@@ -40,6 +40,8 @@ Then use the Agent tool with `subagent_type=Explore` to walk the codebase. Don't
 - Where are modules **shallow** — interface nearly as complex as the implementation?
 - Where have pure functions been extracted just for testability, but the real bugs hide in how they're called (no **locality**)?
 - Where do tightly-coupled modules leak across their seams?
+- Where does the same logic appear in two or more places? Duplication is a missing deep module — one implementation would pay back across N call sites (**leverage**).
+- Which concerns thread through many unrelated modules (logging, auth, validation, telemetry, retries)? A concern living at N seams when it could live at one is the same shape of problem as a shallow module — interface widened by something that should sit behind a single seam.
 - Which parts of the codebase are untested, or hard to test through their current interface?
 
 Apply the **deletion test** to anything you suspect is shallow: would deleting it concentrate complexity, or just move it? A "yes, concentrates" is the signal you want.
