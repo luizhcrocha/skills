@@ -54,7 +54,7 @@ Each worker gets a fresh context window — it knows nothing you know. In every 
 - The **standards block** below, verbatim.
 - How to report back (what "done" looks like).
 - If more optimal, considering the tasks:
-  - To avoid making the agents repeat skill calls, pre-run the skills yourself and give the workers the results.
+  - To avoid making the agents repeat skill calls, pre-run the skills yourself and give the workers the results. If you alredy have ran the skills, and there's no need to re-run them, just pass the results.
   - If the work is similar across agents, write a template prompt and have them fill in the blanks instead of writing separate prompts.
 
 ### 6. Integrate
