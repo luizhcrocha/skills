@@ -138,6 +138,7 @@ General workflow tools, not code-specific.
 - **[grill-me](./skills/productivity/grill-me/SKILL.md)** — Get relentlessly interviewed about a plan or design until every branch of the decision tree is resolved.
 - **[handoff](./skills/productivity/handoff/SKILL.md)** — Compact the current conversation into a handoff document so another agent can continue the work.
 - **[orchestrate](./skills/productivity/orchestrate/SKILL.md)** — Fan a batch of pending tasks out across subagents, a dynamic workflow, or an agent team, partitioned by file ownership so workers never conflict, with shared coding standards baked into every worker prompt.
+- **[teach](./skills/productivity/teach/SKILL.md)** — Teach a new skill or concept over multiple sessions using a stateful teaching workspace grounded in a mission, trusted resources, and learning records.
 - **[write-a-skill](./skills/productivity/write-a-skill/SKILL.md)** — Create new skills with proper structure, progressive disclosure, and bundled resources.
 
 ### Misc
