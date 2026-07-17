@@ -122,7 +122,9 @@ Skills I use daily for code work.
 - **[diagnose](./skills/engineering/diagnose/SKILL.md)** — Disciplined diagnosis loop for hard bugs and performance regressions: reproduce → minimise → hypothesise → instrument → fix → regression-test.
 - **[grill-with-docs](./skills/engineering/grill-with-docs/SKILL.md)** — Grilling session that challenges your plan against the existing domain model, sharpens terminology, and updates `CONTEXT.md` and ADRs inline.
 - **[triage](./skills/engineering/triage/SKILL.md)** — Triage issues through a state machine of triage roles.
-- **[improve-codebase-architecture](./skills/engineering/improve-codebase-architecture/SKILL.md)** — Find deepening opportunities in a codebase, informed by the domain language in `CONTEXT.md` and the decisions in `docs/adr/`.
+- **[improve-codebase-architecture](./skills/engineering/improve-codebase-architecture/SKILL.md)** — Scan a codebase for deepening opportunities, present them as a visual HTML report, then grill through whichever one you pick.
+- **[codebase-design](./skills/engineering/codebase-design/SKILL.md)** — Shared vocabulary and principles for designing deep modules — module, interface, depth, seam, adapter, leverage, locality — used directly or pulled in by other skills.
+- **[domain-modeling](./skills/engineering/domain-modeling/SKILL.md)** — Actively build and sharpen a project's domain model: challenge fuzzy terms, capture the glossary in `CONTEXT.md`, and record hard-to-reverse decisions as ADRs inline.
 - **[setup-luizrocha-skills](./skills/engineering/setup-luizrocha-skills/SKILL.md)** — Scaffold the per-repo config (issue tracker, triage label vocabulary, domain doc layout) that the other engineering skills consume. Run once per repo before using `to-issues`, `to-prd`, `triage`, `diagnose`, `tdd`, `improve-codebase-architecture`, or `zoom-out`.
 - **[tdd](./skills/engineering/tdd/SKILL.md)** — Test-driven development with a red-green-refactor loop. Builds features or fixes bugs one vertical slice at a time.
 - **[to-issues](./skills/engineering/to-issues/SKILL.md)** — Break any plan, spec, or PRD into independently-grabbable GitHub issues using vertical slices.
@@ -137,6 +139,7 @@ General workflow tools, not code-specific.
 
 - **[caveman](./skills/productivity/caveman/SKILL.md)** — Ultra-compressed communication mode. Cuts token usage ~75% by dropping filler while keeping full technical accuracy.
 - **[grill-me](./skills/productivity/grill-me/SKILL.md)** — Get relentlessly interviewed about a plan or design until every branch of the decision tree is resolved.
+- **[grilling](./skills/productivity/grilling/SKILL.md)** — Get interviewed relentlessly, one question at a time, down every branch of the decision tree until you reach shared understanding. The engine behind `grill-me` and `grill-with-docs`.
 - **[handoff](./skills/productivity/handoff/SKILL.md)** — Compact the current conversation into a handoff document so another agent can continue the work.
 - **[orchestrate](./skills/productivity/orchestrate/SKILL.md)** — Fan a batch of pending tasks out across subagents, a dynamic workflow, or an agent team, partitioned by file ownership so workers never conflict, with shared coding standards baked into every worker prompt.
 - **[teach](./skills/productivity/teach/SKILL.md)** — Teach a new skill or concept over multiple sessions using a stateful teaching workspace grounded in a mission, trusted resources, and learning records.
