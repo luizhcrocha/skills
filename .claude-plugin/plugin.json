@@ -19,6 +19,7 @@
     "./skills/productivity/grilling",
     "./skills/productivity/handoff",
     "./skills/productivity/orchestrate",
+    "./skills/productivity/show-me",
     "./skills/productivity/teach",
     "./skills/productivity/write-a-skill"
   ]
