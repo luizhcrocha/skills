@@ -1,0 +1,3 @@
+[tasks.sync-upstream]
+description = "Sync skills from mattpocock/skills (the original repo), keeping local changes"
+run = "bash scripts/sync-upstream.sh"
