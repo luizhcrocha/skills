@@ -26,7 +26,7 @@ Run this on every task the user hands you, and again on every report a worker se
 
 ### 1. Intake
 
-Understand the task before splitting it. Read enough to name the milestones and their steps; delegate any deeper reading. If the user's ask is ambiguous in a way that changes the split, ask one question. Then write the roadmap into the dashboard state, render it, and start the server (see [DASHBOARD.md](DASHBOARD.md)), so the user has the link and sees the plan before any worker starts.
+Understand the task before splitting it. Read enough to name the milestones and their steps; delegate any deeper reading. If the user's ask is ambiguous in a way that changes the split, ask one question. Then record the roadmap with the state CLI and start the server (see [DASHBOARD.md](DASHBOARD.md)), so the user has the link and sees the plan before any worker starts.
 
 ### 2. Route
 
@@ -72,11 +72,11 @@ For a batch of independent tasks, call the Skill tool with "orchestrate" for the
 
 ### 5. Track
 
-The dashboard state file is the fleet ledger: one row per worker with its lane, status, tokens, and last report. Keep it current at every event (spawn, report, block, resolution, decision), and render right after, so the user can watch the fleet without asking.
+The dashboard state is the fleet ledger: one row per worker with its lane, status, tokens, and last report. Record every event (spawn, report, block, resolution, decision) with the state CLI the moment it happens; each command renders, so the user can watch the fleet without asking.
 
 Lanes are how conflicts are avoided. Before spawning, check the ledger: a task whose files overlap a running lane waits, or joins that worker's queue. Two workers on the same file overwrite each other silently, and you find out at integration.
 
-Token and duration figures arrive in the task notification when a worker finishes or replies. Copy them into the ledger the moment the notification lands; they are not persisted anywhere else.
+Token and duration figures arrive in the task notification when a worker finishes or replies. Record them the moment the notification lands; they are not persisted anywhere else.
 
 ### 6. Respond
 

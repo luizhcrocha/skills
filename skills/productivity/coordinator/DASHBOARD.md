@@ -1,11 +1,11 @@
 # Fleet dashboard
 
-The dashboard is the user's window into the fleet and the coordinator's ledger, from one file: `state.json`. Edit the state, render. The page itself is a fixed template, so an update is a JSON edit plus one command, never a rewrite of HTML.
+The dashboard is the user's window into the fleet and the coordinator's ledger, from one file: `state.json`. The state CLI is the only way you touch it: one command per event, which validates the change and renders the page. The page itself is a fixed template, never rewritten by hand.
 
 ## Where things live
 
-- **State**: `<scratchpad>/coordinator/state.json`. Start it by copying [assets/example-state.json](assets/example-state.json) and replacing every field; the example is the schema.
-- **Render**: `python3 <skill-dir>/scripts/render_dashboard.py <scratchpad>/coordinator/state.json <scratchpad>/coordinator/index.html`. The script stamps `updated` with the current time and fails loudly on a malformed state.
+- **State**: `<scratchpad>/coordinator/state.json`, created and changed only through `scripts/state.py` (below). [assets/example-state.json](assets/example-state.json) shows a filled-in state for reference.
+- **Render**: done by every `state.py` command. `scripts/render_dashboard.py` is what it calls, and the only reason to run it directly is `--fragment` for the Artifact tool.
 - **Publish**: serve the directory over the tailnet, once per session:
   `python3 <skill-dir>/scripts/serve_dashboard.py <scratchpad>/coordinator`. The script binds a free port on this machine's Tailscale address and prints `http://<magicdns-name>:<port>/`, reachable from any device on the tailnet and from nowhere else. Several coordinators on one machine each get their own port. Give the user the URL once. Every later render is picked up by the page on its own: it polls `state.json` beside it every few seconds and re-renders in place, filters intact. Stop the server with `--stop` when the session ends.
   If the user asks for a claude.ai artifact instead (no tailnet on their device), render with `--fragment` to `dashboard.html` and publish it with the Artifact tool (`icon: "chart"`, a one-sentence `description`), republishing the same path after every state change; open viewers receive each republish without reloading.
@@ -56,19 +56,22 @@ events[]     activity log, oldest first
   text       one or two sentences
 ```
 
-## What to update, when
+## The state CLI
 
-| Event | State edit |
+`python3 <skill-dir>/scripts/state.py <scratchpad>/coordinator <command>`. Create and update share a verb: an unknown id with its required fields creates the row, a known id changes only the fields given. Timestamps are stamped for you, ids you reference are checked, and every command renders.
+
+| Event | Command |
 | :-- | :-- |
-| Intake done | `roadmap`, `goal`, `now`, an event of kind `decision` per non-obvious split |
-| Worker spawned | append to `agents` (status `running`), set its step to `current`, event `spawned` |
-| Notification arrives | `tokens`, `duration_ms`, `updated`, `report`, `status`; event `reported` |
-| Worker blocked | agent status `blocked`, a roadblock with `needs`, step status `blocked`, event `blocked` |
-| Roadblock cleared | `resolved: true`, statuses back to `running`/`current`, event `resolved` |
-| Model proposal | event `decision` with the proposal and the user's answer |
-| Milestone checks pass | its steps `done`, next step `current`, event `integrated`, `now` |
+| Intake done | `init --project P --goal G`, then `milestone m1 --title T` and `step s1 --milestone m1 --title T` per step, then `event --kind decision "why the split"` for anything non-obvious |
+| Worker spawned | `agent a1 --task T --skill tdd --milestone m1 --lane src/x.ts test/x.test.ts --step s1 --brief "done when ..."` (model defaults to opus; logs the spawn, marks the step current) |
+| Notification arrives | `agent a1 --status done --tokens N --duration-ms N --report "..." --step s1 --log "what it verified"` (the step follows the status; the log becomes a `reported` event) |
+| Worker blocked | `roadblock r1 --title T --detail D --severity serious --needs user --agent a1` (marks the worker blocked, logs it) |
+| Roadblock cleared | `roadblock r1 --resolved` (worker back to running, logs it) |
+| Model proposal or other decision | `event --kind decision "proposed haiku for the rename sweep; user approved"` |
+| Milestone checks pass | `step s2 --status done` for any step not already done, `event --kind integrated "checks green"`, `set --now "..."` |
+| Session ends | `set --status done --now "..."` |
 
-Render after each row. A stale dashboard is worse than none: the user acts on it.
+`show` prints the ledger as text when you need to check it without opening the page. Add `--no-render` to any command when several follow in a row, and let the last one render.
 
 ## What the page shows
 
