@@ -10,25 +10,60 @@
       "id": "m1",
       "title": "Understand the current billing seam",
       "steps": [
-        { "id": "s1", "title": "Research Stripe metered billing API", "status": "done", "agent": "research-stripe" },
-        { "id": "s2", "title": "Map the invoice module's interface", "status": "done", "agent": "map-invoice" }
+        {
+          "id": "s1",
+          "title": "Research Stripe metered billing API",
+          "status": "done",
+          "agent": "research-stripe"
+        },
+        {
+          "id": "s2",
+          "title": "Map the invoice module's interface",
+          "status": "done",
+          "agent": "map-invoice"
+        }
       ]
     },
     {
       "id": "m2",
       "title": "Usage records and invoice generation",
       "steps": [
-        { "id": "s3", "title": "UsageRecord domain type and store", "status": "done", "agent": "usage-store" },
-        { "id": "s4", "title": "Invoice generator reads usage", "status": "current", "agent": "invoice-gen" },
-        { "id": "s5", "title": "Stripe adapter for metered prices", "status": "blocked", "agent": "stripe-adapter" }
+        {
+          "id": "s3",
+          "title": "UsageRecord domain type and store",
+          "status": "done",
+          "agent": "usage-store"
+        },
+        {
+          "id": "s4",
+          "title": "Invoice generator reads usage",
+          "status": "current",
+          "agent": "invoice-gen"
+        },
+        {
+          "id": "s5",
+          "title": "Stripe adapter for metered prices",
+          "status": "blocked",
+          "agent": "stripe-adapter"
+        }
       ]
     },
     {
       "id": "m3",
       "title": "Verify and ship",
       "steps": [
-        { "id": "s6", "title": "Integration tests through the real seam", "status": "pending", "agent": null },
-        { "id": "s7", "title": "Code review against the spec", "status": "pending", "agent": null }
+        {
+          "id": "s6",
+          "title": "Integration tests through the real seam",
+          "status": "pending",
+          "agent": null
+        },
+        {
+          "id": "s7",
+          "title": "Code review against the spec",
+          "status": "pending",
+          "agent": null
+        }
       ]
     }
   ],
@@ -40,7 +75,9 @@
       "skill": "research",
       "model": "opus",
       "status": "done",
-      "lane": ["docs/research/stripe-metered-billing.md"],
+      "lane": [
+        "docs/research/stripe-metered-billing.md"
+      ],
       "milestone": "m1",
       "tokens": 61204,
       "duration_ms": 412000,
@@ -72,7 +109,9 @@
       "skill": "tdd",
       "model": "opus",
       "status": "done",
-      "lane": ["src/billing/usage/**"],
+      "lane": [
+        "src/billing/usage/**"
+      ],
       "milestone": "m2",
       "tokens": 142330,
       "duration_ms": 1380000,
@@ -88,7 +127,9 @@
       "skill": "implement",
       "model": "opus",
       "status": "running",
-      "lane": ["src/billing/invoice/**"],
+      "lane": [
+        "src/billing/invoice/**"
+      ],
       "milestone": "m2",
       "tokens": 0,
       "duration_ms": 0,
@@ -104,7 +145,9 @@
       "skill": "implement",
       "model": "opus",
       "status": "blocked",
-      "lane": ["src/billing/stripe/**"],
+      "lane": [
+        "src/billing/stripe/**"
+      ],
       "milestone": "m2",
       "tokens": 27950,
       "duration_ms": 240000,
@@ -137,16 +180,72 @@
     }
   ],
   "events": [
-    { "at": "2026-09-26T14:02:00-05:00", "agent": null, "kind": "decision", "text": "Split into three milestones; research first so the adapter is designed against the real API." },
-    { "at": "2026-09-26T14:05:00-05:00", "agent": "research-stripe", "kind": "spawned", "text": "Spawned on opus following research." },
-    { "at": "2026-09-26T14:05:00-05:00", "agent": "map-invoice", "kind": "spawned", "text": "Spawned on opus, read-only mapping task." },
-    { "at": "2026-09-26T14:09:00-05:00", "agent": "map-invoice", "kind": "reported", "text": "Usage enters through the line-item builder." },
-    { "at": "2026-09-26T14:12:00-05:00", "agent": "research-stripe", "kind": "reported", "text": "Research file written with 6 citations." },
-    { "at": "2026-09-26T14:20:00-05:00", "agent": "usage-store", "kind": "spawned", "text": "Spawned on opus following tdd." },
-    { "at": "2026-09-26T14:43:00-05:00", "agent": "usage-store", "kind": "reported", "text": "12 tests green across both adapters." },
-    { "at": "2026-09-26T14:48:00-05:00", "agent": null, "kind": "resolved", "text": "Lane overlap on line-items.ts resolved by ownership to invoice-gen." },
-    { "at": "2026-09-26T14:50:00-05:00", "agent": "invoice-gen", "kind": "spawned", "text": "Spawned on opus following implement." },
-    { "at": "2026-09-26T14:50:00-05:00", "agent": "stripe-adapter", "kind": "spawned", "text": "Spawned on opus following implement." },
-    { "at": "2026-09-26T15:30:00-05:00", "agent": "stripe-adapter", "kind": "blocked", "text": "Needs STRIPE_TEST_KEY to record the fixture." }
+    {
+      "at": "2026-09-26T14:02:00-05:00",
+      "agent": null,
+      "kind": "decision",
+      "text": "Split into three milestones; research first so the adapter is designed against the real API."
+    },
+    {
+      "at": "2026-09-26T14:05:00-05:00",
+      "agent": "research-stripe",
+      "kind": "spawned",
+      "text": "Spawned on opus following research."
+    },
+    {
+      "at": "2026-09-26T14:05:00-05:00",
+      "agent": "map-invoice",
+      "kind": "spawned",
+      "text": "Spawned on opus, read-only mapping task."
+    },
+    {
+      "at": "2026-09-26T14:09:00-05:00",
+      "agent": "map-invoice",
+      "kind": "reported",
+      "text": "Usage enters through the line-item builder."
+    },
+    {
+      "at": "2026-09-26T14:12:00-05:00",
+      "agent": "research-stripe",
+      "kind": "reported",
+      "text": "Research file written with 6 citations."
+    },
+    {
+      "at": "2026-09-26T14:20:00-05:00",
+      "agent": "usage-store",
+      "kind": "spawned",
+      "text": "Spawned on opus following tdd."
+    },
+    {
+      "at": "2026-09-26T14:43:00-05:00",
+      "agent": "usage-store",
+      "kind": "reported",
+      "text": "12 tests green across both adapters."
+    },
+    {
+      "at": "2026-09-26T14:48:00-05:00",
+      "agent": null,
+      "kind": "resolved",
+      "text": "Lane overlap on line-items.ts resolved by ownership to invoice-gen."
+    },
+    {
+      "at": "2026-09-26T14:50:00-05:00",
+      "agent": "invoice-gen",
+      "kind": "spawned",
+      "text": "Spawned on opus following implement."
+    },
+    {
+      "at": "2026-09-26T14:50:00-05:00",
+      "agent": "stripe-adapter",
+      "kind": "spawned",
+      "text": "Spawned on opus following implement."
+    },
+    {
+      "at": "2026-09-26T15:30:00-05:00",
+      "agent": "stripe-adapter",
+      "kind": "blocked",
+      "text": "Needs STRIPE_TEST_KEY to record the fixture.",
+      "important": true
+    }
   ]
 }

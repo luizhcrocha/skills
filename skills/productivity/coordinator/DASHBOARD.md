@@ -54,6 +54,7 @@ events[]     activity log, oldest first
   agent      agent id or null (coordinator events)
   kind       spawned | reported | blocked | resolved | decision | note | integrated
   text       one or two sentences
+  important  true when the user should see it now (optional; absent means routine)
 ```
 
 ## The state CLI
@@ -69,6 +70,7 @@ events[]     activity log, oldest first
 | Roadblock cleared | `roadblock r1 --resolved` (worker back to running, logs it) |
 | Model proposal or other decision | `event --kind decision "proposed haiku for the rename sweep; user approved"` |
 | Milestone checks pass | `step s2 --status done` for any step not already done, `event --kind integrated "checks green"`, `set --now "..."` |
+| The user must see something now | `--important` on `event`, `agent --log`, or `roadblock`; `--needs user` and a failed worker imply it |
 | Session ends | `set --status done --now "..."` |
 
 `show` prints the ledger as text when you need to check it without opening the page. Add `--no-render` to any command when several follow in a row, and let the last one render.
@@ -82,5 +84,6 @@ events[]     activity log, oldest first
 - Fleet table with filters (status, milestone, skill, model, free text) and expandable rows for brief and report.
 - Token chart: one bar per worker, coloured by spawn order, hover for the figures, with the table as the accessible alternative.
 - Activity log, newest first, filtered together with the table.
+- Notifications: every event is one. A bell in the top right carries the unread count and opens the list, with mark-read, clear, and the sound and toast preferences. New events show as toasts; important ones stay until dismissed, chime, and flag the tab title. Browsers allow sound only after the viewer has clicked the page once, so a viewer who never interacts still gets the toast and the badge.
 
 Filters and the expanded rows survive each re-render (the page keeps them in the viewer's browser), so the user's view is not reset by your updates.

@@ -172,7 +172,67 @@
   .foot { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; color: var(--muted); font-size: 0.8rem; }
   .error { padding: 16px; border: 1px solid var(--critical); border-radius: 8px; color: var(--critical); font-family: var(--mono); }
   @media (prefers-reduced-motion: no-preference) { .step, .pill, .expand { transition: background 150ms ease; } }
+  /* notifications */
+  .bell { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 12px); right: 16px; z-index: 40; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; display: grid; place-items: center; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+  .bell svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .bell .badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--critical); color: #fff; font-size: 0.7rem; font-weight: 600; display: grid; place-items: center; font-family: var(--mono); }
+  .bell .badge[hidden] { display: none; }
+  .bell.muted::after { content: ""; position: absolute; width: 26px; height: 2px; background: var(--muted); transform: rotate(-45deg); }
+  .panel { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 58px); right: 16px; z-index: 40; width: min(400px, calc(100vw - 32px)); max-height: min(70vh, 600px); display: grid; grid-template-rows: auto auto 1fr; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.14); overflow: hidden; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .panel-head h2 { font-size: 0.75rem; }
+  .panel-head .actions { display: flex; gap: 4px; }
+  .panel-head button, .panel-prefs button { background: none; border: 1px solid var(--line); border-radius: 5px; padding: 3px 8px; font-size: 0.75rem; color: var(--muted); cursor: pointer; }
+  .panel-prefs { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--card-2); font-size: 0.78rem; color: var(--muted); }
+  .panel-prefs label { display: inline-flex; align-items: center; gap: 5px; }
+  .panel-prefs select { background: var(--card); border: 1px solid var(--line); border-radius: 5px; padding: 2px 5px; font-size: 0.78rem; }
+  .panel-prefs .blocked { color: var(--warning); }
+  .notifs { list-style: none; margin: 0; padding: 0; overflow-y: auto; }
+  .notifs li { display: grid; grid-template-columns: 6px 1fr auto; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 0.85rem; align-items: start; }
+  .notifs li:last-child { border-bottom: none; }
+  .notifs .mark { width: 6px; height: 6px; border-radius: 50%; background: transparent; margin-top: 7px; }
+  .notifs li.unread .mark { background: var(--accent); }
+  .notifs li.important .mark { background: var(--critical); }
+  .notifs li.important.read .mark { background: color-mix(in srgb, var(--critical) 40%, transparent); }
+  .notifs .meta { font-size: 0.72rem; color: var(--muted); font-family: var(--mono); }
+  .notifs .meta .kind { text-transform: uppercase; letter-spacing: 0.05em; }
+  .notifs time { font-size: 0.72rem; color: var(--faint); font-family: var(--mono); white-space: nowrap; margin-top: 2px; }
+  .notifs .empty { padding: 18px 12px; }
+  .toasts { position: fixed; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); z-index: 30; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); }
+  .toast { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 10px 12px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--accent); box-shadow: 0 6px 20px rgba(0,0,0,0.14); font-size: 0.85rem; }
+  .toast.important { border-left-color: var(--critical); }
+  .toast .meta { font-size: 0.72rem; color: var(--muted); font-family: var(--mono); margin-bottom: 2px; }
+  .toast .meta .kind { text-transform: uppercase; letter-spacing: 0.05em; }
+  .toast.important .meta .kind { color: var(--critical); }
+  .toast button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 2px; align-self: start; }
+  @media (prefers-reduced-motion: no-preference) {
+    .toast { animation: toast-in 180ms ease-out; }
+    @keyframes toast-in { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+  }
+  @media (max-width: 760px) { .head-row { padding-right: 48px; } }
 </style>
+
+<button class="bell" id="bell" type="button" aria-label="Notifications" aria-expanded="false" title="Notifications">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17V11a6 6 0 0 1 12 0v6l1.5 2h-15z"/><path d="M10 21h4"/></svg>
+  <span class="badge" id="bell-badge" hidden>0</span>
+</button>
+<div class="panel" id="panel" hidden role="dialog" aria-label="Notifications">
+  <div class="panel-head">
+    <h2 id="panel-title">Notifications</h2>
+    <div class="actions">
+      <button type="button" id="n-read">Mark all read</button>
+      <button type="button" id="n-clear">Clear</button>
+    </div>
+  </div>
+  <div class="panel-prefs">
+    <label>Sound <select id="n-sound"><option value="important">important only</option><option value="all">every event</option><option value="off">off</option></select></label>
+    <label>Toasts <select id="n-toasts"><option value="all">every event</option><option value="important">important only</option><option value="off">off</option></select></label>
+    <button type="button" id="n-test">Test sound</button>
+    <span id="n-audio-note" class="blocked" hidden>Click anywhere once to allow sound.</span>
+  </div>
+  <ul class="notifs" id="notifs"></ul>
+</div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
 
 <div class="wrap" id="app">
   <header class="head" id="head"></header>
@@ -400,16 +460,98 @@
     const events = [...STATE.events].reverse().filter((e) => (!filtering || (e.agent ? ids.has(e.agent) : !q)) && (!q || e.text.toLowerCase().includes(q) || (e.agent && ids.has(e.agent))));
     $("log").innerHTML = events.length ? events.map((e) => `<li>
       <time datetime="${esc(e.at)}" title="${esc(e.at)}">${esc(clock(e.at))}</time>
-      <span><span class="kind ${esc(e.kind)}">${esc(e.kind)}</span>${e.agent ? `${agentById[e.agent] ? `<span class="swatch" style="background:${colorOf(agentById[e.agent])}"></span>` : ""}<span class="who">${esc(agentById[e.agent]?.name || e.agent)}</span>` : '<span class="who">coordinator</span>'}${esc(e.text)}</span>
+      <span><span class="kind ${esc(e.kind)}">${esc(e.kind)}${e.important ? " · needs you" : ""}</span>${e.agent ? `${agentById[e.agent] ? `<span class="swatch" style="background:${colorOf(agentById[e.agent])}"></span>` : ""}<span class="who">${esc(agentById[e.agent]?.name || e.agent)}</span>` : '<span class="who">coordinator</span>'}${esc(e.text)}</span>
     </li>`).join("") : '<li><span></span><span class="muted">Nothing logged yet.</span></li>';
   }
 
   function render() { const rows = visibleAgents(); renderFleet(rows); renderChart(rows); renderLog(rows); }
 
+
+  /* Notifications: every fleet event is a notification; the coordinator flags the ones that need
+     the user now with "important": true. Unread state and preferences live in this browser only. */
+  const notif = (() => {
+    const key = (e) => e.at + "|" + e.text;
+    let lastSeen = store.get("n-lastSeen", "");
+    let clearedBefore = store.get("n-cleared", "");
+    let booted = false;
+    const prefs = { sound: store.get("n-sound", "important"), toasts: store.get("n-toasts", "all") };
+    $("n-sound").value = prefs.sound; $("n-toasts").value = prefs.toasts;
+
+    let ctx = null;
+    const audio = () => { try { ctx = ctx || new (window.AudioContext || window.webkitAudioContext)(); } catch { ctx = null; } return ctx; };
+    const chime = (important) => {
+      const c = audio(); if (!c || c.state !== "running") { $("n-audio-note").hidden = false; return; }
+      $("n-audio-note").hidden = true;
+      const notes = important ? [660, 880, 1320] : [880];
+      notes.forEach((f, i) => {
+        const o = c.createOscillator(), g = c.createGain(); o.type = "sine"; o.frequency.value = f;
+        const t = c.currentTime + i * 0.16; g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + (important ? 0.5 : 0.35));
+        o.connect(g).connect(c.destination); o.start(t); o.stop(t + 0.6);
+      });
+    };
+    const unlock = () => { const c = audio(); if (c && c.state === "suspended") c.resume().then(() => { $("n-audio-note").hidden = true; }); };
+    document.addEventListener("pointerdown", unlock, { passive: true });
+    document.addEventListener("keydown", unlock);
+
+    const visible = () => [...STATE.events].reverse().filter((e) => !clearedBefore || e.at > clearedBefore);
+    const unread = () => visible().filter((e) => !lastSeen || e.at > lastSeen);
+    const who = (e) => e.agent ? (agentById[e.agent]?.name || e.agent) : "coordinator";
+
+    function renderBadge() {
+      const u = unread(), imp = u.filter((e) => e.important).length;
+      $("bell-badge").hidden = !u.length; $("bell-badge").textContent = u.length > 99 ? "99+" : String(u.length);
+      $("bell").classList.toggle("muted", prefs.sound === "off");
+      document.title = (u.length ? `(${u.length}${imp ? "!" : ""}) ` : "") + "Fleet Board";
+    }
+    function renderList() {
+      const items = visible();
+      $("notifs").innerHTML = items.length ? items.map((e) => `<li class="${(!lastSeen || e.at > lastSeen) ? "unread" : "read"}${e.important ? " important" : ""}">
+        <span class="mark"></span>
+        <span><div class="meta"><span class="kind">${esc(e.kind)}</span> · ${esc(who(e))}${e.important ? " · needs you" : ""}</div>${esc(e.text)}</span>
+        <time datetime="${esc(e.at)}" title="${esc(e.at)}">${esc(clock(e.at))}</time>
+      </li>`).join("") : '<li class="empty muted">Nothing yet.</li>';
+    }
+    function toast(e) {
+      if (prefs.toasts === "off" || (prefs.toasts === "important" && !e.important)) return;
+      const el = document.createElement("div"); el.className = "toast" + (e.important ? " important" : "");
+      el.innerHTML = `<div><div class="meta"><span class="kind">${esc(e.kind)}</span> · ${esc(who(e))} · ${esc(clock(e.at))}</div>${esc(e.text)}</div><button type="button" aria-label="Dismiss">×</button>`;
+      el.querySelector("button").addEventListener("click", () => el.remove());
+      $("toasts").prepend(el);
+      while ($("toasts").children.length > 4) $("toasts").lastElementChild.remove();
+      if (!e.important) setTimeout(() => el.remove(), 7000);
+    }
+    function sync() {
+      const seen = new Set(sync.keys || []);
+      const fresh = booted ? STATE.events.filter((e) => !seen.has(key(e))) : [];
+      sync.keys = STATE.events.map(key);
+      if (!booted) { booted = true; unread().filter((e) => e.important).reverse().forEach(toast); }
+      else {
+        fresh.forEach(toast);
+        const imp = fresh.some((e) => e.important);
+        if (fresh.length && (prefs.sound === "all" || (prefs.sound === "important" && imp))) chime(imp);
+      }
+      renderBadge(); if (!$("panel").hidden) renderList();
+    }
+    function markRead() { lastSeen = new Date().toISOString(); store.set("n-lastSeen", lastSeen); renderBadge(); renderList(); }
+    $("bell").addEventListener("click", () => {
+      const open = $("panel").hidden; $("panel").hidden = !open; $("bell").setAttribute("aria-expanded", String(open));
+      if (open) { renderList(); const c = audio(); if (c && c.state !== "running") $("n-audio-note").hidden = false; }
+    });
+    document.addEventListener("click", (ev) => { if (!$("panel").hidden && !$("panel").contains(ev.target) && !$("bell").contains(ev.target)) { $("panel").hidden = true; $("bell").setAttribute("aria-expanded", "false"); } });
+    document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !$("panel").hidden) { $("panel").hidden = true; $("bell").setAttribute("aria-expanded", "false"); } });
+    $("n-read").addEventListener("click", markRead);
+    $("n-clear").addEventListener("click", () => { clearedBefore = new Date().toISOString(); store.set("n-cleared", clearedBefore); markRead(); });
+    $("n-sound").addEventListener("change", () => { prefs.sound = $("n-sound").value; store.set("n-sound", prefs.sound); renderBadge(); });
+    $("n-toasts").addEventListener("change", () => { prefs.toasts = $("n-toasts").value; store.set("n-toasts", prefs.toasts); });
+    $("n-test").addEventListener("click", () => { unlock(); setTimeout(() => chime(true), 50); });
+    return { sync };
+  })();
+
   function applyState(state) {
     STATE = state; NOW = Date.now();
     agentById = Object.fromEntries(STATE.agents.map((a) => [a.id, a]));
     renderHeader(); renderTiles(); renderRoadmap(); renderRoadblocks(); renderFilterOptions(); render();
+    notif.sync();
   }
 
   for (const id of filters) { const saved = store.get(id, ""); if (saved) $(id).value = saved; $(id).addEventListener("input", () => { store.set(id, $(id).value); render(); }); }

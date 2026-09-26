@@ -7,10 +7,10 @@
     state.py DIR step ID [--milestone M --title T] [--status S] [--agent A]
     state.py DIR agent ID [--task T --skill S --model M --lane L... --milestone M]
                           [--status S] [--tokens N] [--duration-ms N] [--report R]
-                          [--brief B] [--name N] [--step STEP] [--log TEXT]
+                          [--brief B] [--name N] [--step STEP] [--log TEXT] [--important]
     state.py DIR roadblock ID [--title T --detail D --severity S --needs N] [--agent A]
                               [--resolved | --open]
-    state.py DIR event [--agent A] [--kind K] TEXT
+    state.py DIR event [--agent A] [--kind K] [--important] TEXT
     state.py DIR show
 
 Add --no-render anywhere to write state.json without rendering.
@@ -58,8 +58,11 @@ def require(args, fields: list[str], what: str) -> None:
         fail(f"new {what} needs --{' --'.join(missing)}")
 
 
-def log(state: dict, kind: str, text: str, agent: str | None = None) -> None:
-    state["events"].append({"at": now(), "agent": agent, "kind": kind, "text": text})
+def log(state: dict, kind: str, text: str, agent: str | None = None, important: bool = False) -> None:
+    event = {"at": now(), "agent": agent, "kind": kind, "text": text}
+    if important:
+        event["important"] = True
+    state["events"].append(event)
 
 
 def cmd_init(state, args):
@@ -145,7 +148,7 @@ def cmd_agent(state, args):
         set_step(state, args.step, follow, a["id"])
     if args.log:
         kind = {"blocked": "blocked", "done": "reported", "failed": "reported", "stopped": "note"}.get(a["status"], "note")
-        log(state, kind, args.log, a["id"])
+        log(state, kind, args.log, a["id"], args.important or a["status"] == "failed")
     return state
 
 
@@ -157,7 +160,7 @@ def cmd_roadblock(state, args):
             "id": args.id, "title": args.title, "detail": args.detail, "agent": args.agent or None,
             "severity": args.severity, "needs": args.needs, "since": now(), "resolved": False,
         })
-        log(state, "blocked", f"{args.title}: {args.detail}", args.agent)
+        log(state, "blocked", f"{args.title}: {args.detail}", args.agent, args.important or args.needs == "user")
         if args.agent and find(state["agents"], args.agent):
             find(state["agents"], args.agent)["status"] = "blocked"
         return state
@@ -178,7 +181,7 @@ def cmd_roadblock(state, args):
 def cmd_event(state, args):
     if args.agent and not find(state["agents"], args.agent):
         fail(f"unknown agent '{args.agent}'")
-    log(state, args.kind or "note", args.text, args.agent)
+    log(state, args.kind or "note", args.text, args.agent, args.important)
     return state
 
 
@@ -214,11 +217,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--report"); s.add_argument("--brief"); s.add_argument("--name")
     s.add_argument("--step", help="step id to mark current on spawn, or to follow the agent's status on update")
     s.add_argument("--log", help="activity text to record with this change")
+    s.add_argument("--important", action="store_true", help="the logged event needs the user's attention now")
     s = sub.add_parser("roadblock"); s.add_argument("id")
     s.add_argument("--title"); s.add_argument("--detail"); s.add_argument("--severity", choices=SEVERITIES)
     s.add_argument("--needs", choices=NEEDS); s.add_argument("--agent")
     g = s.add_mutually_exclusive_group(); g.add_argument("--resolved", action="store_true"); g.add_argument("--open", action="store_true")
+    s.add_argument("--important", action="store_true", help="notify the user now (implied by --needs user)")
     s = sub.add_parser("event"); s.add_argument("text"); s.add_argument("--agent"); s.add_argument("--kind", choices=KINDS)
+    s.add_argument("--important", action="store_true", help="the user should see this now: toast, sound, badge")
     sub.add_parser("show")
     return p
 
