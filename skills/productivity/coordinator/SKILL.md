@@ -20,6 +20,20 @@ Do a piece of work yourself when one of these holds, and say which one when you 
 
 Anything else goes to a worker.
 
+## Architecture discipline
+
+Hold the line on design the way `/improve-codebase-architecture` does, and hold every worker to it. A fleet accelerates entropy: five workers each adding a shallow wrapper produce a ball of mud faster than one agent could, and nobody but the coordinator sees the whole picture.
+
+- Call the Skill tool with "codebase-design" at the start of the session and use its vocabulary everywhere (module, interface, depth, seam, adapter, leverage, locality): in the roadmap, the briefs, the dashboard, and your messages. Read `CONTEXT.md` and `docs/adr/` at intake; the glossary names the seams, and the ADRs record decisions the fleet does not re-litigate.
+- Cut lanes along seams, not along files. A lane is a module and its tests. When two lanes meet at a seam, the interface across it is shared scaffolding: settle it first yourself, or with a `prototype` worker when the shape is contested, so the two workers don't each invent half of it.
+- Paste the standards block below into every brief. When you also use the standards block from `orchestrate`, this one replaces its architecture line.
+- Check every report against the block before its milestone counts as done. A report that added a pass-through, leaked across a seam, or coined a term absent from `CONTEXT.md` goes back to its worker with the rule named, the same way an unverified claim does.
+- When a worker names a place where the existing code fought the rules, log it as a `note` event and tell the user it is a candidate for an `/improve-codebase-architecture` pass once the milestone is in. Don't fold that refactor into the milestone unless the user asks.
+
+### Standards block (paste into every brief)
+
+> Design with the `codebase-design` vocabulary (call the Skill tool with "codebase-design" first): module, interface, depth, seam, adapter, leverage, locality. Build deep modules: a lot of behaviour behind a small interface, at a real seam. Apply the deletion test to anything you add: if deleting it would only move complexity around, don't add it. The interface is the test surface: test through it, never past it. One adapter is a hypothetical seam; introduce a seam only when two things actually vary across it. Name domain things with the `CONTEXT.md` terms and coin nothing new; respect the ADRs in `docs/adr/`. For TypeScript, also follow `coding-standards-ts`. Don't write an architecture report; apply the rules to the code you write, and name in your report any place where the existing code fought them.
+
 ## The loop
 
 Run this on every task the user hands you, and again on every report a worker sends back.
@@ -64,6 +78,7 @@ A worker starts with an empty window. Everything it needs is in the brief or it 
 - The skill to follow (name plus path, per step 2).
 - Its **lane**: the exact files and directories it may edit. Everything outside the lane is read-only; if it needs to touch a file outside the lane it stops and reports instead of editing.
 - The context it cannot discover: decisions from this conversation, the domain vocabulary in `CONTEXT.md`, relevant ADRs, the user's constraints.
+- The architecture standards block, verbatim.
 - How to report back: a short structured report (what changed, what was verified, what is left, questions), so your ledger update is a copy rather than a reconstruction.
 
 Similar tasks get one template brief with the blanks filled per worker. Skill outputs the workers would all recompute (a research finding, a scan), compute once and paste.
@@ -84,14 +99,14 @@ Workers report back with results, questions, or blocks. Handle each in the same 
 
 - A **question** you can answer from context gets a reply through `SendMessage` (the worker keeps its context; a new spawn would lose it).
 - A **block** that needs the user (a credential, a product decision, a destructive step) goes into the dashboard's roadblocks and into your next message to the user, with what is needed spelled out.
-- A **report** gets read for what it verified, not just what it claims. Unverified claims go back to the worker with the verification asked for.
+- A **report** gets read for what it verified, not just what it claims, and against the architecture standards block. Unverified claims and rule breaks go back to the worker with the specific ask.
 - A worker that has **strayed** from its lane is stopped, and the stray edits are handled before anything else runs on those files.
 
 Between events, explain to the user what is happening in plain terms: who is on what, what is waiting on whom, what the next milestone is. The dashboard shows it; your message names it.
 
 ### 7. Integrate
 
-When a milestone's workers are done: run the project's checks yourself (types, tests, lint; a quick win), resolve anything left at the seams between lanes, mark the milestone done, and move the roadmap's current step forward. A milestone counts as done when its checks pass, not when its workers report.
+When a milestone's workers are done: run the project's checks yourself (types, tests, lint; a quick win), resolve anything left at the seams between lanes, mark the milestone done, and move the roadmap's current step forward. A milestone counts as done when its checks pass and its reports clear the standards block, not when its workers report.
 
 ## Reporting to the user
 
