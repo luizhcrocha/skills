@@ -1,4 +1,5 @@
 <title>Fleet Board</title>
+<link rel="icon" id="favicon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231e1b4b'/%3E%3Cpath d='M32 33L15 19M32 33l17-14M32 33v18' stroke='%23a5b4fc' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='15' cy='19' r='7' fill='%23818cf8'/%3E%3Ccircle cx='49' cy='19' r='7' fill='%23818cf8'/%3E%3Ccircle cx='32' cy='51' r='7' fill='%23818cf8'/%3E%3Ccircle cx='32' cy='33' r='10' fill='%23eef2ff'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
   :root {
@@ -57,6 +58,8 @@
   /* header */
   .head { display: grid; gap: 10px; }
   .head-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+  .mark { width: 34px; height: 34px; flex: none; border-radius: 8px; overflow: hidden; }
+  .mark svg { display: block; width: 100%; height: 100%; }
   .goal { max-width: 70ch; font-size: 1rem; }
   .now { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; background: var(--accent-soft); border-radius: 6px; max-width: 80ch; }
   .now b { color: var(--accent); font-weight: 600; white-space: nowrap; }
@@ -314,6 +317,18 @@
   };
   const clock = (iso) => { const t = new Date(iso); return isNaN(t) ? "" : t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
   const pill = (s) => `<span class="pill ${esc(s)}">${esc(s)}</span>`;
+
+  /* The fleet mark: one hub, three workers. Also the favicon, which carries the unread count. */
+  const mark = (badge, critical) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+    <rect width="64" height="64" rx="14" fill="#1e1b4b"/>
+    <path d="M32 33L15 19M32 33l17-14M32 33v18" stroke="#a5b4fc" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="15" cy="19" r="7" fill="#818cf8"/><circle cx="49" cy="19" r="7" fill="#818cf8"/><circle cx="32" cy="51" r="7" fill="#818cf8"/>
+    <circle cx="32" cy="33" r="10" fill="#eef2ff"/>
+    ${badge ? `<circle cx="48" cy="48" r="15" fill="${critical ? "#dc2626" : "#4f46e5"}" stroke="#1e1b4b" stroke-width="3"/><text x="48" y="54" text-anchor="middle" font-family="system-ui,sans-serif" font-size="${String(badge).length > 1 ? 16 : 19}" font-weight="700" fill="#fff">${badge}</text>` : ""}
+  </svg>`;
+  const setFavicon = (unread, critical) => {
+    $("favicon").href = "data:image/svg+xml," + encodeURIComponent(mark(unread > 99 ? "99" : unread, critical).replace(/\s+/g, " "));
+  };
   let agentById = {};
   const colorOf = (a) => `var(--s${(STATE.agents.indexOf(a) % 8) + 1})`;
   const stepAgent = (id) => id && agentById[id] ? `<a href="#agent-${esc(id)}">${esc(agentById[id].name)}</a>` : "";
@@ -322,7 +337,7 @@
 
   function renderHeader() {
     $("head").innerHTML = `
-      <div class="head-row"><h1>${esc(STATE.project)}</h1>${pill(STATE.status)}</div>
+      <div class="head-row"><span class="mark" aria-hidden="true">${mark()}</span><h1>${esc(STATE.project)}</h1>${pill(STATE.status)}</div>
       <p class="goal">${esc(STATE.goal)}</p>
       <div class="now"><b>Now</b><span>${esc(STATE.now)}</span></div>
       <div class="meta">
@@ -502,6 +517,7 @@
       $("bell-badge").hidden = !u.length; $("bell-badge").textContent = u.length > 99 ? "99+" : String(u.length);
       $("bell").classList.toggle("muted", prefs.sound === "off");
       document.title = (u.length ? `(${u.length}${imp ? "!" : ""}) ` : "") + "Fleet Board";
+      setFavicon(u.length, imp > 0);
     }
     function renderList() {
       const items = visible();
