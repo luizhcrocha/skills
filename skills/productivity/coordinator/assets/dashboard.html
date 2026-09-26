@@ -1,0 +1,435 @@
+<title>Fleet Board</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --card: #ffffff;
+    --card-2: #eceef2;
+    --text: #151a21;
+    --muted: #5c6674;
+    --faint: #8b95a3;
+    --line: #dce1e8;
+    --accent: #4f46e5;
+    --accent-soft: #e4e2fb;
+    --good: #0ca30c;
+    --warning: #c98500;
+    --serious: #d9633a;
+    --critical: #d03b3b;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+    --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948;
+    --sans: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #14171c; --card: #1c2027; --card-2: #242932; --text: #eef0f3;
+      --muted: #a2abb7; --faint: #6f7987; --line: #2d333d;
+      --accent: #8f89f2; --accent-soft: #2b2a57;
+      --good: #3fbf3f; --warning: #fab219; --serious: #ec835a; --critical: #e35d5d;
+      --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+      --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #14171c; --card: #1c2027; --card-2: #242932; --text: #eef0f3;
+    --muted: #a2abb7; --faint: #6f7987; --line: #2d333d;
+    --accent: #8f89f2; --accent-soft: #2b2a57;
+    --good: #3fbf3f; --warning: #fab219; --serious: #ec835a; --critical: #e35d5d;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  }
+
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.45; margin: 0; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding-inline: 16px; padding-block: 24px 48px; display: grid; gap: 28px; }
+  h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 600; }
+  h1 { font-size: 1.5rem; letter-spacing: -0.01em; }
+  h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  p { margin: 0; }
+  a { color: var(--accent); }
+  button, select, input { font: inherit; color: inherit; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .faint { color: var(--faint); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* header */
+  .head { display: grid; gap: 10px; }
+  .head-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+  .goal { max-width: 70ch; font-size: 1rem; }
+  .now { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; background: var(--accent-soft); border-radius: 6px; max-width: 80ch; }
+  .now b { color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 0.85rem; }
+
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 0.75rem; font-weight: 500; letter-spacing: 0.02em; background: var(--card-2); color: var(--muted); white-space: nowrap; }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .pill.running { background: var(--accent-soft); color: var(--accent); }
+  .pill.done { color: var(--good); background: color-mix(in srgb, var(--good) 14%, var(--card)); }
+  .pill.blocked, .pill.failed, .pill.critical { color: var(--critical); background: color-mix(in srgb, var(--critical) 12%, var(--card)); }
+  .pill.paused, .pill.queued, .pill.pending, .pill.stopped { color: var(--muted); }
+  .pill.warning { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, var(--card)); }
+  .pill.serious { color: var(--serious); background: color-mix(in srgb, var(--serious) 14%, var(--card)); }
+  .pill.current { background: var(--accent-soft); color: var(--accent); }
+
+  /* tiles */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 2px; }
+  .tile .label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  .tile .value { font-size: 1.5rem; font-weight: 500; line-height: 1.1; }
+  .tile .sub { font-size: 0.8rem; color: var(--muted); }
+  .tile.alert .value { color: var(--critical); }
+
+  /* two-column region */
+  .cols { display: grid; grid-template-columns: 3fr 2fr; gap: 20px; }
+  @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
+  section { display: grid; gap: 12px; align-content: start; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+
+  /* roadmap */
+  .milestone { padding: 12px 14px; display: grid; gap: 8px; }
+  .milestone + .milestone { border-top: 1px solid var(--line); }
+  .milestone-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .milestone-head h3 { font-size: 0.95rem; }
+  .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+  .step { display: grid; grid-template-columns: 18px 1fr auto; gap: 10px; align-items: center; padding: 5px 8px; border-radius: 5px; }
+  .step.current { background: var(--accent-soft); }
+  .step .dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--faint); justify-self: center; }
+  .step.done .dot { background: var(--good); border-color: var(--good); }
+  .step.current .dot { background: var(--accent); border-color: var(--accent); }
+  .step.blocked .dot { background: var(--critical); border-color: var(--critical); }
+  .step.done .title { color: var(--muted); }
+  .step .who { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); }
+  .step .who a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--faint); }
+
+  /* roadblocks */
+  .block { padding: 12px 14px; display: grid; gap: 4px; border-left: 3px solid var(--line); }
+  .block + .block { border-top: 1px solid var(--line); }
+  .block.critical { border-left-color: var(--critical); }
+  .block.serious { border-left-color: var(--serious); }
+  .block.warning { border-left-color: var(--warning); }
+  .block.resolved { border-left-color: var(--good); opacity: 0.7; }
+  .block-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .block-head b { font-weight: 600; }
+  .block .detail { color: var(--muted); font-size: 0.9rem; }
+  .block .needs { font-size: 0.8rem; }
+  .empty { padding: 14px; color: var(--muted); }
+
+  /* filters */
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .filters label { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); }
+  .filters select, .filters input[type="search"] { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 0.85rem; }
+  .filters input[type="search"] { min-width: 12ch; }
+  .filters .reset { background: none; border: none; color: var(--accent); cursor: pointer; padding: 4px 6px; font-size: 0.85rem; }
+  .filters .spacer { flex: 1; }
+  .count { font-size: 0.8rem; color: var(--muted); }
+
+  /* fleet table */
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 0.88rem; }
+  th { text-align: left; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 500; padding: 10px 10px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr.row:last-child td, tr.detail:last-child td { border-bottom: none; }
+  td.right, th.right { text-align: right; white-space: nowrap; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; vertical-align: -1px; }
+  .agent-name { font-family: var(--mono); font-weight: 500; white-space: nowrap; }
+  .task { max-width: 34ch; }
+  .lane { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); }
+  .lane code { display: block; }
+  .expand { background: none; border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; cursor: pointer; font-size: 0.78rem; color: var(--muted); }
+  .expand[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+  tr.detail td { background: var(--card-2); padding: 12px 14px 14px 32px; }
+  .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .detail-grid { grid-template-columns: 1fr; } }
+  .detail-grid h4 { margin: 0 0 4px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 500; }
+  .detail-grid p { white-space: pre-wrap; font-size: 0.88rem; max-width: 60ch; }
+
+  /* chart */
+  .chart-card { padding: 14px 14px 8px; position: relative; }
+  .chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: baseline; margin-bottom: 6px; }
+  svg.bars { width: 100%; height: auto; display: block; font-family: var(--sans); }
+  svg.bars text { fill: var(--text); font-size: 12px; }
+  svg.bars text.tick { fill: var(--muted); font-size: 11px; font-family: var(--mono); }
+  svg.bars text.val { fill: var(--muted); font-size: 11px; font-family: var(--mono); }
+  svg.bars line.grid { stroke: var(--line); stroke-width: 1; }
+  svg.bars rect.hit { fill: transparent; cursor: default; }
+  svg.bars rect.hit:hover + rect.bar, svg.bars rect.bar.hot { opacity: 0.8; }
+  .tip { position: absolute; pointer-events: none; background: var(--text); color: var(--bg); padding: 6px 9px; border-radius: 5px; font-size: 0.78rem; white-space: nowrap; transform: translate(-50%, calc(-100% - 8px)); }
+  .tip .num { color: inherit; }
+
+  /* log */
+  .log { list-style: none; margin: 0; padding: 0; }
+  .log li { display: grid; grid-template-columns: 9ch 1fr; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); font-size: 0.88rem; }
+  .log li:last-child { border-bottom: none; }
+  .log time { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); padding-top: 2px; }
+  .log .who { font-family: var(--mono); font-size: 0.8rem; margin-right: 6px; color: var(--muted); }
+  .log .swatch { margin-right: 5px; }
+  .log .kind { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); margin-right: 8px; }
+  .log .kind.blocked { color: var(--critical); }
+  .log .kind.resolved, .log .kind.integrated { color: var(--good); }
+  .log .kind.decision { color: var(--accent); }
+
+  .foot { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; color: var(--muted); font-size: 0.8rem; }
+  .error { padding: 16px; border: 1px solid var(--critical); border-radius: 8px; color: var(--critical); font-family: var(--mono); }
+  @media (prefers-reduced-motion: no-preference) { .step, .pill, .expand { transition: background 150ms ease; } }
+</style>
+
+<div class="wrap" id="app">
+  <header class="head" id="head"></header>
+  <div class="tiles" id="tiles"></div>
+  <div class="cols">
+    <section>
+      <h2>Roadmap</h2>
+      <div class="card" id="roadmap"></div>
+    </section>
+    <section>
+      <h2>Roadblocks</h2>
+      <div class="card" id="roadblocks"></div>
+    </section>
+  </div>
+  <section>
+    <h2>Fleet</h2>
+    <div class="filters">
+      <label>Status <select id="f-status"><option value="">all</option></select></label>
+      <label>Milestone <select id="f-milestone"><option value="">all</option></select></label>
+      <label>Skill <select id="f-skill"><option value="">all</option></select></label>
+      <label>Model <select id="f-model"><option value="">all</option></select></label>
+      <label><input type="search" id="f-q" placeholder="Search task, lane, report" aria-label="Search"></label>
+      <button class="reset" id="f-reset" type="button">Clear</button>
+      <span class="spacer"></span>
+      <span class="count" id="f-count"></span>
+    </div>
+    <div class="card table-wrap"><table id="fleet"></table></div>
+  </section>
+  <section>
+    <h2>Tokens by worker</h2>
+    <div class="card chart-card" id="chart"></div>
+  </section>
+  <section>
+    <h2>Activity</h2>
+    <div class="card"><ul class="log" id="log"></ul></div>
+  </section>
+  <footer class="foot">
+    <span id="foot-updated"></span>
+    <span class="pill running" id="live" hidden>live</span>
+  </footer>
+</div>
+
+<script id="fleet-state" type="application/json">/*__STATE__*/</script>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  let STATE;
+  try {
+    STATE = JSON.parse($("fleet-state").textContent);
+  } catch (e) {
+    $("app").innerHTML = '<div class="error">No fleet state embedded. Render this template with scripts/render_dashboard.py.</div>';
+    return;
+  }
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem("fleet:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem("fleet:" + k, JSON.stringify(v)); } catch { /* per-viewer convenience only */ } },
+  };
+
+  let NOW = Date.now();
+  const fmtInt = (n) => Number(n || 0).toLocaleString("en-US");
+  const fmtShort = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n);
+  const fmtDur = (ms) => {
+    if (!ms) return "";
+    const s = Math.round(ms / 1000);
+    if (s < 60) return s + " s";
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + " min";
+    const h = Math.floor(m / 60);
+    return h + " h " + (m % 60) + " min";
+  };
+  const ago = (iso) => {
+    const t = Date.parse(iso); if (isNaN(t)) return "";
+    const d = Math.max(0, NOW - t);
+    return d < 60e3 ? "just now" : fmtDur(d) + " ago";
+  };
+  const clock = (iso) => { const t = new Date(iso); return isNaN(t) ? "" : t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
+  const pill = (s) => `<span class="pill ${esc(s)}">${esc(s)}</span>`;
+  let agentById = {};
+  const colorOf = (a) => `var(--s${(STATE.agents.indexOf(a) % 8) + 1})`;
+  const stepAgent = (id) => id && agentById[id] ? `<a href="#agent-${esc(id)}">${esc(agentById[id].name)}</a>` : "";
+  const expanded = new Set(store.get("expanded", []));
+  const filters = ["f-status", "f-milestone", "f-skill", "f-model", "f-q"];
+
+  function renderHeader() {
+    $("head").innerHTML = `
+      <div class="head-row"><h1>${esc(STATE.project)}</h1>${pill(STATE.status)}</div>
+      <p class="goal">${esc(STATE.goal)}</p>
+      <div class="now"><b>Now</b><span>${esc(STATE.now)}</span></div>
+      <div class="meta">
+        <span>Started ${esc(clock(STATE.started))}, ${esc(ago(STATE.started))}</span>
+        <span>Updated ${esc(clock(STATE.updated))}, ${esc(ago(STATE.updated))}</span>
+      </div>`;
+    $("foot-updated").textContent = `State updated ${new Date(STATE.updated).toLocaleString()}`;
+  }
+
+  function renderTiles() {
+    const byStatus = (s) => STATE.agents.filter((a) => a.status === s).length;
+    const totalTokens = STATE.agents.reduce((n, a) => n + (a.tokens || 0), 0);
+    const openBlocks = STATE.roadblocks.filter((r) => !r.resolved);
+    const steps = STATE.roadmap.flatMap((m) => m.steps);
+    const doneSteps = steps.filter((s) => s.status === "done").length;
+    const tile = (label, value, sub, cls) => `<div class="tile ${cls || ""}"><span class="label">${label}</span><span class="value num">${value}</span><span class="sub">${sub}</span></div>`;
+    $("tiles").innerHTML = [
+      tile("Running", byStatus("running"), `${byStatus("queued")} queued`),
+      tile("Done", byStatus("done"), `${byStatus("failed") + byStatus("stopped")} failed or stopped`),
+      tile("Blocked", byStatus("blocked"), `${openBlocks.length} open roadblock${openBlocks.length === 1 ? "" : "s"}`, openBlocks.length ? "alert" : ""),
+      tile("Roadmap", `${doneSteps}/${steps.length}`, "steps done"),
+      tile("Tokens", fmtShort(totalTokens), fmtInt(totalTokens) + " across " + STATE.agents.length + " workers"),
+      tile("Elapsed", fmtDur(NOW - Date.parse(STATE.started)) || "0 s", "since coordination began"),
+    ].join("");
+  }
+
+  function renderRoadmap() {
+    $("roadmap").innerHTML = STATE.roadmap.length ? STATE.roadmap.map((m) => {
+      const done = m.steps.filter((s) => s.status === "done").length;
+      return `<div class="milestone">
+        <div class="milestone-head"><h3>${esc(m.title)}</h3><span class="num faint">${done}/${m.steps.length}</span></div>
+        <ol class="steps">${m.steps.map((s) => `<li class="step ${esc(s.status)}" title="${esc(s.status)}"><span class="dot"></span><span class="title">${esc(s.title)}</span><span class="who">${stepAgent(s.agent)}</span></li>`).join("")}</ol>
+      </div>`;
+    }).join("") : '<p class="empty">No roadmap yet.</p>';
+  }
+
+  function renderRoadblocks() {
+    const blocks = [...STATE.roadblocks].sort((a, b) => (a.resolved - b.resolved) || (Date.parse(b.since) - Date.parse(a.since)));
+    $("roadblocks").innerHTML = blocks.length ? blocks.map((r) => `
+      <div class="block ${r.resolved ? "resolved" : esc(r.severity)}">
+        <div class="block-head"><b>${esc(r.title)}</b>${r.resolved ? pill("done") : pill(r.severity)}</div>
+        <p class="detail">${esc(r.detail)}</p>
+        <p class="needs muted">${r.resolved ? "Resolved" : "Needs <b>" + esc(r.needs) + "</b>"} · ${esc(r.agent ? (agentById[r.agent]?.name || r.agent) : "coordinator")} · since ${esc(clock(r.since))}</p>
+      </div>`).join("") : '<p class="empty">No roadblocks.</p>';
+  }
+
+  function renderFilterOptions() {
+    const keep = Object.fromEntries(filters.map((id) => [id, $(id).value || store.get(id, "")]));
+    const reset = (sel) => { sel.innerHTML = '<option value="">all</option>'; };
+    const fill = (sel, values, labels) => { for (const v of values) { const o = document.createElement("option"); o.value = v; o.textContent = labels ? labels[v] : v; sel.appendChild(o); } };
+    const uniq = (xs) => [...new Set(xs.filter(Boolean))];
+    reset($("f-status")); fill($("f-status"), ["running", "queued", "blocked", "done", "failed", "stopped"].filter((s) => STATE.agents.some((a) => a.status === s)));
+    reset($("f-milestone")); fill($("f-milestone"), STATE.roadmap.map((m) => m.id), Object.fromEntries(STATE.roadmap.map((m) => [m.id, m.title])));
+    reset($("f-skill")); fill($("f-skill"), uniq(STATE.agents.map((a) => a.skill)));
+    reset($("f-model")); fill($("f-model"), uniq(STATE.agents.map((a) => a.model)));
+    for (const id of filters) $(id).value = keep[id];
+  }
+
+  const visibleAgents = () => {
+    const q = $("f-q").value.trim().toLowerCase();
+    return STATE.agents.filter((a) =>
+      (!$("f-status").value || a.status === $("f-status").value) &&
+      (!$("f-milestone").value || a.milestone === $("f-milestone").value) &&
+      (!$("f-skill").value || a.skill === $("f-skill").value) &&
+      (!$("f-model").value || a.model === $("f-model").value) &&
+      (!q || [a.name, a.task, a.report, a.brief, ...(a.lane || [])].join(" ").toLowerCase().includes(q)));
+  };
+
+  function renderFleet(rows) {
+    $("f-count").textContent = rows.length === STATE.agents.length ? `${rows.length} workers` : `${rows.length} of ${STATE.agents.length} workers`;
+    if (!rows.length) { $("fleet").innerHTML = '<tbody><tr><td class="empty">No workers match these filters.</td></tr></tbody>'; return; }
+    $("fleet").innerHTML = `<thead><tr>
+        <th>Worker</th><th>Task</th><th>Skill</th><th>Model</th><th>Status</th><th>Lane</th>
+        <th class="right">Tokens</th><th class="right">Time</th><th>Updated</th><th></th>
+      </tr></thead><tbody>` + rows.map((a) => {
+        const open = expanded.has(a.id);
+        return `<tr class="row" id="agent-${esc(a.id)}">
+          <td><span class="swatch" style="background:${colorOf(a)}"></span><span class="agent-name">${esc(a.name)}</span></td>
+          <td class="task">${esc(a.task)}</td>
+          <td>${esc(a.skill || "none")}</td>
+          <td>${esc(a.model || "opus")}</td>
+          <td>${pill(a.status)}</td>
+          <td class="lane">${(a.lane || []).length ? a.lane.map((l) => `<code>${esc(l)}</code>`).join("") : '<span class="faint">read-only</span>'}</td>
+          <td class="right num">${a.tokens ? fmtInt(a.tokens) : '<span class="faint">pending</span>'}</td>
+          <td class="right num">${esc(fmtDur(a.duration_ms))}</td>
+          <td class="muted" title="${esc(a.updated)}">${esc(ago(a.updated))}</td>
+          <td><button class="expand" type="button" data-id="${esc(a.id)}" aria-expanded="${open}">${open ? "Hide" : "Detail"}</button></td>
+        </tr>` + (open ? `<tr class="detail"><td colspan="10"><div class="detail-grid">
+          <div><h4>Brief and completion criterion</h4><p>${esc(a.brief || "No brief recorded.")}</p></div>
+          <div><h4>Latest report</h4><p>${esc(a.report || "No report yet.")}</p></div>
+        </div></td></tr>` : "");
+      }).join("") + "</tbody>";
+    for (const b of $("fleet").querySelectorAll(".expand")) b.addEventListener("click", () => {
+      const id = b.dataset.id; expanded.has(id) ? expanded.delete(id) : expanded.add(id);
+      store.set("expanded", [...expanded]); render();
+    });
+  }
+
+  function renderChart(rows) {
+    const withTokens = [...rows].sort((a, b) => (b.tokens || 0) - (a.tokens || 0));
+    const total = withTokens.reduce((n, a) => n + (a.tokens || 0), 0);
+    if (!withTokens.length) { $("chart").innerHTML = '<p class="empty">No workers to chart.</p>'; return; }
+    const W = 720, L = 150, R = 60, T = 8, RH = 28, H = T + withTokens.length * RH + 28;
+    const max = Math.max(1, ...withTokens.map((a) => a.tokens || 0));
+    const mag = Math.pow(10, Math.floor(Math.log10(max)));
+    const nice = mag * [1, 2, 5, 10].find((k) => k * mag >= max);
+    const x = (v) => L + (v / nice) * (W - L - R);
+    const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * nice);
+    const bars = withTokens.map((a, i) => {
+      const y = T + i * RH, w = Math.max(0, x(a.tokens || 0) - L);
+      return `<g data-i="${i}">
+        <text x="${L - 10}" y="${y + RH / 2 + 4}" text-anchor="end">${esc(a.name.length > 18 ? a.name.slice(0, 17) + "…" : a.name)}</text>
+        <rect class="hit" x="0" y="${y}" width="${W}" height="${RH}"></rect>
+        <rect class="bar" x="${L}" y="${y + 6}" width="${w}" height="${RH - 12}" rx="3" fill="${colorOf(a)}"></rect>
+        <text class="val" x="${L + w + 6}" y="${y + RH / 2 + 4}">${a.tokens ? fmtShort(a.tokens) : "pending"}</text>
+      </g>`;
+    }).join("");
+    const grid = ticks.map((t) => `<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${T}" y2="${H - 24}"></line><text class="tick" x="${x(t)}" y="${H - 8}" text-anchor="middle">${fmtShort(t)}</text>`).join("");
+    $("chart").innerHTML = `<div class="chart-head"><span class="muted">Total tokens per worker, from task notifications. Running workers show their last reported figure.</span><span class="num muted">${fmtInt(total)} total</span></div>
+      <svg class="bars" viewBox="0 0 ${W} ${H}" role="img" aria-label="Tokens by worker">${grid}${bars}</svg><div class="tip" id="tip" hidden></div>`;
+    const svg = $("chart").querySelector("svg"), tip = $("tip");
+    svg.addEventListener("mousemove", (e) => {
+      const g = e.target.closest("g[data-i]"); if (!g) { tip.hidden = true; return; }
+      const a = withTokens[+g.dataset.i]; const box = $("chart").getBoundingClientRect();
+      tip.innerHTML = `<b>${esc(a.name)}</b> · ${esc(a.status)}<br><span class="num">${fmtInt(a.tokens)}</span> tokens${a.duration_ms ? " · " + esc(fmtDur(a.duration_ms)) : ""}${total ? " · " + Math.round(100 * (a.tokens || 0) / total) + "%" : ""}`;
+      tip.style.left = (e.clientX - box.left) + "px"; tip.style.top = (e.clientY - box.top) + "px"; tip.hidden = false;
+    });
+    svg.addEventListener("mouseleave", () => { tip.hidden = true; });
+  }
+
+  function renderLog(rows) {
+    const ids = new Set(rows.map((a) => a.id));
+    const filtering = rows.length !== STATE.agents.length;
+    const q = $("f-q").value.trim().toLowerCase();
+    const events = [...STATE.events].reverse().filter((e) => (!filtering || (e.agent ? ids.has(e.agent) : !q)) && (!q || e.text.toLowerCase().includes(q) || (e.agent && ids.has(e.agent))));
+    $("log").innerHTML = events.length ? events.map((e) => `<li>
+      <time datetime="${esc(e.at)}" title="${esc(e.at)}">${esc(clock(e.at))}</time>
+      <span><span class="kind ${esc(e.kind)}">${esc(e.kind)}</span>${e.agent ? `${agentById[e.agent] ? `<span class="swatch" style="background:${colorOf(agentById[e.agent])}"></span>` : ""}<span class="who">${esc(agentById[e.agent]?.name || e.agent)}</span>` : '<span class="who">coordinator</span>'}${esc(e.text)}</span>
+    </li>`).join("") : '<li><span></span><span class="muted">Nothing logged yet.</span></li>';
+  }
+
+  function render() { const rows = visibleAgents(); renderFleet(rows); renderChart(rows); renderLog(rows); }
+
+  function applyState(state) {
+    STATE = state; NOW = Date.now();
+    agentById = Object.fromEntries(STATE.agents.map((a) => [a.id, a]));
+    renderHeader(); renderTiles(); renderRoadmap(); renderRoadblocks(); renderFilterOptions(); render();
+  }
+
+  for (const id of filters) { const saved = store.get(id, ""); if (saved) $(id).value = saved; $(id).addEventListener("input", () => { store.set(id, $(id).value); render(); }); }
+  $("f-reset").addEventListener("click", () => { for (const id of filters) { $(id).value = ""; store.set(id, ""); } render(); });
+  applyState(STATE);
+
+  /* Live updates. Served over the tailnet, the page polls state.json beside it and re-renders
+     when the coordinator writes a new version. Published as an artifact, fetch is blocked and
+     each republish reaches open viewers on its own, so the poll fails quietly. */
+  if (location.protocol.startsWith("http")) {
+    const poll = async () => {
+      try {
+        const res = await fetch("state.json", { cache: "no-store" });
+        if (!res.ok) return;
+        const next = await res.json();
+        if (next.updated !== STATE.updated) applyState(next);
+      } catch { /* not served beside a state file */ }
+    };
+    setInterval(poll, 5000);
+    $("live").hidden = false;
+  }
+})();
+</script>

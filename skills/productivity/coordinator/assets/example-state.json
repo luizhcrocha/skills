@@ -1,0 +1,152 @@
+{
+  "project": "acme-billing",
+  "goal": "Add usage-based invoicing to the billing service without breaking the flat-rate path.",
+  "status": "running",
+  "now": "Two workers implementing milestone 2; waiting on the user for the Stripe test key.",
+  "started": "2026-09-26T14:02:00-05:00",
+  "updated": "2026-09-26T15:41:12-05:00",
+  "roadmap": [
+    {
+      "id": "m1",
+      "title": "Understand the current billing seam",
+      "steps": [
+        { "id": "s1", "title": "Research Stripe metered billing API", "status": "done", "agent": "research-stripe" },
+        { "id": "s2", "title": "Map the invoice module's interface", "status": "done", "agent": "map-invoice" }
+      ]
+    },
+    {
+      "id": "m2",
+      "title": "Usage records and invoice generation",
+      "steps": [
+        { "id": "s3", "title": "UsageRecord domain type and store", "status": "done", "agent": "usage-store" },
+        { "id": "s4", "title": "Invoice generator reads usage", "status": "current", "agent": "invoice-gen" },
+        { "id": "s5", "title": "Stripe adapter for metered prices", "status": "blocked", "agent": "stripe-adapter" }
+      ]
+    },
+    {
+      "id": "m3",
+      "title": "Verify and ship",
+      "steps": [
+        { "id": "s6", "title": "Integration tests through the real seam", "status": "pending", "agent": null },
+        { "id": "s7", "title": "Code review against the spec", "status": "pending", "agent": null }
+      ]
+    }
+  ],
+  "agents": [
+    {
+      "id": "research-stripe",
+      "name": "research-stripe",
+      "task": "Document Stripe metered billing: usage records, aggregation, and invoice timing.",
+      "skill": "research",
+      "model": "opus",
+      "status": "done",
+      "lane": ["docs/research/stripe-metered-billing.md"],
+      "milestone": "m1",
+      "tokens": 61204,
+      "duration_ms": 412000,
+      "started": "2026-09-26T14:05:00-05:00",
+      "updated": "2026-09-26T14:12:00-05:00",
+      "brief": "Done when docs/research/stripe-metered-billing.md cites primary sources for usage record creation, aggregation modes, and when metered lines appear on invoices.",
+      "report": "Written with 6 citations. Aggregation is per subscription item; usage must be reported before the invoice finalizes."
+    },
+    {
+      "id": "map-invoice",
+      "name": "map-invoice",
+      "task": "Explain the invoice module's interface and where usage would enter.",
+      "skill": "none",
+      "model": "opus",
+      "status": "done",
+      "lane": [],
+      "milestone": "m1",
+      "tokens": 38810,
+      "duration_ms": 201000,
+      "started": "2026-09-26T14:05:00-05:00",
+      "updated": "2026-09-26T14:09:00-05:00",
+      "brief": "Read-only. Done when the report names every caller of generateInvoice and the one seam usage can enter through.",
+      "report": "generateInvoice has 3 callers. Usage enters through the line-item builder; the flat-rate path never touches it."
+    },
+    {
+      "id": "usage-store",
+      "name": "usage-store",
+      "task": "UsageRecord type and an in-memory plus SQL store behind one interface.",
+      "skill": "tdd",
+      "model": "opus",
+      "status": "done",
+      "lane": ["src/billing/usage/**"],
+      "milestone": "m2",
+      "tokens": 142330,
+      "duration_ms": 1380000,
+      "started": "2026-09-26T14:20:00-05:00",
+      "updated": "2026-09-26T14:43:00-05:00",
+      "brief": "Done when src/billing/usage/store.test.ts is green against both adapters and the diff stays inside src/billing/usage.",
+      "report": "12 tests green. Both adapters share the same interface test. No files touched outside the lane."
+    },
+    {
+      "id": "invoice-gen",
+      "name": "invoice-gen",
+      "task": "Invoice generator adds metered line items from the usage store.",
+      "skill": "implement",
+      "model": "opus",
+      "status": "running",
+      "lane": ["src/billing/invoice/**"],
+      "milestone": "m2",
+      "tokens": 0,
+      "duration_ms": 0,
+      "started": "2026-09-26T14:50:00-05:00",
+      "updated": "2026-09-26T14:50:00-05:00",
+      "brief": "Done when the flat-rate invoice tests still pass and a new test shows a metered line item for a subscription with usage.",
+      "report": ""
+    },
+    {
+      "id": "stripe-adapter",
+      "name": "stripe-adapter",
+      "task": "Stripe adapter that reports usage for metered prices.",
+      "skill": "implement",
+      "model": "opus",
+      "status": "blocked",
+      "lane": ["src/billing/stripe/**"],
+      "milestone": "m2",
+      "tokens": 27950,
+      "duration_ms": 240000,
+      "started": "2026-09-26T14:50:00-05:00",
+      "updated": "2026-09-26T15:30:00-05:00",
+      "brief": "Done when reportUsage is exercised against the Stripe test mode with a recorded fixture.",
+      "report": "Adapter written; cannot record the fixture without a Stripe test key."
+    }
+  ],
+  "roadblocks": [
+    {
+      "id": "r1",
+      "title": "Stripe test key needed",
+      "detail": "stripe-adapter needs STRIPE_TEST_KEY in the environment to record the usage-report fixture.",
+      "agent": "stripe-adapter",
+      "severity": "serious",
+      "needs": "user",
+      "since": "2026-09-26T15:30:00-05:00",
+      "resolved": false
+    },
+    {
+      "id": "r0",
+      "title": "Lane overlap on line-item builder",
+      "detail": "invoice-gen and usage-store both wanted src/billing/invoice/line-items.ts. Assigned to invoice-gen; usage-store exposes a function instead.",
+      "agent": "invoice-gen",
+      "severity": "warning",
+      "needs": "coordinator",
+      "since": "2026-09-26T14:48:00-05:00",
+      "resolved": true
+    }
+  ],
+  "events": [
+    { "at": "2026-09-26T14:02:00-05:00", "agent": null, "kind": "decision", "text": "Split into three milestones; research first so the adapter is designed against the real API." },
+    { "at": "2026-09-26T14:05:00-05:00", "agent": "research-stripe", "kind": "spawned", "text": "Spawned on opus following research." },
+    { "at": "2026-09-26T14:05:00-05:00", "agent": "map-invoice", "kind": "spawned", "text": "Spawned on opus, read-only mapping task." },
+    { "at": "2026-09-26T14:09:00-05:00", "agent": "map-invoice", "kind": "reported", "text": "Usage enters through the line-item builder." },
+    { "at": "2026-09-26T14:12:00-05:00", "agent": "research-stripe", "kind": "reported", "text": "Research file written with 6 citations." },
+    { "at": "2026-09-26T14:20:00-05:00", "agent": "usage-store", "kind": "spawned", "text": "Spawned on opus following tdd." },
+    { "at": "2026-09-26T14:43:00-05:00", "agent": "usage-store", "kind": "reported", "text": "12 tests green across both adapters." },
+    { "at": "2026-09-26T14:48:00-05:00", "agent": null, "kind": "resolved", "text": "Lane overlap on line-items.ts resolved by ownership to invoice-gen." },
+    { "at": "2026-09-26T14:50:00-05:00", "agent": "invoice-gen", "kind": "spawned", "text": "Spawned on opus following implement." },
+    { "at": "2026-09-26T14:50:00-05:00", "agent": "stripe-adapter", "kind": "spawned", "text": "Spawned on opus following implement." },
+    { "at": "2026-09-26T15:30:00-05:00", "agent": "stripe-adapter", "kind": "blocked", "text": "Needs STRIPE_TEST_KEY to record the fixture." }
+  ]
+}
