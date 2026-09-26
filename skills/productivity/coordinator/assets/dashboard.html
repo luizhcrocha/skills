@@ -230,8 +230,10 @@
   <div class="panel-prefs">
     <label>Sound <select id="n-sound"><option value="important">important only</option><option value="all">every event</option><option value="off">off</option></select></label>
     <label>Toasts <select id="n-toasts"><option value="all">every event</option><option value="important">important only</option><option value="off">off</option></select></label>
+    <label>Browser alerts <select id="n-browser"><option value="off">off</option><option value="important">important only</option><option value="all">every event</option></select></label>
     <button type="button" id="n-test">Test sound</button>
     <span id="n-audio-note" class="blocked" hidden>Click anywhere once to allow sound.</span>
+    <span id="n-browser-note" class="blocked" hidden></span>
   </div>
   <ul class="notifs" id="notifs"></ul>
 </div>
@@ -489,8 +491,30 @@
     let lastSeen = store.get("n-lastSeen", "");
     let clearedBefore = store.get("n-cleared", "");
     let booted = false;
-    const prefs = { sound: store.get("n-sound", "important"), toasts: store.get("n-toasts", "all") };
-    $("n-sound").value = prefs.sound; $("n-toasts").value = prefs.toasts;
+    const prefs = { sound: store.get("n-sound", "important"), toasts: store.get("n-toasts", "all"), browser: store.get("n-browser", "off") };
+    $("n-sound").value = prefs.sound; $("n-toasts").value = prefs.toasts; $("n-browser").value = prefs.browser;
+
+    /* Browser-level alerts: system notifications while the tab is hidden. Needs a secure origin
+       (the tailnet HTTPS URL) and a permission the viewer grants from the panel. */
+    const canNotify = () => "Notification" in window && window.isSecureContext;
+    let iconPng = null;
+    const notifIcon = () => iconPng || "data:image/svg+xml," + encodeURIComponent(mark().replace(/\s+/g, " "));
+    (() => { try { const img = new Image(); img.onload = () => { const c = document.createElement("canvas"); c.width = c.height = 128; c.getContext("2d").drawImage(img, 0, 0, 128, 128); iconPng = c.toDataURL("image/png"); }; img.src = notifIcon(); } catch { /* svg fallback */ } })();
+    function browserNote() {
+      const el = $("n-browser-note");
+      if (!canNotify()) { el.textContent = window.isSecureContext ? "Browser alerts are not supported here." : "Browser alerts need the https address."; el.hidden = prefs.browser === "off"; $("n-browser").disabled = true; return; }
+      if (prefs.browser !== "off" && Notification.permission === "denied") { el.textContent = "Browser alerts are blocked in this browser's site settings."; el.hidden = false; return; }
+      if (prefs.browser !== "off" && Notification.permission === "default") { el.textContent = "Waiting for permission."; el.hidden = false; return; }
+      el.hidden = true;
+    }
+    function browserAlert(e) {
+      if (prefs.browser === "off" || (prefs.browser === "important" && !e.important)) return;
+      if (!canNotify() || Notification.permission !== "granted" || document.visibilityState === "visible") return;
+      try {
+        const n = new Notification((e.important ? "Needs you: " : "") + STATE.project, { body: `${who(e)} · ${e.kind}\n${e.text}`, icon: notifIcon(), tag: key(e), requireInteraction: !!e.important, silent: prefs.sound === "off" });
+        n.onclick = () => { window.focus(); n.close(); if ($("panel").hidden) $("bell").click(); };
+      } catch { /* the browser refused; the toast and badge still show */ }
+    }
 
     let ctx = null;
     const audio = () => { try { ctx = ctx || new (window.AudioContext || window.webkitAudioContext)(); } catch { ctx = null; } return ctx; };
@@ -542,7 +566,7 @@
       sync.keys = STATE.events.map(key);
       if (!booted) { booted = true; unread().filter((e) => e.important).reverse().forEach(toast); }
       else {
-        fresh.forEach(toast);
+        fresh.forEach(toast); fresh.forEach(browserAlert);
         const imp = fresh.some((e) => e.important);
         if (fresh.length && (prefs.sound === "all" || (prefs.sound === "important" && imp))) chime(imp);
       }
@@ -559,6 +583,12 @@
     $("n-clear").addEventListener("click", () => { clearedBefore = new Date().toISOString(); store.set("n-cleared", clearedBefore); markRead(); });
     $("n-sound").addEventListener("change", () => { prefs.sound = $("n-sound").value; store.set("n-sound", prefs.sound); renderBadge(); });
     $("n-toasts").addEventListener("change", () => { prefs.toasts = $("n-toasts").value; store.set("n-toasts", prefs.toasts); });
+    $("n-browser").addEventListener("change", () => {
+      prefs.browser = $("n-browser").value; store.set("n-browser", prefs.browser);
+      if (prefs.browser !== "off" && canNotify() && Notification.permission === "default") Notification.requestPermission().then(browserNote);
+      browserNote();
+    });
+    browserNote();
     $("n-test").addEventListener("click", () => { unlock(); setTimeout(() => chime(true), 50); });
     return { sync };
   })();

@@ -84,6 +84,6 @@ events[]     activity log, oldest first
 - Fleet table with filters (status, milestone, skill, model, free text) and expandable rows for brief and report.
 - Token chart: one bar per worker, coloured by spawn order, hover for the figures, with the table as the accessible alternative.
 - Activity log, newest first, filtered together with the table.
-- Notifications: every event is one. A bell in the top right carries the unread count and opens the list, with mark-read, clear, and the sound and toast preferences. New events show as toasts; important ones stay until dismissed, chime, and flag the tab title. Browsers allow sound only after the viewer has clicked the page once, so a viewer who never interacts still gets the toast and the badge.
+- Notifications: every event is one. A bell in the top right carries the unread count and opens the list, with mark-read, clear, and the sound and toast preferences. New events show as toasts; important ones stay until dismissed, chime, and flag the tab title. Browsers allow sound only after the viewer has clicked the page once, so a viewer who never interacts still gets the toast and the badge. Browser alerts (system notifications while the tab is hidden) are a third preference in the panel; they need the https address and a permission the viewer grants when turning them on, and important ones stay on screen until dismissed.
 
 Filters and the expanded rows survive each re-render (the page keeps them in the viewer's browser), so the user's view is not reset by your updates.
