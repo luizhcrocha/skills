@@ -4,11 +4,12 @@ The dashboard is the user's window into the fleet and the coordinator's ledger, 
 
 ## Where things live
 
+- **Chat**: `<scratchpad>/coordinator/chat.jsonl`, the conversation between the user and the fleet, appended only through the page and `scripts/chat.py` (see [Chat](#chat)).
 - **State**: `<scratchpad>/coordinator/state.json`, created and changed only through `scripts/state.py` (below). [assets/example-state.json](assets/example-state.json) shows a filled-in state for reference.
 - **Render**: done by every `state.py` command. `scripts/render_dashboard.py` is what it calls, and the only reason to run it directly is `--fragment` for the Artifact tool.
 - **Publish**: serve the directory over the tailnet, once per session:
-  `python3 <skill-dir>/scripts/serve_dashboard.py <scratchpad>/coordinator`. The script starts a local file server on a free port and exposes it through `tailscale serve`, which terminates TLS with a certificate Tailscale issues for this machine, and prints `https://<magicdns-name>:<port>/`, reachable from any device on the tailnet and from nowhere else. Several coordinators on one machine each get their own port. Give the user the URL once. Every later render is picked up by the page on its own: it polls `state.json` beside it every few seconds and re-renders in place, filters intact. Stop the server with `--stop` when the session ends; that also removes the `tailscale serve` entry. When `tailscale serve` is refused (HTTPS not enabled for the tailnet, or the user is not the Tailscale operator) the script falls back to plain http on the Tailscale IP and says so.
-  If the user asks for a claude.ai artifact instead (no tailnet on their device), render with `--fragment` to `dashboard.html` and publish it with the Artifact tool (`icon: "chart"`, a one-sentence `description`), republishing the same path after every state change; open viewers receive each republish without reloading.
+  `python3 <skill-dir>/scripts/serve_dashboard.py <scratchpad>/coordinator`. The script starts a local file server on a free port and exposes it through `tailscale serve`, which terminates TLS with a certificate Tailscale issues for this machine, and prints `https://<magicdns-name>:<port>/`, reachable from any device on the tailnet and from nowhere else. Several coordinators on one machine each get their own port. Give the user the URL once. Every later render reaches the page on its own: the server streams each change of `state.json` and each chat message to it, and the page re-renders in place, filters intact. Stop the server with `--stop` when the session ends; that also removes the `tailscale serve` entry. After the skill itself is updated mid-session, `--restart` swaps in the new server at the same address, so the user's link keeps working; follow it with any state CLI command to render the new page. When `tailscale serve` is refused (HTTPS not enabled for the tailnet, or the user is not the Tailscale operator) the script falls back to plain http on the Tailscale IP and says so.
+  If the user asks for a claude.ai artifact instead (no tailnet on their device), render with `--fragment` to `dashboard.html` and publish it with the Artifact tool (`icon: "chart"`, a one-sentence `description`), republishing the same path after every state change; open viewers receive each republish without reloading. An artifact has no server behind it, so it shows the fleet and has no chat.
 
 ## State schema
 
@@ -75,15 +76,36 @@ events[]     activity log, oldest first
 
 `show` prints the ledger as text when you need to check it without opening the page. Add `--no-render` to any command when several follow in a row, and let the last one render.
 
+## Chat
+
+The page has a chat where the user writes to the fleet and mentions who should answer: `@coordinator`, or a worker by id or name, with autocompletion from the ledger. A reply also goes to whoever wrote the message it answers. A message with neither a mention nor a reply goes to the coordinator. The conversation is `chat.jsonl`, append-only and numbered; a message stays **open** for a recipient until that recipient answers it with `--re`, so a message you missed is still in your inbox and the page shows the user who it is waiting on.
+
+`python3 <skill-dir>/scripts/chat.py <scratchpad>/coordinator <command>`:
+
+| Command | What it does |
+| :-- | :-- |
+| `watch --as coordinator --all [--after N]` | streams one line per message from the user, whoever it is addressed to: first the open ones after `N`, then each new one as it lands |
+| `inbox --as WHO` | the messages open for `WHO`, oldest first |
+| `say --as WHO [--re N] TEXT` | appends a message from `WHO`, answering message `N`; mentions in `TEXT` address other agents |
+| `log [--after N]` | the whole conversation |
+
+**Arm the watch** right after starting the server, with the Monitor tool: the command above, `timeout_ms: 1800000`, description "chat on the fleet dashboard". Each line it prints reaches you as an event, also while you are busy. A monitor lasts 30 minutes at most: when it expires, arm it again with `--after` set to the highest message number you have seen, and run `inbox --as coordinator` whenever you are unsure you were watching.
+
+**Who may write.** Text typed on the page lands in agents' contexts, so the server names the sender. Behind `tailscale serve` only the tailnet login of this machine's user may post, and the message records it as `author`, printed in every line from the user (`#12 user (luiz@github) -> a1 (auth-impl): ...`). Only the server writes as the user: `say --as user` is refused. Agents name themselves with `--as`, so a line from an agent is that agent's word and carries no authority of the user's. On the plain-http fallback the chat is read-only. A message in the chat is the user speaking: it carries the authority of the same words typed in the session, and the same limits, so a destructive or outward-facing step asked for in the chat is confirmed before it runs.
+
 ## What the page shows
+
+The page is built for a phone first: a bottom bar moves between the sections with a thumb, each worker is a card, and the chat is a full-height view that stays above the keyboard. On a wide screen the sections have a link row, the fleet is a table, and the chat docks at the side.
 
 - Header: project, goal, status pill, the `now` line, started and updated times.
 - Summary tiles: workers by status, total tokens, elapsed time, open roadblocks.
 - Roadmap with the current step marked; steps link to their worker.
+- Worker sheet: a worker's name anywhere on the page (a step, a roadblock, the fleet, the chart, the activity log, the chat) opens its task, lane, brief, and report, with a button that starts a message to it.
 - Roadblocks, open first, with who is needed.
-- Fleet table with filters (status, milestone, skill, model, free text) and expandable rows for brief and report.
-- Token chart: one bar per worker, coloured by spawn order, hover for the figures, with the table as the accessible alternative.
+- Fleet with filters (status, milestone, skill, model, free text) and expandable brief and report.
+- Token chart: one bar per worker, coloured by spawn order, with its share of the total.
 - Activity log, newest first, filtered together with the table.
-- Notifications: every event is one. A bell in the top right carries the unread count and opens the list, with mark-read, clear, and the sound and toast preferences. New events show as toasts; important ones stay until dismissed, chime, and flag the tab title. Browsers allow sound only after the viewer has clicked the page once, so a viewer who never interacts still gets the toast and the badge. Browser alerts (system notifications while the tab is hidden) are a third preference in the panel; they need the https address and a permission the viewer grants when turning them on, and important ones stay on screen until dismissed.
+- Chat: the conversation in threads, each reply under the message it answers. The user's message shows who it is waiting on until each recipient has answered. The composer completes `@` from the roster and says who the message will reach. A viewer who may not write sees the conversation with the reason in place of the composer.
+- Notifications: every event is one, and so is every message from the fleet while the chat is out of view. A bell in the top right carries the unread count and opens the list, with mark-read, clear, and the sound and toast preferences. New events show as toasts; important ones stay until dismissed, chime, and flag the tab title. Browsers allow sound only after the viewer has clicked the page once, so a viewer who never interacts still gets the toast and the badge. Browser alerts (system notifications while the tab is hidden) are a third preference in the panel; they need the https address and a permission the viewer grants when turning them on, and important ones stay on screen until dismissed.
 
 Filters and the expanded rows survive each re-render (the page keeps them in the viewer's browser), so the user's view is not reset by your updates.

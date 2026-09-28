@@ -2,7 +2,7 @@
 
 General workflow tools, not code-specific.
 
-- **[coordinator](./coordinator/SKILL.md)** — Run the session as a coordinator of a fleet of agents: route each task to the right skill (`implement`, `diagnosing-bugs`, `prototype`, `research`, `tdd`), brief workers with lanes, completion criteria, and the `codebase-design` rules that `improve-codebase-architecture` enforces, track them in a live dashboard served over your tailnet with roadmap, roadblocks, and per-worker token usage, and integrate the results.
+- **[coordinator](./coordinator/SKILL.md)** — Run the session as a coordinator of a fleet of agents: route each task to the right skill (`implement`, `diagnosing-bugs`, `prototype`, `research`, `tdd`), brief workers with lanes, completion criteria, and the `codebase-design` rules that `improve-codebase-architecture` enforces, track them in a live dashboard served over your tailnet, built for a phone, with roadmap, roadblocks, per-worker token usage, and a chat where you write to the coordinator or `@`-mention any worker, and integrate the results.
 - **[caveman](./caveman/SKILL.md)** — Ultra-compressed communication mode. Cuts token usage ~75% by dropping filler while keeping full technical accuracy.
 - **[grill-me](./grill-me/SKILL.md)** — Get relentlessly interviewed about a plan or design until every branch of the decision tree is resolved.
 - **[grilling](./grilling/SKILL.md)** — Get interviewed relentlessly, one question at a time, down every branch of the decision tree until you reach shared understanding. The engine behind `grill-me`, `grill-with-docs`, `triage` and `improve-codebase-architecture`.

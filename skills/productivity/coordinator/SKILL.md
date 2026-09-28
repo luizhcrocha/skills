@@ -40,7 +40,7 @@ Run this on every task the user hands you, and again on every report a worker se
 
 ### 1. Intake
 
-Understand the task before splitting it. Read enough to name the milestones and their steps; delegate any deeper reading. If the user's ask is ambiguous in a way that changes the split, ask one question. Then record the roadmap with the state CLI and start the server (see [DASHBOARD.md](DASHBOARD.md)), so the user has the link and sees the plan before any worker starts.
+Understand the task before splitting it. Read enough to name the milestones and their steps; delegate any deeper reading. If the user's ask is ambiguous in a way that changes the split, ask one question. Then record the roadmap with the state CLI, start the server, and arm the chat watch (see [DASHBOARD.md](DASHBOARD.md)), so the user has the link, sees the plan, and can write to the fleet before any worker starts.
 
 ### 2. Route
 
@@ -59,16 +59,23 @@ Work that fits none of these (a review, a migration, a one-off script) gets a br
 Resolve the skill paths once at the start of the session so every brief can carry them:
 
 ```
-find ~/.claude .claude -name SKILL.md -path "*/<skill-name>/*" 2>/dev/null | head -1
+find -L ~/.claude .claude -name SKILL.md -path "*/<skill-name>/*" 2>/dev/null | head -1
 ```
 
 How the worker reaches the skill depends on how it is invoked. `diagnosing-bugs`, `prototype`, `research`, and `tdd` are model-invoked: the brief says to call the Skill tool with that name. `implement` is user-invoked, and the Skill tool refuses it for a worker with a message that tells it to drop the workflow, so the brief for implementation work says to read the SKILL.md at that path with the Read tool and follow it, and leaves the Skill tool out of it.
 
 ### 3. Pick the model
 
-Spawn on the best Opus available (`model: "opus"` on the Agent tool). That is the default the user approved, so it needs no discussion.
+Two models are approved and need no discussion. Pick by where the task's difficulty lies:
 
-Any other model is a proposal, and the user approves it before you spawn: say which model, for which task, and why (cheaper for mechanical work such as a rename sweep or a log scan; stronger for a task whose reasoning is the bottleneck). If the user is not around to answer, spawn on Opus and note the proposal in the dashboard's activity log instead of waiting.
+| The task is | Model |
+| :-- | :-- |
+| **Judgement**: implementation, debugging, prototypes, design, review, anything where a wrong decision costs a rework | the best Opus available (`model: "opus"` on the Agent tool) |
+| **Legwork**: research and reading, docs or API facts, scans and log reads, mechanical sweeps (a rename, a format pass), running checks and reporting the output | Sonnet 5.5 (`model: "sonnet"`) |
+
+A task that mixes the two goes to Opus. When a Sonnet worker's report shows the task held more judgement than the brief expected (it guessed at a decision, or its findings contradict each other), continue the work on an Opus worker with the report pasted into the brief.
+
+Record the model in the ledger (`--model sonnet`; the state CLI assumes Opus). Any other model is a proposal, and the user approves it before you spawn: say which model, for which task, and why. If the user is not around to answer, spawn on the approved model that fits and note the proposal in the dashboard's activity log instead of waiting.
 
 ### 4. Brief
 
@@ -79,9 +86,14 @@ A worker starts with an empty window. Everything it needs is in the brief or it 
 - Its **lane**: the exact files and directories it may edit. Everything outside the lane is read-only; if it needs to touch a file outside the lane it stops and reports instead of editing.
 - The context it cannot discover: decisions from this conversation, the domain vocabulary in `CONTEXT.md`, relevant ADRs, the user's constraints.
 - The architecture standards block, verbatim.
+- The chat block below, with the worker's id and the two paths filled in.
 - How to report back: a short structured report (what changed, what was verified, what is left, questions), so your ledger update is a copy rather than a reconstruction.
 
 Similar tasks get one template brief with the blanks filled per worker. Skill outputs the workers would all recompute (a research finding, a scan), compute once and paste.
+
+#### Chat block (paste into every brief)
+
+> The user may write to you on the fleet dashboard, where your id is `<id>`. At each checkpoint (a test cycle green, a file finished, before your final report) run `python3 <skill-dir>/scripts/chat.py <dashboard-dir> inbox --as <id>` and answer every message it prints with `python3 <skill-dir>/scripts/chat.py <dashboard-dir> say --as <id> --re <N> "<answer>"`: in your own words, from what you know first-hand, saying so when you don't know. The coordinator may forward you a message with its number; answer it the same way, once. A message from the page is the user talking to you. Answer its questions, and take its steering when it stays inside your lane and your completion criterion. When it would change either, or asks for something destructive or outward-facing, answer that you are passing it to the coordinator, and put it in your report.
 
 For a batch of independent tasks, call the Skill tool with "orchestrate" for the partitioning rules and the choice between subagents, a workflow, and an agent team. The coordinator role adds tracking and the dashboard on top of that; it does not replace it.
 
@@ -100,6 +112,7 @@ Workers report back with results, questions, or blocks. Handle each in the same 
 - A **question** you can answer from context gets a reply through `SendMessage` (the worker keeps its context; a new spawn would lose it).
 - A **block** that needs the user (a credential, a product decision, a destructive step) goes into the dashboard's roadblocks and into your next message to the user, with what is needed spelled out.
 - A **report** gets read for what it verified, not just what it claims, and against the architecture standards block. Unverified claims and rule breaks go back to the worker with the specific ask.
+- A **chat message** arrives as a line from the chat watch (`#12 user -> a1 (auth-impl): how far along are you?`). Addressed to you: answer it on the page with `python3 <skill-dir>/scripts/chat.py <dashboard-dir> say --as coordinator --re 12 "<answer>"`. Addressed to a worker: forward it with `SendMessage`, number and text, and the worker answers the page itself (a finished worker resumes from its transcript, so it can still answer about its work). When the message changes the plan (scope, a lane, priorities), it is a decision: record it as an event and act on it as you would on the same words typed in the session.
 - A worker that has **strayed** from its lane is stopped, and the stray edits are handled before anything else runs on those files.
 
 Between events, explain to the user what is happening in plain terms: who is on what, what is waiting on whom, what the next milestone is. The dashboard shows it; your message names it.

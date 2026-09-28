@@ -20,6 +20,14 @@
     --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948;
     --sans: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
     --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* Type steps below the body size. A phone lifts both to 14px: no text there is smaller. */
+    --fs-xs: 0.75rem;
+    --fs-s: 0.85rem;
+    /* The smallest target a finger gets; the desktop's mouse targets stay compact. */
+    --tap: 32px;
+    --dock-h: 0px;
+    --chat-w: clamp(360px, 30vw, 440px);
+    --shadow: 0 10px 30px rgba(0,0,0,0.14);
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -30,6 +38,7 @@
       --good: #3fbf3f; --warning: #fab219; --serious: #ec835a; --critical: #e35d5d;
       --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
       --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+      --shadow: 0 10px 30px rgba(0,0,0,0.45);
     }
   }
   :root[data-theme="dark"] {
@@ -40,32 +49,52 @@
     --good: #3fbf3f; --warning: #fab219; --serious: #ec835a; --critical: #e35d5d;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
     --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --shadow: 0 10px 30px rgba(0,0,0,0.45);
+  }
+  @media (max-width: 759.98px) {
+    :root { --fs-xs: 14px; --fs-s: 14px; --dock-h: 60px; }
+  }
+  @media (max-width: 759.98px), (pointer: coarse) {
+    :root { --tap: 44px; }
   }
 
-  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.45; margin: 0; }
-  .wrap { max-width: 1120px; margin: 0 auto; padding-inline: 16px; padding-block: 24px 48px; display: grid; gap: 28px; }
+  [hidden] { display: none !important; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.45; margin: 0; overflow-x: clip; }
+  @media (max-width: 759.98px) { body { font-size: 15px; } }
+  .shell { min-height: 100dvh; }
+  .wrap { box-sizing: border-box; width: 100%; max-width: 1120px; margin: 0 auto; padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px calc(48px + var(--dock-h) + env(safe-area-inset-bottom, 0px)); display: grid; gap: 28px; container: main / inline-size; min-width: 0; }
   h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 600; }
-  h1 { font-size: 1.5rem; letter-spacing: -0.01em; }
-  h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  h1 { font-size: 1.5rem; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+  h2 { font-size: var(--fs-s); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
   p { margin: 0; }
   a { color: var(--accent); }
-  button, select, input { font: inherit; color: inherit; }
+  button, select, input, textarea { font: inherit; color: inherit; }
+  button { -webkit-tap-highlight-color: transparent; }
   .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   .muted { color: var(--muted); }
   .faint { color: var(--faint); }
+  .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  svg.i { width: 22px; height: 22px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* A worker's name, wherever it appears: one tap opens the worker. */
+  .who { display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); min-width: var(--tap); padding: 0 4px; margin: 0 -4px; background: none; border: 0; border-radius: 5px; cursor: pointer; font-family: var(--mono); font-weight: 500; text-align: left; color: inherit; }
+  .who:hover { background: var(--card-2); }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; flex: none; background: var(--c, var(--faint)); }
 
   /* header */
   .head { display: grid; gap: 10px; }
-  .head-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+  .head-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding-right: 56px; }
   .mark { width: 34px; height: 34px; flex: none; border-radius: 8px; overflow: hidden; }
   .mark svg { display: block; width: 100%; height: 100%; }
   .goal { max-width: 70ch; font-size: 1rem; }
   .now { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; background: var(--accent-soft); border-radius: 6px; max-width: 80ch; }
   .now b { color: var(--accent); font-weight: 600; white-space: nowrap; }
-  .meta { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 0.85rem; }
+  .head .meta { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: var(--fs-s); }
 
-  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 0.75rem; font-weight: 500; letter-spacing: 0.02em; background: var(--card-2); color: var(--muted); white-space: nowrap; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 500; letter-spacing: 0.02em; background: var(--card-2); color: var(--muted); white-space: nowrap; font-family: var(--sans); }
   .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .pill.running { background: var(--accent-soft); color: var(--accent); }
   .pill.done { color: var(--good); background: color-mix(in srgb, var(--good) 14%, var(--card)); }
@@ -75,19 +104,38 @@
   .pill.serious { color: var(--serious); background: color-mix(in srgb, var(--serious) 14%, var(--card)); }
   .pill.current { background: var(--accent-soft); color: var(--accent); }
 
+  /* section navigation: a bar under the thumb on a phone, a sticky strip on a wide screen */
+  .dock { display: flex; gap: 4px; align-items: center; position: sticky; top: 0; z-index: 20; margin-block: -14px; padding: 8px 56px 8px 0; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  .dock a, .dock button { position: relative; display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 10px; border-radius: 7px; border: 0; background: none; color: var(--muted); text-decoration: none; font-size: var(--fs-s); font-weight: 500; cursor: pointer; }
+  .dock svg.i { width: 18px; height: 18px; }
+  .dock a:hover, .dock button:hover { background: var(--card-2); color: var(--text); }
+  .dock [aria-current="true"], .dock [aria-expanded="true"] { color: var(--accent); background: var(--accent-soft); }
+  .dock .to-chat { margin-left: auto; }
+  .dock .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 0.7rem; font-weight: 600; display: grid; place-items: center; font-family: var(--mono); line-height: 1; }
+  .dock .badge.alert { background: var(--critical); }
+  @media (max-width: 759.98px) {
+    .dock { position: fixed; inset: auto 0 0 0; margin: 0; z-index: 35; display: grid; grid-template-columns: repeat(6, 1fr); gap: 0; height: var(--dock-h); padding: 0 max(4px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(4px, env(safe-area-inset-left, 0px)); box-sizing: content-box; background: color-mix(in srgb, var(--card) 94%, transparent); border-top: 1px solid var(--line); }
+    .dock a, .dock button { justify-content: center; min-height: 48px; min-width: 44px; padding: 0; margin: 6px 2px; }
+    .dock svg.i { width: 24px; height: 24px; }
+    .dock .lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .dock .badge { position: absolute; top: 0; left: calc(50% + 4px); font-size: 14px; min-width: 22px; height: 22px; border-radius: 11px; }
+    .dock [aria-current="true"]::after { content: ""; position: absolute; bottom: 2px; width: 16px; height: 3px; border-radius: 2px; background: var(--accent); }
+  }
+  section { display: grid; gap: 12px; align-content: start; min-width: 0; scroll-margin-top: 64px; }
+  @media (max-width: 759.98px) { section { scroll-margin-top: 12px; } }
+
   /* tiles */
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
-  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 2px; }
-  .tile .label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 2px; min-width: 0; }
+  .tile .label { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
   .tile .value { font-size: 1.5rem; font-weight: 500; line-height: 1.1; }
-  .tile .sub { font-size: 0.8rem; color: var(--muted); }
+  .tile .sub { font-size: var(--fs-s); color: var(--muted); }
   .tile.alert .value { color: var(--critical); }
 
   /* two-column region */
-  .cols { display: grid; grid-template-columns: 3fr 2fr; gap: 20px; }
-  @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
-  section { display: grid; gap: 12px; align-content: start; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+  .cols { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 20px; }
+  @container main (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
 
   /* roadmap */
   .milestone { padding: 12px 14px; display: grid; gap: 8px; }
@@ -95,124 +143,309 @@
   .milestone-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
   .milestone-head h3 { font-size: 0.95rem; }
   .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-  .step { display: grid; grid-template-columns: 18px 1fr auto; gap: 10px; align-items: center; padding: 5px 8px; border-radius: 5px; }
+  .step { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; min-height: var(--tap); box-sizing: border-box; padding: 5px 8px; border-radius: 5px; border: 0; background: none; text-align: left; }
+  button.step { cursor: pointer; }
+  button.step:hover { background: var(--card-2); }
   .step.current { background: var(--accent-soft); }
   .step .dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--faint); justify-self: center; }
   .step.done .dot { background: var(--good); border-color: var(--good); }
   .step.current .dot { background: var(--accent); border-color: var(--accent); }
   .step.blocked .dot { background: var(--critical); border-color: var(--critical); }
   .step.done .title { color: var(--muted); }
-  .step .who { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); }
-  .step .who a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--faint); }
+  .step .by { font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); border-bottom: 1px dotted var(--faint); overflow-wrap: anywhere; }
 
   /* roadblocks */
-  .block { padding: 12px 14px; display: grid; gap: 4px; border-left: 3px solid var(--line); }
+  .block { position: relative; padding: 10px 14px 12px; display: grid; gap: 4px; border-left: 3px solid var(--line); }
   .block + .block { border-top: 1px solid var(--line); }
   .block.critical { border-left-color: var(--critical); }
   .block.serious { border-left-color: var(--serious); }
   .block.warning { border-left-color: var(--warning); }
   .block.resolved { border-left-color: var(--good); opacity: 0.7; }
-  .block-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .block-head b { font-weight: 600; }
+  .block-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+  .block-head b, .block-title { font-weight: 600; }
+  .block-title { display: inline-flex; align-items: center; min-height: var(--tap); padding: 0; border: 0; background: none; text-align: left; cursor: pointer; }
+  /* The whole roadblock answers a tap on its title: the button's area stretches over the card. */
+  .block-title::after { content: ""; position: absolute; inset: 0; }
+  .block:has(.block-title):hover { background: color-mix(in srgb, var(--card-2) 60%, transparent); }
   .block .detail { color: var(--muted); font-size: 0.9rem; }
-  .block .needs { font-size: 0.8rem; }
+  .block .needs { font-size: var(--fs-s); }
   .empty { padding: 14px; color: var(--muted); }
 
   /* filters */
   .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .filters label { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); }
-  .filters select, .filters input[type="search"] { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 0.85rem; }
+  .filters label { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-s); color: var(--muted); }
+  .filters select, .filters input[type="search"] { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: var(--fs-s); min-height: var(--tap); box-sizing: border-box; }
   .filters input[type="search"] { min-width: 12ch; }
-  .filters .reset { background: none; border: none; color: var(--accent); cursor: pointer; padding: 4px 6px; font-size: 0.85rem; }
-  .filters .spacer { flex: 1; }
-  .count { font-size: 0.8rem; color: var(--muted); }
+  .f-more { display: contents; }
+  .f-toggle { display: none; }
+  .filters .reset { background: none; border: none; color: var(--accent); cursor: pointer; padding: 4px 6px; font-size: var(--fs-s); min-height: var(--tap); }
+  .count { font-size: var(--fs-s); color: var(--muted); margin-left: auto; }
+  @media (max-width: 759.98px) {
+    .filters { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+    .filters input[type="search"] { width: 100%; font-size: 16px; }
+    .f-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); cursor: pointer; font-size: 15px; }
+    .f-toggle[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+    .f-on { min-width: 20px; height: 20px; border-radius: 10px; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 13px; font-family: var(--mono); padding: 0 5px; }
+    .f-more { display: none; grid-column: 1 / -1; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+    .filters.open .f-more { display: grid; }
+    .f-more label { display: grid; gap: 4px; min-width: 0; }
+    .f-more select { width: 100%; min-width: 0; font-size: 16px; min-height: 44px; }
+    .f-more .reset { grid-column: 1 / -1; justify-self: start; min-height: 44px; padding: 0 12px; margin-left: -12px; }
+    .count { grid-column: 1 / -1; margin-left: 0; }
+  }
 
-  /* fleet table */
-  .table-wrap { overflow-x: auto; }
+  /* fleet: a table where there is room, a card per worker where there is not */
+  .fleet-card { container: fleet / inline-size; overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 0.88rem; }
-  th { text-align: left; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 500; padding: 10px 10px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { text-align: left; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 500; padding: 10px 10px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
   tr.row:last-child td, tr.detail:last-child td { border-bottom: none; }
   td.right, th.right { text-align: right; white-space: nowrap; }
-  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; vertical-align: -1px; }
-  .agent-name { font-family: var(--mono); font-weight: 500; white-space: nowrap; }
+  .agent-name { white-space: nowrap; }
   .task { max-width: 34ch; }
-  .lane { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); }
+  .lane { font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; }
   .lane code { display: block; }
-  .expand { background: none; border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; cursor: pointer; font-size: 0.78rem; color: var(--muted); }
+  .expand { background: none; border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; cursor: pointer; font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; min-height: var(--tap); }
   .expand[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
   tr.detail td { background: var(--card-2); padding: 12px 14px 14px 32px; }
   .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  @media (max-width: 760px) { .detail-grid { grid-template-columns: 1fr; } }
-  .detail-grid h4 { margin: 0 0 4px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 500; }
-  .detail-grid p { white-space: pre-wrap; font-size: 0.88rem; max-width: 60ch; }
+  .detail-grid h4, .sheet h3 { margin: 0 0 4px; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 500; }
+  .detail-grid p { white-space: pre-wrap; font-size: 0.88rem; max-width: 60ch; overflow-wrap: anywhere; }
+  @media (max-width: 759.98px) { .detail-grid { grid-template-columns: 1fr; } }
+  td[data-label]::before { display: none; }
+  @container fleet (max-width: 719.98px) {
+    table, tbody { display: block; min-width: 0; }
+    thead { display: none; }
+    tr.row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-areas: "name name name status" "task task task task" "skill model tokens time" "lane lane lane lane" "upd upd act act"; gap: 8px 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+    tr.row:last-child { border-bottom: none; }
+    tr.row:has(+ tr.detail) { border-bottom: none; }
+    tr.row td { display: block; padding: 0; border: 0; min-width: 0; text-align: left; white-space: normal; }
+    td[data-label]::before { display: block; content: attr(data-label); font-family: var(--sans); font-size: var(--fs-xs); color: var(--muted); }
+    .c-name { grid-area: name; } .c-status { grid-area: status; justify-self: end; align-self: center; }
+    .c-task { grid-area: task; max-width: none; } .c-skill { grid-area: skill; } .c-model { grid-area: model; }
+    .c-tokens { grid-area: tokens; } .c-time { grid-area: time; }
+    .c-lane { grid-area: lane; } .c-lane:has(.faint) { display: none !important; }
+    .c-upd { grid-area: upd; align-self: center; } .c-act { grid-area: act; justify-self: end; }
+    .agent-name { white-space: normal; overflow-wrap: anywhere; font-size: 1rem; }
+    tr.detail { display: block; border-bottom: 1px solid var(--line); }
+    tr.detail:last-child { border-bottom: none; }
+    tr.detail td { display: block; padding: 12px 14px 14px; border: 0; }
+    .detail-grid { grid-template-columns: 1fr; }
+  }
 
-  /* chart */
-  .chart-card { padding: 14px 14px 8px; position: relative; }
-  .chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: baseline; margin-bottom: 6px; }
-  svg.bars { width: 100%; height: auto; display: block; font-family: var(--sans); }
-  svg.bars text { fill: var(--text); font-size: 12px; }
-  svg.bars text.tick { fill: var(--muted); font-size: 11px; font-family: var(--mono); }
-  svg.bars text.val { fill: var(--muted); font-size: 11px; font-family: var(--mono); }
-  svg.bars line.grid { stroke: var(--line); stroke-width: 1; }
-  svg.bars rect.hit { fill: transparent; cursor: default; }
-  svg.bars rect.hit:hover + rect.bar, svg.bars rect.bar.hot { opacity: 0.8; }
-  .tip { position: absolute; pointer-events: none; background: var(--text); color: var(--bg); padding: 6px 9px; border-radius: 5px; font-size: 0.78rem; white-space: nowrap; transform: translate(-50%, calc(-100% - 8px)); }
+  /* token chart: one bar per worker, drawn in HTML so its text stays at reading size on a phone */
+  .chart-card { padding: 14px; position: relative; container: chart / inline-size; }
+  .chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; align-items: baseline; margin-bottom: 10px; font-size: var(--fs-s); }
+  .bars { list-style: none; margin: 0; padding: 0; display: grid; }
+  .bar-row, .bar-axis { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 1fr) 11ch; gap: 0 10px; align-items: center; }
+  .bar-row { min-height: 32px; border-radius: 5px; }
+  .bar-row .who { justify-self: end; max-width: 100%; overflow: hidden; }
+  .bar-row .who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .track { position: relative; height: 100%; min-height: 28px; background-image: repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 25%); background-size: calc(100% - 1px) 100%; background-repeat: no-repeat; border-right: 1px solid var(--line); }
+  .bar { position: absolute; left: 0; top: 50%; height: 16px; transform: translateY(-50%); border-radius: 3px; background: var(--c); min-width: 2px; }
+  .bar-row:hover .bar, .bar-row:focus-within .bar { opacity: 0.8; }
+  .bar-val { font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; }
+  .bar-axis .ticks { position: relative; height: 22px; }
+  .bar-axis .ticks span { position: absolute; top: 4px; transform: translateX(-50%); font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); }
+  .bar-axis .ticks span:first-child { transform: none; }
+  .bar-axis .ticks span:last-child { transform: translateX(-100%); }
+  @container chart (max-width: 520px) {
+    .bar-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "who val" "track track"; padding-bottom: 6px; }
+    .bar-row .who { grid-area: who; justify-self: start; }
+    .bar-row .track { grid-area: track; min-height: 20px; }
+    .bar-row .bar-val { grid-area: val; }
+    .bar-axis { grid-template-columns: minmax(0, 1fr); }
+    .bar-axis > :not(.ticks) { display: none; }
+  }
+  .tip { position: absolute; pointer-events: none; background: var(--text); color: var(--bg); padding: 6px 9px; border-radius: 5px; font-size: var(--fs-s); white-space: nowrap; transform: translate(-50%, calc(-100% - 8px)); z-index: 2; }
   .tip .num { color: inherit; }
 
   /* log */
   .log { list-style: none; margin: 0; padding: 0; }
-  .log li { display: grid; grid-template-columns: 9ch 1fr; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); font-size: 0.88rem; }
+  .log li { display: grid; grid-template-columns: 9ch minmax(0, 1fr); gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); font-size: 0.88rem; }
   .log li:last-child { border-bottom: none; }
-  .log time { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); padding-top: 2px; }
-  .log .who { font-family: var(--mono); font-size: 0.8rem; margin-right: 6px; color: var(--muted); }
-  .log .swatch { margin-right: 5px; }
-  .log .kind { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); margin-right: 8px; }
+  .log time { font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); padding-top: 2px; }
+  .log .by { font-family: var(--mono); font-size: var(--fs-s); margin-right: 6px; color: var(--muted); }
+  .log .who { font-size: var(--fs-s); color: var(--muted); margin-right: 2px; min-height: 0; vertical-align: baseline; }
+  .log .kind { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); margin-right: 8px; }
   .log .kind.blocked { color: var(--critical); }
   .log .kind.resolved, .log .kind.integrated { color: var(--good); }
-  .log .kind.decision { color: var(--accent); }
+  .log .kind.decision, .log .kind.message { color: var(--accent); }
+  @media (max-width: 759.98px), (pointer: coarse) {
+    .log li { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+    .log .log-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0 10px; }
+    .log .who { min-height: 44px; }
+    .log .kind { margin-right: 0; }
+  }
 
-  .foot { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; color: var(--muted); font-size: 0.8rem; }
+  .foot { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; color: var(--muted); font-size: var(--fs-s); }
   .error { padding: 16px; border: 1px solid var(--critical); border-radius: 8px; color: var(--critical); font-family: var(--mono); }
-  @media (prefers-reduced-motion: no-preference) { .step, .pill, .expand { transition: background 150ms ease; } }
+  @media (prefers-reduced-motion: no-preference) { .step, .pill, .expand, .who { transition: background 150ms ease; } }
+
   /* notifications */
-  .bell { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 12px); right: 16px; z-index: 40; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; display: grid; place-items: center; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+  .bell { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 12px); right: max(16px, env(safe-area-inset-right, 0px)); z-index: 40; width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; display: grid; place-items: center; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
   .bell svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .bell .badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--critical); color: #fff; font-size: 0.7rem; font-weight: 600; display: grid; place-items: center; font-family: var(--mono); }
-  .bell .badge[hidden] { display: none; }
+  @media (max-width: 759.98px) { .bell .badge { font-size: 14px; min-width: 22px; height: 22px; border-radius: 11px; top: -6px; right: -6px; } }
   .bell.muted::after { content: ""; position: absolute; width: 26px; height: 2px; background: var(--muted); transform: rotate(-45deg); }
-  .panel { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 58px); right: 16px; z-index: 40; width: min(400px, calc(100vw - 32px)); max-height: min(70vh, 600px); display: grid; grid-template-rows: auto auto 1fr; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.14); overflow: hidden; }
+  .panel { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 64px); right: max(16px, env(safe-area-inset-right, 0px)); z-index: 40; width: min(400px, calc(100vw - 32px)); max-height: min(70dvh, 600px); display: grid; grid-template-rows: auto auto 1fr; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; }
   .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-  .panel-head h2 { font-size: 0.75rem; }
+  .panel-head h2 { font-size: var(--fs-xs); }
   .panel-head .actions { display: flex; gap: 4px; }
-  .panel-head button, .panel-prefs button { background: none; border: 1px solid var(--line); border-radius: 5px; padding: 3px 8px; font-size: 0.75rem; color: var(--muted); cursor: pointer; }
-  .panel-prefs { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--card-2); font-size: 0.78rem; color: var(--muted); }
+  .panel-head button, .panel-prefs button { background: none; border: 1px solid var(--line); border-radius: 5px; padding: 3px 8px; font-size: var(--fs-xs); color: var(--muted); cursor: pointer; min-height: var(--tap); }
+  .panel-prefs { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--card-2); font-size: var(--fs-xs); color: var(--muted); }
   .panel-prefs label { display: inline-flex; align-items: center; gap: 5px; }
-  .panel-prefs select { background: var(--card); border: 1px solid var(--line); border-radius: 5px; padding: 2px 5px; font-size: 0.78rem; }
+  .panel-prefs select { background: var(--card); border: 1px solid var(--line); border-radius: 5px; padding: 2px 5px; font-size: var(--fs-xs); min-height: var(--tap); }
   .panel-prefs .blocked { color: var(--warning); }
-  .notifs { list-style: none; margin: 0; padding: 0; overflow-y: auto; }
-  .notifs li { display: grid; grid-template-columns: 6px 1fr auto; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 0.85rem; align-items: start; }
+  .notifs { list-style: none; margin: 0; padding: 0; overflow-y: auto; overscroll-behavior: contain; }
+  .notifs li { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: var(--fs-s); align-items: start; overflow-wrap: anywhere; }
   .notifs li:last-child { border-bottom: none; }
   .notifs .mark { width: 6px; height: 6px; border-radius: 50%; background: transparent; margin-top: 7px; }
   .notifs li.unread .mark { background: var(--accent); }
   .notifs li.important .mark { background: var(--critical); }
   .notifs li.important.read .mark { background: color-mix(in srgb, var(--critical) 40%, transparent); }
-  .notifs .meta { font-size: 0.72rem; color: var(--muted); font-family: var(--mono); }
+  .notifs .meta { font-size: var(--fs-xs); color: var(--muted); font-family: var(--mono); }
   .notifs .meta .kind { text-transform: uppercase; letter-spacing: 0.05em; }
-  .notifs time { font-size: 0.72rem; color: var(--faint); font-family: var(--mono); white-space: nowrap; margin-top: 2px; }
+  .notifs time { font-size: var(--fs-xs); color: var(--faint); font-family: var(--mono); white-space: nowrap; margin-top: 2px; }
   .notifs .empty { padding: 18px 12px; }
-  .toasts { position: fixed; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); z-index: 30; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); }
-  .toast { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 10px 12px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--accent); box-shadow: 0 6px 20px rgba(0,0,0,0.14); font-size: 0.85rem; }
+  @media (max-width: 759.98px) {
+    .panel { right: 8px; left: 8px; width: auto; max-height: calc(100dvh - 64px - var(--dock-h) - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px) - 16px); }
+    .panel-prefs { display: grid; grid-template-columns: 1fr; gap: 8px; }
+    .panel-prefs label { display: flex; justify-content: space-between; }
+    .panel-prefs select { font-size: 16px; }
+    .panel-head button, .panel-prefs button { padding: 0 12px; }
+  }
+  .toasts { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + var(--dock-h) + 16px); z-index: 30; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); }
+  .toast { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px 12px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--accent); box-shadow: var(--shadow); font-size: var(--fs-s); overflow-wrap: anywhere; }
+  .toast.opens { cursor: pointer; }
   .toast.important { border-left-color: var(--critical); }
-  .toast .meta { font-size: 0.72rem; color: var(--muted); font-family: var(--mono); margin-bottom: 2px; }
+  .toast .meta { font-size: var(--fs-xs); color: var(--muted); font-family: var(--mono); margin-bottom: 2px; }
   .toast .meta .kind { text-transform: uppercase; letter-spacing: 0.05em; }
   .toast.important .meta .kind { color: var(--critical); }
-  .toast button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 2px; align-self: start; }
+  .toast button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0 2px; align-self: start; min-width: var(--tap); min-height: var(--tap); margin: -8px -8px -8px 0; }
   @media (prefers-reduced-motion: no-preference) {
     .toast { animation: toast-in 180ms ease-out; }
     @keyframes toast-in { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
   }
-  @media (max-width: 760px) { .head-row { padding-right: 48px; } }
+
+  /* the worker sheet: a worker's detail, opened from its name anywhere on the page */
+  dialog.sheet { border: 1px solid var(--line); border-radius: 12px; padding: 0; background: var(--card); color: var(--text); width: min(600px, calc(100vw - 32px)); max-height: min(85dvh, 760px); box-shadow: var(--shadow); overflow: hidden; }
+  dialog.sheet::backdrop { background: rgb(10 12 20 / 0.45); }
+  .sheet-in { display: grid; gap: 14px; padding: 16px 18px 18px; max-height: inherit; overflow-y: auto; overscroll-behavior: contain; box-sizing: border-box; }
+  .sheet-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 10px; align-items: center; }
+  .sheet-head .swatch { width: 14px; height: 14px; border-radius: 3px; }
+  .sheet-head h2 { font-family: var(--mono); font-size: 1.15rem; text-transform: none; letter-spacing: 0; color: var(--text); overflow-wrap: anywhere; }
+  .icon-btn { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 8px; border: 0; background: none; color: var(--muted); cursor: pointer; flex: none; }
+  .icon-btn:hover { background: var(--card-2); color: var(--text); }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px 14px; margin: 0; }
+  .facts div { min-width: 0; }
+  .facts dt { font-size: var(--fs-xs); color: var(--muted); }
+  .facts dd { margin: 0; overflow-wrap: anywhere; }
+  .sheet p { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 65ch; }
+  .sheet .lane code { display: block; }
+  .sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-weight: 500; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  :root[data-theme="dark"] .btn.primary { color: #14171c; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn.primary { color: #14171c; } }
+  @media (max-width: 759.98px) {
+    dialog.sheet { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 14px 14px 0 0; border-bottom: 0; max-height: 88dvh; }
+    .sheet-in { padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
+    .sheet-actions .btn { flex: 1; justify-content: center; }
+  }
+  @media (prefers-reduced-motion: no-preference) and (max-width: 759.98px) {
+    dialog.sheet[open] { animation: rise 200ms ease-out; }
+  }
+  @keyframes rise { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+  /* chat: docked beside the page on a wide screen, a full-height view over it elsewhere */
+  .chat { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--card); color: var(--text); }
+  .chat-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 16px; border-bottom: 1px solid var(--line); flex: none; min-height: 56px; box-sizing: border-box; }
+  .chat-head h2 { font-size: 1rem; text-transform: none; letter-spacing: 0; color: var(--text); }
+  .you { font-size: var(--fs-xs); color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+  .chat-head h2:focus { outline: none; }
+  .chat-head h2:focus-visible { outline: 2px solid var(--accent); }
+  .conn { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--muted); margin-right: auto; }
+  .conn::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .conn[data-conn="live"]::before { background: var(--good); }
+  .conn[data-conn="reconnecting"]::before, .conn[data-conn="connecting"]::before { background: var(--warning); }
+  .chat-note { margin: 14px 16px 0; padding: 12px 14px; border-radius: 8px; background: var(--card-2); color: var(--muted); font-size: var(--fs-s); }
+  .chat-log { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; list-style: none; margin: 0; padding: 14px 14px 8px; display: flex; flex-direction: column; gap: 14px; }
+  .chat-empty { margin: auto 0; text-align: center; color: var(--muted); font-size: var(--fs-s); padding: 24px 8px; }
+  .thread { display: grid; gap: 6px; }
+  .msg { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; row-gap: 2px; padding: 6px 12px 10px; border-radius: 10px; background: var(--card-2); border-left: 3px solid var(--c, var(--faint)); overflow-wrap: anywhere; }
+  .msg.from-user { background: var(--accent-soft); border-left-color: var(--accent); }
+  .msg.can-reply { cursor: pointer; }
+  .msg.replying { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .msg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-height: var(--tap); }
+  .msg-head b { font-family: var(--mono); font-weight: 500; }
+  .msg-head .pill { padding: 0 7px; }
+  .msg-head time { font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); }
+  .msg > :not(.msg-head, .reply-btn) { grid-column: 1 / -1; }
+  .msg > .reply-btn { grid-column: 2; grid-row: 1; align-self: start; }
+  .reply-btn { min-height: var(--tap); padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--muted); cursor: pointer; font-size: var(--fs-xs); }
+  .reply-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .msg-re { font-size: var(--fs-xs); color: var(--muted); }
+  .msg-text { white-space: pre-wrap; }
+  .mention { display: inline; padding: 0 6px; border-radius: 999px; font-family: var(--mono); font-size: 0.92em; font-weight: 500; white-space: nowrap; background: color-mix(in srgb, var(--c, var(--accent)) 16%, var(--card)); color: var(--text); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+  .wait { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; font-size: var(--fs-xs); color: var(--muted); }
+  .wait.done { color: var(--good); }
+  .wait .who { font-size: var(--fs-xs); padding: 0 8px; margin: 0; border-radius: 999px; background: var(--card); border: 1px solid var(--line); }
+  .wait .chip { display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); padding: 0 8px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); font-family: var(--mono); }
+  .replies { list-style: none; margin: 0 0 0 14px; padding: 0 0 0 12px; border-left: 2px solid var(--line); display: grid; gap: 6px; }
+  .composer { position: relative; flex: none; padding: 8px 12px max(12px, env(safe-area-inset-bottom, 0px)); background: var(--card); }
+  .chat-error { margin: 0 4px 8px; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--critical) 12%, var(--card)); color: var(--critical); font-size: var(--fs-s); }
+  /* The composer: one rounded surface holding the reply chip, the field (one line to eight, then it
+     scrolls) and the round send button at its bottom right. The focus ring is the surface's. */
+  .box { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "chip chip" "text send"; align-items: end; row-gap: 6px; column-gap: 6px; padding: 6px 6px 6px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--bg); cursor: text; }
+  .box:has(.reply[hidden]) { row-gap: 0; }
+  .box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
+  .box textarea { grid-area: text; display: block; width: 100%; min-width: 0; margin: 0; padding: 7px 0; border: 0; background: none; font-size: 16px; line-height: 1.45; field-sizing: content; min-block-size: calc(1lh + 14px); max-block-size: calc(8lh + 14px); overflow-y: auto; resize: none; box-sizing: border-box; outline: none; }
+  .box textarea::placeholder { color: var(--faint); opacity: 1; }
+  .box textarea:focus-visible { outline: none; }
+  .box textarea:disabled { cursor: not-allowed; }
+  .send { grid-area: send; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: #fff; cursor: pointer; }
+  .send svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .send:disabled { background: var(--line); color: var(--muted); cursor: default; }
+  @media (max-width: 759.98px), (pointer: coarse) { .send { width: 44px; height: 44px; } .box { border-radius: 26px; padding-left: 16px; } }
+  .reply { grid-area: chip; display: flex; align-items: center; gap: 4px; justify-self: start; max-width: 100%; min-width: 0; box-sizing: border-box; padding: 0 0 0 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: var(--fs-xs); margin-top: 2px; }
+  .reply-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .reply .icon-btn { width: var(--tap); height: var(--tap); border-radius: 999px; color: inherit; font-size: 1rem; }
+  .readonly { margin: 0; padding: 12px 14px; border-radius: 12px; background: var(--card-2); color: var(--muted); font-size: var(--fs-s); overflow-wrap: anywhere; }
+  .chat:has(#mentions:not([hidden])) .chat-empty { visibility: hidden; }
+  .box textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .to { margin: 6px 6px 0; font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; }
+  .mentions { position: absolute; left: 8px; right: 8px; bottom: calc(100% - 4px); z-index: 3; list-style: none; margin: 0; padding: 4px; max-height: min(320px, calc(var(--vv-h, 100dvh) * 0.45)); overflow-y: auto; overscroll-behavior: contain; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+  .mentions li { display: grid; grid-template-columns: 10px minmax(0, 1fr); grid-template-areas: "sw main" ". task"; gap: 0 10px; align-items: center; min-height: 48px; box-sizing: border-box; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+  .mentions li[aria-selected="true"] { background: var(--accent-soft); }
+  .mentions .swatch { grid-area: sw; }
+  .mentions .m-main { grid-area: main; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-width: 0; }
+  .mentions .m-name { font-family: var(--mono); font-weight: 500; }
+  .mentions .m-task { grid-area: task; font-size: var(--fs-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat:not(.available) .reply-btn { display: none; }
+
+  @media (min-width: 1100px) {
+    .shell { display: grid; grid-template-columns: minmax(0, 1fr) var(--chat-w); }
+    .shell.chat-collapsed { grid-template-columns: minmax(0, 1fr); }
+    .chat { position: sticky; top: 0; height: 100dvh; border-left: 1px solid var(--line); }
+    .shell.chat-collapsed .chat { display: none; }
+    :root:has(.shell:not(.chat-collapsed)) .bell { right: calc(var(--chat-w) + 16px); }
+    :root:has(.shell:not(.chat-collapsed)) .panel { right: calc(var(--chat-w) + 16px); }
+    :root:has(.shell:not(.chat-collapsed)) .toasts { right: calc(var(--chat-w) + 16px); }
+  }
+  @media (max-width: 1099.98px) {
+    .chat { position: fixed; z-index: 45; top: var(--vv-top, 0px); right: 0; height: var(--vv-h, 100dvh); width: min(440px, 100%); box-shadow: var(--shadow); border-left: 1px solid var(--line); }
+    .chat:not(.open) { display: none; }
+    .chat-head { padding-top: max(6px, env(safe-area-inset-top, 0px)); }
+  }
+  @media (max-width: 759.98px) {
+    .chat { width: 100%; border-left: 0; }
+    html.chat-open, html.chat-open body { overflow: hidden; overscroll-behavior: none; }
+  }
+  @media (prefers-reduced-motion: no-preference) and (max-width: 1099.98px) {
+    .chat.open { animation: rise 200ms ease-out; }
+  }
 </style>
 
 <button class="bell" id="bell" type="button" aria-label="Notifications" aria-expanded="false" title="Notifications">
@@ -239,39 +472,50 @@
 </div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 
+<div class="shell" id="shell">
 <div class="wrap" id="app">
   <header class="head" id="head"></header>
+  <nav class="dock" id="dock" aria-label="Sections">
+    <a href="#roadmap" data-sec="roadmap" title="Roadmap"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4h12l-2.5 4L17 12H5"/></svg><span class="lbl">Roadmap</span></a>
+    <a href="#roadblocks" data-sec="roadblocks" title="Roadblocks"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5M12 17.2v.3"/></svg><span class="lbl">Roadblocks</span><span class="badge alert" id="nav-blocks" hidden></span></a>
+    <a href="#fleet" data-sec="fleet" title="Fleet"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12.5" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="20.5" r="1.8"/><path d="m9.8 10.5-3.3-3M14.2 10.5l3.3-3M12 15.5v3.2"/></svg><span class="lbl">Fleet</span></a>
+    <a href="#tokens" data-sec="tokens" title="Tokens"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3v18"/><path d="M4 7h12M4 12h16M4 17h8"/></svg><span class="lbl">Tokens</span></a>
+    <a href="#activity" data-sec="activity" title="Activity"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg><span class="lbl">Activity</span></a>
+    <button type="button" class="to-chat" id="chat-toggle" aria-controls="chat" aria-expanded="false" title="Chat"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 0 1-12.4 7.5L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/></svg><span class="lbl">Chat</span><span class="badge" id="chat-badge" hidden></span></button>
+  </nav>
   <div class="tiles" id="tiles"></div>
   <div class="cols">
-    <section>
-      <h2>Roadmap</h2>
-      <div class="card" id="roadmap"></div>
+    <section id="roadmap" aria-labelledby="h-roadmap">
+      <h2 id="h-roadmap">Roadmap</h2>
+      <div class="card" id="roadmap-list"></div>
     </section>
-    <section>
-      <h2>Roadblocks</h2>
-      <div class="card" id="roadblocks"></div>
+    <section id="roadblocks" aria-labelledby="h-roadblocks">
+      <h2 id="h-roadblocks">Roadblocks</h2>
+      <div class="card" id="roadblock-list"></div>
     </section>
   </div>
-  <section>
-    <h2>Fleet</h2>
-    <div class="filters">
-      <label>Status <select id="f-status"><option value="">all</option></select></label>
-      <label>Milestone <select id="f-milestone"><option value="">all</option></select></label>
-      <label>Skill <select id="f-skill"><option value="">all</option></select></label>
-      <label>Model <select id="f-model"><option value="">all</option></select></label>
-      <label><input type="search" id="f-q" placeholder="Search task, lane, report" aria-label="Search"></label>
-      <button class="reset" id="f-reset" type="button">Clear</button>
-      <span class="spacer"></span>
+  <section id="fleet" aria-labelledby="h-fleet">
+    <h2 id="h-fleet">Fleet</h2>
+    <div class="filters" id="filters">
+      <input type="search" id="f-q" placeholder="Search task, lane, report" aria-label="Search workers" autocomplete="off">
+      <button type="button" class="f-toggle" id="f-toggle" aria-expanded="false" aria-controls="f-more">Filters <span class="f-on" id="f-on" hidden></span></button>
+      <div class="f-more" id="f-more">
+        <label>Status <select id="f-status"><option value="">all</option></select></label>
+        <label>Milestone <select id="f-milestone"><option value="">all</option></select></label>
+        <label>Skill <select id="f-skill"><option value="">all</option></select></label>
+        <label>Model <select id="f-model"><option value="">all</option></select></label>
+        <button class="reset" id="f-reset" type="button">Clear filters</button>
+      </div>
       <span class="count" id="f-count"></span>
     </div>
-    <div class="card table-wrap"><table id="fleet"></table></div>
+    <div class="card fleet-card"><table id="fleet-table"></table></div>
   </section>
-  <section>
-    <h2>Tokens by worker</h2>
+  <section id="tokens" aria-labelledby="h-tokens">
+    <h2 id="h-tokens">Tokens by worker</h2>
     <div class="card chart-card" id="chart"></div>
   </section>
-  <section>
-    <h2>Activity</h2>
+  <section id="activity" aria-labelledby="h-activity">
+    <h2 id="h-activity">Activity</h2>
     <div class="card"><ul class="log" id="log"></ul></div>
   </section>
   <footer class="foot">
@@ -280,18 +524,212 @@
   </footer>
 </div>
 
+<aside class="chat" id="chat" aria-labelledby="chat-title">
+  <header class="chat-head">
+    <h2 id="chat-title" tabindex="-1">Chat</h2>
+    <span class="you" id="chat-you" hidden></span>
+    <span class="conn" id="conn" data-conn="off" role="status">Unavailable</span>
+    <button type="button" class="icon-btn" id="chat-close" aria-label="Close chat" title="Close chat"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </header>
+  <p class="chat-note" id="chat-note" hidden>Chat is unavailable here. It runs on the dashboard's own server, at the address the coordinator gave you; this copy shows the fleet only.</p>
+  <ol class="chat-log" id="chat-log"></ol>
+  <div class="vh" id="chat-announce" aria-live="polite"></div>
+  <div class="composer" id="composer">
+    <ul class="mentions" id="mentions" role="listbox" aria-label="Mention someone" hidden></ul>
+    <p class="chat-error" id="chat-error" role="alert" hidden></p>
+    <div class="box" id="box">
+      <div class="reply" id="reply" hidden><span class="reply-text" id="reply-text"></span><button type="button" class="icon-btn" id="reply-x" aria-label="Stop replying" title="Stop replying"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width:16px;height:16px"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+      <label class="vh" for="say">Message</label>
+      <textarea id="say" rows="1" placeholder="Message the fleet, or type @" autocomplete="off" autocorrect="on" autocapitalize="sentences" spellcheck="true" data-1p-ignore data-lpignore="true" role="combobox" aria-autocomplete="list" aria-controls="mentions" aria-expanded="false" disabled></textarea>
+      <button type="button" class="send" id="send" aria-label="Send" title="Send" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg></button>
+    </div>
+    <p class="to" id="to" hidden></p>
+    <p class="readonly" id="readonly" role="status" hidden></p>
+  </div>
+</aside>
+</div>
+
+<dialog class="sheet" id="worker" aria-labelledby="worker-name">
+  <div class="sheet-in" id="worker-body"></div>
+</dialog>
+
 <script id="fleet-state" type="application/json">/*__STATE__*/</script>
+<script id="fleet-core">
+/* The page's rules that need no browser: the composer's keys, mentions, the roster, the
+   conversation's threads. Pure functions over plain values, run by the page below and by
+   tests/page.test.mjs, which evaluates this element alone. Mentions follow scripts/chat.py. */
+var FleetCore = (function () {
+  "use strict";
+  const TOKEN = /[A-Za-z0-9_.-]/;
+  const NAME = /^[A-Za-z0-9_.-]+$/;
+
+  /* What a key in the composer does: "send", "blur", or, while the mention list is open, "next",
+     "prev", "pick" and "close"; null leaves the key to the field. Enter sends and Shift+Enter breaks
+     the line; on a coarse pointer (a finger on an on-screen keyboard) Enter breaks the line and the
+     button sends, though Ctrl or Cmd with Enter still sends. Nothing acts while an input method
+     composes a word. While the list is open, Enter and Tab pick instead of sending. */
+  function keyOf(e, coarse, listOpen) {
+    if (!e || e.isComposing || e.keyCode === 229) return null;
+    const plain = !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey;
+    if (listOpen) {
+      if (e.key === "ArrowDown") return "next";
+      if (e.key === "ArrowUp") return "prev";
+      if ((e.key === "Enter" || e.key === "Tab") && plain) return "pick";
+      if (e.key === "Escape") return "close";
+    }
+    if (e.key === "Escape") return "blur";
+    if (e.key !== "Enter" || e.shiftKey || e.altKey) return null;
+    if (coarse && !e.ctrlKey && !e.metaKey) return null;
+    return "send";
+  }
+
+  /* Who can be written to: the coordinator first, then the agents, running ones before the rest,
+     each in spawn order. The coordinator's status and task are the fleet's. */
+  function rosterOf(state) {
+    const agents = (state && state.agents) || [];
+    const row = (a) => ({ id: a.id, name: a.name || a.id, status: a.status || "", task: a.task || "", order: agents.indexOf(a) });
+    return [{ id: "coordinator", name: "coordinator", status: (state && state.status) || "", task: (state && state.now) || "", order: -1 }]
+      .concat(agents.filter((a) => a.status === "running").map(row), agents.filter((a) => a.status !== "running").map(row));
+  }
+
+  /* The roster id a mention token names, any case, or null. Whatever order the roster is shown
+     in, it resolves as chat.py does: coordinator, then agent ids in state order, then agent names
+     in state order (so a name that equals another agent's id names that other agent). */
+  const inStateOrder = new WeakMap();
+  function resolve(roster, token) {
+    const key = String(token).toLowerCase();
+    if (!key) return null;
+    if (key === "coordinator") return "coordinator";
+    let agents = inStateOrder.get(roster);
+    if (!agents) { agents = roster.filter((r) => r.id !== "coordinator").sort((a, b) => (a.order ?? 0) - (b.order ?? 0)); inStateOrder.set(roster, agents); }
+    const hit = agents.find((r) => r.id.toLowerCase() === key) || agents.find((r) => r.name.toLowerCase() === key);
+    return hit ? hit.id : null;
+  }
+
+  /* A message's text cut into plain runs and resolved mentions ({text, mention: id}). A trailing
+     dot or dash ends the sentence unless the name itself has it, as chat.py reads it. */
+  function segments(text, roster) {
+    const out = [], re = /@([A-Za-z0-9_.-]+)/g;
+    let last = 0, m;
+    text = String(text ?? "");
+    while ((m = re.exec(text))) {
+      let token = m[1], id = resolve(roster, token);
+      if (!id) { const cut = token.replace(/[.-]+$/, ""); id = resolve(roster, cut); if (id) token = cut; }
+      if (!id) continue;
+      if (m.index > last) out.push({ text: text.slice(last, m.index) });
+      out.push({ text: "@" + token, mention: id });
+      last = m.index + 1 + token.length;
+      re.lastIndex = last;
+    }
+    if (last < text.length) out.push({ text: text.slice(last) });
+    return out;
+  }
+
+  /* Who a message from `sender` reaches, as the server resolves it: its mentions, plus the sender
+     of the message it answers (`answering`, when it has `re`), never the sender itself. A user
+     message with neither goes to the coordinator; anyone else's also goes to the user. */
+  function recipientsOf(text, roster, sender, answering) {
+    const to = sender === "user" ? [] : ["user"];
+    const add = (id) => { if (id && id !== sender && !to.includes(id)) to.push(id); };
+    for (const s of segments(text, roster)) if (s.mention) add(s.mention);
+    add(answering);
+    return to.length ? to : ["coordinator"];
+  }
+
+  /* The mention being typed at the caret: {start, end, query} when the caret ends "@query" and the
+     "@" starts a word (so an address like a@b does not open the list), else null. */
+  function mentionAt(text, caret) {
+    text = String(text ?? "");
+    let i = Math.max(0, Math.min(caret ?? text.length, text.length));
+    const end = i;
+    while (i > 0 && TOKEN.test(text[i - 1])) i--;
+    if (i === 0 || text[i - 1] !== "@") return null;
+    const start = i - 1;
+    if (start > 0 && TOKEN.test(text[start - 1])) return null;
+    return { start, end, query: text.slice(i, end) };
+  }
+
+  /* The roster narrowed to `query`, matched by id or name in any case: those starting with it
+     first, then those containing it, each group in roster order. */
+  function filterRoster(roster, query) {
+    const q = String(query ?? "").toLowerCase();
+    if (!q) return roster.slice();
+    const starts = [], has = [];
+    for (const r of roster) {
+      const id = r.id.toLowerCase(), name = r.name.toLowerCase();
+      if (id.startsWith(q) || name.startsWith(q)) starts.push(r);
+      else if (id.includes(q) || name.includes(q)) has.push(r);
+    }
+    return starts.concat(has);
+  }
+
+  /* The text with the mention at `at` replaced by "@name " (the id when the name is not a mention
+     token), and the caret after it. The rest of a word under the caret is replaced too. */
+  function insertMention(text, at, entry) {
+    text = String(text ?? "");
+    let end = at.end;
+    while (end < text.length && TOKEN.test(text[end])) end++;
+    const token = "@" + (NAME.test(entry.name) ? entry.name : entry.id);
+    const after = text.slice(end);
+    const next = text.slice(0, at.start) + token + (after.startsWith(" ") ? "" : " ") + after;
+    return { text: next, caret: at.start + token.length + 1 };
+  }
+
+  /* The conversation as threads: each message that answers none (or one not in the log) starts a
+     thread, and every reply, however deep, joins the thread of the message it answers. Threads
+     are ordered by their latest message, so a new reply brings its thread to the end. Each entry
+     carries `waiting`: for a user message, the recipients that have not answered it yet. */
+  function fold(messages) {
+    const list = [...messages].sort((a, b) => a.id - b.id);
+    const byId = new Map(list.map((m) => [m.id, m]));
+    const answered = new Set(list.filter((m) => m.re != null).map((m) => m.re + "\u0000" + m.from));
+    const entry = (m) => ({ message: m, waiting: m.from === "user" ? (m.to || []).filter((r) => !answered.has(m.id + "\u0000" + r)) : [] });
+    const threads = new Map();
+    for (const m of list) {
+      let root = m;
+      const seen = new Set();
+      while (root.re != null && byId.has(root.re) && byId.get(root.re).id < root.id && !seen.has(root.id)) { seen.add(root.id); root = byId.get(root.re); }
+      const t = threads.get(root.id);
+      if (root === m || !t) threads.set(m.id, { root: entry(m), replies: [], last: m.id });
+      else { t.replies.push(entry(m)); t.last = m.id; }
+    }
+    return [...threads.values()].sort((a, b) => a.last - b.last);
+  }
+
+  /* How many messages to the user arrived after the last one read. */
+  function unreadCount(messages, readId) {
+    let n = 0;
+    for (const m of messages) if (m.from !== "user" && m.id > (readId || 0)) n++;
+    return n;
+  }
+
+  /* The composer's draft in a Storage under `key`. A store that throws or is absent (a private
+     window) keeps nothing and reads "". */
+  function drafts(store, key) {
+    const attempt = (fn, fallback) => { try { return store ? fn() : fallback; } catch { return fallback; } };
+    return {
+      read: () => attempt(() => store.getItem(key) || "", ""),
+      write: (text) => attempt(() => { if (String(text).trim() === "") store.removeItem(key); else store.setItem(key, String(text)); }, null),
+      clear: () => attempt(() => store.removeItem(key), null),
+    };
+  }
+
+  return { keyOf, rosterOf, resolve, segments, recipientsOf, mentionAt, filterRoster, insertMention, fold, unreadCount, drafts };
+})();
+</script>
 <script>
 (function () {
   "use strict";
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const Core = FleetCore;
 
   let STATE;
   try {
     STATE = JSON.parse($("fleet-state").textContent);
   } catch (e) {
     $("app").innerHTML = '<div class="error">No fleet state embedded. Render this template with scripts/render_dashboard.py.</div>';
+    $("chat").hidden = true;
     return;
   }
 
@@ -299,9 +737,16 @@
     get(k, d) { try { const v = localStorage.getItem("fleet:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
     set(k, v) { try { localStorage.setItem("fleet:" + k, JSON.stringify(v)); } catch { /* per-viewer convenience only */ } },
   };
+  const media = (q) => window.matchMedia ? window.matchMedia(q) : { matches: false, addEventListener() {} };
+  const PHONE = media("(max-width: 759.98px)");
+  const DOCKED = media("(min-width: 1100px)");
+  const COARSE = media("(pointer: coarse)");
+  const REDUCED = media("(prefers-reduced-motion: reduce)");
 
   let NOW = Date.now();
-  const fmtInt = (n) => Number(n || 0).toLocaleString("en-US");
+  const time = (iso) => { const t = Date.parse(iso); return isNaN(t) ? 0 : t; };
+  const INT = new Intl.NumberFormat("en-US"), CLOCK = new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit" });
+  const fmtInt = (n) => INT.format(Number(n || 0));
   const fmtShort = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n);
   const fmtDur = (ms) => {
     if (!ms) return "";
@@ -317,8 +762,12 @@
     const d = Math.max(0, NOW - t);
     return d < 60e3 ? "just now" : fmtDur(d) + " ago";
   };
-  const clock = (iso) => { const t = new Date(iso); return isNaN(t) ? "" : t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
-  const pill = (s) => `<span class="pill ${esc(s)}">${esc(s)}</span>`;
+  const clock = (iso) => { const t = new Date(iso); return isNaN(t) ? "" : CLOCK.format(t); };
+  /* A region's markup is written only when it changed, so an update that changes nothing there
+     costs no parsing or layout and leaves focus where it was. Returns whether it wrote. */
+  const shownHtml = new WeakMap();
+  const paint = (el, html) => { if (shownHtml.get(el) === html) return false; el.innerHTML = html; shownHtml.set(el, html); return true; };
+  const pill = (s) => s ? `<span class="pill ${esc(s)}">${esc(s)}</span>` : "";
 
   /* The fleet mark: one hub, three workers. Also the favicon, which carries the unread count. */
   const mark = (badge, critical) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
@@ -331,21 +780,29 @@
   const setFavicon = (unread, critical) => {
     $("favicon").href = "data:image/svg+xml," + encodeURIComponent(mark(unread > 99 ? "99" : unread, critical).replace(/\s+/g, " "));
   };
+
   let agentById = {};
+  let roster = [];
   const colorOf = (a) => `var(--s${(STATE.agents.indexOf(a) % 8) + 1})`;
-  const stepAgent = (id) => id && agentById[id] ? `<a href="#agent-${esc(id)}">${esc(agentById[id].name)}</a>` : "";
+  /* A participant's colour and label: the worker's spawn colour, the accent for the coordinator. */
+  const colourOfId = (id) => agentById[id] ? colorOf(agentById[id]) : id === "coordinator" ? "var(--accent)" : "var(--faint)";
+  const nameOf = (id) => agentById[id]?.name || id;
+  /* A worker's name as a control that opens it; anyone else's as plain text. */
+  const whoButton = (id, extra) => agentById[id]
+    ? `<button type="button" class="who ${extra || ""}" data-agent="${esc(id)}" style="--c:${colorOf(agentById[id])}"><span class="swatch"></span><span>${esc(agentById[id].name)}</span></button>`
+    : `<span class="by">${esc(id || "coordinator")}</span>`;
   const expanded = new Set(store.get("expanded", []));
   const filters = ["f-status", "f-milestone", "f-skill", "f-model", "f-q"];
 
   function renderHeader() {
-    $("head").innerHTML = `
+    paint($("head"), `
       <div class="head-row"><span class="mark" aria-hidden="true">${mark()}</span><h1>${esc(STATE.project)}</h1>${pill(STATE.status)}</div>
       <p class="goal">${esc(STATE.goal)}</p>
       <div class="now"><b>Now</b><span>${esc(STATE.now)}</span></div>
       <div class="meta">
         <span>Started ${esc(clock(STATE.started))}, ${esc(ago(STATE.started))}</span>
         <span>Updated ${esc(clock(STATE.updated))}, ${esc(ago(STATE.updated))}</span>
-      </div>`;
+      </div>`);
     $("foot-updated").textContent = `State updated ${new Date(STATE.updated).toLocaleString()}`;
   }
 
@@ -356,37 +813,52 @@
     const steps = STATE.roadmap.flatMap((m) => m.steps);
     const doneSteps = steps.filter((s) => s.status === "done").length;
     const tile = (label, value, sub, cls) => `<div class="tile ${cls || ""}"><span class="label">${label}</span><span class="value num">${value}</span><span class="sub">${sub}</span></div>`;
-    $("tiles").innerHTML = [
+    paint($("tiles"), [
       tile("Running", byStatus("running"), `${byStatus("queued")} queued`),
       tile("Done", byStatus("done"), `${byStatus("failed") + byStatus("stopped")} failed or stopped`),
       tile("Blocked", byStatus("blocked"), `${openBlocks.length} open roadblock${openBlocks.length === 1 ? "" : "s"}`, openBlocks.length ? "alert" : ""),
       tile("Roadmap", `${doneSteps}/${steps.length}`, "steps done"),
       tile("Tokens", fmtShort(totalTokens), fmtInt(totalTokens) + " across " + STATE.agents.length + " workers"),
       tile("Elapsed", fmtDur(NOW - Date.parse(STATE.started)) || "0 s", "since coordination began"),
-    ].join("");
+    ].join(""));
+    $("nav-blocks").hidden = !openBlocks.length;
+    $("nav-blocks").textContent = String(openBlocks.length);
   }
 
+  /* A step with a worker is a control that opens that worker. */
   function renderRoadmap() {
-    $("roadmap").innerHTML = STATE.roadmap.length ? STATE.roadmap.map((m) => {
+    paint($("roadmap-list"), STATE.roadmap.length ? STATE.roadmap.map((m) => {
       const done = m.steps.filter((s) => s.status === "done").length;
       return `<div class="milestone">
         <div class="milestone-head"><h3>${esc(m.title)}</h3><span class="num faint">${done}/${m.steps.length}</span></div>
-        <ol class="steps">${m.steps.map((s) => `<li class="step ${esc(s.status)}" title="${esc(s.status)}"><span class="dot"></span><span class="title">${esc(s.title)}</span><span class="who">${stepAgent(s.agent)}</span></li>`).join("")}</ol>
+        <ol class="steps">${m.steps.map((s) => {
+          const a = s.agent && agentById[s.agent];
+          const inner = `<span class="dot"></span><span class="title">${esc(s.title)}</span><span class="by">${a ? esc(a.name) : ""}</span>`;
+          return `<li>${a ? `<button type="button" class="step ${esc(s.status)}" data-agent="${esc(s.agent)}" title="${esc(s.status)}, open ${esc(a.name)}">${inner}</button>` : `<div class="step ${esc(s.status)}" title="${esc(s.status)}">${inner}</div>`}</li>`;
+        }).join("")}</ol>
       </div>`;
-    }).join("") : '<p class="empty">No roadmap yet.</p>';
+    }).join("") : '<p class="empty">No roadmap yet.</p>');
   }
 
+  /* A roadblock with a worker opens that worker from anywhere on its card. */
   function renderRoadblocks() {
-    const blocks = [...STATE.roadblocks].sort((a, b) => (a.resolved - b.resolved) || (Date.parse(b.since) - Date.parse(a.since)));
-    $("roadblocks").innerHTML = blocks.length ? blocks.map((r) => `
-      <div class="block ${r.resolved ? "resolved" : esc(r.severity)}">
-        <div class="block-head"><b>${esc(r.title)}</b>${r.resolved ? pill("done") : pill(r.severity)}</div>
+    const blocks = [...STATE.roadblocks].sort((a, b) => (a.resolved - b.resolved) || (time(b.since) - time(a.since)));
+    paint($("roadblock-list"), blocks.length ? blocks.map((r) => {
+      const a = r.agent && agentById[r.agent];
+      const title = a ? `<button type="button" class="block-title" data-agent="${esc(r.agent)}">${esc(r.title)}</button>` : `<b>${esc(r.title)}</b>`;
+      return `<div class="block ${r.resolved ? "resolved" : esc(r.severity)}">
+        <div class="block-head">${title}${r.resolved ? pill("done") : pill(r.severity)}</div>
         <p class="detail">${esc(r.detail)}</p>
-        <p class="needs muted">${r.resolved ? "Resolved" : "Needs <b>" + esc(r.needs) + "</b>"} · ${esc(r.agent ? (agentById[r.agent]?.name || r.agent) : "coordinator")} · since ${esc(clock(r.since))}</p>
-      </div>`).join("") : '<p class="empty">No roadblocks.</p>';
+        <p class="needs muted">${r.resolved ? "Resolved" : "Needs <b>" + esc(r.needs) + "</b>"}, ${esc(r.agent ? nameOf(r.agent) : "coordinator")}, since ${esc(clock(r.since))}</p>
+      </div>`;
+    }).join("") : '<p class="empty">No roadblocks.</p>');
   }
 
+  let filterKey = "";
   function renderFilterOptions() {
+    const key = JSON.stringify([STATE.agents.map((a) => [a.status, a.skill, a.model]), STATE.roadmap.map((m) => [m.id, m.title])]);
+    if (key === filterKey) return;
+    filterKey = key;
     const keep = Object.fromEntries(filters.map((id) => [id, $(id).value || store.get(id, "")]));
     const reset = (sel) => { sel.innerHTML = '<option value="">all</option>'; };
     const fill = (sel, values, labels) => { for (const v of values) { const o = document.createElement("option"); o.value = v; o.textContent = labels ? labels[v] : v; sel.appendChild(o); } };
@@ -395,7 +867,7 @@
     reset($("f-milestone")); fill($("f-milestone"), STATE.roadmap.map((m) => m.id), Object.fromEntries(STATE.roadmap.map((m) => [m.id, m.title])));
     reset($("f-skill")); fill($("f-skill"), uniq(STATE.agents.map((a) => a.skill)));
     reset($("f-model")); fill($("f-model"), uniq(STATE.agents.map((a) => a.model)));
-    for (const id of filters) $(id).value = keep[id];
+    for (const id of filters) if ($(id).value !== keep[id]) $(id).value = keep[id];
   }
 
   const visibleAgents = () => {
@@ -409,65 +881,68 @@
   };
 
   function renderFleet(rows) {
+    const active = filters.filter((id) => id !== "f-q" && $(id).value).length;
+    $("f-on").hidden = !active; $("f-on").textContent = String(active);
     $("f-count").textContent = rows.length === STATE.agents.length ? `${rows.length} workers` : `${rows.length} of ${STATE.agents.length} workers`;
-    if (!rows.length) { $("fleet").innerHTML = '<tbody><tr><td class="empty">No workers match these filters.</td></tr></tbody>'; return; }
-    $("fleet").innerHTML = `<thead><tr>
+    if (!rows.length) { paint($("fleet-table"), '<tbody><tr><td class="empty">No workers match these filters.</td></tr></tbody>'); return; }
+    paint($("fleet-table"), `<thead><tr>
         <th>Worker</th><th>Task</th><th>Skill</th><th>Model</th><th>Status</th><th>Lane</th>
-        <th class="right">Tokens</th><th class="right">Time</th><th>Updated</th><th></th>
+        <th class="right">Tokens</th><th class="right">Time</th><th>Updated</th><th><span class="vh">Brief and report</span></th>
       </tr></thead><tbody>` + rows.map((a) => {
         const open = expanded.has(a.id);
         return `<tr class="row" id="agent-${esc(a.id)}">
-          <td><span class="swatch" style="background:${colorOf(a)}"></span><span class="agent-name">${esc(a.name)}</span></td>
-          <td class="task">${esc(a.task)}</td>
-          <td>${esc(a.skill || "none")}</td>
-          <td>${esc(a.model || "opus")}</td>
-          <td>${pill(a.status)}</td>
-          <td class="lane">${(a.lane || []).length ? a.lane.map((l) => `<code>${esc(l)}</code>`).join("") : '<span class="faint">read-only</span>'}</td>
-          <td class="right num">${a.tokens ? fmtInt(a.tokens) : '<span class="faint">pending</span>'}</td>
-          <td class="right num">${esc(fmtDur(a.duration_ms))}</td>
-          <td class="muted" title="${esc(a.updated)}">${esc(ago(a.updated))}</td>
-          <td><button class="expand" type="button" data-id="${esc(a.id)}" aria-expanded="${open}">${open ? "Hide" : "Detail"}</button></td>
-        </tr>` + (open ? `<tr class="detail"><td colspan="10"><div class="detail-grid">
-          <div><h4>Brief and completion criterion</h4><p>${esc(a.brief || "No brief recorded.")}</p></div>
-          <div><h4>Latest report</h4><p>${esc(a.report || "No report yet.")}</p></div>
-        </div></td></tr>` : "");
-      }).join("") + "</tbody>";
-    for (const b of $("fleet").querySelectorAll(".expand")) b.addEventListener("click", () => {
-      const id = b.dataset.id; expanded.has(id) ? expanded.delete(id) : expanded.add(id);
-      store.set("expanded", [...expanded]); render();
-    });
+          <td class="c-name">${whoButton(a.id, "agent-name")}</td>
+          <td class="c-task task">${esc(a.task)}</td>
+          <td class="c-skill" data-label="Skill">${esc(a.skill || "none")}</td>
+          <td class="c-model" data-label="Model">${esc(a.model || "opus")}</td>
+          <td class="c-status">${pill(a.status)}</td>
+          <td class="c-lane lane">${(a.lane || []).length ? a.lane.map((l) => `<code>${esc(l)}</code>`).join("") : '<span class="faint">read-only</span>'}</td>
+          <td class="c-tokens right num" data-label="Tokens">${a.tokens ? fmtInt(a.tokens) : '<span class="faint">pending</span>'}</td>
+          <td class="c-time right num" data-label="Time">${esc(fmtDur(a.duration_ms)) || '<span class="faint">none</span>'}</td>
+          <td class="c-upd muted" title="${esc(a.updated)}">${esc(ago(a.updated))}</td>
+          <td class="c-act"><button class="expand" type="button" data-id="${esc(a.id)}" aria-expanded="${open}">${open ? "Hide brief" : "Brief and report"}</button></td>
+        </tr>` + (open ? `<tr class="detail"><td colspan="10">${briefAndReport(a, "h4")}</td></tr>` : "");
+      }).join("") + "</tbody>");
   }
+  $("fleet-table").addEventListener("click", (e) => {
+    const b = e.target.closest(".expand"); if (!b) return;
+    const id = b.dataset.id; expanded.has(id) ? expanded.delete(id) : expanded.add(id);
+    store.set("expanded", [...expanded]); render();
+    $("fleet-table").querySelector(`.expand[data-id="${CSS.escape(id)}"]`)?.focus();
+  });
+  const briefAndReport = (a, h) => `<div class="detail-grid">
+    <div><${h}>Brief and completion criterion</${h}><p>${esc(a.brief || "No brief recorded.")}</p></div>
+    <div><${h}>Latest report</${h}><p>${esc(a.report || "No report yet.")}</p></div>
+  </div>`;
 
+  /* One bar per worker, coloured by spawn order, the figures on hover or focus. The fleet table
+     above stays the accessible alternative. */
   function renderChart(rows) {
     const withTokens = [...rows].sort((a, b) => (b.tokens || 0) - (a.tokens || 0));
     const total = withTokens.reduce((n, a) => n + (a.tokens || 0), 0);
-    if (!withTokens.length) { $("chart").innerHTML = '<p class="empty">No workers to chart.</p>'; return; }
-    const W = 720, L = 150, R = 60, T = 8, RH = 28, H = T + withTokens.length * RH + 28;
+    if (!withTokens.length) { paint($("chart"), '<p class="empty">No workers to chart.</p>'); return; }
     const max = Math.max(1, ...withTokens.map((a) => a.tokens || 0));
     const mag = Math.pow(10, Math.floor(Math.log10(max)));
     const nice = mag * [1, 2, 5, 10].find((k) => k * mag >= max);
-    const x = (v) => L + (v / nice) * (W - L - R);
-    const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * nice);
-    const bars = withTokens.map((a, i) => {
-      const y = T + i * RH, w = Math.max(0, x(a.tokens || 0) - L);
-      return `<g data-i="${i}">
-        <text x="${L - 10}" y="${y + RH / 2 + 4}" text-anchor="end">${esc(a.name.length > 18 ? a.name.slice(0, 17) + "…" : a.name)}</text>
-        <rect class="hit" x="0" y="${y}" width="${W}" height="${RH}"></rect>
-        <rect class="bar" x="${L}" y="${y + 6}" width="${w}" height="${RH - 12}" rx="3" fill="${colorOf(a)}"></rect>
-        <text class="val" x="${L + w + 6}" y="${y + RH / 2 + 4}">${a.tokens ? fmtShort(a.tokens) : "pending"}</text>
-      </g>`;
-    }).join("");
-    const grid = ticks.map((t) => `<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${T}" y2="${H - 24}"></line><text class="tick" x="${x(t)}" y="${H - 8}" text-anchor="middle">${fmtShort(t)}</text>`).join("");
-    $("chart").innerHTML = `<div class="chart-head"><span class="muted">Total tokens per worker, from task notifications. Running workers show their last reported figure.</span><span class="num muted">${fmtInt(total)} total</span></div>
-      <svg class="bars" viewBox="0 0 ${W} ${H}" role="img" aria-label="Tokens by worker">${grid}${bars}</svg><div class="tip" id="tip" hidden></div>`;
-    const svg = $("chart").querySelector("svg"), tip = $("tip");
-    svg.addEventListener("mousemove", (e) => {
-      const g = e.target.closest("g[data-i]"); if (!g) { tip.hidden = true; return; }
-      const a = withTokens[+g.dataset.i]; const box = $("chart").getBoundingClientRect();
-      tip.innerHTML = `<b>${esc(a.name)}</b> · ${esc(a.status)}<br><span class="num">${fmtInt(a.tokens)}</span> tokens${a.duration_ms ? " · " + esc(fmtDur(a.duration_ms)) : ""}${total ? " · " + Math.round(100 * (a.tokens || 0) / total) + "%" : ""}`;
-      tip.style.left = (e.clientX - box.left) + "px"; tip.style.top = (e.clientY - box.top) + "px"; tip.hidden = false;
+    const pct = (a) => total ? Math.round(100 * (a.tokens || 0) / total) : 0;
+    const bars = withTokens.map((a, i) => `<li class="bar-row" data-i="${i}" style="--c:${colorOf(a)}">
+        ${whoButton(a.id)}
+        <span class="track"><span class="bar" style="width:${(100 * (a.tokens || 0) / nice).toFixed(2)}%"></span></span>
+        <span class="bar-val">${a.tokens ? `${fmtShort(a.tokens)}, ${pct(a)}%` : "pending"}</span>
+      </li>`).join("");
+    const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => `<span style="left:${f * 100}%">${fmtShort(f * nice)}</span>`).join("");
+    if (!paint($("chart"), `<div class="chart-head"><span class="muted">Total tokens per worker, from task notifications. Running workers show their last reported figure.</span><span class="num muted">${fmtInt(total)} total</span></div>
+      <ul class="bars" aria-label="Tokens by worker">${bars}</ul>
+      <div class="bar-axis" aria-hidden="true"><span></span><span class="ticks">${ticks}</span><span></span></div>
+      <div class="tip" id="tip" hidden></div>`)) return;
+    const list = $("chart").querySelector(".bars"), tip = $("tip");
+    list.addEventListener("mousemove", (e) => {
+      const row = e.target.closest(".bar-row"); if (!row) { tip.hidden = true; return; }
+      const a = withTokens[+row.dataset.i]; const box = $("chart").getBoundingClientRect();
+      tip.innerHTML = `<b>${esc(a.name)}</b>, ${esc(a.status)}<br><span class="num">${fmtInt(a.tokens)}</span> tokens${a.duration_ms ? ", " + esc(fmtDur(a.duration_ms)) : ""}${total ? ", " + pct(a) + "%" : ""}`;
+      tip.style.left = Math.min(Math.max(e.clientX - box.left, 90), box.width - 90) + "px"; tip.style.top = (e.clientY - box.top) + "px"; tip.hidden = false;
     });
-    svg.addEventListener("mouseleave", () => { tip.hidden = true; });
+    list.addEventListener("mouseleave", () => { tip.hidden = true; });
   }
 
   function renderLog(rows) {
@@ -475,19 +950,37 @@
     const filtering = rows.length !== STATE.agents.length;
     const q = $("f-q").value.trim().toLowerCase();
     const events = [...STATE.events].reverse().filter((e) => (!filtering || (e.agent ? ids.has(e.agent) : !q)) && (!q || e.text.toLowerCase().includes(q) || (e.agent && ids.has(e.agent))));
-    $("log").innerHTML = events.length ? events.map((e) => `<li>
+    paint($("log"), events.length ? events.map((e) => `<li>
       <time datetime="${esc(e.at)}" title="${esc(e.at)}">${esc(clock(e.at))}</time>
-      <span><span class="kind ${esc(e.kind)}">${esc(e.kind)}${e.important ? " · needs you" : ""}</span>${e.agent ? `${agentById[e.agent] ? `<span class="swatch" style="background:${colorOf(agentById[e.agent])}"></span>` : ""}<span class="who">${esc(agentById[e.agent]?.name || e.agent)}</span>` : '<span class="who">coordinator</span>'}${esc(e.text)}</span>
-    </li>`).join("") : '<li><span></span><span class="muted">Nothing logged yet.</span></li>';
+      <span><span class="log-meta"><span class="kind ${esc(e.kind)}">${esc(e.kind)}${e.important ? ", needs you" : ""}</span>${e.agent ? whoButton(e.agent) : '<span class="by">coordinator</span>'}</span> ${esc(e.text)}</span>
+    </li>`).join("") : '<li><span></span><span class="muted">Nothing logged yet.</span></li>');
   }
 
   function render() { const rows = visibleAgents(); renderFleet(rows); renderChart(rows); renderLog(rows); }
 
+  /* The chat's shared state, read by the notifications below and written by the chat further down. */
+  const chat = {
+    messages: new Map(), lastId: 0,
+    conn: "off",            // off | connecting | live | reconnecting | unavailable
+    reply: null,            // the id of the message the composer answers
+    open: false,            // the overlay view, below the docked width
+    collapsed: store.get("chat-collapsed", null),
+    read: store.get("chat-read", 0),
+    sending: false,
+    write: { ok: true, reason: "" },   // from the stream's hello; a server without hello allows writing
+    you: "",                           // the viewer's tailnet login, when the server knows it
+  };
+  const chatAvailable = () => chat.conn !== "unavailable" && chat.conn !== "off";
+  const chatWritable = () => chatAvailable() && chat.write.ok;
+  let chatKey = "";
+  const chatInView = () => document.visibilityState === "visible" && (DOCKED.matches ? !chatCollapsed() : chat.open);
+  const chatCollapsed = () => chat.collapsed ?? (chat.conn === "unavailable");
 
-  /* Notifications: every fleet event is a notification; the coordinator flags the ones that need
-     the user now with "important": true. Unread state and preferences live in this browser only. */
+  /* Notifications: every fleet event is one, and so is every chat message from the fleet. The
+     coordinator flags the events that need the user now with "important": true. Unread state and
+     preferences live in this browser only. */
   const notif = (() => {
-    const key = (e) => e.at + "|" + e.text;
+    const key = (e) => e.key || e.at + "|" + e.text;
     let lastSeen = store.get("n-lastSeen", "");
     let clearedBefore = store.get("n-cleared", "");
     let booted = false;
@@ -511,8 +1004,8 @@
       if (prefs.browser === "off" || (prefs.browser === "important" && !e.important)) return;
       if (!canNotify() || Notification.permission !== "granted" || document.visibilityState === "visible") return;
       try {
-        const n = new Notification((e.important ? "Needs you: " : "") + STATE.project, { body: `${who(e)} · ${e.kind}\n${e.text}`, icon: notifIcon(), tag: key(e), requireInteraction: !!e.important, silent: prefs.sound === "off" });
-        n.onclick = () => { window.focus(); n.close(); if ($("panel").hidden) $("bell").click(); };
+        const n = new Notification((e.important ? "Needs you: " : "") + STATE.project, { body: `${who(e)}, ${e.kind}\n${e.text}`, icon: notifIcon(), tag: key(e), requireInteraction: !!e.important, silent: prefs.sound === "off" });
+        n.onclick = () => { window.focus(); n.close(); if (e.chat) openChat(); else if ($("panel").hidden) $("bell").click(); };
       } catch { /* the browser refused; the toast and badge still show */ }
     }
 
@@ -532,9 +1025,13 @@
     document.addEventListener("pointerdown", unlock, { passive: true });
     document.addEventListener("keydown", unlock);
 
-    const visible = () => [...STATE.events].reverse().filter((e) => !clearedBefore || e.at > clearedBefore);
-    const unread = () => visible().filter((e) => !lastSeen || e.at > lastSeen);
-    const who = (e) => e.agent ? (agentById[e.agent]?.name || e.agent) : "coordinator";
+    const fromMessage = (m) => ({ key: "chat:" + m.id, chat: m.id, at: m.at, kind: "message", agent: m.from === "coordinator" ? null : m.from, text: m.text });
+    const items = () => [...STATE.events, ...[...chat.messages.values()].filter((m) => m.from !== "user").map(fromMessage)]
+      .filter((e) => !clearedBefore || time(e.at) > time(clearedBefore))
+      .sort((a, b) => time(b.at) - time(a.at));
+    const isUnread = (e) => (!lastSeen || time(e.at) > time(lastSeen)) && (!e.chat || e.chat > chat.read);
+    const unread = () => items().filter(isUnread);
+    const who = (e) => e.agent ? nameOf(e.agent) : "coordinator";
 
     function renderBadge() {
       const u = unread(), imp = u.filter((e) => e.important).length;
@@ -544,41 +1041,47 @@
       setFavicon(u.length, imp > 0);
     }
     function renderList() {
-      const items = visible();
-      $("notifs").innerHTML = items.length ? items.map((e) => `<li class="${(!lastSeen || e.at > lastSeen) ? "unread" : "read"}${e.important ? " important" : ""}">
+      const list = items();
+      paint($("notifs"), list.length ? list.map((e) => `<li class="${isUnread(e) ? "unread" : "read"}${e.important ? " important" : ""}">
         <span class="mark"></span>
-        <span><div class="meta"><span class="kind">${esc(e.kind)}</span> · ${esc(who(e))}${e.important ? " · needs you" : ""}</div>${esc(e.text)}</span>
+        <span><div class="meta"><span class="kind">${esc(e.kind)}</span>, ${esc(who(e))}${e.important ? ", needs you" : ""}</div>${esc(e.text)}</span>
         <time datetime="${esc(e.at)}" title="${esc(e.at)}">${esc(clock(e.at))}</time>
-      </li>`).join("") : '<li class="empty muted">Nothing yet.</li>';
+      </li>`).join("") : '<li class="empty muted">Nothing yet.</li>');
     }
     function toast(e) {
       if (prefs.toasts === "off" || (prefs.toasts === "important" && !e.important)) return;
-      const el = document.createElement("div"); el.className = "toast" + (e.important ? " important" : "");
-      el.innerHTML = `<div><div class="meta"><span class="kind">${esc(e.kind)}</span> · ${esc(who(e))} · ${esc(clock(e.at))}</div>${esc(e.text)}</div><button type="button" aria-label="Dismiss">×</button>`;
-      el.querySelector("button").addEventListener("click", () => el.remove());
+      const el = document.createElement("div"); el.className = "toast" + (e.important ? " important" : "") + (e.chat ? " opens" : "");
+      el.innerHTML = `<div><div class="meta"><span class="kind">${esc(e.kind)}</span>, ${esc(who(e))}, ${esc(clock(e.at))}</div>${esc(e.text)}</div><button type="button" aria-label="Dismiss">×</button>`;
+      el.querySelector("button").addEventListener("click", (ev) => { ev.stopPropagation(); el.remove(); });
+      if (e.chat) el.addEventListener("click", () => { el.remove(); openChat(); });
       $("toasts").prepend(el);
       while ($("toasts").children.length > 4) $("toasts").lastElementChild.remove();
       if (!e.important) setTimeout(() => el.remove(), 7000);
+    }
+    function announce(fresh) {
+      fresh.forEach(toast); fresh.forEach(browserAlert);
+      const imp = fresh.some((e) => e.important);
+      if (fresh.length && (prefs.sound === "all" || (prefs.sound === "important" && imp))) chime(imp);
     }
     function sync() {
       const seen = new Set(sync.keys || []);
       const fresh = booted ? STATE.events.filter((e) => !seen.has(key(e))) : [];
       sync.keys = STATE.events.map(key);
       if (!booted) { booted = true; unread().filter((e) => e.important).reverse().forEach(toast); }
-      else {
-        fresh.forEach(toast); fresh.forEach(browserAlert);
-        const imp = fresh.some((e) => e.important);
-        if (fresh.length && (prefs.sound === "all" || (prefs.sound === "important" && imp))) chime(imp);
-      }
-      renderBadge(); if (!$("panel").hidden) renderList();
+      else announce(fresh);
+      refresh();
     }
+    /* A chat message from the fleet that arrived live while the chat was out of view. */
+    function message(m) { announce([fromMessage(m)]); refresh(); }
+    function refresh() { renderBadge(); if (!$("panel").hidden) renderList(); }
     function markRead() { lastSeen = new Date().toISOString(); store.set("n-lastSeen", lastSeen); renderBadge(); renderList(); }
+    const closePanel = () => { $("panel").hidden = true; $("bell").setAttribute("aria-expanded", "false"); };
     $("bell").addEventListener("click", () => {
       const open = $("panel").hidden; $("panel").hidden = !open; $("bell").setAttribute("aria-expanded", String(open));
       if (open) { renderList(); const c = audio(); if (c && c.state !== "running") $("n-audio-note").hidden = false; }
     });
-    document.addEventListener("click", (ev) => { if (!$("panel").hidden && !$("panel").contains(ev.target) && !$("bell").contains(ev.target)) { $("panel").hidden = true; $("bell").setAttribute("aria-expanded", "false"); } });
-    document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !$("panel").hidden) { $("panel").hidden = true; $("bell").setAttribute("aria-expanded", "false"); } });
+    document.addEventListener("click", (ev) => { if (!$("panel").hidden && !$("panel").contains(ev.target) && !$("bell").contains(ev.target)) closePanel(); });
+    document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !$("panel").hidden) closePanel(); });
     $("n-read").addEventListener("click", markRead);
     $("n-clear").addEventListener("click", () => { clearedBefore = new Date().toISOString(); store.set("n-cleared", clearedBefore); markRead(); });
     $("n-sound").addEventListener("change", () => { prefs.sound = $("n-sound").value; store.set("n-sound", prefs.sound); renderBadge(); });
@@ -590,34 +1093,493 @@
     });
     browserNote();
     $("n-test").addEventListener("click", () => { unlock(); setTimeout(() => chime(true), 50); });
-    return { sync };
+    return { sync, message, refresh };
   })();
+
+  /* The worker sheet: everything the page knows about one worker, and one tap to write to it. */
+  let sheetFor = null, sheetSig = "";
+  const sheetSigOf = (a) => JSON.stringify([a, STATE.roadmap.find((m) => m.id === a.milestone)?.title, chatAvailable(), chat.write]);
+  function openWorker(id) {
+    const a = agentById[id]; if (!a) return;
+    sheetFor = id;
+    paintSheet(a);
+    if (!$("worker").open) $("worker").showModal();
+  }
+  /* After a state or hello: the open sheet is repainted only when its worker's row changed, and
+     the control that had focus keeps it. */
+  function refreshSheet() {
+    if (!sheetFor || !$("worker").open) return;
+    const a = agentById[sheetFor];
+    if (!a) { $("worker").close(); return; }
+    if (sheetSigOf(a) !== sheetSig) paintSheet(a);
+  }
+  function paintSheet(a) {
+    const had = $("worker").contains(document.activeElement) ? document.activeElement.dataset.focus : null;
+    sheetSig = sheetSigOf(a);
+    const ms = STATE.roadmap.find((m) => m.id === a.milestone);
+    const fact = (k, v) => `<div><dt>${k}</dt><dd>${v}</dd></div>`;
+    $("worker-body").innerHTML = `
+      <div class="sheet-head" style="--c:${colorOf(a)}"><span class="swatch"></span><h2 id="worker-name">${esc(a.name)}</h2>${pill(a.status)}<button type="button" class="icon-btn" data-close data-focus="x" aria-label="Close" title="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+      <p>${esc(a.task)}</p>
+      <dl class="facts">${fact("Skill", esc(a.skill || "none"))}${fact("Model", esc(a.model || "opus"))}${fact("Milestone", esc(ms ? ms.title : a.milestone || "none"))}${fact("Tokens", a.tokens ? `<span class="num">${fmtInt(a.tokens)}</span>` : "pending")}${fact("Time", esc(fmtDur(a.duration_ms)) || "none")}${fact("Updated", esc(ago(a.updated)) || "unknown")}</dl>
+      <div><h3>Lane</h3><div class="lane">${(a.lane || []).length ? a.lane.map((l) => `<code>${esc(l)}</code>`).join("") : "read-only"}</div></div>
+      ${briefAndReport(a, "h3")}
+      <div class="sheet-actions">${chatAvailable() ? `<button type="button" class="btn primary" data-write="${esc(a.id)}" data-focus="write"${chat.write.ok ? "" : ` disabled aria-describedby="write-why"`}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 0 1-12.4 7.5L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/></svg>Message ${esc(a.name)}</button>` : ""}<button type="button" class="btn" data-close data-focus="close">Close</button></div>
+      ${chatAvailable() && !chat.write.ok ? `<p class="muted" id="write-why">${esc(chat.write.reason)}</p>` : ""}`;
+    if (had) {
+      const back = $("worker-body").querySelector(`[data-focus="${had}"]:not(:disabled)`) || $("worker-body").querySelector('[data-focus="x"]');
+      back.focus();
+    }
+  }
+  $("worker").addEventListener("click", (e) => {
+    if (e.target === $("worker") || e.target.closest("[data-close]")) { $("worker").close(); return; }
+    const w = e.target.closest("[data-write]");
+    if (w) { $("worker").close(); writeTo(w.dataset.write); }
+  });
+  $("worker").addEventListener("close", () => { sheetFor = null; });
+  /* Any control naming a worker opens it (the worker sheet listens for its own). */
+  document.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-agent]");
+    if (t && !$("worker").contains(t)) { e.preventDefault(); openWorker(t.dataset.agent); }
+  });
 
   function applyState(state) {
     STATE = state; NOW = Date.now();
     agentById = Object.fromEntries(STATE.agents.map((a) => [a.id, a]));
+    roster = Core.rosterOf(STATE);
     renderHeader(); renderTiles(); renderRoadmap(); renderRoadblocks(); renderFilterOptions(); render();
     notif.sync();
+    refreshSheet();
+    /* The conversation depends on the roster's names and statuses only; a state that changes
+       neither leaves it untouched. */
+    const key = STATE.status + "|" + STATE.agents.map((a) => `${a.id}\u0000${a.name}\u0000${a.status}`).join("|");
+    if (key !== chatKey) { chatKey = key; renderChat(); }
+    refreshComposer();
   }
 
   for (const id of filters) { const saved = store.get(id, ""); if (saved) $(id).value = saved; $(id).addEventListener("input", () => { store.set(id, $(id).value); render(); }); }
   $("f-reset").addEventListener("click", () => { for (const id of filters) { $(id).value = ""; store.set(id, ""); } render(); });
-  applyState(STATE);
+  $("f-toggle").addEventListener("click", () => {
+    const open = !$("filters").classList.contains("open");
+    $("filters").classList.toggle("open", open); $("f-toggle").setAttribute("aria-expanded", String(open));
+  });
 
-  /* Live updates. Served over the tailnet, the page polls state.json beside it and re-renders
-     when the coordinator writes a new version. Published as an artifact, fetch is blocked and
-     each republish reaches open viewers on its own, so the poll fails quietly. */
-  if (location.protocol.startsWith("http")) {
-    const poll = async () => {
-      try {
-        const res = await fetch("state.json", { cache: "no-store" });
-        if (!res.ok) return;
-        const next = await res.json();
-        if (next.updated !== STATE.updated) applyState(next);
-      } catch { /* not served beside a state file */ }
+  /* Section navigation: the link of the section in view is current. */
+  (() => {
+    const links = [...$("dock").querySelectorAll("a[data-sec]")];
+    if (!("IntersectionObserver" in window)) return;
+    const seen = new Map();
+    const io = new IntersectionObserver((entries) => {
+      for (const en of entries) seen.set(en.target.id, en.isIntersecting);
+      const current = links.find((l) => seen.get(l.dataset.sec));
+      for (const l of links) l.setAttribute("aria-current", String(l === current));
+    }, { rootMargin: "-35% 0px -55% 0px" });
+    for (const l of links) { const s = $(l.dataset.sec); if (s) io.observe(s); }
+  })();
+
+  /* ---------------------------------------------------------------- the chat */
+
+  const say = $("say");
+  const draft = Core.drafts((() => { try { return window.localStorage; } catch { return null; } })(), "fleet:chat-draft");
+  const SIZED = !!(window.CSS && CSS.supports && CSS.supports("field-sizing", "content"));
+  const ment = { open: false, items: [], index: 0, at: null, dismissed: -1 };
+
+  /* The visual viewport, for the overlay view: it sits over the on-screen keyboard, never under it. */
+  (() => {
+    const vv = window.visualViewport; if (!vv) return;
+    const rootEl = document.documentElement;
+    const sync = () => {
+      const stick = nearBottom();
+      rootEl.style.setProperty("--vv-h", Math.round(vv.height) + "px");
+      rootEl.style.setProperty("--vv-top", Math.round(vv.offsetTop) + "px");
+      if (stick) toBottom();
     };
-    setInterval(poll, 5000);
+    vv.addEventListener("resize", sync); vv.addEventListener("scroll", sync); sync();
+  })();
+  function nearBottom() { const log = $("chat-log"); return log.scrollHeight - log.scrollTop - log.clientHeight < 120; }
+  function toBottom() { const log = $("chat-log"); log.scrollTop = log.scrollHeight; }
+
+  function setConn(conn) {
+    chat.conn = conn;
+    const words = { off: "Unavailable", unavailable: "Unavailable", connecting: "Connecting", live: "Live", reconnecting: "Reconnecting" };
+    $("conn").textContent = words[conn]; $("conn").dataset.conn = conn;
+    $("chat").classList.toggle("available", chatAvailable());
+    $("chat-note").hidden = conn !== "unavailable";
+    layoutChat(); refreshComposer(); renderChat();
+  }
+
+  /* Where the chat shows: docked and collapsible on a wide screen, an overlay view elsewhere. */
+  function layoutChat() {
+    const docked = DOCKED.matches;
+    $("shell").classList.toggle("chat-collapsed", docked && chatCollapsed());
+    $("chat").classList.toggle("open", !docked && chat.open);
+    document.documentElement.classList.toggle("chat-open", !docked && chat.open);
+    const shown = docked ? !chatCollapsed() : chat.open;
+    $("chat-toggle").setAttribute("aria-expanded", String(shown));
+    $("chat-close").setAttribute("aria-label", docked ? "Hide chat" : "Close chat");
+    $("chat-close").title = docked ? "Hide chat" : "Close chat";
+    /* The overlay is modal: the page behind it is inert. The docked panel is not. */
+    const modal = !docked && chat.open;
+    for (const id of ["app", "bell", "panel", "toasts"]) $(id).inert = modal;
+    if (modal) { $("chat").setAttribute("role", "dialog"); $("chat").setAttribute("aria-modal", "true"); }
+    else { $("chat").removeAttribute("role"); $("chat").removeAttribute("aria-modal"); }
+    markChatRead();
+  }
+  let pushed = false, opener = null;
+  function openChat() {
+    if (DOCKED.matches) { chat.collapsed = false; store.set("chat-collapsed", false); layoutChat(); toBottom(); return; }
+    if (chat.open) return;
+    const at = document.activeElement;
+    opener = at && at !== document.body && !$("chat").contains(at) ? at : null;
+    chat.open = true;
+    try { history.pushState({ fleetChat: true }, ""); pushed = true; } catch { pushed = false; }
+    layoutChat(); toBottom();
+    (chatWritable() ? say : $("chat-title")).focus({ preventScroll: true });
+  }
+  /* Closing the overlay gives focus back to what opened it. */
+  function overlayClosed() {
+    chat.open = false; closeMentions();
+    layoutChat();
+    const back = opener && opener.isConnected && !opener.closest("[inert]") ? opener : $("chat-toggle");
+    opener = null;
+    back.focus({ preventScroll: true });
+  }
+  function closeChat() {
+    if (DOCKED.matches) { chat.collapsed = true; store.set("chat-collapsed", true); layoutChat(); return; }
+    if (!chat.open) return;
+    say.blur();
+    if (pushed) { pushed = false; try { history.back(); } catch { /* the view is closed either way */ } }
+    overlayClosed();
+  }
+  window.addEventListener("popstate", () => { if (chat.open) { pushed = false; overlayClosed(); } });
+  /* Tab stays inside the overlay. */
+  $("chat").addEventListener("keydown", (e) => {
+    if (e.key !== "Tab" || e.defaultPrevented || DOCKED.matches || !chat.open) return;
+    const f = [...$("chat").querySelectorAll("button, textarea, a[href]")].filter((x) => !x.disabled && x.getClientRects().length);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1], at = document.activeElement;
+    if (e.shiftKey && (at === first || at === $("chat-title"))) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && at === last) { e.preventDefault(); first.focus(); }
+  });
+  $("chat-toggle").addEventListener("click", () => ((DOCKED.matches ? !chatCollapsed() : chat.open) ? closeChat() : openChat()));
+  $("chat-close").addEventListener("click", closeChat);
+  $("chat").addEventListener("keydown", (e) => { if (e.key === "Escape" && e.target !== say && !DOCKED.matches && chat.open) closeChat(); });
+  DOCKED.addEventListener("change", () => { if (DOCKED.matches && chat.open) { chat.open = false; pushed = false; opener = null; } layoutChat(); });
+  document.addEventListener("visibilitychange", markChatRead);
+
+  function markChatRead() {
+    if (!chatInView() || !chat.lastId) { renderChatBadge(); return; }
+    const top = Math.max(0, ...[...chat.messages.values()].filter((m) => m.from !== "user").map((m) => m.id));
+    if (top > chat.read) { chat.read = top; store.set("chat-read", top); notif.refresh(); }
+    renderChatBadge();
+  }
+  function renderChatBadge() {
+    const n = Core.unreadCount(chat.messages.values(), chat.read);
+    $("chat-badge").hidden = !n; $("chat-badge").textContent = n > 99 ? "99+" : String(n);
+    $("chat-toggle").setAttribute("aria-label", n ? `Chat, ${n} unread` : "Chat");
+  }
+
+  /* The conversation: threads in the order of their latest message, replies under what they answer. */
+  function senderOf(m) {
+    if (m.from === "user") return { label: m.author || "You", colour: "var(--accent)", status: "" };
+    if (m.from === "coordinator") return { label: "coordinator", colour: "var(--accent)", status: STATE.status };
+    const a = agentById[m.from];
+    return { label: a ? a.name : m.from, colour: colourOfId(m.from), status: a ? a.status : "" };
+  }
+  const textHtml = (text) => Core.segments(text, roster).map((s) => s.mention
+    ? `<span class="mention" style="--c:${colourOfId(s.mention)}">${esc(s.text)}</span>` : esc(s.text)).join("");
+  /* The conversation's nodes are kept and patched, never rebuilt: a message node is made once and
+     each of its slots (head, reply control, answering line, text, waiting line) is replaced only
+     when its own markup changed, so focus, a text selection and scroll survive every update. */
+  const threadEls = new Map(), msgEls = new Map(), painted = new WeakMap();
+  function slot(el, name, html) {
+    const cur = el.querySelector(`:scope > [data-slot="${name}"]`);
+    if (cur && painted.get(cur) === html) return;
+    const t = document.createElement("template");
+    t.innerHTML = html || "<span hidden></span>";
+    const next = t.content.firstElementChild;
+    next.dataset.slot = name; painted.set(next, html);
+    if (cur) cur.replaceWith(next); else el.appendChild(next);
+  }
+  function paintMessage(entry, rootId) {
+    const m = entry.message, s = senderOf(m), fromFleet = m.from !== "user", canReply = fromFleet && chatWritable();
+    let el = msgEls.get(m.id);
+    if (!el) { el = document.createElement("article"); el.dataset.id = m.id; msgEls.set(m.id, el); }
+    const cls = `msg from-${fromFleet ? "fleet" : "user"}${canReply ? " can-reply" : ""}${chat.reply === m.id ? " replying" : ""}`;
+    if (el.className !== cls) el.className = cls;
+    const style = `--c:${s.colour}`;
+    if (el.getAttribute("style") !== style) el.setAttribute("style", style);
+    const name = agentById[m.from] ? whoButton(m.from) : `<b>${esc(s.label)}</b>`;
+    const parent = m.re != null && m.re !== rootId ? chat.messages.get(m.re) : null;
+    slot(el, "head", `<div class="msg-head">${name}${s.status && m.from !== "coordinator" ? pill(s.status) : ""}<time datetime="${esc(m.at)}" title="${esc(m.at)}">${esc(clock(m.at))}</time></div>`);
+    slot(el, "reply", canReply ? `<button type="button" class="reply-btn" data-reply="${m.id}" aria-label="Reply to ${esc(s.label)}">Reply</button>` : "");
+    slot(el, "re", parent ? `<p class="msg-re">Answering ${esc(senderOf(parent).label)}</p>` : "");
+    slot(el, "text", `<p class="msg-text">${textHtml(m.text)}</p>`);
+    slot(el, "wait", m.from !== "user" ? "" : entry.waiting.length
+      ? `<p class="wait">Waiting on ${entry.waiting.map((r) => agentById[r] ? whoButton(r) : `<span class="chip"><span class="swatch" style="--c:${colourOfId(r)}"></span>${esc(nameOf(r))}</span>`).join("")}</p>`
+      : `<p class="wait done">Answered</p>`);
+    return el;
+  }
+  function renderChat() {
+    const log = $("chat-log");
+    const stick = nearBottom();
+    const threads = Core.fold(chat.messages.values());
+    if (!threads.length) {
+      const html = chatAvailable() ? `<li class="chat-empty">${chatWritable() ? "No messages yet. Write to the coordinator, or type @ to reach a worker." : "No messages yet."}</li>` : "";
+      if (painted.get(log) !== html) { log.innerHTML = html; painted.set(log, html); threadEls.clear(); msgEls.clear(); }
+      renderChatBadge(); return;
+    }
+    if (painted.has(log)) { log.innerHTML = ""; painted.delete(log); }
+    const shown = new Set();
+    threads.forEach((t, i) => {
+      const rid = t.root.message.id;
+      shown.add(rid);
+      let li = threadEls.get(rid);
+      if (!li) { li = document.createElement("li"); li.className = "thread"; threadEls.set(rid, li); }
+      const root = paintMessage(t.root, rid);
+      if (li.firstElementChild !== root) li.prepend(root);
+      let ol = li.querySelector(":scope > ol.replies");
+      if (t.replies.length && !ol) { ol = document.createElement("ol"); ol.className = "replies"; li.appendChild(ol); }
+      t.replies.forEach((r, j) => {
+        const art = paintMessage(r, rid);
+        let wrap = art.parentElement && art.parentElement.parentElement === ol ? art.parentElement : null;
+        if (!wrap) { wrap = document.createElement("li"); wrap.appendChild(art); }
+        if (ol.children[j] !== wrap) ol.insertBefore(wrap, ol.children[j] || null);
+      });
+      if (ol) { while (ol.children.length > t.replies.length) ol.lastElementChild.remove(); if (!t.replies.length) ol.remove(); }
+      if (log.children[i] !== li) log.insertBefore(li, log.children[i] || null);
+    });
+    for (const [rid, li] of threadEls) if (!shown.has(rid)) { li.remove(); threadEls.delete(rid); }
+    if (stick) toBottom();
+    renderChatBadge();
+  }
+  let chatTimer = 0;
+  const scheduleChat = () => { if (!chatTimer) chatTimer = setTimeout(() => { chatTimer = 0; renderChat(); markChatRead(); notif.refresh(); }, 16); };
+
+  /* A message from the stream or from a send. The store's id makes it idempotent: a replayed or
+     twice-delivered message is kept once. `live` marks one that arrived after the first replay. */
+  function addMessage(m, live) {
+    if (!m || typeof m.id !== "number" || chat.messages.has(m.id)) return;
+    chat.messages.set(m.id, m);
+    chat.lastId = Math.max(chat.lastId, m.id);
+    if (live && m.from !== "user") {
+      $("chat-announce").textContent = `${senderOf(m).label}: ${m.text}`;
+      if (!chatInView()) notif.message(m);
+    }
+    scheduleChat();
+  }
+
+  /* Replying: a tap on a message from the fleet makes the composer answer it. The server
+     addresses a reply to the sender of what it answers, so no mention is needed. */
+  function setReply(id) {
+    const m = chat.messages.get(id); if (!m || m.from === "user" || !chatWritable()) return;
+    chat.reply = id;
+    afterEdit(); renderChat();
+    say.focus(); say.setSelectionRange(say.value.length, say.value.length);
+  }
+  function clearReply() { chat.reply = null; refreshComposer(); renderChat(); }
+  $("reply-x").addEventListener("click", () => { clearReply(); say.focus(); });
+  $("chat-log").addEventListener("click", (e) => {
+    const r = e.target.closest("[data-reply]");
+    if (r) { setReply(+r.dataset.reply); return; }
+    if (e.target.closest("button, a") || String(window.getSelection?.() || "")) return;
+    const art = e.target.closest(".msg.can-reply");
+    if (art) setReply(+art.dataset.id);
+  });
+
+  /* Starting a message to a worker, from its sheet. */
+  function writeTo(id) {
+    openChat();
+    if (!chatWritable()) return;
+    const has = Core.segments(say.value, roster).some((s) => s.mention === id);
+    if (!has) {
+      const a = agentById[id];
+      const token = "@" + (a && /^[A-Za-z0-9_.-]+$/.test(a.name) ? a.name : id) + " ";
+      say.value = token + say.value.replace(/^\s+/, "");
+    }
+    afterEdit();
+    say.focus(); say.setSelectionRange(say.value.length, say.value.length);
+  }
+
+  /* The composer. */
+  function fit() {
+    if (SIZED) return;
+    say.style.height = "auto";
+    const cs = getComputedStyle(say);
+    const line = parseFloat(cs.lineHeight) || 23;
+    const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    say.style.height = Math.min(say.scrollHeight, line * 8 + pad) + "px";
+  }
+  function refreshComposer() {
+    const text = say.value.trim();
+    $("send").disabled = !text || chat.sending || !chatWritable();
+    const readOnly = chatAvailable() && !chat.write.ok;
+    $("readonly").hidden = !readOnly;
+    $("readonly").textContent = chat.write.reason || "This address can read the chat but not write to it.";
+    $("box").hidden = readOnly;
+    say.disabled = !chatWritable();
+    if (readOnly) { $("chat-error").hidden = true; closeMentions(); }
+    const m = chat.reply != null && chat.messages.get(chat.reply);
+    $("reply").hidden = !m;
+    if (m) $("reply-text").textContent = `Replying to ${senderOf(m).label}: ${m.text.replace(/\s+/g, " ").slice(0, 80)}`;
+    say.placeholder = m ? `Reply to ${senderOf(m).label}` : "Message the fleet, or type @";
+    const to = Core.recipientsOf(say.value, roster, "user", m ? m.from : null).map(nameOf);
+    $("to").hidden = !text || !chatWritable();
+    $("to").textContent = "To " + (to.length > 1 ? to.slice(0, -1).join(", ") + " and " + to[to.length - 1] : to[0]);
+    if (ment.open) updateMentions();
+  }
+  function afterEdit() { draft.write(say.value); fit(); refreshComposer(); updateMentions(); }
+
+  /* The mention list: opens on "@", narrows as the query grows, picks with a tap, Enter or Tab. */
+  function updateMentions() {
+    const caret = say.selectionStart, at = say.selectionStart === say.selectionEnd && document.activeElement === say ? Core.mentionAt(say.value, caret) : null;
+    if (!at || at.start === ment.dismissed) { if (!at) ment.dismissed = -1; closeMentions(); return; }
+    const items = Core.filterRoster(roster, at.query);
+    if (!items.length) { closeMentions(); return; }
+    const same = ment.open && ment.at && ment.at.query === at.query && ment.at.start === at.start;
+    ment.items = items; ment.at = at; ment.open = true;
+    if (!same) ment.index = 0;
+    ment.index = Math.min(ment.index, items.length - 1);
+    renderMentions();
+  }
+  function renderMentions() {
+    const list = $("mentions");
+    list.innerHTML = ment.items.map((r, i) => `<li role="option" id="mention-${i}" data-i="${i}" aria-selected="${i === ment.index}" style="--c:${colourOfId(r.id)}">
+      <span class="swatch"></span>
+      <span class="m-main"><span class="m-name">${esc(r.name)}</span>${r.name !== r.id ? `<span class="faint">${esc(r.id)}</span>` : ""}${pill(r.status)}</span>
+      ${r.task ? `<span class="m-task">${esc(r.task)}</span>` : ""}
+    </li>`).join("");
+    list.hidden = false;
+    say.setAttribute("aria-expanded", "true");
+    say.setAttribute("aria-activedescendant", "mention-" + ment.index);
+    const opt = list.children[ment.index];
+    if (opt) {
+      if (opt.offsetTop < list.scrollTop) list.scrollTop = opt.offsetTop - 4;
+      else if (opt.offsetTop + opt.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = opt.offsetTop + opt.offsetHeight - list.clientHeight + 4;
+    }
+  }
+  function closeMentions() {
+    ment.open = false; ment.items = [];
+    $("mentions").hidden = true;
+    say.setAttribute("aria-expanded", "false"); say.removeAttribute("aria-activedescendant");
+  }
+  function pick(i) {
+    const r = ment.items[i]; if (!r || !ment.at) return;
+    const out = Core.insertMention(say.value, ment.at, r);
+    say.value = out.text;
+    say.setSelectionRange(out.caret, out.caret);
+    closeMentions();
+    afterEdit();
+  }
+  $("mentions").addEventListener("pointerdown", (e) => e.preventDefault());
+  $("mentions").addEventListener("click", (e) => { const li = e.target.closest("[data-i]"); if (li) { pick(+li.dataset.i); say.focus(); } });
+
+  say.addEventListener("keydown", (e) => {
+    const action = Core.keyOf(e, COARSE.matches, ment.open);
+    if (!action) return;
+    if (action === "next" || action === "prev") {
+      e.preventDefault();
+      ment.index = (ment.index + (action === "next" ? 1 : -1) + ment.items.length) % ment.items.length;
+      renderMentions(); return;
+    }
+    if (action === "pick") { e.preventDefault(); pick(ment.index); return; }
+    if (action === "close") { e.preventDefault(); ment.dismissed = ment.at ? ment.at.start : -1; closeMentions(); return; }
+    if (action === "blur") { say.blur(); return; }
+    if (action === "send") { e.preventDefault(); send(); }
+  });
+  say.addEventListener("input", afterEdit);
+  say.addEventListener("click", updateMentions);
+  say.addEventListener("keyup", (e) => { if (/^(Arrow(Left|Right)|Home|End)$/.test(e.key)) updateMentions(); });
+  say.addEventListener("blur", closeMentions);
+  say.addEventListener("focus", () => { if (!DOCKED.matches && PHONE.matches) setTimeout(toBottom, 250); });
+  $("send").addEventListener("click", () => { send(); });
+  $("box").addEventListener("pointerdown", (e) => {
+    if (e.target === say || say.disabled || e.target.closest("button")) return;
+    e.preventDefault(); say.focus();
+  });
+
+  function showError(text) { $("chat-error").textContent = text; $("chat-error").hidden = !text; }
+  async function send() {
+    const text = say.value.trim();
+    if (!text || chat.sending || !chatWritable()) return;
+    chat.sending = true; showError(""); refreshComposer();
+    const body = { text };
+    if (chat.reply != null) body.re = chat.reply;
+    try {
+      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      let data = null;
+      try { data = await res.json(); } catch { data = null; }
+      if (res.status !== 201) { showError((data && data.error) || `The server refused the message (${res.status}). Your draft is kept.`); return; }
+      say.value = ""; draft.clear(); chat.reply = null; fit();
+      addMessage(data, true);
+      closeMentions();
+    } catch {
+      showError("Could not reach the dashboard's server. Your draft is kept; send again when it is back.");
+    } finally {
+      chat.sending = false; refreshComposer(); renderChat();
+    }
+  }
+
+  /* ---------------------------------------------------------------- live updates */
+
+  /* The page's stream: `state` events replace the page's state, `chat` events fill the conversation,
+     both from one EventSource on "events" beside the page. The browser resumes a dropped stream
+     with Last-Event-ID; a stream the server closed is reopened here with ?after=<last id>. When the
+     stream never opens (a file, a claude.ai artifact, a server without the route), the page polls
+     state.json as before and the chat shows as unavailable. Polling also covers a reconnect. */
+  const live = { opened: false, replayUntil: 0, retry: 0, lastAttempt: 0, poller: 0 };
+  async function poll() {
+    try {
+      const res = await fetch("state.json", { cache: "no-store" });
+      if (!res.ok) return;
+      const next = await res.json();
+      if (next.updated !== STATE.updated) applyState(next);
+      if (chat.conn === "unavailable" && Date.now() - live.lastAttempt > 60000) connect();
+    } catch { /* not served beside a state file */ }
+  }
+  const startPolling = () => { if (!live.poller) live.poller = setInterval(poll, 5000); };
+  const stopPolling = () => { clearInterval(live.poller); live.poller = 0; };
+  function connect() {
+    live.lastAttempt = Date.now();
+    if (!("EventSource" in window)) { setConn("unavailable"); startPolling(); return; }
+    let es;
+    try { es = new EventSource(chat.lastId ? "events?after=" + chat.lastId : "events"); } catch { setConn("unavailable"); startPolling(); return; }
+    setConn(live.opened ? "reconnecting" : "connecting");
+    es.addEventListener("open", () => {
+      if (!live.opened) live.replayUntil = Date.now() + 1500;
+      live.opened = true; live.retry = 0;
+      setConn("live"); stopPolling();
+    });
+    es.addEventListener("hello", (ev) => {
+      try {
+        const h = JSON.parse(ev.data);
+        chat.write = h.write === false ? { ok: false, reason: String(h.reason || "") } : { ok: true, reason: "" };
+        chat.you = typeof h.you === "string" ? h.you : "";
+      } catch { chat.write = { ok: true, reason: "" }; }
+      $("chat-you").hidden = !chat.you;
+      $("chat-you").textContent = chat.you ? "as " + chat.you : "";
+      $("chat-you").title = chat.you ? "Writing as " + chat.you : "";
+      refreshComposer(); renderChat(); refreshSheet();
+    });
+    es.addEventListener("chat", (ev) => { try { addMessage(JSON.parse(ev.data), Date.now() > live.replayUntil); } catch { /* a malformed line is skipped */ } });
+    es.addEventListener("state", (ev) => { try { const next = JSON.parse(ev.data); if (next.updated !== STATE.updated) applyState(next); } catch { /* keep the last state */ } });
+    es.onerror = () => {
+      if (es.readyState === EventSource.CONNECTING) { if (live.opened) { setConn("reconnecting"); startPolling(); } return; }
+      es.close();
+      if (!live.opened) { setConn("unavailable"); startPolling(); return; }
+      setConn("reconnecting"); startPolling();
+      setTimeout(connect, Math.min(30000, 1000 * 2 ** live.retry++));
+    };
+  }
+
+  say.value = draft.read();
+  fit();
+  applyState(STATE);
+  if (location.protocol.startsWith("http")) {
     $("live").hidden = false;
+    connect();
+  } else {
+    setConn("unavailable");
   }
 })();
 </script>

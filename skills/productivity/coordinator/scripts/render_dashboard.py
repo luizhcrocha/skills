@@ -9,6 +9,7 @@ name the output index.html so the served URL is the bare host:port.
 Artifact tool expects instead.
 """
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,8 @@ REQUIRED = {
 STATUSES = {"running", "paused", "blocked", "done"}
 AGENT_STATUSES = {"queued", "running", "blocked", "done", "failed", "stopped"}
 STEP_STATUSES = {"done", "current", "pending", "blocked"}
+RESERVED = {"user", "coordinator"}  # the two chat participants that are not workers
+MENTIONABLE = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def fail(msg: str) -> None:
@@ -44,6 +47,10 @@ def validate(state: dict) -> None:
             fail(f"agent {a['id']} status '{a['status']}' not in {sorted(AGENT_STATUSES)}")
         if a["id"] in ids:
             fail(f"duplicate agent id '{a['id']}'")
+        if not MENTIONABLE.fullmatch(a["id"]):
+            fail(f"agent id {a['id']!r} should be letters, digits, '_', '.', or '-', so it can be mentioned in the chat")
+        if any(ord(c) < 32 or 127 <= ord(c) < 160 or c in "\u2028\u2029" for c in a["name"]):
+            fail(f"agent {a['id']} name has a control character")
         ids.add(a["id"])
         a.setdefault("tokens", 0)
         a.setdefault("duration_ms", 0)
@@ -51,6 +58,14 @@ def validate(state: dict) -> None:
         a.setdefault("model", "opus")
         a.setdefault("brief", "")
         a.setdefault("report", "")
+    taken = {}
+    for a in state["agents"]:
+        for label in {a["id"].lower(), a["name"].lower()}:
+            if label in RESERVED:
+                fail(f"agent {a['id']} cannot be called '{label}': that name is a chat participant")
+            if label in taken:
+                fail(f"agent {a['id']} is called '{label}', which is also agent {taken[label]}; a mention could not tell them apart")
+            taken[label] = a["id"]
     for m in state["roadmap"]:
         for k in ("id", "title", "steps"):
             if k not in m:
@@ -70,6 +85,15 @@ def validate(state: dict) -> None:
                 fail(f"event is missing '{k}': {e}")
 
 
+def split_head(fragment: str) -> tuple[str, str]:
+    """The fragment opens with its title and links; in a full document they belong in <head>, where the icon is honoured."""
+    lines = fragment.split("\n")
+    n = 0
+    while n < len(lines) and lines[n].lstrip().startswith(("<title", "<link", "<meta")):
+        n += 1
+    return "".join(line + "\n" for line in lines[:n]), "\n".join(lines[n:])
+
+
 def main(argv: list[str]) -> None:
     args = [a for a in argv if not a.startswith("--")]
     if len(args) != 2:
@@ -87,18 +111,19 @@ def main(argv: list[str]) -> None:
     state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n")
 
     template = (Path(__file__).resolve().parent.parent / "assets" / "dashboard.html").read_text()
-    payload = json.dumps(state, ensure_ascii=False).replace("</", "<\\/")
+    payload = json.dumps(state, ensure_ascii=False).replace("<", "\\u003c")  # no markup can open inside the state script
     if "/*__STATE__*/" not in template:
         fail("template has no /*__STATE__*/ placeholder")
     html = template.replace("/*__STATE__*/", payload, 1)
 
     if standalone:
+        head, body = split_head(html)
         html = (
             "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\n"
             "<style>:root{padding-block:env(safe-area-inset-top,0) env(safe-area-inset-bottom,0)}"
             "body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>\n"
-            "</head>\n<body>\n" + html + "\n</body>\n</html>\n"
+            + head + "</head>\n<body>\n" + body + "\n</body>\n</html>\n"
         )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
