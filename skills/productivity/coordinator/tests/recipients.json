@@ -1,42 +1,34 @@
 [
   {
-    "roster": {
-      "agents": [
-        {"id": "a1", "name": "notes-impl", "status": "done"},
-        {"id": "a3", "name": "v1.2", "status": "running"},
-        {"id": "a4", "name": "Coordinator", "status": "done"},
-        {"id": "a5", "name": "user", "status": "done"},
-        {"id": "a6", "name": "x-", "status": "done"},
-        {"id": "a7", "name": "a7", "status": "done"}
-      ]
-    },
+    "roster": {"agents": [{"id": "a1", "name": "notes-impl", "status": "done"}, {"id": "a3", "name": "v1.2", "status": "running"}, {"id": "a4", "name": "Coordinator", "status": "done"}, {"id": "a5", "name": "user", "status": "done"}, {"id": "a6", "name": "x-", "status": "done"}, {"id": "a7", "name": "a7", "status": "done"}]},
     "cases": [
-      {"name": "no mention defaults to the coordinator", "sender": "user", "text": "hi", "re_sender": null, "to": ["coordinator"]},
+      {"name": "no mention defaults to the coordinator", "sender": "user", "text": "hi", "re_sender": null, "to": ["coordinator"], "parts": [{"text": "hi"}]},
+      {"name": "an unresolved mention stays in a plain part", "sender": "user", "text": "ask @bob and @a1", "re_sender": null, "to": ["a1"], "parts": [{"text": "ask @bob and "}, {"text": "@a1", "mention": "a1"}]},
       {"name": "mention by id", "sender": "user", "text": "@a1 hi", "re_sender": null, "to": ["a1"]},
       {"name": "mention by id, any case", "sender": "user", "text": "@A1 hi", "re_sender": null, "to": ["a1"]},
       {"name": "mention by name, any case", "sender": "user", "text": "@NOTES-Impl hi", "re_sender": null, "to": ["a1"]},
-      {"name": "a mention ending a sentence", "sender": "user", "text": "@notes-impl. ok", "re_sender": null, "to": ["a1"]},
-      {"name": "trailing dots and dashes are stripped together", "sender": "user", "text": "@a1.-.", "re_sender": null, "to": ["a1"]},
-      {"name": "an id ending a sentence", "sender": "user", "text": "@a3.", "re_sender": null, "to": ["a3"]},
-      {"name": "a sentence dot right before the next mention", "sender": "user", "text": "@a1.@a3 x", "re_sender": null, "to": ["a1", "a3"]},
-      {"name": "two mentions with no space", "sender": "user", "text": "@a1@a3", "re_sender": null, "to": ["a1", "a3"]},
-      {"name": "a doubled at sign", "sender": "user", "text": "@@a1", "re_sender": null, "to": ["a1"]},
-      {"name": "a name with a dot, with and without a trailing dot, beside a prefix of it", "sender": "user", "text": "@v1.2 and @v1.2. and @v1", "re_sender": null, "to": ["a3"]},
-      {"name": "coordinator with a trailing dash", "sender": "user", "text": "@coordinator-", "re_sender": null, "to": ["coordinator"]},
-      {"name": "a name that ends in a dash matches in full first", "sender": "user", "text": "@x- hi", "re_sender": null, "to": ["a6"]},
-      {"name": "stripping removes every trailing dash, so x-- does not reach x-", "sender": "user", "text": "@x-- hi", "re_sender": null, "to": ["coordinator"]},
-      {"name": "a mention inside an email address still resolves", "sender": "user", "text": "mail me@a1 please", "re_sender": null, "to": ["a1"]},
-      {"name": "a mention in parentheses", "sender": "user", "text": "(@a1)", "re_sender": null, "to": ["a1"]},
+      {"name": "a mention ending a sentence", "sender": "user", "text": "@notes-impl. ok", "re_sender": null, "to": ["a1"], "parts": [{"text": "@notes-impl", "mention": "a1"}, {"text": ". ok"}]},
+      {"name": "trailing dots and dashes are stripped together", "sender": "user", "text": "@a1.-.", "re_sender": null, "to": ["a1"], "parts": [{"text": "@a1", "mention": "a1"}, {"text": ".-."}]},
+      {"name": "an id ending a sentence", "sender": "user", "text": "@a3.", "re_sender": null, "to": ["a3"], "parts": [{"text": "@a3", "mention": "a3"}, {"text": "."}]},
+      {"name": "a sentence dot right before the next mention", "sender": "user", "text": "@a1.@a3 x", "re_sender": null, "to": ["a1", "a3"], "parts": [{"text": "@a1", "mention": "a1"}, {"text": "."}, {"text": "@a3", "mention": "a3"}, {"text": " x"}]},
+      {"name": "two mentions with no space", "sender": "user", "text": "@a1@a3", "re_sender": null, "to": ["a1", "a3"], "parts": [{"text": "@a1", "mention": "a1"}, {"text": "@a3", "mention": "a3"}]},
+      {"name": "a doubled at sign", "sender": "user", "text": "@@a1", "re_sender": null, "to": ["a1"], "parts": [{"text": "@"}, {"text": "@a1", "mention": "a1"}]},
+      {"name": "a name with a dot, with and without a trailing dot, beside a prefix of it", "sender": "user", "text": "@v1.2 and @v1.2. and @v1", "re_sender": null, "to": ["a3"], "parts": [{"text": "@v1.2", "mention": "a3"}, {"text": " and "}, {"text": "@v1.2", "mention": "a3"}, {"text": ". and @v1"}]},
+      {"name": "coordinator with a trailing dash", "sender": "user", "text": "@coordinator-", "re_sender": null, "to": ["coordinator"], "parts": [{"text": "@coordinator", "mention": "coordinator"}, {"text": "-"}]},
+      {"name": "a name that ends in a dash matches in full first", "sender": "user", "text": "@x- hi", "re_sender": null, "to": ["a6"], "parts": [{"text": "@x-", "mention": "a6"}, {"text": " hi"}]},
+      {"name": "stripping removes every trailing dash, so x-- does not reach x-", "sender": "user", "text": "@x-- hi", "re_sender": null, "to": ["coordinator"], "parts": [{"text": "@x-- hi"}]},
+      {"name": "a mention inside an email address still resolves", "sender": "user", "text": "mail me@a1 please", "re_sender": null, "to": ["a1"], "parts": [{"text": "mail me"}, {"text": "@a1", "mention": "a1"}, {"text": " please"}]},
+      {"name": "a mention in parentheses", "sender": "user", "text": "(@a1)", "re_sender": null, "to": ["a1"], "parts": [{"text": "("}, {"text": "@a1", "mention": "a1"}, {"text": ")"}]},
       {"name": "a mention with a possessive", "sender": "user", "text": "@a1's work", "re_sender": null, "to": ["a1"]},
       {"name": "an agent named user is reached by @user", "sender": "user", "text": "@user hi", "re_sender": null, "to": ["a5"]},
-      {"name": "coordinator resolves to the coordinator before an agent named Coordinator", "sender": "user", "text": "@Coordinator and @a4", "re_sender": null, "to": ["coordinator", "a4"]},
+      {"name": "coordinator resolves to the coordinator before an agent named Coordinator", "sender": "user", "text": "@Coordinator and @a4", "re_sender": null, "to": ["coordinator", "a4"], "parts": [{"text": "@Coordinator", "mention": "coordinator"}, {"text": " and "}, {"text": "@a4", "mention": "a4"}]},
       {"name": "an agent whose name equals its id", "sender": "user", "text": "@a7 hi", "re_sender": null, "to": ["a7"]},
       {"name": "several mentions in order, once each", "sender": "user", "text": "@coordinator @a1 @A1", "re_sender": null, "to": ["coordinator", "a1"]},
       {"name": "a user reply to the user's own message defaults to the coordinator", "sender": "user", "text": "no mention", "re_sender": "user", "to": ["coordinator"]},
       {"name": "a user reply reaches the sender it answers", "sender": "user", "text": "yes", "re_sender": "a1", "to": ["a1"]},
       {"name": "a user reply plus a mention", "sender": "user", "text": "@a3 look too", "re_sender": "a1", "to": ["a3", "a1"]},
       {"name": "a user reply mentioning the sender it answers lists it once", "sender": "user", "text": "@a1", "re_sender": "a1", "to": ["a1"]},
-      {"name": "a fleet sender mentioning itself by id", "sender": "a1", "text": "@a1 self", "re_sender": null, "to": ["user"]},
+      {"name": "a fleet sender mentioning itself by id", "sender": "a1", "text": "@a1 self", "re_sender": null, "to": ["user"], "parts": [{"text": "@a1", "mention": "a1"}, {"text": " self"}]},
       {"name": "a fleet sender mentioning itself by name", "sender": "a1", "text": "@notes-impl self", "re_sender": null, "to": ["user"]},
       {"name": "a fleet message mentioning the coordinator", "sender": "a1", "text": "@coordinator", "re_sender": null, "to": ["user", "coordinator"]},
       {"name": "a fleet reply to the user", "sender": "a1", "text": "reply", "re_sender": "user", "to": ["user"]},
@@ -46,17 +38,11 @@
     ]
   },
   {
-    "roster": {
-      "agents": [
-        {"id": "b1", "name": "a2", "status": "running"},
-        {"id": "a2", "name": "lint", "status": "running"},
-        {"id": "b3", "name": "lint", "status": "done"}
-      ]
-    },
+    "roster": {"agents": [{"id": "b1", "name": "a2", "status": "running"}, {"id": "a2", "name": "lint", "status": "running"}, {"id": "b3", "name": "lint", "status": "done"}]},
     "cases": [
-      {"name": "an id wins over an earlier agent's name", "sender": "user", "text": "@a2 hi", "re_sender": null, "to": ["a2"]},
-      {"name": "a name still reaches its agent when no id matches", "sender": "user", "text": "@b1 and @lint", "re_sender": null, "to": ["b1", "a2"]},
-      {"name": "two agents with one name: the first in state.json order", "sender": "user", "text": "@LINT", "re_sender": null, "to": ["a2"]}
+      {"name": "an id wins over an earlier agent's name", "sender": "user", "text": "@a2 hi", "re_sender": null, "to": ["a2"], "parts": [{"text": "@a2", "mention": "a2"}, {"text": " hi"}]},
+      {"name": "a name still reaches its agent when no id matches", "sender": "user", "text": "@b1 and @lint", "re_sender": null, "to": ["b1", "a2"], "parts": [{"text": "@b1", "mention": "b1"}, {"text": " and "}, {"text": "@lint", "mention": "a2"}]},
+      {"name": "two agents with one name: the first in state.json order", "sender": "user", "text": "@LINT", "re_sender": null, "to": ["a2"], "parts": [{"text": "@LINT", "mention": "a2"}]}
     ]
   }
 ]

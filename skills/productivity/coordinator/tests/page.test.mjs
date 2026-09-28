@@ -1,5 +1,6 @@
 // The dashboard page's rules that need no browser (the `fleet-core` script in assets/dashboard.html):
-// the composer's keys, mentions, the roster, and the conversation's threads.
+// the composer's keys, the @token at the caret, the roster list, the threads, and the preferences store.
+// Who a message reaches is chat.py's rule and is tested there (tests/recipients.json).
 // Run from the repo root: node --test skills/productivity/coordinator/tests/
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -56,20 +57,9 @@ test("keyOf: while the mention list is open, arrows move, Enter and Tab pick, Es
 
 test("rosterOf: the coordinator first, then running agents, then the rest in spawn order", () => {
   assert.deepEqual(roster.map((r) => r.id), ["coordinator", "a2", "a4", "a1", "a3"]);
-  assert.deepEqual(roster[0], { id: "coordinator", name: "coordinator", status: "running", task: "Two workers on milestone 2", order: -1 });
-  assert.deepEqual(roster[1], { id: "a2", name: "invoice-gen", status: "running", task: "Generate", order: 1 });
+  assert.deepEqual(roster[0], { id: "coordinator", name: "coordinator", status: "running", task: "Two workers on milestone 2" });
+  assert.deepEqual(roster[1], { id: "a2", name: "invoice-gen", status: "running", task: "Generate" });
   assert.deepEqual(Core.rosterOf({ agents: [] }).map((r) => r.id), ["coordinator"]);
-});
-
-test("resolve: coordinator, then ids in state order, then names in state order, whatever the display order", () => {
-  // b2 is running, so the roster shows it first; its name is b1's id.
-  const r = Core.rosterOf({ agents: [{ id: "b1", name: "first", status: "done" }, { id: "b2", name: "b1", status: "running" }, { id: "b3", name: "first", status: "running" }] });
-  assert.deepEqual(r.map((x) => x.id), ["coordinator", "b2", "b3", "b1"]);
-  assert.equal(Core.resolve(r, "b1"), "b1", "an id wins over a name");
-  assert.equal(Core.resolve(r, "FIRST"), "b1", "of two names, the earlier agent in state order");
-  assert.equal(Core.resolve(r, "Coordinator"), "coordinator");
-  assert.equal(Core.resolve(r, "nobody"), null);
-  assert.deepEqual(Core.recipientsOf("@b1 please", r, "user"), ["b1"]);
 });
 
 test("mentionAt: the @query ending at the caret, when the @ starts a word", () => {
@@ -103,37 +93,6 @@ test("insertMention: '@name ' at the caret, replacing the query and the rest of 
   assert.deepEqual(Core.insertMention("Hi @invxx there", mid, gen), { text: "Hi @invoice-gen there", caret: 16 }, "an existing space is reused");
   const notes = roster.find((r) => r.id === "a4");
   assert.deepEqual(Core.insertMention("@no", Core.mentionAt("@no", 3), notes), { text: "@a4 ", caret: 4 }, "a name that is not a mention token inserts the id");
-});
-
-test("segments: resolved mentions by id or name in any case; unresolved stay text", () => {
-  assert.deepEqual(Core.segments("Hi @Invoice-Gen and @A1, not @nobody", roster), [
-    { text: "Hi " }, { text: "@Invoice-Gen", mention: "a2" }, { text: " and " }, { text: "@A1", mention: "a1" }, { text: ", not @nobody" },
-  ]);
-  assert.deepEqual(Core.segments("ask @coordinator", roster), [{ text: "ask " }, { text: "@coordinator", mention: "coordinator" }]);
-});
-
-test("segments: a trailing dot or dash is punctuation unless the name has it (as chat.py reads it)", () => {
-  assert.deepEqual(Core.segments("thanks @a2.", roster), [{ text: "thanks " }, { text: "@a2", mention: "a2" }, { text: "." }]);
-  assert.deepEqual(Core.segments("@stripe.adapter", roster), [{ text: "@stripe.adapter", mention: "a3" }]);
-  assert.deepEqual(Core.segments("@a2--", roster), [{ text: "@a2", mention: "a2" }, { text: "--" }]);
-});
-
-test("recipientsOf: a user message goes to its mentions, else the coordinator; a fleet message adds the user", () => {
-  assert.deepEqual(Core.recipientsOf("hello", roster, "user"), ["coordinator"]);
-  assert.deepEqual(Core.recipientsOf("@a2 and @invoice-gen and @a1", roster, "user"), ["a2", "a1"]);
-  assert.deepEqual(Core.recipientsOf("@a2 ping @a1", roster, "a2"), ["user", "a1"], "the sender is not its own recipient");
-  assert.deepEqual(Core.recipientsOf("done", roster, "coordinator"), ["user"]);
-});
-
-test("recipientsOf: a reply also reaches the sender of what it answers, never the replier itself", () => {
-  assert.deepEqual(Core.recipientsOf("thanks", roster, "user", "a2"), ["a2"], "no mention needed, and no coordinator");
-  assert.deepEqual(Core.recipientsOf("thanks @a1", roster, "user", "a2"), ["a1", "a2"]);
-  assert.deepEqual(Core.recipientsOf("thanks @a2", roster, "user", "a2"), ["a2"], "once each");
-  assert.deepEqual(Core.recipientsOf("ok", roster, "user", "coordinator"), ["coordinator"]);
-  assert.deepEqual(Core.recipientsOf("noted", roster, "a2", "user"), ["user"], "an agent answering the user");
-  assert.deepEqual(Core.recipientsOf("noted", roster, "a2", "a1"), ["user", "a1"], "an agent answering another agent");
-  assert.deepEqual(Core.recipientsOf("hm", roster, "a2", "a2"), ["user"], "answering itself adds no one");
-  assert.deepEqual(Core.recipientsOf("hello", roster, "user", null), ["coordinator"]);
 });
 
 const msg = (id, from, to, re = null, text = "m" + id) => ({ id, at: "2026-09-28T10:00:0" + (id % 10) + "Z", from, to, text, re });
@@ -174,30 +133,35 @@ test("unreadCount: fleet messages after the last read one", () => {
   assert.equal(Core.unreadCount(list, 3), 0);
 });
 
-test("drafts: kept in the store, cleared when blank, and nothing kept when the store throws", () => {
+test("prefsOf: read with a default, write, remove, each under prefix + key as JSON", () => {
   const map = new Map();
-  const store = { getItem: (k) => map.get(k) ?? null, setItem: (k, v) => map.set(k, v), removeItem: (k) => map.delete(k) };
-  const d = Core.drafts(store, "k");
-  assert.equal(d.read(), "");
-  d.write("half a thought");
-  assert.equal(d.read(), "half a thought");
-  d.write("   ");
-  assert.equal(map.has("k"), false);
-  d.write("again"); d.clear();
-  assert.equal(d.read(), "");
-  const broken = Core.drafts({ getItem() { throw new Error("denied"); }, setItem() { throw new Error("denied"); }, removeItem() { throw new Error("denied"); } }, "k");
-  assert.equal(broken.read(), "");
-  assert.doesNotThrow(() => { broken.write("x"); broken.clear(); });
-  assert.equal(Core.drafts(null, "k").read(), "");
+  const storage = { getItem: (k) => map.get(k) ?? null, setItem: (k, v) => map.set(k, String(v)), removeItem: (k) => map.delete(k) };
+  const p = Core.prefsOf(storage, "fleet:");
+  assert.equal(p.get("f-status", ""), "");
+  p.set("f-status", "done");
+  p.set("expanded", ["a1", "a2"]);
+  p.set("chat-collapsed", false);
+  assert.equal(map.get("fleet:f-status"), '"done"', "the encoding the page has always used");
+  assert.deepEqual(p.get("expanded", []), ["a1", "a2"]);
+  assert.equal(p.get("chat-collapsed", null), false, "a stored false is not the default");
+  p.remove("f-status");
+  assert.equal(p.get("f-status", "all"), "all");
+  assert.equal(map.has("fleet:f-status"), false);
 });
 
-// The cases shared with tests/test_chat.py: the page resolves recipients exactly as chat.py does.
-const shared = JSON.parse(readFileSync(new URL("./recipients.json", import.meta.url), "utf8"));
-for (const [i, group] of shared.entries()) {
-  const sharedRoster = Core.rosterOf(group.roster);
-  for (const c of group.cases) {
-    test(`recipients.json[${i}]: ${c.name}`, () => {
-      assert.deepEqual(Core.recipientsOf(c.text, sharedRoster, c.sender, c.re_sender), c.to);
-    });
+test("prefsOf: reads what the previous version stored, and a value it cannot parse as absent", () => {
+  const map = new Map([["fleet:f-milestone", JSON.stringify("m2")], ["fleet:n-sound", JSON.stringify("off")], ["fleet:chat-draft", "raw text from before"]]);
+  const p = Core.prefsOf({ getItem: (k) => map.get(k) ?? null, setItem: (k, v) => map.set(k, v), removeItem: (k) => map.delete(k) }, "fleet:");
+  assert.equal(p.get("f-milestone", ""), "m2");
+  assert.equal(p.get("n-sound", "important"), "off");
+  assert.equal(p.get("chat-draft", ""), "", "a draft stored raw reads as absent once");
+});
+
+test("prefsOf: a missing or throwing storage keeps nothing and reads every default", () => {
+  const boom = () => { throw new Error("denied"); };
+  for (const storage of [null, undefined, { getItem: boom, setItem: boom, removeItem: boom }]) {
+    const p = Core.prefsOf(storage, "fleet:");
+    assert.doesNotThrow(() => { p.set("k", 1); p.remove("k"); });
+    assert.deepEqual(p.get("k", ["default"]), ["default"]);
   }
-}
+});

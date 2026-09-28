@@ -555,9 +555,11 @@
 
 <script id="fleet-state" type="application/json">/*__STATE__*/</script>
 <script id="fleet-core">
-/* The page's rules that need no browser: the composer's keys, mentions, the roster, the
-   conversation's threads. Pure functions over plain values, run by the page below and by
-   tests/page.test.mjs, which evaluates this element alone. Mentions follow scripts/chat.py. */
+/* The page's rules that need no browser: the composer's keys, the @token at the caret, the
+   roster list, the conversation's threads, the viewer's preferences. Pure functions over plain
+   values, run by the page below and by tests/page.test.mjs, which evaluates this element alone.
+   Who a message reaches, and which @tokens are mentions, is scripts/chat.py's rule alone: the
+   page renders the `parts` and `to` the server resolved. */
 var FleetCore = (function () {
   "use strict";
   const TOKEN = /[A-Za-z0-9_.-]/;
@@ -587,53 +589,9 @@ var FleetCore = (function () {
      each in spawn order. The coordinator's status and task are the fleet's. */
   function rosterOf(state) {
     const agents = (state && state.agents) || [];
-    const row = (a) => ({ id: a.id, name: a.name || a.id, status: a.status || "", task: a.task || "", order: agents.indexOf(a) });
-    return [{ id: "coordinator", name: "coordinator", status: (state && state.status) || "", task: (state && state.now) || "", order: -1 }]
+    const row = (a) => ({ id: a.id, name: a.name || a.id, status: a.status || "", task: a.task || "" });
+    return [{ id: "coordinator", name: "coordinator", status: (state && state.status) || "", task: (state && state.now) || "" }]
       .concat(agents.filter((a) => a.status === "running").map(row), agents.filter((a) => a.status !== "running").map(row));
-  }
-
-  /* The roster id a mention token names, any case, or null. Whatever order the roster is shown
-     in, it resolves as chat.py does: coordinator, then agent ids in state order, then agent names
-     in state order (so a name that equals another agent's id names that other agent). */
-  const inStateOrder = new WeakMap();
-  function resolve(roster, token) {
-    const key = String(token).toLowerCase();
-    if (!key) return null;
-    if (key === "coordinator") return "coordinator";
-    let agents = inStateOrder.get(roster);
-    if (!agents) { agents = roster.filter((r) => r.id !== "coordinator").sort((a, b) => (a.order ?? 0) - (b.order ?? 0)); inStateOrder.set(roster, agents); }
-    const hit = agents.find((r) => r.id.toLowerCase() === key) || agents.find((r) => r.name.toLowerCase() === key);
-    return hit ? hit.id : null;
-  }
-
-  /* A message's text cut into plain runs and resolved mentions ({text, mention: id}). A trailing
-     dot or dash ends the sentence unless the name itself has it, as chat.py reads it. */
-  function segments(text, roster) {
-    const out = [], re = /@([A-Za-z0-9_.-]+)/g;
-    let last = 0, m;
-    text = String(text ?? "");
-    while ((m = re.exec(text))) {
-      let token = m[1], id = resolve(roster, token);
-      if (!id) { const cut = token.replace(/[.-]+$/, ""); id = resolve(roster, cut); if (id) token = cut; }
-      if (!id) continue;
-      if (m.index > last) out.push({ text: text.slice(last, m.index) });
-      out.push({ text: "@" + token, mention: id });
-      last = m.index + 1 + token.length;
-      re.lastIndex = last;
-    }
-    if (last < text.length) out.push({ text: text.slice(last) });
-    return out;
-  }
-
-  /* Who a message from `sender` reaches, as the server resolves it: its mentions, plus the sender
-     of the message it answers (`answering`, when it has `re`), never the sender itself. A user
-     message with neither goes to the coordinator; anyone else's also goes to the user. */
-  function recipientsOf(text, roster, sender, answering) {
-    const to = sender === "user" ? [] : ["user"];
-    const add = (id) => { if (id && id !== sender && !to.includes(id)) to.push(id); };
-    for (const s of segments(text, roster)) if (s.mention) add(s.mention);
-    add(answering);
-    return to.length ? to : ["coordinator"];
   }
 
   /* The mention being typed at the caret: {start, end, query} when the caret ends "@query" and the
@@ -703,18 +661,19 @@ var FleetCore = (function () {
     return n;
   }
 
-  /* The composer's draft in a Storage under `key`. A store that throws or is absent (a private
-     window) keeps nothing and reads "". */
-  function drafts(store, key) {
-    const attempt = (fn, fallback) => { try { return store ? fn() : fallback; } catch { return fallback; } };
+  /* The viewer's preferences in a Storage (the browser's localStorage), each under prefix + key as
+     JSON: read with a default, write, remove. A storage that is missing or throws (a private
+     window, blocked site data) keeps nothing and reads every default. */
+  function prefsOf(storage, prefix) {
+    const attempt = (fn, fallback) => { try { return storage ? fn() : fallback; } catch { return fallback; } };
     return {
-      read: () => attempt(() => store.getItem(key) || "", ""),
-      write: (text) => attempt(() => { if (String(text).trim() === "") store.removeItem(key); else store.setItem(key, String(text)); }, null),
-      clear: () => attempt(() => store.removeItem(key), null),
+      get: (key, fallback) => attempt(() => { const v = storage.getItem(prefix + key); return v === null ? fallback : JSON.parse(v); }, fallback),
+      set: (key, value) => attempt(() => storage.setItem(prefix + key, JSON.stringify(value)), undefined),
+      remove: (key) => attempt(() => storage.removeItem(prefix + key), undefined),
     };
   }
 
-  return { keyOf, rosterOf, resolve, segments, recipientsOf, mentionAt, filterRoster, insertMention, fold, unreadCount, drafts };
+  return { keyOf, rosterOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf };
 })();
 </script>
 <script>
@@ -733,10 +692,9 @@ var FleetCore = (function () {
     return;
   }
 
-  const store = {
-    get(k, d) { try { const v = localStorage.getItem("fleet:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
-    set(k, v) { try { localStorage.setItem("fleet:" + k, JSON.stringify(v)); } catch { /* per-viewer convenience only */ } },
-  };
+  /* Every preference this viewer keeps (filters, expanded rows, notification settings, the docked
+     chat's state, the composer's draft) goes through this one store. */
+  const store = Core.prefsOf((() => { try { return window.localStorage; } catch { return null; } })(), "fleet:");
   const media = (q) => window.matchMedia ? window.matchMedia(q) : { matches: false, addEventListener() {} };
   const PHONE = media("(max-width: 759.98px)");
   const DOCKED = media("(min-width: 1100px)");
@@ -1180,7 +1138,6 @@ var FleetCore = (function () {
   /* ---------------------------------------------------------------- the chat */
 
   const say = $("say");
-  const draft = Core.drafts((() => { try { return window.localStorage; } catch { return null; } })(), "fleet:chat-draft");
   const SIZED = !!(window.CSS && CSS.supports && CSS.supports("field-sizing", "content"));
   const ment = { open: false, items: [], index: 0, at: null, dismissed: -1 };
 
@@ -1286,8 +1243,10 @@ var FleetCore = (function () {
     const a = agentById[m.from];
     return { label: a ? a.name : m.from, colour: colourOfId(m.from), status: a ? a.status : "" };
   }
-  const textHtml = (text) => Core.segments(text, roster).map((s) => s.mention
-    ? `<span class="mention" style="--c:${colourOfId(s.mention)}">${esc(s.text)}</span>` : esc(s.text)).join("");
+  /* A message as the server resolved it: a mention part is a chip named after its roster row (the
+     bare id when the row is gone), any other part is text. */
+  const partsHtml = (m) => (Array.isArray(m.parts) ? m.parts : [{ text: m.text }]).map((p) => p.mention
+    ? `<span class="mention" style="--c:${colourOfId(p.mention)}" title="${esc(p.text)}">@${esc(nameOf(p.mention))}</span>` : esc(p.text)).join("");
   /* The conversation's nodes are kept and patched, never rebuilt: a message node is made once and
      each of its slots (head, reply control, answering line, text, waiting line) is replaced only
      when its own markup changed, so focus, a text selection and scroll survive every update. */
@@ -1314,7 +1273,7 @@ var FleetCore = (function () {
     slot(el, "head", `<div class="msg-head">${name}${s.status && m.from !== "coordinator" ? pill(s.status) : ""}<time datetime="${esc(m.at)}" title="${esc(m.at)}">${esc(clock(m.at))}</time></div>`);
     slot(el, "reply", canReply ? `<button type="button" class="reply-btn" data-reply="${m.id}" aria-label="Reply to ${esc(s.label)}">Reply</button>` : "");
     slot(el, "re", parent ? `<p class="msg-re">Answering ${esc(senderOf(parent).label)}</p>` : "");
-    slot(el, "text", `<p class="msg-text">${textHtml(m.text)}</p>`);
+    slot(el, "text", `<p class="msg-text">${partsHtml(m)}</p>`);
     slot(el, "wait", m.from !== "user" ? "" : entry.waiting.length
       ? `<p class="wait">Waiting on ${entry.waiting.map((r) => agentById[r] ? whoButton(r) : `<span class="chip"><span class="swatch" style="--c:${colourOfId(r)}"></span>${esc(nameOf(r))}</span>`).join("")}</p>`
       : `<p class="wait done">Answered</p>`);
@@ -1374,10 +1333,10 @@ var FleetCore = (function () {
   function setReply(id) {
     const m = chat.messages.get(id); if (!m || m.from === "user" || !chatWritable()) return;
     chat.reply = id;
-    afterEdit(); renderChat();
+    afterEdit(); askPreview(true); renderChat();
     say.focus(); say.setSelectionRange(say.value.length, say.value.length);
   }
-  function clearReply() { chat.reply = null; refreshComposer(); renderChat(); }
+  function clearReply() { chat.reply = null; refreshComposer(); askPreview(true); renderChat(); }
   $("reply-x").addEventListener("click", () => { clearReply(); say.focus(); });
   $("chat-log").addEventListener("click", (e) => {
     const r = e.target.closest("[data-reply]");
@@ -1391,12 +1350,9 @@ var FleetCore = (function () {
   function writeTo(id) {
     openChat();
     if (!chatWritable()) return;
-    const has = Core.segments(say.value, roster).some((s) => s.mention === id);
-    if (!has) {
-      const a = agentById[id];
-      const token = "@" + (a && /^[A-Za-z0-9_.-]+$/.test(a.name) ? a.name : id) + " ";
-      say.value = token + say.value.replace(/^\s+/, "");
-    }
+    const a = agentById[id];
+    const token = "@" + (a && /^[A-Za-z0-9_.-]+$/.test(a.name) ? a.name : id);
+    if (!say.value.toLowerCase().includes(token.toLowerCase())) say.value = token + " " + say.value.replace(/^\s+/, "");
     afterEdit();
     say.focus(); say.setSelectionRange(say.value.length, say.value.length);
   }
@@ -1423,12 +1379,43 @@ var FleetCore = (function () {
     $("reply").hidden = !m;
     if (m) $("reply-text").textContent = `Replying to ${senderOf(m).label}: ${m.text.replace(/\s+/g, " ").slice(0, 80)}`;
     say.placeholder = m ? `Reply to ${senderOf(m).label}` : "Message the fleet, or type @";
-    const to = Core.recipientsOf(say.value, roster, "user", m ? m.from : null).map(nameOf);
-    $("to").hidden = !text || !chatWritable();
-    $("to").textContent = "To " + (to.length > 1 ? to.slice(0, -1).join(", ") + " and " + to[to.length - 1] : to[0]);
+    showTo();
     if (ment.open) updateMentions();
   }
-  function afterEdit() { draft.write(say.value); fit(); refreshComposer(); updateMentions(); }
+  /* The draft is kept across reloads, and cleared when blank or sent. */
+  /* The "To" line: who the server says this text would reach (POST chat/preview), asked once the
+     viewer pauses. Only the newest question's answer counts; the line keeps its last value while
+     waiting, and hides when the preview cannot be had (sending does not depend on it). */
+  const preview = { seq: 0, timer: 0, to: null };
+  function showTo() {
+    const wanted = chatWritable() && (say.value.trim() !== "" || chat.reply != null);
+    const to = preview.to;
+    $("to").hidden = !wanted || !to || !to.length;
+    if (to && to.length) { const n = to.map(nameOf); $("to").textContent = "To " + (n.length > 1 ? n.slice(0, -1).join(", ") + " and " + n[n.length - 1] : n[0]); }
+  }
+  function askPreview(now) {
+    clearTimeout(preview.timer);
+    if (!chatWritable() || (say.value.trim() === "" && chat.reply == null)) { preview.seq++; showTo(); return; }
+    preview.timer = setTimeout(async () => {
+      const seq = ++preview.seq;
+      const body = { text: say.value };
+      if (chat.reply != null) body.re = chat.reply;
+      try {
+        const res = await fetch("chat/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const data = res.ok ? await res.json() : null;
+        if (seq !== preview.seq) return;
+        preview.to = data && Array.isArray(data.to) ? data.to : null;
+      } catch {
+        if (seq !== preview.seq) return;
+        preview.to = null;
+      }
+      showTo();
+    }, now ? 0 : 200);
+  }
+  function afterEdit() {
+    if (say.value.trim()) store.set("chat-draft", say.value); else store.remove("chat-draft");
+    fit(); refreshComposer(); updateMentions(); askPreview();
+  }
 
   /* The mention list: opens on "@", narrows as the query grows, picks with a tap, Enter or Tab. */
   function updateMentions() {
@@ -1510,7 +1497,7 @@ var FleetCore = (function () {
       let data = null;
       try { data = await res.json(); } catch { data = null; }
       if (res.status !== 201) { showError((data && data.error) || `The server refused the message (${res.status}). Your draft is kept.`); return; }
-      say.value = ""; draft.clear(); chat.reply = null; fit();
+      say.value = ""; store.remove("chat-draft"); chat.reply = null; preview.to = null; askPreview(); fit();
       addMessage(data, true);
       closeMentions();
     } catch {
@@ -1527,13 +1514,23 @@ var FleetCore = (function () {
      with Last-Event-ID; a stream the server closed is reopened here with ?after=<last id>. When the
      stream never opens (a file, a claude.ai artifact, a server without the route), the page polls
      state.json as before and the chat shows as unavailable. Polling also covers a reconnect. */
+  /* A new state is applied when its content differs from the last one: `updated` is stamped to
+     the second, so two writes within a second share it and cannot tell them apart. */
+  let lastState = JSON.stringify(STATE);
+  function takeState(raw) {
+    let next;
+    try { next = JSON.parse(raw); } catch { return; /* keep the last state */ }
+    const key = JSON.stringify(next);
+    if (key === lastState) return;
+    lastState = key;
+    applyState(next);
+  }
   const live = { opened: false, replayUntil: 0, retry: 0, lastAttempt: 0, poller: 0 };
   async function poll() {
     try {
       const res = await fetch("state.json", { cache: "no-store" });
       if (!res.ok) return;
-      const next = await res.json();
-      if (next.updated !== STATE.updated) applyState(next);
+      takeState(await res.text());
       if (chat.conn === "unavailable" && Date.now() - live.lastAttempt > 60000) connect();
     } catch { /* not served beside a state file */ }
   }
@@ -1562,7 +1559,7 @@ var FleetCore = (function () {
       refreshComposer(); renderChat(); refreshSheet();
     });
     es.addEventListener("chat", (ev) => { try { addMessage(JSON.parse(ev.data), Date.now() > live.replayUntil); } catch { /* a malformed line is skipped */ } });
-    es.addEventListener("state", (ev) => { try { const next = JSON.parse(ev.data); if (next.updated !== STATE.updated) applyState(next); } catch { /* keep the last state */ } });
+    es.addEventListener("state", (ev) => takeState(ev.data));
     es.onerror = () => {
       if (es.readyState === EventSource.CONNECTING) { if (live.opened) { setConn("reconnecting"); startPolling(); } return; }
       es.close();
@@ -1572,7 +1569,7 @@ var FleetCore = (function () {
     };
   }
 
-  say.value = draft.read();
+  say.value = String(store.get("chat-draft", ""));
   fit();
   applyState(STATE);
   if (location.protocol.startsWith("http")) {

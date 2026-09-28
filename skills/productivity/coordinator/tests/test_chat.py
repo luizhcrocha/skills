@@ -41,21 +41,72 @@ class FleetDir(unittest.TestCase):
         self._tmp.cleanup()
 
 
-class SharedRecipientCasesTest(unittest.TestCase):
-    """tests/recipients.json: the recipient rule, the same cases the page's suite runs."""
+def shared_cases():
+    """(name, roster, case) for every case in tests/recipients.json: the rule for who a message reaches."""
+    for roster in json.loads((Path(__file__).parent / "recipients.json").read_text()):
+        for case in roster["cases"]:
+            yield case["name"], roster["roster"], case
 
-    def test_every_shared_case(self):
-        rosters = json.loads((Path(__file__).parent / "recipients.json").read_text())
-        for roster in rosters:
-            for case in roster["cases"]:
-                with self.subTest(case["name"]), tempfile.TemporaryDirectory() as tmp:
-                    root = Path(tmp)
-                    (root / "state.json").write_text(json.dumps(roster["roster"]))
-                    re_id = None
-                    if case["re_sender"]:
-                        re_id = chat.append(root, case["re_sender"], "earlier", allow_user=True)["id"]
-                    sent = chat.append(root, case["sender"], case["text"], re_id, allow_user=True)
-                    self.assertEqual(sent["to"], case["to"])
+
+class SharedRecipientCasesTest(unittest.TestCase):
+    def check(self, send):
+        """Run every shared case: `send(root, case, re_id)` returns what the interface resolved."""
+        for name, roster, case in shared_cases():
+            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "state.json").write_text(json.dumps(roster))
+                re_id = chat.append(root, case["re_sender"], "earlier", allow_user=True)["id"] if case["re_sender"] else None
+                got = send(root, case, re_id)
+                self.assertEqual(got["to"], case["to"])
+                self.assertEqual("".join(p["text"] for p in got["parts"]), case["text"])
+                if "parts" in case:
+                    self.assertEqual(got["parts"], case["parts"])
+
+    def test_through_address(self):
+        self.check(lambda root, case, re_id: chat.address(root, case["sender"], case["text"], re_id, allow_user=True))
+
+    def test_through_append_which_stores_what_address_resolved(self):
+        def send(root, case, re_id):
+            sent = chat.append(root, case["sender"], case["text"], re_id, allow_user=True)
+            self.assertEqual(chat.read(root)[-1], sent)
+            return sent
+        self.check(send)
+
+
+class PartsTest(FleetDir):
+    TEXTS = [
+        "hi 👋🏽 @a1 cafe\u0301 🧑‍🚀", "@a1 at the very start", "at the very end @notes-impl", "@a1@a2", "@a1 @a2",
+        "@a1.", "@a2-", "@a1.-. then", "é@a1é", "\u2028@a1\n", "@", "@@", "@nobody.", "",
+    ]
+
+    def test_joining_the_parts_gives_back_the_text_exactly(self):
+        for text in self.TEXTS:
+            with self.subTest(text=text):
+                parts = chat.address(self.root, "user", text, allow_user=True)["parts"]
+                self.assertEqual("".join(p["text"] for p in parts), text)
+                self.assertTrue(all(p["text"] for p in parts))
+
+    def test_stripped_punctuation_belongs_to_the_following_plain_part(self):
+        self.assertEqual(chat.address(self.root, "a2", "@a1.- ok")["parts"],
+                         [{"text": "@a1", "mention": "a1"}, {"text": ".- ok"}])
+
+    def test_empty_text_has_no_parts_and_the_default_recipient(self):
+        self.assertEqual(chat.address(self.root, "user", "", allow_user=True), {"from": "user", "to": ["coordinator"], "parts": []})
+
+    def test_parts_are_resolved_against_the_roster_at_append(self):
+        chat.append(self.root, "user", "@late hi", allow_user=True)
+        write_state(self.root, [{"id": "a1"}, {"id": "a9", "name": "late"}])
+        self.assertEqual(chat.read(self.root)[0]["parts"], [{"text": "@late hi"}])
+
+    def test_a_stored_line_without_parts_is_read_with_one_plain_part(self):
+        with open(self.root / "chat.jsonl", "w") as f:
+            f.write(json.dumps({"id": 1, "at": "x", "from": "a1", "to": ["user"], "text": "old @a1", "re": None}) + "\n")
+        self.assertEqual(chat.read(self.root)[0]["parts"], [{"text": "old @a1"}])
+        self.assertEqual(chat.open_for(self.root, "user")[0]["parts"], [{"text": "old @a1"}])
+
+    def test_the_printed_line_is_unchanged(self):
+        chat.append(self.root, "user", "@a1. go", author="luiz@github", allow_user=True)
+        self.assertEqual(run_cli(self.root, "log").stdout, "#1 user (luiz@github) -> a1 (notes-impl): @a1. go\n")
 
 
 class AppendTest(FleetDir):
@@ -447,6 +498,60 @@ class EventsRouteTest(ServerTest):
         time.sleep(1)
         self.assertEqual(self.request("GET", "/chat")[0], 200)
         self.assertNotIn("Traceback", self.stop_server())
+
+
+class PreviewRouteTest(ServerTest):
+    def preview(self, payload, headers: dict | None = None):
+        body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+        return self.request("POST", "/chat/preview", body, {"Content-Type": "application/json", **(headers or {})})
+
+    def test_preview_answers_what_post_would_store_and_stores_nothing(self):
+        chat.append(self.root, "a1", "done?")
+        before = (self.root / "chat.jsonl").read_bytes()
+        status, body = self.preview({"text": "@a2. and you", "re": 1})
+        self.assertEqual((status, body), (200, {"to": ["a2", "a1"], "parts": [
+            {"text": "@a2", "mention": "a2"}, {"text": ". and you"}]}))
+        self.assertEqual(self.preview({"text": ""})[1], {"to": ["coordinator"], "parts": []})
+        self.assertEqual(self.preview({"text": "", "re": 1})[1], {"to": ["a1"], "parts": []})
+        self.assertEqual((self.root / "chat.jsonl").read_bytes(), before)
+
+    def test_preview_refuses_as_post_does(self):
+        chat.append(self.root, "a1", "one")
+        before = (self.root / "chat.jsonl").read_bytes()
+        cases = [
+            (421, self.preview({"text": "hi"}, {"Host": "evil.com"})),
+            (415, self.request("POST", "/chat/preview", b'{"text": "hi"}', {"Content-Type": "text/plain"})),
+            (403, self.preview({"text": "hi"}, {"Origin": "https://evil.example"})),
+            (413, self.preview({"text": "x" * 17000})),
+            (400, self.preview({"text": "hi", "re": 9})),
+            (400, self.preview(b"not json")),
+        ]
+        for expected, (status, body) in cases:
+            self.assertEqual(status, expected, body)
+            self.assertIsInstance(body["error"], str)
+        self.assertEqual((self.root / "chat.jsonl").read_bytes(), before)
+
+    def test_every_shared_case_through_preview(self):
+        for name, roster, case in shared_cases():
+            if case["sender"] != "user":
+                continue
+            with self.subTest(name):
+                (self.root / "state.json").write_text(json.dumps(roster))
+                (self.root / "chat.jsonl").unlink(missing_ok=True)
+                re_id = chat.append(self.root, case["re_sender"], "earlier", allow_user=True)["id"] if case["re_sender"] else None
+                status, body = self.preview({"text": case["text"], "re": re_id})
+                self.assertEqual((status, body["to"]), (200, case["to"]))
+                self.assertEqual("".join(p["text"] for p in body["parts"]), case["text"])
+                if "parts" in case:
+                    self.assertEqual(body["parts"], case["parts"])
+
+
+class ClosedPreviewTest(ServerTest):
+    policy = "closed"
+
+    def test_preview_is_refused_like_post(self):
+        status, body = self.request("POST", "/chat/preview", b'{"text": "hi"}', {"Content-Type": "application/json"})
+        self.assertEqual((status, body), (403, {"error": "chat is read-only on this address; open the https address"}))
 
 
 class TornLineServerTest(ServerTest):

@@ -41,11 +41,11 @@ def fail(msg: str) -> None:
     sys.exit(1)
 
 
-def log_path(root) -> Path:
+def _log_path(root) -> Path:
     return Path(root) / "chat.jsonl"
 
 
-def parse(data: bytes) -> list[dict]:
+def _parse(data: bytes) -> list[dict]:
     """The messages in complete lines of the store. A line that does not parse as a message is skipped,
     and bytes that are not UTF-8 are read with replacement, so one torn line never stops a reader."""
     messages = []
@@ -59,6 +59,7 @@ def parse(data: bytes) -> list[dict]:
         if (isinstance(m, dict) and isinstance(m.get("id"), int) and isinstance(m.get("from"), str)
                 and isinstance(m.get("to"), list) and isinstance(m.get("text"), str)):
             m.setdefault("re", None)
+            m.setdefault("parts", [{"text": m["text"]}])
             messages.append(m)
     return messages
 
@@ -70,7 +71,7 @@ class Tail:
     append still being written), so a caller polling it reads only what is new."""
 
     def __init__(self, root, after: int = 0):
-        self.path, self.after, self.offset = log_path(root), after, 0
+        self.path, self.after, self.offset = _log_path(root), after, 0
 
     def read(self) -> list[dict]:
         try:
@@ -87,7 +88,7 @@ class Tail:
         complete = chunk[:chunk.rfind(b"\n") + 1]
         self.offset += len(complete)
         messages = []
-        for m in parse(complete):
+        for m in _parse(complete):
             if m["id"] > self.after:
                 messages.append(m)
                 self.after = m["id"]
@@ -99,7 +100,7 @@ def read(root, after: int = 0) -> list[dict]:
     return Tail(root, after).read()
 
 
-def agents(root) -> list[dict]:
+def _agents(root) -> list[dict]:
     """The agents[] rows of DIR/state.json, whatever their status; none when there is no state yet."""
     try:
         rows = json.loads((Path(root) / "state.json").read_text(encoding="utf-8")).get("agents", [])
@@ -108,7 +109,7 @@ def agents(root) -> list[dict]:
     return [a for a in rows if isinstance(a, dict) and isinstance(a.get("id"), str)]
 
 
-def resolve(roster: list[dict], who: str) -> str | None:
+def _resolve(roster: list[dict], who: str) -> str | None:
     """The roster id `who` names, any case: `coordinator`, then agent ids, then agent names, each in
     state.json order, so an id always wins over another agent's name. None when nobody has it."""
     key = who.lower()
@@ -121,70 +122,90 @@ def resolve(roster: list[dict], who: str) -> str | None:
     return None
 
 
-MENTION = regex.compile(r"@([A-Za-z0-9_.-]+)")
+_MENTION = regex.compile(r"@([A-Za-z0-9_.-]+)")
 
 
-def mentions(roster: list[dict], text: str) -> list[str]:
-    """The roster ids mentioned in `text`, in order, once each; unresolved mentions are skipped.
+def _parts(roster: list[dict], text: str) -> list[dict]:
+    """`text` split into plain parts and resolved mention parts ({"text", "mention": id}), which join back
+    into `text` exactly. A token that names nobody is tried again without its trailing dots and dashes,
+    so "@a1." ends a sentence (the "." goes to the next plain part) while "@x-" still matches in full.
+    An unresolved token stays inside a plain part."""
+    parts, plain, at = [], "", 0
+    for match in _MENTION.finditer(text):
+        token = match.group(1)
+        who = _resolve(roster, token)
+        if who is None:
+            token = token.rstrip(".-")
+            who = _resolve(roster, token) if token else None
+        if who is None:
+            continue
+        plain += text[at:match.start()]
+        if plain:
+            parts.append({"text": plain})
+        parts.append({"text": "@" + token, "mention": who})
+        plain, at = "", match.start() + 1 + len(token)
+    plain += text[at:]
+    return parts + ([{"text": plain}] if plain else [])
 
-    A token that names nobody is tried again without its trailing dots and dashes, so "@a1." at the
-    end of a sentence reaches a1 while a name that really ends in one ("@x-") still matches in full."""
-    found = []
-    for token in MENTION.findall(text):
-        who = resolve(roster, token) or resolve(roster, token.rstrip(".-"))
-        if who and who not in found:
-            found.append(who)
-    return found
 
-
-def participant(roster: list[dict], who: str, allow_user: bool) -> str:
+def _participant(roster: list[dict], who: str, allow_user: bool) -> str:
     """The id of `who`: a roster member named by id or name, or "user" when the caller allows it.
     Raises ChatError for anyone else."""
     if who == "user":
         if allow_user:
             return who
         raise ChatError("only the dashboard server speaks as the user; use --as coordinator or your agent id")
-    found = resolve(roster, who)
+    found = _resolve(roster, who)
     if found is None:
         raise ChatError(f"unknown participant '{who}'; use coordinator or an agent id or name from state.json")
     return found
 
 
+def address(root, sender: str, text: str, re: int | None = None, allow_user: bool = False) -> dict:
+    """Who a message from `sender` would reach right now, and its text split into parts:
+    {"from": id, "to": [...], "parts": [...]}. The one implementation of the rule; append stores it.
+
+    Recipients are the resolved mentions and, when `re` is set, the sender of the message it answers: a
+    user message goes to them, or to the coordinator when there are none; a fleet message goes to the
+    user plus them. A sender is never its own recipient. Only the server passes allow_user=True. Raises
+    ChatError for an unknown sender or `re`; empty text is answered (no parts), not refused."""
+    roster = _agents(root)
+    sender = _participant(roster, sender, allow_user)
+    parts = _parts(roster, text)
+    named = [p["mention"] for p in parts if "mention" in p]
+    if re is not None:
+        answered = next((m for m in read(root) if m["id"] == re), None)
+        if answered is None:
+            raise ChatError(f"unknown message #{re}")
+        named.append(answered["from"])
+    to = [] if sender == "user" else ["user"]
+    for who in named:
+        if who != sender and who not in to:
+            to.append(who)
+    return {"from": sender, "to": to or ["coordinator"], "parts": parts}
+
+
 def append(root, sender: str, text: str, re: int | None = None, author: str | None = None,
            allow_user: bool = False) -> dict:
-    """Append a message from `sender` ("coordinator", or an agent id or name) and return it as stored.
-
-    Only the server passes allow_user=True, which lets `sender` be "user" and stores `author` on it.
-    Recipients come from the mentions and, when `re` is set, the sender of the message it answers: a user
-    message goes to them, or to the coordinator when there are none; a fleet message goes to the user plus
-    them. A sender is never its own recipient. Raises ChatError for an unknown sender or `re`, and for
-    empty text or text that is not UTF-8."""
-    roster = agents(root)
-    sender = participant(roster, sender, allow_user)
+    """Append a message from `sender` ("coordinator", or an agent id or name) and return it as stored,
+    with the recipients and parts `address` resolves. Only the server passes allow_user=True, which lets
+    `sender` be "user" and stores `author` on it. Raises ChatError as `address` does, and for empty
+    text or text that is not UTF-8."""
+    resolved = address(root, sender, text, re, allow_user)  # the store only grows, so `re` stays valid
     if not text.strip():
         raise ChatError("the message has no text")
     try:
         text.encode("utf-8")
     except UnicodeEncodeError:
         raise ChatError("the text is not valid UTF-8") from None
-    named = mentions(roster, text)
-    with open(log_path(root), "a+b") as f:
+    with open(_log_path(root), "a+b") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         f.seek(0)
         data = f.read()
-        messages = parse(data)
-        if re is not None:
-            answered = next((m for m in messages if m["id"] == re), None)
-            if answered is None:
-                raise ChatError(f"unknown message #{re}")
-            named.append(answered["from"])
-        to = [] if sender == "user" else ["user"]
-        for who in named:
-            if who != sender and who not in to:
-                to.append(who)
-        message = {"id": max((m["id"] for m in messages), default=0) + 1, "at": now(), "from": sender,
-                   "to": to or ["coordinator"], "text": text, "re": re}
-        if author and sender == "user":
+        message = {"id": max((m["id"] for m in _parse(data)), default=0) + 1, "at": now(),
+                   "from": resolved["from"], "to": resolved["to"], "text": text, "re": re,
+                   "parts": resolved["parts"]}
+        if author and message["from"] == "user":
             message["author"] = author
         torn = data and not data.endswith(b"\n")
         f.write((b"\n" if torn else b"") + (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8"))
@@ -192,7 +213,7 @@ def append(root, sender: str, text: str, re: int | None = None, author: str | No
     return message
 
 
-def open_among(messages: list[dict], who: str) -> list[dict]:
+def _open_among(messages: list[dict], who: str) -> list[dict]:
     """The messages addressed to `who` that `who` has not answered (a message of theirs with `re` = its id)."""
     answered = {(m["re"], m["from"]) for m in messages}
     return [m for m in messages if who in m["to"] and (m["id"], who) not in answered]
@@ -200,64 +221,64 @@ def open_among(messages: list[dict], who: str) -> list[dict]:
 
 def open_for(root, who: str, after: int = 0) -> list[dict]:
     """The messages with id > after addressed to `who` that `who` has not answered yet, oldest first."""
-    who = participant(agents(root), who, allow_user=True)
-    return [m for m in open_among(read(root), who) if m["id"] > after]
+    who = _participant(_agents(root), who, allow_user=True)
+    return [m for m in _open_among(read(root), who) if m["id"] > after]
 
 
-LINE_BREAK = regex.compile("\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
-CONTROL = regex.compile("[\x00-\x1f\x80-\x9f]")
+_LINE_BREAK = regex.compile("\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
+_CONTROL = regex.compile("[\x00-\x1f\x80-\x9f]")
 
 
-def one_line(value) -> str:
+def _one_line(value) -> str:
     """`value` as text that can never print as more than one line: breaks become ⏎, a tab a space, controls are dropped."""
-    return CONTROL.sub("", LINE_BREAK.sub(" \u23ce ", str(value)).replace("\t", " "))
+    return _CONTROL.sub("", _LINE_BREAK.sub(" \u23ce ", str(value)).replace("\t", " "))
 
 
-def render(root, messages: list[dict]) -> list[str]:
+def _render(root, messages: list[dict]) -> list[str]:
     """Each message as its one printed line: `#12 user (login) -> a1 (notes-impl): text [re #9]`."""
-    names = {a["id"]: a.get("name", a["id"]) for a in agents(root)}
+    names = {a["id"]: a.get("name", a["id"]) for a in _agents(root)}
 
     def label(id_: str, extra=None) -> str:
         extra = extra or names.get(id_, id_)
-        return one_line(id_ if extra == id_ else f"{id_} ({extra})")
+        return _one_line(id_ if extra == id_ else f"{id_} ({extra})")
 
     return [
         f"#{m['id']} {label(m['from'], m.get('author') if m['from'] == 'user' else None)}"
-        f" -> {', '.join(map(label, m['to']))}: {one_line(m['text'])}"
-        + (f" [re #{one_line(m['re'])}]" if m["re"] is not None else "")
+        f" -> {', '.join(map(label, m['to']))}: {_one_line(m['text'])}"
+        + (f" [re #{_one_line(m['re'])}]" if m["re"] is not None else "")
         for m in messages
     ]
 
 
-def show(root, messages: list[dict]) -> None:
-    for line in render(root, messages):
+def _show(root, messages: list[dict]) -> None:
+    for line in _render(root, messages):
         print(line, flush=True)
 
 
 def cmd_say(root, args) -> None:
-    show(root, [append(root, args.who, args.text, args.re)])
+    _show(root, [append(root, args.who, args.text, args.re)])
 
 
 def cmd_inbox(root, args) -> None:
-    show(root, open_for(root, args.who))
+    _show(root, open_for(root, args.who))
 
 
 def cmd_watch(root, args) -> None:
-    who = participant(agents(root), args.who, allow_user=False)
+    who = _participant(_agents(root), args.who, allow_user=False)
     tail = Tail(root)
     messages = tail.read()
-    wanted = {m["id"] for m in open_among(messages, who)}
+    wanted = {m["id"] for m in _open_among(messages, who)}
     if args.all:
-        wanted |= {m["id"] for r in ("coordinator", *{a["id"] for a in agents(root)})
-                   for m in open_among(messages, r) if m["from"] == "user"}
-    show(root, [m for m in messages if m["id"] > args.after and m["id"] in wanted])
+        wanted |= {m["id"] for r in ("coordinator", *{a["id"] for a in _agents(root)})
+                   for m in _open_among(messages, r) if m["from"] == "user"}
+    _show(root, [m for m in messages if m["id"] > args.after and m["id"] in wanted])
     while True:
         time.sleep(POLL_S)
-        show(root, [m for m in tail.read() if who in m["to"] or (args.all and m["from"] == "user")])
+        _show(root, [m for m in tail.read() if who in m["to"] or (args.all and m["from"] == "user")])
 
 
 def cmd_log(root, args) -> None:
-    show(root, read(root, args.after))
+    _show(root, read(root, args.after))
 
 
 def build_parser() -> argparse.ArgumentParser:

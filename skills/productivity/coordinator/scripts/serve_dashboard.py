@@ -7,7 +7,8 @@
 
 Besides the files, the server carries the chat (chat.py): GET /events streams
 chat messages and state.json changes as server-sent events, POST /chat takes
-the user's messages, GET /chat?after=N lists them. Only this machine's tailnet
+the user's messages, POST /chat/preview answers who a text would reach
+without storing it, GET /chat?after=N lists them. Only this machine's tailnet
 login may post, and only over https; the policy is recorded in server.json.
 
 A local file server binds a free port on 127.0.0.1, and `tailscale serve`
@@ -347,7 +348,8 @@ def worker(root: str, bind_ip: str, port: int, policy: str = "open", *hosts: str
         def do_POST(self):
             if self.unknown_host():
                 return
-            if urlsplit(self.path).path != "/chat":
+            route = urlsplit(self.path).path
+            if route not in ("/chat", "/chat/preview"):
                 self.send_json(404, {"error": "not found"})
                 return
             refusal = post_refusal(policy, allowed, self.headers)
@@ -367,6 +369,10 @@ def worker(root: str, bind_ip: str, port: int, policy: str = "open", *hosts: str
                 self.send_json(400, {"error": "text must be a string and re a message id"})
                 return
             try:
+                if route == "/chat/preview":  # what POST /chat would store for this text now; stores nothing
+                    resolved = chat.address(root, "user", text, re, allow_user=True)
+                    self.send_json(200, {"to": resolved["to"], "parts": resolved["parts"]})
+                    return
                 message = chat.append(root, "user", text, re, self.headers.get("Tailscale-User-Login"), allow_user=True)
             except chat.ChatError as exc:
                 self.send_json(400, {"error": str(exc)})
