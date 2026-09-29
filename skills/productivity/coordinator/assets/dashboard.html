@@ -149,6 +149,9 @@
   .lead.clear .lead-line { color: var(--muted); }
   .goal { max-width: 68ch; }
   .now.stale { color: var(--muted); border-left-color: var(--line); }
+  .glance { list-style: none; margin: 6px 0 0 15px; padding: 0; font-size: var(--fs-s); color: var(--muted); max-width: 90ch; }
+  .glance li { margin: 2px 0; }
+  .glance b { color: var(--text); font-weight: 600; margin-right: 4px; }
   .latest { margin: 6px 0 0 15px; font-size: var(--fs-s); color: var(--text); }
   .latest ul { margin: 2px 0 0; padding-left: 16px; }
   .latest time { color: var(--muted); font-size: var(--fs-xs); margin-right: 4px; }
@@ -1174,6 +1177,18 @@ var FleetCore = (function () {
     if (v === null || typeof v !== "object" || typeof v.on !== "boolean" || !Number.isInteger(v.seen)) return null;
     return { on: v.on, seen: v.seen, unread: Number.isInteger(v.unread) ? v.unread : 0, since: typeof v.since === "string" ? v.since : "" };
   }
+  /* What the ledger says is going on, computed, so no one has to write it: the workers running, the steps
+     current, the next ones in the plan's order. Each list is cut to `max` with how many more. */
+  function glanceOf(state, max = 3) {
+    const cut = (xs) => ({ shown: xs.slice(0, max), more: Math.max(0, xs.length - max) });
+    const steps = (state.roadmap || []).flatMap((m) => m.steps || []);
+    return {
+      running: cut((state.agents || []).filter((a) => a.status === "running" || a.status === "blocked").map((a) => ({ id: a.id, name: a.name || a.id, blocked: a.status === "blocked" }))),
+      current: cut(steps.filter((st) => st.status === "current" || st.status === "blocked").map((st) => ({ id: st.id, title: st.title }))),
+      next: cut(steps.filter((st) => st.status === "pending").map((st) => ({ id: st.id, title: st.title }))),
+    };
+  }
+
   /* Whether a now-line said at `at` is old enough to read as stale: 30 minutes without being said again. */
   const staleNow = (at, now) => typeof at !== "string" || at === "" || isNaN(Date.parse(at)) || now - Date.parse(at) > 30 * 60 * 1000;
   /* Whether the user's message `m` is still unread by the host: after the last one its watch printed. */
@@ -1309,7 +1324,7 @@ var FleetCore = (function () {
   }
 
   return { keyOf, hostOf, rosterOf, usageOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf, toastOf,
-    decisionRows, decisionRoute, pendingAnswer, awaiting, bucketOf, BUCKETS, stuckOf, findRows, findRank, FIND_GROUPS, FIND_PREFIX, grillState, grillAnswerText, sidesOf, excerptOf, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, unreadNotice, staleNow, viewOf, leadOf, VIEWS };
+    decisionRows, decisionRoute, pendingAnswer, awaiting, bucketOf, BUCKETS, stuckOf, findRows, findRank, FIND_GROUPS, FIND_PREFIX, grillState, grillAnswerText, sidesOf, excerptOf, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, unreadNotice, staleNow, glanceOf, viewOf, leadOf, VIEWS };
 })();
 </script>
 <script>
@@ -1451,6 +1466,7 @@ var FleetCore = (function () {
       ${lead.detail ? `<p class="lead-detail">${esc(lead.detail)}</p>` : ""}
       <p class="goal">${esc(STATE.goal)}</p>
       <p class="now${nowStale ? " stale" : ""}"><b>Now</b>${esc(STATE.now)} <span class="said">${nowStale ? `not updated for ${esc(ago(STATE.now_at || STATE.started).replace(/ ago$/, ""))}` : `said ${esc(ago(STATE.now_at))}`}</span></p>
+      ${glanceHtml()}
       ${nowStale && latest.length ? `<div class="latest"><b>Latest from the log</b><ul>${latest.map((e) => `<li>${whenHtml(e.at, true)} ${e.agent ? esc(nameOf(e.agent)) + ": " : ""}${esc(String(e.text).slice(0, 220))}</li>`).join("")}</ul></div>` : ""}
       <p class="meta">Started ${esc(ago(STATE.started))}, updated ${esc(ago(STATE.updated))}.</p>`);
     $("foot-updated").textContent = `State updated ${new Date(STATE.updated).toLocaleString()}`;
@@ -1513,6 +1529,17 @@ var FleetCore = (function () {
   }
 
   /* A roadblock with a worker opens that worker from anywhere on its card. */
+  /* The glance under the Now line: what the ledger says, kept current by the page itself. */
+  function glanceHtml() {
+    const g = Core.glanceOf(STATE);
+    const more = (x) => x.more ? `, and ${x.more} more` : "";
+    const lines = [];
+    if (g.running.shown.length) lines.push(`<li><b>Running</b> ${g.running.shown.map((a) => `${whoButton(a.id)}${a.blocked ? " (blocked)" : ""}`).join(", ")}${more(g.running)}</li>`);
+    if (g.current.shown.length) lines.push(`<li><b>Current</b> ${g.current.shown.map((st) => `${esc(st.id)} ${esc(st.title)}`).join("; ")}${more(g.current)}</li>`);
+    if (g.next.shown.length) lines.push(`<li><b>Next</b> ${g.next.shown.map((st) => `${esc(st.id)} ${esc(st.title)}`).join("; ")}${more(g.next)}</li>`);
+    return lines.length ? `<ul class="glance">${lines.join("")}</ul>` : "";
+  }
+
   /* The places the user opens: the pages and dev servers the fleet named, up or down, and on a
      manager's page every fleet's; then what the machine serves that nobody named. */
   function renderLinks() {

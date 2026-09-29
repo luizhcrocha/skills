@@ -106,6 +106,7 @@ Waiting on the user is a subscription, never a status re-read: whoever asks arms
 
 Every message between sessions is paid for twice: the sender writes it, the receiver reads it, and both read it again on every later turn. So each thing is said once, by the one who knows it, where the user will read it.
 
+- **What the page computes is not written.** Under your Now line the page lists the running workers, the current steps and the next ones; the fleets' pages do the same. Your Now line says what they cannot: whose turn it is, what waits on whom, a rule the user just set.
 - **Your own answers too.** What you answer the user on your page (the chat, a side chat) is written there only. The turn that answered ends, in your session, with one line naming where: "Answered #42 on the page." The user reads the page from any device.
 
 - **Answer from the ledger first.** `python3 <scripts>/fleets.py show <fleet>` prints what a fleet is doing: its now-line and when it was said, the workers running with their task and last report, its latest events, its open decisions and roadblocks, and whether it reads its chat. A question about what a fleet is doing is answered from that, and the coordinator is not asked.

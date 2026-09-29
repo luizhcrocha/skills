@@ -495,3 +495,12 @@ test("stuckOf: an answer the fleet has not recorded after five minutes, a chat n
   const fleets = [{ id: "infra", decisions: [{ id: "d-a", ref: "A6", title: "Two things", answered: "2026-09-29T15:18:00Z" }], hearing: { on: true, seen: 80, unread: 0 } }];
   assert.deepEqual(Core.stuckOf({ decisions: [] }, fleets, [], now).map((r) => [r.fleet, r.ref]), [["infra", "A6"]]);
 });
+
+test("glanceOf: running workers, current steps and the next ones, computed from the ledger", () => {
+  const state = { agents: [{ id: "b1", name: "a", status: "running" }, { id: "b2", status: "done" }, { id: "b3", name: "c", status: "blocked" }],
+    roadmap: [{ id: "m1", steps: [{ id: "l1", title: "x", status: "done" }, { id: "l2", title: "y", status: "current" }, { id: "l3", title: "z", status: "pending" }, { id: "l4", title: "w", status: "pending" }] }] };
+  const g = Core.glanceOf(state, 1);
+  assert.deepEqual(g.running, { shown: [{ id: "b1", name: "a", blocked: false }], more: 1 });
+  assert.deepEqual(g.current.shown.map((s) => s.id), ["l2"]);
+  assert.deepEqual([g.next.shown.map((s) => s.id), g.next.more], [["l3"], 1]);
+});
