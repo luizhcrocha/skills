@@ -259,6 +259,16 @@ class NumberTest(Fleet):
         self.assertEqual([d["id"] for d in self.state()["decisions"]], ["x", "i1"], "a lower-case id is an id, not a number")
 
 
+class DoneTest(Fleet):
+    def test_done_with_a_report_that_reads_unfinished_is_questioned(self):
+        self.ok("agent", "a9", "--task", "t", "--milestone", "m1")
+        said = self.run_cli("agent", "a9", "--status", "done", "--report", "Part A refused a 3rd time; parked.")
+        self.assertEqual(said.returncode, 0)
+        self.assertIn("reads as unfinished", said.stderr)
+        self.ok("agent", "a8", "--task", "t", "--milestone", "m1")
+        self.assertNotIn("unfinished", self.run_cli("agent", "a8", "--status", "done", "--report", "All 12 met; did not touch the API.").stderr)
+
+
 class ManagerTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

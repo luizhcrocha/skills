@@ -94,7 +94,7 @@ For a batch of independent tasks, call the Skill tool with "orchestrate" for the
 
 ### 5. Track
 
-The dashboard state is the fleet ledger: one row per worker with its lane, status, tokens, and last report. Record every event (spawn, report, block, resolution, decision) with the state CLI the moment it happens; each command renders, so the user can watch the fleet without asking. After a compaction, `state.py <dashboard-dir> show` gives back the ledger and every command with the values it takes.
+A worker is `done` only when its completion criterion is met. One that ended short (a refusal, a part parked, a criterion missed) is `stopped`, with the reason in `--log`, or `blocked` with a roadblock when it waits on someone; the page is read at a glance, and a row that says done is taken at its word. The dashboard state is the fleet ledger: one row per worker with its lane, status, tokens, and last report. Record every event (spawn, report, block, resolution, decision) with the state CLI the moment it happens; each command renders, so the user can watch the fleet without asking. After a compaction, `state.py <dashboard-dir> show` gives back the ledger and every command with the values it takes.
 
 Record a worker, then spawn it. The id you gave it in the ledger is the id in its brief, and the chat knows a worker from the moment the ledger does.
 

@@ -122,6 +122,9 @@ def cmd_set(state, args):
 
 
 LIVE = ("running", "queued", "blocked")
+# Words a report uses when the work did not finish: said to a coordinator that records it as done anyway.
+UNFINISHED = re.compile(r"\b(refused|parked|not met|unmet|could(?:n't| not)|failed to|gave up|incomplete|unfinished|"
+                        r"blocked on|waiting on|skipped|not done)\b", re.I)
 
 
 def cmd_park(state, args):
@@ -335,6 +338,11 @@ def cmd_agent(state, args):
     if args.tokens is not None or args.duration_ms is not None:
         a["measured"] = "by hand"
     a["updated"] = now()
+    unfinished = UNFINISHED.search(" ".join(filter(None, [a.get("report"), args.log]))) if a["status"] == "done" else None
+    if unfinished and (args.status == "done" or args.report is not None):
+        sys.stderr.write(f"state: {a['id']} is done, but its report reads as unfinished (\"{unfinished.group(0)}\"). Done means its "
+                         f"completion criterion was met; one that ended short is `--status stopped` with the reason, or `blocked` "
+                         f"with a roadblock when it waits on someone.\n")
     if args.step:
         follow = {"running": "current", "done": "done", "blocked": "blocked"}.get(a["status"])
         set_step(state, args.step, follow, a["id"])
