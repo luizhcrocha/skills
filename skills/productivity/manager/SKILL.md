@@ -97,7 +97,9 @@ Keep the user's words as they said them. Your summary of a decision for the user
 
 ## The plan's usage
 
-Your page shows how full the plan's 5-hour and 7-day windows are, and `python3 <scripts>/usage.py show` prints the same. Read it before you give a turn to work that spawns many workers, and when a window is nearly full say so to the user and to the fleets, with when it resets: a fleet that knows can finish what is in hand instead of starting what it cannot finish. When the page says there is no reading yet, the user's status line does not capture it; the line to add is in the coordinator skill's `DASHBOARD.md`.
+Your page shows, for each fleet, what its workers spent and what its coordinator itself spent (`python3 <scripts>/fleets.py list` prints both). A coordinator that reads far more than its workers write is doing work it should delegate; say so to it.
+
+Your page also shows how full the plan's 5-hour and 7-day windows are, and `python3 <scripts>/usage.py show` prints the same. Read it before you give a turn to work that spawns many workers, and when a window is nearly full say so to the user and to the fleets, with when it resets: a fleet that knows can finish what is in hand instead of starting what it cannot finish. When the page says there is no reading yet, the user's status line does not capture it; the line to add is in the coordinator skill's `DASHBOARD.md`.
 
 ## Staying current
 

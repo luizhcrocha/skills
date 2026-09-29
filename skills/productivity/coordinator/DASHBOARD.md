@@ -122,6 +122,10 @@ events[]     activity log, oldest first
 
 A ledger made with `init --role manager` is a manager's. Its page is sent every coordinator being served, its chat is hosted by `manager` and mentions the coordinators by their fleet's name (their workers stay in their own fleet's chat), its steps name the coordinator whose turn it is, and its directory holds `standing.md`. A coordinator's page shows the way to the manager while one is being served. What a coordinator does with a manager is in [SKILL.md](SKILL.md#with-a-manager).
 
+### What a coordinator itself spends
+
+The ledger counts the workers' tokens as they report. What the coordinator spends on coordinating them is read from its session's transcript (`python3 <skill-dir>/scripts/spend.py <dashboard-dir>` prints it): the tokens it wrote, the tokens it read, and how much of that came from the cache. The page shows it beside the workers' tokens, and a manager's page shows it for every fleet. A session resumed under a new id writes to another transcript, which the figure does not follow.
+
 ### The plan's usage
 
 A manager's page shows how full the plan's 5-hour and 7-day windows are and when each resets. The figures are the ones Claude Code hands a status line (`rate_limits`, for a subscription, after a session's first response), captured on the way through: the user's status line command in `settings.json` becomes `python3 <skill-dir>/scripts/usage.py capture -- <the command it had>`, which keeps the reading and runs the status line as it was. Every session on the machine runs the status line, so the reading follows whichever session worked last. `python3 <skill-dir>/scripts/usage.py show` prints what is held. `settings.json` is the user's: give them the line, and change it only on their word.

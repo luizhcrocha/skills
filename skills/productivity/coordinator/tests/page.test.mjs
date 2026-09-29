@@ -346,3 +346,12 @@ test("usageOf: each window the status line saw, how full it is, and whether it h
   for (const none of [null, undefined, {}, { five_hour: "soon" }, { five_hour: { used_percentage: "many", resets_at: 1 } }]) assert.deepEqual(Core.usageOf(none, now), []);
   assert.equal(Core.usageOf({ five_hour: { used_percentage: 140, resets_at: s("2026-09-29T01:00:00Z"), at: 1 } }, now)[0].percent, 100);
 });
+
+test("parseState: what a coordinator itself spent is four figures, or none", () => {
+  const base = { project: "p", goal: "g", status: "running", now: "n", started: "x" };
+  assert.equal(Core.parseState(base).spent, null);
+  assert.deepEqual(Core.parseState({ ...base, spent: { output: 100, input: 5000, cached: 4000, answers: 3, extra: 1 } }).spent, { output: 100, input: 5000, cached: 4000, answers: 3 });
+  assert.equal(Core.parseState({ ...base, spent: { output: "many" } }).spent, null);
+  const m = Core.parseState({ ...base, role: "manager", coordinators: [{ id: "a", spent: { output: 7, input: 9, cached: 8, answers: 1 } }, { id: "b" }] });
+  assert.deepEqual(m.coordinators.map((c) => c.spent), [{ output: 7, input: 9, cached: 8, answers: 1 }, null]);
+});

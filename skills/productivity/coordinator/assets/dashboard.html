@@ -913,14 +913,17 @@ var FleetCore = (function () {
     const decision = (d) => ({ ...d, title: text(d.title, d.id), question: text(d.question, ""), kind: text(d.kind, "decision"),
       status: text(d.status, "open"), blocking: d.blocking === true, asks: d.asks === "manager" ? "manager" : "user", options: list(d.options) });
     const above = isRow(value.manager) && typeof value.manager.url === "string" && value.manager.url ? value.manager : null;
+    const spent = (v) => isRow(v) && ["output", "input", "cached", "answers"].every((k) => Number.isFinite(v[k]))
+      ? { output: v.output, input: v.input, cached: v.cached, answers: v.answers } : null;
     return {
       ...value,
       role: value.role === "manager" ? "manager" : "coordinator",
       manager: above && { id: text(above.id, "manager"), url: above.url, session: text(above.session, "") },
       coordinators: withId(list(value.coordinators)).map((c) => ({ ...c, name: text(c.name, c.id), goal: text(c.goal, ""), status: text(c.status, "unknown"),
-        now: text(c.now, ""), url: text(c.url, ""), session: text(c.session, ""), tokens: count(c.tokens, 0), roadblocks: count(c.roadblocks, 0),
+        now: text(c.now, ""), url: text(c.url, ""), session: text(c.session, ""), tokens: count(c.tokens, 0), roadblocks: count(c.roadblocks, 0), spent: spent(c.spent),
         workers: isRow(c.workers) ? c.workers : {}, lanes: Array.isArray(c.lanes) ? c.lanes.map(String) : [], decisions: withId(list(c.decisions)).map(decision) })),
       usage: isRow(value.usage) ? value.usage : null,
+      spent: spent(value.spent),
       updated: text(value.updated, value.started),
       roadmap: withId(lists.roadmap).map((m) => ({ ...m, title: text(m.title, m.id), steps: withId(Array.isArray(m.steps) ? m.steps.filter(isRow) : []) })),
       agents: withId(lists.agents).map((a) => ({ ...a, name: text(a.name, a.id), status: text(a.status, ""), task: text(a.task, ""),
@@ -1025,7 +1028,9 @@ var FleetCore = (function () {
   const time = (iso) => { const t = Date.parse(iso); return isNaN(t) ? 0 : t; };
   const INT = new Intl.NumberFormat("en-US"), CLOCK = new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit" });
   const fmtInt = (n) => INT.format(Number(n || 0));
-  const fmtShort = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n);
+  const fmtShort = (n) => n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n);
+  /* What a session itself spent, in words: what it wrote, what it read, how much of that came from the cache. */
+  const spentWords = (s) => `${fmtShort(s.output)} written, ${fmtShort(s.input)} read${s.input ? ` (${Math.round(100 * s.cached / s.input)}% from the cache)` : ""}, in ${fmtInt(s.answers)} answers`;
   const fmtDur = (ms) => {
     if (!ms) return "";
     const s = Math.round(ms / 1000);
@@ -1108,12 +1113,16 @@ var FleetCore = (function () {
     const failed = byStatus("failed") + byStatus("stopped");
     const across = (status) => STATE.coordinators.reduce((n, c) => n + (Number(c.workers[status]) || 0), 0);
     const fleetTokens = STATE.coordinators.reduce((n, c) => n + c.tokens, totalTokens);
+    const own = STATE.spent ? total(`written by the ${HOST}`, esc(fmtShort(STATE.spent.output)), "", `The ${HOST} itself: ${spentWords(STATE.spent)}`) : "";
+    const theirs = STATE.coordinators.filter((c) => c.spent);
     paint($("tiles"), MANAGED() ? [
       total("fleets", STATE.coordinators.length),
       total("workers running", across("running") + byStatus("running")),
       total("workers blocked", across("blocked") + byStatus("blocked"), across("blocked") ? "alert" : ""),
       total("roadblocks", STATE.coordinators.reduce((n, c) => n + c.roadblocks, openBlocks.length), "", "open, across the fleets"),
-      total("tokens", esc(fmtShort(fleetTokens)), "", fmtInt(fleetTokens) + " across the fleets"),
+      total("workers' tokens", esc(fmtShort(fleetTokens)), "", fmtInt(fleetTokens) + " across the fleets, as the workers reported"),
+      theirs.length ? total("written by coordinators", esc(fmtShort(theirs.reduce((n, c) => n + c.spent.output, 0))), "", "What the coordinators themselves wrote, from their transcripts") : "",
+      own,
       total("elapsed", esc(fmtDur(NOW - Date.parse(STATE.started)) || "0 s")),
     ].join("") : [
       total("running", byStatus("running")),
@@ -1122,7 +1131,8 @@ var FleetCore = (function () {
       total("blocked", byStatus("blocked"), openBlocks.length ? "alert" : "", `${openBlocks.length} open roadblock${openBlocks.length === 1 ? "" : "s"}`),
       failed ? total("failed or stopped", failed, "alert") : "",
       total("steps done", `${steps.filter((s) => s.status === "done").length} of ${steps.length}`),
-      total("tokens", esc(fmtShort(totalTokens)), "", fmtInt(totalTokens) + " across " + STATE.agents.length + " workers"),
+      total("workers' tokens", esc(fmtShort(totalTokens)), "", fmtInt(totalTokens) + " across " + STATE.agents.length + " workers, as they reported"),
+      own,
       total("elapsed", esc(fmtDur(NOW - Date.parse(STATE.started)) || "0 s")),
     ].join(""));
     $("nav-decisions").hidden = !asked.length;
@@ -1407,7 +1417,8 @@ img,svg,video,canvas{max-width:100%;height:auto}
     return [workers ? "Workers: " + workers : "No workers yet",
       waiting.length ? `${plural(waiting.length, "decision")} wait${waiting.length === 1 ? "s" : ""} on you` : "",
       held ? `${held} with the manager` : "", c.roadblocks ? plural(c.roadblocks, "open roadblock") : "",
-      c.tokens ? fmtShort(c.tokens) + " tokens" : ""].filter(Boolean).join(". ") + ".";
+      c.tokens ? "Its workers: " + fmtShort(c.tokens) + " tokens" : "",
+      c.spent ? "The coordinator itself: " + spentWords(c.spent) : ""].filter(Boolean).join(". ") + ".";
   }
   function renderCoordinators() {
     $("coordinators").hidden = !MANAGED();
@@ -1732,7 +1743,8 @@ img,svg,video,canvas{max-width:100%;height:auto}
     $("worker-body").innerHTML = `
       <div class="sheet-head" style="--c:${colour}"><span class="swatch"></span><h2 id="worker-name">${esc(c.id)}</h2>${pill(c.status)}<button type="button" class="icon-btn" data-close data-focus="x" aria-label="Close" title="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
       <p>${esc(c.now || c.goal)}</p>
-      <dl class="facts">${fact("Project", esc(c.name))}${fact("Session", esc(c.session || "not named yet"))}${fact("Decisions open", c.decisions.length)}${fact("Roadblocks", c.roadblocks)}${fact("Tokens", c.tokens ? `<span class="num">${fmtInt(c.tokens)}</span>` : "none yet")}${fact("Updated", esc(ago(c.updated)) || "unknown")}</dl>
+      <dl class="facts">${fact("Project", esc(c.name))}${fact("Session", esc(c.session || "not named yet"))}${fact("Decisions open", c.decisions.length)}${fact("Roadblocks", c.roadblocks)}${fact("Workers' tokens", c.tokens ? `<span class="num">${fmtInt(c.tokens)}</span>` : "none yet")}${fact("Updated", esc(ago(c.updated)) || "unknown")}</dl>
+      ${c.spent ? `<div><h3>The coordinator itself</h3><p>${esc(spentWords(c.spent))}</p></div>` : ""}
       ${c.goal ? `<div><h3>Goal</h3><p>${esc(c.goal)}</p></div>` : ""}
       <div><h3>Lanes in flight</h3><div class="lane">${c.lanes.length ? c.lanes.map((l) => `<code>${esc(l)}</code>`).join("") : "none"}</div></div>
       <div class="sheet-actions">${message}${c.url ? `<a class="btn" href="${esc(c.url)}" data-focus="page">Open its page</a>` : ""}<button type="button" class="btn" data-close data-focus="close">Close</button></div>

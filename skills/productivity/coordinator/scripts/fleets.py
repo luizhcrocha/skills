@@ -122,7 +122,9 @@ def manager() -> dict | None:
 
 
 def summary(entry: dict) -> dict:
-    """A fleet as the manager's page and the manager read it: who it is, what it is doing, what waits in it."""
+    """A fleet as the manager's page and the manager read it: who it is, what it is doing, what waits
+    in it, what its workers and its coordinator spent."""
+    import spend  # here, not above: a status line's capture loads this module and needs no transcripts
     state = _read(Path(entry["dir"]) / "state.json")
     rows = lambda key: [r for r in (state or {}).get(key, []) if isinstance(r, dict)]  # noqa: E731
     workers: dict[str, int] = {}
@@ -135,6 +137,7 @@ def summary(entry: dict) -> dict:
         "status": str(state["status"]) if state and state.get("status") else "unknown",
         "now": str((state or {}).get("now") or ""), "updated": (state or {}).get("updated"),
         "workers": workers, "tokens": sum(int(a.get("tokens") or 0) for a in rows("agents")),
+        "spent": spend.of(entry["dir"]),
         "lanes": sorted({str(lane) for a in running for lane in a.get("lane") or []}),
         "roadblocks": sum(1 for r in rows("roadblocks") if not r.get("resolved")),
         "decisions": [{"id": d.get("id"), "kind": d.get("kind", "decision"), "title": d.get("title"), "question": d.get("question"),
@@ -148,13 +151,15 @@ def view(state: dict, root) -> dict:
     """The state as the page shows it: a manager's with every coordinator being served and the plan's
     usage as the status line last saw it, a coordinator's with how to reach its manager when there
     is one. The state itself is left as it is."""
+    import spend
     root = str(Path(root).resolve())
+    state = {**state, "spent": spend.of(root)}
     if role_of(state) == "manager":
         import usage  # here, not above: usage.py reads the registry's place from this module
         return {**state, "coordinators": [summary(e) for e in live() if e["role"] != "manager" and e["dir"] != root],
                 "usage": usage.read()}
     found = manager()
-    return {**state, "manager": {"id": found["id"], "url": found["url"], "session": found.get("session")}} if found else dict(state)
+    return {**state, "manager": {"id": found["id"], "url": found["url"], "session": found.get("session")}} if found else state
 
 
 def cmd_list() -> None:
@@ -168,6 +173,8 @@ def cmd_list() -> None:
             print(f"    now: {s['now']}")
         if s["lanes"]:
             print(f"    lanes in flight: {', '.join(s['lanes'])}")
+        if s["spent"]:
+            print(f"    tokens: its workers {s['tokens']:,}; the {e['role']} itself {s['spent']['output']:,} written, {s['spent']['input']:,} read")
         for d in s["decisions"]:
             marks = ", ".join(filter(None, [d["kind"], "for the manager" if d["asks"] == "manager" else "for the user", "blocks work" if d["blocking"] else ""]))
             print(f"    {d['id']} [{marks}] {d['title']}")
