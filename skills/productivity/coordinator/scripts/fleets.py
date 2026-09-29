@@ -172,7 +172,10 @@ def summary(entry: dict) -> dict:
     """A fleet as the manager's page and the manager read it: who it is, what it is doing, what waits
     in it, what its workers and its coordinator spent."""
     import chat, spend  # here, not above: a status line's capture loads this module and needs neither
+    import decisions
     state = _read(Path(entry["dir"]) / "state.json")
+    if state:
+        decisions.number(state)
     rows = lambda key: [r for r in (state or {}).get(key, []) if isinstance(r, dict)]  # noqa: E731
     workers: dict[str, int] = {}
     for a in rows("agents"):
@@ -202,8 +205,11 @@ def view(state: dict, root) -> dict:
     """The state as the page shows it: a manager's with every coordinator being served and the plan's
     usage as the status line last saw it, a coordinator's with how to reach its manager when there
     is one. The state itself is left as it is."""
-    import chat, served, spend
+    import copy
+    import chat, decisions, served, spend
     root = str(Path(root).resolve())
+    state = copy.deepcopy(state)
+    decisions.number(state)  # the numbers state.py gives on its next write, the same ones: the order is the ledger's
     state = {**state, "spent": spend.of(root), "chat": chat.listening(root)}
     me = find(root)
     links = [{**link, "fleet": me["id"] if me else None} for link in served.links_of(state)]
@@ -211,7 +217,9 @@ def view(state: dict, root) -> dict:
         import usage  # here, not above: usage.py reads the registry's place from this module
         others = [e for e in live() if e["role"] != "manager" and e["dir"] != root]
         for e in others:
-            links += [{**link, "fleet": e["id"]} for link in served.links_of(_read(Path(e["dir"]) / "state.json") or {})]
+            theirs = _read(Path(e["dir"]) / "state.json") or {}
+            decisions.number(theirs)
+            links += [{**link, "fleet": e["id"]} for link in served.links_of(theirs)]
         return {**state, "coordinators": [summary(e) for e in others], "usage": usage.read(), "gate": gate(),
                 "links": links, "found": _unlisted(served.discovered(), links)}
     mine = [x for x in served.discovered() if me and x["fleet"] == me["id"]]
