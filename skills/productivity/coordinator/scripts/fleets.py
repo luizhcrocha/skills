@@ -192,6 +192,7 @@ def summary(entry: dict) -> dict:
         "now_at": (state or {}).get("now_at"),
         "lanes": sorted({str(lane) for a in running for lane in a.get("lane") or []}),
         "roadblocks": sum(1 for r in rows("roadblocks") if not r.get("resolved")),
+        "index": _index(state or {}),
         "decisions": [{"id": d.get("id"), "ref": d.get("ref"), "kind": d.get("kind", "decision"), "title": d.get("title"), "question": d.get("question"),
                        "why": d.get("why"), "blocking": d.get("blocking") is True, "asks": d.get("asks") or "user",
                        "opened": d.get("opened"), "revised": d.get("revised"),
@@ -199,6 +200,32 @@ def summary(entry: dict) -> dict:
                                        and not any(r.get("re") == m["id"] and r["from"] != "user" for r in said) for m in said)}
                       for d in rows("decisions") if d.get("status") == "open" and isinstance(d.get("id"), str)],
     }
+
+
+def _index(state: dict) -> list[dict]:
+    """What the manager's search finds in a fleet: every decision (open or closed), roadblock, plan step
+    and worker, each as {group, ref, title, sub, hint, hash}, the hash leading to it on the fleet's page."""
+    one = lambda v: " ".join(str(v or "").split())[:200]  # noqa: E731
+    rows = []
+    for d in state.get("decisions", []):
+        if isinstance(d, dict) and d.get("id"):
+            rows.append({"group": "decisions", "ref": d.get("ref") or "", "title": one(d.get("title")),
+                         "sub": one(d.get("question") if d.get("status") == "open" else d.get("answer") or d.get("resolution")),
+                         "hint": str(d.get("status") or ""), "hash": "#decision/" + str(d["id"])})
+    for r in state.get("roadblocks", []):
+        if isinstance(r, dict):
+            rows.append({"group": "roadblocks", "ref": r.get("ref") or "", "title": one(r.get("title")), "sub": one(r.get("detail")),
+                         "hint": "resolved" if r.get("resolved") else "open", "hash": "#roadblocks"})
+    for m in state.get("roadmap", []):
+        for st in (m.get("steps") or []) if isinstance(m, dict) else []:
+            if isinstance(st, dict):
+                rows.append({"group": "plan", "ref": str(st.get("id") or ""), "title": one(st.get("title")), "sub": one(m.get("title")),
+                             "hint": str(st.get("status") or ""), "hash": "#plan"})
+    for a in state.get("agents", []):
+        if isinstance(a, dict):
+            rows.append({"group": "workers", "ref": str(a.get("id") or ""), "title": one(a.get("name")), "sub": one(a.get("task")),
+                         "hint": str(a.get("status") or ""), "hash": "#agent-" + str(a.get("id") or "")})
+    return rows
 
 
 def view(state: dict, root) -> dict:

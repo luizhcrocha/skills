@@ -948,8 +948,11 @@ var FleetCore = (function () {
     const rows = [], one = (t) => String(t ?? "").replace(/\s+/g, " ").trim();
     for (const d of state.decisions || []) rows.push({ group: "decisions", ref: d.ref || "", title: one(d.title), sub: one(d.status === "open" ? d.question : (d.answer || d.resolution || d.status)),
       hint: d.status === "open" ? "open" : d.status, go: { kind: "decision", id: d.id } });
-    for (const c of state.coordinators || []) for (const d of c.decisions || []) rows.push({ group: "decisions", ref: d.ref || "", title: one(d.title), sub: one(d.question),
-      hint: "in " + c.id, go: { kind: "url", url: c.url ? c.url + "#decision/" + encodeURIComponent(d.id) : "" } });
+    for (const c of state.coordinators || []) for (const x of Array.isArray(c.index) ? c.index : []) {
+      if (!x || typeof x.title !== "string" || typeof x.group !== "string") continue;
+      rows.push({ group: x.group, ref: String(x.ref || ""), title: one(x.title), sub: one(x.sub), hint: c.id + (x.hint ? ", " + x.hint : ""),
+        go: { kind: "url", url: c.url ? c.url + String(x.hash || "") : "" } });
+    }
     for (const l of state.links || []) rows.push({ group: "links", ref: l.ref || "", title: one(l.title), sub: one(l.url), hint: (l.kind === "page" ? "page" : "dev") + (l.up ? "" : ", down"), go: { kind: "url", url: l.url } });
     for (const c of state.coordinators || []) rows.push({ group: "coordinators", ref: "", title: c.id, sub: one(c.now), hint: c.status, go: { kind: "url", url: c.url } });
     for (const r of state.roadblocks || []) rows.push({ group: "roadblocks", ref: r.ref || "", title: one(r.title), sub: one(r.detail), hint: r.resolved ? "resolved" : "open", go: { kind: "view", hash: "#roadblocks" } });
@@ -1120,7 +1123,7 @@ var FleetCore = (function () {
       manager: above && { id: text(above.id, "manager"), url: above.url, session: text(above.session, "") },
       coordinators: withId(list(value.coordinators)).map((c) => ({ ...c, name: text(c.name, c.id), goal: text(c.goal, ""), status: text(c.status, "unknown"),
         now: text(c.now, ""), url: text(c.url, ""), session: text(c.session, ""), tokens: count(c.tokens, 0), roadblocks: count(c.roadblocks, 0), spent: spent(c.spent), hearing: hearing(c.chat), active: text(c.active, ""),
-        workers: isRow(c.workers) ? c.workers : {}, lanes: Array.isArray(c.lanes) ? c.lanes.map(String) : [], decisions: withId(list(c.decisions)).map(decision) })),
+        index: list(c.index), workers: isRow(c.workers) ? c.workers : {}, lanes: Array.isArray(c.lanes) ? c.lanes.map(String) : [], decisions: withId(list(c.decisions)).map(decision) })),
       usage: isRow(value.usage) ? value.usage : null,
       gate: isRow(value.gate) && typeof value.gate.fleet === "string" ? { fleet: value.gate.fleet, what: text(value.gate.what, ""), since: text(value.gate.since, "") } : null,
       spent: spent(value.spent),
