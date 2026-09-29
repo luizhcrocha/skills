@@ -12,7 +12,8 @@
     state.py DIR roadblock ID [--title T --detail D --severity S --needs N] [--agent A]
                               [--decision D] [--resolved | --open]
     state.py DIR decision ID [--kind K --title T --question Q --why W] [--blocking | --not-blocking]
-                             [--option "KEY: label | consequence"]... [--recommend R --reason WHY]
+                             [--option "KEY: label | consequence"]... [--same-options]
+                             [--recommend R --reason WHY]
                              [--secret NAME] [--manual TEXT] [--body FILE | --no-body]
                              [--agent A] [--supersedes ID] [--log TEXT] [--asks user|manager]
                              [--decide ANSWER --resolution HOW | --withdraw REASON]
@@ -345,6 +346,10 @@ def cmd_decision(state, args):
     else:
         if args.supersedes:
             fail("--supersedes is given when the new decision is opened")
+        asks_anew = args.question is not None and args.question != d["question"]
+        if asks_anew and (args.kind or d["kind"]) == "decision" and not args.option and not args.same_options:
+            fail("the question changed, and the options on the page would be the old question's: give them again "
+                 "(--option, once per option, with --recommend and --reason), or pass --same-options when they still answer it")
         changed = [k for k in FIELDS if getattr(args, k) is not None] + [k for k in ("option", "body") if getattr(args, k)]
         for key in FIELDS:
             if getattr(args, key) is not None:
@@ -392,7 +397,7 @@ commands (state.py DIR <command>; an unknown ID creates the row, a known ID chan
   roadblock ID --title T --detail D --severity {"|".join(SEVERITIES)} --needs {"|".join(NEEDS)} [--agent A]
         [--decision D] [--resolved | --open]
   decision ID --kind {"|".join(decisions.KINDS)} --title T --question Q --why W [--blocking | --not-blocking]
-        [--option "KEY: label | consequence"]... [--recommend R --reason WHY] [--secret NAME] [--manual TEXT]
+        [--option "KEY: label | consequence"]... [--same-options] [--recommend R --reason WHY] [--secret NAME] [--manual TEXT]
         [--body FILE | --no-body] [--agent A] [--supersedes ID] [--log TEXT] [--asks {"|".join(decisions.ASKS)}]
         [--decide ANSWER --resolution HOW | --withdraw REASON]
   event [--kind {"|".join(KINDS)}] [--agent A] [--important] TEXT
@@ -469,6 +474,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--why", help="what it blocks, or the assumption the fleet runs on until it is answered")
     g = s.add_mutually_exclusive_group(); g.add_argument("--blocking", action="store_true"); g.add_argument("--not-blocking", action="store_true")
     s.add_argument("--option", action="append", metavar="\"KEY: label | consequence\"", help="once per option; given again, replaces them all")
+    s.add_argument("--same-options", action="store_true", help="with a new --question: the options still answer it")
     s.add_argument("--recommend", help="the option's KEY, or the value you would give"); s.add_argument("--reason")
     s.add_argument("--secret", metavar="NAME", help="the name the code expects, as in secretspec.toml")
     s.add_argument("--manual", help="the route the user can take by hand: steps or commands, shown verbatim")

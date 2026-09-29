@@ -136,6 +136,7 @@ A ledger made with `init --role manager` is a manager's. Its page is sent every 
 | A manager is present | add `--asks manager`: the manager looks first, and the user is not called. `decision d1 --asks user` passes it on, and calls them |
 | Evidence | add `--body FILE`: an HTML fragment, copied to `decisions/<id>.html`; `--no-body` removes it |
 | The facts changed | `decision d1 --why "..." --log "what changed"` with any field; stamps `revised`, and the page tells the user |
+| The question changed | a choice's new `--question` comes with its options (`--option` again replaces them all, with `--recommend` and `--reason`), or with `--same-options` when the old ones still answer it |
 | The user answered | `decision d1 --decide "B: Keep both shapes" --resolution "answered on the page (#14)"` |
 | Nobody has to answer | `decision d1 --withdraw "the worker found the rule in the finance ADR"` |
 | Changed after it closed | `decision d7 ... --supersedes d1` (a closed decision refuses every change) |

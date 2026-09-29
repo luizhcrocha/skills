@@ -120,6 +120,24 @@ class ReviseTest(Fleet):
         self.assertIn("not one of the options", self.refused("decision", "d1", "--recommend", "Z"))
         self.assertIn("two options", self.refused("decision", "d1", "--option", "A: only | c"))
 
+    def test_a_new_question_comes_with_its_options(self):
+        self.ok("decision", *SCHEMA, "--blocking")
+        said = self.refused("decision", "d1", "--question", "Approve deploys of this kind as a rule?", "--not-blocking")
+        self.assertIn("--option", said)
+        self.assertIn("--same-options", said)
+        self.assertEqual(self.item()["question"], "Migrate the invoice table or keep both shapes?")
+        self.ok("decision", "d1", "--question", "Approve deploys of this kind as a rule?", "--option", "yes: As a rule | no ask per deploy",
+                "--option", "no: Ask each time | one decision per deploy", "--recommend", "yes", "--reason", "r")
+        self.assertEqual([o["id"] for o in self.item()["options"]], ["yes", "no"])
+        self.ok("decision", "d1", "--question", "Approve deploys of this kind, as a rule?", "--same-options")
+        self.assertEqual([o["id"] for o in self.item()["options"]], ["yes", "no"])
+
+    def test_only_a_choice_has_options_to_carry(self):
+        self.ok("decision", "d2", "--kind", "input", "--title", "T", "--question", "q", "--why", "w")
+        self.ok("decision", "d2", "--question", "another question")
+        self.ok("decision", *SCHEMA)
+        self.ok("decision", "d1", "--question", "Migrate the invoice table or keep both shapes?", "--why", "same question, new reason")
+
     def test_blocking_can_be_lifted(self):
         self.ok("decision", *SCHEMA, "--blocking")
         self.ok("decision", "d1", "--not-blocking", "--why", "the fleet proceeds on A until you say otherwise")
