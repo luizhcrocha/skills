@@ -28,6 +28,7 @@ machine's Tailscale IPv4 directly and the URL is plain http, with a warning.
 """
 import json
 import os
+import re
 import shutil
 import select
 import signal
@@ -203,6 +204,7 @@ def start(root: Path, record: Path, existing: dict | None) -> None:
     boss = fleets.manager()
     if boss and me["role"] != "manager":
         print(f"manager: session {boss.get('session') or '(not named yet)'}  {boss['url']}  what holds for every fleet: {Path(boss['dir']) / 'standing.md'}")
+        print(f"on the manager's address: {boss['url'].rstrip('/')}/f/{me['id']}/  (the one to give the user: every fleet and the manager at one address)")
 
 
 def main(argv: list[str]) -> None:
@@ -235,6 +237,12 @@ def main(argv: list[str]) -> None:
 
 
 MAX_POST_BYTES = 16 * 1024
+FLEET_PATH = re.compile(r"^/f/([A-Za-z0-9_.-]+)(/.*)?$")
+# What a passed-through request carries to the fleet's server: the viewer's tailnet identity, the body's
+# type and length, where a stream resumes. The rest (cookies, the viewer's Host and Origin) stays here.
+PASSED_HEADERS = {"accept", "content-type", "content-length", "last-event-id", "tailscale-user-login",
+                  "tailscale-user-name", "tailscale-user-profile-pic"}
+DROPPED_HEADERS = {"connection", "keep-alive", "transfer-encoding", "cache-control", "server", "date"}
 BODY_SANDBOX = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox"
 PING_S = 15
 POLL_S = 0.3
@@ -325,11 +333,73 @@ def worker(root: str, bind_ip: str, port: int, policy: str = "open", *hosts: str
             return True
 
         def do_HEAD(self):
-            if not self.unknown_host():
+            if not self.unknown_host() and not self.passed_to_a_fleet("HEAD"):
                 super().do_HEAD()
 
+        def passed_to_a_fleet(self, method: str) -> bool:
+            """On a manager's server, /f/<fleet>/... is that fleet's page, served by its own server and passed
+            through here, so the user has one address for every fleet. Returns whether the request was one."""
+            url = urlsplit(self.path)
+            found = FLEET_PATH.match(url.path)
+            if not found or fleets.role_of(read_state(root)) != "manager":
+                return False
+            fleet, rest = found.group(1), found.group(2)
+            if not rest:  # the page's relative addresses (chat, events, state.json) need the trailing slash
+                self.send_response(301)
+                self.send_header("Location", f"/f/{fleet}/" + (f"?{url.query}" if url.query else ""))
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return True
+            entry = next((e for e in fleets.live() if e["id"] == fleet and e["role"] != "manager"), None)
+            try:
+                port = int(json.loads((Path(entry["dir"]) / "server.json").read_text())["port"]) if entry else None
+            except (OSError, ValueError, KeyError, TypeError):
+                port = None
+            if port is None:
+                self.send_json(404, {"error": f"no fleet '{fleet}' is being served; the manager's page lists the ones that are"})
+                return True
+            body = None
+            if method == "POST":
+                refusal = post_refusal(policy, allowed, self.headers)  # this server's rules first: the fleet's see a local post
+                if refusal:
+                    self.close_connection = True
+                    self.send_json(refusal[0], {"error": refusal[1]})
+                    return True
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            headers = {k: v for k, v in self.headers.items() if k.lower() in PASSED_HEADERS}
+            headers["Host"] = f"127.0.0.1:{port}"
+            if "Origin" in self.headers:
+                headers["Origin"] = f"http://127.0.0.1:{port}"
+            stream = rest == "/events"
+            import http.client  # here, not above: the launcher must start even where the worker's imports fail
+            try:
+                upstream = http.client.HTTPConnection("127.0.0.1", port, timeout=None if stream else 30)
+                upstream.request(method, rest + (f"?{url.query}" if url.query else ""), body=body, headers=headers)
+                answer = upstream.getresponse()
+            except OSError as exc:
+                self.send_json(502, {"error": f"{fleet}'s server did not answer: {exc}"})
+                return True
+            self.send_response(answer.status)
+            for key, value in answer.getheaders():
+                if key.lower() not in DROPPED_HEADERS:
+                    self.send_header(key, value)
+            self.close_connection = True
+            self.end_headers()
+            try:
+                while True:
+                    chunk = answer.read1(65536) if method != "HEAD" else b""
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+            except OSError:  # the viewer left, or the fleet's server closed
+                pass
+            finally:
+                upstream.close()
+            return True
+
         def do_GET(self):
-            if self.unknown_host():
+            if self.unknown_host() or self.passed_to_a_fleet("GET"):
                 return
             url = urlsplit(self.path)
             if url.path == "/chat":
@@ -368,7 +438,7 @@ def worker(root: str, bind_ip: str, port: int, policy: str = "open", *hosts: str
                 return
 
         def do_POST(self):
-            if self.unknown_host():
+            if self.unknown_host() or self.passed_to_a_fleet("POST"):
                 return
             route = urlsplit(self.path).path
             if route not in ("/chat", "/chat/preview"):

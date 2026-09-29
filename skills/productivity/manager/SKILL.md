@@ -33,7 +33,7 @@ The manager runs on the coordinator skill's scripts and page. Resolve its direct
 
 1. `python3 <scripts>/fleets.py list` names the fleets being served: each one's name, session, address, directory, what it is doing, its lanes in flight, and its open decisions.
 2. `python3 <scripts>/state.py <dir> init --role manager --project "<this machine, or the programme>" --goal "<what the fleets are landing together>"`.
-3. `python3 <scripts>/serve_dashboard.py <dir>`, and give the user the address. The page shows every coordinator with the way to its page, and one list of what waits on the user across all of them.
+3. `python3 <scripts>/serve_dashboard.py <dir>`, and give the user the address: it is the one address for everything, since each fleet's page is served under it at `f/<fleet>/`, with a switcher in every page's header. The page shows every coordinator with the way to its page, and one list of what waits on the user across all of them.
 4. `ListAgents` names this session. Record it, so coordinators can write to you: `python3 <scripts>/fleets.py name <dir> <session>`.
 5. Arm the chat watch as a background Bash command (`run_in_background: true`): `python3 <scripts>/chat.py <dir> watch --as manager --all --resume --once`. It exits with the first news (a message, or a fleet not reading its chat), which wakes you; handle it and arm the same command again.
 6. Record the landing queue: `milestone landings --title "Landings and deploys"`.

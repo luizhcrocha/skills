@@ -957,3 +957,63 @@ class PolicyChoiceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OneAddressTest(unittest.TestCase):
+    """A manager's server serves every fleet's page at /f/<fleet>/: the page, its chat, its stream."""
+
+    def start(self, root: Path) -> int:
+        port = free_port()
+        proc = subprocess.Popen([sys.executable, "-u", str(SCRIPTS / "serve_dashboard.py"), "--worker", str(root), "127.0.0.1", str(port)],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(lambda: (proc.terminate(), proc.communicate(timeout=10)))
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+                return port
+            except OSError:
+                time.sleep(0.05)
+        self.fail("a worker did not start")
+
+    def setUp(self):
+        os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
+        base = Path(tempfile.mkdtemp())
+        self.fleet, self.manager = base / "infra" / "coordinator", base / "m" / "manager"
+        for root in (self.fleet, self.manager):
+            root.mkdir(parents=True)
+        write_state(self.fleet, [{"id": "a1"}])
+        (self.fleet / "index.html").write_text("<p>infra's page</p>")
+        (self.manager / "state.json").write_text(json.dumps({"role": "manager", "project": "all", "goal": "g", "status": "running",
+                                                             "now": "n", "started": "x", "roadmap": [], "agents": [], "roadblocks": [], "events": []}))
+        fleet_port = self.start(self.fleet)
+        (self.fleet / "server.json").write_text(json.dumps({"port": fleet_port}))
+        chat.fleets._write({"id": "infra", "role": "coordinator", "dir": str(self.fleet), "url": "u", "pid": os.getpid(), "since": "1"})
+        self.port = self.start(self.manager)
+
+    def get(self, path: str, headers: dict | None = None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", path, headers=headers or {})
+        resp = conn.getresponse()
+        return resp.status, resp.getheader("Location"), resp.read()
+
+    def test_the_fleets_page_its_chat_and_its_stream_come_through_the_managers_address(self):
+        self.assertEqual(self.get("/f/infra")[:2], (301, "/f/infra/"))
+        self.assertEqual(self.get("/f/infra/")[2], b"<p>infra's page</p>")
+        self.assertEqual(self.get("/f/nobody/")[0], 404)
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("POST", "/f/infra/chat", body=json.dumps({"text": "status?"}),
+                     headers={"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{self.port}"})
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 201, resp.read())
+        self.assertEqual([m["text"] for m in chat.read(self.fleet)], ["status?"], "stored in the fleet's own chat")
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("POST", "/f/infra/chat", body=b"{}", headers={"Content-Type": "application/json", "Origin": "https://evil.example"})
+        self.assertEqual(conn.getresponse().status, 403, "the manager's own rules come first")
+        stream = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        stream.request("GET", "/f/infra/events")
+        answer = stream.getresponse()
+        self.assertEqual(answer.status, 200)
+        first = answer.fp.readline()
+        self.assertEqual(first, b"event: hello\n", "the fleet's live stream comes through")
+        stream.close()

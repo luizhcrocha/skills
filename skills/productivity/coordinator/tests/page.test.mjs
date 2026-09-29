@@ -388,7 +388,7 @@ test("staleNow: a now-line not said again for 30 minutes reads as stale", () => 
   const at = "2026-09-29T08:00:00-05:00", t = Date.parse(at);
   assert.equal(Core.staleNow(at, t + 29 * 60000), false);
   assert.equal(Core.staleNow(at, t + 31 * 60000), true);
-  assert.equal(Core.staleNow(undefined, t), false, "a state from before now_at claims nothing");
+  assert.equal(Core.staleNow(undefined, t), true, "a line never stamped reads as stale");
 });
 
 test("grillState: follow-ups under what they follow, sent answers until recorded, a reply hands it back", () => {

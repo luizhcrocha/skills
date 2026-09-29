@@ -208,6 +208,26 @@ def cmd_keep(state, args):
     return state
 
 
+NOW_STALE_S = 30 * 60
+
+
+def stale_now(state: dict, args) -> str | None:
+    """What to say when the page's Now line has not been said again for NOW_STALE_S: the user reads it
+    first, and a line that was true this morning misleads all day."""
+    if not state or getattr(args, "now", None) is not None or args.cmd == "init":
+        return None
+    said = state.get("now_at")
+    try:
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(said)).total_seconds() if said else None
+    except ValueError:
+        age = None
+    if age is not None and age < NOW_STALE_S:
+        return None
+    when = f"said {int(age // 60)} min ago" if age is not None else "never stamped"
+    return (f"state: the page's Now line ({when}) reads: \"{str(state.get('now', ''))[:160]}\". If it is no longer what is "
+            f"happening, say it again: `state.py <dir> set --now \"...\"` (the same words also restamp it).")
+
+
 def stale_rows(state: dict) -> str | None:
     """What to say when worker rows still read as live while the fleet itself is not."""
     if not state or state.get("status") not in ("paused", "done"):
@@ -762,7 +782,7 @@ def main(argv: list[str]) -> None:
 
     handler = globals()[f"cmd_{args.cmd}"]
     result = handler(state, args)
-    for warning in (chat.deaf_warning(root) if args.cmd != "init" else None, stale_rows(result or state)):
+    for warning in (chat.deaf_warning(root) if args.cmd != "init" else None, stale_rows(result or state), stale_now(result or state, args)):
         if warning:
             sys.stderr.write(warning + "\n")
     if result is None:

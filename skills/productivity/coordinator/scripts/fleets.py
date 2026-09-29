@@ -252,7 +252,11 @@ def view(state: dict, root) -> dict:
     mine = [x for x in served.discovered() if me and x["fleet"] == me["id"]]
     found = manager()
     state = {**state, "links": links, "found": _unlisted(mine, links)}
-    return {**state, "manager": {"id": found["id"], "url": found["url"], "session": found.get("session")}} if found else state
+    if not found:
+        return state
+    return {**state, "manager": {"id": found["id"], "url": found["url"], "session": found.get("session")},
+            "fleet": me["id"] if me else None,
+            "fleets": [e["id"] for e in live() if e["role"] != "manager"]}  # the switcher's: every page is one of the manager's
 
 
 def _unlisted(found: list[dict], links: list[dict]) -> list[dict]:

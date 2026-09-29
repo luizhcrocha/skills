@@ -108,7 +108,7 @@
   .shell { min-height: 100dvh; }
   .main { min-width: 0; container: main / inline-size; }
   .masthead { position: sticky; top: 0; z-index: 30; background: var(--bg); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top, 0px); }
-  .top { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 10px; min-height: var(--top-h); padding-inline: var(--gutter); box-sizing: border-box; }
+  .top { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; align-items: center; gap: 10px; min-height: var(--top-h); padding-inline: var(--gutter); box-sizing: border-box; }
   .top-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .top h1 { font-size: 1.1875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mark { width: 30px; height: 30px; flex: none; border-radius: 7px; overflow: hidden; }
@@ -548,6 +548,7 @@
   .reply-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .reply .icon-btn { width: var(--tap); height: var(--tap); color: inherit; font-size: 1rem; }
   .deaf-line { color: var(--you); font-weight: 600; }
+  .switch select { max-width: 42vw; min-height: var(--tap); padding: 0 28px 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font: inherit; font-size: var(--fs-s); font-weight: 600; text-overflow: ellipsis; }
   dialog.finder { width: min(680px, calc(100vw - 32px)); margin-top: 10vh; }
   .finder-in { display: flex; flex-direction: column; max-height: min(75dvh, 640px); }
   #find-q { flex: none; margin: 0; padding: 14px 16px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--text); font: inherit; font-size: 1.0625rem; outline: none; }
@@ -633,6 +634,7 @@
   <div class="masthead" id="masthead">
     <header class="top">
       <div class="top-name"><span class="mark" id="top-mark" aria-hidden="true"></span><h1 id="top-project"></h1><span id="top-status"></span></div>
+      <label class="switch" id="switch" hidden><span class="vh">Go to</span><select aria-label="Go to the manager or a fleet"></select></label>
       <a class="up" id="top-manager" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6 11.5 12 5.5l6 6"/></svg>Manager</a>
       <button class="bell" id="find-open" type="button" aria-label="Search (Ctrl+K)" title="Search (Ctrl+K)" aria-haspopup="dialog"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></button>
       <button class="bell" id="bell" type="button" aria-label="Notifications" aria-expanded="false" aria-controls="panel" title="Notifications">
@@ -1159,7 +1161,7 @@ var FleetCore = (function () {
     return { on: v.on, seen: v.seen, unread: Number.isInteger(v.unread) ? v.unread : 0, since: typeof v.since === "string" ? v.since : "" };
   }
   /* Whether a now-line said at `at` is old enough to read as stale: 30 minutes without being said again. */
-  const staleNow = (at, now) => typeof at === "string" && at !== "" && now - Date.parse(at) > 30 * 60 * 1000;
+  const staleNow = (at, now) => typeof at !== "string" || at === "" || isNaN(Date.parse(at)) || now - Date.parse(at) > 30 * 60 * 1000;
   /* Whether the user's message `m` is still unread by the host: after the last one its watch printed. */
   const unreadBy = (hearing, m) => hearing !== null && m.from === "user" && m.id > hearing.seen;
 
@@ -1290,7 +1292,10 @@ var FleetCore = (function () {
 
   /* Every preference this viewer keeps (filters, expanded rows, notification settings, the docked
      chat's state, the composer's draft) goes through this one store. */
-  const store = Core.prefsOf((() => { try { return window.localStorage; } catch { return null; } })(), "fleet:");
+  /* Under the manager's address every fleet's page shares one browser storage: each keeps its own
+     under its path (/f/<fleet>/). A page at its own address keeps the plain prefix it always had. */
+  const UNDER_HUB = /^\/f\/[^/]+\//.test(location.pathname);
+  const store = Core.prefsOf((() => { try { return window.localStorage; } catch { return null; } })(), UNDER_HUB ? "fleet:" + location.pathname : "fleet:");
   const media = (q) => window.matchMedia ? window.matchMedia(q) : { matches: false, addEventListener() {} };
   const PHONE = media("(max-width: 759.98px)");
   const DOCKED = media("(min-width: 1100px)");
@@ -1371,7 +1376,8 @@ var FleetCore = (function () {
     $("top-project").textContent = STATE.project;
     paint($("top-status"), pill(STATE.status));
     $("top-manager").hidden = !STATE.manager;
-    if (STATE.manager) $("top-manager").href = STATE.manager.url;
+    if (STATE.manager) $("top-manager").href = hubRoot();
+    renderSwitch();
     $("tab-fleet").textContent = MANAGED() ? "Fleets" : "Fleet";
     $("h-totals").textContent = MANAGED() ? "The fleets" : "The fleet";
     const msgs = [...chat.messages.values()], every = everyDecision();
@@ -1382,7 +1388,7 @@ var FleetCore = (function () {
     paint($("lead"), `<h2 class="lead-line">${esc(lead.headline)}</h2>
       ${lead.detail ? `<p class="lead-detail">${esc(lead.detail)}</p>` : ""}
       <p class="goal">${esc(STATE.goal)}</p>
-      <p class="now${Core.staleNow(STATE.now_at, NOW) ? " stale" : ""}"><b>Now</b>${esc(STATE.now)}${STATE.now_at ? ` <span class="said">said ${esc(ago(STATE.now_at))}</span>` : ""}</p>
+      <p class="now${Core.staleNow(STATE.now_at, NOW) ? " stale" : ""}"><b>Now</b>${esc(STATE.now)}${STATE.now_at ? ` <span class="said">said ${esc(ago(STATE.now_at))}</span>` : ` <span class="said">not said again since ${esc(ago(STATE.started))}</span>`}</p>
       <p class="meta">Started ${esc(ago(STATE.started))}, updated ${esc(ago(STATE.updated))}.</p>`);
     $("foot-updated").textContent = `State updated ${new Date(STATE.updated).toLocaleString()}`;
   }
@@ -2197,7 +2203,24 @@ img,svg,video,canvas{max-width:100%;height:auto}
     if (t && !$("worker").contains(t)) { e.preventDefault(); openWorker(t.dataset.agent); }
   });
 
+  /* Where the manager's page and the fleets' pages live, so moving between them stays on one address:
+     the manager's root, and /f/<fleet>/ under it. Null when there is no manager. */
+  const hubRoot = () => UNDER_HUB || STATE.role === "manager" ? "/" : STATE.manager ? STATE.manager.url : null;
+  const fleetPage = (id) => hubRoot() + "f/" + encodeURIComponent(id) + "/";
+  function renderSwitch() {
+    const root = hubRoot(), ids = STATE.role === "manager" ? STATE.coordinators.map((c) => c.id) : (STATE.fleets || []);
+    const el = $("switch");
+    el.hidden = !root || !ids.length;
+    if (el.hidden) return;
+    const here = STATE.role === "manager" ? "" : UNDER_HUB ? decodeURIComponent(location.pathname.split("/")[2]) : String(STATE.fleet || "");
+    const options = [`<option value="${esc(root)}"${STATE.role === "manager" ? " selected" : ""}>Manager</option>`]
+      .concat(ids.map((id) => `<option value="${esc(fleetPage(id))}"${id === here ? " selected" : ""}>${esc(id)}</option>`));
+    if (STATE.role !== "manager" && !here) options.push(`<option value="" selected>${esc(STATE.project)}</option>`);
+    paint(el.querySelector("select"), options.join(""));
+  }
+  $("switch").addEventListener("change", (e) => { if (e.target.value) location.href = e.target.value; });
   function applyState(state) {
+    if (state.role === "manager") for (const c of state.coordinators) c.url = "f/" + encodeURIComponent(c.id) + "/";
     STATE = state; NOW = Date.now(); HOST = Core.hostOf(STATE);
     people = STATE.agents.concat(STATE.coordinators.map((c) => ({ id: c.id, name: c.id, status: c.status, coordinator: c })));
     agentById = Object.fromEntries(people.map((a) => [a.id, a]));
@@ -2656,7 +2679,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     finder.close();
     const g = r.go;
     if (g.kind === "decision") location.hash = "#decision/" + g.id;
-    else if (g.kind === "url" && g.url) { if (newTab || /^https?:/.test(g.url)) window.open(g.url, "_blank", "noopener"); }
+    else if (g.kind === "url" && g.url) { if (newTab || /^https?:/.test(g.url)) window.open(g.url, "_blank", "noopener"); else location.href = g.url; }
     else if (g.kind === "worker") { location.hash = "#fleet"; openWorker(g.id); }
     else if (g.kind === "view") location.hash = g.hash;
     else if (g.kind === "message") {
