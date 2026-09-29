@@ -178,6 +178,7 @@ def summary(entry: dict) -> dict:
     for a in rows("agents"):
         workers[str(a.get("status"))] = workers.get(str(a.get("status")), 0) + 1
     running = [a for a in rows("agents") if a.get("status") in ("running", "blocked", "queued")]
+    said = chat.read(entry["dir"])
     return {
         "id": entry["id"], "url": entry["url"], "session": entry.get("session"), "dir": entry["dir"],
         "name": entry["id"], "project": str((state or {}).get("project") or ""), "goal": str((state or {}).get("goal") or ""),
@@ -188,9 +189,11 @@ def summary(entry: dict) -> dict:
         "now_at": (state or {}).get("now_at"),
         "lanes": sorted({str(lane) for a in running for lane in a.get("lane") or []}),
         "roadblocks": sum(1 for r in rows("roadblocks") if not r.get("resolved")),
-        "decisions": [{"id": d.get("id"), "kind": d.get("kind", "decision"), "title": d.get("title"), "question": d.get("question"),
+        "decisions": [{"id": d.get("id"), "ref": d.get("ref"), "kind": d.get("kind", "decision"), "title": d.get("title"), "question": d.get("question"),
                        "why": d.get("why"), "blocking": d.get("blocking") is True, "asks": d.get("asks") or "user",
-                       "opened": d.get("opened"), "revised": d.get("revised")}
+                       "opened": d.get("opened"), "revised": d.get("revised"),
+                       "answered": any(m.get("decision") == d["id"] and m["from"] == "user" and str(m["at"]) >= str(d.get("revised") or d.get("opened") or "")
+                                       and not any(r.get("re") == m["id"] and r["from"] != "user" for r in said) for m in said)}
                       for d in rows("decisions") if d.get("status") == "open" and isinstance(d.get("id"), str)],
     }
 
@@ -243,7 +246,7 @@ def cmd_list() -> None:
             print(f"    tokens: its workers {s['tokens']:,}; the {e['role']} itself {s['spent']['output']:,} written, {s['spent']['input']:,} read")
         for d in s["decisions"]:
             marks = ", ".join(filter(None, [d["kind"], "for the manager" if d["asks"] == "manager" else "for the user", "blocks work" if d["blocking"] else ""]))
-            print(f"    {d['id']} [{marks}] {d['title']}")
+            print(f"    {d.get('ref') or ''} {d['id']} [{marks}] {d['title']}".replace("     ", "    "))
 
 
 def cmd_show(fleet: str) -> None:

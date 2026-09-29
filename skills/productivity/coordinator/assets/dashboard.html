@@ -107,7 +107,7 @@
   .shell { min-height: 100dvh; }
   .main { min-width: 0; container: main / inline-size; }
   .masthead { position: sticky; top: 0; z-index: 30; background: var(--bg); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top, 0px); }
-  .top { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-height: var(--top-h); padding-inline: var(--gutter); box-sizing: border-box; }
+  .top { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 10px; min-height: var(--top-h); padding-inline: var(--gutter); box-sizing: border-box; }
   .top-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .top h1 { font-size: 1.1875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mark { width: 30px; height: 30px; flex: none; border-radius: 7px; overflow: hidden; }
@@ -542,9 +542,25 @@
   .reply-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .reply .icon-btn { width: var(--tap); height: var(--tap); color: inherit; font-size: 1rem; }
   .deaf-line { color: var(--you); font-weight: 600; }
+  dialog.finder { width: min(680px, calc(100vw - 32px)); margin-top: 10vh; }
+  .finder-in { display: flex; flex-direction: column; max-height: min(75dvh, 640px); }
+  #find-q { flex: none; margin: 0; padding: 14px 16px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--text); font: inherit; font-size: 1.0625rem; outline: none; }
+  .find-list { list-style: none; margin: 0; padding: 4px 0 8px; overflow: auto; }
+  .find-group { padding: 10px 16px 4px; font-size: var(--fs-xs); font-weight: 700; color: var(--muted); }
+  .find-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 8px 16px; cursor: pointer; border-left: 3px solid transparent; }
+  .find-row[aria-selected="true"] { background: var(--accent-soft); border-left-color: var(--accent); }
+  .find-row .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .find-row .s { grid-column: 1; color: var(--muted); font-size: var(--fs-s); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .find-row .h { grid-row: 1; grid-column: 2; color: var(--muted); font-size: var(--fs-xs); }
+  .find-empty { padding: 16px; color: var(--muted); }
+  .find-foot { flex: none; margin: 0; padding: 8px 16px; border-top: 1px solid var(--line); font-size: var(--fs-xs); }
+  .find-foot kbd { font: inherit; font-size: 0.9em; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; margin: 0 2px; }
+  @media (max-width: 759.98px) { dialog.finder { margin: 0; width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; } .finder-in { max-height: 100dvh; height: 100%; } .find-foot { display: none; } }
+  .ref { font-family: var(--mono, "JetBrains Mono", monospace); font-size: 0.82em; font-weight: 700; color: var(--muted); letter-spacing: 0; }
   .seltool { position: fixed; z-index: 60; display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--text); box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 30%, transparent); }
   .seltool button { min-height: var(--tap); padding: 0 12px; border: 0; border-radius: 7px; background: none; color: var(--bg); font: inherit; font-weight: 600; font-size: var(--fs-s); cursor: pointer; }
   .seltool button:hover, .seltool button:focus-visible { background: color-mix(in srgb, var(--bg) 18%, transparent); }
+  .msg.found { outline: 2px solid var(--accent); outline-offset: 2px; }
   .msg-quote { margin: 4px 0 6px; padding: 4px 10px; border-left: 3px solid var(--line); color: var(--muted); font-size: var(--fs-s); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9.5em; overflow: auto; }
   .msg-quote .from { display: block; font-size: var(--fs-xs); font-weight: 600; }
   .quote-chip .reply-text { white-space: pre-wrap; max-height: 4.5em; overflow: auto; }
@@ -609,6 +625,7 @@
     <header class="top">
       <div class="top-name"><span class="mark" id="top-mark" aria-hidden="true"></span><h1 id="top-project"></h1><span id="top-status"></span></div>
       <a class="up" id="top-manager" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6 11.5 12 5.5l6 6"/></svg>Manager</a>
+      <button class="bell" id="find-open" type="button" aria-label="Search (Ctrl+K)" title="Search (Ctrl+K)" aria-haspopup="dialog"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></button>
       <button class="bell" id="bell" type="button" aria-label="Notifications" aria-expanded="false" aria-controls="panel" title="Notifications">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17V11a6 6 0 0 1 12 0v6l1.5 2h-15z"/><path d="M10 21h4"/></svg>
         <span class="badge" id="bell-badge" hidden>0</span>
@@ -777,6 +794,15 @@
   <button type="button" data-sel="side">Side chat</button>
 </div>
 
+<dialog class="sheet finder" id="finder" aria-label="Search">
+  <div class="finder-in">
+    <label class="vh" for="find-q">Search</label>
+    <input id="find-q" type="search" placeholder="Search: D3, a title, a worker… (d, l, p, w, c narrow it)" autocomplete="off" spellcheck="false" role="combobox" aria-controls="find-list" aria-expanded="true">
+    <ul class="find-list" id="find-list" role="listbox" aria-label="Results"></ul>
+    <p class="find-foot muted"><kbd>↑</kbd><kbd>↓</kbd> move <kbd>↵</kbd> open <kbd>Ctrl</kbd>+<kbd>↵</kbd> new tab <kbd>Esc</kbd> close</p>
+  </div>
+</dialog>
+
 <dialog class="sheet" id="worker" aria-labelledby="worker-name">
   <div class="sheet-in" id="worker-body"></div>
 </dialog>
@@ -908,6 +934,46 @@ var FleetCore = (function () {
   function excerptOf(text) {
     const t = String(text ?? "").replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim();
     return t.length < 2 ? "" : t.slice(0, QUOTE_MAX);
+  }
+
+  /* The finder's (Ctrl/⌘K) rows: everything the page holds that one would look up, each with its group,
+     its number when it has one, a title, a second line, a hint, and where it leads. */
+  const FIND_GROUPS = [["decisions", "Decisions and actions"], ["links", "Links"], ["coordinators", "Coordinators"], ["roadblocks", "Roadblocks"],
+    ["plan", "Plan"], ["workers", "Workers"], ["chat", "Chat"], ["log", "Log"]];
+  const FIND_PREFIX = { d: "decisions", l: "links", r: "roadblocks", p: "plan", w: "workers", c: "chat", f: "coordinators" };
+  function findRows(state, messages) {
+    const rows = [], one = (t) => String(t ?? "").replace(/\s+/g, " ").trim();
+    for (const d of state.decisions || []) rows.push({ group: "decisions", ref: d.ref || "", title: one(d.title), sub: one(d.status === "open" ? d.question : (d.answer || d.resolution || d.status)),
+      hint: d.status === "open" ? "open" : d.status, go: { kind: "decision", id: d.id } });
+    for (const c of state.coordinators || []) for (const d of c.decisions || []) rows.push({ group: "decisions", ref: d.ref || "", title: one(d.title), sub: one(d.question),
+      hint: "in " + c.id, go: { kind: "url", url: c.url ? c.url + "#decision/" + encodeURIComponent(d.id) : "" } });
+    for (const l of state.links || []) rows.push({ group: "links", ref: l.ref || "", title: one(l.title), sub: one(l.url), hint: (l.kind === "page" ? "page" : "dev") + (l.up ? "" : ", down"), go: { kind: "url", url: l.url } });
+    for (const c of state.coordinators || []) rows.push({ group: "coordinators", ref: "", title: c.id, sub: one(c.now), hint: c.status, go: { kind: "url", url: c.url } });
+    for (const r of state.roadblocks || []) rows.push({ group: "roadblocks", ref: r.ref || "", title: one(r.title), sub: one(r.detail), hint: r.resolved ? "resolved" : "open", go: { kind: "view", hash: "#roadblocks" } });
+    for (const m of state.roadmap || []) for (const st of m.steps || []) rows.push({ group: "plan", ref: st.id, title: one(st.title), sub: one(m.title), hint: st.status || "", go: { kind: "view", hash: "#plan" } });
+    for (const a of state.agents || []) rows.push({ group: "workers", ref: a.id, title: one(a.name), sub: one(a.task), hint: a.status || "", go: { kind: "worker", id: a.id } });
+    for (const m of [...(messages || [])].sort((a, b) => b.id - a.id)) rows.push({ group: "chat", ref: "#" + m.id, title: one(m.text).slice(0, 140), sub: one(m.from === "user" ? m.author || "you" : m.from), hint: m.side ? "side chat" : "", go: { kind: "message", id: m.id, side: m.side } });
+    for (const e of [...(state.events || [])].slice(-300).reverse()) rows.push({ group: "log", ref: "", title: one(e.text).slice(0, 140), sub: one(e.kind + (e.agent ? ", " + e.agent : "")), hint: "", go: { kind: "view", hash: "#log" } });
+    return rows;
+  }
+  /* The rows a query finds, best first: "d fix" looks in decisions only, "D3" finds that number
+     first, and every word must appear in the title, the second line or the number. */
+  function findRank(rows, query) {
+    let q = String(query ?? "").trim(), only = null;
+    const pre = /^([a-z])\s+(.*)$/i.exec(q);
+    if (pre && FIND_PREFIX[pre[1].toLowerCase()]) { only = FIND_PREFIX[pre[1].toLowerCase()]; q = pre[2]; }
+    else if (pre === null && FIND_PREFIX[q.toLowerCase()] && q.length === 1) { only = FIND_PREFIX[q.toLowerCase()]; q = ""; }
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const scored = [];
+    rows.forEach((r, i) => {
+      if (only && r.group !== only) return;
+      const ref = r.ref.toLowerCase(), title = r.title.toLowerCase(), hay = ref + " " + title + " " + r.sub.toLowerCase();
+      if (!words.every((w) => hay.includes(w))) return;
+      const exact = words.length > 0 && ref === q.toLowerCase();
+      const score = !words.length ? 0 : (title.startsWith(words[0]) ? 20 : 0) + words.filter((w) => title.includes(w)).length * 5;
+      scored.push({ r, exact, group: FIND_GROUPS.findIndex(([key]) => key === r.group), score, i });
+    });
+    return scored.sort((a, b) => (b.exact - a.exact) || (a.group - b.group) || (b.score - a.score) || (a.i - b.i)).map((x) => x.r);
   }
 
   /* How many messages to the user arrived after the last one read. */
@@ -1113,6 +1179,16 @@ var FleetCore = (function () {
     return { view: "decisions", decision: null, anchor: null };
   }
 
+  /* Whether a decision still waits on the viewer: open, theirs (not the manager's), and not answered
+     already. An answer sent counts at once, before the fleet records it, unless the fleet replied to
+     it (a follow-up hands it back); a fleet's decision on the manager's page says so itself. */
+  function awaiting(d, messages) {
+    if (!d || d.status !== "open" || d.asks === "manager" || d.answered === true) return false;
+    if (d.kind === "grill") return grillState(d, messages).toAnswer > 0;
+    const pending = pendingAnswer(d, messages);
+    return !pending || pending.replies.length > 0;
+  }
+
   /* What waits on the user, as the sentence the page opens with. */
   function leadOf(decisions) {
     const open = (decisions || []).filter((d) => d.status === "open" && d.asks !== "manager"), holding = open.filter((d) => d.blocking).length;
@@ -1160,7 +1236,7 @@ var FleetCore = (function () {
   }
 
   return { keyOf, hostOf, rosterOf, usageOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf, toastOf,
-    decisionRows, decisionRoute, pendingAnswer, grillState, grillAnswerText, sidesOf, excerptOf, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, staleNow, viewOf, leadOf, VIEWS };
+    decisionRows, decisionRoute, pendingAnswer, awaiting, findRows, findRank, FIND_GROUPS, FIND_PREFIX, grillState, grillAnswerText, sidesOf, excerptOf, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, staleNow, viewOf, leadOf, VIEWS };
 })();
 </script>
 <script>
@@ -1215,6 +1291,8 @@ var FleetCore = (function () {
   const paint = (el, html) => { if (shownHtml.get(el) === html) return false; el.innerHTML = html; shownHtml.set(el, html); return true; };
   const pill = (s) => s ? `<span class="pill ${esc(s)}">${esc(s)}</span>` : "";
   const pillAs = (cls, text) => `<span class="pill ${cls}">${esc(text)}</span>`;
+  /* The number a row goes by (D3, A1, L2, R1), to refer to it in the chat and in the session. */
+  const refOf = (x) => x && typeof x.ref === "string" && x.ref ? `<span class="ref">${esc(x.ref)}</span> ` : "";
 
   /* The fleet mark: one hub, three workers. Also the favicon, which carries the unread count. */
   const mark = (badge, critical) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
@@ -1255,7 +1333,10 @@ var FleetCore = (function () {
     if (STATE.manager) $("top-manager").href = STATE.manager.url;
     $("tab-fleet").textContent = MANAGED() ? "Fleets" : "Fleet";
     $("h-totals").textContent = MANAGED() ? "The fleets" : "The fleet";
-    const lead = Core.leadOf(everyDecision());
+    const msgs = [...chat.messages.values()], every = everyDecision();
+    const lead = Core.leadOf(every.filter((d) => Core.awaiting(d, msgs)));
+    const sent = every.filter((d) => d.status === "open" && d.asks !== "manager" && !Core.awaiting(d, msgs)).length;
+    if (sent && lead.tone === "clear") lead.detail = `${sent === 1 ? "Your answer waits" : sent + " answers wait"} to be recorded.`;
     $("lead").className = "lead " + lead.tone;
     paint($("lead"), `<h2 class="lead-line">${esc(lead.headline)}</h2>
       ${lead.detail ? `<p class="lead-detail">${esc(lead.detail)}</p>` : ""}
@@ -1325,7 +1406,7 @@ var FleetCore = (function () {
      manager's page every fleet's; then what the machine serves that nobody named. */
   function renderLinks() {
     const row = (l) => `<div class="block link-row ${l.up ? "" : "down"}">
-        <div class="block-head"><a class="link-title" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title)}</a>${pillAs(l.up ? "running" : "stopped", l.up ? "up" : "down")}${MANAGED() && l.fleet ? pillAs("plain", l.fleet) : ""}</div>
+        <div class="block-head">${refOf(l)}<a class="link-title" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title)}</a>${pillAs(l.up ? "running" : "stopped", l.up ? "up" : "down")}${MANAGED() && l.fleet ? pillAs("plain", l.fleet) : ""}</div>
         <p class="meta lane">${esc(l.url)}</p>
         ${l.note ? `<p class="detail">${esc(l.note)}</p>` : ""}
         ${l.decision && decisionById(l.decision) ? `<a class="block-link" href="#decision/${esc(l.decision)}">For: ${esc(decisionById(l.decision).title)}</a>` : ""}
@@ -1353,7 +1434,7 @@ var FleetCore = (function () {
       const title = a ? `<button type="button" class="block-title" data-agent="${esc(r.agent)}">${esc(r.title)}</button>` : `<b>${esc(r.title)}</b>`;
       const ask = !r.resolved && r.decision && decisionById(r.decision);
       return `<div class="block ${r.resolved ? "resolved" : esc(r.severity)}">
-        <div class="block-head">${title}${r.resolved ? pill("done") : pill(r.severity)}</div>
+        <div class="block-head">${refOf(r)}${title}${r.resolved ? pill("done") : pill(r.severity)}</div>
         <p class="detail">${esc(r.detail)}</p>
         <p class="needs muted">${r.resolved ? "Resolved" : "Needs <b>" + esc(r.needs) + "</b>"}, ${esc(r.agent ? nameOf(r.agent) : HOST)}, since ${esc(clock(r.since))}</p>
         ${ask ? `<a class="block-link" href="#decision/${esc(ask.id)}">Decide: ${esc(ask.title)}</a>` : ""}
@@ -1370,7 +1451,7 @@ var FleetCore = (function () {
      answered on that fleet's page. */
   const everyDecision = () => STATE.decisions.concat(STATE.coordinators.flatMap((c) => c.decisions.map((d) =>
     ({ ...d, id: c.id + "/" + d.id, fleet: c.id, href: c.url ? c.url + "#decision/" + encodeURIComponent(d.id) : "" }))));
-  const openDecisions = () => everyDecision().filter((d) => d.status === "open" && d.asks !== "manager");
+  const openDecisions = () => { const msgs = [...chat.messages.values()]; return everyDecision().filter((d) => Core.awaiting(d, msgs)); };
   const revisionOf = (d) => d.revised || d.opened;
   const closedWords = (d) => d.status === "decided" ? `Decided: ${d.answer || ""}` : `Withdrawn: ${d.resolution || ""}`;
   const grillPill = (d) => { const g = Core.grillState(d, chat.messages.values());
@@ -1388,7 +1469,7 @@ var FleetCore = (function () {
     paint($("decision-list"), rows.length ? rows.map(({ item: d, mark }) => {
       const open = d.status === "open", waits = open && d.asks !== "manager";
       return `<a class="ask ${waits ? "open" : "closed"}${waits && d.blocking ? " blocking" : ""}" href="${esc(d.href || "#decision/" + d.id)}">
-        <span class="ask-head"><b>${esc(d.title)}</b>${statePill(d, open && Core.pendingAnswer(d, messages))}${mark ? pill(mark) : ""}${pillAs("plain", KIND_WORDS[d.kind] || d.kind)}${d.fleet ? pillAs("plain", "in " + d.fleet) : ""}</span>
+        <span class="ask-head"><b>${refOf(d)}${esc(d.title)}</b>${statePill(d, open && Core.pendingAnswer(d, messages))}${mark ? pill(mark) : ""}${pillAs("plain", KIND_WORDS[d.kind] || d.kind)}${d.fleet ? pillAs("plain", "in " + d.fleet) : ""}</span>
         <span class="detail">${esc(open ? d.question : closedWords(d))}</span>
         <span class="meta">${open
           ? `${d.why ? esc((d.blocking ? "Blocks: " : "Meanwhile: ") + d.why) + ". " : ""}Asked ${esc(ago(d.opened))}${d.revised ? ", changed " + esc(ago(d.revised)) : ""}`
@@ -1447,7 +1528,7 @@ var FleetCore = (function () {
     paint($("dv-info"), `
       <header class="dv-head">
         <div class="dv-pills">${statePill(d, pending)}${pillAs("plain", KIND_WORDS[d.kind] || d.kind)}</div>
-        <h1>${esc(d.title)}</h1>
+        <h1>${refOf(d)}${esc(d.title)}</h1>
         <p class="dv-meta">${d.agent && agentById[d.agent] ? "For " + whoButton(d.agent) + ", asked" : "Asked"} ${esc(ago(d.opened))}${d.revised ? ", changed " + esc(ago(d.revised)) : ""}${before ? `. Replaces <a href="#decision/${esc(before.id)}">${esc(before.title)}</a>` : ""}</p>
       </header>
       ${open ? "" : `<div class="note ${esc(d.status)}"><h3>${d.status === "decided" ? "Decided" : "Withdrawn, no answer needed"}</h3>${d.status === "decided" ? `<p><b>${esc(d.answer)}</b></p>` : ""}<p>${esc(d.resolution)}</p><span class="dv-meta">${esc(clock(d.closed))}, ${esc(ago(d.closed))}</span></div>`}
@@ -1787,7 +1868,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     </li>`).join("") : '<li><span></span><span class="muted">Nothing logged yet.</span></li>');
   }
 
-  const aboutLink = (e) => e.decision && decisionById(e.decision) ? ` <a href="#decision/${esc(e.decision)}">Open</a>` : "";
+  const aboutLink = (e) => e.decision && decisionById(e.decision) ? ` <a href="#decision/${esc(e.decision)}">Open ${esc(decisionById(e.decision).ref || "")}</a>` : "";
 
   function render() { const rows = visibleAgents(); renderFleet(rows); renderChart(rows); renderLog(rows); }
 
@@ -2192,7 +2273,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     slot(el, "reply", canReply ? `<button type="button" class="reply-btn" data-reply="${m.id}" aria-label="Reply to ${esc(s.label)}">Reply</button>` : "");
     slot(el, "re", parent ? `<p class="msg-re">Answering ${esc(senderOf(parent).label)}</p>` : "");
     const about = m.decision && decisionById(m.decision);
-    slot(el, "about", m.decision ? `<p class="msg-re">About ${about ? `<a href="#decision/${esc(m.decision)}">${esc(about.title)}</a>` : esc(m.decision)}</p>` : "");
+    slot(el, "about", m.decision ? `<p class="msg-re">About ${about ? `<a href="#decision/${esc(m.decision)}">${refOf(about)}${esc(about.title)}</a>` : esc(m.decision)}</p>` : "");
     slot(el, "quote", m.quote ? `<blockquote class="msg-quote">${m.quote.from ? `<span class="from">From ${esc(m.quote.from)}</span>` : ""}${esc(m.quote.text)}</blockquote>` : "");
     slot(el, "text", `<p class="msg-text">${partsHtml(m)}</p>`);
     slot(el, "wait", m.from !== "user" ? "" : Core.unreadBy(STATE.hearing, m) && entry.waiting.length
@@ -2449,6 +2530,57 @@ img,svg,video,canvas{max-width:100%;height:auto}
       chat.sending = false; refreshComposer(); renderChat();
     }
   }
+
+  /* ---------------------------------------------------------------- the finder (Ctrl/⌘K) */
+
+  /* One box to find anything the page holds and go there: a decision's page, a link in a new tab, a
+     worker's sheet, a message in the chat, a view. Up and down keep the highlight in view; Enter
+     opens, with Ctrl or ⌘ a link in a new tab. */
+  const finder = $("finder"), findQ = $("find-q"), findList = $("find-list");
+  let found = [], foundAt = 0;
+  function paintFinder() {
+    const rows = Core.findRank(Core.findRows(STATE, chat.messages.values()), findQ.value);
+    const perGroup = new Map();
+    found = rows.filter((r) => { const n = perGroup.get(r.group) || 0; perGroup.set(r.group, n + 1); return findQ.value.trim() ? n < 12 : n < 5; });
+    foundAt = Math.min(foundAt, Math.max(0, found.length - 1));
+    if (!found.length) { findList.innerHTML = `<li class="find-empty">${findQ.value.trim() ? "Nothing matches." : "Nothing here yet."}</li>`; return; }
+    let html = "", last = "";
+    found.forEach((r, i) => {
+      if (r.group !== last) { last = r.group; html += `<li class="find-group" role="presentation">${esc(Core.FIND_GROUPS.find(([k]) => k === r.group)[1])}</li>`; }
+      html += `<li class="find-row" role="option" id="find-${i}" data-i="${i}" aria-selected="${i === foundAt}"><span class="t">${r.ref ? `<span class="ref">${esc(r.ref)}</span> ` : ""}${esc(r.title)}</span><span class="h">${esc(r.hint)}</span><span class="s">${esc(r.sub)}</span></li>`;
+    });
+    findList.innerHTML = html;
+    findQ.setAttribute("aria-activedescendant", "find-" + foundAt);
+    $("find-" + foundAt)?.scrollIntoView({ block: "nearest" });
+  }
+  function openFinder() {
+    if (finder.open) { findQ.select(); return; }
+    findQ.value = ""; foundAt = 0; paintFinder(); finder.showModal(); findQ.focus();
+  }
+  function go(r, newTab) {
+    finder.close();
+    const g = r.go;
+    if (g.kind === "decision") location.hash = "#decision/" + g.id;
+    else if (g.kind === "url" && g.url) { if (newTab || /^https?:/.test(g.url)) window.open(g.url, "_blank", "noopener"); }
+    else if (g.kind === "worker") { location.hash = "#fleet"; openWorker(g.id); }
+    else if (g.kind === "view") location.hash = g.hash;
+    else if (g.kind === "message") {
+      chat.focus = g.side ?? null; chat.quote = null; renderChat(); refreshComposer(); openChat();
+      const el = $("chat-log").querySelector(`article.msg[data-id="${g.id}"]`);
+      if (el) { el.scrollIntoView({ block: "center" }); el.classList.add("found"); setTimeout(() => el.classList.remove("found"), 1600); }
+    }
+  }
+  findQ.addEventListener("input", () => { foundAt = 0; paintFinder(); });
+  findQ.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); foundAt = (foundAt + (e.key === "ArrowDown" ? 1 : -1) + found.length) % Math.max(1, found.length); paintFinder(); }
+    else if (e.key === "Enter" && found[foundAt]) { e.preventDefault(); go(found[foundAt], e.ctrlKey || e.metaKey); }
+  });
+  findList.addEventListener("click", (e) => { const row = e.target.closest(".find-row"); if (row) go(found[Number(row.dataset.i)], e.ctrlKey || e.metaKey); });
+  finder.addEventListener("click", (e) => { if (e.target === finder) finder.close(); });  // a click on the backdrop
+  $("find-open").addEventListener("click", openFinder);
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") { e.preventDefault(); openFinder(); }
+  });
 
   /* ---------------------------------------------------------------- selected text */
 

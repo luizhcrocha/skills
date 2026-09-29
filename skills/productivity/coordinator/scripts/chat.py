@@ -305,6 +305,7 @@ def _render(root, messages: list[dict]) -> list[str]:
     """Each message as its one printed line: `#12 user (login) -> a1 (notes-impl) [d1]: text [re #9]`,
     the `[d1]` on a message about that decision."""
     names = {a["id"]: a.get("name", a["id"]) for a in _members(_agents(root))}
+    refs = {d.get("id"): d.get("ref") for d in _state(root).get("decisions", []) if isinstance(d, dict) and d.get("ref")}
 
     def label(id_: str, extra=None) -> str:
         extra = extra or names.get(id_, id_)
@@ -313,7 +314,7 @@ def _render(root, messages: list[dict]) -> list[str]:
     return [
         f"#{m['id']} {label(m['from'], m.get('author') if m['from'] == 'user' else None)}"
         f" -> {', '.join(map(label, m['to']))}"
-        + (f" [{_one_line(m['decision'])}]" if m.get("decision") else "")
+        + (f" [{_one_line((refs.get(m['decision']) + ' ') if refs.get(m['decision']) else '')}{_one_line(m['decision'])}]" if m.get("decision") else "")
         + (f" [side chat #{m['side']}]" if m.get("side") else "")
         + (f" (quoting{' ' + _one_line(m['quote']['from']) if m['quote'].get('from') else ''}: \"{_one_line(m['quote']['text'])}\")" if isinstance(m.get("quote"), dict) and isinstance(m["quote"].get("text"), str) else "")
         + f": {_one_line(m['text'])}"

@@ -75,7 +75,9 @@ def fail(msg: str) -> None:
 
 
 def find(rows: list, id_: str):
-    return next((r for r in rows if r["id"] == id_), None)
+    """The row with this id, or else with this number (L2, written in capitals)."""
+    return next((r for r in rows if r["id"] == id_), None) or \
+        next((r for r in rows if r.get("ref") and r["ref"] == id_), None)
 
 
 def known(state: dict, agent: str) -> bool:
@@ -637,13 +639,15 @@ def cmd_show(state, args):
         rounds = f"  round {a['rounds']}" if a.get("rounds", 1) > 1 else ""
         print(f"  agent {a['id']:<16} {a['status']:<8} {a['skill']:<15} {a['model']:<6} {a['tokens']:>8} tok  lane={','.join(a['lane']) or '-'}{rounds}")
     for r in state["roadblocks"]:
-        print(f"  roadblock {r['id']} {'resolved' if r['resolved'] else 'OPEN'} [{r['severity']}, needs {r['needs']}] {r['title']}")
+        print(f"  {r.get('ref', '')} roadblock {r['id']} {'resolved' if r['resolved'] else 'OPEN'} [{r['severity']}, needs {r['needs']}] {r['title']}")
     for d in state.get("decisions", []):
         status = ("OPEN, blocking" if d.get("blocking") else "OPEN") if d["status"] == "open" else d["status"]
         if d["status"] == "open" and d.get("asks") == "manager":
             status += ", with the manager"
         outcome = d.get("answer") or d.get("resolution")
-        print(f"  decision {d['id']} {status} [{d['kind']}] {d['title']}" + (f": {outcome}" if outcome else ""))
+        print(f"  {d.get('ref', '')} decision {d['id']} {status} [{d['kind']}] {d['title']}" + (f": {outcome}" if outcome else ""))
+    for link in state.get("links", []):
+        print(f"  {link.get('ref', '')} link {link['id']} [{link['kind']}] {link['title']}: {link['url']}")
     for k in state.get("kept", []):
         print(f"  kept {k['id']}: {k['text']}")
     print(f"  {len(state['events'])} events, updated {state['updated']}")
@@ -749,6 +753,7 @@ def main(argv: list[str]) -> None:
     if result is None:
         return
     measure(root, result)
+    decisions.number(result)
     result["updated"] = now()
     render_dashboard.validate(result)
     path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")

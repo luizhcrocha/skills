@@ -435,3 +435,29 @@ test("excerptOf: the selection with its blank space made one, cut to what a mess
   assert.equal(Core.excerptOf("x"), "");
   assert.equal(Core.excerptOf("y".repeat(3000)).length, 2000);
 });
+
+test("awaiting: an answer sent stops the wait at once, unless the fleet replied to it", () => {
+  const d = { id: "d1", kind: "decision", status: "open", asks: "user", opened: "2026-09-29T10:00:00Z" };
+  const answer = { id: 4, from: "user", decision: "d1", at: "2026-09-29T10:05:00Z", text: "yes" };
+  assert.equal(Core.awaiting(d, []), true);
+  assert.equal(Core.awaiting(d, [answer]), false);
+  assert.equal(Core.awaiting(d, [answer, { id: 5, from: "coordinator", re: 4, text: "which?", at: "2026-09-29T10:06:00Z" }]), true);
+  assert.equal(Core.awaiting({ ...d, answered: true }, []), false, "a fleet's decision on the manager's page");
+  assert.equal(Core.awaiting({ ...d, asks: "manager" }, []), false);
+  assert.equal(Core.awaiting({ ...d, status: "decided" }, []), false);
+});
+
+test("findRank: a number first, words everywhere, a prefix keeps one group", () => {
+  const state = { decisions: [{ id: "d-cuts", ref: "D3", title: "Two more passes", question: "Run both now?", status: "open" },
+      { id: "d-key", ref: "A1", title: "Rotate the key", question: "q", status: "decided", answer: "done" }],
+    links: [{ ref: "L1", title: "Lab review", url: "https://b.ts.net:47843/", kind: "page", up: true }],
+    roadmap: [{ id: "m1", title: "Deploy", steps: [{ id: "l19", title: "Watchdog counts per file", status: "current" }] }],
+    agents: [{ id: "b41", name: "audio-research", task: "Audio intelligence", status: "done" }], events: [{ kind: "note", text: "passes ran" }] };
+  const rows = Core.findRows(state, [{ id: 9, from: "user", text: "run both passes", author: "luiz" }]);
+  assert.equal(Core.findRank(rows, "D3")[0].title, "Two more passes");
+  assert.deepEqual(Core.findRank(rows, "passes").map((r) => r.group), ["decisions", "chat", "log"]);
+  assert.deepEqual(Core.findRank(rows, "l review").map((r) => r.ref), ["L1"]);
+  assert.deepEqual(Core.findRank(rows, "w").map((r) => r.ref), ["b41"]);
+  assert.equal(Core.findRank(rows, "watchdog file")[0].ref, "l19");
+  assert.equal(Core.findRank(rows, "nothing like this").length, 0);
+});

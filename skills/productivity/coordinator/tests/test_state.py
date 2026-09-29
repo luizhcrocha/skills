@@ -232,6 +232,29 @@ class LinkTest(Fleet):
         self.assertEqual(self.state()["links"], [])
 
 
+class NumberTest(Fleet):
+    def test_each_kind_is_numbered_in_order_and_a_number_finds_its_row(self):
+        opt = ["--option", "a: A | x", "--option", "b: B | y", "--recommend", "a", "--reason", "r"]
+        self.ok("decision", "d-deploy", "--kind", "decision", "--title", "Deploy", "--question", "q", "--why", "w", *opt)
+        self.ok("decision", "d-key", "--kind", "action", "--title", "Rotate", "--question", "q", "--why", "w", "--manual", "m")
+        self.ok("decision", "d-when", "--kind", "decision", "--title", "When", "--question", "q", "--why", "w", *opt)
+        self.ok("link", "rev", "--url", "https://b.ts.net:1/", "--title", "Review", "--kind", "page")
+        self.assertEqual([d["ref"] for d in self.state()["decisions"]], ["D1", "A1", "D2"])
+        self.assertEqual(self.state()["links"][0]["ref"], "L1")
+        self.ok("decision", "D2", "--decide", "a: A", "--resolution", "answered on the page")
+        self.assertEqual(self.state()["decisions"][2]["status"], "decided")
+        self.ok("link", "L1", "--note", "mark each")
+        self.assertIn("D1 decision d-deploy", self.ok("show"))
+
+    def test_a_number_names_the_row_it_was_given_to(self):
+        self.ok("decision", "x", "--kind", "input", "--title", "T", "--question", "q", "--why", "w")
+        self.assertEqual(self.state()["decisions"][0]["ref"], "I1")
+        self.ok("decision", "I1", "--title", "Renamed", "--log", "clearer")
+        self.assertEqual([(d["id"], d["title"]) for d in self.state()["decisions"]], [("x", "Renamed")])
+        self.ok("decision", "i1", "--kind", "input", "--title", "Lower", "--question", "q", "--why", "w")
+        self.assertEqual([d["id"] for d in self.state()["decisions"]], ["x", "i1"], "a lower-case id is an id, not a number")
+
+
 class ManagerTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

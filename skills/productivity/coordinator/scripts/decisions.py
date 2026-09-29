@@ -23,8 +23,36 @@ NOT_A_VALUE = ("that reads as the secret's value; give an op://vault/item/field 
                "1Password item, never the value")
 
 
+PREFIX = {"decision": "D", "action": "A", "input": "I", "secret": "S", "grill": "G"}
+ROW_PREFIX = {"links": "L", "roadblocks": "R"}
+
+
 def find(state: dict, id_: str) -> dict | None:
-    return next((d for d in state.get("decisions", []) if d.get("id") == id_), None)
+    """The decision with this id, or else with this number (D3, written in capitals: ids are the
+    coordinator's own words, often lower-case like d3, and an id always wins)."""
+    rows = state.get("decisions", [])
+    return next((d for d in rows if d.get("id") == id_), None) or \
+        next((d for d in rows if d.get("ref") and d["ref"] == id_), None)
+
+
+def _next(rows: list, prefix: str) -> int:
+    taken = [int(r["ref"][len(prefix):]) for r in rows if re.fullmatch(prefix + r"\d+", str(r.get("ref", "")))]
+    return max(taken, default=0) + 1
+
+
+def number(state: dict) -> None:
+    """Give each decision, link and roadblock without one its number: a letter for its kind (D a
+    decision, A an action, I an input, S a secret, G a grilling, L a link, R a roadblock) and the next
+    free number for that letter, in the order they were opened. A number, once given, stays."""
+    rows = [d for d in state.get("decisions", []) if isinstance(d, dict)]
+    for d in sorted((d for d in rows if not d.get("ref")), key=lambda d: str(d.get("opened", ""))):
+        prefix = PREFIX.get(d.get("kind"), "D")
+        d["ref"] = f"{prefix}{_next(rows, prefix)}"
+    for key, prefix in ROW_PREFIX.items():
+        items = [r for r in state.get(key, []) if isinstance(r, dict)]
+        for r in items:
+            if not r.get("ref"):
+                r["ref"] = f"{prefix}{_next(items, prefix)}"
 
 
 def closed_because(item: dict) -> str:
@@ -79,6 +107,8 @@ def validate(state: dict, fail) -> None:
             fail(f"decision id {d['id']!r} should be letters, digits, '_', '.', or '-'")
         if d["id"] in ids:
             fail(f"duplicate decision id '{d['id']}'")
+        if any(o is not d and o.get("ref") == d["id"] for o in rows):
+            fail(f"decision id '{d['id']}' is another decision's number; pick another id")
         if d["kind"] not in KINDS:
             fail(f"decision {d['id']} kind '{d['kind']}' not in {KINDS}")
         if d["status"] not in STATUSES:
