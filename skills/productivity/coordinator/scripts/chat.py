@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The chat between the user (on the dashboard) and the fleet, stored in DIR/chat.jsonl.
 
-    chat.py DIR say   --as WHO [--re N] TEXT     append a message from WHO; print the line written
+    chat.py DIR say   --as WHO [--re N] [--decision D] TEXT
+                                                 append a message from WHO; print the line written
     chat.py DIR inbox --as WHO                   the messages open for WHO, oldest first
     chat.py DIR watch --as WHO [--after N] [--all]
                                                  every message open for WHO with id > N, then each
@@ -186,11 +187,12 @@ def address(root, sender: str, text: str, re: int | None = None, allow_user: boo
 
 
 def append(root, sender: str, text: str, re: int | None = None, author: str | None = None,
-           allow_user: bool = False) -> dict:
+           allow_user: bool = False, decision: str | None = None) -> dict:
     """Append a message from `sender` ("coordinator", or an agent id or name) and return it as stored,
     with the recipients and parts `address` resolves. Only the server passes allow_user=True, which lets
-    `sender` be "user" and stores `author` on it. Raises ChatError as `address` does, and for empty
-    text or text that is not UTF-8."""
+    `sender` be "user" and stores `author` on it. `decision` tags the message with the decision it is
+    about (the user's answer to one, given on its page). Raises ChatError as `address` does, and for
+    empty text or text that is not UTF-8."""
     resolved = address(root, sender, text, re, allow_user)  # the store only grows, so `re` stays valid
     if not text.strip():
         raise ChatError("the message has no text")
@@ -207,6 +209,8 @@ def append(root, sender: str, text: str, re: int | None = None, author: str | No
                    "parts": resolved["parts"]}
         if author and message["from"] == "user":
             message["author"] = author
+        if decision:
+            message["decision"] = decision
         torn = data and not data.endswith(b"\n")
         f.write((b"\n" if torn else b"") + (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8"))
         f.flush()
@@ -235,7 +239,8 @@ def _one_line(value) -> str:
 
 
 def _render(root, messages: list[dict]) -> list[str]:
-    """Each message as its one printed line: `#12 user (login) -> a1 (notes-impl): text [re #9]`."""
+    """Each message as its one printed line: `#12 user (login) -> a1 (notes-impl) [d1]: text [re #9]`,
+    the `[d1]` on a message about that decision."""
     names = {a["id"]: a.get("name", a["id"]) for a in _agents(root)}
 
     def label(id_: str, extra=None) -> str:
@@ -244,7 +249,9 @@ def _render(root, messages: list[dict]) -> list[str]:
 
     return [
         f"#{m['id']} {label(m['from'], m.get('author') if m['from'] == 'user' else None)}"
-        f" -> {', '.join(map(label, m['to']))}: {_one_line(m['text'])}"
+        f" -> {', '.join(map(label, m['to']))}"
+        + (f" [{_one_line(m['decision'])}]" if m.get("decision") else "")
+        + f": {_one_line(m['text'])}"
         + (f" [re #{_one_line(m['re'])}]" if m["re"] is not None else "")
         for m in messages
     ]
@@ -256,7 +263,7 @@ def _show(root, messages: list[dict]) -> None:
 
 
 def cmd_say(root, args) -> None:
-    _show(root, [append(root, args.who, args.text, args.re)])
+    _show(root, [append(root, args.who, args.text, args.re, decision=args.decision)])
 
 
 def cmd_inbox(root, args) -> None:
@@ -286,7 +293,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("dir", help="the dashboard directory, holding state.json and chat.jsonl")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("say"); s.add_argument("--as", dest="who", required=True); s.add_argument("--re", type=int)
-    s.add_argument("text")
+    s.add_argument("--decision", metavar="D", help="the decision this message is about"); s.add_argument("text")
     s = sub.add_parser("inbox"); s.add_argument("--as", dest="who", required=True)
     s = sub.add_parser("watch"); s.add_argument("--as", dest="who", required=True)
     s.add_argument("--after", type=int, default=0); s.add_argument("--all", action="store_true")

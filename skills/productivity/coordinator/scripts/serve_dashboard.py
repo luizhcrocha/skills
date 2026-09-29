@@ -10,6 +10,10 @@ chat messages and state.json changes as server-sent events, POST /chat takes
 the user's messages, POST /chat/preview answers who a text would reach
 without storing it, GET /chat?after=N lists them. Only this machine's tailnet
 login may post, and only over https; the policy is recorded in server.json.
+A message may answer a decision (`"decision": ID`); decisions.py says whether
+the answer is taken. The files under DIR/decisions/ are the decisions' bodies,
+written by workers: they are served sandboxed, so a script in one runs without
+this server's origin and cannot post as the user.
 
 A local file server binds a free port on 127.0.0.1, and `tailscale serve`
 exposes it as https://<magicdns-name>:<port>/ with a certificate Tailscale
@@ -36,6 +40,7 @@ from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chat  # noqa: E402
+import decisions  # noqa: E402
 
 
 def fail(msg: str) -> None:
@@ -224,6 +229,7 @@ def main(argv: list[str]) -> None:
 
 
 MAX_POST_BYTES = 16 * 1024
+BODY_SANDBOX = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox"
 PING_S = 15
 POLL_S = 0.3
 
@@ -282,7 +288,17 @@ def worker(root: str, bind_ip: str, port: int, policy: str = "open", *hosts: str
 
         def end_headers(self):
             self.send_header("Cache-Control", "no-store")
+            if self.serves_a_body():
+                self.send_header("Content-Security-Policy", BODY_SANDBOX)
             super().end_headers()
+
+        def serves_a_body(self) -> bool:
+            """Whether this request resolves to a file under DIR/decisions/, however its path is spelled."""
+            try:
+                served = Path(self.translate_path(self.path)).resolve()
+            except (OSError, ValueError):
+                return True
+            return served.is_relative_to(Path(root).resolve() / "decisions")
 
         def log_message(self, fmt, *args):
             pass
@@ -364,16 +380,26 @@ def worker(root: str, bind_ip: str, port: int, policy: str = "open", *hosts: str
             if not isinstance(body, dict):
                 self.send_json(400, {"error": "the body is not a JSON object"})
                 return
-            text, re = body.get("text"), body.get("re")
+            text, re, decision = body.get("text"), body.get("re"), body.get("decision")
             if not isinstance(text, str) or (re is not None and (not isinstance(re, int) or isinstance(re, bool))):
                 self.send_json(400, {"error": "text must be a string and re a message id"})
+                return
+            if decision is not None and not isinstance(decision, str):
+                self.send_json(400, {"error": "decision must be a decision id"})
                 return
             try:
                 if route == "/chat/preview":  # what POST /chat would store for this text now; stores nothing
                     resolved = chat.address(root, "user", text, re, allow_user=True)
                     self.send_json(200, {"to": resolved["to"], "parts": resolved["parts"]})
                     return
-                message = chat.append(root, "user", text, re, self.headers.get("Tailscale-User-Login"), allow_user=True)
+                if decision is not None:
+                    refusal = decisions.answer_refusal(root, decision, text)
+                    if refusal:
+                        closed = (decisions.find(read_state(root), decision) or {}).get("status", "open") != "open"
+                        self.send_json(409 if closed else 400, {"error": refusal})
+                        return
+                message = chat.append(root, "user", text, re, self.headers.get("Tailscale-User-Login"), allow_user=True,
+                                      decision=decision)
             except chat.ChatError as exc:
                 self.send_json(400, {"error": str(exc)})
                 return
@@ -385,6 +411,15 @@ def worker(root: str, bind_ip: str, port: int, policy: str = "open", *hosts: str
     server = ThreadingHTTPServer((bind_ip, port), Handler)
     server.daemon_threads = True
     server.serve_forever()
+
+
+def read_state(root) -> dict:
+    """state.json as a dict, empty while it is missing or half written."""
+    try:
+        state = json.loads(read_bytes(Path(root) / "state.json") or b"{}")
+    except ValueError:
+        return {}
+    return state if isinstance(state, dict) else {}
 
 
 def read_bytes(path: Path) -> bytes | None:
