@@ -461,3 +461,14 @@ test("findRank: a number first, words everywhere, a prefix keeps one group", () 
   assert.equal(Core.findRank(rows, "watchdog file")[0].ref, "l19");
   assert.equal(Core.findRank(rows, "nothing like this").length, 0);
 });
+
+test("unreadNotice: opening a decision reads what came about it until then; a click reads one", () => {
+  const e = { at: "2026-09-29T10:00:00Z", decision: "d1", kind: "asked" };
+  const seen = (x) => ({ lastSeen: "", chatRead: 0, readOf: {}, readKeys: new Set(), ...x });
+  assert.equal(Core.unreadNotice(e, "k", seen({})), true);
+  assert.equal(Core.unreadNotice(e, "k", seen({ readOf: { d1: "2026-09-29T10:05:00Z" } })), false);
+  assert.equal(Core.unreadNotice({ ...e, at: "2026-09-29T10:06:00Z" }, "k2", seen({ readOf: { d1: "2026-09-29T10:05:00Z" } })), true, "what came after the visit");
+  assert.equal(Core.unreadNotice(e, "k", seen({ readKeys: new Set(["k"]) })), false);
+  assert.equal(Core.unreadNotice({ at: e.at, chat: 7 }, "c", seen({ chatRead: 7 })), false);
+  assert.equal(Core.unreadNotice(e, "k", seen({ lastSeen: "2026-09-29T11:00:00Z" })), false);
+});
