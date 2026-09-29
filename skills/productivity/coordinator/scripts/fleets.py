@@ -145,11 +145,14 @@ def summary(entry: dict) -> dict:
 
 
 def view(state: dict, root) -> dict:
-    """The state as the page shows it: a manager's with every coordinator being served, a
-    coordinator's with how to reach its manager when there is one. The state itself is left as it is."""
+    """The state as the page shows it: a manager's with every coordinator being served and the plan's
+    usage as the status line last saw it, a coordinator's with how to reach its manager when there
+    is one. The state itself is left as it is."""
     root = str(Path(root).resolve())
     if role_of(state) == "manager":
-        return {**state, "coordinators": [summary(e) for e in live() if e["role"] != "manager" and e["dir"] != root]}
+        import usage  # here, not above: usage.py reads the registry's place from this module
+        return {**state, "coordinators": [summary(e) for e in live() if e["role"] != "manager" and e["dir"] != root],
+                "usage": usage.read()}
     found = manager()
     return {**state, "manager": {"id": found["id"], "url": found["url"], "session": found.get("session")}} if found else dict(state)
 

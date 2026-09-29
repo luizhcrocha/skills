@@ -95,6 +95,10 @@ You hold the user's answers, and you hold them as what they are. First-hand to y
 
 Keep the user's words as they said them. Your summary of a decision for the user carries the fleet's question and recommendation unchanged, with what you know from the other fleets added under your own name.
 
+## The plan's usage
+
+Your page shows how full the plan's 5-hour and 7-day windows are, and `python3 <scripts>/usage.py show` prints the same. Read it before you give a turn to work that spawns many workers, and when a window is nearly full say so to the user and to the fleets, with when it resets: a fleet that knows can finish what is in hand instead of starting what it cannot finish. When the page says there is no reading yet, the user's status line does not capture it; the line to add is in the coordinator skill's `DASHBOARD.md`.
+
 ## Staying current
 
 Every message is also a reason to look again at what you hold:

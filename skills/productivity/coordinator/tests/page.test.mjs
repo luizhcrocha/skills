@@ -332,3 +332,17 @@ test("decisionRows and leadOf: what is with the manager waits on the manager, af
   assert.deepEqual(Core.leadOf([item("d1", { asks: "manager", blocking: true })]), { headline: "Nothing waits on you.", detail: "", tone: "clear" });
   assert.deepEqual(Core.leadOf([item("d1", { asks: "manager", blocking: true }), item("d2")]), { headline: "1 decision waits on you.", detail: "Work goes on meanwhile.", tone: "waiting" });
 });
+
+test("usageOf: each window the status line saw, how full it is, and whether it has reset since", () => {
+  const now = Date.parse("2026-09-28T22:00:00Z"), s = (iso) => Date.parse(iso) / 1000;
+  const rows = Core.usageOf({ five_hour: { used_percentage: 42.4, resets_at: s("2026-09-29T01:00:00Z"), at: s("2026-09-28T21:59:30Z") },
+    seven_day: { used_percentage: 91, resets_at: s("2026-10-05T21:00:00Z"), at: s("2026-09-28T21:50:00Z") } }, now);
+  assert.deepEqual(rows, [
+    { key: "five_hour", label: "Session, 5 hours", percent: 42, tone: "ok", reset: false, resetsAt: Date.parse("2026-09-29T01:00:00Z"), readAt: Date.parse("2026-09-28T21:59:30Z") },
+    { key: "seven_day", label: "Week, 7 days", percent: 91, tone: "critical", reset: false, resetsAt: Date.parse("2026-10-05T21:00:00Z"), readAt: Date.parse("2026-09-28T21:50:00Z") }]);
+  assert.equal(Core.usageOf({ five_hour: { used_percentage: 80, resets_at: s("2026-09-29T01:00:00Z"), at: 1 } }, now)[0].tone, "warning");
+  const past = Core.usageOf({ five_hour: { used_percentage: 97, resets_at: s("2026-09-28T21:00:00Z"), at: s("2026-09-28T20:00:00Z") } }, now);
+  assert.deepEqual([past[0].reset, past[0].tone, past[0].percent], [true, "ok", 0], "a window that reset since the reading starts again from nothing");
+  for (const none of [null, undefined, {}, { five_hour: "soon" }, { five_hour: { used_percentage: "many", resets_at: 1 } }]) assert.deepEqual(Core.usageOf(none, now), []);
+  assert.equal(Core.usageOf({ five_hour: { used_percentage: 140, resets_at: s("2026-09-29T01:00:00Z"), at: 1 } }, now)[0].percent, 100);
+});
