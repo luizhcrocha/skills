@@ -106,6 +106,7 @@ Waiting on the user is a subscription, never a status re-read: whoever asks arms
 
 Every message between sessions is paid for twice: the sender writes it, the receiver reads it, and both read it again on every later turn. So each thing is said once, by the one who knows it, where the user will read it.
 
+- **A silent worker is checked, not assumed.** Your watch prints `! <fleet>'s worker b50 ... has written nothing since ...` when a worker its ledger says runs has been silent for twenty minutes, and the pages put it under Stuck: `SendMessage` that fleet to check it. Never tell the user a worker is running from its row alone.
 - **A wait is named by its number and read at its source.** Before you tell the user something waits on him, read the decision's current state (`fleets.py decision <fleet> <number>`), never an earlier message; name it by fleet and number ("waits on Luiz: infra I2"). A Now line naming a closed decision is flagged on the page, and `set --now` warns.
 - **What the page computes is not written.** Under your Now line the page lists the running workers, the current steps and the next ones; the fleets' pages do the same. Your Now line says what they cannot: whose turn it is, what waits on whom, a rule the user just set.
 - **Your own answers too.** What you answer the user on your page (the chat, a side chat) is written there only. The turn that answered ends, in your session, with one line naming where: "Answered #42 on the page." The user reads the page from any device.

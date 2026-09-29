@@ -555,6 +555,7 @@
   .reply-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .reply .icon-btn { width: var(--tap); height: var(--tap); color: inherit; font-size: 1rem; }
   .deaf-line { color: var(--you); font-weight: 600; }
+  td.silent { color: var(--critical); font-weight: 600; }
   .dchip { display: inline-block; margin: 0 2px; padding: 0 6px; border-radius: 5px; font-family: var(--mono, "JetBrains Mono", monospace); font-size: 0.78em; font-weight: 700; text-decoration: none; background: var(--card-2); color: var(--muted); vertical-align: 1px; }
   .dchip.open { background: var(--you-soft); color: var(--you); }
   .dchip.held { background: var(--run-soft); color: var(--run); }
@@ -1263,7 +1264,9 @@ var FleetCore = (function () {
      recorded, and a fleet that does not read its chat while the user's messages wait there. On a
      fleet's page `fleets` holds the page itself; on the manager's, every coordinator. Each row: {fleet,
      ref, title, since, what}. */
-  const STUCK_MS = 5 * 60 * 1000;
+  const STUCK_MS = 5 * 60 * 1000, SILENT_MS = 20 * 60 * 1000;
+  /* A worker the ledger says runs whose transcript has not moved for SILENT_MS. */
+  const silentWorker = (a, now) => (a.status === "running" || a.status === "blocked") && typeof a.active === "string" && now - stamp(a.active) > SILENT_MS;
   function stuckOf(own, coordinators, messages, now) {
     const rows = [];
     for (const d of own.decisions || []) {
@@ -1273,7 +1276,11 @@ var FleetCore = (function () {
     }
     if (own.hearing && !own.hearing.on && own.hearing.unread && now - stamp(own.hearing.since) > STUCK_MS)
       rows.push({ fleet: "", ref: "", title: `${own.hearing.unread} message${own.hearing.unread === 1 ? "" : "s"} unread`, since: own.hearing.since, what: "chat not read" });
+    for (const a of own.agents || []) if (silentWorker(a, now))
+      rows.push({ fleet: "", ref: a.id, title: a.name || a.id, since: a.active, what: "worker silent", agent: a.id });
     for (const c of coordinators || []) {
+      for (const w of Array.isArray(c.silent) ? c.silent : []) if (w && typeof w.active === "string")
+        rows.push({ fleet: c.id, ref: String(w.id), title: String(w.name || w.id), since: w.active, what: "worker silent" });
       for (const d of c.decisions || []) if (typeof d.answered === "string" && now - stamp(d.answered) > STUCK_MS)
         rows.push({ fleet: c.id, ref: d.ref || "", title: d.title, since: d.answered, what: "answer not recorded", id: d.id });
       if (c.hearing && !c.hearing.on && c.hearing.unread && now - stamp(c.hearing.since) > STUCK_MS)
@@ -1341,7 +1348,7 @@ var FleetCore = (function () {
   }
 
   return { keyOf, hostOf, rosterOf, usageOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf, toastOf,
-    decisionRows, decisionRoute, pendingAnswer, awaiting, bucketOf, BUCKETS, stuckOf, findRows, findRank, FIND_GROUPS, FIND_PREFIX, grillState, grillAnswerText, sidesOf, excerptOf, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, unreadNotice, staleNow, glanceOf, closedInNow, viewOf, leadOf, VIEWS };
+    decisionRows, decisionRoute, pendingAnswer, awaiting, bucketOf, BUCKETS, stuckOf, silentWorker, findRows, findRank, FIND_GROUPS, FIND_PREFIX, grillState, grillAnswerText, sidesOf, excerptOf, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, unreadNotice, staleNow, glanceOf, closedInNow, viewOf, leadOf, VIEWS };
 })();
 </script>
 <script>
@@ -1475,9 +1482,10 @@ var FleetCore = (function () {
     const latest = nowStale ? STATE.events.filter((e) => e.kind !== "spawned").slice(-2).reverse() : [];
     $("lead").className = "lead " + lead.tone;
     const stuckHtml = stuck.length ? `<div class="stuck" role="status"><h3>Stuck</h3><ul>${stuck.map((r) => {
-      const href = r.id ? (r.fleet ? fleetPage(r.fleet) : "") + "#decision/" + encodeURIComponent(r.id) : r.fleet ? fleetPage(r.fleet) : "";
+      const href = r.agent ? "#agent-" + encodeURIComponent(r.agent) : r.id ? (r.fleet ? fleetPage(r.fleet) : "") + "#decision/" + encodeURIComponent(r.id) : r.fleet ? fleetPage(r.fleet) : "";
       const name = `${r.fleet ? esc(r.fleet) + " " : ""}${r.ref ? `<span class="ref">${esc(r.ref)}</span> ` : ""}${esc(r.title)}`;
-      return `<li>${href ? `<a href="${esc(href)}">${name}</a>` : name}: ${esc(r.what)}, ${esc(ago(r.since))}. ${r.what === "chat not read" ? `The ${r.fleet ? "coordinator" : HOST} is not reading; tell it in its session.` : `The ${r.fleet ? "coordinator" : HOST} has it and has not acted; tell it in its session if it stays.`}</li>`;
+      const why = r.what === "worker silent" ? `The ledger says it runs, but it has written nothing. The ${r.fleet ? "coordinator" : HOST} should ask it where it stands.` : null;
+      return `<li>${href ? `<a href="${esc(href)}">${name}</a>` : name}: ${esc(r.what)}, ${esc(ago(r.since))}. ${why ? esc(why) : r.what === "chat not read" ? `The ${r.fleet ? "coordinator" : HOST} is not reading; tell it in its session.` : `The ${r.fleet ? "coordinator" : HOST} has it and has not acted; tell it in its session if it stays.`}</li>`;
     }).join("")}</ul></div>` : "";
     paint($("lead"), `${stuckHtml}<h2 class="lead-line">${esc(lead.headline)}</h2>
       ${lead.detail ? `<p class="lead-detail">${esc(lead.detail)}</p>` : ""}
@@ -2009,7 +2017,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
           <td class="c-lane lane">${(a.lane || []).length ? a.lane.map((l) => `<code>${esc(l)}</code>`).join("") : '<span class="faint">read-only</span>'}</td>
           <td class="c-tokens right num" data-label="Tokens">${a.tokens ? fmtInt(a.tokens) : '<span class="faint">pending</span>'}</td>
           <td class="c-time right num" data-label="Time">${esc(fmtDur(a.duration_ms)) || '<span class="faint">none</span>'}</td>
-          <td class="c-upd muted" title="${esc(a.updated)}">${esc(ago(a.updated))}</td>
+          <td class="c-upd ${Core.silentWorker(a, Date.now()) ? "silent" : "muted"}" title="${esc(a.active ? "last wrote " + a.active : a.updated)}">${esc(a.active && (a.status === "running" || a.status === "blocked") ? "active " + ago(a.active) : ago(a.updated))}</td>
           <td class="c-act"><button class="expand" type="button" data-id="${esc(a.id)}" aria-expanded="${open}">${open ? "Hide brief" : "Brief and report"}</button></td>
         </tr>` + (open ? `<tr class="detail"><td colspan="10">${briefAndReport(a, "h4")}</td></tr>` : "");
       }).join("") + "</tbody>");
@@ -2277,7 +2285,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     $("worker-body").innerHTML = `
       <div class="sheet-head" style="--c:${colorOf(a)}"><span class="swatch"></span><h2 id="worker-name">${esc(a.name)}</h2>${pill(a.status)}<button type="button" class="icon-btn" data-close data-focus="x" aria-label="Close" title="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
       <p>${esc(a.task)}</p>
-      <dl class="facts">${fact("Skill", esc(a.skill || "none"))}${fact("Model", esc(a.model || "opus"))}${fact("Milestone", esc(ms ? ms.title : a.milestone || "none"))}${fact("Tokens", a.tokens ? `<span class="num">${fmtInt(a.tokens)}</span>` : "pending")}${fact("Time", esc(fmtDur(a.duration_ms)) || "none")}${(a.rounds || 1) > 1 ? fact("Round", `<span class="num">${esc(a.rounds)}</span>`) : ""}${fact("Updated", esc(ago(a.updated)) || "unknown")}</dl>
+      <dl class="facts">${fact("Skill", esc(a.skill || "none"))}${fact("Model", esc(a.model || "opus"))}${fact("Milestone", esc(ms ? ms.title : a.milestone || "none"))}${fact("Tokens", a.tokens ? `<span class="num">${fmtInt(a.tokens)}</span>` : "pending")}${fact("Time", esc(fmtDur(a.duration_ms)) || "none")}${(a.rounds || 1) > 1 ? fact("Round", `<span class="num">${esc(a.rounds)}</span>`) : ""}${fact("Updated", esc(ago(a.updated)) || "unknown")}${a.active ? fact("Last activity", esc(ago(a.active))) : ""}</dl>
       <div><h3>Lane</h3><div class="lane">${(a.lane || []).length ? a.lane.map((l) => `<code>${esc(l)}</code>`).join("") : "read-only"}</div></div>
       ${briefAndReport(a, "h3")}
       <div class="sheet-actions">${chatAvailable() ? `<button type="button" class="btn primary" data-write="${esc(a.id)}" data-focus="write"${chat.write.ok ? "" : ` disabled aria-describedby="write-why"`}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 0 1-12.4 7.5L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/></svg>Message ${esc(a.name)}</button>` : ""}<button type="button" class="btn" data-close data-focus="close">Close</button></div>

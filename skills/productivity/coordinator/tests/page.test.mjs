@@ -511,3 +511,12 @@ test("closedInNow: a Now line naming a closed decision, in the ledger or in a fl
   assert.deepEqual(Core.closedInNow("Waits on Luiz: infra I2 and D2; A6 done", own, fleets).map((c) => [c.fleet, c.ref]), [["infra-coordinator", "I2"], ["", "A6"]]);
   assert.deepEqual(Core.closedInNow("Waits on Luiz: D2", own, fleets), []);
 });
+
+test("stuckOf: a running worker silent for twenty minutes, here or in a fleet", () => {
+  const now = Date.parse("2026-09-29T17:00:00Z");
+  const own = { decisions: [], agents: [{ id: "b50", name: "neon-latency", status: "running", active: "2026-09-29T16:30:00Z" },
+    { id: "b51", status: "running", active: "2026-09-29T16:55:00Z" }, { id: "b52", status: "done", active: "2026-09-29T10:00:00Z" }] };
+  assert.deepEqual(Core.stuckOf(own, [], [], now).map((r) => [r.ref, r.what]), [["b50", "worker silent"]]);
+  const fleets = [{ id: "infra", decisions: [], silent: [{ id: "b42", name: "neo4j-container", active: "2026-09-29T16:07:00Z" }] }];
+  assert.deepEqual(Core.stuckOf({ decisions: [] }, fleets, [], now).map((r) => [r.fleet, r.ref]), [["infra", "b42"]]);
+});

@@ -193,12 +193,32 @@ def summary(entry: dict) -> dict:
         "lanes": sorted({str(lane) for a in running for lane in a.get("lane") or []}),
         "roadblocks": sum(1 for r in rows("roadblocks") if not r.get("resolved")),
         "index": _index(state or {}),
+        "silent": silent_workers(entry["dir"], state or {}),
         "decisions": [{"id": d.get("id"), "ref": d.get("ref"), "kind": d.get("kind", "decision"), "title": d.get("title"), "question": d.get("question"),
                        "why": d.get("why"), "blocking": d.get("blocking") is True, "asks": d.get("asks") or "user",
                        "opened": d.get("opened"), "revised": d.get("revised"),
                        "answered": _answered_at(d, said)}
                       for d in rows("decisions") if d.get("status") == "open" and isinstance(d.get("id"), str)],
     }
+
+
+SILENT_S = 20 * 60  # a running worker that has written nothing for this long is silent
+
+
+def _iso(t: float) -> str:
+    return datetime.fromtimestamp(t, timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def silent_workers(root, state: dict) -> list[dict]:
+    """The workers of DIR the ledger says are running or blocked whose transcript has not moved for
+    SILENT_S: [{id, name, active}], oldest silence first. One whose transcript is not found is left out."""
+    import spend
+    seen, now_t = spend.last_activity(root), datetime.now(timezone.utc).timestamp()
+    rows = []
+    for a in state.get("agents", []):
+        if isinstance(a, dict) and a.get("status") in ("running", "blocked") and a.get("id") in seen and now_t - seen[a["id"]] > SILENT_S:
+            rows.append({"id": a["id"], "name": a.get("name") or a["id"], "active": _iso(seen[a["id"]])})
+    return sorted(rows, key=lambda r: r["active"])
 
 
 def _answered_at(d: dict, said: list[dict]) -> str | None:
@@ -246,6 +266,9 @@ def view(state: dict, root) -> dict:
     state = copy.deepcopy(state)
     decisions.number(state)  # the numbers state.py gives on its next write, the same ones: the order is the ledger's
     state = {**state, "spent": spend.of(root), "chat": chat.listening(root)}
+    seen = spend.last_activity(root)
+    state["agents"] = [{**a, "active": _iso(seen[a["id"]])} if isinstance(a, dict) and a.get("id") in seen else a
+                       for a in state.get("agents", [])]
     me = find(root)
     links = [{**link, "fleet": me["id"] if me else None} for link in served.links_of(state)]
     if role_of(state) == "manager":
@@ -287,6 +310,8 @@ def cmd_list() -> None:
             print(f"    lanes in flight: {', '.join(s['lanes'])}")
         if s["active"]:
             print(f"    session last active {s['active']}")
+        for w in s["silent"]:
+            print(f"    worker {w['id']} ({w['name']}) silent since {w['active'][11:16]}")
         if not s["chat"]["on"]:
             print(f"    chat: not read now" + (f"; {s['chat']['unread']} message(s) from the user wait since #{s['chat']['seen']}" if s["chat"]["unread"] else ""))
         if s["spent"]:

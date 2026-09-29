@@ -26,6 +26,8 @@ in your own words, from what you know first-hand, saying so when you don't know.
 
 ## Report
 
+When something stops you (the permission check refuses a command, an access or a secret is missing, a gate fails in a way you cannot fix), say so at once, before anything else, and do not wait on it in silence: `python3 {skill_dir}/scripts/chat.py {dashboard_dir} say --as <your id> "blocked: <what, and the exact refusal>"`, then end with your report. The page shows a worker that writes nothing for twenty minutes as silent.
+
 End with a report the coordinator can act on from its first block, ten lines at most:
 
 1. Each completion criterion: met or not.

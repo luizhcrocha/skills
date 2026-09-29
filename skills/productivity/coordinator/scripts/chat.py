@@ -413,6 +413,33 @@ def _unrecorded(e: dict, told: dict) -> list[str]:
     return lines
 
 
+def _silent(root, fleet: str | None, told: dict) -> list[str]:
+    """The `!` lines for the running workers of DIR silent for fleets.SILENT_S, each silence told once."""
+    lines = []
+    for w in fleets.silent_workers(root, _state(root)):
+        mark = f"silent:{fleet or ''}:{w['id']}:{w['active']}"
+        if told.get(mark):
+            continue
+        told[mark] = True
+        where = f"{fleet}'s worker" if fleet else "worker"
+        lines.append(f"! {where} {w['id']} ({_one_line(w['name'])}) has written nothing since {w['active'][11:16]} though the ledger says it runs. "
+                     + (f"SendMessage {fleet} to check it." if fleet else f"Ask it where it stands (SendMessage {w['id']}), or park it with the reason."))
+    return lines
+
+
+def _own_silent(root) -> list[str]:
+    """For a coordinator's watch: its own silent workers, told once across watches (kept in DIR)."""
+    told_path = Path(root) / "watch-coordinator.told"
+    try:
+        told = json.loads(told_path.read_text())
+    except (OSError, ValueError):
+        told = {}
+    lines = _silent(root, None, told)
+    if lines:
+        told_path.write_text(json.dumps(told))
+    return lines
+
+
 def _fleets_unheard(me: str) -> list[str]:
     """For a manager's watch: one line per fleet whose coordinator does not read its chat while the user's
     messages wait there more than UNHEARD_S. Each set of waiting messages is told once, across watches:
@@ -427,6 +454,7 @@ def _fleets_unheard(me: str) -> list[str]:
         if e["role"] == "manager" or e["dir"] == me:
             continue
         lines += _unrecorded(e, told)
+        lines += _silent(e["dir"], e["id"], told)
         heard = listening(e["dir"])
         mark = f"{heard['seen']}:{heard['unread']}:{heard['since']}"
         if heard["on"] or not heard["unread"] or told.get(e["id"]) == mark:
@@ -499,9 +527,9 @@ def _watch(root, args, who: str, cursor: Path) -> None:
         new = [m for m in tail.read() if who in m["to"] or (args.all and m["from"] == "user")]
         show(new)
         lines = []
-        if who == "manager" and time.monotonic() - checked >= FLEETS_S:
+        if who in ("manager", "coordinator") and time.monotonic() - checked >= FLEETS_S:
             checked = time.monotonic()
-            lines = _fleets_unheard(str(root))
+            lines = _fleets_unheard(str(root)) if who == "manager" else _own_silent(root)
             for line in lines:
                 print(line, flush=True)
         if args.once and (new or lines):

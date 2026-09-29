@@ -16,6 +16,7 @@ another transcript, which this does not follow.
 """
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -26,6 +27,9 @@ _held: dict[str, dict] = {}   # transcript path -> what was read of it so far
 
 def forget() -> None:
     _held.clear()
+
+
+ACTIVE_S = 10  # how often the workers' transcripts are looked at again
 
 
 def transcript_of(root) -> Path | None:
@@ -44,6 +48,43 @@ def active(root) -> str | None:
         return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).astimezone().isoformat(timespec="seconds") if path else None
     except OSError:
         return None
+
+
+_WHO = re.compile(r"(?:your id is|You are) ([A-Za-z][A-Za-z0-9_.-]*?)[,.\s\"]")
+_named: dict[str, str | None] = {}          # transcript path -> the ledger id its brief names, read once
+_active_cache: dict[str, tuple[float, dict]] = {}
+
+
+def last_activity(root) -> dict[str, float]:
+    """When each worker of the session whose scratchpad holds DIR last wrote its transcript, by the id its
+    brief gave it ("You are b50", "your id is b50"): a worker's liveness, whether or not its row names its
+    task id. Looked up at most every ACTIVE_S seconds."""
+    key = str(root)
+    hit = _active_cache.get(key)
+    if hit and time.monotonic() - hit[0] < ACTIVE_S:
+        return hit[1]
+    transcript = transcript_of(root)
+    folder = transcript.with_suffix("") / "subagents" if transcript else None
+    seen: dict[str, float] = {}
+    for path in (folder.glob("agent-*.jsonl") if folder and folder.is_dir() else []):
+        name = str(path)
+        if name not in _named:
+            try:
+                with open(path, "rb") as fh:
+                    found = _WHO.search(fh.readline(20000).decode("utf-8", "replace"))
+            except OSError:
+                continue
+            _named[name] = found.group(1) if found else None
+        wid = _named[name]
+        if not wid:
+            continue
+        try:
+            at = path.stat().st_mtime
+        except OSError:
+            continue
+        seen[wid] = max(seen.get(wid, 0.0), at)
+    _active_cache[key] = (time.monotonic(), seen)
+    return seen
 
 
 def worker(root, task_id: str) -> dict | None:

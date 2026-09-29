@@ -111,6 +111,8 @@ Token and duration figures arrive in the task notification when a worker finishe
 
 ### 6. Respond
 
+**A running row is not proof of work.** The page shows each worker's last activity from its transcript, and your chat watch prints `! worker b50 ... has written nothing since 16:30` when one has been silent for twenty minutes: ask it where it stands (`SendMessage`), or park it with the reason, and never report it as running from its row alone. A refusal reported by a worker (`blocked: ...`) becomes a roadblock at once, with the action the user can take.
+
 **Said once, on the page.** What you answer the user on the page is written there only. The turn that answered ends, in your session, with one line naming where: "Answered #42 on the page." The user reads the page, from any device; the same words in the session are paid twice, written and then read on every later turn.
 
 Workers report back with results, questions, or blocks. Handle each in the same turn it arrives:
