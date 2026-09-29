@@ -42,6 +42,7 @@ import fleets  # noqa: E402
 
 POLL_S = 0.3
 FLEETS_S = float(os.environ.get("FLEET_CHECK_S", 30))  # how often a manager's watch looks at the other fleets' chats
+READING_GRACE_S = 10 * 60  # a host whose watch ended, or who spoke, this recently still counts as reading
 QUOTE_MAX = 2000  # characters of a selected excerpt a message carries
 UNHEARD_S = float(os.environ.get("FLEET_UNHEARD_S", 120))  # how long the user's message waits unread before the manager is told
 
@@ -344,6 +345,11 @@ def _cursor(root, who: str) -> Path:
     return Path(root) / f"watch-{who}.cursor"
 
 
+def _left(root, who: str) -> Path:
+    """Touched when a watch as `who` ends: a host woken by its watch is still reading until it arms the next."""
+    return Path(root) / f"watch-{who}.left"
+
+
 def _pulse(root, who: str) -> Path:
     """Where a running watch as `who` keeps its process id, so the page and the manager can tell it listens."""
     return Path(root) / f"watch-{who}.pid"
@@ -360,6 +366,17 @@ def listening(root) -> dict:
         on = True
     except (OSError, ValueError):
         on = False
+    if not on:  # between a `--once` watch that woke it and the next, a host is still reading: allow for the gap
+        try:
+            on = time.time() - _left(root, who).stat().st_mtime < READING_GRACE_S
+        except OSError:
+            pass
+        if not on:
+            last = next((m for m in reversed(read(root)) if m["from"] == who), None)
+            try:
+                on = bool(last) and time.time() - datetime.fromisoformat(last["at"]).timestamp() < READING_GRACE_S
+            except ValueError:
+                pass
     try:
         seen = int(_cursor(root, who).read_text())
     except (OSError, ValueError):
@@ -494,6 +511,10 @@ def cmd_watch(root, args) -> None:
         try:
             if pulse.read_text() == str(os.getpid()):
                 pulse.unlink()
+        except OSError:
+            pass
+        try:
+            _left(root, who).touch()
         except OSError:
             pass
 

@@ -849,7 +849,10 @@ class ListeningTest(FleetDir):
         self.assertFalse((self.root / "watch-coordinator.pid").exists(), "a watch that ends says so")
         chat.append(self.root, "user", "still there?", allow_user=True)
         heard = chat.listening(self.root)
-        self.assertEqual((heard["on"], heard["seen"], heard["unread"]), (False, sent["id"], 1))
+        self.assertEqual((heard["on"], heard["seen"], heard["unread"]), (True, sent["id"], 1), "a watch that just ended still reads")
+        old = time.time() - chat.READING_GRACE_S - 5
+        os.utime(self.root / "watch-coordinator.left", (old, old))
+        self.assertFalse(chat.listening(self.root)["on"], "ten minutes on, it does not")
 
     def test_every_state_command_tells_a_deaf_coordinator_what_waits(self):
         chat.append(self.root, "user", "status?", allow_user=True)

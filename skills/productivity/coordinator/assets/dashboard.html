@@ -2360,8 +2360,8 @@ img,svg,video,canvas{max-width:100%;height:auto}
   function renderHearing() {
     const h = STATE.hearing, deaf = h !== null && !h.on && chatAvailable();
     $("deaf").hidden = !deaf;
-    if (deaf) $("deaf").textContent = `The ${HOST} is not reading the chat right now. What you send is kept until it does`
-      + (STATE.manager ? "; if it waits two minutes, the manager is told and reaches the " + HOST + "." : ".");
+    if (deaf) $("deaf").textContent = `The ${HOST} has not read the chat for over ten minutes. What you send is kept`
+      + (STATE.manager ? ", and the manager is told if it waits." : "; tell it in its session if it stays unread.");
   }
 
   for (const id of filters) { const saved = store.get(id, ""); if (saved) $(id).value = saved; $(id).addEventListener("input", () => { store.set(id, $(id).value); render(); }); }
