@@ -14,6 +14,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import decisions  # noqa: E402
+
 REQUIRED = {
     "project": str, "goal": str, "status": str, "now": str, "started": str,
     "roadmap": list, "agents": list, "roadblocks": list, "events": list,
@@ -83,6 +86,7 @@ def validate(state: dict) -> None:
         for k in ("at", "kind", "text"):
             if k not in e:
                 fail(f"event is missing '{k}': {e}")
+    decisions.validate(state, fail)
 
 
 def split_head(fragment: str) -> tuple[str, str]:

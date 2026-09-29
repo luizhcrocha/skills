@@ -1,0 +1,272 @@
+"""The decisions seam: what waits on the user, through the state CLI and the rule for what an answer may be."""
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+import decisions  # noqa: E402
+
+STATE = str(SCRIPTS / "state.py")
+
+SCHEMA = ["d1", "--kind", "decision", "--title", "Invoice schema", "--question", "Migrate the invoice table or keep both shapes?",
+          "--why", "invoice-gen cannot write usage lines until this is settled",
+          "--option", "A: migrate now | one shape, a 20 minute lock on invoices",
+          "--option", "B: keep both | no lock, two code paths until the next release",
+          "--recommend", "A", "--reason", "the table is small and the second path costs every later change"]
+
+
+class Fleet(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.ok("init", "--project", "p", "--goal", "g")
+        self.ok("milestone", "m1", "--title", "M")
+        self.ok("agent", "a1", "--task", "t", "--milestone", "m1", "--name", "invoice-gen")
+
+    def run_cli(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, STATE, str(self.root), *args, "--no-render"],
+                              capture_output=True, text=True, timeout=20)
+
+    def ok(self, *args: str) -> str:
+        result = self.run_cli(*args)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def refused(self, *args: str) -> str:
+        result = self.run_cli(*args)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
+        return result.stderr
+
+    def state(self) -> dict:
+        return json.loads((self.root / "state.json").read_text())
+
+    def item(self, id_: str = "d1") -> dict:
+        return next(d for d in self.state()["decisions"] if d["id"] == id_)
+
+
+class OpenTest(Fleet):
+    def test_a_new_item_is_open_with_its_four_fields_and_is_announced(self):
+        self.ok("decision", *SCHEMA, "--blocking", "--agent", "a1")
+        d = self.item()
+        self.assertEqual((d["status"], d["kind"], d["blocking"], d["agent"], d["page"]), ("open", "decision", True, "a1", True))
+        self.assertEqual(d["options"], [
+            {"id": "A", "label": "migrate now", "consequence": "one shape, a 20 minute lock on invoices"},
+            {"id": "B", "label": "keep both", "consequence": "no lock, two code paths until the next release"}])
+        self.assertEqual((d["recommend"], d["revised"], d["closed"]), ("A", None, None))
+        event = self.state()["events"][-1]
+        self.assertEqual((event["kind"], event["decision"], event["agent"], event.get("important")), ("asked", "d1", "a1", True))
+        self.assertIn("Migrate the invoice table", event["text"])
+
+    def test_an_item_that_does_not_block_is_a_routine_event(self):
+        self.ok("decision", *SCHEMA)
+        self.assertFalse(self.item()["blocking"])
+        self.assertNotIn("important", self.state()["events"][-1])
+
+    def test_a_new_item_needs_its_fields(self):
+        self.assertIn("--question", self.refused("decision", "d1", "--kind", "input", "--title", "T", "--why", "w"))
+        self.assertIn("--why", self.refused("decision", "d1", "--kind", "input", "--title", "T", "--question", "q"))
+        self.assertNotIn("decisions", {k for k, v in self.state().items() if v})
+
+    def test_each_kind_needs_what_its_answer_control_shows(self):
+        base = ["--title", "T", "--question", "q", "--why", "w"]
+        self.assertIn("two options", self.refused("decision", "d1", "--kind", "decision", *base, "--option", "A: only one | c",
+                                                  "--recommend", "A", "--reason", "r"))
+        self.assertIn("--recommend", self.refused("decision", "d1", "--kind", "decision", *base, "--option", "A: x | c", "--option", "B: y | c"))
+        self.assertIn("not one of the options", self.refused("decision", "d1", "--kind", "decision", *base, "--option", "A: x | c",
+                                                             "--option", "B: y | c", "--recommend", "C", "--reason", "r"))
+        self.assertIn("--secret", self.refused("decision", "d1", "--kind", "secret", *base))
+        self.assertIn("--manual", self.refused("decision", "d1", "--kind", "secret", *base, "--secret", "NEO4J_PASSWORD"))
+        self.assertIn("--manual", self.refused("decision", "d1", "--kind", "action", *base))
+        self.ok("decision", "d1", "--kind", "input", *base)
+        self.ok("decision", "d2", "--kind", "secret", *base, "--secret", "NEO4J_PASSWORD", "--manual", "secretspec set NEO4J_PASSWORD")
+        self.ok("decision", "d3", "--kind", "action", *base, "--manual", "tailscale up")
+
+    def test_an_option_is_key_label_and_consequence(self):
+        base = ["decision", "d1", "--kind", "decision", "--title", "T", "--question", "q", "--why", "w", "--recommend", "A", "--reason", "r"]
+        self.assertIn("KEY: label | consequence", self.refused(*base, "--option", "A: no consequence", "--option", "B: y | c"))
+        self.assertIn("KEY: label | consequence", self.refused(*base, "--option", "just words | c", "--option", "B: y | c"))
+        self.assertIn("twice", self.refused(*base, "--option", "A: x | c", "--option", "A: y | c"))
+
+    def test_an_id_is_a_token_and_an_agent_is_known(self):
+        self.assertIn("letters", self.refused("decision", "d/1", *SCHEMA[1:]))
+        self.assertIn("unknown agent", self.refused("decision", *SCHEMA, "--agent", "nobody"))
+
+
+class ReviseTest(Fleet):
+    def test_changing_an_open_item_stamps_revised_and_says_what_changed(self):
+        self.ok("decision", *SCHEMA)
+        self.ok("decision", "d1", "--why", "invoice-gen and the stripe adapter both wait", "--log", "the adapter now waits on this too")
+        d = self.item()
+        self.assertEqual(d["why"], "invoice-gen and the stripe adapter both wait")
+        self.assertEqual(d["change"], "the adapter now waits on this too")
+        self.assertIsNotNone(d["revised"])
+        event = self.state()["events"][-1]
+        self.assertEqual((event["kind"], event["decision"]), ("asked", "d1"))
+        self.assertIn("the adapter now waits on this too", event["text"])
+        self.assertNotIn("important", event)
+
+    def test_a_revision_keeps_the_kind_consistent(self):
+        self.ok("decision", *SCHEMA)
+        self.assertIn("not one of the options", self.refused("decision", "d1", "--recommend", "Z"))
+        self.assertIn("two options", self.refused("decision", "d1", "--option", "A: only | c"))
+
+    def test_blocking_can_be_lifted(self):
+        self.ok("decision", *SCHEMA, "--blocking")
+        self.ok("decision", "d1", "--not-blocking", "--why", "the fleet proceeds on A until you say otherwise")
+        self.assertFalse(self.item()["blocking"])
+
+    def test_the_body_is_copied_beside_the_page_and_removed_on_request(self):
+        source = self.root / "analysis.html"
+        source.write_text("<table><tr><td>rows</td><td>1,204</td></tr></table>")
+        self.ok("decision", *SCHEMA, "--body", str(source))
+        self.assertTrue(self.item()["body"])
+        self.assertEqual((self.root / "decisions" / "d1.html").read_text(), source.read_text())
+        source.write_text("<p>new figures</p>")
+        self.ok("decision", "d1", "--body", str(source), "--log", "figures as of 15:00")
+        self.assertEqual((self.root / "decisions" / "d1.html").read_text(), "<p>new figures</p>")
+        self.assertIsNotNone(self.item()["revised"])
+        self.ok("decision", "d1", "--no-body")
+        self.assertFalse(self.item()["body"])
+        self.assertFalse((self.root / "decisions" / "d1.html").exists())
+        self.assertIn("cannot read", self.refused("decision", "d1", "--body", str(self.root / "missing.html")))
+
+
+class CloseTest(Fleet):
+    def test_deciding_records_the_answer_and_how_it_came(self):
+        self.ok("decision", *SCHEMA)
+        self.ok("decision", "d1", "--decide", "B: keep both", "--resolution", "answered on the page (#14)")
+        d = self.item()
+        self.assertEqual((d["status"], d["answer"], d["resolution"]), ("decided", "B: keep both", "answered on the page (#14)"))
+        self.assertIsNotNone(d["closed"])
+        event = self.state()["events"][-1]
+        self.assertEqual((event["kind"], event["decision"]), ("decision", "d1"))
+        self.assertIn("B: keep both", event["text"])
+
+    def test_deciding_needs_how_and_withdrawing_needs_why(self):
+        self.ok("decision", *SCHEMA)
+        self.assertIn("--resolution", self.refused("decision", "d1", "--decide", "A"))
+        self.assertEqual(self.item()["status"], "open")
+        self.ok("decision", "d1", "--withdraw", "the worker found the answer in the migration notes")
+        d = self.item()
+        self.assertEqual((d["status"], d["resolution"], d["answer"]), ("withdrawn", "the worker found the answer in the migration notes", None))
+        self.assertEqual(self.state()["events"][-1]["kind"], "resolved")
+
+    def test_a_closed_item_is_not_edited_or_closed_again(self):
+        self.ok("decision", *SCHEMA)
+        self.ok("decision", "d1", "--decide", "A", "--resolution", "said in the session")
+        for args in (["--why", "new"], ["--decide", "B", "--resolution", "x"], ["--withdraw", "moot"]):
+            self.assertIn("--supersedes d1", self.refused("decision", "d1", *args))
+        self.assertEqual(self.item()["answer"], "A")
+
+    def test_a_new_item_supersedes_a_closed_one(self):
+        self.ok("decision", *SCHEMA)
+        self.assertIn("still open", self.refused("decision", "d2", *SCHEMA[1:], "--supersedes", "d1"))
+        self.ok("decision", "d1", "--decide", "A", "--resolution", "said in the session")
+        self.ok("decision", "d2", *SCHEMA[1:], "--supersedes", "d1")
+        self.assertEqual(self.item("d2")["supersedes"], "d1")
+        self.assertIn("unknown decision", self.refused("decision", "d3", *SCHEMA[1:], "--supersedes", "d9"))
+
+    def test_a_decision_made_elsewhere_is_recorded_closed_and_has_no_page(self):
+        self.ok("decision", "d1", "--title", "Model for the rename sweep", "--question", "Haiku for the rename sweep?",
+                "--decide", "yes", "--resolution", "said in the session")
+        d = self.item()
+        self.assertEqual((d["status"], d["kind"], d["page"], d["answer"]), ("decided", "decision", False, "yes"))
+        self.assertEqual([e["kind"] for e in self.state()["events"] if e.get("decision") == "d1"], ["decision"])
+
+
+class RoadblockTest(Fleet):
+    ROADBLOCK = ["roadblock", "r1", "--title", "Schema undecided", "--detail", "invoice-gen is stopped", "--severity", "serious",
+                 "--needs", "user", "--agent", "a1"]
+
+    def test_a_roadblock_that_needs_the_user_names_its_decision(self):
+        self.assertIn("--decision", self.refused(*self.ROADBLOCK))
+        self.assertIn("unknown decision", self.refused(*self.ROADBLOCK, "--decision", "d1"))
+        self.ok("decision", *SCHEMA, "--blocking", "--agent", "a1")
+        self.ok(*self.ROADBLOCK, "--decision", "d1")
+        self.assertEqual(self.state()["roadblocks"][0]["decision"], "d1")
+        self.ok("roadblock", "r2", "--title", "T", "--detail", "D", "--severity", "warning", "--needs", "coordinator")
+
+    def test_closing_the_decision_clears_its_roadblocks_and_frees_the_worker(self):
+        self.ok("decision", *SCHEMA, "--blocking", "--agent", "a1")
+        self.ok(*self.ROADBLOCK, "--decision", "d1")
+        self.assertEqual(self.state()["agents"][0]["status"], "blocked")
+        self.ok("decision", "d1", "--decide", "A", "--resolution", "answered on the page")
+        state = self.state()
+        self.assertTrue(state["roadblocks"][0]["resolved"])
+        self.assertEqual(state["agents"][0]["status"], "running")
+
+    def test_a_roadblock_cannot_hang_on_a_closed_decision(self):
+        self.ok("decision", *SCHEMA)
+        self.ok("decision", "d1", "--withdraw", "moot")
+        self.assertIn("withdrawn", self.refused(*self.ROADBLOCK, "--decision", "d1"))
+
+
+class LedgerTest(Fleet):
+    def test_show_lists_what_waits_and_what_was_decided(self):
+        self.ok("decision", *SCHEMA, "--blocking")
+        self.ok("decision", "d2", "--kind", "input", "--title", "Rate limit", "--question", "q", "--why", "w")
+        self.ok("decision", "d2", "--decide", "200 per minute", "--resolution", "said in the chat (#3)")
+        out = subprocess.run([sys.executable, STATE, str(self.root), "show"], capture_output=True, text=True).stdout
+        self.assertIn("decision d1 OPEN, blocking [decision] Invoice schema", out)
+        self.assertIn("decision d2 decided [input] Rate limit: 200 per minute", out)
+
+    def test_a_state_from_before_decisions_still_renders(self):
+        state = self.state()
+        del state["decisions"]
+        (self.root / "state.json").write_text(json.dumps(state))
+        result = subprocess.run([sys.executable, STATE, str(self.root), "set", "--now", "later"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.state()["decisions"], [])
+        self.assertTrue((self.root / "index.html").exists())
+
+    def test_a_state_whose_decisions_are_malformed_is_refused(self):
+        self.ok("decision", *SCHEMA)
+        good = (self.root / "state.json").read_text()
+        for change, word in [({"status": "maybe"}, "status"), ({"kind": "poll"}, "kind"), ({"supersedes": "d9"}, "d9")]:
+            state = json.loads(good)
+            state["decisions"][0].update(change)
+            (self.root / "state.json").write_text(json.dumps(state))
+            self.assertIn(word, self.refused("set", "--now", "x"))
+
+
+class AnswerTest(Fleet):
+    def refusal(self, id_: str, text: str):
+        return decisions.answer_refusal(self.root, id_, text)
+
+    def test_an_open_item_takes_an_answer(self):
+        self.ok("decision", *SCHEMA)
+        self.assertIsNone(self.refusal("d1", "B: keep both"))
+        self.assertIsNone(self.refusal("d1", "None of these: split the table instead"))
+
+    def test_an_unknown_or_closed_item_refuses_with_the_reason(self):
+        self.assertIn("unknown decision", self.refusal("d1", "A"))
+        self.ok("decision", *SCHEMA)
+        self.ok("decision", "d1", "--withdraw", "the worker found the answer in the migration notes")
+        said = self.refusal("d1", "A")
+        self.assertIn("withdrawn", said)
+        self.assertIn("the worker found the answer in the migration notes", said)
+
+    def test_a_secret_takes_a_reference_or_an_item_name_and_never_a_value(self):
+        self.ok("decision", "d1", "--kind", "secret", "--title", "Neo4j password", "--question", "Where is the Neo4j password?", "--why", "w",
+                "--secret", "NEO4J_PASSWORD", "--manual", "secretspec set NEO4J_PASSWORD")
+        for fine in ["op://Engineering/Neo4j Aura/password", "op://dev/abcdefghijklmnopqrstuvwxyz/section/credential",
+                     "Neo4j Aura (prod)", "NEO4J_PASSWORD in the Engineering vault", "Set by hand."]:
+            self.assertIsNone(self.refusal("d1", fine), fine)
+        for value in ["sk-ant-api03-Zk9xQ2", "ghp_16C7e42F292c6912E7710c838347Ae178B4a", "xoxb-12345-abcdef",
+                      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc", "f3a9c1d27b6e4f0a8d5c2b1e9f7a6d3c", "AKIAIOSFODNN7EXAMPLE",
+                      "the password is hunter2hunter2hunter2", "-----BEGIN PRIVATE KEY-----", "x" * 300]:
+            self.assertIn("never the value", self.refusal("d1", value), value)
+
+    def test_other_kinds_take_any_text(self):
+        self.ok("decision", "d1", "--kind", "input", "--title", "T", "--question", "q", "--why", "w")
+        self.assertIsNone(self.refusal("d1", "commit f3a9c1d27b6e4f0a8d5c2b1e9f7a6d3c is the one"))
+
+
+if __name__ == "__main__":
+    unittest.main()

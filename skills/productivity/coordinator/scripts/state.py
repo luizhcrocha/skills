@@ -9,7 +9,12 @@
                           [--status S] [--tokens N] [--duration-ms N] [--report R]
                           [--brief B] [--name N] [--step STEP] [--log TEXT] [--important]
     state.py DIR roadblock ID [--title T --detail D --severity S --needs N] [--agent A]
-                              [--resolved | --open]
+                              [--decision D] [--resolved | --open]
+    state.py DIR decision ID [--kind K --title T --question Q --why W] [--blocking | --not-blocking]
+                             [--option "KEY: label | consequence"]... [--recommend R --reason WHY]
+                             [--secret NAME] [--manual TEXT] [--body FILE | --no-body]
+                             [--agent A] [--supersedes ID] [--log TEXT]
+                             [--decide ANSWER --resolution HOW | --withdraw REASON]
     state.py DIR event [--agent A] [--kind K] [--important] TEXT
     state.py DIR show
 
@@ -22,11 +27,13 @@ validates the result, and renders index.html.
 """
 import argparse
 import json
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import decisions  # noqa: E402
 import render_dashboard  # noqa: E402
 
 STATUSES = sorted(render_dashboard.STATUSES)
@@ -36,7 +43,7 @@ SKILLS = ["implement", "diagnosing-bugs", "prototype", "research", "tdd", "none"
 MODELS = ["opus", "sonnet", "haiku", "fable"]
 SEVERITIES = ["warning", "serious", "critical"]
 NEEDS = ["user", "coordinator", "worker"]
-KINDS = ["spawned", "reported", "blocked", "resolved", "decision", "note", "integrated"]
+KINDS = ["spawned", "reported", "blocked", "resolved", "asked", "decision", "note", "integrated"]
 
 
 def now() -> str:
@@ -58,10 +65,13 @@ def require(args, fields: list[str], what: str) -> None:
         fail(f"new {what} needs --{' --'.join(missing)}")
 
 
-def log(state: dict, kind: str, text: str, agent: str | None = None, important: bool = False) -> None:
+def log(state: dict, kind: str, text: str, agent: str | None = None, important: bool = False,
+        decision: str | None = None) -> None:
     event = {"at": now(), "agent": agent, "kind": kind, "text": text}
     if important:
         event["important"] = True
+    if decision:
+        event["decision"] = decision
     state["events"].append(event)
 
 
@@ -71,7 +81,7 @@ def cmd_init(state, args):
     return {
         "project": args.project, "goal": args.goal, "status": "running",
         "now": args.now or "Intake in progress.", "started": now(), "updated": now(),
-        "roadmap": [], "agents": [], "roadblocks": [], "events": [],
+        "roadmap": [], "agents": [], "roadblocks": [], "decisions": [], "events": [],
     }
 
 
@@ -152,29 +162,164 @@ def cmd_agent(state, args):
     return state
 
 
+def open_decision(state, id_: str) -> dict:
+    d = decisions.find(state, id_)
+    if d is None:
+        fail(f"unknown decision '{id_}'")
+    if d["status"] != "open":
+        fail(decisions.closed_because(d))
+    return d
+
+
+def resolve(state, r: dict) -> None:
+    r["resolved"] = True
+    log(state, "resolved", f"{r['title']} resolved.", r.get("agent"))
+    a = r.get("agent") and find(state["agents"], r["agent"])
+    if a and a["status"] == "blocked":
+        a["status"] = "running"
+
+
 def cmd_roadblock(state, args):
     r = find(state["roadblocks"], args.id)
+    if args.decision:
+        open_decision(state, args.decision)
     if r is None:
         require(args, ["title", "detail", "severity", "needs"], "roadblock")
+        if args.needs == "user" and not args.decision:
+            fail("a roadblock that needs the user names what it asks: record the `decision` first, then pass --decision ID")
         state["roadblocks"].append({
             "id": args.id, "title": args.title, "detail": args.detail, "agent": args.agent or None,
-            "severity": args.severity, "needs": args.needs, "since": now(), "resolved": False,
+            "severity": args.severity, "needs": args.needs, "decision": args.decision or None,
+            "since": now(), "resolved": False,
         })
-        log(state, "blocked", f"{args.title}: {args.detail}", args.agent, args.important or args.needs == "user")
+        log(state, "blocked", f"{args.title}: {args.detail}", args.agent, args.important or args.needs == "user", args.decision)
         if args.agent and find(state["agents"], args.agent):
             find(state["agents"], args.agent)["status"] = "blocked"
         return state
-    for key in ("title", "detail", "severity", "needs", "agent"):
+    for key in ("title", "detail", "severity", "needs", "agent", "decision"):
         if getattr(args, key) is not None:
             r[key] = getattr(args, key)
     if args.resolved:
-        r["resolved"] = True
-        log(state, "resolved", f"{r['title']} resolved.", r.get("agent"))
-        a = r.get("agent") and find(state["agents"], r["agent"])
-        if a and a["status"] == "blocked":
-            a["status"] = "running"
+        resolve(state, r)
     if args.open:
         r["resolved"] = False
+    return state
+
+
+def parse_options(texts: list[str]) -> list[dict]:
+    """Each "KEY: label | consequence" as {"id", "label", "consequence"}."""
+    options = []
+    for text in texts:
+        key, colon, rest = text.partition(":")
+        label, bar, consequence = rest.partition("|")
+        key, label, consequence = key.strip(), label.strip(), consequence.strip()
+        if not (colon and bar and label and consequence and decisions.ID.fullmatch(key)):
+            fail(f"an option reads \"KEY: label | consequence\", got {text!r}")
+        if find(options, key):
+            fail(f"option '{key}' is given twice")
+        options.append({"id": key, "label": label, "consequence": consequence})
+    return options
+
+
+def check_kind(d: dict) -> None:
+    """What each kind's answer control shows has to be there."""
+    if d["kind"] == "decision":
+        if len(d["options"]) < 2:
+            fail("a decision needs at least two options (--option, once per option)")
+        missing = [f for f in ("recommend", "reason") if not d[f]]
+        if missing:
+            fail(f"a decision carries the coordinator's recommendation: give --{' --'.join(missing)}")
+        if not find(d["options"], d["recommend"]):
+            fail(f"--recommend '{d['recommend']}' is not one of the options ({', '.join(o['id'] for o in d['options'])})")
+    if d["kind"] == "secret" and not d["secret"]:
+        fail("a secret names what the code expects: give --secret NAME (the key in secretspec.toml)")
+    if d["kind"] in ("secret", "action") and not d["manual"]:
+        fail(f"{'a secret' if d['kind'] == 'secret' else 'an action'} gives the manual route: give --manual with the steps or commands")
+
+
+def set_body(root: Path, d: dict, args) -> None:
+    target = root / "decisions" / f"{d['id']}.html"
+    if args.no_body:
+        target.unlink(missing_ok=True)
+        d["body"] = False
+    elif args.body:
+        try:
+            content = Path(args.body).read_bytes()
+        except OSError as exc:
+            fail(f"cannot read the body {args.body}: {exc.strerror or exc}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        d["body"] = True
+
+
+def close(state, d: dict, status: str, answer: str | None, resolution: str) -> None:
+    d.update(status=status, answer=answer, resolution=resolution, closed=now())
+    if status == "decided":
+        log(state, "decision", f"{d['title']}: {answer} ({resolution})", d["agent"], decision=d["id"])
+    else:
+        log(state, "resolved", f"{d['title']} withdrawn: {resolution}", d["agent"], decision=d["id"])
+    for r in state["roadblocks"]:
+        if r.get("decision") == d["id"] and not r["resolved"]:
+            resolve(state, r)
+
+
+FIELDS = ("kind", "title", "question", "why", "recommend", "reason", "secret", "manual", "agent")
+
+
+def cmd_decision(state, args):
+    rows = state.setdefault("decisions", [])
+    d = decisions.find(state, args.id)
+    if args.decide is not None and not args.resolution:
+        fail("--decide says what was chosen and --resolution how it came (\"answered on the page (#14)\", \"said in the session\")")
+    if args.agent and not find(state["agents"], args.agent):
+        fail(f"unknown agent '{args.agent}'")
+    if d is not None and d["status"] != "open":
+        fail(f"{decisions.closed_because(d)}. A closed decision stays as it is; open a new one with --supersedes {d['id']}")
+    if d is None:
+        if not decisions.ID.fullmatch(args.id):
+            fail(f"decision id {args.id!r} should be letters, digits, '_', '.', or '-'")
+        if args.supersedes:
+            old = decisions.find(state, args.supersedes)
+            if old is None:
+                fail(f"unknown decision '{args.supersedes}'")
+            if old["status"] == "open":
+                fail(f"{old['title']} is still open; change it instead of superseding it")
+        made_elsewhere = args.decide is not None
+        require(args, ["title", "question"] if made_elsewhere else ["kind", "title", "question", "why"], "decision")
+        d = {"id": args.id, "kind": args.kind or "decision", "title": args.title, "question": args.question,
+             "why": args.why, "blocking": bool(args.blocking), "agent": args.agent or None,
+             "options": parse_options(args.option or []), "recommend": args.recommend, "reason": args.reason,
+             "secret": args.secret, "manual": args.manual, "body": False, "page": not made_elsewhere,
+             "supersedes": args.supersedes, "status": "open", "answer": None, "resolution": None, "change": None,
+             "opened": now(), "revised": None, "closed": None}
+        if not made_elsewhere:
+            check_kind(d)
+            set_body(Path(args.dir).resolve(), d, args)
+            log(state, "asked", f"{d['title']}: {d['question']}", d["agent"], d["blocking"], d["id"])
+        rows.append(d)
+    else:
+        if args.supersedes:
+            fail("--supersedes is given when the new decision is opened")
+        changed = [k for k in FIELDS if getattr(args, k) is not None] + [k for k in ("option", "body") if getattr(args, k)]
+        for key in FIELDS:
+            if getattr(args, key) is not None:
+                d[key] = getattr(args, key) or None
+        if args.option:
+            d["options"] = parse_options(args.option)
+        if args.blocking or args.not_blocking:
+            d["blocking"] = bool(args.blocking)
+            changed.append("blocking")
+        if args.no_body:
+            changed.append("body")
+        check_kind(d)
+        set_body(Path(args.dir).resolve(), d, args)
+        if changed:
+            d["revised"], d["change"] = now(), args.log or None
+            log(state, "asked", f"{d['title']} changed: {args.log or ', '.join(changed)}", d["agent"], decision=d["id"])
+    if args.decide is not None:
+        close(state, d, "decided", args.decide, args.resolution)
+    elif args.withdraw is not None:
+        close(state, d, "withdrawn", None, args.withdraw)
     return state
 
 
@@ -196,6 +341,10 @@ def cmd_show(state, args):
         print(f"  agent {a['id']:<16} {a['status']:<8} {a['skill']:<15} {a['model']:<6} {a['tokens']:>8} tok  lane={','.join(a['lane']) or '-'}")
     for r in state["roadblocks"]:
         print(f"  roadblock {r['id']} {'resolved' if r['resolved'] else 'OPEN'} [{r['severity']}, needs {r['needs']}] {r['title']}")
+    for d in state.get("decisions", []):
+        status = ("OPEN, blocking" if d.get("blocking") else "OPEN") if d["status"] == "open" else d["status"]
+        outcome = d.get("answer") or d.get("resolution")
+        print(f"  decision {d['id']} {status} [{d['kind']}] {d['title']}" + (f": {outcome}" if outcome else ""))
     print(f"  {len(state['events'])} events, updated {state['updated']}")
     return None
 
@@ -221,8 +370,23 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("roadblock"); s.add_argument("id")
     s.add_argument("--title"); s.add_argument("--detail"); s.add_argument("--severity", choices=SEVERITIES)
     s.add_argument("--needs", choices=NEEDS); s.add_argument("--agent")
+    s.add_argument("--decision", help="the decision this roadblock waits on; required with --needs user")
     g = s.add_mutually_exclusive_group(); g.add_argument("--resolved", action="store_true"); g.add_argument("--open", action="store_true")
     s.add_argument("--important", action="store_true", help="notify the user now (implied by --needs user)")
+    s = sub.add_parser("decision"); s.add_argument("id")
+    s.add_argument("--kind", choices=decisions.KINDS); s.add_argument("--title"); s.add_argument("--question")
+    s.add_argument("--why", help="what it blocks, or the assumption the fleet runs on until it is answered")
+    g = s.add_mutually_exclusive_group(); g.add_argument("--blocking", action="store_true"); g.add_argument("--not-blocking", action="store_true")
+    s.add_argument("--option", action="append", metavar="\"KEY: label | consequence\"", help="once per option; given again, replaces them all")
+    s.add_argument("--recommend", help="the option's KEY, or the value you would give"); s.add_argument("--reason")
+    s.add_argument("--secret", metavar="NAME", help="the name the code expects, as in secretspec.toml")
+    s.add_argument("--manual", help="the route the user can take by hand: steps or commands, shown verbatim")
+    g = s.add_mutually_exclusive_group(); g.add_argument("--body", metavar="FILE", help="an HTML fragment with the evidence, copied to DIR/decisions/ID.html")
+    g.add_argument("--no-body", action="store_true")
+    s.add_argument("--agent", help="the worker that waits on it"); s.add_argument("--supersedes", metavar="ID")
+    s.add_argument("--log", help="what changed, shown to the user on the page")
+    g = s.add_mutually_exclusive_group(); g.add_argument("--decide", metavar="ANSWER"); g.add_argument("--withdraw", metavar="REASON")
+    s.add_argument("--resolution", metavar="HOW", help="with --decide: how the answer came")
     s = sub.add_parser("event"); s.add_argument("text"); s.add_argument("--agent"); s.add_argument("--kind", choices=KINDS)
     s.add_argument("--important", action="store_true", help="the user should see this now: toast, sound, badge")
     sub.add_parser("show")
