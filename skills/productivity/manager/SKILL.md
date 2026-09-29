@@ -93,6 +93,7 @@ A fleet's name is its session's: the registry reads it from the session's title,
 
 - **One heavy check at a time.** `fleets.py gate` says who holds the gate slot; a fleet takes it before a test suite or a build that loads the machine, and frees it after. Your page shows the holder. Settle a dispute over it as you settle a turn.
 - **What each session left running.** `fleets.py procs` lists, per fleet, the background processes its session started, with their age. One that outlived its purpose is its session's to stop: tell it.
+- **Where the user goes.** Your Links view lists every fleet's pages and dev servers, and every port the machine serves that no link names, with the fleet that started it. One left unnamed goes back to that fleet to record (`link`) or to stop.
 - **Whose files a landing moves.** `fleets.py whose FROM TO`, in the repository, sorts the files by owning fleet from `<dir>/owners` (one `FLEET GLOB` per line, first match wins; keep it with the owners in `standing.md`).
 
 ## Said once

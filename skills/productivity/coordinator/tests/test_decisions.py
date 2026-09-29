@@ -15,6 +15,7 @@ STATE = str(SCRIPTS / "state.py")
 
 # The registry of fleets is this machine's; the tests get one of their own.
 os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
+os.environ["FLEET_DISCOVER"] = "0"
 
 SCHEMA = ["d1", "--kind", "decision", "--title", "Invoice schema", "--question", "Migrate the invoice table or keep both shapes?",
           "--why", "invoice-gen cannot write usage lines until this is settled",

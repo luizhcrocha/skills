@@ -10,7 +10,8 @@ import json
 import re
 from pathlib import Path
 
-KINDS = ["decision", "input", "secret", "action"]
+KINDS = ["decision", "input", "secret", "action", "grill"]
+QUESTION_STATUSES = ["open", "answered", "dropped"]
 STATUSES = ["open", "decided", "withdrawn"]
 ASKS = ["user", "manager"]
 ID = re.compile(r"[A-Za-z0-9_.-]+")
@@ -85,6 +86,11 @@ def validate(state: dict, fail) -> None:
         for o in d.setdefault("options", []):
             if not isinstance(o, dict) or not all(isinstance(o.get(k), str) for k in ("id", "label", "consequence")):
                 fail(f"decision {d['id']} has an option without id, label and consequence")
+        if d["kind"] == "grill":
+            qs = d.setdefault("questions", [])
+            if not isinstance(qs, list) or not all(isinstance(q, dict) and isinstance(q.get("id"), str) and isinstance(q.get("title"), str)
+                                                    and q.get("status") in QUESTION_STATUSES for q in qs):
+                fail(f"grilling {d['id']} has a question without id, title, or a status in {QUESTION_STATUSES}")
         ids.add(d["id"])
         if d.setdefault("asks", "user") not in ASKS:
             fail(f"decision {d['id']} asks '{d['asks']}', not one of {ASKS}")

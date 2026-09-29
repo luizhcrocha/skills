@@ -199,15 +199,29 @@ def view(state: dict, root) -> dict:
     """The state as the page shows it: a manager's with every coordinator being served and the plan's
     usage as the status line last saw it, a coordinator's with how to reach its manager when there
     is one. The state itself is left as it is."""
-    import chat, spend
+    import chat, served, spend
     root = str(Path(root).resolve())
     state = {**state, "spent": spend.of(root), "chat": chat.listening(root)}
+    me = find(root)
+    links = [{**link, "fleet": me["id"] if me else None} for link in served.links_of(state)]
     if role_of(state) == "manager":
         import usage  # here, not above: usage.py reads the registry's place from this module
-        return {**state, "coordinators": [summary(e) for e in live() if e["role"] != "manager" and e["dir"] != root],
-                "usage": usage.read(), "gate": gate()}
+        others = [e for e in live() if e["role"] != "manager" and e["dir"] != root]
+        for e in others:
+            links += [{**link, "fleet": e["id"]} for link in served.links_of(_read(Path(e["dir"]) / "state.json") or {})]
+        return {**state, "coordinators": [summary(e) for e in others], "usage": usage.read(), "gate": gate(),
+                "links": links, "found": _unlisted(served.discovered(), links)}
+    mine = [x for x in served.discovered() if me and x["fleet"] == me["id"]]
     found = manager()
+    state = {**state, "links": links, "found": _unlisted(mine, links)}
     return {**state, "manager": {"id": found["id"], "url": found["url"], "session": found.get("session")}} if found else state
+
+
+def _unlisted(found: list[dict], links: list[dict]) -> list[dict]:
+    """What the machine serves that no link names: a served port whose address no link points at."""
+    from urllib.parse import urlsplit
+    ports = {urlsplit(link["url"]).port for link in links}
+    return [x for x in found if x["port"] not in ports]
 
 
 def cmd_list() -> None:

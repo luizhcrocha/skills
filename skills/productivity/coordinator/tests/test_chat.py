@@ -21,6 +21,7 @@ CHAT = str(SCRIPTS / "chat.py")
 
 # The registry of fleets is this machine's; the tests get one of their own.
 os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
+os.environ["FLEET_DISCOVER"] = "0"
 
 
 def write_state(root: Path, agents: list[dict]) -> None:

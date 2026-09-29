@@ -30,7 +30,7 @@ End with a report the coordinator can act on from its first block, ten lines at 
 
 1. Each completion criterion: met or not.
 2. What you verified and how (the command and its result), and what you left unverified.
-3. What you left running or changed outside the code (processes, ports, files outside the repository).
+3. What you left running or changed outside the code (processes, ports, files outside the repository). A dev server or a page you built for the user: its address, and what it is for.
 4. What needs the coordinator: questions, files outside your lane, anything that needs the user.
 
 The detail goes below that block.

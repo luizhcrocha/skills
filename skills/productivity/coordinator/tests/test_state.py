@@ -12,6 +12,7 @@ STATE = str(SKILL / "scripts" / "state.py")
 
 # The registry of fleets is this machine's; the tests get one of their own.
 os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
+os.environ["FLEET_DISCOVER"] = "0"
 
 
 class Fleet(unittest.TestCase):
@@ -196,6 +197,39 @@ class KeepAndNextTest(Fleet):
         self.assertEqual(self.state()["kept"], [])
         self.assertIn("landed in l3", self.state()["events"][-1]["text"])
         self.assertIn("nothing kept", self.refused("keep", "x", "--drop", "y"))
+
+
+class GrillTest(Fleet):
+    def test_a_grilling_is_asked_answered_followed_up_and_done(self):
+        self.assertIn("--title", self.refused("grill", "g1", "--ask", "a | b | c"))
+        self.ok("grill", "g1", "--title", "Tab", "--ask", "Where | tab or sidebar? | tab", "--ask", "Secrets | how? | refs")
+        d = self.state()["decisions"][0]
+        self.assertEqual((d["kind"], d["question"], [q["id"] for q in d["questions"]]), ("grill", "2 questions to answer", ["q1", "q2"]))
+        self.assertEqual(self.state()["events"][-1]["kind"], "asked")
+        self.ok("grill", "g1", "--answer", "Q1: a sidebar", "--of", "q1", "--ask", "Side | left or right? | left")
+        d = self.state()["decisions"][0]
+        self.assertEqual([(q["id"], q["status"], q["of"]) for q in d["questions"]], [("q1", "answered", None), ("q2", "open", None), ("q3", "open", "q1")])
+        self.assertTrue(d["revised"])
+        self.assertIn("still open", self.refused("grill", "g1", "--done", "x"))
+        self.assertIn("Q3:", self.refused("grill", "g1", "--answer", "left"))
+        self.ok("grill", "g1", "--drop", "Q2: settled in the session", "--answer", "Q3: left", "--done", "a left sidebar")
+        d = self.state()["decisions"][0]
+        self.assertEqual((d["status"], d["answer"]), ("decided", "a left sidebar"))
+
+    def test_a_grilling_is_not_opened_with_decision(self):
+        self.assertIn("grill command", self.refused("decision", "g2", "--kind", "grill", "--title", "t", "--question", "q", "--why", "w"))
+
+
+class LinkTest(Fleet):
+    def test_links_are_recorded_tied_to_a_decision_and_dropped(self):
+        self.assertIn("--url and --title", self.refused("link", "l1"))
+        self.ok("link", "review", "--url", "https://box.ts.net:47843/", "--title", "Lab review", "--kind", "page")
+        self.assertIn("unknown decision", self.refused("link", "review", "--decision", "d9"))
+        self.ok("link", "review", "--note", "mark each hit")
+        link = self.state()["links"][0]
+        self.assertEqual((link["kind"], link["note"]), ("page", "mark each hit"))
+        self.ok("link", "review", "--drop", "the review is done")
+        self.assertEqual(self.state()["links"], [])
 
 
 class ManagerTest(unittest.TestCase):

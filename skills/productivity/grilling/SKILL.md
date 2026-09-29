@@ -26,3 +26,11 @@ Each round the user answers reshapes the tree: settled decisions push the fronti
 Finding _facts_ is your job, never the user's. When a frontier question needs a fact from the environment (filesystem, tools, etc.), dispatch a sub-agent to find it; don't ask the user for anything you could look up yourself. Don't block on it: a running exploration is an unsettled prerequisite, so only the questions downstream of it wait for the sub-agent to report; ask the rest of the frontier now. The _decisions_ are the user's: put each to them and wait.
 
 The session is done when the frontier is empty: every branch of the design tree visited, nothing left silently assumed. Do not act on it until the user confirms you have reached a shared understanding.
+
+## On a fleet dashboard
+
+When this session runs a coordinator's or a manager's dashboard, the rounds go on its page, where each question has its own answer and none is lost among chat messages. The dashboard's `state.py` is in the coordinator skill's `scripts/`:
+
+- A round: `state.py <dir> grill <id> --title "<what is being decided>" --ask "<title> | <question, with its choices> | <recommended answer>"`, one `--ask` per frontier question. Follow-ups: `--of Q2` on the command that asks them. Then tell the user the page (`<dashboard url>#decision/<id>`), in one line.
+- Answers arrive in the chat watch as `[<id>]` lines of `Q3: ...`. Record each: `--answer "Q3: <their words>"`. A question that stopped mattering: `--drop "Q4: why"`; one you would now ask differently: `--revise "Q3: <title> | <question> | <recommendation>"`.
+- The frontier is empty and the user has confirmed: `--done "<what was agreed>"`.

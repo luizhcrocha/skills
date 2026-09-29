@@ -21,6 +21,9 @@
     state.py DIR event [--agent A] [--kind K] [--important] TEXT
     state.py DIR park [--agent A]... REASON
     state.py DIR keep ID [TEXT | --drop REASON]
+    state.py DIR link ID --url U --title T [--kind dev|page] [--decision D] [--agent A] [--note N] | --drop REASON
+    state.py DIR grill ID [--title T --why W] [--ask "TITLE | QUESTION | RECOMMENDATION"]... [--of Q]
+                          [--answer "Q3: ..."]... [--drop "Q4: why"]... [--revise "Q3: T | Q | R"]... [--done SUMMARY]
     state.py DIR step next --milestone M --title T   (records the next free step id and prints it)
     state.py DIR show
 
@@ -145,6 +148,39 @@ def measure(root, state: dict) -> None:
         if got is None or (a.get("measured") == got["at"] and a["status"] not in LIVE):
             continue
         a["tokens"], a["duration_ms"], a["measured"] = got["tokens"], got["duration_ms"], got["at"]
+
+
+LINK_KINDS = ["dev", "page"]
+
+
+def cmd_link(state, args):
+    """A place the user opens: a dev server (`dev`) or a page made for a purpose (`page`: a review, a
+    lab, a report). The Links view lists them, up or down; one tied to a decision opens from its page."""
+    links = state.setdefault("links", [])
+    item = find(links, args.id)
+    if args.drop is not None:
+        if item is None:
+            fail(f"no link '{args.id}'")
+        links.remove(item)
+        log(state, "note", f"Link {args.id} ({item['title']}) removed: {args.drop}")
+        return state
+    if args.decision and not decisions.find(state, args.decision):
+        fail(f"unknown decision '{args.decision}'")
+    if args.agent and not known(state, args.agent):
+        fail(f"unknown agent '{args.agent}'")
+    if item is None:
+        if not args.url or not args.title:
+            fail("a new link needs --url and --title")
+        item = {"id": args.id, "url": args.url, "title": args.title, "kind": args.kind or "dev", "decision": args.decision,
+                "agent": args.agent, "note": args.note, "since": now()}
+        links.append(item)
+        log(state, "note", f"{'Page' if item['kind'] == 'page' else 'Dev server'} {item['title']}: {item['url']}", args.agent,
+            decision=args.decision)
+    else:
+        for key in ("url", "title", "kind", "decision", "agent", "note"):
+            if getattr(args, key) is not None:
+                item[key] = getattr(args, key) or None
+    return state
 
 
 def cmd_keep(state, args):
@@ -367,6 +403,8 @@ def parse_options(texts: list[str]) -> list[dict]:
 
 def check_kind(d: dict) -> None:
     """What each kind's answer control shows has to be there."""
+    if d["kind"] == "grill" and "questions" not in d:
+        fail("a grilling is asked with the grill command: `grill ID --title T --ask \"TITLE | QUESTION | RECOMMENDATION\"`")
     if d["kind"] == "decision":
         if len(d["options"]) < 2:
             fail("a decision needs at least two options (--option, once per option)")
@@ -478,6 +516,82 @@ def cmd_decision(state, args):
     return state
 
 
+def _q(text: str, what: str) -> tuple[str, str]:
+    """ "Q3: rest" as ("q3", "rest")."""
+    head, sep, rest = text.partition(":")
+    if not sep or not re.fullmatch(r"[Qq]\d+", head.strip()):
+        fail(f"{what} starts with the question's number: \"Q3: ...\"")
+    return head.strip().lower(), rest.strip()
+
+
+def _asked(text: str) -> tuple[str, str, str]:
+    parts = [x.strip() for x in text.split("|")]
+    if len(parts) != 3 or not all(parts):
+        fail("--ask takes \"title | the question, with its choices | your recommended answer\"")
+    return parts[0], parts[1], parts[2]
+
+
+def cmd_grill(state, args):
+    """A grilling: a round of numbered questions, each with its recommendation, answered one by one on
+    the page. Questions are added round by round (follow-ups under what they follow), answered as
+    the answers come, dropped when they stop mattering, and the grilling is done when none is open."""
+    d = decisions.find(state, args.id)
+    created = d is None
+    if d is not None and d["kind"] != "grill":
+        fail(f"{args.id} is a {d['kind']}, not a grilling")
+    if d is not None and d["status"] != "open":
+        fail(decisions.closed_because(d))
+    if d is None:
+        if not decisions.ID.fullmatch(args.id):
+            fail(f"grilling id {args.id!r} should be letters, digits, '_', '.', or '-'")
+        if not args.title or not args.ask:
+            fail("a new grilling needs --title and its first round (--ask, once per question)")
+        d = {"id": args.id, "kind": "grill", "title": args.title, "question": "", "why": args.why, "blocking": bool(args.blocking),
+             "agent": args.agent or None, "options": [], "recommend": None, "reason": None, "secret": None, "manual": None,
+             "body": False, "page": True, "supersedes": None, "status": "open", "answer": None, "resolution": None,
+             "change": None, "asks": "user", "opened": now(), "revised": None, "closed": None, "questions": []}
+        state.setdefault("decisions", []).append(d)
+    qs = d["questions"]
+    byid = {q["id"]: q for q in qs}
+    if args.of and args.of.lower() not in byid:
+        fail(f"--of {args.of}: no such question in {d['id']}")
+    for text in args.answer or []:
+        qid, answer = _q(text, "--answer")
+        if qid not in byid:
+            fail(f"no question {qid.upper()} in {d['id']}")
+        byid[qid].update(status="answered", answer=answer, answered=now())
+    for text in args.drop or []:
+        qid, reason = _q(text, "--drop")
+        if qid not in byid:
+            fail(f"no question {qid.upper()} in {d['id']}")
+        byid[qid].update(status="dropped", answer=None, dropped=reason, answered=now())
+    for text in args.revise or []:
+        qid, rest = _q(text, "--revise")
+        if qid not in byid:
+            fail(f"no question {qid.upper()} in {d['id']}")
+        title, body, rec = _asked(rest)
+        byid[qid].update(title=title, body=body, recommend=rec, status="open", answer=None, asked=now())
+    new = []
+    for text in args.ask or []:
+        title, body, rec = _asked(text)
+        q = {"id": f"q{len(qs) + 1}", "title": title, "body": body, "recommend": rec, "of": args.of.lower() if args.of else None,
+             "status": "open", "answer": None, "asked": now()}
+        qs.append(q)
+        new.append(q)
+    open_ = [q for q in qs if q["status"] == "open"]
+    d["question"] = f"{len(open_)} question{'s' if len(open_) != 1 else ''} to answer" if open_ else "Every question is answered"
+    if new or args.revise:
+        if not created:
+            d["revised"] = now()  # the page shows the round as new since the viewer last looked
+        words = f"{len(new)} new question{'s' if len(new) != 1 else ''}" if new else "a question revised"
+        log(state, "asked", f"{d['title']}: {words}", d["agent"], d["blocking"], d["id"])
+    if args.done is not None:
+        if open_:
+            fail(f"{', '.join(q['id'].upper() for q in open_)} still open: answer them, drop them, or ask what is left")
+        close(state, d, "decided", args.done, "grilling finished")
+    return state
+
+
 def cmd_event(state, args):
     if args.agent and not known(state, args.agent):
         fail(f"unknown agent '{args.agent}'")
@@ -503,6 +617,9 @@ commands (state.py DIR <command>; an unknown ID creates the row, a known ID chan
   event [--kind {"|".join(KINDS)}] [--agent A] [--important] TEXT   (a note is `event --kind note TEXT`)
   park [--agent A]... REASON     stop every live worker row (or those named) in one command
   keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace
+  link ID --url U --title T [--kind dev|page] [--decision D] [--note N] | --drop R   a dev server or a purpose-built page
+  grill ID --title T --ask "TITLE | QUESTION | RECOMMENDATION"... [--of Q]   a grilling round, answered on the page
+        [--answer "Q3: ..."] [--drop "Q4: why"] [--revise "Q3: T | Q | R"] [--done SUMMARY]
   step next --milestone M --title T   the next free step id, printed
   show
   --no-render on any command writes state.json without rendering; -q renders without saying so"""
@@ -593,6 +710,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--resolution", metavar="HOW", help="with --decide: how the answer came")
     s = sub.add_parser("event"); s.add_argument("text"); s.add_argument("--agent"); s.add_argument("--kind", choices=KINDS)
     s.add_argument("--important", action="store_true", help="the user should see this now: toast, sound, badge")
+    s = sub.add_parser("grill"); s.add_argument("id"); s.add_argument("--title"); s.add_argument("--why")
+    s.add_argument("--ask", action="append", metavar='"TITLE | QUESTION | RECOMMENDATION"', help="a question of this round (repeatable)")
+    s.add_argument("--of", metavar="Q", help="the questions asked here follow up on this one")
+    s.add_argument("--answer", action="append", metavar='"Q3: ANSWER"'); s.add_argument("--drop", action="append", metavar='"Q4: WHY"')
+    s.add_argument("--revise", action="append", metavar='"Q3: TITLE | QUESTION | RECOMMENDATION"')
+    s.add_argument("--blocking", action="store_true"); s.add_argument("--agent")
+    s.add_argument("--done", metavar="SUMMARY", help="every question is settled: what was agreed")
+    s = sub.add_parser("link"); s.add_argument("id"); s.add_argument("--url"); s.add_argument("--title")
+    s.add_argument("--kind", choices=LINK_KINDS, help="dev: a dev server; page: a page made for a purpose")
+    s.add_argument("--decision", help="the decision it serves: its page links here"); s.add_argument("--agent")
+    s.add_argument("--note", help="what to do there"); s.add_argument("--drop", metavar="REASON")
     s = sub.add_parser("keep"); s.add_argument("id"); s.add_argument("text", nargs="?")
     s.add_argument("--drop", metavar="REASON", help="it no longer needs keeping")
     s = sub.add_parser("park"); s.add_argument("reason"); s.add_argument("--agent", action="append", help="only this worker (repeatable)")

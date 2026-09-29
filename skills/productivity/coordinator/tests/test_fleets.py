@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+os.environ["FLEET_DISCOVER"] = "0"  # the machine's own servers are not the tests' to see
 sys.path.insert(0, str(SCRIPTS))
 import fleets  # noqa: E402
 

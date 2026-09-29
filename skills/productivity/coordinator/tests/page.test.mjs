@@ -390,3 +390,29 @@ test("staleNow: a now-line not said again for 30 minutes reads as stale", () => 
   assert.equal(Core.staleNow(at, t + 31 * 60000), true);
   assert.equal(Core.staleNow(undefined, t), false, "a state from before now_at claims nothing");
 });
+
+test("grillState: follow-ups under what they follow, sent answers until recorded, a reply hands it back", () => {
+  const g = { id: "g1", kind: "grill", questions: [
+    { id: "q1", title: "Where", body: "b", recommend: "tab", status: "open", of: null, asked: "2026-09-29T10:00:00Z" },
+    { id: "q2", title: "Secrets", body: "b", recommend: "refs", status: "answered", answer: "refs", of: null, asked: "2026-09-29T10:00:00Z" },
+    { id: "q3", title: "Order", body: "b", recommend: "newest", status: "open", of: "q1", asked: "2026-09-29T10:05:00Z" }] };
+  let s = Core.grillState(g, []);
+  assert.deepEqual(s.questions.map((e) => [e.q.id, e.depth]), [["q1", 0], ["q3", 1], ["q2", 0]]);
+  assert.equal(s.toAnswer, 2);
+  const sent = { id: 7, from: "user", decision: "g1", at: "2026-09-29T10:06:00Z", text: "Q1: a sidebar\nQ3: ok, as recommended (newest)", re: null };
+  s = Core.grillState(g, [sent]);
+  assert.equal(s.toAnswer, 0); assert.equal(s.waiting, 2);
+  assert.equal(s.questions[0].sent.text, "a sidebar");
+  s = Core.grillState(g, [sent, { id: 8, from: "coordinator", re: 7, text: "which sidebar?", at: "2026-09-29T10:07:00Z" }]);
+  assert.equal(s.toAnswer, 2, "a reply to the answers hands both back");
+  const early = { ...sent, at: "2026-09-29T10:01:00Z" };
+  assert.equal(Core.grillState(g, [early]).questions[1].sent, null, "an answer sent before the question was asked is not its answer");
+});
+
+test("grillAnswerText: one line per question answered now", () => {
+  const g = { questions: [{ id: "q1", recommend: "a tab" }, { id: "q2", recommend: "refs" }, { id: "q3", recommend: "x" }] };
+  assert.deepEqual(Core.grillAnswerText(g, [{ id: "q1", pick: "rec", text: "" }, { id: "q2", pick: "own", text: "env\nvars" }, { id: "q3", pick: "later" }]),
+    { text: "Q1: ok, as recommended (a tab)\nQ2: env vars" });
+  assert.ok(Core.grillAnswerText(g, [{ id: "q1", pick: "own", text: " " }]).error);
+  assert.ok(Core.grillAnswerText(g, [{ id: "q1", pick: "later" }]).error);
+});

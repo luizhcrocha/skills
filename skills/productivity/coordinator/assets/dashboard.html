@@ -123,7 +123,7 @@
   .badge { min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 10px; background: var(--you); color: var(--bg); font-size: 0.75rem; font-weight: 700; font-variant-numeric: tabular-nums; display: grid; place-items: center; line-height: 1; }
   .badge.alert { background: var(--critical); }
   @media (max-width: 759.98px) {
-    .tabs { position: fixed; inset: auto 0 0 0; z-index: 35; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; margin: 0; padding: 0 max(4px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(4px, env(safe-area-inset-left, 0px)); background: var(--card); border-top: 1px solid var(--line); }
+    .tabs { position: fixed; inset: auto 0 0 0; z-index: 35; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0; margin: 0; padding: 0 max(4px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(4px, env(safe-area-inset-left, 0px)); background: var(--card); border-top: 1px solid var(--line); }
     .tabs a, .tabs button { flex-direction: column; justify-content: center; gap: 3px; min-height: var(--dock-h); padding: 0; font-size: 0.8125rem; font-stretch: 78%; }
     .tabs svg.i { width: 24px; height: 24px; }
     .tabs [aria-current="true"], .tabs [aria-expanded="true"] { color: var(--accent); }
@@ -542,6 +542,21 @@
   .reply-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .reply .icon-btn { width: var(--tap); height: var(--tap); color: inherit; font-size: 1rem; }
   .deaf-line { color: var(--you); font-weight: 600; }
+  .link-title { font-weight: 700; color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+  .link-title:hover { text-decoration: underline; }
+  .link-row.down .link-title { color: var(--muted); }
+  .part-note { margin: -4px 0 8px; font-size: var(--fs-s); }
+  .gq { margin: 0 0 14px calc(var(--depth, 0) * 18px); padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--you); border-radius: 10px; background: var(--card); min-width: 0; }
+  .gq legend, .gq-title { font-weight: 700; padding: 0 4px; margin: 0; }
+  .gq-id { font-variant-numeric: tabular-nums; color: var(--you); }
+  .gq-of { font-weight: 500; color: var(--muted); font-size: var(--fs-xs); }
+  .gq-body { white-space: pre-wrap; margin: 6px 0 10px; }
+  .gq textarea { width: 100%; box-sizing: border-box; margin: 4px 0 6px; font: inherit; font-size: 16px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
+  .gq.sent { border-left-color: var(--run); }
+  .gq-sent { color: var(--muted); font-size: var(--fs-s); }
+  .gq-done ul { margin: 8px 0 0; padding-left: 18px; }
+  .gq-done li.dropped { color: var(--muted); }
+  .btn.small { min-height: var(--tap); padding: 0 10px; font-size: var(--fs-xs); }
   .readonly { margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--card-2); color: var(--muted); font-size: var(--fs-s); overflow-wrap: anywhere; }
   .chat:has(#mentions:not([hidden])) .chat-empty { visibility: hidden; }
   .to { margin: 6px 6px 0; font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; }
@@ -592,6 +607,7 @@
       <a href="#decisions" data-view="decisions"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg><span class="lbl">Decisions</span><span class="badge" id="nav-decisions" hidden></span></a>
       <a href="#plan" data-view="plan"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4h12l-2.5 4L17 12H5"/></svg><span class="lbl">Plan</span><span class="badge alert" id="nav-blocks" hidden></span></a>
       <a href="#fleet" data-view="fleet"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12.5" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="20.5" r="1.8"/><path d="m9.8 10.5-3.3-3M14.2 10.5l3.3-3M12 15.5v3.2"/></svg><span class="lbl" id="tab-fleet">Fleet</span></a>
+      <a href="#links" data-view="links"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"/></svg><span class="lbl">Links</span></a>
       <a href="#log" data-view="log"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg><span class="lbl">Log</span></a>
       <button type="button" class="to-chat" id="chat-toggle" aria-controls="chat" aria-expanded="false" title="Chat"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 0 1-12.4 7.5L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/></svg><span class="lbl">Chat</span><span class="badge" id="chat-badge" hidden></span></button>
     </nav>
@@ -673,6 +689,22 @@
       <div class="part" id="tokens">
         <h2>Tokens by worker</h2>
         <div class="card chart-card" id="chart"></div>
+      </div>
+    </section>
+    <section class="view" id="links-view" data-view="links" aria-label="Links" hidden>
+      <div class="part">
+        <h2>Pages</h2>
+        <p class="muted part-note">Pages made for one purpose: a review, a lab, a report.</p>
+        <div class="card" id="page-list"></div>
+      </div>
+      <div class="part">
+        <h2>Dev servers</h2>
+        <div class="card" id="dev-list"></div>
+      </div>
+      <div class="part" id="found-part" hidden>
+        <h2>Also served on this machine</h2>
+        <p class="muted part-note">Found by looking at what the machine serves; no fleet has said what they are.</p>
+        <div class="card" id="found-list"></div>
       </div>
     </section>
     <section class="view" id="log-view" data-view="log" aria-label="Log" hidden>
@@ -872,6 +904,48 @@ var FleetCore = (function () {
     });
   }
 
+  /* A grilling as its page shows it: the questions in reading order (a follow-up right under what it
+     follows), each with the answer the viewer sent and the fleet has not recorded yet (the latest
+     "Q3: ..." line of theirs about this grilling since the question was asked, and whether the fleet
+     replied to it), and how many still wait on the viewer. */
+  function grillState(item, messages) {
+    const qs = Array.isArray(item.questions) ? item.questions.filter((q) => q && typeof q.id === "string") : [];
+    const list = [...(messages || [])].sort((a, b) => a.id - b.id);
+    const sentFor = (q) => {
+      let sent = null;
+      for (const m of list) {
+        if (m.from !== "user" || m.decision !== item.id || stamp(m.at) < stamp(q.asked)) continue;
+        for (const line of String(m.text).split("\n")) {
+          const hit = /^\s*Q(\d+)\s*:\s*(.*)$/i.exec(line);
+          if (hit && "q" + hit[1] === q.id) sent = { text: hit[2], at: m.at, id: m.id };
+        }
+      }
+      return sent && { ...sent, replied: list.some((m) => m.re === sent.id && m.from !== "user") };
+    };
+    const ordered = [], placed = new Set();
+    const place = (q, depth) => {
+      if (placed.has(q.id)) return;
+      placed.add(q.id); ordered.push({ q, depth, sent: q.status === "open" ? sentFor(q) : null });
+      qs.filter((c) => c.of === q.id).forEach((c) => place(c, depth + 1));
+    };
+    qs.filter((q) => !q.of || !qs.some((p) => p.id === q.of)).forEach((q) => place(q, 0));
+    const toAnswer = ordered.filter((e) => e.q.status === "open" && (!e.sent || e.sent.replied)).length;
+    return { questions: ordered, toAnswer, waiting: ordered.filter((e) => e.q.status === "open" && e.sent && !e.sent.replied).length };
+  }
+
+  /* The message a grilling's form sends: one "Q3: answer" line per question the viewer answered now. */
+  function grillAnswerText(item, picks) {
+    const lines = [];
+    for (const p of picks) {
+      const q = (item.questions || []).find((x) => x.id === p.id);
+      if (!q || p.pick === "later") continue;
+      const own = String(p.text ?? "").trim().replace(/\s*\n\s*/g, " ");
+      if (p.pick === "own" && !own) return { error: `${q.id.toUpperCase()}: write your answer, or take the recommendation.` };
+      lines.push(`${q.id.toUpperCase()}: ${p.pick === "rec" ? "ok, as recommended (" + q.recommend + ")" + (own ? ". " + own : "") : own}`);
+    }
+    return lines.length ? { text: lines.join("\n") } : { error: "Answer at least one question." };
+  }
+
   /* The decision a location hash names ("#decision/d1"), or null. */
   function decisionRoute(hash) {
     const m = /^#decision\/([A-Za-z0-9_.-]+)$/.exec(String(hash ?? ""));
@@ -882,7 +956,7 @@ var FleetCore = (function () {
      sent after the item last changed, with the fleet's replies to that message. Null when there is
      none, and for a closed item. */
   function pendingAnswer(item, messages) {
-    if (!item || item.status !== "open") return null;
+    if (!item || item.status !== "open" || item.kind === "grill") return null;
     const since = stamp(item.revised || item.opened);
     let answer = null;
     const list = [...(messages || [])].sort((a, b) => a.id - b.id);
@@ -945,6 +1019,11 @@ var FleetCore = (function () {
         lane: Array.isArray(a.lane) ? a.lane.map(String) : [], tokens: count(a.tokens, 0), duration_ms: count(a.duration_ms, 0), rounds: count(a.rounds, 1) })),
       roadblocks: withId(lists.roadblocks).map((r) => ({ ...r, title: text(r.title, r.id), resolved: r.resolved === true })),
       decisions: withId(lists.decisions).map(decision),
+      links: withId(list(value.links)).filter((l) => typeof l.url === "string" && /^https?:\/\//.test(l.url)).map((l) => ({ ...l,
+        title: text(l.title, l.id), kind: l.kind === "page" ? "page" : "dev", up: l.up === true, fleet: text(l.fleet, ""), note: text(l.note, ""),
+        decision: text(l.decision, "") })),
+      found: list(value.found).filter((f) => typeof f.url === "string" && /^https:\/\//.test(f.url)).map((f) => ({ url: f.url, up: f.up === true,
+        fleet: text(f.fleet, ""), cwd: text(f.cwd, ""), command: text(f.command, ""), port: count(f.port, 0) })),
       kept: withId(list(value.kept)).map((k) => ({ ...k, text: text(k.text, ""), at: text(k.at, "") })),
       events: lists.events.filter((e) => typeof e.text === "string" && typeof e.kind === "string").map((e) => ({ ...e, at: text(e.at, "") })),
     };
@@ -976,7 +1055,7 @@ var FleetCore = (function () {
 
   /* Where a location hash leads: the view, the decision it opens, the element to scroll to. The
      addresses the page had as one long scroll still lead to where their section went. */
-  const VIEWS = ["decisions", "plan", "fleet", "log"];
+  const VIEWS = ["decisions", "plan", "fleet", "links", "log"];
   const MOVED = { roadmap: "plan", roadblocks: "plan", tokens: "fleet", activity: "log" };
   function viewOf(hash) {
     const decision = decisionRoute(hash);
@@ -1035,7 +1114,7 @@ var FleetCore = (function () {
   }
 
   return { keyOf, hostOf, rosterOf, usageOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf, toastOf,
-    decisionRows, decisionRoute, pendingAnswer, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, staleNow, viewOf, leadOf, VIEWS };
+    decisionRows, decisionRoute, pendingAnswer, grillState, grillAnswerText, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, staleNow, viewOf, leadOf, VIEWS };
 })();
 </script>
 <script>
@@ -1196,6 +1275,25 @@ var FleetCore = (function () {
   }
 
   /* A roadblock with a worker opens that worker from anywhere on its card. */
+  /* The places the user opens: the pages and dev servers the fleet named, up or down, and on a
+     manager's page every fleet's; then what the machine serves that nobody named. */
+  function renderLinks() {
+    const row = (l) => `<div class="block link-row ${l.up ? "" : "down"}">
+        <div class="block-head"><a class="link-title" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title)}</a>${pillAs(l.up ? "running" : "stopped", l.up ? "up" : "down")}${MANAGED() && l.fleet ? pillAs("plain", l.fleet) : ""}</div>
+        <p class="meta lane">${esc(l.url)}</p>
+        ${l.note ? `<p class="detail">${esc(l.note)}</p>` : ""}
+        ${l.decision && decisionById(l.decision) ? `<a class="block-link" href="#decision/${esc(l.decision)}">For: ${esc(decisionById(l.decision).title)}</a>` : ""}
+      </div>`;
+    const pages = STATE.links.filter((l) => l.kind === "page"), devs = STATE.links.filter((l) => l.kind === "dev");
+    paint($("page-list"), pages.length ? pages.map(row).join("") : `<p class="empty">No page yet. The ${esc(HOST)} lists one here when a worker builds it.</p>`);
+    paint($("dev-list"), devs.length ? devs.map(row).join("") : '<p class="empty">No dev server recorded.</p>');
+    $("found-part").hidden = !STATE.found.length;
+    paint($("found-list"), STATE.found.map((f) => `<div class="block link-row ${f.up ? "" : "down"}">
+        <div class="block-head"><a class="link-title" href="${esc(f.url)}" target="_blank" rel="noopener">Port ${esc(String(f.port))}</a>${pillAs(f.up ? "running" : "stopped", f.up ? "up" : "nothing answers")}${f.fleet ? pillAs("plain", f.fleet) : ""}</div>
+        ${f.cwd ? `<p class="meta lane">${esc(f.cwd)}</p>` : ""}${f.command ? `<p class="meta lane">${esc(f.command)}</p>` : ""}
+      </div>`).join(""));
+  }
+
   function renderKept() {
     $("kept").hidden = !STATE.kept.length;
     paint($("kept-list"), STATE.kept.map((k) => `<div class="block"><div class="block-head"><b>${esc(k.id)}</b></div>
@@ -1219,7 +1317,7 @@ var FleetCore = (function () {
 
   /* ---------------------------------------------------------------- decisions */
 
-  const KIND_WORDS = { decision: "a choice", input: "your input", secret: "a secret", action: "something to do" };
+  const KIND_WORDS = { decision: "a choice", input: "your input", secret: "a secret", action: "something to do", grill: "a grilling" };
   const seen = store.get("d-seen", {});   // decision id -> the revision this viewer last opened
   const decisionById = (id) => STATE.decisions.find((d) => d.id === id);
   /* The ledger's decisions, and on a manager's page the ones open in each fleet, which are
@@ -1229,7 +1327,10 @@ var FleetCore = (function () {
   const openDecisions = () => everyDecision().filter((d) => d.status === "open" && d.asks !== "manager");
   const revisionOf = (d) => d.revised || d.opened;
   const closedWords = (d) => d.status === "decided" ? `Decided: ${d.answer || ""}` : `Withdrawn: ${d.resolution || ""}`;
+  const grillPill = (d) => { const g = Core.grillState(d, chat.messages.values());
+    return g.toAnswer ? pillAs("open", `${g.toAnswer} to answer`) : pillAs("answered", g.waiting ? "answers sent" : "nothing to answer"); };
   const statePill = (d, pending) => d.status !== "open" ? pill(d.status)
+    : d.kind === "grill" ? grillPill(d)
     : pending ? pillAs("answered", pending.replies.length ? "the " + HOST + " replied" : Core.unreadBy(STATE.hearing, pending.answer) ? "answered, not read yet" : "answered, waiting on the " + HOST)
     : d.asks === "manager" ? pillAs("", "with the manager") + (d.blocking ? pillAs("blocking", "blocks work") : "")
     : d.blocking ? pillAs("blocking", "blocks work") : pillAs("open", "open");
@@ -1311,7 +1412,10 @@ var FleetCore = (function () {
       ${d.why ? `<div class="dv-block"><h3>${d.blocking ? "What it blocks" : "Meanwhile"}</h3><p>${esc(d.why)}</p></div>` : ""}
       ${d.recommend ? `<div class="dv-block"><h3>Recommended</h3><p><b>${esc(recommended ? recommended.id + ": " + recommended.label : d.recommend)}</b>${d.reason ? "\n" + esc(d.reason) : ""}</p></div>` : ""}`);
     renderEvidence(d);
-    paint($("dv-answer"), answerHtml(d, pending));
+    const pagesFor = STATE.links.filter((l) => l.decision === d.id);
+    paint($("dv-answer"), (pagesFor.length ? `<div class="dv-block"><h3>Open to decide</h3>${pagesFor.map((l) =>
+      `<p><a class="btn" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title)}</a>${l.up ? "" : ' <span class="muted">(not answering now)</span>'}</p>${l.note ? `<p class="muted">${esc(l.note)}</p>` : ""}`).join("")}</div>` : "")
+      + answerHtml(d, pending));
   }
 
   const optionsHtml = (d, pick) => d.options.map((o) => {
@@ -1324,7 +1428,38 @@ var FleetCore = (function () {
   const discuss = '<button type="button" class="btn" data-discuss>Ask in the chat</button>';
   let answeringAgain = null;  // the decision whose form the viewer brought back over a pending answer
 
+  /* A grilling's answers: each open question with its recommendation and a choice (take it, answer
+     in your own words, or leave it for later), what was sent and waits on the fleet, and what is
+     settled, folded away. One send carries every question answered now. */
+  function grillHtml(d) {
+    const g = Core.grillState(d, chat.messages.values());
+    const writable = chatWritable() && d.status === "open";
+    const head = (e) => `<span class="gq-id">${esc(e.q.id.toUpperCase())}</span> ${esc(e.q.title)}${e.q.of ? ` <span class="gq-of">follows up ${esc(e.q.of.toUpperCase())}</span>` : ""}`;
+    const open = g.questions.filter((e) => e.q.status === "open");
+    const asking = open.filter((e) => !e.sent || e.sent.replied || answeringAgain === d.id + "/" + e.q.id);
+    const sent = open.filter((e) => !asking.includes(e));
+    const settled = g.questions.filter((e) => e.q.status !== "open");
+    const ask = (e) => `<fieldset class="gq" data-q="${esc(e.q.id)}" style="--depth:${e.depth}"><legend>${head(e)}</legend>
+        <p class="gq-body">${esc(e.q.body)}</p>
+        ${e.sent ? `<p class="gq-sent">You sent: ${esc(e.sent.text)}. The ${esc(HOST)} replied in the chat.</p>` : ""}
+        ${writable ? `<label class="option"><input type="radio" name="${esc(e.q.id)}" value="rec"><span class="label">Take the recommendation</span><span class="consequence">${esc(e.q.recommend)}</span></label>
+        <label class="option"><input type="radio" name="${esc(e.q.id)}" value="own"><span class="label">My answer</span></label>
+        <textarea name="${esc(e.q.id)}-text" rows="2" aria-label="Your answer to ${esc(e.q.id.toUpperCase())}"></textarea>
+        <label class="option later"><input type="radio" name="${esc(e.q.id)}" value="later" checked><span class="label">Later</span></label>`
+        : `<p class="gq-rec">Recommended: ${esc(e.q.recommend)}</p>`}</fieldset>`;
+    const waiting = (e) => `<div class="gq sent" style="--depth:${e.depth}"><p class="gq-title">${head(e)}</p><p>You sent: <b>${esc(e.sent.text)}</b></p>
+        <span class="dv-meta">${esc(clock(e.sent.at))}. The ${esc(HOST)} records it next.</span>${writable ? ` <button type="button" class="btn small" data-again-q="${esc(e.q.id)}">Answer again</button>` : ""}</div>`;
+    const done = (e) => `<li class="${esc(e.q.status)}"><b>${esc(e.q.id.toUpperCase())}</b> ${esc(e.q.title)}: ${e.q.status === "dropped" ? "dropped, " + esc(e.q.dropped || "no longer needed") : esc(e.q.answer)}</li>`;
+    return (asking.length ? (writable ? `<form class="dv-form grill" novalidate>${asking.map(ask).join("")}
+        <p class="chat-error" id="dv-error" role="alert" hidden></p>
+        <div class="sheet-actions"><button type="submit" class="btn primary">Send my answers</button>${discuss}</div></form>` : asking.map(ask).join("")) : "")
+      + (sent.length ? `<div class="dv-block"><h3>Sent, waiting on the ${esc(HOST)}</h3>${sent.map(waiting).join("")}</div>` : "")
+      + (settled.length ? `<details class="dv-block gq-done"><summary>Settled (${settled.length})</summary><ul>${settled.map(done).join("")}</ul></details>` : "")
+      + (!chatWritable() && d.status === "open" ? `<p class="readonly" role="status">This copy of the page cannot send answers. Give them in the session with the ${esc(HOST)}.</p>` : "");
+  }
+
   function answerHtml(d, pending) {
+    if (d.kind === "grill") return grillHtml(d);
     const shown = d.kind === "decision" && d.options.length ? `<div class="dv-block"><h3>Options</h3><div class="options">${optionsHtml(d, false)}</div></div>` : "";
     if (d.status !== "open") return d.page === false && !shown ? "" : shown + (chatWritable() ? `<div class="sheet-actions"><button type="button" class="btn" data-change>Change my answer</button></div>` : "");
     if (pending) {
@@ -1367,11 +1502,20 @@ var FleetCore = (function () {
         <div class="sheet-actions"><button type="submit" class="btn primary">Send my answer</button>${discuss}</div></form>`;
   }
 
+  $("dv-answer").addEventListener("input", (e) => {
+    const box = e.target.closest("fieldset.gq textarea");
+    if (!box) return;
+    const own = box.closest("fieldset").querySelector('input[value="own"]');
+    if (own && box.value.trim()) own.checked = true;
+  });
   $("dv-answer").addEventListener("submit", async (e) => {
     e.preventDefault();
     const d = decisionById(viewing), form = e.target, fields = new FormData(form);
     if (!d) return;
-    const out = Core.answerText(d, { choice: fields.get("choice") || "", note: fields.get("note") || "", value: fields.get("value") || "",
+    const out = d.kind === "grill"
+      ? Core.grillAnswerText(d, [...form.querySelectorAll("fieldset.gq")].map((f) => ({ id: f.dataset.q,
+          pick: fields.get(f.dataset.q) || "later", text: fields.get(f.dataset.q + "-text") || "" })))
+      : Core.answerText(d, { choice: fields.get("choice") || "", note: fields.get("note") || "", value: fields.get("value") || "",
       done: d.kind === "action" || !!(e.submitter && e.submitter.name === "done") });
     const error = $("dv-error"), buttons = [...form.querySelectorAll("button")];
     const refuse = (text) => { error.textContent = text; error.hidden = !text; };
@@ -1392,6 +1536,8 @@ var FleetCore = (function () {
   $("decision").addEventListener("click", (e) => {
     if (e.target.closest("[data-discuss]")) { openChat(); return; }
     if (e.target.closest("[data-again]")) { answeringAgain = viewing; renderDecision(); return; }
+    const againQ = e.target.closest("[data-again-q]");
+    if (againQ) { answeringAgain = viewing + "/" + againQ.dataset.againQ; renderDecision(); return; }
     if (!e.target.closest("[data-change]")) return;
     const d = decisionById(viewing);
     openChat();
@@ -1832,7 +1978,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     people = STATE.agents.concat(STATE.coordinators.map((c) => ({ id: c.id, name: c.id, status: c.status, coordinator: c })));
     agentById = Object.fromEntries(people.map((a) => [a.id, a]));
     roster = Core.rosterOf(STATE);
-    renderHeader(); renderTiles(); renderDecisions(); renderRoadmap(); renderRoadblocks(); renderKept(); renderCoordinators(); renderUsage(); renderFilterOptions(); render();
+    renderHeader(); renderTiles(); renderDecisions(); renderRoadmap(); renderRoadblocks(); renderKept(); renderLinks(); renderCoordinators(); renderUsage(); renderFilterOptions(); render();
     renderDecision();
     notif.sync();
     refreshSheet();

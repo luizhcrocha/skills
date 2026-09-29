@@ -150,6 +150,12 @@ When the session ends, every decision still open is either withdrawn with its re
 
 The commands and the schema are in [DASHBOARD.md](DASHBOARD.md#decisions).
 
+## Grillings and links
+
+A **grilling** (the `grilling` or `grill-me` skill, or any round of questions to settle a design) runs on the page, never as chat messages: `state.py <dir> grill <id>` with one `--ask` per question. The `grilling` skill's "On a fleet dashboard" says how rounds, follow-ups, answers, and the end are recorded.
+
+A **link** names a place the user opens: `state.py <dir> link <id> --url <address> --title "<what it is>" --kind dev|page`. Record every dev server and every page a worker builds for the user (a review, a lab, a report), from the worker's report; `--decision` ties a page to the decision it serves, so the decision's page opens it; `--drop "why"` when it stops. The Links view lists them, up or down, and what the machine serves that no link names.
+
 ## With a manager
 
 One session may manage every coordinator on the machine (the `manager` skill). `serve_dashboard.py` says so when it starts, and `python3 <skill-dir>/scripts/fleets.py manager` asks again: the manager's session, its page, and `standing.md`. With a manager:
