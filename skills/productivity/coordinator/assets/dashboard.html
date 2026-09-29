@@ -642,11 +642,16 @@
           <h2>Roadblocks</h2>
           <div class="card" id="roadblock-list"></div>
         </div>
+        <div class="part" id="kept" hidden>
+          <h2>Held for later</h2>
+          <div class="card" id="kept-list"></div>
+        </div>
       </div>
     </section>
     <section class="view" id="fleet" data-view="fleet" aria-label="Fleet" hidden>
       <div class="part" id="coordinators" hidden>
         <h2>Coordinators</h2>
+        <p class="meta" id="gate-line"></p>
         <div class="card" id="coordinator-list"></div>
       </div>
       <div class="part" id="workers">
@@ -931,6 +936,7 @@ var FleetCore = (function () {
         now: text(c.now, ""), url: text(c.url, ""), session: text(c.session, ""), tokens: count(c.tokens, 0), roadblocks: count(c.roadblocks, 0), spent: spent(c.spent), hearing: hearing(c.chat), active: text(c.active, ""),
         workers: isRow(c.workers) ? c.workers : {}, lanes: Array.isArray(c.lanes) ? c.lanes.map(String) : [], decisions: withId(list(c.decisions)).map(decision) })),
       usage: isRow(value.usage) ? value.usage : null,
+      gate: isRow(value.gate) && typeof value.gate.fleet === "string" ? { fleet: value.gate.fleet, what: text(value.gate.what, ""), since: text(value.gate.since, "") } : null,
       spent: spent(value.spent),
       hearing: hearing(value.chat),
       updated: text(value.updated, value.started),
@@ -939,6 +945,7 @@ var FleetCore = (function () {
         lane: Array.isArray(a.lane) ? a.lane.map(String) : [], tokens: count(a.tokens, 0), duration_ms: count(a.duration_ms, 0), rounds: count(a.rounds, 1) })),
       roadblocks: withId(lists.roadblocks).map((r) => ({ ...r, title: text(r.title, r.id), resolved: r.resolved === true })),
       decisions: withId(lists.decisions).map(decision),
+      kept: withId(list(value.kept)).map((k) => ({ ...k, text: text(k.text, ""), at: text(k.at, "") })),
       events: lists.events.filter((e) => typeof e.text === "string" && typeof e.kind === "string").map((e) => ({ ...e, at: text(e.at, "") })),
     };
   }
@@ -1189,6 +1196,12 @@ var FleetCore = (function () {
   }
 
   /* A roadblock with a worker opens that worker from anywhere on its card. */
+  function renderKept() {
+    $("kept").hidden = !STATE.kept.length;
+    paint($("kept-list"), STATE.kept.map((k) => `<div class="block"><div class="block-head"><b>${esc(k.id)}</b></div>
+      <p class="detail">${esc(k.text)}</p><p class="needs muted">Kept ${esc(ago(k.at))}</p></div>`).join(""));
+  }
+
   function renderRoadblocks() {
     const blocks = [...STATE.roadblocks].sort((a, b) => (a.resolved - b.resolved) || (time(b.since) - time(a.since)));
     paint($("roadblock-list"), blocks.length ? blocks.map((r) => {
@@ -1468,6 +1481,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     $("workers").hidden = MANAGED() && !STATE.agents.length;
     $("tokens").hidden = MANAGED() && !STATE.agents.length;
     if (!MANAGED()) return;
+    $("gate-line").textContent = STATE.gate ? `The gate is held by ${STATE.gate.fleet} since ${clock(STATE.gate.since)}: ${STATE.gate.what}.` : "The gate is free: no heavy check is running.";
     paint($("coordinator-list"), STATE.coordinators.length ? STATE.coordinators.map((c) => `<div class="strip" style="--c:${colorOf(agentById[c.id])}">
         <div class="strip-head">${whoButton(c.id)}${pill(c.status)}${c.name !== c.id ? `<span class="muted">${esc(c.name)}</span>` : ""}</div>
         ${c.now ? `<p class="detail">${esc(c.now)}</p>` : ""}
@@ -1818,7 +1832,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     people = STATE.agents.concat(STATE.coordinators.map((c) => ({ id: c.id, name: c.id, status: c.status, coordinator: c })));
     agentById = Object.fromEntries(people.map((a) => [a.id, a]));
     roster = Core.rosterOf(STATE);
-    renderHeader(); renderTiles(); renderDecisions(); renderRoadmap(); renderRoadblocks(); renderCoordinators(); renderUsage(); renderFilterOptions(); render();
+    renderHeader(); renderTiles(); renderDecisions(); renderRoadmap(); renderRoadblocks(); renderKept(); renderCoordinators(); renderUsage(); renderFilterOptions(); render();
     renderDecision();
     notif.sync();
     refreshSheet();

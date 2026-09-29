@@ -20,6 +20,8 @@
                              [--decide ANSWER --resolution HOW | --withdraw REASON]
     state.py DIR event [--agent A] [--kind K] [--important] TEXT
     state.py DIR park [--agent A]... REASON
+    state.py DIR keep ID [TEXT | --drop REASON]
+    state.py DIR step next --milestone M --title T   (records the next free step id and prints it)
     state.py DIR show
 
 Add --no-render anywhere to write state.json without rendering, -q to render without saying so.
@@ -38,6 +40,7 @@ import argparse
 import contextlib
 import io
 import json
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -144,6 +147,26 @@ def measure(root, state: dict) -> None:
         a["tokens"], a["duration_ms"], a["measured"] = got["tokens"], got["duration_ms"], got["at"]
 
 
+def cmd_keep(state, args):
+    """What must outlive a compaction and has no row elsewhere: a queued ask, a hunk outside any lane,
+    a workspace and what it holds, where a worker stands. `show` prints them; the page lists them."""
+    kept = state.setdefault("kept", [])
+    item = find(kept, args.id)
+    if args.drop is not None:
+        if item is None:
+            fail(f"nothing kept as '{args.id}'")
+        kept.remove(item)
+        log(state, "note", f"Dropped {args.id} ({item['text']}): {args.drop}")
+        return state
+    if not args.text:
+        fail("keep needs TEXT: what must still be known after a compaction")
+    if item is None:
+        kept.append({"id": args.id, "text": args.text, "at": now()})
+    else:
+        item.update(text=args.text, at=now())
+    return state
+
+
 def stale_rows(state: dict) -> str | None:
     """What to say when worker rows still read as live while the fleet itself is not."""
     if not state or state.get("status") not in ("paused", "done"):
@@ -190,7 +213,23 @@ def place(m: dict, step: dict, state, before: str | None, after: str | None) -> 
     m["steps"].insert(at if before else at + 1, step)
 
 
+def next_step_id(state: dict, milestone: str) -> str:
+    """The next free step id for `milestone`: its steps' letters with the number after the highest
+    that any step of the ledger with those letters has (l17 after l16), so two asks never collide."""
+    m = find(state["roadmap"], milestone)
+    letters = [re.match(r"[A-Za-z]+", x["id"]).group(0) for x in (m or {}).get("steps", []) if re.match(r"[A-Za-z]+\d+$", x["id"])]
+    prefix = letters[-1] if letters else (re.match(r"[A-Za-z]", milestone) or re.match("", "")).group(0).lower() or "s"
+    used = [int(x["id"][len(prefix):]) for mm in state["roadmap"] for x in mm["steps"] if re.fullmatch(prefix + r"\d+", x["id"])]
+    return f"{prefix}{max(used, default=0) + 1}"
+
+
 def cmd_step(state, args):
+    if args.id == "next":
+        require(args, ["milestone", "title"], "step")
+        if not find(state["roadmap"], args.milestone):
+            fail(f"unknown milestone '{args.milestone}'")
+        args.id = next_step_id(state, args.milestone)
+        print(f"recorded step {args.id}")
     m = next((x for x in state["roadmap"] if find(x["steps"], args.id)), None)
     if args.remove is not None:
         if m is None:
@@ -463,6 +502,8 @@ commands (state.py DIR <command>; an unknown ID creates the row, a known ID chan
         [--decide ANSWER --resolution HOW | --withdraw REASON]
   event [--kind {"|".join(KINDS)}] [--agent A] [--important] TEXT   (a note is `event --kind note TEXT`)
   park [--agent A]... REASON     stop every live worker row (or those named) in one command
+  keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace
+  step next --milestone M --title T   the next free step id, printed
   show
   --no-render on any command writes state.json without rendering; -q renders without saying so"""
 
@@ -486,6 +527,8 @@ def cmd_show(state, args):
             status += ", with the manager"
         outcome = d.get("answer") or d.get("resolution")
         print(f"  decision {d['id']} {status} [{d['kind']}] {d['title']}" + (f": {outcome}" if outcome else ""))
+    for k in state.get("kept", []):
+        print(f"  kept {k['id']}: {k['text']}")
     print(f"  {len(state['events'])} events, updated {state['updated']}")
     print(CHEATSHEET)
     return None
@@ -550,6 +593,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--resolution", metavar="HOW", help="with --decide: how the answer came")
     s = sub.add_parser("event"); s.add_argument("text"); s.add_argument("--agent"); s.add_argument("--kind", choices=KINDS)
     s.add_argument("--important", action="store_true", help="the user should see this now: toast, sound, badge")
+    s = sub.add_parser("keep"); s.add_argument("id"); s.add_argument("text", nargs="?")
+    s.add_argument("--drop", metavar="REASON", help="it no longer needs keeping")
     s = sub.add_parser("park"); s.add_argument("reason"); s.add_argument("--agent", action="append", help="only this worker (repeatable)")
     sub.add_parser("show")
     return p

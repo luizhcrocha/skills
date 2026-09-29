@@ -885,6 +885,14 @@ class ManagerRelaysTheUnheardTest(FleetDir):
         line = Lines(proc.stdout).next()
         self.assertTrue(line.startswith("! billing does not read its chat: 1 message(s) from the user since #0"), line)
         self.assertIn("SendMessage its session (billing)", line)
+        proc.kill(); proc.wait()
+        again = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "manager", "--all", "--resume", "--once"],
+                                 stdout=subprocess.PIPE, text=True, encoding="utf-8", env=env)
+        self.addCleanup(lambda: (again.poll() is None and again.kill(), again.wait(), again.stdout.close()))
+        time.sleep(1.5)
+        self.assertIsNone(again.poll(), "what was told once is not told again by the next watch")
+        chat.append(fleet["dir"], "coordinator", "here", 1)
+        self.assertEqual(chat.listening(fleet["dir"])["unread"], 0, "an answered message no longer waits")
 
 
 class ManagerIsNotInAFleetsChatTest(FleetDir):

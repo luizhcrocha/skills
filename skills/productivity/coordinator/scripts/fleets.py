@@ -8,6 +8,11 @@
     fleets.py manager           how to reach the manager; exits 1 when there is none
     fleets.py decision FLEET ID what a fleet asks, in full: the question, why, the options, the
                                 recommendation, where its evidence and its page are
+    fleets.py gate [take FLEET WHAT | free FLEET]
+                                the machine's one gate slot: a heavy check (a test suite, a build)
+                                runs only while its fleet holds it
+    fleets.py procs             the background processes each fleet's session started, with their age
+    fleets.py whose FROM TO     the files a landing moves, by owning fleet (the manager's DIR/owners)
     fleets.py name DIR SESSION  give the fleet its one name: the session's, which the registry, the
                                 manager's page and chat, and SendMessage all use from then on
 
@@ -200,7 +205,7 @@ def view(state: dict, root) -> dict:
     if role_of(state) == "manager":
         import usage  # here, not above: usage.py reads the registry's place from this module
         return {**state, "coordinators": [summary(e) for e in live() if e["role"] != "manager" and e["dir"] != root],
-                "usage": usage.read()}
+                "usage": usage.read(), "gate": gate()}
     found = manager()
     return {**state, "manager": {"id": found["id"], "url": found["url"], "session": found.get("session")}} if found else state
 
@@ -254,6 +259,105 @@ def cmd_show(fleet: str) -> None:
         print(f"    {e.get('at', '')[11:16]} {e.get('kind')} {e.get('agent') or ''} {e.get('text')}".replace("  ", " "))
 
 
+def _gate_path() -> Path:
+    return home() / "gate" / "gate.json"  # a directory of its own: live() treats every *.json here as a fleet
+
+
+def gate() -> dict | None:
+    """Who holds the machine's gate slot (the one heavy check at a time: a test suite under load, a
+    build), or None. A hold whose fleet is no longer served is forgotten."""
+    held = _read(_gate_path())
+    if held and any(e["id"] == held.get("fleet") for e in live()):
+        return held
+    _gate_path().unlink(missing_ok=True)
+    return None
+
+
+def cmd_gate(argv: list[str]) -> None:
+    """gate | gate take FLEET WHAT | gate free FLEET"""
+    held = gate()
+    if not argv:
+        print(f"held by {held['fleet']} since {held['since']}: {held['what']}" if held else "free")
+        return
+    if argv[0] == "take" and len(argv) == 3:
+        if held and held["fleet"] != argv[1]:
+            fail(f"held by {held['fleet']} since {held['since']}: {held['what']}; take it when `fleets.py gate` says free")
+        if not any(e["id"] == argv[1] for e in live()):
+            fail(f"no fleet '{argv[1]}' is being served")
+        _gate_path().parent.mkdir(parents=True, exist_ok=True)
+        _gate_path().write_text(json.dumps({"fleet": argv[1], "what": argv[2], "since": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")}))
+        print(f"{argv[1]} holds the gate: {argv[2]}")
+    elif argv[0] == "free" and len(argv) == 2:
+        if held and held["fleet"] != argv[1]:
+            fail(f"held by {held['fleet']}, not {argv[1]}")
+        _gate_path().unlink(missing_ok=True)
+        print("free")
+    else:
+        fail("usage: fleets.py gate | gate take FLEET WHAT | gate free FLEET")
+
+
+def processes(root) -> list[dict]:
+    """The background processes the session whose scratchpad holds DIR started and that still run:
+    each writes its output into the session's tasks/ directory. Oldest first."""
+    tasks = Path(root).resolve().parent.parent / "tasks"
+    found, tick = [], os.sysconf("SC_CLK_TCK")
+    try:
+        boot = next(float(line.split()[1]) for line in open("/proc/stat") if line.startswith("btime"))
+    except (OSError, StopIteration):
+        return []
+    for proc in Path("/proc").glob("[0-9]*"):
+        try:
+            links = [os.readlink(f) for f in (proc / "fd").iterdir()]
+        except OSError:
+            continue
+        if not any(link.startswith(str(tasks) + "/") for link in links):
+            continue
+        try:
+            stat = (proc / "stat").read_text().rsplit(")", 1)[1].split()
+            args = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace").strip()
+        except OSError:
+            continue
+        wrapped = re.search(r"eval '([^']*)'", args)  # the shell a session's Bash tool wraps a command in
+        found.append({"pid": int(proc.name), "started": boot + int(stat[19]) / tick, "command": wrapped.group(1) if wrapped else args})
+    return sorted(found, key=lambda x: x["started"])
+
+
+def cmd_procs() -> None:
+    now = datetime.now(timezone.utc).timestamp()
+    for e in live():
+        rows = processes(e["dir"])
+        print(f"{e['id']}: {len(rows)} background process(es)")
+        for r in rows:
+            hours = (now - r["started"]) / 3600
+            print(f"    {r['pid']}  {hours:.1f} h  {r['command'][:160]}")
+
+
+def cmd_whose(argv: list[str]) -> None:
+    """whose FROM TO: the files a landing moves (jj diff in the working directory), by the fleet that
+    owns them, from the manager's DIR/owners: one `FLEET GLOB` per line, the first match wins."""
+    import fnmatch
+    import subprocess
+    if len(argv) != 2:
+        fail("usage: fleets.py whose FROM TO   (run in the repository; owners from the manager's DIR/owners)")
+    found = manager()
+    owners_file = Path(found["dir"]) / "owners" if found else None
+    if not owners_file or not owners_file.exists():
+        fail("no owners file: the manager writes DIR/owners, one `FLEET GLOB` per line (`infra servers/case-analysis/**`)")
+    rules = [line.split(None, 1) for line in owners_file.read_text().splitlines() if line.strip() and not line.startswith("#")]
+    diff = subprocess.run(["jj", "diff", "--from", argv[0], "--to", argv[1], "--summary"], capture_output=True, text=True)
+    if diff.returncode:
+        fail(diff.stderr.strip() or "jj diff failed")
+    by: dict[str, list[str]] = {}
+    for line in diff.stdout.splitlines():
+        path = line.split(None, 1)[-1].strip()
+        owner = next((fleet for fleet, glob in rules if fnmatch.fnmatch(path, glob.strip())), "unowned")
+        by.setdefault(owner, []).append(path)
+    for owner, paths in sorted(by.items()):
+        print(f"{owner}: {len(paths)} file(s)")
+        for path in paths:
+            print(f"    {path}")
+
+
 def cmd_manager() -> None:
     found = manager()
     if not found:
@@ -293,6 +397,12 @@ def main(argv: list[str]) -> None:
         cmd_list()
     elif argv == ["manager"]:
         cmd_manager()
+    elif argv and argv[0] == "gate":
+        cmd_gate(argv[1:])
+    elif argv == ["procs"]:
+        cmd_procs()
+    elif argv and argv[0] == "whose":
+        cmd_whose(argv[1:])
     elif len(argv) == 2 and argv[0] == "show":
         cmd_show(argv[1])
     elif len(argv) == 3 and argv[0] == "decision":
@@ -303,7 +413,7 @@ def main(argv: list[str]) -> None:
             fail(entry)
         print(f"this fleet is {entry['id']}, the session {entry['session']}: use that one name everywhere")
     else:
-        fail("usage: fleets.py list | show FLEET | manager | decision FLEET ID | name DIR SESSION")
+        fail("usage: fleets.py list | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET WHAT | free FLEET] | procs | whose FROM TO")
 
 
 if __name__ == "__main__":

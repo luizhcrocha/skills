@@ -331,7 +331,13 @@ def listening(root) -> dict:
         seen = int(_cursor(root, who).read_text())
     except (OSError, ValueError):
         seen = 0
-    unread = [m for m in read(root, seen) if m["from"] == "user"]
+    messages = read(root)
+    answered = {m["re"] for m in messages if m["from"] != "user" and m["re"] is not None}
+    state = _state(root)
+    closed = {d.get("id") for d in state.get("decisions", []) if isinstance(d, dict) and d.get("status") != "open"}
+    # Unread is what still waits: a message someone answered, or an answer to a decision since closed, does not.
+    unread = [m for m in messages if m["id"] > seen and m["from"] == "user" and m["id"] not in answered
+              and not (m.get("decision") and m["decision"] in closed)]
     return {"on": on, "seen": seen, "unread": len(unread), "since": unread[0]["at"] if unread else None}
 
 
@@ -345,15 +351,22 @@ def deaf_warning(root) -> str | None:
             f"Arm `chat.py {root} watch --as {who} --all --resume --once` as a background command; it prints them first.")
 
 
-def _fleets_unheard(me: str, told: dict) -> list[str]:
+def _fleets_unheard(me: str) -> list[str]:
     """For a manager's watch: one line per fleet whose coordinator does not read its chat while the user's
-    messages wait there more than UNHEARD_S, once per newest message."""
+    messages wait there more than UNHEARD_S. Each set of waiting messages is told once, across watches:
+    what was told is kept in the manager's DIR."""
+    told_path = Path(me) / "watch-manager.told"
+    try:
+        told = json.loads(told_path.read_text())
+    except (OSError, ValueError):
+        told = {}
     lines = []
     for e in fleets.live():
         if e["role"] == "manager" or e["dir"] == me:
             continue
         heard = listening(e["dir"])
-        if heard["on"] or not heard["unread"] or told.get(e["id"]) == heard["unread"]:
+        mark = f"{heard['seen']}:{heard['unread']}:{heard['since']}"
+        if heard["on"] or not heard["unread"] or told.get(e["id"]) == mark:
             continue
         try:
             waited = time.time() - datetime.fromisoformat(heard["since"]).timestamp()
@@ -361,10 +374,20 @@ def _fleets_unheard(me: str, told: dict) -> list[str]:
             waited = UNHEARD_S
         if waited < UNHEARD_S:
             continue
-        told[e["id"]] = heard["unread"]
+        told[e["id"]] = mark
+        import spend
+        active = spend.active(e["dir"])
+        gone = ""
+        try:
+            if active and time.time() - datetime.fromisoformat(active).timestamp() > 1800:
+                gone = f" Its session last wrote at {active[:16].replace('T', ' ')}; it may be gone."
+        except ValueError:
+            pass
         lines.append(f"! {e['id']} does not read its chat: {heard['unread']} message(s) from the user since "
                      f"#{heard['seen']}, the oldest at {heard['since'][11:16]}. SendMessage its session "
-                     f"({e.get('session') or e['id']}) to arm its watch; `chat.py {e['dir']} log --after {heard['seen']}` shows them.")
+                     f"({e.get('session') or e['id']}) to arm its watch; `chat.py {e['dir']} log --after {heard['seen']}` shows them." + gone)
+    if lines:
+        told_path.write_text(json.dumps(told))
     return lines
 
 
@@ -407,7 +430,7 @@ def _watch(root, args, who: str, cursor: Path) -> None:
     show(first)
     if args.once and first:
         return
-    told, checked = {}, 0.0
+    checked = 0.0
     while True:
         time.sleep(POLL_S)
         new = [m for m in tail.read() if who in m["to"] or (args.all and m["from"] == "user")]
@@ -415,7 +438,7 @@ def _watch(root, args, who: str, cursor: Path) -> None:
         lines = []
         if who == "manager" and time.monotonic() - checked >= FLEETS_S:
             checked = time.monotonic()
-            lines = _fleets_unheard(str(root), told)
+            lines = _fleets_unheard(str(root))
             for line in lines:
                 print(line, flush=True)
         if args.once and (new or lines):

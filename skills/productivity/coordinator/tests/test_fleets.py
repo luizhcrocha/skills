@@ -244,3 +244,28 @@ class SessionTitleTest(unittest.TestCase):
     def test_without_a_title_the_project_names_it(self):
         root = self.session("-home-x-repo", "s2", None)
         self.assertEqual(fleets.register(root, "u", os.getpid())["id"], "case-analysis")
+
+
+class GateTest(unittest.TestCase):
+    def setUp(self):
+        os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
+        self.base = Path(tempfile.mkdtemp())
+        for name in ("infra", "ui"):
+            root = self.base / name / "coordinator"
+            root.mkdir(parents=True)
+            (root / "state.json").write_text(json.dumps({"project": name}))
+            fleets.register(root, "u", os.getpid())
+
+    def cli(self, *args):
+        return subprocess.run([sys.executable, str(SCRIPTS / "fleets.py"), *args], capture_output=True, text=True, timeout=20)
+
+    def test_one_fleet_holds_the_gate_at_a_time(self):
+        self.assertEqual(self.cli("gate").stdout, "free\n")
+        self.assertEqual(self.cli("gate", "take", "infra", "live Neo4j suite").returncode, 0)
+        refused = self.cli("gate", "take", "ui", "browser tests")
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("held by infra", refused.stderr)
+        self.assertEqual(len(fleets.live()), 2, "the gate is not taken for a fleet")
+        self.assertEqual(self.cli("gate", "free", "ui").returncode, 1)
+        self.assertEqual(self.cli("gate", "free", "infra").returncode, 0)
+        self.assertEqual(self.cli("gate", "take", "ui", "browser tests").returncode, 0)

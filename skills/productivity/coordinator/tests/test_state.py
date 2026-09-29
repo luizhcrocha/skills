@@ -181,6 +181,23 @@ class MeasuredTest(unittest.TestCase):
         self.assertEqual(json.loads((root / "state.json").read_text())["agents"][0]["tokens"], 7, "a figure given by hand stays")
 
 
+class KeepAndNextTest(Fleet):
+    def test_step_next_takes_the_number_after_the_highest(self):
+        self.ok("step", "l16", "--milestone", "m1", "--title", "a")
+        self.ok("step", "l3", "--milestone", "m2", "--title", "b")
+        self.assertIn("recorded step l17", self.ok("step", "next", "--milestone", "m1", "--title", "c"))
+        self.assertIn("recorded step l18", self.ok("step", "next", "--milestone", "m2", "--title", "d"))
+        self.assertEqual([x["id"] for x in self.state()["roadmap"][0]["steps"]], ["l16", "l17"])
+
+    def test_kept_items_are_shown_and_dropped_with_a_reason(self):
+        self.ok("keep", "hunk-open", "pglite.worker.ts: hold the ENOENT rejection (a80's hunk)")
+        self.assertIn("kept hunk-open: pglite.worker.ts", self.ok("show"))
+        self.ok("keep", "hunk-open", "--drop", "landed in l3")
+        self.assertEqual(self.state()["kept"], [])
+        self.assertIn("landed in l3", self.state()["events"][-1]["text"])
+        self.assertIn("nothing kept", self.refused("keep", "x", "--drop", "y"))
+
+
 class ManagerTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

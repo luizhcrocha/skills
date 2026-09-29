@@ -105,6 +105,10 @@ events[]     activity log, oldest first
 | A step's words or place changed | `step s2 --title "..."`, `step s2 --before s1` (or `--after`); `step s2 --remove "why"` takes out one recorded in error and logs the reason |
 | Milestone checks pass | `step s2 --status done` for any step not already done, `event --kind integrated "checks green"`, `set --now "..."` |
 | The user must see something now | open a decision for it: the page chimes and keeps a toast only for what asks the user something still open. Everything else is the fleet's record, which the user sees only when their page is set to notify about everything |
+| A worker is spawned | `agent a1 --task ... --milestone m1 --task-id <agentId>`: with the id the Agent tool returned, its tokens and duration are read from its own transcript on every command, so a finished worker's figures need no copying |
+| Something must outlive a compaction and has no row (a queued ask, a hunk outside any lane, a workspace and what it holds, where a worker stands) | `keep ID "text"`; `keep ID --drop "why"` when it is settled. `show` prints them, and the Plan view lists them as held for later |
+| A step whose id you would otherwise invent | `step next --milestone M --title T` records it under the next free id and prints it |
+| A heavy check on the shared machine (a test suite under load, a full build) | `fleets.py gate take <fleet> "what"` before, `fleets.py gate free <fleet>` after; while another fleet holds it, `take` refuses and names the holder |
 | Workers were paused, stopped, or ended unseen | `park "why"` (or `park --agent a1 --agent a2 "why"`): every live row stops in one command, with one log line. Every command warns while rows still say running in a paused or done fleet |
 | Session ends | `set --status done --now "..."` |
 

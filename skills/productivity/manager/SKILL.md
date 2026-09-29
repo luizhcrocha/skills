@@ -89,6 +89,12 @@ The chat's watch prints each message, and every 30 seconds it also looks at the 
 
 A fleet's name is its session's: the registry reads it from the session's title, so a `/rename` carries over by itself. Call a fleet by that name only, in your chat, in `standing.md`, and in `SendMessage`.
 
+## The machine
+
+- **One heavy check at a time.** `fleets.py gate` says who holds the gate slot; a fleet takes it before a test suite or a build that loads the machine, and frees it after. Your page shows the holder. Settle a dispute over it as you settle a turn.
+- **What each session left running.** `fleets.py procs` lists, per fleet, the background processes its session started, with their age. One that outlived its purpose is its session's to stop: tell it.
+- **Whose files a landing moves.** `fleets.py whose FROM TO`, in the repository, sorts the files by owning fleet from `<dir>/owners` (one `FLEET GLOB` per line, first match wins; keep it with the owners in `standing.md`).
+
 ## Said once
 
 Every message between sessions is paid for twice: the sender writes it, the receiver reads it, and both read it again on every later turn. So each thing is said once, by the one who knows it, where the user will read it.
