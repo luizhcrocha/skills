@@ -22,8 +22,8 @@
     state.py DIR park [--agent A]... REASON
     state.py DIR keep ID [TEXT | --drop REASON]
     state.py DIR link ID --url U --title T [--kind dev|page] [--decision D] [--agent A] [--note N] | --drop REASON
-    state.py DIR grill ID [--title T --why W] [--ask "TITLE | QUESTION | RECOMMENDATION"]... [--of Q]
-                          [--answer "Q3: ..."]... [--drop "Q4: why"]... [--revise "Q3: T | Q | R"]... [--done SUMMARY]
+    state.py DIR grill ID [--title T --why W] [--ask "TITLE | QUESTION | RECOMMENDATION | WHY"]... [--of Q]
+                          [--answer "Q3: ..."]... [--drop "Q4: why"]... [--revise "Q3: T | Q | R | W"]... [--reason "Q3: why"]... [--done SUMMARY]
     state.py DIR step next --milestone M --title T   (records the next free step id and prints it)
     state.py DIR show
 
@@ -406,7 +406,7 @@ def parse_options(texts: list[str]) -> list[dict]:
 def check_kind(d: dict) -> None:
     """What each kind's answer control shows has to be there."""
     if d["kind"] == "grill" and "questions" not in d:
-        fail("a grilling is asked with the grill command: `grill ID --title T --ask \"TITLE | QUESTION | RECOMMENDATION\"`")
+        fail("a grilling is asked with the grill command: `grill ID --title T --ask \"TITLE | QUESTION | RECOMMENDATION | WHY\"`")
     if d["kind"] == "decision":
         if len(d["options"]) < 2:
             fail("a decision needs at least two options (--option, once per option)")
@@ -526,11 +526,12 @@ def _q(text: str, what: str) -> tuple[str, str]:
     return head.strip().lower(), rest.strip()
 
 
-def _asked(text: str) -> tuple[str, str, str]:
+def _asked(text: str) -> tuple[str, str, str, str]:
     parts = [x.strip() for x in text.split("|")]
-    if len(parts) != 3 or not all(parts):
-        fail("--ask takes \"title | the question, with its choices | your recommended answer\"")
-    return parts[0], parts[1], parts[2]
+    if len(parts) != 4 or not all(parts):
+        fail("--ask takes \"title | the question, with its choices and what each leads to | your recommended answer | "
+             "why: the reason and the evidence for it, and what it costs or rules out\"")
+    return parts[0], parts[1], parts[2], parts[3]
 
 
 def cmd_grill(state, args):
@@ -571,21 +572,26 @@ def cmd_grill(state, args):
         qid, rest = _q(text, "--revise")
         if qid not in byid:
             fail(f"no question {qid.upper()} in {d['id']}")
-        title, body, rec = _asked(rest)
-        byid[qid].update(title=title, body=body, recommend=rec, status="open", answer=None, asked=now())
+        title, body, rec, why = _asked(rest)
+        byid[qid].update(title=title, body=body, recommend=rec, reason=why, status="open", answer=None, asked=now())
+    for text in args.reason or []:
+        qid, why = _q(text, "--reason")
+        if qid not in byid or not why:
+            fail(f"--reason \"Q3: why\": no question {qid.upper()} in {d['id']}, or no reason given")
+        byid[qid]["reason"] = why
     new = []
     for text in args.ask or []:
-        title, body, rec = _asked(text)
-        q = {"id": f"q{len(qs) + 1}", "title": title, "body": body, "recommend": rec, "of": args.of.lower() if args.of else None,
+        title, body, rec, why = _asked(text)
+        q = {"id": f"q{len(qs) + 1}", "title": title, "body": body, "recommend": rec, "reason": why, "of": args.of.lower() if args.of else None,
              "status": "open", "answer": None, "asked": now()}
         qs.append(q)
         new.append(q)
     open_ = [q for q in qs if q["status"] == "open"]
     d["question"] = f"{len(open_)} question{'s' if len(open_) != 1 else ''} to answer" if open_ else "Every question is answered"
-    if new or args.revise:
+    if new or args.revise or args.reason:
         if not created:
             d["revised"] = now()  # the page shows the round as new since the viewer last looked
-        words = f"{len(new)} new question{'s' if len(new) != 1 else ''}" if new else "a question revised"
+        words = f"{len(new)} new question{'s' if len(new) != 1 else ''}" if new else "a question revised" if args.revise else "reasons added"
         log(state, "asked", f"{d['title']}: {words}", d["agent"], d["blocking"], d["id"])
     if args.done is not None:
         if open_:
@@ -620,8 +626,8 @@ commands (state.py DIR <command>; an unknown ID creates the row, a known ID chan
   park [--agent A]... REASON     stop every live worker row (or those named) in one command
   keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace
   link ID --url U --title T [--kind dev|page] [--decision D] [--note N] | --drop R   a dev server or a purpose-built page
-  grill ID --title T --ask "TITLE | QUESTION | RECOMMENDATION"... [--of Q]   a grilling round, answered on the page
-        [--answer "Q3: ..."] [--drop "Q4: why"] [--revise "Q3: T | Q | R"] [--done SUMMARY]
+  grill ID --title T --ask "TITLE | QUESTION | RECOMMENDATION | WHY"... [--of Q]   a grilling round, answered on the page
+        [--answer "Q3: ..."] [--drop "Q4: why"] [--revise "Q3: T | Q | R | W"] [--reason "Q3: why"] [--done SUMMARY]
   step next --milestone M --title T   the next free step id, printed
   show
   --no-render on any command writes state.json without rendering; -q renders without saying so"""
@@ -715,10 +721,11 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("event"); s.add_argument("text"); s.add_argument("--agent"); s.add_argument("--kind", choices=KINDS)
     s.add_argument("--important", action="store_true", help="the user should see this now: toast, sound, badge")
     s = sub.add_parser("grill"); s.add_argument("id"); s.add_argument("--title"); s.add_argument("--why")
-    s.add_argument("--ask", action="append", metavar='"TITLE | QUESTION | RECOMMENDATION"', help="a question of this round (repeatable)")
+    s.add_argument("--ask", action="append", metavar='"TITLE | QUESTION | RECOMMENDATION | WHY"', help="a question of this round (repeatable)")
+    s.add_argument("--reason", action="append", metavar='"Q3: WHY"', help="the reason for a question's recommendation, given afterwards")
     s.add_argument("--of", metavar="Q", help="the questions asked here follow up on this one")
     s.add_argument("--answer", action="append", metavar='"Q3: ANSWER"'); s.add_argument("--drop", action="append", metavar='"Q4: WHY"')
-    s.add_argument("--revise", action="append", metavar='"Q3: TITLE | QUESTION | RECOMMENDATION"')
+    s.add_argument("--revise", action="append", metavar='"Q3: TITLE | QUESTION | RECOMMENDATION | WHY"')
     s.add_argument("--blocking", action="store_true"); s.add_argument("--agent")
     s.add_argument("--done", metavar="SUMMARY", help="every question is settled: what was agreed")
     s = sub.add_parser("link"); s.add_argument("id"); s.add_argument("--url"); s.add_argument("--title")

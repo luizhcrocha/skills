@@ -581,6 +581,9 @@
   .gq textarea { width: 100%; box-sizing: border-box; margin: 4px 0 6px; font: inherit; font-size: 16px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
   .gq.sent { border-left-color: var(--run); }
   .gq-sent { color: var(--muted); font-size: var(--fs-s); }
+  .gq-rec { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px; background: var(--card-2); }
+  .gq-rec p { margin: 0; white-space: pre-wrap; }
+  .gq-why { margin-top: 4px !important; font-size: var(--fs-s); }
   .gq-done ul { margin: 8px 0 0; padding-left: 18px; }
   .gq-done li.dropped { color: var(--muted); }
   .btn.small { min-height: var(--tap); padding: 0 10px; font-size: var(--fs-xs); }
@@ -1575,12 +1578,13 @@ var FleetCore = (function () {
     const settled = g.questions.filter((e) => e.q.status !== "open");
     const ask = (e) => `<fieldset class="gq" data-q="${esc(e.q.id)}" style="--depth:${e.depth}"><legend>${head(e)}</legend>
         <p class="gq-body">${esc(e.q.body)}</p>
+        <div class="gq-rec"><p><b>Recommended:</b> ${esc(e.q.recommend)}</p>${e.q.reason ? `<p class="gq-why"><b>Why:</b> ${esc(e.q.reason)}</p>` : `<p class="gq-why muted">No reason given. Ask for one in a side chat, or with a note.</p>`}</div>
         ${e.sent ? `<p class="gq-sent">You sent: ${esc(e.sent.text)}. The ${esc(HOST)} replied in the chat.</p>` : ""}
-        ${writable ? `<label class="option"><input type="radio" name="${esc(e.q.id)}" value="rec"><span class="label">Take the recommendation</span><span class="consequence">${esc(e.q.recommend)}</span></label>
+        ${writable ? `<label class="option"><input type="radio" name="${esc(e.q.id)}" value="rec"><span class="label">Take the recommendation</span></label>
         <label class="option"><input type="radio" name="${esc(e.q.id)}" value="own"><span class="label">My answer</span></label>
         <textarea name="${esc(e.q.id)}-text" rows="2" aria-label="Your answer to ${esc(e.q.id.toUpperCase())}"></textarea>
         <label class="option later"><input type="radio" name="${esc(e.q.id)}" value="later" checked><span class="label">Later</span></label>`
-        : `<p class="gq-rec">Recommended: ${esc(e.q.recommend)}</p>`}</fieldset>`;
+        : ""}</fieldset>`;
     const waiting = (e) => `<div class="gq sent" style="--depth:${e.depth}"><p class="gq-title">${head(e)}</p><p>You sent: <b>${esc(e.sent.text)}</b></p>
         <span class="dv-meta">${esc(clock(e.sent.at))}. The ${esc(HOST)} records it next.</span>${writable ? ` <button type="button" class="btn small" data-again-q="${esc(e.q.id)}">Answer again</button>` : ""}</div>`;
     const done = (e) => `<li class="${esc(e.q.status)}"><b>${esc(e.q.id.toUpperCase())}</b> ${esc(e.q.title)}: ${e.q.status === "dropped" ? "dropped, " + esc(e.q.dropped || "no longer needed") : esc(e.q.answer)}</li>`;

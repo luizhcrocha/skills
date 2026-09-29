@@ -201,15 +201,19 @@ class KeepAndNextTest(Fleet):
 
 class GrillTest(Fleet):
     def test_a_grilling_is_asked_answered_followed_up_and_done(self):
-        self.assertIn("--title", self.refused("grill", "g1", "--ask", "a | b | c"))
-        self.ok("grill", "g1", "--title", "Tab", "--ask", "Where | tab or sidebar? | tab", "--ask", "Secrets | how? | refs")
+        self.assertIn("--title", self.refused("grill", "g1", "--ask", "a | b | c | d"))
+        self.assertIn("why", self.refused("grill", "g1", "--title", "T", "--ask", "a | b | c"), "a recommendation comes with its reason")
+        self.ok("grill", "g1", "--title", "Tab", "--ask", "Where | tab or sidebar? | tab | a tab opens first on a phone", "--ask", "Secrets | how? | refs | a value never passes the page")
         d = self.state()["decisions"][0]
         self.assertEqual((d["kind"], d["question"], [q["id"] for q in d["questions"]]), ("grill", "2 questions to answer", ["q1", "q2"]))
         self.assertEqual(self.state()["events"][-1]["kind"], "asked")
-        self.ok("grill", "g1", "--answer", "Q1: a sidebar", "--of", "q1", "--ask", "Side | left or right? | left")
+        self.ok("grill", "g1", "--answer", "Q1: a sidebar", "--of", "q1", "--ask", "Side | left or right? | left | the chat is on the right")
         d = self.state()["decisions"][0]
         self.assertEqual([(q["id"], q["status"], q["of"]) for q in d["questions"]], [("q1", "answered", None), ("q2", "open", None), ("q3", "open", "q1")])
         self.assertTrue(d["revised"])
+        self.assertEqual(d["questions"][0]["reason"], "a tab opens first on a phone")
+        self.ok("grill", "g1", "--reason", "Q2: refs resolve where the code reads them")
+        self.assertEqual(self.state()["decisions"][0]["questions"][1]["reason"], "refs resolve where the code reads them")
         self.assertIn("still open", self.refused("grill", "g1", "--done", "x"))
         self.assertIn("Q3:", self.refused("grill", "g1", "--answer", "left"))
         self.ok("grill", "g1", "--drop", "Q2: settled in the session", "--answer", "Q3: left", "--done", "a left sidebar")
