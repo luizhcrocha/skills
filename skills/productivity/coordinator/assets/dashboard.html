@@ -103,6 +103,12 @@
   .pill.warning { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, var(--card)); }
   .pill.serious { color: var(--serious); background: color-mix(in srgb, var(--serious) 14%, var(--card)); }
   .pill.current { background: var(--accent-soft); color: var(--accent); }
+  .pill.open, .pill.answered, .pill.recommended { background: var(--accent-soft); color: var(--accent); }
+  .pill.decided { color: var(--good); background: color-mix(in srgb, var(--good) 14%, var(--card)); }
+  .pill.blocking { color: var(--critical); background: color-mix(in srgb, var(--critical) 12%, var(--card)); }
+  .pill.new, .pill.changed { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, var(--card)); }
+  .pill.withdrawn { color: var(--muted); }
+  .pill.plain::before { display: none; }
 
   /* section navigation: a bar under the thumb on a phone, a sticky strip on a wide screen */
   .dock { display: flex; gap: 4px; align-items: center; position: sticky; top: 0; z-index: 20; margin-block: -14px; padding: 8px 56px 8px 0; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
@@ -114,8 +120,8 @@
   .dock .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 0.7rem; font-weight: 600; display: grid; place-items: center; font-family: var(--mono); line-height: 1; }
   .dock .badge.alert { background: var(--critical); }
   @media (max-width: 759.98px) {
-    .dock { position: fixed; inset: auto 0 0 0; margin: 0; z-index: 35; display: grid; grid-template-columns: repeat(6, 1fr); gap: 0; height: var(--dock-h); padding: 0 max(4px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(4px, env(safe-area-inset-left, 0px)); box-sizing: content-box; background: color-mix(in srgb, var(--card) 94%, transparent); border-top: 1px solid var(--line); }
-    .dock a, .dock button { justify-content: center; min-height: 48px; min-width: 44px; padding: 0; margin: 6px 2px; }
+    .dock { position: fixed; inset: auto 0 0 0; margin: 0; z-index: 35; display: grid; grid-template-columns: repeat(7, 1fr); gap: 0; height: var(--dock-h); padding: 0 max(4px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(4px, env(safe-area-inset-left, 0px)); box-sizing: content-box; background: color-mix(in srgb, var(--card) 94%, transparent); border-top: 1px solid var(--line); }
+    .dock a, .dock button { justify-content: center; min-height: 48px; min-width: 40px; padding: 0; margin: 6px 1px; }
     .dock svg.i { width: 24px; height: 24px; }
     .dock .lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     .dock .badge { position: absolute; top: 0; left: calc(50% + 4px); font-size: 14px; min-width: 22px; height: 22px; border-radius: 11px; }
@@ -169,7 +175,63 @@
   .block:has(.block-title):hover { background: color-mix(in srgb, var(--card-2) 60%, transparent); }
   .block .detail { color: var(--muted); font-size: 0.9rem; }
   .block .needs { font-size: var(--fs-s); }
+  .block-link { position: relative; z-index: 1; display: inline-flex; align-items: center; min-height: var(--tap); font-weight: 500; }
   .empty { padding: 14px; color: var(--muted); }
+
+  /* decisions: what waits on the user, each row a link to its page */
+  .ask { display: grid; gap: 4px; padding: 12px 14px; border-left: 3px solid var(--line); color: inherit; text-decoration: none; }
+  .ask + .ask { border-top: 1px solid var(--line); }
+  .ask:hover { background: color-mix(in srgb, var(--card-2) 60%, transparent); }
+  .ask.open { border-left-color: var(--accent); }
+  .ask.open.blocking { border-left-color: var(--critical); }
+  .ask.closed { opacity: 0.75; }
+  .ask-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+  .ask-head b { font-weight: 600; font-size: 1rem; overflow-wrap: anywhere; }
+  .ask .detail { overflow-wrap: anywhere; }
+  .ask .meta { font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
+
+  /* the decision's page: what the user needs to decide, and the control to answer */
+  .dv { max-width: 860px; gap: 18px; }
+  .dv:focus { outline: none; }
+  .dv-back { justify-self: start; display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); padding-right: 56px; color: var(--muted); text-decoration: none; font-size: var(--fs-s); font-weight: 500; }
+  .dv-back:hover { color: var(--text); }
+  .dv-back svg.i { width: 18px; height: 18px; }
+  .dv-info, .dv-answer { display: grid; gap: 18px; min-width: 0; }
+  .dv-head { display: grid; gap: 8px; }
+  .dv-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .dv-meta { color: var(--muted); font-size: var(--fs-s); overflow-wrap: anywhere; }
+  .dv-meta .who { min-height: 0; vertical-align: baseline; }
+  .dv-question { font-size: 1.2rem; font-weight: 500; line-height: 1.35; max-width: 60ch; text-wrap: pretty; overflow-wrap: anywhere; }
+  .dv-block { display: grid; gap: 4px; min-width: 0; }
+  .dv-block h3, .note h3 { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 500; }
+  .dv-block p, .note p { max-width: 70ch; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .note { display: grid; gap: 4px; padding: 12px 14px; border-radius: 8px; background: var(--card-2); border-left: 3px solid var(--faint); min-width: 0; }
+  .note.changed { border-left-color: var(--warning); }
+  .note.decided { border-left-color: var(--good); }
+  .note.pending { border-left-color: var(--accent); background: var(--accent-soft); }
+  .note .by { font-family: var(--mono); font-size: var(--fs-s); color: var(--muted); }
+  .options { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .option { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; align-items: start; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+  label.option { cursor: pointer; }
+  label.option:hover { border-color: var(--faint); }
+  .option:has(input:checked), .option.chosen { border-color: var(--accent); background: var(--accent-soft); }
+  .option input { accent-color: var(--accent); width: 20px; height: 20px; margin: 1px 0 0; }
+  .option .key { font-family: var(--mono); font-weight: 500; color: var(--muted); min-width: 20px; }
+  .option .label { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-weight: 600; overflow-wrap: anywhere; }
+  .option .consequence { grid-column: 2; color: var(--muted); overflow-wrap: anywhere; }
+  .dv-form { display: grid; gap: 14px; min-width: 0; }
+  .dv-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 8px; }
+  .dv-form legend { padding: 0; margin-bottom: 8px; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 500; }
+  .field { display: grid; gap: 4px; font-size: var(--fs-s); color: var(--muted); }
+  .field textarea, .field input { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font-size: 16px; line-height: 1.45; }
+  .field textarea { field-sizing: content; min-block-size: calc(2lh + 22px); max-block-size: 40dvh; resize: vertical; }
+  .field input { font-family: var(--mono); }
+  .field textarea:focus-visible, .field input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
+  .manual { margin: 0; padding: 10px 12px; border-radius: 6px; background: var(--card-2); font-family: var(--mono); font-size: 0.9rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .dv code { font-family: var(--mono); font-size: 0.92em; padding: 1px 5px; border-radius: 4px; background: var(--card-2); }
+  .dv-body iframe { display: block; width: 100%; height: 160px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+  .dv-body iframe.fixed { height: 70dvh; }
+  @media (max-width: 759.98px) { .dv { padding-bottom: calc(32px + env(safe-area-inset-bottom, 0px)); } .dv .sheet-actions .btn { flex: 1; justify-content: center; } }
 
   /* filters */
   .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -270,7 +332,7 @@
   .log .kind { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); margin-right: 8px; }
   .log .kind.blocked { color: var(--critical); }
   .log .kind.resolved, .log .kind.integrated { color: var(--good); }
-  .log .kind.decision, .log .kind.message { color: var(--accent); }
+  .log .kind.decision, .log .kind.message, .log .kind.asked { color: var(--accent); }
   @media (max-width: 759.98px), (pointer: coarse) {
     .log li { grid-template-columns: minmax(0, 1fr); gap: 2px; }
     .log .log-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0 10px; }
@@ -476,6 +538,7 @@
 <div class="wrap" id="app">
   <header class="head" id="head"></header>
   <nav class="dock" id="dock" aria-label="Sections">
+    <a href="#decisions" data-sec="decisions" title="Decisions"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg><span class="lbl">Decisions</span><span class="badge" id="nav-decisions" hidden></span></a>
     <a href="#roadmap" data-sec="roadmap" title="Roadmap"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4h12l-2.5 4L17 12H5"/></svg><span class="lbl">Roadmap</span></a>
     <a href="#roadblocks" data-sec="roadblocks" title="Roadblocks"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5M12 17.2v.3"/></svg><span class="lbl">Roadblocks</span><span class="badge alert" id="nav-blocks" hidden></span></a>
     <a href="#fleet" data-sec="fleet" title="Fleet"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12.5" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="20.5" r="1.8"/><path d="m9.8 10.5-3.3-3M14.2 10.5l3.3-3M12 15.5v3.2"/></svg><span class="lbl">Fleet</span></a>
@@ -484,6 +547,10 @@
     <button type="button" class="to-chat" id="chat-toggle" aria-controls="chat" aria-expanded="false" title="Chat"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 0 1-12.4 7.5L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/></svg><span class="lbl">Chat</span><span class="badge" id="chat-badge" hidden></span></button>
   </nav>
   <div class="tiles" id="tiles"></div>
+  <section id="decisions" aria-labelledby="h-decisions">
+    <h2 id="h-decisions">Decisions</h2>
+    <div class="card" id="decision-list"></div>
+  </section>
   <div class="cols">
     <section id="roadmap" aria-labelledby="h-roadmap">
       <h2 id="h-roadmap">Roadmap</h2>
@@ -524,6 +591,16 @@
   </footer>
 </div>
 
+<main class="wrap dv" id="decision" tabindex="-1" hidden>
+  <a class="dv-back" href="#decisions"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>All decisions</a>
+  <div class="dv-info" id="dv-info"></div>
+  <section class="dv-body" id="dv-body" aria-labelledby="h-evidence" hidden>
+    <h2 id="h-evidence">What it rests on</h2>
+    <div id="dv-frame"></div>
+  </section>
+  <div class="dv-answer" id="dv-answer"></div>
+</main>
+
 <aside class="chat" id="chat" aria-labelledby="chat-title">
   <header class="chat-head">
     <h2 id="chat-title" tabindex="-1">Chat</h2>
@@ -556,7 +633,8 @@
 <script id="fleet-state" type="application/json">/*__STATE__*/</script>
 <script id="fleet-core">
 /* The page's rules that need no browser: the composer's keys, the @token at the caret, the
-   roster list, the conversation's threads, the viewer's preferences. Pure functions over plain
+   roster list, the conversation's threads, the decisions' order and answers, the viewer's
+   preferences. Pure functions over plain
    values, run by the page below and by tests/page.test.mjs, which evaluates this element alone.
    Who a message reaches, and which @tokens are mentions, is scripts/chat.py's rule alone: the
    page renders the `parts` and `to` the server resolved. */
@@ -673,7 +751,57 @@ var FleetCore = (function () {
     };
   }
 
-  return { keyOf, rosterOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf };
+  const stamp = (iso) => { const t = Date.parse(iso); return isNaN(t) ? 0 : t; };
+
+  /* The decisions as the user should read them: open and blocking first, then the other open ones,
+     oldest first in each, then the closed ones, newest first. `seen` maps an id to the revision the
+     viewer last opened; an open item never opened is marked "new", one revised since is "changed". */
+  function decisionRows(decisions, seen) {
+    const rank = (d) => d.status !== "open" ? 2 : d.blocking ? 0 : 1;
+    const rows = [...(decisions || [])].sort((a, b) => (rank(a) - rank(b))
+      || (rank(a) === 2 ? stamp(b.closed) - stamp(a.closed) : stamp(a.opened) - stamp(b.opened)));
+    return rows.map((d) => {
+      const last = seen && seen[d.id];
+      const mark = d.status !== "open" ? "" : !last ? "new" : d.revised && stamp(d.revised) > stamp(last) ? "changed" : "";
+      return { item: d, mark };
+    });
+  }
+
+  /* The decision a location hash names ("#decision/d1"), or null. */
+  function decisionRoute(hash) {
+    const m = /^#decision\/([A-Za-z0-9_.-]+)$/.exec(String(hash ?? ""));
+    return m ? m[1] : null;
+  }
+
+  /* The answer an open decision waits to see recorded: the user's latest message tagged with it and
+     sent after the item last changed, with the fleet's replies to that message. Null when there is
+     none, and for a closed item. */
+  function pendingAnswer(item, messages) {
+    if (!item || item.status !== "open") return null;
+    const since = stamp(item.revised || item.opened);
+    let answer = null;
+    const list = [...(messages || [])].sort((a, b) => a.id - b.id);
+    for (const m of list) if (m.from === "user" && m.decision === item.id && stamp(m.at) >= since) answer = m;
+    return answer && { answer, replies: list.filter((m) => m.re === answer.id && m.from !== "user") };
+  }
+
+  /* What the page posts for the answer given in `form`: {text}, or {error} saying what is missing.
+     A decision is one option with an optional note, or "none" with a note that says what instead. */
+  function answerText(item, form) {
+    const note = String(form.note ?? "").trim(), value = String(form.value ?? "").trim();
+    const withNote = (text) => ({ text: note ? text + "\n" + note : text });
+    if (item.kind === "decision") {
+      if (form.choice === "none") return note ? { text: "None of these: " + note } : { error: "Say what you want instead." };
+      const option = (item.options || []).find((o) => o.id === form.choice);
+      return option ? withNote(option.id + ": " + option.label) : { error: "Pick one option." };
+    }
+    if (form.done) return withNote(item.kind === "secret" ? "Set by hand." : "Done.");
+    if (item.kind === "secret") return value ? { text: value } : { error: "Give the reference or the item's name." };
+    return value ? { text: value } : { error: "Write your answer." };
+  }
+
+  return { keyOf, rosterOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf,
+    decisionRows, decisionRoute, pendingAnswer, answerText };
 })();
 </script>
 <script>
@@ -726,6 +854,7 @@ var FleetCore = (function () {
   const shownHtml = new WeakMap();
   const paint = (el, html) => { if (shownHtml.get(el) === html) return false; el.innerHTML = html; shownHtml.set(el, html); return true; };
   const pill = (s) => s ? `<span class="pill ${esc(s)}">${esc(s)}</span>` : "";
+  const pillAs = (cls, text) => `<span class="pill ${cls}">${esc(text)}</span>`;
 
   /* The fleet mark: one hub, three workers. Also the favicon, which carries the unread count. */
   const mark = (badge, critical) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
@@ -771,7 +900,12 @@ var FleetCore = (function () {
     const steps = STATE.roadmap.flatMap((m) => m.steps);
     const doneSteps = steps.filter((s) => s.status === "done").length;
     const tile = (label, value, sub, cls) => `<div class="tile ${cls || ""}"><span class="label">${label}</span><span class="value num">${value}</span><span class="sub">${sub}</span></div>`;
+    const asked = openDecisions(), holding = asked.filter((d) => d.blocking).length;
+    $("nav-decisions").hidden = !asked.length;
+    $("nav-decisions").textContent = String(asked.length);
+    $("nav-decisions").classList.toggle("alert", holding > 0);
     paint($("tiles"), [
+      tile("Waiting on you", asked.length, holding ? `${holding} block${holding === 1 ? "s" : ""} work` : "none blocks work", holding ? "alert" : ""),
       tile("Running", byStatus("running"), `${byStatus("queued")} queued`),
       tile("Done", byStatus("done"), `${byStatus("failed") + byStatus("stopped")} failed or stopped`),
       tile("Blocked", byStatus("blocked"), `${openBlocks.length} open roadblock${openBlocks.length === 1 ? "" : "s"}`, openBlocks.length ? "alert" : ""),
@@ -804,13 +938,220 @@ var FleetCore = (function () {
     paint($("roadblock-list"), blocks.length ? blocks.map((r) => {
       const a = r.agent && agentById[r.agent];
       const title = a ? `<button type="button" class="block-title" data-agent="${esc(r.agent)}">${esc(r.title)}</button>` : `<b>${esc(r.title)}</b>`;
+      const ask = !r.resolved && r.decision && decisionById(r.decision);
       return `<div class="block ${r.resolved ? "resolved" : esc(r.severity)}">
         <div class="block-head">${title}${r.resolved ? pill("done") : pill(r.severity)}</div>
         <p class="detail">${esc(r.detail)}</p>
         <p class="needs muted">${r.resolved ? "Resolved" : "Needs <b>" + esc(r.needs) + "</b>"}, ${esc(r.agent ? nameOf(r.agent) : "coordinator")}, since ${esc(clock(r.since))}</p>
+        ${ask ? `<a class="block-link" href="#decision/${esc(ask.id)}">Decide: ${esc(ask.title)}</a>` : ""}
       </div>`;
     }).join("") : '<p class="empty">No roadblocks.</p>');
   }
+
+  /* ---------------------------------------------------------------- decisions */
+
+  const KIND_WORDS = { decision: "a choice", input: "your input", secret: "a secret", action: "something to do" };
+  const seen = store.get("d-seen", {});   // decision id -> the revision this viewer last opened
+  const decisionById = (id) => (STATE.decisions || []).find((d) => d.id === id);
+  const openDecisions = () => (STATE.decisions || []).filter((d) => d.status === "open");
+  const revisionOf = (d) => d.revised || d.opened;
+  const closedWords = (d) => d.status === "decided" ? `Decided: ${d.answer || ""}` : `Withdrawn: ${d.resolution || ""}`;
+  const statePill = (d, pending) => d.status !== "open" ? pill(d.status)
+    : pending ? pillAs("answered", "answered, being recorded") : d.blocking ? pillAs("blocking", "blocks work") : pillAs("open", "open");
+
+  /* The list: every row is a link to the decision's page. */
+  function renderDecisions() {
+    const messages = [...chat.messages.values()];
+    const rows = Core.decisionRows(STATE.decisions, seen);
+    paint($("decision-list"), rows.length ? rows.map(({ item: d, mark }) => {
+      const open = d.status === "open";
+      return `<a class="ask ${open ? "open" : "closed"}${open && d.blocking ? " blocking" : ""}" href="#decision/${esc(d.id)}">
+        <span class="ask-head"><b>${esc(d.title)}</b>${statePill(d, open && Core.pendingAnswer(d, messages))}${mark ? pill(mark) : ""}${pillAs("plain", KIND_WORDS[d.kind] || d.kind)}</span>
+        <span class="detail">${esc(open ? d.question : closedWords(d))}</span>
+        <span class="meta">${open
+          ? `${d.why ? esc((d.blocking ? "Blocks: " : "Meanwhile: ") + d.why) + ". " : ""}Asked ${esc(ago(d.opened))}${d.revised ? ", changed " + esc(ago(d.revised)) : ""}`
+          : `${d.status === "decided" && d.resolution ? esc(d.resolution) + ". " : ""}Closed ${esc(ago(d.closed))}`}</span>
+      </a>`;
+    }).join("") : '<p class="empty">Nothing waits on you.</p>');
+  }
+
+  /* The decision's page, a view of this page at #decision/<id>. Its three regions are painted apart:
+     the facts, the evidence (a frame, reloaded only when the item is revised), and the answer's
+     form, which is rewritten only when what it shows changed, so a half-written answer survives
+     every update of the state. */
+  let viewing = null, changedNote = null;
+  const evidence = { key: "", frame: null };
+
+  function route() {
+    const id = Core.decisionRoute(location.hash), was = viewing;
+    viewing = id;
+    $("app").hidden = !!id; $("decision").hidden = !id;
+    if (id && !DOCKED.matches && chat.open) { pushed = false; overlayClosed(); }
+    if (id) {
+      if (was !== id) changedNote = null;
+      for (const toast of $("toasts").querySelectorAll("[data-decision]")) if (toast.dataset.decision === id) toast.remove();
+      renderDecision();
+      if (was !== id) { window.scrollTo(0, 0); $("decision").focus({ preventScroll: true }); }
+    } else if (was) {
+      renderDecisions();
+      const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
+      if (target) target.scrollIntoView();
+    }
+  }
+
+  function renderDecision() {
+    if (!viewing) return;
+    const d = decisionById(viewing);
+    if (!d) {
+      paint($("dv-info"), `<div class="note"><h3>Not in this ledger</h3><p>No decision "${esc(viewing)}" is recorded for this fleet.</p></div>`);
+      paint($("dv-answer"), ""); renderEvidence(null);
+      return;
+    }
+    const open = d.status === "open";
+    if (open && d.revised && seen[d.id] && time(d.revised) > time(seen[d.id])) changedNote = { id: d.id, at: d.revised, text: d.change || "" };
+    if (seen[d.id] !== revisionOf(d)) { seen[d.id] = revisionOf(d); store.set("d-seen", seen); }
+    const pending = Core.pendingAnswer(d, chat.messages.values());
+    const recommended = (d.options || []).find((o) => o.id === d.recommend);
+    const successor = (STATE.decisions || []).find((x) => x.supersedes === d.id);
+    const before = d.supersedes && decisionById(d.supersedes);
+    paint($("dv-info"), `
+      <header class="dv-head">
+        <div class="dv-pills">${statePill(d, pending)}${pillAs("plain", KIND_WORDS[d.kind] || d.kind)}</div>
+        <h1>${esc(d.title)}</h1>
+        <p class="dv-meta">${d.agent && agentById[d.agent] ? "For " + whoButton(d.agent) + ", asked" : "Asked"} ${esc(ago(d.opened))}${d.revised ? ", changed " + esc(ago(d.revised)) : ""}${before ? `. Replaces <a href="#decision/${esc(before.id)}">${esc(before.title)}</a>` : ""}</p>
+      </header>
+      ${open ? "" : `<div class="note ${esc(d.status)}"><h3>${d.status === "decided" ? "Decided" : "Withdrawn, no answer needed"}</h3>${d.status === "decided" ? `<p><b>${esc(d.answer)}</b></p>` : ""}<p>${esc(d.resolution)}</p><span class="dv-meta">${esc(clock(d.closed))}, ${esc(ago(d.closed))}</span></div>`}
+      ${successor ? `<div class="note changed"><h3>Replaced</h3><p>A newer decision takes its place: <a href="#decision/${esc(successor.id)}">${esc(successor.title)}</a></p></div>` : ""}
+      ${open && changedNote && changedNote.id === d.id ? `<div class="note changed" role="status"><h3>Changed since you last looked</h3><p>${esc(changedNote.text || "The coordinator revised this decision.")}</p><span class="dv-meta">${esc(clock(changedNote.at))}</span></div>` : ""}
+      <p class="dv-question">${esc(d.question)}</p>
+      ${d.why ? `<div class="dv-block"><h3>${d.blocking ? "What it blocks" : "Meanwhile"}</h3><p>${esc(d.why)}</p></div>` : ""}
+      ${d.recommend ? `<div class="dv-block"><h3>Recommended</h3><p><b>${esc(recommended ? recommended.id + ": " + recommended.label : d.recommend)}</b>${d.reason ? "\n" + esc(d.reason) : ""}</p></div>` : ""}`);
+    renderEvidence(d);
+    paint($("dv-answer"), answerHtml(d, pending));
+  }
+
+  const optionsHtml = (d, pick) => (d.options || []).map((o) => {
+    const chosen = !pick && d.status === "decided" && String(d.answer || "").startsWith(o.id + ":");
+    return `<${pick ? "label" : "div"} class="option${chosen ? " chosen" : ""}">${pick ? `<input type="radio" name="choice" value="${esc(o.id)}">` : `<span class="key">${esc(o.id)}</span>`}
+      <span class="label">${pick ? esc(o.id) + ": " : ""}${esc(o.label)}${o.id === d.recommend ? pillAs("recommended plain", "recommended") : ""}</span>
+      <span class="consequence">${esc(o.consequence)}</span></${pick ? "label" : "div"}>`;
+  }).join("");
+  const manualHtml = (d, title) => d.manual ? `<div class="dv-block"><h3>${title}</h3><pre class="manual">${esc(d.manual)}</pre></div>` : "";
+  const discuss = '<button type="button" class="btn" data-discuss>Ask about it in the chat</button>';
+
+  function answerHtml(d, pending) {
+    const shown = d.kind === "decision" && (d.options || []).length ? `<div class="dv-block"><h3>Options</h3><div class="options">${optionsHtml(d, false)}</div></div>` : "";
+    if (d.status !== "open") return d.page === false && !shown ? "" : shown + (chatWritable() ? `<div class="sheet-actions"><button type="button" class="btn" data-change>Change my answer</button></div>` : "");
+    if (pending) return `<div class="note pending" role="status"><h3>Your answer</h3><p>${esc(pending.answer.text)}</p>
+        <span class="dv-meta">Sent ${esc(clock(pending.answer.at))}. The coordinator records it next; the fleet acts on it once it is recorded.</span>
+        ${pending.replies.map((m) => `<p><span class="by">${esc(nameOf(m.from))}</span> ${esc(m.text)}</p>`).join("")}</div>
+      <div class="sheet-actions">${discuss}</div>`;
+    if (!chatWritable()) return shown + manualHtml(d, "What to do") + `<p class="readonly" role="status">${esc(chatAvailable() && chat.write.reason
+      ? chat.write.reason + " Give your answer in the session with the coordinator."
+      : "This copy of the page cannot send an answer. Give it in the session with the coordinator.")}</p>`;
+    const error = '<p class="chat-error" id="dv-error" role="alert" hidden></p>';
+    const note = (label) => `<label class="field">${label}<textarea name="note" rows="2" autocomplete="off"></textarea></label>`;
+    if (d.kind === "decision") return `<form class="dv-form" novalidate>
+        <fieldset><legend>Your decision</legend>${optionsHtml(d, true)}
+          <label class="option"><input type="radio" name="choice" value="none"><span class="label">None of these</span><span class="consequence">Say what you want instead, in the note.</span></label>
+        </fieldset>
+        ${note("Note, if you want to add one")}${error}
+        <div class="sheet-actions"><button type="submit" class="btn primary">Send my decision</button>${discuss}</div></form>`;
+    if (d.kind === "secret") return `<form class="dv-form" novalidate>
+        <p>The fleet needs <code>${esc(d.secret)}</code>. Say where it lives; the value itself never goes through this page.</p>
+        <label class="field">1Password reference, or the item's name<input type="text" name="value" placeholder="op://vault/item/field" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-1p-ignore data-lpignore="true"></label>
+        ${error}
+        <div class="sheet-actions"><button type="submit" class="btn primary">Send the reference</button>${discuss}</div>
+        ${manualHtml(d, "Or set it by hand")}
+        <div class="sheet-actions"><button type="submit" name="done" value="1" class="btn">I have set it</button></div></form>`;
+    if (d.kind === "action") return `<form class="dv-form" novalidate>
+        ${manualHtml(d, "What to do")}${note("Note, if something went differently")}${error}
+        <div class="sheet-actions"><button type="submit" name="done" value="1" class="btn primary">Done</button>${discuss}</div></form>`;
+    return `<form class="dv-form" novalidate>
+        <label class="field">Your answer<textarea name="value" rows="3" autocomplete="off"></textarea></label>${error}
+        <div class="sheet-actions"><button type="submit" class="btn primary">Send my answer</button>${discuss}</div></form>`;
+  }
+
+  $("dv-answer").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const d = decisionById(viewing), form = e.target, fields = new FormData(form);
+    if (!d) return;
+    const out = Core.answerText(d, { choice: fields.get("choice") || "", note: fields.get("note") || "", value: fields.get("value") || "",
+      done: d.kind === "action" || !!(e.submitter && e.submitter.name === "done") });
+    const error = $("dv-error"), buttons = [...form.querySelectorAll("button")];
+    const refuse = (text) => { error.textContent = text; error.hidden = !text; };
+    if (out.error) { refuse(out.error); return; }
+    refuse(""); buttons.forEach((b) => { b.disabled = true; });
+    try {
+      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: out.text, decision: d.id }) });
+      let data = null;
+      try { data = await res.json(); } catch { data = null; }
+      if (res.status !== 201) { refuse((data && data.error) || `The server refused the answer (${res.status}). It is kept here.`); return; }
+      addMessage(data, true); renderDecision(); renderDecisions();
+    } catch {
+      refuse("Could not reach the dashboard's server. Your answer is kept here; send it again when the server is back.");
+    } finally {
+      buttons.forEach((b) => { b.disabled = false; });
+    }
+  });
+  $("decision").addEventListener("click", (e) => {
+    if (e.target.closest("[data-discuss]")) { openChat(); return; }
+    if (!e.target.closest("[data-change]")) return;
+    const d = decisionById(viewing);
+    openChat();
+    if (!d || !chatWritable()) return;
+    if (!say.value.trim()) say.value = `About "${d.title}": I want to change my answer. `;
+    afterEdit(); say.focus(); say.setSelectionRange(say.value.length, say.value.length);
+  });
+
+  /* The evidence: the fragment a worker or the coordinator wrote for this decision, in a frame
+     without this page's origin, so a script in it can draw a chart and cannot answer as the
+     viewer. The page gives it the base styles and the theme, and the frame reports its height. */
+  const TOKENS = ["bg", "card", "card-2", "text", "muted", "faint", "line", "accent", "accent-soft", "good", "warning", "serious", "critical", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
+  function frameDoc(html) {
+    const cs = getComputedStyle(document.documentElement);
+    const vars = TOKENS.map((t) => `--${t}:${cs.getPropertyValue("--" + t).trim()}`).join(";");
+    return `<!doctype html><html><head><meta charset="utf-8"><base href="${esc(new URL("decisions/", location.href).href)}" target="_blank">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>:root{${vars};color-scheme:${cs.colorScheme === "dark" ? "dark" : "light"}}
+html{font:15px/1.5 "IBM Plex Sans","Segoe UI",system-ui,sans-serif;color:var(--text);background:var(--card)}
+body{margin:0;padding:14px 16px;overflow-x:auto;overflow-wrap:anywhere}
+body>:first-child{margin-top:0}body>:last-child{margin-bottom:0}
+h1,h2,h3,h4{margin:1.2em 0 .4em;line-height:1.25;font-weight:600}h1{font-size:1.25rem}h2{font-size:1.1rem}h3,h4{font-size:1rem}
+p,ul,ol,table,pre,figure,dl{margin:0 0 .9em}a{color:var(--accent)}
+table{border-collapse:collapse;width:100%;font-size:.92rem}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:500}
+code,pre{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:.88em}
+pre{background:var(--card-2);padding:10px 12px;border-radius:6px;overflow-x:auto}
+img,svg,video,canvas{max-width:100%;height:auto}
+.num{font-variant-numeric:tabular-nums;text-align:right}
+.muted{color:var(--muted)}.good{color:var(--good)}.warning{color:var(--warning)}.critical{color:var(--critical)}
+</style></head><body>${html}
+<scr` + `ipt>(function(){var post=function(){parent.postMessage({fleetEvidence:true,height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post()})()</scr` + `ipt></body></html>`;
+  }
+  function renderEvidence(d) {
+    const key = d && d.body ? d.id + "|" + revisionOf(d) : "";
+    if (key === evidence.key) return;
+    evidence.key = key; evidence.frame = null;
+    $("dv-body").hidden = !key; $("dv-frame").innerHTML = "";
+    if (!key) return;
+    const url = `decisions/${encodeURIComponent(d.id)}.html?v=${encodeURIComponent(revisionOf(d))}`;
+    const frame = document.createElement("iframe");
+    frame.setAttribute("sandbox", "allow-scripts allow-popups allow-popups-to-escape-sandbox");
+    frame.title = "What the decision rests on";
+    evidence.frame = frame;
+    $("dv-frame").appendChild(frame);
+    fetch(url, { cache: "no-store" }).then((res) => res.ok ? res.text() : Promise.reject(new Error(String(res.status))))
+      .then((html) => { if (evidence.key === key) frame.srcdoc = frameDoc(html); })
+      .catch(() => { if (evidence.key === key) { frame.classList.add("fixed"); frame.src = url; } });
+  }
+  window.addEventListener("message", (e) => {
+    if (!evidence.frame || e.source !== evidence.frame.contentWindow || !e.data || e.data.fleetEvidence !== true) return;
+    const height = Number(e.data.height);
+    if (height > 0) evidence.frame.style.height = Math.min(Math.ceil(height) + 2, 20000) + "px";
+  });
+  window.addEventListener("hashchange", route);
 
   let filterKey = "";
   function renderFilterOptions() {
@@ -910,9 +1251,11 @@ var FleetCore = (function () {
     const events = [...STATE.events].reverse().filter((e) => (!filtering || (e.agent ? ids.has(e.agent) : !q)) && (!q || e.text.toLowerCase().includes(q) || (e.agent && ids.has(e.agent))));
     paint($("log"), events.length ? events.map((e) => `<li>
       <time datetime="${esc(e.at)}" title="${esc(e.at)}">${esc(clock(e.at))}</time>
-      <span><span class="log-meta"><span class="kind ${esc(e.kind)}">${esc(e.kind)}${e.important ? ", needs you" : ""}</span>${e.agent ? whoButton(e.agent) : '<span class="by">coordinator</span>'}</span> ${esc(e.text)}</span>
+      <span><span class="log-meta"><span class="kind ${esc(e.kind)}">${esc(e.kind)}${e.important ? ", needs you" : ""}</span>${e.agent ? whoButton(e.agent) : '<span class="by">coordinator</span>'}</span> ${esc(e.text)}${aboutLink(e)}</span>
     </li>`).join("") : '<li><span></span><span class="muted">Nothing logged yet.</span></li>');
   }
+
+  const aboutLink = (e) => e.decision && decisionById(e.decision) ? ` <a href="#decision/${esc(e.decision)}">Open</a>` : "";
 
   function render() { const rows = visibleAgents(); renderFleet(rows); renderChart(rows); renderLog(rows); }
 
@@ -963,7 +1306,7 @@ var FleetCore = (function () {
       if (!canNotify() || Notification.permission !== "granted" || document.visibilityState === "visible") return;
       try {
         const n = new Notification((e.important ? "Needs you: " : "") + STATE.project, { body: `${who(e)}, ${e.kind}\n${e.text}`, icon: notifIcon(), tag: key(e), requireInteraction: !!e.important, silent: prefs.sound === "off" });
-        n.onclick = () => { window.focus(); n.close(); if (e.chat) openChat(); else if ($("panel").hidden) $("bell").click(); };
+        n.onclick = () => { window.focus(); n.close(); if (e.chat) openChat(); else if (e.decision) location.hash = "#decision/" + e.decision; else if ($("panel").hidden) $("bell").click(); };
       } catch { /* the browser refused; the toast and badge still show */ }
     }
 
@@ -1002,16 +1345,17 @@ var FleetCore = (function () {
       const list = items();
       paint($("notifs"), list.length ? list.map((e) => `<li class="${isUnread(e) ? "unread" : "read"}${e.important ? " important" : ""}">
         <span class="mark"></span>
-        <span><div class="meta"><span class="kind">${esc(e.kind)}</span>, ${esc(who(e))}${e.important ? ", needs you" : ""}</div>${esc(e.text)}</span>
+        <span><div class="meta"><span class="kind">${esc(e.kind)}</span>, ${esc(who(e))}${e.important ? ", needs you" : ""}</div>${esc(e.text)}${aboutLink(e)}</span>
         <time datetime="${esc(e.at)}" title="${esc(e.at)}">${esc(clock(e.at))}</time>
       </li>`).join("") : '<li class="empty muted">Nothing yet.</li>');
     }
     function toast(e) {
       if (prefs.toasts === "off" || (prefs.toasts === "important" && !e.important)) return;
-      const el = document.createElement("div"); el.className = "toast" + (e.important ? " important" : "") + (e.chat ? " opens" : "");
+      const el = document.createElement("div"); el.className = "toast" + (e.important ? " important" : "") + (e.chat || e.decision ? " opens" : "");
       el.innerHTML = `<div><div class="meta"><span class="kind">${esc(e.kind)}</span>, ${esc(who(e))}, ${esc(clock(e.at))}</div>${esc(e.text)}</div><button type="button" aria-label="Dismiss">×</button>`;
       el.querySelector("button").addEventListener("click", (ev) => { ev.stopPropagation(); el.remove(); });
       if (e.chat) el.addEventListener("click", () => { el.remove(); openChat(); });
+      else if (e.decision) { el.dataset.decision = e.decision; el.addEventListener("click", () => { el.remove(); location.hash = "#decision/" + e.decision; }); }
       $("toasts").prepend(el);
       while ($("toasts").children.length > 4) $("toasts").lastElementChild.remove();
       if (!e.important) setTimeout(() => el.remove(), 7000);
@@ -1105,7 +1449,8 @@ var FleetCore = (function () {
     STATE = state; NOW = Date.now();
     agentById = Object.fromEntries(STATE.agents.map((a) => [a.id, a]));
     roster = Core.rosterOf(STATE);
-    renderHeader(); renderTiles(); renderRoadmap(); renderRoadblocks(); renderFilterOptions(); render();
+    renderHeader(); renderTiles(); renderDecisions(); renderRoadmap(); renderRoadblocks(); renderFilterOptions(); render();
+    renderDecision();
     notif.sync();
     refreshSheet();
     /* The conversation depends on the roster's names and statuses only; a state that changes
@@ -1162,7 +1507,7 @@ var FleetCore = (function () {
     $("conn").textContent = words[conn]; $("conn").dataset.conn = conn;
     $("chat").classList.toggle("available", chatAvailable());
     $("chat-note").hidden = conn !== "unavailable";
-    layoutChat(); refreshComposer(); renderChat();
+    layoutChat(); refreshComposer(); renderChat(); renderDecision();
   }
 
   /* Where the chat shows: docked and collapsible on a wide screen, an overlay view elsewhere. */
@@ -1177,7 +1522,7 @@ var FleetCore = (function () {
     $("chat-close").title = docked ? "Hide chat" : "Close chat";
     /* The overlay is modal: the page behind it is inert. The docked panel is not. */
     const modal = !docked && chat.open;
-    for (const id of ["app", "bell", "panel", "toasts"]) $(id).inert = modal;
+    for (const id of ["app", "decision", "bell", "panel", "toasts"]) $(id).inert = modal;
     if (modal) { $("chat").setAttribute("role", "dialog"); $("chat").setAttribute("aria-modal", "true"); }
     else { $("chat").removeAttribute("role"); $("chat").removeAttribute("aria-modal"); }
     markChatRead();
@@ -1273,6 +1618,8 @@ var FleetCore = (function () {
     slot(el, "head", `<div class="msg-head">${name}${s.status && m.from !== "coordinator" ? pill(s.status) : ""}<time datetime="${esc(m.at)}" title="${esc(m.at)}">${esc(clock(m.at))}</time></div>`);
     slot(el, "reply", canReply ? `<button type="button" class="reply-btn" data-reply="${m.id}" aria-label="Reply to ${esc(s.label)}">Reply</button>` : "");
     slot(el, "re", parent ? `<p class="msg-re">Answering ${esc(senderOf(parent).label)}</p>` : "");
+    const about = m.decision && decisionById(m.decision);
+    slot(el, "about", m.decision ? `<p class="msg-re">About ${about ? `<a href="#decision/${esc(m.decision)}">${esc(about.title)}</a>` : esc(m.decision)}</p>` : "");
     slot(el, "text", `<p class="msg-text">${partsHtml(m)}</p>`);
     slot(el, "wait", m.from !== "user" ? "" : entry.waiting.length
       ? `<p class="wait">Waiting on ${entry.waiting.map((r) => agentById[r] ? whoButton(r) : `<span class="chip"><span class="swatch" style="--c:${colourOfId(r)}"></span>${esc(nameOf(r))}</span>`).join("")}</p>`
@@ -1313,7 +1660,7 @@ var FleetCore = (function () {
     renderChatBadge();
   }
   let chatTimer = 0;
-  const scheduleChat = () => { if (!chatTimer) chatTimer = setTimeout(() => { chatTimer = 0; renderChat(); markChatRead(); notif.refresh(); }, 16); };
+  const scheduleChat = () => { if (!chatTimer) chatTimer = setTimeout(() => { chatTimer = 0; renderChat(); markChatRead(); notif.refresh(); renderDecisions(); renderDecision(); }, 16); };
 
   /* A message from the stream or from a send. The store's id makes it idempotent: a replayed or
      twice-delivered message is kept once. `live` marks one that arrived after the first replay. */
@@ -1556,7 +1903,7 @@ var FleetCore = (function () {
       $("chat-you").hidden = !chat.you;
       $("chat-you").textContent = chat.you ? "as " + chat.you : "";
       $("chat-you").title = chat.you ? "Writing as " + chat.you : "";
-      refreshComposer(); renderChat(); refreshSheet();
+      refreshComposer(); renderChat(); refreshSheet(); renderDecision();
     });
     es.addEventListener("chat", (ev) => { try { addMessage(JSON.parse(ev.data), Date.now() > live.replayUntil); } catch { /* a malformed line is skipped */ } });
     es.addEventListener("state", (ev) => takeState(ev.data));
@@ -1572,6 +1919,7 @@ var FleetCore = (function () {
   say.value = String(store.get("chat-draft", ""));
   fit();
   applyState(STATE);
+  route();
   if (location.protocol.startsWith("http")) {
     $("live").hidden = false;
     connect();

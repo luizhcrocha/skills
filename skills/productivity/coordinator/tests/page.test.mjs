@@ -165,3 +165,76 @@ test("prefsOf: a missing or throwing storage keeps nothing and reads every defau
     assert.deepEqual(p.get("k", ["default"]), ["default"]);
   }
 });
+
+const item = (id, extra = {}) => ({ id, kind: "decision", title: "T" + id, question: "q", status: "open", blocking: false, opened: "2026-09-28T10:00:00Z", revised: null, closed: null, ...extra });
+
+test("decisionRows: open and blocking first, then open, oldest first in each, then closed, newest first", () => {
+  const rows = Core.decisionRows([
+    item("d1", { opened: "2026-09-28T10:05:00Z" }),
+    item("d2", { status: "decided", closed: "2026-09-28T11:00:00Z" }),
+    item("d3", { blocking: true, opened: "2026-09-28T10:30:00Z" }),
+    item("d4", { status: "withdrawn", closed: "2026-09-28T12:00:00Z" }),
+    item("d5", { blocking: true, opened: "2026-09-28T10:10:00Z" }),
+    item("d6", { opened: "2026-09-28T10:01:00Z" }),
+  ], {});
+  assert.deepEqual(rows.map((r) => r.item.id), ["d5", "d3", "d6", "d1", "d4", "d2"]);
+  assert.deepEqual(Core.decisionRows(undefined, {}), []);
+});
+
+test("decisionRows: an open item is new until seen, and changed when revised after it was seen", () => {
+  const seen = { d1: "2026-09-28T10:00:00Z", d2: "2026-09-28T10:20:00Z", d4: "2026-09-28T10:00:00Z" };
+  const rows = Core.decisionRows([
+    item("d1", { revised: "2026-09-28T10:20:00Z" }),
+    item("d2", { revised: "2026-09-28T10:20:00Z" }),
+    item("d3"),
+    item("d4", { status: "decided", closed: "2026-09-28T11:00:00Z", revised: "2026-09-28T10:30:00Z" }),
+  ], seen);
+  assert.deepEqual(rows.map((r) => [r.item.id, r.mark]), [["d1", "changed"], ["d2", ""], ["d3", "new"], ["d4", ""]]);
+  assert.deepEqual(Core.decisionRows([item("d3")], null).map((r) => r.mark), ["new"]);
+});
+
+test("decisionRoute: the decision a location hash names", () => {
+  assert.equal(Core.decisionRoute("#decision/d1"), "d1");
+  assert.equal(Core.decisionRoute("#decision/schema.v2-a"), "schema.v2-a");
+  for (const hash of ["", "#", "#decisions", "#decision/", "#decision/a/b", "#decision/a b", "#roadmap", undefined]) assert.equal(Core.decisionRoute(hash), null, String(hash));
+});
+
+test("pendingAnswer: the user's latest answer given after the item last changed, with the replies to it", () => {
+  const d = item("d1", { opened: "2026-09-28T10:00:00Z", revised: "2026-09-28T10:30:00Z" });
+  const at = (m, iso, decision) => ({ ...m, at: iso, ...(decision ? { decision } : {}) });
+  const messages = [
+    at(msg(1, "user", ["coordinator"]), "2026-09-28T10:10:00Z", "d1"),
+    at(msg(2, "user", ["coordinator"]), "2026-09-28T10:40:00Z", "d2"),
+    at(msg(3, "user", ["coordinator"]), "2026-09-28T10:41:00Z", "d1"),
+    at(msg(4, "coordinator", ["user"], 3), "2026-09-28T10:42:00Z"),
+    at(msg(5, "user", ["coordinator"]), "2026-09-28T10:43:00Z"),
+    at(msg(6, "a2", ["user"], 1), "2026-09-28T10:44:00Z"),
+  ];
+  const pending = Core.pendingAnswer(d, messages);
+  assert.equal(pending.answer.id, 3);
+  assert.deepEqual(pending.replies.map((m) => m.id), [4]);
+  assert.equal(Core.pendingAnswer(item("d1", { revised: "2026-09-28T10:50:00Z" }), messages), null, "a revision after the answer asks again");
+  assert.equal(Core.pendingAnswer(item("d1", { status: "decided" }), messages), null, "a closed item waits on nothing");
+  assert.equal(Core.pendingAnswer(item("d9"), messages), null);
+  assert.equal(Core.pendingAnswer(item("d9"), []), null);
+});
+
+test("answerText: a decision is one option with an optional note, or none of them with a note", () => {
+  const d = item("d1", { options: [{ id: "A", label: "migrate now", consequence: "c" }, { id: "B", label: "keep both", consequence: "c" }] });
+  assert.deepEqual(Core.answerText(d, { choice: "B", note: "" }), { text: "B: keep both" });
+  assert.deepEqual(Core.answerText(d, { choice: "B", note: "  after the release \n" }), { text: "B: keep both\nafter the release" });
+  assert.deepEqual(Core.answerText(d, { choice: "none", note: "split the table" }), { text: "None of these: split the table" });
+  assert.equal(Core.answerText(d, { choice: "none", note: " " }).error, "Say what you want instead.");
+  assert.equal(Core.answerText(d, { choice: "", note: "x" }).error, "Pick one option.");
+  assert.equal(Core.answerText(d, { choice: "Z", note: "" }).error, "Pick one option.");
+});
+
+test("answerText: an input is its text, a secret a reference or done by hand, an action done", () => {
+  assert.deepEqual(Core.answerText(item("d1", { kind: "input" }), { value: " 200 per minute " }), { text: "200 per minute" });
+  assert.equal(Core.answerText(item("d1", { kind: "input" }), { value: "" }).error, "Write your answer.");
+  const secret = item("d1", { kind: "secret", secret: "NEO4J_PASSWORD" });
+  assert.deepEqual(Core.answerText(secret, { value: "op://Engineering/Neo4j/password" }), { text: "op://Engineering/Neo4j/password" });
+  assert.deepEqual(Core.answerText(secret, { done: true, note: "" }), { text: "Set by hand." });
+  assert.equal(Core.answerText(secret, { value: " " }).error, "Give the reference or the item's name.");
+  assert.deepEqual(Core.answerText(item("d1", { kind: "action" }), { done: true, note: "ran on the NAS too" }), { text: "Done.\nran on the NAS too" });
+});

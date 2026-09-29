@@ -110,10 +110,13 @@ Token and duration figures arrive in the task notification when a worker finishe
 Workers report back with results, questions, or blocks. Handle each in the same turn it arrives:
 
 - A **question** you can answer from context gets a reply through `SendMessage` (the worker keeps its context; a new spawn would lose it).
-- A **block** that needs the user (a credential, a product decision, a destructive step) goes into the dashboard's roadblocks and into your next message to the user, with what is needed spelled out.
+- A **block** that needs the user (a credential, a product decision, a destructive step) becomes a decision (see [Decisions](#decisions)), with a roadblock pointing at it when a worker is stopped, and goes into your next message to the user by its title.
 - A **report** gets read for what it verified, not just what it claims, and against the architecture standards block. Unverified claims and rule breaks go back to the worker with the specific ask.
 - A **chat message** arrives as a line from the chat watch (`#12 user -> a1 (auth-impl): how far along are you?`). Addressed to you: answer it on the page with `python3 <skill-dir>/scripts/chat.py <dashboard-dir> say --as coordinator --re 12 "<answer>"`. Addressed to a worker: forward it with `SendMessage`, number and text, and the worker answers the page itself (a finished worker resumes from its transcript, so it can still answer about its work). When the message changes the plan (scope, a lane, priorities), it is a decision: record it as an event and act on it as you would on the same words typed in the session.
+- An **answer** to a decision arrives as a chat line tagged with it (`#14 user (luiz@github) -> coordinator [d1]: B: Keep both shapes`). Check that it still holds, record it, answer the message, act on it (see [Decisions](#decisions)).
 - A worker that has **strayed** from its lane is stopped, and the stray edits are handled before anything else runs on those files.
+
+Every report and every chat message is also read against the open decisions: what you just learned may have answered one, changed one, or made one moot.
 
 Between events, explain to the user what is happening in plain terms: who is on what, what is waiting on whom, what the next milestone is. The dashboard shows it; your message names it.
 
@@ -121,6 +124,33 @@ Between events, explain to the user what is happening in plain terms: who is on 
 
 When a milestone's workers are done: run the project's checks yourself (types, tests, lint; a quick win), resolve anything left at the seams between lanes, mark the milestone done, and move the roadmap's current step forward. A milestone counts as done when its checks pass and its reports clear the standards block, not when its workers report.
 
+## Decisions
+
+Everything that needs the user is a **decision** in the ledger: a choice between options, an input, a secret, an action only they can take. The user works through one list on the dashboard, and each decision has a page built for deciding. A question that lives only in a message is lost by the next report: record it, then name it in your message by its title.
+
+Settle what you can first: from this conversation, `CONTEXT.md`, the ADRs, a worker's report, one quick read. What remains is the user's.
+
+A decision carries the bare minimum to decide:
+
+- The **question**, in one sentence the user can answer without reading anything else.
+- **Why**: what it blocks, or the assumption the fleet runs on until they answer. Prefer the assumption: take the option you would recommend, proceed on it, and let the answer change course. Block (`--blocking`) when proceeding would be destructive, outward-facing, or expensive to undo.
+- For a choice, the **options**, each with its consequence in one line, and your **recommendation** with its reason.
+- The **evidence** (`--body`), when it could change the choice: the table, the diff, the measurement, as an HTML fragment that says as of when. The worker that holds the data writes the fragment, in its lane. A simple question has none.
+
+A **secret** is asked for as a pointer to it. The decision names the key the code expects (`--secret`, as in `secretspec.toml`), the user answers with a 1Password reference (`op://vault/item/field`) or the item's name, and `--manual` gives the route by hand, in the user's shell syntax. Resolve the reference where the code reads it (`op read`, `secretspec check`) and report whether it resolved; the value stays out of the chat, the ledger, and your messages.
+
+Decisions go stale, and a stale one costs the user a choice that no longer matters. When a report or a message touches an open decision:
+
+- **Answered by other means** (a worker found it, the user said it in the session): close it, saying how. `--decide` when the user said it, `--withdraw` when nobody had to.
+- **The facts changed**: revise it with `--log "what changed"`. The page tells the user it changed since they last looked.
+- **Changed after it closed**: a closed decision is a record. Open a new one with `--supersedes`.
+
+An answer given on the page waits on you: until you record it, the page shows it as sent and the fleet has not acted on it. Check that it still holds (the option may be gone since), then `--decide "<answer>" --resolution "answered on the page (#14)"`, answer the message with `--re 14`, and act. When it no longer holds, answer the message with why and revise the decision.
+
+When the session ends, every decision still open is either withdrawn with its reason or named in your last message as left open on purpose.
+
+The commands and the schema are in [DASHBOARD.md](DASHBOARD.md#decisions).
+
 ## Reporting to the user
 
-Lead with the state of the fleet: what finished, what is running, what is blocked and on whom. Keep it to what changed since the last message; the dashboard carries the history. Link the dashboard once at the start and again whenever the user seems to have lost it.
+Lead with the state of the fleet: what finished, what is running, what is blocked and on whom, and what waits on the user, by title. Keep it to what changed since the last message; the dashboard carries the history. Link the dashboard once at the start and again whenever the user seems to have lost it.

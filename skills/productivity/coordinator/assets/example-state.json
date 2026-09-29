@@ -166,7 +166,8 @@
       "severity": "serious",
       "needs": "user",
       "since": "2026-09-26T15:30:00-05:00",
-      "resolved": false
+      "resolved": false,
+      "decision": "d1"
     },
     {
       "id": "r0",
@@ -177,6 +178,91 @@
       "needs": "coordinator",
       "since": "2026-09-26T14:48:00-05:00",
       "resolved": true
+    }
+  ],
+  "decisions": [
+    {
+      "id": "d1",
+      "kind": "secret",
+      "title": "Stripe test key",
+      "question": "Where is the Stripe test key?",
+      "why": "stripe-adapter cannot record the usage-report fixture without it",
+      "blocking": true,
+      "agent": "stripe-adapter",
+      "options": [],
+      "recommend": null,
+      "reason": null,
+      "secret": "STRIPE_TEST_KEY",
+      "manual": "cd services/billing; secretspec set STRIPE_TEST_KEY",
+      "body": false,
+      "page": true,
+      "supersedes": null,
+      "status": "open",
+      "answer": null,
+      "resolution": null,
+      "change": null,
+      "opened": "2026-09-26T15:30:00-05:00",
+      "revised": null,
+      "closed": null
+    },
+    {
+      "id": "d2",
+      "kind": "decision",
+      "title": "Rounding of usage quantities",
+      "question": "Round a fractional usage quantity up, or bill the fraction?",
+      "why": "invoice-gen bills the fraction until you say otherwise",
+      "blocking": false,
+      "agent": "invoice-gen",
+      "options": [
+        {
+          "id": "A",
+          "label": "Bill the fraction",
+          "consequence": "Invoices show quantities like 12.4. Matches what Stripe meters."
+        },
+        {
+          "id": "B",
+          "label": "Round up",
+          "consequence": "Whole quantities on the invoice. Customers pay for usage they did not have."
+        }
+      ],
+      "recommend": "A",
+      "reason": "It is what the meter records, so the invoice and Stripe's figures agree.",
+      "secret": null,
+      "manual": null,
+      "body": false,
+      "page": true,
+      "supersedes": null,
+      "status": "open",
+      "answer": null,
+      "resolution": null,
+      "change": null,
+      "opened": "2026-09-26T15:12:00-05:00",
+      "revised": null,
+      "closed": null
+    },
+    {
+      "id": "d0",
+      "kind": "decision",
+      "title": "Model for the fixture sweep",
+      "question": "Haiku for renaming the fixtures?",
+      "why": null,
+      "blocking": false,
+      "agent": null,
+      "options": [],
+      "recommend": null,
+      "reason": null,
+      "secret": null,
+      "manual": null,
+      "body": false,
+      "page": false,
+      "supersedes": null,
+      "status": "decided",
+      "answer": "yes",
+      "resolution": "said in the session",
+      "change": null,
+      "opened": "2026-09-26T14:20:00-05:00",
+      "revised": null,
+      "closed": "2026-09-26T14:20:00-05:00"
     }
   ],
   "events": [
@@ -241,10 +327,26 @@
       "text": "Spawned on opus following implement."
     },
     {
+      "at": "2026-09-26T15:12:00-05:00",
+      "agent": "invoice-gen",
+      "kind": "asked",
+      "decision": "d2",
+      "text": "Rounding of usage quantities: Round a fractional usage quantity up, or bill the fraction?"
+    },
+    {
       "at": "2026-09-26T15:30:00-05:00",
       "agent": "stripe-adapter",
       "kind": "blocked",
       "text": "Needs STRIPE_TEST_KEY to record the fixture.",
+      "important": true,
+      "decision": "d1"
+    },
+    {
+      "at": "2026-09-26T15:30:00-05:00",
+      "agent": "stripe-adapter",
+      "kind": "asked",
+      "decision": "d1",
+      "text": "Stripe test key: Where is the Stripe test key?",
       "important": true
     }
   ]

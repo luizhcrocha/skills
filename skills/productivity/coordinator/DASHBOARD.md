@@ -4,12 +4,13 @@ The dashboard is the user's window into the fleet and the coordinator's ledger, 
 
 ## Where things live
 
+- **Decisions' evidence**: `<scratchpad>/coordinator/decisions/<id>.html`, one HTML fragment per decision that has one, copied there by `state.py decision --body` (see [Decisions](#decisions)).
 - **Chat**: `<scratchpad>/coordinator/chat.jsonl`, the conversation between the user and the fleet, appended only through the page and `scripts/chat.py` (see [Chat](#chat)).
 - **State**: `<scratchpad>/coordinator/state.json`, created and changed only through `scripts/state.py` (below). [assets/example-state.json](assets/example-state.json) shows a filled-in state for reference.
 - **Render**: done by every `state.py` command. `scripts/render_dashboard.py` is what it calls, and the only reason to run it directly is `--fragment` for the Artifact tool.
 - **Publish**: serve the directory over the tailnet, once per session:
   `python3 <skill-dir>/scripts/serve_dashboard.py <scratchpad>/coordinator`. The script starts a local file server on a free port and exposes it through `tailscale serve`, which terminates TLS with a certificate Tailscale issues for this machine, and prints `https://<magicdns-name>:<port>/`, reachable from any device on the tailnet and from nowhere else. Several coordinators on one machine each get their own port. Give the user the URL once. Every later render reaches the page on its own: the server streams each change of `state.json` and each chat message to it, and the page re-renders in place, filters intact. Stop the server with `--stop` when the session ends; that also removes the `tailscale serve` entry. After the skill itself is updated mid-session, `--restart` swaps in the new server at the same address, so the user's link keeps working; follow it with any state CLI command to render the new page. When `tailscale serve` is refused (HTTPS not enabled for the tailnet, or the user is not the Tailscale operator) the script falls back to plain http on the Tailscale IP and says so.
-  If the user asks for a claude.ai artifact instead (no tailnet on their device), render with `--fragment` to `dashboard.html` and publish it with the Artifact tool (`icon: "chart"`, a one-sentence `description`), republishing the same path after every state change; open viewers receive each republish without reloading. An artifact has no server behind it, so it shows the fleet and has no chat.
+  If the user asks for a claude.ai artifact instead (no tailnet on their device), render with `--fragment` to `dashboard.html` and publish it with the Artifact tool (`icon: "chart"`, a one-sentence `description`), republishing the same path after every state change; open viewers receive each republish without reloading. An artifact has no server behind it, so it shows the fleet and has no chat: the decisions are listed and readable, and the user answers them in the session. Publish each decision's evidence beside the page, under the path the page asks for (`files: {"decisions/d1.html": "<scratchpad>/coordinator/decisions/d1.html"}`).
 
 ## State schema
 
@@ -47,14 +48,37 @@ roadblocks[]
   agent      agent id or null
   severity   warning | serious | critical
   needs      user | coordinator | worker
+  decision   decision id: what the user is asked, required when needs is user
   since      ISO
   resolved   boolean
+
+decisions[]  what waits on the user, in the order they were opened
+  id         short stable id ("d1"), also the page's address (#decision/d1)
+  kind       decision (pick an option) | input (give a value) | secret (say where it lives) | action (do it by hand)
+  title      the row's label
+  question   one sentence
+  why        what it blocks, or the assumption the fleet runs on meanwhile
+  blocking   boolean
+  options[]  id, label, consequence (kind decision)
+  recommend  an option's id, or the value you would give; reason says why
+  secret     the key the code expects (kind secret)
+  manual     the route by hand: steps or commands, shown verbatim (kind secret and action)
+  body       boolean: decisions/<id>.html holds the evidence
+  agent      the worker that waits on it, or null
+  supersedes the closed decision this one replaces, or null
+  status     open | decided | withdrawn
+  answer     what was chosen or given (decided)
+  resolution how it closed
+  change     what the last revision changed
+  page       false for a decision recorded after the fact
+  opened, revised, closed   ISO
 
 events[]     activity log, oldest first
   at         ISO
   agent      agent id or null (coordinator events)
-  kind       spawned | reported | blocked | resolved | decision | note | integrated
+  kind       spawned | reported | blocked | resolved | asked | decision | note | integrated
   text       one or two sentences
+  decision   decision id the event is about (optional); the page opens it from the event
   important  true when the user should see it now (optional; absent means routine)
 ```
 
@@ -67,14 +91,40 @@ events[]     activity log, oldest first
 | Intake done | `init --project P --goal G`, then `milestone m1 --title T` and `step s1 --milestone m1 --title T` per step, then `event --kind decision "why the split"` for anything non-obvious |
 | Worker spawned | `agent a1 --task T --skill tdd --milestone m1 --lane src/x.ts test/x.test.ts --step s1 --brief "done when ..."` (model defaults to opus; logs the spawn, marks the step current) |
 | Notification arrives | `agent a1 --status done --tokens N --duration-ms N --report "..." --step s1 --log "what it verified"` (the step follows the status; the log becomes a `reported` event) |
-| Worker blocked | `roadblock r1 --title T --detail D --severity serious --needs user --agent a1` (marks the worker blocked, logs it) |
+| Worker blocked | `roadblock r1 --title T --detail D --severity serious --needs coordinator --agent a1` (marks the worker blocked, logs it) |
+| Worker blocked on the user | the decision first, then `roadblock r1 ... --needs user --decision d1`; closing the decision clears the roadblock |
 | Roadblock cleared | `roadblock r1 --resolved` (worker back to running, logs it) |
-| Model proposal or other decision | `event --kind decision "proposed haiku for the rename sweep; user approved"` |
+| Something needs the user | `decision d1 --kind decision --title T --question Q --why W --option "A: label \| consequence" --option "B: ..." --recommend A --reason R` (see [Decisions](#decisions)) |
+| Your own choice, for the record | `event --kind decision "split the adapter out of m2: its interface is contested"` |
 | Milestone checks pass | `step s2 --status done` for any step not already done, `event --kind integrated "checks green"`, `set --now "..."` |
-| The user must see something now | `--important` on `event`, `agent --log`, or `roadblock`; `--needs user` and a failed worker imply it |
+| The user must see something now | `--important` on `event`, `agent --log`, or `roadblock`; a decision with `--blocking`, `--needs user`, and a failed worker imply it |
 | Session ends | `set --status done --now "..."` |
 
 `show` prints the ledger as text when you need to check it without opening the page. Add `--no-render` to any command when several follow in a row, and let the last one render.
+
+## Decisions
+
+`state.py <scratchpad>/coordinator decision ID ...` opens a decision with an unknown id and changes an open one with a known id. When to open one, and what goes in it, is in [SKILL.md](SKILL.md#decisions).
+
+| Event | Command |
+| :-- | :-- |
+| A choice | `decision d1 --kind decision --title T --question Q --why W --option "A: label \| consequence" --option "B: label \| consequence" --recommend A --reason R` |
+| An input | `decision d2 --kind input --title T --question Q --why W [--recommend VALUE --reason R]` |
+| A secret | `decision d3 --kind secret --title T --question Q --why W --secret STRIPE_TEST_KEY --manual "cd servers/billing; secretspec set STRIPE_TEST_KEY"` |
+| An action by hand | `decision d4 --kind action --title T --question Q --why W --manual "the steps or commands"` |
+| It stops work | add `--blocking` (the event is important: chime, sticky toast); `--agent a1` names the worker that waits |
+| Evidence | add `--body FILE`: an HTML fragment, copied to `decisions/<id>.html`; `--no-body` removes it |
+| The facts changed | `decision d1 --why "..." --log "what changed"` with any field; stamps `revised`, and the page tells the user |
+| The user answered | `decision d1 --decide "B: Keep both shapes" --resolution "answered on the page (#14)"` |
+| Nobody has to answer | `decision d1 --withdraw "the worker found the rule in the finance ADR"` |
+| Changed after it closed | `decision d7 ... --supersedes d1` (a closed decision refuses every change) |
+| Decided in the session or the chat | `decision d8 --title T --question Q --decide "yes" --resolution "said in the session"` (recorded closed, no page) |
+
+**The page.** Each decision has a page at `<dashboard-url>#decision/<id>`: the question, what it blocks or what the fleet assumes meanwhile, the recommendation, the evidence, and the control for its kind (options to pick with a note, a field, a reference for a secret, a done button). The user's answer posts to the chat tagged with the decision, and the page shows it as sent until you record it. A decision that was decided or withdrawn shows how, and takes no more answers: the server refuses one with the reason, so a page left open on a stale decision cannot answer it.
+
+**The evidence** is a fragment, not a document: headings, tables, inline SVG, and scripts or external libraries when a chart needs them. The page supplies the typography and the theme (the colours are CSS variables: `--text`, `--muted`, `--line`, `--accent`, `--good`, `--warning`, `--critical`, `--s1` to `--s8`; the classes `num`, `muted`, `good`, `warning`, `critical`). It runs in a frame without the dashboard's origin, so a script in it can draw and cannot answer as the user. Its figures are a snapshot: say as of when, and replace the file with `--body` when they change.
+
+**A secret's answer** is a 1Password reference or an item's name. The server refuses text that reads as a value (a known token prefix, a long word mixing letters and digits), so the value never reaches `chat.jsonl`.
 
 ## Chat
 
@@ -98,14 +148,15 @@ The page has a chat where the user writes to the fleet and mentions who should a
 The page is built for a phone first: a bottom bar moves between the sections with a thumb, each worker is a card, and the chat is a full-height view that stays above the keyboard. On a wide screen the sections have a link row, the fleet is a table, and the chat docks at the side.
 
 - Header: project, goal, status pill, the `now` line, started and updated times.
-- Summary tiles: workers by status, total tokens, elapsed time, open roadblocks.
+- Summary tiles: what waits on the user, workers by status, total tokens, elapsed time, open roadblocks.
+- Decisions: open ones that block work first, then the other open ones, oldest first, then the closed ones with how they closed. A row is marked new until the user opens it and changed when it was revised since. Each row opens the decision's page.
 - Roadmap with the current step marked; steps link to their worker.
 - Worker sheet: a worker's name anywhere on the page (a step, a roadblock, the fleet, the chart, the activity log, the chat) opens its task, lane, brief, and report, with a button that starts a message to it.
-- Roadblocks, open first, with who is needed.
+- Roadblocks, open first, with who is needed and a link to the decision when it is the user.
 - Fleet with filters (status, milestone, skill, model, free text) and expandable brief and report.
 - Token chart: one bar per worker, coloured by spawn order, with its share of the total.
 - Activity log, newest first, filtered together with the table.
 - Chat: the conversation in threads, each reply under the message it answers. The user's message shows who it is waiting on until each recipient has answered. The composer completes `@` from the roster and says who the message will reach. A viewer who may not write sees the conversation with the reason in place of the composer.
-- Notifications: every event is one, and so is every message from the fleet while the chat is out of view. A bell in the top right carries the unread count and opens the list, with mark-read, clear, and the sound and toast preferences. New events show as toasts; important ones stay until dismissed, chime, and flag the tab title. Browsers allow sound only after the viewer has clicked the page once, so a viewer who never interacts still gets the toast and the badge. Browser alerts (system notifications while the tab is hidden) are a third preference in the panel; they need the https address and a permission the viewer grants when turning them on, and important ones stay on screen until dismissed.
+- Notifications: every event is one, and so is every message from the fleet while the chat is out of view. One about a decision opens its page. A bell in the top right carries the unread count and opens the list, with mark-read, clear, and the sound and toast preferences. New events show as toasts; important ones stay until dismissed, chime, and flag the tab title. Browsers allow sound only after the viewer has clicked the page once, so a viewer who never interacts still gets the toast and the badge. Browser alerts (system notifications while the tab is hidden) are a third preference in the panel; they need the https address and a permission the viewer grants when turning them on, and important ones stay on screen until dismissed.
 
 Filters and the expanded rows survive each re-render (the page keeps them in the viewer's browser), so the user's view is not reset by your updates.
