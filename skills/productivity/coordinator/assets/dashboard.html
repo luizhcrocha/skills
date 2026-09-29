@@ -1592,9 +1592,34 @@ var FleetCore = (function () {
       ${d.recommend ? `<div class="dv-block"><h3>Recommended</h3><p><b>${esc(recommended ? recommended.id + ": " + recommended.label : d.recommend)}</b>${d.reason ? "\n" + esc(d.reason) : ""}</p></div>` : ""}`);
     renderEvidence(d);
     const pagesFor = STATE.links.filter((l) => l.decision === d.id);
-    paint($("dv-answer"), (pagesFor.length ? `<div class="dv-block"><h3>Open to decide</h3>${pagesFor.map((l) =>
+    if (paint($("dv-answer"), (pagesFor.length ? `<div class="dv-block"><h3>Open to decide</h3>${pagesFor.map((l) =>
       `<p><a class="btn" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title)}</a>${l.up ? "" : ' <span class="muted">(not answering now)</span>'}</p>${l.note ? `<p class="muted">${esc(l.note)}</p>` : ""}`).join("")}</div>` : "")
-      + answerHtml(d, pending));
+      + answerHtml(d, pending))) restoreDraft(d);
+  }
+
+  /* A half-given answer is kept in this browser as it is typed or picked, per decision and per
+     revision (a revised decision starts clean), and put back whenever the form is drawn again: a
+     refresh, a state update, another device's reload. Sent, it is dropped. */
+  const draftKey = (d) => "dv-draft:" + d.id + ":" + revisionOf(d);
+  const fieldsOf = (form) => [...form.elements].filter((el) => el.name && el.type !== "submit" && el.type !== "button");
+  function saveDraft() {
+    const d = decisionById(viewing), form = $("dv-answer").querySelector("form");
+    if (!d || !form) return;
+    const values = {};
+    for (const el of fieldsOf(form)) {
+      if (el.type === "radio" || el.type === "checkbox") { if (el.checked) values[el.name] = el.value; }
+      else values[el.name] = el.value;
+    }
+    store.set(draftKey(d), values);
+  }
+  function restoreDraft(d) {
+    const form = $("dv-answer").querySelector("form"), values = store.get(draftKey(d), null);
+    if (!form || !values || typeof values !== "object") return;
+    for (const el of fieldsOf(form)) {
+      if (!(el.name in values)) continue;
+      if (el.type === "radio" || el.type === "checkbox") el.checked = el.value === values[el.name];
+      else el.value = String(values[el.name]);
+    }
   }
 
   const optionsHtml = (d, pick) => d.options.map((o) => {
@@ -1688,6 +1713,8 @@ var FleetCore = (function () {
     const own = box.closest("fieldset").querySelector('input[value="own"]');
     if (own && box.value.trim()) own.checked = true;
   });
+  $("dv-answer").addEventListener("input", saveDraft);
+  $("dv-answer").addEventListener("change", saveDraft);
   $("dv-answer").addEventListener("submit", async (e) => {
     e.preventDefault();
     const d = decisionById(viewing), form = e.target, fields = new FormData(form);
@@ -1706,6 +1733,7 @@ var FleetCore = (function () {
       let data = null;
       try { data = await res.json(); } catch { data = null; }
       if (res.status !== 201) { refuse((data && data.error) || `The server refused the answer (${res.status}). It is kept here.`); return; }
+      store.remove(draftKey(d));
       addMessage(data, true); renderDecision(); renderDecisions();
     } catch {
       refuse("Could not reach the dashboard's server. Your answer is kept here; send it again when the server is back.");
