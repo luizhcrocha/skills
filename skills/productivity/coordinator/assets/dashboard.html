@@ -147,6 +147,8 @@
   .lead.blocking .lead-detail { color: var(--critical); }
   .lead.clear .lead-line { color: var(--muted); }
   .goal { max-width: 68ch; }
+  .now.stale { color: var(--muted); border-left-color: var(--line); }
+  .now .said { color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
   .now { max-width: 72ch; padding: 1px 0 1px 12px; border-left: 3px solid var(--run); }
   .now b { font-stretch: var(--narrow); margin-right: 4px; }
   .lead .meta { color: var(--muted); font-size: var(--fs-s); }
@@ -515,6 +517,8 @@
   .mention { display: inline; padding: 0 6px; border-radius: 4px; font-size: 0.94em; font-weight: 600; font-stretch: var(--narrow); white-space: nowrap; background: color-mix(in srgb, var(--c, var(--accent)) 18%, var(--card)); color: var(--text); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
   .wait { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; font-size: var(--fs-xs); color: var(--muted); }
   .wait.done { color: var(--good); }
+  .wait.unread { color: var(--you); font-weight: 600; }
+  .deaf { margin: 0 0 8px; padding: 10px 12px; border-radius: 10px; background: var(--you-soft); color: var(--text); font-size: var(--fs-s); }
   .wait .who { font-size: var(--fs-xs); padding: 0 8px; margin: 0; border-radius: 6px; background: var(--card); border: 1px solid var(--line); }
   .wait .chip { display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); padding: 0 8px; border-radius: 6px; background: var(--card); border: 1px solid var(--line); font-weight: 600; font-stretch: var(--narrow); }
   .replies { list-style: none; margin: 0 0 0 14px; padding: 0 0 0 12px; border-left: 2px solid var(--line); display: grid; gap: 6px; }
@@ -537,6 +541,7 @@
   .reply { grid-area: chip; display: flex; align-items: center; gap: 4px; justify-self: start; max-width: 100%; min-width: 0; box-sizing: border-box; padding: 0 0 0 10px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: var(--fs-xs); margin-top: 2px; }
   .reply-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .reply .icon-btn { width: var(--tap); height: var(--tap); color: inherit; font-size: 1rem; }
+  .deaf-line { color: var(--you); font-weight: 600; }
   .readonly { margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--card-2); color: var(--muted); font-size: var(--fs-s); overflow-wrap: anywhere; }
   .chat:has(#mentions:not([hidden])) .chat-empty { visibility: hidden; }
   .to { margin: 6px 6px 0; font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; }
@@ -599,6 +604,7 @@
         </div>
       </div>
       <div class="panel-prefs">
+        <label>Notify about <select id="n-about"><option value="mine">decisions and messages to me</option><option value="all">everything the fleet does</option></select></label>
         <label>Sound <select id="n-sound"><option value="important">important only</option><option value="all">every event</option><option value="off">off</option></select></label>
         <label>Toasts <select id="n-toasts"><option value="all">every event</option><option value="important">important only</option><option value="off">off</option></select></label>
         <label>Browser alerts <select id="n-browser"><option value="off">off</option><option value="important">important only</option><option value="all">every event</option></select></label>
@@ -700,6 +706,7 @@
   <div class="composer" id="composer">
     <ul class="mentions" id="mentions" role="listbox" aria-label="Mention someone" hidden></ul>
     <p class="chat-error" id="chat-error" role="alert" hidden></p>
+    <p class="deaf" id="deaf" role="status" hidden></p>
     <div class="box" id="box">
       <div class="reply" id="reply" hidden><span class="reply-text" id="reply-text"></span><button type="button" class="icon-btn" id="reply-x" aria-label="Stop replying" title="Stop replying"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width:16px;height:16px"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
       <label class="vh" for="say">Message</label>
@@ -913,6 +920,7 @@ var FleetCore = (function () {
     const decision = (d) => ({ ...d, title: text(d.title, d.id), question: text(d.question, ""), kind: text(d.kind, "decision"),
       status: text(d.status, "open"), blocking: d.blocking === true, asks: d.asks === "manager" ? "manager" : "user", options: list(d.options) });
     const above = isRow(value.manager) && typeof value.manager.url === "string" && value.manager.url ? value.manager : null;
+    const hearing = (v) => hearingOf(v);
     const spent = (v) => isRow(v) && ["output", "input", "cached", "answers"].every((k) => Number.isFinite(v[k]))
       ? { output: v.output, input: v.input, cached: v.cached, answers: v.answers } : null;
     return {
@@ -920,10 +928,11 @@ var FleetCore = (function () {
       role: value.role === "manager" ? "manager" : "coordinator",
       manager: above && { id: text(above.id, "manager"), url: above.url, session: text(above.session, "") },
       coordinators: withId(list(value.coordinators)).map((c) => ({ ...c, name: text(c.name, c.id), goal: text(c.goal, ""), status: text(c.status, "unknown"),
-        now: text(c.now, ""), url: text(c.url, ""), session: text(c.session, ""), tokens: count(c.tokens, 0), roadblocks: count(c.roadblocks, 0), spent: spent(c.spent),
+        now: text(c.now, ""), url: text(c.url, ""), session: text(c.session, ""), tokens: count(c.tokens, 0), roadblocks: count(c.roadblocks, 0), spent: spent(c.spent), hearing: hearing(c.chat), active: text(c.active, ""),
         workers: isRow(c.workers) ? c.workers : {}, lanes: Array.isArray(c.lanes) ? c.lanes.map(String) : [], decisions: withId(list(c.decisions)).map(decision) })),
       usage: isRow(value.usage) ? value.usage : null,
       spent: spent(value.spent),
+      hearing: hearing(value.chat),
       updated: text(value.updated, value.started),
       roadmap: withId(lists.roadmap).map((m) => ({ ...m, title: text(m.title, m.id), steps: withId(Array.isArray(m.steps) ? m.steps.filter(isRow) : []) })),
       agents: withId(lists.agents).map((a) => ({ ...a, name: text(a.name, a.id), status: text(a.status, ""), task: text(a.task, ""),
@@ -933,6 +942,18 @@ var FleetCore = (function () {
       events: lists.events.filter((e) => typeof e.text === "string" && typeof e.kind === "string").map((e) => ({ ...e, at: text(e.at, "") })),
     };
   }
+
+  /* Whether a chat's host reads it, as the server reports it: a watch is running (`on`), the last
+     message it read (`seen`), how many from the user wait unread. Null when the server said nothing
+     (a copy of the page, an older server), so the page claims nothing either way. */
+  function hearingOf(v) {
+    if (v === null || typeof v !== "object" || typeof v.on !== "boolean" || !Number.isInteger(v.seen)) return null;
+    return { on: v.on, seen: v.seen, unread: Number.isInteger(v.unread) ? v.unread : 0, since: typeof v.since === "string" ? v.since : "" };
+  }
+  /* Whether a now-line said at `at` is old enough to read as stale: 30 minutes without being said again. */
+  const staleNow = (at, now) => typeof at === "string" && at !== "" && now - Date.parse(at) > 30 * 60 * 1000;
+  /* Whether the user's message `m` is still unread by the host: after the last one its watch printed. */
+  const unreadBy = (hearing, m) => hearing !== null && m.from === "user" && m.id > hearing.seen;
 
   /* A chat message as the server stores it, or null for anything else (an error body, a torn line). */
   function parseMessage(value) {
@@ -972,6 +993,16 @@ var FleetCore = (function () {
     return { headline, detail, tone: "blocking" };
   }
 
+  /* What a notification is to the viewer. `forYou`: it asks them something, is about a decision open
+     for them, or is a message from the fleet (the chat is theirs); the rest is the fleet's own record.
+     `important` (chime, a toast that stays, "needs you"): it asks them something still open. A flag the
+     coordinator set on a routine event does not make it important: only what waits on the viewer does. */
+  function noticeOf(e, openForYou) {
+    const asks = Boolean(e.decision) && openForYou(e.decision);
+    const important = asks && (e.kind === "asked" || e.kind === "blocked" || e.kind === "message");
+    return { important, forYou: asks || e.kind === "message" };
+  }
+
   /* The one toast that stands for everything that arrived and was not dismissed: the newest event
      that needs the viewer, else the newest, with how many more there are. It stays while any of
      them needs the viewer. Null when nothing is pending. */
@@ -997,7 +1028,7 @@ var FleetCore = (function () {
   }
 
   return { keyOf, hostOf, rosterOf, usageOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf, toastOf,
-    decisionRows, decisionRoute, pendingAnswer, answerText, parseState, parseMessage, viewOf, leadOf, VIEWS };
+    decisionRows, decisionRoute, pendingAnswer, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, staleNow, viewOf, leadOf, VIEWS };
 })();
 </script>
 <script>
@@ -1097,7 +1128,7 @@ var FleetCore = (function () {
     paint($("lead"), `<h2 class="lead-line">${esc(lead.headline)}</h2>
       ${lead.detail ? `<p class="lead-detail">${esc(lead.detail)}</p>` : ""}
       <p class="goal">${esc(STATE.goal)}</p>
-      <p class="now"><b>Now</b>${esc(STATE.now)}</p>
+      <p class="now${Core.staleNow(STATE.now_at, NOW) ? " stale" : ""}"><b>Now</b>${esc(STATE.now)}${STATE.now_at ? ` <span class="said">said ${esc(ago(STATE.now_at))}</span>` : ""}</p>
       <p class="meta">Started ${esc(ago(STATE.started))}, updated ${esc(ago(STATE.updated))}.</p>`);
     $("foot-updated").textContent = `State updated ${new Date(STATE.updated).toLocaleString()}`;
   }
@@ -1186,7 +1217,7 @@ var FleetCore = (function () {
   const revisionOf = (d) => d.revised || d.opened;
   const closedWords = (d) => d.status === "decided" ? `Decided: ${d.answer || ""}` : `Withdrawn: ${d.resolution || ""}`;
   const statePill = (d, pending) => d.status !== "open" ? pill(d.status)
-    : pending ? pillAs("answered", "answered, being recorded")
+    : pending ? pillAs("answered", Core.unreadBy(STATE.hearing, pending.answer) ? "answered, not read yet" : "answered, waiting on the " + HOST)
     : d.asks === "manager" ? pillAs("", "with the manager") + (d.blocking ? pillAs("blocking", "blocks work") : "")
     : d.blocking ? pillAs("blocking", "blocks work") : pillAs("open", "open");
 
@@ -1283,7 +1314,9 @@ var FleetCore = (function () {
     const shown = d.kind === "decision" && d.options.length ? `<div class="dv-block"><h3>Options</h3><div class="options">${optionsHtml(d, false)}</div></div>` : "";
     if (d.status !== "open") return d.page === false && !shown ? "" : shown + (chatWritable() ? `<div class="sheet-actions"><button type="button" class="btn" data-change>Change my answer</button></div>` : "");
     if (pending) return `<div class="note pending" role="status"><h3>Your answer</h3><p>${esc(pending.answer.text)}</p>
-        <span class="dv-meta">Sent ${esc(clock(pending.answer.at))}. The ${HOST} records it next; the fleet acts on it once it is recorded.</span>
+        <span class="dv-meta">Sent ${esc(clock(pending.answer.at))}. ${Core.unreadBy(STATE.hearing, pending.answer)
+          ? `The ${HOST} has not read it yet${STATE.hearing.on ? "" : ": it is not reading the chat right now"}. Your answer is kept.`
+          : `The ${HOST} has read it and has yet to record it; the fleet acts on it once it is recorded.`}</span>
         ${pending.replies.map((m) => `<p><span class="by">${esc(nameOf(m.from))}</span> ${esc(m.text)}</p>`).join("")}</div>
       <div class="sheet-actions">${discuss}</div>`;
     if (!chatWritable()) return shown + manualHtml(d, "What to do") + `<p class="readonly" role="status">${esc(chatAvailable() && chat.write.reason
@@ -1429,6 +1462,8 @@ img,svg,video,canvas{max-width:100%;height:auto}
         <div class="strip-head">${whoButton(c.id)}${pill(c.status)}${c.name !== c.id ? `<span class="muted">${esc(c.name)}</span>` : ""}</div>
         ${c.now ? `<p class="detail">${esc(c.now)}</p>` : ""}
         <p class="meta">${esc(fleetFacts(c))}</p>
+        ${c.active ? `<p class="meta${Core.staleNow(c.active, NOW) ? " deaf-line" : ""}">Session last active ${esc(ago(c.active))}</p>` : ""}
+        ${c.hearing && !c.hearing.on ? `<p class="meta deaf-line">Not reading its chat${c.hearing.unread ? `: ${plural(c.hearing.unread, "message")} from you unread since ${esc(clock(c.hearing.since))}` : ""}</p>` : ""}
         ${c.lanes.length ? `<p class="meta lane">${c.lanes.map(esc).join(", ")}</p>` : ""}
         ${c.url ? `<a class="block-link" href="${esc(c.url)}">Open its page</a>` : ""}
       </div>`).join("") : '<p class="empty">No coordinator is being served on this machine. One appears here when it starts its dashboard.</p>');
@@ -1532,7 +1567,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     const events = [...STATE.events].reverse().filter((e) => (!filtering || (e.agent ? ids.has(e.agent) : !q)) && (!q || e.text.toLowerCase().includes(q) || (e.agent && ids.has(e.agent))));
     paint($("log"), events.length ? events.map((e) => `<li>
       <time datetime="${esc(e.at)}" title="${esc(e.at)}">${esc(clock(e.at))}</time>
-      <span><span class="log-meta"><span class="kind ${esc(e.kind)}">${esc(e.kind)}${e.important ? ", needs you" : ""}</span>${e.agent ? whoButton(e.agent) : `<span class="by">${HOST}</span>`}</span> ${esc(e.text)}${aboutLink(e)}</span>
+      <span><span class="log-meta"><span class="kind ${esc(e.kind)}">${esc(e.kind)}${Core.noticeOf(e, (id) => { const d = decisionById(id); return Boolean(d) && d.status === "open" && d.asks !== "manager"; }).important ? ", needs you" : ""}</span>${e.agent ? whoButton(e.agent) : `<span class="by">${HOST}</span>`}</span> ${esc(e.text)}${aboutLink(e)}</span>
     </li>`).join("") : '<li><span></span><span class="muted">Nothing logged yet.</span></li>');
   }
 
@@ -1566,8 +1601,8 @@ img,svg,video,canvas{max-width:100%;height:auto}
     let lastSeen = store.get("n-lastSeen", "");
     let clearedBefore = store.get("n-cleared", "");
     let booted = false;
-    const prefs = { sound: store.get("n-sound", "important"), toasts: store.get("n-toasts", "all"), browser: store.get("n-browser", "off") };
-    $("n-sound").value = prefs.sound; $("n-toasts").value = prefs.toasts; $("n-browser").value = prefs.browser;
+    const prefs = { about: store.get("n-about", "mine"), sound: store.get("n-sound", "important"), toasts: store.get("n-toasts", "all"), browser: store.get("n-browser", "off") };
+    $("n-about").value = prefs.about; $("n-sound").value = prefs.sound; $("n-toasts").value = prefs.toasts; $("n-browser").value = prefs.browser;
 
     /* Browser-level alerts: system notifications while the tab is hidden. Needs a secure origin
        (the tailnet HTTPS URL) and a permission the viewer grants from the panel. */
@@ -1607,8 +1642,12 @@ img,svg,video,canvas{max-width:100%;height:auto}
     document.addEventListener("pointerdown", unlock, { passive: true });
     document.addEventListener("keydown", unlock);
 
-    const fromMessage = (m) => ({ key: "chat:" + m.id, chat: m.id, at: m.at, kind: "message", agent: m.from === HOST ? null : m.from, text: m.text });
+    const fromMessage = (m) => ({ key: "chat:" + m.id, chat: m.id, at: m.at, kind: "message", agent: m.from === HOST ? null : m.from, text: m.text, decision: m.decision });
+    const openForYou = (id) => { const d = decisionById(id); return Boolean(d) && d.status === "open" && d.asks !== "manager"; };
+    const tag = (e) => ({ ...e, ...Core.noticeOf(e, openForYou) });
+    const wanted = (e) => prefs.about === "all" || e.forYou;
     const items = () => [...STATE.events, ...[...chat.messages.values()].filter((m) => m.from !== "user").map(fromMessage)]
+      .map(tag).filter(wanted)
       .filter((e) => !clearedBefore || time(e.at) > time(clearedBefore))
       .sort((a, b) => time(b.at) - time(a.at));
     const isUnread = (e) => (!lastSeen || time(e.at) > time(lastSeen)) && (!e.chat || e.chat > chat.read);
@@ -1659,7 +1698,8 @@ img,svg,video,canvas{max-width:100%;height:auto}
     });
     /* The viewer opened a decision's page: what was pending about it has been seen. */
     function about(decision) { pending = pending.filter((e) => e.decision !== decision); paintToast(); }
-    function announce(fresh) {
+    function announce(arrived) {
+      const fresh = arrived.map(tag).filter(wanted);
       fresh.forEach(toast); fresh.forEach(browserAlert);
       const imp = fresh.some((e) => e.important);
       if (fresh.length && (prefs.sound === "all" || (prefs.sound === "important" && imp))) chime(imp);
@@ -1687,6 +1727,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !$("panel").hidden) closePanel(); });
     $("n-read").addEventListener("click", markRead);
     $("n-clear").addEventListener("click", () => { clearedBefore = new Date().toISOString(); store.set("n-cleared", clearedBefore); markRead(); });
+    $("n-about").addEventListener("change", () => { prefs.about = $("n-about").value; store.set("n-about", prefs.about); refresh(); });
     $("n-sound").addEventListener("change", () => { prefs.sound = $("n-sound").value; store.set("n-sound", prefs.sound); renderBadge(); });
     $("n-toasts").addEventListener("change", () => { prefs.toasts = $("n-toasts").value; store.set("n-toasts", prefs.toasts); });
     $("n-browser").addEventListener("change", () => {
@@ -1773,9 +1814,18 @@ img,svg,video,canvas{max-width:100%;height:auto}
     refreshSheet();
     /* The conversation depends on the roster's names and statuses only; a state that changes
        neither leaves it untouched. */
-    const key = STATE.status + "|" + people.map((a) => `${a.id}\u0000${a.name}\u0000${a.status}`).join("|");
+    const key = STATE.status + "|" + JSON.stringify(STATE.hearing) + "|" + people.map((a) => `${a.id}\u0000${a.name}\u0000${a.status}`).join("|");
     if (key !== chatKey) { chatKey = key; renderChat(); }
     refreshComposer();
+    renderHearing();
+  }
+
+  /* Said by the composer while the host reads no chat: what is sent is kept, and who else hears of it. */
+  function renderHearing() {
+    const h = STATE.hearing, deaf = h !== null && !h.on && chatAvailable();
+    $("deaf").hidden = !deaf;
+    if (deaf) $("deaf").textContent = `The ${HOST} is not reading the chat right now. What you send is kept until it does`
+      + (STATE.manager ? "; if it waits two minutes, the manager is told and reaches the " + HOST + "." : ".");
   }
 
   for (const id of filters) { const saved = store.get(id, ""); if (saved) $(id).value = saved; $(id).addEventListener("input", () => { store.set(id, $(id).value); render(); }); }
@@ -1926,7 +1976,8 @@ img,svg,video,canvas{max-width:100%;height:auto}
     const about = m.decision && decisionById(m.decision);
     slot(el, "about", m.decision ? `<p class="msg-re">About ${about ? `<a href="#decision/${esc(m.decision)}">${esc(about.title)}</a>` : esc(m.decision)}</p>` : "");
     slot(el, "text", `<p class="msg-text">${partsHtml(m)}</p>`);
-    slot(el, "wait", m.from !== "user" ? "" : entry.waiting.length
+    slot(el, "wait", m.from !== "user" ? "" : Core.unreadBy(STATE.hearing, m) && entry.waiting.length
+      ? `<p class="wait unread">Not read yet</p>` : entry.waiting.length
       ? `<p class="wait">Waiting on ${entry.waiting.map((r) => agentById[r] ? whoButton(r) : `<span class="chip"><span class="swatch" style="--c:${colourOfId(r)}"></span>${esc(nameOf(r))}</span>`).join("")}</p>`
       : `<p class="wait done">Answered</p>`);
     return el;

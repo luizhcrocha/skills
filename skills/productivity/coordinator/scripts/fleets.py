@@ -6,11 +6,12 @@
     fleets.py manager           how to reach the manager; exits 1 when there is none
     fleets.py decision FLEET ID what a fleet asks, in full: the question, why, the options, the
                                 recommendation, where its evidence and its page are
-    fleets.py name DIR SESSION  record the session name other sessions message this fleet by
+    fleets.py name DIR SESSION  give the fleet its one name: the session's, which the registry, the
+                                manager's page and chat, and SendMessage all use from then on
 
 serve_dashboard.py registers a fleet when it starts serving DIR and forgets it on --stop; a fleet
-whose server died is forgotten the next time anyone looks. A fleet is known by a name made from its
-project (`acme-billing`), which is also the name the manager's chat mentions it by. The registry is
+whose server died is forgotten the next time anyone looks. A fleet is known by one name: its
+project's (`acme-billing`) until `name` gives it its session's, which the manager's chat mentions it by. The registry is
 $FLEET_HOME, or fleet-board under $XDG_STATE_HOME (~/.local/state).
 """
 import json
@@ -92,7 +93,7 @@ def register(root, url: str, pid: int) -> dict:
     if known:
         name = known["id"]
     else:
-        base = "manager" if role == "manager" else re.sub(r"[^A-Za-z0-9_.-]+", "-", str((state or {}).get("project") or root.parent.name)).strip("-.").lower() or "fleet"
+        base = "manager" if role == "manager" else slug(str((state or {}).get("project") or root.parent.name)) or "fleet"
         if role != "manager" and base in KEPT:
             base += "-fleet"
         taken, name, n = {e["id"] for e in others}, base, 1
@@ -111,10 +112,24 @@ def unregister(root) -> None:
             path.unlink(missing_ok=True)
 
 
-def name(root, session: str) -> dict | None:
-    """Record the session name of the fleet served from DIR; None when DIR is not being served."""
+def slug(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", text).strip("-.").lower()
+
+
+def name(root, session: str) -> dict | str:
+    """Give the fleet served from DIR its one name: the session's, which becomes its name in the
+    registry, on the manager's page and in the manager's chat too. The entry, or why not."""
     entry = find(root)
-    return _write({**entry, "session": session}) if entry else None
+    if not entry:
+        return f"{root} is not being served; start it with serve_dashboard.py first"
+    new = "manager" if entry["role"] == "manager" else slug(session)  # the manager's chat host keeps its name
+    if not new or (new in KEPT and entry["role"] != "manager"):
+        return f"'{session}' cannot name a fleet; the chat keeps {sorted(KEPT)} for itself"
+    if any(e["id"] == new for e in live() if e["dir"] != entry["dir"]):
+        return f"another fleet is already called '{new}'; pick another session name"
+    if new != entry["id"]:
+        (home() / f"{entry['id']}.json").unlink(missing_ok=True)
+    return _write({**entry, "id": new, "session": session})
 
 
 def manager() -> dict | None:
@@ -124,7 +139,7 @@ def manager() -> dict | None:
 def summary(entry: dict) -> dict:
     """A fleet as the manager's page and the manager read it: who it is, what it is doing, what waits
     in it, what its workers and its coordinator spent."""
-    import spend  # here, not above: a status line's capture loads this module and needs no transcripts
+    import chat, spend  # here, not above: a status line's capture loads this module and needs neither
     state = _read(Path(entry["dir"]) / "state.json")
     rows = lambda key: [r for r in (state or {}).get(key, []) if isinstance(r, dict)]  # noqa: E731
     workers: dict[str, int] = {}
@@ -133,11 +148,12 @@ def summary(entry: dict) -> dict:
     running = [a for a in rows("agents") if a.get("status") in ("running", "blocked", "queued")]
     return {
         "id": entry["id"], "url": entry["url"], "session": entry.get("session"), "dir": entry["dir"],
-        "name": str((state or {}).get("project") or entry["id"]), "goal": str((state or {}).get("goal") or ""),
+        "name": entry["id"], "project": str((state or {}).get("project") or ""), "goal": str((state or {}).get("goal") or ""),
         "status": str(state["status"]) if state and state.get("status") else "unknown",
         "now": str((state or {}).get("now") or ""), "updated": (state or {}).get("updated"),
         "workers": workers, "tokens": sum(int(a.get("tokens") or 0) for a in rows("agents")),
-        "spent": spend.of(entry["dir"]),
+        "spent": spend.of(entry["dir"]), "chat": chat.listening(entry["dir"]), "active": spend.active(entry["dir"]),
+        "now_at": (state or {}).get("now_at"),
         "lanes": sorted({str(lane) for a in running for lane in a.get("lane") or []}),
         "roadblocks": sum(1 for r in rows("roadblocks") if not r.get("resolved")),
         "decisions": [{"id": d.get("id"), "kind": d.get("kind", "decision"), "title": d.get("title"), "question": d.get("question"),
@@ -151,9 +167,9 @@ def view(state: dict, root) -> dict:
     """The state as the page shows it: a manager's with every coordinator being served and the plan's
     usage as the status line last saw it, a coordinator's with how to reach its manager when there
     is one. The state itself is left as it is."""
-    import spend
+    import chat, spend
     root = str(Path(root).resolve())
-    state = {**state, "spent": spend.of(root)}
+    state = {**state, "spent": spend.of(root), "chat": chat.listening(root)}
     if role_of(state) == "manager":
         import usage  # here, not above: usage.py reads the registry's place from this module
         return {**state, "coordinators": [summary(e) for e in live() if e["role"] != "manager" and e["dir"] != root],
@@ -173,6 +189,10 @@ def cmd_list() -> None:
             print(f"    now: {s['now']}")
         if s["lanes"]:
             print(f"    lanes in flight: {', '.join(s['lanes'])}")
+        if s["active"]:
+            print(f"    session last active {s['active']}")
+        if not s["chat"]["on"]:
+            print(f"    chat: not read now" + (f"; {s['chat']['unread']} message(s) from the user wait since #{s['chat']['seen']}" if s["chat"]["unread"] else ""))
         if s["spent"]:
             print(f"    tokens: its workers {s['tokens']:,}; the {e['role']} itself {s['spent']['output']:,} written, {s['spent']['input']:,} read")
         for d in s["decisions"]:
@@ -222,9 +242,10 @@ def main(argv: list[str]) -> None:
     elif len(argv) == 3 and argv[0] == "decision":
         cmd_decision(argv[1], argv[2])
     elif len(argv) == 3 and argv[0] == "name":
-        if name(argv[1], argv[2]) is None:
-            fail(f"{argv[1]} is not being served; start it with serve_dashboard.py first")
-        print(f"this fleet's session is {argv[2]}")
+        entry = name(argv[1], argv[2])
+        if isinstance(entry, str):
+            fail(entry)
+        print(f"this fleet is {entry['id']}, the session {entry['session']}: use that one name everywhere")
     else:
         fail("usage: fleets.py list | manager | decision FLEET ID | name DIR SESSION")
 

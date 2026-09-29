@@ -179,7 +179,7 @@ class ServeCliTest(unittest.TestCase):
         fleets.name(self.root, "billing-coordinator")
         self.assertEqual(self.serve("--restart").returncode, 0)
         again = fleets.find(self.root)
-        self.assertEqual((again["id"], again["session"], again["pid"]), ("acme-billing", "billing-coordinator", self.record()["pid"]))
+        self.assertEqual((again["id"], again["session"], again["pid"]), ("billing-coordinator", "billing-coordinator", self.record()["pid"]))
         self.assertEqual(self.serve("--stop").returncode, 0)
         self.assertIsNone(fleets.find(self.root))
 

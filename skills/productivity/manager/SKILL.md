@@ -85,13 +85,15 @@ Something another fleet should know (a schema changed, a shared tool's version m
 
 ## What the user writes on your page
 
-The chat's watch prints each message. One addressed to you, answer on the page: `chat.py <dir> say --as manager --re <N> "<answer>"`. One addressed to a coordinator (`@acme-billing`), forward with `SendMessage`: its number, its text, and how to answer (`python3 <scripts>/chat.py <dir> say --as <fleet> --re <N> "..."`). The coordinator answers the page itself, under its fleet's name.
+The chat's watch prints each message, and every 30 seconds it also looks at the other fleets: a line `! <fleet> does not read its chat: ...` means the user's messages have waited there unread for two minutes. `SendMessage` that fleet's session to arm its watch, with the numbers waiting. `fleets.py list` shows the same per fleet (`chat: not read now`), and when each session last wrote its transcript (`session last active`), which tells a live coordinator from a page left serving after its session ended.
+
+A fleet's name is its session's (`fleets.py name`). Call it by that name only, in your chat, in `standing.md`, and in `SendMessage`; when a send to it fails, `ListAgents` shows what the session is now called, and the fleet runs `fleets.py name` again. One addressed to you, answer on the page: `chat.py <dir> say --as manager --re <N> "<answer>"`. One addressed to a coordinator (`@acme-billing`), forward with `SendMessage`: its number, its text, and how to answer (`python3 <scripts>/chat.py <dir> say --as <fleet> --re <N> "..."`). The coordinator answers the page itself, under its fleet's name.
 
 What the user decides in the chat or in your session and that holds for more than one fleet goes into `standing.md`, in their words, with when and where they said it.
 
 ## The user's word
 
-You hold the user's answers, and you hold them as what they are. First-hand to you is what the user typed in your session, wrote in your chat, or answered on a decision's page. When you hand it to a coordinator, say that it is relayed and where it was said; for anything destructive or outward-facing, the coordinator confirms with the user, or reads the decision's record on the page.
+You hold the user's answers, and you hold them as what they are. First-hand to you is what the user typed in your session, wrote in your chat, or answered on a decision's page. When you hand it to a coordinator, say that it is relayed and where it was said; for anything destructive or outward-facing, the coordinator confirms with the user, or reads the decision's record on the page. So an approval the coordinator's own session gates (a deploy, a production read) is asked on that coordinator's page, as its decision, and not answered by you: point the user there.
 
 Keep the user's words as they said them. Your summary of a decision for the user carries the fleet's question and recommendation unchanged, with what you know from the other fleets added under your own name.
 

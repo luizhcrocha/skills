@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 _held: dict[str, dict] = {}   # transcript path -> what was read of it so far
@@ -34,6 +35,15 @@ def transcript_of(root) -> Path | None:
         return None
     config = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
     return config / "projects" / parts[-4] / f"{parts[-3]}.jsonl"
+
+
+def active(root) -> str | None:
+    """When the session whose scratchpad holds DIR last wrote its transcript, or None when unknown."""
+    path = transcript_of(root)
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).astimezone().isoformat(timespec="seconds") if path else None
+    except OSError:
+        return None
 
 
 def _figures(usage: dict) -> tuple[int, int, int, int]:

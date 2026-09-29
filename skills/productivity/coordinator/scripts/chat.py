@@ -9,6 +9,10 @@
                                                  new one as it lands; never exits on its own. --all
                                                  also streams every message from the user. --resume
                                                  takes N from the last line a watch as WHO printed.
+                                                 While it runs, DIR/watch-WHO.pid says so: the page
+                                                 shows whether the host reads the chat, and a
+                                                 manager's watch also prints a `!` line for each
+                                                 fleet where the user's messages wait unread.
     chat.py DIR log   [--after N]                the whole conversation, oldest first
 
 WHO is `coordinator` or an agent id or name from DIR/state.json; only the
@@ -22,6 +26,7 @@ import fcntl
 import json
 import os
 import re as regex
+import signal
 import sys
 import time
 from datetime import datetime, timezone
@@ -32,6 +37,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fleets  # noqa: E402
 
 POLL_S = 0.3
+FLEETS_S = float(os.environ.get("FLEET_CHECK_S", 30))  # how often a manager's watch looks at the other fleets' chats
+UNHEARD_S = float(os.environ.get("FLEET_UNHEARD_S", 120))  # how long the user's message waits unread before the manager is told
 
 
 class ChatError(Exception):
@@ -303,9 +310,80 @@ def _cursor(root, who: str) -> Path:
     return Path(root) / f"watch-{who}.cursor"
 
 
+def _pulse(root, who: str) -> Path:
+    """Where a running watch as `who` keeps its process id, so the page and the manager can tell it listens."""
+    return Path(root) / f"watch-{who}.pid"
+
+
+def listening(root) -> dict:
+    """Whether the host of DIR reads its chat now, and how far it has read: {"on", "seen", "unread",
+    "since"}. `on` is a live watch; `seen` the last message a watch printed; `unread` the messages from
+    the user after it, `since` when the oldest of them was sent."""
+    who = host(root)
+    try:
+        pid = int(_pulse(root, who).read_text())
+        os.kill(pid, 0)
+        on = True
+    except (OSError, ValueError):
+        on = False
+    try:
+        seen = int(_cursor(root, who).read_text())
+    except (OSError, ValueError):
+        seen = 0
+    unread = [m for m in read(root, seen) if m["from"] == "user"]
+    return {"on": on, "seen": seen, "unread": len(unread), "since": unread[0]["at"] if unread else None}
+
+
+def deaf_warning(root) -> str | None:
+    """What the host must be told when the user writes to a chat nobody reads, or None."""
+    heard = listening(root)
+    if heard["on"] or not heard["unread"]:
+        return None
+    who = host(root)
+    return (f"chat: the user wrote {heard['unread']} message(s) since #{heard['seen']} that no watch has read. "
+            f"Read them with `chat.py {root} watch --as {who} --all --resume` armed on the Monitor tool; it prints them first.")
+
+
+def _fleets_unheard(me: str, told: dict) -> list[str]:
+    """For a manager's watch: one line per fleet whose coordinator does not read its chat while the user's
+    messages wait there more than UNHEARD_S, once per newest message."""
+    lines = []
+    for e in fleets.live():
+        if e["role"] == "manager" or e["dir"] == me:
+            continue
+        heard = listening(e["dir"])
+        if heard["on"] or not heard["unread"] or told.get(e["id"]) == heard["unread"]:
+            continue
+        try:
+            waited = time.time() - datetime.fromisoformat(heard["since"]).timestamp()
+        except (TypeError, ValueError):
+            waited = UNHEARD_S
+        if waited < UNHEARD_S:
+            continue
+        told[e["id"]] = heard["unread"]
+        lines.append(f"! {e['id']} does not read its chat: {heard['unread']} message(s) from the user since "
+                     f"#{heard['seen']}, the oldest at {heard['since'][11:16]}. SendMessage its session "
+                     f"({e.get('session') or e['id']}) to arm its watch; `chat.py {e['dir']} log --after {heard['seen']}` shows them.")
+    return lines
+
+
 def cmd_watch(root, args) -> None:
     who = _participant(_agents(root), args.who, allow_user=False)
     cursor = _cursor(root, who)
+    pulse = _pulse(root, who)
+    pulse.write_text(str(os.getpid()))
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        _watch(root, args, who, cursor)
+    finally:
+        try:
+            if pulse.read_text() == str(os.getpid()):
+                pulse.unlink()
+        except OSError:
+            pass
+
+
+def _watch(root, args, who: str, cursor: Path) -> None:
     after = args.after
     if args.resume:
         try:
@@ -325,9 +403,14 @@ def cmd_watch(root, args) -> None:
         wanted |= {m["id"] for r in (host(root), *{a["id"] for a in _members(_agents(root))})
                    for m in _open_among(messages, r) if m["from"] == "user"}
     show([m for m in messages if m["id"] > after and m["id"] in wanted])
+    told, checked = {}, 0.0
     while True:
         time.sleep(POLL_S)
         show([m for m in tail.read() if who in m["to"] or (args.all and m["from"] == "user")])
+        if who == "manager" and time.monotonic() - checked >= FLEETS_S:
+            checked = time.monotonic()
+            for line in _fleets_unheard(str(root), told):
+                print(line, flush=True)
 
 
 def cmd_log(root, args) -> None:

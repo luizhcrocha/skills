@@ -61,10 +61,19 @@ class RegisterTest(Machine):
         a, b = self.fleet("a", "billing"), self.fleet("b", "billing")
         fleets.register(a, "u1", os.getpid())
         fleets.register(b, "u2", os.getpid())
-        fleets.name(b, "billing-coordinator")
+        fleets.name(b, "Billing-Coordinator")
         again = fleets.register(b, "u3", os.getpid())
-        self.assertEqual((again["id"], again["session"], again["url"]), ("billing-2", "billing-coordinator", "u3"))
+        self.assertEqual((again["id"], again["session"], again["url"]), ("billing-coordinator", "Billing-Coordinator", "u3"))
         self.assertEqual(len(fleets.live()), 2)
+
+    def test_a_fleet_takes_its_sessions_name_as_its_one_name(self):
+        a, b = self.fleet("a", "billing"), self.fleet("b", "infra")
+        fleets.register(a, "u1", os.getpid())
+        fleets.register(b, "u2", os.getpid())
+        self.assertEqual(fleets.name(a, "Billing Coordinator")["id"], "billing-coordinator")
+        self.assertEqual(sorted(e["id"] for e in fleets.live()), ["billing-coordinator", "infra"])
+        self.assertIn("already called", fleets.name(b, "billing-coordinator"))
+        self.assertIn("keeps", fleets.name(b, "user"))
 
     def test_a_name_the_chat_keeps_for_itself_is_not_given_to_a_fleet(self):
         for project in ["manager", "Coordinator", "user"]:
@@ -128,7 +137,7 @@ class ManagerTest(Machine):
         self.assertEqual(len(view["coordinators"]), 1)
         c = view["coordinators"][0]
         self.assertEqual((c["id"], c["name"], c["goal"], c["status"], c["now"], c["url"], c["session"]),
-                         ("billing", "billing", "g of billing", "running", "now of billing", "https://box.ts.net:1/", "billing-coordinator"))
+                         ("billing-coordinator", "billing-coordinator", "g of billing", "running", "now of billing", "https://box.ts.net:1/", "billing-coordinator"))
         self.assertEqual((c["workers"], c["tokens"], c["roadblocks"]), ({"running": 1, "done": 1}, 150, 1))
         self.assertEqual(c["lanes"], ["src/billing/**"])
         self.assertEqual([(d["id"], d["asks"], d["blocking"]) for d in c["decisions"]], [("d1", "user", True), ("d2", "manager", False)])
@@ -150,7 +159,7 @@ class CliTest(Machine):
         fleets.register(a, "https://box.ts.net:1/", os.getpid())
         self.assertEqual(self.cli("name", str(a), "billing-coordinator").returncode, 0)
         out = self.cli("list").stdout
-        self.assertIn("billing  coordinator  session billing-coordinator  running", out)
+        self.assertIn("billing-coordinator  coordinator  session billing-coordinator  running", out)
         self.assertIn("https://box.ts.net:1/", out)
         self.assertIn(str(a), out)
         self.assertIn("now of billing", out)

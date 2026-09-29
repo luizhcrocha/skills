@@ -124,6 +124,40 @@ class AgentTest(Fleet):
         self.assertIn("round 3", self.ok("show"))
 
 
+class ParkTest(Fleet):
+    def test_park_stops_every_live_row_in_one_command_and_says_why(self):
+        for a, status in [("a1", "running"), ("a2", "queued"), ("a3", "done")]:
+            self.ok("agent", a, "--task", "t", "--milestone", "m1")
+            self.ok("agent", a, "--status", status)
+        self.ok("park", "Luiz paused the UI work")
+        self.assertEqual([a["status"] for a in self.state()["agents"]], ["stopped", "stopped", "done"])
+        self.assertEqual(self.state()["events"][-1]["text"], "Stopped a1, a2: Luiz paused the UI work")
+        self.assertIn("no worker row is running", self.refused("park", "again"))
+
+    def test_park_can_name_the_workers(self):
+        for a in ("a1", "a2"):
+            self.ok("agent", a, "--task", "t", "--milestone", "m1")
+        self.ok("park", "--agent", "a2", "its lane was dropped")
+        self.assertEqual([a["status"] for a in self.state()["agents"]], ["running", "stopped"])
+        self.assertIn("unknown agent 'a9'", self.refused("park", "--agent", "a9", "x"))
+
+    def test_a_paused_fleet_with_running_rows_is_warned_on_every_command(self):
+        self.ok("agent", "a1", "--task", "t", "--milestone", "m1")
+        said = self.run_cli("set", "--status", "paused")
+        self.assertIn("a1 still read as running/queued/blocked while the fleet is paused", said.stderr)
+        self.assertIn("park", said.stderr)
+        self.ok("park", "paused")
+        self.assertNotIn("still read as", self.run_cli("event", "x").stderr)
+
+    def test_a_now_line_is_stamped_when_it_is_said(self):
+        self.assertNotIn("now_at", self.state())
+        self.ok("set", "--now", "l9 deploying")
+        self.assertTrue(self.state()["now_at"])
+
+    def test_a_note_command_points_at_event(self):
+        self.assertIn("event --kind note TEXT", self.refused("note", "x"))
+
+
 class ManagerTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

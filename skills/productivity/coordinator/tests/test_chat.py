@@ -800,7 +800,7 @@ class ManagerChatTest(FleetDir):
     def setUp(self):
         super().setUp()
         os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
-        as_manager(self.root, ("billing", "billing-coordinator"), ("infra", "infra-coordinator"))
+        as_manager(self.root, ("billing", "billing"), ("infra", "infra"))
 
     def to(self, sender: str, text: str, re: int | None = None) -> list[str]:
         return chat.address(self.root, sender, text, re, allow_user=True)["to"]
@@ -831,6 +831,49 @@ class ManagerChatTest(FleetDir):
         self.assertEqual(Lines(proc.stdout).next(), "#1 user -> infra: @infra is the deploy gate green?\n")
 
 
+class ListeningTest(FleetDir):
+    """Whether the host reads its chat: a watch says so while it runs, and what it printed is what was read."""
+
+    def test_a_running_watch_listens_and_marks_what_it_read(self):
+        self.assertEqual(chat.listening(self.root), {"on": False, "seen": 0, "unread": 0, "since": None})
+        sent = chat.append(self.root, "user", "status?", allow_user=True)
+        self.assertEqual(chat.listening(self.root)["unread"], 1)
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "coordinator", "--all", "--resume"],
+                                stdout=subprocess.PIPE, text=True, encoding="utf-8")
+        self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdout.close()))
+        self.assertEqual(Lines(proc.stdout).next(), "#1 user -> coordinator: status?\n")
+        self.assertEqual(chat.listening(self.root), {"on": True, "seen": 1, "unread": 0, "since": None})
+        self.assertIsNone(chat.deaf_warning(self.root))
+        proc.terminate(); proc.wait()
+        self.assertFalse((self.root / "watch-coordinator.pid").exists(), "a watch that ends says so")
+        chat.append(self.root, "user", "still there?", allow_user=True)
+        heard = chat.listening(self.root)
+        self.assertEqual((heard["on"], heard["seen"], heard["unread"]), (False, sent["id"], 1))
+
+    def test_every_state_command_tells_a_deaf_coordinator_what_waits(self):
+        chat.append(self.root, "user", "status?", allow_user=True)
+        out = subprocess.run([sys.executable, str(SCRIPTS / "state.py"), str(self.root), "event", "x", "--no-render"],
+                             capture_output=True, text=True, timeout=20)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("the user wrote 1 message(s) since #0 that no watch has read", out.stderr)
+        self.assertIn("watch --as coordinator --all --resume", out.stderr)
+
+
+class ManagerRelaysTheUnheardTest(FleetDir):
+    def test_the_managers_watch_names_a_fleet_that_does_not_read_its_chat(self):
+        os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
+        as_manager(self.root, ("billing", "billing"))
+        fleet = next(e for e in chat.fleets.live() if e["id"] == "billing")
+        chat.append(fleet["dir"], "user", "are you there?", allow_user=True)
+        env = {**os.environ, "FLEET_CHECK_S": "0.2", "FLEET_UNHEARD_S": "0"}
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "manager", "--all"],
+                                stdout=subprocess.PIPE, text=True, encoding="utf-8", env=env)
+        self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdout.close()))
+        line = Lines(proc.stdout).next()
+        self.assertTrue(line.startswith("! billing does not read its chat: 1 message(s) from the user since #0"), line)
+        self.assertIn("SendMessage its session (billing)", line)
+
+
 class ManagerIsNotInAFleetsChatTest(FleetDir):
     def test_a_fleets_chat_has_no_manager(self):
         self.assertEqual(chat.address(self.root, "user", "@manager hello", allow_user=True)["to"], ["coordinator"])
@@ -841,13 +884,13 @@ class ManagerStreamTest(ServerTest):
     def test_the_managers_page_is_sent_every_coordinator_and_follows_what_they_do(self):
         os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
         self.stop_server()
-        as_manager(self.root, ("billing", "billing-coordinator"))
+        as_manager(self.root, ("billing", "billing"))
         ServerTest.setUp_server(self)
         stream = Stream(self.port)
         self.addCleanup(stream.close)
         stream.next()
         state = json.loads(stream.next()["data"])
-        self.assertEqual([(c["id"], c["now"], c["session"]) for c in state["coordinators"]], [("billing", "now of billing", "billing-coordinator")])
+        self.assertEqual([(c["id"], c["now"], c["session"]) for c in state["coordinators"]], [("billing", "now of billing", "billing")])
         import fleets
         home = Path(fleets.live()[0]["dir"])
         fleet = json.loads((home / "state.json").read_text())

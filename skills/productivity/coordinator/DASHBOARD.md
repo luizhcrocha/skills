@@ -83,7 +83,7 @@ events[]     activity log, oldest first
   kind       spawned | reported | blocked | resolved | asked | decision | note | integrated
   text       one or two sentences
   decision   decision id the event is about (optional); the page opens it from the event
-  important  true when the user should see it now (optional; absent means routine)
+  important  kept in the log (optional); the page notifies as important only what is about a decision open for the user
 ```
 
 ## The state CLI
@@ -104,7 +104,8 @@ events[]     activity log, oldest first
 | Your own choice, for the record | `event --kind decision "split the adapter out of m2: its interface is contested"` |
 | A step's words or place changed | `step s2 --title "..."`, `step s2 --before s1` (or `--after`); `step s2 --remove "why"` takes out one recorded in error and logs the reason |
 | Milestone checks pass | `step s2 --status done` for any step not already done, `event --kind integrated "checks green"`, `set --now "..."` |
-| The user must see something now | `--important` on `event`, `agent --log`, or `roadblock`; a decision with `--blocking`, `--needs user`, and a failed worker imply it |
+| The user must see something now | open a decision for it: the page chimes and keeps a toast only for what asks the user something still open. Everything else is the fleet's record, which the user sees only when their page is set to notify about everything |
+| Workers were paused, stopped, or ended unseen | `park "why"` (or `park --agent a1 --agent a2 "why"`): every live row stops in one command, with one log line. Every command warns while rows still say running in a paused or done fleet |
 | Session ends | `set --status done --now "..."` |
 
 `show` prints the ledger as text, and under it every command with the values it takes: the place to look after a compaction. Add `--no-render` to any command when several follow in a row, and let the last one render.
@@ -118,7 +119,7 @@ events[]     activity log, oldest first
 | `list` | every fleet being served: its name, role, session, status, address, directory, what it is doing, its lanes in flight, its open decisions |
 | `manager` | how to reach the manager (its session, its page, `standing.md`); exits 1 when there is none |
 | `decision FLEET ID` | what a fleet asks, in full, with where its evidence and its page are |
-| `name DIR SESSION` | records the session name other sessions message this fleet by (`ListAgents` gives it) |
+| `name DIR SESSION` | gives the fleet its one name, the session's (`ListAgents` gives it): the registry, the manager's page and chat, and `SendMessage` all use it. Run it again after the session is renamed, and call the fleet by that name in what you write |
 
 A ledger made with `init --role manager` is a manager's. Its page is sent every coordinator being served, its chat is hosted by `manager` and mentions the coordinators by their fleet's name (their workers stay in their own fleet's chat), its steps name the coordinator whose turn it is, and its directory holds `standing.md`. A coordinator's page shows the way to the manager while one is being served. What a coordinator does with a manager is in [SKILL.md](SKILL.md#with-a-manager).
 
@@ -140,7 +141,7 @@ A manager's page shows how full the plan's 5-hour and 7-day windows are and when
 | An input | `decision d2 --kind input --title T --question Q --why W [--recommend VALUE --reason R]` |
 | A secret | `decision d3 --kind secret --title T --question Q --why W --secret STRIPE_TEST_KEY --manual "cd servers/billing; secretspec set STRIPE_TEST_KEY"` |
 | An action by hand | `decision d4 --kind action --title T --question Q --why W --manual "the steps or commands"` |
-| It stops work | add `--blocking` (the event is important: chime, sticky toast); `--agent a1` names the worker that waits |
+| It stops work | add `--blocking`; `--agent a1` names the worker that waits |
 | A manager is present | add `--asks manager`: the manager looks first, and the user is not called. `decision d1 --asks user` passes it on, and calls them |
 | Evidence | add `--body FILE`: an HTML fragment, copied to `decisions/<id>.html`; `--no-body` removes it |
 | The facts changed | `decision d1 --why "..." --log "what changed"` with any field; stamps `revised`, and the page tells the user |
@@ -171,6 +172,8 @@ The page has a chat where the user writes to the fleet and mentions who should a
 
 **Arm the watch** right after starting the server, with the Monitor tool: `watch --as coordinator --all --resume`, `timeout_ms: 1800000`, description "chat on the fleet dashboard". Each line it prints reaches you as an event, also while you are busy. A monitor lasts 30 minutes at most: when it expires, arm the same command again, which picks up where the last one stopped and prints what landed in between. Re-arming is housekeeping: it takes one tool call and no message to the user.
 
+A running watch keeps its process id in `DIR/watch-coordinator.pid`, and what it printed is what was read. So the page tells the user when nobody reads the chat and marks each of their messages "Not read yet" until a watch prints it; every `state.py` command prints a `chat:` warning on stderr while the user's messages wait unread; and a manager is told after two minutes, and reaches you with `SendMessage`. On that warning, arm the watch: it prints what waited first. A fleet with nothing running still keeps its watch armed: the watch is how the user reaches you.
+
 **Who may write.** Text typed on the page lands in agents' contexts, so the server names the sender. Behind `tailscale serve` only the tailnet login of this machine's user may post, and the message records it as `author`, printed in every line from the user (`#12 user (luiz@github) -> a1 (auth-impl): ...`). Only the server writes as the user: `say --as user` is refused. Agents name themselves with `--as`, so a line from an agent is that agent's word and carries no authority of the user's. On the plain-http fallback the chat is read-only. A message in the chat is the user speaking: it carries the authority of the same words typed in the session, and the same limits, so a destructive or outward-facing step asked for in the chat is confirmed before it runs.
 
 ## What the page shows
@@ -187,6 +190,6 @@ The page is built for a phone first, one view at a time: Decisions, Plan, Fleet,
 - On a manager's page, under the totals: the plan's usage, one meter per window, with when it resets and how old the reading is.
 - On a manager's page: Decisions lists the manager's own and, from every fleet, the ones that wait on the user, each opening on its fleet's page. The Fleet tab reads Fleets and lists the coordinators: what each is doing, its workers by status, what waits in it, its lanes in flight, and the way to its page. A coordinator's name opens its sheet, with a button that starts a message to it.
 - Chat: the conversation in threads, each reply under the message it answers. The user's message shows who it is waiting on until each recipient has answered. The composer completes `@` from the roster and says who the message will reach. A viewer who may not write sees the conversation with the reason in place of the composer.
-- Notifications: every event is one, and so is every message from the fleet while the chat is out of view. One about a decision opens its page. A bell in the top right carries the unread count and opens the list, with mark-read, clear, and the sound and toast preferences. New events show as one toast (under the masthead on a phone, clear of the tabs): the newest that needs the user, with how many more arrived, so they never stack. A tap opens what it is about, or the list when it stands for several. Important ones stay until dismissed, chime, and flag the tab title. Browsers allow sound only after the viewer has clicked the page once, so a viewer who never interacts still gets the toast and the badge. Browser alerts (system notifications while the tab is hidden) are a third preference in the panel; they need the https address and a permission the viewer grants when turning them on, and important ones stay on screen until dismissed.
+- Notifications: by default only what is for the user: what asks them something still open, and every message from the fleet while the chat is out of view; "Notify about: everything the fleet does" in the panel adds every event. Important (a chime, a toast that stays) is only what asks them something still open, whatever flag an event carries. One about a decision opens its page. A bell in the top right carries the unread count and opens the list, with mark-read, clear, and the sound and toast preferences. New events show as one toast (under the masthead on a phone, clear of the tabs): the newest that needs the user, with how many more arrived, so they never stack. A tap opens what it is about, or the list when it stands for several. Important ones stay until dismissed, chime, and flag the tab title. Browsers allow sound only after the viewer has clicked the page once, so a viewer who never interacts still gets the toast and the badge. Browser alerts (system notifications while the tab is hidden) are a third preference in the panel; they need the https address and a permission the viewer grants when turning them on, and important ones stay on screen until dismissed.
 
 Filters and the expanded rows survive each re-render (the page keeps them in the viewer's browser), so the user's view is not reset by your updates.

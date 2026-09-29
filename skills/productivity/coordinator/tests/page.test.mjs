@@ -355,3 +355,38 @@ test("parseState: what a coordinator itself spent is four figures, or none", () 
   const m = Core.parseState({ ...base, role: "manager", coordinators: [{ id: "a", spent: { output: 7, input: 9, cached: 8, answers: 1 } }, { id: "b" }] });
   assert.deepEqual(m.coordinators.map((c) => c.spent), [{ output: 7, input: 9, cached: 8, answers: 1 }, null]);
 });
+
+test("noticeOf: only what asks the viewer something open is important; routine flags are not", () => {
+  const open = (id) => id === "d1";
+  assert.deepEqual(Core.noticeOf({ kind: "asked", decision: "d1" }, open), { important: true, forYou: true });
+  assert.deepEqual(Core.noticeOf({ kind: "asked", decision: "d2" }, open), { important: false, forYou: false }, "a decision already closed");
+  assert.deepEqual(Core.noticeOf({ kind: "integrated", important: true }, open), { important: false, forYou: false });
+  assert.deepEqual(Core.noticeOf({ kind: "note", decision: "d1" }, open), { important: false, forYou: true });
+  assert.deepEqual(Core.noticeOf({ kind: "message" }, open), { important: false, forYou: true });
+  assert.deepEqual(Core.noticeOf({ kind: "message", decision: "d1" }, open), { important: true, forYou: true });
+});
+
+test("hearingOf and unreadBy: the user's messages after what the host's watch read are unread", () => {
+  assert.equal(Core.hearingOf(undefined), null);
+  assert.equal(Core.hearingOf({ on: "yes", seen: 1 }), null);
+  const h = Core.hearingOf({ on: false, seen: 37, unread: 2, since: "2026-09-29T07:47:40-05:00" });
+  assert.deepEqual(h, { on: false, seen: 37, unread: 2, since: "2026-09-29T07:47:40-05:00" });
+  assert.equal(Core.unreadBy(h, { id: 41, from: "user" }), true);
+  assert.equal(Core.unreadBy(h, { id: 37, from: "user" }), false);
+  assert.equal(Core.unreadBy(h, { id: 41, from: "coordinator" }), false);
+  assert.equal(Core.unreadBy(null, { id: 41, from: "user" }), false, "a server that says nothing claims nothing");
+});
+
+test("parseState: the host's hearing and each coordinator's", () => {
+  const st = Core.parseState({ project: "p", goal: "g", status: "running", now: "n", started: "x", chat: { on: true, seen: 3, unread: 0, since: null },
+    coordinators: [{ id: "infra", chat: { on: false, seen: 37, unread: 5, since: "t" } }] });
+  assert.deepEqual(st.hearing, { on: true, seen: 3, unread: 0, since: "" });
+  assert.equal(st.coordinators[0].hearing.unread, 5);
+});
+
+test("staleNow: a now-line not said again for 30 minutes reads as stale", () => {
+  const at = "2026-09-29T08:00:00-05:00", t = Date.parse(at);
+  assert.equal(Core.staleNow(at, t + 29 * 60000), false);
+  assert.equal(Core.staleNow(at, t + 31 * 60000), true);
+  assert.equal(Core.staleNow(undefined, t), false, "a state from before now_at claims nothing");
+});

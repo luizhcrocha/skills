@@ -18,9 +18,12 @@
                              [--agent A] [--supersedes ID] [--log TEXT] [--asks user|manager]
                              [--decide ANSWER --resolution HOW | --withdraw REASON]
     state.py DIR event [--agent A] [--kind K] [--important] TEXT
+    state.py DIR park [--agent A]... REASON
     state.py DIR show
 
-Add --no-render anywhere to write state.json without rendering.
+Add --no-render anywhere to write state.json without rendering, -q to render without saying so.
+Every command also warns (on stderr) when the user's chat messages wait unread, and when worker
+rows still say running while the fleet is paused or done.
 
 DIR holds state.json, the rendered index.html, and brief.md: what every worker
 of the fleet reads before its task, written once from assets/brief.md and the
@@ -31,6 +34,8 @@ fields given. Every command stamps timestamps, validates the result, and
 renders index.html.
 """
 import argparse
+import contextlib
+import io
 import json
 import shutil
 import sys
@@ -38,6 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import chat  # noqa: E402
 import decisions  # noqa: E402
 import render_dashboard  # noqa: E402
 
@@ -100,7 +106,39 @@ def cmd_set(state, args):
     for key in ("status", "now", "goal"):
         if getattr(args, key) is not None:
             state[key] = getattr(args, key)
+    if args.now is not None:
+        state["now_at"] = now()  # the page greys a now-line that has not been said again for a while
     return state
+
+
+LIVE = ("running", "queued", "blocked")
+
+
+def cmd_park(state, args):
+    """Stop every worker row still live (or the ones named) in one command, with one reason: what a
+    pause, a stop, or a worker that ended unseen leaves behind."""
+    for a in args.agent or []:
+        if not find(state["agents"], a):
+            fail(f"unknown agent '{a}'")
+    rows = [a for a in state["agents"] if a["status"] in LIVE and (not args.agent or a["id"] in args.agent)]
+    if not rows:
+        fail("no worker row is running, queued, or blocked" + (" among those named" if args.agent else ""))
+    for a in rows:
+        a["status"] = "stopped"
+        a["updated"] = now()
+    log(state, "note", f"Stopped {', '.join(a['id'] for a in rows)}: {args.reason}")
+    return state
+
+
+def stale_rows(state: dict) -> str | None:
+    """What to say when worker rows still read as live while the fleet itself is not."""
+    if not state or state.get("status") not in ("paused", "done"):
+        return None
+    rows = [a["id"] for a in state.get("agents", []) if a.get("status") in LIVE]
+    if not rows:
+        return None
+    return (f"state: {', '.join(rows)} still read as {'/'.join(LIVE)} while the fleet is {state['status']}; "
+            f"if they are not working, `state.py <dir> park \"why\"` stops their rows in one command.")
 
 
 def cmd_milestone(state, args):
@@ -171,6 +209,8 @@ def cmd_agent(state, args):
         known = ", ".join(m["id"] for m in state["roadmap"]) or "none yet; record one with `milestone`"
         fail(f"unknown milestone '{args.milestone}' (the roadmap has: {known})")
     if a is None:
+        if args.milestone is None:
+            fail(f"new agent needs --milestone, one of {', '.join(m['id'] for m in state['roadmap']) or '(none yet: add one with `milestone`)'}")
         require(args, ["task", "milestone"], "agent")
         a = {
             "id": args.id, "name": args.name or args.id, "task": args.task,
@@ -400,9 +440,10 @@ commands (state.py DIR <command>; an unknown ID creates the row, a known ID chan
         [--option "KEY: label | consequence"]... [--same-options] [--recommend R --reason WHY] [--secret NAME] [--manual TEXT]
         [--body FILE | --no-body] [--agent A] [--supersedes ID] [--log TEXT] [--asks {"|".join(decisions.ASKS)}]
         [--decide ANSWER --resolution HOW | --withdraw REASON]
-  event [--kind {"|".join(KINDS)}] [--agent A] [--important] TEXT
+  event [--kind {"|".join(KINDS)}] [--agent A] [--important] TEXT   (a note is `event --kind note TEXT`)
+  park [--agent A]... REASON     stop every live worker row (or those named) in one command
   show
-  --no-render on any command writes state.json without rendering"""
+  --no-render on any command writes state.json without rendering; -q renders without saying so"""
 
 
 def cmd_show(state, args):
@@ -487,13 +528,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--resolution", metavar="HOW", help="with --decide: how the answer came")
     s = sub.add_parser("event"); s.add_argument("text"); s.add_argument("--agent"); s.add_argument("--kind", choices=KINDS)
     s.add_argument("--important", action="store_true", help="the user should see this now: toast, sound, badge")
+    s = sub.add_parser("park"); s.add_argument("reason"); s.add_argument("--agent", action="append", help="only this worker (repeatable)")
     sub.add_parser("show")
     return p
 
 
 def main(argv: list[str]) -> None:
-    no_render = "--no-render" in argv
-    args = build_parser().parse_args([a for a in argv if a != "--no-render"])
+    if len(argv) > 1 and argv[1] == "note":
+        fail("there is no `note` command: a note is `event --kind note TEXT`")
+    no_render, quiet = "--no-render" in argv, "-q" in argv
+    args = build_parser().parse_args([a for a in argv if a not in ("--no-render", "-q")])
     args.no_render = no_render
     root = Path(args.dir).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -504,6 +548,9 @@ def main(argv: list[str]) -> None:
 
     handler = globals()[f"cmd_{args.cmd}"]
     result = handler(state, args)
+    for warning in (chat.deaf_warning(root) if args.cmd != "init" else None, stale_rows(result or state)):
+        if warning:
+            sys.stderr.write(warning + "\n")
     if result is None:
         return
     result["updated"] = now()
@@ -512,6 +559,9 @@ def main(argv: list[str]) -> None:
     ensure_brief(root, result)
     if args.no_render:
         print(f"state.json updated ({args.cmd} {getattr(args, 'id', '')})".rstrip())
+    elif quiet:
+        with contextlib.redirect_stdout(io.StringIO()):
+            render_dashboard.main([str(path), str(root / "index.html")])
     else:
         render_dashboard.main([str(path), str(root / "index.html")])
 
