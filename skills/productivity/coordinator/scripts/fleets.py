@@ -3,6 +3,8 @@
 
     fleets.py list              every live fleet: its name, role, session, status, address, directory,
                                 what it is doing, and the decisions open in it
+    fleets.py show FLEET        what one fleet is doing, from its ledger: now-line, live workers and
+                                their last report, open decisions and roadblocks, latest events
     fleets.py manager           how to reach the manager; exits 1 when there is none
     fleets.py decision FLEET ID what a fleet asks, in full: the question, why, the options, the
                                 recommendation, where its evidence and its page are
@@ -56,8 +58,18 @@ def role_of(state: dict | None) -> str:
     return "manager" if (state or {}).get("role") == "manager" else "coordinator"
 
 
+def title_of(root) -> str | None:
+    """The title the session whose scratchpad holds DIR goes by (its /rename), or None when it has none."""
+    import spend
+    transcript = spend.transcript_of(root)
+    value = _read(transcript.with_suffix("") / "custom-title.json") if transcript else None
+    title = (value or {}).get("customTitle")
+    return title.strip() if isinstance(title, str) and title.strip() else None
+
+
 def live() -> list[dict]:
-    """The fleets whose server is running, oldest first. One whose server died is forgotten here."""
+    """The fleets whose server is running, oldest first. One whose server died is forgotten here, and
+    one whose session was renamed takes its new name here, so the registry never lags the session."""
     entries = []
     for path in sorted(home().glob("*.json")):
         entry = _read(path)
@@ -65,6 +77,16 @@ def live() -> list[dict]:
             entries.append(entry)
         else:
             path.unlink(missing_ok=True)
+    for i, entry in enumerate(entries):
+        title = title_of(entry["dir"])
+        if not title or title == entry.get("session"):
+            continue
+        new = entry["id"] if entry["role"] == "manager" else slug(title)
+        if not new or new in KEPT and entry["role"] != "manager" or any(e["id"] == new for e in entries if e is not entry):
+            new = entry["id"]
+        if new != entry["id"]:
+            (home() / f"{entry['id']}.json").unlink(missing_ok=True)
+        entries[i] = _write({**entry, "id": new, "session": title})
     return sorted(entries, key=lambda e: str(e.get("since", "")))
 
 
@@ -90,7 +112,10 @@ def register(root, url: str, pid: int) -> dict:
     # The fleet's own entry is read before the dead are forgotten: on a restart its server is the dead one.
     known = next((e for e in map(_read, sorted(home().glob("*.json"))) if e and e.get("dir") == str(root) and e.get("id")), None)
     role, others = role_of(state), [e for e in live() if e["dir"] != str(root)]
-    if known:
+    title = title_of(root)
+    if title and role != "manager" and slug(title) and slug(title) not in KEPT and slug(title) not in {e["id"] for e in others}:
+        name = slug(title)
+    elif known:
         name = known["id"]
     else:
         base = "manager" if role == "manager" else slug(str((state or {}).get("project") or root.parent.name)) or "fleet"
@@ -100,8 +125,10 @@ def register(root, url: str, pid: int) -> dict:
         while name in taken:
             n += 1
             name = f"{base}-{n}"
+    if known and known["id"] != name:
+        (home() / f"{known['id']}.json").unlink(missing_ok=True)
     return _write({"id": name, "role": role, "dir": str(root), "url": url, "pid": pid,
-                   "session": known.get("session") if known else None,
+                   "session": title or (known.get("session") if known else None),
                    "since": known["since"] if known else datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")})
 
 
@@ -200,6 +227,33 @@ def cmd_list() -> None:
             print(f"    {d['id']} [{marks}] {d['title']}")
 
 
+def cmd_show(fleet: str) -> None:
+    """What one fleet is doing, from its ledger alone: enough to answer "what is X doing" without asking X."""
+    import chat
+    entry = next((e for e in live() if e["id"] == fleet), None)
+    if not entry:
+        fail(f"no fleet '{fleet}' is being served; `fleets.py list` names the ones that are")
+    state = _read(Path(entry["dir"]) / "state.json") or {}
+    rows = lambda key: [r for r in state.get(key, []) if isinstance(r, dict)]  # noqa: E731
+    print(f"{fleet}  {state.get('status', 'unknown')}  {entry['url']}")
+    print(f"    now: {state.get('now', '')}" + (f"  (said {state['now_at']})" if state.get("now_at") else ""))
+    heard = chat.listening(entry["dir"])
+    print(f"    chat: {'read' if heard['on'] else 'not read now'}" + (f"; {heard['unread']} from the user unread since #{heard['seen']}" if heard["unread"] else ""))
+    for a in rows("agents"):
+        if a.get("status") in ("running", "blocked", "queued"):
+            print(f"    {a.get('id')} ({a.get('name')}) {a.get('status')} since {a.get('updated') or a.get('started')}: {a.get('task')}")
+            if a.get("report"):
+                print(f"        last report: {str(a['report'])[:300]}")
+    for d in rows("decisions"):
+        if d.get("status") == "open":
+            print(f"    decision {d.get('id')} [{d.get('asks') or 'user'}{', blocks work' if d.get('blocking') else ''}] {d.get('title')}: {d.get('question')}")
+    for r in rows("roadblocks"):
+        if not r.get("resolved"):
+            print(f"    roadblock {r.get('id')} [needs {r.get('needs')}] {r.get('title')}")
+    for e in rows("events")[-8:]:
+        print(f"    {e.get('at', '')[11:16]} {e.get('kind')} {e.get('agent') or ''} {e.get('text')}".replace("  ", " "))
+
+
 def cmd_manager() -> None:
     found = manager()
     if not found:
@@ -239,6 +293,8 @@ def main(argv: list[str]) -> None:
         cmd_list()
     elif argv == ["manager"]:
         cmd_manager()
+    elif len(argv) == 2 and argv[0] == "show":
+        cmd_show(argv[1])
     elif len(argv) == 3 and argv[0] == "decision":
         cmd_decision(argv[1], argv[2])
     elif len(argv) == 3 and argv[0] == "name":
@@ -247,7 +303,7 @@ def main(argv: list[str]) -> None:
             fail(entry)
         print(f"this fleet is {entry['id']}, the session {entry['session']}: use that one name everywhere")
     else:
-        fail("usage: fleets.py list | manager | decision FLEET ID | name DIR SESSION")
+        fail("usage: fleets.py list | show FLEET | manager | decision FLEET ID | name DIR SESSION")
 
 
 if __name__ == "__main__":

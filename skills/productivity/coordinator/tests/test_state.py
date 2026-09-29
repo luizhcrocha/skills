@@ -158,6 +158,29 @@ class ParkTest(Fleet):
         self.assertIn("event --kind note TEXT", self.refused("note", "x"))
 
 
+class MeasuredTest(unittest.TestCase):
+    """A worker row that names its task id takes its tokens and duration from the worker's transcript."""
+
+    def test_tokens_and_duration_come_from_the_workers_transcript(self):
+        config, tmp = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
+        root = tmp / "-home-x" / "s1" / "scratchpad" / "coordinator"
+        sub = config / "projects" / "-home-x" / "s1" / "subagents"
+        sub.mkdir(parents=True)
+        env = {**os.environ, "CLAUDE_CONFIG_DIR": str(config)}
+        run = lambda *a: subprocess.run([sys.executable, STATE, str(root), *a, "--no-render"], capture_output=True, text=True, env=env, timeout=20)  # noqa: E731
+        usage = lambda n: {"input_tokens": 10, "cache_read_input_tokens": n, "cache_creation_input_tokens": 5, "output_tokens": 100}  # noqa: E731
+        lines = [{"timestamp": "2026-09-29T10:00:00.000Z", "message": {"id": "m1", "usage": usage(1000)}},
+                 {"timestamp": "2026-09-29T10:02:30.000Z", "message": {"id": "m2", "usage": usage(5000)}}]
+        (sub / "agent-abc123.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+        for args in (["init", "--project", "p", "--goal", "g"], ["milestone", "m1", "--title", "M"],
+                     ["agent", "a1", "--task", "t", "--milestone", "m1", "--task-id", "abc123"]):
+            self.assertEqual(run(*args).returncode, 0)
+        a = json.loads((root / "state.json").read_text())["agents"][0]
+        self.assertEqual((a["tokens"], a["duration_ms"]), (5115, 150000))
+        self.assertEqual(run("agent", "a1", "--status", "done", "--tokens", "7").returncode, 0)
+        self.assertEqual(json.loads((root / "state.json").read_text())["agents"][0]["tokens"], 7, "a figure given by hand stays")
+
+
 class ManagerTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

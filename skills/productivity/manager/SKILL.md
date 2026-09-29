@@ -35,7 +35,7 @@ The manager runs on the coordinator skill's scripts and page. Resolve its direct
 2. `python3 <scripts>/state.py <dir> init --role manager --project "<this machine, or the programme>" --goal "<what the fleets are landing together>"`.
 3. `python3 <scripts>/serve_dashboard.py <dir>`, and give the user the address. The page shows every coordinator with the way to its page, and one list of what waits on the user across all of them.
 4. `ListAgents` names this session. Record it, so coordinators can write to you: `python3 <scripts>/fleets.py name <dir> <session>`.
-5. Arm the chat watch with the Monitor tool: `python3 <scripts>/chat.py <dir> watch --as manager --all --resume`, `timeout_ms: 1800000`. Re-arm the same command when it expires; that takes no message to the user.
+5. Arm the chat watch as a background Bash command (`run_in_background: true`): `python3 <scripts>/chat.py <dir> watch --as manager --all --resume --once`. It exits with the first news (a message, or a fleet not reading its chat), which wakes you; handle it and arm the same command again.
 6. Record the landing queue: `milestone landings --title "Landings and deploys"`.
 7. Write to each coordinator (`SendMessage` to its session) that a manager is present: your session, your page, the path of `standing.md`, and that decisions, questions for other fleets, and landings now come to you. Ask each for what it owns, what it has in flight, and what it is waiting on.
 8. Fill `standing.md` from their answers and from what the user tells you.
@@ -85,9 +85,18 @@ Something another fleet should know (a schema changed, a shared tool's version m
 
 ## What the user writes on your page
 
-The chat's watch prints each message, and every 30 seconds it also looks at the other fleets: a line `! <fleet> does not read its chat: ...` means the user's messages have waited there unread for two minutes. `SendMessage` that fleet's session to arm its watch, with the numbers waiting. `fleets.py list` shows the same per fleet (`chat: not read now`), and when each session last wrote its transcript (`session last active`), which tells a live coordinator from a page left serving after its session ended.
+The chat's watch prints each message, and every 30 seconds it also looks at the other fleets: a line `! <fleet> does not read its chat: ...` means the user's messages have waited there unread for two minutes. `SendMessage` that fleet's session to arm its watch, with the numbers waiting. `fleets.py list` shows the same per fleet (`chat: not read now`), and when each session last wrote its transcript (`session last active`), which tells a live coordinator from a page left serving after its session ended. One addressed to you, answer on the page: `chat.py <dir> say --as manager --re <N> "<answer>"`. One addressed to a coordinator (`@acme-billing`), or one about what a coordinator is doing: see [Said once](#said-once).
 
-A fleet's name is its session's (`fleets.py name`). Call it by that name only, in your chat, in `standing.md`, and in `SendMessage`; when a send to it fails, `ListAgents` shows what the session is now called, and the fleet runs `fleets.py name` again. One addressed to you, answer on the page: `chat.py <dir> say --as manager --re <N> "<answer>"`. One addressed to a coordinator (`@acme-billing`), forward with `SendMessage`: its number, its text, and how to answer (`python3 <scripts>/chat.py <dir> say --as <fleet> --re <N> "..."`). The coordinator answers the page itself, under its fleet's name.
+A fleet's name is its session's: the registry reads it from the session's title, so a `/rename` carries over by itself. Call a fleet by that name only, in your chat, in `standing.md`, and in `SendMessage`.
+
+## Said once
+
+Every message between sessions is paid for twice: the sender writes it, the receiver reads it, and both read it again on every later turn. So each thing is said once, by the one who knows it, where the user will read it.
+
+- **Answer from the ledger first.** `python3 <scripts>/fleets.py show <fleet>` prints what a fleet is doing: its now-line and when it was said, the workers running with their task and last report, its latest events, its open decisions and roadblocks, and whether it reads its chat. A question about what a fleet is doing is answered from that, and the coordinator is not asked.
+- **When only the coordinator knows**, forward the user's question with its number and the page it was asked on: "#14 on the manager's page: <text>. Answer there: `python3 <scripts>/chat.py <dir> say --as <fleet> --re 14 \"...\"`". The coordinator answers the user there, once. You do not repeat, summarise, or acknowledge its answer; the user has read it.
+- **A question of yours** goes to the coordinator by `SendMessage` and comes back the same way. What you then tell the user is what they need from it, not the exchange.
+- **A message carries what the receiver lacks**: no quoting what it sent you, no restating the thread, no reply that only acknowledges. When you relay the user's words, cite where they are ("#12 on the manager's page") instead of copying a long text.
 
 What the user decides in the chat or in your session and that holds for more than one fleet goes into `standing.md`, in their words, with when and where they said it.
 

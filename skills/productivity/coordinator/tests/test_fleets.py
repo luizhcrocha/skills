@@ -207,3 +207,40 @@ class CliTest(Machine):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SessionTitleTest(unittest.TestCase):
+    """A fleet in a session's scratchpad is named after the session's title, and follows its renames."""
+
+    def setUp(self):
+        self.config = Path(tempfile.mkdtemp(prefix="claude-"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="tmp-"))
+        os.environ["CLAUDE_CONFIG_DIR"] = str(self.config)
+        os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
+        self.addCleanup(os.environ.pop, "CLAUDE_CONFIG_DIR", None)
+
+    def session(self, project: str, sid: str, title: str | None) -> Path:
+        root = self.tmp / project / sid / "scratchpad" / "coordinator"
+        root.mkdir(parents=True)
+        (root / "state.json").write_text(json.dumps({"project": "case analysis", "goal": "g", "status": "running", "now": "n",
+                                                     "started": "x", "roadmap": [], "agents": [], "roadblocks": [], "events": []}))
+        if title:
+            self.title(project, sid, title)
+        return root
+
+    def title(self, project: str, sid: str, title: str) -> None:
+        d = self.config / "projects" / project / sid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "custom-title.json").write_text(json.dumps({"customTitle": title}))
+
+    def test_the_title_names_the_fleet_and_a_rename_follows(self):
+        root = self.session("-home-x-repo", "s1", "infra-coordinator")
+        self.assertEqual((fleets.register(root, "u", os.getpid())["id"]), "infra-coordinator")
+        self.title("-home-x-repo", "s1", "Infra Lead")
+        self.assertEqual([(e["id"], e["session"]) for e in fleets.live()], [("infra-lead", "Infra Lead")])
+        self.assertEqual(len(list(Path(os.environ["FLEET_HOME"]).glob("*.json"))), 1)
+        self.assertEqual(fleets.register(root, "u2", os.getpid())["id"], "infra-lead", "a restart keeps it")
+
+    def test_without_a_title_the_project_names_it(self):
+        root = self.session("-home-x-repo", "s2", None)
+        self.assertEqual(fleets.register(root, "u", os.getpid())["id"], "case-analysis")

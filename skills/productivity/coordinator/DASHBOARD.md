@@ -165,12 +165,12 @@ The page has a chat where the user writes to the fleet and mentions who should a
 
 | Command | What it does |
 | :-- | :-- |
-| `watch --as coordinator --all [--resume]` | streams one line per message from the user, whoever it is addressed to: first the open ones, then each new one as it lands. `--resume` starts after the last line a watch of yours printed (`--after N` names the number yourself) |
+| `watch --as coordinator --all [--resume] [--once]` | streams one line per message from the user, whoever it is addressed to: first the open ones, then each new one as it lands. `--resume` starts after the last line a watch of yours printed (`--after N` names the number yourself); `--once` exits after the first lines it prints |
 | `inbox --as WHO` | the messages open for `WHO`, oldest first |
 | `say --as WHO [--re N] TEXT` | appends a message from `WHO`, answering message `N`; mentions in `TEXT` address other agents |
 | `log [--after N]` | the whole conversation |
 
-**Arm the watch** right after starting the server, with the Monitor tool: `watch --as coordinator --all --resume`, `timeout_ms: 1800000`, description "chat on the fleet dashboard". Each line it prints reaches you as an event, also while you are busy. A monitor lasts 30 minutes at most: when it expires, arm the same command again, which picks up where the last one stopped and prints what landed in between. Re-arming is housekeeping: it takes one tool call and no message to the user.
+**Arm the watch** right after starting the server, as a background Bash command (`run_in_background: true`): `python3 <skill-dir>/scripts/chat.py <dashboard-dir> watch --as coordinator --all --resume --once`. It waits without costing anything, and exits with the first messages that land, which wakes you with them, also when you are idle. Handle them, then arm the same command again: `--resume` starts after the last line printed, so nothing is missed or shown twice. A background command has no deadline, so a quiet chat costs no turns. (The Monitor tool also works, without `--once`, but a monitor expires every 30 minutes and each expiry costs a turn.)
 
 A running watch keeps its process id in `DIR/watch-coordinator.pid`, and what it printed is what was read. So the page tells the user when nobody reads the chat and marks each of their messages "Not read yet" until a watch prints it; every `state.py` command prints a `chat:` warning on stderr while the user's messages wait unread; and a manager is told after two minutes, and reaches you with `SendMessage`. On that warning, arm the watch: it prints what waited first. A fleet with nothing running still keeps its watch armed: the watch is how the user reaches you.
 

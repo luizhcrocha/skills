@@ -1217,7 +1217,7 @@ var FleetCore = (function () {
   const revisionOf = (d) => d.revised || d.opened;
   const closedWords = (d) => d.status === "decided" ? `Decided: ${d.answer || ""}` : `Withdrawn: ${d.resolution || ""}`;
   const statePill = (d, pending) => d.status !== "open" ? pill(d.status)
-    : pending ? pillAs("answered", Core.unreadBy(STATE.hearing, pending.answer) ? "answered, not read yet" : "answered, waiting on the " + HOST)
+    : pending ? pillAs("answered", pending.replies.length ? "the " + HOST + " replied" : Core.unreadBy(STATE.hearing, pending.answer) ? "answered, not read yet" : "answered, waiting on the " + HOST)
     : d.asks === "manager" ? pillAs("", "with the manager") + (d.blocking ? pillAs("blocking", "blocks work") : "")
     : d.blocking ? pillAs("blocking", "blocks work") : pillAs("open", "open");
 
@@ -1309,16 +1309,25 @@ var FleetCore = (function () {
   }).join("");
   const manualHtml = (d, title) => d.manual ? `<div class="dv-block"><h3>${title}</h3><pre class="manual">${esc(d.manual)}</pre></div>` : "";
   const discuss = '<button type="button" class="btn" data-discuss>Ask in the chat</button>';
+  let answeringAgain = null;  // the decision whose form the viewer brought back over a pending answer
 
   function answerHtml(d, pending) {
     const shown = d.kind === "decision" && d.options.length ? `<div class="dv-block"><h3>Options</h3><div class="options">${optionsHtml(d, false)}</div></div>` : "";
     if (d.status !== "open") return d.page === false && !shown ? "" : shown + (chatWritable() ? `<div class="sheet-actions"><button type="button" class="btn" data-change>Change my answer</button></div>` : "");
-    if (pending) return `<div class="note pending" role="status"><h3>Your answer</h3><p>${esc(pending.answer.text)}</p>
-        <span class="dv-meta">Sent ${esc(clock(pending.answer.at))}. ${Core.unreadBy(STATE.hearing, pending.answer)
+    if (pending) {
+      /* A reply to the answer hands the turn back to the viewer (a follow-up question, a correction),
+         so the form comes back under it; without one, "Answer again" brings it back on demand. */
+      const replied = pending.replies.length > 0, again = replied || answeringAgain === d.id;
+      const note = `<div class="note pending" role="status"><h3>Your answer</h3><p>${esc(pending.answer.text)}</p>
+        <span class="dv-meta">Sent ${esc(clock(pending.answer.at))}. ${replied
+          ? `The ${HOST} replied; answer again below if it asks you something.`
+          : Core.unreadBy(STATE.hearing, pending.answer)
           ? `The ${HOST} has not read it yet${STATE.hearing.on ? "" : ": it is not reading the chat right now"}. Your answer is kept.`
           : `The ${HOST} has read it and has yet to record it; the fleet acts on it once it is recorded.`}</span>
-        ${pending.replies.map((m) => `<p><span class="by">${esc(nameOf(m.from))}</span> ${esc(m.text)}</p>`).join("")}</div>
-      <div class="sheet-actions">${discuss}</div>`;
+        ${pending.replies.map((m) => `<p><span class="by">${esc(nameOf(m.from))}</span> ${esc(m.text)}</p>`).join("")}</div>`;
+      if (again && chatWritable()) return note + answerHtml(d, null);
+      return note + `<div class="sheet-actions">${chatWritable() ? '<button type="button" class="btn" data-again>Answer again</button>' : ""}${discuss}</div>`;
+    }
     if (!chatWritable()) return shown + manualHtml(d, "What to do") + `<p class="readonly" role="status">${esc(chatAvailable() && chat.write.reason
       ? chat.write.reason + ` Give your answer in the session with the ${HOST}.`
       : `This copy of the page cannot send an answer. Give it in the session with the ${HOST}.`)}</p>`;
@@ -1369,6 +1378,7 @@ var FleetCore = (function () {
   });
   $("decision").addEventListener("click", (e) => {
     if (e.target.closest("[data-discuss]")) { openChat(); return; }
+    if (e.target.closest("[data-again]")) { answeringAgain = viewing; renderDecision(); return; }
     if (!e.target.closest("[data-change]")) return;
     const d = decisionById(viewing);
     openChat();

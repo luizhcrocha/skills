@@ -4,11 +4,12 @@
     chat.py DIR say   --as WHO [--re N] [--decision D] TEXT
                                                  append a message from WHO; print the line written
     chat.py DIR inbox --as WHO                   the messages open for WHO, oldest first
-    chat.py DIR watch --as WHO [--after N | --resume] [--all]
+    chat.py DIR watch --as WHO [--after N | --resume] [--all] [--once]
                                                  every message open for WHO with id > N, then each
                                                  new one as it lands; never exits on its own. --all
                                                  also streams every message from the user. --resume
-                                                 takes N from the last line a watch as WHO printed.
+                                                 takes N from the last line a watch as WHO printed;
+                                                 --once exits after the first lines it prints.
                                                  While it runs, DIR/watch-WHO.pid says so: the page
                                                  shows whether the host reads the chat, and a
                                                  manager's watch also prints a `!` line for each
@@ -341,7 +342,7 @@ def deaf_warning(root) -> str | None:
         return None
     who = host(root)
     return (f"chat: the user wrote {heard['unread']} message(s) since #{heard['seen']} that no watch has read. "
-            f"Read them with `chat.py {root} watch --as {who} --all --resume` armed on the Monitor tool; it prints them first.")
+            f"Arm `chat.py {root} watch --as {who} --all --resume --once` as a background command; it prints them first.")
 
 
 def _fleets_unheard(me: str, told: dict) -> list[str]:
@@ -402,15 +403,23 @@ def _watch(root, args, who: str, cursor: Path) -> None:
     if args.all:
         wanted |= {m["id"] for r in (host(root), *{a["id"] for a in _members(_agents(root))})
                    for m in _open_among(messages, r) if m["from"] == "user"}
-    show([m for m in messages if m["id"] > after and m["id"] in wanted])
+    first = [m for m in messages if m["id"] > after and m["id"] in wanted]
+    show(first)
+    if args.once and first:
+        return
     told, checked = {}, 0.0
     while True:
         time.sleep(POLL_S)
-        show([m for m in tail.read() if who in m["to"] or (args.all and m["from"] == "user")])
+        new = [m for m in tail.read() if who in m["to"] or (args.all and m["from"] == "user")]
+        show(new)
+        lines = []
         if who == "manager" and time.monotonic() - checked >= FLEETS_S:
             checked = time.monotonic()
-            for line in _fleets_unheard(str(root), told):
+            lines = _fleets_unheard(str(root), told)
+            for line in lines:
                 print(line, flush=True)
+        if args.once and (new or lines):
+            return
 
 
 def cmd_log(root, args) -> None:
@@ -427,6 +436,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("watch"); s.add_argument("--as", dest="who", required=True)
     s.add_argument("--after", type=int, default=0); s.add_argument("--all", action="store_true")
     s.add_argument("--resume", action="store_true", help="start after the last message a watch as WHO printed")
+    s.add_argument("--once", action="store_true", help="exit after the first batch it prints: a background task that wakes its session only when there is news")
     s = sub.add_parser("log"); s.add_argument("--after", type=int, default=0)
     return p
 

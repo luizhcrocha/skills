@@ -9,6 +9,7 @@
     state.py DIR agent ID [--task T --skill S --model M --lane L... --milestone M]
                           [--status S] [--tokens N] [--duration-ms N] [--report R]
                           [--brief B] [--name N] [--step STEP] [--log TEXT] [--important]
+                          [--task-id ID]   (tokens and duration then come from the worker's transcript)
     state.py DIR roadblock ID [--title T --detail D --severity S --needs N] [--agent A]
                               [--decision D] [--resolved | --open]
     state.py DIR decision ID [--kind K --title T --question Q --why W] [--blocking | --not-blocking]
@@ -46,6 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chat  # noqa: E402
 import decisions  # noqa: E402
 import render_dashboard  # noqa: E402
+import spend  # noqa: E402
 
 STATUSES = sorted(render_dashboard.STATUSES)
 AGENT_STATUSES = sorted(render_dashboard.AGENT_STATUSES)
@@ -128,6 +130,18 @@ def cmd_park(state, args):
         a["updated"] = now()
     log(state, "note", f"Stopped {', '.join(a['id'] for a in rows)}: {args.reason}")
     return state
+
+
+def measure(root, state: dict) -> None:
+    """Fill the tokens and duration of each worker row that names its task id, from the worker's own
+    transcript, as long as it runs and once more after it ends. Figures given by hand stay."""
+    for a in state["agents"]:
+        if not a.get("task_id") or a.get("measured") == "by hand":
+            continue
+        got = spend.worker(root, a["task_id"])
+        if got is None or (a.get("measured") == got["at"] and a["status"] not in LIVE):
+            continue
+        a["tokens"], a["duration_ms"], a["measured"] = got["tokens"], got["duration_ms"], got["at"]
 
 
 def stale_rows(state: dict) -> str | None:
@@ -219,6 +233,8 @@ def cmd_agent(state, args):
             "milestone": args.milestone, "tokens": 0, "duration_ms": 0, "rounds": 1,
             "started": now(), "updated": now(), "brief": args.brief or "", "report": "",
         }
+        if args.task_id:
+            a["task_id"] = args.task_id
         state["agents"].append(a)
         log(state, "spawned", args.log or f"Spawned on {a['model']} following {a['skill']}.", a["id"])
         if args.step:
@@ -227,6 +243,9 @@ def cmd_agent(state, args):
         return state
     if a["status"] == "done" and args.status == "running":  # sent back after its report
         a["rounds"] = a.get("rounds", 1) + 1
+    if args.task_id:
+        a["task_id"] = args.task_id
+        a.pop("measured", None)
     for key in ("name", "task", "skill", "model", "status", "milestone", "brief", "report"):
         if getattr(args, key) is not None:
             a[key] = getattr(args, key)
@@ -236,6 +255,8 @@ def cmd_agent(state, args):
         a["tokens"] = args.tokens
     if args.duration_ms is not None:
         a["duration_ms"] = args.duration_ms
+    if args.tokens is not None or args.duration_ms is not None:
+        a["measured"] = "by hand"
     a["updated"] = now()
     if args.step:
         follow = {"running": "current", "done": "done", "blocked": "blocked"}.get(a["status"])
@@ -433,7 +454,7 @@ commands (state.py DIR <command>; an unknown ID creates the row, a known ID chan
         [--before STEP | --after STEP] [--remove REASON]
   agent ID --task T --milestone M [--name N] [--skill {"|".join(SKILLS)}] [--model {"|".join(MODELS)}]
         [--lane PATH...] [--step S] [--brief B] [--status {"|".join(AGENT_STATUSES)}]
-        [--tokens N --duration-ms N] [--report R] [--log TEXT] [--important]
+        [--task-id ID | --tokens N --duration-ms N] [--report R] [--log TEXT] [--important]
   roadblock ID --title T --detail D --severity {"|".join(SEVERITIES)} --needs {"|".join(NEEDS)} [--agent A]
         [--decision D] [--resolved | --open]
   decision ID --kind {"|".join(decisions.KINDS)} --title T --question Q --why W [--blocking | --not-blocking]
@@ -500,6 +521,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--task"); s.add_argument("--skill", choices=SKILLS); s.add_argument("--model", choices=MODELS)
     s.add_argument("--lane", nargs="*", help="files or globs the worker may edit"); s.add_argument("--milestone")
     s.add_argument("--status", choices=AGENT_STATUSES); s.add_argument("--tokens", type=int); s.add_argument("--duration-ms", type=int)
+    s.add_argument("--task-id", help="the id the Agent tool gave the worker: its tokens and duration are then read from its own transcript")
     s.add_argument("--report"); s.add_argument("--brief"); s.add_argument("--name")
     s.add_argument("--step", help="step id to mark current on spawn, or to follow the agent's status on update")
     s.add_argument("--log", help="activity text to record with this change")
@@ -553,6 +575,7 @@ def main(argv: list[str]) -> None:
             sys.stderr.write(warning + "\n")
     if result is None:
         return
+    measure(root, result)
     result["updated"] = now()
     render_dashboard.validate(result)
     path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")

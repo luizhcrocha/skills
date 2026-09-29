@@ -859,6 +859,19 @@ class ListeningTest(FleetDir):
         self.assertIn("watch --as coordinator --all --resume", out.stderr)
 
 
+class WatchOnceTest(FleetDir):
+    def test_a_watch_once_waits_for_news_prints_it_and_exits(self):
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "coordinator", "--all", "--resume", "--once"],
+                                stdout=subprocess.PIPE, text=True, encoding="utf-8")
+        self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
+        time.sleep(0.8)
+        self.assertIsNone(proc.poll(), "no news: it waits")
+        self.assertTrue(chat.listening(self.root)["on"])
+        chat.append(self.root, "user", "status?", allow_user=True)
+        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertEqual(proc.stdout.read(), "#1 user -> coordinator: status?\n")
+
+
 class ManagerRelaysTheUnheardTest(FleetDir):
     def test_the_managers_watch_names_a_fleet_that_does_not_read_its_chat(self):
         os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")

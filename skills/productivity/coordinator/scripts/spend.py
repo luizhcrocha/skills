@@ -46,6 +46,41 @@ def active(root) -> str | None:
         return None
 
 
+def worker(root, task_id: str) -> dict | None:
+    """What the worker `task_id` of the session whose scratchpad holds DIR has used, from its own
+    transcript: `tokens` its context at its last answer (what a task notification reports as
+    subagent_tokens), `duration_ms` from its first line to its last, and `at` the transcript's mtime.
+    None when there is no such transcript."""
+    transcript = transcript_of(root)
+    path = transcript.with_suffix("") / "subagents" / f"agent-{task_id}.jsonl" if transcript else None
+    try:
+        mtime = path.stat().st_mtime if path else None
+        lines = path.read_text(encoding="utf-8").splitlines() if path else []
+    except OSError:
+        return None
+    last, first_at, last_at = None, None, None
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        at = row.get("timestamp") if isinstance(row, dict) else None
+        if isinstance(at, str):
+            first_at, last_at = first_at or at, at
+        message = row.get("message") if isinstance(row, dict) else None
+        if isinstance(message, dict) and isinstance(message.get("usage"), dict):
+            last = message["usage"]
+    if last is None:
+        return None
+    output, fresh, written, cached = _figures(last)
+    span = 0
+    try:
+        span = int((datetime.fromisoformat(last_at.replace("Z", "+00:00")) - datetime.fromisoformat(first_at.replace("Z", "+00:00"))).total_seconds() * 1000)
+    except (AttributeError, ValueError):
+        pass
+    return {"tokens": output + fresh + written + cached, "duration_ms": span, "at": mtime}
+
+
 def _figures(usage: dict) -> tuple[int, int, int, int]:
     number = lambda key: int(usage.get(key) or 0) if isinstance(usage.get(key), (int, float)) else 0  # noqa: E731
     return number("output_tokens"), number("input_tokens"), number("cache_creation_input_tokens"), number("cache_read_input_tokens")
