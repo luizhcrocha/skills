@@ -98,6 +98,10 @@ A fleet's name is its session's: the registry reads it from the session's title,
 
 A monitor agent you spawn (app metrics, runs, executions, reporting back to you) runs on the default Sonnet (`model: "sonnet"`), as the coordinator's model table says. When a new default model comes out, the fleets move their agents to it (the coordinator's SKILL.md, "A new default model"); yours too.
 
+## Waiting on the user
+
+Waiting on the user is a subscription, never a status re-read: whoever asks arms `chat.py <dir> wait <id>` as a background command when the decision is opened, and it wakes them the moment the user answers. Your watch also prints `! <fleet> has not recorded the user's answer to A6 ...` when a fleet has had an answer for two minutes without recording it: `SendMessage` that fleet to record it, and tell no one it still waits on the user. `fleets.py show` and `fleets.py decision` print the user's answers to open decisions, recorded or not. Every page shows a "Stuck" block at its top for an answer unrecorded after five minutes and for a chat nobody reads.
+
 ## Said once
 
 Every message between sessions is paid for twice: the sender writes it, the receiver reads it, and both read it again on every later turn. So each thing is said once, by the one who knows it, where the user will read it.

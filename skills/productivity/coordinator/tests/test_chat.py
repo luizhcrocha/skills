@@ -881,6 +881,32 @@ class QuoteAndSideTest(FleetDir):
             chat.append(self.root, "user", "x", allow_user=True, side=99)
 
 
+class WaitTest(FleetDir):
+    def decide(self):
+        state = json.loads((self.root / "state.json").read_text())
+        state["decisions"] = [{"id": "d-x", "ref": "A1", "kind": "action", "title": "Do it", "question": "q", "status": "open", "opened": "2026-01-01T00:00:00+00:00"}]
+        (self.root / "state.json").write_text(json.dumps(state))
+
+    def test_wait_wakes_on_the_answer_to_its_decision_only(self):
+        self.decide()
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "wait", "A1"], stdout=subprocess.PIPE, text=True, encoding="utf-8")
+        self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
+        time.sleep(0.6)
+        chat.append(self.root, "user", "unrelated", allow_user=True)
+        time.sleep(0.6)
+        self.assertIsNone(proc.poll(), "another message is not its answer")
+        chat.append(self.root, "user", "Done.", allow_user=True, decision="d-x")
+        self.assertEqual(proc.wait(timeout=10), 0)
+        out = proc.stdout.read()
+        self.assertIn("[A1 d-x]: Done.", out)
+        self.assertIn("record it first", out)
+
+    def test_an_answer_given_already_prints_at_once(self):
+        self.decide()
+        chat.append(self.root, "user", "Done.", allow_user=True, decision="d-x")
+        self.assertIn("[A1 d-x]: Done.", run_cli(self.root, "wait", "d-x").stdout)
+
+
 class WatchOnceTest(FleetDir):
     def test_a_watch_once_waits_for_news_prints_it_and_exits(self):
         proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "coordinator", "--all", "--resume", "--once"],

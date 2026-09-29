@@ -483,3 +483,15 @@ test("bucketOf: waits on you, waiting on someone else, or done", () => {
   const g = { id: "g1", kind: "grill", status: "open", asks: "user", opened: "x", questions: [{ id: "q1", title: "t", status: "answered", asked: "x" }] };
   assert.equal(Core.bucketOf(g, []), "waiting", "a grilling with nothing left to answer waits on the fleet");
 });
+
+test("stuckOf: an answer the fleet has not recorded after five minutes, a chat nobody reads", () => {
+  const now = Date.parse("2026-09-29T15:40:00Z");
+  const own = { decisions: [{ id: "d-a", ref: "A6", title: "Two things", kind: "action", status: "open", asks: "user", opened: "2026-09-29T15:13:00Z" }],
+    hearing: { on: false, seen: 80, unread: 1, since: "2026-09-29T15:22:00Z" } };
+  const answer = { id: 80, from: "user", decision: "d-a", at: "2026-09-29T15:18:00Z", text: "Done." };
+  const rows = Core.stuckOf(own, [], [answer], now);
+  assert.deepEqual(rows.map((r) => [r.ref, r.what]), [["A6", "answer not recorded"], ["", "chat not read"]]);
+  assert.equal(Core.stuckOf(own, [], [answer], Date.parse("2026-09-29T15:20:00Z")).length, 0, "not before five minutes");
+  const fleets = [{ id: "infra", decisions: [{ id: "d-a", ref: "A6", title: "Two things", answered: "2026-09-29T15:18:00Z" }], hearing: { on: true, seen: 80, unread: 0 } }];
+  assert.deepEqual(Core.stuckOf({ decisions: [] }, fleets, [], now).map((r) => [r.fleet, r.ref]), [["infra", "A6"]]);
+});

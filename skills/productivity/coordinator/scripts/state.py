@@ -106,7 +106,7 @@ def cmd_init(state, args):
         fail("state.json already exists; use `set` to change it")
     state = {
         "project": args.project, "goal": args.goal, "status": "running",
-        "now": args.now or "Intake in progress.", "started": now(), "updated": now(),
+        "now": args.now or "Intake in progress.", "now_at": now(), "started": now(), "updated": now(),
         "roadmap": [], "agents": [], "roadblocks": [], "decisions": [], "events": [],
     }
     return {"role": "manager", **state} if args.role == "manager" else state
@@ -511,6 +511,10 @@ def cmd_decision(state, args):
             log(state, "asked", f"{'For the manager: ' if for_manager else ''}{d['title']}: {d['question']}", d["agent"],
                 d["blocking"] and not for_manager, d["id"])
         rows.append(d)
+        if not made_elsewhere:
+            print(f"asked {d['id']}. Arm its answer's wake now, as a background command (run_in_background): "
+                  f"`python3 {Path(__file__).resolve().parent / 'chat.py'} {Path(args.dir).resolve()} wait {d['id']}`: "
+                  f"it exits with the user's answer the moment it is given.")
     else:
         if args.supersedes:
             fail("--supersedes is given when the new decision is opened")
@@ -616,6 +620,9 @@ def cmd_grill(state, args):
         new.append(q)
     open_ = [q for q in qs if q["status"] == "open"]
     d["question"] = f"{len(open_)} question{'s' if len(open_) != 1 else ''} to answer" if open_ else "Every question is answered"
+    if new and created:
+        print(f"asked {d['id']}. Arm its answers' wake now, as a background command (run_in_background): "
+              f"`python3 {Path(__file__).resolve().parent / 'chat.py'} {Path(args.dir).resolve()} wait {d['id']}`; arm it again after each round.")
     if new or args.revise or args.reason:
         if not created:
             d["revised"] = now()  # the page shows the round as new since the viewer last looked

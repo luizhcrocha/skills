@@ -14,6 +14,9 @@
                                                  shows whether the host reads the chat, and a
                                                  manager's watch also prints a `!` line for each
                                                  fleet where the user's messages wait unread.
+    chat.py DIR wait  DECISION...                wait for the user's answer to one of these decisions,
+                                                 print it and exit: armed as a background command when
+                                                 a decision is opened, it wakes the session at once
     chat.py DIR log   [--after N]                the whole conversation, oldest first
 
 WHO is `coordinator` or an agent id or name from DIR/state.json; only the
@@ -381,6 +384,35 @@ def deaf_warning(root) -> str | None:
             f"Arm `chat.py {root} watch --as {who} --all --resume --once` as a background command; it prints them first.")
 
 
+def _unrecorded(e: dict, told: dict) -> list[str]:
+    """The `!` lines for answers the user gave in fleet `e` that its coordinator has had for UNHEARD_S and
+    not recorded, each told once."""
+    import copy
+    import decisions
+    state = copy.deepcopy(_state(e["dir"]))
+    decisions.number(state)
+    said, lines = read(e["dir"]), []
+    for d in state.get("decisions", []):
+        if not isinstance(d, dict) or d.get("status") != "open":
+            continue
+        at = fleets._answered_at(d, said)
+        mark = f"answer:{d.get('id')}:{at}"
+        if not at or told.get(mark):
+            continue
+        try:
+            waited = time.time() - datetime.fromisoformat(at).timestamp()
+        except ValueError:
+            continue
+        if waited < UNHEARD_S:
+            continue
+        told[mark] = True
+        m = next(m for m in reversed(said) if m.get("decision") == d.get("id") and m["at"] == at)
+        lines.append(f"! {e['id']} has not recorded the user's answer to {d.get('ref') or d.get('id')} ({_one_line(d.get('title'))}), "
+                     f"given at {at[11:16]} as #{m['id']}: \"{_one_line(m['text'])[:120]}\". SendMessage its session "
+                     f"({e.get('session') or e['id']}) to record it: `state.py <dir> decision {d.get('ref') or d.get('id')} --decide ...`.")
+    return lines
+
+
 def _fleets_unheard(me: str) -> list[str]:
     """For a manager's watch: one line per fleet whose coordinator does not read its chat while the user's
     messages wait there more than UNHEARD_S. Each set of waiting messages is told once, across watches:
@@ -394,6 +426,7 @@ def _fleets_unheard(me: str) -> list[str]:
     for e in fleets.live():
         if e["role"] == "manager" or e["dir"] == me:
             continue
+        lines += _unrecorded(e, told)
         heard = listening(e["dir"])
         mark = f"{heard['seen']}:{heard['unread']}:{heard['since']}"
         if heard["on"] or not heard["unread"] or told.get(e["id"]) == mark:
@@ -475,6 +508,40 @@ def _watch(root, args, who: str, cursor: Path) -> None:
             return
 
 
+def cmd_wait(root, args) -> None:
+    """Wait for the user's answer to any of these decisions (ids or numbers), print it and exit: the
+    subscription a coordinator arms when it asks, so it knows at once, whatever its chat watch is doing.
+    An answer given already and not recorded prints at once."""
+    import decisions
+    state = _state(root)
+    decisions.number(state)
+    wanted = {}
+    for key in args.decision:
+        d = decisions.find(state, key)
+        if d is None:
+            fail(f"no decision '{key}' in {root}")
+        if d.get("status") != "open":
+            print(f"{d.get('ref') or d['id']} is already {d['status']}: {d.get('answer') or d.get('resolution')}", flush=True)
+            return
+        wanted[d["id"]] = d
+    tail = Tail(root)
+    first = True
+    while True:
+        messages = tail.read() if not first else read(root)
+        for m in messages:
+            d = wanted.get(m.get("decision"))
+            if d and m["from"] == "user" and (not first or str(m["at"]) >= str(d.get("revised") or d.get("opened") or "")):
+                if first and any(r.get("re") == m["id"] and r["from"] != "user" for r in messages):
+                    continue  # answered already, and replied to: not news
+                _show(root, [m])
+                print(f"-> the user answered {d.get('ref') or d['id']}: record it first, `state.py {root} decision {d.get('ref') or d['id']} --decide ...`", flush=True)
+                return
+        if first:
+            tail = Tail(root, max((m["id"] for m in messages), default=0))
+            first = False
+        time.sleep(POLL_S)
+
+
 def cmd_log(root, args) -> None:
     _show(root, read(root, args.after))
 
@@ -486,6 +553,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("say"); s.add_argument("--as", dest="who", required=True); s.add_argument("--re", type=int)
     s.add_argument("--decision", metavar="D", help="the decision this message is about"); s.add_argument("text")
     s = sub.add_parser("inbox"); s.add_argument("--as", dest="who", required=True)
+    s = sub.add_parser("wait"); s.add_argument("decision", nargs="+", help="decision ids or numbers (A6) to wait on")
     s = sub.add_parser("watch"); s.add_argument("--as", dest="who", required=True)
     s.add_argument("--after", type=int, default=0); s.add_argument("--all", action="store_true")
     s.add_argument("--resume", action="store_true", help="start after the last message a watch as WHO printed")

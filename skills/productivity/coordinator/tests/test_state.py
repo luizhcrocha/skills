@@ -151,13 +151,15 @@ class ParkTest(Fleet):
         self.assertNotIn("still read as", self.run_cli("event", "x").stderr)
 
     def test_a_now_line_not_said_again_is_pointed_out(self):
+        self.assertNotIn("Now line", self.run_cli("event", "x").stderr, "init says it")
+        state = self.state(); del state["now_at"]; (self.root / "state.json").write_text(json.dumps(state))
         said = self.run_cli("event", "x")
         self.assertIn("the page's Now line (never stamped)", said.stderr)
         self.ok("set", "--now", "l9 deploying")
         self.assertNotIn("Now line", self.run_cli("event", "y").stderr)
 
     def test_a_now_line_is_stamped_when_it_is_said(self):
-        self.assertNotIn("now_at", self.state())
+        state = self.state(); del state["now_at"]; (self.root / "state.json").write_text(json.dumps(state))
         self.ok("set", "--now", "l9 deploying")
         self.assertTrue(self.state()["now_at"])
 

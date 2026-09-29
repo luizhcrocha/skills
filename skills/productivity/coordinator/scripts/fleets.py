@@ -196,10 +196,18 @@ def summary(entry: dict) -> dict:
         "decisions": [{"id": d.get("id"), "ref": d.get("ref"), "kind": d.get("kind", "decision"), "title": d.get("title"), "question": d.get("question"),
                        "why": d.get("why"), "blocking": d.get("blocking") is True, "asks": d.get("asks") or "user",
                        "opened": d.get("opened"), "revised": d.get("revised"),
-                       "answered": any(m.get("decision") == d["id"] and m["from"] == "user" and str(m["at"]) >= str(d.get("revised") or d.get("opened") or "")
-                                       and not any(r.get("re") == m["id"] and r["from"] != "user" for r in said) for m in said)}
+                       "answered": _answered_at(d, said)}
                       for d in rows("decisions") if d.get("status") == "open" and isinstance(d.get("id"), str)],
     }
+
+
+def _answered_at(d: dict, said: list[dict]) -> str | None:
+    """When the user's answer to the open decision `d`, given after it last changed and not replied to, was
+    sent: the fleet has it and has not recorded it. None when there is none."""
+    since = str(d.get("revised") or d.get("opened") or "")
+    answers = [m for m in said if m.get("decision") == d.get("id") and m["from"] == "user" and str(m["at"]) >= since
+               and not any(r.get("re") == m["id"] and r["from"] != "user" for r in said)]
+    return answers[-1]["at"] if answers else None
 
 
 def _index(state: dict) -> list[dict]:
@@ -285,7 +293,8 @@ def cmd_list() -> None:
             print(f"    tokens: its workers {s['tokens']:,}; the {e['role']} itself {s['spent']['output']:,} written, {s['spent']['input']:,} read")
         for d in s["decisions"]:
             marks = ", ".join(filter(None, [d["kind"], "for the manager" if d["asks"] == "manager" else "for the user", "blocks work" if d["blocking"] else ""]))
-            print(f"    {d.get('ref') or ''} {d['id']} [{marks}] {d['title']}".replace("     ", "    "))
+            print(f"    {d.get('ref') or ''} {d['id']} [{marks}] {d['title']}".replace("     ", "    ")
+                  + (f"  ANSWERED at {d['answered'][11:16]}, not recorded" if d.get("answered") else ""))
 
 
 def cmd_show(fleet: str) -> None:
@@ -295,6 +304,8 @@ def cmd_show(fleet: str) -> None:
     if not entry:
         fail(f"no fleet '{fleet}' is being served; `fleets.py list` names the ones that are")
     state = _read(Path(entry["dir"]) / "state.json") or {}
+    import decisions
+    decisions.number(state)
     rows = lambda key: [r for r in state.get(key, []) if isinstance(r, dict)]  # noqa: E731
     print(f"{fleet}  {state.get('status', 'unknown')}  {entry['url']}")
     print(f"    now: {state.get('now', '')}" + (f"  (said {state['now_at']})" if state.get("now_at") else ""))
@@ -305,9 +316,14 @@ def cmd_show(fleet: str) -> None:
             print(f"    {a.get('id')} ({a.get('name')}) {a.get('status')} since {a.get('updated') or a.get('started')}: {a.get('task')}")
             if a.get("report"):
                 print(f"        last report: {str(a['report'])[:300]}")
+    said = chat.read(entry["dir"])
     for d in rows("decisions"):
         if d.get("status") == "open":
-            print(f"    decision {d.get('id')} [{d.get('asks') or 'user'}{', blocks work' if d.get('blocking') else ''}] {d.get('title')}: {d.get('question')}")
+            print(f"    decision {d.get('ref') or ''} {d.get('id')} [{d.get('asks') or 'user'}{', blocks work' if d.get('blocking') else ''}] {d.get('title')}: {d.get('question')}")
+            at = _answered_at(d, said)
+            if at:
+                m = next(m for m in reversed(said) if m.get("decision") == d.get("id") and m["at"] == at)
+                print(f"        ANSWERED by the user at {at[11:16]} (#{m['id']}): {m['text'][:200]}; not recorded yet")
     for r in rows("roadblocks"):
         if not r.get("resolved"):
             print(f"    roadblock {r.get('id')} [needs {r.get('needs')}] {r.get('title')}")
@@ -427,7 +443,8 @@ def cmd_decision(fleet: str, id_: str) -> None:
     if not entry:
         fail(f"no fleet '{fleet}' is being served; `fleets.py list` names the ones that are")
     rows = (_read(Path(entry["dir"]) / "state.json") or {}).get("decisions", [])
-    d = next((r for r in rows if isinstance(r, dict) and r.get("id") == id_), None)
+    import decisions
+    d = decisions.find({"decisions": [r for r in rows if isinstance(r, dict)]}, id_)
     if not d:
         fail(f"no decision '{id_}' in {fleet}")
     open_ = d.get("status") == "open"
@@ -443,8 +460,12 @@ def cmd_decision(fleet: str, id_: str) -> None:
         print(f"    recommended: {d['recommend']}" + (f", {d['reason']}" if d.get("reason") else ""))
     if d.get("agent"):
         print(f"    waits: {d['agent']}")
+    import chat
+    for m in chat.read(entry["dir"]):
+        if m.get("decision") == d.get("id") and m["from"] == "user":
+            print(f"    the user answered #{m['id']} at {m['at'][11:16]}: {m['text'][:200]}")
     if d.get("body"):
-        print(f"    evidence: {Path(entry['dir']) / 'decisions' / (id_ + '.html')}")
+        print(f"    evidence: {Path(entry['dir']) / 'decisions' / (d['id'] + '.html')}")
     print(f"    page: {entry['url']}#decision/{id_}")
 
 
