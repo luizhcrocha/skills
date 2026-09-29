@@ -6,6 +6,7 @@ The dashboard is the user's window into the fleet and the coordinator's ledger, 
 
 - **Decisions' evidence**: `<scratchpad>/coordinator/decisions/<id>.html`, one HTML fragment per decision that has one, copied there by `state.py decision --body` (see [Decisions](#decisions)).
 - **Chat**: `<scratchpad>/coordinator/chat.jsonl`, the conversation between the user and the fleet, appended only through the page and `scripts/chat.py` (see [Chat](#chat)).
+- **Brief**: `<scratchpad>/coordinator/brief.md`, what every worker reads before its task, written by `init` from [assets/brief.md](assets/brief.md) with this fleet's paths. It is yours to add to, and no command overwrites it.
 - **State**: `<scratchpad>/coordinator/state.json`, created and changed only through `scripts/state.py` (below). [assets/example-state.json](assets/example-state.json) shows a filled-in state for reference.
 - **Render**: done by every `state.py` command. `scripts/render_dashboard.py` is what it calls, and the only reason to run it directly is `--fragment` for the Artifact tool.
 - **Publish**: serve the directory over the tailnet, once per session:
@@ -37,7 +38,8 @@ agents[]     one row per worker, in spawn order (its position picks its chart co
   status     queued | running | blocked | done | failed | stopped
   lane[]     files or globs the worker may edit
   milestone  milestone id
-  tokens     integer, from the task notification (0 until the first one)
+  tokens     integer, from the task notification: the worker's total so far (0 until the first one)
+  rounds     integer: 1, plus one each time the worker is sent back after a report
   duration_ms integer, same source
   started, updated   ISO
   brief      the completion criterion given to the worker
@@ -89,8 +91,9 @@ events[]     activity log, oldest first
 | Event | Command |
 | :-- | :-- |
 | Intake done | `init --project P --goal G`, then `milestone m1 --title T` and `step s1 --milestone m1 --title T` per step, then `event --kind decision "why the split"` for anything non-obvious |
-| Worker spawned | `agent a1 --task T --skill tdd --milestone m1 --lane src/x.ts test/x.test.ts --step s1 --brief "done when ..."` (model defaults to opus; logs the spawn, marks the step current) |
-| Notification arrives | `agent a1 --status done --tokens N --duration-ms N --report "..." --step s1 --log "what it verified"` (the step follows the status; the log becomes a `reported` event) |
+| Worker about to be spawned | `agent a1 --task T --skill tdd --milestone m1 --lane src/x.ts test/x.test.ts --step s1 --brief "done when ..."` (model defaults to opus; logs the spawn, marks the step current, prints the line its brief opens with) |
+| Notification arrives | `agent a1 --status done --tokens N --duration-ms N --report "..." --step s1 --log "what it verified"` (the step follows the status; the log becomes a `reported` event; tokens are the worker's total so far) |
+| Worker sent back after its report | `agent a1 --status running --step s1 --log "sent back: ..."` (counts a new round) |
 | Worker blocked | `roadblock r1 --title T --detail D --severity serious --needs coordinator --agent a1` (marks the worker blocked, logs it) |
 | Worker blocked on the user | the decision first, then `roadblock r1 ... --needs user --decision d1`; closing the decision clears the roadblock |
 | Roadblock cleared | `roadblock r1 --resolved` (worker back to running, logs it) |
@@ -100,7 +103,7 @@ events[]     activity log, oldest first
 | The user must see something now | `--important` on `event`, `agent --log`, or `roadblock`; a decision with `--blocking`, `--needs user`, and a failed worker imply it |
 | Session ends | `set --status done --now "..."` |
 
-`show` prints the ledger as text when you need to check it without opening the page. Add `--no-render` to any command when several follow in a row, and let the last one render.
+`show` prints the ledger as text, and under it every command with the values it takes: the place to look after a compaction. Add `--no-render` to any command when several follow in a row, and let the last one render.
 
 ## Decisions
 
@@ -134,12 +137,12 @@ The page has a chat where the user writes to the fleet and mentions who should a
 
 | Command | What it does |
 | :-- | :-- |
-| `watch --as coordinator --all [--after N]` | streams one line per message from the user, whoever it is addressed to: first the open ones after `N`, then each new one as it lands |
+| `watch --as coordinator --all [--resume]` | streams one line per message from the user, whoever it is addressed to: first the open ones, then each new one as it lands. `--resume` starts after the last line a watch of yours printed (`--after N` names the number yourself) |
 | `inbox --as WHO` | the messages open for `WHO`, oldest first |
 | `say --as WHO [--re N] TEXT` | appends a message from `WHO`, answering message `N`; mentions in `TEXT` address other agents |
 | `log [--after N]` | the whole conversation |
 
-**Arm the watch** right after starting the server, with the Monitor tool: the command above, `timeout_ms: 1800000`, description "chat on the fleet dashboard". Each line it prints reaches you as an event, also while you are busy. A monitor lasts 30 minutes at most: when it expires, arm it again with `--after` set to the highest message number you have seen, and run `inbox --as coordinator` whenever you are unsure you were watching.
+**Arm the watch** right after starting the server, with the Monitor tool: `watch --as coordinator --all --resume`, `timeout_ms: 1800000`, description "chat on the fleet dashboard". Each line it prints reaches you as an event, also while you are busy. A monitor lasts 30 minutes at most: when it expires, arm the same command again, which picks up where the last one stopped and prints what landed in between. Re-arming is housekeeping: it takes one tool call and no message to the user.
 
 **Who may write.** Text typed on the page lands in agents' contexts, so the server names the sender. Behind `tailscale serve` only the tailnet login of this machine's user may post, and the message records it as `author`, printed in every line from the user (`#12 user (luiz@github) -> a1 (auth-impl): ...`). Only the server writes as the user: `say --as user` is refused. Agents name themselves with `--as`, so a line from an agent is that agent's word and carries no authority of the user's. On the plain-http fallback the chat is read-only. A message in the chat is the user speaking: it carries the authority of the same words typed in the session, and the same limits, so a destructive or outward-facing step asked for in the chat is confirmed before it runs.
 
@@ -151,7 +154,7 @@ The page is built for a phone first: a bottom bar moves between the sections wit
 - Summary tiles: what waits on the user, workers by status, total tokens, elapsed time, open roadblocks.
 - Decisions: open ones that block work first, then the other open ones, oldest first, then the closed ones with how they closed. A row is marked new until the user opens it and changed when it was revised since. Each row opens the decision's page.
 - Roadmap with the current step marked; steps link to their worker.
-- Worker sheet: a worker's name anywhere on the page (a step, a roadblock, the fleet, the chart, the activity log, the chat) opens its task, lane, brief, and report, with a button that starts a message to it.
+- Worker sheet: a worker's name anywhere on the page (a step, a roadblock, the fleet, the chart, the activity log, the chat) opens its task, lane, round, brief, and report, with a button that starts a message to it.
 - Roadblocks, open first, with who is needed and a link to the decision when it is the user.
 - Fleet with filters (status, milestone, skill, model, free text) and expandable brief and report.
 - Token chart: one bar per worker, coloured by spawn order, with its share of the total.

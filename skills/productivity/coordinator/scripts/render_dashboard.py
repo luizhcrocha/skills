@@ -61,6 +61,7 @@ def validate(state: dict) -> None:
         a.setdefault("model", "opus")
         a.setdefault("brief", "")
         a.setdefault("report", "")
+        a.setdefault("rounds", 1)
     taken = {}
     for a in state["agents"]:
         for label in {a["id"].lower(), a["name"].lower()}:

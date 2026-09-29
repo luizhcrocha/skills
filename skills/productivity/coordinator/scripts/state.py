@@ -20,10 +20,12 @@
 
 Add --no-render anywhere to write state.json without rendering.
 
-DIR holds state.json and the rendered index.html. Creating and updating use
-the same verb: an unknown ID with the required fields creates the row, a
-known ID updates only the fields given. Every command stamps timestamps,
-validates the result, and renders index.html.
+DIR holds state.json, the rendered index.html, and brief.md: what every worker
+of the fleet reads before its task, written once from assets/brief.md and the
+coordinator's to add to. Creating and updating use the same verb: an unknown
+ID with the required fields creates the row, a known ID updates only the
+fields given. Every command stamps timestamps, validates the result, and
+renders index.html.
 """
 import argparse
 import json
@@ -129,20 +131,26 @@ def cmd_step(state, args):
 
 def cmd_agent(state, args):
     a = find(state["agents"], args.id)
+    if args.milestone is not None and not find(state["roadmap"], args.milestone):
+        known = ", ".join(m["id"] for m in state["roadmap"]) or "none yet; record one with `milestone`"
+        fail(f"unknown milestone '{args.milestone}' (the roadmap has: {known})")
     if a is None:
         require(args, ["task", "milestone"], "agent")
         a = {
             "id": args.id, "name": args.name or args.id, "task": args.task,
             "skill": args.skill or "none", "model": args.model or "opus",
             "status": args.status or "running", "lane": args.lane or [],
-            "milestone": args.milestone, "tokens": 0, "duration_ms": 0,
+            "milestone": args.milestone, "tokens": 0, "duration_ms": 0, "rounds": 1,
             "started": now(), "updated": now(), "brief": args.brief or "", "report": "",
         }
         state["agents"].append(a)
         log(state, "spawned", args.log or f"Spawned on {a['model']} following {a['skill']}.", a["id"])
         if args.step:
             set_step(state, args.step, "current", a["id"])
+        print(f"recorded {a['id']} ({a['name']}); its brief opens with: Read {Path(args.dir).resolve() / 'brief.md'} first; your id is {a['id']}.")
         return state
+    if a["status"] == "done" and args.status == "running":  # sent back after its report
+        a["rounds"] = a.get("rounds", 1) + 1
     for key in ("name", "task", "skill", "model", "status", "milestone", "brief", "report"):
         if getattr(args, key) is not None:
             a[key] = getattr(args, key)
@@ -330,6 +338,25 @@ def cmd_event(state, args):
     return state
 
 
+CHEATSHEET = f"""
+commands (state.py DIR <command>; an unknown ID creates the row, a known ID changes the fields given):
+  set [--status {"|".join(STATUSES)}] [--now TEXT] [--goal G]
+  milestone ID --title T
+  step ID --milestone M --title T [--status {"|".join(STEP_STATUSES)}] [--agent A]
+  agent ID --task T --milestone M [--name N] [--skill {"|".join(SKILLS)}] [--model {"|".join(MODELS)}]
+        [--lane PATH...] [--step S] [--brief B] [--status {"|".join(AGENT_STATUSES)}]
+        [--tokens N --duration-ms N] [--report R] [--log TEXT] [--important]
+  roadblock ID --title T --detail D --severity {"|".join(SEVERITIES)} --needs {"|".join(NEEDS)} [--agent A]
+        [--decision D] [--resolved | --open]
+  decision ID --kind {"|".join(decisions.KINDS)} --title T --question Q --why W [--blocking | --not-blocking]
+        [--option "KEY: label | consequence"]... [--recommend R --reason WHY] [--secret NAME] [--manual TEXT]
+        [--body FILE | --no-body] [--agent A] [--supersedes ID] [--log TEXT]
+        [--decide ANSWER --resolution HOW | --withdraw REASON]
+  event [--kind {"|".join(KINDS)}] [--agent A] [--important] TEXT
+  show
+  --no-render on any command writes state.json without rendering"""
+
+
 def cmd_show(state, args):
     print(f"{state['project']} [{state['status']}] {state['now']}")
     for m in state["roadmap"]:
@@ -338,7 +365,8 @@ def cmd_show(state, args):
         for s in m["steps"]:
             print(f"    {s['id']:<6} {s['status']:<8} {s['title']}" + (f"  @{s['agent']}" if s.get("agent") else ""))
     for a in state["agents"]:
-        print(f"  agent {a['id']:<16} {a['status']:<8} {a['skill']:<15} {a['model']:<6} {a['tokens']:>8} tok  lane={','.join(a['lane']) or '-'}")
+        rounds = f"  round {a['rounds']}" if a.get("rounds", 1) > 1 else ""
+        print(f"  agent {a['id']:<16} {a['status']:<8} {a['skill']:<15} {a['model']:<6} {a['tokens']:>8} tok  lane={','.join(a['lane']) or '-'}{rounds}")
     for r in state["roadblocks"]:
         print(f"  roadblock {r['id']} {'resolved' if r['resolved'] else 'OPEN'} [{r['severity']}, needs {r['needs']}] {r['title']}")
     for d in state.get("decisions", []):
@@ -346,7 +374,18 @@ def cmd_show(state, args):
         outcome = d.get("answer") or d.get("resolution")
         print(f"  decision {d['id']} {status} [{d['kind']}] {d['title']}" + (f": {outcome}" if outcome else ""))
     print(f"  {len(state['events'])} events, updated {state['updated']}")
+    print(CHEATSHEET)
     return None
+
+
+def ensure_brief(root: Path) -> None:
+    """DIR/brief.md from assets/brief.md with this fleet's paths, unless it is there: what the coordinator added stays."""
+    path = root / "brief.md"
+    if path.exists():
+        return
+    skill = Path(__file__).resolve().parent.parent
+    template = (skill / "assets" / "brief.md").read_text()
+    path.write_text(template.replace("{skill_dir}", str(skill)).replace("{dashboard_dir}", str(root)))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -411,6 +450,7 @@ def main(argv: list[str]) -> None:
     result["updated"] = now()
     render_dashboard.validate(result)
     path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
+    ensure_brief(root)
     if args.no_render:
         print(f"state.json updated ({args.cmd} {getattr(args, 'id', '')})".rstrip())
     else:

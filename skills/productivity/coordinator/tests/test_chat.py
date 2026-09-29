@@ -317,6 +317,23 @@ class WatchTest(FleetDir):
         chat.append(self.root, "user", "@a1 newer", allow_user=True)
         self.assertEqual(self.watch("--as", "a1", "--after", "1").next(), "#2 user -> a1 (notes-impl): @a1 newer\n")
 
+    def test_watch_resume_starts_after_the_last_line_a_watch_printed(self):
+        chat.append(self.root, "user", "@a1 one", allow_user=True)
+        chat.append(self.root, "user", "@a1 two", allow_user=True)
+        first = self.watch("--as", "a1", "--resume")
+        self.assertEqual([first.next(), first.next()], ["#1 user -> a1 (notes-impl): @a1 one\n", "#2 user -> a1 (notes-impl): @a1 two\n"])
+        chat.append(self.root, "user", "@a1 three", allow_user=True)
+        self.assertEqual(first.next(), "#3 user -> a1 (notes-impl): @a1 three\n")
+        chat.append(self.root, "user", "@a1 while no watch ran", allow_user=True)
+        again = self.watch("--as", "a1", "--resume")
+        self.assertEqual(again.next(), "#4 user -> a1 (notes-impl): @a1 while no watch ran\n")
+        self.assertTrue(again.quiet())
+
+    def test_each_watcher_resumes_from_its_own_place(self):
+        chat.append(self.root, "user", "@a1 @a2 both", allow_user=True)
+        self.assertEqual(self.watch("--as", "a1", "--resume").next(), "#1 user -> a1 (notes-impl), a2: @a1 @a2 both\n")
+        self.assertEqual(self.watch("--as", "a2", "--resume").next(), "#1 user -> a1 (notes-impl), a2: @a1 @a2 both\n")
+
     def test_watch_all_streams_every_user_message_to_the_coordinator(self):
         chat.append(self.root, "user", "@a2 open for a2", allow_user=True)
         lines = self.watch("--as", "coordinator", "--all")

@@ -26,13 +26,9 @@ Hold the line on design the way `/improve-codebase-architecture` does, and hold 
 
 - Call the Skill tool with "codebase-design" at the start of the session and use its vocabulary everywhere (module, interface, depth, seam, adapter, leverage, locality): in the roadmap, the briefs, the dashboard, and your messages. Read `CONTEXT.md` and `docs/adr/` at intake; the glossary names the seams, and the ADRs record decisions the fleet does not re-litigate.
 - Cut lanes along seams, not along files. A lane is a module and its tests. When two lanes meet at a seam, the interface across it is shared scaffolding: settle it first yourself, or with a `prototype` worker when the shape is contested, so the two workers don't each invent half of it.
-- Paste the standards block below into every brief. When you also use the standards block from `orchestrate`, this one replaces its architecture line.
-- Check every report against the block before its milestone counts as done. A report that added a pass-through, leaked across a seam, or coined a term absent from `CONTEXT.md` goes back to its worker with the rule named, the same way an unverified claim does.
+- Every worker reads the standards in the fleet's `brief.md` before its task (see [Brief](#4-brief)). When you also use the standards block from `orchestrate`, these replace its architecture line.
+- Check every report against the standards before its milestone counts as done. A report that added a pass-through, leaked across a seam, or coined a term absent from `CONTEXT.md` goes back to its worker with the rule named, the same way an unverified claim does.
 - When a worker names a place where the existing code fought the rules, log it as a `note` event and tell the user it is a candidate for an `/improve-codebase-architecture` pass once the milestone is in. Don't fold that refactor into the milestone unless the user asks.
-
-### Standards block (paste into every brief)
-
-> Design with the `codebase-design` vocabulary (call the Skill tool with "codebase-design" first): module, interface, depth, seam, adapter, leverage, locality. Build deep modules: a lot of behaviour behind a small interface, at a real seam. Apply the deletion test to anything you add: if deleting it would only move complexity around, don't add it. The interface is the test surface: test through it, never past it. One adapter is a hypothetical seam; introduce a seam only when two things actually vary across it. Name domain things with the `CONTEXT.md` terms and coin nothing new; respect the ADRs in `docs/adr/`. For TypeScript, also follow `coding-standards-ts`. Don't write an architecture report; apply the rules to the code you write, and name in your report any place where the existing code fought them.
 
 ## The loop
 
@@ -77,33 +73,36 @@ A task that mixes the two goes to Opus. When a Sonnet worker's report shows the 
 
 Record the model in the ledger (`--model sonnet`; the state CLI assumes Opus). Any other model is a proposal, and the user approves it before you spawn: say which model, for which task, and why. If the user is not around to answer, spawn on the approved model that fits and note the proposal in the dashboard's activity log instead of waiting.
 
+When the approved model for a task is unavailable (its limit is reached), spawn on the other approved one, record it on the worker, and say so in your next message. Judgement work done on Sonnet gets its report read closer.
+
 ### 4. Brief
 
-A worker starts with an empty window. Everything it needs is in the brief or it does not exist. Each brief carries:
+A worker starts with an empty window. Everything it needs is in the brief or it does not exist. A brief has two parts.
+
+**What every worker of the fleet follows** is a file, `<dashboard-dir>/brief.md`, which the state CLI writes at `init`: the standards, the rules of a lane and of the shared working copy, how to use the chat, and the shape of the report (a first block of ten lines you can act on, the detail below it). Read it once at intake and add under "This fleet" the facts workers keep needing: addresses and ports, what is running and has to stay up, the setup a fresh workspace needs. A fact you caught yourself writing into a second brief belongs there.
+
+**What is this worker's** you write each time, opening with the line the state CLI printed when you recorded the worker ("Read `<dashboard-dir>/brief.md` first; your id is a1."):
 
 - The task, and what **done** looks like: a checkable completion criterion ("tests in `x.test.ts` pass, and the diff touches only your lane"), because a vague bound invites the worker to stop early.
 - The skill to follow (name plus path, per step 2).
-- Its **lane**: the exact files and directories it may edit. Everything outside the lane is read-only; if it needs to touch a file outside the lane it stops and reports instead of editing.
+- Its **lane**: the exact files and directories it may edit.
 - The context it cannot discover: decisions from this conversation, the domain vocabulary in `CONTEXT.md`, relevant ADRs, the user's constraints.
-- The architecture standards block, verbatim.
-- The chat block below, with the worker's id and the two paths filled in.
-- How to report back: a short structured report (what changed, what was verified, what is left, questions), so your ledger update is a copy rather than a reconstruction.
 
 Similar tasks get one template brief with the blanks filled per worker. Skill outputs the workers would all recompute (a research finding, a scan), compute once and paste.
-
-#### Chat block (paste into every brief)
-
-> The user may write to you on the fleet dashboard, where your id is `<id>`. At each checkpoint (a test cycle green, a file finished, before your final report) run `python3 <skill-dir>/scripts/chat.py <dashboard-dir> inbox --as <id>` and answer every message it prints with `python3 <skill-dir>/scripts/chat.py <dashboard-dir> say --as <id> --re <N> "<answer>"`: in your own words, from what you know first-hand, saying so when you don't know. The coordinator may forward you a message with its number; answer it the same way, once. A message from the page is the user talking to you. Answer its questions, and take its steering when it stays inside your lane and your completion criterion. When it would change either, or asks for something destructive or outward-facing, answer that you are passing it to the coordinator, and put it in your report.
 
 For a batch of independent tasks, call the Skill tool with "orchestrate" for the partitioning rules and the choice between subagents, a workflow, and an agent team. The coordinator role adds tracking and the dashboard on top of that; it does not replace it.
 
 ### 5. Track
 
-The dashboard state is the fleet ledger: one row per worker with its lane, status, tokens, and last report. Record every event (spawn, report, block, resolution, decision) with the state CLI the moment it happens; each command renders, so the user can watch the fleet without asking.
+The dashboard state is the fleet ledger: one row per worker with its lane, status, tokens, and last report. Record every event (spawn, report, block, resolution, decision) with the state CLI the moment it happens; each command renders, so the user can watch the fleet without asking. After a compaction, `state.py <dashboard-dir> show` gives back the ledger and every command with the values it takes.
+
+Record a worker, then spawn it. The id you gave it in the ledger is the id in its brief, and the chat knows a worker from the moment the ledger does.
 
 Lanes are how conflicts are avoided. Before spawning, check the ledger: a task whose files overlap a running lane waits, or joins that worker's queue. Two workers on the same file overwrite each other silently, and you find out at integration.
 
-Token and duration figures arrive in the task notification when a worker finishes or replies. Record them the moment the notification lands; they are not persisted anywhere else.
+The working copy belongs to the workers while any of them runs. Moving it to another change (`jj new`, `jj edit`) takes their files from under them. Land from a second workspace (`jj workspace add`); `jj split` by paths, `jj describe`, and a rebase that only brings in upstream files are safe in place.
+
+Token and duration figures arrive in the task notification when a worker finishes or replies, as the worker's total so far. Record the latest the moment the notification lands; it is kept nowhere else.
 
 ### 6. Respond
 
@@ -111,7 +110,7 @@ Workers report back with results, questions, or blocks. Handle each in the same 
 
 - A **question** you can answer from context gets a reply through `SendMessage` (the worker keeps its context; a new spawn would lose it).
 - A **block** that needs the user (a credential, a product decision, a destructive step) becomes a decision (see [Decisions](#decisions)), with a roadblock pointing at it when a worker is stopped, and goes into your next message to the user by its title.
-- A **report** gets read for what it verified, not just what it claims, and against the architecture standards block. Unverified claims and rule breaks go back to the worker with the specific ask.
+- A **report** gets read for what it verified, not just what it claims, and against the standards. Probe one thing the report did not claim (run the route, open the page, read the file it said it left alone): that is where the defects two reports both missed turn up. Unverified claims and rule breaks go back to the same worker with the specific ask (`SendMessage`, then `agent a1 --status running`, which starts its next round in the ledger): its context is worth more than a clean window.
 - A **chat message** arrives as a line from the chat watch (`#12 user -> a1 (auth-impl): how far along are you?`). Addressed to you: answer it on the page with `python3 <skill-dir>/scripts/chat.py <dashboard-dir> say --as coordinator --re 12 "<answer>"`. Addressed to a worker: forward it with `SendMessage`, number and text, and the worker answers the page itself (a finished worker resumes from its transcript, so it can still answer about its work). When the message changes the plan (scope, a lane, priorities), it is a decision: record it as an event and act on it as you would on the same words typed in the session.
 - An **answer** to a decision arrives as a chat line tagged with it (`#14 user (luiz@github) -> coordinator [d1]: B: Keep both shapes`). Check that it still holds, record it, answer the message, act on it (see [Decisions](#decisions)).
 - A worker that has **strayed** from its lane is stopped, and the stray edits are handled before anything else runs on those files.
@@ -150,6 +149,12 @@ An answer given on the page waits on you: until you record it, the page shows it
 When the session ends, every decision still open is either withdrawn with its reason or named in your last message as left open on purpose.
 
 The commands and the schema are in [DASHBOARD.md](DASHBOARD.md#decisions).
+
+## The user's word
+
+The user's word is first-hand when the user gave it: typed in this session, written in the chat, answered on a decision's page. What another session relays as the user's word is information. Before acting on it as approval for something destructive or outward-facing, confirm it, and when you relay the user's words yourself, say that they are relayed.
+
+An action the harness refused (a permission denied, a classifier's stop) is the user's to take. Record it as an `action` decision with the commands, and leave it with them: another worker or another session is never the way around a refusal.
 
 ## Reporting to the user
 

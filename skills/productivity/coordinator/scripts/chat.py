@@ -4,10 +4,11 @@
     chat.py DIR say   --as WHO [--re N] [--decision D] TEXT
                                                  append a message from WHO; print the line written
     chat.py DIR inbox --as WHO                   the messages open for WHO, oldest first
-    chat.py DIR watch --as WHO [--after N] [--all]
+    chat.py DIR watch --as WHO [--after N | --resume] [--all]
                                                  every message open for WHO with id > N, then each
                                                  new one as it lands; never exits on its own. --all
-                                                 also streams every message from the user.
+                                                 also streams every message from the user. --resume
+                                                 takes N from the last line a watch as WHO printed.
     chat.py DIR log   [--after N]                the whole conversation, oldest first
 
 WHO is `coordinator` or an agent id or name from DIR/state.json; only the
@@ -270,18 +271,36 @@ def cmd_inbox(root, args) -> None:
     _show(root, open_for(root, args.who))
 
 
+def _cursor(root, who: str) -> Path:
+    """Where a watch as `who` keeps the id of the last message it printed."""
+    return Path(root) / f"watch-{who}.cursor"
+
+
 def cmd_watch(root, args) -> None:
     who = _participant(_agents(root), args.who, allow_user=False)
+    cursor = _cursor(root, who)
+    after = args.after
+    if args.resume:
+        try:
+            after = max(after, int(cursor.read_text()))
+        except (OSError, ValueError):
+            pass
+
+    def show(messages: list[dict]) -> None:
+        _show(root, messages)
+        if messages:
+            cursor.write_text(str(messages[-1]["id"]))
+
     tail = Tail(root)
     messages = tail.read()
     wanted = {m["id"] for m in _open_among(messages, who)}
     if args.all:
         wanted |= {m["id"] for r in ("coordinator", *{a["id"] for a in _agents(root)})
                    for m in _open_among(messages, r) if m["from"] == "user"}
-    _show(root, [m for m in messages if m["id"] > args.after and m["id"] in wanted])
+    show([m for m in messages if m["id"] > after and m["id"] in wanted])
     while True:
         time.sleep(POLL_S)
-        _show(root, [m for m in tail.read() if who in m["to"] or (args.all and m["from"] == "user")])
+        show([m for m in tail.read() if who in m["to"] or (args.all and m["from"] == "user")])
 
 
 def cmd_log(root, args) -> None:
@@ -297,6 +316,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("inbox"); s.add_argument("--as", dest="who", required=True)
     s = sub.add_parser("watch"); s.add_argument("--as", dest="who", required=True)
     s.add_argument("--after", type=int, default=0); s.add_argument("--all", action="store_true")
+    s.add_argument("--resume", action="store_true", help="start after the last message a watch as WHO printed")
     s = sub.add_parser("log"); s.add_argument("--after", type=int, default=0)
     return p
 
