@@ -5,6 +5,7 @@
     state.py DIR set [--status S] [--now TEXT] [--goal G]
     state.py DIR milestone ID --title T
     state.py DIR step ID [--milestone M --title T] [--status S] [--agent A]
+                         [--before STEP | --after STEP] [--remove REASON]
     state.py DIR agent ID [--task T --skill S --model M --lane L... --milestone M]
                           [--status S] [--tokens N] [--duration-ms N] [--report R]
                           [--brief B] [--name N] [--step STEP] [--log TEXT] [--important]
@@ -123,16 +124,43 @@ def set_step(state, step_id: str, status: str | None, agent: str | None) -> dict
     fail(f"unknown step '{step_id}'")
 
 
+def place(m: dict, step: dict, state, before: str | None, after: str | None) -> None:
+    """Put `step` right before or after another step of its milestone: the steps read in the order of their turn."""
+    other = before or after
+    if other == step["id"]:
+        fail(f"step {other} cannot be placed before or after itself")
+    if not find(m["steps"], other):
+        home = next((x for x in state["roadmap"] if find(x["steps"], other)), None)
+        fail(f"step {other} is in {home['id']}, and {step['id']} is in {m['id']}" if home else f"unknown step '{other}'")
+    m["steps"] = [s for s in m["steps"] if s is not step]
+    at = next(i for i, s in enumerate(m["steps"]) if s["id"] == other)
+    m["steps"].insert(at if before else at + 1, step)
+
+
 def cmd_step(state, args):
-    exists = any(find(m["steps"], args.id) for m in state["roadmap"])
-    if not exists:
+    m = next((x for x in state["roadmap"] if find(x["steps"], args.id)), None)
+    if args.remove is not None:
+        if m is None:
+            fail(f"unknown step '{args.id}'")
+        step = find(m["steps"], args.id)
+        m["steps"].remove(step)
+        log(state, "note", f"Step {args.id} removed ({step['title']}): {args.remove}", step.get("agent") if find(state["agents"], step.get("agent") or "") else None)
+        return state
+    if m is None:
         require(args, ["milestone", "title"], "step")
         m = find(state["roadmap"], args.milestone)
         if m is None:
             fail(f"unknown milestone '{args.milestone}'")
-        m["steps"].append({"id": args.id, "title": args.title, "status": args.status or "pending", "agent": args.agent or None})
+        step = {"id": args.id, "title": args.title, "status": args.status or "pending", "agent": args.agent or None}
+        m["steps"].append(step)
     else:
-        set_step(state, args.id, args.status, args.agent)
+        if args.milestone is not None and args.milestone != m["id"]:
+            fail(f"step {args.id} stays in {m['id']}; remove it and record it in {args.milestone} to move it")
+        step = set_step(state, args.id, args.status, args.agent)
+        if args.title is not None:
+            step["title"] = args.title
+    if args.before or args.after:
+        place(m, step, state, args.before, args.after)
     return state
 
 
@@ -357,6 +385,7 @@ commands (state.py DIR <command>; an unknown ID creates the row, a known ID chan
   set [--status {"|".join(STATUSES)}] [--now TEXT] [--goal G]
   milestone ID --title T
   step ID --milestone M --title T [--status {"|".join(STEP_STATUSES)}] [--agent A]
+        [--before STEP | --after STEP] [--remove REASON]
   agent ID --task T --milestone M [--name N] [--skill {"|".join(SKILLS)}] [--model {"|".join(MODELS)}]
         [--lane PATH...] [--step S] [--brief B] [--status {"|".join(AGENT_STATUSES)}]
         [--tokens N --duration-ms N] [--report R] [--log TEXT] [--important]
@@ -419,6 +448,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("milestone"); s.add_argument("id"); s.add_argument("--title")
     s = sub.add_parser("step"); s.add_argument("id"); s.add_argument("--milestone"); s.add_argument("--title")
     s.add_argument("--status", choices=STEP_STATUSES); s.add_argument("--agent", help="agent id, or '' to clear")
+    g = s.add_mutually_exclusive_group(); g.add_argument("--before", metavar="STEP"); g.add_argument("--after", metavar="STEP")
+    g.add_argument("--remove", metavar="REASON", help="take out a step recorded in error; the log keeps the reason")
     s = sub.add_parser("agent"); s.add_argument("id")
     s.add_argument("--task"); s.add_argument("--skill", choices=SKILLS); s.add_argument("--model", choices=MODELS)
     s.add_argument("--lane", nargs="*", help="files or globs the worker may edit"); s.add_argument("--milestone")

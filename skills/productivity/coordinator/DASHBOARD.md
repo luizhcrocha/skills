@@ -102,6 +102,7 @@ events[]     activity log, oldest first
 | Roadblock cleared | `roadblock r1 --resolved` (worker back to running, logs it) |
 | Something needs the user | `decision d1 --kind decision --title T --question Q --why W --option "A: label \| consequence" --option "B: ..." --recommend A --reason R` (see [Decisions](#decisions)) |
 | Your own choice, for the record | `event --kind decision "split the adapter out of m2: its interface is contested"` |
+| A step's words or place changed | `step s2 --title "..."`, `step s2 --before s1` (or `--after`); `step s2 --remove "why"` takes out one recorded in error and logs the reason |
 | Milestone checks pass | `step s2 --status done` for any step not already done, `event --kind integrated "checks green"`, `set --now "..."` |
 | The user must see something now | `--important` on `event`, `agent --log`, or `roadblock`; a decision with `--blocking`, `--needs user`, and a failed worker imply it |
 | Session ends | `set --status done --now "..."` |

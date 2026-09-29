@@ -55,6 +55,47 @@ class ShowTest(Fleet):
         self.assertIn("m2 Verify and ship (0/0)", out)
 
 
+class StepTest(Fleet):
+    def setUp(self):
+        super().setUp()
+        for id_, title in [("l1", "billing: push master"), ("l0", "usage: the repair for 12 stale cases"), ("l2", "usage: deploy")]:
+            self.ok("step", id_, "--milestone", "m1", "--title", title)
+
+    def steps(self, milestone: str = "m1") -> list[tuple[str, str]]:
+        return [(s["id"], s["title"]) for m in self.state()["roadmap"] if m["id"] == milestone for s in m["steps"]]
+
+    def test_a_known_step_takes_a_new_title(self):
+        self.ok("step", "l0", "--title", "usage: five case pass changes with migration 0081", "--status", "current")
+        step = next(s for s in self.state()["roadmap"][0]["steps"] if s["id"] == "l0")
+        self.assertEqual((step["title"], step["status"]), ("usage: five case pass changes with migration 0081", "current"))
+
+    def test_steps_are_put_in_the_order_of_their_turn(self):
+        self.ok("step", "l0", "--before", "l1")
+        self.assertEqual([s[0] for s in self.steps()], ["l0", "l1", "l2"])
+        self.ok("step", "l0", "--after", "l2")
+        self.assertEqual([s[0] for s in self.steps()], ["l1", "l2", "l0"])
+        self.ok("step", "l9", "--milestone", "m1", "--title", "infra: rebuild the index", "--before", "l2")
+        self.assertEqual([s[0] for s in self.steps()], ["l1", "l9", "l2", "l0"])
+
+    def test_a_place_is_among_the_steps_of_the_same_milestone(self):
+        self.ok("step", "s1", "--milestone", "m2", "--title", "elsewhere")
+        self.assertIn("is in m2", self.refused("step", "l0", "--before", "s1"))
+        self.assertIn("unknown step 'l7'", self.refused("step", "l0", "--after", "l7"))
+        self.assertIn("itself", self.refused("step", "l0", "--before", "l0"))
+        self.assertEqual([s[0] for s in self.steps()], ["l1", "l0", "l2"])
+
+    def test_a_step_stays_in_its_milestone(self):
+        self.assertIn("stays in m1", self.refused("step", "l0", "--milestone", "m2"))
+        self.ok("step", "l0", "--milestone", "m1", "--title", "same milestone, new words")
+
+    def test_a_step_queued_in_error_is_removed_and_the_log_says_so(self):
+        self.ok("step", "l2", "--remove", "queued twice: l0 is the same landing")
+        self.assertEqual([s[0] for s in self.steps()], ["l1", "l0"])
+        event = self.state()["events"][-1]
+        self.assertEqual((event["kind"], event["text"]), ("note", "Step l2 removed (usage: deploy): queued twice: l0 is the same landing"))
+        self.assertIn("unknown step 'l2'", self.refused("step", "l2", "--remove", "again"))
+
+
 class AgentTest(Fleet):
     def test_a_worker_on_an_unknown_milestone_is_refused_with_the_ones_there_are(self):
         said = self.refused("agent", "a1", "--task", "t", "--milestone", "m9")
