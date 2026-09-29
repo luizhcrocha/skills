@@ -1,78 +1,88 @@
 <title>Fleet Board</title>
 <link rel="icon" id="favicon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231e1b4b'/%3E%3Cpath d='M32 33L15 19M32 33l17-14M32 33v18' stroke='%23a5b4fc' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='15' cy='19' r='7' fill='%23818cf8'/%3E%3Ccircle cx='49' cy='19' r='7' fill='%23818cf8'/%3E%3Ccircle cx='32' cy='51' r='7' fill='%23818cf8'/%3E%3Ccircle cx='32' cy='33' r='10' fill='%23eef2ff'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..700&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
+  /* The fleet's ledger: pale ruled paper, green-black ink, and colour only where it says a state.
+     Amber waits on the viewer, red is blocked, blue is running, green is done. One family of type,
+     set narrow for names, figures and tabs so a phone line holds more, and at its normal width for
+     reading. The monospace is for paths and commands. */
   :root {
-    --bg: #f4f5f7;
-    --card: #ffffff;
-    --card-2: #eceef2;
-    --text: #151a21;
-    --muted: #5c6674;
-    --faint: #8b95a3;
-    --line: #dce1e8;
-    --accent: #4f46e5;
-    --accent-soft: #e4e2fb;
-    --good: #0ca30c;
-    --warning: #c98500;
-    --serious: #d9633a;
-    --critical: #d03b3b;
+    --bg: #eff3ee;
+    --card: #fbfcfa;
+    --card-2: #e5ebe4;
+    --text: #16211c;
+    --muted: #55635b;
+    --faint: #8a968e;
+    --line: #d2dbd3;
+    --accent: #0e6b55;
+    --accent-soft: #d8ebe2;
+    --on-accent: #ffffff;
+    --you: #9a5200;
+    --you-soft: #f6e7cf;
+    --run: #1f5fbf;
+    --run-soft: #dce7f8;
+    --good: #2c7a39;
+    --warning: #9a5200;
+    --serious: #b94f1a;
+    --critical: #b93125;
+    --critical-soft: #f7dedb;
     --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
     --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948;
-    --sans: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
-    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-    /* Type steps below the body size. A phone lifts both to 14px: no text there is smaller. */
-    --fs-xs: 0.75rem;
-    --fs-s: 0.85rem;
+    --sans: "Archivo", "Helvetica Neue", Arial, system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --narrow: 84%;
+    --fs-xs: 0.8125rem;
+    --fs-s: 0.875rem;
     /* The smallest target a finger gets; the desktop's mouse targets stay compact. */
     --tap: 32px;
     --dock-h: 0px;
+    --top-h: 56px;
+    --gutter: max(16px, calc((100% - 1088px) / 2));
     --chat-w: clamp(360px, 30vw, 440px);
-    --shadow: 0 10px 30px rgba(0,0,0,0.14);
+    --shadow: 0 12px 32px rgb(22 33 28 / 0.16);
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       color-scheme: dark;
-      --bg: #14171c; --card: #1c2027; --card-2: #242932; --text: #eef0f3;
-      --muted: #a2abb7; --faint: #6f7987; --line: #2d333d;
-      --accent: #8f89f2; --accent-soft: #2b2a57;
-      --good: #3fbf3f; --warning: #fab219; --serious: #ec835a; --critical: #e35d5d;
+      --bg: #0e1411; --card: #151c18; --card-2: #1e2823; --text: #e9efea;
+      --muted: #9eaba3; --faint: #67746c; --line: #29352e;
+      --accent: #56c7a6; --accent-soft: #16352c; --on-accent: #08130f;
+      --you: #f0a440; --you-soft: #382910; --run: #7fb0f7; --run-soft: #172a45;
+      --good: #6cc878; --warning: #f0a440; --serious: #f08a55; --critical: #f2766a; --critical-soft: #3b1a17;
       --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
       --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
-      --shadow: 0 10px 30px rgba(0,0,0,0.45);
+      --shadow: 0 12px 32px rgb(0 0 0 / 0.5);
     }
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --bg: #14171c; --card: #1c2027; --card-2: #242932; --text: #eef0f3;
-    --muted: #a2abb7; --faint: #6f7987; --line: #2d333d;
-    --accent: #8f89f2; --accent-soft: #2b2a57;
-    --good: #3fbf3f; --warning: #fab219; --serious: #ec835a; --critical: #e35d5d;
+    --bg: #0e1411; --card: #151c18; --card-2: #1e2823; --text: #e9efea;
+    --muted: #9eaba3; --faint: #67746c; --line: #29352e;
+    --accent: #56c7a6; --accent-soft: #16352c; --on-accent: #08130f;
+    --you: #f0a440; --you-soft: #382910; --run: #7fb0f7; --run-soft: #172a45;
+    --good: #6cc878; --warning: #f0a440; --serious: #f08a55; --critical: #f2766a; --critical-soft: #3b1a17;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
     --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
-    --shadow: 0 10px 30px rgba(0,0,0,0.45);
+    --shadow: 0 12px 32px rgb(0 0 0 / 0.5);
   }
   @media (max-width: 759.98px) {
-    :root { --fs-xs: 14px; --fs-s: 14px; --dock-h: 60px; }
+    :root { --fs-xs: 0.875rem; --fs-s: 0.875rem; --dock-h: 62px; --top-h: 52px; }
   }
   @media (max-width: 759.98px), (pointer: coarse) {
     :root { --tap: 44px; }
   }
 
   [hidden] { display: none !important; }
-  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
-  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.45; margin: 0; overflow-x: clip; }
-  @media (max-width: 759.98px) { body { font-size: 15px; } }
-  .shell { min-height: 100dvh; }
-  .wrap { box-sizing: border-box; width: 100%; max-width: 1120px; margin: 0 auto; padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px calc(48px + var(--dock-h) + env(safe-area-inset-bottom, 0px)); display: grid; gap: 28px; container: main / inline-size; min-width: 0; }
-  h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 600; }
-  h1 { font-size: 1.5rem; letter-spacing: -0.01em; overflow-wrap: anywhere; }
-  h2 { font-size: var(--fs-s); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; scroll-padding-top: calc(var(--top-h) + 60px); }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 0.9375rem; line-height: 1.5; margin: 0; overflow-x: clip; }
+  @media (max-width: 759.98px) { body { font-size: 1rem; } }
+  h1, h2, h3, h4 { margin: 0; font-weight: 700; font-stretch: var(--narrow); text-wrap: balance; }
+  h2 { font-size: 1.0625rem; }
   p { margin: 0; }
-  a { color: var(--accent); }
+  a { color: var(--accent); text-underline-offset: 2px; }
   button, select, input, textarea { font: inherit; color: inherit; }
   button { -webkit-tap-highlight-color: transparent; }
-  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .num { font-stretch: var(--narrow); font-variant-numeric: tabular-nums; }
   .muted { color: var(--muted); }
   .faint { color: var(--faint); }
   .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -80,175 +90,143 @@
   svg.i { width: 22px; height: 22px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
   /* A worker's name, wherever it appears: one tap opens the worker. */
-  .who { display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); min-width: var(--tap); padding: 0 4px; margin: 0 -4px; background: none; border: 0; border-radius: 5px; cursor: pointer; font-family: var(--mono); font-weight: 500; text-align: left; color: inherit; }
+  .who { display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); min-width: var(--tap); padding: 0 4px; margin: 0 -4px; background: none; border: 0; border-radius: 5px; cursor: pointer; font-weight: 600; font-stretch: var(--narrow); text-align: left; color: inherit; }
   .who:hover { background: var(--card-2); }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; flex: none; background: var(--c, var(--faint)); }
 
-  /* header */
-  .head { display: grid; gap: 10px; }
-  .head-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding-right: 56px; }
-  .mark { width: 34px; height: 34px; flex: none; border-radius: 8px; overflow: hidden; }
+  /* A state, said in a word. */
+  .pill { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 4px; font-size: var(--fs-xs); font-weight: 600; font-stretch: var(--narrow); line-height: 1.5; background: var(--card-2); color: var(--muted); white-space: nowrap; }
+  .pill.running, .pill.current { background: var(--run-soft); color: var(--run); }
+  .pill.done, .pill.decided { background: color-mix(in srgb, var(--good) 15%, var(--card)); color: var(--good); }
+  .pill.blocked, .pill.failed, .pill.critical, .pill.blocking { background: var(--critical-soft); color: var(--critical); }
+  .pill.open, .pill.answered, .pill.new, .pill.changed, .pill.warning { background: var(--you-soft); color: var(--you); }
+  .pill.serious { background: color-mix(in srgb, var(--serious) 15%, var(--card)); color: var(--serious); }
+  .pill.recommended { background: var(--accent-soft); color: var(--accent); }
+
+  /* the page: a masthead that stays, one view at a time under it */
+  .shell { min-height: 100dvh; }
+  .main { min-width: 0; container: main / inline-size; }
+  .masthead { position: sticky; top: 0; z-index: 30; background: var(--bg); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top, 0px); }
+  .top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: var(--top-h); padding-inline: var(--gutter); box-sizing: border-box; }
+  .top-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .top h1 { font-size: 1.1875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mark { width: 30px; height: 30px; flex: none; border-radius: 7px; overflow: hidden; }
   .mark svg { display: block; width: 100%; height: 100%; }
-  .goal { max-width: 70ch; font-size: 1rem; }
-  .now { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; background: var(--accent-soft); border-radius: 6px; max-width: 80ch; }
-  .now b { color: var(--accent); font-weight: 600; white-space: nowrap; }
-  .head .meta { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: var(--fs-s); }
 
-  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 500; letter-spacing: 0.02em; background: var(--card-2); color: var(--muted); white-space: nowrap; font-family: var(--sans); }
-  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-  .pill.running { background: var(--accent-soft); color: var(--accent); }
-  .pill.done { color: var(--good); background: color-mix(in srgb, var(--good) 14%, var(--card)); }
-  .pill.blocked, .pill.failed, .pill.critical { color: var(--critical); background: color-mix(in srgb, var(--critical) 12%, var(--card)); }
-  .pill.paused, .pill.queued, .pill.pending, .pill.stopped { color: var(--muted); }
-  .pill.warning { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, var(--card)); }
-  .pill.serious { color: var(--serious); background: color-mix(in srgb, var(--serious) 14%, var(--card)); }
-  .pill.current { background: var(--accent-soft); color: var(--accent); }
-  .pill.open, .pill.answered, .pill.recommended { background: var(--accent-soft); color: var(--accent); }
-  .pill.decided { color: var(--good); background: color-mix(in srgb, var(--good) 14%, var(--card)); }
-  .pill.blocking { color: var(--critical); background: color-mix(in srgb, var(--critical) 12%, var(--card)); }
-  .pill.new, .pill.changed { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, var(--card)); }
-  .pill.withdrawn { color: var(--muted); }
-  .pill.plain::before { display: none; }
-
-  /* section navigation: a bar under the thumb on a phone, a sticky strip on a wide screen */
-  .dock { display: flex; gap: 4px; align-items: center; position: sticky; top: 0; z-index: 20; margin-block: -14px; padding: 8px 56px 8px 0; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
-  .dock a, .dock button { position: relative; display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 10px; border-radius: 7px; border: 0; background: none; color: var(--muted); text-decoration: none; font-size: var(--fs-s); font-weight: 500; cursor: pointer; }
-  .dock svg.i { width: 18px; height: 18px; }
-  .dock a:hover, .dock button:hover { background: var(--card-2); color: var(--text); }
-  .dock [aria-current="true"], .dock [aria-expanded="true"] { color: var(--accent); background: var(--accent-soft); }
-  .dock .to-chat { margin-left: auto; }
-  .dock .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 0.7rem; font-weight: 600; display: grid; place-items: center; font-family: var(--mono); line-height: 1; }
-  .dock .badge.alert { background: var(--critical); }
+  .tabs { display: flex; gap: 2px; align-items: stretch; padding-inline: calc(var(--gutter) - 12px); margin-bottom: -1px; }
+  .tabs a, .tabs button { position: relative; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border: 0; background: none; color: var(--muted); text-decoration: none; font-weight: 600; font-stretch: var(--narrow); cursor: pointer; }
+  .tabs svg.i { width: 18px; height: 18px; }
+  .tabs a:hover, .tabs button:hover { color: var(--text); }
+  .tabs [aria-current="true"], .tabs [aria-expanded="true"] { color: var(--text); }
+  .tabs [aria-current="true"]::after, .tabs [aria-expanded="true"]::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 3px; border-radius: 3px 3px 0 0; background: var(--text); }
+  .tabs .to-chat { margin-left: auto; }
+  .badge { min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 10px; background: var(--you); color: var(--bg); font-size: 0.75rem; font-weight: 700; font-variant-numeric: tabular-nums; display: grid; place-items: center; line-height: 1; }
+  .badge.alert { background: var(--critical); }
   @media (max-width: 759.98px) {
-    .dock { position: fixed; inset: auto 0 0 0; margin: 0; z-index: 35; display: grid; grid-template-columns: repeat(7, 1fr); gap: 0; height: var(--dock-h); padding: 0 max(4px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(4px, env(safe-area-inset-left, 0px)); box-sizing: content-box; background: color-mix(in srgb, var(--card) 94%, transparent); border-top: 1px solid var(--line); }
-    .dock a, .dock button { justify-content: center; min-height: 48px; min-width: 40px; padding: 0; margin: 6px 1px; }
-    .dock svg.i { width: 24px; height: 24px; }
-    .dock .lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-    .dock .badge { position: absolute; top: 0; left: calc(50% + 4px); font-size: 14px; min-width: 22px; height: 22px; border-radius: 11px; }
-    .dock [aria-current="true"]::after { content: ""; position: absolute; bottom: 2px; width: 16px; height: 3px; border-radius: 2px; background: var(--accent); }
+    .tabs { position: fixed; inset: auto 0 0 0; z-index: 35; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; margin: 0; padding: 0 max(4px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(4px, env(safe-area-inset-left, 0px)); background: var(--card); border-top: 1px solid var(--line); }
+    .tabs a, .tabs button { flex-direction: column; justify-content: center; gap: 3px; min-height: var(--dock-h); padding: 0; font-size: 0.8125rem; font-stretch: 78%; }
+    .tabs svg.i { width: 24px; height: 24px; }
+    .tabs [aria-current="true"], .tabs [aria-expanded="true"] { color: var(--accent); }
+    .tabs [aria-current="true"]::after, .tabs [aria-expanded="true"]::after { top: 0; bottom: auto; left: 24%; right: 24%; border-radius: 0 0 3px 3px; background: var(--accent); }
+    .tabs .to-chat { margin-left: 0; }
+    .tabs .badge { position: absolute; top: 5px; left: calc(50% + 5px); }
   }
-  section { display: grid; gap: 12px; align-content: start; min-width: 0; scroll-margin-top: 64px; }
-  @media (max-width: 759.98px) { section { scroll-margin-top: 12px; } }
 
-  /* tiles */
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
-  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 2px; min-width: 0; }
-  .tile .label { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-  .tile .value { font-size: 1.5rem; font-weight: 500; line-height: 1.1; }
-  .tile .sub { font-size: var(--fs-s); color: var(--muted); }
-  .tile.alert .value { color: var(--critical); }
+  .wrap { box-sizing: border-box; width: 100%; max-width: 1120px; margin: 0 auto; padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); padding-block: 22px calc(40px + var(--dock-h) + env(safe-area-inset-bottom, 0px)); display: grid; gap: 24px; min-width: 0; }
+  .view { display: grid; gap: 26px; align-content: start; min-width: 0; }
+  .part { display: grid; gap: 10px; align-content: start; min-width: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+  .cols { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 24px; }
+  @container main (max-width: 820px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+  .empty { padding: 16px; color: var(--muted); }
 
-  /* two-column region */
-  .cols { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 20px; }
-  @container main (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+  /* the lead: what waits on the viewer, as a sentence */
+  .lead { display: grid; gap: 12px; }
+  .lead-line { font-size: clamp(1.875rem, 1.3rem + 3vw, 2.75rem); line-height: 1.04; font-stretch: 76%; letter-spacing: -0.01em; max-width: 20ch; }
+  .lead-detail { font-size: 1.0625rem; font-weight: 600; font-stretch: var(--narrow); margin-top: -6px; color: var(--muted); }
+  .lead.blocking .lead-detail { color: var(--critical); }
+  .lead.clear .lead-line { color: var(--muted); }
+  .goal { max-width: 68ch; }
+  .now { max-width: 72ch; padding: 1px 0 1px 12px; border-left: 3px solid var(--run); }
+  .now b { font-stretch: var(--narrow); margin-right: 4px; }
+  .lead .meta { color: var(--muted); font-size: var(--fs-s); }
+
+  /* the fleet's totals: one ruled band of figures */
+  .totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 0 12px; margin: 0; padding: 0; border-block: 1px solid var(--line); }
+  .totals div { display: grid; padding: 10px 0; min-width: 0; }
+  .totals dt { order: 2; font-size: var(--fs-xs); color: var(--muted); font-stretch: var(--narrow); }
+  .totals dd { margin: 0; font-size: 1.5rem; font-weight: 600; font-stretch: 80%; font-variant-numeric: tabular-nums; line-height: 1.15; white-space: nowrap; }
+  .totals .alert dd { color: var(--critical); }
+  @media (max-width: 759.98px) { .totals { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+  /* decisions: what waits on the user, each row a link to its page */
+  .ask { display: grid; gap: 3px; padding: 13px 14px 13px 13px; border-left: 4px solid var(--line); color: inherit; text-decoration: none; }
+  .ask:first-child { border-top-left-radius: 9px; }
+  .ask:last-child { border-bottom-left-radius: 9px; }
+  .ask + .ask { border-top: 1px solid var(--line); }
+  .ask:hover { background: color-mix(in srgb, var(--card-2) 55%, transparent); }
+  .ask.open { border-left-color: var(--you); }
+  .ask.open.blocking { border-left-color: var(--critical); }
+  .ask.closed { color: var(--muted); }
+  .ask-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+  .ask-head b { font-weight: 700; font-stretch: var(--narrow); font-size: 1.0625rem; overflow-wrap: anywhere; margin-right: 2px; }
+  .ask.closed .ask-head b { font-weight: 600; }
+  .ask .detail { overflow-wrap: anywhere; }
+  .ask .meta { font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
 
   /* roadmap */
   .milestone { padding: 12px 14px; display: grid; gap: 8px; }
   .milestone + .milestone { border-top: 1px solid var(--line); }
   .milestone-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
-  .milestone-head h3 { font-size: 0.95rem; }
-  .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-  .step { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; min-height: var(--tap); box-sizing: border-box; padding: 5px 8px; border-radius: 5px; border: 0; background: none; text-align: left; }
+  .milestone-head h3 { font-size: 1rem; }
+  .steps { list-style: none; margin: 0 -8px; padding: 0; display: grid; gap: 2px; }
+  .step { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; min-height: var(--tap); box-sizing: border-box; padding: 5px 8px; border-radius: 6px; border: 0; background: none; text-align: left; }
   button.step { cursor: pointer; }
   button.step:hover { background: var(--card-2); }
-  .step.current { background: var(--accent-soft); }
-  .step .dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--faint); justify-self: center; }
+  .step.current { background: var(--run-soft); }
+  .step .dot { width: 10px; height: 10px; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--faint); justify-self: center; }
   .step.done .dot { background: var(--good); border-color: var(--good); }
-  .step.current .dot { background: var(--accent); border-color: var(--accent); }
+  .step.current .dot { background: var(--run); border-color: var(--run); }
   .step.blocked .dot { background: var(--critical); border-color: var(--critical); }
   .step.done .title { color: var(--muted); }
-  .step .by { font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); border-bottom: 1px dotted var(--faint); overflow-wrap: anywhere; }
+  .step .by { font-size: var(--fs-s); font-weight: 600; font-stretch: var(--narrow); color: var(--muted); overflow-wrap: anywhere; }
 
   /* roadblocks */
-  .block { position: relative; padding: 10px 14px 12px; display: grid; gap: 4px; border-left: 3px solid var(--line); }
+  .block { position: relative; padding: 12px 14px 12px 13px; display: grid; gap: 3px; border-left: 4px solid var(--line); }
+  .block:first-child { border-top-left-radius: 9px; }
+  .block:last-child { border-bottom-left-radius: 9px; }
   .block + .block { border-top: 1px solid var(--line); }
   .block.critical { border-left-color: var(--critical); }
   .block.serious { border-left-color: var(--serious); }
   .block.warning { border-left-color: var(--warning); }
-  .block.resolved { border-left-color: var(--good); opacity: 0.7; }
+  .block.resolved { border-left-color: var(--good); color: var(--muted); }
   .block-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
-  .block-head b, .block-title { font-weight: 600; }
+  .block-head b, .block-title { font-weight: 700; font-stretch: var(--narrow); font-size: 1.0625rem; }
   .block-title { display: inline-flex; align-items: center; min-height: var(--tap); padding: 0; border: 0; background: none; text-align: left; cursor: pointer; }
   /* The whole roadblock answers a tap on its title: the button's area stretches over the card. */
   .block-title::after { content: ""; position: absolute; inset: 0; }
-  .block:has(.block-title):hover { background: color-mix(in srgb, var(--card-2) 60%, transparent); }
-  .block .detail { color: var(--muted); font-size: 0.9rem; }
+  .block:has(.block-title):hover { background: color-mix(in srgb, var(--card-2) 55%, transparent); }
+  .block .detail { overflow-wrap: anywhere; }
   .block .needs { font-size: var(--fs-s); }
-  .block-link { position: relative; z-index: 1; display: inline-flex; align-items: center; min-height: var(--tap); font-weight: 500; }
-  .empty { padding: 14px; color: var(--muted); }
-
-  /* decisions: what waits on the user, each row a link to its page */
-  .ask { display: grid; gap: 4px; padding: 12px 14px; border-left: 3px solid var(--line); color: inherit; text-decoration: none; }
-  .ask + .ask { border-top: 1px solid var(--line); }
-  .ask:hover { background: color-mix(in srgb, var(--card-2) 60%, transparent); }
-  .ask.open { border-left-color: var(--accent); }
-  .ask.open.blocking { border-left-color: var(--critical); }
-  .ask.closed { opacity: 0.75; }
-  .ask-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
-  .ask-head b { font-weight: 600; font-size: 1rem; overflow-wrap: anywhere; }
-  .ask .detail { overflow-wrap: anywhere; }
-  .ask .meta { font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
-
-  /* the decision's page: what the user needs to decide, and the control to answer */
-  .dv { max-width: 860px; gap: 18px; }
-  .dv:focus { outline: none; }
-  .dv-back { justify-self: start; display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); padding-right: 56px; color: var(--muted); text-decoration: none; font-size: var(--fs-s); font-weight: 500; }
-  .dv-back:hover { color: var(--text); }
-  .dv-back svg.i { width: 18px; height: 18px; }
-  .dv-info, .dv-answer { display: grid; gap: 18px; min-width: 0; }
-  .dv-head { display: grid; gap: 8px; }
-  .dv-pills { display: flex; flex-wrap: wrap; gap: 6px; }
-  .dv-meta { color: var(--muted); font-size: var(--fs-s); overflow-wrap: anywhere; }
-  .dv-meta .who { min-height: 0; vertical-align: baseline; }
-  .dv-question { font-size: 1.2rem; font-weight: 500; line-height: 1.35; max-width: 60ch; text-wrap: pretty; overflow-wrap: anywhere; }
-  .dv-block { display: grid; gap: 4px; min-width: 0; }
-  .dv-block h3, .note h3 { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 500; }
-  .dv-block p, .note p { max-width: 70ch; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .note { display: grid; gap: 4px; padding: 12px 14px; border-radius: 8px; background: var(--card-2); border-left: 3px solid var(--faint); min-width: 0; }
-  .note.changed { border-left-color: var(--warning); }
-  .note.decided { border-left-color: var(--good); }
-  .note.pending { border-left-color: var(--accent); background: var(--accent-soft); }
-  .note .by { font-family: var(--mono); font-size: var(--fs-s); color: var(--muted); }
-  .options { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-  .option { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; align-items: start; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
-  label.option { cursor: pointer; }
-  label.option:hover { border-color: var(--faint); }
-  .option:has(input:checked), .option.chosen { border-color: var(--accent); background: var(--accent-soft); }
-  .option input { accent-color: var(--accent); width: 20px; height: 20px; margin: 1px 0 0; }
-  .option .key { font-family: var(--mono); font-weight: 500; color: var(--muted); min-width: 20px; }
-  .option .label { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-weight: 600; overflow-wrap: anywhere; }
-  .option .consequence { grid-column: 2; color: var(--muted); overflow-wrap: anywhere; }
-  .dv-form { display: grid; gap: 14px; min-width: 0; }
-  .dv-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 8px; }
-  .dv-form legend { padding: 0; margin-bottom: 8px; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 500; }
-  .field { display: grid; gap: 4px; font-size: var(--fs-s); color: var(--muted); }
-  .field textarea, .field input { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font-size: 16px; line-height: 1.45; }
-  .field textarea { field-sizing: content; min-block-size: calc(2lh + 22px); max-block-size: 40dvh; resize: vertical; }
-  .field input { font-family: var(--mono); }
-  .field textarea:focus-visible, .field input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
-  .manual { margin: 0; padding: 10px 12px; border-radius: 6px; background: var(--card-2); font-family: var(--mono); font-size: 0.9rem; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .dv code { font-family: var(--mono); font-size: 0.92em; padding: 1px 5px; border-radius: 4px; background: var(--card-2); }
-  .dv-body iframe { display: block; width: 100%; height: 160px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
-  .dv-body iframe.fixed { height: 70dvh; }
-  @media (max-width: 759.98px) { .dv { padding-bottom: calc(32px + env(safe-area-inset-bottom, 0px)); } .dv .sheet-actions .btn { flex: 1; justify-content: center; } }
+  .block-link { position: relative; z-index: 1; justify-self: start; display: inline-flex; align-items: center; min-height: var(--tap); font-weight: 600; }
 
   /* filters */
   .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .filters label { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-s); color: var(--muted); }
-  .filters select, .filters input[type="search"] { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: var(--fs-s); min-height: var(--tap); box-sizing: border-box; }
-  .filters input[type="search"] { min-width: 12ch; }
+  .filters select, .filters input[type="search"] { background: var(--card); border: 1px solid var(--line); border-radius: 7px; padding: 5px 9px; font-size: var(--fs-s); min-height: var(--tap); box-sizing: border-box; }
+  .filters input[type="search"] { min-width: 14ch; }
+  .filters select { max-width: 24ch; }
   .f-more { display: contents; }
   .f-toggle { display: none; }
-  .filters .reset { background: none; border: none; color: var(--accent); cursor: pointer; padding: 4px 6px; font-size: var(--fs-s); min-height: var(--tap); }
+  .filters .reset { background: none; border: none; color: var(--accent); cursor: pointer; padding: 4px 6px; font-size: var(--fs-s); font-weight: 600; min-height: var(--tap); }
   .count { font-size: var(--fs-s); color: var(--muted); margin-left: auto; }
   @media (max-width: 759.98px) {
     .filters { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
     .filters input[type="search"] { width: 100%; font-size: 16px; }
-    .f-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); cursor: pointer; font-size: 15px; }
+    .f-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); cursor: pointer; font-weight: 600; font-stretch: var(--narrow); }
     .f-toggle[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
-    .f-on { min-width: 20px; height: 20px; border-radius: 10px; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 13px; font-family: var(--mono); padding: 0 5px; }
-    .f-more { display: none; grid-column: 1 / -1; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+    .f-on { min-width: 20px; height: 20px; border-radius: 10px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; font-size: 0.75rem; font-weight: 700; padding: 0 5px; }
+    .f-more { display: none; grid-column: 1 / -1; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
     .filters.open .f-more { display: grid; }
     .f-more label { display: grid; gap: 4px; min-width: 0; }
     .f-more select { width: 100%; min-width: 0; font-size: 16px; min-height: 44px; }
@@ -256,39 +234,42 @@
     .count { grid-column: 1 / -1; margin-left: 0; }
   }
 
-  /* fleet: a table where there is room, a card per worker where there is not */
+  /* workers: a table where there is room, a strip per worker where there is not */
   .fleet-card { container: fleet / inline-size; overflow-x: auto; }
-  table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 0.88rem; }
-  th { text-align: left; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 500; padding: 10px 10px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 0.9rem; }
+  th { text-align: left; font-size: var(--fs-xs); color: var(--muted); font-weight: 600; font-stretch: var(--narrow); padding: 10px 10px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
   tr.row:last-child td, tr.detail:last-child td { border-bottom: none; }
   td.right, th.right { text-align: right; white-space: nowrap; }
   .agent-name { white-space: nowrap; }
   .task { max-width: 34ch; }
-  .lane { font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; }
-  .lane code { display: block; }
-  .expand { background: none; border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; cursor: pointer; font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; min-height: var(--tap); }
+  .lane { font-family: var(--mono); font-size: 0.8125rem; color: var(--muted); overflow-wrap: anywhere; }
+  td.lane { min-width: 20ch; }
+  td.c-upd { white-space: nowrap; }
+  .lane code { display: block; font-family: inherit; }
+  .expand { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 2px 9px; cursor: pointer; font-size: var(--fs-xs); font-weight: 600; font-stretch: var(--narrow); color: var(--muted); white-space: nowrap; min-height: var(--tap); }
   .expand[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
   tr.detail td { background: var(--card-2); padding: 12px 14px 14px 32px; }
   .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  .detail-grid h4, .sheet h3 { margin: 0 0 4px; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 500; }
-  .detail-grid p { white-space: pre-wrap; font-size: 0.88rem; max-width: 60ch; overflow-wrap: anywhere; }
+  .detail-grid h4, .sheet h3 { margin: 0 0 3px; font-size: var(--fs-s); color: var(--muted); }
+  .detail-grid p { white-space: pre-wrap; max-width: 62ch; overflow-wrap: anywhere; }
   @media (max-width: 759.98px) { .detail-grid { grid-template-columns: 1fr; } }
   td[data-label]::before { display: none; }
   @container fleet (max-width: 719.98px) {
-    table, tbody { display: block; min-width: 0; }
+    table, tbody { display: block; min-width: 0; font-size: inherit; }
     thead { display: none; }
-    tr.row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-areas: "name name name status" "task task task task" "skill model tokens time" "lane lane lane lane" "upd upd act act"; gap: 8px 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+    tr.row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
     tr.row:last-child { border-bottom: none; }
     tr.row:has(+ tr.detail) { border-bottom: none; }
     tr.row td { display: block; padding: 0; border: 0; min-width: 0; text-align: left; white-space: normal; }
-    td[data-label]::before { display: block; content: attr(data-label); font-family: var(--sans); font-size: var(--fs-xs); color: var(--muted); }
-    .c-name { grid-area: name; } .c-status { grid-area: status; justify-self: end; align-self: center; }
-    .c-task { grid-area: task; max-width: none; } .c-skill { grid-area: skill; } .c-model { grid-area: model; }
-    .c-tokens { grid-area: tokens; } .c-time { grid-area: time; }
-    .c-lane { grid-area: lane; } .c-lane:has(.faint) { display: none !important; }
-    .c-upd { grid-area: upd; align-self: center; } .c-act { grid-area: act; justify-self: end; }
-    .agent-name { white-space: normal; overflow-wrap: anywhere; font-size: 1rem; }
+    .c-name { order: 1; flex: 1 1 auto; } .c-status { order: 2; }
+    .c-task { order: 3; flex: 1 0 100%; max-width: none; }
+    .c-skill { order: 4; } .c-model { order: 5; } .c-tokens { order: 6; } .c-time { order: 7; }
+    .c-skill, .c-model, .c-tokens, .c-time { font-size: var(--fs-s); font-stretch: var(--narrow); color: var(--muted); }
+    td[data-label]::before { display: inline; content: attr(data-label) " "; color: var(--faint); }
+    td.c-lane { order: 8; flex: 1 0 100%; min-width: 0; } .c-lane:has(.faint) { display: none !important; }
+    .c-upd { order: 9; flex: 1 1 auto; font-size: var(--fs-s); } .c-act { order: 10; }
+    .agent-name { white-space: normal; overflow-wrap: anywhere; font-size: 1.0625rem; font-weight: 700; }
     tr.detail { display: block; border-bottom: 1px solid var(--line); }
     tr.detail:last-child { border-bottom: none; }
     tr.detail td { display: block; padding: 12px 14px 14px; border: 0; }
@@ -306,113 +287,119 @@
   .track { position: relative; height: 100%; min-height: 28px; background-image: repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 25%); background-size: calc(100% - 1px) 100%; background-repeat: no-repeat; border-right: 1px solid var(--line); }
   .bar { position: absolute; left: 0; top: 50%; height: 16px; transform: translateY(-50%); border-radius: 3px; background: var(--c); min-width: 2px; }
   .bar-row:hover .bar, .bar-row:focus-within .bar { opacity: 0.8; }
-  .bar-val { font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; }
+  .bar-val { font-stretch: var(--narrow); font-variant-numeric: tabular-nums; font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; }
   .bar-axis .ticks { position: relative; height: 22px; }
-  .bar-axis .ticks span { position: absolute; top: 4px; transform: translateX(-50%); font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); }
+  .bar-axis .ticks span { position: absolute; top: 4px; transform: translateX(-50%); font-stretch: var(--narrow); font-variant-numeric: tabular-nums; font-size: var(--fs-xs); color: var(--muted); }
   .bar-axis .ticks span:first-child { transform: none; }
   .bar-axis .ticks span:last-child { transform: translateX(-100%); }
   @container chart (max-width: 520px) {
     .bar-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "who val" "track track"; padding-bottom: 6px; }
     .bar-row .who { grid-area: who; justify-self: start; }
-    .bar-row .track { grid-area: track; min-height: 20px; }
+    .bar-row .track { grid-area: track; min-height: 18px; }
+    .bar-row .bar { height: 12px; }
     .bar-row .bar-val { grid-area: val; }
     .bar-axis { grid-template-columns: minmax(0, 1fr); }
     .bar-axis > :not(.ticks) { display: none; }
   }
-  .tip { position: absolute; pointer-events: none; background: var(--text); color: var(--bg); padding: 6px 9px; border-radius: 5px; font-size: var(--fs-s); white-space: nowrap; transform: translate(-50%, calc(-100% - 8px)); z-index: 2; }
+  .tip { position: absolute; pointer-events: none; background: var(--text); color: var(--bg); padding: 6px 9px; border-radius: 6px; font-size: var(--fs-s); white-space: nowrap; transform: translate(-50%, calc(-100% - 8px)); z-index: 2; }
   .tip .num { color: inherit; }
 
-  /* log */
+  /* the log: a time, what happened, who, and the words */
   .log { list-style: none; margin: 0; padding: 0; }
-  .log li { display: grid; grid-template-columns: 9ch minmax(0, 1fr); gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); font-size: 0.88rem; }
+  .log li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
   .log li:last-child { border-bottom: none; }
-  .log time { font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); padding-top: 2px; }
-  .log .by { font-family: var(--mono); font-size: var(--fs-s); margin-right: 6px; color: var(--muted); }
-  .log .who { font-size: var(--fs-s); color: var(--muted); margin-right: 2px; min-height: 0; vertical-align: baseline; }
-  .log .kind { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); margin-right: 8px; }
-  .log .kind.blocked { color: var(--critical); }
-  .log .kind.resolved, .log .kind.integrated { color: var(--good); }
-  .log .kind.decision, .log .kind.message, .log .kind.asked { color: var(--accent); }
-  @media (max-width: 759.98px), (pointer: coarse) {
-    .log li { grid-template-columns: minmax(0, 1fr); gap: 2px; }
-    .log .log-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0 10px; }
-    .log .who { min-height: 44px; }
-    .log .kind { margin-right: 0; }
+  .log time { font-stretch: var(--narrow); font-variant-numeric: tabular-nums; font-size: var(--fs-xs); color: var(--muted); padding-top: 3px; white-space: nowrap; }
+  .log .log-meta { display: inline; }
+  .log .by { font-weight: 600; font-stretch: var(--narrow); margin-right: 6px; color: var(--muted); }
+  .log .who { min-height: 0; vertical-align: baseline; margin-right: 2px; color: var(--muted); }
+  .kind { display: inline-block; font-size: var(--fs-xs); font-weight: 700; font-stretch: var(--narrow); color: var(--muted); margin-right: 8px; }
+  .kind::first-letter { text-transform: uppercase; }
+  .kind.blocked { color: var(--critical); }
+  .kind.asked { color: var(--you); }
+  .kind.resolved, .kind.integrated { color: var(--good); }
+  .kind.decision, .kind.message { color: var(--accent); }
+  @media (max-width: 759.98px) {
+    .log li { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 10px 14px; }
+    .log time { padding: 0; }
+    .log .log-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0 4px; min-height: 30px; }
   }
 
   .foot { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; color: var(--muted); font-size: var(--fs-s); }
-  .error { padding: 16px; border: 1px solid var(--critical); border-radius: 8px; color: var(--critical); font-family: var(--mono); }
-  @media (prefers-reduced-motion: no-preference) { .step, .pill, .expand, .who { transition: background 150ms ease; } }
+  .error { padding: 16px; margin: 16px; border: 1px solid var(--critical); border-radius: 10px; color: var(--critical); }
+  @media (prefers-reduced-motion: no-preference) { .step, .expand, .who, .ask, .tabs a, .tabs button { transition: background-color 150ms ease, color 150ms ease; } }
 
   /* notifications */
-  .bell { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 12px); right: max(16px, env(safe-area-inset-right, 0px)); z-index: 40; width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; display: grid; place-items: center; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-  .bell svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-  .bell .badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--critical); color: #fff; font-size: 0.7rem; font-weight: 600; display: grid; place-items: center; font-family: var(--mono); }
-  @media (max-width: 759.98px) { .bell .badge { font-size: 14px; min-width: 22px; height: 22px; border-radius: 11px; top: -6px; right: -6px; } }
+  .bell { position: relative; width: 44px; height: 44px; margin-right: -8px; border-radius: 8px; border: 0; background: none; color: var(--text); cursor: pointer; display: grid; place-items: center; }
+  .bell:hover, .bell[aria-expanded="true"] { background: var(--card-2); }
+  .bell svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .bell .badge { position: absolute; top: 2px; right: 0; background: var(--critical); }
   .bell.muted::after { content: ""; position: absolute; width: 26px; height: 2px; background: var(--muted); transform: rotate(-45deg); }
-  .panel { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 64px); right: max(16px, env(safe-area-inset-right, 0px)); z-index: 40; width: min(400px, calc(100vw - 32px)); max-height: min(70dvh, 600px); display: grid; grid-template-rows: auto auto 1fr; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; }
+  .panel { position: absolute; top: calc(env(safe-area-inset-top, 0px) + var(--top-h) - 2px); right: max(12px, calc(var(--gutter) - 8px)); z-index: 40; width: min(400px, calc(100% - 24px)); max-height: min(70dvh, 600px); display: grid; grid-template-rows: auto auto 1fr; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
   .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-  .panel-head h2 { font-size: var(--fs-xs); }
+  .panel-head h2 { font-size: 1rem; }
   .panel-head .actions { display: flex; gap: 4px; }
-  .panel-head button, .panel-prefs button { background: none; border: 1px solid var(--line); border-radius: 5px; padding: 3px 8px; font-size: var(--fs-xs); color: var(--muted); cursor: pointer; min-height: var(--tap); }
+  .panel-head button, .panel-prefs button { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; font-size: var(--fs-xs); font-weight: 600; font-stretch: var(--narrow); color: var(--muted); cursor: pointer; min-height: var(--tap); }
   .panel-prefs { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--card-2); font-size: var(--fs-xs); color: var(--muted); }
   .panel-prefs label { display: inline-flex; align-items: center; gap: 5px; }
-  .panel-prefs select { background: var(--card); border: 1px solid var(--line); border-radius: 5px; padding: 2px 5px; font-size: var(--fs-xs); min-height: var(--tap); }
+  .panel-prefs select { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 2px 5px; font-size: var(--fs-xs); min-height: var(--tap); }
   .panel-prefs .blocked { color: var(--warning); }
   .notifs { list-style: none; margin: 0; padding: 0; overflow-y: auto; overscroll-behavior: contain; }
   .notifs li { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: var(--fs-s); align-items: start; overflow-wrap: anywhere; }
   .notifs li:last-child { border-bottom: none; }
-  .notifs .mark { width: 6px; height: 6px; border-radius: 50%; background: transparent; margin-top: 7px; }
-  .notifs li.unread .mark { background: var(--accent); }
-  .notifs li.important .mark { background: var(--critical); }
-  .notifs li.important.read .mark { background: color-mix(in srgb, var(--critical) 40%, transparent); }
-  .notifs .meta { font-size: var(--fs-xs); color: var(--muted); font-family: var(--mono); }
-  .notifs .meta .kind { text-transform: uppercase; letter-spacing: 0.05em; }
-  .notifs time { font-size: var(--fs-xs); color: var(--faint); font-family: var(--mono); white-space: nowrap; margin-top: 2px; }
+  .notifs .dot { width: 6px; height: 6px; border-radius: 50%; background: transparent; margin-top: 8px; }
+  .notifs li.unread .dot { background: var(--accent); }
+  .notifs li.important .dot { background: var(--critical); }
+  .notifs li.important.read .dot { background: color-mix(in srgb, var(--critical) 40%, transparent); }
+  .notifs .meta, .toast .meta { font-size: var(--fs-xs); color: var(--muted); font-stretch: var(--narrow); }
+  .notifs time { font-size: var(--fs-xs); color: var(--muted); font-stretch: var(--narrow); font-variant-numeric: tabular-nums; white-space: nowrap; margin-top: 2px; }
   .notifs .empty { padding: 18px 12px; }
   @media (max-width: 759.98px) {
-    .panel { right: 8px; left: 8px; width: auto; max-height: calc(100dvh - 64px - var(--dock-h) - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px) - 16px); }
+    .panel { right: 8px; left: 8px; width: auto; max-height: calc(100dvh - var(--top-h) - var(--dock-h) - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px) - 16px); }
     .panel-prefs { display: grid; grid-template-columns: 1fr; gap: 8px; }
     .panel-prefs label { display: flex; justify-content: space-between; }
     .panel-prefs select { font-size: 16px; }
     .panel-head button, .panel-prefs button { padding: 0 12px; }
   }
-  .toasts { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + var(--dock-h) + 16px); z-index: 30; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); }
-  .toast { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px 12px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--accent); box-shadow: var(--shadow); font-size: var(--fs-s); overflow-wrap: anywhere; }
+  .toasts { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); z-index: 32; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); }
+  .toast { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px 12px 10px 11px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--accent); box-shadow: var(--shadow); font-size: var(--fs-s); overflow-wrap: anywhere; }
   .toast.opens { cursor: pointer; }
   .toast.important { border-left-color: var(--critical); }
-  .toast .meta { font-size: var(--fs-xs); color: var(--muted); font-family: var(--mono); margin-bottom: 2px; }
-  .toast .meta .kind { text-transform: uppercase; letter-spacing: 0.05em; }
-  .toast.important .meta .kind { color: var(--critical); }
-  .toast button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0 2px; align-self: start; min-width: var(--tap); min-height: var(--tap); margin: -8px -8px -8px 0; }
+  .toast.important .kind { color: var(--critical); }
+  .toast .text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+  .toast button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.2rem; line-height: 1; padding: 0 2px; align-self: start; min-width: var(--tap); min-height: var(--tap); margin: -8px -8px -8px 0; }
+  /* On a phone the toasts come in under the masthead, clear of the thumb and of what it is about to press. */
+  @media (max-width: 759.98px) {
+    .toasts { top: calc(env(safe-area-inset-top, 0px) + var(--top-h) + 8px); bottom: auto; left: 8px; right: 8px; width: auto; }
+    .toast .text { -webkit-line-clamp: 2; line-clamp: 2; }
+    .toast:nth-child(n + 3) { display: none; }
+  }
   @media (prefers-reduced-motion: no-preference) {
     .toast { animation: toast-in 180ms ease-out; }
-    @keyframes toast-in { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+    @keyframes toast-in { from { transform: translateY(-6px); opacity: 0; } to { transform: none; opacity: 1; } }
   }
 
   /* the worker sheet: a worker's detail, opened from its name anywhere on the page */
-  dialog.sheet { border: 1px solid var(--line); border-radius: 12px; padding: 0; background: var(--card); color: var(--text); width: min(600px, calc(100vw - 32px)); max-height: min(85dvh, 760px); box-shadow: var(--shadow); overflow: hidden; }
-  dialog.sheet::backdrop { background: rgb(10 12 20 / 0.45); }
+  dialog.sheet { border: 1px solid var(--line); border-radius: 14px; padding: 0; background: var(--card); color: var(--text); width: min(600px, calc(100vw - 32px)); max-height: min(85dvh, 760px); box-shadow: var(--shadow); overflow: hidden; }
+  dialog.sheet::backdrop { background: rgb(10 16 13 / 0.5); }
   .sheet-in { display: grid; gap: 14px; padding: 16px 18px 18px; max-height: inherit; overflow-y: auto; overscroll-behavior: contain; box-sizing: border-box; }
   .sheet-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 10px; align-items: center; }
   .sheet-head .swatch { width: 14px; height: 14px; border-radius: 3px; }
-  .sheet-head h2 { font-family: var(--mono); font-size: 1.15rem; text-transform: none; letter-spacing: 0; color: var(--text); overflow-wrap: anywhere; }
+  .sheet-head h2 { font-size: 1.375rem; overflow-wrap: anywhere; }
   .icon-btn { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 8px; border: 0; background: none; color: var(--muted); cursor: pointer; flex: none; }
   .icon-btn:hover { background: var(--card-2); color: var(--text); }
-  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px 14px; margin: 0; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px 14px; margin: 0; padding: 10px 0; border-block: 1px solid var(--line); }
   .facts div { min-width: 0; }
-  .facts dt { font-size: var(--fs-xs); color: var(--muted); }
-  .facts dd { margin: 0; overflow-wrap: anywhere; }
+  .facts dt { font-size: var(--fs-xs); color: var(--muted); font-stretch: var(--narrow); }
+  .facts dd { margin: 0; font-weight: 600; font-stretch: var(--narrow); overflow-wrap: anywhere; }
   .sheet p { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 65ch; }
-  .sheet .lane code { display: block; }
   .sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-  .btn { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-weight: 500; }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-weight: 600; font-stretch: var(--narrow); }
+  .btn:hover { border-color: var(--faint); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
   .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-  :root[data-theme="dark"] .btn.primary { color: #14171c; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn.primary { color: #14171c; } }
   @media (max-width: 759.98px) {
-    dialog.sheet { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 14px 14px 0 0; border-bottom: 0; max-height: 88dvh; }
+    dialog.sheet { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 16px 16px 0 0; border-bottom: 0; max-height: 88dvh; }
     .sheet-in { padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
     .sheet-actions .btn { flex: 1; justify-content: center; }
   }
@@ -421,10 +408,59 @@
   }
   @keyframes rise { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 
+  /* the decision's page: what the user needs to decide, and the control to answer */
+  .dv { max-width: 820px; gap: 20px; }
+  .dv:focus { outline: none; }
+  .dv-back { justify-self: start; display: inline-flex; align-items: center; gap: 4px; min-height: var(--tap); margin: -6px 0 -10px -6px; padding: 0 8px 0 2px; border-radius: 6px; color: var(--muted); text-decoration: none; font-weight: 600; font-stretch: var(--narrow); }
+  .dv-back:hover { color: var(--text); background: var(--card-2); }
+  .dv-back svg.i { width: 20px; height: 20px; }
+  .dv-info, .dv-answer { display: grid; gap: 18px; min-width: 0; }
+  .dv-head { display: grid; gap: 8px; }
+  .dv-head h1 { font-size: 1rem; color: var(--muted); }
+  .dv-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .dv-meta { color: var(--muted); font-size: var(--fs-s); overflow-wrap: anywhere; }
+  .dv-meta .who { min-height: 0; vertical-align: baseline; }
+  .dv-question { font-size: clamp(1.5rem, 1.2rem + 1.6vw, 2rem); font-weight: 700; font-stretch: 80%; line-height: 1.12; letter-spacing: -0.005em; max-width: 26ch; text-wrap: balance; overflow-wrap: anywhere; }
+  .dv-block { display: grid; gap: 3px; min-width: 0; }
+  .dv-block h3, .note h3, .dv-form legend, .dv-body h2 { font-size: var(--fs-s); color: var(--muted); }
+  .dv-block p, .note p { max-width: 68ch; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .note { display: grid; gap: 3px; padding: 12px 14px 12px 13px; border-radius: 10px; background: var(--card-2); border-left: 4px solid var(--faint); min-width: 0; }
+  .note.changed { border-left-color: var(--you); background: var(--you-soft); }
+  .note.decided { border-left-color: var(--good); }
+  .note.pending { border-left-color: var(--accent); background: var(--accent-soft); }
+  .note .by { font-weight: 600; font-stretch: var(--narrow); color: var(--muted); }
+  .options { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .option { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; align-items: start; padding: 13px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  label.option { cursor: pointer; }
+  label.option:hover { border-color: var(--faint); }
+  .option:has(input:checked), .option.chosen { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+  .option input { accent-color: var(--accent); width: 20px; height: 20px; margin: 2px 0 0; }
+  .option .key { font-weight: 700; font-stretch: var(--narrow); color: var(--muted); min-width: 20px; }
+  .option .label { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-weight: 700; font-stretch: var(--narrow); font-size: 1.0625rem; overflow-wrap: anywhere; }
+  .option .consequence { grid-column: 2; color: var(--muted); overflow-wrap: anywhere; }
+  .dv-form { display: grid; gap: 14px; min-width: 0; }
+  .dv-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 8px; }
+  .dv-form legend { padding: 0; margin-bottom: 8px; font-weight: 700; font-stretch: var(--narrow); }
+  .field { display: grid; gap: 4px; font-size: var(--fs-s); font-weight: 600; font-stretch: var(--narrow); color: var(--muted); }
+  .field textarea, .field input { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font-size: 16px; font-weight: 400; font-stretch: 100%; line-height: 1.45; }
+  .field textarea { field-sizing: content; min-block-size: calc(2lh + 22px); max-block-size: 40dvh; resize: vertical; }
+  .field input { font-family: var(--mono); font-size: 15px; }
+  .field textarea:focus-visible, .field input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
+  .manual { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--card-2); font-family: var(--mono); font-size: 0.8125rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .dv code { font-family: var(--mono); font-size: 0.88em; padding: 1px 5px; border-radius: 4px; background: var(--card-2); }
+  .dv-body { display: grid; gap: 8px; }
+  .dv-body iframe { display: block; width: 100%; height: 160px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  .dv-body iframe.fixed { height: 70dvh; }
+  /* On a phone the way to answer stays under the thumb while the page scrolls above it. */
+  @media (max-width: 759.98px) {
+    .dv .sheet-actions .btn { flex: 1; justify-content: center; }
+    .dv-form > .sheet-actions:first-of-type { position: sticky; bottom: calc(var(--dock-h) + env(safe-area-inset-bottom, 0px)); z-index: 2; margin: 0 -16px; padding: 10px 16px; background: color-mix(in srgb, var(--bg) 94%, transparent); border-top: 1px solid var(--line); }
+  }
+
   /* chat: docked beside the page on a wide screen, a full-height view over it elsewhere */
   .chat { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--card); color: var(--text); }
-  .chat-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 16px; border-bottom: 1px solid var(--line); flex: none; min-height: 56px; box-sizing: border-box; }
-  .chat-head h2 { font-size: 1rem; text-transform: none; letter-spacing: 0; color: var(--text); }
+  .chat-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 16px; border-bottom: 1px solid var(--line); flex: none; min-height: var(--top-h); box-sizing: border-box; }
+  .chat-head h2 { font-size: 1.1875rem; }
   .you { font-size: var(--fs-xs); color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
   .chat-head h2:focus { outline: none; }
   .chat-head h2:focus-visible { outline: 2px solid var(--accent); }
@@ -432,58 +468,57 @@
   .conn::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
   .conn[data-conn="live"]::before { background: var(--good); }
   .conn[data-conn="reconnecting"]::before, .conn[data-conn="connecting"]::before { background: var(--warning); }
-  .chat-note { margin: 14px 16px 0; padding: 12px 14px; border-radius: 8px; background: var(--card-2); color: var(--muted); font-size: var(--fs-s); }
+  .chat-note { margin: 14px 16px 0; padding: 12px 14px; border-radius: 10px; background: var(--card-2); color: var(--muted); font-size: var(--fs-s); }
   .chat-log { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; list-style: none; margin: 0; padding: 14px 14px 8px; display: flex; flex-direction: column; gap: 14px; }
   .chat-empty { margin: auto 0; text-align: center; color: var(--muted); font-size: var(--fs-s); padding: 24px 8px; }
   .thread { display: grid; gap: 6px; }
-  .msg { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; row-gap: 2px; padding: 6px 12px 10px; border-radius: 10px; background: var(--card-2); border-left: 3px solid var(--c, var(--faint)); overflow-wrap: anywhere; }
+  .msg { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; row-gap: 1px; padding: 4px 12px 10px 11px; border-radius: 10px; background: var(--card-2); border-left: 4px solid var(--c, var(--faint)); overflow-wrap: anywhere; }
   .msg.from-user { background: var(--accent-soft); border-left-color: var(--accent); }
   .msg.can-reply { cursor: pointer; }
   .msg.replying { outline: 2px solid var(--accent); outline-offset: 1px; }
   .msg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-height: var(--tap); }
-  .msg-head b { font-family: var(--mono); font-weight: 500; }
-  .msg-head .pill { padding: 0 7px; }
-  .msg-head time { font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); }
+  .msg-head b { font-weight: 700; font-stretch: var(--narrow); }
+  .msg-head time { font-stretch: var(--narrow); font-variant-numeric: tabular-nums; font-size: var(--fs-xs); color: var(--muted); }
   .msg > :not(.msg-head, .reply-btn) { grid-column: 1 / -1; }
-  .msg > .reply-btn { grid-column: 2; grid-row: 1; align-self: start; }
-  .reply-btn { min-height: var(--tap); padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--muted); cursor: pointer; font-size: var(--fs-xs); }
-  .reply-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .msg > .reply-btn { grid-column: 2; grid-row: 1; align-self: center; }
+  .reply-btn { min-height: 32px; padding: 0 10px; border-radius: 6px; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: var(--fs-xs); font-weight: 600; font-stretch: var(--narrow); }
+  .reply-btn:hover { color: var(--accent); background: var(--card); }
   .msg-re { font-size: var(--fs-xs); color: var(--muted); }
   .msg-text { white-space: pre-wrap; }
-  .mention { display: inline; padding: 0 6px; border-radius: 999px; font-family: var(--mono); font-size: 0.92em; font-weight: 500; white-space: nowrap; background: color-mix(in srgb, var(--c, var(--accent)) 16%, var(--card)); color: var(--text); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+  .mention { display: inline; padding: 0 6px; border-radius: 4px; font-size: 0.94em; font-weight: 600; font-stretch: var(--narrow); white-space: nowrap; background: color-mix(in srgb, var(--c, var(--accent)) 18%, var(--card)); color: var(--text); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
   .wait { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; font-size: var(--fs-xs); color: var(--muted); }
   .wait.done { color: var(--good); }
-  .wait .who { font-size: var(--fs-xs); padding: 0 8px; margin: 0; border-radius: 999px; background: var(--card); border: 1px solid var(--line); }
-  .wait .chip { display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); padding: 0 8px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); font-family: var(--mono); }
+  .wait .who { font-size: var(--fs-xs); padding: 0 8px; margin: 0; border-radius: 6px; background: var(--card); border: 1px solid var(--line); }
+  .wait .chip { display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); padding: 0 8px; border-radius: 6px; background: var(--card); border: 1px solid var(--line); font-weight: 600; font-stretch: var(--narrow); }
   .replies { list-style: none; margin: 0 0 0 14px; padding: 0 0 0 12px; border-left: 2px solid var(--line); display: grid; gap: 6px; }
   .composer { position: relative; flex: none; padding: 8px 12px max(12px, env(safe-area-inset-bottom, 0px)); background: var(--card); }
-  .chat-error { margin: 0 4px 8px; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--critical) 12%, var(--card)); color: var(--critical); font-size: var(--fs-s); }
+  .chat-error { margin: 0 4px 8px; padding: 9px 12px; border-radius: 8px; background: var(--critical-soft); color: var(--critical); font-size: var(--fs-s); }
+  .dv .chat-error { margin: 0; }
   /* The composer: one rounded surface holding the reply chip, the field (one line to eight, then it
      scrolls) and the round send button at its bottom right. The focus ring is the surface's. */
   .box { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "chip chip" "text send"; align-items: end; row-gap: 6px; column-gap: 6px; padding: 6px 6px 6px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--bg); cursor: text; }
   .box:has(.reply[hidden]) { row-gap: 0; }
   .box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
   .box textarea { grid-area: text; display: block; width: 100%; min-width: 0; margin: 0; padding: 7px 0; border: 0; background: none; font-size: 16px; line-height: 1.45; field-sizing: content; min-block-size: calc(1lh + 14px); max-block-size: calc(8lh + 14px); overflow-y: auto; resize: none; box-sizing: border-box; outline: none; }
-  .box textarea::placeholder { color: var(--faint); opacity: 1; }
+  .box textarea::placeholder { color: var(--faint); opacity: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .box textarea:focus-visible { outline: none; }
   .box textarea:disabled { cursor: not-allowed; }
-  .send { grid-area: send; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: #fff; cursor: pointer; }
+  .send { grid-area: send; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: var(--on-accent); cursor: pointer; }
   .send svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
   .send:disabled { background: var(--line); color: var(--muted); cursor: default; }
   @media (max-width: 759.98px), (pointer: coarse) { .send { width: 44px; height: 44px; } .box { border-radius: 26px; padding-left: 16px; } }
-  .reply { grid-area: chip; display: flex; align-items: center; gap: 4px; justify-self: start; max-width: 100%; min-width: 0; box-sizing: border-box; padding: 0 0 0 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: var(--fs-xs); margin-top: 2px; }
+  .reply { grid-area: chip; display: flex; align-items: center; gap: 4px; justify-self: start; max-width: 100%; min-width: 0; box-sizing: border-box; padding: 0 0 0 10px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: var(--fs-xs); margin-top: 2px; }
   .reply-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-  .reply .icon-btn { width: var(--tap); height: var(--tap); border-radius: 999px; color: inherit; font-size: 1rem; }
-  .readonly { margin: 0; padding: 12px 14px; border-radius: 12px; background: var(--card-2); color: var(--muted); font-size: var(--fs-s); overflow-wrap: anywhere; }
+  .reply .icon-btn { width: var(--tap); height: var(--tap); color: inherit; font-size: 1rem; }
+  .readonly { margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--card-2); color: var(--muted); font-size: var(--fs-s); overflow-wrap: anywhere; }
   .chat:has(#mentions:not([hidden])) .chat-empty { visibility: hidden; }
-  .box textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .to { margin: 6px 6px 0; font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; }
   .mentions { position: absolute; left: 8px; right: 8px; bottom: calc(100% - 4px); z-index: 3; list-style: none; margin: 0; padding: 4px; max-height: min(320px, calc(var(--vv-h, 100dvh) * 0.45)); overflow-y: auto; overscroll-behavior: contain; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
   .mentions li { display: grid; grid-template-columns: 10px minmax(0, 1fr); grid-template-areas: "sw main" ". task"; gap: 0 10px; align-items: center; min-height: 48px; box-sizing: border-box; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
   .mentions li[aria-selected="true"] { background: var(--accent-soft); }
   .mentions .swatch { grid-area: sw; }
   .mentions .m-main { grid-area: main; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-width: 0; }
-  .mentions .m-name { font-family: var(--mono); font-weight: 500; }
+  .mentions .m-name { font-weight: 700; font-stretch: var(--narrow); }
   .mentions .m-task { grid-area: task; font-size: var(--fs-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chat:not(.available) .reply-btn { display: none; }
 
@@ -492,8 +527,6 @@
     .shell.chat-collapsed { grid-template-columns: minmax(0, 1fr); }
     .chat { position: sticky; top: 0; height: 100dvh; border-left: 1px solid var(--line); }
     .shell.chat-collapsed .chat { display: none; }
-    :root:has(.shell:not(.chat-collapsed)) .bell { right: calc(var(--chat-w) + 16px); }
-    :root:has(.shell:not(.chat-collapsed)) .panel { right: calc(var(--chat-w) + 16px); }
     :root:has(.shell:not(.chat-collapsed)) .toasts { right: calc(var(--chat-w) + 16px); }
   }
   @media (max-width: 1099.98px) {
@@ -510,96 +543,114 @@
   }
 </style>
 
-<button class="bell" id="bell" type="button" aria-label="Notifications" aria-expanded="false" title="Notifications">
-  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17V11a6 6 0 0 1 12 0v6l1.5 2h-15z"/><path d="M10 21h4"/></svg>
-  <span class="badge" id="bell-badge" hidden>0</span>
-</button>
-<div class="panel" id="panel" hidden role="dialog" aria-label="Notifications">
-  <div class="panel-head">
-    <h2 id="panel-title">Notifications</h2>
-    <div class="actions">
-      <button type="button" id="n-read">Mark all read</button>
-      <button type="button" id="n-clear">Clear</button>
-    </div>
-  </div>
-  <div class="panel-prefs">
-    <label>Sound <select id="n-sound"><option value="important">important only</option><option value="all">every event</option><option value="off">off</option></select></label>
-    <label>Toasts <select id="n-toasts"><option value="all">every event</option><option value="important">important only</option><option value="off">off</option></select></label>
-    <label>Browser alerts <select id="n-browser"><option value="off">off</option><option value="important">important only</option><option value="all">every event</option></select></label>
-    <button type="button" id="n-test">Test sound</button>
-    <span id="n-audio-note" class="blocked" hidden>Click anywhere once to allow sound.</span>
-    <span id="n-browser-note" class="blocked" hidden></span>
-  </div>
-  <ul class="notifs" id="notifs"></ul>
-</div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 
 <div class="shell" id="shell">
-<div class="wrap" id="app">
-  <header class="head" id="head"></header>
-  <nav class="dock" id="dock" aria-label="Sections">
-    <a href="#decisions" data-sec="decisions" title="Decisions"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg><span class="lbl">Decisions</span><span class="badge" id="nav-decisions" hidden></span></a>
-    <a href="#roadmap" data-sec="roadmap" title="Roadmap"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4h12l-2.5 4L17 12H5"/></svg><span class="lbl">Roadmap</span></a>
-    <a href="#roadblocks" data-sec="roadblocks" title="Roadblocks"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5M12 17.2v.3"/></svg><span class="lbl">Roadblocks</span><span class="badge alert" id="nav-blocks" hidden></span></a>
-    <a href="#fleet" data-sec="fleet" title="Fleet"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12.5" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="20.5" r="1.8"/><path d="m9.8 10.5-3.3-3M14.2 10.5l3.3-3M12 15.5v3.2"/></svg><span class="lbl">Fleet</span></a>
-    <a href="#tokens" data-sec="tokens" title="Tokens"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3v18"/><path d="M4 7h12M4 12h16M4 17h8"/></svg><span class="lbl">Tokens</span></a>
-    <a href="#activity" data-sec="activity" title="Activity"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg><span class="lbl">Activity</span></a>
-    <button type="button" class="to-chat" id="chat-toggle" aria-controls="chat" aria-expanded="false" title="Chat"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 0 1-12.4 7.5L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/></svg><span class="lbl">Chat</span><span class="badge" id="chat-badge" hidden></span></button>
-  </nav>
-  <div class="tiles" id="tiles"></div>
-  <section id="decisions" aria-labelledby="h-decisions">
-    <h2 id="h-decisions">Decisions</h2>
-    <div class="card" id="decision-list"></div>
-  </section>
-  <div class="cols">
-    <section id="roadmap" aria-labelledby="h-roadmap">
-      <h2 id="h-roadmap">Roadmap</h2>
-      <div class="card" id="roadmap-list"></div>
-    </section>
-    <section id="roadblocks" aria-labelledby="h-roadblocks">
-      <h2 id="h-roadblocks">Roadblocks</h2>
-      <div class="card" id="roadblock-list"></div>
-    </section>
-  </div>
-  <section id="fleet" aria-labelledby="h-fleet">
-    <h2 id="h-fleet">Fleet</h2>
-    <div class="filters" id="filters">
-      <input type="search" id="f-q" placeholder="Search task, lane, report" aria-label="Search workers" autocomplete="off">
-      <button type="button" class="f-toggle" id="f-toggle" aria-expanded="false" aria-controls="f-more">Filters <span class="f-on" id="f-on" hidden></span></button>
-      <div class="f-more" id="f-more">
-        <label>Status <select id="f-status"><option value="">all</option></select></label>
-        <label>Milestone <select id="f-milestone"><option value="">all</option></select></label>
-        <label>Skill <select id="f-skill"><option value="">all</option></select></label>
-        <label>Model <select id="f-model"><option value="">all</option></select></label>
-        <button class="reset" id="f-reset" type="button">Clear filters</button>
+<div class="main" id="main">
+  <div class="masthead" id="masthead">
+    <header class="top">
+      <div class="top-name"><span class="mark" id="top-mark" aria-hidden="true"></span><h1 id="top-project"></h1><span id="top-status"></span></div>
+      <span></span>
+      <button class="bell" id="bell" type="button" aria-label="Notifications" aria-expanded="false" aria-controls="panel" title="Notifications">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17V11a6 6 0 0 1 12 0v6l1.5 2h-15z"/><path d="M10 21h4"/></svg>
+        <span class="badge" id="bell-badge" hidden>0</span>
+      </button>
+    </header>
+    <nav class="tabs" id="dock" aria-label="Views">
+      <a href="#decisions" data-view="decisions"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg><span class="lbl">Decisions</span><span class="badge" id="nav-decisions" hidden></span></a>
+      <a href="#plan" data-view="plan"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4h12l-2.5 4L17 12H5"/></svg><span class="lbl">Plan</span><span class="badge alert" id="nav-blocks" hidden></span></a>
+      <a href="#fleet" data-view="fleet"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12.5" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="20.5" r="1.8"/><path d="m9.8 10.5-3.3-3M14.2 10.5l3.3-3M12 15.5v3.2"/></svg><span class="lbl">Fleet</span></a>
+      <a href="#log" data-view="log"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg><span class="lbl">Log</span></a>
+      <button type="button" class="to-chat" id="chat-toggle" aria-controls="chat" aria-expanded="false" title="Chat"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 0 1-12.4 7.5L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/></svg><span class="lbl">Chat</span><span class="badge" id="chat-badge" hidden></span></button>
+    </nav>
+    <div class="panel" id="panel" hidden role="dialog" aria-label="Notifications">
+      <div class="panel-head">
+        <h2 id="panel-title">Notifications</h2>
+        <div class="actions">
+          <button type="button" id="n-read">Mark all read</button>
+          <button type="button" id="n-clear">Clear</button>
+        </div>
       </div>
-      <span class="count" id="f-count"></span>
+      <div class="panel-prefs">
+        <label>Sound <select id="n-sound"><option value="important">important only</option><option value="all">every event</option><option value="off">off</option></select></label>
+        <label>Toasts <select id="n-toasts"><option value="all">every event</option><option value="important">important only</option><option value="off">off</option></select></label>
+        <label>Browser alerts <select id="n-browser"><option value="off">off</option><option value="important">important only</option><option value="all">every event</option></select></label>
+        <button type="button" id="n-test">Test sound</button>
+        <span id="n-audio-note" class="blocked" hidden>Click anywhere once to allow sound.</span>
+        <span id="n-browser-note" class="blocked" hidden></span>
+      </div>
+      <ul class="notifs" id="notifs"></ul>
     </div>
-    <div class="card fleet-card"><table id="fleet-table"></table></div>
-  </section>
-  <section id="tokens" aria-labelledby="h-tokens">
-    <h2 id="h-tokens">Tokens by worker</h2>
-    <div class="card chart-card" id="chart"></div>
-  </section>
-  <section id="activity" aria-labelledby="h-activity">
-    <h2 id="h-activity">Activity</h2>
-    <div class="card"><ul class="log" id="log"></ul></div>
-  </section>
-  <footer class="foot">
-    <span id="foot-updated"></span>
-    <span class="pill running" id="live" hidden>live</span>
-  </footer>
-</div>
+  </div>
 
-<main class="wrap dv" id="decision" tabindex="-1" hidden>
-  <a class="dv-back" href="#decisions"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>All decisions</a>
-  <div class="dv-info" id="dv-info"></div>
-  <section class="dv-body" id="dv-body" aria-labelledby="h-evidence" hidden>
-    <h2 id="h-evidence">What it rests on</h2>
-    <div id="dv-frame"></div>
-  </section>
-  <div class="dv-answer" id="dv-answer"></div>
-</main>
+  <div class="wrap" id="app">
+    <section class="view" id="decisions" data-view="decisions" aria-labelledby="h-decisions">
+      <div class="lead" id="lead"></div>
+      <div class="part">
+        <h2 id="h-decisions" class="vh">Decisions</h2>
+        <div class="card" id="decision-list"></div>
+      </div>
+      <div class="part">
+        <h2 id="h-totals">The fleet</h2>
+        <dl class="totals" id="tiles"></dl>
+      </div>
+    </section>
+    <section class="view" id="plan" data-view="plan" aria-label="Plan" hidden>
+      <div class="cols">
+        <div class="part" id="roadmap">
+          <h2>Roadmap</h2>
+          <div class="card" id="roadmap-list"></div>
+        </div>
+        <div class="part" id="roadblocks">
+          <h2>Roadblocks</h2>
+          <div class="card" id="roadblock-list"></div>
+        </div>
+      </div>
+    </section>
+    <section class="view" id="fleet" data-view="fleet" aria-label="Fleet" hidden>
+      <div class="part" id="workers">
+        <h2>Workers</h2>
+        <div class="filters" id="filters">
+          <input type="search" id="f-q" placeholder="Search task, lane, report" aria-label="Search workers" autocomplete="off">
+          <button type="button" class="f-toggle" id="f-toggle" aria-expanded="false" aria-controls="f-more">Filters <span class="f-on" id="f-on" hidden></span></button>
+          <div class="f-more" id="f-more">
+            <label>Status <select id="f-status"><option value="">all</option></select></label>
+            <label>Milestone <select id="f-milestone"><option value="">all</option></select></label>
+            <label>Skill <select id="f-skill"><option value="">all</option></select></label>
+            <label>Model <select id="f-model"><option value="">all</option></select></label>
+            <button class="reset" id="f-reset" type="button">Clear filters</button>
+          </div>
+          <span class="count" id="f-count"></span>
+        </div>
+        <div class="card fleet-card"><table id="fleet-table"></table></div>
+      </div>
+      <div class="part" id="tokens">
+        <h2>Tokens by worker</h2>
+        <div class="card chart-card" id="chart"></div>
+      </div>
+    </section>
+    <section class="view" id="log-view" data-view="log" aria-label="Log" hidden>
+      <div class="part" id="activity">
+        <h2>Activity</h2>
+        <div class="card"><ul class="log" id="log"></ul></div>
+      </div>
+    </section>
+    <footer class="foot">
+      <span id="foot-updated"></span>
+      <span class="pill running" id="live" hidden>live</span>
+    </footer>
+  </div>
+
+  <main class="wrap dv" id="decision" tabindex="-1" hidden>
+    <a class="dv-back" href="#decisions"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>All decisions</a>
+    <div class="dv-info" id="dv-info"></div>
+    <section class="dv-body" id="dv-body" aria-labelledby="h-evidence" hidden>
+      <h2 id="h-evidence">What it rests on</h2>
+      <div id="dv-frame"></div>
+    </section>
+    <div class="dv-answer" id="dv-answer"></div>
+  </main>
+</div>
 
 <aside class="chat" id="chat" aria-labelledby="chat-title">
   <header class="chat-head">
@@ -800,8 +851,75 @@ var FleetCore = (function () {
     return value ? { text: value } : { error: "Write your answer." };
   }
 
+  /* The state as the page renders it, from whatever arrived (the embedded script, the stream, a
+     poll): the five texts have to be there, every list is present, and a row that is not a row is
+     dropped. Null when it is not a state, so the page keeps the one it has. */
+  function parseState(value) {
+    const isRow = (r) => r !== null && typeof r === "object" && !Array.isArray(r);
+    if (!isRow(value)) return null;
+    for (const key of ["project", "goal", "status", "now", "started"]) if (typeof value[key] !== "string") return null;
+    const lists = {};
+    for (const key of ["roadmap", "agents", "roadblocks", "decisions", "events"]) {
+      const rows = value[key] ?? [];
+      if (!Array.isArray(rows)) return null;
+      lists[key] = rows.filter(isRow);
+    }
+    const text = (v, fallback) => typeof v === "string" ? v : fallback;
+    const count = (v, fallback) => Number.isFinite(v) ? v : fallback;
+    const withId = (rows) => rows.filter((r) => typeof r.id === "string" && r.id);
+    return {
+      ...value,
+      updated: text(value.updated, value.started),
+      roadmap: withId(lists.roadmap).map((m) => ({ ...m, title: text(m.title, m.id), steps: withId(Array.isArray(m.steps) ? m.steps.filter(isRow) : []) })),
+      agents: withId(lists.agents).map((a) => ({ ...a, name: text(a.name, a.id), status: text(a.status, ""), task: text(a.task, ""),
+        lane: Array.isArray(a.lane) ? a.lane.map(String) : [], tokens: count(a.tokens, 0), duration_ms: count(a.duration_ms, 0), rounds: count(a.rounds, 1) })),
+      roadblocks: withId(lists.roadblocks).map((r) => ({ ...r, title: text(r.title, r.id), resolved: r.resolved === true })),
+      decisions: withId(lists.decisions).map((d) => ({ ...d, title: text(d.title, d.id), question: text(d.question, ""), kind: text(d.kind, "decision"),
+        status: text(d.status, "open"), blocking: d.blocking === true, options: Array.isArray(d.options) ? d.options.filter(isRow) : [] })),
+      events: lists.events.filter((e) => typeof e.text === "string" && typeof e.kind === "string").map((e) => ({ ...e, at: text(e.at, "") })),
+    };
+  }
+
+  /* A chat message as the server stores it, or null for anything else (an error body, a torn line). */
+  function parseMessage(value) {
+    if (value === null || typeof value !== "object") return null;
+    if (!Number.isInteger(value.id) || typeof value.from !== "string" || typeof value.text !== "string" || !Array.isArray(value.to)) return null;
+    const parts = Array.isArray(value.parts) ? value.parts.filter((p) => p && typeof p.text === "string") : [];
+    return {
+      id: value.id, at: typeof value.at === "string" ? value.at : "", from: value.from, to: value.to.map(String), text: value.text,
+      re: Number.isInteger(value.re) ? value.re : null, parts: parts.length ? parts : [{ text: value.text }],
+      decision: typeof value.decision === "string" ? value.decision : "", author: typeof value.author === "string" ? value.author : "",
+    };
+  }
+
+  /* Where a location hash leads: the view, the decision it opens, the element to scroll to. The
+     addresses the page had as one long scroll still lead to where their section went. */
+  const VIEWS = ["decisions", "plan", "fleet", "log"];
+  const MOVED = { roadmap: "plan", roadblocks: "plan", tokens: "fleet", activity: "log" };
+  function viewOf(hash) {
+    const decision = decisionRoute(hash);
+    const name = String(hash ?? "").replace(/^#/, "");
+    if (decision) return { view: "decisions", decision, anchor: null };
+    if (VIEWS.includes(name)) return { view: name, decision: null, anchor: null };
+    if (MOVED[name]) return { view: MOVED[name], decision: null, anchor: name };
+    if (/^agent-[A-Za-z0-9_.-]+$/.test(name)) return { view: "fleet", decision: null, anchor: name };
+    return { view: "decisions", decision: null, anchor: null };
+  }
+
+  /* What waits on the user, as the sentence the page opens with. */
+  function leadOf(decisions) {
+    const open = (decisions || []).filter((d) => d.status === "open"), holding = open.filter((d) => d.blocking).length;
+    if (!open.length) return { headline: "Nothing waits on you.", detail: "", tone: "clear" };
+    const headline = open.length === 1 ? "1 decision waits on you." : `${open.length} decisions wait on you.`;
+    if (!holding) return { headline, detail: "Work goes on meanwhile.", tone: "waiting" };
+    const detail = open.length === 1 ? "It blocks work."
+      : holding === open.length ? (holding === 2 ? "Both block work." : "All of them block work.")
+      : `${holding} of them block${holding === 1 ? "s" : ""} work.`;
+    return { headline, detail, tone: "blocking" };
+  }
+
   return { keyOf, rosterOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf,
-    decisionRows, decisionRoute, pendingAnswer, answerText };
+    decisionRows, decisionRoute, pendingAnswer, answerText, parseState, parseMessage, viewOf, leadOf, VIEWS };
 })();
 </script>
 <script>
@@ -811,12 +929,11 @@ var FleetCore = (function () {
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const Core = FleetCore;
 
-  let STATE;
-  try {
-    STATE = JSON.parse($("fleet-state").textContent);
-  } catch (e) {
+  let STATE = null;
+  try { STATE = Core.parseState(JSON.parse($("fleet-state").textContent)); } catch { STATE = null; }
+  if (!STATE) {
     $("app").innerHTML = '<div class="error">No fleet state embedded. Render this template with scripts/render_dashboard.py.</div>';
-    $("chat").hidden = true;
+    $("chat").hidden = true; $("masthead").hidden = true;
     return;
   }
 
@@ -881,38 +998,43 @@ var FleetCore = (function () {
   const expanded = new Set(store.get("expanded", []));
   const filters = ["f-status", "f-milestone", "f-skill", "f-model", "f-q"];
 
+  /* The masthead names the fleet; the page opens with what waits on the viewer, said in a sentence. */
+  $("top-mark").innerHTML = mark();
   function renderHeader() {
-    paint($("head"), `
-      <div class="head-row"><span class="mark" aria-hidden="true">${mark()}</span><h1>${esc(STATE.project)}</h1>${pill(STATE.status)}</div>
+    $("top-project").textContent = STATE.project;
+    paint($("top-status"), pill(STATE.status));
+    const lead = Core.leadOf(STATE.decisions);
+    $("lead").className = "lead " + lead.tone;
+    paint($("lead"), `<h2 class="lead-line">${esc(lead.headline)}</h2>
+      ${lead.detail ? `<p class="lead-detail">${esc(lead.detail)}</p>` : ""}
       <p class="goal">${esc(STATE.goal)}</p>
-      <div class="now"><b>Now</b><span>${esc(STATE.now)}</span></div>
-      <div class="meta">
-        <span>Started ${esc(clock(STATE.started))}, ${esc(ago(STATE.started))}</span>
-        <span>Updated ${esc(clock(STATE.updated))}, ${esc(ago(STATE.updated))}</span>
-      </div>`);
+      <p class="now"><b>Now</b>${esc(STATE.now)}</p>
+      <p class="meta">Started ${esc(ago(STATE.started))}, updated ${esc(ago(STATE.updated))}.</p>`);
     $("foot-updated").textContent = `State updated ${new Date(STATE.updated).toLocaleString()}`;
   }
 
+  /* The fleet's totals, and the counts the tabs carry. */
   function renderTiles() {
     const byStatus = (s) => STATE.agents.filter((a) => a.status === s).length;
-    const totalTokens = STATE.agents.reduce((n, a) => n + (a.tokens || 0), 0);
+    const totalTokens = STATE.agents.reduce((n, a) => n + a.tokens, 0);
     const openBlocks = STATE.roadblocks.filter((r) => !r.resolved);
     const steps = STATE.roadmap.flatMap((m) => m.steps);
-    const doneSteps = steps.filter((s) => s.status === "done").length;
-    const tile = (label, value, sub, cls) => `<div class="tile ${cls || ""}"><span class="label">${label}</span><span class="value num">${value}</span><span class="sub">${sub}</span></div>`;
+    const total = (label, value, cls, title) => `<div class="${cls || ""}"${title ? ` title="${esc(title)}"` : ""}><dd>${value}</dd><dt>${label}</dt></div>`;
     const asked = openDecisions(), holding = asked.filter((d) => d.blocking).length;
+    const failed = byStatus("failed") + byStatus("stopped");
+    paint($("tiles"), [
+      total("running", byStatus("running")),
+      byStatus("queued") ? total("queued", byStatus("queued")) : "",
+      total("done", byStatus("done")),
+      total("blocked", byStatus("blocked"), openBlocks.length ? "alert" : "", `${openBlocks.length} open roadblock${openBlocks.length === 1 ? "" : "s"}`),
+      failed ? total("failed or stopped", failed, "alert") : "",
+      total("steps done", `${steps.filter((s) => s.status === "done").length} of ${steps.length}`),
+      total("tokens", esc(fmtShort(totalTokens)), "", fmtInt(totalTokens) + " across " + STATE.agents.length + " workers"),
+      total("elapsed", esc(fmtDur(NOW - Date.parse(STATE.started)) || "0 s")),
+    ].join(""));
     $("nav-decisions").hidden = !asked.length;
     $("nav-decisions").textContent = String(asked.length);
     $("nav-decisions").classList.toggle("alert", holding > 0);
-    paint($("tiles"), [
-      tile("Waiting on you", asked.length, holding ? `${holding} block${holding === 1 ? "s" : ""} work` : "none blocks work", holding ? "alert" : ""),
-      tile("Running", byStatus("running"), `${byStatus("queued")} queued`),
-      tile("Done", byStatus("done"), `${byStatus("failed") + byStatus("stopped")} failed or stopped`),
-      tile("Blocked", byStatus("blocked"), `${openBlocks.length} open roadblock${openBlocks.length === 1 ? "" : "s"}`, openBlocks.length ? "alert" : ""),
-      tile("Roadmap", `${doneSteps}/${steps.length}`, "steps done"),
-      tile("Tokens", fmtShort(totalTokens), fmtInt(totalTokens) + " across " + STATE.agents.length + " workers"),
-      tile("Elapsed", fmtDur(NOW - Date.parse(STATE.started)) || "0 s", "since coordination began"),
-    ].join(""));
     $("nav-blocks").hidden = !openBlocks.length;
     $("nav-blocks").textContent = String(openBlocks.length);
   }
@@ -952,8 +1074,8 @@ var FleetCore = (function () {
 
   const KIND_WORDS = { decision: "a choice", input: "your input", secret: "a secret", action: "something to do" };
   const seen = store.get("d-seen", {});   // decision id -> the revision this viewer last opened
-  const decisionById = (id) => (STATE.decisions || []).find((d) => d.id === id);
-  const openDecisions = () => (STATE.decisions || []).filter((d) => d.status === "open");
+  const decisionById = (id) => STATE.decisions.find((d) => d.id === id);
+  const openDecisions = () => STATE.decisions.filter((d) => d.status === "open");
   const revisionOf = (d) => d.revised || d.opened;
   const closedWords = (d) => d.status === "decided" ? `Decided: ${d.answer || ""}` : `Withdrawn: ${d.resolution || ""}`;
   const statePill = (d, pending) => d.status !== "open" ? pill(d.status)
@@ -979,24 +1101,32 @@ var FleetCore = (function () {
      the facts, the evidence (a frame, reloaded only when the item is revised), and the answer's
      form, which is rewritten only when what it shows changed, so a half-written answer survives
      every update of the state. */
-  let viewing = null, changedNote = null;
+  let viewing = null, changedNote = null, shown = "";
   const evidence = { key: "", frame: null };
 
+  /* One view at a time: the tab of the view in the address is current, and a decision's page
+     stands in for the views while it is open. */
   function route() {
-    const id = Core.decisionRoute(location.hash), was = viewing;
+    const at = Core.viewOf(location.hash), id = at.decision, was = viewing;
+    const place = id ? "decision/" + id : at.view;
     viewing = id;
     $("app").hidden = !!id; $("decision").hidden = !id;
-    if (id && !DOCKED.matches && chat.open) { pushed = false; overlayClosed(); }
+    for (const view of document.querySelectorAll(".view")) view.hidden = view.dataset.view !== at.view;
+    for (const tab of $("dock").querySelectorAll("a[data-view]")) tab.setAttribute("aria-current", String(tab.dataset.view === at.view));
+    if (!DOCKED.matches && chat.open) { pushed = false; overlayClosed(); }
+    if (!$("panel").hidden) $("bell").click();
     if (id) {
       if (was !== id) changedNote = null;
       for (const toast of $("toasts").querySelectorAll("[data-decision]")) if (toast.dataset.decision === id) toast.remove();
       renderDecision();
-      if (was !== id) { window.scrollTo(0, 0); $("decision").focus({ preventScroll: true }); }
-    } else if (was) {
-      renderDecisions();
-      const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
-      if (target) target.scrollIntoView();
+    } else {
+      renderDecisions(); render();
     }
+    const target = at.anchor && document.getElementById(at.anchor);
+    if (target) target.scrollIntoView();
+    else if (shown && shown !== place) window.scrollTo(0, 0);
+    if (id && was !== id && shown) $("decision").focus({ preventScroll: true });
+    shown = place;
   }
 
   function renderDecision() {
@@ -1011,8 +1141,8 @@ var FleetCore = (function () {
     if (open && d.revised && seen[d.id] && time(d.revised) > time(seen[d.id])) changedNote = { id: d.id, at: d.revised, text: d.change || "" };
     if (seen[d.id] !== revisionOf(d)) { seen[d.id] = revisionOf(d); store.set("d-seen", seen); }
     const pending = Core.pendingAnswer(d, chat.messages.values());
-    const recommended = (d.options || []).find((o) => o.id === d.recommend);
-    const successor = (STATE.decisions || []).find((x) => x.supersedes === d.id);
+    const recommended = d.options.find((o) => o.id === d.recommend);
+    const successor = STATE.decisions.find((x) => x.supersedes === d.id);
     const before = d.supersedes && decisionById(d.supersedes);
     paint($("dv-info"), `
       <header class="dv-head">
@@ -1030,17 +1160,17 @@ var FleetCore = (function () {
     paint($("dv-answer"), answerHtml(d, pending));
   }
 
-  const optionsHtml = (d, pick) => (d.options || []).map((o) => {
+  const optionsHtml = (d, pick) => d.options.map((o) => {
     const chosen = !pick && d.status === "decided" && String(d.answer || "").startsWith(o.id + ":");
     return `<${pick ? "label" : "div"} class="option${chosen ? " chosen" : ""}">${pick ? `<input type="radio" name="choice" value="${esc(o.id)}">` : `<span class="key">${esc(o.id)}</span>`}
       <span class="label">${pick ? esc(o.id) + ": " : ""}${esc(o.label)}${o.id === d.recommend ? pillAs("recommended plain", "recommended") : ""}</span>
       <span class="consequence">${esc(o.consequence)}</span></${pick ? "label" : "div"}>`;
   }).join("");
   const manualHtml = (d, title) => d.manual ? `<div class="dv-block"><h3>${title}</h3><pre class="manual">${esc(d.manual)}</pre></div>` : "";
-  const discuss = '<button type="button" class="btn" data-discuss>Ask about it in the chat</button>';
+  const discuss = '<button type="button" class="btn" data-discuss>Ask in the chat</button>';
 
   function answerHtml(d, pending) {
-    const shown = d.kind === "decision" && (d.options || []).length ? `<div class="dv-block"><h3>Options</h3><div class="options">${optionsHtml(d, false)}</div></div>` : "";
+    const shown = d.kind === "decision" && d.options.length ? `<div class="dv-block"><h3>Options</h3><div class="options">${optionsHtml(d, false)}</div></div>` : "";
     if (d.status !== "open") return d.page === false && !shown ? "" : shown + (chatWritable() ? `<div class="sheet-actions"><button type="button" class="btn" data-change>Change my answer</button></div>` : "");
     if (pending) return `<div class="note pending" role="status"><h3>Your answer</h3><p>${esc(pending.answer.text)}</p>
         <span class="dv-meta">Sent ${esc(clock(pending.answer.at))}. The coordinator records it next; the fleet acts on it once it is recorded.</span>
@@ -1107,25 +1237,25 @@ var FleetCore = (function () {
   /* The evidence: the fragment a worker or the coordinator wrote for this decision, in a frame
      without this page's origin, so a script in it can draw a chart and cannot answer as the
      viewer. The page gives it the base styles and the theme, and the frame reports its height. */
-  const TOKENS = ["bg", "card", "card-2", "text", "muted", "faint", "line", "accent", "accent-soft", "good", "warning", "serious", "critical", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
+  const TOKENS = ["bg", "card", "card-2", "text", "muted", "faint", "line", "accent", "accent-soft", "you", "run", "good", "warning", "serious", "critical", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
   function frameDoc(html) {
     const cs = getComputedStyle(document.documentElement);
     const vars = TOKENS.map((t) => `--${t}:${cs.getPropertyValue("--" + t).trim()}`).join(";");
     return `<!doctype html><html><head><meta charset="utf-8"><base href="${esc(new URL("decisions/", location.href).href)}" target="_blank">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..700&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>:root{${vars};color-scheme:${cs.colorScheme === "dark" ? "dark" : "light"}}
-html{font:15px/1.5 "IBM Plex Sans","Segoe UI",system-ui,sans-serif;color:var(--text);background:var(--card)}
+html{font:15px/1.5 "Archivo","Helvetica Neue",Arial,system-ui,sans-serif;color:var(--text);background:var(--card)}
 body{margin:0;padding:14px 16px;overflow-x:auto;overflow-wrap:anywhere}
 body>:first-child{margin-top:0}body>:last-child{margin-bottom:0}
-h1,h2,h3,h4{margin:1.2em 0 .4em;line-height:1.25;font-weight:600}h1{font-size:1.25rem}h2{font-size:1.1rem}h3,h4{font-size:1rem}
+h1,h2,h3,h4{margin:1.2em 0 .4em;line-height:1.2;font-weight:700;font-stretch:84%}h1{font-size:1.3rem}h2{font-size:1.15rem}h3,h4{font-size:1rem}
 p,ul,ol,table,pre,figure,dl{margin:0 0 .9em}a{color:var(--accent)}
 table{border-collapse:collapse;width:100%;font-size:.92rem}
 th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
-th{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:500}
-code,pre{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:.88em}
+th{font-size:.85rem;color:var(--muted);font-weight:600;font-stretch:84%}
+code,pre{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.86em}
 pre{background:var(--card-2);padding:10px 12px;border-radius:6px;overflow-x:auto}
 img,svg,video,canvas{max-width:100%;height:auto}
-.num{font-variant-numeric:tabular-nums;text-align:right}
+.num{font-variant-numeric:tabular-nums;font-stretch:84%;text-align:right}
 .muted{color:var(--muted)}.good{color:var(--good)}.warning{color:var(--warning)}.critical{color:var(--critical)}
 </style></head><body>${html}
 <scr` + `ipt>(function(){var post=function(){parent.postMessage({fleetEvidence:true,height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post()})()</scr` + `ipt></body></html>`;
@@ -1344,15 +1474,15 @@ img,svg,video,canvas{max-width:100%;height:auto}
     function renderList() {
       const list = items();
       paint($("notifs"), list.length ? list.map((e) => `<li class="${isUnread(e) ? "unread" : "read"}${e.important ? " important" : ""}">
-        <span class="mark"></span>
-        <span><div class="meta"><span class="kind">${esc(e.kind)}</span>, ${esc(who(e))}${e.important ? ", needs you" : ""}</div>${esc(e.text)}${aboutLink(e)}</span>
+        <span class="dot"></span>
+        <span><div class="meta"><span class="kind">${esc(e.kind)}${e.important ? ", needs you" : ""}</span>${esc(who(e))}</div>${esc(e.text)}${aboutLink(e)}</span>
         <time datetime="${esc(e.at)}" title="${esc(e.at)}">${esc(clock(e.at))}</time>
       </li>`).join("") : '<li class="empty muted">Nothing yet.</li>');
     }
     function toast(e) {
       if (prefs.toasts === "off" || (prefs.toasts === "important" && !e.important)) return;
       const el = document.createElement("div"); el.className = "toast" + (e.important ? " important" : "") + (e.chat || e.decision ? " opens" : "");
-      el.innerHTML = `<div><div class="meta"><span class="kind">${esc(e.kind)}</span>, ${esc(who(e))}, ${esc(clock(e.at))}</div>${esc(e.text)}</div><button type="button" aria-label="Dismiss">×</button>`;
+      el.innerHTML = `<div><div class="meta"><span class="kind">${esc(e.kind)}</span>${esc(who(e))}, ${esc(clock(e.at))}</div><div class="text">${esc(e.text)}</div></div><button type="button" aria-label="Dismiss">×</button>`;
       el.querySelector("button").addEventListener("click", (ev) => { ev.stopPropagation(); el.remove(); });
       if (e.chat) el.addEventListener("click", () => { el.remove(); openChat(); });
       else if (e.decision) { el.dataset.decision = e.decision; el.addEventListener("click", () => { el.remove(); location.hash = "#decision/" + e.decision; }); }
@@ -1369,7 +1499,9 @@ img,svg,video,canvas{max-width:100%;height:auto}
       const seen = new Set(sync.keys || []);
       const fresh = booted ? STATE.events.filter((e) => !seen.has(key(e))) : [];
       sync.keys = STATE.events.map(key);
-      if (!booted) { booted = true; unread().filter((e) => e.important).reverse().forEach(toast); }
+      /* On load the page itself opens with what waits on the viewer, so only the other important
+         events (a failed worker, a flagged note) come up as toasts. */
+      if (!booted) { booted = true; unread().filter((e) => e.important && !e.decision).reverse().forEach(toast); }
       else announce(fresh);
       refresh();
     }
@@ -1467,19 +1599,6 @@ img,svg,video,canvas{max-width:100%;height:auto}
     $("filters").classList.toggle("open", open); $("f-toggle").setAttribute("aria-expanded", String(open));
   });
 
-  /* Section navigation: the link of the section in view is current. */
-  (() => {
-    const links = [...$("dock").querySelectorAll("a[data-sec]")];
-    if (!("IntersectionObserver" in window)) return;
-    const seen = new Map();
-    const io = new IntersectionObserver((entries) => {
-      for (const en of entries) seen.set(en.target.id, en.isIntersecting);
-      const current = links.find((l) => seen.get(l.dataset.sec));
-      for (const l of links) l.setAttribute("aria-current", String(l === current));
-    }, { rootMargin: "-35% 0px -55% 0px" });
-    for (const l of links) { const s = $(l.dataset.sec); if (s) io.observe(s); }
-  })();
-
   /* ---------------------------------------------------------------- the chat */
 
   const say = $("say");
@@ -1522,7 +1641,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     $("chat-close").title = docked ? "Hide chat" : "Close chat";
     /* The overlay is modal: the page behind it is inert. The docked panel is not. */
     const modal = !docked && chat.open;
-    for (const id of ["app", "decision", "bell", "panel", "toasts"]) $(id).inert = modal;
+    for (const id of ["masthead", "app", "decision", "toasts"]) $(id).inert = modal;
     if (modal) { $("chat").setAttribute("role", "dialog"); $("chat").setAttribute("aria-modal", "true"); }
     else { $("chat").removeAttribute("role"); $("chat").removeAttribute("aria-modal"); }
     markChatRead();
@@ -1664,8 +1783,9 @@ img,svg,video,canvas{max-width:100%;height:auto}
 
   /* A message from the stream or from a send. The store's id makes it idempotent: a replayed or
      twice-delivered message is kept once. `live` marks one that arrived after the first replay. */
-  function addMessage(m, live) {
-    if (!m || typeof m.id !== "number" || chat.messages.has(m.id)) return;
+  function addMessage(received, live) {
+    const m = Core.parseMessage(received);
+    if (!m || chat.messages.has(m.id)) return;
     chat.messages.set(m.id, m);
     chat.lastId = Math.max(chat.lastId, m.id);
     if (live && m.from !== "user") {
@@ -1865,8 +1985,9 @@ img,svg,video,canvas{max-width:100%;height:auto}
      the second, so two writes within a second share it and cannot tell them apart. */
   let lastState = JSON.stringify(STATE);
   function takeState(raw) {
-    let next;
-    try { next = JSON.parse(raw); } catch { return; /* keep the last state */ }
+    let next = null;
+    try { next = Core.parseState(JSON.parse(raw)); } catch { next = null; }
+    if (!next) return;   // half written, or not a state: the page keeps the one it has
     const key = JSON.stringify(next);
     if (key === lastState) return;
     lastState = key;

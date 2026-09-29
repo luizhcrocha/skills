@@ -121,7 +121,7 @@ Between events, explain to the user what is happening in plain terms: who is on 
 
 ### 7. Integrate
 
-When a milestone's workers are done: run the project's checks yourself (types, tests, lint; a quick win), resolve anything left at the seams between lanes, mark the milestone done, and move the roadmap's current step forward. A milestone counts as done when its checks pass and its reports clear the standards block, not when its workers report.
+When a milestone's workers are done: run the project's checks yourself (types, tests, lint; a quick win), resolve anything left at the seams between lanes, mark the milestone done, and move the roadmap's current step forward. A milestone counts as done when its checks pass and its reports clear the standards, not when its workers report.
 
 ## Decisions
 

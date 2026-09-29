@@ -148,18 +148,16 @@ The page has a chat where the user writes to the fleet and mentions who should a
 
 ## What the page shows
 
-The page is built for a phone first: a bottom bar moves between the sections with a thumb, each worker is a card, and the chat is a full-height view that stays above the keyboard. On a wide screen the sections have a link row, the fleet is a table, and the chat docks at the side.
+The page is built for a phone first, one view at a time: Decisions, Plan, Fleet, Log, and the chat. A bar of labelled tabs sits under the thumb, each worker is a strip, and the chat is a full-height view that stays above the keyboard. On a wide screen the tabs are a row under the masthead, the fleet is a table, and the chat docks at the side. Each view has an address (`#decisions`, `#plan`, `#fleet`, `#log`, `#decision/<id>`), so a link you give the user opens where you mean.
 
-- Header: project, goal, status pill, the `now` line, started and updated times.
-- Summary tiles: what waits on the user, workers by status, total tokens, elapsed time, open roadblocks.
-- Decisions: open ones that block work first, then the other open ones, oldest first, then the closed ones with how they closed. A row is marked new until the user opens it and changed when it was revised since. Each row opens the decision's page.
-- Roadmap with the current step marked; steps link to their worker.
+- Masthead: the project, its status, and the bell.
+- Decisions, the view the page opens on: what waits on the user said in a sentence ("2 decisions wait on you. 1 of them blocks work."), the goal and the `now` line, then the decisions: open ones that block work first, then the other open ones, oldest first, then the closed ones with how they closed. A row is marked new until the user opens it and changed when it was revised since. Each row opens the decision's page. Under them, the fleet's totals: workers by status, steps done, tokens, elapsed time.
+- Plan: the roadmap with the current step marked; steps link to their worker.
 - Worker sheet: a worker's name anywhere on the page (a step, a roadblock, the fleet, the chart, the activity log, the chat) opens its task, lane, round, brief, and report, with a button that starts a message to it.
-- Roadblocks, open first, with who is needed and a link to the decision when it is the user.
-- Fleet with filters (status, milestone, skill, model, free text) and expandable brief and report.
-- Token chart: one bar per worker, coloured by spawn order, with its share of the total.
-- Activity log, newest first, filtered together with the table.
+- Plan, too: the roadblocks, open first, with who is needed and a link to the decision when it is the user.
+- Fleet: the workers with filters (status, milestone, skill, model, free text) and expandable brief and report, and the token chart: one bar per worker, coloured by spawn order, with its share of the total.
+- Log: the activity, newest first, filtered together with the table.
 - Chat: the conversation in threads, each reply under the message it answers. The user's message shows who it is waiting on until each recipient has answered. The composer completes `@` from the roster and says who the message will reach. A viewer who may not write sees the conversation with the reason in place of the composer.
-- Notifications: every event is one, and so is every message from the fleet while the chat is out of view. One about a decision opens its page. A bell in the top right carries the unread count and opens the list, with mark-read, clear, and the sound and toast preferences. New events show as toasts; important ones stay until dismissed, chime, and flag the tab title. Browsers allow sound only after the viewer has clicked the page once, so a viewer who never interacts still gets the toast and the badge. Browser alerts (system notifications while the tab is hidden) are a third preference in the panel; they need the https address and a permission the viewer grants when turning them on, and important ones stay on screen until dismissed.
+- Notifications: every event is one, and so is every message from the fleet while the chat is out of view. One about a decision opens its page. A bell in the top right carries the unread count and opens the list, with mark-read, clear, and the sound and toast preferences. New events show as toasts (under the masthead on a phone, clear of the tabs); important ones stay until dismissed, chime, and flag the tab title. Browsers allow sound only after the viewer has clicked the page once, so a viewer who never interacts still gets the toast and the badge. Browser alerts (system notifications while the tab is hidden) are a third preference in the panel; they need the https address and a permission the viewer grants when turning them on, and important ones stay on screen until dismissed.
 
 Filters and the expanded rows survive each re-render (the page keeps them in the viewer's browser), so the user's view is not reset by your updates.

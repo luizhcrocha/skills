@@ -238,3 +238,53 @@ test("answerText: an input is its text, a secret a reference or done by hand, an
   assert.equal(Core.answerText(secret, { value: " " }).error, "Give the reference or the item's name.");
   assert.deepEqual(Core.answerText(item("d1", { kind: "action" }), { done: true, note: "ran on the NAS too" }), { text: "Done.\nran on the NAS too" });
 });
+
+test("parseState: a state the page can render, with every list present, or null", () => {
+  const parsed = Core.parseState({ project: "p", goal: "g", status: "running", now: "n", started: "2026-09-28T10:00:00Z", agents: [{ id: "a1", name: "x", status: "done", task: "t" }] });
+  assert.deepEqual([parsed.roadmap, parsed.roadblocks, parsed.decisions, parsed.events], [[], [], [], []]);
+  assert.deepEqual(parsed.agents[0], { id: "a1", name: "x", status: "done", task: "t", lane: [], tokens: 0, duration_ms: 0, rounds: 1 });
+  assert.equal(parsed.updated, "2026-09-28T10:00:00Z", "a state never rendered was last updated when it began");
+  for (const bad of [null, undefined, "text", 3, [], { project: "p" }, { project: "p", goal: "g", status: "running", now: "n", started: "x", agents: "none" }, { project: 1, goal: "g", status: "s", now: "n", started: "x" }]) assert.equal(Core.parseState(bad), null, JSON.stringify(bad));
+});
+
+test("parseState: rows that are not rows are dropped, and a row keeps the fields the page does not know", () => {
+  const parsed = Core.parseState({ project: "p", goal: "g", status: "running", now: "n", started: "x", agents: [null, { name: "no id" }, { id: "a1", extra: 1 }], decisions: [{ id: "d1", title: "T" }, "x"], events: [{ at: "x", kind: "note", text: "t" }, { text: 1 }] });
+  assert.deepEqual(parsed.agents, [{ id: "a1", extra: 1, name: "a1", status: "", task: "", lane: [], tokens: 0, duration_ms: 0, rounds: 1 }]);
+  assert.deepEqual(parsed.decisions.map((d) => [d.id, d.status, d.kind, d.options]), [["d1", "open", "decision", []]]);
+  assert.equal(parsed.events.length, 1);
+});
+
+test("parseMessage: a chat message as the server stores it, or null", () => {
+  const m = Core.parseMessage({ id: 3, at: "2026-09-28T10:00:00Z", from: "a1", to: ["user"], text: "hi", re: 1, parts: [{ text: "hi" }], decision: "d1" });
+  assert.deepEqual(m, { id: 3, at: "2026-09-28T10:00:00Z", from: "a1", to: ["user"], text: "hi", re: 1, parts: [{ text: "hi" }], decision: "d1", author: "" });
+  assert.deepEqual(Core.parseMessage({ id: 1, from: "user", to: [], text: "x" }), { id: 1, at: "", from: "user", to: [], text: "x", re: null, parts: [{ text: "x" }], decision: "", author: "" });
+  for (const bad of [null, "x", {}, { id: "1", from: "a", to: [], text: "x" }, { id: 1, from: "a", to: "user", text: "x" }, { id: 1, from: "a", to: [], text: 3 }, { error: "refused" }]) assert.equal(Core.parseMessage(bad), null, JSON.stringify(bad));
+});
+
+test("viewOf: the view a location hash names, the decision it opens, and the place to scroll to", () => {
+  assert.deepEqual(Core.viewOf(""), { view: "decisions", decision: null, anchor: null });
+  assert.deepEqual(Core.viewOf("#"), { view: "decisions", decision: null, anchor: null });
+  assert.deepEqual(Core.viewOf("#decisions"), { view: "decisions", decision: null, anchor: null });
+  assert.deepEqual(Core.viewOf("#decision/d1"), { view: "decisions", decision: "d1", anchor: null });
+  assert.deepEqual(Core.viewOf("#plan"), { view: "plan", decision: null, anchor: null });
+  assert.deepEqual(Core.viewOf("#fleet"), { view: "fleet", decision: null, anchor: null });
+  assert.deepEqual(Core.viewOf("#log"), { view: "log", decision: null, anchor: null });
+  assert.deepEqual(Core.viewOf("#roadblocks"), { view: "plan", decision: null, anchor: "roadblocks" }, "the addresses the page had before it had views");
+  assert.deepEqual(Core.viewOf("#roadmap"), { view: "plan", decision: null, anchor: "roadmap" });
+  assert.deepEqual(Core.viewOf("#tokens"), { view: "fleet", decision: null, anchor: "tokens" });
+  assert.deepEqual(Core.viewOf("#activity"), { view: "log", decision: null, anchor: "activity" });
+  assert.deepEqual(Core.viewOf("#agent-a1"), { view: "fleet", decision: null, anchor: "agent-a1" });
+  assert.deepEqual(Core.viewOf("#nonsense"), { view: "decisions", decision: null, anchor: null });
+});
+
+test("leadOf: what waits on the user, said in a sentence", () => {
+  const lead = (...rows) => Core.leadOf(rows);
+  assert.deepEqual(lead(), { headline: "Nothing waits on you.", detail: "", tone: "clear" });
+  assert.deepEqual(lead(item("d1", { status: "decided" })), { headline: "Nothing waits on you.", detail: "", tone: "clear" });
+  assert.deepEqual(lead(item("d1")), { headline: "1 decision waits on you.", detail: "Work goes on meanwhile.", tone: "waiting" });
+  assert.deepEqual(lead(item("d1", { blocking: true })), { headline: "1 decision waits on you.", detail: "It blocks work.", tone: "blocking" });
+  assert.deepEqual(lead(item("d1"), item("d2", { blocking: true }), item("d3")), { headline: "3 decisions wait on you.", detail: "1 of them blocks work.", tone: "blocking" });
+  assert.deepEqual(lead(item("d1", { blocking: true }), item("d2", { blocking: true })), { headline: "2 decisions wait on you.", detail: "Both block work.", tone: "blocking" });
+  assert.deepEqual(lead(item("d1", { blocking: true }), item("d2", { blocking: true }), item("d3", { blocking: true }), item("d4")), { headline: "4 decisions wait on you.", detail: "3 of them block work.", tone: "blocking" });
+  assert.deepEqual(lead(item("d1", { blocking: true }), item("d2", { blocking: true }), item("d3", { blocking: true })), { headline: "3 decisions wait on you.", detail: "All of them block work.", tone: "blocking" });
+});
