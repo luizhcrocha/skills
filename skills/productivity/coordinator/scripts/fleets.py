@@ -4,6 +4,8 @@
     fleets.py list              every live fleet: its name, role, session, status, address, directory,
                                 what it is doing, and the decisions open in it
     fleets.py manager           how to reach the manager; exits 1 when there is none
+    fleets.py decision FLEET ID what a fleet asks, in full: the question, why, the options, the
+                                recommendation, where its evidence and its page are
     fleets.py name DIR SESSION  record the session name other sessions message this fleet by
 
 serve_dashboard.py registers a fleet when it starts serving DIR and forgets it on --stop; a fleet
@@ -176,17 +178,45 @@ def cmd_manager() -> None:
     print(f"    what holds for every fleet: {Path(found['dir']) / 'standing.md'}")
 
 
+def cmd_decision(fleet: str, id_: str) -> None:
+    entry = next((e for e in live() if e["id"] == fleet), None)
+    if not entry:
+        fail(f"no fleet '{fleet}' is being served; `fleets.py list` names the ones that are")
+    rows = (_read(Path(entry["dir"]) / "state.json") or {}).get("decisions", [])
+    d = next((r for r in rows if isinstance(r, dict) and r.get("id") == id_), None)
+    if not d:
+        fail(f"no decision '{id_}' in {fleet}")
+    open_ = d.get("status") == "open"
+    marks = [str(d.get("kind", "decision")), ("for the manager" if d.get("asks") == "manager" else "for the user") if open_ else str(d.get("status"))]
+    print(f"{fleet} {id_} [{', '.join(marks + (['blocks work'] if open_ and d.get('blocking') else []))}] {d.get('title')}")
+    print(f"    question: {d.get('question')}")
+    for key in ("why", "secret", "manual", "change", "answer", "resolution"):
+        if d.get(key):
+            print(f"    {key}: {d[key]}")
+    for o in d.get("options") or []:
+        print(f"    {o.get('id')}: {o.get('label')} | {o.get('consequence')}")
+    if d.get("recommend"):
+        print(f"    recommended: {d['recommend']}" + (f", {d['reason']}" if d.get("reason") else ""))
+    if d.get("agent"):
+        print(f"    waits: {d['agent']}")
+    if d.get("body"):
+        print(f"    evidence: {Path(entry['dir']) / 'decisions' / (id_ + '.html')}")
+    print(f"    page: {entry['url']}#decision/{id_}")
+
+
 def main(argv: list[str]) -> None:
     if argv == ["list"]:
         cmd_list()
     elif argv == ["manager"]:
         cmd_manager()
+    elif len(argv) == 3 and argv[0] == "decision":
+        cmd_decision(argv[1], argv[2])
     elif len(argv) == 3 and argv[0] == "name":
         if name(argv[1], argv[2]) is None:
             fail(f"{argv[1]} is not being served; start it with serve_dashboard.py first")
         print(f"this fleet's session is {argv[2]}")
     else:
-        fail("usage: fleets.py list | manager | name DIR SESSION")
+        fail("usage: fleets.py list | manager | decision FLEET ID | name DIR SESSION")
 
 
 if __name__ == "__main__":

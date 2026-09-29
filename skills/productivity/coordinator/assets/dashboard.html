@@ -107,7 +107,7 @@
   .shell { min-height: 100dvh; }
   .main { min-width: 0; container: main / inline-size; }
   .masthead { position: sticky; top: 0; z-index: 30; background: var(--bg); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top, 0px); }
-  .top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: var(--top-h); padding-inline: var(--gutter); box-sizing: border-box; }
+  .top { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-height: var(--top-h); padding-inline: var(--gutter); box-sizing: border-box; }
   .top-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .top h1 { font-size: 1.1875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mark { width: 30px; height: 30px; flex: none; border-radius: 7px; overflow: hidden; }
@@ -173,6 +173,20 @@
   .ask.closed .ask-head b { font-weight: 600; }
   .ask .detail { overflow-wrap: anywhere; }
   .ask .meta { font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
+
+  /* a manager's fleets: one strip per coordinator */
+  .strip { display: grid; gap: 3px; padding: 12px 14px 12px 13px; border-left: 4px solid var(--c, var(--line)); }
+  .strip:first-child { border-top-left-radius: 9px; }
+  .strip:last-child { border-bottom-left-radius: 9px; }
+  .strip + .strip { border-top: 1px solid var(--line); }
+  .strip-head { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; }
+  .strip-head .who { font-size: 1.0625rem; font-weight: 700; }
+  .strip .detail { overflow-wrap: anywhere; }
+  .strip .meta { font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
+  .strip .block-link { z-index: auto; }
+  .up { display: inline-flex; align-items: center; gap: 4px; min-height: var(--tap); padding: 0 8px; border-radius: 6px; color: var(--muted); font-weight: 600; font-stretch: var(--narrow); font-size: var(--fs-s); text-decoration: none; white-space: nowrap; }
+  .up:hover { color: var(--text); background: var(--card-2); }
+  .up svg.i { width: 16px; height: 16px; }
 
   /* roadmap */
   .milestone { padding: 12px 14px; display: grid; gap: 8px; }
@@ -550,7 +564,7 @@
   <div class="masthead" id="masthead">
     <header class="top">
       <div class="top-name"><span class="mark" id="top-mark" aria-hidden="true"></span><h1 id="top-project"></h1><span id="top-status"></span></div>
-      <span></span>
+      <a class="up" id="top-manager" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6 11.5 12 5.5l6 6"/></svg>Manager</a>
       <button class="bell" id="bell" type="button" aria-label="Notifications" aria-expanded="false" aria-controls="panel" title="Notifications">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17V11a6 6 0 0 1 12 0v6l1.5 2h-15z"/><path d="M10 21h4"/></svg>
         <span class="badge" id="bell-badge" hidden>0</span>
@@ -559,7 +573,7 @@
     <nav class="tabs" id="dock" aria-label="Views">
       <a href="#decisions" data-view="decisions"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg><span class="lbl">Decisions</span><span class="badge" id="nav-decisions" hidden></span></a>
       <a href="#plan" data-view="plan"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4h12l-2.5 4L17 12H5"/></svg><span class="lbl">Plan</span><span class="badge alert" id="nav-blocks" hidden></span></a>
-      <a href="#fleet" data-view="fleet"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12.5" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="20.5" r="1.8"/><path d="m9.8 10.5-3.3-3M14.2 10.5l3.3-3M12 15.5v3.2"/></svg><span class="lbl">Fleet</span></a>
+      <a href="#fleet" data-view="fleet"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12.5" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="20.5" r="1.8"/><path d="m9.8 10.5-3.3-3M14.2 10.5l3.3-3M12 15.5v3.2"/></svg><span class="lbl" id="tab-fleet">Fleet</span></a>
       <a href="#log" data-view="log"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg><span class="lbl">Log</span></a>
       <button type="button" class="to-chat" id="chat-toggle" aria-controls="chat" aria-expanded="false" title="Chat"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 0 1-12.4 7.5L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/></svg><span class="lbl">Chat</span><span class="badge" id="chat-badge" hidden></span></button>
     </nav>
@@ -608,6 +622,10 @@
       </div>
     </section>
     <section class="view" id="fleet" data-view="fleet" aria-label="Fleet" hidden>
+      <div class="part" id="coordinators" hidden>
+        <h2>Coordinators</h2>
+        <div class="card" id="coordinator-list"></div>
+      </div>
       <div class="part" id="workers">
         <h2>Workers</h2>
         <div class="filters" id="filters">
@@ -714,13 +732,18 @@ var FleetCore = (function () {
     return "send";
   }
 
-  /* Who can be written to: the coordinator first, then the agents, running ones before the rest,
-     each in spawn order. The coordinator's status and task are the fleet's. */
+  /* Who runs the chat of this state: the manager in a manager's, the coordinator in a fleet's. */
+  const hostOf = (state) => state && state.role === "manager" ? "manager" : "coordinator";
+
+  /* Who can be written to: the host first, then the agents, running ones before the rest, each in
+     spawn order, then in a manager's state the coordinators, each under its fleet's name. The
+     host's status and task are the fleet's. */
   function rosterOf(state) {
-    const agents = (state && state.agents) || [];
+    const agents = (state && state.agents) || [], host = hostOf(state);
     const row = (a) => ({ id: a.id, name: a.name || a.id, status: a.status || "", task: a.task || "" });
-    return [{ id: "coordinator", name: "coordinator", status: (state && state.status) || "", task: (state && state.now) || "" }]
-      .concat(agents.filter((a) => a.status === "running").map(row), agents.filter((a) => a.status !== "running").map(row));
+    return [{ id: host, name: host, status: (state && state.status) || "", task: (state && state.now) || "" }]
+      .concat(agents.filter((a) => a.status === "running").map(row), agents.filter((a) => a.status !== "running").map(row),
+        ((state && state.coordinators) || []).map((c) => ({ id: c.id, name: c.id, status: c.status || "", task: c.now || "" })));
   }
 
   /* The mention being typed at the caret: {start, end, query} when the caret ends "@query" and the
@@ -805,15 +828,17 @@ var FleetCore = (function () {
   const stamp = (iso) => { const t = Date.parse(iso); return isNaN(t) ? 0 : t; };
 
   /* The decisions as the user should read them: open and blocking first, then the other open ones,
-     oldest first in each, then the closed ones, newest first. `seen` maps an id to the revision the
-     viewer last opened; an open item never opened is marked "new", one revised since is "changed". */
+     oldest first in each, then the ones the manager looks at first, then the closed ones, newest
+     first. `seen` maps an id to the revision the viewer last opened; an open item never opened is
+     marked "new", one revised since is "changed". A row with an `href` is another fleet's, opened
+     on that fleet's page, and carries no mark here. */
   function decisionRows(decisions, seen) {
-    const rank = (d) => d.status !== "open" ? 2 : d.blocking ? 0 : 1;
+    const rank = (d) => d.status !== "open" ? 3 : d.asks === "manager" ? 2 : d.blocking ? 0 : 1;
     const rows = [...(decisions || [])].sort((a, b) => (rank(a) - rank(b))
-      || (rank(a) === 2 ? stamp(b.closed) - stamp(a.closed) : stamp(a.opened) - stamp(b.opened)));
+      || (rank(a) === 3 ? stamp(b.closed) - stamp(a.closed) : stamp(a.opened) - stamp(b.opened)));
     return rows.map((d) => {
       const last = seen && seen[d.id];
-      const mark = d.status !== "open" ? "" : !last ? "new" : d.revised && stamp(d.revised) > stamp(last) ? "changed" : "";
+      const mark = d.status !== "open" || d.href ? "" : !last ? "new" : d.revised && stamp(d.revised) > stamp(last) ? "changed" : "";
       return { item: d, mark };
     });
   }
@@ -867,15 +892,23 @@ var FleetCore = (function () {
     const text = (v, fallback) => typeof v === "string" ? v : fallback;
     const count = (v, fallback) => Number.isFinite(v) ? v : fallback;
     const withId = (rows) => rows.filter((r) => typeof r.id === "string" && r.id);
+    const list = (v) => Array.isArray(v) ? v.filter(isRow) : [];
+    const decision = (d) => ({ ...d, title: text(d.title, d.id), question: text(d.question, ""), kind: text(d.kind, "decision"),
+      status: text(d.status, "open"), blocking: d.blocking === true, asks: d.asks === "manager" ? "manager" : "user", options: list(d.options) });
+    const above = isRow(value.manager) && typeof value.manager.url === "string" && value.manager.url ? value.manager : null;
     return {
       ...value,
+      role: value.role === "manager" ? "manager" : "coordinator",
+      manager: above && { id: text(above.id, "manager"), url: above.url, session: text(above.session, "") },
+      coordinators: withId(list(value.coordinators)).map((c) => ({ ...c, name: text(c.name, c.id), goal: text(c.goal, ""), status: text(c.status, "unknown"),
+        now: text(c.now, ""), url: text(c.url, ""), session: text(c.session, ""), tokens: count(c.tokens, 0), roadblocks: count(c.roadblocks, 0),
+        workers: isRow(c.workers) ? c.workers : {}, lanes: Array.isArray(c.lanes) ? c.lanes.map(String) : [], decisions: withId(list(c.decisions)).map(decision) })),
       updated: text(value.updated, value.started),
       roadmap: withId(lists.roadmap).map((m) => ({ ...m, title: text(m.title, m.id), steps: withId(Array.isArray(m.steps) ? m.steps.filter(isRow) : []) })),
       agents: withId(lists.agents).map((a) => ({ ...a, name: text(a.name, a.id), status: text(a.status, ""), task: text(a.task, ""),
         lane: Array.isArray(a.lane) ? a.lane.map(String) : [], tokens: count(a.tokens, 0), duration_ms: count(a.duration_ms, 0), rounds: count(a.rounds, 1) })),
       roadblocks: withId(lists.roadblocks).map((r) => ({ ...r, title: text(r.title, r.id), resolved: r.resolved === true })),
-      decisions: withId(lists.decisions).map((d) => ({ ...d, title: text(d.title, d.id), question: text(d.question, ""), kind: text(d.kind, "decision"),
-        status: text(d.status, "open"), blocking: d.blocking === true, options: Array.isArray(d.options) ? d.options.filter(isRow) : [] })),
+      decisions: withId(lists.decisions).map(decision),
       events: lists.events.filter((e) => typeof e.text === "string" && typeof e.kind === "string").map((e) => ({ ...e, at: text(e.at, "") })),
     };
   }
@@ -908,7 +941,7 @@ var FleetCore = (function () {
 
   /* What waits on the user, as the sentence the page opens with. */
   function leadOf(decisions) {
-    const open = (decisions || []).filter((d) => d.status === "open"), holding = open.filter((d) => d.blocking).length;
+    const open = (decisions || []).filter((d) => d.status === "open" && d.asks !== "manager"), holding = open.filter((d) => d.blocking).length;
     if (!open.length) return { headline: "Nothing waits on you.", detail: "", tone: "clear" };
     const headline = open.length === 1 ? "1 decision waits on you." : `${open.length} decisions wait on you.`;
     if (!holding) return { headline, detail: "Work goes on meanwhile.", tone: "waiting" };
@@ -927,7 +960,7 @@ var FleetCore = (function () {
     return { shown: (urgent.length ? urgent : pending)[(urgent.length || pending.length) - 1], more: pending.length - 1, sticky: urgent.length > 0 };
   }
 
-  return { keyOf, rosterOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf, toastOf,
+  return { keyOf, hostOf, rosterOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf, toastOf,
     decisionRows, decisionRoute, pendingAnswer, answerText, parseState, parseMessage, viewOf, leadOf, VIEWS };
 })();
 </script>
@@ -994,16 +1027,21 @@ var FleetCore = (function () {
     $("favicon").href = "data:image/svg+xml," + encodeURIComponent(mark(unread > 99 ? "99" : unread, critical).replace(/\s+/g, " "));
   };
 
+  /* Who the page can name: the workers, and on a manager's page the coordinators, each under its
+     fleet's name. `HOST` is who runs this chat and keeps this ledger. */
   let agentById = {};
+  let people = [];
   let roster = [];
-  const colorOf = (a) => `var(--s${(STATE.agents.indexOf(a) % 8) + 1})`;
-  /* A participant's colour and label: the worker's spawn colour, the accent for the coordinator. */
-  const colourOfId = (id) => agentById[id] ? colorOf(agentById[id]) : id === "coordinator" ? "var(--accent)" : "var(--faint)";
+  let HOST = Core.hostOf(STATE);
+  const MANAGED = () => STATE.role === "manager";
+  const colorOf = (a) => `var(--s${(people.indexOf(a) % 8) + 1})`;
+  /* A participant's colour and label: the worker's spawn colour, the accent for the host. */
+  const colourOfId = (id) => agentById[id] ? colorOf(agentById[id]) : id === HOST ? "var(--accent)" : "var(--faint)";
   const nameOf = (id) => agentById[id]?.name || id;
-  /* A worker's name as a control that opens it; anyone else's as plain text. */
+  /* A worker's or a coordinator's name as a control that opens it; anyone else's as plain text. */
   const whoButton = (id, extra) => agentById[id]
     ? `<button type="button" class="who ${extra || ""}" data-agent="${esc(id)}" style="--c:${colorOf(agentById[id])}"><span class="swatch"></span><span>${esc(agentById[id].name)}</span></button>`
-    : `<span class="by">${esc(id || "coordinator")}</span>`;
+    : `<span class="by">${esc(id || HOST)}</span>`;
   const expanded = new Set(store.get("expanded", []));
   const filters = ["f-status", "f-milestone", "f-skill", "f-model", "f-q"];
 
@@ -1012,7 +1050,11 @@ var FleetCore = (function () {
   function renderHeader() {
     $("top-project").textContent = STATE.project;
     paint($("top-status"), pill(STATE.status));
-    const lead = Core.leadOf(STATE.decisions);
+    $("top-manager").hidden = !STATE.manager;
+    if (STATE.manager) $("top-manager").href = STATE.manager.url;
+    $("tab-fleet").textContent = MANAGED() ? "Fleets" : "Fleet";
+    $("h-totals").textContent = MANAGED() ? "The fleets" : "The fleet";
+    const lead = Core.leadOf(everyDecision());
     $("lead").className = "lead " + lead.tone;
     paint($("lead"), `<h2 class="lead-line">${esc(lead.headline)}</h2>
       ${lead.detail ? `<p class="lead-detail">${esc(lead.detail)}</p>` : ""}
@@ -1031,7 +1073,16 @@ var FleetCore = (function () {
     const total = (label, value, cls, title) => `<div class="${cls || ""}"${title ? ` title="${esc(title)}"` : ""}><dd>${value}</dd><dt>${label}</dt></div>`;
     const asked = openDecisions(), holding = asked.filter((d) => d.blocking).length;
     const failed = byStatus("failed") + byStatus("stopped");
-    paint($("tiles"), [
+    const across = (status) => STATE.coordinators.reduce((n, c) => n + (Number(c.workers[status]) || 0), 0);
+    const fleetTokens = STATE.coordinators.reduce((n, c) => n + c.tokens, totalTokens);
+    paint($("tiles"), MANAGED() ? [
+      total("fleets", STATE.coordinators.length),
+      total("workers running", across("running") + byStatus("running")),
+      total("workers blocked", across("blocked") + byStatus("blocked"), across("blocked") ? "alert" : ""),
+      total("roadblocks", STATE.coordinators.reduce((n, c) => n + c.roadblocks, openBlocks.length), "", "open, across the fleets"),
+      total("tokens", esc(fmtShort(fleetTokens)), "", fmtInt(fleetTokens) + " across the fleets"),
+      total("elapsed", esc(fmtDur(NOW - Date.parse(STATE.started)) || "0 s")),
+    ].join("") : [
       total("running", byStatus("running")),
       byStatus("queued") ? total("queued", byStatus("queued")) : "",
       total("done", byStatus("done")),
@@ -1073,7 +1124,7 @@ var FleetCore = (function () {
       return `<div class="block ${r.resolved ? "resolved" : esc(r.severity)}">
         <div class="block-head">${title}${r.resolved ? pill("done") : pill(r.severity)}</div>
         <p class="detail">${esc(r.detail)}</p>
-        <p class="needs muted">${r.resolved ? "Resolved" : "Needs <b>" + esc(r.needs) + "</b>"}, ${esc(r.agent ? nameOf(r.agent) : "coordinator")}, since ${esc(clock(r.since))}</p>
+        <p class="needs muted">${r.resolved ? "Resolved" : "Needs <b>" + esc(r.needs) + "</b>"}, ${esc(r.agent ? nameOf(r.agent) : HOST)}, since ${esc(clock(r.since))}</p>
         ${ask ? `<a class="block-link" href="#decision/${esc(ask.id)}">Decide: ${esc(ask.title)}</a>` : ""}
       </div>`;
     }).join("") : '<p class="empty">No roadblocks.</p>');
@@ -1084,20 +1135,26 @@ var FleetCore = (function () {
   const KIND_WORDS = { decision: "a choice", input: "your input", secret: "a secret", action: "something to do" };
   const seen = store.get("d-seen", {});   // decision id -> the revision this viewer last opened
   const decisionById = (id) => STATE.decisions.find((d) => d.id === id);
-  const openDecisions = () => STATE.decisions.filter((d) => d.status === "open");
+  /* The ledger's decisions, and on a manager's page the ones open in each fleet, which are
+     answered on that fleet's page. */
+  const everyDecision = () => STATE.decisions.concat(STATE.coordinators.flatMap((c) => c.decisions.map((d) =>
+    ({ ...d, id: c.id + "/" + d.id, fleet: c.id, href: c.url ? c.url + "#decision/" + encodeURIComponent(d.id) : "" }))));
+  const openDecisions = () => everyDecision().filter((d) => d.status === "open" && d.asks !== "manager");
   const revisionOf = (d) => d.revised || d.opened;
   const closedWords = (d) => d.status === "decided" ? `Decided: ${d.answer || ""}` : `Withdrawn: ${d.resolution || ""}`;
   const statePill = (d, pending) => d.status !== "open" ? pill(d.status)
-    : pending ? pillAs("answered", "answered, being recorded") : d.blocking ? pillAs("blocking", "blocks work") : pillAs("open", "open");
+    : pending ? pillAs("answered", "answered, being recorded")
+    : d.asks === "manager" ? pillAs("", "with the manager") + (d.blocking ? pillAs("blocking", "blocks work") : "")
+    : d.blocking ? pillAs("blocking", "blocks work") : pillAs("open", "open");
 
   /* The list: every row is a link to the decision's page. */
   function renderDecisions() {
     const messages = [...chat.messages.values()];
-    const rows = Core.decisionRows(STATE.decisions, seen);
+    const rows = Core.decisionRows(everyDecision(), seen);
     paint($("decision-list"), rows.length ? rows.map(({ item: d, mark }) => {
-      const open = d.status === "open";
-      return `<a class="ask ${open ? "open" : "closed"}${open && d.blocking ? " blocking" : ""}" href="#decision/${esc(d.id)}">
-        <span class="ask-head"><b>${esc(d.title)}</b>${statePill(d, open && Core.pendingAnswer(d, messages))}${mark ? pill(mark) : ""}${pillAs("plain", KIND_WORDS[d.kind] || d.kind)}</span>
+      const open = d.status === "open", waits = open && d.asks !== "manager";
+      return `<a class="ask ${waits ? "open" : "closed"}${waits && d.blocking ? " blocking" : ""}" href="${esc(d.href || "#decision/" + d.id)}">
+        <span class="ask-head"><b>${esc(d.title)}</b>${statePill(d, open && Core.pendingAnswer(d, messages))}${mark ? pill(mark) : ""}${pillAs("plain", KIND_WORDS[d.kind] || d.kind)}${d.fleet ? pillAs("plain", "in " + d.fleet) : ""}</span>
         <span class="detail">${esc(open ? d.question : closedWords(d))}</span>
         <span class="meta">${open
           ? `${d.why ? esc((d.blocking ? "Blocks: " : "Meanwhile: ") + d.why) + ". " : ""}Asked ${esc(ago(d.opened))}${d.revised ? ", changed " + esc(ago(d.revised)) : ""}`
@@ -1161,7 +1218,8 @@ var FleetCore = (function () {
       </header>
       ${open ? "" : `<div class="note ${esc(d.status)}"><h3>${d.status === "decided" ? "Decided" : "Withdrawn, no answer needed"}</h3>${d.status === "decided" ? `<p><b>${esc(d.answer)}</b></p>` : ""}<p>${esc(d.resolution)}</p><span class="dv-meta">${esc(clock(d.closed))}, ${esc(ago(d.closed))}</span></div>`}
       ${successor ? `<div class="note changed"><h3>Replaced</h3><p>A newer decision takes its place: <a href="#decision/${esc(successor.id)}">${esc(successor.title)}</a></p></div>` : ""}
-      ${open && changedNote && changedNote.id === d.id ? `<div class="note changed" role="status"><h3>Changed since you last looked</h3><p>${esc(changedNote.text || "The coordinator revised this decision.")}</p><span class="dv-meta">${esc(clock(changedNote.at))}</span></div>` : ""}
+      ${open && d.asks === "manager" ? `<div class="note"><h3>With the manager</h3><p>The manager looks at this first, and passes it to you when it is yours to decide. You can answer it now.</p></div>` : ""}
+      ${open && changedNote && changedNote.id === d.id ? `<div class="note changed" role="status"><h3>Changed since you last looked</h3><p>${esc(changedNote.text || `The ${HOST} revised this decision.`)}</p><span class="dv-meta">${esc(clock(changedNote.at))}</span></div>` : ""}
       <p class="dv-question">${esc(d.question)}</p>
       ${d.why ? `<div class="dv-block"><h3>${d.blocking ? "What it blocks" : "Meanwhile"}</h3><p>${esc(d.why)}</p></div>` : ""}
       ${d.recommend ? `<div class="dv-block"><h3>Recommended</h3><p><b>${esc(recommended ? recommended.id + ": " + recommended.label : d.recommend)}</b>${d.reason ? "\n" + esc(d.reason) : ""}</p></div>` : ""}`);
@@ -1182,12 +1240,12 @@ var FleetCore = (function () {
     const shown = d.kind === "decision" && d.options.length ? `<div class="dv-block"><h3>Options</h3><div class="options">${optionsHtml(d, false)}</div></div>` : "";
     if (d.status !== "open") return d.page === false && !shown ? "" : shown + (chatWritable() ? `<div class="sheet-actions"><button type="button" class="btn" data-change>Change my answer</button></div>` : "");
     if (pending) return `<div class="note pending" role="status"><h3>Your answer</h3><p>${esc(pending.answer.text)}</p>
-        <span class="dv-meta">Sent ${esc(clock(pending.answer.at))}. The coordinator records it next; the fleet acts on it once it is recorded.</span>
+        <span class="dv-meta">Sent ${esc(clock(pending.answer.at))}. The ${HOST} records it next; the fleet acts on it once it is recorded.</span>
         ${pending.replies.map((m) => `<p><span class="by">${esc(nameOf(m.from))}</span> ${esc(m.text)}</p>`).join("")}</div>
       <div class="sheet-actions">${discuss}</div>`;
     if (!chatWritable()) return shown + manualHtml(d, "What to do") + `<p class="readonly" role="status">${esc(chatAvailable() && chat.write.reason
-      ? chat.write.reason + " Give your answer in the session with the coordinator."
-      : "This copy of the page cannot send an answer. Give it in the session with the coordinator.")}</p>`;
+      ? chat.write.reason + ` Give your answer in the session with the ${HOST}.`
+      : `This copy of the page cannot send an answer. Give it in the session with the ${HOST}.`)}</p>`;
     const error = '<p class="chat-error" id="dv-error" role="alert" hidden></p>';
     const note = (label) => `<label class="field">${label}<textarea name="note" rows="2" autocomplete="off"></textarea></label>`;
     if (d.kind === "decision") return `<form class="dv-form" novalidate>
@@ -1292,6 +1350,30 @@ img,svg,video,canvas{max-width:100%;height:auto}
   });
   window.addEventListener("hashchange", route);
 
+  /* A manager's fleets: who coordinates what, what each is doing now, what waits in it, and the way to its page. */
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  function fleetFacts(c) {
+    const waiting = c.decisions.filter((d) => d.asks !== "manager"), held = c.decisions.length - waiting.length;
+    const workers = Object.entries(c.workers).filter(([, n]) => n > 0).map(([status, n]) => `${n} ${status}`).join(", ");
+    return [workers ? "Workers: " + workers : "No workers yet",
+      waiting.length ? `${plural(waiting.length, "decision")} wait${waiting.length === 1 ? "s" : ""} on you` : "",
+      held ? `${held} with the manager` : "", c.roadblocks ? plural(c.roadblocks, "open roadblock") : "",
+      c.tokens ? fmtShort(c.tokens) + " tokens" : ""].filter(Boolean).join(". ") + ".";
+  }
+  function renderCoordinators() {
+    $("coordinators").hidden = !MANAGED();
+    $("workers").hidden = MANAGED() && !STATE.agents.length;
+    $("tokens").hidden = MANAGED() && !STATE.agents.length;
+    if (!MANAGED()) return;
+    paint($("coordinator-list"), STATE.coordinators.length ? STATE.coordinators.map((c) => `<div class="strip" style="--c:${colorOf(agentById[c.id])}">
+        <div class="strip-head">${whoButton(c.id)}${pill(c.status)}${c.name !== c.id ? `<span class="muted">${esc(c.name)}</span>` : ""}</div>
+        ${c.now ? `<p class="detail">${esc(c.now)}</p>` : ""}
+        <p class="meta">${esc(fleetFacts(c))}</p>
+        ${c.lanes.length ? `<p class="meta lane">${c.lanes.map(esc).join(", ")}</p>` : ""}
+        ${c.url ? `<a class="block-link" href="${esc(c.url)}">Open its page</a>` : ""}
+      </div>`).join("") : '<p class="empty">No coordinator is being served on this machine. One appears here when it starts its dashboard.</p>');
+  }
+
   let filterKey = "";
   function renderFilterOptions() {
     const key = JSON.stringify([STATE.agents.map((a) => [a.status, a.skill, a.model]), STATE.roadmap.map((m) => [m.id, m.title])]);
@@ -1390,7 +1472,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     const events = [...STATE.events].reverse().filter((e) => (!filtering || (e.agent ? ids.has(e.agent) : !q)) && (!q || e.text.toLowerCase().includes(q) || (e.agent && ids.has(e.agent))));
     paint($("log"), events.length ? events.map((e) => `<li>
       <time datetime="${esc(e.at)}" title="${esc(e.at)}">${esc(clock(e.at))}</time>
-      <span><span class="log-meta"><span class="kind ${esc(e.kind)}">${esc(e.kind)}${e.important ? ", needs you" : ""}</span>${e.agent ? whoButton(e.agent) : '<span class="by">coordinator</span>'}</span> ${esc(e.text)}${aboutLink(e)}</span>
+      <span><span class="log-meta"><span class="kind ${esc(e.kind)}">${esc(e.kind)}${e.important ? ", needs you" : ""}</span>${e.agent ? whoButton(e.agent) : `<span class="by">${HOST}</span>`}</span> ${esc(e.text)}${aboutLink(e)}</span>
     </li>`).join("") : '<li><span></span><span class="muted">Nothing logged yet.</span></li>');
   }
 
@@ -1465,13 +1547,13 @@ img,svg,video,canvas{max-width:100%;height:auto}
     document.addEventListener("pointerdown", unlock, { passive: true });
     document.addEventListener("keydown", unlock);
 
-    const fromMessage = (m) => ({ key: "chat:" + m.id, chat: m.id, at: m.at, kind: "message", agent: m.from === "coordinator" ? null : m.from, text: m.text });
+    const fromMessage = (m) => ({ key: "chat:" + m.id, chat: m.id, at: m.at, kind: "message", agent: m.from === HOST ? null : m.from, text: m.text });
     const items = () => [...STATE.events, ...[...chat.messages.values()].filter((m) => m.from !== "user").map(fromMessage)]
       .filter((e) => !clearedBefore || time(e.at) > time(clearedBefore))
       .sort((a, b) => time(b.at) - time(a.at));
     const isUnread = (e) => (!lastSeen || time(e.at) > time(lastSeen)) && (!e.chat || e.chat > chat.read);
     const unread = () => items().filter(isUnread);
-    const who = (e) => e.agent ? nameOf(e.agent) : "coordinator";
+    const who = (e) => e.agent ? nameOf(e.agent) : HOST;
 
     function renderBadge() {
       const u = unread(), imp = u.filter((e) => e.important).length;
@@ -1577,6 +1659,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
   function paintSheet(a) {
     const had = $("worker").contains(document.activeElement) ? document.activeElement.dataset.focus : null;
     sheetSig = sheetSigOf(a);
+    if (a.coordinator) { paintFleetSheet(a.coordinator, colorOf(a)); refocus(had); return; }
     const ms = STATE.roadmap.find((m) => m.id === a.milestone);
     const fact = (k, v) => `<div><dt>${k}</dt><dd>${v}</dd></div>`;
     $("worker-body").innerHTML = `
@@ -1587,10 +1670,24 @@ img,svg,video,canvas{max-width:100%;height:auto}
       ${briefAndReport(a, "h3")}
       <div class="sheet-actions">${chatAvailable() ? `<button type="button" class="btn primary" data-write="${esc(a.id)}" data-focus="write"${chat.write.ok ? "" : ` disabled aria-describedby="write-why"`}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 0 1-12.4 7.5L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/></svg>Message ${esc(a.name)}</button>` : ""}<button type="button" class="btn" data-close data-focus="close">Close</button></div>
       ${chatAvailable() && !chat.write.ok ? `<p class="muted" id="write-why">${esc(chat.write.reason)}</p>` : ""}`;
-    if (had) {
-      const back = $("worker-body").querySelector(`[data-focus="${had}"]:not(:disabled)`) || $("worker-body").querySelector('[data-focus="x"]');
-      back.focus();
-    }
+    refocus(had);
+  }
+  function refocus(had) {
+    if (!had) return;
+    const back = $("worker-body").querySelector(`[data-focus="${had}"]:not(:disabled)`) || $("worker-body").querySelector('[data-focus="x"]');
+    back.focus();
+  }
+  function paintFleetSheet(c, colour) {
+    const fact = (k, v) => `<div><dt>${k}</dt><dd>${v}</dd></div>`;
+    const message = chatAvailable() ? `<button type="button" class="btn primary" data-write="${esc(c.id)}" data-focus="write"${chat.write.ok ? "" : ` disabled aria-describedby="write-why"`}>Message ${esc(c.id)}</button>` : "";
+    $("worker-body").innerHTML = `
+      <div class="sheet-head" style="--c:${colour}"><span class="swatch"></span><h2 id="worker-name">${esc(c.id)}</h2>${pill(c.status)}<button type="button" class="icon-btn" data-close data-focus="x" aria-label="Close" title="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+      <p>${esc(c.now || c.goal)}</p>
+      <dl class="facts">${fact("Project", esc(c.name))}${fact("Session", esc(c.session || "not named yet"))}${fact("Decisions open", c.decisions.length)}${fact("Roadblocks", c.roadblocks)}${fact("Tokens", c.tokens ? `<span class="num">${fmtInt(c.tokens)}</span>` : "none yet")}${fact("Updated", esc(ago(c.updated)) || "unknown")}</dl>
+      ${c.goal ? `<div><h3>Goal</h3><p>${esc(c.goal)}</p></div>` : ""}
+      <div><h3>Lanes in flight</h3><div class="lane">${c.lanes.length ? c.lanes.map((l) => `<code>${esc(l)}</code>`).join("") : "none"}</div></div>
+      <div class="sheet-actions">${message}${c.url ? `<a class="btn" href="${esc(c.url)}" data-focus="page">Open its page</a>` : ""}<button type="button" class="btn" data-close data-focus="close">Close</button></div>
+      ${chatAvailable() && !chat.write.ok ? `<p class="muted" id="write-why">${esc(chat.write.reason)}</p>` : ""}`;
   }
   $("worker").addEventListener("click", (e) => {
     if (e.target === $("worker") || e.target.closest("[data-close]")) { $("worker").close(); return; }
@@ -1605,16 +1702,17 @@ img,svg,video,canvas{max-width:100%;height:auto}
   });
 
   function applyState(state) {
-    STATE = state; NOW = Date.now();
-    agentById = Object.fromEntries(STATE.agents.map((a) => [a.id, a]));
+    STATE = state; NOW = Date.now(); HOST = Core.hostOf(STATE);
+    people = STATE.agents.concat(STATE.coordinators.map((c) => ({ id: c.id, name: c.id, status: c.status, coordinator: c })));
+    agentById = Object.fromEntries(people.map((a) => [a.id, a]));
     roster = Core.rosterOf(STATE);
-    renderHeader(); renderTiles(); renderDecisions(); renderRoadmap(); renderRoadblocks(); renderFilterOptions(); render();
+    renderHeader(); renderTiles(); renderDecisions(); renderRoadmap(); renderRoadblocks(); renderCoordinators(); renderFilterOptions(); render();
     renderDecision();
     notif.sync();
     refreshSheet();
     /* The conversation depends on the roster's names and statuses only; a state that changes
        neither leaves it untouched. */
-    const key = STATE.status + "|" + STATE.agents.map((a) => `${a.id}\u0000${a.name}\u0000${a.status}`).join("|");
+    const key = STATE.status + "|" + people.map((a) => `${a.id}\u0000${a.name}\u0000${a.status}`).join("|");
     if (key !== chatKey) { chatKey = key; renderChat(); }
     refreshComposer();
   }
@@ -1730,7 +1828,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
   /* The conversation: threads in the order of their latest message, replies under what they answer. */
   function senderOf(m) {
     if (m.from === "user") return { label: m.author || "You", colour: "var(--accent)", status: "" };
-    if (m.from === "coordinator") return { label: "coordinator", colour: "var(--accent)", status: STATE.status };
+    if (m.from === HOST) return { label: HOST, colour: "var(--accent)", status: STATE.status };
     const a = agentById[m.from];
     return { label: a ? a.name : m.from, colour: colourOfId(m.from), status: a ? a.status : "" };
   }
@@ -1761,7 +1859,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     if (el.getAttribute("style") !== style) el.setAttribute("style", style);
     const name = agentById[m.from] ? whoButton(m.from) : `<b>${esc(s.label)}</b>`;
     const parent = m.re != null && m.re !== rootId ? chat.messages.get(m.re) : null;
-    slot(el, "head", `<div class="msg-head">${name}${s.status && m.from !== "coordinator" ? pill(s.status) : ""}<time datetime="${esc(m.at)}" title="${esc(m.at)}">${esc(clock(m.at))}</time></div>`);
+    slot(el, "head", `<div class="msg-head">${name}${s.status && m.from !== HOST ? pill(s.status) : ""}<time datetime="${esc(m.at)}" title="${esc(m.at)}">${esc(clock(m.at))}</time></div>`);
     slot(el, "reply", canReply ? `<button type="button" class="reply-btn" data-reply="${m.id}" aria-label="Reply to ${esc(s.label)}">Reply</button>` : "");
     slot(el, "re", parent ? `<p class="msg-re">Answering ${esc(senderOf(parent).label)}</p>` : "");
     const about = m.decision && decisionById(m.decision);
@@ -1777,7 +1875,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     const stick = nearBottom();
     const threads = Core.fold(chat.messages.values());
     if (!threads.length) {
-      const html = chatAvailable() ? `<li class="chat-empty">${chatWritable() ? "No messages yet. Write to the coordinator, or type @ to reach a worker." : "No messages yet."}</li>` : "";
+      const html = chatAvailable() ? `<li class="chat-empty">${chatWritable() ? (MANAGED() ? "No messages yet. Write to the manager, or type @ to reach a coordinator." : "No messages yet. Write to the coordinator, or type @ to reach a worker.") : "No messages yet."}</li>` : "";
       if (painted.get(log) !== html) { log.innerHTML = html; painted.set(log, html); threadEls.clear(); msgEls.clear(); }
       renderChatBadge(); return;
     }

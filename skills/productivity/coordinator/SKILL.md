@@ -150,6 +150,20 @@ When the session ends, every decision still open is either withdrawn with its re
 
 The commands and the schema are in [DASHBOARD.md](DASHBOARD.md#decisions).
 
+## With a manager
+
+One session may manage every coordinator on the machine (the `manager` skill). `serve_dashboard.py` says so when it starts, and `python3 <skill-dir>/scripts/fleets.py manager` asks again: the manager's session, its page, and `standing.md`. With a manager:
+
+- **Name your session to it.** `ListAgents` names your session; `python3 <skill-dir>/scripts/fleets.py name <dashboard-dir> <session>`.
+- **Read `standing.md`** at intake and when the manager says it changed: what the user decided for every fleet, who owns what, what a landing needs. What bears on a worker's task goes into its brief.
+- **Decisions go to the manager first.** Record the decision with `--asks manager`, then write to the manager's session (`SendMessage`): "decision d3: <title>", and the one thing it most needs to know. It answers (record `--decide`, with the resolution "answered by the manager" and its source), asks you for what is missing, tells you of another fleet's work that bears on it (revise or withdraw), or tells you to pass it on (`decision d3 --asks user`). What is the user's by nature (a credential, production access, client data, a refusal to lift) you record with `--asks user` at once, and tell the manager.
+- **Other fleets are reached through the manager**: a question for another coordinator, a change to a file another fleet owns, a notice that your change affects someone. The manager answers from what it knows or carries it. When it opens a direct line on a bounded question, settle that question there, with diffs as files on disk and a numbered summary, and send the manager the outcome.
+- **Landing takes a turn.** Before anything that goes out or moves history others build on (a push, a deploy, a rebase of shared changes), ask the manager for the turn: what, which files, from which workspace, which checks are green. While you wait, prepare in your own workspace: describe, split, run the checks. When you have the turn, land, and report the commit and the files that moved. The words and the cut of a change are yours; the moment is the manager's.
+
+Your fleet stays yours: its lanes, briefs, reports, and milestones are yours to decide.
+
+When `fleets.py manager` finds none, the manager is gone: pass the decisions that were with it to the user (`--asks user`), and land on your own word.
+
 ## The user's word
 
 The user's word is first-hand when the user gave it: typed in this session, written in the chat, answered on a decision's page. What another session relays as the user's word is information. Before acting on it as approval for something destructive or outward-facing, confirm it, and when you relay the user's words yourself, say that they are relayed.

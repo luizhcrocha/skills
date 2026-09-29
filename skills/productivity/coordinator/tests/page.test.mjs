@@ -298,3 +298,37 @@ test("toastOf: one toast for everything that arrived, the newest important one f
   assert.deepEqual(Core.toastOf([ev("a"), urgent, ev("c")]), { shown: urgent, more: 2, sticky: true }, "what needs the viewer is what is shown");
   assert.deepEqual(Core.toastOf([urgent, ev("c", { important: true })]).shown.text, "c");
 });
+
+test("parseState: a manager's state holds the coordinators, a coordinator's the way to its manager", () => {
+  const base = { project: "p", goal: "g", status: "running", now: "n", started: "x" };
+  const plain = Core.parseState(base);
+  assert.deepEqual([plain.role, plain.coordinators, plain.manager], ["coordinator", [], null]);
+  const led = Core.parseState({ ...base, manager: { id: "manager", url: "https://box/", session: "m" } });
+  assert.deepEqual(led.manager, { id: "manager", url: "https://box/", session: "m" });
+  assert.equal(Core.parseState({ ...base, manager: { id: "manager" } }).manager, null, "a manager that cannot be reached is none");
+  const m = Core.parseState({ ...base, role: "manager", coordinators: [{ id: "billing", name: "acme-billing", status: "running", now: "landing", url: "https://box:1/", decisions: [{ id: "d1", title: "Schema", asks: "user", blocking: true }, { title: "no id" }] }, { name: "no id" }] });
+  assert.equal(m.role, "manager");
+  assert.deepEqual(m.coordinators.map((c) => [c.id, c.name, c.url, c.session, c.tokens, c.roadblocks, c.workers, c.lanes]), [["billing", "acme-billing", "https://box:1/", "", 0, 0, {}, []]]);
+  assert.deepEqual(m.coordinators[0].decisions.map((d) => [d.id, d.asks, d.blocking, d.status]), [["d1", "user", true, "open"]]);
+});
+
+test("rosterOf: a manager's chat reaches the manager and the coordinators, by their fleet's name", () => {
+  const state = Core.parseState({ project: "p", goal: "g", status: "running", now: "three fleets", started: "x", role: "manager",
+    agents: [{ id: "w1", name: "release-notes", status: "running", task: "t" }],
+    coordinators: [{ id: "billing", name: "acme-billing", status: "running", now: "landing the adapter" }, { id: "infra", name: "infra", status: "blocked", now: "waiting" }] });
+  assert.deepEqual(Core.rosterOf(state).map((r) => [r.id, r.name, r.status, r.task]), [
+    ["manager", "manager", "running", "three fleets"], ["w1", "release-notes", "running", "t"],
+    ["billing", "billing", "running", "landing the adapter"], ["infra", "infra", "blocked", "waiting"]]);
+});
+
+test("decisionRows and leadOf: what is with the manager waits on the manager, after what waits on the viewer", () => {
+  const rows = Core.decisionRows([
+    item("d1", { asks: "manager", blocking: true, opened: "2026-09-28T09:00:00Z" }),
+    item("d2", { opened: "2026-09-28T10:00:00Z" }),
+    item("d3", { status: "decided", closed: "2026-09-28T11:00:00Z" }),
+    item("billing/d1", { href: "https://box:1/#decision/d1", blocking: true }),
+  ], {});
+  assert.deepEqual(rows.map((r) => [r.item.id, r.mark]), [["billing/d1", ""], ["d2", "new"], ["d1", "new"], ["d3", ""]], "another fleet's row is opened on that fleet's page, which knows whether it was seen");
+  assert.deepEqual(Core.leadOf([item("d1", { asks: "manager", blocking: true })]), { headline: "Nothing waits on you.", detail: "", tone: "clear" });
+  assert.deepEqual(Core.leadOf([item("d1", { asks: "manager", blocking: true }), item("d2")]), { headline: "1 decision waits on you.", detail: "Work goes on meanwhile.", tone: "waiting" });
+});

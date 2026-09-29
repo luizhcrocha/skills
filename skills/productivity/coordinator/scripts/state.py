@@ -62,6 +62,11 @@ def find(rows: list, id_: str):
     return next((r for r in rows if r["id"] == id_), None)
 
 
+def known(state: dict, agent: str) -> bool:
+    """Whether the ledger can name `agent`: one of its workers, or for a manager any fleet, since they come and go."""
+    return state.get("role") == "manager" or find(state["agents"], agent) is not None
+
+
 def require(args, fields: list[str], what: str) -> None:
     missing = [f for f in fields if getattr(args, f.replace("-", "_")) is None]
     if missing:
@@ -281,7 +286,7 @@ def cmd_decision(state, args):
     d = decisions.find(state, args.id)
     if args.decide is not None and not args.resolution:
         fail("--decide says what was chosen and --resolution how it came (\"answered on the page (#14)\", \"said in the session\")")
-    if args.agent and not find(state["agents"], args.agent):
+    if args.agent and not known(state, args.agent):
         fail(f"unknown agent '{args.agent}'")
     if d is not None and d["status"] != "open":
         fail(f"{decisions.closed_because(d)}. A closed decision stays as it is; open a new one with --supersedes {d['id']}")
@@ -341,7 +346,7 @@ def cmd_decision(state, args):
 
 
 def cmd_event(state, args):
-    if args.agent and not find(state["agents"], args.agent):
+    if args.agent and not known(state, args.agent):
         fail(f"unknown agent '{args.agent}'")
     log(state, args.kind or "note", args.text, args.agent, args.important)
     return state

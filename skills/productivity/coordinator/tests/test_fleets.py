@@ -171,6 +171,25 @@ class CliTest(Machine):
         for word in ["session manager-session", "https://box.ts.net:9/", str(m), str(m / "standing.md")]:
             self.assertIn(word, found.stdout)
 
+    def test_decision_prints_what_a_fleet_asks_in_full(self):
+        a = self.fleet("a", "billing", decisions=[{
+            "id": "d7", "kind": "decision", "title": "Order of the two migrations", "status": "open", "asks": "manager", "blocking": True,
+            "question": "Does the invoice migration run before or after the index rebuild?", "why": "the fleet assumes after",
+            "options": [{"id": "A", "label": "After", "consequence": "one lock window"}, {"id": "B", "label": "Before", "consequence": "two windows"}],
+            "recommend": "A", "reason": "one window is what the user asked for", "body": True, "agent": "a1", "opened": "2026-09-28T10:00:00+00:00"}])
+        fleets.register(a, "https://box.ts.net:1/", os.getpid())
+        out = self.cli("decision", "billing", "d7").stdout
+        for line in ["billing d7 [decision, for the manager, blocks work] Order of the two migrations",
+                     "question: Does the invoice migration run before or after the index rebuild?",
+                     "why: the fleet assumes after", "A: After | one lock window", "B: Before | two windows",
+                     "recommended: A, one window is what the user asked for", f"evidence: {a / 'decisions' / 'd7.html'}",
+                     "page: https://box.ts.net:1/#decision/d7"]:
+            self.assertIn(line, out)
+        for args, word in [(["decision", "billing", "d9"], "no decision 'd9'"), (["decision", "nobody", "d7"], "no fleet 'nobody'")]:
+            result = self.cli(*args)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(word, result.stderr)
+
     def test_name_needs_a_served_fleet(self):
         result = self.cli("name", str(self.fleet("a", "billing")), "x")
         self.assertEqual(result.returncode, 1)

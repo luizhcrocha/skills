@@ -112,6 +112,14 @@ class ManagerTest(unittest.TestCase):
         render = subprocess.run([sys.executable, STATE, str(self.root), "set", "--now", "infra has the turn"], capture_output=True, text=True)
         self.assertEqual(render.returncode, 0, render.stderr)
 
+    def test_a_managers_events_and_decisions_name_a_fleet(self):
+        self.run_cli("init", "--role", "manager", "--project", "this machine", "--goal", "g")
+        for args in (["event", "--kind", "integrated", "--agent", "billing", "l2 landed as 1d5b1b1a"],
+                     ["decision", "d1", "--kind", "action", "--title", "Deploy billing", "--question", "q", "--why", "w",
+                      "--manual", "just deploy billing", "--agent", "billing"]):
+            result = self.run_cli(*args)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_a_coordinators_step_names_one_of_its_workers(self):
         self.run_cli("init", "--project", "p", "--goal", "g")
         self.run_cli("milestone", "m1", "--title", "M")

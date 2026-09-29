@@ -18,6 +18,7 @@ The dashboard is the user's window into the fleet and the coordinator's ledger, 
 Every list is ordered as the user should read it. Timestamps are ISO 8601 with a timezone.
 
 ```
+role         manager, in a manager's ledger (absent in a coordinator's)
 project      string   repo or project name
 goal         string   the user's ask in one sentence
 status       running | paused | blocked | done
@@ -68,6 +69,7 @@ decisions[]  what waits on the user, in the order they were opened
   body       boolean: decisions/<id>.html holds the evidence
   agent      the worker that waits on it, or null
   supersedes the closed decision this one replaces, or null
+  asks       user | manager: who looks at it first
   status     open | decided | withdrawn
   answer     what was chosen or given (decided)
   resolution how it closed
@@ -90,6 +92,7 @@ events[]     activity log, oldest first
 
 | Event | Command |
 | :-- | :-- |
+| A manager's intake | `init --role manager --project P --goal G`, then `milestone landings --title "Landings and deploys"` |
 | Intake done | `init --project P --goal G`, then `milestone m1 --title T` and `step s1 --milestone m1 --title T` per step, then `event --kind decision "why the split"` for anything non-obvious |
 | Worker about to be spawned | `agent a1 --task T --skill tdd --milestone m1 --lane src/x.ts test/x.test.ts --step s1 --brief "done when ..."` (model defaults to opus; logs the spawn, marks the step current, prints the line its brief opens with) |
 | Notification arrives | `agent a1 --status done --tokens N --duration-ms N --report "..." --step s1 --log "what it verified"` (the step follows the status; the log becomes a `reported` event; tokens are the worker's total so far) |
@@ -105,6 +108,19 @@ events[]     activity log, oldest first
 
 `show` prints the ledger as text, and under it every command with the values it takes: the place to look after a compaction. Add `--no-render` to any command when several follow in a row, and let the last one render.
 
+## Fleets and the manager
+
+`serve_dashboard.py` records the fleet it serves in a registry on this machine and forgets it on `--stop`. A fleet is known there by a name made from its project (`acme-billing`; a second fleet of the same project is `acme-billing-2`). `python3 <skill-dir>/scripts/fleets.py`:
+
+| Command | What it does |
+| :-- | :-- |
+| `list` | every fleet being served: its name, role, session, status, address, directory, what it is doing, its lanes in flight, its open decisions |
+| `manager` | how to reach the manager (its session, its page, `standing.md`); exits 1 when there is none |
+| `decision FLEET ID` | what a fleet asks, in full, with where its evidence and its page are |
+| `name DIR SESSION` | records the session name other sessions message this fleet by (`ListAgents` gives it) |
+
+A ledger made with `init --role manager` is a manager's. Its page is sent every coordinator being served, its chat is hosted by `manager` and mentions the coordinators by their fleet's name (their workers stay in their own fleet's chat), its steps name the coordinator whose turn it is, and its directory holds `standing.md`. A coordinator's page shows the way to the manager while one is being served. What a coordinator does with a manager is in [SKILL.md](SKILL.md#with-a-manager).
+
 ## Decisions
 
 `state.py <scratchpad>/coordinator decision ID ...` opens a decision with an unknown id and changes an open one with a known id. When to open one, and what goes in it, is in [SKILL.md](SKILL.md#decisions).
@@ -116,6 +132,7 @@ events[]     activity log, oldest first
 | A secret | `decision d3 --kind secret --title T --question Q --why W --secret STRIPE_TEST_KEY --manual "cd servers/billing; secretspec set STRIPE_TEST_KEY"` |
 | An action by hand | `decision d4 --kind action --title T --question Q --why W --manual "the steps or commands"` |
 | It stops work | add `--blocking` (the event is important: chime, sticky toast); `--agent a1` names the worker that waits |
+| A manager is present | add `--asks manager`: the manager looks first, and the user is not called. `decision d1 --asks user` passes it on, and calls them |
 | Evidence | add `--body FILE`: an HTML fragment, copied to `decisions/<id>.html`; `--no-body` removes it |
 | The facts changed | `decision d1 --why "..." --log "what changed"` with any field; stamps `revised`, and the page tells the user |
 | The user answered | `decision d1 --decide "B: Keep both shapes" --resolution "answered on the page (#14)"` |
@@ -150,13 +167,14 @@ The page has a chat where the user writes to the fleet and mentions who should a
 
 The page is built for a phone first, one view at a time: Decisions, Plan, Fleet, Log, and the chat. A bar of labelled tabs sits under the thumb, each worker is a strip, and the chat is a full-height view that stays above the keyboard. On a wide screen the tabs are a row under the masthead, the fleet is a table, and the chat docks at the side. Each view has an address (`#decisions`, `#plan`, `#fleet`, `#log`, `#decision/<id>`), so a link you give the user opens where you mean.
 
-- Masthead: the project, its status, and the bell.
+- Masthead: the project, its status, the way to the manager's page when there is one, and the bell.
 - Decisions, the view the page opens on: what waits on the user said in a sentence ("2 decisions wait on you. 1 of them blocks work."), the goal and the `now` line, then the decisions: open ones that block work first, then the other open ones, oldest first, then the closed ones with how they closed. A row is marked new until the user opens it and changed when it was revised since. Each row opens the decision's page. Under them, the fleet's totals: workers by status, steps done, tokens, elapsed time.
 - Plan: the roadmap with the current step marked; steps link to their worker.
 - Worker sheet: a worker's name anywhere on the page (a step, a roadblock, the fleet, the chart, the activity log, the chat) opens its task, lane, round, brief, and report, with a button that starts a message to it.
 - Plan, too: the roadblocks, open first, with who is needed and a link to the decision when it is the user.
 - Fleet: the workers with filters (status, milestone, skill, model, free text) and expandable brief and report, and the token chart: one bar per worker, coloured by spawn order, with its share of the total.
 - Log: the activity, newest first, filtered together with the table.
+- On a manager's page: Decisions lists the manager's own and, from every fleet, the ones that wait on the user, each opening on its fleet's page. The Fleet tab reads Fleets and lists the coordinators: what each is doing, its workers by status, what waits in it, its lanes in flight, and the way to its page. A coordinator's name opens its sheet, with a button that starts a message to it.
 - Chat: the conversation in threads, each reply under the message it answers. The user's message shows who it is waiting on until each recipient has answered. The composer completes `@` from the roster and says who the message will reach. A viewer who may not write sees the conversation with the reason in place of the composer.
 - Notifications: every event is one, and so is every message from the fleet while the chat is out of view. One about a decision opens its page. A bell in the top right carries the unread count and opens the list, with mark-read, clear, and the sound and toast preferences. New events show as one toast (under the masthead on a phone, clear of the tabs): the newest that needs the user, with how many more arrived, so they never stack. A tap opens what it is about, or the list when it stands for several. Important ones stay until dismissed, chime, and flag the tab title. Browsers allow sound only after the viewer has clicked the page once, so a viewer who never interacts still gets the toast and the badge. Browser alerts (system notifications while the tab is hidden) are a third preference in the panel; they need the https address and a permission the viewer grants when turning them on, and important ones stay on screen until dismissed.
 
