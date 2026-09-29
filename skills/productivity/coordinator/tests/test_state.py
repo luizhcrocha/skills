@@ -291,6 +291,15 @@ class OriginTest(Fleet):
         self.assertEqual(self.state()["decisions"][-1]["step"], "l19")
 
 
+class NowNamesTest(Fleet):
+    def test_a_now_line_naming_a_closed_decision_is_questioned(self):
+        self.ok("decision", "d-key", "--kind", "input", "--title", "Neon key", "--question", "q", "--why", "w")
+        self.ok("decision", "I1", "--decide", "given", "--resolution", "answered on the page (#83)")
+        said = self.run_cli("set", "--now", "Waits on Luiz: I1, the Neon key")
+        self.assertIn("names I1 (Neon key) is decided", said.stderr)
+        self.assertNotIn("names", self.run_cli("set", "--now", "Latency test running").stderr)
+
+
 class ManagerTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

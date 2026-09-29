@@ -112,12 +112,42 @@ def cmd_init(state, args):
     return {"role": "manager", **state} if args.role == "manager" else state
 
 
+REF = re.compile(r"\b([DAISGLR]\d+)\b")
+
+
+def closed_named(state: dict, text: str) -> list[str]:
+    """The decisions a Now line names by number that are already closed: in this ledger ("A6"), and on a
+    manager's, in a fleet's ("infra I2", "infra-coordinator I2")."""
+    import copy
+    own = copy.deepcopy(state)
+    decisions.number(own)
+    found = []
+    ledgers = {"": own}
+    if state.get("role") == "manager":
+        import fleets
+        for e in fleets.live():
+            if e["role"] != "manager":
+                theirs = fleets._read(Path(e["dir"]) / "state.json") or {}
+                decisions.number(theirs)
+                ledgers[e["id"]] = theirs
+    for m in REF.finditer(text or ""):
+        before = text[:m.start()].split()
+        word = before[-1].lower().strip(",:;(") if before else ""
+        fleet = next((f for f in ledgers if f and (word == f or word == f.split("-")[0])), "")
+        d = decisions.find(ledgers[fleet], m.group(1))
+        if d and d.get("status") != "open":
+            found.append(f"{(fleet + ' ') if fleet else ''}{m.group(1)} ({d['title']}) is {d['status']}")
+    return found
+
+
 def cmd_set(state, args):
     for key in ("status", "now", "goal"):
         if getattr(args, key) is not None:
             state[key] = getattr(args, key)
     if args.now is not None:
         state["now_at"] = now()  # the page greys a now-line that has not been said again for a while
+        for said in closed_named(state, args.now):
+            sys.stderr.write(f"state: the Now line names {said}: check the decision's state before saying it waits on anyone.\n")
     return state
 
 

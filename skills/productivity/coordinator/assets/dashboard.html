@@ -149,6 +149,7 @@
   .lead.clear .lead-line { color: var(--muted); }
   .goal { max-width: 68ch; }
   .now.stale { color: var(--muted); border-left-color: var(--line); }
+  .now-wrong { margin: 6px 0 0 15px; padding: 4px 10px; border-left: 3px solid var(--critical); font-size: var(--fs-s); color: var(--text); background: color-mix(in srgb, var(--critical) 8%, transparent); }
   .glance { list-style: none; margin: 6px 0 0 15px; padding: 0; font-size: var(--fs-s); color: var(--muted); max-width: 90ch; }
   .glance li { margin: 2px 0; }
   .glance b { color: var(--text); font-weight: 600; margin-right: 4px; }
@@ -1189,6 +1190,22 @@ var FleetCore = (function () {
     };
   }
 
+  /* The decisions a Now line names by number (A6, "infra I2") that are closed already: a line that says
+     something waits on the user when it no longer does. `fleets` maps a fleet id to its rows. */
+  function closedInNow(text, own, fleets) {
+    const found = [], re = /\b([DAISGLR]\d+)\b/g;
+    let m;
+    while ((m = re.exec(String(text ?? "")))) {
+      const before = text.slice(0, m.index).trim().split(/\s+/).pop()?.toLowerCase().replace(/[,:;(]/g, "") || "";
+      const fleet = Object.keys(fleets || {}).find((f) => before === f || before === f.split("-")[0]) || "";
+      const rows = fleet ? fleets[fleet] : own;
+      const d = (rows || []).find((x) => x.ref === m[1]);
+      const status = d && (d.status || d.hint);
+      if (d && status && status !== "open") found.push({ fleet, ref: m[1], title: d.title, status });
+    }
+    return found;
+  }
+
   /* Whether a now-line said at `at` is old enough to read as stale: 30 minutes without being said again. */
   const staleNow = (at, now) => typeof at !== "string" || at === "" || isNaN(Date.parse(at)) || now - Date.parse(at) > 30 * 60 * 1000;
   /* Whether the user's message `m` is still unread by the host: after the last one its watch printed. */
@@ -1324,7 +1341,7 @@ var FleetCore = (function () {
   }
 
   return { keyOf, hostOf, rosterOf, usageOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf, toastOf,
-    decisionRows, decisionRoute, pendingAnswer, awaiting, bucketOf, BUCKETS, stuckOf, findRows, findRank, FIND_GROUPS, FIND_PREFIX, grillState, grillAnswerText, sidesOf, excerptOf, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, unreadNotice, staleNow, glanceOf, viewOf, leadOf, VIEWS };
+    decisionRows, decisionRoute, pendingAnswer, awaiting, bucketOf, BUCKETS, stuckOf, findRows, findRank, FIND_GROUPS, FIND_PREFIX, grillState, grillAnswerText, sidesOf, excerptOf, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, unreadNotice, staleNow, glanceOf, closedInNow, viewOf, leadOf, VIEWS };
 })();
 </script>
 <script>
@@ -1466,6 +1483,8 @@ var FleetCore = (function () {
       ${lead.detail ? `<p class="lead-detail">${esc(lead.detail)}</p>` : ""}
       <p class="goal">${esc(STATE.goal)}</p>
       <p class="now${nowStale ? " stale" : ""}"><b>Now</b>${esc(STATE.now)} <span class="said">${nowStale ? `not updated for ${esc(ago(STATE.now_at || STATE.started).replace(/ ago$/, ""))}` : `said ${esc(ago(STATE.now_at))}`}</span></p>
+      ${(() => { const closed = Core.closedInNow(STATE.now, STATE.decisions, Object.fromEntries(STATE.coordinators.map((c) => [c.id, (c.index || []).filter((x) => x.group === "decisions").map((x) => ({ ref: x.ref, title: x.title, status: x.hint }))])));
+        return closed.length ? `<p class="now-wrong" role="status">The Now line names ${closed.map((c) => `${esc(c.fleet ? c.fleet + " " : "")}<span class="ref">${esc(c.ref)}</span> (${esc(c.title)}), ${esc(c.status)}`).join("; ")}: it no longer waits on anyone.</p>` : ""; })()}
       ${glanceHtml()}
       ${nowStale && latest.length ? `<div class="latest"><b>Latest from the log</b><ul>${latest.map((e) => `<li>${whenHtml(e.at, true)} ${e.agent ? esc(nameOf(e.agent)) + ": " : ""}${esc(String(e.text).slice(0, 220))}</li>`).join("")}</ul></div>` : ""}
       <p class="meta">Started ${esc(ago(STATE.started))}, updated ${esc(ago(STATE.updated))}.</p>`);

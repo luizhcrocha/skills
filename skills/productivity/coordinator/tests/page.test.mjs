@@ -504,3 +504,10 @@ test("glanceOf: running workers, current steps and the next ones, computed from 
   assert.deepEqual(g.current.shown.map((s) => s.id), ["l2"]);
   assert.deepEqual([g.next.shown.map((s) => s.id), g.next.more], [["l3"], 1]);
 });
+
+test("closedInNow: a Now line naming a closed decision, in the ledger or in a fleet", () => {
+  const own = [{ ref: "A6", title: "Unblock", status: "decided" }, { ref: "D2", title: "Open one", status: "open" }];
+  const fleets = { "infra-coordinator": [{ ref: "I2", title: "Neon key", status: "decided" }] };
+  assert.deepEqual(Core.closedInNow("Waits on Luiz: infra I2 and D2; A6 done", own, fleets).map((c) => [c.fleet, c.ref]), [["infra-coordinator", "I2"], ["", "A6"]]);
+  assert.deepEqual(Core.closedInNow("Waits on Luiz: D2", own, fleets), []);
+});
