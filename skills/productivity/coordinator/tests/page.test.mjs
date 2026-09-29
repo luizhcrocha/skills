@@ -288,3 +288,13 @@ test("leadOf: what waits on the user, said in a sentence", () => {
   assert.deepEqual(lead(item("d1", { blocking: true }), item("d2", { blocking: true }), item("d3", { blocking: true }), item("d4")), { headline: "4 decisions wait on you.", detail: "3 of them block work.", tone: "blocking" });
   assert.deepEqual(lead(item("d1", { blocking: true }), item("d2", { blocking: true }), item("d3", { blocking: true })), { headline: "3 decisions wait on you.", detail: "All of them block work.", tone: "blocking" });
 });
+
+test("toastOf: one toast for everything that arrived, the newest important one first", () => {
+  const ev = (text, extra = {}) => ({ at: "x", kind: "note", text, ...extra });
+  assert.equal(Core.toastOf([]), null);
+  assert.deepEqual(Core.toastOf([ev("a")]), { shown: ev("a"), more: 0, sticky: false });
+  assert.deepEqual(Core.toastOf([ev("a"), ev("b"), ev("c")]), { shown: ev("c"), more: 2, sticky: false });
+  const urgent = ev("b", { important: true });
+  assert.deepEqual(Core.toastOf([ev("a"), urgent, ev("c")]), { shown: urgent, more: 2, sticky: true }, "what needs the viewer is what is shown");
+  assert.deepEqual(Core.toastOf([urgent, ev("c", { important: true })]).shown.text, "c");
+});

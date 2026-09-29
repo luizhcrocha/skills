@@ -366,12 +366,12 @@
   .toast.important { border-left-color: var(--critical); }
   .toast.important .kind { color: var(--critical); }
   .toast .text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+  .toast .more { margin-top: 2px; font-size: var(--fs-xs); font-weight: 700; font-stretch: var(--narrow); color: var(--muted); }
   .toast button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.2rem; line-height: 1; padding: 0 2px; align-self: start; min-width: var(--tap); min-height: var(--tap); margin: -8px -8px -8px 0; }
   /* On a phone the toasts come in under the masthead, clear of the thumb and of what it is about to press. */
   @media (max-width: 759.98px) {
     .toasts { top: calc(env(safe-area-inset-top, 0px) + var(--top-h) + 8px); bottom: auto; left: 8px; right: 8px; width: auto; }
     .toast .text { -webkit-line-clamp: 2; line-clamp: 2; }
-    .toast:nth-child(n + 3) { display: none; }
   }
   @media (prefers-reduced-motion: no-preference) {
     .toast { animation: toast-in 180ms ease-out; }
@@ -918,7 +918,16 @@ var FleetCore = (function () {
     return { headline, detail, tone: "blocking" };
   }
 
-  return { keyOf, rosterOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf,
+  /* The one toast that stands for everything that arrived and was not dismissed: the newest event
+     that needs the viewer, else the newest, with how many more there are. It stays while any of
+     them needs the viewer. Null when nothing is pending. */
+  function toastOf(pending) {
+    if (!pending.length) return null;
+    const urgent = pending.filter((e) => e.important);
+    return { shown: (urgent.length ? urgent : pending)[(urgent.length || pending.length) - 1], more: pending.length - 1, sticky: urgent.length > 0 };
+  }
+
+  return { keyOf, rosterOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf, toastOf,
     decisionRows, decisionRoute, pendingAnswer, answerText, parseState, parseMessage, viewOf, leadOf, VIEWS };
 })();
 </script>
@@ -1117,7 +1126,7 @@ var FleetCore = (function () {
     if (!$("panel").hidden) $("bell").click();
     if (id) {
       if (was !== id) changedNote = null;
-      for (const toast of $("toasts").querySelectorAll("[data-decision]")) if (toast.dataset.decision === id) toast.remove();
+      notif.about(id);
       renderDecision();
     } else {
       renderDecisions(); render();
@@ -1479,17 +1488,35 @@ img,svg,video,canvas{max-width:100%;height:auto}
         <time datetime="${esc(e.at)}" title="${esc(e.at)}">${esc(clock(e.at))}</time>
       </li>`).join("") : '<li class="empty muted">Nothing yet.</li>');
     }
+    /* Toasts never stack: one stands for all that arrived, and says how many more there are. A tap
+       opens what it is about, or the list when it stands for several. */
+    let pending = [], toastTimer = 0;
     function toast(e) {
       if (prefs.toasts === "off" || (prefs.toasts === "important" && !e.important)) return;
-      const el = document.createElement("div"); el.className = "toast" + (e.important ? " important" : "") + (e.chat || e.decision ? " opens" : "");
-      el.innerHTML = `<div><div class="meta"><span class="kind">${esc(e.kind)}</span>${esc(who(e))}, ${esc(clock(e.at))}</div><div class="text">${esc(e.text)}</div></div><button type="button" aria-label="Dismiss">×</button>`;
-      el.querySelector("button").addEventListener("click", (ev) => { ev.stopPropagation(); el.remove(); });
-      if (e.chat) el.addEventListener("click", () => { el.remove(); openChat(); });
-      else if (e.decision) { el.dataset.decision = e.decision; el.addEventListener("click", () => { el.remove(); location.hash = "#decision/" + e.decision; }); }
-      $("toasts").prepend(el);
-      while ($("toasts").children.length > 4) $("toasts").lastElementChild.remove();
-      if (!e.important) setTimeout(() => el.remove(), 7000);
+      pending.push(e); paintToast();
     }
+    function paintToast() {
+      clearTimeout(toastTimer);
+      const t = Core.toastOf(pending);
+      if (!t) { $("toasts").innerHTML = ""; return; }
+      const e = t.shown;
+      $("toasts").innerHTML = `<div class="toast opens${e.important ? " important" : ""}">
+        <div><div class="meta"><span class="kind">${esc(e.kind)}${e.important ? ", needs you" : ""}</span>${esc(who(e))}, ${esc(clock(e.at))}</div>
+          <div class="text">${esc(e.text)}</div>${t.more ? `<div class="more">and ${t.more} more</div>` : ""}</div>
+        <button type="button" aria-label="Dismiss">×</button></div>`;
+      if (!t.sticky) toastTimer = setTimeout(() => { pending = []; paintToast(); }, 7000);
+    }
+    $("toasts").addEventListener("click", (ev) => {
+      const t = Core.toastOf(pending);
+      pending = []; paintToast();
+      if (!t || ev.target.closest("button")) return;
+      if (t.more) { if ($("panel").hidden) { ev.stopPropagation(); $("bell").click(); } }
+      else if (t.shown.chat) openChat();
+      else if (t.shown.decision) location.hash = "#decision/" + t.shown.decision;
+      else if ($("panel").hidden) { ev.stopPropagation(); $("bell").click(); }
+    });
+    /* The viewer opened a decision's page: what was pending about it has been seen. */
+    function about(decision) { pending = pending.filter((e) => e.decision !== decision); paintToast(); }
     function announce(fresh) {
       fresh.forEach(toast); fresh.forEach(browserAlert);
       const imp = fresh.some((e) => e.important);
@@ -1527,7 +1554,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     });
     browserNote();
     $("n-test").addEventListener("click", () => { unlock(); setTimeout(() => chime(true), 50); });
-    return { sync, message, refresh };
+    return { sync, message, refresh, about };
   })();
 
   /* The worker sheet: everything the page knows about one worker, and one tap to write to it. */
