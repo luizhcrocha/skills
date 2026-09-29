@@ -1,6 +1,7 @@
 """The chat seam: the chat module, its CLI, and the dashboard server's chat routes."""
 import http.client
 import json
+import os
 import queue
 import socket
 import subprocess
@@ -17,6 +18,9 @@ import chat  # noqa: E402
 import serve_dashboard  # noqa: E402
 
 CHAT = str(SCRIPTS / "chat.py")
+
+# The registry of fleets is this machine's; the tests get one of their own.
+os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
 
 
 def write_state(root: Path, agents: list[dict]) -> None:
@@ -355,6 +359,9 @@ class ServerTest(FleetDir):
 
     def setUp(self):
         super().setUp()
+        self.setUp_server()
+
+    def setUp_server(self):
         self.port = free_port()
         args = [sys.executable, "-u", str(SCRIPTS / "serve_dashboard.py"), "--worker", str(self.root), "127.0.0.1",
                 str(self.port)] + ([self.policy] if self.policy else [])
@@ -772,6 +779,80 @@ class BodyIsSandboxedTest(ServerTest):
                 self.assertTrue((self.header(path) or "").startswith("sandbox allow-scripts"), path)
         self.assertIsNone(self.header("/index.html"))
         self.assertIsNone(self.header("/"))
+
+
+def as_manager(root: Path, *coordinators: tuple[str, str]) -> None:
+    """Make DIR a manager's, with each (project, session) served as a coordinator from a directory beside it."""
+    import fleets
+    state = json.loads((root / "state.json").read_text())
+    state["role"] = "manager"
+    (root / "state.json").write_text(json.dumps(state))
+    for project, session in coordinators:
+        home = Path(tempfile.mkdtemp(prefix="fleet-")) / "coordinator"
+        home.mkdir()
+        (home / "state.json").write_text(json.dumps({**state, "project": project, "role": "coordinator", "agents": [],
+                                                     "now": "now of " + project}))
+        fleets.register(home, f"https://box.ts.net/{project}/", os.getpid())
+        fleets.name(home, session)
+
+
+class ManagerChatTest(FleetDir):
+    def setUp(self):
+        super().setUp()
+        os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
+        as_manager(self.root, ("billing", "billing-coordinator"), ("infra", "infra-coordinator"))
+
+    def to(self, sender: str, text: str, re: int | None = None) -> list[str]:
+        return chat.address(self.root, sender, text, re, allow_user=True)["to"]
+
+    def test_the_user_writes_to_the_manager_unless_a_coordinator_is_mentioned(self):
+        self.assertEqual(self.to("user", "what is landing next?"), ["manager"])
+        self.assertEqual(self.to("user", "@billing and @INFRA, status?"), ["billing", "infra"])
+        self.assertEqual(self.to("user", "@manager and @billing"), ["manager", "billing"])
+
+    def test_a_coordinators_workers_are_not_in_the_managers_chat(self):
+        self.assertEqual(self.to("user", "@coordinator hello"), ["manager"])
+        self.assertEqual(chat.address(self.root, "user", "@notes-impl go", allow_user=True)["to"], ["a1"],
+                         "the manager's own workers are")
+
+    def test_a_coordinator_answers_on_the_managers_page_under_its_name(self):
+        chat.append(self.root, "user", "@billing status?", author="luiz@github", allow_user=True)
+        said = run_cli(self.root, "say", "--as", "billing", "--re", "1", "two workers on milestone 2")
+        self.assertEqual(said.stdout, "#2 billing -> user: two workers on milestone 2 [re #1]\n")
+        self.assertEqual(run_cli(self.root, "inbox", "--as", "billing").stdout, "")
+        self.assertEqual(run_cli(self.root, "say", "--as", "manager", "infra lands first").stdout, "#3 manager -> user: infra lands first\n")
+        self.assertEqual(run_cli(self.root, "say", "--as", "coordinator", "x").returncode, 1)
+
+    def test_the_managers_watch_streams_what_the_user_writes_to_a_coordinator(self):
+        chat.append(self.root, "user", "@infra is the deploy gate green?", allow_user=True)
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "manager", "--all"],
+                                stdout=subprocess.PIPE, text=True, encoding="utf-8")
+        self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdout.close()))
+        self.assertEqual(Lines(proc.stdout).next(), "#1 user -> infra: @infra is the deploy gate green?\n")
+
+
+class ManagerIsNotInAFleetsChatTest(FleetDir):
+    def test_a_fleets_chat_has_no_manager(self):
+        self.assertEqual(chat.address(self.root, "user", "@manager hello", allow_user=True)["to"], ["coordinator"])
+        self.assertEqual(run_cli(self.root, "say", "--as", "manager", "x").returncode, 1)
+
+
+class ManagerStreamTest(ServerTest):
+    def test_the_managers_page_is_sent_every_coordinator_and_follows_what_they_do(self):
+        os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
+        self.stop_server()
+        as_manager(self.root, ("billing", "billing-coordinator"))
+        ServerTest.setUp_server(self)
+        stream = Stream(self.port)
+        self.addCleanup(stream.close)
+        stream.next()
+        state = json.loads(stream.next()["data"])
+        self.assertEqual([(c["id"], c["now"], c["session"]) for c in state["coordinators"]], [("billing", "now of billing", "billing-coordinator")])
+        import fleets
+        home = Path(fleets.live()[0]["dir"])
+        fleet = json.loads((home / "state.json").read_text())
+        (home / "state.json").write_text(json.dumps({**fleet, "now": "landing the adapter"}))
+        self.assertEqual(json.loads(stream.next()["data"])["coordinators"][0]["now"], "landing the adapter")
 
 
 class PolicyChoiceTest(unittest.TestCase):

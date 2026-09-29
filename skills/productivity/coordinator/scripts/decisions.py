@@ -12,6 +12,7 @@ from pathlib import Path
 
 KINDS = ["decision", "input", "secret", "action"]
 STATUSES = ["open", "decided", "withdrawn"]
+ASKS = ["user", "manager"]
 ID = re.compile(r"[A-Za-z0-9_.-]+")
 
 _REFERENCE = re.compile(r"op://[^/\n]+/[^/\n]+/[^/\n]+(/[^/\n]+)?")
@@ -85,6 +86,8 @@ def validate(state: dict, fail) -> None:
             if not isinstance(o, dict) or not all(isinstance(o.get(k), str) for k in ("id", "label", "consequence")):
                 fail(f"decision {d['id']} has an option without id, label and consequence")
         ids.add(d["id"])
+        if d.setdefault("asks", "user") not in ASKS:
+            fail(f"decision {d['id']} asks '{d['asks']}', not one of {ASKS}")
         d.setdefault("blocking", False)
         d.setdefault("page", True)
         d.setdefault("body", False)

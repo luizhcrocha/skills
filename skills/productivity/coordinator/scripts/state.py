@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Record fleet events in the dashboard state and re-render, one command per event.
 
-    state.py DIR init --project P --goal G [--now TEXT]
+    state.py DIR init --project P --goal G [--now TEXT] [--role manager]
     state.py DIR set [--status S] [--now TEXT] [--goal G]
     state.py DIR milestone ID --title T
     state.py DIR step ID [--milestone M --title T] [--status S] [--agent A]
@@ -13,7 +13,7 @@
     state.py DIR decision ID [--kind K --title T --question Q --why W] [--blocking | --not-blocking]
                              [--option "KEY: label | consequence"]... [--recommend R --reason WHY]
                              [--secret NAME] [--manual TEXT] [--body FILE | --no-body]
-                             [--agent A] [--supersedes ID] [--log TEXT]
+                             [--agent A] [--supersedes ID] [--log TEXT] [--asks user|manager]
                              [--decide ANSWER --resolution HOW | --withdraw REASON]
     state.py DIR event [--agent A] [--kind K] [--important] TEXT
     state.py DIR show
@@ -22,7 +22,8 @@ Add --no-render anywhere to write state.json without rendering.
 
 DIR holds state.json, the rendered index.html, and brief.md: what every worker
 of the fleet reads before its task, written once from assets/brief.md and the
-coordinator's to add to. Creating and updating use the same verb: an unknown
+coordinator's to add to. A manager's DIR (init --role manager) also holds
+standing.md: what holds for every fleet, the manager's to keep. Creating and updating use the same verb: an unknown
 ID with the required fields creates the row, a known ID updates only the
 fields given. Every command stamps timestamps, validates the result, and
 renders index.html.
@@ -80,11 +81,12 @@ def log(state: dict, kind: str, text: str, agent: str | None = None, important: 
 def cmd_init(state, args):
     if state is not None:
         fail("state.json already exists; use `set` to change it")
-    return {
+    state = {
         "project": args.project, "goal": args.goal, "status": "running",
         "now": args.now or "Intake in progress.", "started": now(), "updated": now(),
         "roadmap": [], "agents": [], "roadblocks": [], "decisions": [], "events": [],
     }
+    return {"role": "manager", **state} if args.role == "manager" else state
 
 
 def cmd_set(state, args):
@@ -299,11 +301,13 @@ def cmd_decision(state, args):
              "options": parse_options(args.option or []), "recommend": args.recommend, "reason": args.reason,
              "secret": args.secret, "manual": args.manual, "body": False, "page": not made_elsewhere,
              "supersedes": args.supersedes, "status": "open", "answer": None, "resolution": None, "change": None,
-             "opened": now(), "revised": None, "closed": None}
+             "asks": args.asks or "user", "opened": now(), "revised": None, "closed": None}
         if not made_elsewhere:
             check_kind(d)
             set_body(Path(args.dir).resolve(), d, args)
-            log(state, "asked", f"{d['title']}: {d['question']}", d["agent"], d["blocking"], d["id"])
+            for_manager = d["asks"] == "manager"   # the manager looks first: the user is not called yet
+            log(state, "asked", f"{'For the manager: ' if for_manager else ''}{d['title']}: {d['question']}", d["agent"],
+                d["blocking"] and not for_manager, d["id"])
         rows.append(d)
     else:
         if args.supersedes:
@@ -319,11 +323,16 @@ def cmd_decision(state, args):
             changed.append("blocking")
         if args.no_body:
             changed.append("body")
+        passed_on = args.asks == "user" and d.get("asks") == "manager"
+        if args.asks and args.asks != d.get("asks", "user"):
+            d["asks"] = args.asks
+            changed.append("asks")
         check_kind(d)
         set_body(Path(args.dir).resolve(), d, args)
         if changed:
             d["revised"], d["change"] = now(), args.log or None
-            log(state, "asked", f"{d['title']} changed: {args.log or ', '.join(changed)}", d["agent"], decision=d["id"])
+            text = f"{d['title']} now asks you: {d['question']}" if passed_on else f"{d['title']} changed: {args.log or ', '.join(changed)}"
+            log(state, "asked", text, d["agent"], passed_on and d["blocking"], d["id"])
     if args.decide is not None:
         close(state, d, "decided", args.decide, args.resolution)
     elif args.withdraw is not None:
@@ -350,7 +359,7 @@ commands (state.py DIR <command>; an unknown ID creates the row, a known ID chan
         [--decision D] [--resolved | --open]
   decision ID --kind {"|".join(decisions.KINDS)} --title T --question Q --why W [--blocking | --not-blocking]
         [--option "KEY: label | consequence"]... [--recommend R --reason WHY] [--secret NAME] [--manual TEXT]
-        [--body FILE | --no-body] [--agent A] [--supersedes ID] [--log TEXT]
+        [--body FILE | --no-body] [--agent A] [--supersedes ID] [--log TEXT] [--asks {"|".join(decisions.ASKS)}]
         [--decide ANSWER --resolution HOW | --withdraw REASON]
   event [--kind {"|".join(KINDS)}] [--agent A] [--important] TEXT
   show
@@ -358,7 +367,8 @@ commands (state.py DIR <command>; an unknown ID creates the row, a known ID chan
 
 
 def cmd_show(state, args):
-    print(f"{state['project']} [{state['status']}] {state['now']}")
+    role = ", manager" if state.get("role") == "manager" else ""
+    print(f"{state['project']} [{state['status']}{role}] {state['now']}")
     for m in state["roadmap"]:
         done = sum(s["status"] == "done" for s in m["steps"])
         print(f"  {m['id']} {m['title']} ({done}/{len(m['steps'])})")
@@ -371,6 +381,8 @@ def cmd_show(state, args):
         print(f"  roadblock {r['id']} {'resolved' if r['resolved'] else 'OPEN'} [{r['severity']}, needs {r['needs']}] {r['title']}")
     for d in state.get("decisions", []):
         status = ("OPEN, blocking" if d.get("blocking") else "OPEN") if d["status"] == "open" else d["status"]
+        if d["status"] == "open" and d.get("asks") == "manager":
+            status += ", with the manager"
         outcome = d.get("answer") or d.get("resolution")
         print(f"  decision {d['id']} {status} [{d['kind']}] {d['title']}" + (f": {outcome}" if outcome else ""))
     print(f"  {len(state['events'])} events, updated {state['updated']}")
@@ -378,14 +390,17 @@ def cmd_show(state, args):
     return None
 
 
-def ensure_brief(root: Path) -> None:
-    """DIR/brief.md from assets/brief.md with this fleet's paths, unless it is there: what the coordinator added stays."""
-    path = root / "brief.md"
-    if path.exists():
-        return
+def ensure_brief(root: Path, state: dict) -> None:
+    """DIR/brief.md from assets/brief.md with this fleet's paths, and for a manager DIR/standing.md,
+    each unless it is there: what was added to them stays."""
     skill = Path(__file__).resolve().parent.parent
-    template = (skill / "assets" / "brief.md").read_text()
-    path.write_text(template.replace("{skill_dir}", str(skill)).replace("{dashboard_dir}", str(root)))
+    path = root / "brief.md"
+    if not path.exists():
+        template = (skill / "assets" / "brief.md").read_text()
+        path.write_text(template.replace("{skill_dir}", str(skill)).replace("{dashboard_dir}", str(root)))
+    standing = root / "standing.md"
+    if state.get("role") == "manager" and not standing.exists():
+        standing.write_text((skill / "assets" / "standing.md").read_text())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -394,6 +409,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("init"); s.add_argument("--project", required=True); s.add_argument("--goal", required=True); s.add_argument("--now")
+    s.add_argument("--role", choices=["coordinator", "manager"], help="manager: this ledger is the manager's, over every coordinator on the machine")
     s = sub.add_parser("set"); s.add_argument("--status", choices=STATUSES); s.add_argument("--now"); s.add_argument("--goal")
     s = sub.add_parser("milestone"); s.add_argument("id"); s.add_argument("--title")
     s = sub.add_parser("step"); s.add_argument("id"); s.add_argument("--milestone"); s.add_argument("--title")
@@ -424,6 +440,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--no-body", action="store_true")
     s.add_argument("--agent", help="the worker that waits on it"); s.add_argument("--supersedes", metavar="ID")
     s.add_argument("--log", help="what changed, shown to the user on the page")
+    s.add_argument("--asks", choices=decisions.ASKS, help="who looks at it first: the user, or the manager when there is one")
     g = s.add_mutually_exclusive_group(); g.add_argument("--decide", metavar="ANSWER"); g.add_argument("--withdraw", metavar="REASON")
     s.add_argument("--resolution", metavar="HOW", help="with --decide: how the answer came")
     s = sub.add_parser("event"); s.add_argument("text"); s.add_argument("--agent"); s.add_argument("--kind", choices=KINDS)
@@ -450,7 +467,7 @@ def main(argv: list[str]) -> None:
     result["updated"] = now()
     render_dashboard.validate(result)
     path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
-    ensure_brief(root)
+    ensure_brief(root, result)
     if args.no_render:
         print(f"state.json updated ({args.cmd} {getattr(args, 'id', '')})".rstrip())
     else:

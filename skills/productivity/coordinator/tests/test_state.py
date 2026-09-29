@@ -1,5 +1,6 @@
 """The state CLI beyond decisions: what it tells a coordinator that lost its context, and what it keeps for it."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -8,6 +9,9 @@ from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent.parent
 STATE = str(SKILL / "scripts" / "state.py")
+
+# The registry of fleets is this machine's; the tests get one of their own.
+os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
 
 
 class Fleet(unittest.TestCase):
@@ -77,6 +81,47 @@ class AgentTest(Fleet):
         a = self.state()["agents"][0]
         self.assertEqual((a["rounds"], a["tokens"]), (3, 180))
         self.assertIn("round 3", self.ok("show"))
+
+
+class ManagerTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name) / "manager"
+        self.addCleanup(self._tmp.cleanup)
+
+    def run_cli(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, STATE, str(self.root), *args, "--no-render"], capture_output=True, text=True, timeout=20)
+
+    def test_a_managers_ledger_says_so_and_holds_what_every_fleet_follows(self):
+        result = self.run_cli("init", "--role", "manager", "--project", "this machine", "--goal", "land the billing work in order")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads((self.root / "state.json").read_text())["role"], "manager")
+        standing = (self.root / "standing.md").read_text()
+        for heading in ["## What the user decided", "## Who owns what", "## Landings and deploys"]:
+            self.assertIn(heading, standing)
+        (self.root / "standing.md").write_text(standing + "\nNever export the infra token in a deploy shell.\n")
+        self.assertEqual(self.run_cli("set", "--now", "x").returncode, 0)
+        self.assertIn("Never export the infra token", (self.root / "standing.md").read_text())
+        self.assertIn("this machine [running, manager]", self.run_cli("show").stdout)
+
+    def test_a_managers_step_names_the_coordinator_whose_turn_it_is(self):
+        self.run_cli("init", "--role", "manager", "--project", "this machine", "--goal", "g")
+        self.run_cli("milestone", "landings", "--title", "Landings and deploys")
+        step = self.run_cli("step", "l1", "--milestone", "landings", "--title", "infra: push master", "--agent", "infra", "--status", "current")
+        self.assertEqual(step.returncode, 0, step.stderr)
+        render = subprocess.run([sys.executable, STATE, str(self.root), "set", "--now", "infra has the turn"], capture_output=True, text=True)
+        self.assertEqual(render.returncode, 0, render.stderr)
+
+    def test_a_coordinators_step_names_one_of_its_workers(self):
+        self.run_cli("init", "--project", "p", "--goal", "g")
+        self.run_cli("milestone", "m1", "--title", "M")
+        refused = self.run_cli("step", "s1", "--milestone", "m1", "--title", "T", "--agent", "nobody")
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("unknown agent 'nobody'", refused.stderr)
+
+    def test_a_coordinators_ledger_has_no_standing_file(self):
+        self.run_cli("init", "--project", "p", "--goal", "g")
+        self.assertFalse((self.root / "standing.md").exists())
 
 
 class BriefTest(Fleet):

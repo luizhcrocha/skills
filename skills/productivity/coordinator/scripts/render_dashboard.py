@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import decisions  # noqa: E402
+import fleets  # noqa: E402
 
 REQUIRED = {
     "project": str, "goal": str, "status": str, "now": str, "started": str,
@@ -77,7 +78,8 @@ def validate(state: dict) -> None:
         for s in m["steps"]:
             if s.get("status") not in STEP_STATUSES:
                 fail(f"step {s.get('id', '?')} status not in {sorted(STEP_STATUSES)}")
-            if s.get("agent") and s["agent"] not in ids:
+            # A manager's step names the coordinator whose turn it is, and coordinators come and go.
+            if s.get("agent") and s["agent"] not in ids and fleets.role_of(state) != "manager":
                 fail(f"step {s['id']} points at unknown agent '{s['agent']}'")
     for r in state["roadblocks"]:
         for k in ("id", "title", "severity", "needs", "since", "resolved"):
@@ -116,7 +118,8 @@ def main(argv: list[str]) -> None:
     state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n")
 
     template = (Path(__file__).resolve().parent.parent / "assets" / "dashboard.html").read_text()
-    payload = json.dumps(state, ensure_ascii=False).replace("<", "\\u003c")  # no markup can open inside the state script
+    shown = fleets.view(state, state_path.parent)  # with the coordinators, or the way to the manager
+    payload = json.dumps(shown, ensure_ascii=False).replace("<", "\\u003c")  # no markup can open inside the state script
     if "/*__STATE__*/" not in template:
         fail("template has no /*__STATE__*/ placeholder")
     html = template.replace("/*__STATE__*/", payload, 1)

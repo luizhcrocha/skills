@@ -41,6 +41,7 @@ from urllib.parse import parse_qs, urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chat  # noqa: E402
 import decisions  # noqa: E402
+import fleets  # noqa: E402
 
 
 def fail(msg: str) -> None:
@@ -198,6 +199,10 @@ def start(root: Path, record: Path, existing: dict | None) -> None:
         warn(f"address changed: {existing.get('url')} is now {url}")
     record.write_text(json.dumps({"pid": pid, "port": port, "url": url, "tls": tls, "post": policy}, indent=2) + "\n")
     print(url)
+    me = fleets.register(root, url, pid)
+    boss = fleets.manager()
+    if boss and me["role"] != "manager":
+        print(f"manager: session {boss.get('session') or '(not named yet)'}  {boss['url']}  what holds for every fleet: {Path(boss['dir']) / 'standing.md'}")
 
 
 def main(argv: list[str]) -> None:
@@ -218,6 +223,7 @@ def main(argv: list[str]) -> None:
                 tailscale_unserve(existing["port"])
             print(f"stopped {existing['url']}")
         record.unlink(missing_ok=True)
+        fleets.unregister(root)
         return
 
     if existing and alive(existing["pid"]):
@@ -346,10 +352,10 @@ def worker(root: str, bind_ip: str, port: int, policy: str = "open", *hosts: str
                 greeting = hello(policy, self.headers.get("Tailscale-User-Login"))
                 self.wfile.write(f"event: hello\ndata: {json.dumps(greeting, ensure_ascii=False)}\n\n".encode())
                 while True:
-                    raw = read_bytes(Path(root) / "state.json")
-                    if raw != sent_state and (state := parse_state(raw)) is not None:
+                    state = parse_state(read_bytes(Path(root) / "state.json"), root)
+                    if state is not None and state != sent_state:
                         self.wfile.write(f"event: state\ndata: {state}\n\n".encode())
-                        sent_state = raw
+                        sent_state = state
                     for m in tail.read():
                         self.wfile.write(f"event: chat\nid: {m['id']}\ndata: {json.dumps(m, ensure_ascii=False)}\n\n".encode())
                     if time.monotonic() - pinged >= PING_S:
@@ -429,12 +435,16 @@ def read_bytes(path: Path) -> bytes | None:
         return None
 
 
-def parse_state(raw: bytes | None) -> str | None:
-    """state.json as one line of JSON, or None while it is missing or half written."""
+def parse_state(raw: bytes | None, root=None) -> str | None:
+    """state.json as the page is sent it, one line of JSON: with the coordinators being served when it
+    is a manager's, with the way to the manager when there is one. None while it is missing or half written."""
     try:
-        return json.dumps(json.loads(raw), ensure_ascii=False) if raw else None
+        state = json.loads(raw) if raw else None
     except ValueError:
         return None
+    if not isinstance(state, dict):
+        return None
+    return json.dumps(fleets.view(state, root) if root is not None else state, ensure_ascii=False)
 
 
 def client_gone(conn: socket.socket, wait: float) -> bool:

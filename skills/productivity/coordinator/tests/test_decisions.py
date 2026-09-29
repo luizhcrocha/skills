@@ -1,5 +1,6 @@
 """The decisions seam: what waits on the user, through the state CLI and the rule for what an answer may be."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,9 @@ sys.path.insert(0, str(SCRIPTS))
 import decisions  # noqa: E402
 
 STATE = str(SCRIPTS / "state.py")
+
+# The registry of fleets is this machine's; the tests get one of their own.
+os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
 
 SCHEMA = ["d1", "--kind", "decision", "--title", "Invoice schema", "--question", "Migrate the invoice table or keep both shapes?",
           "--why", "invoice-gen cannot write usage lines until this is settled",
@@ -178,6 +182,28 @@ class CloseTest(Fleet):
         d = self.item()
         self.assertEqual((d["status"], d["kind"], d["page"], d["answer"]), ("decided", "decision", False, "yes"))
         self.assertEqual([e["kind"] for e in self.state()["events"] if e.get("decision") == "d1"], ["decision"])
+
+
+class AsksTest(Fleet):
+    def test_a_decision_asks_the_user_unless_it_is_put_to_the_manager(self):
+        self.ok("decision", *SCHEMA)
+        self.assertEqual(self.item()["asks"], "user")
+
+    def test_one_put_to_the_manager_does_not_call_the_user(self):
+        self.ok("decision", *SCHEMA, "--blocking", "--asks", "manager")
+        self.assertEqual(self.item()["asks"], "manager")
+        event = self.state()["events"][-1]
+        self.assertEqual(event["kind"], "asked")
+        self.assertNotIn("important", event)
+        self.assertTrue(event["text"].startswith("For the manager: "))
+
+    def test_passing_it_to_the_user_calls_them(self):
+        self.ok("decision", *SCHEMA, "--blocking", "--asks", "manager")
+        self.ok("decision", "d1", "--asks", "user", "--log", "the manager passed it on: the choice is yours")
+        d = self.item()
+        self.assertEqual((d["asks"], d["change"]), ("user", "the manager passed it on: the choice is yours"))
+        event = self.state()["events"][-1]
+        self.assertEqual((event["kind"], event.get("important"), event["decision"]), ("asked", True, "d1"))
 
 
 class RoadblockTest(Fleet):

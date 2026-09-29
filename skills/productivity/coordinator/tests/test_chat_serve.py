@@ -12,6 +12,11 @@ import unittest
 from pathlib import Path
 
 SERVE = str(Path(__file__).resolve().parent.parent / "scripts" / "serve_dashboard.py")
+sys.path.insert(0, str(Path(SERVE).parent))
+import fleets  # noqa: E402
+
+# The registry of fleets is this machine's; the tests get one of their own.
+os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
 
 FAKE_TAILSCALE = """#!/usr/bin/env python3
 import json, os, sys
@@ -163,6 +168,33 @@ class ServeCliTest(unittest.TestCase):
             conn.request("GET", "/chat")
             self.assertEqual(conn.getresponse().status, 200)
             conn.close()
+
+    def test_a_served_fleet_is_in_the_registry_until_it_is_stopped(self):
+        (self.root / "state.json").write_text(json.dumps({"project": "acme billing", "goal": "g", "status": "running", "now": "n",
+                                                          "started": "x", "roadmap": [], "agents": [], "roadblocks": [], "events": []}))
+        self.assertEqual(self.serve().returncode, 0)
+        entry = fleets.find(self.root)
+        self.assertEqual((entry["id"], entry["role"], entry["url"], entry["pid"]),
+                         ("acme-billing", "coordinator", self.record()["url"], self.record()["pid"]))
+        fleets.name(self.root, "billing-coordinator")
+        self.assertEqual(self.serve("--restart").returncode, 0)
+        again = fleets.find(self.root)
+        self.assertEqual((again["id"], again["session"], again["pid"]), ("acme-billing", "billing-coordinator", self.record()["pid"]))
+        self.assertEqual(self.serve("--stop").returncode, 0)
+        self.assertIsNone(fleets.find(self.root))
+
+    def test_starting_says_how_to_reach_the_manager_when_there_is_one(self):
+        self.assertNotIn("manager", self.serve().stdout)
+        home = Path(tempfile.mkdtemp(prefix="fleet-")) / "manager"
+        home.mkdir()
+        (home / "state.json").write_text(json.dumps({"role": "manager", "project": "everything"}))
+        fleets.register(home, "https://box.ts.net:9/", os.getpid())
+        fleets.name(home, "manager-session")
+        self.addCleanup(fleets.unregister, home)
+        out = self.serve("--restart").stdout
+        self.assertEqual(out.splitlines()[0], self.record()["url"])
+        self.assertIn("manager: session manager-session", out)
+        self.assertIn(str(home / "standing.md"), out)
 
     def test_a_worker_that_cannot_start_fails_with_its_log_and_leaves_no_record(self):
         port = free_port()

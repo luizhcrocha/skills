@@ -12,7 +12,8 @@
     chat.py DIR log   [--after N]                the whole conversation, oldest first
 
 WHO is `coordinator` or an agent id or name from DIR/state.json; only the
-dashboard server speaks as the user. Every message prints as exactly one line,
+dashboard server speaks as the user. In a manager's DIR the host is `manager`
+and the coordinators being served are participants too, by their fleet's name. Every message prints as exactly one line,
 flushed at once. The server imports this module,
 so append, read, open_for and the mention rules are shared by both callers.
 """
@@ -26,6 +27,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fleets  # noqa: E402
 
 POLL_S = 0.3
 
@@ -102,26 +106,49 @@ def read(root, after: int = 0) -> list[dict]:
     return Tail(root, after).read()
 
 
-def _agents(root) -> list[dict]:
-    """The agents[] rows of DIR/state.json, whatever their status; none when there is no state yet."""
+def _state(root) -> dict:
     try:
-        rows = json.loads((Path(root) / "state.json").read_text(encoding="utf-8")).get("agents", [])
-    except (OSError, ValueError, AttributeError):
-        return []
-    return [a for a in rows if isinstance(a, dict) and isinstance(a.get("id"), str)]
+        state = json.loads((Path(root) / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def host(root) -> str:
+    """Who runs the chat of DIR and gets what is addressed to nobody: `manager` in a manager's, else `coordinator`."""
+    return fleets.role_of(_state(root))
+
+
+def _agents(root) -> list[dict]:
+    """Who can be written to beside the host: the agents[] rows of DIR/state.json, whatever their
+    status, and in a manager's DIR the coordinators being served, each under its fleet's name."""
+    state = _state(root)
+    rows = state.get("agents", [])
+    roster = [a for a in rows if isinstance(a, dict) and isinstance(a.get("id"), str)] if isinstance(rows, list) else []
+    if fleets.role_of(state) == "manager":
+        roster += [{"id": c["id"], "name": c["id"]} for c in fleets.view(state, root)["coordinators"]]
+    return [{"id": "", "host": fleets.role_of(state)}] + roster
 
 
 def _resolve(roster: list[dict], who: str) -> str | None:
-    """The roster id `who` names, any case: `coordinator`, then agent ids, then agent names, each in
+    """The roster id `who` names, any case: the host, then agent ids, then agent names, each in
     state.json order, so an id always wins over another agent's name. None when nobody has it."""
     key = who.lower()
-    if key == "coordinator":
-        return "coordinator"
+    if key == _host_of(roster):
+        return key
     for field in ("id", "name"):
-        for a in roster:
+        for a in _members(roster):
             if str(a.get(field, a["id"])).lower() == key:
                 return a["id"]
     return None
+
+
+def _host_of(roster: list[dict]) -> str:
+    return next((a["host"] for a in roster if "host" in a), "coordinator")
+
+
+def _members(roster: list[dict]) -> list[dict]:
+    return [a for a in roster if "host" not in a]
 
 
 _MENTION = regex.compile(r"@([A-Za-z0-9_.-]+)")
@@ -156,10 +183,10 @@ def _participant(roster: list[dict], who: str, allow_user: bool) -> str:
     if who == "user":
         if allow_user:
             return who
-        raise ChatError("only the dashboard server speaks as the user; use --as coordinator or your agent id")
+        raise ChatError(f"only the dashboard server speaks as the user; use --as {_host_of(roster)} or your own id")
     found = _resolve(roster, who)
     if found is None:
-        raise ChatError(f"unknown participant '{who}'; use coordinator or an agent id or name from state.json")
+        raise ChatError(f"unknown participant '{who}'; use {_host_of(roster)} or an id or name from state.json")
     return found
 
 
@@ -168,7 +195,7 @@ def address(root, sender: str, text: str, re: int | None = None, allow_user: boo
     {"from": id, "to": [...], "parts": [...]}. The one implementation of the rule; append stores it.
 
     Recipients are the resolved mentions and, when `re` is set, the sender of the message it answers: a
-    user message goes to them, or to the coordinator when there are none; a fleet message goes to the
+    user message goes to them, or to the host when there are none; a fleet message goes to the
     user plus them. A sender is never its own recipient. Only the server passes allow_user=True. Raises
     ChatError for an unknown sender or `re`; empty text is answered (no parts), not refused."""
     roster = _agents(root)
@@ -184,7 +211,7 @@ def address(root, sender: str, text: str, re: int | None = None, allow_user: boo
     for who in named:
         if who != sender and who not in to:
             to.append(who)
-    return {"from": sender, "to": to or ["coordinator"], "parts": parts}
+    return {"from": sender, "to": to or [_host_of(roster)], "parts": parts}
 
 
 def append(root, sender: str, text: str, re: int | None = None, author: str | None = None,
@@ -242,7 +269,7 @@ def _one_line(value) -> str:
 def _render(root, messages: list[dict]) -> list[str]:
     """Each message as its one printed line: `#12 user (login) -> a1 (notes-impl) [d1]: text [re #9]`,
     the `[d1]` on a message about that decision."""
-    names = {a["id"]: a.get("name", a["id"]) for a in _agents(root)}
+    names = {a["id"]: a.get("name", a["id"]) for a in _members(_agents(root))}
 
     def label(id_: str, extra=None) -> str:
         extra = extra or names.get(id_, id_)
@@ -295,7 +322,7 @@ def cmd_watch(root, args) -> None:
     messages = tail.read()
     wanted = {m["id"] for m in _open_among(messages, who)}
     if args.all:
-        wanted |= {m["id"] for r in ("coordinator", *{a["id"] for a in _agents(root)})
+        wanted |= {m["id"] for r in (host(root), *{a["id"] for a in _members(_agents(root))})
                    for m in _open_among(messages, r) if m["from"] == "user"}
     show([m for m in messages if m["id"] > after and m["id"] in wanted])
     while True:
