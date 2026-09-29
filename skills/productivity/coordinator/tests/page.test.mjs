@@ -472,3 +472,14 @@ test("unreadNotice: opening a decision reads what came about it until then; a cl
   assert.equal(Core.unreadNotice({ at: e.at, chat: 7 }, "c", seen({ chatRead: 7 })), false);
   assert.equal(Core.unreadNotice(e, "k", seen({ lastSeen: "2026-09-29T11:00:00Z" })), false);
 });
+
+test("bucketOf: waits on you, waiting on someone else, or done", () => {
+  const d = { id: "d1", kind: "decision", status: "open", asks: "user", opened: "2026-09-29T10:00:00Z" };
+  const answer = { id: 4, from: "user", decision: "d1", at: "2026-09-29T10:05:00Z", text: "yes" };
+  assert.equal(Core.bucketOf(d, []), "active");
+  assert.equal(Core.bucketOf(d, [answer]), "waiting");
+  assert.equal(Core.bucketOf({ ...d, asks: "manager" }, []), "waiting");
+  assert.equal(Core.bucketOf({ ...d, status: "withdrawn" }, []), "done");
+  const g = { id: "g1", kind: "grill", status: "open", asks: "user", opened: "x", questions: [{ id: "q1", title: "t", status: "answered", asked: "x" }] };
+  assert.equal(Core.bucketOf(g, []), "waiting", "a grilling with nothing left to answer waits on the fleet");
+});

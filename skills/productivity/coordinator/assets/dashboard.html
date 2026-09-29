@@ -99,6 +99,7 @@
   .pill.running, .pill.current { background: var(--run-soft); color: var(--run); }
   .pill.done, .pill.decided { background: color-mix(in srgb, var(--good) 15%, var(--card)); color: var(--good); }
   .pill.blocked, .pill.failed, .pill.critical, .pill.blocking { background: var(--critical-soft); color: var(--critical); }
+  .pill.held { background: var(--run-soft); color: var(--run); }
   .pill.open, .pill.answered, .pill.new, .pill.changed, .pill.warning { background: var(--you-soft); color: var(--you); }
   .pill.serious { background: color-mix(in srgb, var(--serious) 15%, var(--card)); color: var(--serious); }
   .pill.recommended { background: var(--accent-soft); color: var(--accent); }
@@ -168,6 +169,11 @@
   .ask + .ask { border-top: 1px solid var(--line); }
   .ask:hover { background: color-mix(in srgb, var(--card-2) 55%, transparent); }
   .ask.open { border-left-color: var(--you); }
+  .ask.held { border-left-color: var(--run); }
+  .seg { display: inline-flex; margin: 0 0 10px; padding: 3px; gap: 2px; border: 1px solid var(--line); border-radius: 10px; background: var(--card-2); max-width: 100%; overflow-x: auto; }
+  .seg button { min-height: var(--tap); padding: 0 12px; border: 0; border-radius: 7px; background: none; color: var(--muted); font: inherit; font-size: var(--fs-s); font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .seg button[aria-pressed="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 14%, transparent); }
+  .seg .n { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 500; }
   .ask.open.blocking { border-left-color: var(--critical); }
   .ask.closed { color: var(--muted); }
   .ask-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
@@ -668,6 +674,7 @@
       <div class="lead" id="lead"></div>
       <div class="part">
         <h2 id="h-decisions" class="vh">Decisions</h2>
+        <div class="seg" id="decision-seg" role="group" aria-label="Show decisions"></div>
         <div class="card" id="decision-list"></div>
       </div>
       <div class="part">
@@ -1195,6 +1202,15 @@ var FleetCore = (function () {
     return !pending || pending.replies.length > 0;
   }
 
+  /* Which list a decision belongs in: "active" while it waits on the viewer, "waiting" while it is
+     open but with someone else (an answer sent and not recorded, the manager's to look at, a grilling
+     with nothing left to answer), "done" once decided or withdrawn. */
+  function bucketOf(d, messages) {
+    if (!d || d.status !== "open") return "done";
+    return awaiting(d, messages) ? "active" : "waiting";
+  }
+  const BUCKETS = [["active", "Waits on you"], ["waiting", "Waiting"], ["done", "Done"]];
+
   /* What waits on the user, as the sentence the page opens with. */
   function leadOf(decisions) {
     const open = (decisions || []).filter((d) => d.status === "open" && d.asks !== "manager"), holding = open.filter((d) => d.blocking).length;
@@ -1254,7 +1270,7 @@ var FleetCore = (function () {
   }
 
   return { keyOf, hostOf, rosterOf, usageOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf, toastOf,
-    decisionRows, decisionRoute, pendingAnswer, awaiting, findRows, findRank, FIND_GROUPS, FIND_PREFIX, grillState, grillAnswerText, sidesOf, excerptOf, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, unreadNotice, staleNow, viewOf, leadOf, VIEWS };
+    decisionRows, decisionRoute, pendingAnswer, awaiting, bucketOf, BUCKETS, findRows, findRank, FIND_GROUPS, FIND_PREFIX, grillState, grillAnswerText, sidesOf, excerptOf, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, unreadNotice, staleNow, viewOf, leadOf, VIEWS };
 })();
 </script>
 <script>
@@ -1480,28 +1496,39 @@ var FleetCore = (function () {
   const revisionOf = (d) => d.revised || d.opened;
   const closedWords = (d) => d.status === "decided" ? `Decided: ${d.answer || ""}` : `Withdrawn: ${d.resolution || ""}`;
   const grillPill = (d) => { const g = Core.grillState(d, chat.messages.values());
-    return g.toAnswer ? pillAs("open", `${g.toAnswer} to answer`) : pillAs("answered", g.waiting ? "answers sent" : "nothing to answer"); };
+    return g.toAnswer ? pillAs("open", `${g.toAnswer} to answer`) : pillAs("held", g.waiting ? "answers sent" : "all answered"); };
   const statePill = (d, pending) => d.status !== "open" ? pill(d.status)
     : d.kind === "grill" ? grillPill(d)
-    : pending ? pillAs("answered", pending.replies.length ? "the " + HOST + " replied" : Core.unreadBy(STATE.hearing, pending.answer) ? "answered, not read yet" : "answered, waiting on the " + HOST)
+    : pending ? pillAs(pending.replies.length ? "open" : "held", pending.replies.length ? "the " + HOST + " replied" : Core.unreadBy(STATE.hearing, pending.answer) ? "answered, not read yet" : "answered, waiting on the " + HOST)
     : d.asks === "manager" ? pillAs("", "with the manager") + (d.blocking ? pillAs("blocking", "blocks work") : "")
     : d.blocking ? pillAs("blocking", "blocks work") : pillAs("open", "open");
 
   /* The list: every row is a link to the decision's page. */
+  let bucket = store.get("d-bucket", "active");
   function renderDecisions() {
     const messages = [...chat.messages.values()];
-    const rows = Core.decisionRows(everyDecision(), seen);
-    paint($("decision-list"), rows.length ? rows.map(({ item: d, mark }) => {
-      const open = d.status === "open", waits = open && d.asks !== "manager";
-      return `<a class="ask ${waits ? "open" : "closed"}${waits && d.blocking ? " blocking" : ""}" href="${esc(d.href || "#decision/" + d.id)}">
-        <span class="ask-head"><b>${refOf(d)}${esc(d.title)}</b>${statePill(d, open && Core.pendingAnswer(d, messages))}${mark ? pill(mark) : ""}${pillAs("plain", KIND_WORDS[d.kind] || d.kind)}${d.fleet ? pillAs("plain", "in " + d.fleet) : ""}</span>
+    const all = Core.decisionRows(everyDecision(), seen).map((r) => ({ ...r, bucket: Core.bucketOf(r.item, messages) }));
+    const counts = Object.fromEntries(Core.BUCKETS.map(([k]) => [k, all.filter((r) => r.bucket === k).length]));
+    paint($("decision-seg"), Core.BUCKETS.map(([k, label]) =>
+      `<button type="button" data-bucket="${k}" aria-pressed="${bucket === k}">${esc(label)} <span class="n">${counts[k]}</span></button>`).join(""));
+    const rows = all.filter((r) => r.bucket === bucket);
+    const empty = { active: "Nothing waits on you.", waiting: "Nothing is waiting on the fleet.", done: "Nothing decided yet." }[bucket];
+    paint($("decision-list"), rows.length ? rows.map(({ item: d, mark, bucket: b }) => {
+      const open = d.status === "open", waits = b === "active";
+      return `<a class="ask ${waits ? "open" : open ? "held" : "closed"}${waits && d.blocking ? " blocking" : ""}" href="${esc(d.href || "#decision/" + d.id)}">
+        <span class="ask-head"><b>${refOf(d)}${esc(d.title)}</b>${statePill(d, open && Core.pendingAnswer(d, messages))}${mark && waits ? pill(mark) : ""}${pillAs("plain", KIND_WORDS[d.kind] || d.kind)}${d.fleet ? pillAs("plain", "in " + d.fleet) : ""}</span>
         <span class="detail">${esc(open ? d.question : closedWords(d))}</span>
         <span class="meta">${open
           ? `${d.why ? esc((d.blocking ? "Blocks: " : "Meanwhile: ") + d.why) + ". " : ""}Asked ${esc(ago(d.opened))}${d.revised ? ", changed " + esc(ago(d.revised)) : ""}`
           : `${d.status === "decided" && d.resolution ? esc(d.resolution) + ". " : ""}Closed ${esc(ago(d.closed))}`}</span>
       </a>`;
-    }).join("") : '<p class="empty">Nothing waits on you.</p>');
+    }).join("") : `<p class="empty">${esc(empty)}</p>`);
   }
+  $("decision-seg").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-bucket]");
+    if (!b) return;
+    bucket = b.dataset.bucket; store.set("d-bucket", bucket); renderDecisions();
+  });
 
   /* The decision's page, a view of this page at #decision/<id>. Its three regions are painted apart:
      the facts, the evidence (a frame, reloaded only when the item is revised), and the answer's

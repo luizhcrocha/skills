@@ -96,7 +96,7 @@ A fleet's name is its session's: the registry reads it from the session's title,
 - **Where the user goes.** Your Links view lists every fleet's pages and dev servers, and every port the machine serves that no link names, with the fleet that started it. One left unnamed goes back to that fleet to record (`link`) or to stop.
 - **Whose files a landing moves.** `fleets.py whose FROM TO`, in the repository, sorts the files by owning fleet from `<dir>/owners` (one `FLEET GLOB` per line, first match wins; keep it with the owners in `standing.md`).
 
-A monitor agent you spawn (app metrics, runs, executions, reporting back to you) runs on Sonnet 5.5 (`model: "sonnet"`), as the coordinator's model table says.
+A monitor agent you spawn (app metrics, runs, executions, reporting back to you) runs on the default Sonnet (`model: "sonnet"`), as the coordinator's model table says. When a new default model comes out, the fleets move their agents to it (the coordinator's SKILL.md, "A new default model"); yours too.
 
 ## Said once
 

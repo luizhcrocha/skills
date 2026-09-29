@@ -62,19 +62,21 @@ How the worker reaches the skill depends on how it is invoked. `diagnosing-bugs`
 
 ### 3. Pick the model
 
-Two models are approved and need no discussion. Pick by where the task's difficulty lies:
+Two models are approved and need no discussion: the default Opus and the default Sonnet, whichever versions those are today (`model: "opus"` and `model: "sonnet"` on the Agent tool pick them). Pick by where the task's difficulty lies:
 
 | The task is | Model |
 | :-- | :-- |
-| **Judgement**: implementation, debugging, prototypes, design, review, anything where a wrong decision costs a rework | the best Opus available (`model: "opus"` on the Agent tool) |
-| **Legwork**: research and reading, docs or API facts, scans and log reads, mechanical sweeps (a rename, a format pass), running checks and reporting the output | Sonnet 5.5 (`model: "sonnet"`) |
-| **Watching**: a monitor agent that watches app metrics, runs, or executions and reports back | Sonnet 5.5 (`model: "sonnet"`), whoever spawns it: you, a worker, or the manager |
+| **Judgement**: implementation, debugging, prototypes, design, review, anything where a wrong decision costs a rework | the default Opus (`model: "opus"`) |
+| **Legwork**: research and reading, docs or API facts, scans and log reads, mechanical sweeps (a rename, a format pass), running checks and reporting the output | the default Sonnet (`model: "sonnet"`) |
+| **Watching**: a monitor agent that watches app metrics, runs, or executions and reports back | the default Sonnet (`model: "sonnet"`), whoever spawns it: you, a worker, or the manager |
 
 A task that mixes the two goes to Opus. When a Sonnet worker's report shows the task held more judgement than the brief expected (it guessed at a decision, or its findings contradict each other), continue the work on an Opus worker with the report pasted into the brief.
 
 Record the model in the ledger (`--model sonnet`; the state CLI assumes Opus). Any other model is a proposal, and the user approves it before you spawn: say which model, for which task, and why. If the user is not around to answer, spawn on the approved model that fits and note the proposal in the dashboard's activity log instead of waiting.
 
 When the approved model for a task is unavailable (its limit is reached), spawn on the other approved one, record it on the worker, and say so in your next message. Judgement work done on Sonnet gets its report read closer.
+
+**A new default model.** When a newer default Opus or Sonnet comes out (the models your session lists change), every agent on the old one moves to it. Upgrade each: a worker resumed on the new default carries on where it was. One that cannot be upgraded (it keeps the model it started on, or fails on the new one) is asked for a handoff (what it did, what is left, the files and commands it was in the middle of) and replaced by a new worker on the new default, with the handoff in its brief. Record the new model on the row, and say in your next message who moved. Your own session moves too: when the user switches it, go on from `state.py <dir> show` and your kept records.
 
 ### 4. Brief
 

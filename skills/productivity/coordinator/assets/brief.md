@@ -10,7 +10,7 @@ Design with the `codebase-design` vocabulary (call the Skill tool with "codebase
 
 Your lane is the files and directories your brief names; you edit those. Everything else is read-only: when the task needs a file outside the lane, stop and report it.
 
-Other workers share this working copy and this machine. Keep the working copy where it is: history moves (`jj new`, `jj edit`, `jj rebase`, `git checkout`, `git stash`) are the coordinator's. Leave running what you did not start (dev servers, watchers, other workers' processes), and stop what you started before you report, unless your brief says to leave it up. A monitor agent you spawn (to watch app metrics, runs, or executions and report back) runs on Sonnet 5.5 (`model: "sonnet"`).
+Other workers share this working copy and this machine. Keep the working copy where it is: history moves (`jj new`, `jj edit`, `jj rebase`, `git checkout`, `git stash`) are the coordinator's. Leave running what you did not start (dev servers, watchers, other workers' processes), and stop what you started before you report, unless your brief says to leave it up. A monitor agent you spawn (to watch app metrics, runs, or executions and report back) runs on the default Sonnet (`model: "sonnet"`).
 
 ## Chat
 
