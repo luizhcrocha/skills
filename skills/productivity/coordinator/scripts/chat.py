@@ -195,7 +195,11 @@ def _participant(roster: list[dict], who: str, allow_user: bool) -> str:
         raise ChatError(f"only the dashboard server speaks as the user; use --as {_host_of(roster)} or your own id")
     found = _resolve(roster, who)
     if found is None:
-        raise ChatError(f"unknown participant '{who}'; use {_host_of(roster)} or an id or name from state.json")
+        ids = [a["id"] for a in _members(roster)]
+        known = f"the last ids it has are {', '.join(ids[-5:])}" if ids else "it has no worker yet"
+        raise ChatError(f"unknown participant '{who}': no worker row by that id or name in this DIR's state.json "
+                        f"({known}). Check DIR is your fleet's dashboard directory (your brief names it), and that "
+                        f"the coordinator recorded you (`state.py DIR agent {who} ...`) before you started; else use --as {_host_of(roster)}")
     return found
 
 
