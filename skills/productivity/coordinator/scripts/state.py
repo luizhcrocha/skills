@@ -475,7 +475,26 @@ def close(state, d: dict, status: str, answer: str | None, resolution: str) -> N
             resolve(state, r)
 
 
-FIELDS = ("kind", "title", "question", "why", "recommend", "reason", "secret", "manual", "agent")
+FIELDS = ("kind", "title", "question", "why", "recommend", "reason", "secret", "manual", "agent", "step", "milestone")
+
+
+def place_of(state: dict, d: dict, args) -> None:
+    """Tie a decision to the work it came from: a step of the plan (which implies its milestone), a
+    milestone, a worker (which implies its milestone). Refused when the step or milestone is unknown."""
+    step = getattr(args, "step", None)
+    milestone = getattr(args, "milestone", None)
+    if step:
+        m = next((x for x in state["roadmap"] if find(x["steps"], step)), None)
+        if m is None:
+            fail(f"unknown step '{step}'")
+        d["step"], d["milestone"] = find(m["steps"], step)["id"], m["id"]
+    if milestone:
+        if not find(state["roadmap"], milestone):
+            fail(f"unknown milestone '{milestone}' (the roadmap has: {', '.join(x['id'] for x in state['roadmap']) or 'none'})")
+        d["milestone"] = milestone
+    if d.get("agent") and not d.get("milestone"):
+        a = find(state["agents"], d["agent"])
+        d["milestone"] = (a or {}).get("milestone")
 
 
 def cmd_decision(state, args):
@@ -486,6 +505,12 @@ def cmd_decision(state, args):
     if args.agent and not known(state, args.agent):
         fail(f"unknown agent '{args.agent}'")
     if d is not None and d["status"] != "open":
+        only_place = (args.step is not None or args.milestone is not None) and not any(
+            getattr(args, k) is not None for k in FIELDS if k not in ("step", "milestone")) and not args.option and not args.body \
+            and args.decide is None and args.withdraw is None
+        if only_place:  # where it came from is not what was decided: it can be said of a closed one too
+            place_of(state, d, args)
+            return state
         fail(f"{decisions.closed_because(d)}. A closed decision stays as it is; open a new one with --supersedes {d['id']}")
     if d is None:
         if not decisions.ID.fullmatch(args.id):
@@ -503,7 +528,8 @@ def cmd_decision(state, args):
              "options": parse_options(args.option or []), "recommend": args.recommend, "reason": args.reason,
              "secret": args.secret, "manual": args.manual, "body": False, "page": not made_elsewhere,
              "supersedes": args.supersedes, "status": "open", "answer": None, "resolution": None, "change": None,
-             "asks": args.asks or "user", "opened": now(), "revised": None, "closed": None}
+             "asks": args.asks or "user", "opened": now(), "revised": None, "closed": None, "step": None, "milestone": None}
+        place_of(state, d, args)
         if not made_elsewhere:
             check_kind(d)
             set_body(Path(args.dir).resolve(), d, args)
@@ -524,8 +550,12 @@ def cmd_decision(state, args):
                  "(--option, once per option, with --recommend and --reason), or pass --same-options when they still answer it")
         changed = [k for k in FIELDS if getattr(args, k) is not None] + [k for k in ("option", "body") if getattr(args, k)]
         for key in FIELDS:
+            if key in ("step", "milestone"):
+                continue
             if getattr(args, key) is not None:
                 d[key] = getattr(args, key) or None
+        if args.step is not None or args.milestone is not None:
+            place_of(state, d, args)
         if args.option:
             d["options"] = parse_options(args.option)
         if args.blocking or args.not_blocking:
@@ -584,8 +614,13 @@ def cmd_grill(state, args):
         d = {"id": args.id, "kind": "grill", "title": args.title, "question": "", "why": args.why, "blocking": bool(args.blocking),
              "agent": args.agent or None, "options": [], "recommend": None, "reason": None, "secret": None, "manual": None,
              "body": False, "page": True, "supersedes": None, "status": "open", "answer": None, "resolution": None,
-             "change": None, "asks": "user", "opened": now(), "revised": None, "closed": None, "questions": []}
+             "change": None, "asks": "user", "opened": now(), "revised": None, "closed": None, "questions": [],
+             "step": None, "milestone": None}
+        if args.agent and not known(state, args.agent):
+            fail(f"unknown agent '{args.agent}'")
         state.setdefault("decisions", []).append(d)
+    if args.step or args.milestone or (created and d.get("agent")):
+        place_of(state, d, args)
     qs = d["questions"]
     byid = {q["id"]: q for q in qs}
     if args.of and args.of.lower() not in byid:
@@ -749,6 +784,8 @@ def build_parser() -> argparse.ArgumentParser:
     g = s.add_mutually_exclusive_group(); g.add_argument("--body", metavar="FILE", help="an HTML fragment with the evidence, copied to DIR/decisions/ID.html")
     g.add_argument("--no-body", action="store_true")
     s.add_argument("--agent", help="the worker that waits on it"); s.add_argument("--supersedes", metavar="ID")
+    s.add_argument("--step", help="the step of the plan it came from (implies its milestone)")
+    s.add_argument("--milestone", help="the milestone it came from, when no one step")
     s.add_argument("--log", help="what changed, shown to the user on the page")
     s.add_argument("--asks", choices=decisions.ASKS, help="who looks at it first: the user, or the manager when there is one")
     g = s.add_mutually_exclusive_group(); g.add_argument("--decide", metavar="ANSWER"); g.add_argument("--withdraw", metavar="REASON")
@@ -762,6 +799,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--answer", action="append", metavar='"Q3: ANSWER"'); s.add_argument("--drop", action="append", metavar='"Q4: WHY"')
     s.add_argument("--revise", action="append", metavar='"Q3: TITLE | QUESTION | RECOMMENDATION | WHY"')
     s.add_argument("--blocking", action="store_true"); s.add_argument("--agent")
+    s.add_argument("--step", help="the step of the plan it came from"); s.add_argument("--milestone")
     s.add_argument("--done", metavar="SUMMARY", help="every question is settled: what was agreed")
     s = sub.add_parser("link"); s.add_argument("id"); s.add_argument("--url"); s.add_argument("--title")
     s.add_argument("--kind", choices=LINK_KINDS, help="dev: a dev server; page: a page made for a purpose")

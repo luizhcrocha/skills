@@ -127,7 +127,7 @@ def validate(state: dict, fail) -> None:
         d.setdefault("blocking", False)
         d.setdefault("page", True)
         d.setdefault("body", False)
-        for k in ("why", "recommend", "reason", "secret", "manual", "agent", "supersedes", "change",
+        for k in ("why", "recommend", "reason", "secret", "manual", "agent", "supersedes", "change", "step", "milestone",
                   "answer", "resolution", "revised", "closed"):
             d.setdefault(k, None)
     for d in rows:

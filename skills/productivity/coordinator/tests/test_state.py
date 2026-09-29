@@ -277,6 +277,20 @@ class DoneTest(Fleet):
         self.assertNotIn("unfinished", self.run_cli("agent", "a8", "--status", "done", "--report", "All 12 met; did not touch the API.").stderr)
 
 
+class OriginTest(Fleet):
+    def test_a_decision_is_tied_to_its_step_milestone_and_worker(self):
+        self.ok("step", "l19", "--milestone", "m2", "--title", "Watchdog")
+        self.ok("agent", "b41", "--task", "t", "--milestone", "m1")
+        self.ok("decision", "d-a", "--kind", "action", "--title", "Unblock", "--question", "q", "--why", "w", "--manual", "m", "--step", "l19")
+        self.ok("decision", "d-b", "--kind", "input", "--title", "Which", "--question", "q", "--why", "w", "--agent", "b41")
+        d = {x["id"]: x for x in self.state()["decisions"]}
+        self.assertEqual((d["d-a"]["step"], d["d-a"]["milestone"]), ("l19", "m2"))
+        self.assertEqual((d["d-b"]["step"], d["d-b"]["milestone"]), (None, "m1"), "a worker implies its milestone")
+        self.assertIn("unknown step", self.refused("decision", "d-a", "--step", "l99"))
+        self.ok("grill", "g1", "--title", "T", "--ask", "a | b | c | d", "--step", "l19")
+        self.assertEqual(self.state()["decisions"][-1]["step"], "l19")
+
+
 class ManagerTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
