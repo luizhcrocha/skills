@@ -106,6 +106,8 @@ Waiting on the user is a subscription, never a status re-read: whoever asks arms
 
 Every message between sessions is paid for twice: the sender writes it, the receiver reads it, and both read it again on every later turn. So each thing is said once, by the one who knows it, where the user will read it.
 
+- **Your own answers too.** What you answer the user on your page (the chat, a side chat) is written there only. The turn that answered ends, in your session, with one line naming where: "Answered #42 on the page." The user reads the page from any device.
+
 - **Answer from the ledger first.** `python3 <scripts>/fleets.py show <fleet>` prints what a fleet is doing: its now-line and when it was said, the workers running with their task and last report, its latest events, its open decisions and roadblocks, and whether it reads its chat. A question about what a fleet is doing is answered from that, and the coordinator is not asked.
 - **When only the coordinator knows**, forward the user's question with its number and the page it was asked on: "#14 on the manager's page: <text>. Answer there: `python3 <scripts>/chat.py <dir> say --as <fleet> --re 14 \"...\"`". The coordinator answers the user there, once. You do not repeat, summarise, or acknowledge its answer; the user has read it.
 - **A question of yours** goes to the coordinator by `SendMessage` and comes back the same way. What you then tell the user is what they need from it, not the exchange.

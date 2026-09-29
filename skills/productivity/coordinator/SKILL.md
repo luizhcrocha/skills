@@ -109,6 +109,8 @@ Token and duration figures arrive in the task notification when a worker finishe
 
 ### 6. Respond
 
+**Said once, on the page.** What you answer the user on the page is written there only. The turn that answered ends, in your session, with one line naming where: "Answered #42 on the page." The user reads the page, from any device; the same words in the session are paid twice, written and then read on every later turn.
+
 Workers report back with results, questions, or blocks. Handle each in the same turn it arrives:
 
 - A **question** you can answer from context gets a reply through `SendMessage` (the worker keeps its context; a new spawn would lose it).
