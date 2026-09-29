@@ -860,6 +860,27 @@ class ListeningTest(FleetDir):
         self.assertIn("watch --as coordinator --all --resume", out.stderr)
 
 
+class QuoteAndSideTest(FleetDir):
+    def test_a_quote_travels_with_the_message_and_prints_in_its_line(self):
+        m = chat.append(self.root, "user", "why this number?", allow_user=True, quote={"text": "14.1M tokens", "from": "Fleet"})
+        self.assertEqual(m["quote"], {"text": "14.1M tokens", "from": "Fleet"})
+        self.assertEqual(run_cli(self.root, "log").stdout, '#1 user -> coordinator (quoting Fleet: "14.1M tokens"): why this number?\n')
+        with self.assertRaises(chat.ChatError):
+            chat.append(self.root, "user", "x", allow_user=True, quote={"text": " "})
+
+    def test_a_side_chat_is_opened_answered_and_kept_apart(self):
+        opener = chat.append(self.root, "user", "what is l19?", allow_user=True, side="new", quote={"text": "l19", "from": "Plan"})
+        self.assertEqual(opener["side"], opener["id"])
+        answer = run_cli(self.root, "say", "--as", "coordinator", "--re", str(opener["id"]), "the watchdog fix")
+        self.assertIn(f"[side chat #{opener['id']}]", answer.stdout, "a reply stays in the side chat")
+        more = chat.append(self.root, "user", "and when?", allow_user=True, side=opener["id"])
+        self.assertEqual(more["side"], opener["id"])
+        main = chat.append(self.root, "user", "status?", allow_user=True)
+        self.assertNotIn("side", main)
+        with self.assertRaises(chat.ChatError):
+            chat.append(self.root, "user", "x", allow_user=True, side=99)
+
+
 class WatchOnceTest(FleetDir):
     def test_a_watch_once_waits_for_news_prints_it_and_exits(self):
         proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "coordinator", "--all", "--resume", "--once"],

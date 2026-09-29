@@ -393,6 +393,7 @@ def worker(root: str, bind_ip: str, port: int, policy: str = "open", *hosts: str
             if decision is not None and not isinstance(decision, str):
                 self.send_json(400, {"error": "decision must be a decision id"})
                 return
+            quote, side = body.get("quote"), body.get("side")
             try:
                 if route == "/chat/preview":  # what POST /chat would store for this text now; stores nothing
                     resolved = chat.address(root, "user", text, re, allow_user=True)
@@ -405,7 +406,7 @@ def worker(root: str, bind_ip: str, port: int, policy: str = "open", *hosts: str
                         self.send_json(409 if closed else 400, {"error": refusal})
                         return
                 message = chat.append(root, "user", text, re, self.headers.get("Tailscale-User-Login"), allow_user=True,
-                                      decision=decision)
+                                      decision=decision, quote=quote, side=side)
             except chat.ChatError as exc:
                 self.send_json(400, {"error": str(exc)})
                 return

@@ -39,6 +39,7 @@ import fleets  # noqa: E402
 
 POLL_S = 0.3
 FLEETS_S = float(os.environ.get("FLEET_CHECK_S", 30))  # how often a manager's watch looks at the other fleets' chats
+QUOTE_MAX = 2000  # characters of a selected excerpt a message carries
 UNHEARD_S = float(os.environ.get("FLEET_UNHEARD_S", 120))  # how long the user's message waits unread before the manager is told
 
 
@@ -223,12 +224,16 @@ def address(root, sender: str, text: str, re: int | None = None, allow_user: boo
 
 
 def append(root, sender: str, text: str, re: int | None = None, author: str | None = None,
-           allow_user: bool = False, decision: str | None = None) -> dict:
+           allow_user: bool = False, decision: str | None = None, quote: dict | None = None,
+           side: int | str | None = None) -> dict:
     """Append a message from `sender` ("coordinator", or an agent id or name) and return it as stored,
     with the recipients and parts `address` resolves. Only the server passes allow_user=True, which lets
     `sender` be "user" and stores `author` on it. `decision` tags the message with the decision it is
-    about (the user's answer to one, given on its page). Raises ChatError as `address` does, and for
-    empty text or text that is not UTF-8."""
+    about (the user's answer to one, given on its page). `quote` is the excerpt the message is about,
+    {"text", "from"}, the text the user selected on the page and where. `side` puts it in a side chat:
+    "new" opens one (its id is the message's own), a number continues that one, and a reply to a
+    message in a side chat stays in it. Raises ChatError as `address` does, for empty text or text that
+    is not UTF-8, and for a quote or side that is not one."""
     resolved = address(root, sender, text, re, allow_user)  # the store only grows, so `re` stays valid
     if not text.strip():
         raise ChatError("the message has no text")
@@ -236,17 +241,35 @@ def append(root, sender: str, text: str, re: int | None = None, author: str | No
         text.encode("utf-8")
     except UnicodeEncodeError:
         raise ChatError("the text is not valid UTF-8") from None
+    if quote is not None:
+        if not isinstance(quote, dict) or not isinstance(quote.get("text"), str) or not quote["text"].strip():
+            raise ChatError("a quote is the selected text, with where it was")
+        quote = {"text": quote["text"].strip()[:QUOTE_MAX], "from": str(quote.get("from") or "")[:200]}
     with open(_log_path(root), "a+b") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         f.seek(0)
         data = f.read()
-        message = {"id": max((m["id"] for m in _parse(data)), default=0) + 1, "at": now(),
+        known = _parse(data)
+        next_id = max((m["id"] for m in known), default=0) + 1
+        parent = next((m for m in known if m["id"] == re), None) if re is not None else None
+        if side == "new":
+            side = next_id
+        elif side is not None:
+            if not isinstance(side, int) or isinstance(side, bool) or not any(m.get("side") == side for m in known):
+                raise ChatError(f"no side chat #{side}")
+        elif parent and parent.get("side"):
+            side = parent["side"]
+        message = {"id": next_id, "at": now(),
                    "from": resolved["from"], "to": resolved["to"], "text": text, "re": re,
                    "parts": resolved["parts"]}
         if author and message["from"] == "user":
             message["author"] = author
         if decision:
             message["decision"] = decision
+        if quote:
+            message["quote"] = quote
+        if side:
+            message["side"] = side
         torn = data and not data.endswith(b"\n")
         f.write((b"\n" if torn else b"") + (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8"))
         f.flush()
@@ -287,6 +310,8 @@ def _render(root, messages: list[dict]) -> list[str]:
         f"#{m['id']} {label(m['from'], m.get('author') if m['from'] == 'user' else None)}"
         f" -> {', '.join(map(label, m['to']))}"
         + (f" [{_one_line(m['decision'])}]" if m.get("decision") else "")
+        + (f" [side chat #{m['side']}]" if m.get("side") else "")
+        + (f" (quoting{' ' + _one_line(m['quote']['from']) if m['quote'].get('from') else ''}: \"{_one_line(m['quote']['text'])}\")" if isinstance(m.get("quote"), dict) and isinstance(m["quote"].get("text"), str) else "")
         + f": {_one_line(m['text'])}"
         + (f" [re #{_one_line(m['re'])}]" if m["re"] is not None else "")
         for m in messages

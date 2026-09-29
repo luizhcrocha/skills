@@ -256,8 +256,8 @@ test("parseState: rows that are not rows are dropped, and a row keeps the fields
 
 test("parseMessage: a chat message as the server stores it, or null", () => {
   const m = Core.parseMessage({ id: 3, at: "2026-09-28T10:00:00Z", from: "a1", to: ["user"], text: "hi", re: 1, parts: [{ text: "hi" }], decision: "d1" });
-  assert.deepEqual(m, { id: 3, at: "2026-09-28T10:00:00Z", from: "a1", to: ["user"], text: "hi", re: 1, parts: [{ text: "hi" }], decision: "d1", author: "" });
-  assert.deepEqual(Core.parseMessage({ id: 1, from: "user", to: [], text: "x" }), { id: 1, at: "", from: "user", to: [], text: "x", re: null, parts: [{ text: "x" }], decision: "", author: "" });
+  assert.deepEqual(m, { id: 3, at: "2026-09-28T10:00:00Z", from: "a1", to: ["user"], text: "hi", re: 1, parts: [{ text: "hi" }], decision: "d1", author: "", quote: null, side: null });
+  assert.deepEqual(Core.parseMessage({ id: 1, from: "user", to: [], text: "x" }), { id: 1, at: "", from: "user", to: [], text: "x", re: null, parts: [{ text: "x" }], decision: "", author: "", quote: null, side: null });
   for (const bad of [null, "x", {}, { id: "1", from: "a", to: [], text: "x" }, { id: 1, from: "a", to: "user", text: "x" }, { id: 1, from: "a", to: [], text: 3 }, { error: "refused" }]) assert.equal(Core.parseMessage(bad), null, JSON.stringify(bad));
 });
 
@@ -415,4 +415,23 @@ test("grillAnswerText: one line per question answered now", () => {
     { text: "Q1: ok, as recommended (a tab)\nQ2: env vars" });
   assert.ok(Core.grillAnswerText(g, [{ id: "q1", pick: "own", text: " " }]).error);
   assert.ok(Core.grillAnswerText(g, [{ id: "q1", pick: "later" }]).error);
+});
+
+test("parseMessage keeps a quote and a side chat", () => {
+  const m = Core.parseMessage({ id: 5, from: "user", to: ["coordinator"], text: "why?", side: 5, quote: { text: "14.1M", from: "Fleet" } });
+  assert.deepEqual([m.quote, m.side], [{ text: "14.1M", from: "Fleet" }, 5]);
+  assert.equal(Core.parseMessage({ id: 6, from: "user", to: [], text: "x", quote: { text: " " }, side: "5" }).quote, null);
+});
+
+test("sidesOf: one per side chat, with its quote and how many messages it holds", () => {
+  const ms = [{ id: 1, text: "main" }, { id: 2, side: 2, text: "what is l19?", quote: { text: "l19", from: "Plan" } },
+    { id: 3, side: 2, text: "the watchdog fix" }, { id: 4, text: "main again" }, { id: 5, side: 5, text: "and this?", quote: null }];
+  assert.deepEqual(Core.sidesOf(ms), [{ id: 2, quote: { text: "l19", from: "Plan" }, count: 2, last: 3, first: "what is l19?" },
+    { id: 5, quote: null, count: 1, last: 5, first: "and this?" }]);
+});
+
+test("excerptOf: the selection with its blank space made one, cut to what a message carries", () => {
+  assert.equal(Core.excerptOf("  a   b \n\n  c "), "a b\nc");
+  assert.equal(Core.excerptOf("x"), "");
+  assert.equal(Core.excerptOf("y".repeat(3000)).length, 2000);
 });

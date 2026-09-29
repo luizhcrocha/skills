@@ -542,6 +542,17 @@
   .reply-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .reply .icon-btn { width: var(--tap); height: var(--tap); color: inherit; font-size: 1rem; }
   .deaf-line { color: var(--you); font-weight: 600; }
+  .seltool { position: fixed; z-index: 60; display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--text); box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 30%, transparent); }
+  .seltool button { min-height: var(--tap); padding: 0 12px; border: 0; border-radius: 7px; background: none; color: var(--bg); font: inherit; font-weight: 600; font-size: var(--fs-s); cursor: pointer; }
+  .seltool button:hover, .seltool button:focus-visible { background: color-mix(in srgb, var(--bg) 18%, transparent); }
+  .msg-quote { margin: 4px 0 6px; padding: 4px 10px; border-left: 3px solid var(--line); color: var(--muted); font-size: var(--fs-s); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9.5em; overflow: auto; }
+  .msg-quote .from { display: block; font-size: var(--fs-xs); font-weight: 600; }
+  .quote-chip .reply-text { white-space: pre-wrap; max-height: 4.5em; overflow: auto; }
+  .side-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--card-2); flex: none; }
+  .side-title { font-weight: 700; }
+  .side-link { list-style: none; }
+  .side-link button { display: block; width: 100%; text-align: left; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 10px; background: var(--card); color: var(--text); font: inherit; cursor: pointer; }
+  .side-link .from { color: var(--muted); font-size: var(--fs-xs); }
   .link-title { font-weight: 700; color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
   .link-title:hover { text-decoration: underline; }
   .link-row.down .link-title { color: var(--muted); }
@@ -737,6 +748,10 @@
     <span class="conn" id="conn" data-conn="off" role="status">Unavailable</span>
     <button type="button" class="icon-btn" id="chat-close" aria-label="Close chat" title="Close chat"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
   </header>
+  <div class="side-head" id="side-head" hidden>
+    <button type="button" class="btn small" id="side-back">Back to the chat</button>
+    <span class="side-title">Side chat</span>
+  </div>
   <p class="chat-note" id="chat-note" hidden>Chat is unavailable here. It runs on the dashboard's own server, at the address the coordinator gave you; this copy shows the fleet only.</p>
   <ol class="chat-log" id="chat-log"></ol>
   <div class="vh" id="chat-announce" aria-live="polite"></div>
@@ -745,6 +760,7 @@
     <p class="chat-error" id="chat-error" role="alert" hidden></p>
     <p class="deaf" id="deaf" role="status" hidden></p>
     <div class="box" id="box">
+      <div class="reply quote-chip" id="quote" hidden><span class="reply-text" id="quote-text"></span><button type="button" class="icon-btn" id="quote-x" aria-label="Remove the quote" title="Remove the quote"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width:16px;height:16px"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
       <div class="reply" id="reply" hidden><span class="reply-text" id="reply-text"></span><button type="button" class="icon-btn" id="reply-x" aria-label="Stop replying" title="Stop replying"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width:16px;height:16px"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
       <label class="vh" for="say">Message</label>
       <textarea id="say" rows="1" placeholder="Message the fleet, or type @" autocomplete="off" autocorrect="on" autocapitalize="sentences" spellcheck="true" data-1p-ignore data-lpignore="true" role="combobox" aria-autocomplete="list" aria-controls="mentions" aria-expanded="false" disabled></textarea>
@@ -754,6 +770,11 @@
     <p class="readonly" id="readonly" role="status" hidden></p>
   </div>
 </aside>
+</div>
+
+<div class="seltool" id="seltool" role="toolbar" aria-label="Selected text" hidden>
+  <button type="button" data-sel="reply">Reply</button>
+  <button type="button" data-sel="side">Side chat</button>
 </div>
 
 <dialog class="sheet" id="worker" aria-labelledby="worker-name">
@@ -865,6 +886,28 @@ var FleetCore = (function () {
       else { t.replies.push(entry(m)); t.last = m.id; }
     }
     return [...threads.values()].sort((a, b) => a.last - b.last);
+  }
+
+  /* The side chats among the messages: one per opener, with its quote, how many messages it holds,
+     and its last message's id, in the order they were opened. */
+  function sidesOf(messages) {
+    const sides = new Map();
+    for (const m of [...messages].sort((a, b) => a.id - b.id)) {
+      if (m.side == null) continue;
+      const s = sides.get(m.side) || { id: m.side, quote: null, count: 0, last: 0, first: "" };
+      if (m.id === m.side) { s.quote = m.quote; s.first = m.text; }
+      s.count++; s.last = m.id;
+      sides.set(m.side, s);
+    }
+    return [...sides.values()];
+  }
+
+  /* The text a selection toolbar offers: the selected text with its runs of blank space made one,
+     cut to what a message carries. Empty when there is nothing worth quoting. */
+  const QUOTE_MAX = 2000;
+  function excerptOf(text) {
+    const t = String(text ?? "").replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim();
+    return t.length < 2 ? "" : t.slice(0, QUOTE_MAX);
   }
 
   /* How many messages to the user arrived after the last one read. */
@@ -1050,6 +1093,9 @@ var FleetCore = (function () {
       id: value.id, at: typeof value.at === "string" ? value.at : "", from: value.from, to: value.to.map(String), text: value.text,
       re: Number.isInteger(value.re) ? value.re : null, parts: parts.length ? parts : [{ text: value.text }],
       decision: typeof value.decision === "string" ? value.decision : "", author: typeof value.author === "string" ? value.author : "",
+      quote: value.quote && typeof value.quote.text === "string" && value.quote.text.trim()
+        ? { text: value.quote.text, from: typeof value.quote.from === "string" ? value.quote.from : "" } : null,
+      side: Number.isInteger(value.side) ? value.side : null,
     };
   }
 
@@ -1114,7 +1160,7 @@ var FleetCore = (function () {
   }
 
   return { keyOf, hostOf, rosterOf, usageOf, mentionAt, filterRoster, insertMention, fold, unreadCount, prefsOf, toastOf,
-    decisionRows, decisionRoute, pendingAnswer, grillState, grillAnswerText, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, staleNow, viewOf, leadOf, VIEWS };
+    decisionRows, decisionRoute, pendingAnswer, grillState, grillAnswerText, sidesOf, excerptOf, answerText, parseState, parseMessage, hearingOf, unreadBy, noticeOf, staleNow, viewOf, leadOf, VIEWS };
 })();
 </script>
 <script>
@@ -1570,7 +1616,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
 .num{font-variant-numeric:tabular-nums;font-stretch:84%;text-align:right}
 .muted{color:var(--muted)}.good{color:var(--good)}.warning{color:var(--warning)}.critical{color:var(--critical)}
 </style></head><body>${html}
-<scr` + `ipt>(function(){var post=function(){parent.postMessage({fleetEvidence:true,height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post()})()</scr` + `ipt></body></html>`;
+<scr` + `ipt>(function(){var post=function(){parent.postMessage({fleetEvidence:true,height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post();var t=0;document.addEventListener("selectionchange",function(){clearTimeout(t);t=setTimeout(function(){var s=getSelection(),r=s&&s.rangeCount&&!s.isCollapsed?s.getRangeAt(0).getBoundingClientRect():null;parent.postMessage({fleetSelect:true,text:r?String(s):"",rect:r?{top:r.top,bottom:r.bottom,left:r.left,width:r.width}:null},"*")},180)})})()</scr` + `ipt></body></html>`;
   }
   function renderEvidence(d) {
     const key = d && d.body ? d.id + "|" + revisionOf(d) : "";
@@ -1750,6 +1796,8 @@ img,svg,video,canvas{max-width:100%;height:auto}
     messages: new Map(), lastId: 0,
     conn: "off",            // off | connecting | live | reconnecting | unavailable
     reply: null,            // the id of the message the composer answers
+    quote: null,            // {text, from}: the excerpt the next message is about
+    focus: null,            // the side chat shown: its opener's id, "new" while one is being started, null for the chat
     open: false,            // the overlay view, below the docked width
     collapsed: store.get("chat-collapsed", null),
     read: store.get("chat-read", 0),
@@ -2145,6 +2193,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     slot(el, "re", parent ? `<p class="msg-re">Answering ${esc(senderOf(parent).label)}</p>` : "");
     const about = m.decision && decisionById(m.decision);
     slot(el, "about", m.decision ? `<p class="msg-re">About ${about ? `<a href="#decision/${esc(m.decision)}">${esc(about.title)}</a>` : esc(m.decision)}</p>` : "");
+    slot(el, "quote", m.quote ? `<blockquote class="msg-quote">${m.quote.from ? `<span class="from">From ${esc(m.quote.from)}</span>` : ""}${esc(m.quote.text)}</blockquote>` : "");
     slot(el, "text", `<p class="msg-text">${partsHtml(m)}</p>`);
     slot(el, "wait", m.from !== "user" ? "" : Core.unreadBy(STATE.hearing, m) && entry.waiting.length
       ? `<p class="wait unread">Not read yet</p>` : entry.waiting.length
@@ -2155,15 +2204,30 @@ img,svg,video,canvas{max-width:100%;height:auto}
   function renderChat() {
     const log = $("chat-log");
     const stick = nearBottom();
-    const threads = Core.fold(chat.messages.values());
+    const all = [...chat.messages.values()];
+    $("side-head").hidden = chat.focus == null;
+    const threads = chat.focus == null
+      ? [...Core.fold(all.filter((m) => m.side == null)), ...Core.sidesOf(all).map((side) => ({ side, last: side.last }))].sort((a, b) => a.last - b.last)
+      : Core.fold(all.filter((m) => m.side === chat.focus));
     if (!threads.length) {
-      const html = chatAvailable() ? `<li class="chat-empty">${chatWritable() ? (MANAGED() ? "No messages yet. Write to the manager, or type @ to reach a coordinator." : "No messages yet. Write to the coordinator, or type @ to reach a worker.") : "No messages yet."}</li>` : "";
+      const html = chat.focus != null ? `<li class="chat-empty">A side chat, apart from the main one. Ask about the quote, and the ${esc(HOST)} answers here.</li>`
+        : chatAvailable() ? `<li class="chat-empty">${chatWritable() ? (MANAGED() ? "No messages yet. Write to the manager, or type @ to reach a coordinator." : "No messages yet. Write to the coordinator, or type @ to reach a worker.") : "No messages yet."}</li>` : "";
       if (painted.get(log) !== html) { log.innerHTML = html; painted.set(log, html); threadEls.clear(); msgEls.clear(); }
       renderChatBadge(); return;
     }
     if (painted.has(log)) { log.innerHTML = ""; painted.delete(log); }
     const shown = new Set();
     threads.forEach((t, i) => {
+      if (t.side) {
+        const key = "side:" + t.side.id;
+        shown.add(key);
+        let li = threadEls.get(key);
+        if (!li) { li = document.createElement("li"); li.className = "side-link"; threadEls.set(key, li); }
+        const html = `<button type="button" data-side="${t.side.id}"><b>Side chat</b> <span class="from">${t.side.count} message${t.side.count === 1 ? "" : "s"}</span><br>${esc((t.side.quote ? t.side.quote.text : t.side.first).replace(/\s+/g, " ").slice(0, 120))}</button>`;
+        if (painted.get(li) !== html) { li.innerHTML = html; painted.set(li, html); }
+        if (log.children[i] !== li) log.insertBefore(li, log.children[i] || null);
+        return;
+      }
       const rid = t.root.message.id;
       shown.add(rid);
       let li = threadEls.get(rid);
@@ -2249,6 +2313,8 @@ img,svg,video,canvas{max-width:100%;height:auto}
     $("box").hidden = readOnly;
     say.disabled = !chatWritable();
     if (readOnly) { $("chat-error").hidden = true; closeMentions(); }
+    $("quote").hidden = !chat.quote;
+    if (chat.quote) $("quote-text").textContent = `${chat.focus === "new" ? "Side chat on" : "Quoting"}${chat.quote.from ? " " + chat.quote.from : ""}: ${chat.quote.text.replace(/\s+/g, " ").slice(0, 160)}`;
     const m = chat.reply != null && chat.messages.get(chat.reply);
     $("reply").hidden = !m;
     if (m) $("reply-text").textContent = `Replying to ${senderOf(m).label}: ${m.text.replace(/\s+/g, " ").slice(0, 80)}`;
@@ -2366,12 +2432,15 @@ img,svg,video,canvas{max-width:100%;height:auto}
     chat.sending = true; showError(""); refreshComposer();
     const body = { text };
     if (chat.reply != null) body.re = chat.reply;
+    if (chat.quote) body.quote = chat.quote;
+    if (chat.focus != null) body.side = chat.focus;
     try {
       const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       let data = null;
       try { data = await res.json(); } catch { data = null; }
       if (res.status !== 201) { showError((data && data.error) || `The server refused the message (${res.status}). Your draft is kept.`); return; }
-      say.value = ""; store.remove("chat-draft"); chat.reply = null; preview.to = null; askPreview(); fit();
+      say.value = ""; store.remove("chat-draft"); chat.reply = null; chat.quote = null; preview.to = null; askPreview(); fit();
+      if (chat.focus === "new" && Number.isInteger(data && data.side)) chat.focus = data.side;
       addMessage(data, true);
       closeMentions();
     } catch {
@@ -2380,6 +2449,83 @@ img,svg,video,canvas{max-width:100%;height:auto}
       chat.sending = false; refreshComposer(); renderChat();
     }
   }
+
+  /* ---------------------------------------------------------------- selected text */
+
+  /* Text selected anywhere on the page (or in a decision's evidence) offers two things: Reply puts it
+     on the composer as a quote, Side chat opens a conversation of its own about it. The bar sits under
+     the selection, clear of the menu phones show above it. */
+  const seltool = $("seltool");
+  let picked = null;   // {text, from} of the current selection
+  const whereOf = (node) => {
+    const el = node && (node.nodeType === 1 ? node : node.parentElement);
+    if (!el) return "";
+    if (el.closest("#chat-log")) { const m = el.closest("article.msg"); const msg = m && chat.messages.get(Number(m.dataset.id)); return msg ? "the chat, " + senderOf(msg).label : "the chat"; }
+    if (el.closest("#decision")) { const d = decisionById(viewing); return d ? d.title : "a decision"; }
+    const view = el.closest("section.view[data-view]");
+    return view ? { decisions: "Decisions", plan: "the Plan", fleet: MANAGED() ? "Fleets" : "the Fleet", links: "Links", log: "the Log" }[view.dataset.view] || "" : "the page's head";
+  };
+  function showTool(text, from, rect) {
+    const excerpt = Core.excerptOf(text);
+    if (!excerpt || !chatWritable()) { hideTool(); return; }
+    picked = { text: excerpt, from };
+    seltool.hidden = false;
+    const w = seltool.offsetWidth, h = seltool.offsetHeight, pad = 8;
+    let top = rect.bottom + pad;
+    if (top + h > innerHeight - pad) top = Math.max(pad, rect.top - h - pad);
+    seltool.style.top = top + "px";
+    seltool.style.left = Math.min(Math.max(pad, rect.left + rect.width / 2 - w / 2), innerWidth - w - pad) + "px";
+  }
+  function hideTool() { seltool.hidden = true; picked = null; }
+  let selTimer = 0;
+  document.addEventListener("selectionchange", () => {
+    clearTimeout(selTimer);
+    selTimer = setTimeout(() => {
+      const sel = getSelection();
+      if (!sel || sel.isCollapsed || !sel.rangeCount) { if (!framePicked) hideTool(); return; }
+      const node = sel.anchorNode, el = node && (node.nodeType === 1 ? node : node.parentElement);
+      if (!el || el.closest("textarea, input, .composer, #seltool, .seltool") || !el.closest("#app, #decision, #chat-log")) { hideTool(); return; }
+      framePicked = false;
+      showTool(sel.toString(), whereOf(node), sel.getRangeAt(0).getBoundingClientRect());
+    }, 180);
+  });
+  /* A selection inside the evidence frame arrives as a message: its text and where it sits in the frame. */
+  let framePicked = false;
+  window.addEventListener("message", (e) => {
+    if (!evidence.frame || e.source !== evidence.frame.contentWindow || !e.data || e.data.fleetSelect !== true) return;
+    const box = evidence.frame.getBoundingClientRect(), r = e.data.rect || {};
+    if (!e.data.text) { if (framePicked) { framePicked = false; hideTool(); } return; }
+    framePicked = true;
+    const d = decisionById(viewing);
+    showTool(String(e.data.text), "the evidence" + (d ? " of " + d.title : ""),
+      { top: box.top + (r.top || 0), bottom: box.top + (r.bottom || 0), left: box.left + (r.left || 0), width: r.width || 0 });
+  });
+  /* A scroll moves the selection: the bar follows it while it lasts. */
+  addEventListener("scroll", () => {
+    if (seltool.hidden || framePicked) return;
+    const sel = getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) { hideTool(); return; }
+    const from = picked && picked.from;
+    showTool(sel.toString(), from, sel.getRangeAt(0).getBoundingClientRect());
+  }, { passive: true, capture: true });
+  seltool.addEventListener("pointerdown", (e) => e.preventDefault());  // keep the selection while the bar is used
+  seltool.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-sel]");
+    if (!b || !picked) return;
+    const quote = picked;
+    hideTool(); getSelection()?.removeAllRanges();
+    chat.quote = quote; chat.reply = null;
+    chat.focus = b.dataset.sel === "side" ? "new" : null;
+    renderChat(); refreshComposer(); openChat(); say.focus();
+  });
+  $("quote-x").addEventListener("click", () => { chat.quote = null; if (chat.focus === "new") chat.focus = null; renderChat(); refreshComposer(); });
+  $("side-back").addEventListener("click", () => { chat.focus = null; chat.quote = null; renderChat(); refreshComposer(); toBottom(); });
+  $("chat-log").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-side]");
+    if (!b) return;
+    chat.focus = Number(b.dataset.side); chat.quote = null; chat.reply = null;
+    renderChat(); refreshComposer(); toBottom();
+  });
 
   /* ---------------------------------------------------------------- live updates */
 
