@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""tuca-mode's session flag: `tuca-mode on|off|status <session_id> [--data DIR]`.
+
+The flag is `<data>/sessions/<session_id>/tuca-mode`, where <data> is --data,
+else ${CLAUDE_PLUGIN_DATA}, else ${XDG_STATE_HOME:-~/.local/state}/tstack: the
+same folder hooks/tstack-hook reads, so its SessionStart handler can re-inject
+the mode after a compaction or a resume.
+
+`/tstack:tuca-mode` runs `on` when it loads. That call must never fail (a
+failing command aborts the skill), so every command prints one line and exits 0;
+a flag that could not be written is said in that line.
+"""
+
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+USAGE = "usage: tuca-mode on|off|status <session_id> [--data DIR]"
+
+
+def data_dir(env, given):
+    if given:
+        return Path(given)
+    if env.get("CLAUDE_PLUGIN_DATA"):
+        return Path(env["CLAUDE_PLUGIN_DATA"])
+    state = env.get("XDG_STATE_HOME") or str(Path(env.get("HOME", "/tmp")) / ".local" / "state")
+    return Path(state) / "tstack"
+
+
+def flag_path(data, session_id):
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id) or "unknown"
+    return data / "sessions" / safe / "tuca-mode"
+
+
+def run(argv, env):
+    args, given = [], None
+    it = iter(argv)
+    for a in it:
+        if a == "--data":
+            given = next(it, None)
+        elif a.startswith("--data="):
+            given = a.split("=", 1)[1]
+        else:
+            args.append(a)
+    if len(args) != 2 or args[0] not in ("on", "off", "status") or not args[1].strip():
+        return USAGE
+    command, session_id = args[0], args[1].strip()
+    if "${" in session_id:  # an unsubstituted placeholder is no session
+        return f"tuca-mode: no session id ({session_id}); the flag was not touched"
+    flag = flag_path(data_dir(env, given), session_id)
+    if command == "on":
+        try:
+            flag.parent.mkdir(parents=True, exist_ok=True)
+            flag.write_text(time.strftime("%Y-%m-%dT%H:%M:%S%z") + "\n")
+        except OSError as e:
+            return (f"tuca-mode: on for this conversation, but the flag was not written ({e.strerror}); "
+                    "a compaction or resume will not bring the mode back")
+        return f"tuca-mode: on for session {session_id} (flag {flag})"
+    if command == "off":
+        try:
+            flag.unlink()
+        except FileNotFoundError:
+            return f"tuca-mode: already off for session {session_id}"
+        except OSError as e:
+            return f"tuca-mode: could not remove {flag} ({e.strerror})"
+        return f"tuca-mode: off for session {session_id}"
+    return f"tuca-mode: {'on' if flag.is_file() else 'off'} for session {session_id}"
+
+
+def main():
+    try:
+        print(run(sys.argv[1:], os.environ))
+    except Exception as e:  # noqa: BLE001 - a failing command aborts the skill that runs it
+        print(f"tuca-mode: error ({e})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

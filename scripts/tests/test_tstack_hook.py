@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "hooks" / "tstack-hook"
 HOOKS_JSON = ROOT / "hooks" / "hooks.json"
 MEMO = ROOT / "scripts" / "memo"
+TUCA = ROOT / "bin" / "tuca-mode"
 
 
 def tool_use(name, **tool_input):
@@ -172,6 +173,101 @@ class JJHintsTest(HookCase):
             self.hook("SessionStart", payload)
             times.append((time.perf_counter() - started) * 1000)
         print(f"\n  SessionStart (jj hints) hook: median {statistics.median(times):.0f} ms, best {min(times):.0f} ms",
+              end="", file=sys.stderr)
+        self.assertLess(min(times), 150, times)
+
+
+class TucaModeTest(HookCase):
+    """The flag scripts/tuca-mode writes, and the SessionStart handler that re-injects the mode."""
+
+    def flag(self, *args, env=None):
+        r = subprocess.run([str(TUCA), *args], capture_output=True, text=True, env={**self.env, **(env or {})},
+                           timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, "")
+        return r.stdout.strip()
+
+    def context(self, source, **extra):
+        r = self.hook("SessionStart", self.base("SessionStart", source=source, **extra))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout else ""
+
+    def block(self, source, **extra):
+        context = self.context(source, **extra)
+        return context[context.index("# tuca-mode"):] if "# tuca-mode" in context else ""
+
+    def test_on_status_off_round_trip(self):
+        flag = self.data / "sessions" / "sess-1" / "tuca-mode"
+        self.assertEqual(self.flag("status", "sess-1"), "tuca-mode: off for session sess-1")
+        self.assertIn(f"(flag {flag})", self.flag("on", "sess-1"))
+        self.assertTrue(flag.is_file())
+        self.assertIn("(flag", self.flag("on", "sess-1"))  # idempotent
+        self.assertEqual(self.flag("status", "sess-1"), "tuca-mode: on for session sess-1")
+        self.assertEqual(self.flag("off", "sess-1"), "tuca-mode: off for session sess-1")
+        self.assertFalse(flag.exists())
+        self.assertEqual(self.flag("off", "sess-1"), "tuca-mode: already off for session sess-1")
+
+    def test_data_flag_wins_over_the_environment(self):
+        # The skill's `!` line runs without CLAUDE_PLUGIN_DATA in its environment, so it passes --data.
+        other = self.tmp / "given"
+        self.flag("on", "sess-1", "--data", str(other))
+        self.assertTrue((other / "sessions" / "sess-1" / "tuca-mode").is_file())
+        self.assertFalse((self.data / "sessions" / "sess-1").exists())
+        env = {k: v for k, v in self.env.items() if k != "CLAUDE_PLUGIN_DATA"}
+        r = subprocess.run([str(TUCA), "on", "sess-9"], capture_output=True, text=True,
+                           env={**env, "XDG_STATE_HOME": str(self.tmp / "state")})
+        self.assertIn(str(self.tmp / "state" / "tstack" / "sessions" / "sess-9"), r.stdout)
+
+    def test_never_fails(self):
+        blocker = self.tmp / "blocker"
+        blocker.write_text("a file, not a folder")
+        self.assertIn("the flag was not written", self.flag("on", "sess-1", "--data", str(blocker)))
+        self.assertIn("no session id", self.flag("on", "${CLAUDE_SESSION_ID}"))
+        self.assertTrue(self.flag().startswith("usage:"))
+        self.assertTrue(self.flag("jump", "sess-1").startswith("usage:"))
+        self.assertIn("tuca-mode:", self.flag("on", "../../etc/x"))
+        self.assertTrue((self.data / "sessions" / ".._.._etc_x" / "tuca-mode").is_file())
+
+    def test_reinjected_after_compact_and_resume_only_with_the_flag(self):
+        for source in ("startup", "resume", "clear", "compact"):
+            self.assertEqual(self.block(source), "", source)
+        self.flag("on", "sess-1")
+        for source in ("compact", "resume"):
+            block = self.block(source)
+            self.assertTrue(block.startswith("# tuca-mode is on\n"), block[:60])
+            self.assertLessEqual(len(block.splitlines()), 15)
+            self.assertIn(str(ROOT / "skills" / "engineering" / "tuca-mode" / "SKILL.md"), block)
+            self.assertIn("copied verbatim", block)
+            self.assertIn(f"{ROOT / 'bin' / 'tuca-mode'} off sess-1 --data {self.data}", block)
+        for source in ("startup", "clear"):
+            self.assertEqual(self.block(source), "", source)
+        self.assertEqual(self.block("compact", session_id="sess-2"), "")
+        self.flag("off", "sess-1")
+        self.assertEqual(self.block("compact"), "")
+
+    def test_workers_never_get_it(self):
+        self.flag("on", "sess-1")
+        self.assertEqual(self.block("compact", agent_id="w1"), "")
+        self.assertSilent(self.hook("SessionStart", self.base("SessionStart", source="compact"),
+                                    env={"TSTACK_ROLE": "worker"}))
+
+    def test_it_follows_memo_and_jj(self):
+        self.memo("note", "fact", "tuca order")
+        self.flag("on", "sess-1")
+        context = self.context("compact")
+        self.assertTrue(context.startswith("# memo"))
+        self.assertTrue(context.rstrip().split("\n\n")[-1].startswith("# tuca-mode is on"))
+
+    def test_the_reinjection_is_fast(self):
+        self.flag("on", "sess-1")
+        payload = self.base("SessionStart", source="compact")
+        self.hook("SessionStart", payload)
+        times = []
+        for _ in range(7):
+            started = time.perf_counter()
+            self.hook("SessionStart", payload)
+            times.append((time.perf_counter() - started) * 1000)
+        print(f"\n  SessionStart (tuca-mode) hook: median {statistics.median(times):.0f} ms, best {min(times):.0f} ms",
               end="", file=sys.stderr)
         self.assertLess(min(times), 150, times)
 
@@ -334,6 +430,8 @@ class HooksJsonTest(unittest.TestCase):
         self.assertTrue(os.access(HOOK, os.X_OK))
         self.assertTrue(os.access(MEMO, os.X_OK))
         self.assertEqual((ROOT / "bin" / "memo").resolve(), MEMO.resolve())
+        self.assertEqual(TUCA.resolve(), (ROOT / "scripts" / "tuca-mode").resolve())
+        self.assertTrue(os.access(TUCA, os.X_OK))
 
 
 class LatencyTest(HookCase):

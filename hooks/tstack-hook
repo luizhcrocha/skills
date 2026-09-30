@@ -3,8 +3,8 @@
 
 A handler is a small function `handler(hook) -> str | None` listed under its
 event in HANDLERS; what the handlers of one event return is joined and emitted
-in the shape that event takes (EMIT). To add one (jj hints, mode re-injection,
-fleet heartbeat), write the function and list it.
+in the shape that event takes (EMIT). To add one (fleet heartbeat, say), write
+the function and list it.
 
 The rule that outranks the rest: a hook never breaks a session. Any error, in
 a handler or in the dispatcher, is logged to ${CLAUDE_PLUGIN_DATA}/hook.log and
@@ -211,8 +211,32 @@ def jj_hints(hook):
     return JJ_HINTS.format(where=where)
 
 
+TUCA_MODE = """\
+# tuca-mode is on
+This session runs in /tstack:tuca-mode; the compaction or resume dropped its text, so read {skill} before the next real task.
+- Each new request: a real task → match a playbook from that file's list, open a fresh todo list whose first items are the playbook's steps copied verbatim (a skipped step stays as `skip: <reason>`), then work it. A casual turn → just answer.
+- Coordinator mindset: delegate what a fresh window does as well; research and legwork subagents on Sonnet, judgement on Opus, in the background; you own their output.
+- Reversible work proceeds. Irreversible writes (force-push, deploys, deletion, messages to people) wait for Luiz's yes.
+- Read the leaf in {principles}/ for any principle you apply, and name the principles that shaped a decision.
+- Replies: short declarative sentences; every claim carries its evidence or a label (measured, inferred, guess); link only what you produced or read.
+- "stop tuca-mode" → run `{bin} off {session} --data {data}` and drop these rules."""
+
+
+def tuca_mode(hook):
+    """SessionStart after a compaction or resume: bring /tuca-mode back when its flag is set.
+    The flag is written by scripts/tuca-mode when the skill loads."""
+    if hook.is_worker or str(hook.input.get("source") or "") not in ("compact", "resume"):
+        return None
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", hook.session_id) or "unknown"
+    if not (hook.data_dir / "sessions" / safe / "tuca-mode").is_file():
+        return None
+    return TUCA_MODE.format(skill=ROOT / "skills" / "engineering" / "tuca-mode" / "SKILL.md",
+                            principles=ROOT / "skills" / "engineering" / "principles",
+                            bin=ROOT / "bin" / "tuca-mode", session=hook.session_id, data=hook.data_dir)
+
+
 HANDLERS = {
-    "SessionStart": [memo_wake, jj_hints],
+    "SessionStart": [memo_wake, jj_hints, tuca_mode],
     "Stop": [memo_nudge],
     "PreCompact": [memo_precompact],
 }

@@ -56,15 +56,19 @@ out to small handlers and must stay under ~100 ms. Handlers: memo wake
 **`/tuca-mode`.** pstack's poteto-mode, adapted: non-negotiables, the autonomy
 rules, the principle index, and a playbook router; the matched playbook's steps
 are copied into the todo list verbatim, skipped steps stay with a reason.
-Invoking it writes a flag in `CLAUDE_PLUGIN_DATA/sessions/<session_id>`; the
-skill text stays in the conversation, and after a compaction or resume the
+Invoking it writes a flag in `CLAUDE_PLUGIN_DATA/sessions/<session_id>/tuca-mode`
+through a `!` line in the skill (`bin/tuca-mode on`, granted by the skill's
+`allowed-tools`; it runs once, at invocation). A skill-frontmatter hook was
+tried and rejected: it fires on the first matching event after the skill loads,
+not at invocation, and its environment lacked `CLAUDE_PLUGIN_DATA`. The skill
+text stays in the conversation, and after a compaction or resume the
 SessionStart hook re-injects a short summary, so the mode is sticky without a
 per-turn reminder. The coordinator behaviour (D2) lives in the mode: it starts
-the ledger lazily through the fleet scripts.
+the ledger lazily, today through the coordinator skill, later the fleet scripts.
 
 **principles.** One skill, an index plus one file per principle (23 from
-pstack, merged with ours); model-invocable, so a playbook or the model loads
-the leaf it cites.
+pstack, synced through `upstreams.toml`, adapted in place); model-invocable, so
+a playbook or the model loads the leaf it cites.
 
 **worktree-janitor.** `agents/worktree-janitor.md` (Opus, tools limited to
 Bash, Read, Grep, Glob, and Edit for conflict markers only) and
@@ -136,6 +140,35 @@ Discarded: make-bot-ui, benny automations, setup-pstack model detection
 (agents carry `model:`), cursor-team-kit references (deslop → /simplify,
 control-ui → claude-in-chrome), Bugbot and Origin parts of shipping/babysit.
 The 23 `principle-*` skills become one `principles` skill with a file each.
+
+## Open merges from tuca-mode
+
+pstack skills the tuca-mode playbooks used that tstack does not have yet. Each
+place marks it `(pending merge: <skill>)` and does the step inline meanwhile;
+merging the skill replaces the marker with a pointer.
+
+| pstack skill | Used by | Meanwhile |
+|---|---|---|
+| how | investigation, feature, refactoring, perf-issue, hillclimb | map the subsystem by hand or through a Sonnet Explore agent |
+| why | investigation | `recall`, `jj log -- <path>`, `jj file annotate` |
+| architect | bug-fix, feature, refactoring | `codebase-design` and its DESIGN-IT-TWICE.md |
+| arena | feature | two Opus agents in separate jj workspaces, pick or graft |
+| interrogate | feature | `code-review` plus a fresh Opus reviewer told to break it |
+| unslop | the reply rules | the rules inline in tuca-mode |
+| no-comments | the comments rule | the rule inline in tuca-mode |
+| show-me-your-work | non-negotiables, autonomous-run, hillclimb, principles/prove-it-works | a TSV decision log in the scratchpad |
+| figure-it-out | the no-playbook fallback, refactoring | a bespoke step list in playbook shape |
+| technical-writing | commit and PR messages | the repo's style from `jj log`, written by the worktree-janitor |
+| swarm | parallel fan-out | the `orchestrate` skill |
+
+Replaced rather than pending: poteto-agent (subagents take `model` per role),
+`/deslop` (Claude Code's `/simplify`), control-ui and control-cli
+(claude-in-chrome, or running the CLI), create-skill (`writing-for-agents`),
+Bugbot triage (every review comment triaged on its merits), Cursor cloud agents
+(background Agent calls in jj workspaces). Not in the router, moving into the
+fleet (step 6): the orchestrate, autopilot-full, autopilot-stack and
+multi-phase-plan playbooks; until then "run this whole project" goes to the
+coordinator and orchestrate skills.
 
 ## Testing ladder (draft)
 
