@@ -131,6 +131,9 @@ ignore = [
   # this machine (no cloud workers), Sonnet or Opus by the worker's job, one jj
   # workspace per code-writing worker, model-invocable.
   "skills/swarm",
+  # decided: merged into lang-ts by hand, 2026-09-30. No file kept verbatim;
+  # what was taken and rejected is in skills/engineering/lang-ts/references/sources.md.
+  "skills/typescript-best-practices",
 ]
 map = [
   { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md" },

@@ -35,7 +35,7 @@ If the existing repo has no reporting/correlation mechanism for the touched path
 
 - Use Effect's `Redacted.Redacted` in Effect codebases.
 - Outside Effect, use a small local `Redacted<T>` wrapper, usually in `prelude.ts`, when the project lacks one.
-- Prefer structured fields over prose-only logs.
+- Prefer structured fields over prose-only logs: one JSON line per event from a named event catalog, with the ids needed to debug from one of them. In Workers, `console.log` of that JSON object is the transport Workers Logs ingests; elsewhere, the repository's logger. A bare `console.log` of prose in shipped code is a leftover.
 
 ## Redaction
 

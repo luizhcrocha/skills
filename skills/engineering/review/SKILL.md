@@ -42,7 +42,7 @@ Look for the originating spec, in this order:
 
 Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`.
 
-If the diff touches TypeScript, also call the Skill tool with "coding-standards-ts" and pass its relevant rules to the Standards sub-agent as a standards source, ranked below any repo-documented standard.
+If the diff touches TypeScript, also call the Skill tool with "lang-ts" and pass its relevant rules to the Standards sub-agent as a standards source, ranked below any repo-documented standard.
 
 When the user asks for a stricter bar ("thermo-nuclear", "harsh maintainability review"), add interrogate's maintainability lens ([../interrogate/references/lenses/maintainability.md](../interrogate/references/lenses/maintainability.md)) as a standards source, ranked below the repo's standards and above the smell baseline.
 

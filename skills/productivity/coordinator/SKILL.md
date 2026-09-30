@@ -50,7 +50,7 @@ Every piece of work has a **kind**, and every kind has a skill the worker follow
 | Research, docs or API facts, reading legwork | `research` |
 | Tests, test-first work, red-green-refactor | `tdd` |
 
-Work that fits none of these (a review, a migration, a one-off script) gets a brief without a skill, and you name the relevant repo skills instead (`review`, `interrogate`, `coding-standards-ts`, `resolving-merge-conflicts`).
+Work that fits none of these (a review, a migration, a one-off script) gets a brief without a skill, and you name the relevant repo skills instead (`review`, `interrogate`, `lang-ts`, `resolving-merge-conflicts`).
 
 Resolve the skill paths once at the start of the session so every brief can carry them:
 

@@ -83,7 +83,8 @@ belong to whoever holds the landing turn, `gh` from the main workspace, one
 `jj workspace add` per worker.
 
 **Language rules.** `lang-ts` (coding-standards-ts merged with pstack's
-typescript-best-practices) with `paths: ["**/*.ts", "**/*.tsx"]`; `lang-go`
+typescript-best-practices; **done**) with `paths: ["**/*.ts", "**/*.tsx",
+"**/*.mts", "**/*.cts"]`; `lang-go`
 wraps JetBrains use-modern-go with `paths: ["**/*.go", "**/go.mod"]`; `lang-py`
 and `lang-nix` start as a page each and grow from corrections.
 
@@ -138,7 +139,7 @@ before the refactor, so the refactor is checked against it.
 | self-model | automate-me | tuca-mode | **done**: `automate-me` (user-invoked) mines the named projects' transcripts through `human-turns`, Sonnet readers per batch, and proposes edits to tuca-mode, its playbooks and the global `CLAUDE.md` as jj changes citing sessions; mechanical rules become structure proposals |
 | planning | multi-phase-plan, figure-it-out | to-spec, to-issues, triage, grilling | keep ours; **figure-it-out done**: tuca-mode's no-playbook fallback, jj units, `show-me-your-work` trail |
 | session | recall, reflect, show-me-your-work, pause/pickup | handoff, wait-what | **done**: `recall` has two modes (lookup on memo, jj and the claude-mem archive; catch-up over this project's transcripts through Sonnet miners, live jj/PR/memo state, a narrow `why` sweep when useful); `reflect` (three Opus reviewers, Opus synthesizer, approved edits as a jj change in the tstack repo, other lessons to memo); `show-me-your-work` (TSV log via log.sh, transcript audit, fresh Opus review); bro and wait-what merged as `bro`; pause-safely and session-pickup use them |
-| language | typescript-best-practices | coding-standards-ts, JetBrains use-modern-go | merge into lang-ts; wrap use-modern-go in lang-go |
+| language | typescript-best-practices | coding-standards-ts, JetBrains use-modern-go | **lang-ts done**: coding-standards-ts renamed, pstack's rules folded into its topic files (conflicts resolved for ours, listed in `references/sources.md`), testing cut to the TypeScript tools per rung with `tdd` owning the method; wrap use-modern-go in lang-go |
 | conflicts | - | resolving-merge-conflicts (git only) | **done**: jj-first (a conflict recorded in the change, read both sides and their intent, resolve in a child, `jj squash`, the repo's checks), git as a fallback; the worktree-janitor keeps its own marker-only resolution. `implement` records jj changes too |
 
 Discarded: make-bot-ui, benny automations, setup-pstack model detection

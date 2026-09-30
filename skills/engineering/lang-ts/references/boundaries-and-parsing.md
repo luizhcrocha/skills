@@ -45,8 +45,8 @@ Parser failure shape follows the repository's error-handling convention. A parse
 Prefer:
 
 ```ts
-async function handle(body: unknown): Promise<Result<Response, CreateUserError>> {
-  const input = CreateUserInput.parse(body);
+async function handle(request: Request): Promise<Result<Response, CreateUserError>> {
+  const input = CreateUserInput.parse(await request.json());
   if (input._tag === "err") {
     return input;
   }
@@ -118,7 +118,11 @@ const CreateUserBody = z.strictObject({
 });
 ```
 
-Use permissive shapes only for explicitly extensible sub-objects, such as third-party metadata.
+Use permissive shapes only for explicitly extensible sub-objects, such as third-party metadata. Payloads we only read from a vendor or an older client keep the schema's default of dropping unknown keys (`z.object`), so an additive upstream change does not break the parse.
+
+Persisted JSON blobs carry a version field; the parser dispatches on it and returns a typed failure for an unknown version.
+
+`unknown` lives only at the I/O call (`await request.json()`, `JSON.parse`, a queue message body) and goes straight into a schema. Inner functions take the parsed type, not `unknown` or `object` parameters, and do not re-check shapes with `typeof`. Anti-slop's `no-unknown-parameters`, `no-unknown-returns` and `no-runtime-typeof` enforce this where installed; `cause` fields and type-guard subjects are the allowed exceptions.
 
 ## Persistence boundary parsing
 

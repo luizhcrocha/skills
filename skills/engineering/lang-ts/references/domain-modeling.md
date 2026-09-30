@@ -103,7 +103,37 @@ function loadUser(userId: string) {
 const userId = body.userId as UserId; // decoded data did not establish the invariant
 ```
 
-When the established schema library can express the brand, use the library's branding/refinement rather than a handwritten cast.
+When the established schema library can express the brand, use the library's branding/refinement rather than a handwritten cast: `Schema.brand("UserId")` in Effect, `.brand<"UserId">()` in Zod. Otherwise reuse the repository's `Brand` helper; when there is none, define it once as `type Brand<T, B extends string> = T & { readonly __brand: B }` and do not invent a second shape.
+
+## Constructive modeling
+
+Build the type from parts that are all legal, so the illegal value cannot be written, instead of guarding a loose type at runtime.
+
+```ts
+type NonEmptyArray<T> = readonly [T, ...T[]];   // non-empty
+type Pairs<T> = ReadonlyArray<readonly [T, T]>; // even length
+type TimeRange = { readonly start: Instant; readonly duration: Milliseconds }; // no negative range
+```
+
+Expose the reading callers need on top (`rangeEnd(range)`, `pairs.flat()`). Where a plain array arrives, narrow once with `isNonEmpty(xs): xs is NonEmptyArray<T>` (or Effect's `Array.isNonEmptyReadonlyArray`) and let the fact travel in the type.
+
+## Simplest total type
+
+Do not strengthen by reflex. Keep `ReadonlyArray<T>` while every operation on it is total (`sum([])` is `0`). Strengthen where the loose type forces a lie at a use site: `!`, `xs[0] as T`, or a "should never happen" throw.
+
+```ts
+// Avoid: partiality hidden from the compiler
+function newestSession(sessions: ReadonlyArray<Session>): Session {
+  return sessions.at(0)!;
+}
+
+// Prefer: strengthen the input and the assertion disappears
+function newestSession(sessions: NonEmptyArray<Session>): Session {
+  return sessions[0];
+}
+```
+
+Weakening the result to `Session | undefined` is the other total signature.
 
 ## Value classes
 
@@ -246,7 +276,16 @@ switch (payment._tag) {
 }
 ```
 
-Avoid default branches that silently swallow future variants.
+Without a project helper, assign the value to a `never` local in the default arm so a new variant fails to compile:
+
+```ts
+default: {
+  const unhandled: never = payment;
+  return unhandled;
+}
+```
+
+In a statement switch, follow the assignment with `void unhandled;`. Avoid default branches that silently swallow future variants.
 
 ## Persisted invariants
 

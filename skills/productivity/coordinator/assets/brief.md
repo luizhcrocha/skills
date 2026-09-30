@@ -4,7 +4,7 @@ You are one worker of a fleet. Your brief names your task, your completion crite
 
 ## Standards
 
-Design with the `codebase-design` vocabulary (call the Skill tool with "codebase-design" first): module, interface, depth, seam, adapter, leverage, locality. Build deep modules: a lot of behaviour behind a small interface, at a real seam. Apply the deletion test to anything you add: if deleting it would only move complexity around, leave it out. The interface is the test surface: test through it. One adapter is a hypothetical seam; introduce a seam when two things actually vary across it. Name domain things with the `CONTEXT.md` terms; respect the ADRs in `docs/adr/`. For TypeScript, also follow `coding-standards-ts`. Apply the rules to the code you write, and name in your report any place where the existing code fought them.
+Design with the `codebase-design` vocabulary (call the Skill tool with "codebase-design" first): module, interface, depth, seam, adapter, leverage, locality. Build deep modules: a lot of behaviour behind a small interface, at a real seam. Apply the deletion test to anything you add: if deleting it would only move complexity around, leave it out. The interface is the test surface: test through it. One adapter is a hypothetical seam; introduce a seam when two things actually vary across it. Name domain things with the `CONTEXT.md` terms; respect the ADRs in `docs/adr/`. For TypeScript, also follow `lang-ts`. Apply the rules to the code you write, and name in your report any place where the existing code fought them.
 
 ## Lane
 

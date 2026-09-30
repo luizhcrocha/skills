@@ -4,7 +4,7 @@ Design deep modules: cohesive behavior behind low-burden interfaces at intention
 
 ## Vocabulary
 
-Shared module terms — **Module**, **Interface**, **Implementation**, **Seam**, **Domain Module**, **Service Module**, **Adapter**, **External Adapter Module**, **Deep Module**, **Accidental Interface**, **Functional Core**, and **Imperative Shell** — live in [`VOCABULARY.md`](VOCABULARY.md).
+Shared module terms — **Module**, **Interface**, **Implementation**, **Seam**, **Domain Module**, **Service Module**, **Adapter**, **External Adapter Module**, **Deep Module**, **Accidental Interface**, **Functional Core**, and **Imperative Shell** — live in [`vocabulary.md`](vocabulary.md).
 
 This file uses these local terms:
 
@@ -82,7 +82,7 @@ Despite the word "service," pure domain behavior that does not depend on externa
 ## Strong defaults
 
 - Outside Effect, use constructor injection for dependency-bearing modules.
-- Inside Effect, load [`EFFECT.md`](EFFECT.md) and use Effect Services/Tags/Layers rather than dependency bags.
+- Inside Effect, load [`effect.md`](effect.md) and use Effect Services/Tags/Layers rather than dependency bags.
 - Avoid ad hoc `deps` bags passed through service calls; concentrate dependency ownership in a Service Module or composition root.
 - Use narrow structural dependency types at the consuming Service Module.
 - Service Modules depend on narrow, behavior-shaped interfaces they consume; External Adapter Modules implement those interfaces at composition seams.

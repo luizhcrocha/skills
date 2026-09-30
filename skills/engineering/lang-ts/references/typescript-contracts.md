@@ -52,6 +52,47 @@ type Fn = (...args: any[]) => unknown;
 
 Do not use non-null assertions. Branch, parse, refine, or change the type.
 
+Never chain assertions (`as unknown as T`): the chain discards what TypeScript knew. When refactoring an existing `as` away, find why inference failed: a missing discriminant (add `_tag`), a source typed too wide (narrow it), an unparsed boundary (add the parser), or an invariant TypeScript cannot express (brand it in the parser, or use `satisfies`).
+
+## Narrowing
+
+For typed values, prefer in this order: a discriminant `switch`/`if` on `_tag`, the `in` operator, `instanceof`, a user-defined type guard, and a `SAFETY:` cast last. Values of unknown shape skip the ladder: they go through a schema at the boundary, not through `typeof` chains.
+
+A type guard must verify everything its predicate claims. A guard that checks one field and claims the whole type is worse than `as`, because the name says it is safe. Name guards `isX` or `hasX`, and prefer discriminant narrowing when it is available.
+
+```ts
+function isSettled(payment: Payment): payment is SettledPayment {
+  return payment._tag === "Settled";
+}
+```
+
+## `satisfies` over `as`
+
+`satisfies` checks a value against a type without widening its literals:
+
+```ts
+const routes = { home: "/", invoices: "/invoices" } satisfies Record<RouteName, string>;
+// routes.home is "/" and a missing or misspelled route fails to compile
+```
+
+`as Config` on a literal checks less and forgets the literal types.
+
+## Derived types
+
+When a schema, generated client, migration or existing type already defines a shape, derive from it (`z.infer`, `Schema.Type`, `typeof table.$inferSelect`, `Pick`, `Omit`, `Parameters`, `ReturnType`, `Awaited`, `typeof`) instead of declaring a parallel interface that drifts.
+
+```ts
+function renderChecks(summary: Pick<ChecksMessage, "totalCount" | "checks">): Html;
+```
+
+## Object arguments
+
+Pass one named input object when a function takes two or more arguments a caller could swap, or any boolean or optional argument: the call site then names every value, and the input type can grow. Keep positional parameters for one obvious argument, for `(value, options)` pairs, and on measured hot paths (tokenizers, parsers, per-frame work) where the allocation matters.
+
+```ts
+openFile({ uri, selection: { startLine: 10, startColumn: 1, endLine: 10, endColumn: 1 } });
+```
+
 ## Unknown catch values
 
 Prefer:
@@ -70,7 +111,7 @@ catch (error) {
 }
 ```
 
-JavaScript can throw anything. Classification and telemetry rules live in [`ERROR_HANDLING.md`](ERROR_HANDLING.md) and [`OBSERVABILITY.md`](OBSERVABILITY.md).
+JavaScript can throw anything. Classification and telemetry rules live in [`error-handling.md`](error-handling.md) and [`observability.md`](observability.md).
 
 ## Thenable trap
 
@@ -148,6 +189,8 @@ const usersById = users.reduce(indexUserById, {});
 ```
 
 If immutable accumulation is required, use a persistent data structure or named helper that makes the cost explicit.
+
+Fuse adjacent `filter` and `map` passes into one `flatMap`, or chain iterator helpers (`xs.values().filter(f).map(g).toArray()`) where `lib` includes `ES2025`.
 
 Do not use `map` only for side effects:
 
@@ -312,9 +355,7 @@ Comments explain invariants, trade-offs, safety, and non-obvious domain rules. A
 
 ## Toolchain
 
-This section is loaded with TypeScript contracts for now; split it into a disclosed toolchain reference only if Vite+/toolchain detail grows beyond what ordinary TypeScript-contract work needs.
-
-For new TypeScript projects, prefer Vite+ as formatter/linter/type checker/test runner/task interface.
+`SKILL.md` names the tools and gates; this section holds the detail. For new TypeScript projects, prefer Vite+ as formatter/linter/type checker/test runner/task interface.
 
 In Vite+ projects:
 
@@ -325,11 +366,15 @@ In Vite+ projects:
 - warnings and unused suppressions are not tolerated;
 - keep default correctness plugins and semantic checks for assertions, async loops, parameter mutation, caught-error preservation, JSDoc structure, accumulating spread, barrels, unsafe type operations, floating promises, invalid thrown values, nullish defaults, switch exhaustiveness, unknown catch callbacks, module mocks, and method spies;
 - test configuration lives in `vite.config.ts`, not standalone Vitest config;
-- ordinary tests import from `vite-plus/test`.
+- ordinary tests import from `vite-plus/test`;
+- lint runs type-aware with type checking folded in (`lint.options: { typeAware: true, typeCheck: true }`), so `vp check` is the one gate;
+- custom rules ship as an Oxlint JS plugin registered under `lint.jsPlugins`, every rule at `error`. The anti-slop plugin Luiz vendors (`servers/case-analysis/tools/oxlint/anti-slop/` in custom-mcp-servers) bans chained and widen-then-assert assertions, `SAFETY:`-less assertions, module mocking, `unknown` parameters, returns and aliases outside the boundary, dictionary types with `unknown`/`any`/`object` values, runtime `typeof` checks, conditional empty-object spreads, accumulator copies in `reduce`, adjacent `filter`/`map` passes, and "shape" in symbol names. Copy it into a new package rather than rewriting the rules; its `@oxlint/plugins` pin follows the Oxlint that Vite+ bundles.
+
+Compiler options every tsconfig sets (custom-mcp-servers' baseline): `strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `noImplicitReturns`, `noFallthroughCasesInSwitch`, `noImplicitOverride`, `noPropertyAccessFromIndexSignature`, `verbatimModuleSyntax`, `isolatedModules`, `erasableSyntaxOnly` (Node runs `.ts` by type stripping), `allowImportingTsExtensions` with `.ts` import specifiers, `module: "ESNext"`, `moduleResolution: "bundler"`, `noEmit`. Take `lib` from the runtime: `ES2025` or later when the code uses iterator helpers.
 
 Keep tool defaults unless a correctness requirement or demonstrated false positive justifies an override. Do not enable whole lint categories merely to enforce aesthetic preferences.
 
-Use strict compiler settings including exact optional-property behavior, unchecked-index protection, implicit-return checks, fallthrough protection, explicit override checks, and full strictness. Preserve established toolchains unless migration is explicitly in scope.
+Preserve established toolchains unless migration is explicitly in scope.
 
 ## Review checklist
 

@@ -104,6 +104,8 @@ Effect 4 guidance was audited against:
 - `effect@4.0.0-beta.85`
 - `@effect/vitest@4.0.0-beta.85`
 
+On 2026-09-30 Effect 4 is at `4.0.0-rc.118` on the `rc` tag and the stable `latest` is still `3.22.2` (see [`sources.md`](sources.md)); this file targets Effect 4 and has not been re-audited against the RC. `@effect/vitest` 4 RCs need Vitest 5, which Vite+ bundles from 1.0; on an older Vite+ (Vitest 4) a local `itEffect` helper that runs `Effect.runPromise` inside `it` stands in for `it.effect`.
+
 For Effect 4 codebases using `@effect/vitest`, keep `effect` and `@effect/vitest` on the same version. Re-audit testing, schema-generation, and property-test assumptions when either package is upgraded.
 
 Use `@effect/vitest` rather than `@fast-check/vitest` in Effect 4 codebases. Effect depends on Fast-Check, re-exports it from `effect/testing`, and `@effect/vitest` owns the integration.
@@ -152,7 +154,7 @@ For a new Cloudflare project selecting Effect, or an Effect project selecting a 
 
 Do not duplicate Alchemy-owned declarations in ad hoc Wrangler configuration, one-off scripts, or parallel infrastructure models unless a documented tooling gap requires small compatibility glue.
 
-Cloudflare platform placement itself lives in `CLOUDFLARE_ARCHITECTURE.md`.
+Cloudflare platform placement itself lives in `cloudflare-architecture.md`.
 
 ## Rejected framings
 
