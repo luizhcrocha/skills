@@ -23,7 +23,7 @@
 
 [upstream.mattpocock]
 url = "https://github.com/mattpocock/skills.git"
-base = "c55ee46073ed923f86ce59a5eb3b6d895095d1b7"
+base = "d81f3a183412e71a5b1e84ca21bc1a35eea03a60"
 units = ["skills/*/*"]
 # Repo plumbing, and bucket READMEs (ours, per CLAUDE.md), are never synced.
 ignore = [
@@ -32,12 +32,18 @@ ignore = [
   # Decided, not copied: zoom-out was folded into how (2026-09-30).
   "skills/engineering/zoom-out",
 ]
+# Undecided, new at d81f3a1 (v1.3) and so no longer flagged as new: GLOSSARY.md
+# (upstream's own repo glossary), skills/engineering/implement-spec, pr, retro.
 map = [
   # code-review was renamed review (2026-09-30): Claude Code's built-in /code-review
   # takes the name. Upstream edits still 3-way merge into the renamed dir.
   { from = "skills/engineering/code-review", to = "skills/engineering/review" },
   { from = "skills/engineering/codebase-design", to = "skills/engineering/codebase-design" },
   { from = "skills/engineering/diagnosing-bugs", to = "skills/engineering/diagnosing-bugs" },
+  # We keep CONTEXT.md / CONTEXT-MAP.md; upstream renamed the convention to
+  # GLOSSARY.md (v1.3). Its GLOSSARY-FORMAT.md is our CONTEXT-FORMAT.md; the
+  # rename itself is declined in every synced file (decided, 2026-09-30).
+  { from = "skills/engineering/domain-modeling/GLOSSARY-FORMAT.md", to = "skills/engineering/domain-modeling/CONTEXT-FORMAT.md" },
   { from = "skills/engineering/domain-modeling", to = "skills/engineering/domain-modeling" },
   { from = "skills/engineering/grill-with-docs", to = "skills/engineering/grill-with-docs" },
   { from = "skills/engineering/implement", to = "skills/engineering/implement" },
