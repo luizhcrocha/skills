@@ -96,7 +96,7 @@ A worker starts with an empty window. Everything it needs is in the brief or it 
 
 Similar tasks get one template brief with the blanks filled per worker. Skill outputs the workers would all recompute (a research finding, a scan), compute once and paste.
 
-For a batch of independent tasks, call the Skill tool with "orchestrate" for the partitioning rules and the choice between subagents, a workflow, and an agent team. The coordinator role adds tracking and the dashboard on top of that; it does not replace it.
+For a batch of independent tasks, call the Skill tool with "orchestrate" for the partitioning rules and the choice between subagents, a workflow, and an agent team. The coordinator role adds tracking and the dashboard on top of that; it does not replace it. N workers that check, measure or race and return one verdict table go through `tstack:swarm` instead.
 
 ### 5. Track
 

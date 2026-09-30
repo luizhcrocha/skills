@@ -1,6 +1,6 @@
 {
   "name": "tstack",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Luiz Rocha's engineering stack for Claude Code: skills, agents and hooks for rigorous, jj-based work.",
   "author": {
     "name": "Luiz Rocha",
@@ -30,6 +30,7 @@
     "./skills/engineering/explain",
     "./skills/engineering/architect",
     "./skills/engineering/arena",
+    "./skills/engineering/swarm",
     "./skills/engineering/figure-it-out",
     "./skills/engineering/create-verification-skill",
     "./skills/engineering/maintain-verification-skill",

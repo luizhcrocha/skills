@@ -127,6 +127,10 @@ ignore = [
   # tuca-mode, from Claude Code transcripts (scripts/human-turns, Sonnet
   # readers, jj changes for review) instead of drafting a new -mode skill.
   "skills/automate-me",
+  # decided: adapted by hand, 2026-09-30. swarm runs background Agent calls on
+  # this machine (no cloud workers), Sonnet or Opus by the worker's job, one jj
+  # workspace per code-writing worker, model-invocable.
+  "skills/swarm",
 ]
 map = [
   { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md" },

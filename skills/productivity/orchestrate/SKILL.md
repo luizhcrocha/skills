@@ -7,6 +7,8 @@ description: Take a set of pending tasks, or user given tasks, and run them in p
 
 Drive a batch of work across multiple agents without conflicts. You decide what to parallelize, pick the right primitive, partition the work so no two workers edit the same files, and brief every worker on the standards they must follow.
 
+Pick this for a batch of different tasks that change code, partitioned by file ownership. N workers that check, measure, explore or race and come back as one verdict table → `tstack:swarm`. A standing program whose lanes outlive the session's attention → the coordinator (`/tstack:coordinator`).
+
 ## Process
 
 ### 1. Gather the work

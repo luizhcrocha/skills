@@ -38,7 +38,7 @@ Every tuca-mode session is a coordinator. The mindset always: your context is th
 
 The machinery only once it is earned: when you spawn a worker that outlives one turn, or the task runs as several lanes, keep the ledger and the dashboard as the coordinator skill runs them. It is user-invoked, so read `${CLAUDE_PLUGIN_ROOT}/skills/productivity/coordinator/SKILL.md` and follow its loop (Intake, Route, Pick the model, Brief, Track, Respond, Integrate) with its state CLI.
 
-"Run this whole project", "fan these out", a batch of independent tasks → the orchestrate skill (`tstack:orchestrate`) for the partition, under the coordinator's ledger for anything that runs longer than the session's attention.
+N checks, measurements or attempts that come back as one verdict table (coverage matrices, races, gauntlets) → `tstack:swarm`. "Run this whole project", "fan these out", a batch of independent tasks that change code → the orchestrate skill (`tstack:orchestrate`) for the partition, under the coordinator's ledger for anything that runs longer than the session's attention.
 
 ## Autonomy
 
