@@ -123,8 +123,8 @@ before the refactor, so the refactor is checked against it.
 
 | Theme | pstack | here | proposal |
 |---|---|---|---|
-| test-first | tdd | tdd | merge into `test-strategy` with the ladder |
-| explaining | how, teach | zoom-out, teach, show-me | `how` absorbs zoom-out; keep teach, add diagrams |
+| test-first | tdd | tdd | **done**: one `tdd` skill with the ladder |
+| explaining | how, teach | zoom-out, teach, show-me | **done**: `how` absorbed zoom-out (model-invocable, Sonnet explorers, gotchas to memo); pstack's teach decided with `why` |
 | rationale | why | - | adapt sources to our MCPs |
 | parallelism | swarm, arena, orchestrate playbook, orch CLI | orchestrate, coordinator, manager | fold into fleet |
 | review | interrogate, no-comments + comment-sicko | code-review, thermo-nuclear | code-review is the entry; interrogate its high-stakes mode; keep no-comments |
@@ -149,7 +149,6 @@ merging the skill replaces the marker with a pointer.
 
 | pstack skill | Used by | Meanwhile |
 |---|---|---|
-| how | investigation, feature, refactoring, perf-issue, hillclimb | map the subsystem by hand or through a Sonnet Explore agent |
 | why | investigation | `recall`, `jj log -- <path>`, `jj file annotate` |
 | architect | bug-fix, feature, refactoring | `codebase-design` and its DESIGN-IT-TWICE.md |
 | arena | feature | two Opus agents in separate jj workspaces, pick or graft |

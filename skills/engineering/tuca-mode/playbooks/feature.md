@@ -2,7 +2,7 @@
 
 **You own the design. Plan, review, verify.** Delegate the implementation; stay in the lead.
 
-1. Map the affected subsystem: `CONTEXT.md`, the ADRs, the modules and seams the feature touches. A Sonnet Explore agent does the reading when it spans more than a few files (pending merge: how).
+1. Map the affected subsystem: `CONTEXT.md`, the ADRs, the modules and seams the feature touches. `tstack:how` does the reading when it spans more than a few files.
 2. Design the shape: name the data shape and its organizing structure (Model the Domain), the module and its interface, the seam it sits behind, in `tstack:codebase-design` vocabulary. A contested shape → design it twice (codebase-design's DESIGN-IT-TWICE.md), or two Opus agents in separate jj workspaces build competing shapes and you pick or graft (pending merge: architect, arena).
 3. Write the throughput checkpoint as four todo items. A dimension that does not apply keeps its item with `n/a: <reason>`:
    - **Blocking first steps.** Gates that run before any fan-out (shared types, schemas, config).

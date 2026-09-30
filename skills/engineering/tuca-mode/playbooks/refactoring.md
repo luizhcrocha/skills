@@ -4,7 +4,7 @@
 
 A cleanup that reveals a missing feature or a real bug splits it out: the structural change lands first against the pinned contract. A redesign is allowed, but name it and route it to Feature. Large or cross-cutting structural work gets a bespoke plan (pending merge: figure-it-out) or the coordinator; this playbook is the focused-to-medium change.
 
-1. Pin the behaviour contract first. Map the subsystem (pending merge: how), then write a characterization test, snapshot or equivalence harness that captures current behaviour before any structure moves. No coverage → write the pin before touching structure. Type check and lint are not a pin.
+1. Pin the behaviour contract first. Map the subsystem (`tstack:how`), then write a characterization test, snapshot or equivalence harness that captures current behaviour before any structure moves. No coverage → write the pin before touching structure. Type check and lint are not a pin.
 2. Name the structure the code is missing (Model the Domain). Boring code stays when its shape is already clear and local. The reshape deletes branches or invalid states; it does not add indirection.
 3. Name the target shape: the module layout, types and call graph as if built today (Foundational Thinking, Redesign from First Principles), in `tstack:codebase-design` vocabulary. A target that crosses a function boundary gets designed twice first (DESIGN-IT-TWICE.md; pending merge: architect).
 4. Subtract before you add: delete dead code, collapse one-caller wrappers, drop redundant validators and orphan references before the new shape goes in (Subtract Before You Add). The smallest change that reaches the target lands (Laziness Protocol). A speculative cleanup that "might help" gets reverted.

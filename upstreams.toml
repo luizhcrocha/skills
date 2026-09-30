@@ -29,6 +29,8 @@ units = ["skills/*/*"]
 ignore = [
   ".*", "AGENTS.md", "CHANGELOG.md", "CLAUDE.md", "LICENSE", "README.md",
   "docs", "package.json", "package-lock.json", "scripts", "skills/*/README.md",
+  # Decided, not copied: zoom-out was folded into how (2026-09-30).
+  "skills/engineering/zoom-out",
 ]
 map = [
   { from = "skills/engineering/code-review", to = "skills/engineering/code-review" },
@@ -68,6 +70,9 @@ units = ["skills/*", "agents/*", "automations/*"]
 ignore = ["skills/tdd"]
 map = [
   { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md" },
+  # how: SKILL.md rewritten for tstack (Sonnet explorers, memo gotchas); the
+  # prompt templates are pstack's, verbatim (2026-09-30).
+  { from = "skills/how", to = "skills/engineering/how" },
   # watch-pr, unchanged: the babysit and shipping playbooks poll GitHub with it (bun).
   { from = "skills/poteto-mode/scripts/watch-pr", to = "skills/engineering/tuca-mode/scripts/watch-pr" },
   { from = "skills/poteto-mode/scripts/bootstrap.ts", to = "skills/engineering/tuca-mode/scripts/bootstrap.ts" },

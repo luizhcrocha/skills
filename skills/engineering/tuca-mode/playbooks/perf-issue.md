@@ -3,7 +3,7 @@
 **You own the measurement story. Plan, review, verify the numbers.** Every fix ties to a measurement; reading source is not measuring. `tstack:diagnosing-bugs` has the perf branch of the loop (baseline first, then bisect).
 
 1. Capture a baseline on the matching surface: a timing harness, a profile, a query plan, a trace. Median of several runs, with the command that produced it.
-2. Map the hot path to ground hypotheses (pending merge: how). Claim no ceiling without running it. Most fixes come from eight strategy families; use them as hypothesis generators, and a family earns an attempt only when the trace shows its signal:
+2. Map the hot path to ground hypotheses (`tstack:how`). Claim no ceiling without running it. Most fixes come from eight strategy families; use them as hypothesis generators, and a family earns an attempt only when the trace shows its signal:
    - **Elimination.** Does the hot path need to exist at all: a computation nobody consumes, a gate always off, a redundant sync, a legacy path kept just in case? The profiler shows what is slow, never that it is deletable, so this family needs the map.
    - **Divide and conquer.** The cost scales with input size: split so each piece touches less, or run independent pieces in parallel.
    - **Caching.** The same computation or fetch repeats on identical inputs. Name what invalidates it before claiming the win.
