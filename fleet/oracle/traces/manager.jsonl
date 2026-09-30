@@ -1,0 +1,37 @@
+{"trace": 1, "name": "manager", "about": "A manager's ledger and the machine's registry: standing.md, steps naming fleets, a Now line naming a fleet's closed decision, fleets.py list, show, decision, manager, gate and name, with registry entries written as serve_dashboard.py would."}
+{"cli": "state", "argv": ["$W/manager", "init", "--role", "manager", "--project", "this machine", "--goal", "land the billing work in order", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "acme-billing", "--goal", "usage records land", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "M", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a1", "--task", "the writer", "--milestone", "m1", "--lane", "src/usage/**", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--kind", "input", "--title", "Neon key", "--question", "which branch?", "--why", "w", "--blocking", "--no-render"], "clock": "2026-01-05T09:05:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "d2", "--kind", "action", "--title", "Deploy", "--question", "deploy?", "--why", "w", "--manual", "just deploy", "--asks", "manager", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "I1", "--decide", "main", "--resolution", "answered on the page (#1)", "--no-render"], "clock": "2026-01-05T09:10:00+00:00"}
+{"cli": "fleets", "argv": ["list"]}
+{"fixture": "write", "path": "$REGISTRY/manager.json", "content": "{\"id\": \"manager\", \"role\": \"manager\", \"dir\": \"$W/manager\", \"url\": \"https://box.ts.net:40001/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:00:00+00:00\"}\n"}
+{"fixture": "write", "path": "$REGISTRY/acme-billing.json", "content": "{\"id\": \"acme-billing\", \"role\": \"coordinator\", \"dir\": \"$DIR\", \"url\": \"https://box.ts.net:40002/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:30:00+00:00\"}\n"}
+{"fixture": "write", "path": "$REGISTRY/dead.json", "content": "{\"id\": \"dead\", \"role\": \"coordinator\", \"dir\": \"$W/dead\", \"url\": \"https://box.ts.net:40003/\", \"pid\": 999999999, \"session\": null, \"since\": \"2026-01-05T07:00:00+00:00\"}\n"}
+{"cli": "fleets", "argv": ["list"], "clock": "2026-01-05T09:20:00+00:00"}
+{"cli": "fleets", "argv": ["show", "acme-billing"]}
+{"cli": "fleets", "argv": ["show", "nobody"]}
+{"cli": "fleets", "argv": ["decision", "acme-billing", "d2"]}
+{"cli": "fleets", "argv": ["decision", "acme-billing", "A1"]}
+{"cli": "fleets", "argv": ["decision", "acme-billing", "d9"]}
+{"cli": "fleets", "argv": ["manager"]}
+{"cli": "fleets", "argv": ["gate"]}
+{"cli": "fleets", "argv": ["gate", "take", "acme-billing", "the full suite"]}
+{"cli": "fleets", "argv": ["gate", "take", "manager", "a build"]}
+{"cli": "fleets", "argv": ["gate", "free", "manager"]}
+{"cli": "fleets", "argv": ["gate", "free", "acme-billing"]}
+{"cli": "fleets", "argv": ["gate", "take", "nobody", "x"]}
+{"cli": "fleets", "argv": ["name", "$DIR", "Acme Billing (usage)"]}
+{"cli": "fleets", "argv": ["name", "$DIR", "coordinator"]}
+{"cli": "fleets", "argv": ["name", "$W/elsewhere", "x"]}
+{"cli": "fleets", "argv": ["bogus"]}
+{"cli": "state", "argv": ["$W/manager", "milestone", "landings", "--title", "Landings and deploys", "--no-render"]}
+{"cli": "state", "argv": ["$W/manager", "step", "l1", "--milestone", "landings", "--title", "acme: push master", "--agent", "acme-billing-usage", "--status", "current", "--no-render"]}
+{"cli": "state", "argv": ["$W/manager", "event", "--kind", "integrated", "--agent", "acme-billing-usage", "l2 landed", "--no-render"]}
+{"cli": "state", "argv": ["$W/manager", "set", "--now", "acme I1 is answered; the turn is acme's", "--no-render"], "clock": "2026-01-05T09:30:00+00:00"}
+{"cli": "state", "argv": ["$W/manager", "set", "--now", "waiting on acme-billing-usage A1", "--no-render"]}
+{"cli": "state", "argv": ["$W/manager", "show"]}
+{"cli": "chat", "argv": ["$W/manager", "say", "--as", "acme-billing-usage", "on it"]}
+{"cli": "chat", "argv": ["$W/manager", "inbox", "--as", "acme-billing-usage"]}

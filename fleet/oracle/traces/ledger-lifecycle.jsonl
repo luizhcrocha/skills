@@ -1,0 +1,20 @@
+{"trace": 1, "name": "ledger-lifecycle", "about": "A coordinator's day: intake, a worker blocked on the user's decision, the answer clearing the roadblock, a pause, a kept note, and show. Rendered once, at the end."}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "acme-billing", "--goal", "usage records land", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "Usage records", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "step", "s1", "--milestone", "m1", "--title", "schema", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "step", "s2", "--milestone", "m1", "--title", "writer", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a1", "--task", "write the schema", "--skill", "tdd", "--milestone", "m1", "--lane", "db/schema.sql", "--step", "s1", "--brief", "done when the migration runs", "--no-render"], "clock": "2026-01-05T09:05:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--kind", "decision", "--title", "Key shape", "--question", "uuid or ulid?", "--why", "blocks the schema", "--blocking", "--agent", "a1", "--option", "A: uuid | random", "--option", "B: ulid | sortable", "--recommend", "B", "--reason", "sorts by time", "--no-render"], "clock": "2026-01-05T09:10:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "roadblock", "r1", "--title", "key shape", "--detail", "needs the user's choice", "--severity", "serious", "--needs", "user", "--agent", "a1", "--decision", "d1", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "set", "--now", "a1 waits on D1", "--no-render"], "clock": "2026-01-05T09:12:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "D1", "--decide", "B: ulid", "--resolution", "answered on the page (#1)", "--no-render"], "clock": "2026-01-05T09:30:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--why", "too late", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a1", "--status", "done", "--tokens", "1200", "--duration-ms", "60000", "--report", "migration runs", "--step", "s1", "--log", "verified", "--no-render"], "clock": "2026-01-05T09:50:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "agent", "a2", "--task", "the writer", "--milestone", "m1", "--step", "s2", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "set", "--status", "paused", "--no-render"], "clock": "2026-01-05T10:20:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "park", "Luiz paused the fleet", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "keep", "ws-a2", "a2's workspace holds the half-done writer", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "event", "--agent", "nobody", "x", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "note", "x"]}
+{"cli": "state", "argv": ["$DIR", "show"], "clock": "2026-01-05T11:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "set", "--now", "paused for the night"]}

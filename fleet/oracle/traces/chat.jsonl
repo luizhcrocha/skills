@@ -1,0 +1,31 @@
+{"trace": 1, "name": "chat", "about": "The chat's say, inbox, log, watch --once and wait on a fleet with two workers; the user's messages written as the page's server would; a state command warning while they wait unread; a torn line."}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "M", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a1", "--task", "t", "--milestone", "m1", "--name", "notes-impl", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a2", "--task", "t", "--milestone", "m1", "--status", "done", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--kind", "input", "--title", "Region", "--question", "which region?", "--why", "w", "--no-render"]}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 1, "at": "2026-01-05T09:05:00+00:00", "from": "user", "to": ["a1"], "text": "hello @notes-impl, where are you?", "re": null, "parts": [{"text": "hello "}, {"text": "@notes-impl", "mention": "a1"}, {"text": ", where are you?"}]}, "clock": "2026-01-05T09:05:00+00:00"}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 2, "at": "2026-01-05T09:06:00+00:00", "from": "user", "to": ["coordinator"], "text": "eu-west", "re": null, "decision": "d1"}, "clock": "2026-01-05T09:06:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "event", "x", "--no-render"], "clock": "2026-01-05T09:07:00+00:00"}
+{"cli": "chat", "argv": ["$DIR", "inbox", "--as", "a1"]}
+{"cli": "chat", "argv": ["$DIR", "inbox", "--as", "notes-impl"]}
+{"cli": "chat", "argv": ["$DIR", "inbox", "--as", "coordinator"]}
+{"cli": "chat", "argv": ["$DIR", "inbox", "--as", "user"]}
+{"cli": "chat", "argv": ["$DIR", "inbox", "--as", "ghost"]}
+{"cli": "chat", "argv": ["$DIR", "say", "--as", "a1", "--re", "1", "halfway, the parser is done"]}
+{"cli": "chat", "argv": ["$DIR", "say", "--as", "user", "hi"]}
+{"cli": "chat", "argv": ["$DIR", "say", "--as", "ghost", "hi"]}
+{"cli": "chat", "argv": ["$DIR", "say", "--as", "a1", "--re", "99", "hi"]}
+{"cli": "chat", "argv": ["$DIR", "say", "--as", "A2", "ask @coordinator. and @A1, @nobody"]}
+{"cli": "chat", "argv": ["$DIR", "say", "--as", "coordinator", "--decision", "d1", "noted\nwith a second line\tand a tab"]}
+{"cli": "chat", "argv": ["$DIR", "wait", "I1"], "clock": "2026-01-05T09:10:00+00:00"}
+{"cli": "chat", "argv": ["$DIR", "wait", "d9"]}
+{"cli": "chat", "argv": ["$DIR", "watch", "--as", "coordinator", "--all", "--once"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--decide", "eu-west", "--resolution", "answered on the page (#2)", "--no-render"], "clock": "2026-01-05T09:30:00+00:00"}
+{"cli": "chat", "argv": ["$DIR", "wait", "d1"]}
+{"cli": "state", "argv": ["$DIR", "event", "y", "--no-render"]}
+{"cli": "chat", "argv": ["$DIR", "log"]}
+{"cli": "chat", "argv": ["$DIR", "log", "--after", "3"]}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": "{\"id\": 6, \"from\": \"a1\", \"to\": [\"us"}
+{"cli": "chat", "argv": ["$DIR", "say", "--as", "coordinator", "after the torn line"]}
+{"cli": "chat", "argv": ["$DIR", "log", "--after", "4"]}

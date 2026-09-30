@@ -1,0 +1,61 @@
+{"trace": 1, "name": "model-2", "about": "test_model.py's random sequence, seed 2, 60 steps", "seed": 2}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "M", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "set", "--status", "blocked", "--now", "waits on D1", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "step", "s2", "--milestone", "m1", "--title", "T", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "set", "--no-render"], "clock": "2026-01-05T09:15:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "D2", "--kind", "decision", "--title", "T", "--question", "Q?", "--why", "W", "--recommend", "A", "--reason", "R", "--option", "A: a | x", "--option", "B: b | y", "--no-render"], "clock": "2026-01-05T09:15:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "roadblock", "r2", "--title", "T", "--detail", "D", "--severity", "serious", "--needs", "user", "--agent", "A1", "--decision", "d1", "--no-render"], "clock": "2026-01-05T09:30:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "roadblock", "R1", "--title", "T", "--detail", "D", "--severity", "warning", "--needs", "worker", "--agent", "A1", "--no-render"], "clock": "2026-01-05T09:40:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "roadblock", "R1", "--open", "--no-render"], "clock": "2026-01-05T10:05:30+00:00"}
+{"cli": "chat", "argv": ["$DIR", "inbox", "--as", "ghost"], "clock": "2026-01-05T10:06:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "I1", "--kind", "input", "--title", "T", "--question", "Q2?", "--why", "W", "--no-render"], "clock": "2026-01-05T10:21:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "agent", "a2", "--task", "T", "--milestone", "m9", "--name", "coordinator", "--no-render"], "clock": "2026-01-05T10:23:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "step", "s2", "--agent", "", "--before", "s2", "--no-render"], "clock": "2026-01-05T10:25:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "step", "s2", "--remove", "recorded in error", "--no-render"], "clock": "2026-01-05T10:35:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "event", "x", "--agent", "a1"], "clock": "2026-01-05T10:35:00+00:00"}
+{"cli": "chat", "argv": ["$DIR", "inbox", "--as", "a3"], "clock": "2026-01-05T10:40:00+00:00"}
+{"cli": "chat", "argv": ["$DIR", "inbox", "--as", "user"], "clock": "2026-01-05T10:40:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "milestone", "m3", "--title", "M", "--no-render"], "clock": "2026-01-05T10:42:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "step", "s5", "--milestone", "m3", "--title", "T", "--status", "done", "--no-render"], "clock": "2026-01-05T10:42:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "keep", "k1", "a workspace"], "clock": "2026-01-05T10:42:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "link", "l1", "--url", "https://box.ts.net:1/", "--title", "T", "--no-render"], "clock": "2026-01-05T10:52:30+00:00"}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 1, "at": "2026-01-05T10:52:30+00:00", "from": "user", "to": ["coordinator"], "text": "are you there?", "re": null, "decision": "I1"}, "clock": "2026-01-05T10:52:30+00:00"}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 2, "at": "2026-01-05T10:57:30+00:00", "from": "user", "to": ["coordinator"], "text": "are you there?", "re": null}, "clock": "2026-01-05T10:57:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "step", "next", "--milestone", "m3", "--title", "T", "--no-render"], "clock": "2026-01-05T10:59:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "note", "--no-render"], "clock": "2026-01-05T11:01:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "d3", "--kind", "secret", "--title", "T", "--question", "Q?", "--why", "W", "--manual", "by hand", "--secret", "KEY", "--no-render"], "clock": "2026-01-05T11:01:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "roadblock", "r1", "--title", "T", "--detail", "D", "--severity", "warning", "--needs", "user", "--decision", "d1", "--no-render"], "clock": "2026-01-05T11:01:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "agent", "A1", "--task", "T", "--milestone", "m1", "--step", "s6", "--no-render"], "clock": "2026-01-05T11:03:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "link", "l1", "--url", "https://box.ts.net:1/", "--title", "T", "--no-render"], "clock": "2026-01-05T11:03:30+00:00"}
+{"cli": "chat", "argv": ["$DIR", "inbox", "--as", "coordinator"], "clock": "2026-01-05T11:03:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "D2", "--decide", "B", "--resolution", "answered on the page", "--no-render"], "clock": "2026-01-05T11:13:30+00:00"}
+{"cli": "chat", "argv": ["$DIR", "say", "--as", "coordinator", "--re", "1", "done"], "clock": "2026-01-05T11:13:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "step", "s2", "--milestone", "m1", "--title", "T", "--status", "done", "--no-render"], "clock": "2026-01-05T11:13:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "I1", "--step", "s9", "--no-render"], "clock": "2026-01-05T11:13:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "step", "s3", "--milestone", "m3", "--title", "T", "--status", "blocked", "--no-render"], "clock": "2026-01-05T11:38:30+00:00"}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 4, "at": "2026-01-05T11:43:30+00:00", "from": "user", "to": ["coordinator"], "text": "are you there?", "re": null, "decision": "I1"}, "clock": "2026-01-05T11:43:30+00:00"}
+{"cli": "chat", "argv": ["$DIR", "say", "--as", "ghost", "@impl, see this"], "clock": "2026-01-05T12:08:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "agent", "a1", "--task", "T", "--milestone", "m3", "--no-render"], "clock": "2026-01-05T12:08:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "show", "--no-render"], "clock": "2026-01-05T12:08:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "agent", "A1", "--status", "done", "--no-render"], "clock": "2026-01-05T12:08:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "agent", "a1", "--task", "T", "--milestone", "m3", "--step", "s3", "--no-render"], "clock": "2026-01-05T12:08:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "agent", "A1", "--status", "blocked", "--step", "s6", "--no-render"], "clock": "2026-01-05T12:18:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "d3", "--decide", "B", "--resolution", "answered on the page", "--no-render"], "clock": "2026-01-05T12:33:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "D1", "--step", "s3", "--no-render"], "clock": "2026-01-05T12:33:30+00:00"}
+{"cli": "chat", "argv": ["$DIR", "say", "--as", "A1", "@ghost hi"], "clock": "2026-01-05T12:48:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "roadblock", "R1", "--open", "--no-render"], "clock": "2026-01-05T12:49:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "M", "--no-render"], "clock": "2026-01-05T13:04:00+00:00"}
+{"cli": "chat", "argv": ["$DIR", "say", "--as", "A1", "@A2 ping"], "clock": "2026-01-05T13:06:00+00:00"}
+{"cli": "chat", "argv": ["$DIR", "inbox", "--as", "coordinator"], "clock": "2026-01-05T13:31:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "step", "s3", "--status", "current"], "clock": "2026-01-05T13:41:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "I1", "--step", "s2"], "clock": "2026-01-05T14:06:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "step", "s2", "--no-render"], "clock": "2026-01-05T14:06:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "D2", "--withdraw", "no longer needed", "--no-render"], "clock": "2026-01-05T14:06:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "D1", "--withdraw", "no longer needed", "--no-render"], "clock": "2026-01-05T14:07:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "d2", "--kind", "input", "--title", "T", "--question", "Q2?", "--why", "W", "--no-render"], "clock": "2026-01-05T14:22:00+00:00"}
+{"cli": "chat", "argv": ["$DIR", "inbox", "--as", "coordinator"], "clock": "2026-01-05T14:37:00+00:00"}
+{"cli": "chat", "argv": ["$DIR", "say", "--as", "A1", "@ghost hi"], "clock": "2026-01-05T14:42:00+00:00"}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 8, "at": "2026-01-05T14:47:00+00:00", "from": "user", "to": ["coordinator"], "text": "are you there?", "re": null}, "clock": "2026-01-05T14:47:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "step", "s3", "--status", "pending", "--after", "s3", "--no-render"], "clock": "2026-01-05T15:12:00+00:00"}
+{"cli": "chat", "argv": ["$DIR", "inbox", "--as", "ghost"], "clock": "2026-01-05T15:14:00+00:00"}
