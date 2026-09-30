@@ -76,7 +76,7 @@ Write it clean as you draft, per `tstack:unslop`; a cleanup pass after drafting 
 
 ## Comments
 
-Comments follow the reply's rules, written clean as you go. Keep a comment only for a non-obvious why the code cannot show. A script or test carries no phase narration (`# step 1: seed`); the assertion or log string documents the step. This holds for every file you produce, a delegate's diff included (pending merge: no-comments).
+Comments follow the reply's rules, written clean as you go. Keep a comment only for a non-obvious why the code cannot show. A script or test carries no phase narration (`# step 1: seed`); the assertion or log string documents the step. This holds for every file you produce, a delegate's diff included. Before landing, `tstack:no-comments` gives the diff to a reader who did not write it.
 
 ## Playbooks
 

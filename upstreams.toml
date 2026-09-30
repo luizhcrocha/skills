@@ -77,6 +77,9 @@ map = [
   # the model load them (2026-09-30).
   { from = "skills/unslop/SKILL.md", to = "skills/productivity/unslop/SKILL.md" },
   { from = "skills/technical-writing/SKILL.md", to = "skills/productivity/technical-writing/SKILL.md" },
+  # comment-sicko and no-comments, adapted (kebab-case name, Sonnet, jj diff scope, codebase-design for architect).
+  { from = "agents/comment-sicko.md", to = "agents/comment-sicko.md" },
+  { from = "skills/no-comments/SKILL.md", to = "skills/engineering/no-comments/SKILL.md" },
   # watch-pr, unchanged: the babysit and shipping playbooks poll GitHub with it (bun).
   { from = "skills/poteto-mode/scripts/watch-pr", to = "skills/engineering/tuca-mode/scripts/watch-pr" },
   { from = "skills/poteto-mode/scripts/bootstrap.ts", to = "skills/engineering/tuca-mode/scripts/bootstrap.ts" },
