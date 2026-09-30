@@ -88,8 +88,22 @@ ladder's tools live in the `lang-*` skill (fast-check in lang-ts, rapid and
 to a plugin-level `fleet/` package. Changes, in order:
 1. Worker liveness from the PostToolUse heartbeat (`agent_id`), replacing the
    transcript regex on "your id is X".
-2. One jj workspace per worker: `fleet ws new <id>` creates it, the ledger
-   records it, landing removes it; the lanes stay for planning.
+2. One jj workspace per worker: `fleet ws new <lane>` creates it, the ledger
+   records it, `fleet ws done <lane>` removes it when the lane closes; the
+   lanes stay for planning. `default` stays Luiz's, landing happens only from
+   landing workspaces (`*-land`, `deploy`), one turn at a time. Workers rebase
+   onto `master@origin` at each checkpoint so landing rebases stay small.
+   `fleet ws prune` sweeps the rest (crashed fleets, old lanes), dry-run by
+   default, deleting only on Luiz's yes (one decision on the control plane). A
+   workspace is removable only when every check passes: not `default`, a
+   landing or a protected workspace; no running ledger row, no heartbeat in 20
+   min, no process with its cwd inside; `jj workspace update-stale` and
+   `jj status` run inside it show no uncommitted work; nothing unlanded
+   (`(::<ws>@ ~ ::trunk()) ~ empty()` is empty after a fetch); idle for 2 h.
+   Then `jj workspace forget`, remove the directory, `jj clean` for the empty
+   @ left behind. Unlanded work of an abandoned lane is kept as a local,
+   never-pushed bookmark `archive/<fleet>/<lane>` recorded in the ledger;
+   archives older than 30 days show up in the prune list.
 3. The hub as a systemd user service (D3a), then federation across the tailnet.
 4. Rules that keep being restated in prose become code (the "said once" rule,
    stale Now lines, unrecorded answers), each with a test.
