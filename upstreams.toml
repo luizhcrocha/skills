@@ -61,7 +61,8 @@ map = [
   { from = "skills/productivity/grilling", to = "skills/productivity/grilling" },
   { from = "skills/productivity/handoff", to = "skills/productivity/handoff" },
   { from = "skills/productivity/teach", to = "skills/productivity/teach" },
-  { from = "skills/productivity/wait-what", to = "skills/productivity/wait-what" },
+  # wait-what became bro (2026-09-30): pstack's bro merged into its text.
+  { from = "skills/productivity/wait-what", to = "skills/productivity/bro" },
   { from = "skills/productivity/writing-for-agents", to = "skills/productivity/writing-for-agents" },
 ]
 
@@ -87,6 +88,21 @@ ignore = [
   # decided: adapted by hand, 2026-09-30. pstack's teach became our explain
   # (skills/engineering/explain); our teach is mattpocock's.
   "skills/teach",
+  # decided: adapted by hand, 2026-09-30. pstack's recall became the catch-up
+  # mode of our recall (skills/productivity/recall), on Claude Code
+  # transcripts through scripts/sessions.py, jj status tags and memo.
+  "skills/recall",
+  # decided: adapted by hand, 2026-09-30. reflect's and show-me-your-work's
+  # SKILL.md were rewritten for Claude Code (Opus reviewers, transcript lookup
+  # by session id, jj change in the tstack repo, memo); only the files mapped
+  # below sync.
+  "skills/reflect",
+  "skills/show-me-your-work",
+  # decided: adapted by hand, 2026-09-30 (jj changes, our skills in place of
+  # architect and arena). skills/engineering/figure-it-out.
+  "skills/figure-it-out",
+  # decided: merged into bro, 2026-09-30 (mattpocock's wait-what, renamed).
+  "skills/bro",
   # decided: adapted by hand, 2026-09-30. arena and architect were rewritten
   # for Claude Code: Opus runners under distinct constraints instead of three
   # model families, one jj workspace per runner, tstack:how / why / arena
@@ -119,6 +135,13 @@ map = [
   { from = "skills/why/references/epistemics.md", to = "skills/engineering/why/references/epistemics.md" },
   { from = "skills/why/references/synthesizer-prompt.md", to = "skills/engineering/why/references/synthesizer-prompt.md" },
   { from = "skills/why/references/sources/incident-postmortem.md", to = "skills/engineering/why/references/sources/incident-postmortem.md" },
+  # reflect: the reviewer and synthesizer prompts, adapted in place (Claude
+  # Code tool names and skill paths, a memo routing, backlog as memo open
+  # notes), so upstream edits 3-way merge (2026-09-30).
+  { from = "skills/reflect/references", to = "skills/productivity/reflect/references" },
+  # show-me-your-work: log.sh and the template, verbatim (2026-09-30).
+  { from = "skills/show-me-your-work/scripts/log.sh", to = "skills/productivity/show-me-your-work/scripts/log.sh" },
+  { from = "skills/show-me-your-work/references/decision-log-template.tsv", to = "skills/productivity/show-me-your-work/references/decision-log-template.tsv" },
   # watch-pr, unchanged: the babysit and shipping playbooks poll GitHub with it (bun).
   # interrogate: rubric and lead-judgment verbatim; reviewer-prompt adapted in
   # place (one lens per reviewer), so upstream edits 3-way merge (2026-09-30).

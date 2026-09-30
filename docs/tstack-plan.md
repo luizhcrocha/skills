@@ -131,8 +131,8 @@ before the refactor, so the refactor is checked against it.
 | design | architect, arena, principle-* | codebase-design, improve-codebase-architecture, domain-modeling | **done**: `architect` (ground with how and why, sketch through arena, implement against the sketch, scrap on a pattern of friction; checkpoint only when asked) and `arena` (N Opus runners under distinct constraints, each in its own jj workspace, a blind Opus cross-judge, pick and graft by hand), both model-invocable; the red flags joined codebase-design as RED-FLAGS.md; DESIGN-IT-TWICE.md fans out through arena |
 | debugging | bug-fix, forensics playbooks, blast-radius | diagnosing-bugs | our loop is the bug-fix playbook; **blast-radius done** (model-invocable, why's jj anchor, interrogate in place of arena) |
 | prose | unslop, technical-writing | writing-for-agents, caveman | **done**: unslop and technical-writing imported, model-invocable; tuca-mode sends every prose surface through unslop (pstack's way); caveman removed |
-| planning | multi-phase-plan, figure-it-out | to-spec, to-issues, triage, grilling | keep ours; figure-it-out as fallback playbook |
-| session | recall, reflect, show-me-your-work, pause/pickup | handoff, wait-what | recall on memo; bro into wait-what |
+| planning | multi-phase-plan, figure-it-out | to-spec, to-issues, triage, grilling | keep ours; **figure-it-out done**: tuca-mode's no-playbook fallback, jj units, `show-me-your-work` trail |
+| session | recall, reflect, show-me-your-work, pause/pickup | handoff, wait-what | **done**: `recall` has two modes (lookup on memo, jj and the claude-mem archive; catch-up over this project's transcripts through Sonnet miners, live jj/PR/memo state, a narrow `why` sweep when useful); `reflect` (three Opus reviewers, Opus synthesizer, approved edits as a jj change in the tstack repo, other lessons to memo); `show-me-your-work` (TSV log via log.sh, transcript audit, fresh Opus review); bro and wait-what merged as `bro`; pause-safely and session-pickup use them |
 | language | typescript-best-practices | coding-standards-ts, JetBrains use-modern-go | merge into lang-ts; wrap use-modern-go in lang-go |
 | conflicts | - | resolving-merge-conflicts (git only) | jj-aware, or folded into worktree-janitor |
 
@@ -149,8 +149,6 @@ merging the skill replaces the marker with a pointer.
 
 | pstack skill | Used by | Meanwhile |
 |---|---|---|
-| show-me-your-work | non-negotiables, autonomous-run, hillclimb, principles/prove-it-works | a TSV decision log in the scratchpad |
-| figure-it-out | the no-playbook fallback, refactoring | a bespoke step list in playbook shape |
 | swarm | parallel fan-out | the `orchestrate` skill |
 
 Replaced rather than pending: poteto-agent (subagents take `model` per role),

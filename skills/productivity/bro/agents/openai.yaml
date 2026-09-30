@@ -1,0 +1,5 @@
+interface:
+  display_name: "Bro"
+  short_description: "Say that again plainly, with the context I'm missing"
+policy:
+  allow_implicit_invocation: false

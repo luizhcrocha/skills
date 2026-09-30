@@ -2,7 +2,7 @@
 
 **You own the contract. The structure changes; the behaviour does not.** Feature adds behaviour and Bug fix corrects it; this playbook does neither.
 
-A cleanup that reveals a missing feature or a real bug splits it out: the structural change lands first against the pinned contract. A redesign is allowed, but name it and route it to Feature. Large or cross-cutting structural work gets a bespoke plan (pending merge: figure-it-out) or the coordinator; this playbook is the focused-to-medium change.
+A cleanup that reveals a missing feature or a real bug splits it out: the structural change lands first against the pinned contract. A redesign is allowed, but name it and route it to Feature. Large or cross-cutting structural work gets a bespoke plan (`tstack:figure-it-out`) or the coordinator; this playbook is the focused-to-medium change.
 
 1. Pin the behaviour contract first. Map the subsystem (`tstack:how`), then write a characterization test, snapshot or equivalence harness that captures current behaviour before any structure moves. No coverage → write the pin before touching structure. Type check and lint are not a pin.
 2. Name the structure the code is missing (Model the Domain). Boring code stays when its shape is already clear and local. The reshape deletes branches or invalid states; it does not add indirection.

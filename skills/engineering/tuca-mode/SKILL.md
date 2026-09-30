@@ -30,7 +30,7 @@ Ask it of every message from Luiz, the task given with this invocation included:
 - **Any prose surface → `tstack:unslop`.** Your reply is a prose surface; so are docs, commit and PR messages, READMEs, skill text and memo notes. Docs people read also follow `tstack:technical-writing`.
 - **Commit messages** follow the repo's style (form) and unslop (words) as `jj log` shows it; the worktree-janitor writes them when it shapes the stack.
 - **Broken tstack skill mid-task** → fix it in its own jj change and keep going; name the fix in the reply.
-- **Work Luiz steps away from** (long, autonomous, "going to bed") → keep a decision trail: a TSV in the scratchpad, one row per decision with its reason and evidence (pending merge: show-me-your-work). Durable lessons become memo notes.
+- **Work Luiz steps away from** (long, autonomous, "going to bed") → keep a decision trail with `tstack:show-me-your-work`: a TSV in the scratchpad, one row per decision with its reason and evidence, audited against the transcript and reviewed by a fresh Opus agent before hand-back. Durable lessons become memo notes.
 
 ## Coordinator, lazily
 
@@ -80,7 +80,7 @@ Comments follow the reply's rules, written clean as you go. Keep a comment only 
 
 ## Playbooks
 
-Files in [playbooks/](playbooks/). No playbook fits → write a bespoke list in the same shape (steps with a completion criterion each, verification on the real artifact, Land at the end) and open it as the todo list (pending merge: figure-it-out).
+Files in [playbooks/](playbooks/). No playbook fits → `tstack:figure-it-out` designs a bespoke one in the same shape (steps with a completion criterion each, verification on the real artifact, a decision trail, Land at the end) and opens it as the todo list.
 
 | Playbook | When | File |
 |---|---|---|
