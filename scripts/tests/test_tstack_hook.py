@@ -110,6 +110,72 @@ class SessionStartTest(HookCase):
         self.assertIn("found through CLAUDE_PROJECT_DIR", r.stdout)
 
 
+@unittest.skipUnless(shutil.which("jj"), "jj is not installed")
+class JJHintsTest(HookCase):
+    def setUp(self):
+        super().setUp()
+        self.env["MEMO_QUIET"] = "1"
+        self.jjrepo = self.tmp / "jjrepo"
+        self.jjrepo.mkdir()
+        subprocess.run(["jj", "git", "init", "--colocate"], cwd=self.jjrepo, check=True, capture_output=True)
+
+    def context(self, cwd, **extra):
+        r = self.hook("SessionStart", {**self.base("SessionStart", source="startup"), "cwd": str(cwd), **extra})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout else ""
+
+    def hints(self, context):
+        return context[context.index("# jj"):] if "# jj" in context else ""
+
+    def test_a_jj_repo_gets_the_hints_from_any_subfolder(self):
+        (self.jjrepo / "src" / "deep").mkdir(parents=True)
+        for cwd in (self.jjrepo, self.jjrepo / "src" / "deep"):
+            hints = self.hints(self.context(cwd))
+            self.assertTrue(hints.startswith("# jj\n"))
+            self.assertIn("detached git HEAD is normal", hints)
+            self.assertIn("jj git push --bookmark <b>", hints)
+            self.assertIn("/tstack:worktree-janitor", hints)
+            self.assertNotIn("secondary workspace;", hints)
+            self.assertLessEqual(len(hints.splitlines()), 10)
+
+    def test_a_secondary_workspace_names_the_main_one(self):
+        second = self.tmp / "jjrepo-lane"
+        subprocess.run(["jj", "workspace", "add", str(second), "--name", "lane"], cwd=self.jjrepo,
+                       check=True, capture_output=True)
+        self.assertTrue((second / ".jj" / "repo").is_file())
+        hints = self.hints(self.context(second))
+        self.assertIn(f"the main one is {self.jjrepo}", hints)
+
+    def test_silent_outside_jj(self):
+        self.assertEqual(self.hints(self.context(self.repo)), "")  # plain git
+        plain = self.tmp / "plain"
+        plain.mkdir()
+        self.assertEqual(self.hints(self.context(plain)), "")
+        half = self.tmp / "half"
+        (half / ".jj").mkdir(parents=True)
+        self.assertEqual(self.hints(self.context(half)), "")
+
+    def test_workers_get_the_hints_and_memo_stays_first(self):
+        self.assertIn("# jj", self.context(self.jjrepo, agent_id="w1"))
+        self.env["MEMO_QUIET"] = ""
+        context = self.context(self.jjrepo)
+        self.assertTrue(context.startswith("# memo"), context[:80])
+        self.assertIn("\n\n# jj\n", context)
+
+    def test_the_hint_is_fast(self):
+        (self.jjrepo / "a" / "b" / "c").mkdir(parents=True)
+        payload = {**self.base("SessionStart", source="startup"), "cwd": str(self.jjrepo / "a" / "b" / "c")}
+        self.hook("SessionStart", payload)
+        times = []
+        for _ in range(7):
+            started = time.perf_counter()
+            self.hook("SessionStart", payload)
+            times.append((time.perf_counter() - started) * 1000)
+        print(f"\n  SessionStart (jj hints) hook: median {statistics.median(times):.0f} ms, best {min(times):.0f} ms",
+              end="", file=sys.stderr)
+        self.assertLess(min(times), 150, times)
+
+
 class StopTest(HookCase):
     def stop(self, env=None, **extra):
         return self.hook("Stop", self.base("Stop", stop_hook_active=False, **extra), env=env)

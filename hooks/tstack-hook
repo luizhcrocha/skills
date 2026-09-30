@@ -173,8 +173,46 @@ def memo_precompact(hook):
     return PRECOMPACT
 
 
+JJ_HINTS = """\
+# jj
+This repo is jj, colocated with git; a detached git HEAD is normal here, leave it as it is.
+- History goes through jj: `jj status/log/diff/describe/new/split/squash/rebase/abandon`. git checkout, stash, commit and reset stay unused: they fight jj's working copy.
+- Publish: move this repo's landing bookmark (its docs name it: master in most repos, `nix` in dotfiles), `jj bookmark set <b> -r @-`, then `jj git push --bookmark <b>`.
+- After a push, @ sits on a fresh empty commit. jj makes one itself when the push turns @ immutable (trunk); for any other bookmark, `jj log -r @` and `jj new` if @ is the pushed commit.
+- One jj workspace per agent (`jj workspace add ../<repo>-<lane> -r <base> --name <lane>`); rebases, bookmark moves and pushes belong to whoever holds the landing turn.
+- `gh` runs from the main workspace: a secondary workspace has no .git.{where}
+- @ holding several unrelated edits, or about to land: run /tstack:worktree-janitor to shape it into a described stack."""
+
+
+def jj_workspace(cwd):
+    """(workspace root, main workspace root) of the jj repo holding cwd, or None.
+    Plain file reads up the tree, no jj process, so the hook stays fast."""
+    here = Path(cwd).resolve()
+    for d in (here, *here.parents):
+        repo = d / ".jj" / "repo"
+        if repo.is_dir():
+            return d, d
+        if repo.is_file():  # a secondary workspace: the file points at the main .jj/repo
+            target = Path(repo.read_text().strip())
+            target = (target if target.is_absolute() else repo.parent / target).resolve()
+            return d, target.parent.parent
+        if (d / ".jj").is_dir():  # a .jj with no repo in it is half-made: say nothing
+            return None
+    return None
+
+
+def jj_hints(hook):
+    """SessionStart: how history works in a jj repo. Silent outside one."""
+    found = jj_workspace(hook.cwd)
+    if not found:
+        return None
+    root, main = found
+    where = "" if root == main else f" This is a secondary workspace; the main one is {main}."
+    return JJ_HINTS.format(where=where)
+
+
 HANDLERS = {
-    "SessionStart": [memo_wake],
+    "SessionStart": [memo_wake, jj_hints],
     "Stop": [memo_nudge],
     "PreCompact": [memo_precompact],
 }

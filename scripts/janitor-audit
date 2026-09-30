@@ -1,0 +1,346 @@
+#!/usr/bin/env python3
+"""The mechanical audit behind /worktree-janitor: did the janitor keep its leash?
+
+    janitor-audit start [--from REV]
+        Record the starting point: prints the operation id to audit against,
+        the scope (FROM..@), its revisions and files, and conflicted paths.
+    janitor-audit check --op OP [--from REV] [--check CMD] [--json]
+        Compare the repo now with the repo at OP. Exit 0 pass, 1 fail, 2 usage.
+
+Scope: the stack from the nearest bookmark or immutable revision below @
+(`heads(::@ & (immutable() | bookmarks()))`), or from --from, up to @. The
+janitor may rewrite only the revisions in it.
+
+Checks (each failure is one line of reasons):
+  tree       the tree of @ equals the tree of @ at OP, except paths that were
+             conflicted in the scope at OP (those are listed, with their diff)
+  base       every base revision is still an ancestor of @, unchanged
+  bookmarks  no bookmark on ::@ (at OP or now) was moved, created or deleted
+  stack      every revision of the new stack is described, non-empty (merges
+             aside) and free of conflicts; @ is empty and undescribed
+  strays     no new revision is left that nothing (@, a workspace, a
+             bookmark) reaches
+  style      each subject the janitor wrote matches the prefix habit of the last 30
+             subjects below the stack (`type(scope): ...` or not); WIP,
+             fixup! and squash! subjects fail; unusual types and lengths are notes
+  checks     with --check CMD: CMD passes on every new revision, each exported
+             with `git archive` to a temp dir (no jj op is recorded)
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+DEFAULT_FROM = "heads(::@ & (immutable() | bookmarks()))"
+PREFIX = re.compile(r"^[a-z][\w.-]*(\([^)]*\))?!?: \S")
+JUNK = re.compile(r"^(wip\b|fixup!|squash!|amend!|tmp\b|temp\b|\(no description)", re.I)
+STYLE_SAMPLE = 30
+
+REV_TEMPLATE = (
+    'json(change_id.short(12)) ++ "\\t" ++ json(commit_id) ++ "\\t" ++ json(empty) ++ "\\t" ++ '
+    'json(conflict) ++ "\\t" ++ json(parents.len()) ++ "\\t" ++ json(description) ++ "\\n"'
+)
+
+
+class JJError(Exception):
+    pass
+
+
+class Repo:
+    def __init__(self, cwd):
+        self.cwd = cwd
+
+    def jj(self, *args, op=None, check=True):
+        cmd = ["jj", "--no-pager", "--color=never"]
+        cmd += ["--at-op", op] if op else ["--ignore-working-copy"]
+        r = subprocess.run(cmd + list(args), cwd=self.cwd, capture_output=True, text=True,
+                           env={**os.environ, "JJ_EDITOR": "true", "EDITOR": "true"})
+        if check and r.returncode != 0:
+            raise JJError(f"`jj {' '.join(args)}` failed: {r.stderr.strip()}")
+        return r
+
+    def out(self, *args, op=None):
+        return self.jj(*args, op=op).stdout
+
+    def ids(self, revset, op=None):
+        text = self.out("log", "--no-graph", "-r", revset, "-T", 'commit_id ++ "\\n"', op=op)
+        return [line for line in text.splitlines() if line]
+
+    def revs(self, revset, op=None):
+        text = self.out("log", "--no-graph", "-r", revset, "-T", REV_TEMPLATE, op=op)
+        revs = []
+        for line in text.splitlines():
+            change, commit, empty, conflict, parents, description = map(json.loads, line.split("\t"))
+            revs.append({"change": change, "commit": commit, "empty": empty, "conflict": conflict,
+                         "merge": parents > 1, "description": description,
+                         "subject": description.split("\n", 1)[0].strip()})
+        return revs
+
+    def files(self, *diff_args, op=None):
+        text = self.out("diff", "--name-only", *diff_args, op=op)
+        return [line for line in text.splitlines() if line]
+
+    def conflicted_paths(self, revset, op=None):
+        paths = set()
+        for commit in self.ids(f"({revset}) & conflicts()", op=op):
+            r = self.jj("resolve", "--list", "-r", commit, op=op, check=False)
+            for line in r.stdout.splitlines():
+                if line.strip():
+                    paths.add(re.split(r"\s{2,}", line.strip())[0])
+        return paths
+
+    def bookmarks(self, revset=None, op=None):
+        """{name or name@remote: commit id, or None when conflicted} for bookmarks (into revset)."""
+        where = ["-r", revset] if revset else []
+        text = self.out("bookmark", "list", "--all-remotes", *where, "-T",
+                        'if(present, separate("@", name, remote) ++ "\\t" ++ '
+                        'if(normal_target, normal_target.commit_id(), "-") ++ "\\n")', op=op)
+        marks = {}
+        for line in text.splitlines():
+            if "\t" in line:
+                name, target = line.split("\t")
+                marks[name] = None if target == "-" else target
+        return marks
+
+
+def op_id(repo):
+    # Without --ignore-working-copy: the snapshot of @ is part of the recorded operation.
+    r = subprocess.run(["jj", "--no-pager", "op", "log", "-n1", "--no-graph", "-T", "id.short(16)"],
+                       cwd=repo.cwd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise JJError(r.stderr.strip())
+    return r.stdout.strip()
+
+
+def fileset(path):
+    return "root:" + json.dumps(path)
+
+
+def start(repo, frm):
+    op = op_id(repo)
+    base = repo.ids(frm, op=op)
+    scope = f"({'|'.join(base) or 'none()'})..@"
+    revs = repo.revs(scope, op=op)
+    head = repo.ids("@", op=op)[0]
+    return {
+        "op": op,
+        "from": frm,
+        "base": base,
+        "scope": scope,
+        "revisions": revs,
+        "files": repo.files("-r", scope, op=op) if revs else [],
+        "conflicted": sorted(repo.conflicted_paths(scope, op=op)),
+    }
+
+
+def style_profile(subjects):
+    subjects = [s for s in subjects if s]
+    if not subjects:
+        return {"sample": 0}
+    prefixed = [s for s in subjects if PREFIX.match(s)]
+    return {
+        "sample": len(subjects),
+        "prefixed": len(prefixed) / len(subjects),
+        "types": sorted({re.match(r"^[a-z][\w.-]*", s).group(0) for s in prefixed}),
+        "max_len": max(len(s) for s in subjects),
+        "skip_ci": sum("[skip ci]" in s for s in subjects) / len(subjects),
+    }
+
+
+def style_findings(subject, profile):
+    """(failures, notes) for one new subject against the repo's habit."""
+    fails, notes = [], []
+    if JUNK.match(subject):
+        fails.append(f"subject {subject!r} is a placeholder, not a description")
+    if not profile.get("sample"):
+        return fails, notes
+    prefixed = bool(PREFIX.match(subject))
+    if profile["prefixed"] >= 0.6 and not prefixed:
+        fails.append(f"subject {subject!r} lacks the `type(scope): ` prefix "
+                     f"{profile['prefixed']:.0%} of recent subjects carry")
+    elif profile["prefixed"] <= 0.2 and prefixed:
+        notes.append(f"subject {subject!r} is prefixed; recent subjects mostly are not")
+    if prefixed and profile.get("types"):
+        kind = re.match(r"^[a-z][\w.-]*", subject).group(0)
+        if kind not in profile["types"]:
+            notes.append(f"subject {subject!r}: type `{kind}` is not among recent ones "
+                         f"({', '.join(profile['types'])})")
+    if len(subject) > max(72, profile["max_len"]):
+        notes.append(f"subject {subject!r} is {len(subject)} chars; recent ones reach {profile['max_len']}")
+    if "[skip ci]" in subject and not profile["skip_ci"]:
+        notes.append(f"subject {subject!r} says [skip ci]; recent subjects never do")
+    return fails, notes
+
+
+def run_checks(repo, revs, command):
+    """CMD on every revision's tree, exported with git archive. [(change, ok, tail)]."""
+    git_dir = repo.out("git", "root").strip()
+    results = []
+    for rev in revs:
+        with tempfile.TemporaryDirectory(prefix="janitor-check-") as tmp:
+            archive = subprocess.run(["git", "--git-dir", git_dir, "archive", rev["commit"]],
+                                     capture_output=True)
+            if archive.returncode != 0:
+                results.append((rev["change"], False, archive.stderr.decode(errors="replace")[-300:]))
+                continue
+            subprocess.run(["tar", "-x", "-C", tmp], input=archive.stdout, check=True)
+            r = subprocess.run(command, shell=True, cwd=tmp, capture_output=True, text=True)
+            results.append((rev["change"], r.returncode == 0, (r.stdout + r.stderr)[-300:]))
+    return results
+
+
+def check(repo, op, frm, command=None):
+    fails, notes, info = [], [], {}
+    op_id(repo)  # snapshot @ once; every read below skips the working copy
+    base = repo.ids(frm, op=op)
+    if not base:
+        return {"ok": False, "fail": [f"no base revision for {frm!r} at {op}"], "notes": [], "info": {}}
+    base_set = "|".join(base)
+    old_scope = f"({base_set})..@"
+    old_head = repo.ids("@", op=op)[0]
+
+    # base: every base revision still below @, same commit id (so nothing under it moved).
+    for commit in base:
+        if not repo.ids(f"present({commit}) & ::@"):
+            fails.append(f"base: {commit[:12]} is no longer an ancestor of @ "
+                         "(the stack was moved or something below it rewritten)")
+
+    # tree: identical to the start, conflict resolutions aside.
+    conflicted = repo.conflicted_paths(old_scope, op=op)
+    changed = repo.files("--from", old_head, "--to", "@")
+    resolved = [p for p in changed if p in conflicted]
+    foreign = [p for p in changed if p not in conflicted]
+    if foreign:
+        fails.append("tree: @ differs from the start in " + ", ".join(foreign))
+    if resolved:
+        info["resolutions"] = {p: repo.out("diff", "--git", "--from", old_head, "--to", "@", fileset(p))
+                               for p in resolved}
+
+    # bookmarks: none that pointed into the stack then, or points into it now, has moved.
+    old_all, new_all = repo.bookmarks(op=op), repo.bookmarks()
+    touching = set(repo.bookmarks(f"::{old_head}", op=op)) | set(repo.bookmarks("::@"))
+    for name in sorted(touching):
+        before, after = old_all.get(name), new_all.get(name)
+        if name not in old_all:
+            fails.append(f"bookmarks: {name} was created ({(after or 'conflicted')[:12]})")
+        elif name not in new_all:
+            fails.append(f"bookmarks: {name} was deleted (was {(before or 'conflicted')[:12]})")
+        elif before != after:
+            fails.append(f"bookmarks: {name} moved ({(before or 'conflicted')[:12]} -> {(after or 'conflicted')[:12]})")
+
+    # stack: described, non-empty, conflict-free; @ empty and undescribed.
+    at = repo.revs("@")[0]
+    stack = [r for r in repo.revs(f"({base_set})..@") if r["commit"] != at["commit"]]
+    if not at["empty"]:
+        fails.append(f"stack: @ ({at['change']}) still holds changes: "
+                     + ", ".join(repo.files("-r", "@")[:10]))
+    if at["conflict"]:
+        fails.append(f"stack: @ ({at['change']}) still has conflicts")
+    if at["description"].strip():
+        fails.append(f"stack: @ ({at['change']}) is described; the janitor ends on a fresh empty @")
+    for rev in stack:
+        if not rev["subject"]:
+            fails.append(f"stack: {rev['change']} has no description")
+        if rev["empty"] and not rev["merge"]:
+            fails.append(f"stack: {rev['change']} ({rev['subject'] or 'no description'}) is empty")
+        if rev["conflict"]:
+            fails.append(f"stack: {rev['change']} ({rev['subject']}) still has conflicts")
+
+    # strays: new revisions nothing reaches.
+    orphan = "mutable() ~ ::(working_copies() | bookmarks() | remote_bookmarks())"
+    strays = set(repo.ids(orphan)) - set(repo.ids(orphan, op=op))
+    for rev in repo.revs("|".join(sorted(strays))) if strays else []:
+        fails.append(f"strays: {rev['change']} ({rev['subject'] or 'no description'}) is left unreachable")
+
+    # style: the repo's subject habit, for the descriptions the janitor wrote.
+    profile = style_profile([r["subject"] for r in repo.revs(f"latest(::({base_set}) ~ root(), {STYLE_SAMPLE})")])
+    info["style"] = profile
+    kept = {r["description"] for r in repo.revs(old_scope, op=op)}
+    for rev in stack:
+        if rev["subject"] and rev["description"] not in kept:
+            f, n = style_findings(rev["subject"], profile)
+            fails += [f"style: {x}" for x in f]
+            notes += [f"style: {x}" for x in n]
+
+    # checks: optional, per revision.
+    if command:
+        results = run_checks(repo, list(reversed(stack)), command)
+        info["checks"] = [{"change": c, "ok": ok} for c, ok, _ in results]
+        for change, ok, tail in results:
+            if not ok:
+                last = (tail.strip().splitlines() or ["no output"])[-1]
+                fails.append(f"checks: `{command}` fails on {change}: {last}")
+
+    info["stack"] = [{"change": r["change"], "subject": r["subject"],
+                      "files": repo.files("-r", r["commit"])}
+                     for r in reversed(stack)]
+    info["op"] = op
+    return {"ok": not fails, "fail": fails, "notes": notes, "info": info}
+
+
+def render_check(result):
+    lines = ["PASS" if result["ok"] else "FAIL"]
+    lines += [f"  fail  {f}" for f in result["fail"]]
+    lines += [f"  note  {n}" for n in result["notes"]]
+    info = result.get("info", {})
+    if info.get("stack"):
+        lines.append("stack (bottom to top):")
+        for rev in info["stack"]:
+            lines.append(f"  {rev['change']}  {rev['subject']}  [{', '.join(rev['files'])}]")
+    if info.get("checks"):
+        lines.append("checks: " + ", ".join(f"{c['change']} {'ok' if c['ok'] else 'FAILED'}"
+                                            for c in info["checks"]))
+    for path, diff in (info.get("resolutions") or {}).items():
+        lines.append(f"conflict resolved in {path}:")
+        lines.append(diff.rstrip())
+    if info.get("op"):
+        lines.append(f"undo: jj op restore {info['op']}")
+    return "\n".join(lines)
+
+
+def render_start(s):
+    lines = [f"op {s['op']}", f"scope {s['scope']}  (from {s['from']})", "revisions (top first):"]
+    lines += [f"  {r['change']}  {r['subject'] or '(no description)'}"
+              f"{'  (empty)' if r['empty'] else ''}{'  (conflict)' if r['conflict'] else ''}"
+              for r in s["revisions"]]
+    lines.append("files: " + (", ".join(s["files"]) or "none"))
+    if s["conflicted"]:
+        lines.append("conflicted: " + ", ".join(s["conflicted"]))
+    return "\n".join(lines)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="janitor-audit", description=__doc__.split("\n\n")[0])
+    parser.add_argument("-R", "--repo", default=".", help="a path inside the jj workspace (default .)")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    p_start = sub.add_parser("start", help="record the op and show the scope")
+    p_start.add_argument("--from", dest="frm", default=DEFAULT_FROM)
+    p_start.add_argument("--json", action="store_true")
+    p_check = sub.add_parser("check", help="audit the repo now against --op")
+    p_check.add_argument("--op", required=True)
+    p_check.add_argument("--from", dest="frm", default=DEFAULT_FROM,
+                         help="the base revset, evaluated at --op (default: nearest bookmark/immutable)")
+    p_check.add_argument("--check", dest="command", help="a fast check command to run on every new revision")
+    p_check.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+    repo = Repo(str(Path(args.repo).resolve()))
+    try:
+        if args.cmd == "start":
+            s = start(repo, args.frm)
+            print(json.dumps(s, indent=2) if args.json else render_start(s))
+            return 0
+        result = check(repo, args.op, args.frm, args.command)
+        print(json.dumps(result, indent=2) if args.json else render_check(result))
+        return 0 if result["ok"] else 1
+    except JJError as e:
+        print(f"janitor-audit: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
