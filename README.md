@@ -1,4 +1,5 @@
 Based on [mattpocock/skills](https://github.com/mattpocock/skills#)
+The `principles` are adapted from poteto's [pstack](https://github.com/cursor/plugins/tree/main/pstack), MIT.
 Just feel I will change this a lot throug time.
 
 # Skills for dev work
@@ -141,6 +142,7 @@ Skills I use daily for code work.
 - **[prototype](./skills/engineering/prototype/SKILL.md)** — Build a throwaway prototype to answer a design question — either a single shareable HTML file for state/logic questions, or several radically different UI variations toggleable from one route.
 - **[coding-standards-ts](./skills/engineering/coding-standards-ts/SKILL.md)** — TypeScript coding standards and design taste: correctness first, precise domain modeling, typed failures, deep modules, explicit boundaries, real-seam tests, with topic files for Effect and Cloudflare.
 - **[worktree-janitor](./skills/engineering/worktree-janitor/SKILL.md)** — Shape a messy jj `@` into a clean, described stack through the worktree-janitor agent (split by intent, fixups absorbed, conflicts resolved, messages in the repo's style, empty `@` on top), then audit it mechanically with `janitor-audit`: same final tree, nothing below the stack touched, one `jj op restore` to undo.
+- **[principles](./skills/engineering/principles/SKILL.md)** — Twenty-three engineering principles (laziness, root causes, prove it works, model the domain, guard the context window…), an index of one line each and a file per principle, adapted from poteto's pstack (MIT).
 
 ### Productivity
 
