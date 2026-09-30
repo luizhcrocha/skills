@@ -62,7 +62,7 @@ cd ~/repos/luizhcrocha/skills; jj workspace add ../skills-reflect -r 'trunk()' -
 
 In the tstack workspace, run `just test` and `just validate`, describe the change in the repo's style (`jj log` shows it; `tstack:unslop` for the words) naming what each edit fixes, then `jj new`. Never push or move a bookmark: the change is for Luiz to review, and landing it is his call or a Land run he asks for.
 
-Backlog items do not wait for approval: each becomes a memo `open` note in the owning repo's workspace (the pattern, what was hit, the suggested mechanism, one line), so it ships inside the same change.
+Backlog items do not wait for approval: each becomes a memo `open` note in the owning repo's workspace (the pattern, what was hit, the suggested mechanism, one line), so it ships inside the same change. An item whose mechanism is a lint rule then goes to `tstack:lint-evolve`, with the note's id as its evidence.
 
 ## 6. Summarize for Luiz
 

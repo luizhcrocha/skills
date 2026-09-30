@@ -43,6 +43,7 @@ A project's pinned version wins. Read it first from `CMakeLists.txt` (`C_STANDAR
 - **Navigation**: the `clangd-lsp` plugin is installed, so the LSP tool (go to definition, find references, hover types) works on C once `compile_commands.json` exists. Prefer it over grep for "who calls this".
 - **Builds**: CMake 4.4 (`cmake_minimum_required(VERSION 3.25...4.4)`: CMake 4 dropped compatibility with versions below 3.5) or Meson 1.12. Set the standard per target: `set_target_properties(t PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)`, or `c_std=c23` in Meson.
 - **Latest release, always.** LLVM: `gh api repos/llvm/llvm-project/releases/latest`; GCC: gcc.gnu.org/releases.html; CMake, Meson, AFL++, Mull: their GitHub releases. On Luiz's Nix machines, take a tool from nixpkgs-unstable or upstream when stable lags.
+- **Lint pack**: tstack's `lint/c-cpp` (`.clang-tidy`), vendored with `lint-vendor add c-cpp`; a lesson that repeats becomes a rule there through `tstack:lint-evolve`.
 
 ## Testing ladder in C
 

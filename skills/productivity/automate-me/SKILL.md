@@ -47,7 +47,7 @@ Route each survivor to one home:
 | to every session, in any repo, mode on or off | global `CLAUDE.md` in the dotfiles repo |
 | to how the mode works: autonomy, subagents, replies, non-negotiables | `tuca-mode/SKILL.md` |
 | to one kind of task | that playbook |
-| and code could check it (`mechanical: yes`) | a structure proposal, per `tstack:principles`' Encode Lessons in Structure: the strongest mechanism that fits (a hook, a lint, a `land-check` rule, a script flag), with where it would live. The prose rule is dropped once the mechanism exists. |
+| and code could check it (`mechanical: yes`) | a structure proposal, per `tstack:principles`' Encode Lessons in Structure: the strongest mechanism that fits (a hook, a lint, a `land-check` rule, a script flag), with where it would live; a lint rule goes through `tstack:lint-evolve`. The prose rule is dropped once the mechanism exists. |
 | to one repo only | that repo's `CLAUDE.md`, named as a proposal in the report |
 
 Done when every pattern is kept with a home, or dropped with its reason.

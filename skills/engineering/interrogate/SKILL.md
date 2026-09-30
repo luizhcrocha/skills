@@ -97,3 +97,5 @@ Write the verdict through `tstack:unslop`, in this structure:
 [Where did reviewers agree across lenses, where did they diverge, and what does the pattern tell us?]
 
 The blast-radius safety fact, when you ran it, goes after the Agreement Map with the rung it reached.
+
+An Act on or Consider finding that matches a memo gotcha, or recurs from an earlier review, is named last as a `tstack:lint-evolve` candidate.

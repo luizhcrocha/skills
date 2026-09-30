@@ -50,6 +50,7 @@ tstack's own tooling (`scripts/*.py`, extensionless scripts, `hooks/tstack-hook`
 - `select = ["ALL"]` also turns on rules added in later ruff releases, so ruff is pinned in `uv.lock` and a ruff upgrade is its own change. Starter config: [references/pyproject.md](references/pyproject.md).
 - **ty** (astral) is beta, `0.0.x` with no stable API. It may run as a non-blocking second opinion; basedpyright gates.
 - **Repos with their own gate keep it** until Luiz asks to migrate: crm-contract-tasks runs black, isort, flake8 and mypy; custom-mcp-servers runs `tasks/check-python` (stdlib `ast`, chosen so the check never needs an install) through `pnpm check`.
+- **Lint pack**: tstack's `lint/py` (`ruff.toml`), vendored with `lint-vendor add py`; a lesson that repeats becomes a rule there through `tstack:lint-evolve`.
 
 ## Testing ladder
 

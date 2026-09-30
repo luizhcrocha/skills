@@ -57,6 +57,8 @@ Always the latest stable release of each tool (Luiz's rule). Find it with `cargo
 
 Luiz's repos run compiling steps through `mbx` (jdx/mr-boxington, a content-addressed rustc cache): `mbx clippy …`, `mbx nextest run …`, `mbx test`. Use `mbx` where the justfile does; `cargo fmt`, `cargo sort` and `cargo machete` stay on plain cargo. Clippy strictness is the default groups plus `-D warnings`; a crate that opts into `clippy::pedantic` does it in `[lints.clippy]` in `Cargo.toml` (or `[workspace.lints]` with `lints.workspace = true`), never through command-line flags.
 
+The lint pack is tstack's `lint/rust` (`[workspace.lints]` and `clippy.toml`), vendored with `lint-vendor add rust`; a lesson that repeats becomes a rule there through `tstack:lint-evolve`.
+
 ## Testing ladder in Rust
 
 The `tdd` skill owns the method and the rungs; this maps them to tools.

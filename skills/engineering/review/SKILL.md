@@ -88,6 +88,8 @@ If the spec is missing, skip the Spec sub-agent and note this in the final repor
 
 Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings, because the two axes are deliberately separate (see _Why two axes_).
 
+A finding that matches a memo gotcha, or that an earlier review of this repo already raised, is a lint candidate: name it after the reports as one for `tstack:lint-evolve`.
+
 End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
 
 ## Why two axes

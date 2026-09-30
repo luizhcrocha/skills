@@ -19,6 +19,8 @@ A note is a **lesson**: what the next session would otherwise pay to rediscover.
 
 The line is self-contained, one sentence, at most 280 characters: a reader with no context understands it. State the outcome and the why ("Chose X over Y because Z"), never the story ("looked into X, then tried…").
 
+A `gotcha` a linter could catch is also a `tstack:lint-evolve` candidate, with the note's id as its evidence.
+
 Leave out what already has a home: narration of the session, what the code, a comment, the docs or `jj log` already say, anything true only for this session. A note lands in `.tstack/memo/` and is committed with the work: everyone who reads the repo reads it, company repos included. Secrets never go in a note; name where the secret lives instead (memo refuses text that looks like a key or password).
 
 User- and machine-wide lessons (a preference that holds in every repo, how this machine is set up) take `--global`; outside a repo every note is global.

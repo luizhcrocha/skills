@@ -45,6 +45,8 @@ dotnet test                          # runner chosen by global.json
 
 Strictness: `AnalysisLevel` `latest-recommended`, `EnforceCodeStyleInBuild` true (IDE rules are off in command-line builds without it), `TreatWarningsAsErrors` true, severities per rule in `.editorconfig` (`dotnet_diagnostic.CA2007.severity = none`). A repo without these gets them as their own change, not inside a feature. The props, `.editorconfig` and `global.json` templates: [references/project-setup.md](references/project-setup.md).
 
+The lint pack is tstack's `lint/cs` (`Directory.Build.props` and `tstack.globalconfig`), vendored with `lint-vendor add cs`; a lesson that repeats becomes a rule there through `tstack:lint-evolve`.
+
 ## Testing ladder
 
 tstack's `tdd` skill owns the method; this maps its rungs to .NET tools.

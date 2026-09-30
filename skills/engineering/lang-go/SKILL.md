@@ -52,6 +52,7 @@ JetBrains' `use-modern-go` skill (plugin `modern-go-guidelines`) is the source o
 
 - **Pick the linter per repo.** A repo with `.golangci.yml` or a `lint` recipe that calls golangci-lint uses golangci-lint; otherwise `go vet` plus staticcheck. gofumpt only where the repo already formats with it (neither hum nor clipse does).
 - **Latest release, always.** Go from `https://go.dev/dl/?mode=json`; tools from their GitHub releases (`gh release list -R golangci/golangci-lint -L 1`). golangci-lint ships prebuilt binaries and advises against `go tool` for it; take it from nixpkgs-unstable or the release binary. Small Go tools (gremlins, staticcheck) may be pinned with a go.mod `tool` directive (`go get -tool <pkg>@latest`, run as `go tool <name>`).
+- **Lint pack**: tstack's `lint/go` (`golangci.yml`), vendored with `lint-vendor add go`; a lesson that repeats becomes a rule there through `tstack:lint-evolve`.
 
 ## Testing ladder
 

@@ -43,6 +43,8 @@ A project's pinned inputs win. Read `flake.nix` and `flake.lock` (or `devenv.yam
 
 The package is `nixfmt`; `nixfmt-rfc-style` is now only an alias for it, and `nixfmt-classic` is gone. `nix flake check` without `--no-build` builds every `checks.<system>.*`, which is how VM tests and eval tests run in CI.
 
+The lint pack is tstack's `lint/nix` (`statix.toml`), vendored with `lint-vendor add nix`; a lesson that repeats becomes a rule there through `tstack:lint-evolve`.
+
 ## Testing ladder
 
 tstack's `tdd` owns the method and the rungs; this maps them to Nix.

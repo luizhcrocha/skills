@@ -41,6 +41,7 @@ A project's pinned version wins. Read it first from `CMakeLists.txt` (`CMAKE_CXX
 - **compile_commands.json** (CMake `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`, Meson's build dir) feeds clang-tidy and clangd. The `clangd-lsp` plugin is installed: use the LSP tool for definitions, references and types instead of grep.
 - **Builds**: CMake 4.4 (targets and `target_*` commands only, no global `include_directories`/`add_definitions`; `cmake_minimum_required(VERSION 3.28...4.4)`) with presets, or Meson 1.12. Dependencies through vcpkg (date-tagged releases) or Conan 2.
 - **Latest release, always.** LLVM: `gh api repos/llvm/llvm-project/releases/latest`; GCC: gcc.gnu.org/releases.html; the rest from their GitHub releases. On Luiz's Nix machines, take a tool from nixpkgs-unstable or upstream when stable lags.
+- **Lint pack**: tstack's `lint/c-cpp` (`.clang-tidy`), vendored with `lint-vendor add c-cpp`; a lesson that repeats becomes a rule there through `tstack:lint-evolve`.
 
 ## Testing ladder in C++
 
