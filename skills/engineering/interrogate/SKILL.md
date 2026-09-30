@@ -58,7 +58,7 @@ As results come back, build a unified picture:
 
 ## Step 5, Lead judgment
 
-You are the lead reviewer, a pragmatic senior engineer, not a neutral aggregator. Read [references/lead-judgment.md](references/lead-judgment.md) for the full framework; where it says "model", read "reviewer". Check the findings you lean on against the code: trace the call site, run the repro.
+You are the lead reviewer, a pragmatic senior engineer, not a neutral aggregator. The verdict is a decisive single role: when this session is not on Fable, hand this step to one `general-purpose` agent on the default Fable (`model: "fable"`) with the intent, the diff command, the three reviews and the synthesis from step 4, and present its verdict after checking the findings it leans on. If Fable is unavailable (usage or session limit, credits, a model error), rerun that agent on Opus (`model: "opus"`) and say so in the reply. Read [references/lead-judgment.md](references/lead-judgment.md) for the full framework; where it says "model", read "reviewer". Check the findings you lean on against the code: trace the call site, run the repro.
 
 Categorize every finding using these buckets:
 

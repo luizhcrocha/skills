@@ -111,7 +111,7 @@ to a plugin-level `fleet/` package. Changes, in order:
 3. The hub as a systemd user service (D3a), then federation across the tailnet.
 4. Rules that keep being restated in prose become code (the "said once" rule,
    stale Now lines, unrecorded answers), each with a test.
-5. An `advisor` agent (Opus, read-only tools, long-lived): a coordinator starts
+5. An `advisor` agent (Fable, falling back to Opus when Fable is unavailable; read-only tools, long-lived): a coordinator starts
    one per fleet when workers need judgement; workers ask it through
    SendMessage before asking the user.
 The coordinator's state machine (`state.py`) gets a model-based test (rung 5)

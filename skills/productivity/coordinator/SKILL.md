@@ -62,11 +62,12 @@ How the worker reaches the skill depends on how it is invoked. `diagnosing-bugs`
 
 ### 3. Pick the model
 
-Two models are approved and need no discussion: the default Opus and the default Sonnet, whichever versions those are today (`model: "opus"` and `model: "sonnet"` on the Agent tool pick them). Pick by where the task's difficulty lies:
+Three models are approved and need no discussion: the default Fable for decisive single roles, the default Opus and the default Sonnet, whichever versions those are today (`model: "opus"` and `model: "sonnet"` on the Agent tool pick them). Pick by where the task's difficulty lies:
 
 | The task is | Model |
 | :-- | :-- |
 | **Judgement**: implementation, debugging, prototypes, design, review, anything where a wrong decision costs a rework | the default Opus (`model: "opus"`) |
+| **Decisive single role**: one agent whose call decides what follows (the fleet's advisor, a skill's judge or synthesizer, the hardest task) | the default Fable (`model: "fable"`); if Fable is unavailable (limits, credits, a model error), the default Opus, recorded on the worker and said in your next message |
 | **Legwork**: research and reading, docs or API facts, scans and log reads, mechanical sweeps (a rename, a format pass), running checks and reporting the output | the default Sonnet (`model: "sonnet"`), whoever spawns it: research a worker needs for its own task runs on Sonnet too, unless the question itself needs judgement (contradicting sources, a trade-off to weigh) |
 | **Watching**: a monitor agent that watches app metrics, runs, or executions and reports back | the default Sonnet (`model: "sonnet"`), whoever spawns it: you, a worker, or the manager |
 

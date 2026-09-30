@@ -30,7 +30,7 @@ A runner that produces nothing drops out: continue with N-1 and note the dropout
 
 ## 3. Cross-judge
 
-Once every candidate is written, spawn one judge: a fresh agent that ran nothing in this arena, `model: "opus"`, read-only, in the background. It gets the rubric and the candidates by neutral labels (A, B, C), without the constraint each ran under, scores each criterion per candidate, and recommends a base with its reason. It runs while you read in step 4.
+Once every candidate is written, spawn one judge: a fresh agent that ran nothing in this arena, on the default Fable (`model: "fable"`), read-only, in the background (if Fable is unavailable (usage or session limit, credits, a model error), rerun that agent on Opus (`model: "opus"`) and say so in the reply). It gets the rubric and the candidates by neutral labels (A, B, C), without the constraint each ran under, scores each criterion per candidate, and recommends a base with its reason. It runs while you read in step 4.
 
 ## 4. Pick a base
 

@@ -62,7 +62,7 @@ A category is skipped only with a written reason that goes in Sources Consulted:
 
 ## 5. Synthesize
 
-When every investigator has returned, spawn one synthesizer: `general-purpose` on the default Opus (`model: "opus"`), with [references/synthesizer-prompt.md](references/synthesizer-prompt.md) filled in: all findings (null results included), the skipped categories with their reasons, the code anchor, the question, and [references/epistemics.md](references/epistemics.md). It spot-checks citations and writes nothing.
+When every investigator has returned, spawn one synthesizer: `general-purpose` on the default Fable (`model: "fable"`; if Fable is unavailable (usage or session limit, credits, a model error), rerun that agent on Opus (`model: "opus"`) and say so in the reply), with [references/synthesizer-prompt.md](references/synthesizer-prompt.md) filled in: all findings (null results included), the skipped categories with their reasons, the code anchor, the question, and [references/epistemics.md](references/epistemics.md). It spot-checks citations and writes nothing.
 
 ## 6. Present
 

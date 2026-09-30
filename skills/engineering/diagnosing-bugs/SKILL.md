@@ -89,6 +89,8 @@ Do not proceed until you have reproduced **and** minimised.
 
 Generate **3–5 ranked hypotheses** before testing any of them. Single-hypothesis generation anchors on the first plausible idea.
 
+**Escalate once.** When a full round of hypotheses has been falsified, or an Opus attempt at the fix failed, hand the feedback loop, the minimised repro and every falsified hypothesis with its evidence to one agent on the default Fable (`model: "fable"`) for the next ranking. If Fable is unavailable (usage or session limit, credits, a model error), rerun that agent on Opus (`model: "opus"`) and say so in the reply.
+
 Each hypothesis must be **falsifiable**: state the prediction it makes.
 
 > Format: "If <X> is the cause, then <changing Y> will make the bug disappear / <changing Z> will make it worse."
