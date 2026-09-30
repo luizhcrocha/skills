@@ -186,7 +186,7 @@ class CliTest(Machine):
             "id": "d7", "kind": "decision", "title": "Order of the two migrations", "status": "open", "asks": "manager", "blocking": True,
             "question": "Does the invoice migration run before or after the index rebuild?", "why": "the fleet assumes after",
             "options": [{"id": "A", "label": "After", "consequence": "one lock window"}, {"id": "B", "label": "Before", "consequence": "two windows"}],
-            "recommend": "A", "reason": "one window is what the user asked for", "body": True, "agent": "a1", "opened": "2026-09-28T10:00:00+00:00"}])
+            "recommend": "A", "reason": "one window is what the user asked for", "body": True, "agent": "a1", "opened": "2026-09-28T10:00:00+00:00", "ref": "D4"}])
         fleets.register(a, "https://box.ts.net:1/", os.getpid())
         out = self.cli("decision", "billing", "d7").stdout
         for line in ["billing d7 [decision, for the manager, blocks work] Order of the two migrations",
@@ -195,6 +195,7 @@ class CliTest(Machine):
                      "recommended: A, one window is what the user asked for", f"evidence: {a / 'decisions' / 'd7.html'}",
                      "page: https://box.ts.net:1/#decision/d7"]:
             self.assertIn(line, out)
+        self.assertIn("page: https://box.ts.net:1/#decision/d7", self.cli("decision", "billing", "D4").stdout, "a number leads to the id's page")
         for args, word in [(["decision", "billing", "d9"], "no decision 'd9'"), (["decision", "nobody", "d7"], "no fleet 'nobody'")]:
             result = self.cli(*args)
             self.assertEqual(result.returncode, 1)

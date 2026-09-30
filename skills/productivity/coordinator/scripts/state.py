@@ -200,8 +200,8 @@ def cmd_link(state, args):
         links.remove(item)
         log(state, "note", f"Link {args.id} ({item['title']}) removed: {args.drop}")
         return state
-    if args.decision and not decisions.find(state, args.decision):
-        fail(f"unknown decision '{args.decision}'")
+    if args.decision:  # a number (D3) is kept as the id it names: the page looks decisions up by id
+        args.decision = (decisions.find(state, args.decision) or fail(f"unknown decision '{args.decision}'"))["id"]
     if args.agent and not known(state, args.agent):
         fail(f"unknown agent '{args.agent}'")
     if item is None:
@@ -423,7 +423,7 @@ def resolve(state, r: dict) -> None:
 def cmd_roadblock(state, args):
     r = find(state["roadblocks"], args.id)
     if args.decision:
-        open_decision(state, args.decision)
+        args.decision = open_decision(state, args.decision)["id"]  # a number (D3) is kept as the id it names
     if r is None:
         require(args, ["title", "detail", "severity", "needs"], "roadblock")
         if args.needs == "user" and not args.decision:
@@ -552,6 +552,7 @@ def cmd_decision(state, args):
                 fail(f"unknown decision '{args.supersedes}'")
             if old["status"] == "open":
                 fail(f"{old['title']} is still open; change it instead of superseding it")
+            args.supersedes = old["id"]  # a number (D3) is kept as the id it names
         made_elsewhere = args.decide is not None
         require(args, ["title", "question"] if made_elsewhere else ["kind", "title", "question", "why"], "decision")
         d = {"id": args.id, "kind": args.kind or "decision", "title": args.title, "question": args.question,

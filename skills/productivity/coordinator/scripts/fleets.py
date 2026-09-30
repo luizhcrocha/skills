@@ -494,7 +494,7 @@ def cmd_decision(fleet: str, id_: str) -> None:
             print(f"    the user answered #{m['id']} at {m['at'][11:16]}: {m['text'][:200]}")
     if d.get("body"):
         print(f"    evidence: {Path(entry['dir']) / 'decisions' / (d['id'] + '.html')}")
-    print(f"    page: {entry['url']}#decision/{id_}")
+    print(f"    page: {entry['url']}#decision/{d['id']}")  # the page finds a decision by its id, not its number
 
 
 def main(argv: list[str]) -> None:

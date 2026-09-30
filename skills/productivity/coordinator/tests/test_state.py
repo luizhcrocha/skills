@@ -267,6 +267,18 @@ class NumberTest(Fleet):
         self.assertEqual([d["id"] for d in self.state()["decisions"]], ["x", "i1"], "a lower-case id is an id, not a number")
 
 
+    def test_a_number_given_for_a_decision_is_kept_as_its_id(self):
+        self.ok("decision", "key", "--kind", "input", "--title", "Key", "--question", "q", "--why", "w")
+        self.ok("roadblock", "r1", "--title", "T", "--detail", "D", "--severity", "serious", "--needs", "user", "--decision", "I1")
+        self.ok("link", "l1", "--url", "https://b.ts.net:1/", "--title", "Form", "--decision", "I1")
+        self.ok("decision", "I1", "--decide", "given", "--resolution", "said in the session")
+        self.ok("decision", "key2", "--kind", "input", "--title", "Key again", "--question", "q", "--why", "w", "--supersedes", "I1")
+        state = self.state()
+        self.assertEqual((state["roadblocks"][0]["decision"], state["links"][0]["decision"], state["decisions"][1]["supersedes"]),
+                         ("key", "key", "key"))
+        self.assertTrue(state["roadblocks"][0]["resolved"], "closing the decision clears the roadblock that waits on it")
+
+
 class DoneTest(Fleet):
     def test_done_with_a_report_that_reads_unfinished_is_questioned(self):
         self.ok("agent", "a9", "--task", "t", "--milestone", "m1")
