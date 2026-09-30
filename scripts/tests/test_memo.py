@@ -469,6 +469,15 @@ class ReadTest(MemoCase):
         self.assertIn("nothing on", self.ok("recall", "fridays"))
         self.assertIn("project:acme/other", self.ok("recall", "fridays", "--all"))
 
+    def test_cwd_is_accepted_before_or_after_the_subcommand(self):
+        other = init_repo(self.tmp / "other", "git@github.com:acme/other.git")
+        self.note("fact", "the other repo deploys on fridays", cwd=other)
+        before = self.ok("--cwd", other, "export")
+        after = self.ok("export", "--cwd", other)
+        self.assertIn("deploys on fridays", before)
+        self.assertEqual(before, after)
+        self.assertNotIn("deploys on fridays", self.ok("export"))
+
     def test_export(self):
         a = self.note("fact", "first")
         self.ok("supersede", a, "second")
