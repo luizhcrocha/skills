@@ -54,6 +54,7 @@
     "./skills/productivity/bro",
     "./skills/productivity/writing-for-agents",
     "./skills/productivity/unslop",
-    "./skills/productivity/technical-writing"
+    "./skills/productivity/technical-writing",
+    "./skills/productivity/automate-me"
   ]
 }

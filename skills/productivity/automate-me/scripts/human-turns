@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Print the user's own turns from Claude Code transcripts, one JSON object per line.
+
+Transcripts live in ~/.claude/projects/<slug>/<session>.jsonl, where <slug> is
+the project's absolute path with every "/" and "." turned into "-". A subagent's
+transcript (<session>/subagents/agent-*.jsonl) holds the lead's brief, not the
+user's words, so it is read only with --subagents.
+
+Each output row: {"session", "date", "cwd", "text", "prev"}; "prev" is the tail
+of the assistant text the turn answers, so a correction reads with its cause.
+Harness noise is dropped: meta turns, compaction summaries, tool results,
+system reminders, messages from peers and task notifications (promptSource
+"system"), command wrappers other than the command's own arguments, and
+headless `claude -p` sessions (entrypoint "sdk-cli": scripts and e2e runs,
+not the user typing) unless --headless.
+
+    human-turns --project ~/repos/luizhcrocha/skills --since 2026-09-01
+    human-turns --project ~/repos/x --workspaces --list      # which dirs and sessions, no text
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+PROJECTS = Path.home() / ".claude" / "projects"
+REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+COMMAND_ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
+COMMAND_NAME = re.compile(r"<command-name>(.*?)</command-name>", re.S)
+PREV_CHARS = 400
+
+
+def slug(path: str) -> str:
+    return re.sub(r"[/.]", "-", str(Path(path).expanduser().resolve()))
+
+
+def project_dirs(paths: list[str], workspaces: bool, root: Path = PROJECTS) -> list[Path]:
+    dirs: list[Path] = []
+    for p in paths:
+        s = slug(p)
+        if (root / s).is_dir():
+            dirs.append(root / s)
+        if workspaces:
+            dirs += sorted(d for d in root.glob(f"{s}-*") if d.is_dir())
+    return dirs
+
+
+def text_of(content) -> str | None:
+    """The human-written text of a user message, or None when it is harness noise."""
+    if isinstance(content, list):
+        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+            return None
+        content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    if not isinstance(content, str):
+        return None
+    content = REMINDER.sub("", content)
+    name = COMMAND_NAME.search(content)
+    if name:
+        args = COMMAND_ARGS.search(content)
+        content = f"{name.group(1).strip()} {args.group(1).strip() if args else ''}".strip()
+    elif content.lstrip().startswith(("<local-command", "<command-", "<task-notification", "Caveat:")):
+        return None
+    content = content.strip()
+    return content or None
+
+
+def assistant_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+
+def turns(transcript: Path, since: str | None = None, headless: bool = False):
+    prev = ""
+    with transcript.open() as f:
+        for line in f:
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            kind = d.get("type")
+            msg = d.get("message") or {}
+            if kind == "assistant":
+                t = assistant_text(msg.get("content")).strip()
+                if t:
+                    prev = t
+                continue
+            if kind != "user" or d.get("isMeta") or d.get("isCompactSummary"):
+                continue
+            if d.get("promptSource") == "system" or (d.get("entrypoint") == "sdk-cli" and not headless):
+                continue
+            text = text_of(msg.get("content"))
+            if text is None:
+                continue
+            date = d.get("timestamp", "")[:10]
+            if since and date < since:
+                continue
+            yield {
+                "session": d.get("sessionId") or transcript.stem,
+                "date": date,
+                "cwd": d.get("cwd", ""),
+                "text": text,
+                "prev": prev[-PREV_CHARS:],
+            }
+            prev = ""
+
+
+def transcripts(dirs: list[Path], subagents: bool) -> list[Path]:
+    out: list[Path] = []
+    for d in dirs:
+        out += sorted(d.glob("*.jsonl"))
+        if subagents:
+            out += sorted(d.glob("*/subagents/*.jsonl"))
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--project", action="append", required=True, help="project path (repeatable)")
+    ap.add_argument("--since", help="YYYY-MM-DD, inclusive")
+    ap.add_argument("--workspaces", action="store_true", help="also <project>-* dirs (jj workspaces beside it)")
+    ap.add_argument("--subagents", action="store_true", help="also read subagent transcripts")
+    ap.add_argument("--headless", action="store_true", help="keep headless (claude -p) sessions")
+    ap.add_argument("--list", action="store_true", help="print dirs and session files with turn counts only")
+    ap.add_argument("--root", type=Path, default=PROJECTS, help=argparse.SUPPRESS)
+    a = ap.parse_args(argv)
+    dirs = project_dirs(a.project, a.workspaces, a.root)
+    if not dirs:
+        print(f"no transcripts for {a.project} under {a.root}", file=sys.stderr)
+        return 1
+    for t in transcripts(dirs, a.subagents):
+        rows = list(turns(t, a.since, a.headless))
+        if a.list:
+            if rows:
+                print(f"{len(rows)}\t{rows[0]['date']}..{rows[-1]['date']}\t{t}")
+            continue
+        for r in rows:
+            print(json.dumps(r, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

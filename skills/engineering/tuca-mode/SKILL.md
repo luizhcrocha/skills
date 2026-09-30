@@ -12,7 +12,7 @@ Flag: !`${CLAUDE_PLUGIN_ROOT}/bin/tuca-mode on ${CLAUDE_SESSION_ID} --data ${CLA
 
 tuca-mode is on for the rest of this session, across every request, until Luiz says "stop tuca-mode" or the session ends. On "stop tuca-mode", run `${CLAUDE_PLUGIN_ROOT}/bin/tuca-mode off ${CLAUDE_SESSION_ID} --data ${CLAUDE_PLUGIN_DATA}` and drop these rules. After a compaction or a resume, a SessionStart hook tells you the mode is still on; read this file again then.
 
-Adapted from poteto's pstack (poteto-mode), MIT.
+Adapted from poteto's pstack (poteto-mode), MIT. `/automate-me` refreshes these rules from Luiz's transcripts.
 
 ## Every request: a new task?
 
