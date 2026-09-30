@@ -1,0 +1,14 @@
+{
+  "name": "tstack-lint-ts",
+  "private": true,
+  "type": "module",
+  "description": "Test harness for tstack's TypeScript lint pack: the RuleTester suites of the anti-slop fork and of tstack's own rules. Not vendored into repos.",
+  "scripts": {
+    "test": "node run-tests.mjs"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.86.0",
+    "oxlint": "1.86.0",
+    "tsx": "4.23.15"
+  }
+}

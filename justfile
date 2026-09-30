@@ -9,11 +9,15 @@ sync-upstream *args:
     python3 scripts/sync_upstream.py {{args}}
 
 # Every test in the repo
-test: test-scripts test-coordinator
+test: test-scripts test-coordinator test-lint-ts
 
 # The repo scripts (sync-upstream) against throwaway git repos
 test-scripts:
     python3 -m unittest discover -s scripts/tests -v
+
+# The TypeScript lint pack's RuleTester suites (anti-slop fork, tstack rules), on the pinned Oxlint
+test-lint-ts:
+    cd lint/ts && npm install --no-audit --no-fund --prefer-offline --silent && node run-tests.mjs
 
 # The coordinator's scripts and dashboard page
 test-coordinator:

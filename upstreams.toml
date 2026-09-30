@@ -199,3 +199,23 @@ url = "https://github.com/texarkanine/OptMem-Split.git"
 branch = "main.split"
 base = "72f4149d48187f641e3b5bc9bbba7a2dd15f4df0"
 watch = true
+
+# Dillon Mulroy's anti-slop (MIT): Oxlint JS rules, the seed of the TypeScript
+# lint pack (docs/tstack-plan.md D12, step 5b). src/ is forked verbatim into
+# lint/ts/anti-slop with its LICENSE; lint-vendor copies it into repos at
+# tools/oxlint/anti-slop (tests left out, like upstream's own skill bundle).
+# Local edits to the fork 3-way merge on the next sync (2026-09-30).
+[upstream.anti-slop]
+url = "https://github.com/dmmulroy/anti-slop.git"
+base = "c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b"
+# Decided, not copied: repo plumbing, and the install-anti-slop skill, whose
+# job (copy, configure, 3-way update) lint-vendor and lint-audit do; its
+# assets/ are src/ minus the tests.
+ignore = [
+  ".*", "AGENTS.md", "README.md", "package.json", "pnpm-lock.yaml",
+  "tsconfig.json", "scripts", "skills",
+]
+map = [
+  { from = "src", to = "lint/ts/anti-slop" },
+  { from = "LICENSE", to = "lint/ts/anti-slop/LICENSE" },
+]
