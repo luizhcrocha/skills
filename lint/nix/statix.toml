@@ -1,0 +1,5 @@
+# tstack lint pack, Nix: `statix check --config tools/lint/tstack/nix/statix.toml`.
+# Seed, from lang-nix's gates: every statix lint on, as advice (statix's last
+# release is from 2023); deadnix covers unused bindings and needs no config.
+# A lint the repo rejects goes in `disabled`, with its reason.
+disabled = []  # nix/statix

@@ -1,0 +1,6 @@
+# tstack lint pack, Rust: clippy's own configuration (disallowed-methods,
+# disallowed-types, thresholds). Clippy reads clippy.toml from the workspace
+# root or from CLIPPY_CONF_DIR; lint-vendor prints which.
+#
+# Empty seed: lang-rust's gates set no clippy option. A promoted rule is one
+# entry here, with its registry id beside it.

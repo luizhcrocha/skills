@@ -1,0 +1,16 @@
+<Project>
+  <!-- tstack lint pack, C#. Import it from the repo's root Directory.Build.props:
+       <Import Project="$(MSBuildThisFileDirectory)tools/lint/tstack/cs/Directory.Build.props" />
+       Seed, from lang-cs's gates: analyzers at latest-recommended, IDE rules in
+       the build, every warning an error; per-rule severities in tstack.globalconfig. -->
+  <PropertyGroup>
+    <!-- cs/analysis-level -->
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <!-- cs/enforce-code-style -->
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <GlobalAnalyzerConfigFiles Include="$(MSBuildThisFileDirectory)tstack.globalconfig" />
+  </ItemGroup>
+</Project>

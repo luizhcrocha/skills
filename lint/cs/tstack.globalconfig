@@ -1,0 +1,15 @@
+# tstack lint pack, C#: per-rule severities for every project that imports
+# Directory.Build.props from this folder. A global analyzer config applies to
+# the whole project wherever it lives (an .editorconfig here would reach only
+# this folder), and the repo's own .editorconfig wins on the same key, so a
+# local override survives. Seed: lang-cs's .editorconfig template.
+is_global = true
+
+# cs/IDE0161
+csharp_style_namespace_declarations = file_scoped:warning
+# cs/IDE0005
+dotnet_diagnostic.IDE0005.severity = warning
+# ConfigureAwait: app code and Temporal workflows
+dotnet_diagnostic.CA2007.severity = none
+# LoggerMessage delegates, advice only
+dotnet_diagnostic.CA1848.severity = suggestion

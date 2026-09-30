@@ -1,0 +1,18 @@
+# tstack lint pack, Python. Extend it from the repo's ruff config:
+#   [tool.ruff]
+#   extend = "tools/lint/tstack/py/ruff.toml"
+# Paths in an extended file resolve from this folder, so per-file-ignores
+# (tests/**) stay in the repo's own config; lint-vendor prints them.
+#
+# Seed, from lang-py's gates and starter pyproject. `select = ["ALL"]` turns on
+# rules new ruff releases add, so ruff is pinned in uv.lock and an upgrade is
+# its own change.
+line-length = 88
+
+[lint]
+select = ["ALL"]  # py/ruff-all
+ignore = [
+  "D",       # docstrings: names and types carry the meaning; comments only for the why
+  "COM812",  # conflicts with ruff format
+  "ISC001",  # conflicts with ruff format
+]

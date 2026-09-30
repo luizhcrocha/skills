@@ -1,0 +1,18 @@
+# tstack lint pack, C and C++. clang-tidy reads the nearest .clang-tidy above
+# each file: a repo without one runs `clang-tidy --config-file=tools/lint/tstack/c-cpp/.clang-tidy`
+# (or copies this file to the root); a repo with one merges Checks.
+#
+# Seed, from lang-c's and lang-cpp's gates: their check groups, united (the
+# cppcoreguidelines and modernize checks only fire on C++), every warning an
+# error. The readability subset each skill mentions is left to the repo. Each
+# group's registry id is c-cpp/<group>, e.g. c-cpp/bugprone.
+Checks: >-
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  cppcoreguidelines-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  portability-*
+WarningsAsErrors: '*'

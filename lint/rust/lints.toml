@@ -1,0 +1,13 @@
+# tstack lint pack, Rust. Merge these tables into the workspace Cargo.toml and
+# set `[lints] workspace = true` in every member crate (lint-vendor prints the
+# steps). A single-crate repo uses [lints.clippy] instead.
+#
+# Seed, from lang-rust's gates: clippy's default groups (clippy::all) at warn,
+# turned into errors by `cargo clippy --workspace --all-targets -- -D warnings`.
+# A rule promoted by lint-audit is one line here, with its registry id beside
+# it. Lints clippy lacks are dylint libraries (lint/README.md).
+
+[workspace.lints.rust]
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }  # rust/clippy-all

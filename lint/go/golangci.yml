@@ -1,0 +1,14 @@
+# tstack lint pack, Go, for golangci-lint v2. v2 has no config inheritance: a
+# repo without .golangci.yml runs `golangci-lint run -c tools/lint/tstack/go/golangci.yml`
+# (or copies this file to the root); a repo with one merges these keys.
+#
+# Seed, from lang-go's gates: the standard linter set, gofmt and goimports.
+version: "2"
+
+linters:
+  default: standard  # go/golangci-standard
+
+formatters:
+  enable:
+    - gofmt      # go/gofmt
+    - goimports  # go/goimports
