@@ -75,3 +75,15 @@ test("calculateTotal sums line items", () => {
   expect(calculateTotal([{ price: 10 }, { price: 5 }])).toBe(15);
 });
 ```
+
+## Would it pass on `undefined`?
+
+Before keeping a test, ask whether it would still pass if every function it imports returned `undefined`. These shapes do:
+
+- **Weak or no assertion**: no `expect`, or only `toBeDefined`, `toBeTruthy`, `not.toThrow`, `toBeInstanceOf`, `toBeGreaterThan(0)`.
+- **Substitute or absence only**: only "was called" / "was not called", `toBeUndefined`, `toEqual([])`, `toHaveLength(0)`, `not.toBe(wrongValue)`.
+- **Self-referential**: the expected value comes from the code under test, `expect(f(a)).toBe(f(a))`.
+- **Constant pin**: restates a hand-maintained constant, config default or prompt string, `expect(LIMITS.maxTools).toBe(8)`.
+- **Fixture asserts fixture**: asserts data the test built itself; the subject never runs in the body.
+
+The fix: call the subject with one concrete input and assert the literal output or the observable effect. For an absence, assert the presence on the other input in the same test. For a constant, test the mechanism that reads it. When no such assertion exists, delete the test.

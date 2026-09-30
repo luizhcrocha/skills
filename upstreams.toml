@@ -40,7 +40,10 @@ map = [
   { from = "skills/engineering/improve-codebase-architecture", to = "skills/engineering/improve-codebase-architecture" },
   { from = "skills/engineering/prototype", to = "skills/engineering/prototype" },
   { from = "skills/engineering/research", to = "skills/engineering/research" },
-  { from = "skills/engineering/tdd", to = "skills/engineering/tdd" },
+  # tdd was merged with pstack's tdd and the testing ladder (2026-09-30): only
+  # the files we kept map; mocking.md became substitutes.md and stays out.
+  { from = "skills/engineering/tdd/SKILL.md", to = "skills/engineering/tdd/SKILL.md" },
+  { from = "skills/engineering/tdd/tests.md", to = "skills/engineering/tdd/tests.md" },
   { from = "skills/engineering/to-spec", to = "skills/engineering/to-spec" },
   { from = "skills/engineering/triage", to = "skills/engineering/triage" },
   { from = "skills/engineering/wizard", to = "skills/engineering/wizard" },
@@ -61,7 +64,8 @@ url = "https://github.com/cursor/plugins.git"
 subdir = "pstack"
 base = "2eb7ed4613cfc8f098dfe464a23680ea44d84c5e"
 units = ["skills/*", "agents/*", "automations/*"]
-ignore = []
+# Decided, not copied: merged by hand into our own skill (tdd, 2026-09-30).
+ignore = ["skills/tdd"]
 map = [
   { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md" },
   # watch-pr, unchanged: the babysit and shipping playbooks poll GitHub with it (bun).

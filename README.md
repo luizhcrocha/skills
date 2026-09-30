@@ -88,7 +88,7 @@ It's time to look at your feedback loops. Without feedback on how the code it pr
 
 For automated tests, a red-green-refactor loop is critical. This is where the agent writes a failing test first, then fixes the test. This helps give the agent a consistent level of feedback that results in far better code.
 
-I've built a **[`/tdd`](./skills/engineering/tdd/SKILL.md) skill** you can slot into any project. It encourages red-green-refactor and gives the agent plenty of guidance on what makes good and bad tests.
+I've built a **[`/tdd`](./skills/engineering/tdd/SKILL.md) skill** you can slot into any project. It picks the evidence a change needs from a testing ladder (examples, integration, property, model-based, fuzzing, mutation, deterministic simulation), runs red-green in vertical slices, and gives the agent plenty of guidance on what makes good and bad tests.
 
 For debugging, I've also built a **[`/diagnosing-bugs`](./skills/engineering/diagnosing-bugs/SKILL.md)** skill that wraps best debugging practices into a disciplined loop, gated phase by phase.
 
@@ -132,7 +132,7 @@ Skills I use daily for code work.
 - **[setup-luizrocha-skills](./skills/engineering/setup-luizrocha-skills/SKILL.md)** — Scaffold the per-repo config (issue tracker, triage label vocabulary, domain doc layout) that the other engineering skills consume. Run once per repo before using `to-issues`, `to-spec`, `triage`, `diagnosing-bugs`, `code-review`, `tdd`, `improve-codebase-architecture`, or `zoom-out`.
 - **[research](./skills/engineering/research/SKILL.md)** — Investigate a question against high-trust primary sources and capture the findings as a cited Markdown file in the repo, run as a background agent.
 - **[resolving-merge-conflicts](./skills/engineering/resolving-merge-conflicts/SKILL.md)** — Work through an in-progress git merge or rebase conflict hunk by hunk, resolving by intent traced to each side's primary source, then finish the operation (never `--abort`).
-- **[tdd](./skills/engineering/tdd/SKILL.md)** — Test-driven development with a red-green-refactor loop. Builds features or fixes bugs one vertical slice at a time.
+- **[tdd](./skills/engineering/tdd/SKILL.md)** — Test-driven development and choosing the evidence: pick the rung of the testing ladder the risk needs, then red-green one vertical slice at a time, with substitutes only through seams and the evidence tier reported.
 - **[implement](./skills/engineering/implement/SKILL.md)** — Build the work described by a spec or set of issues, driving `/tdd` at pre-agreed seams and closing out with `/code-review` before committing.
 - **[code-review](./skills/engineering/code-review/SKILL.md)** — Two-axis review of the diff since a fixed point: **Standards** (does it follow the repo's coding standards, plus `coding-standards-ts` for TypeScript?) and **Spec** (does it faithfully implement the originating issue/spec?), run as parallel sub-agents so neither pollutes the other.
 - **[to-issues](./skills/engineering/to-issues/SKILL.md)** — Break any plan, spec, or PRD into independently-grabbable GitHub issues using vertical slices.
