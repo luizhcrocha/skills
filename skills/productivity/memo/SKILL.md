@@ -32,6 +32,7 @@ memo pin <ID> [--unpin]
 memo open ["<line>"]              # list open threads, or open one
 memo summarize <ID>... "<line>"   # answer a compaction task
 memo recall <words> | zoom <ID> | export | doctor
+memo import <file.tsv> [--cwd <repo>] [--global] [--dry-run]   # reviewed notes, each at its original date
 ```
 
 IDs are the short tails shown at wake, e.g. `(Q4KT23)`.

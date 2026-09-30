@@ -155,7 +155,9 @@ It returns a short cited answer and never injects raw dumps.
    for recall; drop `chroma/` and `logs/` (1.6 GB).
 3. Per project, one distillation pass: the 1,074 `decision` rows plus the
    `learned` field of session summaries become at most 50-100 notes, reviewed
-   by Luiz before import.
+   by Luiz before import. `memo import <file.tsv>` loads a reviewed file
+   (`date kind pin text sources`, tab-separated): all lines valid or nothing
+   written, each note at its original date, idempotent, no compaction tasks.
 4. Remove claude-mem from aimgr and the plugin list.
 
 ## CLI

@@ -78,6 +78,10 @@ def new_ulid():
     else:
         rnd = _rand80()
     _last_ulid[0], _last_ulid[1] = ms, rnd
+    return encode_ulid(ms, rnd)
+
+
+def encode_ulid(ms, rnd):
     n = (ms << 80) | rnd
     return "".join(_B32[(n >> (5 * i)) & 31] for i in range(25, -1, -1))
 
@@ -952,6 +956,124 @@ def cmd_reindex(ctx, a, out):
         print(f"reindexed {store.scope}: {len(ctx.index.items(store))} items", file=out)
 
 
+IMPORT_HEADER = ["date", "kind", "pin", "text", "sources"]
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_SOURCE_RE = re.compile(r"^[a-z_]+:[A-Za-z0-9_.-]+$")
+
+
+def parse_import(text):
+    """(rows, errors) of an import file: rows are (line number, date, kind, pin, text, refs)."""
+    import datetime
+    rows, errors, header, seen = [], [], None, {}
+    for n, raw in enumerate(text.split("\n"), 1):
+        line = raw.rstrip("\r")
+        if not line.strip() or (header is None and line.lstrip().startswith("#")):
+            continue
+        fields = line.split("\t")
+        if header is None:
+            header = fields
+            if [f.strip() for f in fields] != IMPORT_HEADER:
+                errors.append(f"line {n}: the header must be the tab-separated columns {' '.join(IMPORT_HEADER)}")
+                break
+            continue
+        if len(fields) != len(IMPORT_HEADER):
+            errors.append(f"line {n}: {len(fields)} tab-separated fields, want {len(IMPORT_HEADER)}"
+                          + (" (a tab inside the text?)" if len(fields) > len(IMPORT_HEADER) else ""))
+            continue
+        date, kind, pin, body, sources = (f.strip() for f in fields)
+        problems = []
+        try:
+            if not _DATE_RE.match(date):
+                raise ValueError
+            datetime.date.fromisoformat(date)
+        except ValueError:
+            problems.append(f"date {date!r} is not YYYY-MM-DD")
+        if kind not in KINDS:
+            problems.append(f"kind {kind!r} is not one of {', '.join(KINDS)}")
+        if pin not in ("", "yes"):
+            problems.append(f"pin {pin!r} is not 'yes' or empty")
+        try:
+            body = clean_text(body)
+        except MemoError as e:
+            problems.append(str(e).removeprefix("memo: ").rstrip("."))
+        refs = [x.strip() for x in sources.split(",") if x.strip()]
+        bad = [r for r in refs if not _SOURCE_RE.match(r)]
+        if bad:
+            problems.append(f"sources {', '.join(bad)} are not like obs:123 or sum:45")
+        if not problems and (date, body) in seen:
+            problems.append(f"same date and text as line {seen[(date, body)]}")
+        if problems:
+            errors.append(f"line {n}: " + "; ".join(problems))
+            continue
+        seen[(date, body)] = n
+        rows.append((n, date, kind, pin == "yes", body, [f"claude-mem:{r}" for r in refs]))
+    if header is None and not errors:
+        errors.append("no header line: " + "\t".join(IMPORT_HEADER))
+    return rows, errors
+
+
+def cmd_import(ctx, a, out):
+    """Load distilled notes (claude-mem's, reviewed by Luiz), each at its original date."""
+    import calendar
+    if not a.dry_run:
+        ctx.must_write()
+    try:
+        text = Path(a.file).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        raise MemoError(f"memo: cannot read {a.file}: {e}")
+    rows, errors = parse_import(text)
+    if errors:
+        print(f"memo: {len(errors)} bad line(s) in {a.file}; nothing was imported:", file=sys.stderr)
+        for e in errors:
+            print("  " + e, file=sys.stderr)
+        return EXIT_INVALID
+    store = ctx.target(a.glob)
+    view = ctx.view(store)
+    have = {(i.at[:10], i.text) for i in view.items if not i.is_summary}
+    new, per_day = [], {}
+    for n, date, kind, pin, body, refs in sorted(rows, key=lambda r: r[1]):  # stable: file order within a day
+        if (date, body) in have:
+            continue
+        y, m, d = map(int, date.split("-"))
+        ms = calendar.timegm((y, m, d, 12, 0, 0)) * 1000 + per_day.get(date, 0)
+        per_day[date] = per_day.get(date, 0) + 1
+        new.append(Item(id=encode_ulid(ms, _rand80()), kind=kind, text=body, scope=store.scope,
+                        by=ctx.by(), at=f"{date}T12:00:00Z", pin=pin, refs=refs))
+    held = len(view.pins) + len(view.opens)
+    adding = sum(1 for i in new if i.pin or i.kind == "open")
+    cap = ctx.budget(store) // 2
+    if held + adding > cap:
+        raise MemoError(f"memo: refused, nothing was imported: {adding} pins and open threads in {a.file} plus the "
+                        f"{held} already in {store.scope} make {held + adding}; together they may take {cap} lines "
+                        "of the wake. Unpin or drop some in the file and import again.")
+    after = View(view.items + new)
+    verb = "would write" if a.dry_run else "wrote"
+    for item in new:
+        if not a.dry_run:
+            atomic_write(store.path_of(item), render_item(item))
+        print(f"{verb} {item.at[:10]} [{item.kind}]{' (pinned)' if item.pin else ''} {item.text}", file=out)
+    print(f"{store.scope}: {len(new)} {'to import' if a.dry_run else 'imported'}, "
+          f"{len(rows) - len(new)} already present", file=out)
+    budget = ctx.budget(store)
+    flat = store.scope == "global"
+    section = render(after, budget, flat)
+    lines = len(USAGE.split("\n")) + len(section)
+    for other in ctx.stores():
+        if other != store:
+            lines += len(render(ctx.view(other), ctx.budget(other), other.scope == "global"))
+    print(f"wake {'would be' if a.dry_run else 'is'} {lines} lines here, {len(section)} of them for "
+          f"{store.scope} (budget {budget})", file=out)
+    r = room(after, budget, flat)
+    size = min(ctx.cfg.bucket, max(2, r // 2))
+    target = max(r - size, r // 2)
+    if len(after.spine) > target:
+        needed = -(-(len(after.spine) - target) // (size - 1))
+        print(f"the store {'would need' if a.dry_run else 'needs'} about {needed} summaries of {size} items: "
+              f"{len(after.spine)} lines of notes for {r} lines of room. Agents write them as `memo note` hands out "
+              "compaction tasks; until then the wake shows the newest notes and a count.", file=out)
+    return 0
+
+
 def cmd_scope(ctx, a, out):
     for store in ctx.stores():
         print(f"{store.scope}\t{store.dir}", file=out)
@@ -1047,6 +1169,11 @@ def build_parser():
     s = add("export", cmd_export, "every item, superseded ones included")
     s.add_argument("--json", action="store_true", help="one JSON object per line")
     s.add_argument("--global", dest="glob", action="store_true", help="only the global store")
+    s = add("import", cmd_import, "load reviewed notes from a TSV file, each at its original date")
+    s.add_argument("file", help="date<TAB>kind<TAB>pin<TAB>text<TAB>sources, one note per line after the header")
+    s.add_argument("--global", dest="glob", action="store_true", help="into the global store")
+    s.add_argument("--dry-run", action="store_true", help="print what would be written, write nothing")
+    s.add_argument("--cwd", dest="sub_cwd", help="the repo to import into (default: the current one)")
     add("reindex", cmd_reindex, "rebuild the index from the files")
     add("doctor", cmd_doctor, "check the stores and the index")
     add("scope", cmd_scope, "print the stores in play here")
@@ -1061,7 +1188,7 @@ def main(argv=None, env=None, cwd=None, out=None):
     except SystemExit as e:
         return e.code if isinstance(e.code, int) else EXIT_INVALID
     try:
-        ctx = Ctx(env, a.cwd or cwd or os.getcwd())
+        ctx = Ctx(env, getattr(a, "sub_cwd", None) or a.cwd or cwd or os.getcwd())
     except MemoError as e:
         print(e, file=sys.stderr)
         return e.code

@@ -12,6 +12,7 @@ import io
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -517,6 +518,137 @@ class ReadTest(MemoCase):
         self.assertEqual(code, 1)
         self.assertIn("FAIL every file parses", out)
         self.assertIn("healthy", self.wake(), "a bad file does not break the wake")
+
+
+class ImportTest(MemoCase):
+    HEADER = "date\tkind\tpin\ttext\tsources\n"
+
+    def tsv(self, *rows, name="notes.tsv", comment="# repo: /somewhere\n"):
+        path = self.tmp / name
+        path.write_text(comment + self.HEADER + "".join("\t".join(r) + "\n" for r in rows))
+        return path
+
+    def items(self, store=None):
+        store = store or self.store
+        return [memo.parse_item(p.read_text(), p.stem) for p in sorted((store / "notes").glob("*.md"))]
+
+    ROWS = [
+        ("2026-08-26", "decision", "", "Skills ship through the plugin, not skills.sh", "obs:1281,sum:45"),
+        ("2026-05-02", "preference", "yes", "Commands for Luiz are nushell", "sum:12"),
+        ("2026-07-25", "gotcha", "", "Second on the 25th in file order", "obs:6627"),
+        ("2026-07-25", "open", "", "First? no: file order within a day is kept", ""),
+    ]
+
+    def test_notes_keep_their_dates_and_sort_by_history(self):
+        self.note("fact", "written today")
+        out = self.ok("import", self.tsv(*self.ROWS))
+        self.assertIn("4 imported, 0 already present", out)
+        self.assertNotIn("then run: memo summarize", out)
+        items = self.items()
+        self.assertEqual([i.at for i in items],
+                         ["2026-05-02T12:00:00Z", "2026-07-25T12:00:00Z", "2026-07-25T12:00:00Z",
+                          "2026-08-26T12:00:00Z", items[-1].at])
+        self.assertEqual(items[-1].text, "written today", "imported history sorts before today's notes")
+        self.assertEqual([memo.ulid_date(i.id) for i in items[:4]], ["2026-05-02", "2026-07-25", "2026-07-25", "2026-08-26"])
+        self.assertEqual(memo.ulid_ms(items[0].id) % 86_400_000, 12 * 3_600_000, "noon UTC")
+        self.assertEqual(items[1].text, "Second on the 25th in file order", "file order within a day")
+        self.assertEqual(items[3].refs, ["claude-mem:obs:1281", "claude-mem:sum:45"])
+        self.assertTrue(items[0].pin)
+        wake = self.wake()
+        self.assertIn("## Pinned", wake)
+        self.assertIn("## Open threads", wake)
+        self.assertLess(wake.index("Skills ship through"), wake.index("written today"))
+
+    def test_reimport_writes_nothing_new(self):
+        path = self.tsv(*self.ROWS)
+        self.ok("import", path)
+        before = sorted(p.name for p in self.store.rglob("*.md"))
+        out = self.ok("import", path)
+        self.assertIn("0 imported, 4 already present", out)
+        self.assertEqual(sorted(p.name for p in self.store.rglob("*.md")), before)
+        grown = self.tsv(*self.ROWS, ("2026-09-01", "fact", "", "one more line", ""), name="grown.tsv")
+        self.assertIn("1 imported, 4 already present", self.ok("import", grown))
+
+    def test_every_bad_line_is_reported_and_nothing_imported(self):
+        path = self.tsv(
+            ("2026-01-01", "fact", "", "a good line", "obs:1"),
+            ("2026-13-01", "fact", "", "month thirteen", ""),
+            ("2026-1-5", "story", "maybe", "three problems", ""),
+            ("2026-01-02", "fact", "", "a tab\tinside", ""),
+            ("2026-01-03", "fact", "", "x" * 281, ""),
+            ("2026-01-04", "fact", "", "token: abcdefghijklmnop", ""),
+            ("2026-01-05", "fact", "", "odd sources", "obs 1"),
+            ("2026-01-01", "fact", "", "a good line", "sum:2"),
+            ("2026-01-06", "fact", "", "  ", ""),
+        )
+        code, out, err = self.run_memo("import", path)
+        self.assertEqual(code, 2)
+        for line, why in [(4, "is not YYYY-MM-DD"), (5, "kind 'story'"), (5, "pin 'maybe'"), (6, "a tab inside"),
+                          (7, "characters"), (8, "secret"), (9, "sources obs 1"), (10, "same date and text as line 3"),
+                          (11, "empty")]:
+            self.assertRegex(err, rf"line {line}: .*{re.escape(why)}")
+        self.assertIn("8 bad line(s)", err)
+        self.assertNotIn("line 3:", err)
+        self.assertFalse(self.store.exists(), "nothing was written")
+
+    def test_header_is_required(self):
+        path = self.tmp / "noheader.tsv"
+        path.write_text("2026-01-01\tfact\t\ttext\t\n")
+        code, _, err = self.run_memo("import", path)
+        self.assertEqual(code, 2)
+        self.assertIn("header", err)
+        path.write_text("# only a comment\n")
+        self.assertIn("no header", self.run_memo("import", path)[2])
+        self.assertEqual(self.run_memo("import", self.tmp / "missing.tsv")[0], 2)
+
+    def test_dry_run_writes_nothing_and_counts_the_wake(self):
+        code, out, _ = self.run_memo("import", self.tsv(*self.ROWS), "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.count("would write "), 4)
+        self.assertIn("4 to import", out)
+        self.assertIn("wake would be 12 lines here, 7 of them for project:acme/widget (budget 120)", out)
+        self.assertFalse(self.store.exists())
+        self.assertEqual(len(self.wake().splitlines()), 5)
+        self.ok("import", self.tsv(*self.ROWS))
+        self.assertEqual(len(self.wake().splitlines()), 12, "the dry run counted the wake right")
+
+    def test_pins_and_threads_past_half_the_budget_are_refused_with_the_count(self):
+        env = {"MEMO_PROJECT_LINES": "10"}
+        self.note("preference", "an existing rule", "--pin", env=env)
+        rows = [(f"2026-02-0{n}", "open" if n % 2 else "preference", "" if n % 2 else "yes", f"item {n}", "")
+                for n in range(1, 6)]
+        code, _, err = self.run_memo("import", self.tsv(*rows), env=env)
+        self.assertEqual(code, 2)
+        self.assertIn("5 pins and open threads", err)
+        self.assertIn("plus the 1 already", err)
+        self.assertIn("make 6", err)
+        self.assertEqual(len(self.files()), 1)
+        self.ok("import", self.tsv(*rows[:4]), env=env)
+
+    def test_over_budget_says_how_many_summaries_are_needed(self):
+        env = {"MEMO_PROJECT_LINES": "20", "MEMO_BUCKET": "4"}
+        rows = [(f"2026-03-{n:02d}", "fact", "", f"imported fact {n}", "") for n in range(1, 31)]
+        out = self.ok("import", self.tsv(*rows), env=env)
+        self.assertRegex(out, r"needs about \d+ summaries of 4 items: 30 lines of notes for 19 lines of room")
+        self.assertNotIn("then run: memo summarize", out, "an import hands out no task")
+        self.assertEqual(len(self.files("summaries")), 0, "nothing is summarized automatically")
+        self.assertIn("compaction task", self.ok("note", "fact", "the next note hands out a task", env=env))
+
+    def test_global_and_cwd(self):
+        nowhere = self.tmp / "nowhere"
+        nowhere.mkdir()
+        out = self.ok("import", self.tsv(*self.ROWS), "--global", cwd=nowhere)
+        self.assertIn("global: 4 imported", out)
+        self.assertEqual(len(self.items(self.global_dir)), 4)
+        self.assertFalse(self.store.exists())
+        self.ok("import", self.tsv(*self.ROWS[:1]), "--cwd", self.repo, cwd=nowhere)
+        self.assertEqual([i.text for i in self.items()], [self.ROWS[0][3]])
+
+    def test_a_worker_may_dry_run_but_not_import(self):
+        worker = {"TSTACK_ROLE": "worker"}
+        self.assertEqual(self.run_memo("import", self.tsv(*self.ROWS), "--dry-run", env=worker)[0], 0)
+        self.assertEqual(self.run_memo("import", self.tsv(*self.ROWS), env=worker)[0], 3)
+        self.assertFalse(self.store.exists())
 
 
 class TwoMachinesTest(MemoCase):
