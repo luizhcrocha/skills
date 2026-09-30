@@ -136,7 +136,7 @@ before the refactor, so the refactor is checked against it.
 | planning | multi-phase-plan, figure-it-out | to-spec, to-issues, triage, grilling | keep ours; **figure-it-out done**: tuca-mode's no-playbook fallback, jj units, `show-me-your-work` trail |
 | session | recall, reflect, show-me-your-work, pause/pickup | handoff, wait-what | **done**: `recall` has two modes (lookup on memo, jj and the claude-mem archive; catch-up over this project's transcripts through Sonnet miners, live jj/PR/memo state, a narrow `why` sweep when useful); `reflect` (three Opus reviewers, Opus synthesizer, approved edits as a jj change in the tstack repo, other lessons to memo); `show-me-your-work` (TSV log via log.sh, transcript audit, fresh Opus review); bro and wait-what merged as `bro`; pause-safely and session-pickup use them |
 | language | typescript-best-practices | coding-standards-ts, JetBrains use-modern-go | merge into lang-ts; wrap use-modern-go in lang-go |
-| conflicts | - | resolving-merge-conflicts (git only) | jj-aware, or folded into worktree-janitor |
+| conflicts | - | resolving-merge-conflicts (git only) | **done**: jj-first (a conflict recorded in the change, read both sides and their intent, resolve in a child, `jj squash`, the repo's checks), git as a fallback; the worktree-janitor keeps its own marker-only resolution. `implement` records jj changes too |
 
 Discarded: make-bot-ui, benny automations, setup-pstack model detection
 (agents carry `model:`), cursor-team-kit references (deslop → /simplify,
