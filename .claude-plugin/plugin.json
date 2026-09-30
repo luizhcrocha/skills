@@ -10,6 +10,7 @@
   "skills": [
     "./skills/engineering/review",
     "./skills/engineering/codebase-design",
+    "./skills/engineering/lang-py",
     "./skills/engineering/lang-rust",
     "./skills/engineering/lang-ts",
     "./skills/engineering/lang-zig",
