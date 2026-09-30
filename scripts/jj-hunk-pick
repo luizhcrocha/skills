@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""A non-interactive jj diff editor: keep exactly the hunks named, drop the rest.
+
+    jj-hunk-pick list -r REV [PATH...]
+        Number the hunks of REV's diff against its parent, per file, the way the
+        editor below counts them. Read this before naming hunks.
+    jj-hunk-pick split -r REV -m MESSAGE PICK...
+        `jj split -r REV` with the picked hunks as the first (parent) revision,
+        which takes MESSAGE; everything else stays in REV.
+    jj-hunk-pick squash --from REV --into REV [-m MESSAGE] PICK...
+        `jj squash -i` moving only the picked hunks.
+    jj-hunk-pick edit [--pick PICK]... LEFT RIGHT
+        The editor itself, as jj calls it. Picks come from --pick or from
+        $JJ_HUNK_PICK (a JSON list of picks).
+
+A PICK names what to keep, per file:
+    PATH          the whole file
+    PATH:2,4      hunks 2 and 4 of the file (1-based, as `list` numbers them)
+    PATH@10-20    every hunk touching lines 10 to 20 of REV's side of the file
+A file with no pick is left out of the selection. New, deleted and binary files
+are one hunk each.
+
+jj's diff-editor contract (jj 0.41): jj runs the tool as `<program> $left $right`
+(`merge-tools.<tool>.edit-args`, default ["$left", "$right"], or a list in
+ui.diff-editor). Both are temp directories holding only the files the diff
+touches (and the command's filesets allow): $left the parent side, $right the
+revision's side plus a JJ-INSTRUCTIONS file jj ignores. The tool rewrites $right
+in place to the tree it selects and exits 0; a non-zero exit aborts the command.
+"""
+
+import argparse
+import difflib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+SELF = Path(__file__).resolve()
+INSTRUCTIONS = "JJ-INSTRUCTIONS"
+PICK = re.compile(r"^(?P<path>.+?)(?::(?P<hunks>\d+(?:,\d+)*)|@(?P<lo>\d+)-(?P<hi>\d+))?$")
+
+
+class PickError(Exception):
+    pass
+
+
+def parse_pick(text):
+    m = PICK.match(text)
+    if not m or not m.group("path"):
+        raise PickError(f"cannot read pick {text!r}")
+    path = m.group("path")
+    if m.group("hunks"):
+        return path, ("hunks", {int(n) for n in m.group("hunks").split(",")})
+    if m.group("lo"):
+        lo, hi = int(m.group("lo")), int(m.group("hi"))
+        if lo > hi:
+            raise PickError(f"pick {text!r}: the range runs backwards")
+        return path, ("lines", (lo, hi))
+    return path, ("all", None)
+
+
+def parse_picks(texts):
+    picks = {}
+    for text in texts:
+        path, sel = parse_pick(text)
+        if path in picks and picks[path][0] != sel[0]:
+            raise PickError(f"{path}: mix of pick kinds; name it once")
+        if path in picks and sel[0] == "hunks":
+            picks[path][1].update(sel[1])
+        elif path in picks and sel[0] == "lines":
+            picks[path] = ("ranges", picks[path][1] + [sel[1]])
+        else:
+            picks[path] = ("ranges", [sel[1]]) if sel[0] == "lines" else sel
+    return picks
+
+
+def is_binary(data):
+    return data is not None and b"\0" in data[:8192]
+
+
+def hunks(old, new):
+    """The changed blocks between two byte strings (None = absent), each
+    (i1, i2, j1, j2) over their lines. A file added, deleted or binary is one hunk."""
+    if old == new:
+        return []
+    if old is None or new is None or is_binary(old) or is_binary(new):
+        return [None]
+    a, b = old.splitlines(keepends=True), new.splitlines(keepends=True)
+    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    return [(i1, i2, j1, j2) for tag, i1, i2, j1, j2 in matcher.get_opcodes() if tag != "equal"]
+
+
+def touches(hunk, lo, hi):
+    """Does the hunk touch lines lo..hi (1-based) of the new side? A pure deletion
+    sits between two lines and touches both."""
+    _, _, j1, j2 = hunk
+    first, last = (j1 + 1, j2) if j2 > j1 else (j1, j1 + 1)
+    return first <= hi and last >= lo
+
+
+def chosen(path, blocks, sel):
+    """The 1-based indices of blocks the selection keeps."""
+    kind, arg = sel
+    if kind == "all":
+        return set(range(1, len(blocks) + 1))
+    if blocks == [None]:
+        raise PickError(f"{path}: added, deleted or binary, so it is one hunk; pick the whole file")
+    if kind == "hunks":
+        bad = sorted(n for n in arg if not 1 <= n <= len(blocks))
+        if bad:
+            raise PickError(f"{path}: no hunk {', '.join(map(str, bad))} (it has {len(blocks)})")
+        return set(arg)
+    keep = {n for n, h in enumerate(blocks, 1) if any(touches(h, lo, hi) for lo, hi in arg)}
+    if not keep:
+        raise PickError(f"{path}: no hunk touches lines {arg}")
+    return keep
+
+
+def merge(old, new, blocks, keep):
+    """old with the kept blocks of new applied."""
+    a, b = old.splitlines(keepends=True), new.splitlines(keepends=True)
+    out, at = [], 0
+    for n, (i1, i2, j1, j2) in enumerate(blocks, 1):
+        out += a[at:i1]
+        out += b[j1:j2] if n in keep else a[i1:i2]
+        at = i2
+    out += a[at:]
+    return b"".join(out)
+
+
+def read(path):
+    if path.is_symlink():
+        return b"\x00symlink:" + os.readlink(path).encode()
+    return path.read_bytes() if path.is_file() else None
+
+
+def tree(root):
+    root = Path(root)
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*")
+                  if (p.is_file() or p.is_symlink()) and str(p.relative_to(root)) != INSTRUCTIONS)
+
+
+def restore(left, right, rel):
+    """Make right/rel what left/rel is: the file's change is not selected."""
+    src, dst = Path(left) / rel, Path(right) / rel
+    if dst.is_symlink() or dst.exists():
+        dst.unlink()
+    if src.is_symlink():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(os.readlink(src), dst)
+    elif src.exists():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+
+
+def edit(left, right, picks):
+    left, right = Path(left), Path(right)
+    paths = sorted(set(tree(left)) | set(tree(right)))
+    unknown = sorted(set(picks) - set(paths))
+    if unknown:
+        raise PickError(f"not in this diff: {', '.join(unknown)} (it has {', '.join(paths) or 'nothing'})")
+    plan = []  # every pick is checked before $right changes
+    for rel in paths:
+        old, new = read(left / rel), read(right / rel)
+        blocks = hunks(old, new)
+        if rel not in picks or not blocks:
+            plan.append((rel, None))
+            continue
+        keep = chosen(rel, blocks, picks[rel])
+        if keep != set(range(1, len(blocks) + 1)):
+            plan.append((rel, merge(old, new, blocks, keep)))
+    for rel, content in plan:
+        if content is None:
+            restore(left, right, rel)
+            continue
+        mode = (right / rel).stat().st_mode
+        (right / rel).write_bytes(content)
+        os.chmod(right / rel, mode)
+
+
+# --- the jj side ------------------------------------------------------------
+
+def jj(repo, *args, check=True, env=None):
+    r = subprocess.run(["jj", "--no-pager", "--color=never", *args], cwd=repo, capture_output=True,
+                       text=True, env={**os.environ, "JJ_EDITOR": "true", "EDITOR": "true", **(env or {})})
+    if check and r.returncode != 0:
+        raise PickError(f"`jj {' '.join(args)}` failed: {r.stderr.strip()}")
+    return r
+
+
+def file_at(repo, rev, path):
+    r = subprocess.run(["jj", "--no-pager", "--ignore-working-copy", "file", "show", "-r", rev,
+                        "root:" + json.dumps(path)], cwd=repo, capture_output=True)
+    return r.stdout if r.returncode == 0 else None
+
+
+def list_hunks(repo, rev, paths):
+    parents = jj(repo, "log", "--no-graph", "-r", f"{rev}-", "-T", 'commit_id ++ "\\n"').stdout.split()
+    if len(parents) != 1:
+        raise PickError(f"{rev} has {len(parents)} parents; list works on a non-merge revision")
+    names = jj(repo, "diff", "--name-only", "-r", rev, *["root:" + json.dumps(p) for p in paths]).stdout.split("\n")
+    lines = []
+    for path in filter(None, names):
+        old, new = file_at(repo, parents[0], path), file_at(repo, rev, path)
+        blocks = hunks(old, new)
+        if blocks == [None]:
+            state = "added" if old is None else "deleted" if new is None else "binary"
+            lines.append(f"{path}  ({state}: one hunk, pick the whole file)")
+            continue
+        lines.append(f"{path}  ({len(blocks)} hunk{'s' * (len(blocks) != 1)})")
+        a, b = old.decode(errors="replace").splitlines(), new.decode(errors="replace").splitlines()
+        for n, (i1, i2, j1, j2) in enumerate(blocks, 1):
+            lines.append(f"  {path}:{n}  -{i1 + 1},{i2 - i1} +{j1 + 1},{j2 - j1}")
+            lines += [f"    -{x}" for x in a[i1:i2]] + [f"    +{x}" for x in b[j1:j2]]
+    return "\n".join(lines)
+
+
+def editor_config(picks):
+    return ["--config", f"merge-tools.hunk-pick.program={json.dumps(str(SELF))}",
+            "--config", 'merge-tools.hunk-pick.edit-args=["edit", "$left", "$right"]',
+            "--tool", "hunk-pick"]
+
+
+def run_jj_with_picks(repo, rev, args, picks):
+    """Run jj with this script as the diff editor, after checking every picked
+    path is in rev's diff: jj given a fileset that matches nothing would split
+    off an empty revision instead of failing."""
+    paths = {parse_pick(p)[0] for p in picks}
+    parse_picks(picks)
+    changed = set(jj(repo, "diff", "--name-only", "-r", rev).stdout.split("\n")) - {""}
+    missing = sorted(paths - changed)
+    if missing:
+        raise PickError(f"not in {rev}'s diff: {', '.join(missing)}")
+    filesets = ["root:" + json.dumps(p) for p in sorted(paths)]
+    r = jj(repo, *args, *editor_config(picks), *filesets, check=False,
+           env={"JJ_HUNK_PICK": json.dumps(picks)})
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    return r.returncode
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="jj-hunk-pick", description=__doc__.split("\n\n")[0],
+                                     formatter_class=argparse.RawDescriptionHelpFormatter,
+                                     epilog=__doc__.split("\n\n", 1)[1])
+    parser.add_argument("-R", "--repo", default=".")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("list")
+    p.add_argument("-r", "--revision", default="@")
+    p.add_argument("paths", nargs="*")
+    p = sub.add_parser("split")
+    p.add_argument("-r", "--revision", default="@")
+    p.add_argument("-m", "--message", required=True)
+    p.add_argument("picks", nargs="+")
+    p = sub.add_parser("squash")
+    p.add_argument("--from", dest="frm", default="@")
+    p.add_argument("--into", required=True)
+    p.add_argument("-m", "--message")
+    p.add_argument("picks", nargs="+")
+    p = sub.add_parser("edit")
+    p.add_argument("--pick", action="append", default=[])
+    p.add_argument("left")
+    p.add_argument("right")
+    args = parser.parse_args(argv)
+    try:
+        if args.cmd == "edit":
+            texts = args.pick or json.loads(os.environ.get("JJ_HUNK_PICK") or "[]")
+            if not texts:
+                raise PickError("no picks: pass --pick or set JJ_HUNK_PICK")
+            edit(args.left, args.right, parse_picks(texts))
+            return 0
+        repo = str(Path(args.repo).resolve())
+        if args.cmd == "list":
+            print(list_hunks(repo, args.revision, args.paths))
+            return 0
+        if args.cmd == "split":
+            return run_jj_with_picks(repo, args.revision, ["split", "-r", args.revision, "-m", args.message],
+                                     args.picks)
+        extra = ["-m", args.message] if args.message else ["--use-destination-message"]
+        return run_jj_with_picks(repo, args.frm, ["squash", "--from", args.frm, "--into", args.into, *extra],
+                                 args.picks)
+    except PickError as e:
+        print(f"jj-hunk-pick: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

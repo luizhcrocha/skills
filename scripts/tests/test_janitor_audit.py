@@ -45,11 +45,18 @@ HISTORY = [
 ]
 
 
+CORE = "".join(f"def step{i}():\n    return {i}\n\n" for i in range(len(HISTORY)))
+CORE_DOC = '"""The core steps."""\n\n'
+CORE_MAIN = "def main():\n    return step0()\n"
+
+
 def build_messy(repo):
     """A jj repo whose @ is messy, on a stack of one mutable commit above `master`:
 
         @     cli.py (new), docs/usage.md (new), a typo fix in util.py (a fixup for
-              the commit below), and a conflict in config.txt
+              the commit below), a conflict in config.txt, and core.py with two
+              hunks of two intents: a docstring on top (docs), a main() at the
+              bottom (cli)
         A     feat(util): string helpers   (util.py, config.txt value=2)
         master  five prefixed commits (core.py, config.txt value=1)
     """
@@ -70,6 +77,7 @@ def build_messy(repo):
     write(repo, "config.txt", "name=demo\nvalue=3\n")
     write(repo, "cli.py", "import sys\n\nprint(sys.argv)\n")
     write(repo, "docs/usage.md", "# Usage\n\nRun `python cli.py`.\n")
+    write(repo, "core.py", CORE_DOC + CORE + CORE_MAIN)
     jj(repo, "rebase", "-r", "@", "-d", stack)
     write(repo, "util.py", "def shout(s):\n    return s.upper()\n\n\ndef whisper(s):\n    return s.lower()\n")
     jj(repo, "status")
@@ -84,6 +92,38 @@ def tidy(repo, resolve="name=demo\nvalue=3\n"):
     jj(repo, "split", "-m", "docs: usage", "docs/usage.md")
     jj(repo, "describe", "-m", "feat(cli): print the arguments")
     jj(repo, "new")
+
+
+HUNK_PICK = AUDIT.parent / "jj-hunk-pick"
+
+
+def change(repo, rev):
+    return jj(repo, "log", "--no-graph", "-r", rev, "-T", "change_id").strip()
+
+
+def tidy_hunks(repo):
+    """tidy, with core.py's two hunks sent to their two intents by jj-hunk-pick."""
+    jj(repo, "absorb", "--into", "master..@-", "util.py")
+    write(repo, "config.txt", "name=demo\nvalue=3\n")
+    jj(repo, "split", "-m", "feat(config): value is 3", "config.txt")
+    r = subprocess.run([sys.executable, str(HUNK_PICK), "-R", str(repo), "split", "-m", "docs: usage",
+                        "docs/usage.md", "core.py:1"], env=ENV, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise AssertionError(r.stderr)
+    jj(repo, "describe", "-m", "feat(cli): print the arguments")
+    jj(repo, "new")
+
+
+def shape(repo, merge_message="feat: the cli and its usage, together"):
+    """tidy, then the docs and cli revisions made siblings and, given a message,
+    joined by a merge with a fresh @ on top."""
+    tidy(repo)
+    docs, cli = change(repo, "@--"), change(repo, "@-")
+    jj(repo, "parallelize", f"{docs}::{cli}")
+    if merge_message is not None:
+        jj(repo, "new", docs, cli, "-m", merge_message)
+        jj(repo, "new")
+    return docs, cli
 
 
 @unittest.skipUnless(HAVE_JJ, "jj is not installed")
@@ -116,7 +156,7 @@ class StartTest(AuditCase):
         self.assertEqual(code, 0)
         self.assertEqual([r["subject"] for r in s["revisions"]], ["", "feat(util): string helpers"])
         self.assertEqual(s["conflicted"], ["config.txt"])
-        self.assertEqual(set(s["files"]), {"cli.py", "config.txt", "docs/usage.md", "util.py"})
+        self.assertEqual(set(s["files"]), {"cli.py", "config.txt", "core.py", "docs/usage.md", "util.py"})
         master = jj(self.repo, "log", "--no-graph", "-r", "master", "-T", "commit_id").strip()
         self.assertEqual(s["base"], [master])
         text = self.audit("start")[1]
@@ -158,6 +198,49 @@ class PassTest(AuditCase):
         result = self.verdict("--check", "test -f cli.py")
         self.assertFails(result, "checks", "test -f cli.py")
         self.assertEqual([c["ok"] for c in result["info"]["checks"]], [False, False, False, True])
+
+
+class HunkSplitTest(AuditCase):
+    def test_one_file_split_between_two_intents_passes(self):
+        tidy_hunks(self.repo)
+        result = self.verdict()
+        self.assertTrue(result["ok"], result["fail"])
+        stack = {r["subject"]: r["files"] for r in result["info"]["stack"]}
+        self.assertEqual(stack["docs: usage"], ["core.py", "docs/usage.md"])
+        self.assertEqual(stack["feat(cli): print the arguments"], ["cli.py", "core.py"])
+        docs = jj(self.repo, "diff", "--git", "-r", "@--", "core.py")
+        cli = jj(self.repo, "diff", "--git", "-r", "@-", "core.py")
+        self.assertIn("The core steps", docs)
+        self.assertNotIn("def main", docs)
+        self.assertIn("def main", cli)
+        self.assertNotIn("The core steps", cli)
+
+
+class ShapeTest(AuditCase):
+    def test_siblings_joined_by_a_merge_pass(self):
+        docs, cli = shape(self.repo)
+        parents = jj(self.repo, "log", "--no-graph", "-r", "@-", "-T", 'parents.map(|p| p.change_id()).join(" ")')
+        self.assertEqual(set(parents.split()), {docs, cli})
+        self.assertEqual(change(self.repo, f"{docs}-"), change(self.repo, f"{cli}-"))
+        result = self.verdict()
+        self.assertTrue(result["ok"], result["fail"])
+        self.assertEqual(len(result["info"]["stack"]), 5)
+
+    def test_parallelize_alone_leaves_at_as_the_merge_and_fails(self):
+        shape(self.repo, merge_message=None)
+        self.assertEqual(len(jj(self.repo, "log", "--no-graph", "-r", "@-", "-T", 'change_id ++ "\\n"').split()), 2)
+        self.assertFails(self.verdict(), "stack", "joins 2 parents")
+
+    def test_a_sibling_left_off_to_the_side_fails(self):
+        docs, cli = shape(self.repo, merge_message=None)
+        jj(self.repo, "new", cli)
+        result = self.verdict()
+        self.assertFails(result, "tree", "docs/usage.md")
+        self.assertFails(result, "strays", "docs: usage")
+
+    def test_an_undescribed_merge_below_at_fails(self):
+        shape(self.repo, merge_message="")
+        self.assertFails(self.verdict(), "stack", "has no description")
 
 
 class FailTest(AuditCase):

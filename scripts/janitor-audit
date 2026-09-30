@@ -17,7 +17,8 @@ Checks (each failure is one line of reasons):
   base       every base revision is still an ancestor of @, unchanged
   bookmarks  no bookmark on ::@ (at OP or now) was moved, created or deleted
   stack      every revision of the new stack is described, non-empty (merges
-             aside) and free of conflicts; @ is empty and undescribed
+             aside) and free of conflicts; @ is empty, undescribed and not a
+             merge (a shaped stack joins its siblings in a described merge)
   strays     no new revision is left that nothing (@, a workspace, a
              bookmark) reaches
   style      each subject the janitor wrote matches the prefix habit of the last 30
@@ -243,6 +244,9 @@ def check(repo, op, frm, command=None):
         fails.append(f"stack: @ ({at['change']}) still has conflicts")
     if at["description"].strip():
         fails.append(f"stack: @ ({at['change']}) is described; the janitor ends on a fresh empty @")
+    if at["merge"]:
+        fails.append(f"stack: @ ({at['change']}) joins {len(repo.ids('@-'))} parents; the join is a described "
+                     "merge revision (`jj new A B -m ...`) with a fresh empty @ on top")
     for rev in stack:
         if not rev["subject"]:
             fails.append(f"stack: {rev['change']} has no description")
