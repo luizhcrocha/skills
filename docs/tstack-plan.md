@@ -18,20 +18,88 @@ this repo's skills once step 1 lands.
 | D5 | claude-mem is replaced by a clean-room, OptMem-Split-style memory (`memo`): deliberate one-line notes, summary tree, fixed-size wake injected by a SessionStart hook, per-project scope keyed through `jj root` plus the origin remote. `recall` also reads the archived claude-mem DB (read-only) and `jj log`. claude-mem is disabled once memo works; its DB is archived, not deleted. OptMem has no license, so nothing is copied from it. |
 | D6 | jj is the working model. A SessionStart hook injects jj hints when `.jj` exists. A new agent, **worktree-janitor**, shapes a messy `@` into a clean, described stack: split by intent, describe in the repo's commit style, absorb fixups, resolve conflicts, abandon empties, end with an empty `@`. It follows the comment-sicko pattern: an Opus persona agent with a closed leash (no content edits except conflict markers, no bookmarks or pushes, nothing immutable) and a fixed report, plus a `/worktree-janitor` lead skill that audits it mechanically (final tree identical to the starting tree, conflicts aside), restores via `jj op restore` and reruns once on failure. `/tuca-mode` calls it before landing. It is non-interactive (the dotfiles `sp`/`d`/`push` scripts are gum-driven and stay for Luiz). |
 | D7 | Overlaps with pstack are merged one at a time, each presented to Luiz with a proposed handle and merged text. Anything with no Claude Code capability is discarded. |
-| D8 | Language rules load themselves when a matching file is edited (PreToolUse hook on Edit/Write mapping extension to a `lang-*` skill; `paths:` frontmatter if supported). |
+| D8 | Language rules load themselves when a matching file is touched, through the skill `paths:` frontmatter (supported in Claude Code 2.1.285; no hook needed). |
+| D10 | The repo's tasks run through a `justfile`; no mise, no dev shell (python3, node and jj come from the machine). |
 | D9 | Testing follows a ladder chosen by risk and maturity (below), after the tdd merge. |
 
 ## Order of work
 
 1. Plugin skeleton and marketplace; switch the install from skills.sh; current skills unchanged.
 2. memo + recall; disable claude-mem.
-3. `/tuca-mode` and its playbooks; jj hints hook; tree-butler.
+3. `/tuca-mode` and its playbooks; jj hints hook; worktree-janitor.
 4. Merges, one by one (map below), starting with tdd. Each merge adds its
    mapping to `upstreams.toml`, the manifest of upstreams (mattpocock/skills
-   and pstack so far) that `mise run sync-upstream` 3-way merges from;
+   and pstack so far) that `just sync-upstream` 3-way merges from;
    `--list-unmapped` shows what pstack still offers.
 5. Language rules (ts, go, then py/nix as they earn it).
 6. Fleet: machine-level control plane, one jj workspace per worker, advisor agent, rules moved from prose into code.
+
+## Components (design sketch)
+
+Facts they rest on (Claude Code 2.1.285 docs): SessionStart (startup, resume,
+clear, compact, fork) and Stop can inject `additionalContext`; UserPromptSubmit
+and PreToolUse cannot; there is no SubagentStart; hook input carries
+`session_id`, `transcript_path`, and `agent_id`/`agent_type` inside subagents;
+hooks get `CLAUDE_PLUGIN_ROOT`, `CLAUDE_PLUGIN_DATA`, `CLAUDE_PROJECT_DIR`.
+Skills take `paths:`, `context: fork`, `model`, `effort`; plugin agents take
+`model`, `effort`, `tools`, `skills`, `background`, `isolation: worktree`.
+`--plugin-dir` / `CLAUDE_CODE_PLUGIN_DIRS` overrides the installed plugin, and
+`/reload-plugins` reloads it. PreCompact is undocumented: verify before use.
+
+**Hooks.** One `hooks/hooks.json` calling one dispatcher,
+`${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook <event>` (Python, stdlib), which fans
+out to small handlers and must stay under ~100 ms. Handlers: memo wake
+(SessionStart), jj hints (SessionStart, when `.jj` exists), mode re-injection
+(SessionStart on compact/resume, when the mode flag is set), fleet heartbeat
+(PostToolUse, when `agent_id` is present and a ledger exists), memo nudge (Stop).
+
+**`/tuca-mode`.** pstack's poteto-mode, adapted: non-negotiables, the autonomy
+rules, the principle index, and a playbook router; the matched playbook's steps
+are copied into the todo list verbatim, skipped steps stay with a reason.
+Invoking it writes a flag in `CLAUDE_PLUGIN_DATA/sessions/<session_id>`; the
+skill text stays in the conversation, and after a compaction or resume the
+SessionStart hook re-injects a short summary, so the mode is sticky without a
+per-turn reminder. The coordinator behaviour (D2) lives in the mode: it starts
+the ledger lazily through the fleet scripts.
+
+**principles.** One skill, an index plus one file per principle (23 from
+pstack, merged with ours); model-invocable, so a playbook or the model loads
+the leaf it cites.
+
+**worktree-janitor.** `agents/worktree-janitor.md` (Opus, tools limited to
+Bash, Read, Grep, Glob, and Edit for conflict markers only) and
+`skills/worktree-janitor` (the lead). Details in D6.
+
+**jj hints.** SessionStart context of about 10 lines when `.jj` exists:
+detached HEAD is normal, never `git checkout/stash/commit`, history moves
+belong to whoever holds the landing turn, `gh` from the main workspace, one
+`jj workspace add` per worker.
+
+**Language rules.** `lang-ts` (coding-standards-ts merged with pstack's
+typescript-best-practices) with `paths: ["**/*.ts", "**/*.tsx"]`; `lang-go`
+wraps JetBrains use-modern-go with `paths: ["**/*.go", "**/go.mod"]`; `lang-py`
+and `lang-nix` start as a page each and grow from corrections.
+
+**test-strategy.** The merged tdd plus the ladder below; per language, the
+ladder's tools live in the `lang-*` skill (fast-check in lang-ts, rapid and
+`go test -fuzz` in lang-go, Hypothesis in lang-py).
+
+**Fleet and control plane.** Scripts move from `skills/productivity/coordinator`
+to a plugin-level `fleet/` package. Changes, in order:
+1. Worker liveness from the PostToolUse heartbeat (`agent_id`), replacing the
+   transcript regex on "your id is X".
+2. One jj workspace per worker: `fleet ws new <id>` creates it, the ledger
+   records it, landing removes it; the lanes stay for planning.
+3. The hub as a systemd user service (D3a), then federation across the tailnet.
+4. Rules that keep being restated in prose become code (the "said once" rule,
+   stale Now lines, unrecorded answers), each with a test.
+5. An `advisor` agent (Opus, read-only tools, long-lived): a coordinator starts
+   one per fleet when workers need judgement; workers ask it through
+   SendMessage before asking the user.
+The coordinator's state machine (`state.py`) gets a model-based test (rung 5)
+before the refactor, so the refactor is checked against it.
+
+**memo.** See [design/memo.md](design/memo.md).
 
 ## Overlap map (proposals, each decided in step 4)
 
@@ -48,7 +116,7 @@ this repo's skills once step 1 lands.
 | planning | multi-phase-plan, figure-it-out | to-spec, to-issues, triage, grilling | keep ours; figure-it-out as fallback playbook |
 | session | recall, reflect, show-me-your-work, pause/pickup | handoff, wait-what | recall on memo; bro into wait-what |
 | language | typescript-best-practices | coding-standards-ts, JetBrains use-modern-go | merge into lang-ts; wrap use-modern-go in lang-go |
-| conflicts | - | resolving-merge-conflicts (git only) | jj-aware, or folded into tree-butler |
+| conflicts | - | resolving-merge-conflicts (git only) | jj-aware, or folded into worktree-janitor |
 
 Discarded: make-bot-ui, benny automations, setup-pstack model detection
 (agents carry `model:`), cursor-team-kit references (deslop → /simplify,

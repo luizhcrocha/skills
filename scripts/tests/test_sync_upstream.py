@@ -1,6 +1,6 @@
 """Tests for scripts/sync_upstream.py against throwaway git repos.
 
-Run: mise run test-scripts  (or python3 -m unittest discover -s scripts/tests)
+Run: just test-scripts  (or python3 -m unittest discover -s scripts/tests)
 """
 
 import subprocess

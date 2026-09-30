@@ -1,4 +1,4 @@
-# Upstreams tstack adapts. `mise run sync-upstream` (scripts/sync_upstream.py)
+# Upstreams tstack adapts. `just sync-upstream` (scripts/sync_upstream.py)
 # reads this file; see the docstring there for the full semantics.
 #
 # Per upstream, under [upstream.<name>]:
