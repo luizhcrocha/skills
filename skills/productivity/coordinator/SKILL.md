@@ -67,7 +67,7 @@ Two models are approved and need no discussion: the default Opus and the default
 | The task is | Model |
 | :-- | :-- |
 | **Judgement**: implementation, debugging, prototypes, design, review, anything where a wrong decision costs a rework | the default Opus (`model: "opus"`) |
-| **Legwork**: research and reading, docs or API facts, scans and log reads, mechanical sweeps (a rename, a format pass), running checks and reporting the output | the default Sonnet (`model: "sonnet"`) |
+| **Legwork**: research and reading, docs or API facts, scans and log reads, mechanical sweeps (a rename, a format pass), running checks and reporting the output | the default Sonnet (`model: "sonnet"`), whoever spawns it: research a worker needs for its own task runs on Sonnet too, unless the question itself needs judgement (contradicting sources, a trade-off to weigh) |
 | **Watching**: a monitor agent that watches app metrics, runs, or executions and reports back | the default Sonnet (`model: "sonnet"`), whoever spawns it: you, a worker, or the manager |
 
 **What delegating saves.** A worker costs its brief, everything it reads, and your reading of its report, so hand the default Sonnet what is read-heavy and comes back short: aggregating many reports into a table, reading logs, drafting a summary from files. A sentence you can write from what you already know stays yours: the handoff would cost more than the sentence. And the page computes what the ledger holds (the workers running, the current steps, what comes next, what waits on the user), so none of that needs writing.
