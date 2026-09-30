@@ -126,9 +126,9 @@ before the refactor, so the refactor is checked against it.
 | test-first | tdd | tdd | **done**: one `tdd` skill with the ladder |
 | explaining | how, teach | zoom-out, teach, show-me | **done**: `how` absorbed zoom-out (model-invocable, Sonnet explorers, gotchas to memo); pstack's teach became `explain` (one-shot, on how and why); our `teach` stays the multi-session workspace |
 | rationale | why | - | **done**: `why`, full sweep over 8 evidence categories (pstack's 7 plus agent memory) mapped to our sources, Sonnet investigators, Opus synthesizer, jj code anchor, company data kept to engineering rationale |
-| parallelism | swarm, arena, orchestrate playbook, orch CLI | orchestrate, coordinator, manager | fold into fleet |
+| parallelism | swarm, orchestrate playbook, orch CLI (arena: see design) | orchestrate, coordinator, manager | fold into fleet |
 | review | interrogate, no-comments + comment-sicko | code-review, thermo-nuclear | **done**: `code-review` renamed `review` (the built-in `/code-review` takes the name), jj-native with the landing bookmark's remote as the default fixed point and Opus Standards/Spec reviewers; `interrogate` its adversarial mode, three Opus reviewers on three lenses (correctness and security, maintainability, intent) and the lead's verdict; thermo-nuclear folded into interrogate's maintainability lens; **no-comments done** (comment-sicko on Sonnet, run by Land before the janitor) |
-| design | architect, principle-* | codebase-design, improve-codebase-architecture, domain-modeling | keep ours; architect as a playbook |
+| design | architect, arena, principle-* | codebase-design, improve-codebase-architecture, domain-modeling | **done**: `architect` (ground with how and why, sketch through arena, implement against the sketch, scrap on a pattern of friction; checkpoint only when asked) and `arena` (N Opus runners under distinct constraints, each in its own jj workspace, a blind Opus cross-judge, pick and graft by hand), both model-invocable; the red flags joined codebase-design as RED-FLAGS.md; DESIGN-IT-TWICE.md fans out through arena |
 | debugging | bug-fix, forensics playbooks, blast-radius | diagnosing-bugs | our loop is the bug-fix playbook; **blast-radius done** (model-invocable, why's jj anchor, interrogate in place of arena) |
 | prose | unslop, technical-writing | writing-for-agents, caveman | **done**: unslop and technical-writing imported, model-invocable; tuca-mode sends every prose surface through unslop (pstack's way); caveman removed |
 | planning | multi-phase-plan, figure-it-out | to-spec, to-issues, triage, grilling | keep ours; figure-it-out as fallback playbook |
@@ -149,8 +149,6 @@ merging the skill replaces the marker with a pointer.
 
 | pstack skill | Used by | Meanwhile |
 |---|---|---|
-| architect | bug-fix, feature, refactoring | `codebase-design` and its DESIGN-IT-TWICE.md |
-| arena | feature | two Opus agents in separate jj workspaces, pick or graft |
 | show-me-your-work | non-negotiables, autonomous-run, hillclimb, principles/prove-it-works | a TSV decision log in the scratchpad |
 | figure-it-out | the no-playbook fallback, refactoring | a bespoke step list in playbook shape |
 | swarm | parallel fan-out | the `orchestrate` skill |

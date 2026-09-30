@@ -87,6 +87,13 @@ ignore = [
   # decided: adapted by hand, 2026-09-30. pstack's teach became our explain
   # (skills/engineering/explain); our teach is mattpocock's.
   "skills/teach",
+  # decided: adapted by hand, 2026-09-30. arena and architect were rewritten
+  # for Claude Code: Opus runners under distinct constraints instead of three
+  # model families, one jj workspace per runner, tstack:how / why / arena
+  # pointers, architect's checkpoint off unless asked. Only the files mapped
+  # below sync.
+  "skills/arena",
+  "skills/architect",
   # decided: adapted by hand, 2026-09-30. interrogate's SKILL.md was rewritten
   # for three Opus reviewers on three lenses (Claude Code has one model
   # family), and code-quality-review.md was merged with cursor-team-kit's
@@ -121,6 +128,13 @@ map = [
   # blast-radius, adapted in place (model-invocable, why's jj anchor,
   # interrogate for arena, tstack: pointers), 2026-09-30.
   { from = "skills/blast-radius/SKILL.md", to = "skills/engineering/blast-radius/SKILL.md" },
+  # architect's references: the red flags verbatim, moved into codebase-design
+  # (both are Ousterhout); the runner prompt and rationale template adapted in
+  # place (step names, jj workspaces, constraints instead of models), so
+  # upstream edits 3-way merge (2026-09-30).
+  { from = "skills/architect/references/design-red-flags.md", to = "skills/engineering/codebase-design/RED-FLAGS.md" },
+  { from = "skills/architect/references/runner-prompt.md", to = "skills/engineering/architect/references/runner-prompt.md" },
+  { from = "skills/architect/references/rationale-template.md", to = "skills/engineering/architect/references/rationale-template.md" },
   { from = "skills/poteto-mode/scripts/watch-pr", to = "skills/engineering/tuca-mode/scripts/watch-pr" },
   { from = "skills/poteto-mode/scripts/bootstrap.ts", to = "skills/engineering/tuca-mode/scripts/bootstrap.ts" },
   { from = "skills/poteto-mode/scripts/package.json", to = "skills/engineering/tuca-mode/scripts/package.json" },

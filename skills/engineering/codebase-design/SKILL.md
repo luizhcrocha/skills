@@ -111,4 +111,5 @@ Good interfaces make testing natural:
 ## Going deeper
 
 - **Deepening a cluster given its dependencies**, see [DEEPENING.md](DEEPENING.md): dependency categories, seam discipline, and replace-don't-layer testing.
-- **Exploring alternative interfaces**, see [DESIGN-IT-TWICE.md](DESIGN-IT-TWICE.md): spin up parallel sub-agents to design the interface several radically different ways, then compare on depth, locality, and seam placement.
+- **Exploring alternative interfaces**, see [DESIGN-IT-TWICE.md](DESIGN-IT-TWICE.md): design the interface several radically different ways in parallel (through `tstack:arena`), then compare on depth, locality, and seam placement.
+- **Screening a design**, see [RED-FLAGS.md](RED-FLAGS.md): shallow modules, information leakage, temporal decomposition, pass-through methods. Check every candidate shape against it before choosing one.

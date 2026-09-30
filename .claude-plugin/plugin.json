@@ -28,6 +28,8 @@
     "./skills/engineering/interrogate",
     "./skills/engineering/blast-radius",
     "./skills/engineering/explain",
+    "./skills/engineering/architect",
+    "./skills/engineering/arena",
     "./skills/engineering/to-issues",
     "./skills/engineering/to-spec",
     "./skills/engineering/triage",
