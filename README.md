@@ -11,13 +11,16 @@ Trial and error to see what really useful.
 
 ## Quickstart (30-second setup)
 
-1. Run the skills.sh installer:
+1. Install the **tstack** plugin in Claude Code (from a local checkout: `claude plugin marketplace add ~/repos/luizhcrocha/skills`):
 
-```bash
-npx skills@latest add luizhcrocha/skills
+```
+/plugin marketplace add luizhcrocha/skills
+/plugin install tstack@tstack
 ```
 
-2. Pick the skills you want, and which coding agents you want to install them on. **Make sure you select `/setup-luizrocha-skills`**.
+   Other agents (Codex, Cursor, …) still install through skills.sh: `npx skills@latest add luizhcrocha/skills`. Don't pick Claude Code there, or every skill shows up twice.
+
+2. After editing a skill, bump `version` in `.claude-plugin/plugin.json` and run `claude plugin update tstack@tstack`: the plugin is served from a versioned cache, not from the checkout. The restructure in progress is described in [docs/tstack-plan.md](docs/tstack-plan.md).
 
 3. Run `/setup-luizrocha-skills` in your agent. It will:
    - Ask you which issue tracker you want to use (GitHub, Linear, or local files)

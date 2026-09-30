@@ -1,5 +1,12 @@
 {
-  "name": "luizhcrocha-skills",
+  "name": "tstack",
+  "version": "0.1.0",
+  "description": "Luiz Rocha's engineering stack for Claude Code: skills, agents and hooks for rigorous, jj-based work.",
+  "author": {
+    "name": "Luiz Rocha",
+    "url": "https://github.com/luizhcrocha"
+  },
+  "homepage": "https://github.com/luizhcrocha/skills",
   "skills": [
     "./skills/engineering/code-review",
     "./skills/engineering/codebase-design",

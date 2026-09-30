@@ -1,0 +1,18 @@
+{
+  "name": "tstack",
+  "owner": {
+    "name": "Luiz Rocha",
+    "url": "https://github.com/luizhcrocha"
+  },
+  "metadata": {
+    "description": "Luiz Rocha's engineering stack for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "tstack",
+      "source": "./",
+      "description": "Luiz Rocha's engineering stack for Claude Code: skills, agents and hooks for rigorous, jj-based work.",
+      "category": "development"
+    }
+  ]
+}
