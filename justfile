@@ -20,6 +20,10 @@ test-coordinator:
     python3 -m unittest discover -s skills/productivity/coordinator/tests -p 'test_*.py'
     node --test 'skills/productivity/coordinator/tests/*.test.mjs'
 
+# The lang-* skills' sources tables as JSON (--skill NAME, --stale DAYS)
+lang-sources *args:
+    python3 scripts/lang-sources {{args}}
+
 # Validate the plugin and marketplace manifests
 validate:
     claude plugin validate .claude-plugin/plugin.json

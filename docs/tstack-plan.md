@@ -35,6 +35,14 @@ this repo's skills once step 1 lands.
    `--list-unmapped` shows what pstack still offers.
 5. Language rules: one `lang-*` skill per language (ts, rust, zig, cs, py, go, nix, c, cpp), each with `references/sources.md`, kept current by `lang-refresh`.
 5b. Evolving lint rules (D12): the proposal → trial → promote → retire loop, in each language's native linter, vendored into repos.
+5. Language rules (ts, go, then py/nix as they earn it).
+   Every `lang-*` skill pins its versions in `references/sources.md`
+   (item, kind, version targeted, checked on, release-notes URL);
+   `scripts/lang-sources` (`just lang-sources`) prints those rows as JSON and
+   `--stale DAYS` lists overdue ones, and `lang-refresh` checks them against
+   official release notes and registries, one Sonnet agent per skill, and
+   proposes one jj change per skill for review. It runs monthly as a
+   `/schedule` cloud routine (check only) and by hand on a major release.
 6. Fleet: machine-level control plane, one jj workspace per worker, advisor agent, rules moved from prose into code.
 
 ## Components (design sketch)

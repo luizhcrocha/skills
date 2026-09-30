@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""The rows of every lang-* skill's references/sources.md, as JSON.
+
+    lang-sources [--skill NAME ...] [--stale DAYS] [--today YYYY-MM-DD] [--root DIR]
+
+Reads skills/engineering/lang-*/references/sources.md and prints a JSON list,
+one object per table row. A language skill is a lang-* directory whose SKILL.md
+frontmatter has paths: (so lang-refresh itself is not one).
+
+    skill       the skill directory name (lang-c)
+    item        what the skill makes claims about (C23, GCC, clang-tidy)
+    kind        language | tool | library | doc
+    version     the version targeted
+    checked_on  the date the row was last checked (YYYY-MM-DD), or null
+    url         the official release notes / changelog URL
+    age_days    days since checked_on (null when checked_on is missing)
+
+The table is the first one whose header has an "item" column and a "checked"
+column; header cells are matched by name, so column order is free.
+
+--skill keeps one skill (repeatable; "c" and "lang-c" both work).
+--stale DAYS keeps rows not checked in the last DAYS days, plus rows with no
+parseable date. --today fixes "today" (tests).
+
+Exit 0; 1 when a lang-* skill has no sources.md or no table in it (the rows
+found are still printed, the problems go to stderr); 2 on bad arguments.
+"""
+
+import argparse
+import datetime as dt
+import json
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+URL = re.compile(r"https?://[^\s<>|)`]+")
+DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+FIELDS = {
+    "item": lambda h: h == "item" or h.startswith("item"),
+    "kind": lambda h: h.startswith("kind"),
+    "version": lambda h: "version" in h,
+    "checked_on": lambda h: "checked" in h,
+    "url": lambda h: "url" in h or h.startswith("source"),
+}
+
+
+def cells(line: str) -> list[str]:
+    body = line.strip()
+    if body.startswith("|"):
+        body = body[1:]
+    if body.endswith("|"):
+        body = body[:-1]
+    return [c.strip() for c in re.split(r"(?<!\\)\|", body)]
+
+
+def plain(text: str) -> str:
+    return text.replace("`", "").replace("\\|", "|").strip()
+
+
+def url_of(text: str) -> str | None:
+    link = LINK.search(text)
+    if link:
+        return link.group(1)
+    bare = URL.search(text)
+    return bare.group(0) if bare else None
+
+
+def columns(header: list[str]) -> dict[str, int] | None:
+    names = [plain(h).lower() for h in header]
+    found: dict[str, int] = {}
+    for field, test in FIELDS.items():
+        for i, name in enumerate(names):
+            if i not in found.values() and test(name):
+                found[field] = i
+                break
+    return found if "item" in found and "checked_on" in found else None
+
+
+def parse(text: str) -> list[dict] | None:
+    """The rows of the first sources table in text, or None when there is none."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if not line.lstrip().startswith("|") or i + 1 >= len(lines):
+            continue
+        if not re.fullmatch(r"\s*\|?[\s:|-]+\|?\s*", lines[i + 1]) or "-" not in lines[i + 1]:
+            continue
+        cols = columns(cells(line))
+        if cols is None:
+            continue
+        rows = []
+        for row_line in lines[i + 2:]:
+            if not row_line.lstrip().startswith("|"):
+                break
+            row = cells(row_line)
+            get = lambda f: row[cols[f]] if f in cols and cols[f] < len(row) else ""
+            item = plain(get("item"))
+            if not item:
+                continue
+            date = DATE.search(get("checked_on"))
+            rows.append({
+                "item": item,
+                "kind": plain(get("kind")).lower() or None,
+                "version": plain(get("version")) or None,
+                "checked_on": date.group(0) if date else None,
+                "url": url_of(get("url")),
+            })
+        return rows
+    return None
+
+
+def is_language_skill(d: Path) -> bool:
+    """A lang-* skill attaches through paths: in its frontmatter; lang-refresh has none."""
+    skill = d / "SKILL.md"
+    if not skill.is_file():
+        return False
+    front = skill.read_text().split("---", 2)
+    return len(front) == 3 and re.search(r"^paths:", front[1], re.M) is not None
+
+
+def skill_dirs(root: Path, names: list[str]) -> list[Path]:
+    dirs = sorted(p for p in (root / "skills" / "engineering").glob("lang-*") if is_language_skill(p))
+    if names:
+        wanted = {n if n.startswith("lang-") else f"lang-{n}" for n in names}
+        dirs = [d for d in dirs if d.name in wanted]
+    return dirs
+
+
+def age(checked_on: str | None, today: dt.date) -> int | None:
+    if checked_on is None:
+        return None
+    try:
+        return (today - dt.date.fromisoformat(checked_on)).days
+    except ValueError:
+        return None
+
+
+def collect(root: Path, names: list[str], today: dt.date) -> tuple[list[dict], list[str]]:
+    rows, problems = [], []
+    dirs = skill_dirs(root, names)
+    if names:
+        missing = {n if n.startswith("lang-") else f"lang-{n}" for n in names} - {d.name for d in dirs}
+        problems += [f"{m}: no such skill under skills/engineering" for m in sorted(missing)]
+    for d in dirs:
+        sources = d / "references" / "sources.md"
+        if not sources.is_file():
+            problems.append(f"{d.name}: no references/sources.md")
+            continue
+        table = parse(sources.read_text())
+        if table is None:
+            problems.append(f"{d.name}: no sources table (needs item and checked on columns)")
+            continue
+        for r in table:
+            rows.append({"skill": d.name, **r, "age_days": age(r["checked_on"], today)})
+    return rows, problems
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--skill", action="append", default=[], help="one lang-* skill (repeatable)")
+    ap.add_argument("--stale", type=int, metavar="DAYS", help="only rows not checked in DAYS days")
+    ap.add_argument("--today", type=dt.date.fromisoformat, default=dt.date.today())
+    ap.add_argument("--root", type=Path, default=ROOT)
+    args = ap.parse_args(argv)
+    rows, problems = collect(args.root, args.skill, args.today)
+    if args.stale is not None:
+        rows = [r for r in rows if r["age_days"] is None or r["age_days"] > args.stale]
+    json.dump(rows, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    for p in problems:
+        print(f"lang-sources: {p}", file=sys.stderr)
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
