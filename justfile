@@ -32,6 +32,10 @@ lang-sources *args:
 lint-registry *args:
     python3 scripts/lint-registry {{args}}
 
+# Vendor a lint pack into a repo, or update it by 3-way merge (--repo DIR add LANG|auto, update, status, wiring, remove)
+lint-vendor *args:
+    python3 scripts/lint-vendor {{args}}
+
 # Validate the plugin and marketplace manifests
 validate:
     claude plugin validate .claude-plugin/plugin.json

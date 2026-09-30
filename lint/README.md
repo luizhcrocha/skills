@@ -22,3 +22,7 @@ Each pack is seeded only with what its `lang-*` skill's gates already prescribe.
 - **Python, Go, C/C++, Nix**: config only (ruff rule selection, golangci-lint linters and settings, clang-tidy checks, statix lints). A lesson none of them can express stays in the skill as prose.
 
 Upstream anti-slop edits arrive through `just sync-upstream --upstream anti-slop`, which 3-way merges them into `ts/anti-slop/`.
+
+## Vendoring
+
+`lint-vendor` (on the Bash PATH through the plugin's `bin/`, or `just lint-vendor`) copies a pack into a repo at the paths above, records each file's base in `tools/lint/tstack/manifest.toml`, and later updates it by a 3-way merge so the repo's edits survive. It edits the working copy only and prints the wiring the repo still needs (oxlint `jsPlugins` and rules from the registry, `[lints] workspace = true`, the ruff `extend`...). `lint-vendor --help` has the merge rules. aimgr's `tstack-lint` package runs it on `aimgr use` and `aimgr up`.

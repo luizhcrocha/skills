@@ -1,0 +1,579 @@
+#!/usr/bin/env python3
+"""Vendor tstack's lint packs (lint/<lang>/) into a repo, and update them later
+by a 3-way merge that keeps the repo's own edits.
+
+    lint-vendor detect  [--repo DIR]
+    lint-vendor add     LANG... | auto  [--repo DIR] [--adopt]
+    lint-vendor update  [LANG...]       [--repo DIR]
+    lint-vendor status                  [--repo DIR]
+    lint-vendor wiring  [LANG...]       [--repo DIR]
+    lint-vendor remove  [LANG...]       [--repo DIR]
+    (--source DIR: the tstack checkout, default this script's; --repo: default .)
+
+LANG is ts, rust, cs, py, go, c-cpp or nix; `auto` takes what `detect` finds
+(marker files up to three levels deep: tsconfig.json or a package.json naming
+typescript, Cargo.toml, *.csproj/*.sln/*.slnx, pyproject.toml, go.mod,
+CMakeLists.txt/meson.build or C/C++ sources, flake.nix/devenv.nix).
+
+Where packs land, relative to --repo:
+    ts     tools/oxlint/anti-slop/, tools/oxlint/tstack/   (anti-slop's own layout; *.test.ts left out)
+    other  tools/lint/tstack/<lang>/
+The manifest, tools/lint/tstack/manifest.toml, records the tstack revision and,
+per file, where it came from and its base: the git blob id of the bytes
+vendored. The base's bytes come back from the tstack checkout's git object
+store, or from the cache ($TSTACK_LINT_CACHE, default ~/.cache/tstack/lint-base)
+that every run fills.
+
+update, per file (local = the repo's copy, base = what was last vendored,
+incoming = the pack now):
+    local == incoming               nothing to do; base moves to incoming
+    base == incoming                the repo's edit, kept
+    base == local                   replaced by incoming
+    all three differ                git merge-file; conflict markers on a clash
+    no base recoverable             left alone, reported (compare by hand)
+    deleted in the repo             stays deleted; reported if incoming changed
+    new in the pack                 added
+    gone from the pack              kept, reported, dropped from the manifest
+A conflicted file keeps its old base, so a rerun after resolving merges clean.
+
+add copies a pack in. A file already there (an earlier install-anti-slop copy)
+is recorded when it matches the pack; when it differs it is left alone and
+reported, or, with --adopt, recorded as the pack plus the repo's edits.
+remove deletes the files still equal to their base; an edited one stays, as the
+repo's own file (out of the manifest).
+
+Every command edits the working copy only: nothing is staged, committed or
+pushed. add and update end by printing the wiring the repo still needs (the
+oxlint jsPlugins and rules, `[lints] workspace = true`, the ruff extend...);
+lint-vendor never edits the repo's own config files.
+Exit 0; 1 on conflicts, skipped files or a bad state; 2 on bad arguments.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+LANGS = ("ts", "rust", "cs", "py", "go", "c-cpp", "nix")
+MANIFEST = Path("tools/lint/tstack/manifest.toml")
+SKIP_DIRS = {".git", ".jj", "node_modules", "target", "dist", "build", ".venv", "venv", "vendor", ".direnv", "tools"}
+
+
+def pack_dirs(lang: str) -> list[tuple[str, str]]:
+    """(pack directory in tstack, directory in the repo) pairs for a language."""
+    if lang == "ts":
+        return [("lint/ts/anti-slop", "tools/oxlint/anti-slop"), ("lint/ts/tstack", "tools/oxlint/tstack")]
+    return [(f"lint/{lang}", f"tools/lint/tstack/{lang}")]
+
+
+def vendored(name: str) -> bool:
+    return not name.endswith(".test.ts")
+
+
+def pack_files(source: Path, lang: str) -> dict[str, str]:
+    """{repo path: tstack path} for every file the language's pack vendors."""
+    out = {}
+    for src_dir, dst_dir in pack_dirs(lang):
+        base = source / src_dir
+        if not base.is_dir():
+            raise Failure(f"no pack {src_dir} in {source}")
+        for f in sorted(base.rglob("*")):
+            if f.is_file() and vendored(f.name) and "node_modules" not in f.parts:
+                rel = f.relative_to(base).as_posix()
+                out[f"{dst_dir}/{rel}"] = f"{src_dir}/{rel}"
+    return out
+
+
+class Failure(Exception):
+    pass
+
+
+def blob_id(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def cache_dir() -> Path:
+    env = os.environ.get("TSTACK_LINT_CACHE")
+    return Path(env) if env else Path.home() / ".cache" / "tstack" / "lint-base"
+
+
+def cache_put(data: bytes) -> None:
+    d = cache_dir()
+    blob = blob_id(data)
+    target = d / blob[:2] / blob[2:]
+    if not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+
+
+def git_dir(source: Path) -> Path | None:
+    """The git directory behind a checkout: .git, or through a jj workspace's repo pointer."""
+    if (source / ".git").exists():
+        return source / ".git"
+    repo = source / ".jj" / "repo"
+    if repo.is_file():
+        repo = (source / ".jj" / Path(repo.read_text().strip())).resolve()
+    target = repo / "store" / "git_target"
+    if target.is_file():
+        return (repo / "store" / target.read_text().strip()).resolve()
+    return None
+
+
+def base_bytes(source: Path, blob: str) -> bytes | None:
+    cached = cache_dir() / blob[:2] / blob[2:]
+    if cached.is_file():
+        return cached.read_bytes()
+    gd = git_dir(source)
+    if gd is not None:
+        p = subprocess.run(["git", "--git-dir", str(gd), "cat-file", "blob", blob], capture_output=True)
+        if p.returncode == 0 and blob_id(p.stdout) == blob:
+            return p.stdout
+    return None
+
+
+def revision(source: Path) -> str:
+    if (source / ".jj").is_dir():
+        p = subprocess.run(["jj", "log", "--ignore-working-copy", "-R", str(source), "-r", "@", "--no-graph",
+                            "-T", 'commit_id ++ " (change " ++ change_id.short(12) ++ ")"'],
+                           capture_output=True, text=True)
+        if p.returncode == 0 and p.stdout.strip():
+            return p.stdout.strip()
+    gd = git_dir(source)
+    if gd is not None:
+        p = subprocess.run(["git", "--git-dir", str(gd), "rev-parse", "HEAD"], capture_output=True, text=True)
+        if p.returncode == 0:
+            return p.stdout.strip()
+    return "unknown"
+
+
+@dataclass
+class Manifest:
+    revision: str = ""
+    updated: str = ""
+    langs: list[str] = field(default_factory=list)
+    files: dict[str, dict] = field(default_factory=dict)  # repo path -> {from, lang, base}
+
+    @classmethod
+    def load(cls, repo: Path) -> "Manifest":
+        path = repo / MANIFEST
+        if not path.is_file():
+            return cls()
+        data = tomllib.loads(path.read_text())
+        return cls(
+            revision=data.get("revision", ""),
+            updated=data.get("updated", ""),
+            langs=list(data.get("langs", [])),
+            files={f["path"]: {"from": f["from"], "lang": f["lang"], "base": f["base"]} for f in data.get("file", [])},
+        )
+
+    def save(self, repo: Path) -> None:
+        path = repo / MANIFEST
+        if not self.files:
+            if path.exists():
+                path.unlink()
+            return
+        q = lambda s: json.dumps(s, ensure_ascii=False)
+        out = [
+            "# Written by tstack's lint-vendor (github.com/luizhcrocha/skills, scripts/lint-vendor).\n",
+            "# `base` is the git blob id of the bytes last vendored: the merge base for the\n",
+            "# next `lint-vendor update`, which keeps this repo's edits. Edit the vendored\n",
+            "# files freely; leave this file to lint-vendor.\n\n",
+            f"source = {q('https://github.com/luizhcrocha/skills')}\n",
+            f"revision = {q(self.revision)}\n",
+            f"updated = {q(self.updated)}\n",
+            "langs = [" + ", ".join(q(lang) for lang in sorted(self.langs, key=LANGS.index)) + "]\n",
+        ]
+        for p in sorted(self.files):
+            f = self.files[p]
+            out.append(f"\n[[file]]\npath = {q(p)}\nfrom = {q(f['from'])}\nlang = {q(f['lang'])}\nbase = {q(f['base'])}\n")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(out))
+
+
+@dataclass
+class Report:
+    added: list[str] = field(default_factory=list)
+    updated: list[str] = field(default_factory=list)
+    merged: list[str] = field(default_factory=list)
+    kept: list[str] = field(default_factory=list)
+    conflicted: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
+    adopted: list[str] = field(default_factory=list)
+    deleted_locally: list[str] = field(default_factory=list)
+    gone_from_pack: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+
+    def print(self) -> None:
+        labels = [
+            ("added", "Added"),
+            ("updated", "Updated (no local edits)"),
+            ("merged", "Merged (tstack's change and the repo's edits)"),
+            ("kept", "Kept (the repo's edits; tstack unchanged)"),
+            ("adopted", "Adopted (an existing copy recorded as the pack plus the repo's edits)"),
+            ("conflicted", "CONFLICTED (resolve the markers, then run update again)"),
+            ("skipped", "Skipped (differs, no base to merge from; compare by hand, or add --adopt)"),
+            ("deleted_locally", "Deleted in the repo (left deleted)"),
+            ("gone_from_pack", "Gone from the pack (kept; now the repo's own file)"),
+            ("removed", "Removed"),
+        ]
+        for key, label in labels:
+            items = getattr(self, key)
+            if items:
+                print(f"{label}:")
+                for i in items:
+                    print(f"  {i}")
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.conflicted or self.skipped)
+
+
+def merge3(local: bytes, base: bytes, incoming: bytes) -> tuple[bytes, bool]:
+    with tempfile.TemporaryDirectory() as t:
+        paths = [Path(t) / n for n in ("local", "base", "incoming")]
+        for p, data in zip(paths, (local, base, incoming)):
+            p.write_bytes(data)
+        p = subprocess.run(["git", "merge-file", "-p", "-L", "repo", "-L", "base", "-L", "tstack", *map(str, paths)],
+                           capture_output=True)
+        if p.returncode < 0 or p.returncode > 127:
+            raise Failure(f"git merge-file failed: {p.stderr.decode().strip()}")
+        return p.stdout, p.returncode == 0
+
+
+def write(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
+def vendor(source: Path, repo: Path, langs: list[str], adopt: bool) -> Report:
+    """Bring each language's pack into the repo (add and update share it); the manifest is rewritten only on a change."""
+    m = Manifest.load(repo)
+    before = (json.dumps(m.files, sort_keys=True), sorted(m.langs))
+    r = Report()
+    for lang in langs:
+        incoming_files = pack_files(source, lang)
+        for dst, src in incoming_files.items():
+            incoming = (source / src).read_bytes()
+            cache_put(incoming)
+            local_path = repo / dst
+            entry = m.files.get(dst)
+            record = {"from": src, "lang": lang, "base": blob_id(incoming)}
+            if entry is None:
+                if not local_path.exists():
+                    write(local_path, incoming)
+                    r.added.append(dst)
+                elif local_path.read_bytes() == incoming:
+                    r.added.append(f"{dst} (already there, identical)")
+                elif adopt:
+                    r.adopted.append(dst)
+                else:
+                    r.skipped.append(f"{dst} (exists, not vendored by lint-vendor; tstack's copy: {src})")
+                    continue
+                m.files[dst] = record
+                continue
+            if not local_path.exists():
+                if entry["base"] != record["base"]:
+                    r.deleted_locally.append(f"{dst} (tstack changed it since; see {src})")
+                else:
+                    r.deleted_locally.append(dst)
+                continue
+            local = local_path.read_bytes()
+            if local == incoming:
+                m.files[dst] = record
+                continue
+            if entry["base"] == record["base"]:
+                r.kept.append(dst)
+                continue
+            base = base_bytes(source, entry["base"])
+            if base is None:
+                r.skipped.append(f"{dst} (base {entry['base'][:12]} not recoverable; tstack's copy: {src})")
+                continue
+            if base == local:
+                write(local_path, incoming)
+                r.updated.append(dst)
+                m.files[dst] = record
+                continue
+            merged, clean = merge3(local, base, incoming)
+            write(local_path, merged)
+            if clean:
+                r.merged.append(dst)
+                m.files[dst] = record
+            else:
+                r.conflicted.append(dst)
+        for dst, entry in list(m.files.items()):
+            if entry["lang"] == lang and dst not in incoming_files:
+                r.gone_from_pack.append(dst)
+                del m.files[dst]
+        if lang not in m.langs and any(e["lang"] == lang for e in m.files.values()):
+            m.langs.append(lang)
+    if (json.dumps(m.files, sort_keys=True), sorted(m.langs)) != before:
+        m.revision = revision(source)
+        m.updated = dt.date.today().isoformat()
+        m.save(repo)
+    return r
+
+
+def remove(repo: Path, langs: list[str]) -> Report:
+    m = Manifest.load(repo)
+    r = Report()
+    for dst, entry in sorted(m.files.items()):
+        if entry["lang"] not in langs:
+            continue
+        path = repo / dst
+        del m.files[dst]
+        if path.exists() and blob_id(path.read_bytes()) != entry["base"]:
+            r.kept.append(f"{dst} (edited in the repo, now its own file; delete it by hand if it should go)")
+            continue
+        if path.exists():
+            path.unlink()
+            r.removed.append(dst)
+        parent = path.parent
+        while parent != repo and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
+    m.langs = [lang for lang in m.langs if any(e["lang"] == lang for e in m.files.values())]
+    m.save(repo)
+    return r
+
+
+def status(source: Path, repo: Path) -> int:
+    m = Manifest.load(repo)
+    if not m.files:
+        print(f"nothing vendored in {repo} (no {MANIFEST})")
+        return 0
+    print(f"vendored from tstack {m.revision} on {m.updated}: {', '.join(m.langs)}")
+    for dst, entry in sorted(m.files.items()):
+        path = repo / dst
+        local = "missing" if not path.exists() else ("clean" if blob_id(path.read_bytes()) == entry["base"] else "edited")
+        src = source / entry["from"]
+        incoming = "gone from the pack" if not src.exists() else (
+            "" if blob_id(src.read_bytes()) == entry["base"] else "tstack has a newer version")
+        if local != "clean" or incoming:
+            print(f"  {dst}: {local}" + (f", {incoming}" if incoming else ""))
+    return 0
+
+
+# Detection
+
+def walk(repo: Path, depth: int = 3):
+    stack = [(repo, 0)]
+    while stack:
+        d, level = stack.pop()
+        try:
+            entries = list(d.iterdir())
+        except OSError:
+            continue
+        for e in entries:
+            if e.is_dir():
+                if level < depth and e.name not in SKIP_DIRS and not e.name.startswith("."):
+                    stack.append((e, level + 1))
+            else:
+                yield e
+
+
+def names_typescript(package_json: Path) -> bool:
+    try:
+        data = json.loads(package_json.read_text())
+    except (OSError, ValueError):
+        return False
+    return any("typescript" in (data.get(k) or {}) for k in ("dependencies", "devDependencies"))
+
+
+def detect(repo: Path) -> list[str]:
+    found = set()
+    for f in walk(repo):
+        n = f.name
+        if n == "tsconfig.json" or (n == "package.json" and names_typescript(f)):
+            found.add("ts")
+        elif n == "Cargo.toml":
+            found.add("rust")
+        elif f.suffix in (".csproj", ".sln", ".slnx"):
+            found.add("cs")
+        elif n in ("pyproject.toml", "setup.py"):
+            found.add("py")
+        elif n == "go.mod":
+            found.add("go")
+        elif n in ("CMakeLists.txt", "meson.build") or f.suffix in (".c", ".cc", ".cpp", ".cxx"):
+            found.add("c-cpp")
+        elif n in ("flake.nix", "devenv.nix", "default.nix", "shell.nix"):
+            found.add("nix")
+    return [lang for lang in LANGS if lang in found]
+
+
+# Wiring: what the repo still has to point at the vendored files.
+
+def load_registry(source: Path) -> list[dict]:
+    path = source / "lint" / "registry.toml"
+    return tomllib.loads(path.read_text()).get("rule", []) if path.is_file() else []
+
+
+def package_json(repo: Path) -> dict:
+    try:
+        return json.loads((repo / "package.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def dependency(pkg: dict, name: str) -> str | None:
+    for k in ("dependencies", "devDependencies"):
+        if name in (pkg.get(k) or {}):
+            return pkg[k][name]
+    return None
+
+
+def ts_wiring(source: Path, repo: Path) -> list[str]:
+    rules = [r for r in load_registry(source) if r.get("lang") == "ts" and r.get("status") in ("warn", "error")]
+    pkg = package_json(repo)
+    effect = dependency(pkg, "effect") is not None
+    lines = []
+    for r in sorted(rules, key=lambda r: r["id"]):
+        plugin, name = r["id"].split("/", 2)[1:]
+        if plugin == "anti-slop-effect" and not effect:
+            continue
+        lines.append(f'    "{plugin}/{name}": "{r["status"]}",')
+    config = next((c for c in ("vite.config.ts", "oxlint.config.ts", ".oxlintrc.json") if (repo / c).exists()), None)
+    oxlint = dependency(pkg, "oxlint") or dependency(pkg, "vite-plus")
+    plugins = [
+        '    { name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },',
+        '    { name: "tstack", specifier: "./tools/oxlint/tstack/index.ts" },',
+    ]
+    if effect:
+        plugins.append('    { name: "anti-slop-effect", specifier: "./tools/oxlint/anti-slop/effect/index.ts" },')
+    out = [
+        f"ts: in {config or 'oxlint.config.ts'} ({'under `lint`, and the ignore under `fmt` too' if config == 'vite.config.ts' else 'top level'}),"
+        " merged with what is there (an existing anti-slop entry stays as is):",
+        '  ignorePatterns: ["tools/oxlint/**"],',
+        "  jsPlugins: [",
+        *plugins,
+        "  ],",
+        "  rules: {  // the registry's warn and error rules; trial rules stay off",
+        *lines,
+        "  },",
+    ]
+    if oxlint:
+        out.append(f"  dependency: @oxlint/plugins pinned exactly to the Oxlint in use ({'vite-plus ' if dependency(pkg, 'oxlint') is None else 'oxlint '}{oxlint}; Vite+ bundles its own Oxlint).")
+    else:
+        out.append("  dependency: no oxlint yet: `npm view oxlint version`, then add oxlint and @oxlint/plugins at exactly that version as dev dependencies.")
+    if not effect:
+        out.append("  anti-slop-effect: not registered (no direct effect dependency).")
+    return out
+
+
+def wiring(source: Path, repo: Path, lang: str) -> list[str]:
+    d = f"tools/lint/tstack/{lang}"
+    if lang == "ts":
+        return ts_wiring(source, repo)
+    if lang == "rust":
+        return [
+            f"rust: merge {d}/lints.toml into Cargo.toml: its [workspace.lints] tables in a workspace root and"
+            " `[lints] workspace = true` in each member crate; in a single-crate repo, the same keys under [lints.clippy].",
+            f"  clippy.toml: copy {d}/clippy.toml to the workspace root when it has entries, or set"
+            f" CLIPPY_CONF_DIR={d} for the lint recipe.",
+        ]
+    if lang == "cs":
+        return [f'cs: in the root Directory.Build.props: <Import Project="$(MSBuildThisFileDirectory){d}/Directory.Build.props" />'
+                " (it adds tstack.globalconfig; the repo's .editorconfig still wins per key)."]
+    if lang == "py":
+        return [
+            f'py: in pyproject.toml, [tool.ruff] extend = "{d}/ruff.toml" (ruff.toml: extend at top level).',
+            '  and, in the repo\'s own config, [tool.ruff.lint.per-file-ignores] "tests/**" = ["S101", "PLR2004", "ANN"]',
+            "  (paths in an extended file resolve from its folder, so they stay here).",
+        ]
+    if lang == "go":
+        have = (repo / ".golangci.yml").exists() or (repo / ".golangci.yaml").exists()
+        return [f"go: merge {d}/golangci.yml's linters and formatters into .golangci.yml (golangci-lint v2 has no includes)."
+                if have else f"go: `golangci-lint run -c {d}/golangci.yml ./...` in the lint recipe, or copy it to .golangci.yml."]
+    if lang == "c-cpp":
+        have = (repo / ".clang-tidy").exists()
+        return [f"c-cpp: merge {d}/.clang-tidy's Checks into the root .clang-tidy." if have
+                else f"c-cpp: `clang-tidy --config-file={d}/.clang-tidy -p build <files>`, or copy it to the root .clang-tidy."]
+    if lang == "nix":
+        return [f"nix: `statix check --config {d}/statix.toml .` in the lint recipe (advice; deadnix needs no config)."]
+    raise Failure(f"unknown language {lang}")
+
+
+def print_wiring(source: Path, repo: Path, langs: list[str]) -> None:
+    if not langs:
+        return
+    print("\nWire it (lint-vendor edits none of these):")
+    for lang in langs:
+        for line in wiring(source, repo, lang):
+            print(line)
+    print("\nNothing was committed: review with `jj diff` (or `git status`).")
+
+
+def parse_langs(values: list[str], repo: Path, allow_auto: bool) -> list[str]:
+    if allow_auto and values == ["auto"]:
+        return detect(repo)
+    bad = [v for v in values if v not in LANGS]
+    if bad:
+        raise Failure(f"unknown language(s): {', '.join(bad)} (one of {', '.join(LANGS)}{', or auto' if allow_auto else ''})")
+    return list(dict.fromkeys(values))
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    common = argparse.ArgumentParser(add_help=False)
+    for parser, default in ((ap, True), (common, False)):
+        parser.add_argument("--source", type=Path, default=ROOT if default else argparse.SUPPRESS, help="the tstack checkout")
+        parser.add_argument("--repo", type=Path, default=Path(".") if default else argparse.SUPPRESS,
+                            help="the repo (or package) to vendor into")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("detect", parents=[common])
+    p = sub.add_parser("add", parents=[common])
+    p.add_argument("langs", nargs="+")
+    p.add_argument("--adopt", action="store_true", help="record differing existing files as the pack plus local edits")
+    for name in ("update", "wiring", "remove"):
+        sub.add_parser(name, parents=[common]).add_argument("langs", nargs="*")
+    sub.add_parser("status", parents=[common])
+    args = ap.parse_args(argv)
+    source, repo = args.source.resolve(), args.repo.resolve()
+
+    try:
+        if not repo.is_dir():
+            raise Failure(f"no directory {repo}")
+        if args.cmd == "detect":
+            print(" ".join(detect(repo)))
+            return 0
+        if args.cmd == "status":
+            return status(source, repo)
+        manifest = Manifest.load(repo)
+        if args.cmd == "add":
+            langs = parse_langs(args.langs, repo, allow_auto=True)
+            if not langs:
+                print(f"no language detected in {repo}; name one: {', '.join(LANGS)}")
+                return 0
+            r = vendor(source, repo, langs, args.adopt)
+        elif args.cmd == "update":
+            langs = parse_langs(args.langs, repo, allow_auto=False) or manifest.langs
+            if not langs:
+                raise Failure(f"nothing vendored in {repo}; run `lint-vendor add` first")
+            r = vendor(source, repo, langs, adopt=False)
+        elif args.cmd == "remove":
+            langs = parse_langs(args.langs, repo, allow_auto=False) or manifest.langs
+            remove(repo, langs).print()
+            return 0
+        else:
+            print_wiring(source, repo, parse_langs(args.langs, repo, allow_auto=False) or manifest.langs)
+            return 0
+        print(f"tstack lint packs in {repo}: {', '.join(langs)}")
+        r.print()
+        print_wiring(source, repo, [lang for lang in langs if lang in Manifest.load(repo).langs])
+        return 1 if r.failed else 0
+    except Failure as e:
+        print(f"lint-vendor: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
