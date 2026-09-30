@@ -26,7 +26,10 @@ this repo's skills once step 1 lands.
 1. Plugin skeleton and marketplace; switch the install from skills.sh; current skills unchanged.
 2. memo + recall; disable claude-mem.
 3. `/tuca-mode` and its playbooks; jj hints hook; tree-butler.
-4. Merges, one by one (map below), starting with tdd.
+4. Merges, one by one (map below), starting with tdd. Each merge adds its
+   mapping to `upstreams.toml`, the manifest of upstreams (mattpocock/skills
+   and pstack so far) that `mise run sync-upstream` 3-way merges from;
+   `--list-unmapped` shows what pstack still offers.
 5. Language rules (ts, go, then py/nix as they earn it).
 6. Fleet: machine-level control plane, one jj workspace per worker, advisor agent, rules moved from prose into code.
 
