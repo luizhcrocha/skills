@@ -21,6 +21,8 @@ this repo's skills once step 1 lands.
 | D8 | Language rules load themselves when a matching file is touched, through the skill `paths:` frontmatter (supported in Claude Code 2.1.285; no hook needed). |
 | D10 | The repo's tasks run through a `justfile`; no mise, no dev shell (python3, node and jj come from the machine). |
 | D9 | Testing follows a ladder chosen by risk and maturity (below), after the tdd merge. |
+| D11 | Models: Sonnet for research, reading and legwork; Opus for judgement; Fable for decisive single roles (a judge, a synthesizer, the advisor, the hardest task), never for fan-out, rerun on Opus when Fable is unavailable. |
+| D12 | **Evolving lint rules.** Lessons that repeat become lint rules, in each language's native linter: Oxlint JS plugins for TS (anti-slop as the seed), Clippy config (dylint for custom lints) for Rust, Roslyn analyzers/.editorconfig for C#, ruff config for Python, golangci-lint for Go, clang-tidy for C/C++, statix for Nix. Rules are **vendored** into each repo (anti-slop style), so the repo's own checks and CI enforce them. Proposals come automatically from reflect's structural-enforcement backlog, review/interrogate findings seen 2+ times, comment-sicko's MUST KILL flags, memo gotchas and automate-me; each rule ships with tests from the real incident, runs in trial across Luiz's repos (hits, false positives), and is promoted warn → error with Luiz's yes; rules that never fire are retired. |
 
 ## Order of work
 
@@ -31,7 +33,8 @@ this repo's skills once step 1 lands.
    mapping to `upstreams.toml`, the manifest of upstreams (mattpocock/skills
    and pstack so far) that `just sync-upstream` 3-way merges from;
    `--list-unmapped` shows what pstack still offers.
-5. Language rules (ts, go, then py/nix as they earn it).
+5. Language rules: one `lang-*` skill per language (ts, rust, zig, cs, py, go, nix, c, cpp), each with `references/sources.md`, kept current by `lang-refresh`.
+5b. Evolving lint rules (D12): the proposal → trial → promote → retire loop, in each language's native linter, vendored into repos.
 6. Fleet: machine-level control plane, one jj workspace per worker, advisor agent, rules moved from prose into code.
 
 ## Components (design sketch)
