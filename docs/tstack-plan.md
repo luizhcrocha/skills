@@ -35,7 +35,7 @@ this repo's skills once step 1 lands.
    and pstack so far) that `just sync-upstream` 3-way merges from;
    `--list-unmapped` shows what pstack still offers.
 5. Language rules: one `lang-*` skill per language (ts, rust, zig, cs, py, go, nix, c, cpp), each with `references/sources.md`, kept current by `lang-refresh`.
-5b. Evolving lint rules (D12): the proposal → trial → promote → retire loop, in each language's native linter, vendored into repos.
+5b. Evolving lint rules (D12): the proposal → trial → promote → retire loop, in each language's native linter, vendored into repos. **Done**: packs under `lint/<lang>/` (ts: the anti-slop fork, synced as an upstream, plus tstack's own Oxlint plugin with `no-spy-on`; rust, cs, py, go, c-cpp, nix: native config seeded from each `lang-*` skill's gates), `lint/registry.toml` with `scripts/lint-registry` (evidence, status history, trial runs, stale rules), `scripts/lint-vendor` (vendors a pack, 3-way updates it against the recorded base, prints the wiring; aimgr's `tstack-lint` package runs it), `lint-evolve` (evidence → native lint or custom rule tested on the incident → read-only trials → warn) and `lint-audit` (measure, promote on Luiz's yes, retire, point rules that keep firing at a skill, re-vendor), fed by reflect, review, interrogate, no-comments, memo and automate-me.
 5. Language rules (ts, go, then py/nix as they earn it).
    Every `lang-*` skill pins its versions in `references/sources.md`
    (item, kind, version targeted, checked on, release-notes URL);
