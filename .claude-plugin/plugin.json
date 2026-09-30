@@ -31,6 +31,8 @@
     "./skills/engineering/architect",
     "./skills/engineering/arena",
     "./skills/engineering/figure-it-out",
+    "./skills/engineering/create-verification-skill",
+    "./skills/engineering/maintain-verification-skill",
     "./skills/engineering/to-issues",
     "./skills/engineering/to-spec",
     "./skills/engineering/triage",

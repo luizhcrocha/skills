@@ -116,6 +116,13 @@ ignore = [
   # thermo-nuclear review into our lenses/maintainability.md. Only the files
   # mapped below sync.
   "skills/interrogate",
+  # decided: adapted by hand, 2026-09-30. Both SKILL.md files were rewritten
+  # for Claude Code: .claude/skills/verify-<app>, claude-in-chrome for web
+  # (Playwright's _electron for packaged Electron), tmux or direct commands for
+  # CLIs and TUIs, Claude Code's run skill, Sonnet source readers, a jj change
+  # instead of a PR, model-invocable. Only the feature-map example maps.
+  "skills/create-verification-skill",
+  "skills/maintain-verification-skill",
 ]
 map = [
   { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md" },
@@ -158,6 +165,8 @@ map = [
   { from = "skills/architect/references/design-red-flags.md", to = "skills/engineering/codebase-design/RED-FLAGS.md" },
   { from = "skills/architect/references/runner-prompt.md", to = "skills/engineering/architect/references/runner-prompt.md" },
   { from = "skills/architect/references/rationale-template.md", to = "skills/engineering/architect/references/rationale-template.md" },
+  # create-verification-skill's feature-map example, verbatim (2026-09-30).
+  { from = "skills/create-verification-skill/references", to = "skills/engineering/create-verification-skill/references" },
   { from = "skills/poteto-mode/scripts/watch-pr", to = "skills/engineering/tuca-mode/scripts/watch-pr" },
   { from = "skills/poteto-mode/scripts/bootstrap.ts", to = "skills/engineering/tuca-mode/scripts/bootstrap.ts" },
   { from = "skills/poteto-mode/scripts/package.json", to = "skills/engineering/tuca-mode/scripts/package.json" },
