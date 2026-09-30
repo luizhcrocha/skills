@@ -52,15 +52,24 @@ map = [
   { from = "skills/productivity/writing-for-agents", to = "skills/productivity/writing-for-agents" },
 ]
 
-# poteto's pstack. Nothing merged yet: each overlap is decided with Luiz
-# (docs/tstack-plan.md, step 4) and gets its mapping then.
+# poteto's pstack (MIT). Each overlap is decided with Luiz (docs/tstack-plan.md,
+# step 4) and gets its mapping then. The principles are adapted in place
+# (Cursor-only references, links between leaves); those local edits 3-way merge
+# on the next sync.
 [upstream.pstack]
 url = "https://github.com/cursor/plugins.git"
 subdir = "pstack"
-base = "fae2c6ed95821bd85f614a73e4842e13229fa5e5"
+base = "2eb7ed4613cfc8f098dfe464a23680ea44d84c5e"
 units = ["skills/*", "agents/*", "automations/*"]
 ignore = []
-map = []
+map = [
+  { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md" },
+  # watch-pr, unchanged: the babysit and shipping playbooks poll GitHub with it (bun).
+  { from = "skills/poteto-mode/scripts/watch-pr", to = "skills/engineering/tuca-mode/scripts/watch-pr" },
+  { from = "skills/poteto-mode/scripts/bootstrap.ts", to = "skills/engineering/tuca-mode/scripts/bootstrap.ts" },
+  { from = "skills/poteto-mode/scripts/package.json", to = "skills/engineering/tuca-mode/scripts/package.json" },
+  { from = "skills/poteto-mode/scripts/bun.lock", to = "skills/engineering/tuca-mode/scripts/bun.lock" },
+]
 
 # OptMem and its per-project fork: the ideas behind memo (docs/design/memo.md).
 # Neither has a license, so they are watch-only: `just sync-upstream` lists what
