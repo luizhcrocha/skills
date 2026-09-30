@@ -33,7 +33,6 @@
     "./skills/productivity/manager",
     "./skills/productivity/memo",
     "./skills/productivity/recall",
-    "./skills/productivity/caveman",
     "./skills/productivity/grill-me",
     "./skills/productivity/grilling",
     "./skills/productivity/handoff",
@@ -41,6 +40,8 @@
     "./skills/productivity/show-me",
     "./skills/productivity/teach",
     "./skills/productivity/wait-what",
-    "./skills/productivity/writing-for-agents"
+    "./skills/productivity/writing-for-agents",
+    "./skills/productivity/unslop",
+    "./skills/productivity/technical-writing"
   ]
 }

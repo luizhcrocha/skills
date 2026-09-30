@@ -95,7 +95,7 @@ OptMem's way, with no extra model call:
   the next bucket; two summaries that overlap after a merge are both kept and
   wake uses the one covering more.
 - Fleet workers (`TSTACK_ROLE=worker`) never get compaction tasks; neither does
-  a session in `/caveman` or with the hint suppressed (`MEMO_QUIET=1`).
+  a session with the hint suppressed (`MEMO_QUIET=1`).
 - Summaries form a tree (16 notes, 16 summaries, …); wake shows recent notes
   verbatim and older periods as progressively coarser lines, and
   `memo zoom <id>` walks down. `memo wake` never blocks on a missing summary: an

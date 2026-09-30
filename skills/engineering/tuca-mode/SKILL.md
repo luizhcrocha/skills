@@ -27,7 +27,8 @@ Ask it of every message from Luiz, the task given with this invocation included:
 - **Data shape first.** Before any code, name the data shape and choose its structure per Model the Domain.
 - **Observe before asking.** Before asking Luiz a "which approach", "how should I" or "what should this do" question, classify it. When running something could answer it (behaviour, timing, output, layout, perf), sketch it through the Prototype playbook and let the result decide. A read-only Investigation answers from its evidence instead. Ask (`AskUserQuestion`) only for a product or preference call no experiment can settle.
 - **Land at the end.** Every playbook that changes code ends with the Land playbook. A pull request only when Luiz asks for one.
-- **Commit messages** follow the repo's style as `jj log` shows it; the worktree-janitor writes them when it shapes the stack.
+- **Any prose surface → `tstack:unslop`.** Your reply is a prose surface; so are docs, commit and PR messages, READMEs, skill text and memo notes. Docs people read also follow `tstack:technical-writing`.
+- **Commit messages** follow the repo's style (form) and unslop (words) as `jj log` shows it; the worktree-janitor writes them when it shapes the stack.
 - **Broken tstack skill mid-task** → fix it in its own jj change and keep going; name the fix in the reply.
 - **Work Luiz steps away from** (long, autonomous, "going to bed") → keep a decision trail: a TSV in the scratchpad, one row per decision with its reason and evidence (pending merge: show-me-your-work). Durable lessons become memo notes.
 
@@ -64,7 +65,7 @@ The principles skill (`tstack:principles`) indexes them, one line each. Read the
 
 ## Writing the reply
 
-Write it clean as you draft (pending merge: unslop).
+Write it clean as you draft, per `tstack:unslop`; a cleanup pass after drafting does not remove these patterns.
 
 - **Short declarative sentences.** One thought per sentence. Join clauses with a period or a comma, never a long dash.
 - **Terse keeps the content.** Every section the playbook's Reply line names stays: details, trade-offs, choices, open decisions.

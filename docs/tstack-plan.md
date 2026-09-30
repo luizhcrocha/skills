@@ -130,7 +130,7 @@ before the refactor, so the refactor is checked against it.
 | review | interrogate, no-comments + comment-sicko | code-review, thermo-nuclear | code-review is the entry; interrogate its high-stakes mode; keep no-comments |
 | design | architect, principle-* | codebase-design, improve-codebase-architecture, domain-modeling | keep ours; architect as a playbook |
 | debugging | bug-fix, forensics playbooks, blast-radius | diagnosing-bugs | our loop is the bug-fix playbook; keep blast-radius |
-| prose | unslop, technical-writing | writing-for-agents, caveman | keep all; unslop model-invocable |
+| prose | unslop, technical-writing | writing-for-agents, caveman | **done**: unslop and technical-writing imported, model-invocable; tuca-mode sends every prose surface through unslop (pstack's way); caveman removed |
 | planning | multi-phase-plan, figure-it-out | to-spec, to-issues, triage, grilling | keep ours; figure-it-out as fallback playbook |
 | session | recall, reflect, show-me-your-work, pause/pickup | handoff, wait-what | recall on memo; bro into wait-what |
 | language | typescript-best-practices | coding-standards-ts, JetBrains use-modern-go | merge into lang-ts; wrap use-modern-go in lang-go |
@@ -153,11 +153,9 @@ merging the skill replaces the marker with a pointer.
 | architect | bug-fix, feature, refactoring | `codebase-design` and its DESIGN-IT-TWICE.md |
 | arena | feature | two Opus agents in separate jj workspaces, pick or graft |
 | interrogate | feature | `code-review` plus a fresh Opus reviewer told to break it |
-| unslop | the reply rules | the rules inline in tuca-mode |
 | no-comments | the comments rule | the rule inline in tuca-mode |
 | show-me-your-work | non-negotiables, autonomous-run, hillclimb, principles/prove-it-works | a TSV decision log in the scratchpad |
 | figure-it-out | the no-playbook fallback, refactoring | a bespoke step list in playbook shape |
-| technical-writing | commit and PR messages | the repo's style from `jj log`, written by the worktree-janitor |
 | swarm | parallel fan-out | the `orchestrate` skill |
 
 Replaced rather than pending: poteto-agent (subagents take `model` per role),
