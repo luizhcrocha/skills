@@ -57,7 +57,7 @@ The machinery only once it is earned: when you spawn a worker that outlives one 
 - **Model by role.** Research, reading, legwork, scans, sweeps, running checks, watching: `model: "sonnet"`. Judgement (implementation, debugging, design, review): `model: "opus"`. A task that mixes both goes to Opus. Any other model is a proposal Luiz approves first.
 - **Defaults for every Agent call.** `run_in_background: true`; file pointers, not pasted content; a specific scope (the files it may edit, the data shape, the done criterion).
 - **One jj workspace per code-writing worker**: `jj workspace add ../<repo>-<lane> -r <base> --name <lane>`. Rebases, bookmark moves and pushes stay with whoever holds the landing turn.
-- **You own their output.** Read the diff and write your own summary; a report is a claim until you check it. For a second opinion, a fresh Opus agent with the same brief. Skills that set their own agents (research, code-review, worktree-janitor, orchestrate) keep them.
+- **You own their output.** Read the diff and write your own summary; a report is a claim until you check it. For a second opinion, a fresh Opus agent with the same brief. Skills that set their own agents (research, review, interrogate, worktree-janitor, orchestrate) keep them.
 
 ## Principles
 

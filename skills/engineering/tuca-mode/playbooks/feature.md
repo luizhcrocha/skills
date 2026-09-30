@@ -11,7 +11,7 @@
    - **Smallest safe decomposition.** If one worker is best, say why.
 4. Delegate the code to an Opus subagent in its own jj workspace with a specific scope: file paths, the named data shape and its structure (a state machine over scattered booleans, a table over branching, a typed model over repeated shape assumptions), the seam, and a checkable done criterion. Test-first at the agreed seams with `tstack:tdd`. Surgical edits; comments per [Comments](../SKILL.md#comments); a shared-primitive change reaches every consumer, each verified.
 5. Verify on the matching surface: run it, drive it (claude-in-chrome for a UI), read the real output. "Inconclusive" or the wrong surface is not a pass; flag it.
-6. Review: `tstack:code-review` against the spec, then `/simplify` (Claude Code built-in) over the diff. A contested design gets a fresh Opus reviewer told to break it (pending merge: interrogate).
+6. Review: `tstack:review` against the spec, then `/simplify` (Claude Code built-in) over the diff. A contested design → `tstack:interrogate` (three Opus reviewers try to break it; you act on its verdict).
 7. Shape the history into small ordered changes, each landable and verified before the next (Sequence Work into Verifiable Units).
 8. Run the Land playbook.
 

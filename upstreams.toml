@@ -33,7 +33,9 @@ ignore = [
   "skills/engineering/zoom-out",
 ]
 map = [
-  { from = "skills/engineering/code-review", to = "skills/engineering/code-review" },
+  # code-review was renamed review (2026-09-30): Claude Code's built-in /code-review
+  # takes the name. Upstream edits still 3-way merge into the renamed dir.
+  { from = "skills/engineering/code-review", to = "skills/engineering/review" },
   { from = "skills/engineering/codebase-design", to = "skills/engineering/codebase-design" },
   { from = "skills/engineering/diagnosing-bugs", to = "skills/engineering/diagnosing-bugs" },
   { from = "skills/engineering/domain-modeling", to = "skills/engineering/domain-modeling" },
@@ -79,6 +81,12 @@ ignore = [
   # decided: adapted by hand, 2026-09-30. pstack's teach became our explain
   # (skills/engineering/explain); our teach is mattpocock's.
   "skills/teach",
+  # decided: adapted by hand, 2026-09-30. interrogate's SKILL.md was rewritten
+  # for three Opus reviewers on three lenses (Claude Code has one model
+  # family), and code-quality-review.md was merged with cursor-team-kit's
+  # thermo-nuclear review into our lenses/maintainability.md. Only the files
+  # mapped below sync.
+  "skills/interrogate",
 ]
 map = [
   { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md" },
@@ -99,6 +107,14 @@ map = [
   { from = "skills/why/references/synthesizer-prompt.md", to = "skills/engineering/why/references/synthesizer-prompt.md" },
   { from = "skills/why/references/sources/incident-postmortem.md", to = "skills/engineering/why/references/sources/incident-postmortem.md" },
   # watch-pr, unchanged: the babysit and shipping playbooks poll GitHub with it (bun).
+  # interrogate: rubric and lead-judgment verbatim; reviewer-prompt adapted in
+  # place (one lens per reviewer), so upstream edits 3-way merge (2026-09-30).
+  { from = "skills/interrogate/references/rubric.md", to = "skills/engineering/interrogate/references/rubric.md" },
+  { from = "skills/interrogate/references/reviewer-prompt.md", to = "skills/engineering/interrogate/references/reviewer-prompt.md" },
+  { from = "skills/interrogate/references/lead-judgment.md", to = "skills/engineering/interrogate/references/lead-judgment.md" },
+  # blast-radius, adapted in place (model-invocable, why's jj anchor,
+  # interrogate for arena, tstack: pointers), 2026-09-30.
+  { from = "skills/blast-radius/SKILL.md", to = "skills/engineering/blast-radius/SKILL.md" },
   { from = "skills/poteto-mode/scripts/watch-pr", to = "skills/engineering/tuca-mode/scripts/watch-pr" },
   { from = "skills/poteto-mode/scripts/bootstrap.ts", to = "skills/engineering/tuca-mode/scripts/bootstrap.ts" },
   { from = "skills/poteto-mode/scripts/package.json", to = "skills/engineering/tuca-mode/scripts/package.json" },

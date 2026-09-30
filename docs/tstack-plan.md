@@ -127,9 +127,9 @@ before the refactor, so the refactor is checked against it.
 | explaining | how, teach | zoom-out, teach, show-me | **done**: `how` absorbed zoom-out (model-invocable, Sonnet explorers, gotchas to memo); pstack's teach became `explain` (one-shot, on how and why); our `teach` stays the multi-session workspace |
 | rationale | why | - | **done**: `why`, full sweep over 8 evidence categories (pstack's 7 plus agent memory) mapped to our sources, Sonnet investigators, Opus synthesizer, jj code anchor, company data kept to engineering rationale |
 | parallelism | swarm, arena, orchestrate playbook, orch CLI | orchestrate, coordinator, manager | fold into fleet |
-| review | interrogate, no-comments + comment-sicko | code-review, thermo-nuclear | code-review is the entry; interrogate its high-stakes mode; **no-comments done** (comment-sicko on Sonnet, run by Land before the janitor) |
+| review | interrogate, no-comments + comment-sicko | code-review, thermo-nuclear | **done**: `code-review` renamed `review` (the built-in `/code-review` takes the name), jj-native with the landing bookmark's remote as the default fixed point and Opus Standards/Spec reviewers; `interrogate` its adversarial mode, three Opus reviewers on three lenses (correctness and security, maintainability, intent) and the lead's verdict; thermo-nuclear folded into interrogate's maintainability lens; **no-comments done** (comment-sicko on Sonnet, run by Land before the janitor) |
 | design | architect, principle-* | codebase-design, improve-codebase-architecture, domain-modeling | keep ours; architect as a playbook |
-| debugging | bug-fix, forensics playbooks, blast-radius | diagnosing-bugs | our loop is the bug-fix playbook; keep blast-radius |
+| debugging | bug-fix, forensics playbooks, blast-radius | diagnosing-bugs | our loop is the bug-fix playbook; **blast-radius done** (model-invocable, why's jj anchor, interrogate in place of arena) |
 | prose | unslop, technical-writing | writing-for-agents, caveman | **done**: unslop and technical-writing imported, model-invocable; tuca-mode sends every prose surface through unslop (pstack's way); caveman removed |
 | planning | multi-phase-plan, figure-it-out | to-spec, to-issues, triage, grilling | keep ours; figure-it-out as fallback playbook |
 | session | recall, reflect, show-me-your-work, pause/pickup | handoff, wait-what | recall on memo; bro into wait-what |
@@ -151,7 +151,6 @@ merging the skill replaces the marker with a pointer.
 |---|---|---|
 | architect | bug-fix, feature, refactoring | `codebase-design` and its DESIGN-IT-TWICE.md |
 | arena | feature | two Opus agents in separate jj workspaces, pick or graft |
-| interrogate | feature | `code-review` plus a fresh Opus reviewer told to break it |
 | show-me-your-work | non-negotiables, autonomous-run, hillclimb, principles/prove-it-works | a TSV decision log in the scratchpad |
 | figure-it-out | the no-playbook fallback, refactoring | a bespoke step list in playbook shape |
 | swarm | parallel fan-out | the `orchestrate` skill |

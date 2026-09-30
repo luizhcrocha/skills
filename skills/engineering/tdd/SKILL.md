@@ -27,7 +27,7 @@ Name the seams under test before writing any. When the user is present and the r
 
 - **Red before green.** Write the failing test first and run it: it must fail for the intended reason. Passing, or failing for an unrelated reason, means the test or the repro is wrong: fix that before touching production code. Then write only enough code to pass.
 - **Vertical slices.** One seam, one test, one minimal implementation per cycle; each test a tracer bullet that responds to what the last cycle taught you. Never all tests first, then all code: bulk tests verify imagined behavior and go insensitive to real changes.
-- **Refactoring is not part of the loop.** It belongs to review (`code-review`), against a green suite.
+- **Refactoring is not part of the loop.** It belongs to review (`review`), against a green suite.
 - **Never weaken a test to match wrong code.** Change an assertion only when the expected behavior genuinely changed, and say why.
 
 ## 4. What a good test is

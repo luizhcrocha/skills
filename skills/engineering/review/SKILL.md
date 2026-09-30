@@ -1,9 +1,9 @@
 ---
-name: code-review
-description: "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to \"review since X\"."
+name: review
+description: "Review the changes since a fixed point (a bookmark, change, commit or tag; by default the landing bookmark's remote) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a stack, a PR, work-in-progress changes, or asks to \"review since X\"."
 ---
 
-Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
+Two-axis review of the diff between `@` and a fixed point:
 
 - **Standards**: does the code conform to this repo's documented coding standards?
 - **Spec**: does the code faithfully implement the originating issue / spec?
@@ -16,19 +16,26 @@ The issue tracker should have been provided to you. If `docs/agents/issue-tracke
 
 ### 1. Pin the fixed point
 
-Whatever the user said is the fixed point (a commit SHA, branch name, tag, `main`, `HEAD~5`, etc.). If they didn't specify one, ask for it.
+Whatever the user said is the fixed point (a bookmark, `master@origin`, a change id, a commit, a tag). If they named none, it is the landing bookmark's remote, `<bookmark>@origin`, with the bookmark named by the repo's own docs (`CLAUDE.md`, `AGENTS.md`, `README.md`, the justfile): `master` in most repos, `nix` in dotfiles. Docs silent → `trunk()`.
 
-Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+Capture the diff command once:
 
-Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here, not inside two parallel sub-agents.
+- `jj diff --from <fixed> --to @` when the fixed point is an ancestor of `@` (`jj log -r '<fixed> & ::@'` prints it).
+- `jj diff -r '<fixed>..@'` otherwise (the stack is behind the fetched bookmark): it diffs from the fork point, so upstream's newer commits stay out.
+
+Note the commits with `jj log -r '<fixed>..@'`; `jj log -p -r '<fixed>..@'` shows them one revision at a time.
+
+Before going further, confirm the fixed point resolves (`jj log -r '<fixed>' -n 1`) and the diff is non-empty. A bad revision or empty diff should fail here, not inside two parallel sub-agents.
+
+In a repo without jj: the fixed point defaults to `origin/<default branch>`, the diff is `git diff <fixed>...HEAD` (three-dot, against the merge-base), the commits `git log <fixed>..HEAD --oneline`, the check `git rev-parse <fixed>`.
 
 ### 2. Identify the spec source
 
 Look for the originating spec, in this order:
 
-1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.), fetched via the workflow in `docs/agents/issue-tracker.md`.
+1. Issue references in the change descriptions (`#123`, `Closes #45`, GitLab `!67`, etc.), fetched via the workflow in `docs/agents/issue-tracker.md`.
 2. A path the user passed as an argument.
-3. A spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
+3. A spec file under `docs/`, `specs/`, or `.scratch/` matching the bookmark name or feature.
 4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
 
 ### 3. Identify the standards sources
@@ -36,6 +43,8 @@ Look for the originating spec, in this order:
 Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`.
 
 If the diff touches TypeScript, also call the Skill tool with "coding-standards-ts" and pass its relevant rules to the Standards sub-agent as a standards source, ranked below any repo-documented standard.
+
+When the user asks for a stricter bar ("thermo-nuclear", "harsh maintainability review"), add interrogate's maintainability lens ([../interrogate/references/lenses/maintainability.md](../interrogate/references/lenses/maintainability.md)) as a standards source, ranked below the repo's standards and above the smell baseline.
 
 On top of whatever the repo documents, the Standards axis always carries the **smell baseline** below: a fixed set of Fowler code smells (_Refactoring_, ch.3) that applies even when a repo documents nothing. Two rules bind it:
 
@@ -58,6 +67,8 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 - **Refused Bequest**: a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
 
 ### 4. Spawn both sub-agents in parallel
+
+Both in one message: `general-purpose` agents on Opus (`model: "opus"`), in the background. Each reads the code itself through the diff command and writes nothing.
 
 **Standards sub-agent prompt** should include:
 
@@ -87,3 +98,5 @@ A change can pass one axis and fail the other:
 - Code that does exactly what the issue asked but breaks the project's conventions → **Spec pass, Standards fail.**
 
 Reporting them separately stops one axis from masking the other.
+
+For an adversarial pass that tries to break the change (a contested design, a risky diff), use `tstack:interrogate`.

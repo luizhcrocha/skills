@@ -1,6 +1,6 @@
 {
   "name": "tstack",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Luiz Rocha's engineering stack for Claude Code: skills, agents and hooks for rigorous, jj-based work.",
   "author": {
     "name": "Luiz Rocha",
@@ -8,7 +8,7 @@
   },
   "homepage": "https://github.com/luizhcrocha/skills",
   "skills": [
-    "./skills/engineering/code-review",
+    "./skills/engineering/review",
     "./skills/engineering/codebase-design",
     "./skills/engineering/coding-standards-ts",
     "./skills/engineering/diagnosing-bugs",
@@ -25,6 +25,8 @@
     "./skills/engineering/how",
     "./skills/engineering/no-comments",
     "./skills/engineering/why",
+    "./skills/engineering/interrogate",
+    "./skills/engineering/blast-radius",
     "./skills/engineering/explain",
     "./skills/engineering/to-issues",
     "./skills/engineering/to-spec",
