@@ -46,11 +46,12 @@ import json
 import re
 import shutil
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chat  # noqa: E402
+import clock  # noqa: E402
 import decisions  # noqa: E402
 import render_dashboard  # noqa: E402
 import spend  # noqa: E402
@@ -66,7 +67,7 @@ KINDS = ["spawned", "reported", "blocked", "resolved", "asked", "decision", "not
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    return clock.stamp()
 
 
 def fail(msg: str) -> None:
@@ -248,7 +249,7 @@ def stale_now(state: dict, args) -> str | None:
         return None
     said = state.get("now_at")
     try:
-        age = (datetime.now(timezone.utc) - datetime.fromisoformat(said)).total_seconds() if said else None
+        age = (clock.now() - datetime.fromisoformat(said)).total_seconds() if said else None
     except ValueError:
         age = None
     if age is not None and age < NOW_STALE_S:

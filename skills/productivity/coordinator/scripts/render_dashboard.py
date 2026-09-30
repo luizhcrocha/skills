@@ -11,10 +11,10 @@ Artifact tool expects instead.
 import json
 import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import clock  # noqa: E402
 import decisions  # noqa: E402
 import fleets  # noqa: E402
 
@@ -114,7 +114,7 @@ def main(argv: list[str]) -> None:
         fail(f"cannot read state: {exc}")
     validate(state)
 
-    state["updated"] = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    state["updated"] = clock.stamp()
     state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n")
 
     template = (Path(__file__).resolve().parent.parent / "assets" / "dashboard.html").read_text()

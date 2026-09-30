@@ -33,11 +33,12 @@ import re as regex
 import signal
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import clock  # noqa: E402
 import fleets  # noqa: E402
 
 POLL_S = 0.3
@@ -52,7 +53,7 @@ class ChatError(Exception):
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    return clock.stamp()
 
 
 def fail(msg: str) -> None:
@@ -368,13 +369,13 @@ def listening(root) -> dict:
         on = False
     if not on:  # between a `--once` watch that woke it and the next, a host is still reading: allow for the gap
         try:
-            on = time.time() - _left(root, who).stat().st_mtime < READING_GRACE_S
+            on = clock.time() - _left(root, who).stat().st_mtime < READING_GRACE_S
         except OSError:
             pass
         if not on:
             last = next((m for m in reversed(read(root)) if m["from"] == who), None)
             try:
-                on = bool(last) and time.time() - datetime.fromisoformat(last["at"]).timestamp() < READING_GRACE_S
+                on = bool(last) and clock.time() - datetime.fromisoformat(last["at"]).timestamp() < READING_GRACE_S
             except ValueError:
                 pass
     try:
@@ -417,7 +418,7 @@ def _unrecorded(e: dict, told: dict) -> list[str]:
         if not at or told.get(mark):
             continue
         try:
-            waited = time.time() - datetime.fromisoformat(at).timestamp()
+            waited = clock.time() - datetime.fromisoformat(at).timestamp()
         except ValueError:
             continue
         if waited < UNHEARD_S:
@@ -477,7 +478,7 @@ def _fleets_unheard(me: str) -> list[str]:
         if heard["on"] or not heard["unread"] or told.get(e["id"]) == mark:
             continue
         try:
-            waited = time.time() - datetime.fromisoformat(heard["since"]).timestamp()
+            waited = clock.time() - datetime.fromisoformat(heard["since"]).timestamp()
         except (TypeError, ValueError):
             waited = UNHEARD_S
         if waited < UNHEARD_S:
@@ -487,7 +488,7 @@ def _fleets_unheard(me: str) -> list[str]:
         active = spend.active(e["dir"])
         gone = ""
         try:
-            if active and time.time() - datetime.fromisoformat(active).timestamp() > 1800:
+            if active and clock.time() - datetime.fromisoformat(active).timestamp() > 1800:
                 gone = f" Its session last wrote at {active[:16].replace('T', ' ')}; it may be gone."
         except ValueError:
             pass
@@ -515,6 +516,7 @@ def cmd_watch(root, args) -> None:
             pass
         try:
             _left(root, who).touch()
+            os.utime(_left(root, who), (clock.time(), clock.time()))  # its age is read against the same clock
         except OSError:
             pass
 

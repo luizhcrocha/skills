@@ -300,6 +300,18 @@ class NowNamesTest(Fleet):
         self.assertNotIn("names", self.run_cli("set", "--now", "Latency test running").stderr)
 
 
+class ClockTest(Fleet):
+    def test_fleet_now_stops_the_clock_for_stamps_and_ages(self):
+        env = {**os.environ, "FLEET_NOW": "2026-01-02T09:00:00+00:00", "TZ": "UTC"}
+        run = lambda *a: subprocess.run([sys.executable, STATE, str(self.root), *a, "--no-render"],  # noqa: E731
+                                        capture_output=True, text=True, env=env, timeout=20)
+        self.assertEqual(run("set", "--now", "x").returncode, 0)
+        state = self.state()
+        self.assertEqual((state["now_at"], state["updated"]), ("2026-01-02T09:00:00+00:00",) * 2)
+        env["FLEET_NOW"] = "2026-01-02T09:45:00+00:00"
+        self.assertIn("the page's Now line (said 45 min ago)", run("event", "y").stderr)
+
+
 class ManagerTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

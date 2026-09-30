@@ -28,6 +28,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import clock  # noqa: E402
+
 KEPT = {"user", "coordinator", "manager"}  # the names the chat keeps for itself
 
 
@@ -134,7 +137,7 @@ def register(root, url: str, pid: int) -> dict:
         (home() / f"{known['id']}.json").unlink(missing_ok=True)
     return _write({"id": name, "role": role, "dir": str(root), "url": url, "pid": pid,
                    "session": title or (known.get("session") if known else None),
-                   "since": known["since"] if known else datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")})
+                   "since": known["since"] if known else clock.stamp()})
 
 
 def unregister(root) -> None:
@@ -213,7 +216,7 @@ def silent_workers(root, state: dict) -> list[dict]:
     """The workers of DIR the ledger says are running or blocked whose transcript has not moved for
     SILENT_S: [{id, name, active}], oldest silence first. One whose transcript is not found is left out."""
     import spend
-    seen, now_t = spend.last_activity(root), datetime.now(timezone.utc).timestamp()
+    seen, now_t = spend.last_activity(root), clock.time()
     rows = []
     for a in state.get("agents", []):
         if isinstance(a, dict) and a.get("status") in ("running", "blocked") and a.get("id") in seen and now_t - seen[a["id"]] > SILENT_S:
@@ -382,7 +385,7 @@ def cmd_gate(argv: list[str]) -> None:
         if not any(e["id"] == argv[1] for e in live()):
             fail(f"no fleet '{argv[1]}' is being served")
         _gate_path().parent.mkdir(parents=True, exist_ok=True)
-        _gate_path().write_text(json.dumps({"fleet": argv[1], "what": argv[2], "since": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")}))
+        _gate_path().write_text(json.dumps({"fleet": argv[1], "what": argv[2], "since": clock.stamp()}))
         print(f"{argv[1]} holds the gate: {argv[2]}")
     elif argv[0] == "free" and len(argv) == 2:
         if held and held["fleet"] != argv[1]:

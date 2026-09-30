@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import clock  # noqa: E402
 import fleets  # noqa: E402
 
 WINDOWS = {"five_hour": "5-hour window", "seven_day": "7-day window"}
@@ -63,7 +64,7 @@ def keep(limits) -> None:
         newer = not old or new["resets_at"] > old["resets_at"] or (
             new["resets_at"] == old["resets_at"] and new["used_percentage"] >= old["used_percentage"])
         if newer:
-            held[window] = {"used_percentage": new["used_percentage"], "resets_at": new["resets_at"], "at": int(time.time())}
+            held[window] = {"used_percentage": new["used_percentage"], "resets_at": new["resets_at"], "at": int(clock.time())}
             changed = True
     if changed:
         path = _path()
@@ -94,7 +95,7 @@ def show() -> None:
     if not held:
         print("no usage captured yet: the status line has not run through `usage.py capture`")
         return
-    now = time.time()
+    now = clock.time()
     for window, label in WINDOWS.items():
         r = held.get(window)
         if r:
