@@ -7,7 +7,7 @@ description: Explain how code works, at the level of a senior engineer onboardin
 
 Answer "how does X work?" with an explanation a senior engineer new to the area can build a working mental model from: enough to start working in it confidently, not annotated source code. Adapted from poteto's pstack (MIT).
 
-Use the project's own vocabulary: read `CONTEXT.md` (if it exists) and the ADRs in the area, and name things the way they do. For motivation ("why was it built this way?"), read the history instead (`jj log`, `jj file annotate`, `recall`).
+Use the project's own vocabulary: read `CONTEXT.md` (if it exists) and the ADRs in the area, and name things the way they do. Motivation ("why was it built this way?") is the `why` skill's question.
 
 ## 1. Size the question
 

@@ -67,7 +67,19 @@ subdir = "pstack"
 base = "2eb7ed4613cfc8f098dfe464a23680ea44d84c5e"
 units = ["skills/*", "agents/*", "automations/*"]
 # Decided, not copied: merged by hand into our own skill (tdd, 2026-09-30).
-ignore = ["skills/tdd"]
+ignore = [
+  "skills/tdd",
+  # decided: adapted by hand, 2026-09-30. why's SKILL.md, investigator prompt
+  # and source playbooks were rewritten for jj, Claude Code subagents and our
+  # sources (linear.md -> issue-tracker.md, notion.md -> docs.md, slack.md ->
+  # chat.md, datadog.md -> observability.md, sentry.md -> errors.md,
+  # databricks.md -> analytics.md, plus agent-memory.md); source-playbook.md
+  # became the table in SKILL.md. Only the files mapped below sync.
+  "skills/why",
+  # decided: adapted by hand, 2026-09-30. pstack's teach became our explain
+  # (skills/engineering/explain); our teach is mattpocock's.
+  "skills/teach",
+]
 map = [
   { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md" },
   # how: SKILL.md rewritten for tstack (Sonnet explorers, memo gotchas); the
@@ -80,6 +92,12 @@ map = [
   # comment-sicko and no-comments, adapted (kebab-case name, Sonnet, jj diff scope, codebase-design for architect).
   { from = "agents/comment-sicko.md", to = "agents/comment-sicko.md" },
   { from = "skills/no-comments/SKILL.md", to = "skills/engineering/no-comments/SKILL.md" },
+  # why: epistemics verbatim; the synthesizer prompt and incident-postmortem
+  # adapted in place (agent memory, the company data rule, our sources), so
+  # upstream edits 3-way merge (2026-09-30).
+  { from = "skills/why/references/epistemics.md", to = "skills/engineering/why/references/epistemics.md" },
+  { from = "skills/why/references/synthesizer-prompt.md", to = "skills/engineering/why/references/synthesizer-prompt.md" },
+  { from = "skills/why/references/sources/incident-postmortem.md", to = "skills/engineering/why/references/sources/incident-postmortem.md" },
   # watch-pr, unchanged: the babysit and shipping playbooks poll GitHub with it (bun).
   { from = "skills/poteto-mode/scripts/watch-pr", to = "skills/engineering/tuca-mode/scripts/watch-pr" },
   { from = "skills/poteto-mode/scripts/bootstrap.ts", to = "skills/engineering/tuca-mode/scripts/bootstrap.ts" },

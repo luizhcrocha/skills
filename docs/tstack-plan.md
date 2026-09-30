@@ -124,8 +124,8 @@ before the refactor, so the refactor is checked against it.
 | Theme | pstack | here | proposal |
 |---|---|---|---|
 | test-first | tdd | tdd | **done**: one `tdd` skill with the ladder |
-| explaining | how, teach | zoom-out, teach, show-me | **done**: `how` absorbed zoom-out (model-invocable, Sonnet explorers, gotchas to memo); pstack's teach decided with `why` |
-| rationale | why | - | adapt sources to our MCPs |
+| explaining | how, teach | zoom-out, teach, show-me | **done**: `how` absorbed zoom-out (model-invocable, Sonnet explorers, gotchas to memo); pstack's teach became `explain` (one-shot, on how and why); our `teach` stays the multi-session workspace |
+| rationale | why | - | **done**: `why`, full sweep over 8 evidence categories (pstack's 7 plus agent memory) mapped to our sources, Sonnet investigators, Opus synthesizer, jj code anchor, company data kept to engineering rationale |
 | parallelism | swarm, arena, orchestrate playbook, orch CLI | orchestrate, coordinator, manager | fold into fleet |
 | review | interrogate, no-comments + comment-sicko | code-review, thermo-nuclear | code-review is the entry; interrogate its high-stakes mode; **no-comments done** (comment-sicko on Sonnet, run by Land before the janitor) |
 | design | architect, principle-* | codebase-design, improve-codebase-architecture, domain-modeling | keep ours; architect as a playbook |
@@ -149,7 +149,6 @@ merging the skill replaces the marker with a pointer.
 
 | pstack skill | Used by | Meanwhile |
 |---|---|---|
-| why | investigation | `recall`, `jj log -- <path>`, `jj file annotate` |
 | architect | bug-fix, feature, refactoring | `codebase-design` and its DESIGN-IT-TWICE.md |
 | arena | feature | two Opus agents in separate jj workspaces, pick or graft |
 | interrogate | feature | `code-review` plus a fresh Opus reviewer told to break it |
