@@ -48,6 +48,10 @@ and wake shows only the newest, so the memory does not contradict itself. An
 
 ## Where it lives (decided: in the repo)
 
+A file is a TOML front block between `+++` lines, then the one-line text:
+`id`, `kind` (`summary` for a summary, which adds `level` and `covers`), `scope`,
+`by`, `at`, and optional `pin`, `refs`, `supersedes`.
+
 Project memory lives in the repo, committed with the work:
 `.tstack/memo/notes/<ulid>.md` (one file per note) and
 `.tstack/memo/summaries/<ulid>.md` (one file per summary). One file per item
@@ -118,13 +122,16 @@ the brief); a coordinator wakes like any session.
   `memo` skill, which also says what is worth a note and what is not (no
   narration, no facts the code or `jj log` already hold).
 - **Stop hook** (documented to return `additionalContext`): at most once per
-  session, when the session did real work (edits or a decision recorded) and
-  wrote no note, remind it once.
-- **PreCompact hook**: before compaction, remind the agent to note anything
-  durable from the context about to be lost. PreCompact is not in the 2.1.285
-  hooks reference; verify it with a real compaction before relying on it. If it
-  is missing, the Stop nudge carries the load and a note written after a
-  compaction still lands.
+  session, when the session did real work (Edit/Write/MultiEdit, or a
+  `jj describe`/`commit` in Bash) and wrote no note, remind it once. The added
+  context gives the agent one more turn, so headless runs (`claude -p`, SDK:
+  `CLAUDE_CODE_SESSION_ATTENDED=0`) are skipped: the extra turn would replace
+  their final result.
+- **PreCompact hook**: exists in 2.1.285 (input `trigger` manual|auto,
+  `custom_instructions`) but cannot reach the agent: its stdout is appended to
+  the compaction instructions. So it asks the summary to list unnoted durable
+  items under "Memo candidates", and the wake after a compaction
+  (`source: compact`) tells the agent to note them.
 - Workers (`TSTACK_ROLE=worker`) cannot write; they report, and their
   coordinator notes what is durable.
 - Luiz can note directly: `memo note preference "…"` from the shell.

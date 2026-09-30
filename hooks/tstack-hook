@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""tstack's one hook dispatcher: `tstack-hook <Event>`, the hook JSON on stdin.
+
+A handler is a small function `handler(hook) -> str | None` listed under its
+event in HANDLERS; what the handlers of one event return is joined and emitted
+in the shape that event takes (EMIT). To add one (jj hints, mode re-injection,
+fleet heartbeat), write the function and list it.
+
+The rule that outranks the rest: a hook never breaks a session. Any error, in
+a handler or in the dispatcher, is logged to ${CLAUDE_PLUGIN_DATA}/hook.log and
+the process exits 0 having written nothing to stdout.
+"""
+
+import json
+import os
+import re
+import sys
+import time
+import traceback
+from pathlib import Path
+
+ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or Path(__file__).resolve().parent.parent)
+LOG_MAX = 512 * 1024
+
+
+class Hook:
+    """One invocation: the event, its input, and where this plugin keeps state."""
+
+    def __init__(self, event, data, env):
+        self.event = event
+        self.input = data
+        self.env = env
+        state = env.get("XDG_STATE_HOME") or str(Path(env.get("HOME", "/tmp")) / ".local" / "state")
+        self.data_dir = Path(env.get("CLAUDE_PLUGIN_DATA") or Path(state) / "tstack")
+        self.session_id = str(data.get("session_id") or "")
+        cwd = data.get("cwd")
+        self.cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else (env.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+        # Inside a subagent the input carries agent_id: that is a worker.
+        self.is_worker = bool(data.get("agent_id")) or env.get("TSTACK_ROLE") == "worker"
+        self.quiet = env.get("MEMO_QUIET", "") not in ("", "0")
+        # `claude -p` and SDK runs: nobody reads a reminder, and the turn it adds
+        # would replace the run's final result.
+        self.headless = (env.get("CLAUDE_CODE_SESSION_ATTENDED") == "0"
+                         or env.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"))
+
+    def session_file(self, name):
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", self.session_id) or "unknown"
+        return self.data_dir / "sessions" / f"{safe}.{name}.json"
+
+    def load_state(self, name):
+        try:
+            return json.loads(self.session_file(name).read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def save_state(self, name, state):
+        path = self.session_file(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}")
+        tmp.write_text(json.dumps(state))
+        os.replace(tmp, path)
+
+
+def log(hook_dir, text):
+    try:
+        hook_dir.mkdir(parents=True, exist_ok=True)
+        path = hook_dir / "hook.log"
+        if path.exists() and path.stat().st_size > LOG_MAX:
+            path.write_text(path.read_text(errors="replace")[-LOG_MAX // 2:])
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {text.rstrip()}\n")
+    except OSError:
+        pass
+
+
+_memo = []
+
+
+def memo():
+    """scripts/memo as a module: one process per hook, not two."""
+    if not _memo:
+        from importlib.machinery import SourceFileLoader
+        from importlib.util import module_from_spec, spec_from_loader
+        loader = SourceFileLoader("tstack_memo", str(ROOT / "scripts" / "memo"))
+        module = module_from_spec(spec_from_loader("tstack_memo", loader))
+        loader.exec_module(module)
+        _memo.append(module)
+    return _memo[0]
+
+
+# --- handlers ---------------------------------------------------------------
+
+def memo_wake(hook):
+    """SessionStart: the memory this repo's earlier sessions left. Workers do not wake."""
+    if hook.is_worker:
+        return None
+    return memo().wake_text(hook.env, hook.cwd, str(hook.input.get("source") or "")) or None
+
+
+NUDGE = (
+    "memo: this session changed things and wrote no note. If it produced a decision and its why, "
+    "a gotcha, a stated preference or a thread left unfinished that the next session would pay to "
+    'rediscover, record it now: `memo note <decision|gotcha|preference|fact|open> "<one line>"` '
+    "(skill: memo). If nothing is durable, carry on; this reminder is not repeated."
+)
+_EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+_DESCRIBED = re.compile(r"\b(?:jj\s+(?:--?[\w-]+(?:[= ]\S+)?\s+)*(?:describe|desc|commit)|git\s+commit)\b")
+_NOTED = re.compile(r"\bmemo\b[^|;&\n]*?\b(note|supersede|open)\b")
+
+
+def scan_transcript(path, offset):
+    """What the transcript shows from offset on: (new offset, did real work, wrote a note)."""
+    work = noted = False
+    with open(path, "rb") as f:
+        f.seek(offset)
+        chunk = f.read()
+    end = chunk.rfind(b"\n") + 1  # a line still being written is left for the next run
+    for line in chunk[:end].splitlines():
+        if b'"tool_use"' not in line:
+            continue
+        try:
+            content = json.loads(line).get("message", {}).get("content")
+        except (ValueError, AttributeError):
+            continue
+        for block in content if isinstance(content, list) else ():
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            name, command = block.get("name"), str((block.get("input") or {}).get("command") or "")
+            if name in _EDIT_TOOLS:
+                work = True
+            elif name == "Bash":
+                work = work or bool(_DESCRIBED.search(command))
+                noted = noted or bool(_NOTED.search(command))
+    return offset + end, work, noted
+
+
+def memo_nudge(hook):
+    """Stop: once per session, when it did real work and wrote no note, say so.
+    The context a Stop hook adds gives the agent one more turn to act on it."""
+    if (hook.is_worker or hook.quiet or hook.headless or hook.input.get("stop_hook_active")
+            or not hook.session_id):
+        return None
+    state = hook.load_state("memo")
+    if state.get("reminded") or state.get("noted"):
+        return None
+    transcript = hook.input.get("transcript_path")
+    if not transcript or not os.path.isfile(transcript):
+        return None
+    offset = state.get("offset", 0)
+    if offset > os.path.getsize(transcript):
+        offset = 0
+    offset, work, noted = scan_transcript(transcript, offset)
+    state = {"offset": offset, "work": bool(state.get("work") or work), "noted": noted}
+    remind = state["work"] and not noted
+    state["reminded"] = remind
+    hook.save_state("memo", state)
+    return NUDGE if remind else None
+
+
+PRECOMPACT = (
+    "If this conversation holds a durable decision and its reason, a gotcha, a stated user preference "
+    "or an unfinished thread that was not recorded with `memo note`, list each as one line under a "
+    "heading 'Memo candidates' in the summary, so it can be noted after the compaction."
+)
+
+
+def memo_precompact(hook):
+    """PreCompact: what a hook prints here is added to the compaction instructions
+    (it does not reach the agent), so ask the summary to carry what was not noted;
+    the wake that follows a compaction tells the agent to note it."""
+    if hook.is_worker or hook.quiet:
+        return None
+    return PRECOMPACT
+
+
+HANDLERS = {
+    "SessionStart": [memo_wake],
+    "Stop": [memo_nudge],
+    "PreCompact": [memo_precompact],
+}
+
+
+def _context(event, text):
+    return json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}})
+
+
+EMIT = {
+    "SessionStart": _context,
+    "Stop": _context,
+    "PreCompact": lambda event, text: text,
+}
+
+
+def dispatch(event, raw, env):
+    """The text to print for this event, or "" for nothing."""
+    data = json.loads(raw) if raw.strip() else {}
+    if not isinstance(data, dict):
+        raise ValueError("hook input is not a JSON object")
+    hook = Hook(event, data, env)
+    parts = []
+    for handler in HANDLERS.get(event, ()):
+        try:
+            text = handler(hook)
+        except Exception:  # one handler failing does not take the others down
+            log(hook.data_dir, f"{event} {handler.__name__} failed\n{traceback.format_exc()}")
+            continue
+        if text and text.strip():
+            parts.append(text.strip())
+    if not parts or event not in EMIT:
+        return ""
+    return EMIT[event](event, "\n\n".join(parts))
+
+
+def main(argv, stdin, stdout, env):
+    started = time.perf_counter()
+    event = argv[1] if len(argv) > 1 else ""
+    data_dir = Path(env.get("CLAUDE_PLUGIN_DATA") or Path(env.get("XDG_STATE_HOME")
+                    or Path(env.get("HOME", "/tmp")) / ".local" / "state") / "tstack")
+    try:
+        out = dispatch(event, "" if stdin.isatty() else stdin.read(), env)
+        if out:
+            stdout.write(out + "\n")
+            stdout.flush()
+        if env.get("TSTACK_HOOK_DEBUG"):
+            log(data_dir, f"{event} ok {(time.perf_counter() - started) * 1000:.0f} ms, {len(out)} chars")
+    except BaseException:  # noqa: BLE001 - never break a session
+        log(data_dir, f"{event} dispatcher failed\n{traceback.format_exc()}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv, sys.stdin, sys.stdout, os.environ))
