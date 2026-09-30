@@ -1,0 +1,391 @@
+#!/usr/bin/env python3
+"""tstack's lint rule registry (lint/registry.toml): validate, list, find stale
+rules, record trial runs, move a rule's status.
+
+    lint-registry validate
+    lint-registry list [--status S]... [--lang L]... [--json]
+    lint-registry show ID
+    lint-registry stale [--days N] [--today YYYY-MM-DD] [--json]
+    lint-registry record ID --repo PATH --hits N --false-positives N [--date D] [--note TEXT]
+    lint-registry set-status ID STATUS --note TEXT [--date D]
+    lint-registry add --id ID --lang L --engine E --kind K --summary TEXT --where PATH
+                      --evidence REF [--evidence REF]... [--date D]
+    (every command takes --root DIR, the tstack checkout; default: this script's)
+
+One [[rule]] per custom rule or enabled native lint:
+
+    id        <lang>/<name>, e.g. ts/tstack/no-spy-on, py/ruff-all
+    lang      ts | rust | cs | py | go | c-cpp | nix
+    engine    the linter (oxlint, clippy, dylint, dotnet-analyzers, ruff,
+              golangci-lint, clang-tidy, statix), one of its lang's
+    kind      custom (rule code in a pack) | config (a native lint turned on)
+    status    proposed -> trial -> warn -> error, or retired from any
+    summary   what it catches, one line
+    where     the pack file that holds it, relative to the checkout
+    created   YYYY-MM-DD
+    evidence  refs, each "<source>:<ref>": memo, review, interrogate, reflect,
+              comment-sicko, automate-me, session, repo, skill, upstream
+    history   [{date, status, note}], oldest first; the last is the status
+    runs      trial runs, one per repo (the latest replaces the earlier):
+              [{repo, date, hits, false_positives, note}]
+    last_hit  YYYY-MM-DD of the latest run with hits, or ""
+
+A status move is legal along proposed -> trial -> warn -> error, one step back
+(trial -> proposed, warn -> trial, error -> warn), or to retired from anywhere.
+A retired rule comes back only as proposed.
+
+stale: rules in trial, warn or error whose last hit is older than --days (90)
+while a run inside that window found nothing: candidates to retire. Rules with
+no run inside the window are listed apart as unmeasured: trial them first.
+
+Writes rewrite the file in canonical form (the header comment is kept).
+Exit 0; 1 when validate finds problems or an ID is unknown; 2 on bad arguments.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+REGISTRY = Path("lint/registry.toml")
+
+LANGS = {
+    "ts": {"oxlint"},
+    "rust": {"clippy", "dylint"},
+    "cs": {"dotnet-analyzers"},
+    "py": {"ruff"},
+    "go": {"golangci-lint"},
+    "c-cpp": {"clang-tidy"},
+    "nix": {"statix"},
+}
+KINDS = ("custom", "config")
+STATUSES = ("proposed", "trial", "warn", "error", "retired")
+ACTIVE = ("trial", "warn", "error")
+SOURCES = (
+    "memo", "review", "interrogate", "reflect", "comment-sicko", "automate-me",
+    "session", "repo", "skill", "upstream",
+)
+FORWARD = {"proposed": "trial", "trial": "warn", "warn": "error"}
+BACK = {"trial": "proposed", "warn": "trial", "error": "warn"}
+ORDER = ("id", "lang", "engine", "kind", "status", "summary", "where", "created", "last_hit", "evidence", "history", "runs")
+DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+class Failure(Exception):
+    pass
+
+
+def legal(old: str, new: str) -> bool:
+    if new == "retired":
+        return old != "retired"
+    if old == "retired":
+        return new == "proposed"
+    return FORWARD.get(old) == new or BACK.get(old) == new
+
+
+def is_date(value: object) -> bool:
+    if not isinstance(value, str) or not DATE.match(value):
+        return False
+    try:
+        dt.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def load(root: Path) -> list[dict]:
+    rules = tomllib.loads((root / REGISTRY).read_text()).get("rule", [])
+    for r in rules:
+        r.setdefault("evidence", [])
+        r.setdefault("history", [])
+        r.setdefault("runs", [])
+        r.setdefault("last_hit", "")
+    return rules
+
+
+def leading_comment(text: str) -> str:
+    out = []
+    for line in text.splitlines(keepends=True):
+        if line.startswith("#") or (out and not line.strip()):
+            out.append(line)
+            continue
+        break
+    return "".join(out).rstrip("\n") + "\n\n" if out else ""
+
+
+def q(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def inline(table: dict, keys: tuple[str, ...]) -> str:
+    return "{ " + ", ".join(f"{k} = {q(table[k])}" for k in keys if k in table and table[k] != "") + " }"
+
+
+def dump(header: str, rules: list[dict]) -> str:
+    """The registry in canonical form: keys in ORDER, one evidence, history entry or run per line."""
+    out = [header]
+    for r in rules:
+        out.append("[[rule]]\n")
+        for key in ORDER:
+            if key not in r:
+                continue
+            v = r[key]
+            if key == "evidence":
+                out.append("evidence = [\n" + "".join(f"  {q(e)},\n" for e in v) + "]\n")
+            elif key == "history":
+                out.append("history = [\n" + "".join(f"  {inline(h, ('date', 'status', 'note'))},\n" for h in v) + "]\n")
+            elif key == "runs":
+                if v:
+                    out.append("runs = [\n" + "".join(
+                        f"  {inline(x, ('repo', 'date', 'hits', 'false_positives', 'note'))},\n" for x in v) + "]\n")
+                else:
+                    out.append("runs = []\n")
+            else:
+                out.append(f"{key} = {q(v)}\n")
+        out.append("\n")
+    return "".join(out).rstrip("\n") + "\n"
+
+
+def save(root: Path, rules: list[dict]) -> None:
+    path = root / REGISTRY
+    header = leading_comment(path.read_text()) if path.exists() else ""
+    text = dump(header, rules)
+    tomllib.loads(text)
+    path.write_text(text)
+
+
+def validate(root: Path, rules: list[dict]) -> list[str]:
+    problems = []
+    seen = set()
+    for i, r in enumerate(rules):
+        rid = r.get("id", f"<rule {i + 1}>")
+        bad = lambda msg: problems.append(f"{rid}: {msg}")
+        for key in ("id", "lang", "engine", "kind", "status", "summary", "where", "created"):
+            if not isinstance(r.get(key), str) or not r.get(key):
+                bad(f"missing {key}")
+        if rid in seen:
+            bad("duplicate id")
+        seen.add(rid)
+        lang = r.get("lang")
+        if lang not in LANGS:
+            bad(f"lang {lang!r} not one of {', '.join(LANGS)}")
+        else:
+            if not str(r.get("id", "")).startswith(lang + "/"):
+                bad(f"id must start with {lang}/")
+            if r.get("engine") not in LANGS[lang]:
+                bad(f"engine {r.get('engine')!r} not one of {', '.join(sorted(LANGS[lang]))}")
+        if r.get("kind") not in KINDS:
+            bad(f"kind {r.get('kind')!r} not one of {', '.join(KINDS)}")
+        status = r.get("status")
+        if status not in STATUSES:
+            bad(f"status {status!r} not one of {', '.join(STATUSES)}")
+        if r.get("created") and not is_date(r["created"]):
+            bad(f"created {r['created']!r} is not YYYY-MM-DD")
+        if r.get("where") and status != "retired" and not (root / r["where"]).exists():
+            bad(f"where {r['where']} does not exist")
+        if not r["evidence"]:
+            bad("no evidence")
+        for e in r["evidence"]:
+            source = str(e).split(":", 1)[0]
+            if ":" not in str(e) or source not in SOURCES:
+                bad(f"evidence {e!r} needs a <source>: prefix, one of {', '.join(SOURCES)}")
+        history = r["history"]
+        if not history:
+            bad("no history")
+        for h in history:
+            if not is_date(h.get("date")) or h.get("status") not in STATUSES or not h.get("note"):
+                bad(f"history entry {h!r} needs a date, a status and a note")
+        for a, b in zip(history, history[1:]):
+            if a.get("status") in STATUSES and b.get("status") in STATUSES and not legal(a["status"], b["status"]):
+                bad(f"history moves {a['status']} -> {b['status']}, not a legal step")
+            if is_date(a.get("date")) and is_date(b.get("date")) and b["date"] < a["date"]:
+                bad("history is not in date order")
+        if history and history[-1].get("status") != status:
+            bad(f"status {status} differs from the last history entry ({history[-1].get('status')})")
+        repos = set()
+        for run in r["runs"]:
+            if not run.get("repo") or not is_date(run.get("date")):
+                bad(f"run {run!r} needs a repo and a date")
+            for n in ("hits", "false_positives"):
+                if not isinstance(run.get(n), int) or run[n] < 0:
+                    bad(f"run {run!r}: {n} must be a count")
+            if run.get("repo") in repos:
+                bad(f"two runs for {run.get('repo')}; record keeps one per repo")
+            repos.add(run.get("repo"))
+        if r["last_hit"] and not is_date(r["last_hit"]):
+            bad(f"last_hit {r['last_hit']!r} is not YYYY-MM-DD")
+    return problems
+
+
+def totals(r: dict) -> dict:
+    runs = r["runs"]
+    return {
+        "repos": len(runs),
+        "hits": sum(x["hits"] for x in runs),
+        "false_positives": sum(x["false_positives"] for x in runs),
+        "last_run": max((x["date"] for x in runs), default=""),
+    }
+
+
+def find(rules: list[dict], rid: str) -> dict:
+    for r in rules:
+        if r["id"] == rid:
+            return r
+    raise Failure(f"no rule {rid}")
+
+
+def stale(rules: list[dict], days: int, today: dt.date) -> tuple[list[dict], list[dict]]:
+    cutoff = (today - dt.timedelta(days=days)).isoformat()
+    silent, unmeasured = [], []
+    for r in rules:
+        if r["status"] not in ACTIVE:
+            continue
+        if r["last_hit"] and r["last_hit"] >= cutoff:
+            continue
+        recent = [x for x in r["runs"] if x["date"] >= cutoff]
+        (silent if recent else unmeasured).append(r)
+    return silent, unmeasured
+
+
+def row(r: dict) -> str:
+    t = totals(r)
+    trial = f"{t['repos']} repos, {t['hits']} hits, {t['false_positives']} fp, last run {t['last_run'] or '-'}" if t["repos"] else "no runs"
+    return f"{r['status']:<8} {r['id']:<52} {r['kind']:<6} {trial}"
+
+
+def today_date(value: str | None) -> dt.date:
+    return dt.date.fromisoformat(value) if value else dt.date.today()
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--root", type=Path, default=ROOT, help="the tstack checkout")
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--root", type=Path, default=argparse.SUPPRESS, help="the tstack checkout")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def command(name: str) -> argparse.ArgumentParser:
+        return sub.add_parser(name, parents=[common])
+
+    command("validate")
+    p = command("list")
+    p.add_argument("--status", action="append", choices=STATUSES, default=[])
+    p.add_argument("--lang", action="append", choices=list(LANGS), default=[])
+    p.add_argument("--json", action="store_true")
+    p = command("show")
+    p.add_argument("id")
+    p = command("stale")
+    p.add_argument("--days", type=int, default=90)
+    p.add_argument("--today")
+    p.add_argument("--json", action="store_true")
+    p = command("record")
+    p.add_argument("id")
+    p.add_argument("--repo", required=True)
+    p.add_argument("--hits", type=int, required=True)
+    p.add_argument("--false-positives", type=int, required=True)
+    p.add_argument("--date")
+    p.add_argument("--note", default="")
+    p = command("set-status")
+    p.add_argument("id")
+    p.add_argument("status", choices=STATUSES)
+    p.add_argument("--note", required=True)
+    p.add_argument("--date")
+    p = command("add")
+    p.add_argument("--id", required=True)
+    p.add_argument("--lang", required=True, choices=list(LANGS))
+    p.add_argument("--engine", required=True)
+    p.add_argument("--kind", required=True, choices=KINDS)
+    p.add_argument("--summary", required=True)
+    p.add_argument("--where", required=True)
+    p.add_argument("--evidence", action="append", required=True)
+    p.add_argument("--date")
+    args = ap.parse_args(argv)
+    root = args.root.resolve()
+
+    try:
+        rules = load(root)
+        if args.cmd == "validate":
+            problems = validate(root, rules)
+            for problem in problems:
+                print(f"lint-registry: {problem}", file=sys.stderr)
+            if not problems:
+                print(f"{len(rules)} rules, valid")
+            return 1 if problems else 0
+        if args.cmd == "list":
+            shown = [r for r in rules if (not args.status or r["status"] in args.status) and (not args.lang or r["lang"] in args.lang)]
+            if args.json:
+                json.dump([{**r, "trial": totals(r)} for r in shown], sys.stdout, indent=2, ensure_ascii=False)
+                print()
+            else:
+                for r in shown:
+                    print(row(r))
+            return 0
+        if args.cmd == "show":
+            r = find(rules, args.id)
+            json.dump({**r, "trial": totals(r)}, sys.stdout, indent=2, ensure_ascii=False)
+            print()
+            return 0
+        if args.cmd == "stale":
+            silent, unmeasured = stale(rules, args.days, today_date(args.today))
+            if args.json:
+                json.dump({"silent": [r["id"] for r in silent], "unmeasured": [r["id"] for r in unmeasured]}, sys.stdout, indent=2)
+                print()
+                return 0
+            print(f"Silent for {args.days} days (retire candidates):")
+            for r in silent:
+                print("  " + row(r))
+            print(f"Unmeasured (no run in {args.days} days; trial them):")
+            for r in unmeasured:
+                print("  " + row(r))
+            return 0
+        date = today_date(args.date).isoformat()
+        if args.cmd == "record":
+            if args.hits < 0 or args.false_positives < 0 or args.false_positives > args.hits:
+                raise Failure("hits and false positives are counts, false positives at most hits")
+            r = find(rules, args.id)
+            run = {"repo": args.repo, "date": date, "hits": args.hits, "false_positives": args.false_positives}
+            if args.note:
+                run["note"] = args.note
+            r["runs"] = [x for x in r["runs"] if x["repo"] != args.repo] + [run]
+            r["runs"].sort(key=lambda x: (x["date"], x["repo"]))
+            if args.hits > args.false_positives and date > r["last_hit"]:
+                r["last_hit"] = date
+        elif args.cmd == "set-status":
+            r = find(rules, args.id)
+            if not legal(r["status"], args.status):
+                raise Failure(f"{args.id}: {r['status']} -> {args.status} is not a legal step")
+            r["status"] = args.status
+            r["history"].append({"date": date, "status": args.status, "note": args.note})
+        elif args.cmd == "add":
+            if any(r["id"] == args.id for r in rules):
+                raise Failure(f"{args.id} exists")
+            rules.append({
+                "id": args.id, "lang": args.lang, "engine": args.engine, "kind": args.kind,
+                "status": "proposed", "summary": args.summary, "where": args.where, "created": date,
+                "last_hit": "", "evidence": args.evidence,
+                "history": [{"date": date, "status": "proposed", "note": "proposed by lint-evolve"}],
+                "runs": [],
+            })
+        problems = validate(root, rules)
+        if problems:
+            raise Failure("refusing to write an invalid registry:\n  " + "\n  ".join(problems))
+        save(root, rules)
+        print(row(find(rules, args.id)))
+        return 0
+    except Failure as e:
+        print(f"lint-registry: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

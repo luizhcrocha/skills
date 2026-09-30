@@ -28,6 +28,10 @@ test-coordinator:
 lang-sources *args:
     python3 scripts/lang-sources {{args}}
 
+# The lint rule registry, lint/registry.toml (validate, list, show, stale, record, set-status, add)
+lint-registry *args:
+    python3 scripts/lint-registry {{args}}
+
 # Validate the plugin and marketplace manifests
 validate:
     claude plugin validate .claude-plugin/plugin.json

@@ -1,0 +1,827 @@
+# tstack's lint rule registry (docs/tstack-plan.md, D12). One [[rule]] per
+# custom rule or enabled native lint; `scripts/lint-registry --help` documents
+# the fields. Edit through lint-registry (add, record, set-status) or by hand,
+# then `just lint-registry validate`.
+
+[[rule]]
+id = "ts/oxc/no-accumulating-spread"
+lang = "ts"
+engine = "oxlint"
+kind = "config"
+status = "error"
+summary = "spreads of the accumulator in reducers and loops (native companion of no-reduce-accumulator-copy)"
+where = "lint/ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 README (companion rule)",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-array-filter-map"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "adjacent eager array filter/map passes"
+where = "lint/ts/anti-slop/rules/no-array-filter-map.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-array-filter-map.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-reduce-accumulator-copy"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "reducers that copy the accumulator (Object.assign({}, acc), concat, slice)"
+where = "lint/ts/anti-slop/rules/no-reduce-accumulator-copy.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-reduce-accumulator-copy.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-chained-type-assertions"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "nested `as` assertions that fabricate evidence"
+where = "lint/ts/anti-slop/rules/no-chained-type-assertions.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-chained-type-assertions.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-conditional-empty-object-spread"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "object spreads that omit fields through a conditional `{}`"
+where = "lint/ts/anti-slop/rules/no-conditional-empty-object-spread.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-conditional-empty-object-spread.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-known-value-widening"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "known values widened to unknown, object or open dictionaries"
+where = "lint/ts/anti-slop/rules/no-known-value-widening.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-known-value-widening.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-module-mocking"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "vi.mock, jest.mock and friends in place of real seams"
+where = "lint/ts/anti-slop/rules/no-module-mocking.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-module-mocking.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-object-parameters"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "`object` (or aliases of it) on function inputs"
+where = "lint/ts/anti-slop/rules/no-object-parameters.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-object-parameters.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-reflect-apply"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "Reflect.apply in place of a typed call"
+where = "lint/ts/anti-slop/rules/no-reflect-apply.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-reflect-apply.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-reflect-get"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "Reflect.get in place of typed access or boundary parsing"
+where = "lint/ts/anti-slop/rules/no-reflect-get.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-reflect-get.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-runtime-typeof"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "ad hoc typeof narrowing instead of boundary parsing"
+where = "lint/ts/anti-slop/rules/no-runtime-typeof.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-runtime-typeof.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-shape-in-symbol-names"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "\"shape\" in locally owned symbol names"
+where = "lint/ts/anti-slop/rules/no-shape-in-symbol-names.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-shape-in-symbol-names.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-unknown-parameters"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "`unknown` on function inputs outside the cause and type-predicate conventions"
+where = "lint/ts/anti-slop/rules/no-unknown-parameters.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-unknown-parameters.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-unknown-returns"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "function contracts that return unknown"
+where = "lint/ts/anti-slop/rules/no-unknown-returns.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-unknown-returns.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-unknown-type-aliases"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "type aliases that resolve to unknown"
+where = "lint/ts/anti-slop/rules/no-unknown-type-aliases.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-unknown-type-aliases.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-unsafe-dictionary-type"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "dictionary values typed unknown, any, object or {}"
+where = "lint/ts/anti-slop/rules/no-unsafe-dictionary-type.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-unsafe-dictionary-type.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/no-widen-then-assert"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "widening known evidence and asserting it back"
+where = "lint/ts/anti-slop/rules/no-widen-then-assert.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/no-widen-then-assert.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/require-readable-spacing"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "missing blank lines between declarations and around blocks (autofix)"
+where = "lint/ts/anti-slop/rules/require-readable-spacing.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/require-readable-spacing.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop/require-safety-comment-for-type-assertion"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "error"
+summary = "type assertions without a SAFETY: justification"
+where = "lint/ts/anti-slop/rules/require-safety-comment-for-type-assertion.ts"
+created = "2026-09-26"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/rules/require-safety-comment-for-type-assertion.ts",
+  "repo:custom-mcp-servers servers/case-analysis/vite.config.ts (installed at error 2026-09-26, per tools/oxlint/anti-slop/UPSTREAM.md)",
+]
+history = [
+  { date = "2026-09-26", status = "error", note = "installed at error in custom-mcp-servers (case-analysis); seeded from there 2026-09-30" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop-effect/no-manual-effect-error-tag"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "trial"
+summary = "manual _tag checks inside broad Effect.catch handlers"
+where = "lint/ts/anti-slop/effect/rules/no-manual-effect-error-tag.ts"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/effect/rules/no-manual-effect-error-tag.ts",
+  "repo:custom-mcp-servers servers/case-analysis/tools/oxlint/anti-slop/effect (vendored, not registered: no direct effect dependency)",
+]
+history = [
+  { date = "2026-09-30", status = "trial", note = "in the pack from the anti-slop fork; opt-in for repos with a direct effect dependency; not yet trialled" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop-effect/no-manual-tag-comparison"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "trial"
+summary = "direct _tag comparisons and switches"
+where = "lint/ts/anti-slop/effect/rules/no-manual-tag-comparison.ts"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/effect/rules/no-manual-tag-comparison.ts",
+  "repo:custom-mcp-servers servers/case-analysis/tools/oxlint/anti-slop/effect (vendored, not registered: no direct effect dependency)",
+]
+history = [
+  { date = "2026-09-30", status = "trial", note = "in the pack from the anti-slop fork; opt-in for repos with a direct effect dependency; not yet trialled" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop-effect/no-manual-tagged-construction"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "trial"
+summary = "literal _tag object construction"
+where = "lint/ts/anti-slop/effect/rules/no-manual-tagged-construction.ts"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/effect/rules/no-manual-tagged-construction.ts",
+  "repo:custom-mcp-servers servers/case-analysis/tools/oxlint/anti-slop/effect (vendored, not registered: no direct effect dependency)",
+]
+history = [
+  { date = "2026-09-30", status = "trial", note = "in the pack from the anti-slop fork; opt-in for repos with a direct effect dependency; not yet trialled" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop-effect/no-service-constructor-imports"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "trial"
+summary = "make<Service> imports from relative modules outside tests"
+where = "lint/ts/anti-slop/effect/rules/no-service-constructor-imports.ts"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/effect/rules/no-service-constructor-imports.ts",
+  "repo:custom-mcp-servers servers/case-analysis/tools/oxlint/anti-slop/effect (vendored, not registered: no direct effect dependency)",
+]
+history = [
+  { date = "2026-09-30", status = "trial", note = "in the pack from the anti-slop fork; opt-in for repos with a direct effect dependency; not yet trialled" },
+]
+runs = []
+
+[[rule]]
+id = "ts/anti-slop-effect/prefer-effect-match"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "trial"
+summary = "chained literal ternaries over one value"
+where = "lint/ts/anti-slop/effect/rules/prefer-effect-match.ts"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "upstream:anti-slop@c44ef22 src/effect/rules/prefer-effect-match.ts",
+  "repo:custom-mcp-servers servers/case-analysis/tools/oxlint/anti-slop/effect (vendored, not registered: no direct effect dependency)",
+]
+history = [
+  { date = "2026-09-30", status = "trial", note = "in the pack from the anti-slop fork; opt-in for repos with a direct effect dependency; not yet trialled" },
+]
+runs = []
+
+[[rule]]
+id = "ts/tstack/no-spy-on"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "proposed"
+summary = "vi.spyOn and jest.spyOn in place of a seam (console silencing included)"
+where = "lint/ts/tstack/rules/no-spy-on.ts"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-ts SKILL.md (vi.mock and vi.spyOn are out) and references/sources.md open question (16 spies)",
+  "skill:tdd substitutes.md (never method-spy APIs)",
+  "repo:custom-mcp-servers servers/case-analysis/src/telemetry/emit.test.ts:24-26 (console warn, error, log)",
+  "repo:custom-mcp-servers servers/case-analysis/src/telemetry/caught.test.ts:22, telemetry/product.test.ts:183, watchdog/watchdog.test.ts:214, ui/icons.test.ts:125 (console)",
+  "repo:custom-mcp-servers servers/case-analysis/src/pipeline/run-record.test.ts:285,418,472, pipeline/gateway.test.ts:540, cloudflare/d1-cost-ledger.test.ts:632 (console)",
+  "repo:custom-mcp-servers servers/case-analysis/src/projection/projection.test.ts:900 (JSON.stringify)",
+  "repo:durable-automations lint-plugins/no-vi-mock.js (a local rule banning vi.spyOn, 06d2b2c 2026-03-28)",
+]
+history = [
+  { date = "2026-09-30", status = "proposed", note = "written with RuleTester cases from the custom-mcp-servers spies; not trialled" },
+]
+runs = []
+
+[[rule]]
+id = "rust/clippy-all"
+lang = "rust"
+engine = "clippy"
+kind = "config"
+status = "error"
+summary = "clippy's default groups, errors under -D warnings"
+where = "lint/rust/lints.toml"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-rust SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-rust's gates" },
+]
+runs = []
+
+[[rule]]
+id = "cs/analysis-level"
+lang = "cs"
+engine = "dotnet-analyzers"
+kind = "config"
+status = "error"
+summary = "the .NET analyzers at AnalysisLevel latest-recommended, warnings as errors"
+where = "lint/cs/Directory.Build.props"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-cs SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-cs's gates" },
+]
+runs = []
+
+[[rule]]
+id = "cs/enforce-code-style"
+lang = "cs"
+engine = "dotnet-analyzers"
+kind = "config"
+status = "error"
+summary = "IDE code-style rules run in dotnet build (EnforceCodeStyleInBuild)"
+where = "lint/cs/Directory.Build.props"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-cs SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-cs's gates" },
+]
+runs = []
+
+[[rule]]
+id = "cs/IDE0161"
+lang = "cs"
+engine = "dotnet-analyzers"
+kind = "config"
+status = "error"
+summary = "file-scoped namespace declarations"
+where = "lint/cs/tstack.globalconfig"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-cs SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-cs's gates" },
+]
+runs = []
+
+[[rule]]
+id = "cs/IDE0005"
+lang = "cs"
+engine = "dotnet-analyzers"
+kind = "config"
+status = "error"
+summary = "unnecessary using directives"
+where = "lint/cs/tstack.globalconfig"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-cs SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-cs's gates" },
+]
+runs = []
+
+[[rule]]
+id = "py/ruff-all"
+lang = "py"
+engine = "ruff"
+kind = "config"
+status = "error"
+summary = "every ruff rule but docstrings and the two that fight ruff format"
+where = "lint/py/ruff.toml"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-py SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-py's gates" },
+]
+runs = []
+
+[[rule]]
+id = "go/golangci-standard"
+lang = "go"
+engine = "golangci-lint"
+kind = "config"
+status = "error"
+summary = "golangci-lint's standard linter set"
+where = "lint/go/golangci.yml"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-go SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-go's gates" },
+]
+runs = []
+
+[[rule]]
+id = "go/gofmt"
+lang = "go"
+engine = "golangci-lint"
+kind = "config"
+status = "error"
+summary = "gofmt formatting"
+where = "lint/go/golangci.yml"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-go SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-go's gates" },
+]
+runs = []
+
+[[rule]]
+id = "go/goimports"
+lang = "go"
+engine = "golangci-lint"
+kind = "config"
+status = "error"
+summary = "goimports import grouping"
+where = "lint/go/golangci.yml"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-go SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-go's gates" },
+]
+runs = []
+
+[[rule]]
+id = "go/exhaustive"
+lang = "go"
+engine = "golangci-lint"
+kind = "config"
+status = "proposed"
+summary = "switches over enum-like types that miss a case"
+where = "lint/go/golangci.yml"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-go SKILL.md, Data shape first (exhaustive checks switch defaults where enabled)",
+  "skill:lang-go references/sources.md open question (adopt clipse's v2 config?)",
+]
+history = [
+  { date = "2026-09-30", status = "proposed", note = "named by lang-go, enabled in no pack yet" },
+]
+runs = []
+
+[[rule]]
+id = "c-cpp/bugprone"
+lang = "c-cpp"
+engine = "clang-tidy"
+kind = "config"
+status = "error"
+summary = "clang-tidy's bugprone-* checks"
+where = "lint/c-cpp/.clang-tidy"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-c SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-c's gates" },
+]
+runs = []
+
+[[rule]]
+id = "c-cpp/cert"
+lang = "c-cpp"
+engine = "clang-tidy"
+kind = "config"
+status = "error"
+summary = "clang-tidy's cert-* checks"
+where = "lint/c-cpp/.clang-tidy"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-c SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-c's gates" },
+]
+runs = []
+
+[[rule]]
+id = "c-cpp/clang-analyzer"
+lang = "c-cpp"
+engine = "clang-tidy"
+kind = "config"
+status = "error"
+summary = "clang-tidy's clang-analyzer-* checks"
+where = "lint/c-cpp/.clang-tidy"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-c SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-c's gates" },
+]
+runs = []
+
+[[rule]]
+id = "c-cpp/cppcoreguidelines"
+lang = "c-cpp"
+engine = "clang-tidy"
+kind = "config"
+status = "error"
+summary = "clang-tidy's cppcoreguidelines-* checks"
+where = "lint/c-cpp/.clang-tidy"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-cpp SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-cpp's gates" },
+]
+runs = []
+
+[[rule]]
+id = "c-cpp/misc"
+lang = "c-cpp"
+engine = "clang-tidy"
+kind = "config"
+status = "error"
+summary = "clang-tidy's misc-* checks"
+where = "lint/c-cpp/.clang-tidy"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-c SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-c's gates" },
+]
+runs = []
+
+[[rule]]
+id = "c-cpp/modernize"
+lang = "c-cpp"
+engine = "clang-tidy"
+kind = "config"
+status = "error"
+summary = "clang-tidy's modernize-* checks"
+where = "lint/c-cpp/.clang-tidy"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-cpp SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-cpp's gates" },
+]
+runs = []
+
+[[rule]]
+id = "c-cpp/performance"
+lang = "c-cpp"
+engine = "clang-tidy"
+kind = "config"
+status = "error"
+summary = "clang-tidy's performance-* checks"
+where = "lint/c-cpp/.clang-tidy"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-c SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-c's gates" },
+]
+runs = []
+
+[[rule]]
+id = "c-cpp/portability"
+lang = "c-cpp"
+engine = "clang-tidy"
+kind = "config"
+status = "error"
+summary = "clang-tidy's portability-* checks"
+where = "lint/c-cpp/.clang-tidy"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-c SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "error", note = "seeded from lang-c's gates" },
+]
+runs = []
+
+[[rule]]
+id = "nix/statix"
+lang = "nix"
+engine = "statix"
+kind = "config"
+status = "warn"
+summary = "statix's lints (anti-patterns in Nix expressions), as advice"
+where = "lint/nix/statix.toml"
+created = "2026-09-30"
+last_hit = ""
+evidence = [
+  "skill:lang-nix SKILL.md, Toolchain and gates",
+]
+history = [
+  { date = "2026-09-30", status = "warn", note = "seeded from lang-nix's gates: statix only as advice" },
+]
+runs = []
