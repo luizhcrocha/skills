@@ -9,7 +9,7 @@ sync-upstream *args:
     python3 scripts/sync_upstream.py {{args}}
 
 # Every test in the repo
-test: test-scripts test-coordinator test-lint-ts
+test: test-scripts test-coordinator test-lint-ts test-fleet
 
 # The repo scripts (sync-upstream) against throwaway git repos
 test-scripts:
@@ -23,6 +23,10 @@ test-lint-ts:
 test-coordinator:
     python3 -m unittest discover -s skills/productivity/coordinator/tests -p 'test_*.py'
     node --test 'skills/productivity/coordinator/tests/*.test.mjs'
+
+# The fleet oracle: the model-based test of the ledger (FLEET_MODEL_SEED=N replays a sequence) and the golden traces
+test-fleet:
+    python3 -m unittest discover -s fleet/oracle -p 'test_*.py'
 
 # The lang-* skills' sources tables as JSON (--skill NAME, --stale DAYS)
 lang-sources *args:
