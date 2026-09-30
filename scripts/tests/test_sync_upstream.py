@@ -205,6 +205,52 @@ map = [
         out = self.run_sync()
         self.assertIn("Stale mappings (match nothing upstream):\n    skills/gone", out)
 
+    def add_watch(self, extra=""):
+        self.manifest.write_text(self.manifest.read_text() + f"""
+[upstream.watched]
+url = "{self.up}"
+base = "{self.base}"
+watch = true
+{extra}""")
+
+    def run_watch(self, *args, ok=True):
+        p = subprocess.run(
+            [sys.executable, str(SCRIPT), "--root", str(self.local), "--upstream", "watched", *args],
+            capture_output=True, text=True,
+        )
+        if ok:
+            self.assertEqual(p.returncode, 0, p.stderr)
+        return p
+
+    def test_watch_reports_commits_and_files_and_copies_nothing(self):
+        self.add_watch()
+        self.write_up("memo.py", "def wake(): pass\n")
+        head = self.commit_up("wake gets a budget")
+        before = sorted(p.relative_to(self.local).as_posix() for p in self.local.rglob("*") if p.is_file())
+        out = self.run_watch("--diff").stdout
+        self.assertIn("watch-only", out)
+        self.assertIn("wake gets a budget", out)
+        self.assertIn("memo.py", out)
+        self.assertIn("+def wake(): pass", out)
+        after = sorted(p.relative_to(self.local).as_posix() for p in self.local.rglob("*") if p.is_file())
+        self.assertEqual(before, after)
+        self.assertEqual(self.recorded_base("watched"), head)
+
+    def test_watch_dry_run_keeps_base_and_quiet_when_nothing_new(self):
+        self.add_watch()
+        self.assertIn("nothing new since base", self.run_watch().stdout)
+        self.write_up("memo.py", "x\n")
+        self.commit_up("change")
+        out = self.run_watch("--dry-run").stdout
+        self.assertIn("base unchanged", out)
+        self.assertEqual(self.recorded_base("watched"), self.base)
+
+    def test_watch_refuses_a_map(self):
+        self.add_watch('map = [{ from = "memo.py", to = "scripts/memo" }]\n')
+        p = self.run_watch(ok=False)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("watch-only", p.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

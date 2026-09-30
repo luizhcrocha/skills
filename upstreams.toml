@@ -18,6 +18,8 @@
 #   units   patterns naming the units unmapped content is reported by
 #           (default: the top-level entry)
 #   ignore  patterns never reported as unmapped (decided: not wanted)
+#   watch   true: read for ideas, never copied (no map allowed). The report lists
+#           commits and changed files since `base`; `--diff` prints the diff.
 
 [upstream.mattpocock]
 url = "https://github.com/mattpocock/skills.git"
@@ -59,3 +61,19 @@ base = "fae2c6ed95821bd85f614a73e4842e13229fa5e5"
 units = ["skills/*", "agents/*", "automations/*"]
 ignore = []
 map = []
+
+# OptMem and its per-project fork: the ideas behind memo (docs/design/memo.md).
+# Neither has a license, so they are watch-only: `just sync-upstream` lists what
+# changed since `base` (`--diff` shows it) and never copies a file; anything
+# worth having is reimplemented in scripts/memo. `base` is the commit memo was
+# designed from (2026-09-30); a real run moves it to what the report showed.
+[upstream.optmem]
+url = "https://github.com/VictorTaelin/OptMem.git"
+base = "1fb164cf39028047781f72ac3bb1e5a691c1dcb0"
+watch = true
+
+[upstream.optmem-split]
+url = "https://github.com/texarkanine/OptMem-Split.git"
+branch = "main.split"
+base = "72f4149d48187f641e3b5bc9bbba7a2dd15f4df0"
+watch = true

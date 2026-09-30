@@ -20,6 +20,11 @@ segment and `**` across segments. It matches a file when it matches the whole
 path (file -> file) or a leading directory of it (dir -> dir; the rest of the
 path is appended to `to`). `{1}`, `{2}`... in `to` are replaced by what the
 wildcards matched, in order. The first matching entry wins.
+
+A `watch = true` upstream is read, never copied: it may not have a `map`. The
+report lists its commits and changed files since `base` (`--diff` prints the
+diff) so ideas can be reimplemented by hand, as for an unlicensed repo. A real
+run marks what it showed as seen by moving `base`, like any other upstream.
 """
 
 from __future__ import annotations
@@ -91,6 +96,7 @@ class Upstream:
     maps: list[Mapping] = field(default_factory=list)
     units: list[str] = field(default_factory=list)
     ignore: list[str] = field(default_factory=list)
+    watch: bool = False
 
     def target(self, path: str) -> str | None:
         for m in self.maps:
@@ -124,8 +130,11 @@ def load_manifest(path: Path) -> list[Upstream]:
                 maps=[Mapping(m["from"], m["to"]) for m in u.get("map", [])],
                 units=u.get("units", []),
                 ignore=u.get("ignore", []),
+                watch=u.get("watch", False),
             )
         )
+        if out[-1].watch and out[-1].maps:
+            raise SystemExit(f"error: {name} is watch-only; its files are never copied, so it takes no map")
     return out
 
 
@@ -157,6 +166,9 @@ class Result:
     removed_upstream: list[str] = field(default_factory=list)
     stale_maps: list[str] = field(default_factory=list)
     unmapped: list[tuple[str, bool]] = field(default_factory=list)  # (unit, new since base)
+    commits: list[str] = field(default_factory=list)  # watch: one line per commit since base
+    changed: list[str] = field(default_factory=list)  # watch: `git diff --stat` lines
+    diff: str = ""  # watch, with --diff
 
 
 def clone(u: Upstream, dest: Path) -> None:
@@ -180,6 +192,24 @@ def ls_files(clone_dir: Path, rev: str, subdir: str) -> list[str]:
 def show(clone_dir: Path, rev: str, path: str) -> bytes | None:
     p = git("show", f"{rev}:{path}", cwd=clone_dir, check=False)
     return p.stdout if p.returncode == 0 else None
+
+
+def watch(u: Upstream, tmp: Path, with_diff: bool) -> Result:
+    up = tmp / u.name
+    clone(u, up)
+    r = Result(head=git("rev-parse", "HEAD", cwd=up).stdout.decode().strip())
+    if u.base and git("cat-file", "-e", f"{u.base}^{{commit}}", cwd=up, check=False).returncode == 0:
+        r.base = u.base
+    elif u.base:
+        print(f"warning: {u.name}: recorded base {u.base} not found upstream; showing all history", file=sys.stderr)
+    span = f"{r.base}..HEAD" if r.base else "HEAD"
+    paths = ["--", u.subdir + "/"] if u.subdir else []
+    r.commits = git("log", "--format=%h %ad %s", "--date=short", span, *paths, cwd=up).stdout.decode().splitlines()
+    if r.base and r.commits:
+        r.changed = git("diff", "--stat", r.base, "HEAD", *paths, cwd=up).stdout.decode().splitlines()
+        if with_diff:
+            r.diff = git("diff", r.base, "HEAD", *paths, cwd=up).stdout.decode()
+    return r
 
 
 def sync(u: Upstream, root: Path, tmp: Path, dry_run: bool, list_only: bool) -> Result:
@@ -275,6 +305,21 @@ def report(u: Upstream, r: Result, dry_run: bool, list_only: bool, all_unmapped:
             for i in items:
                 print(f"    {i}")
 
+    if u.watch:
+        print("   watch-only: read for ideas, never copied")
+        if not r.commits:
+            print("\n  nothing new since base")
+            return
+        section(f"Commits since base ({len(r.commits)}):", r.commits)
+        section("Changed files:", r.changed)
+        if r.diff:
+            print("\n" + r.diff)
+        if dry_run or list_only:
+            print("  dry run: base unchanged")
+        else:
+            print(f"  seen: base -> {r.head[:12]}")
+        return
+
     if not list_only:
         section("Added (new upstream files):", r.added)
         section("Updated (upstream change, no local edits):", r.updated)
@@ -312,6 +357,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--upstream", action="append", metavar="NAME", help="sync only this upstream (repeatable)")
     ap.add_argument("--list-unmapped", action="store_true", help="only list upstream content no mapping covers")
     ap.add_argument("--all-unmapped", action="store_true", help="in the sync report, list every unmapped unit, not only new ones")
+    ap.add_argument("--diff", action="store_true", help="for watch-only upstreams, print the diff since base")
     ap.add_argument("--root", type=Path, default=REPO, help=argparse.SUPPRESS)
     ap.add_argument("--manifest", type=Path, help="default: <root>/upstreams.toml")
     args = ap.parse_args(argv)
@@ -329,7 +375,10 @@ def main(argv: list[str] | None = None) -> int:
         tmp = Path(t)
         for u in upstreams:
             print(f"Cloning {u.name} ({u.url})...")
-            r = sync(u, root, tmp, args.dry_run, args.list_unmapped)
+            if u.watch:
+                r = watch(u, tmp, args.diff)
+            else:
+                r = sync(u, root, tmp, args.dry_run, args.list_unmapped)
             report(u, r, args.dry_run, args.list_unmapped, args.all_unmapped)
             if not (args.dry_run or args.list_unmapped or r.conflicted) and r.head != u.base:
                 set_base(manifest, u.name, r.head)
