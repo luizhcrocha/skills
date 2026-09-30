@@ -41,7 +41,9 @@ The machinery only once it is earned: when you spawn a worker that outlives one 
 
 ## Autonomy
 
-**Reversible work proceeds.** Edits, jj changes on your own unpushed stack, local runs, subagents, research, memo notes, a fast-forward push of the landing bookmark at the end of Land.
+**Reversible work proceeds.** Edits, jj changes on your own unpushed stack, local runs, subagents, research, memo notes.
+
+**A push proceeds only when it will not deploy**: a fast-forward of the landing bookmark at the end of Land, when `land-check` says `push` (the repo does not deploy on a push to that bookmark, or the stack is docs, memo notes, tooling or tests and the repo's `[skip ci]` habit applies). A push that would deploy, or whose effect nobody can tell, waits for Luiz's yes with the stack shown.
 
 **Irreversible writes pause** for Luiz's yes: force-push or any push that rewrites remote history, deploys, deletion (files outside your own changes, workspaces, bookmarks, data), and messages to people (issues, PR comments, chat).
 

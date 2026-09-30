@@ -135,6 +135,8 @@ class JJHintsTest(HookCase):
             self.assertTrue(hints.startswith("# jj\n"))
             self.assertIn("detached git HEAD is normal", hints)
             self.assertIn("jj git push --bookmark <b>", hints)
+            self.assertIn("jj rebase -b @ -d <b>@origin", hints)
+            self.assertIn("land-check -b <b>", hints)
             self.assertIn("/tstack:worktree-janitor", hints)
             self.assertNotIn("secondary workspace;", hints)
             self.assertLessEqual(len(hints.splitlines()), 10)
@@ -238,6 +240,7 @@ class TucaModeTest(HookCase):
             self.assertLessEqual(len(block.splitlines()), 15)
             self.assertIn(str(ROOT / "skills" / "engineering" / "tuca-mode" / "SKILL.md"), block)
             self.assertIn("copied verbatim", block)
+            self.assertIn("only when `land-check` says it will not deploy", block)
             self.assertIn(f"{ROOT / 'bin' / 'tuca-mode'} off sess-1 --data {self.data}", block)
         for source in ("startup", "clear"):
             self.assertEqual(self.block(source), "", source)

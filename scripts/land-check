@@ -1,0 +1,584 @@
+#!/usr/bin/env python3
+"""Land's verdict on one push: may it go without asking?
+
+    land-check --bookmark B [--head REV] [--remote origin] [--apply-skip-ci]
+
+Prints JSON. Run it after `jj git fetch` and the rebase, from inside the
+workspace. Exit 0 when the verdict is "push", 1 for "ask" or "stop", 2 on error.
+
+    bookmark, remote   what is being landed, and where
+    head               the single top revision of the work under @ (--head
+                       overrides); several heads → verdict "stop"
+    ff                 B@remote is an ancestor of head (and the local B too):
+                       the push only adds commits
+    stack              B@remote..head, bottom first
+    files              every path the push changes
+    deploys_on_push    true | false | "unknown": does a push of these files to
+                       B deploy? From .github/workflows (push triggers, branch
+                       and path filters, jobs that deploy, workflow_run chains),
+                       other CI configs, and, when no workflow deploys, platform
+                       configs (wrangler, netlify, vercel...) and the repo's
+                       docs, either of which makes it "unknown"
+    skip_ci_habit      the last 30 trunk subjects, the workflows or the docs
+                       use [skip ci]
+    skip_ci_marked     head's message already carries it
+    suggest_skip_ci    the habit holds, head lacks the marker, and every file
+                       is docs, a memo note (.tstack/), tooling or a test
+    verdict            "push": fast-forward, and nothing deploys (or [skip ci]
+                       on the head stops the only deploys, GitHub Actions ones);
+                       "ask": the push would deploy, or nobody can tell;
+                       "stop": not a fast-forward, several heads, nothing to
+                       push, or a revision jj would refuse to push
+    reasons            one line per finding behind the verdict
+
+--apply-skip-ci appends " [skip ci]" to head's subject when suggest_skip_ci
+holds (idempotent, head only), then reports on the rewritten head.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+SKIP_MARKERS = ("[skip ci]", "[ci skip]", "[no ci]", "[skip actions]", "[actions skip]")
+HABIT_SAMPLE = 30
+
+NON_DEPLOYING = {
+    "docs": ["**/*.md", "**/*.mdx", "**/*.rst", "docs/**", "doc/**", "LICENSE*", "CODEOWNERS",
+             ".github/ISSUE_TEMPLATE/**", ".github/PULL_REQUEST_TEMPLATE*"],
+    "memo": [".tstack/**"],
+    "tests": ["**/tests/**", "**/test/**", "**/__tests__/**", "**/testdata/**", "**/*_test.*",
+              "**/test_*.py", "**/*.test.*", "**/*.spec.*", "**/conftest.py"],
+    "tooling": ["justfile", ".justfile", "Justfile", ".editorconfig", ".gitignore", ".gitattributes",
+                ".claude/**", ".vscode/**", ".serena/**", ".envrc", "devenv.nix", "devenv.yaml", "devenv.lock",
+                ".pre-commit-config.yaml", ".prettierrc*", ".prettierignore", ".markdownlint*"],
+}
+
+DEPLOY_WORDS = re.compile(
+    r"deploy|\bpublish|\brelease\b|wrangler|vercel|netlify|flyctl|superfly|gh-pages|pages-artifact"
+    r"|firebase|kubectl|\bhelm\b|terraform apply|pulumi up|docker push|build-push-action|goreleaser"
+    r"|twine upload|cargo publish|\"environment\"", re.I)
+
+OTHER_CI = [".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", ".buildkite/**", "bitbucket-pipelines.yml",
+            ".drone.yml", "azure-pipelines.yml", ".woodpecker.yml", ".woodpecker/**"]
+PLATFORMS = ["**/netlify.toml", "**/vercel.json", "**/render.yaml", "**/wrangler.toml", "**/wrangler.json",
+             "**/wrangler.jsonc", "**/.platform.app.yaml", "app.json", "**/railway.json", "**/railway.toml"]
+DOCS = ["CLAUDE.md", "AGENTS.md", "README.md", "CONTRIBUTING.md", "docs/deploy.md", "docs/deployment.md"]
+
+
+class CheckError(Exception):
+    pass
+
+
+# --- GitHub's filter patterns and a YAML subset ------------------------------
+
+def glob_re(pattern):
+    """GitHub's filter pattern syntax: * no slash, ** anything, ? and + quantify
+    the character before them, [..] a class."""
+    out, i = [], 0
+    while i < len(pattern):
+        c = pattern[i]
+        if pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+            if i < len(pattern) and pattern[i] == "/":
+                out[-1] = "(?:.*/)?"
+                i += 1
+            continue
+        if c == "*":
+            out.append("[^/]*")
+        elif c in "?+":
+            out.append(c)
+        elif c == "[":
+            end = pattern.find("]", i)
+            if end == -1:
+                out.append(re.escape(c))
+            else:
+                out.append(pattern[i:end + 1])
+                i = end
+        else:
+            out.append(re.escape(c))
+        i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def matches(pattern, path):
+    try:
+        return bool(glob_re(pattern).match(path))
+    except re.error:
+        return False
+
+
+def filtered(patterns, path):
+    """GitHub's rule for a list with ! negations: the last pattern that matches decides."""
+    hit = False
+    for p in patterns:
+        p = str(p)
+        if p.startswith("!"):
+            if matches(p[1:], path):
+                hit = False
+        elif matches(p, path):
+            hit = True
+    return hit
+
+
+def strip_comment(line):
+    quote = None
+    for i, c in enumerate(line):
+        if quote:
+            if c == quote:
+                quote = None
+        elif c in "'\"":
+            quote = c
+        elif c == "#" and (i == 0 or line[i - 1] in " \t"):
+            return line[:i].rstrip()
+    return line.rstrip()
+
+
+def scalar(text):
+    text = text.strip()
+    if not text:
+        return None
+    if text[0] == "[" and text.endswith("]"):
+        return [scalar(x) for x in split_flow(text[1:-1])]
+    if text[0] == "{" and text.endswith("}"):
+        out = {}
+        for item in split_flow(text[1:-1]):
+            k, _, v = item.partition(":")
+            out[str(scalar(k))] = scalar(v)
+        return out
+    if len(text) > 1 and text[0] == text[-1] and text[0] in "'\"":
+        return text[1:-1]
+    return text
+
+
+def split_flow(text):
+    items, depth, quote, cur = [], 0, None, ""
+    for c in text:
+        if quote:
+            quote = None if c == quote else quote
+        elif c in "'\"":
+            quote = c
+        elif c in "[{":
+            depth += 1
+        elif c in "]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            items.append(cur)
+            cur = ""
+            continue
+        cur += c
+    if cur.strip():
+        items.append(cur)
+    return [i for i in items if i.strip()]
+
+
+KEY = re.compile(r"""^("[^"]*"|'[^']*'|[^\s'"\[{][^:]*?)\s*:(?:\s+(.*)|$)""")
+
+
+def parse_yaml(text):
+    """Block mappings and sequences, flow lists and maps, quoted scalars, block
+    scalars: the part of YAML a workflow's `on:` and `jobs:` use."""
+    lines = []
+    raw = text.splitlines()
+    i = 0
+    while i < len(raw):
+        line = strip_comment(raw[i].replace("\t", "  "))
+        i += 1
+        if not line.strip() or line.strip() in ("---", "..."):
+            continue
+        body = line.strip()
+        while body.count("[") > body.count("]") and i < len(raw):
+            body += " " + strip_comment(raw[i]).strip()
+            i += 1
+        lines.append([len(line) - len(line.lstrip()), body])
+    value, end = node(lines, 0, lines[0][0] if lines else 0)
+    if end != len(lines):
+        raise ValueError(f"unparsed from line {end}: {lines[end][1]!r}")
+    return value
+
+
+def node(lines, i, indent):
+    if i >= len(lines) or lines[i][0] < indent:
+        return None, i
+    indent = lines[i][0]
+    if lines[i][1] == "-" or lines[i][1].startswith("- "):
+        return sequence(lines, i, indent)
+    return mapping(lines, i, indent)
+
+
+def block_scalar(lines, i, indent):
+    parts = []
+    while i < len(lines) and lines[i][0] > indent:
+        parts.append(lines[i][1])
+        i += 1
+    return "\n".join(parts), i
+
+
+def mapping(lines, i, indent):
+    out = {}
+    while i < len(lines) and lines[i][0] == indent and not (lines[i][1] == "-" or lines[i][1].startswith("- ")):
+        m = KEY.match(lines[i][1])
+        if not m:
+            raise ValueError(f"not a key: {lines[i][1]!r}")
+        key, rest = str(scalar(m.group(1))), (m.group(2) or "").strip()
+        i += 1
+        if rest[:1] in ("|", ">"):
+            out[key], i = block_scalar(lines, i, indent)
+        elif rest:
+            out[key] = scalar(rest)
+        elif i < len(lines) and (lines[i][0] > indent or (lines[i][0] == indent and lines[i][1].startswith("-"))):
+            out[key], i = node(lines, i, lines[i][0])
+        else:
+            out[key] = None
+    return out, i
+
+
+def sequence(lines, i, indent):
+    out = []
+    while i < len(lines) and lines[i][0] == indent and (lines[i][1] == "-" or lines[i][1].startswith("- ")):
+        rest = lines[i][1][1:].strip()
+        if not rest:
+            value, i = node(lines, i + 1, indent + 1)
+            out.append(value)
+        elif KEY.match(rest) and not rest.startswith(("'", '"')):
+            lines[i] = [indent + 2 + (len(lines[i][1][1:]) - len(lines[i][1][1:].lstrip()) - 1), rest]
+            value, i = mapping(lines, i, lines[i][0])
+            out.append(value)
+        elif rest[:1] in ("|", ">"):
+            value, i = block_scalar(lines, i + 1, indent)
+            out.append(value)
+        else:
+            out.append(scalar(rest))
+            i += 1
+    return out, i
+
+
+# --- the repo --------------------------------------------------------------
+
+class Repo:
+    def __init__(self, cwd):
+        self.cwd = cwd
+
+    def jj(self, *args, check=True):
+        r = subprocess.run(["jj", "--no-pager", "--color=never", *args], cwd=self.cwd, capture_output=True,
+                           text=True, env={**os.environ, "JJ_EDITOR": "true", "EDITOR": "true"})
+        if check and r.returncode != 0:
+            raise CheckError(f"`jj {' '.join(args)}` failed: {r.stderr.strip()}")
+        return r
+
+    def revs(self, revset):
+        template = ('json(change_id.short(12)) ++ "\\t" ++ json(commit_id) ++ "\\t" ++ json(empty) ++ "\\t" ++ '
+                    'json(conflict) ++ "\\t" ++ json(parents.len()) ++ "\\t" ++ json(description) ++ "\\n"')
+        out = self.jj("log", "--no-graph", "--reversed", "-r", revset, "-T", template).stdout
+        revs = []
+        for line in out.splitlines():
+            change, commit, empty, conflict, parents, description = map(json.loads, line.split("\t"))
+            revs.append({"change": change, "commit": commit, "subject": description.split("\n", 1)[0].strip(),
+                         "description": description, "empty": empty, "conflict": conflict, "merge": parents > 1})
+        return revs
+
+    def exists(self, revset):
+        return self.jj("log", "--no-graph", "-r", f"present({revset})", "-T", '"x"').stdout != ""
+
+    def files(self, rev):
+        return [f for f in self.jj("file", "list", "-r", rev).stdout.splitlines() if f]
+
+    def show(self, rev, path):
+        r = self.jj("file", "show", "-r", rev, "root:" + json.dumps(path), check=False)
+        return r.stdout if r.returncode == 0 else None
+
+
+def rev_json(rev, commit=False):
+    out = {"change": rev["change"], "subject": rev["subject"]}
+    if commit:
+        out["commit"] = rev["commit"]
+    out.update({k: True for k in ("merge", "empty", "conflict") if rev[k]})
+    return out
+
+
+# --- deploy detection ------------------------------------------------------
+
+def triggers(on):
+    """{event: config or None} from a workflow's `on:`."""
+    if isinstance(on, str):
+        return {on: None}
+    if isinstance(on, list):
+        return {str(e): None for e in on}
+    if isinstance(on, dict):
+        return {str(k): v for k, v in on.items()}
+    return {}
+
+
+def push_fires(cfg, bookmark, files):
+    """Does a push of files to bookmark fire this push trigger? (fires, why)"""
+    if cfg is None:
+        return True, "on every push"
+    if not isinstance(cfg, dict):
+        return True, "on push"
+    listify = lambda v: v if isinstance(v, list) else [v] if v is not None else []
+    branches, ignore = listify(cfg.get("branches")), listify(cfg.get("branches-ignore"))
+    if branches and not filtered(branches, bookmark):
+        return False, f"its push branches {branches} leave out {bookmark}"
+    if ignore and filtered(ignore, bookmark):
+        return False, f"its branches-ignore {ignore} names {bookmark}"
+    if not branches and not ignore and (cfg.get("tags") or cfg.get("tags-ignore")):
+        return False, "it fires on tag pushes only"
+    paths, paths_ignore = listify(cfg.get("paths")), listify(cfg.get("paths-ignore"))
+    if paths and files and not any(filtered(paths, f) for f in files):
+        return False, f"no changed file matches its paths {paths}"
+    if paths_ignore and files and all(filtered(paths_ignore, f) for f in files):
+        return False, f"every changed file matches its paths-ignore {paths_ignore}"
+    return True, f"on push to {bookmark}"
+
+
+def deploy_jobs(workflow, bookmark):
+    """Names of jobs that look like deploys and are not limited to another branch."""
+    jobs = workflow.get("jobs") if isinstance(workflow.get("jobs"), dict) else {}
+    marked = {j for j, job in jobs.items() if DEPLOY_WORDS.search(j + " " + json.dumps(job))}
+    if not marked and DEPLOY_WORDS.search(str(workflow.get("name") or "")):
+        marked = set(jobs)  # a workflow named for deploying, with no job that says how
+    found = []
+    for job_id, job in jobs.items():
+        if job_id not in marked:
+            continue
+        cond = str(job.get("if") or "") if isinstance(job, dict) else ""
+        refs = re.findall(r"refs/heads/([\w./-]+)", cond)
+        if refs and bookmark not in refs:
+            continue
+        found.append(job_id)
+    return found
+
+
+def read_workflows(repo, head, tracked):
+    workflows, reasons = {}, []
+    for path in tracked:
+        if re.match(r"^\.github/workflows/[^/]+\.ya?ml$", path):
+            text = repo.show(head, path) or ""
+            try:
+                data = parse_yaml(text)
+                if not isinstance(data, dict):
+                    raise ValueError("not a mapping")
+                workflows[path] = (data, text)
+            except (ValueError, IndexError) as e:
+                workflows[path] = (None, text)
+                reasons.append(f"could not read {path} ({e})")
+    return workflows, reasons
+
+
+def deploy_status(repo, head, bookmark, files, tracked):
+    """(true | false | "unknown", reasons, only_actions, paths lists of firing deploy workflows)."""
+    workflows, reasons = read_workflows(repo, head, tracked)
+    deploying, unknown, deploy_paths = [], [], []
+    push_named = {}
+    for path, (data, _) in workflows.items():
+        if data is None:
+            unknown.append(path)
+            continue
+        push_named[str(data.get("name") or Path(path).stem)] = (path, data)
+    for path, (data, _) in workflows.items():
+        if data is None:
+            continue
+        on = triggers(data.get("on", data.get(True)))
+        jobs = deploy_jobs(data, bookmark)
+        fired = []
+        if "push" in on:
+            ok, why = push_fires(on["push"], bookmark, files)
+            if ok:
+                fired.append(why)
+            elif jobs:
+                reasons.append(f"{path} deploys ({', '.join(jobs)}) but not for this push: {why}")
+        if "workflow_run" in on and isinstance(on["workflow_run"], dict):
+            cfg = on["workflow_run"]
+            branches = cfg.get("branches")
+            for name in (cfg.get("workflows") or []):
+                upstream = push_named.get(str(name))
+                if not upstream:
+                    continue
+                up_on = triggers(upstream[1].get("on"))
+                if "push" in up_on and push_fires(up_on["push"], bookmark, files)[0] and (
+                        not branches or filtered(branches if isinstance(branches, list) else [branches], bookmark)):
+                    fired.append(f"after {name}, which runs on push to {bookmark}")
+        if fired and jobs:
+            deploying.append(f"{path} deploys ({', '.join(jobs)}) {fired[0]}")
+            push_cfg = on.get("push") if isinstance(on.get("push"), dict) else {}
+            deploy_paths.append(push_cfg.get("paths") or [])
+    others = [p for p in tracked if any(matches(g, p) for g in OTHER_CI)]
+    platforms = [p for p in tracked if any(matches(g, p) for g in PLATFORMS)]
+    doc_lines = []
+    for doc in DOCS:
+        if doc in tracked:
+            for line in (repo.show(head, doc) or "").splitlines():
+                low = line.lower()
+                if "deploy" in low and re.search(r"\b(push|pushed|pushes|merge|merged|land|lands)\b", low):
+                    doc_lines.append(f"{doc}: {line.strip()[:120]}")
+    if deploying:
+        reasons += deploying
+        if others:
+            reasons.append("CI outside GitHub Actions too, not read: " + ", ".join(others))
+        return True, reasons, not others, deploy_paths
+    if unknown or others or platforms or doc_lines:
+        if others:
+            reasons.append("CI outside GitHub Actions, not read: " + ", ".join(others))
+        if platforms:
+            reasons.append("a platform config that may deploy on push through its git integration: "
+                           + ", ".join(platforms))
+        reasons += [f"the docs mention deploying on push: {d}" for d in doc_lines]
+        return "unknown", reasons, False, deploy_paths
+    reasons.append(f"no workflow deploys on a push to {bookmark}" if workflows
+                   else "no CI config and no deploy config in the repo")
+    return False, reasons, True, deploy_paths
+
+
+def kind(path):
+    for name, patterns in NON_DEPLOYING.items():
+        if any(matches(p, path) for p in patterns):
+            return name
+    return None
+
+
+def has_marker(text):
+    low = text.lower()
+    return any(m in low for m in SKIP_MARKERS)
+
+
+def skip_ci_habit(repo, base, head, tracked, workflows_text):
+    sample = repo.revs(f"latest(::{base} ~ root(), {HABIT_SAMPLE})")
+    marked = [r for r in sample if has_marker(r["description"])]
+    reasons = []
+    if marked:
+        reasons.append(f"{len(marked)} of the last {len(sample)} trunk commits carry [skip ci]")
+    if any(has_marker(t) for t in workflows_text):
+        reasons.append("a workflow tests for [skip ci]")
+    for doc in DOCS:
+        if doc in tracked and has_marker(repo.show(head, doc) or ""):
+            reasons.append(f"{doc} mentions [skip ci]")
+    return bool(reasons), reasons
+
+
+# --- the check -------------------------------------------------------------
+
+def land_check(repo, bookmark, head_rev=None, remote="origin", apply_skip_ci=False):
+    reasons = []
+    remote_ref = f"{bookmark}@{remote}"
+    if repo.exists(remote_ref):
+        base = remote_ref
+    elif repo.exists(bookmark):
+        base = bookmark
+        reasons.append(f"{remote_ref} does not exist: the push creates it")
+    else:
+        raise CheckError(f"neither {bookmark} nor {remote_ref} exists")
+
+    if head_rev:
+        heads = repo.revs(head_rev)
+    else:
+        work = f"(roots({base}..@)::) ~ (empty() & description(exact:\"\") & ~merges())"
+        heads = repo.revs(f"heads({work})")
+    result = {"bookmark": bookmark, "remote": remote, "head": None, "ff": False, "stack": [], "files": [],
+              "deploys_on_push": "unknown", "skip_ci_habit": False, "skip_ci_marked": False,
+              "suggest_skip_ci": False, "verdict": "stop", "reasons": reasons}
+    if not heads:
+        reasons.append(f"nothing to push: no described work between {base} and @")
+        return result
+    if len(heads) > 1:
+        result["heads"] = [rev_json(h) for h in heads]
+        reasons.append(f"the work has {len(heads)} heads ({', '.join(h['change'] for h in heads)}): "
+                       "name the one to land, or join them with a merge (`jj new A B -m ...`)")
+        return result
+    head = heads[0]
+
+    stack = repo.revs(f"{base}..{head['commit']}")
+    ff = repo.exists(f"{base} & ::{head['commit']}")
+    if repo.exists(bookmark) and not repo.exists(f"{bookmark} & ::{head['commit']}"):
+        ff = False
+        reasons.append(f"the local {bookmark} has commits the head does not: moving it would drop them")
+    if not ff and base == remote_ref:
+        reasons.append(f"{remote_ref} is not an ancestor of {head['change']}: the push would rewrite remote history")
+    if not stack:
+        reasons.append(f"nothing to push: {head['change']} is already in {base}")
+    for rev in stack:
+        if not rev["subject"]:
+            reasons.append(f"{rev['change']} has no description: jj will not push it")
+        if rev["conflict"]:
+            reasons.append(f"{rev['change']} has conflicts: jj will not push it")
+        if rev["empty"] and not rev["merge"] and rev["subject"]:
+            reasons.append(f"note: {rev['change']} ({rev['subject']}) is empty")
+
+    files = [f for f in repo.jj("diff", "--name-only", "--from", base, "--to", head["commit"]).stdout.splitlines()
+             if f]
+    tracked = set(repo.files(head["commit"]))
+    deploys, deploy_reasons, only_actions, deploy_paths = deploy_status(repo, head["commit"], bookmark, files,
+                                                                        tracked)
+    reasons += deploy_reasons
+    workflow_texts = [repo.show(head["commit"], p) or "" for p in tracked if p.startswith(".github/workflows/")]
+    habit, habit_reasons = skip_ci_habit(repo, base, head["commit"], tracked, workflow_texts)
+    reasons += habit_reasons
+    marked = has_marker(head["subject"])
+
+    quiet = {}
+    for f in files:
+        k = kind(f)
+        if k and any(filtered(paths, f) for paths in deploy_paths if paths):
+            k = None  # a deploy workflow names this path: it is what gets deployed
+        quiet[f] = k
+    loud = [f for f, k in quiet.items() if not k]
+    suggest = habit and not marked and bool(files) and not loud
+    if habit and not marked and loud:
+        reasons.append("no [skip ci]: these files may need CI or a deploy: " + ", ".join(loud[:8]))
+    elif suggest:
+        reasons.append("every file is " + "/".join(sorted({k for k in quiet.values()})) + ": [skip ci] fits")
+
+    if apply_skip_ci and suggest:
+        first, _, rest = head["description"].partition("\n")
+        repo.jj("describe", "-r", head["commit"], "-m", f"{first.rstrip()} [skip ci]\n{rest}".rstrip("\n") + "\n")
+        result = land_check(repo, bookmark, head["change"], remote)
+        result["skip_ci_applied"] = True
+        return result
+
+    result.update({
+        "head": rev_json(head, commit=True), "ff": ff, "stack": [rev_json(r) for r in stack], "files": files,
+        "deploys_on_push": deploys, "skip_ci_habit": habit, "skip_ci_marked": marked, "suggest_skip_ci": suggest,
+    })
+    blocked = (not ff or not stack or any(not r["subject"] or r["conflict"] for r in stack))
+    if blocked:
+        result["verdict"] = "stop"
+    elif deploys is False:
+        result["verdict"] = "push"
+    elif deploys is True and only_actions and marked:
+        result["verdict"] = "push"
+        reasons.append("[skip ci] on the head stops the GitHub Actions deploys")
+    else:
+        result["verdict"] = "ask"
+        if deploys is True and only_actions and suggest:
+            reasons.append("--apply-skip-ci would mark the head and make this a push")
+        if deploys is True and not only_actions and (marked or suggest):
+            reasons.append("[skip ci] may not stop every deploy source")
+    return result
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="land-check", description=__doc__.split("\n\n")[0],
+                                     formatter_class=argparse.RawDescriptionHelpFormatter,
+                                     epilog=__doc__.split("\n\n", 1)[1])
+    parser.add_argument("-R", "--repo", default=".")
+    parser.add_argument("--bookmark", "-b", required=True)
+    parser.add_argument("--head", help="the revision to land (default: the single head of the work under @)")
+    parser.add_argument("--remote", default="origin")
+    parser.add_argument("--apply-skip-ci", action="store_true",
+                        help="append [skip ci] to head's subject when suggest_skip_ci holds")
+    args = parser.parse_args(argv)
+    try:
+        result = land_check(Repo(str(Path(args.repo).resolve())), args.bookmark, args.head, args.remote,
+                            args.apply_skip_ci)
+    except CheckError as e:
+        print(f"land-check: {e}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, indent=2))
+    return 0 if result["verdict"] == "push" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
