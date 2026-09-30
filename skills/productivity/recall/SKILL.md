@@ -9,10 +9,10 @@ Answer from the record, not from memory: search each source below that bears on 
 
 1. **memo**, the deliberate notes and summaries. `memo recall <words>` searches the project and global stores (`--all`: every repo indexed on this machine); `memo zoom <ID>` expands a summary into what it covers. A result marked `superseded by` is history: cite the note that replaced it.
 2. **`jj log`**: descriptions carry the why of each change. Search them with a revset, e.g. `jj log -r 'description(substring-i:"hook")' --no-graph -T 'change_id.short() ++ " " ++ description.first_line() ++ "\n"'`; `jj show <change>` for one change. In a plain git repo, `git log --grep=<word> -i --oneline`.
-3. **claude-mem archive**, the automatic observations of sessions before memo, when the file exists (`~/.claude-mem/claude-mem.db`, or wherever it was archived). Open it **read-only** and never write to it:
+3. **claude-mem archive**, the automatic observations of sessions before memo, when the file exists (`~/.local/share/claude-mem-archive/claude-mem.db`, archived 2026-09-30; claude-mem is retired). Open it **read-only** and never write to it:
 
    ```
-   sqlite3 'file:/home/luizrocha/.claude-mem/claude-mem.db?mode=ro' "<query>"
+   sqlite3 "file:$HOME/.local/share/claude-mem-archive/claude-mem.db?mode=ro" "<query>"
    ```
 
    - `observations` (`id`, `project` = the repo folder's name, `type`, `title`, `subtitle`, `narrative`, `facts`, `created_at`), full-text through `observations_fts`. Rows of type `decision` carry the most signal; most `discovery` and `change` rows are narration.
