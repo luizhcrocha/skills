@@ -14,6 +14,7 @@ import { Core, type Decision, type GrillEntry, type JsonRecord } from "./core.ts
 import { DecisionThread } from "./DecisionThread.tsx";
 import { clock } from "./format.ts";
 import { KIND_WORDS, StatePill } from "./Overview.tsx";
+import { ManualText, Rich } from "./Rich.tsx";
 
 const TOKENS = ["bg", "card", "card-2", "text", "muted", "faint", "line", "accent", "accent-soft", "you", "run", "good", "warning", "serious", "critical", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
 
@@ -129,7 +130,7 @@ function Options(props: { readonly d: Decision; readonly pick: boolean }): JSX.E
                 <PillAs cls="recommended plain" text="recommended" />
               </Show>
             </span>
-            <span class="consequence">{o().consequence}</span>
+            <Show when={o().consequence}>{(c) => <Rich class="consequence" text={c()} />}</Show>
           </>
         );
 
@@ -160,7 +161,7 @@ function Manual(props: { readonly d: Decision; readonly title: string }): JSX.El
     <Show when={props.d.manual}>
       <div class="dv-block">
         <h3>{props.title}</h3>
-        <pre class="manual">{props.d.manual}</pre>
+        <ManualText text={props.d.manual ?? ""} />
       </div>
     </Show>
   );
@@ -337,7 +338,7 @@ function Grill(props: { readonly d: Decision }): JSX.Element {
   const ask = (e: () => GrillEntry): JSX.Element => (
     <fieldset class="gq" data-q={e().q.id} style={`--depth:${e().depth}`}>
       <legend>{head(e())}</legend>
-      <p class="gq-body">{e().q.body}</p>
+      <Rich class="gq-body" text={e().q.body ?? ""} />
       <div class="gq-rec">
         <p>
           <b>Recommended:</b> {e().q.recommend}
@@ -752,11 +753,11 @@ function Info(props: { readonly d: Decision }): JSX.Element {
           </div>
         )}
       </Show>
-      <p class="dv-question">{d().question}</p>
+      <Rich class="dv-question" text={d().question} />
       <Show when={d().why}>
         <div class="dv-block">
           <h3>{d().blocking ? "What it blocks" : "Meanwhile"}</h3>
-          <p>{d().why}</p>
+          <Rich text={d().why ?? ""} />
         </div>
       </Show>
       <Show when={d().recommend}>
@@ -764,8 +765,8 @@ function Info(props: { readonly d: Decision }): JSX.Element {
           <h3>Recommended</h3>
           <p>
             <b>{recommended() ? `${recommended()?.id ?? ""}: ${recommended()?.label ?? ""}` : d().recommend}</b>
-            {d().reason ? "\n" + String(d().reason) : ""}
           </p>
+          <Show when={d().reason}>{(r) => <Rich text={r()} />}</Show>
         </div>
       </Show>
     </>

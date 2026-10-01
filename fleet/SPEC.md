@@ -290,6 +290,16 @@ workspaces[]? {id (the jj workspace's name), agent, path, repo (the default work
                base (change id), added, status (active|pruned), pruned?}   written by `fleet ws` only
 ```
 
+**Text on the page.** The page shows a decision's `question`, `why`, `reason`, its options'
+`consequence`, `manual`, a grilling question's `body`, a roadblock's `detail` and a chat message's
+`text` in one small format: paragraphs split on a blank line, inline code in backticks, and fenced
+blocks (a line of three or more backticks with an optional language tag, `nu`, `sh`, `ts`, `json`,
+`toml`, `nix`, `python`, `sql`, `rust`, `diff`, `yaml` and their aliases), shown highlighted with a
+copy button. Nothing else is markup and no HTML is rendered. Text with no backtick shows as it always
+did. A `manual` with no backtick that is one line and not a sentence (it does not end in `.`, `!`, `?`
+or `:`, and does not open with a capitalised word and a space) shows as one `sh` block. The CLIs store
+the text as given; the format is the page's (`fleet/page/src/text.ts`).
+
 `workspaces` is a key neither state.py nor `fleet state` knows: both keep it as it is (Python
 round-trips the whole object, TypeScript keeps a ledger's unknown keys in place), and the page's view
 passes it through. No oracle trace has it.

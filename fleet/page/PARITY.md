@@ -110,6 +110,42 @@ How a row was checked:
 | The composer's list is the page's one caret list (`src/carets.ts`, `src/CaretList.tsx`), shared with the decision page's fields; the composer (the main chat and a side chat, one field) adds `@` | dom (the composer's tests above, unchanged); cdp "the chat's composer" |
 | **new** Hub `GET /f/<fleet>/skills` (plugins installed and enabled, user and project skills, 60 s cache), and the host and workers running a `/skill` message with the Skill tool | fleet/test/hub.test.ts (fixture HOME: two plugins, one disabled, a user skill, a project skill; a `/` chat round trip) |
 
+## Text and code
+
+Free text that can carry code is shown in one small format (`src/text.ts`; fleet/SPEC.md, "Text on
+the page"): paragraphs, inline code, fenced blocks with a language. Luiz (2026-10-01): a decision's
+"What to do" was one monospace slab mixing prose and a nushell command.
+
+| Feature | Checked |
+|---|---|
+| **new** Where: a decision's question, why, reason and options' consequences, `--manual`, a grilling question's body, a roadblock's detail, every chat message (mentions stay chips, in the words; in code they are their text) | dom `code.test.tsx` "a chat message's code is a block in the bubble…"; shot `code-*` |
+| **new** Paragraphs on a blank line, inline code, fences with and without a language (none: plain), an unclosed fence runs to the end; no other markup and no HTML: the parser returns strings and the page renders text nodes and spans | `text.test.ts` (paragraphs, inline code, fences, "text that looks like HTML stays text"); dom (an HTML-looking message has no `b` or `script`) |
+| **new** Text with no backtick shows exactly as before (one paragraph, pre-wrap). An old `--manual` with none: one line and not a sentence is one `sh` block; anything else is the old monospace slab | `text.test.ts` "an old --manual…"; dom "an old one-command --manual is one sh block…"; shot `code-*-legacy` |
+| **new** A code block: the language as its label, highlighting in the page's tokens (both themes), a Wrap switch (off), horizontal scroll inside the block (never the page), a Copy button per block, at least 44 px on a touch screen, that copies exactly the code (`navigator.clipboard.writeText` in the click, else the code selected and copied with `execCommand`, else left selected), "Copied" for 2 s | dom "Copy writes exactly…", "without the clipboard (plain http)…", "each block has its own button…"; cdp "at 390 px a block scrolls inside itself…", "Copy puts exactly the block's code on the clipboard…"; shot `code-{390,1280}-{light,dark}-{modal,legacy,chat}` |
+| **new** A block is keyed by its content: a state update that leaves it as it was keeps its node, its Wrap and its "Copied" | dom "a block keeps its node…"; cdp "a block keeps its node and its wrap switch through a state event" |
+| **new** Languages: nu (the page's own grammar, `src/langs.ts`: commands at a pipeline's head, flags, `$vars` and cell paths, the four string kinds, `$"…(expr)"` with the expression highlighted as nu, records, closures' parameters, pipes, numbers with units, comments), sh/bash, ts, js, json, toml, nix and rust (the page's own, small), python, sql, diff, yaml | `text.test.ts` "nu: a variable, a flag, a string, interpolation, a closure, a record, a comment", "the fleet's other languages…" |
+
+**The highlighter: @tanstack/highlight 1.0.0** (the latest on npm, MIT, no dependencies), its `core`
+entry with one import per language, over sugar-high 2.5.0 (latest, MIT). Read from both packages'
+published source, by the criteria in order:
+
+1. Nushell: neither ships it. @tanstack/highlight takes a language as `defineLanguage({name, aliases,
+   tokenize(code, ctx)})`, any code returning `{start, end, className}` ranges, with `ctx.tokenize` to
+   hand a substring to another language: a hand-written scanner with states, and the `(expr)` of an
+   interpolation tokenized as nu again. sugar-high takes only `ParseOptions` (keyword sets, comment and
+   quote hooks) for its JS-shaped lexer: `$"..."` came out as `$` and a string, and nested interpolation
+   is out of reach.
+2. The fleet's languages: @tanstack/highlight has sh, ts, js, json, toml, python, sql, diff, yaml, not
+   rust or nix; sugar-high has those and rust, not nix. Nix is the page's own either way; rust is a
+   small scanner here.
+3. Size: core and the full language set, 6.2 KB gzipped for @tanstack/highlight against 5.8 KB for
+   sugar-high, 0.4 KB apart, so size does not decide. The built template grew from 298,660 to 329,233
+   bytes (+30.6 KB; `gzip -9` 92,403 to 103,248, +10.8 KB), the highlighter and its languages 8.4 KB of it gzipped.
+4. Solid: both tokenize a string synchronously with no framework; @tanstack/highlight's `tokenize`
+   returns `{className, value}` tokens, which the page renders as spans (no `innerHTML`).
+5. Theming: classes; the page maps them to its own tokens (`.t-keyword`, `.t-string`...), both themes.
+   sugar-high writes an inline style per token.
+
 ## Notifications
 
 | Feature | Checked |

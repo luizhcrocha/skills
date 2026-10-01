@@ -13,6 +13,7 @@ import { Pill, usePage, Who } from "./bits.tsx";
 import { chatRows, dayWords, type Item, type Row } from "./chatlog.ts";
 import { Core, type Message, type Side } from "./core.ts";
 import { clock, fullTime } from "./format.ts";
+import { Rich } from "./Rich.tsx";
 
 /** Who sent a message, as the chat shows it. */
 export function useSender(): (msg: Message) => { label: string; colour: string; status: string } {
@@ -50,24 +51,25 @@ export const firstLine = (text: string, n = 90): string => {
   return line.length > n ? line.slice(0, n - 1).trimEnd() + "…" : line;
 };
 
-/** A message's words, its mentions as chips in the colour of who they name. */
+/** A message's words in the page's text format, its mentions as chips in the colour of who they name. */
 function Words(props: { readonly msg: Message }): JSX.Element {
   const { m } = usePage();
 
   return (
-    <p class="msg-text">
-      <For each={props.msg.parts} keyed={false}>
-        {(p) => (
-          <Show when={p().mention} fallback={p().text}>
-            {(id) => (
-              <span class="mention" style={`--c:${m.colourOfId(id())}`} title={p().text}>
-                @{m.nameOf(id())}
-              </span>
-            )}
-          </Show>
-        )}
-      </For>
-    </p>
+    <Rich
+      class="msg-text"
+      text={props.msg.text}
+      parts={props.msg.parts}
+      mention={(p) =>
+        p.mention ? (
+          <span class="mention" style={`--c:${m.colourOfId(p.mention)}`} title={p.text}>
+            @{m.nameOf(p.mention)}
+          </span>
+        ) : (
+          p.text
+        )
+      }
+    />
   );
 }
 

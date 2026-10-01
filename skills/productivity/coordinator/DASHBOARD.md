@@ -64,7 +64,9 @@ decisions[]  what waits on the user, in the order they were opened
   options[]  id, label, consequence (kind decision)
   recommend  an option's id, or the value you would give; reason says why
   secret     the key the code expects (kind secret)
-  manual     the route by hand: steps or commands, shown verbatim (kind secret and action)
+  manual     the route by hand (kind secret and action): short prose, and each command in a fenced block
+             tagged with its language (nu on Luiz's machines: he runs nushell), one command per block
+             where the steps are separate; the page highlights each block and gives it a copy button
   body       boolean: decisions/<id>.html holds the evidence
   agent      the worker that waits on it, or null
   supersedes the closed decision this one replaces, or null
@@ -148,7 +150,7 @@ A manager's page shows how full the plan's 5-hour and 7-day windows are and when
 | A choice | `decision d1 --kind decision --title T --question Q --why W --option "A: label \| consequence" --option "B: label \| consequence" --recommend A --reason R` |
 | An input | `decision d2 --kind input --title T --question Q --why W [--recommend VALUE --reason R]` |
 | A secret | `decision d3 --kind secret --title T --question Q --why W --secret STRIPE_TEST_KEY --manual "cd servers/billing; secretspec set STRIPE_TEST_KEY"` |
-| An action by hand | `decision d4 --kind action --title T --question Q --why W --manual "the steps or commands"` |
+| An action by hand | `decision d4 --kind action --title T --question Q --why W --manual '...'`, the text short prose and each command in a fenced block with its language (```` ```nu ```` for Luiz, who runs nushell), one command per block where the steps are separate. Pass it in single quotes with real line breaks: inside double quotes the shell runs backticks. The page highlights each block and gives it a copy button; question, why, reason, consequences and chat messages take inline code and blocks too ("Text on the page" in fleet/SPEC.md) |
 | It stops work | add `--blocking`; `--agent a1` names the worker that waits |
 | A manager is present | add `--asks manager`: the manager looks first, and the user is not called. `decision d1 --asks user` passes it on, and calls them |
 | Evidence | add `--body FILE`: an HTML fragment, copied to `decisions/<id>.html`; `--no-body` removes it |

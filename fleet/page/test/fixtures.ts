@@ -222,3 +222,48 @@ export function chatConversation(now: number): Message[] {
     { id: 13, at: before(now, 10), from: "user", to: ["coordinator"], text: "Thanks. Tell me when the adapter is unblocked.", author: "luiz@example.com" },
   ];
 }
+
+/** Luiz's Modal clean-up (2026-10-01), as `--manual` is written now: prose, then the command in a `nu` block. */
+export const MODAL_MANUAL = [
+  "From the repo's devenv shell (modal is on its PATH), in nushell:",
+  "",
+  "```nu",
+  "with-env {…} { modal volume delete -y cr-lab-hf-cache; modal volume list }",
+  "```",
+  "",
+  "The list afterwards should not show `cr-lab-hf-cache`.",
+].join("\n");
+
+/** An old `--manual`: one command, no fence, as DASHBOARD.md's example wrote it. */
+export const LEGACY_MANUAL = "cd servers/billing; secretspec set STRIPE_TEST_KEY";
+
+/**
+ * The coordinator's view for the code blocks' tests and screenshots: an action with Luiz's Modal clean-up
+ * in the format (A2), an action with an old one-command `--manual` (A3), one whose old `--manual` is a
+ * sentence (A4), and a roadblock whose detail carries a block.
+ */
+export function codeView(now: number): View {
+  const view = coordinatorView(now);
+  const decisions = Array.isArray(view["decisions"]) ? view["decisions"] : [];
+  const roadblocks = Array.isArray(view["roadblocks"]) ? view["roadblocks"] : [];
+
+  return {
+    ...view,
+    decisions: [
+      ...decisions,
+      { id: "a8", ref: "A2", kind: "action", title: "Delete the lab's HF cache volume", question: "Delete the `cr-lab-hf-cache` volume on Modal?", why: "It holds 40 GB of stale weights; the lab re-downloads what it needs.", status: "open", blocking: false, asks: "user", opened: before(now, 12), manual: MODAL_MANUAL, options: [] },
+      { id: "a9", ref: "A3", kind: "action", title: "Set the Stripe test key", question: "Set the Stripe test key in the billing server's secrets.", status: "open", blocking: false, asks: "user", opened: before(now, 11), manual: LEGACY_MANUAL, options: [] },
+      { id: "a10", ref: "A4", kind: "action", title: "Rotate the webhook secret", question: "Rotate the webhook secret.", status: "open", blocking: false, asks: "user", opened: before(now, 10), manual: "Open the Stripe dashboard, Developers, Webhooks, and roll the secret.", options: [] },
+    ],
+    roadblocks: [...roadblocks, { id: "r3", ref: "R3", title: "Lab volume full", severity: "warning", needs: "the old cache deleted (A2)", since: before(now, 12), resolved: false, detail: "The volume is at 98%:\n\n```nu\nmodal volume list | where name =~ hf\n```", decision: "a8" }],
+  };
+}
+
+/** The coordinator's conversation with a worker's message that carries a command in a block, and a message that looks like HTML. */
+export function codeChat(now: number): Message[] {
+  return [
+    ...coordinatorChat(now),
+    { id: 6, at: before(now, 3), from: "a2", to: ["user"], text: "Checked the volume with `modal volume list`:\n\n```nu\nmodal volume list | where name =~ hf | get name\n```\n\nOnly `cr-lab-hf-cache` matches." },
+    { id: 7, at: before(now, 2), from: "user", to: ["coordinator"], text: "<b>not bold</b> and <script>alert(1)</script>", author: "luiz@example.com" },
+  ];
+}

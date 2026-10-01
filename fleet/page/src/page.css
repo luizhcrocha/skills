@@ -509,6 +509,37 @@
   .field textarea:focus-visible, .field input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
   .manual { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--card-2); font-family: var(--mono); font-size: 0.8125rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
   .dv code { font-family: var(--mono); font-size: 0.88em; padding: 1px 5px; border-radius: 4px; background: var(--card-2); }
+
+  /* Free text in the page's format (src/text.ts): paragraphs, inline code, and code blocks. A block is
+     its language, a wrap switch and a copy button over the code, which scrolls sideways inside the block
+     (never the page) unless wrapped. The colours are the page's own tokens, so both themes follow. */
+  .rich { display: grid; gap: 0.6em; min-width: 0; }
+  .rich > p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .rich code.ic { font-family: var(--mono); font-size: 0.86em; padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--text) 8%, transparent); overflow-wrap: anywhere; }
+  .code { margin: 0; min-width: 0; max-width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--card-2); overflow: hidden; font-size: 1rem; font-weight: 400; font-stretch: 100%; line-height: 1.5; letter-spacing: 0; text-wrap: initial; }
+  .code-head { display: flex; align-items: center; gap: 2px; padding-left: 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--text) 4%, var(--card-2)); }
+  .code-lang { flex: 1; min-width: 0; font-family: var(--mono); font-size: 0.75rem; color: var(--muted); }
+  .code-head button { min-width: var(--tap); min-height: var(--tap); padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--muted); font-family: var(--sans); font-size: var(--fs-xs); font-weight: 600; font-stretch: var(--narrow); cursor: pointer; }
+  .code-head button:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+  .code-head .code-copy { color: var(--accent); }
+  .code-head .code-wrap[aria-pressed="true"] { color: var(--text); background: color-mix(in srgb, var(--text) 10%, transparent); }
+  .code-pre { margin: 0; padding: 10px 12px; overflow-x: auto; overscroll-behavior-x: contain; font-family: var(--mono); font-size: 0.8125rem; line-height: 1.55; white-space: pre; tab-size: 4; color: var(--text); }
+  .code-pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .code-pre:focus-visible { outline-offset: -2px; }
+  .code-pre code { font: inherit; padding: 0; background: none; }
+  .t-comment { color: var(--muted); font-style: italic; }
+  .t-command, .t-heading { color: var(--text); font-weight: 600; }
+  .t-keyword, .t-selector { color: var(--s7); }
+  .t-attr, .t-meta { color: var(--you); }
+  .t-variable, .t-function { color: var(--run); }
+  .t-property, .t-tag { color: var(--critical); }
+  .t-string, .t-inserted { color: var(--good); }
+  .t-number, .t-literal { color: var(--serious); }
+  .t-type { color: var(--accent); }
+  .t-operator { color: var(--muted); }
+  .t-deleted { color: var(--critical); }
+  .t-link { color: var(--accent); text-decoration: underline; }
+  .msg .code { margin: 2px 0; background: color-mix(in srgb, var(--card) 70%, transparent); }
   .dv-body { display: grid; gap: 8px; }
   .dv-body iframe { display: block; width: 100%; height: 160px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
   .dv-body iframe.fixed { height: 70dvh; }
@@ -564,6 +595,7 @@
   .msg.can-reply { cursor: pointer; }
   .msg.replying, .found { outline: 2px solid var(--accent); outline-offset: 2px; }
   .msg-text { margin: 0; white-space: pre-wrap; }
+  .msg-text.rich { gap: 0.45em; }
   /* What a reply answers, on one line in the answered sender's colour; a tap shows it. */
   .re-line { display: grid; justify-items: start; width: 100%; min-width: 0; min-height: var(--tap); box-sizing: border-box; margin: 1px 0 6px; padding: 3px 10px 4px; border: 0; border-left: 3px solid var(--c, var(--faint)); border-radius: 6px; background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--muted); font: inherit; font-size: var(--fs-xs); line-height: 1.35; text-align: left; cursor: pointer; }
   .re-line b { font-weight: 700; font-stretch: var(--narrow); color: color-mix(in srgb, var(--c, var(--text)) 55%, var(--text)); }

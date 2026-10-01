@@ -7,14 +7,15 @@
  * `--extra` adds the open notifications panel, the chat overlay on a phone and a decision's page.
  * `--chat` shoots only the chat, on the conversation of `chatConversation` (the overlay on a phone, the
  * docked panel at 1280), at its end and scrolled to its start, with decision activity left out and shown,
- * and D18's page with its thread.
+ * and D18's page with its thread. `--code` shoots code blocks on `codeView`: A2 (Luiz's Modal clean-up,
+ * prose and a nu block), A3 (an old one-command `--manual`), and a chat message with a block.
  */
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import puppeteer, { type Page } from "puppeteer-core";
 
-import { chatConversation, chatView, coordinatorChat, coordinatorView, managerChat, managerView } from "./fixtures.ts";
+import { chatConversation, chatView, codeChat, codeView, coordinatorChat, coordinatorView, managerChat, managerView } from "./fixtures.ts";
 import { serveHarness } from "./harness.ts";
 
 const [templatePath, out] = process.argv.slice(2);
@@ -98,6 +99,53 @@ async function shootChat(): Promise<void> {
   }
 
   harness.stop();
+}
+
+/** Code blocks, at both widths and in both themes. */
+async function shootCode(): Promise<void> {
+  const harness = serveHarness({ template, view: codeView(now), messages: codeChat(now), skills });
+
+  for (const [w, h] of [
+    [390, 844],
+    [1280, 900],
+  ] as const) {
+    for (const theme of ["light", "dark"] as const) {
+      const phone = w < 500;
+      const page = await browser.newPage();
+      await page.setViewport({ width: w, height: h, deviceScaleFactor: phone ? 2 : 1, isMobile: phone, hasTouch: phone });
+      await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: theme }, { name: "prefers-reduced-motion", value: "reduce" }]);
+      await page.evaluateOnNewDocument((t: number) => {
+        Date.now = () => t;
+      }, now);
+
+      for (const [id, name] of [
+        ["a8", "modal"],
+        ["a9", "legacy"],
+      ] as const) {
+        await page.goto(harness.url + "#decision/" + id, { waitUntil: "networkidle2" });
+        await page.evaluate(() => document.querySelector("#dv-answer .dv-block")?.scrollIntoView({ block: "center" }));
+        await shoot(page, `code-${w}-${theme}-${name}`);
+      }
+
+      if (phone) await page.click("#chat-toggle");
+      await page.evaluate(() => {
+        const log = document.querySelector("#chat-log");
+
+        if (log) log.scrollTop = log.scrollHeight;
+      });
+      await shoot(page, `code-${w}-${theme}-chat`);
+      await page.close();
+    }
+  }
+
+  harness.stop();
+}
+
+if (process.argv.includes("--code")) {
+  await shootCode();
+  await browser.close();
+  console.log(`screenshots in ${out}`);
+  process.exit(0);
 }
 
 if (process.argv.includes("--chat")) {

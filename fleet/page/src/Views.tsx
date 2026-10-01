@@ -10,6 +10,7 @@ import { Pill, PillAs, RefTag, usePage, When, Who, tf } from "./bits.tsx";
 import { Core, type Agent, type Coordinator, type Decision, type Link } from "./core.ts";
 import { clock, fmtDur, fmtInt, fmtShort, plural, spentWords } from "./format.ts";
 import { keyed } from "./model.ts";
+import { Rich } from "./Rich.tsx";
 import { FILTERS, type Filter } from "./ui.ts";
 
 /** The decisions tied to a step, or to a milestone and no one step, as chips that open them. */
@@ -117,7 +118,7 @@ function Roadblocks(): JSX.Element {
                   </Show>
                   <Pill s={r().resolved ? "done" : r().severity} />
                 </div>
-                <p class="detail">{r().detail}</p>
+                <Rich class="detail" text={r().detail ?? ""} />
                 <p class="needs muted">
                   <Show when={!r().resolved} fallback="Resolved">
                     Needs <b>{r().needs}</b>

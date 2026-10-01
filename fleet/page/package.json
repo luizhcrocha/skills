@@ -14,6 +14,7 @@
     "@oxlint/plugins": "1.86.0",
     "@solidjs/compiler": "2.0.0-rc.13",
     "@solidjs/web": "2.0.0-rc.13",
+    "@tanstack/highlight": "1.0.0",
     "@types/bun": "1.4.2",
     "happy-dom": "20.14.5",
     "oxlint": "1.86.0",

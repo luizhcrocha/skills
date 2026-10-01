@@ -9,6 +9,7 @@
         "@oxlint/plugins": "1.86.0",
         "@solidjs/compiler": "2.0.0-rc.13",
         "@solidjs/web": "2.0.0-rc.13",
+        "@tanstack/highlight": "1.0.0",
         "@types/bun": "1.4.2",
         "happy-dom": "20.14.5",
         "oxlint": "1.86.0",
@@ -88,6 +89,8 @@
     "@solidjs/signals": ["@solidjs/signals@2.0.0-rc.13", "", {}, "sha512-4+pRdrAHtfyE9BUJWBup3TpzJojJjgW2mV1vm/Jik4tWa5epxXB/YrLkwqP1v8+S9XjyKKZu5BSLqmcpswMYeQ=="],
 
     "@solidjs/web": ["@solidjs/web@2.0.0-rc.13", "", { "dependencies": { "seroval": "~1.6.7", "seroval-plugins": "~1.6.7" }, "peerDependencies": { "solid-js": "^2.0.0-rc.13" } }, "sha512-vI/7v/XM8B/3U/oKAzCW2VjTLFkM5IArB2DFnrjxyPRYD3FX9KAXg9QuAnPIPQHC/xvg/LgxmvoVfZUfJ96gOQ=="],
+
+    "@tanstack/highlight": ["@tanstack/highlight@1.0.0", "", {}, "sha512-nrg2iZSQUZlDZGTPKh/CNlg6Orm3vFHIaIi/9DqPC1rUpfe/M6rD2iokrckWTc2Z5jYDz185BK76GUh9VIjQRw=="],
 
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.4", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-W3c4gRigFS0T/Ma4qIYF3GDAc5AQdHb1yL5znJT1Zv1YaD9Kitx656wBjvr19qbiosmZT8lWDM5BEMynUqX65A=="],
 
