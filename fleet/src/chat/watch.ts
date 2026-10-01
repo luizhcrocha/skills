@@ -181,11 +181,43 @@ export function fleetsUnheard(machine: Machine, me: string): string[] {
   return lines;
 }
 
-/** For a coordinator's watch: its own silent workers, told once across watches. */
+/** A message to a worker that it has not answered for this long is forwarded by the coordinator (L1). */
+export const NUDGE_S = 10 * 60;
+
+/** The `!` lines for messages to the workers of `root` that the addressee has not answered (no `--re`
+ * from it) for `nudgeS`: workers read their inbox at checkpoints, and only a message left this long is
+ * forwarded by SendMessage. Each told once. */
+function nudgeLines(machine: Machine, root: string, told: Map<string, Json>, nudgeS: number): string[] {
+  const messages = readChat(root);
+  const lines: string[] = [];
+
+  for (const w of rosterOf(machine, root).members) {
+    for (const m of openAmong(messages, w.id)) {
+      const mark = `nudge:${m.id}:${w.id}`;
+      const at = parseInstant(pyText(m.at));
+
+      if (m.from === w.id || at === undefined || (told.has(mark) && told.get(mark) !== false)) continue;
+      const waited = secondsNow(machine) - at / 1000;
+
+      if (waited < nudgeS) continue;
+      told.set(mark, true);
+      const who = w.name === w.id ? w.id : `${w.id} (${oneLine(w.name)})`;
+      lines.push(
+        `! worker ${who} has not answered #${m.id} from ${oneLine(m.from)} for ${Math.floor(waited / 60)} min: ` +
+          `"${[...oneLine(m.text)].slice(0, 120).join("")}". Forward it (SendMessage ${w.id}).`,
+      );
+    }
+  }
+
+  return lines;
+}
+
+/** For a coordinator's watch: its own silent workers, and the messages its workers left unanswered for
+ * FLEET_NUDGE_S (ten minutes), each told once across watches. */
 export function ownSilent(machine: Machine, root: string): string[] {
   const toldPath = join(root, "watch-coordinator.told");
   const told = readTold(toldPath);
-  const lines = silentLines(machine, root, undefined, told);
+  const lines = [...silentLines(machine, root, undefined, told), ...nudgeLines(machine, root, told, seconds(machine.env, "FLEET_NUDGE_S", NUDGE_S))];
 
   if (lines.length > 0) writeTold(toldPath, told);
 

@@ -354,6 +354,32 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+class NudgeTest(FleetDir):
+    """A message a worker leaves unanswered for ten minutes is named on the coordinator's watch (L1)."""
+
+    def watch_at(self, minutes: int) -> tuple[subprocess.Popen, Lines]:
+        env = {**os.environ, "FLEET_NOW": f"2026-01-05T09:{minutes:02d}:00+00:00", "FLEET_CHECK_S": "0.2"}
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "coordinator", "--resume", "--once"],
+                                stdout=subprocess.PIPE, text=True, encoding="utf-8", env=env)
+        self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdout.close()))
+        return proc, Lines(proc.stdout)
+
+    def test_named_after_ten_minutes_once_and_not_once_answered(self):
+        os.environ["FLEET_NOW"] = "2026-01-05T09:00:00+00:00"
+        self.addCleanup(os.environ.pop, "FLEET_NOW", None)
+        chat.append(self.root, "coordinator", "@a1 rebase on main first")
+        self.assertTrue(self.watch_at(9)[1].quiet(1.5))
+        proc, lines = self.watch_at(10)
+        self.assertEqual(lines.next(), '! worker a1 (notes-impl) has not answered #1 from coordinator for 10 min: '
+                                       '"@a1 rebase on main first". Forward it (SendMessage a1).\n')
+        self.assertEqual(proc.wait(timeout=5), 0)
+        self.assertTrue(self.watch_at(12)[1].quiet(1.5))
+        chat.append(self.root, "coordinator", "@a1 and run the tests")
+        chat.append(self.root, "a1", "on it", re=2)
+        self.assertEqual(self.watch_at(30)[1].next(), "#3 a1 (notes-impl) -> user, coordinator: on it [re #2]\n")
+        self.assertTrue(self.watch_at(30)[1].quiet(1.5))
+
+
 class ServerTest(FleetDir):
     policy: str | None = None
     hosts: list[str] = []  # "{port}" is replaced by the worker's port

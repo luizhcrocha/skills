@@ -168,6 +168,46 @@ describe("a roadblock changed to need the user (L8)", () => {
   });
 });
 
+describe("a message a worker leaves unanswered (L1)", () => {
+  const at = (minutes: number): string => `2026-01-05T09:${String(minutes).padStart(2, "0")}:00+00:00`;
+
+  function watchAt(minutes: number) {
+    const { proc, lines } = start(["chat", root, "watch", "--as", "coordinator", "--resume", "--once"], { ...env, FLEET_NOW: at(minutes), FLEET_CHECK_S: "0.2" });
+    procs.push(proc);
+
+    return { proc, next: () => lines.next() };
+  }
+
+  test("the coordinator's watch names it after ten minutes, once, and not once the worker answers", async () => {
+    ok("agent", "a1", "--task", "T", "--milestone", "m1", "--name", "notes-impl");
+    expect(fleet(["chat", root, "say", "--as", "coordinator", "@a1 rebase on main first"], env).code).toBe(0);
+
+    const early = watchAt(9);
+    await Bun.sleep(1500);
+    expect(early.proc.exitCode).toBeNull();
+    early.proc.kill();
+
+    const due = watchAt(10);
+    expect(await due.next()).toBe('! worker a1 (notes-impl) has not answered #1 from coordinator for 10 min: "@a1 rebase on main first". Forward it (SendMessage a1).\n');
+    expect(await due.proc.exited).toBe(0);
+
+    const told = watchAt(12);
+    await Bun.sleep(1500);
+    expect(told.proc.exitCode).toBeNull();
+    told.proc.kill();
+
+    expect(fleet(["chat", root, "say", "--as", "coordinator", "@a1 and run the tests"], env).code).toBe(0);
+    expect(fleet(["chat", root, "say", "--as", "a1", "--re", "2", "on it"], { ...env, FLEET_NOW: at(5) }).code).toBe(0);
+    const reply = watchAt(30);
+    expect(await reply.next()).toBe("#3 a1 (notes-impl) -> user, coordinator: on it [re #2]\n");
+    expect(await reply.proc.exited).toBe(0);
+    const answered = watchAt(30);
+    await Bun.sleep(1500);
+    expect(answered.proc.exitCode).toBeNull();
+    answered.proc.kill();
+  }, 20_000);
+});
+
 describe("the landing queue of a manager", () => {
   let manager: string;
 

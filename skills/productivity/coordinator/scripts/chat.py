@@ -13,7 +13,9 @@
                                                  While it runs, DIR/watch-WHO.pid says so: the page
                                                  shows whether the host reads the chat, and a
                                                  manager's watch also prints a `!` line for each
-                                                 fleet where the user's messages wait unread.
+                                                 fleet where the user's messages wait unread, and a
+                                                 coordinator's for each message a worker left
+                                                 unanswered for FLEET_NUDGE_S (ten minutes).
     chat.py DIR wait  DECISION...                wait for the user's answer to one of these decisions,
                                                  print it and exit: armed as a background command when
                                                  a decision is opened, it wakes the session at once
@@ -46,6 +48,7 @@ FLEETS_S = float(os.environ.get("FLEET_CHECK_S", 30))  # how often a manager's w
 READING_GRACE_S = 10 * 60  # a host whose watch ended, or who spoke, this recently still counts as reading
 QUOTE_MAX = 2000  # characters of a selected excerpt a message carries
 UNHEARD_S = float(os.environ.get("FLEET_UNHEARD_S", 120))  # how long the user's message waits unread before the manager is told
+NUDGE_S = float(os.environ.get("FLEET_NUDGE_S", 10 * 60))  # how long a worker leaves a message unanswered before its coordinator forwards it
 
 
 class ChatError(Exception):
@@ -445,14 +448,39 @@ def _silent(root, fleet: str | None, told: dict) -> list[str]:
     return lines
 
 
+def _nudges(root, told: dict) -> list[str]:
+    """The `!` lines for messages to the workers of DIR that the addressee has not answered (no `--re` from
+    it) for NUDGE_S: workers read their inbox at checkpoints, and only a message left this long is
+    forwarded by SendMessage (L1). Each told once."""
+    messages, lines = read(root), []
+    for w in _members(_agents(root)):
+        for m in _open_among(messages, w["id"]):
+            mark = f"nudge:{m['id']}:{w['id']}"
+            if m["from"] == w["id"] or told.get(mark):
+                continue
+            try:
+                waited = clock.time() - datetime.fromisoformat(str(m.get("at"))).timestamp()
+            except ValueError:
+                continue
+            if waited < NUDGE_S:
+                continue
+            told[mark] = True
+            name = w.get("name", w["id"])
+            who = w["id"] if name == w["id"] else f"{w['id']} ({_one_line(name)})"
+            lines.append(f"! worker {who} has not answered #{m['id']} from {_one_line(m['from'])} for {int(waited // 60)} min: "
+                         f"\"{_one_line(m['text'])[:120]}\". Forward it (SendMessage {w['id']}).")
+    return lines
+
+
 def _own_silent(root) -> list[str]:
-    """For a coordinator's watch: its own silent workers, told once across watches (kept in DIR)."""
+    """For a coordinator's watch: its own silent workers, and the messages its workers left unanswered for
+    NUDGE_S, each told once across watches (kept in DIR)."""
     told_path = Path(root) / "watch-coordinator.told"
     try:
         told = json.loads(told_path.read_text())
     except (OSError, ValueError):
         told = {}
-    lines = _silent(root, None, told)
+    lines = _silent(root, None, told) + _nudges(root, told)
     if lines:
         told_path.write_text(json.dumps(told))
     return lines
