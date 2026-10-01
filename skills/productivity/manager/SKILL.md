@@ -103,7 +103,7 @@ A monitor agent you spawn (app metrics, runs, executions, reporting back to you)
 
 ## Waiting on the user
 
-Waiting on the user is a subscription, never a status re-read: whoever asks arms the `wait` command opening the decision prints, as a background command. A fleet's every state command warns while an answer on its page is unrecorded; your watch prints `! <fleet> has not recorded the user's answer to A6 ...` after two minutes: `SendMessage` that fleet to record it, and tell no one it still waits on the user.
+Waiting on the user is a subscription, never a status re-read: whoever asks arms the `wait` command opening the decision prints, as a background command. A fleet's every state command warns while an answer on its page is unrecorded; your watch prints `! <fleet> has not recorded the user's answer to A6 ...` after two minutes: `SendMessage` that fleet to record it, and tell no one it still waits on the user. When the answer means the fleet must act first (a fix, a new command), it records it with `decision A6 --hold "<what it does first>"` and re-presents the item by revising it; the same for your own decisions. `fleet fleets show` names a held item and its reason.
 
 ## Said once
 
