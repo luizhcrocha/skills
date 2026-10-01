@@ -1,8 +1,10 @@
 /**
  * The control plane's commands:
  *
- * - `fleet hub [--port N] [--https PORT] [--no-peers]`: run the hub until stopped (SIGTERM, SIGINT).
- *   The port is `--port`, else `$FLEET_HUB_PORT`, else 7420.
+ * - `fleet hub [--port N] [--https PORT] [--no-peers] [--reload | --no-reload]`: run the hub until stopped
+ *   (SIGTERM, SIGINT). The port is `--port`, else `$FLEET_HUB_PORT`, else 7420. Under a supervisor (systemd,
+ *   launchd), or with `--reload`, it also stops when its own sources change, exiting 75 so the supervisor
+ *   starts it on the new code.
  * - `fleet serve DIR [--stop] [--pid PID]`: put DIR's fleet in the registry, so the hub serves it at
  *   `/f/<fleet>/`, and print its address (`--stop` takes it out). The entry lives while PID does: by
  *   default the Claude Code session that runs the command (the nearest `claude` among its parents).
@@ -20,6 +22,7 @@ import { stampOf } from "../clock.ts";
 import { Refusal } from "../errors.ts";
 import { isDir, readText, resolvePath, writeText } from "../files.ts";
 import { discover } from "../hub/served.ts";
+import { codeChanged, RELOAD_EXIT, supervised } from "../hub/reload.ts";
 import { DEFAULT_PORT, runningHub, startHub } from "../hub/server.ts";
 import { readTailnetSync, tailscaleBin } from "../hub/tailnet.ts";
 import { Out } from "../io.ts";
@@ -63,9 +66,10 @@ function hub(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
     const [portText, afterPort] = option(argv, "--port");
     const [httpsText, rest] = option(afterPort, "--https");
     const peers = !rest.includes("--no-peers");
-    const unknown = rest.filter((a) => a !== "--no-peers");
+    const reload = rest.includes("--reload") || (!rest.includes("--no-reload") && supervised(machine.env));
+    const unknown = rest.filter((a) => a !== "--no-peers" && a !== "--reload" && a !== "--no-reload");
 
-    if (unknown.length > 0) return yield* refuse("hub", "usage: fleet hub [--port N] [--https PORT] [--no-peers]");
+    if (unknown.length > 0) return yield* refuse("hub", "usage: fleet hub [--port N] [--https PORT] [--no-peers] [--reload | --no-reload]");
     const port = portOf(portText, machine);
     const https = httpsText === undefined ? undefined : portOf(httpsText, machine);
 
@@ -79,17 +83,25 @@ function hub(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
     if (running instanceof Error) return yield* refuse("hub", running.message);
     out.out(`${running.url}\n`);
 
-    yield* Effect.promise(
-      () =>
-        new Promise<void>((resolve) => {
-          process.once("SIGTERM", () => resolve());
-          process.once("SIGINT", () => resolve());
+    const watch = reload ? codeChanged() : undefined;
+
+    const why = yield* Effect.promise(() =>
+      Promise.race([
+        new Promise<"signal">((resolve) => {
+          process.once("SIGTERM", () => resolve("signal"));
+          process.once("SIGINT", () => resolve("signal"));
         }),
+        ...(watch ? [watch.changed.then(() => "code" as const)] : []),
+      ]),
     );
+
+    watch?.stop();
+
+    if (why === "code") log("its code changed: stopping, to be started again on the new code");
     yield* Effect.promise(() => running.stop());
     log("stopped");
 
-    return 0;
+    return why === "code" ? RELOAD_EXIT : 0;
   });
 }
 

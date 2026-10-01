@@ -492,6 +492,11 @@ itself. A manager made later appears the same way, on the same address.
   loopback port exits 1. `REGISTRY/hub/hub.json` holds `{pid, port, url, https, since}` while it
   runs. `--https PORT` also runs `tailscale serve --bg --https=PORT http://127.0.0.1:<port>` (and
   turns it off on exit): the page's browser alerts need a secure page.
+- **New code**: the page is read at each request, the server's code only at start. Under a
+  supervisor (systemd's `INVOCATION_ID`, launchd's `XPC_SERVICE_NAME`), or with `--reload`, the hub
+  looks at its sources (`fleet/src/**`, `package.json`, `bun.lock`) every 15 s and, once a change has
+  held still for one look, stops and exits 75, so `Restart=on-failure` (launchd: `SuccessfulExit =
+  false`) starts it on the new code. `--no-reload` turns it off; a hub run by hand does not watch.
 - **Routes**: `GET /` the index (every fleet of this machine, then each peer hub's, with the plan's
   usage, the gate and what else the machine serves), `GET /events` its stream (`fleets` events, on
   change, `: ping` every 15 s), `GET /api/fleets` this machine's fleets (`{name, fleets: [summary
