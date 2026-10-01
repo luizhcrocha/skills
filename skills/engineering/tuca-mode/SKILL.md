@@ -30,7 +30,7 @@ Ask it of every message from Luiz, the task given with this invocation included:
 - **Any prose surface → `tstack:unslop`.** Your reply is a prose surface; so are docs, commit and PR messages, READMEs, skill text and memo notes. Docs people read also follow `tstack:technical-writing`.
 - **Commit messages** follow the repo's style (form) and unslop (words) as `jj log` shows it; the worktree-janitor writes them when it shapes the stack.
 - **Broken tstack skill mid-task** → fix it in its own jj change and keep going; name the fix in the reply.
-- **Work Luiz steps away from** (long, autonomous, "going to bed") → keep a decision trail with `tstack:show-me-your-work`: a TSV in the scratchpad, one row per decision with its reason and evidence, audited against the transcript and reviewed by a fresh Opus agent before hand-back. Durable lessons become memo notes.
+- **Work Luiz steps away from** (any absence he announces: "I'm out for half an hour", "back after lunch", "stepping away", "for the night", "going to bed"; long or autonomous work) → keep a decision trail with `tstack:show-me-your-work`: a TSV in the scratchpad, one row per decision with its reason and evidence, audited against the transcript and reviewed by a fresh Opus agent before hand-back. Durable lessons become memo notes.
 
 ## Coordinator, lazily
 
@@ -48,7 +48,7 @@ N checks, measurements or attempts that come back as one verdict table (coverage
 
 **Irreversible writes pause** for Luiz's yes: force-push or any push that rewrites remote history, deploys, deletion (files outside your own changes, workspaces, bookmarks, data), and messages to people (issues, PR comments, chat).
 
-**Session overrides.** "Don't stop", "going to bed", "run until done", "be fully autonomous" → keep going through the Autonomous run playbook; the pause list still holds.
+**Session overrides.** "Don't stop", "going to bed", "run until done", "be fully autonomous" → keep going through the Autonomous run playbook; the pause list still holds. An announced absence of any length ("I'm out for half an hour") turns on the decision trail above for that absence; in a manager or coordinator session it also goes to the fleets (their skills' "The user steps away").
 
 **No is an acceptable answer.** Asked whether to do something or shown an approach, give your real judgement: decline, push back, or say it does not earn its place. Candor over agreement.
 

@@ -101,6 +101,15 @@ A fleet's advisor runs on Fable, restarted on Opus when Fable is unavailable (it
 
 A monitor agent you spawn (app metrics, runs, executions, reporting back to you) runs on the default Sonnet (`model: "sonnet"`), as the coordinator's model table says. When a new default model comes out, the fleets move their agents to it (the coordinator's SKILL.md, "A new default model"); yours too.
 
+## The user steps away
+
+Any absence the user announces ("I'm out for half an hour", "back after lunch", "for the night"), on the page or in the session:
+
+1. Note it on your page with its expected return (`fleet state <dir> set --now "user away until <time>: <what goes on>"`).
+2. Tell each coordinator by `SendMessage`, in one message each: the user is away until about <time>; keep working inside the briefs; start a decision trail with `tstack:show-me-your-work` for the absence; what only the user can settle becomes a decision and waits; the pause list holds (pushes that rewrite history, deploys, deletions, messages to people).
+3. Keep your own trail the same way for what you decide while they are out (landing turns, answers you gave from `standing.md`).
+4. On their return (they write again, or the time passes and they reappear): one page message, "While you were out": what landed, what each fleet decided on its own (from the trails), and what waits on them now (`fleet fleets waiting`). Then the trails go to the fresh-Opus review `tstack:show-me-your-work` asks for.
+
 ## Waiting on the user
 
 **What waits on the user is what `fleet fleets waiting` prints**, and nothing else: every open decision for the user across the fleets' ledgers (yours included), with since when, and `ANSWERED at ...; not recorded yet` when the user answered on a page and the fleet has not recorded it. Run it before you tell the user anything waits on them, every time. Your memory, your notes and `standing.md` never decide what is waiting: the user answers on any fleet's page, and only the ledgers know. An answered item is not asked again; an unrecorded answer is the fleet's to record.
