@@ -32,13 +32,12 @@ Your value is the hop you save the user. A question you settle from what another
 The manager runs on the coordinator skill's scripts and page. Resolve its directory once (`find -L ~/.claude .claude -name SKILL.md -path "*/coordinator/*" | head -1`), and read its `DASHBOARD.md`: the state CLI, the chat, and the decisions work for you as they do for a coordinator. Below, `<scripts>` is that skill's `scripts/` and `<dir>` is `<scratchpad>/manager`.
 
 1. `python3 <scripts>/fleets.py list` names the fleets being served: each one's name, session, address, directory, what it is doing, its lanes in flight, and its open decisions.
-2. `python3 <scripts>/state.py <dir> init --role manager --project "<this machine, or the programme>" --goal "<what the fleets are landing together>"`.
+2. `python3 <scripts>/state.py <dir> init --role manager --project "<this machine, or the programme>" --goal "<what the fleets are landing together>"`: the ledger starts with the landing queue, milestone `landings`.
 3. `<scripts>/../../../../fleet/bin/fleet serve <dir>` puts the manager on the machine's hub (the `fleet-hub` service), and give the user the hub's address (the printed one without its `f/manager/`): it is the one address for everything, since every fleet's page is served under it at `f/<fleet>/`, the index lists them all (and the fleets of the user's other machines that run a hub), and every page's header has a switcher. When it says no hub runs, ask the user to start it (`systemctl --user start fleet-hub`); the fallback until the cutover is `python3 <scripts>/serve_dashboard.py <dir>`, the manager's own server with each fleet at `f/<fleet>/` under it. The page shows every coordinator with the way to its page, and one list of what waits on the user across all of them.
 4. `ListAgents` names this session. Record it, so coordinators can write to you: `python3 <scripts>/fleets.py name <dir> <session>`.
 5. Arm the chat watch as a background Bash command (`run_in_background: true`): `python3 <scripts>/chat.py <dir> watch --as manager --all --resume --once`. It exits with the first news (a message, or a fleet not reading its chat), which wakes you; handle it and arm the same command again.
-6. Record the landing queue: `milestone landings --title "Landings and deploys"`.
-7. Write to each coordinator (`SendMessage` to its session) that a manager is present: your session, your page, the path of `standing.md`, and that decisions, questions for other fleets, and landings now come to you. Ask each for what it owns, what it has in flight, and what it is waiting on.
-8. Fill `standing.md` from their answers and from what the user tells you.
+6. Write to each coordinator (`SendMessage` to its session) that a manager is present: your session, your page, the path of `standing.md`, and that decisions, questions for other fleets, and landings now come to you. Ask each for what it owns, what it has in flight, and what it is waiting on.
+7. Fill `standing.md` from their answers and from what the user tells you.
 
 Setup is done when every fleet in `fleets.py list` has answered, and `standing.md` names an owner for every lane in flight.
 
@@ -74,10 +73,8 @@ A coordinator asks for the turn before anything that goes out or moves history o
 1. Queue it: `step l4 --milestone landings --title "<fleet>: <what> (<files>)" --agent <fleet>`. The queue reads in the order of the turns: place a landing with `--before` or `--after` another, give it new words with `--title` when what it lands changes, and take out one queued in error with `--remove "why"`.
 2. Check it against `standing.md` (what a landing needs, who owns the files) and against the lanes in flight of the other fleets. A landing that touches another fleet's files goes to that fleet as a diff first.
 3. Get the user's word when it is needed. A push or a deploy the user has approved first-hand, for this landing or as a standing rule in `standing.md`, goes ahead. Any other becomes a decision on your page (`--kind action` or `decision`, `--blocking`).
-4. Give the turn: `step l4 --status current`, and tell the coordinator. It lands from its own workspace (its workers' changes already rebased into its stack from their own workspaces, `fleet ws`) and reports the commit and the files that moved.
+4. Give the turn: `step l4 --status current` (refused while another landing has it: close that one, `--status done`, or give it back, `--status pending`), and tell the coordinator. Its `fleet turn` and `land-check` pass from then on; it lands from its own workspace and reports the commit and the files that moved.
 5. Close it: `step l4 --status done`, `event --kind integrated --agent <fleet> "l4 landed as <commit>: <files>"`, the deploy in `standing.md`, and a notice to every fleet whose lanes touch what moved: the commit, the files, what to rebase.
-
-One fleet has the turn. The next turn is given when the one before is closed or given back.
 
 ### A notice
 
@@ -100,13 +97,13 @@ A monitor agent you spawn (app metrics, runs, executions, reporting back to you)
 
 ## Waiting on the user
 
-Waiting on the user is a subscription, never a status re-read: whoever asks arms `chat.py <dir> wait <id>` as a background command when the decision is opened, and it wakes them the moment the user answers. Your watch also prints `! <fleet> has not recorded the user's answer to A6 ...` when a fleet has had an answer for two minutes without recording it: `SendMessage` that fleet to record it, and tell no one it still waits on the user. `fleets.py show` and `fleets.py decision` print the user's answers to open decisions, recorded or not. Every page shows a "Stuck" block at its top for an answer unrecorded after five minutes and for a chat nobody reads.
+Waiting on the user is a subscription, never a status re-read: whoever asks arms the `wait` command opening the decision prints, as a background command. A fleet's every state command warns while an answer on its page is unrecorded; your watch prints `! <fleet> has not recorded the user's answer to A6 ...` after two minutes: `SendMessage` that fleet to record it, and tell no one it still waits on the user.
 
 ## Said once
 
 Every message between sessions is paid for twice: the sender writes it, the receiver reads it, and both read it again on every later turn. So each thing is said once, by the one who knows it, where the user will read it.
 
-- **A silent worker is checked, not assumed.** Your watch prints `! <fleet>'s worker b50 ... has written nothing since ...` when a worker its ledger says runs has been silent for twenty minutes, and the pages put it under Stuck: `SendMessage` that fleet to check it. Never tell the user a worker is running from its row alone.
+- **A silent worker is checked, not assumed.** Your watch prints `! <fleet>'s worker b50 ... has written nothing since ...` after twenty minutes (`fleets.py show` marks it too): `SendMessage` that fleet to check it.
 - **A wait is named by its number and read at its source.** Before you tell the user something waits on him, read the decision's current state (`fleets.py decision <fleet> <number>`), never an earlier message; name it by fleet and number ("waits on Luiz: infra I2"). A Now line naming a closed decision is flagged on the page, and `set --now` warns.
 - **What the page computes is not written.** Under your Now line the page lists the running workers, the current steps and the next ones; the fleets' pages do the same. Your Now line says what they cannot: whose turn it is, what waits on whom, a rule the user just set.
 - **Your own answers too.** What you answer the user on your page (the chat, a side chat) is written there only. The turn that answered ends, in your session, with one line naming where: "Answered #42 on the page." The user reads the page from any device.

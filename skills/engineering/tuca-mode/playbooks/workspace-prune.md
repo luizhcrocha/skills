@@ -6,7 +6,7 @@
 2. Run every check per workspace. A workspace is a candidate only when all hold:
    - Not `default`, not a landing workspace (`*-land`, `deploy`), not one Luiz marked protected.
    - No running worker on it: `fleets.py list` and `fleets.py show <fleet>` from the coordinator's scripts show no live lane there.
-   - No heartbeat in 20 minutes (the fleet heartbeat does not exist yet: use the newest mtime under the directory, `.jj` excluded).
+   - No heartbeat in 20 minutes: `fleet ws <dashboard-dir> list` shows when each fleet worker was last seen; elsewhere, the newest mtime under the directory, `.jj` excluded.
    - No process with its cwd inside: `readlink /proc/*/cwd` matched against the directory.
    - No uncommitted work: inside it, `jj workspace update-stale` then `jj status` shows an empty `@`.
    - Nothing unlanded: after `jj git fetch`, `jj log -r '(::<ws>@ ~ ::trunk()) ~ empty()'` is empty.
@@ -16,4 +16,4 @@
 4. Ask once (`AskUserQuestion`) with the exact set. Only Luiz's yes goes on; a partial yes covers only what he named.
 5. For each confirmed workspace: `jj bookmark create archive/<fleet>/<lane> -r <head>` when it has unlanded work, `jj workspace forget <ws>`, remove the directory, and `jj clean` for the empty `@` left behind. Re-list and show the result.
 
-**Reply:** the table (removed, archived, kept and the check that kept each), the commands run, and a line saying the checks ran by hand because `fleet ws prune` is not built yet.
+**Reply:** the table (removed, archived, kept and the check that kept each), the commands run, and for workspaces outside a fleet's ledger a line saying the checks ran by hand.

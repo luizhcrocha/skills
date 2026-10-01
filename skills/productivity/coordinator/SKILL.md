@@ -52,13 +52,7 @@ Every piece of work has a **kind**, and every kind has a skill the worker follow
 
 Work that fits none of these (a review, a migration, a one-off script) gets a brief without a skill, and you name the relevant repo skills instead (`review`, `interrogate`, `lang-ts`, `resolving-merge-conflicts`).
 
-Resolve the skill paths once at the start of the session so every brief can carry them:
-
-```
-find -L ~/.claude .claude -name SKILL.md -path "*/<skill-name>/*" 2>/dev/null | head -1
-```
-
-How the worker reaches the skill depends on how it is invoked. `diagnosing-bugs`, `prototype`, `research`, and `tdd` are model-invoked: the brief says to call the Skill tool with that name. `implement` is user-invoked, and the Skill tool refuses it for a worker with a message that tells it to drop the workflow, so the brief for implementation work says to read the SKILL.md at that path with the Read tool and follow it, and leaves the Skill tool out of it.
+Record the skill on the worker (`agent --skill`); `fleet brief` resolves its path and tells the worker how to load it (the Skill tool, or the Read tool for a user-invoked skill like `implement`).
 
 ### 3. Pick the model
 
@@ -87,13 +81,7 @@ A worker starts with an empty window. Everything it needs is in the brief or it 
 
 **What every worker of the fleet follows** is a file, `<dashboard-dir>/brief.md`, which the state CLI writes at `init`: the standards, the rules of a lane and of the worker's own workspace, how to use the chat, and the shape of the report (a first block of ten lines you can act on, the detail below it). Read it once at intake and add under "This fleet" the facts workers keep needing: addresses and ports, what is running and has to stay up, the setup a fresh workspace needs. A fact you caught yourself writing into a second brief belongs there.
 
-**What is this worker's** you write each time, opening with the line the state CLI printed when you recorded the worker ("Read `<dashboard-dir>/brief.md` first; your id is a1."):
-
-- The task, and what **done** looks like: a checkable completion criterion ("tests in `x.test.ts` pass, and the diff touches only your lane"), because a vague bound invites the worker to stop early.
-- The skill to follow (name plus path, per step 2).
-- Its **lane**: the exact files and directories it may edit.
-- Its **workspace**, for a worker that edits code: the path `fleet ws` printed (below, in Track).
-- The context it cannot discover: decisions from this conversation, the domain vocabulary in `CONTEXT.md`, relevant ADRs, the user's constraints.
+**What is this worker's** is printed by `<skill-dir>/../../../fleet/bin/fleet brief <dashboard-dir> <id>` from its row (it refuses a worker not yet recorded): the opening line, the task, the completion criterion, the skill and how to load it, the lane, the workspace, the step and its chat id. Record a checkable criterion (`--brief "done when tests in x.test.ts pass and the diff touches only the lane"`): a vague bound invites the worker to stop early. Below its output you add the context the worker cannot discover: decisions from this conversation, the domain vocabulary in `CONTEXT.md`, relevant ADRs, the user's constraints.
 
 Similar tasks get one template brief with the blanks filled per worker. Skill outputs the workers would all recompute (a research finding, a scan), compute once and paste.
 
@@ -101,21 +89,19 @@ For a batch of independent tasks, call the Skill tool with "orchestrate" for the
 
 ### 5. Track
 
-The Now line (`set --now`) names what it waits on by number (A6, I2), so the page can tell when that is closed; it says only what the page cannot compute: what the fleet is waiting for and why, a pause and its reason, the one thing the user should know. The page lists under it the workers running, the current steps and the next ones, from the ledger, so the line stays short and is said again whenever that changes. A worker is `done` only when its completion criterion is met. One that ended short (a refusal, a part parked, a criterion missed) is `stopped`, with the reason in `--log`, or `blocked` with a roadblock when it waits on someone; the page is read at a glance, and a row that says done is taken at its word. The dashboard state is the fleet ledger: one row per worker with its lane, status, tokens, and last report. Record every event (spawn, report, block, resolution, decision) with the state CLI the moment it happens; each command renders, so the user can watch the fleet without asking. After a compaction, `state.py <dashboard-dir> show` gives back the ledger and every command with the values it takes.
+The Now line (`set --now`) names what it waits on by number (A6, I2), so the page can tell when that is closed; it says only what the page cannot compute: what the fleet is waiting for and why, a pause and its reason, the one thing the user should know. The page lists under it the workers running, the current steps and the next ones, from the ledger, so the line stays short and is said again whenever that changes. A worker is `done` only when its completion criterion is met (`agent --status done` warns when the report reads as unfinished: then `stopped` with the reason, or `blocked` with a roadblock). The dashboard state is the fleet ledger: one row per worker with its lane, status, tokens, and last report. Record every event (spawn, report, block, resolution, decision) with the state CLI the moment it happens; each command renders, so the user can watch the fleet without asking. After a compaction, `state.py <dashboard-dir> show` gives back the ledger and every command with the values it takes.
 
-Record a worker, then spawn it. The id you gave it in the ledger is the id in its brief, and the chat knows a worker from the moment the ledger does.
+`agent` warns when a running worker's lane meets another running lane: that task waits (`--status queued`) or joins that worker's queue.
 
-Lanes are how conflicts are avoided. Before spawning, check the ledger: a task whose files overlap a running lane waits, or joins that worker's queue. Two workers on the same file overwrite each other silently, and you find out at integration.
-
-**One jj workspace per worker that edits code.** Your session's working copy (the repo's `default` workspace) is the stack; no worker edits it. Record the worker, then `<skill-dir>/../../../fleet/bin/fleet ws <dashboard-dir> add <id> [-r <base>]` makes `../<repo>-<id>` on the base (default `@-`), records it in the ledger, and prints the path for the brief. A worker that only reads (research, review) needs none. `fleet ws <dashboard-dir> list` shows each workspace's tip and what it holds ahead of the stack, conflicts included, and when its worker was last seen. Integrating a finished worker is yours: rebase its described changes under your `@` (`jj rebase -r '(::<id>@ ~ ::@) ~ <id>@' -B @`), resolve conflicts by intent, run the gates, mark the worker done, then `fleet ws <dashboard-dir> prune` (a dry run: what goes, and each workspace kept with why) and `prune --apply`. Prune deletes only the workspaces it made whose worker is no longer live and whose changes are all in the stack; anything else it refuses by name, and the refusal is the next thing to integrate or ask about.
+**One jj workspace per worker that edits code**; your session's working copy (`default`) is the stack, and no worker edits it. `fleet ws <dashboard-dir> add <id> [-r <base>]` makes and records it (`fleet brief` warns when a worker with a lane has none); `fleet ws <dashboard-dir> list` shows what each holds ahead of the stack, the files a worker changed outside its lane, and when it was last seen. Integrating is yours: rebase its changes under your `@` (`jj rebase -r '(::<id>@ ~ ::@) ~ <id>@' -B @`), resolve by intent, run the gates, mark the worker done, then `fleet ws <dashboard-dir> prune` (a dry run) and `prune --apply`. Every state command warns while a done worker's workspace is still there; what prune keeps, it names with why.
 
 Until the cutover, a fleet on the Python path (`state.py`, no `fleet ws`) shares one working copy: it belongs to the workers while any of them runs, and moving it (`jj new`, `jj edit`) takes their files from under them. There, land from a second workspace (`jj workspace add`); `jj split` by paths, `jj describe`, and a rebase that only brings in upstream files are safe in place.
 
-Token and duration figures arrive in the task notification when a worker finishes or replies, as the worker's total so far. Record the latest the moment the notification lands; it is kept nowhere else.
+Record `--task-id <agentId>` once the worker is spawned: its tokens and duration are then read from its transcript on every command.
 
 ### 6. Respond
 
-**A running row is not proof of work.** The page shows when each worker was last seen: its last tool call, from the heartbeat the plugin's hook writes in `<dashboard-dir>/heartbeats/`, else the last write to its transcript; and your chat watch prints `! worker b50 ... has written nothing since 16:30` when one has been silent for twenty minutes: ask it where it stands (`SendMessage`), or park it with the reason, and never report it as running from its row alone. A refusal reported by a worker (`blocked: ...`) becomes a roadblock at once, with the action the user can take.
+**A running row is not proof of work.** Your chat watch prints `! worker b50 ... has written nothing since 16:30` after twenty minutes without a tool call (the page and `fleets show` mark it too): ask it where it stands (`SendMessage`), or park it with the reason. A refusal reported by a worker (`blocked: ...`) becomes a roadblock at once, with the action the user can take.
 
 **Said once, on the page.** What you answer the user on the page is written there only. The turn that answered ends, in your session, with one line naming where: "Answered #42 on the page." The user reads the page, from any device; the same words in the session are paid twice, written and then read on every later turn.
 
@@ -126,7 +112,7 @@ Workers report back with results, questions, or blocks. Handle each in the same 
 - A **report** gets read for what it verified, not just what it claims, and against the standards. Probe one thing the report did not claim (run the route, open the page, read the file it said it left alone): that is where the defects two reports both missed turn up. Unverified claims and rule breaks go back to the same worker with the specific ask (`SendMessage`, then `agent a1 --status running`, which starts its next round in the ledger): its context is worth more than a clean window.
 - A **chat message** arrives as a line from the chat watch (`#12 user -> a1 (auth-impl): how far along are you?`). Addressed to you: answer it on the page with `python3 <skill-dir>/scripts/chat.py <dashboard-dir> say --as coordinator --re 12 "<answer>"`. Addressed to a worker: forward it with `SendMessage`, number and text, and the worker answers the page itself (a finished worker resumes from its transcript, so it can still answer about its work). A line with `(quoting <where>: "...")` is about that excerpt of the page: answer about it. A line tagged `[side chat #N]` is a side chat, a quick question apart from the main thread: answer it with `--re` (the reply stays in the side chat), briefly, or hand it to a Sonnet worker with the quote and the question and let it answer the page as itself; it does not enter your plan unless the answer changes something. When the message changes the plan (scope, a lane, priorities), it is a decision: record it as an event and act on it as you would on the same words typed in the session.
 - An **answer** to a decision arrives as a chat line tagged with it (`#14 user (luiz@github) -> coordinator [d1]: B: Keep both shapes`). Check that it still holds, record it, answer the message, act on it (see [Decisions](#decisions)).
-- A worker that has **strayed** from its lane is stopped, and the stray edits are handled before anything else runs on those files.
+- A worker that has **strayed** from its lane (`fleet ws list` names the files) is stopped, and the stray edits are handled before anything else runs on those files.
 
 Every report and every chat message is also read against the open decisions: what you just learned may have answered one, changed one, or made one moot.
 
@@ -159,11 +145,11 @@ Decisions go stale, and a stale one costs the user a choice that no longer matte
 
 **Every decision says where it came from.** Open it with `--step <step>` (the step of the plan it belongs to; its milestone follows), or `--milestone` when no one step, and `--agent` for the worker it is for; the same on `grill`. The decision's page names them, the list shows them, and the Plan shows each step's decisions as numbered chips. One opened without them can be tied later, closed or not: `decision A6 --step l19`.
 
-**Waiting on the user is a subscription.** When you open a decision, arm its wake at once, as a background command (`run_in_background: true`): `python3 <skill-dir>/scripts/chat.py <dashboard-dir> wait <id>` (`state.py` prints it). It has no deadline and exits the moment the user answers that decision, on any page, whatever your chat watch is doing; for a grilling, arm it again after each round. When it wakes you, recording the answer is the first thing you do. Whoever records a decision tells everyone who waits on it: the worker it blocks, and the manager when the manager relayed it or another fleet waits on it.
+**Waiting on the user is a subscription.** Opening a decision prints its `wait` command: arm it at once as a background command (`run_in_background: true`); it exits when the user answers or the decision closes, and for a grilling you arm it again after each round. Whoever records a decision tells everyone who waits on it: the worker it blocks, and the manager when the manager relayed it or another fleet waits on it.
 
-An answer given on the page waits on you: until you record it, the page shows it as sent and the fleet has not acted on it; after five minutes the pages show it as stuck. Record it the moment the watch prints it, before any other work. Refer to decisions, links and roadblocks by their number (D3, L1, R2) when you write to the user. Check that it still holds (the option may be gone since), then `--decide "<answer>" --resolution "answered on the page (#14)"`, answer the message with `--re 14`, and act. When it no longer holds, answer the message with why and revise the decision. When the answer leads to another question (a query to run again, a figure you still need), revise the decision with the new question, or close it and open the next one: the item is what the page acts on, and a chat reply alone leaves it looking answered. Your reply to an answer shows the user the form again, but the ledger should say what you now ask.
+An answer given on the page is recorded before any other work: every state command warns until it is. Refer to decisions, links and roadblocks by their number (D3, L1, R2) when you write to the user. Check that it still holds (the option may be gone since), then `--decide "<answer>" --resolution "answered on the page (#14)"`, answer the message with `--re 14`, and act. When it no longer holds, answer the message with why and revise the decision. When the answer leads to another question (a query to run again, a figure you still need), revise the decision with the new question, or close it and open the next one: the item is what the page acts on, and a chat reply alone leaves it looking answered. Your reply to an answer shows the user the form again, but the ledger should say what you now ask.
 
-When the session ends, every decision still open is either withdrawn with its reason or named in your last message as left open on purpose.
+When the session ends, `set --status done` names each decision still open and each workspace not pruned: withdraw it with its reason, or name it in your last message as left open on purpose.
 
 The commands and the schema are in [DASHBOARD.md](DASHBOARD.md#decisions).
 
@@ -183,11 +169,11 @@ One session may manage every coordinator on the machine (the `manager` skill). `
 - **Read `standing.md`** at intake and when the manager says it changed: what the user decided for every fleet, who owns what, what a landing needs. What bears on a worker's task goes into its brief.
 - **Decisions go to the manager first.** Record the decision with `--asks manager`, then write to the manager's session (`SendMessage`): "decision d3: <title>", and the one thing it most needs to know. It answers (record `--decide`, with the resolution "answered by the manager" and its source), asks you for what is missing, tells you of another fleet's work that bears on it (revise or withdraw), or tells you to pass it on (`decision d3 --asks user`). What is the user's by nature (a credential, production access, client data, a refusal to lift) you record with `--asks user` at once, and tell the manager.
 - **Other fleets are reached through the manager**: a question for another coordinator, a change to a file another fleet owns, a notice that your change affects someone. The manager answers from what it knows or carries it. When it opens a direct line on a bounded question, settle that question there, with diffs as files on disk and a numbered summary, and send the manager the outcome.
-- **Landing takes a turn.** Before anything that goes out or moves history others build on (a push, a deploy, a rebase of shared changes), ask the manager for the turn: what, which files, from which workspace, which checks are green. While you wait, prepare in your own workspace: describe, split, run the checks. When you have the turn, land, and report the commit and the files that moved. The words and the cut of a change are yours; the moment is the manager's.
+- **Landing takes a turn.** `fleet turn <dashboard-dir>` (and `land-check`, which runs it) refuses until the manager gave you the turn. Ask for it before a push, a deploy or a rebase of shared changes: what, which files, from which workspace, which checks are green; prepare meanwhile, then land and report the commit and the files that moved. The words and the cut of a change are yours; the moment is the manager's.
 
 Your fleet stays yours: its lanes, briefs, reports, and milestones are yours to decide.
 
-When `fleets.py manager` finds none, the manager is gone: pass the decisions that were with it to the user (`--asks user`), and land on your own word.
+When the manager is gone (`fleet turn` says so), pass the decisions that were with it to the user (`--asks user`), and land on your own word.
 
 ## The user's word
 

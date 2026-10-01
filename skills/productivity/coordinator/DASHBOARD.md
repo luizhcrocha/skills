@@ -94,6 +94,7 @@ events[]     activity log, oldest first
 | A manager's intake | `init --role manager --project P --goal G`, then `milestone landings --title "Landings and deploys"` |
 | Intake done | `init --project P --goal G`, then `milestone m1 --title T` and `step s1 --milestone m1 --title T` per step, then `event --kind decision "why the split"` for anything non-obvious |
 | Worker about to be spawned | `agent a1 --task T --skill tdd --milestone m1 --lane src/x.ts test/x.test.ts --step s1 --brief "done when ..."` (model defaults to opus; logs the spawn, marks the step current, prints the line its brief opens with) |
+| Its brief | `<skill-dir>/../../../fleet/bin/fleet brief <dir> a1` prints the part the row holds (opening line, task, criterion, skill and how to load it, lane, workspace, step, chat id); you add the context below it |
 | Notification arrives | `agent a1 --status done --tokens N --duration-ms N --report "..." --step s1 --log "what it verified"` (the step follows the status; the log becomes a `reported` event; tokens are the worker's total so far) |
 | Worker sent back after its report | `agent a1 --status running --step s1 --log "sent back: ..."` (counts a new round) |
 | Worker blocked | `roadblock r1 --title T --detail D --severity serious --needs coordinator --agent a1` (marks the worker blocked, logs it) |
@@ -112,7 +113,8 @@ events[]     activity log, oldest first
 | A step whose id you would otherwise invent | `step next --milestone M --title T` records it under the next free id and prints it |
 | A heavy check on the shared machine (a test suite under load, a full build) | `fleets.py gate take <fleet> "what"` before, `fleets.py gate free <fleet>` after; while another fleet holds it, `take` refuses and names the holder |
 | Workers were paused, stopped, or ended unseen | `park "why"` (or `park --agent a1 --agent a2 "why"`): every live row stops in one command, with one log line. Every command warns while rows still say running in a paused or done fleet |
-| Session ends | `set --status done --now "..."` |
+| Session ends | `set --status done --now "..."` (names the decisions still open and the workspaces not pruned) |
+| Before a landing, with a manager | `fleet turn <dir>`: exit 0 when the manager gave this fleet the turn (or no manager is served); `land-check` runs it too |
 
 `show` prints the ledger as text, and under it every command with the values it takes: the place to look after a compaction. Add `--no-render` to any command when several follow in a row, and let the last one render.
 
