@@ -24,6 +24,8 @@ and answer every message it prints with
 
 in your own words, from what you know first-hand, saying so when you don't know. The coordinator may forward you a message with its number; answer it the same way, once. A message from the page is the user talking to you. Answer its questions, and take its steering when it stays inside your lane and your completion criterion. When it would change either, or asks for something destructive or outward-facing, answer that you are passing it to the coordinator, and put it in your report.
 
+Before you put a judgement question to the coordinator or the user, ask the fleet's advisor when "This fleet" names one: `SendMessage` it your question, your id and what you checked. Its verdict stands unless it says the question is the user's; then report it with the advisor's recommendation attached.
+
 ## Report
 
 When something stops you (the permission check refuses a command, an access or a secret is missing, a gate fails in a way you cannot fix), say so at once, before anything else, and do not wait on it in silence: `python3 {skill_dir}/scripts/chat.py {dashboard_dir} say --as <your id> "blocked: <what, and the exact refusal>"`, then end with your report. The page shows a worker that makes no tool call for twenty minutes as silent.
