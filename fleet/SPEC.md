@@ -463,7 +463,10 @@ at every rendering step.
   page.test.mjs.
 - **render_dashboard.py** `STATE OUT [--fragment]`: validates, stamps `updated`, rewrites STATE,
   and writes the page: `assets/dashboard.html` with `/*__STATE__*/` replaced by `fleets.view(state)`
-  (`<` escaped), as a full document or a bare fragment.
+  (`<` escaped), as a full document or a bare fragment. The template is built, not written by hand:
+  `fleet/page/` (Solid 2.0, D14) compiles into it with `just build-page`, keeping that contract (its
+  opening `<title>`/`<link>` lines, one `/*__STATE__*/` inside `<script id="fleet-state">`, and the
+  rules as `<script id="fleet-core">`, which page.test.mjs evaluates).
 - **served.py**: every port `tailscale serve` exposes but the dashboards, with the process, its
   cwd and the fleet whose session started it (by its parents, else by the first transcript that
   wrote its address).

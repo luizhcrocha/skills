@@ -1,0 +1,24 @@
+{
+  "name": "@tstack/fleet-page",
+  "private": true,
+  "type": "module",
+  "description": "The fleet's dashboard page in Solid 2.0, built by Bun into the coordinator's template (assets/dashboard.html).",
+  "scripts": {
+    "build": "bun build.ts",
+    "check": "bun build.ts --check",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@happy-dom/global-registrator": "20.14.5",
+    "@oxlint/plugins": "1.86.0",
+    "@solidjs/compiler": "2.0.0-rc.13",
+    "@solidjs/web": "2.0.0-rc.13",
+    "@types/bun": "1.4.2",
+    "happy-dom": "20.14.5",
+    "oxlint": "1.86.0",
+    "puppeteer-core": "25.12.0",
+    "solid-js": "2.0.0-rc.13",
+    "typescript": "7.0.2"
+  }
+}

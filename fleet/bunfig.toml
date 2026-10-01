@@ -1,0 +1,3 @@
+# The fleet's own tests; fleet/page has its own (just test-page).
+[test]
+root = "test"
