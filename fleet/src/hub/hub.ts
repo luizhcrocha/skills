@@ -174,6 +174,8 @@ export class Hub {
   readonly options: HubOptions;
   /** The `host:port` names it answers to, lower case. */
   readonly hosts = new Set<string>();
+  /** Names added once it runs (`answerTo`): kept across the tailnet's re-reads. */
+  private readonly added = new Set<string>();
   private tailnet: Tailnet | undefined;
   private readonly peerHubs = new Map<string, Peer>();
   private readonly served: Served;
@@ -213,7 +215,13 @@ export class Hub {
       for (const name of [self.dns, self.name, self.ip]) if (name !== undefined) this.hosts.add(`${name.toLowerCase()}:${port}`);
     }
 
-    for (const host of this.options.hosts) this.hosts.add(host.toLowerCase());
+    for (const host of [...this.options.hosts, ...this.added]) this.hosts.add(host.toLowerCase());
+  }
+
+  /** Answer to `host` (`host:port`) from now on, as to the names it started with. */
+  answerTo(host: string): void {
+    this.added.add(host.toLowerCase());
+    this.hosts.add(host.toLowerCase());
   }
 
   /** Read the tailnet and ask the peer hubs, now and then every 30 s. */

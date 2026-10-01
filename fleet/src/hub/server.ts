@@ -104,7 +104,7 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
 
     if (served === undefined) log(`tailscale serve refused https on port ${https}; the hub stays on http`);
     else {
-      hub.hosts.add(`${self.dns.toLowerCase()}:${https}`);
+      hub.answerTo(`${self.dns}:${https}`);
       url = `https://${self.dns}:${https}/`;
     }
   }

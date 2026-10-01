@@ -15,9 +15,11 @@ import { readChat } from "../src/chat/store.ts";
 import { ChatError } from "../src/errors.ts";
 import { collapse } from "../src/hub/hub.ts";
 import { hello, postRefusal, viewerOf, writerRefusal } from "../src/hub/policy.ts";
+import { lsofListenersOf } from "../src/hub/served.ts";
 import { startHub, type Running } from "../src/hub/server.ts";
 import { isTailnetIp, tailnetOf } from "../src/hub/tailnet.ts";
 import { asArray, asObject, asString, type JsonObject } from "../src/json.ts";
+import { elapsedOf, lsofFiles, parentsOf } from "../src/procs.ts";
 import { baseEnv, fleet, machine, spawnFleet, tmp, type Environment } from "./support.ts";
 
 const OWNER = "luiz@example.com";
@@ -445,6 +447,23 @@ describe("hosts and origins", () => {
     expect(readChat(root)).toEqual([]);
   });
 
+  test("the https name tailscale serve gives it is still answered after the tailnet is read again", async () => {
+    await running?.stop();
+    const fake = join(base, "tailscale");
+    writeFileSync(fake, FAKE_TAILSCALE.replace('  *) exit 1 ;;', '  "serve --bg") exit 0 ;;\n  *) exit 1 ;;'));
+    chmodSync(fake, 0o755);
+    port = freePort();
+    const got = await startHub({ port, machine: machine(env), tailscale: fake, peers: false, hosts: [], https: 7443 }, () => {});
+
+    if (got instanceof Error) throw got;
+    running = got;
+    expect(running.url).toBe("https://box.tail.ts.net:7443/");
+    const https = { Host: "box.tail.ts.net:7443" };
+    expect((await request("GET", "/api/fleets", undefined, https)).status).toBe(200);
+    await running.hub.refresh();
+    expect((await request("GET", "/api/fleets", undefined, https)).status).toBe(200);
+  });
+
   test("localhost is allowed", async () => {
     expect((await post({ text: "hi" }, { Host: `localhost:${port}`, Origin: `http://localhost:${port}` })).status).toBe(201);
   });
@@ -453,6 +472,35 @@ describe("hosts and origins", () => {
     for (const origin of [`ftp://127.0.0.1:${port}`, `http://localhost:${port + 1}`, "null"]) {
       expect((await post({ text: "hi" }, { Origin: origin })).status).toBe(403);
     }
+  });
+});
+
+describe("the Mac's process readings (ps and lsof, no /proc)", () => {
+  test("lsof -F pn: each pid's open names, in order", () => {
+    const text = "p12\nfcwd\nn/Users/u/repo\np34\nf5\nn127.0.0.1:7420\nf8\nn100.91.33.44:7420\n";
+    expect([...lsofFiles(text)]).toEqual([
+      [12, ["/Users/u/repo"]],
+      [34, ["127.0.0.1:7420", "100.91.33.44:7420"]],
+    ]);
+  });
+
+  test("listening ports from lsof, the first pid on each", () => {
+    const text = "p34\nf5\nn127.0.0.1:7420\nf8\nn[::1]:7420\np56\nf3\nn*:8080\n";
+    expect([...lsofListenersOf(text)]).toEqual([
+      [7420, 34],
+      [8080, 56],
+    ]);
+  });
+
+  test("ps etime in seconds", () => {
+    expect([elapsedOf("00:07"), elapsedOf("01:02:03"), elapsedOf(" 2-00:00:01\n"), elapsedOf("")]).toEqual([7, 3723, 172801, Number.NaN]);
+  });
+
+  test("ps pid ppid: each pid's parent", () => {
+    expect([...parentsOf("    1     0\n  412     1\n\n")]).toEqual([
+      [1, 0],
+      [412, 1],
+    ]);
   });
 });
 

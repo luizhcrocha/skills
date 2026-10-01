@@ -14,7 +14,7 @@ import { resolvePath } from "../files.ts";
 import { asObject, asString, parseJson } from "../json.ts";
 import type { Found } from "../page/view.ts";
 import { splitUrl } from "../page/url.ts";
-import { ancestry, commandOf, cwdOf, processes } from "../procs.ts";
+import { ancestry, commandOf, cwdOf, lsofFiles, processes } from "../procs.ts";
 import type { Entry } from "../registry.ts";
 import { transcriptOf } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
@@ -76,6 +76,29 @@ export function listenersOf(text: string): Map<number, number> {
   return ports;
 }
 
+/** Local port -> pid of the process listening on it, from `lsof -nP -iTCP -sTCP:LISTEN -F pn` (the
+ * Mac, which has no `ss`). */
+export function lsofListenersOf(text: string): Map<number, number> {
+  const ports = new Map<number, number>();
+
+  for (const [pid, names] of lsofFiles(text)) {
+    for (const name of names) {
+      const port = Number(name.slice(name.lastIndexOf(":") + 1));
+
+      if (Number.isInteger(port) && !ports.has(port)) ports.set(port, pid);
+    }
+  }
+
+  return ports;
+}
+
+/** Every listening TCP port of this machine and its process. */
+async function listeners(): Promise<Map<number, number>> {
+  return process.platform === "darwin"
+    ? lsofListenersOf(await output(["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn"]))
+    : listenersOf(await output(["ss", "-ltnpH"]));
+}
+
 /** The fleet whose session started `pid` (it or a parent writes into the session's tasks/), or whose
  * session directory holds its working directory. */
 export function ownerOf(pid: number, cwd: string, entries: readonly Entry[]): string | undefined {
@@ -127,13 +150,13 @@ export async function discover(machine: Machine): Promise<Found[]> {
   if (machine.env("FLEET_DISCOVER") === "0") return [];
   const entries = machine.registry.live();
   const pages = new Set(entries.map((e) => splitUrl(e.url).port));
-  const listeners = listenersOf(await output(["ss", "-ltnpH"]));
+  const ports = await listeners();
   const found: Found[] = [];
 
   for (const s of exposedOf(await tailscale(tailscaleBin(machine.env), ["serve", "status", "--json"]))) {
     if (pages.has(s.port)) continue;
     const local = splitUrl(s.target).port;
-    const pid = local === undefined ? undefined : listeners.get(local);
+    const pid = local === undefined ? undefined : ports.get(local);
     const cwd = pid === undefined ? "" : cwdOf(pid);
     const command = pid === undefined ? "" : commandOf(pid);
     const fleet = pid === undefined ? undefined : (ownerOf(pid, cwd, entries) ?? (await mentionedBy(s.port, pid, entries, machine.config)));
