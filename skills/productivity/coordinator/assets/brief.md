@@ -24,7 +24,7 @@ and answer every message it prints with
 
 in your own words, from what you know first-hand, saying so when you don't know. The coordinator may forward you a message with its number; answer it the same way, once. A message from the page is the user talking to you. Answer its questions, and take its steering when it stays inside your lane and your completion criterion. When it would change either, or asks for something destructive or outward-facing, answer that you are passing it to the coordinator, and put it in your report.
 
-Before you put a judgement question to the coordinator or the user, ask the fleet's advisor when "This fleet" names one: `SendMessage` it your question, your id and what you checked. Its verdict stands unless it says the question is the user's; then report it with the advisor's recommendation attached.
+Before you put a judgement question to the coordinator or the user, ask the fleet's advisor when "This fleet" names one: `SendMessage` it your question, your id and what you checked. Its answer arrives as a message to you once your current tool call ends: go on with work that does not depend on it, and never `sleep` to wait. Its verdict stands unless it says the question is the user's; then report it with the advisor's recommendation attached.
 
 ## Report
 

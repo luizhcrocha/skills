@@ -97,7 +97,7 @@ The Now line (`set --now`) names what it waits on by number (A6, I2), so the pag
 
 `agent` warns when a running worker's lane meets another running lane: that task waits (`--status queued`) or joins that worker's queue.
 
-**One jj workspace per worker that edits code**; your session's working copy (`default`) is the stack, and no worker edits it. `fleet ws <dashboard-dir> add <id> [-r <base>]` makes and records it (`fleet brief` warns when a worker with a lane has none); `fleet ws <dashboard-dir> list` shows what each holds ahead of the stack, the files a worker changed outside its lane, and when it was last seen. Integrating is yours: rebase its changes under your `@` (`jj rebase -r '(::<id>@ ~ ::@) ~ <id>@' -B @`), resolve by intent, run the gates, mark the worker done, then `fleet ws <dashboard-dir> prune` (a dry run) and `prune --apply`. Every state command warns while a done worker's workspace is still there; what prune keeps, it names with why.
+**One jj workspace per worker that edits code**; your session's working copy (`default`) is the stack, and no worker edits it. `fleet ws <dashboard-dir> add <id> [-r <base>]`, run from the repository (or with `--repo <repo>`: the dashboard directory is outside it), makes and records it (`fleet brief` warns when a worker with a lane has none); `fleet ws <dashboard-dir> list` shows what each holds ahead of the stack, the files a worker changed outside its lane, and when it was last seen. Integrating is yours: rebase its changes under your `@` (`jj rebase -r '(::<id>@ ~ ::@) ~ <id>@' -B @`), resolve by intent, run the gates, mark the worker done, then `fleet ws <dashboard-dir> prune` (a dry run) and `prune --apply`. Every state command warns while a done worker's workspace is still there; what prune keeps, it names with why.
 
 Record `--task-id <agentId>` once the worker is spawned: its tokens and duration are then read from its transcript on every command.
 
@@ -151,7 +151,7 @@ Decisions go stale, and a stale one costs the user a choice that no longer matte
 
 An answer given on the page is recorded before any other work: every state command warns until it is. Refer to decisions, links and roadblocks by their number (D3, L1, R2) when you write to the user. Check that it still holds (the option may be gone since), then `--decide "<answer>" --resolution "answered on the page (#14)"`, answer the message with `--re 14`, and act. When it no longer holds, answer the message with why and revise the decision. When the answer leads to another question (a query to run again, a figure you still need), revise the decision with the new question, or close it and open the next one: the item is what the page acts on, and a chat reply alone leaves it looking answered. Your reply to an answer shows the user the form again, but the ledger should say what you now ask.
 
-When the session ends, `set --status done` names each decision still open and each workspace not pruned: withdraw it with its reason, or name it in your last message as left open on purpose.
+When the session ends, stop the advisor's row (`park --agent advisor "fleet done"`); `set --status done` names each decision still open and each workspace not pruned: withdraw it with its reason, or name it in your last message as left open on purpose.
 
 The commands and the schema are in [DASHBOARD.md](DASHBOARD.md#decisions).
 
