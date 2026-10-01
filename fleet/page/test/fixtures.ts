@@ -25,6 +25,8 @@ export interface Message {
   readonly decision?: string;
   readonly author?: string;
   readonly parts?: readonly { readonly text: string; readonly mention?: string }[];
+  readonly quote?: { readonly text: string; readonly from: string };
+  readonly side?: number;
 }
 
 const MIN = 60_000;
@@ -168,5 +170,55 @@ export function managerChat(now: number): Message[] {
   return [
     { id: 1, at: before(now, 30), from: "user", to: ["manager"], text: "Which fleet needs me?" },
     { id: 2, at: before(now, 29), from: "manager", to: ["user"], text: "billing: D1, the rounding rule. infra is not reading its chat.", re: 1 },
+  ];
+}
+
+/**
+ * The coordinator's view for the chat's screenshots and tests: the fleet's view with D18 answered on the
+ * page and held by the fleet, its answer in the conversation, and the host having read up to #12.
+ */
+export function chatView(now: number): View {
+  const view = coordinatorView(now);
+  const decisions = Array.isArray(view["decisions"]) ? view["decisions"] : [];
+
+  return {
+    ...view,
+    decisions: [
+      ...decisions,
+      { id: "d18", ref: "D18", kind: "decision", title: "Load check on the full ledger", question: "Run the 10k-row load check now, or after the cost work?", status: "open", held: "Re-run after the cost improvements work is done: the load check waits for it.", held_at: before(now, 114), blocking: false, asks: "user", opened: before(now, 200), options: [{ id: "a", label: "Now", consequence: "Measures today's generator." }, { id: "b", label: "Skip it", consequence: "No numbers before release." }] },
+    ],
+    chat: { on: true, seen: 12, unread: 0, since: "" },
+  };
+}
+
+/**
+ * A day and a half of the coordinator's conversation, as Luiz reads it on his phone: an exchange the day
+ * before, a worker's report and its follow-up, a side chat on a quote, a decision's answer with the
+ * coordinator's acknowledgement, a long status, a reply to the report an hour later, and a message not
+ * read yet.
+ */
+export function chatConversation(now: number): Message[] {
+  const report = "Round 2 done: the generator writes every invoice of the sample ledger (412 rows) in 1.8 s. Totals are integer cents; three lines round differently from Stripe, listed in docs/invoices/rounding.md.";
+
+  return [
+    { id: 1, at: before(now, 1160), from: "user", to: ["coordinator"], text: "Before you stop for the day: what is left on milestone 2?", author: "luiz@example.com" },
+    { id: 2, at: before(now, 1159), from: "coordinator", to: ["user"], text: "The generator and the notes. The adapter waits on S1, the restricted key.", re: 1 },
+    { id: 3, at: before(now, 1157), from: "coordinator", to: ["user"], text: "invoice-gen keeps running overnight; its tests are green so far." },
+    { id: 4, at: before(now, 168), from: "a2", to: ["user", "coordinator"], text: report },
+    { id: 5, at: before(now, 167), from: "a2", to: ["user", "coordinator"], text: "Next: the Stripe adapter, once S1 is in." },
+    { id: 6, at: before(now, 150), from: "user", to: ["coordinator"], text: "Is that true for credit notes too?", author: "luiz@example.com", side: 6, quote: { text: "Stripe rounds on the total; matching it avoids one-cent drift.", from: "D1 Rounding rule for totals" } },
+    { id: 7, at: before(now, 149), from: "coordinator", to: ["user"], text: "Yes: a credit note is totalled the same way.", re: 6, side: 6 },
+    { id: 8, at: before(now, 115), from: "user", to: ["coordinator"], text: "None of these: Re-run after the cost improvements work is done", author: "luiz@example.com", decision: "d18" },
+    { id: 9, at: before(now, 114), from: "coordinator", to: ["user"], text: "Recorded D18: the load check waits for the cost work, and I re-run it the day that lands.", re: 8 },
+    {
+      id: 10,
+      at: before(now, 80),
+      from: "coordinator",
+      to: ["user"],
+      text: "Where things stand.\n\nMilestone 2: invoice-gen has the generator and its tests merged; notes-impl is halfway through the notes, the customer-facing part first. stripe.adapter is still blocked on S1, so the Stripe side waits.\n\nMilestone 3: docs-pass is queued behind the notes. perf-check crashed out of memory on 10k rows; that is the load check D18 put off, so it stays failed until the cost work lands.\n\nNothing else waits on you.",
+    },
+    { id: 11, at: before(now, 40), from: "user", to: ["a2"], text: "@invoice-gen which three lines? Put them in the PR description too.", author: "luiz@example.com", re: 4, parts: [{ text: "@invoice-gen", mention: "a2" }, { text: " which three lines? Put them in the PR description too." }] },
+    { id: 12, at: before(now, 38), from: "a2", to: ["user"], text: "Lines 88, 214 and 390, each a half-cent tie. They are in the PR description now.", re: 11 },
+    { id: 13, at: before(now, 10), from: "user", to: ["coordinator"], text: "Thanks. Tell me when the adapter is unblocked.", author: "luiz@example.com" },
   ];
 }
