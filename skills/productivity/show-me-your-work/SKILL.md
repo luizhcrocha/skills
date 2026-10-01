@@ -77,7 +77,7 @@ Correct the log, not the story. The audit never edits or removes a row, even an 
 
 ## Fresh review of the trail
 
-Before handing back, spawn a reviewer that did not do the work: a `general-purpose` agent on Opus (`model: "opus"`), fresh context. Self-review is not a substitute. Its brief: the log path, the transcript path, the task's goal, and the four checks below; it writes nothing. It reads the trail and the transcript, then flags what Luiz should pay attention to. Not a redo of the work, a scan for what's suboptimal or risky.
+Before handing back, spawn a reviewer that did not do the work: a `general-purpose` agent with a fresh context, on Fable (`model: "fable"`) for a trail from a long absence (a night, more than a couple of hours) since it is the one decisive read of that work, else on Opus (`model: "opus"`); when Fable is unavailable, Opus, and the reviewer line says so. Self-review is not a substitute. Its brief: the log path, the transcript path, the task's goal, and the four checks below; it writes nothing. It reads the trail and the transcript, then flags what Luiz should pay attention to. Not a redo of the work, a scan for what's suboptimal or risky.
 
 - Decisions logged with weak or absent evidence.
 - Verification steps skipped or claimed without proof in the transcript.

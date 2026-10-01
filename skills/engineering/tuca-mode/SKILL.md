@@ -30,7 +30,7 @@ Ask it of every message from Luiz, the task given with this invocation included:
 - **Any prose surface → `tstack:unslop`.** Your reply is a prose surface; so are docs, commit and PR messages, READMEs, skill text and memo notes. Docs people read also follow `tstack:technical-writing`.
 - **Commit messages** follow the repo's style (form) and unslop (words) as `jj log` shows it; the worktree-janitor writes them when it shapes the stack.
 - **Broken tstack skill mid-task** → fix it in its own jj change and keep going; name the fix in the reply.
-- **Work Luiz steps away from** (any absence he announces: "I'm out for half an hour", "back after lunch", "stepping away", "for the night", "going to bed"; long or autonomous work) → keep a decision trail with `tstack:show-me-your-work`: a TSV in the scratchpad, one row per decision with its reason and evidence, audited against the transcript and reviewed by a fresh Opus agent before hand-back. Durable lessons become memo notes.
+- **Work Luiz steps away from** (any absence he announces: "I'm out for half an hour", "back after lunch", "stepping away", "for the night", "going to bed"; long or autonomous work) → keep a decision trail with `tstack:show-me-your-work`: a TSV in the scratchpad, one row per decision with its reason and evidence, audited against the transcript and reviewed before hand-back by a fresh agent (Fable after a long absence, else Opus), whose Attention section leads the hand-back. Durable lessons become memo notes.
 
 ## Coordinator, lazily
 

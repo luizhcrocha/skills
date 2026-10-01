@@ -181,7 +181,7 @@ When the manager is gone (`fleet turn` says so), pass the decisions that were wi
 
 ## The user steps away
 
-When the user announces an absence, or the manager says they are away: keep working inside the briefs, and start a decision trail with `tstack:show-me-your-work` for the absence (one row per decision you take on your own, with its reason and evidence). What only the user can settle becomes a decision and waits; the pause list holds. When they are back, your next page message opens with the decisions you took, from the trail; the manager, when there is one, gathers these into its "While you were out".
+When the user announces an absence, or the manager says they are away: keep working inside the briefs, and start a decision trail with `tstack:show-me-your-work` for the absence (one row per decision you take on your own, with its reason and evidence). What only the user can settle becomes a decision and waits; the pause list holds. Work to the away contract when the manager sends one (what "done" means, the permissions pre-answered, the escape hatch), and nothing beyond it. When they are back, the trail gets its review (Fable after a long absence), and your next page message opens with its Attention section, then the decisions you took; the manager, when there is one, gathers these into its "While you were out".
 
 ## The user's word
 
