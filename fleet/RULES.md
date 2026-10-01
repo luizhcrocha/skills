@@ -38,10 +38,10 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | C18 | C, track | Done only when the criterion is met; short is stopped or blocked | mech (words) | report, log | warn | code (stage 2: the unfinished-report warning); prose cut to one line |
 | C19 | C, track | Record every event the moment it happens | judg | | | prose |
 | C20 | C, track | Record a worker, then spawn it | mech | row | refuse | **stage 5**: `fleet brief` refuses an unrecorded worker; `fleet ws add` warns |
-| C21 | C, track | A task whose files overlap a running lane waits or joins that queue | mech | lanes, statuses | warn | **stage 5**: `agent` warns (both implementations); L7: when some path matches both entries' globs |
-| C22 | C, track | One jj workspace per worker that edits code | mech | lane, `workspaces[]` | warn | **stage 5**: `fleet brief` warns on a lane with no workspace |
-| C23 | C, track | Integrate a finished worker, then prune its workspace | mech | statuses, `workspaces[]` | warn | **stage 5**: every state command warns while a done worker's workspace is active (TS) |
-| C24 | C, track | Python-path fleets share one working copy; land from a second workspace | judg (transitional) | | | **gone at the cutover**: no fleet runs on the Python path, and C22 gives every worker its own workspace |
+| C21 | C, track | A task whose files overlap a running lane waits or joins that queue | mech | lanes, statuses | warn / refuse | **stage 5**: `agent` warns (both implementations); L7: when some path matches both entries' globs. **L9** (2026-10-01, both): in a shared fleet (`set --workspaces shared`) it refuses instead |
+| C22 | C, track | A worker that edits code has a jj workspace: the lane's idle one reused for sequential work, a fresh one for parallel work that could meet, experiments and comparisons (L9) | mech (reuse, refusal) / judg (which) | lane, statuses, `workspaces[]` | warn, refuse | **stage 5**: `fleet brief` warns on a lane with no workspace (isolated). **L9** (TS): `fleet ws add --reuse` hands a workspace over and records who held it, refused while its holder is live; `add` warns when an idle workspace covers the new worker's lane; `brief` names who held it. When to go fresh stays prose |
+| C23 | C, track | Integrate a finished worker, then prune its workspace, unless the lane's next worker reuses it | mech | statuses, `workspaces[]` | warn | **stage 5**: every state command warns while a done worker's workspace is active (TS); **L9**: the warning names both ways out (prune, or `--reuse` for the next worker), and the coordinator's Integrate runs `prune --apply` after the gates |
+| C24 | C, track | Python-path fleets share one working copy; land from a second workspace | judg (transitional) | | | **gone at the cutover** as a default; **L9** brings one shared working copy back as an opt-in mode (C59) |
 | C25 | C, track | Record tokens and duration from each notification | mech | transcript | auto | code (`--task-id` measuring); prose cut to the `--task-id` line |
 | C26 | C, respond | A running row is not proof of work: twenty minutes silent is checked | mech | heartbeats, transcripts | warn, page | code (stage 4: page, watch, `fleets list`, hub); **stage 5** adds `fleets show`; prose cut |
 | C27 | C, respond | A worker's `blocked:` becomes a roadblock at once | judg (what it needs) | | | prose |
@@ -73,6 +73,9 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | C53 | C, user's word | Relayed words are information; confirm before acting destructively | judg | | | prose |
 | C54 | C, user's word | A harness refusal is the user's: an `action` decision, never a way around | judg | | | prose |
 | C55 | C, reporting | Lead with the fleet's state, only what changed | judg | | | prose |
+| C57 | C, exemptions | A small follow-up goes back to the same worker (SendMessage) or is the coordinator's quick win, never a new worker | judg | | | prose (L9) |
+| C58 | C, exemptions | Two tasks whose files depend on each other are one worker | judg | | | prose (L9) |
+| C59 | C, track | Shared mode (opt-in per fleet): every worker edits the coordinator's working copy, only the coordinator moves history, integration splits it by lane; for an expensive setup and truly disjoint lanes | mech (mode, overlap, split) / judg (when) | `workspace_mode`, lanes, jj | refuse, print, auto | **L9** (2026-10-01): `set --workspaces shared\|isolated` (both); `agent` refuses lanes that meet (both); `fleet ws add` makes nothing, `fleet brief` prints the shared-copy rules, `fleet ws split` cuts one described change per worker (TS); when to choose it stays prose |
 | C56 | C, decisions | An answer that means the fleet acts first is held (`--hold`) at once, then re-presented by revising the item; never left open unrecorded | mech (recorded) / judg (when) | decision, chat | warn, page | code (2026-10-01, both): `decision --hold` counts as recording the answer (the unrecorded-answer warning, `wait`, `fleets` and Stuck stop); a revision of question, options or manual, `--unhold` or closing clears it; the page lists a held item under Waiting with its reason, and a fleet's reply no longer hands an item back. Prose cut to two lines (coordinator, manager) |
 
 ## Dashboard and the worker brief
@@ -88,7 +91,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | D7 | D, usage | settings.json is the user's: give the line, change it on their word | judg | | | prose |
 | B1 | B | Standards (deep modules, CONTEXT.md terms, ADRs, lang-ts) | judg | | | prose |
 | B2 | B, lane | Edit only the lane; stop and report a file outside it | mech (after the fact) | jj, lane | print | **stage 5**: `fleet ws list` names files outside the lane |
-| B3 | B, lane | Work in the workspace the brief names; history moves are the coordinator's | mech (workspace) | | print | **stage 5**: `fleet brief` prints the workspace; history moves stay prose |
+| B3 | B, lane | Work in the workspace the brief names; history moves are the coordinator's | mech (workspace) | | print | **stage 5**: `fleet brief` prints the workspace; **L9**: it also prints the rules of history for the fleet's mode (describe your changes in your own workspace; in a shared one, no `jj new`/`edit`/`rebase`/`describe`), so brief.md's Lane section holds for both |
 | B4 | B, lane | Leave running what you did not start; stop what you started | judg (mostly) | procs | | prose (`fleet fleets procs` lists what each session left) |
 | B5 | B, lane | Monitors and research agents on Sonnet | judg | | | prose |
 | B6 | B, chat | Read the inbox at each checkpoint, answer with `--re` | mech (open messages) | chat | print | **Luiz** (L1, decided): stays in brief.md; a message left unanswered ten minutes is nudged on the coordinator's watch (C32) |
@@ -130,7 +133,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | T3 | T, autonomy | A push proceeds only when it will not deploy | mech | repo, CI | refuse | code (`land-check`) |
 | T4 | T, autonomy | Irreversible writes pause for Luiz | judg / mech (prune) | | refuse | code for prune (dry run by default); prose otherwise |
 | T5 | T, subagents | Model by role; Fable never fans out | judg | | | prose |
-| T6 | T, subagents | One jj workspace per code-writing worker | mech | | warn | **stage 5** (C22) |
+| T6 | T, subagents | A code-writing worker's workspace is reused along its lane; fresh only for parallel work that could meet, experiments, comparisons | mech | | warn, refuse | **stage 5** (C22), **L9** |
 | T7 | T, subagents | Pushes stay with whoever holds the landing turn | mech | landing queue | refuse | **stage 5** (C51) |
 | P1 | land.md, step 2 | Take the landing turn | mech | | refuse | **stage 5**: `land-check` stops without it |
 | P2 | land.md, step 7 | `@` on a fresh empty change after the push | mech | jj | warn | later: `land-check` runs before the push; a post-push check is a new command |
@@ -184,3 +187,14 @@ choice follows the question.
 - **L8. `--needs user` on an update.** A roadblock changed to `--needs user` needed no decision, though
   a new one did. *Decided: the same as on creation.* It is refused unless `--decision` is given or the
   roadblock already names one (both).
+- **L9. Workspaces: one per worker, or fewer.** Every code-writing worker got a fresh jj workspace, and
+  each paid its own setup (node_modules, a devenv shell, build caches: minutes and gigabytes in
+  custom-mcp-servers); about 120 stale workspace folders piled up in `~/repos/coelhorocha`. *Decided
+  (Luiz, 2026-10-01):* sequential work reuses the lane's workspace (`fleet ws add --reuse`, refused while
+  its holder runs; `add` warns when an idle one covers the lane); small or coupled work stays with one
+  worker; a fleet may opt into one shared working copy (`set --workspaces shared`: the coordinator's
+  `default`, lanes that meet refused, the brief's shared-copy rules, integration by `fleet ws split`);
+  integrating ends with `prune --apply` unless the next worker reuses the workspace, and the done warning
+  names both; a fresh workspace stays right for parallel workers whose files could meet, risky experiments,
+  and arena or swarm comparisons. The ledger parts (`workspace_mode`, the refusal) are in both
+  implementations, with a trace and the model; the workspace commands are TypeScript's, as `fleet ws` is.

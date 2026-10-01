@@ -5,7 +5,8 @@ kept notes, links, the event count, the chat's messages) is driven by random com
 together with the real state and chat CLIs, through the oracle runner (run.py). After every step
 the test checks the exit code the model predicts, that a refused command wrote nothing, that the
 ledger's shape matches the model, the warnings the model expects on stderr (a stale Now line, live
-rows in a paused fleet, a chat nobody reads, a Now line naming a closed decision), `show` against
+rows in a paused fleet, a chat nobody reads, a Now line naming a closed decision, lanes that meet), the
+refusal of lanes that meet in a fleet sharing one working copy (`set --workspaces shared`), `show` against
 state.json, `inbox` against the model's open messages, and invariants that need no model: events
 and chat only grow, numbers once given stay, a closed decision never changes.
 
@@ -52,6 +53,14 @@ MODELS = ["opus", "sonnet", "haiku", "fable"]
 POLICY_MODELS = ("opus", "sonnet", "fable")  # L3: any other is accepted with a warning
 KEPT = ["k1", "k2"]
 LINKS = ["l1", "l2", "L1"]
+# Lane entries, and which pairs meet (L7: some path matches both). A plain path covers what is under it; `*` stays
+# in its segment. Each entry meets itself.
+LANES = ["src/", "src/a.ts", "src/*.ts", "docs/", "lib/x.py"]
+MEET = {frozenset(p) for p in [("src/", "src/a.ts"), ("src/", "src/*.ts"), ("src/a.ts", "src/*.ts")]}
+
+
+def meet(x: str, y: str) -> bool:
+    return x == y or frozenset((x, y)) in MEET
 NOW_TEXTS = ["building", "waits on D1", "A1 next", "checking I1 and D2", "quiet"]
 
 
@@ -72,6 +81,7 @@ class Model:
         self.links: dict[str, dict] | None = None
         self.events = 0
         self.messages: list[dict] = []
+        self.mode: str | None = None  # `set --workspaces`: None until set, then "isolated" or "shared"
 
     # -- lookups ----------------------------------------------------------------------------------
     @staticmethod
@@ -103,6 +113,7 @@ class Model:
 
     def do_set(self, c):
         self.status = c.get("status", self.status)
+        self.mode = c.get("workspaces", self.mode)
         if "now" in c:
             self.now, self.now_at = c["now"], self.clock
 
@@ -175,10 +186,11 @@ class Model:
             if "milestone" not in c or "task" not in c:
                 raise Refused("new agent needs --task --milestone")
             self.agents[aid] = {"name": c.get("name") or aid, "status": c.get("status") or "running",
-                                "milestone": c["milestone"], "rounds": 1, "tokens": 0}
+                                "milestone": c["milestone"], "rounds": 1, "tokens": 0, "lane": list(c.get("lane", []))}
             self.log()
             if c.get("step"):
                 self.set_step(c["step"], "current", aid)
+            self.refuse_shared_overlap(c, aid)
             c["printed"] = f"recorded {aid} ({self.agents[aid]['name']})"
             return
         if a["status"] == "done" and c.get("status") == "running":
@@ -186,11 +198,32 @@ class Model:
         for key in ("name", "status", "milestone", "tokens"):
             if key in c:
                 a[key] = c[key]
+        if "lane" in c:
+            a["lane"] = list(c["lane"])
         if c.get("step"):
             follow = {"running": "current", "done": "done", "blocked": "blocked"}.get(a["status"])
             self.set_step(c["step"], follow, aid)
         if "log" in c:
             self.log()
+        self.refuse_shared_overlap(c, aid)
+
+    @staticmethod
+    def starts_lane(c: dict) -> bool:
+        """An `agent` command that gives a lane, a task or `--status running` is checked for lanes that meet."""
+        return "lane" in c or c.get("status") == "running" or bool(c.get("task"))
+
+    def lane_hits(self, aid: str) -> list[str]:
+        """The running or blocked workers whose lane meets running worker `aid`'s."""
+        a = self.agents[aid]
+        if a["status"] != "running":
+            return []
+        return [k for k, o in self.agents.items()
+                if k != aid and o["status"] in ("running", "blocked") and any(meet(x, y) for x in a["lane"] for y in o["lane"])]
+
+    def refuse_shared_overlap(self, c: dict, aid: str) -> None:
+        """A fleet that shares one working copy refuses a running worker whose lane meets a live one's."""
+        if self.mode == "shared" and self.starts_lane(c) and self.lane_hits(aid):
+            raise Refused("lanes meet in a shared working copy")
 
     def open_decision(self, key: str) -> str:
         did = self.find(self.decisions, key)
@@ -474,6 +507,8 @@ class Model:
             found["open"] = "state: the fleet is done with"
         if c["cmd"] == "agent" and c.get("model") not in (None, *POLICY_MODELS):
             found["model"] = "outside the model policy"
+        if c["cmd"] == "agent" and self.mode != "shared" and self.starts_lane(c) and self.lane_hits(c["id"]):
+            found["lanes"] = f"state: {c['id']}'s lane overlaps"
         return found
 
     def answered(self, did: str) -> bool:
@@ -571,9 +606,9 @@ class Model:
     # -- the ledger's shape, as the model sees it ---------------------------------------------------
     def shape(self) -> dict:
         return {
-            "status": self.status, "now": self.now,
+            "status": self.status, "now": self.now, "workspace_mode": self.mode,
             "roadmap": [[mid, [[s, self.steps[s]["status"], self.steps[s]["agent"]] for s in steps]] for mid, steps in self.milestones.items()],
-            "agents": [[k, a["status"], a["milestone"], a["rounds"], a["name"], a["tokens"]] for k, a in self.agents.items()],
+            "agents": [[k, a["status"], a["milestone"], a["rounds"], a["name"], a["tokens"], a["lane"]] for k, a in self.agents.items()],
             "decisions": [[k, d["kind"], d["status"], d["ref"], d["step"], d["milestone"], d["agent"], d.get("held")] for k, d in self.decisions.items()],
             "roadblocks": [[k, r["resolved"], r["ref"], r["agent"], r["decision"]] for k, r in self.roadblocks.items()],
             "kept": None if self.kept is None else [[k, v] for k, v in self.kept.items()],
@@ -584,9 +619,9 @@ class Model:
 
 def shape_of(state: dict) -> dict:
     return {
-        "status": state["status"], "now": state["now"],
+        "status": state["status"], "now": state["now"], "workspace_mode": state.get("workspace_mode"),
         "roadmap": [[m["id"], [[s["id"], s["status"], s["agent"]] for s in m["steps"]]] for m in state["roadmap"]],
-        "agents": [[a["id"], a["status"], a["milestone"], a["rounds"], a["name"], a["tokens"]] for a in state["agents"]],
+        "agents": [[a["id"], a["status"], a["milestone"], a["rounds"], a["name"], a["tokens"], a["lane"]] for a in state["agents"]],
         "decisions": [[d["id"], d["kind"], d["status"], d["ref"], d["step"], d["milestone"], d["agent"], d.get("held")] for d in state["decisions"]],
         "roadblocks": [[r["id"], r["resolved"], r["ref"], r["agent"], r["decision"]] for r in state["roadblocks"]],
         "kept": None if "kept" not in state else [[k["id"], k["text"]] for k in state["kept"]],
@@ -617,6 +652,8 @@ def gen(rng: random.Random, m: Model) -> dict:
             c["status"] = pick(["running", "paused", "blocked", "done"])
         if maybe(0.7):
             c["now"] = pick(NOW_TEXTS)
+        if maybe(0.2):
+            c["workspaces"] = pick(["shared", "isolated"])
         return c
     if cmd == "step":
         if maybe(0.15):
@@ -647,8 +684,12 @@ def gen(rng: random.Random, m: Model) -> dict:
                 c["name"] = pick(NAMES)
             if maybe(0.4):
                 c["step"] = pick(step_ids)
+            if maybe(0.6):
+                c["lane"] = rng.sample(LANES, rng.choice([1, 1, 2]))
             return c
         c["status"] = pick(["running", "done", "blocked", "queued", "stopped", "failed"])
+        if maybe(0.2):
+            c["lane"] = rng.sample(LANES, rng.choice([1, 2]))
         if maybe(0.3):
             c["step"] = pick(step_ids)
         if maybe(0.3):
@@ -795,7 +836,7 @@ def to_step(c: dict, clock: str, render: bool, next_id: int) -> dict:
         argv += [c["id"]]
     flags = {"status", "now", "title", "milestone", "agent", "before", "after", "remove", "task", "name", "step", "log",
              "tokens", "model", "detail", "severity", "needs", "decision", "kind", "question", "why", "recommend", "reason",
-             "secret", "manual", "supersedes", "decide", "resolution", "withdraw", "url", "done", "log", "hold"}
+             "secret", "manual", "supersedes", "decide", "resolution", "withdraw", "url", "done", "log", "hold", "workspaces"}
     if cmd not in ("event", "park", "keep"):
         for key, value in c.items():
             if key in flags:
@@ -805,6 +846,8 @@ def to_step(c: dict, clock: str, render: bool, next_id: int) -> dict:
                 argv.append("--" + key)
         if cmd == "link" and "drop" in c:
             argv += ["--drop", c["drop"]]
+        if "lane" in c:
+            argv += ["--lane", *c["lane"]]
         for o in c.get("options", []):
             argv += ["--option", o]
         for q in c.get("ask", []):
@@ -827,6 +870,8 @@ def sequence(seed: int, steps: int):
     """The seeded sequence: (command, step) pairs, with the model's predictions made as it goes."""
     rng, m, t = random.Random(seed), Model(), START_T
     opening = [{"cmd": "init"}, {"cmd": "milestone", "id": "m1", "title": "M"}]
+    if rng.random() < 0.4:  # a fleet whose workers share one working copy from the start
+        opening.append({"cmd": "set", "workspaces": "shared"})
     for i in range(steps):
         c = opening[i] if i < len(opening) else gen(rng, m)
         if i:
@@ -894,7 +939,8 @@ def check_step(c: dict, step: dict, expected: tuple[int, dict], got: dict, befor
         need(new["updated"] == step["clock"], f"updated is {new['updated']}, the clock {step['clock']}")
     if c["cmd"] == "show" and got["exit"] == 0:
         out = got["stdout"].splitlines()
-        need(out[0] == f"{new['project']} [{new['status']}] {new['now']}", f"show's first line: {out[0]!r}")
+        shared = ", shared working copy" if new.get("workspace_mode") == "shared" else ""
+        need(out[0] == f"{new['project']} [{new['status']}{shared}] {new['now']}", f"show's first line: {out[0]!r}")
         for x in new["roadmap"]:
             done = sum(s["status"] == "done" for s in x["steps"])
             need(f"  {x['id']} {x['title']} ({done}/{len(x['steps'])})" in out, f"show leaves out milestone {x['id']}")

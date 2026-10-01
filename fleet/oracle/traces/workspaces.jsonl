@@ -1,0 +1,17 @@
+{"trace": 1, "name": "workspaces", "about": "set --workspaces: a fleet whose workers share one working copy refuses a running lane that meets a live one (L7's rule), an isolated fleet only warns; show names the mode, a bad mode is a usage error, and the page renders with it"}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "Parser", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "set", "--workspaces", "shared", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a1", "--task", "the lexer", "--milestone", "m1", "--lane", "src/**", "--no-render"], "clock": "2026-01-05T09:05:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "agent", "a2", "--task", "the parser", "--milestone", "m1", "--lane", "src/parse.ts", "docs/", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a2", "--task", "the parser", "--milestone", "m1", "--lane", "src/parse.ts", "docs/", "--status", "queued", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a3", "--task", "the docs", "--milestone", "m1", "--lane", "docs/*.md", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a1", "--status", "blocked", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a2", "--status", "running", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "show"]}
+{"cli": "state", "argv": ["$DIR", "set", "--workspaces", "isolated", "--no-render"], "clock": "2026-01-05T09:10:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "agent", "a2", "--status", "running", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "set", "--workspaces", "bogus", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "set", "--workspaces", "shared", "--now", "a1 is done; a2 next"]}
+{"fixture": "patch", "path": "$DIR/state.json", "set": {"workspace_mode": "both"}}
+{"cli": "state", "argv": ["$DIR", "event", "x", "--no-render"]}

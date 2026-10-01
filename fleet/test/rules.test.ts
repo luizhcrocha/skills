@@ -296,7 +296,8 @@ describe("fleet brief", () => {
     writeFileSync(join(root, "state.json"), JSON.stringify({ ...state, workspaces: [{ id: "a2", agent: "a2", path: "/repo-a2", repo: "/repo", base: "x", added: "t", status: "active" }] }));
     const ran = fleet(["brief", root, "a2"], env);
     expect(ran.stdout).toContain('Skill: call the Skill tool with "tstack:tdd" and follow it.');
-    expect(ran.stdout).toContain("Workspace: /repo-a2. Work there only");
+    expect(ran.stdout).toContain("Workspace: /repo-a2, yours alone. Work there only");
+    expect(ran.stdout).toContain("End with your changes described there (`jj describe`, `jj split` by intent, `jj new` on top)");
     expect(ran.stderr).toContain("a2 has no completion criterion");
     expect(ran.stderr).not.toContain("no workspace");
   });
@@ -313,7 +314,11 @@ describe("a done worker's workspace is pruned", () => {
     withWorkspace();
     expect(ok("event", "x").stderr).not.toContain("still there");
     const done = ok("agent", "a1", "--status", "done");
-    expect(done.stderr).toContain("state: a1's workspace a1 still there though its worker is done: bring its changes into the stack, then `fleet ws <dir> prune`");
+    // The warning names both ways out: prune it once integrated, or hand it to the next worker of the lane.
+    expect(done.stderr).toContain(
+      "state: a1's workspace a1 still there though its worker is done: bring its changes into the stack, then prune it " +
+        "(`fleet ws <dir> prune`, a dry run, then --apply), or hand it to the next worker of its lane (`fleet ws <dir> add <next> --reuse a1`).",
+    );
     expect(ok("set", "--status", "done").stderr).toContain("state: the fleet is done with workspace(s) a1 not pruned");
   });
 });

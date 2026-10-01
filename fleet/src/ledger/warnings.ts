@@ -139,12 +139,12 @@ export function leftOpen(ledger: Ledger, settingDone: boolean): string | undefin
   );
 }
 
-/** When worker `id`, recorded as running, shares files with another running or blocked worker's lane: two
- * workers on the same files collide at integration, so the task waits or joins that worker's queue. */
-export function overlapping(ledger: Ledger, id: string): string | undefined {
+/** The live lanes worker `id`'s lane meets when it is running: per running or blocked worker, the entries of
+ * `id`'s lane that meet one of its own (L7). */
+function laneHits(ledger: Ledger, id: string): string[] {
   const a = ledger.agents.find((x) => x.id === id);
 
-  if (a?.status !== "running") return undefined;
+  if (a?.status !== "running") return [];
   const hits: string[] = [];
 
   for (const other of ledger.agents) {
@@ -154,11 +154,39 @@ export function overlapping(ledger: Ledger, id: string): string | undefined {
     if (shared.length > 0) hits.push(`${other.id}'s (${other.status}: ${shared.join(", ")})`);
   }
 
+  return hits;
+}
+
+/** Whether the fleet's workers share one working copy (`set --workspaces shared`). */
+export function sharesWorkingCopy(ledger: Ledger): boolean {
+  return ledger.workspace_mode === "shared";
+}
+
+/** When worker `id`, recorded as running, shares files with another running or blocked worker's lane: two
+ * workers on the same files collide at integration, so the task waits or joins that worker's queue. A
+ * shared fleet refuses it instead ({@link sharedOverlap}), so it never warns. */
+export function overlapping(ledger: Ledger, id: string): string | undefined {
+  const hits = sharesWorkingCopy(ledger) ? [] : laneHits(ledger, id);
+
   if (hits.length === 0) return undefined;
 
   return (
-    `state: ${a.id}'s lane overlaps ${hits.join("; ")}. A task whose files overlap a running lane waits ` +
+    `state: ${id}'s lane overlaps ${hits.join("; ")}. A task whose files overlap a running lane waits ` +
     "(`--status queued`) or joins that worker's queue."
+  );
+}
+
+/** Why worker `id` cannot run in a shared fleet: its lane meets a running or blocked worker's, and in one
+ * working copy the two would edit the same files under each other. Undefined when it can. */
+export function sharedOverlap(ledger: Ledger, id: string): string | undefined {
+  const hits = sharesWorkingCopy(ledger) ? laneHits(ledger, id) : [];
+
+  if (hits.length === 0) return undefined;
+
+  return (
+    `${id}'s lane overlaps ${hits.join("; ")}, and this fleet's workers share one working copy (\`set --workspaces shared\`), ` +
+    "where two workers on the same files overwrite each other: record it `--status queued` until that worker is done, " +
+    "or give the task to that worker."
   );
 }
 
@@ -198,7 +226,8 @@ export function unpruned(ledger: Ledger, workspaces: readonly ActiveWorkspace[],
   if (done.length > 0) {
     lines.push(
       `state: ${done.map((w) => `${w.agent}'s workspace ${w.id}`).join(", ")} still there though its worker is done: ` +
-        "bring its changes into the stack, then `fleet ws <dir> prune` (a dry run, then --apply).",
+        "bring its changes into the stack, then prune it (`fleet ws <dir> prune`, a dry run, then --apply), " +
+        `or hand it to the next worker of its lane (\`fleet ws <dir> add <next> --reuse ${done.length === 1 ? (done[0]?.id ?? "") : "<workspace>"}\`).`,
     );
   }
 

@@ -4,12 +4,12 @@
 import { pyRepr } from "../json.ts";
 import { EVENT_KINDS, MODELS, NEEDS, SEVERITIES, SKILLS } from "./commands.ts";
 import type { Ledger } from "./model.ts";
-import { AGENT_STATUSES, ASKS, KINDS, STATUSES, STEP_STATUSES } from "./validate.ts";
+import { AGENT_STATUSES, ASKS, KINDS, STATUSES, STEP_STATUSES, WORKSPACE_MODES } from "./validate.ts";
 
 /** The command cheat sheet `show` ends with: each command with the values its flags take. */
 export const CHEATSHEET = `
 commands (fleet state DIR <command>; an unknown ID creates the row, a known ID changes the fields given):
-  set [--status ${STATUSES.join("|")}] [--now TEXT] [--goal G]
+  set [--status ${STATUSES.join("|")}] [--now TEXT] [--goal G] [--workspaces ${WORKSPACE_MODES.join("|")}]
   milestone ID --title T
   step ID --milestone M --title T [--status ${STEP_STATUSES.join("|")}] [--agent A]
         [--before STEP | --after STEP] [--remove REASON]
@@ -48,7 +48,8 @@ function right(text: string, n: number): string {
 export function showLines(ledger: Ledger): string[] {
   const lines: string[] = [];
   const role = ledger.role === "manager" ? ", manager" : "";
-  lines.push(`${ledger.project} [${ledger.status}${role}] ${ledger.now}`);
+  const shared = ledger.workspace_mode === "shared" ? ", shared working copy" : "";
+  lines.push(`${ledger.project} [${ledger.status}${role}${shared}] ${ledger.now}`);
 
   for (const m of ledger.roadmap) {
     const done = m.steps.filter((s) => s.status === "done").length;

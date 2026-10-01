@@ -1,10 +1,17 @@
 /**
- * `fleet ws DIR …`: one jj workspace per worker, recorded in the ledger (`workspaces[]`).
+ * `fleet ws DIR …`: the jj workspaces a fleet's workers edit in, recorded in the ledger (`workspaces[]`).
  *
  * - `add NAME [-r BASE] [--agent ID] [--repo PATH]`: `jj workspace add <repo>-NAME -r BASE --name NAME`
  *   beside the repo's default workspace (the one `--repo`, else the cwd, is in); BASE defaults to `@-`
  *   there. Records the worker (`--agent`, else NAME), the path and the base change, and prints the path
- *   for the brief.
+ *   for the brief. It warns when an idle workspace already covers the worker's lane: that one is reused.
+ * - `add WORKER --reuse WORKSPACE|WORKER [-r BASE]`: hands a recorded workspace whose worker is no longer
+ *   at work to the next worker of its lane, on a fresh change (on BASE when given, else on what the last
+ *   holder left), and records who held it before. Its setup (dependencies, a dev shell, build caches) stays.
+ * - In a fleet whose workers share one working copy (`fleet state DIR set --workspaces shared`), `add` makes
+ *   nothing: it prints the shared working copy (the repo's default workspace) for the brief; and
+ *   `split WORKER -m MESSAGE` integrates a finished worker by splitting its lane's files out of that working
+ *   copy's @ into one described change.
  * - `list`: each workspace's tip, whether it is empty or conflicted, what it holds that the stack (the
  *   default workspace's @) does not, and when its worker was last seen.
  * - `prune [--apply | --dry-run]`: forgets and deletes the workspaces whose worker is no longer live and
@@ -25,7 +32,7 @@ import { exists, isDir, readText, resolvePath, writeText } from "../files.ts";
 import { workerActivity } from "../heartbeat.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
-import { laneMatches } from "../ledger/lanes.ts";
+import { laneMatches, lanesMeet } from "../ledger/lanes.ts";
 import { decodeLedger } from "../ledger/model.ts";
 import { validate } from "../ledger/validate.ts";
 import { cliLookups } from "../page/lookups.ts";
@@ -35,7 +42,9 @@ import { changes, jj, literal, unintegratedRevset, why, workspaceNames, workspac
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 
-const USAGE = "usage: fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] | list | prune [--apply | --dry-run]";
+const USAGE =
+  "usage: fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] | add WORKER --reuse WORKSPACE|WORKER [-r BASE] | " +
+  "split WORKER -m MESSAGE [--repo PATH] | list | prune [--apply | --dry-run]";
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
 
@@ -82,6 +91,24 @@ function agentRow(raw: JsonObject, id: string): JsonObject | undefined {
   return (asArray(raw["agents"]) ?? []).map(asObject).find((a) => asString(a?.["id"]) === id);
 }
 
+/** A worker row's lane entries. */
+function laneOf(row: JsonObject | undefined): string[] {
+  return asArray(row?.["lane"])?.flatMap((e) => asString(e) ?? []) ?? [];
+}
+
+/** A worker's status, or undefined when the ledger has no row for it. */
+function statusOf(raw: JsonObject, id: string): string | undefined {
+  return asString(agentRow(raw, id)?.["status"]);
+}
+
+/** Whether the fleet's workers share one working copy (`fleet state DIR set --workspaces shared`). */
+function shared(raw: JsonObject): boolean {
+  return raw["workspace_mode"] === "shared";
+}
+
+/** The flags that take a value: one given last, with no value, is a usage error. */
+const VALUED = new Set(["-r", "--revision", "--agent", "--repo", "--reuse", "-m", "--message"]);
+
 /** The ledger in DIR as JSON, checked as every command checks it. */
 function load(root: string): JsonObject | Refusal {
   const text = readText(join(root, "state.json"));
@@ -93,10 +120,12 @@ function load(root: string): JsonObject | Refusal {
   return ledger instanceof Refusal ? ledger : (raw ?? {});
 }
 
-/** Write the ledger with `workspaces` and these events, stamped, and render the page. */
-function save(machine: Machine, root: string, raw: JsonObject, workspaces: readonly Json[], events: readonly JsonObject[]): Refusal | undefined {
+/** Write the ledger with `workspaces` (when given) and these events, stamped, and render the page. */
+function save(machine: Machine, root: string, raw: JsonObject, workspaces: readonly Json[] | undefined, events: readonly JsonObject[]): Refusal | undefined {
   const stamp = stampOf(machine.now());
-  const next: JsonObject = { ...raw, workspaces: [...workspaces], events: [...(asArray(raw["events"]) ?? []), ...events], updated: stamp };
+  const kept: JsonObject = workspaces === undefined ? raw : { ...raw, workspaces: [...workspaces] };
+  const next: JsonObject = { ...kept, events: [...(asArray(raw["events"]) ?? []), ...events], updated: stamp };
+
   const ledger = decodeLedger(next);
   const fault = ledger instanceof Refusal ? ledger : validate(ledger);
 
@@ -121,18 +150,46 @@ function described(c: Change): string {
 
 // -- add ----------------------------------------------------------------------------------------
 
+/** The line `add` prints for the brief. */
+const BRIEF_LINE = (path: string): string =>
+  `brief: your working copy is ${path}; edit, build and describe your changes there only. The coordinator rebases them onto the stack and prunes the workspace.\n`;
+
 function add(machine: Machine, root: string, raw: JsonObject, argv: readonly string[]): Effect.Effect<number, Refusal, Out> {
   return Effect.gen(function* () {
-    const out = yield* Out;
-    const [base = "@-", a] = option(argv, "-r", "--revision");
+    if (VALUED.has(argv.at(-1) ?? "")) return yield* refuse(USAGE);
+    const [baseGiven, a] = option(argv, "-r", "--revision");
     const [agentGiven, b] = option(a, "--agent");
-    const [repoGiven, rest] = option(b, "--repo");
+    const [repoGiven, c] = option(b, "--repo");
+    const [reuse, rest] = option(c, "--reuse");
     const name = rest[0];
 
     if (rest.length !== 1 || name === undefined) return yield* refuse(USAGE);
 
+    if (shared(raw)) return yield* addShared(root, raw, agentGiven ?? name, repoGiven, baseGiven, reuse);
+
+    if (reuse !== undefined) {
+      if (agentGiven !== undefined || repoGiven !== undefined) return yield* refuse(`--reuse takes the worker as NAME, and the workspace knows its repo: ${USAGE}`);
+
+      return yield* handOver(machine, root, raw, name, reuse, baseGiven);
+    }
+
+    return yield* addFresh(machine, root, raw, name, agentGiven ?? name, repoGiven, baseGiven ?? "@-");
+  });
+}
+
+function addFresh(
+  machine: Machine,
+  root: string,
+  raw: JsonObject,
+  name: string,
+  agent: string,
+  repoGiven: string | undefined,
+  base: string,
+): Effect.Effect<number, Refusal, Out> {
+  return Effect.gen(function* () {
+    const out = yield* Out;
+
     if (!NAME.test(name) || name === "default") return yield* refuse(`a workspace name is letters, digits, '_', '.' or '-', and not 'default': ${JSON.stringify(name)}`);
-    const agent = agentGiven ?? name;
     const main = workspaceRoot(resolvePath(repoGiven ?? process.cwd()), "default");
 
     if (main === undefined) return yield* refuse(`${repoGiven ?? process.cwd()} is not in a jj repo with a default workspace`);
@@ -156,13 +213,190 @@ function add(machine: Machine, root: string, raw: JsonObject, argv: readonly str
     const fault = save(machine, root, raw, [...(asArray(raw["workspaces"]) ?? []), row], [event(machine, raw, agent, "note", `Workspace ${name} for ${agent} at ${path}, on ${described(from)}.`)]);
 
     if (fault !== undefined) return yield* Effect.fail(fault);
+    noRowYet(out, root, raw, agent);
 
-    if (agentRow(raw, agent) === undefined) {
-      out.err(`ws: no worker row ${agent} yet: record it (\`fleet state ${root} agent ${agent} --task T --milestone M ...\`) before you brief and spawn it\n`);
+    for (const idle of reusable(raw, agent)) {
+      out.err(
+        `ws: ${idle.agent}'s workspace ${idle.id} covers ${agent}'s lane and nobody works in it (${idle.agent} ${statusOf(raw, idle.agent) ?? "has no row"}): ` +
+          `reuse it: \`fleet ws ${root} add ${agent} --reuse ${idle.id}\` keeps its setup; a fresh one is for parallel work that could meet, a risky experiment, or a comparison\n`,
+      );
     }
 
     out.out(`workspace ${name} for ${agent} at ${path}, on ${described(from)}\n`);
-    out.out(`brief: your working copy is ${path}; edit, build and describe your changes there only. The coordinator rebases them onto the stack and prunes the workspace.\n`);
+    out.out(BRIEF_LINE(path));
+
+    return 0;
+  });
+}
+
+function noRowYet(out: Out["Service"], root: string, raw: JsonObject, agent: string): void {
+  if (agentRow(raw, agent) !== undefined) return;
+  out.err(`ws: no worker row ${agent} yet: record it (\`fleet state ${root} agent ${agent} --task T --milestone M ...\`) before you brief and spawn it\n`);
+}
+
+/** The recorded workspaces another worker of `worker`'s lane left idle: its holder is no longer at work, and
+ * the holder's lane meets `worker`'s (L7). */
+function reusable(raw: JsonObject, worker: string): Recorded[] {
+  const lane = laneOf(agentRow(raw, worker));
+
+  if (lane.length === 0) return [];
+
+  return recorded(raw).filter((r) => {
+    const status = statusOf(raw, r.agent);
+
+    return r.agent !== worker && (status === undefined || !LIVE.has(status)) && laneOf(agentRow(raw, r.agent)).some((x) => lane.some((y) => lanesMeet(x, y)));
+  });
+}
+
+/** `add WORKER --reuse TARGET`: hand the workspace TARGET names (by its name, else by its worker) to
+ * WORKER, on a fresh change, once its last holder is no longer at work. */
+function handOver(machine: Machine, root: string, raw: JsonObject, worker: string, target: string, base: string | undefined): Effect.Effect<number, Refusal, Out> {
+  return Effect.gen(function* () {
+    const out = yield* Out;
+    const all = recorded(raw);
+    const r = all.find((x) => x.id === target) ?? all.find((x) => x.agent === target);
+
+    if (r === undefined) return yield* refuse(`no active workspace ${target}, by its name or its worker's: \`fleet ws ${root} list\` names them`);
+
+    if (r.agent === worker) return yield* refuse(`workspace ${r.id} is already ${worker}'s`);
+    const status = statusOf(raw, r.agent);
+
+    if (status !== undefined && LIVE.has(status)) {
+      return yield* refuse(`workspace ${r.id} is ${r.agent}'s, and ${r.agent} is ${status}: a workspace changes hands once its worker is done or stopped, never while it works there`);
+    }
+
+    const own = all.find((x) => x.agent === worker);
+
+    if (own !== undefined) return yield* refuse(`${worker} already works in workspace ${own.id} (${own.path}); a worker holds one workspace`);
+
+    if (!isDir(r.path) || !belongs(r.path, r.repo) || resolvePath(workspaceRoot(r.repo, r.id) ?? "") !== resolvePath(r.path)) {
+      return yield* refuse(`${r.path} is no longer jj workspace ${r.id} of ${r.repo}: make ${worker} a fresh one`);
+    }
+
+    const failed = snapshot(r.path);
+
+    if (failed !== undefined) return yield* refuse(`jj could not snapshot ${r.id}: ${failed}`);
+    const tip = changes(r.repo, `${literal(r.id)}@`)?.[0];
+
+    if (tip === undefined) return yield* refuse(`jj could not read workspace ${r.id}'s @`);
+
+    if (base !== undefined) {
+      const at = changes(r.repo, base, false);
+      const onto = at?.[0];
+
+      if (at === undefined || onto === undefined || at.length !== 1) return yield* refuse(`-r ${base} names ${at?.length ?? "no"} commit(s) in ${r.repo}; give one`);
+      const moved = jj(r.path, ["new", onto.commit]);
+
+      if (!moved.ok) return yield* refuse(why(moved));
+    } else if (!tip.empty || tip.description !== "") {
+      // The next worker never edits the last one's change: it starts a new one on top.
+      const moved = jj(r.path, ["new"]);
+
+      if (!moved.ok) return yield* refuse(why(moved));
+    }
+
+    const parent = changes(r.repo, `${literal(r.id)}@-`)?.[0];
+
+    if (parent === undefined || changes(r.repo, `${literal(r.id)}@-`)?.length !== 1) return yield* refuse(`workspace ${r.id}'s @ has no single parent; give -r BASE`);
+    const stamp = stampOf(machine.now());
+    const handovers = [...(asArray(r.row["handovers"]) ?? []), { from: r.agent, at: stamp }];
+    const workspaces = (asArray(raw["workspaces"]) ?? []).map((item) => (asObject(item) === r.row ? { ...r.row, agent: worker, base: parent.change, handovers } : item));
+    const text = `Workspace ${r.id} handed from ${r.agent} (${status ?? "no row"}) to ${worker} at ${r.path}, on ${described(parent)}.`;
+    const fault = save(machine, root, raw, workspaces, [event(machine, raw, worker, "note", text)]);
+
+    if (fault !== undefined) return yield* Effect.fail(fault);
+    noRowYet(out, root, raw, worker);
+    out.out(`workspace ${r.id} for ${worker} at ${r.path}, reused from ${r.agent}, on ${described(parent)}\n`);
+    out.out(BRIEF_LINE(r.path));
+
+    return 0;
+  });
+}
+
+/** `add` in a fleet whose workers share one working copy: no workspace is made; the worker is told the
+ * shared one. */
+function addShared(
+  root: string,
+  raw: JsonObject,
+  worker: string,
+  repoGiven: string | undefined,
+  base: string | undefined,
+  reuse: string | undefined,
+): Effect.Effect<number, Refusal, Out> {
+  return Effect.gen(function* () {
+    const out = yield* Out;
+
+    if (reuse !== undefined || base !== undefined) {
+      return yield* refuse(`this fleet's workers share one working copy (\`set --workspaces shared\`): there is no workspace to ${reuse === undefined ? "base elsewhere" : "hand over"}`);
+    }
+
+    const main = workspaceRoot(resolvePath(repoGiven ?? process.cwd()), "default");
+
+    if (main === undefined) return yield* refuse(`${repoGiven ?? process.cwd()} is not in a jj repo with a default workspace`);
+    noRowYet(out, root, raw, worker);
+    out.out(`shared: ${worker} gets no workspace of its own: this fleet's workers share one working copy, ${main} (\`set --workspaces shared\`)\n`);
+    out.out(
+      `brief: your working copy is ${main}, shared with the fleet's other workers; edit only your lane there and move no history ` +
+        "(no `jj new`, `edit`, `rebase`, `describe`): the coordinator splits the working copy by each worker's lane.\n",
+    );
+
+    return 0;
+  });
+}
+
+// -- split --------------------------------------------------------------------------------------
+
+/** `split WORKER -m MESSAGE`: in a shared fleet, the finished worker's lane files out of the shared working
+ * copy's @, into one change described MESSAGE, below what is left. */
+function split(machine: Machine, root: string, raw: JsonObject, argv: readonly string[]): Effect.Effect<number, Refusal, Out> {
+  return Effect.gen(function* () {
+    const out = yield* Out;
+
+    if (VALUED.has(argv.at(-1) ?? "")) return yield* refuse(USAGE);
+    const [message, a] = option(argv, "-m", "--message");
+    const [repoGiven, rest] = option(a, "--repo");
+    const worker = rest[0];
+
+    if (rest.length !== 1 || worker === undefined || message === undefined || message.trim() === "") return yield* refuse(USAGE);
+
+    if (!shared(raw)) {
+      return yield* refuse("split integrates a fleet whose workers share one working copy; here each worker's changes are in its own workspace: rebase them onto the stack");
+    }
+
+    const row = agentRow(raw, worker);
+    const status = asString(row?.["status"]);
+
+    if (row === undefined) return yield* refuse(`no worker ${worker} in the ledger`);
+
+    if (status !== undefined && LIVE.has(status)) return yield* refuse(`${worker} is ${status}: split its files out once it is done`);
+    const lane = laneOf(row);
+
+    if (lane.length === 0) return yield* refuse(`${worker} has no lane: no file of the working copy is its`);
+    const main = workspaceRoot(resolvePath(repoGiven ?? process.cwd()), "default");
+
+    if (main === undefined) return yield* refuse(`${repoGiven ?? process.cwd()} is not in a jj repo with a default workspace`);
+    // A snapshot first: the files the workers wrote since the last jj command.
+    const status$ = jj(main, ["status"]);
+
+    if (!status$.ok) return yield* refuse(why(status$));
+    const listed = jj(main, ["log", "--no-graph", "-r", "@", "-T", 'self.diff().files().map(|f| f.source().path() ++ "\\n" ++ f.path() ++ "\\n").join("")'], true);
+
+    if (!listed.ok) return yield* refuse(why(listed));
+    const mine = [...new Set(listed.stdout.split("\n").filter((p) => p !== "" && inLane(p, lane)))].sort();
+
+    if (mine.length === 0) return yield* refuse(`nothing in the shared working copy's @ is in ${worker}'s lane (${lane.join(", ")})`);
+    const cut = jj(main, ["--config", 'ui.editor="true"', "split", "-r", "@", "-m", message, ...mine.map((p) => `root-file:${literal(p)}`)]);
+
+    if (!cut.ok) return yield* refuse(why(cut));
+    const made = changes(main, "@-")?.[0];
+    const said = made === undefined ? JSON.stringify(message) : described(made);
+
+    const fault = save(machine, root, raw, undefined, [
+      event(machine, raw, worker, "integrated", `Split ${worker}'s lane out of the shared working copy as ${said} (${mine.length} file(s)).`),
+    ]);
+
+    if (fault !== undefined) return yield* Effect.fail(fault);
+    out.out(`split ${worker}: ${said}: ${mine.join(", ")}\n`);
 
     return 0;
   });
@@ -178,6 +412,12 @@ function list(machine: Machine, root: string, raw: JsonObject): Effect.Effect<nu
   return Effect.gen(function* () {
     const out = yield* Out;
     const all = recorded(raw);
+
+    if (all.length === 0 && shared(raw)) {
+      out.out(`no workspace: this fleet's workers share one working copy; \`fleet ws ${root} split WORKER -m MESSAGE\` integrates each\n`);
+
+      return 0;
+    }
 
     if (all.length === 0) {
       out.out(`no workspace: \`fleet ws ${root} add NAME\` makes one per worker\n`);
@@ -375,6 +615,8 @@ function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
     if (command === "list" && rest.length === 0) return yield* list(machine, root, raw);
 
     if (command === "prune") return yield* prune(machine, root, raw, rest);
+
+    if (command === "split") return yield* split(machine, root, raw, rest);
 
     return yield* refuse(USAGE);
   });

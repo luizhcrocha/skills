@@ -3,7 +3,8 @@
  * coordinator writes only what it alone knows. From the worker's row: the line the brief opens with,
  * the task, its completion criterion, the skill and how a worker loads it (the Skill tool, or the Read
  * tool for a user-invoked skill, read from the skill's own frontmatter), the lane, the workspace
- * `fleet ws add` recorded for it, the step it works and its id on the chat. Refused for a worker the
+ * `fleet ws add` recorded for it (or, in a fleet that shares one working copy, that copy) with the rules of
+ * history that go with it, the step it works and its id on the chat. Refused for a worker the
  * ledger does not have: a worker is recorded, then spawned.
  */
 import { readdirSync } from "node:fs";
@@ -15,10 +16,11 @@ import * as Option from "effect/Option";
 import { Refusal } from "../errors.ts";
 import { exists, readText, resolvePath, SKILL_DIR } from "../files.ts";
 import { Out } from "../io.ts";
-import { asString, parseObject, type JsonObject } from "../json.ts";
+import { asArray, asObject, asString, parseObject, type JsonObject } from "../json.ts";
 import { decodeLedger, type Agent, type Ledger } from "../ledger/model.ts";
 import { activeWorkspaces } from "../ledger/warnings.ts";
 import { readObject } from "../registry.ts";
+import { workspaceRoot } from "../ws/jj.ts";
 import { World } from "../world.ts";
 import { exitOf } from "./exit.ts";
 
@@ -83,6 +85,44 @@ function stepLine(ledger: Ledger, a: Agent): string | undefined {
   return undefined;
 }
 
+/** The Workspace line of a worker with a jj workspace of its own (the default, isolated mode): where it
+ * works, and that history beyond describing its own changes is the coordinator's. */
+function isolatedLine(path: string, from: string | undefined): string {
+  return (
+    `Workspace: ${path}, yours alone. Work there only: absolute paths, or \`cd ${path};\` at the head of each command.` +
+    (from === undefined ? "" : ` It was ${from}'s before you: what ${from} left is under your @, and you build on it.`) +
+    " End with your changes described there (`jj describe`, `jj split` by intent, `jj new` on top); rebasing them onto the stack, " +
+    "bookmarks and pushes are the coordinator's, and so is every other workspace."
+  );
+}
+
+/** The Workspace line of a worker in a fleet that shares one working copy (`set --workspaces shared`): the
+ * old shared-working-copy rules, since every jj command there moves the other workers' files too. */
+function sharedLine(path: string | undefined): string {
+  return (
+    `Workspace: ${path ?? "the coordinator's working copy (the repo's default workspace)"}, the fleet's one working copy, shared with the other workers as they work. ` +
+    `Work there only${path === undefined ? "" : ` (absolute paths, or \`cd ${path};\` at the head of each command)`}, on your lane's files only. ` +
+    "Move no history and describe nothing: no `jj new`, `jj edit`, `jj rebase`, `jj describe` (nor `split`, `squash`, `commit`, `abandon`, `restore`); " +
+    "reading (`jj status`, `jj diff`, `jj log`) is fine. The coordinator splits the working copy by each worker's lane paths into one described " +
+    "change per worker: end your report with one line it can use as your change's description."
+  );
+}
+
+/** Who held workspace `id` before its current worker, when it was handed over (`fleet ws add --reuse`). */
+function handedFrom(raw: JsonObject, id: string): string | undefined {
+  const row = (asArray(raw["workspaces"]) ?? []).map(asObject).find((w) => asString(w?.["id"]) === id && w?.["status"] !== "pruned");
+
+  return asString(asObject(asArray(row?.["handovers"])?.at(-1))?.["from"]);
+}
+
+/** The shared working copy: the repo a recorded workspace names, else the default workspace of the repo the
+ * command runs in. */
+function sharedPath(raw: JsonObject): string | undefined {
+  const named = (asArray(raw["workspaces"]) ?? []).map((w) => asString(asObject(w)?.["repo"])).find((r) => r !== undefined);
+
+  return named ?? workspaceRoot(process.cwd(), "default");
+}
+
 /** A worker's brief as the ledger gives it, and what the coordinator is told beside it. */
 interface Composed {
   readonly brief: string[];
@@ -107,10 +147,12 @@ function compose(root: string, ledger: Ledger, raw: JsonObject, a: Agent): Compo
   );
   const ws = activeWorkspaces(raw).find((w) => w.agent === a.id);
 
-  if (ws !== undefined) {
-    brief.push(`Workspace: ${ws.path}. Work there only: absolute paths, or \`cd ${ws.path};\` at the head of each command.`);
+  if (ledger.workspace_mode === "shared") {
+    if (a.lane.length > 0) brief.push(sharedLine(sharedPath(raw)));
+  } else if (ws !== undefined) {
+    brief.push(isolatedLine(ws.path, handedFrom(raw, ws.id)));
   } else if (a.lane.length > 0) {
-    notes.push(`brief: ${a.id} has a lane and no workspace: \`fleet ws ${root} add ${a.id}\` makes one for a worker that edits code`);
+    notes.push(`brief: ${a.id} has a lane and no workspace: \`fleet ws ${root} add ${a.id}\` makes one for a worker that edits code, or \`--reuse\` hands it the idle one of its lane`);
   }
 
   const step = stepLine(ledger, a);

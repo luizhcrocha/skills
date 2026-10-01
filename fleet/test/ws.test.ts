@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
-import { baseEnv, fleet, readJson, tmp, type Environment } from "./support.ts";
+import { baseEnv, FLEET, fleet, readJson, tmp, type Environment } from "./support.ts";
 
 let base: string;
 
@@ -260,5 +260,185 @@ describe("fleet ws prune", () => {
     expect(ws("prune", "--apply").code).toBe(0);
     expect(jj(repo, "workspace", "list", "-T", 'name ++ "\\n"')).toBe("default\n");
     expect(workspaces()[0]?.["status"]).toBe("pruned");
+  });
+});
+
+/** The ids of the agents, changes and events a test reads. */
+function lastEvent(): JsonObject | undefined {
+  return asObject((asArray(readJson(join(dir, "state.json"))["events"]) ?? []).at(-1));
+}
+
+describe("fleet ws add --reuse: the next worker of a lane takes over its workspace", () => {
+  test("a done worker's workspace is handed over: the row names the new worker, the handover is recorded, and it starts on a new change", () => {
+    state("agent", "a1", "--task", "t", "--milestone", "m1", "--lane", "src/");
+    ws("add", "a1", "--repo", repo);
+    const at = join(base, "repo-a1");
+    mkdirSync(join(at, "src"));
+    writeFileSync(join(at, "src", "x.ts"), "a1's\n");
+    jj(at, "describe", "-m", "a1: x");
+    // left described, with no `jj new` on top: the next worker must not amend it
+    state("agent", "a1", "--status", "done");
+    state("agent", "b1", "--task", "t2", "--milestone", "m1", "--lane", "src/");
+    const ran = ws("add", "b1", "--reuse", "a1");
+    expect(ran.code).toBe(0);
+    expect(ran.stdout).toMatch(new RegExp(`^workspace a1 for b1 at ${at}, reused from a1, on \\w+ a1: x\\n`));
+    expect(ran.stdout).toContain(`brief: your working copy is ${at};`);
+    const [row] = workspaces();
+    expect(row).toMatchObject({ id: "a1", agent: "b1", path: at, status: "active", handovers: [{ from: "a1", at: "2026-01-05T09:00:00+00:00" }] });
+    expect(row?.["base"]).toBe(jj(repo, "log", "--no-graph", "-r", "description(exact:'a1: x\n')", "-T", "change_id").trim());
+    // b1's @ is a new, empty change on top of what a1 left
+    expect(jj(repo, "log", "--no-graph", "-r", "a1@", "-T", 'empty ++ "|" ++ description')).toBe("true|");
+    expect(lastEvent()).toMatchObject({ agent: "b1", kind: "note" });
+    expect(lastEvent()?.["text"]).toMatch(/^Workspace a1 handed from a1 \(done\) to b1 at /);
+    // its brief names the workspace, and who had it
+    const brief = fleet(["brief", dir, "b1"], env);
+    expect(brief.stdout).toContain(`Workspace: ${at}, yours alone.`);
+    expect(brief.stdout).toContain("It was a1's before you: what a1 left is under your @");
+    expect(brief.stderr).not.toContain("no workspace");
+    expect(fleet(["brief", dir, "a1"], env).stdout).not.toContain("Workspace:");
+    // a1 being done no longer warns: the workspace is b1's now, and b1 runs
+    const quiet = fleet(["state", dir, "event", "x", "--no-render"], env);
+    expect(quiet.stderr).not.toContain("still there");
+  });
+
+  test("by its worker's id, and on -r BASE", () => {
+    state("agent", "a1", "--task", "t", "--milestone", "m1", "--status", "stopped");
+    ws("add", "lane-a", "--agent", "a1", "--repo", repo);
+    state("agent", "b1", "--task", "t2", "--milestone", "m1");
+    expect(ws("add", "b1", "--reuse", "a1", "-r", "root()").code).toBe(0);
+    expect(workspaces()[0]).toMatchObject({ id: "lane-a", agent: "b1", base: "z".repeat(32) });
+    expect(jj(repo, "log", "--no-graph", "-r", '"lane-a"@-', "-T", "change_id").trim()).toBe("z".repeat(32));
+  });
+
+  test("refused while its worker still works there, and what else it refuses", () => {
+    state("agent", "a1", "--task", "t", "--milestone", "m1");
+    state("agent", "b1", "--task", "t2", "--milestone", "m1", "--status", "queued");
+    ws("add", "a1", "--repo", repo);
+    const running = ws("add", "b1", "--reuse", "a1");
+    expect([running.code, running.stderr]).toEqual([
+      1,
+      "ws: workspace a1 is a1's, and a1 is running: a workspace changes hands once its worker is done or stopped, never while it works there\n",
+    ]);
+    state("agent", "a1", "--status", "blocked");
+    expect(ws("add", "b1", "--reuse", "a1").stderr).toContain("a1 is blocked");
+    expect(workspaces()[0]?.["agent"]).toBe("a1");
+    expect(ws("add", "b1", "--reuse", "nope").stderr).toContain("ws: no active workspace nope");
+    expect(ws("add", "a1", "--reuse", "a1").stderr).toBe("ws: workspace a1 is already a1's\n");
+    expect(ws("add", "b1", "--reuse", "a1", "--repo", repo).stderr).toContain("--reuse takes the worker as NAME");
+    expect(ws("add", "b1", "--reuse").code).toBe(1);
+    state("agent", "a1", "--status", "done");
+    ws("add", "b1", "--repo", repo);
+    expect(ws("add", "b1", "--reuse", "a1").stderr).toContain("b1 already works in workspace b1");
+  });
+
+  test("a fresh workspace for a lane an idle workspace covers is made, with the warning that suggests reuse", () => {
+    state("agent", "a1", "--task", "t", "--milestone", "m1", "--lane", "src/**");
+    ws("add", "a1", "--repo", repo);
+    state("agent", "c1", "--task", "elsewhere", "--milestone", "m1", "--lane", "docs/");
+    expect(ws("add", "c1", "--repo", repo).stderr).toBe("");
+    state("agent", "b1", "--task", "t2", "--milestone", "m1", "--lane", "src/x.ts");
+    // a1 still runs: nobody may take its workspace, so nothing is suggested
+    expect(ws("add", "b1", "--repo", repo).stderr).toBe("");
+    state("agent", "a1", "--status", "done");
+    state("agent", "b2", "--task", "t3", "--milestone", "m1", "--lane", "src/y.ts");
+    const ran = ws("add", "b2", "--repo", repo);
+    expect(ran.code).toBe(0);
+    expect(ran.stderr).toBe(
+      `ws: a1's workspace a1 covers b2's lane and nobody works in it (a1 done): reuse it: \`fleet ws ${dir} add b2 --reuse a1\` keeps its setup; ` +
+        "a fresh one is for parallel work that could meet, a risky experiment, or a comparison\n",
+    );
+    expect(existsSync(join(base, "repo-b2"))).toBe(true);
+  });
+});
+
+describe("a fleet whose workers share one working copy (set --workspaces shared)", () => {
+  beforeEach(() => {
+    state("set", "--workspaces", "shared");
+  });
+
+  test("ws add makes no workspace: it names the shared working copy", () => {
+    state("agent", "a1", "--task", "t", "--milestone", "m1", "--lane", "src/");
+    const ran = ws("add", "a1", "--repo", repo);
+    expect(ran.code).toBe(0);
+    expect(ran.stdout).toContain(`shared: a1 gets no workspace of its own: this fleet's workers share one working copy, ${repo}`);
+    expect(ran.stdout).toContain(`brief: your working copy is ${repo}, shared with the fleet's other workers;`);
+    expect(existsSync(join(base, "repo-a1"))).toBe(false);
+    expect(jj(repo, "workspace", "list", "-T", 'name ++ "\\n"')).toBe("default\n");
+    expect(readJson(join(dir, "state.json"))["workspaces"]).toBeUndefined();
+    expect(ws("add", "a1", "--reuse", "x").stderr).toContain("there is no workspace to hand over");
+    expect(ws("list").stdout).toContain("this fleet's workers share one working copy");
+  });
+
+  test("the brief gives the shared working copy's rules: no history moves, nothing described, the coordinator splits by lane", () => {
+    state("agent", "a1", "--task", "t", "--milestone", "m1", "--lane", "src/");
+    state("agent", "r1", "--task", "read", "--milestone", "m1");
+    const ran = Bun.spawnSync([FLEET, "brief", dir, "a1"], { cwd: repo, env, stdout: "pipe", stderr: "pipe" });
+    const out = ran.stdout.toString();
+    expect(out).toContain(`Workspace: ${repo}, the fleet's one working copy, shared with the other workers as they work.`);
+    expect(out).toContain("Move no history and describe nothing: no `jj new`, `jj edit`, `jj rebase`, `jj describe`");
+    expect(out).toContain("The coordinator splits the working copy by each worker's lane paths into one described change per worker");
+    expect(out).not.toContain("yours alone");
+    expect(ran.stderr.toString()).not.toContain("no workspace");
+    // a worker with no lane edits nothing: no workspace line
+    expect(fleet(["brief", dir, "r1"], env).stdout).not.toContain("Workspace:");
+  });
+
+  test("a running worker whose lane meets another live one's is refused, not warned", () => {
+    state("agent", "a1", "--task", "t", "--milestone", "m1", "--lane", "src/**");
+    const refused = fleet(["state", dir, "agent", "a2", "--task", "t", "--milestone", "m1", "--lane", "src/x.ts", "--no-render"], env);
+    expect([refused.code, refused.stdout]).toEqual([1, ""]);
+    expect(refused.stderr).toContain("state: a2's lane overlaps a1's (running: src/x.ts), and this fleet's workers share one working copy");
+    state("agent", "a2", "--task", "t", "--milestone", "m1", "--lane", "src/x.ts", "--status", "queued");
+    expect(fleet(["state", dir, "agent", "a2", "--status", "running", "--no-render"], env).code).toBe(1);
+    state("agent", "a1", "--status", "done");
+    expect(fleet(["state", dir, "agent", "a2", "--status", "running", "--no-render"], env).code).toBe(0);
+  });
+
+  test("integrating is a jj split per worker: each lane's files become one described change", () => {
+    state("agent", "a1", "--task", "t", "--milestone", "m1", "--lane", "src/");
+    state("agent", "a2", "--task", "t", "--milestone", "m1", "--lane", "docs/*.md");
+    // both write into the one working copy at once
+    mkdirSync(join(repo, "src"));
+    mkdirSync(join(repo, "docs"));
+    writeFileSync(join(repo, "src", "a.ts"), "a1\n");
+    writeFileSync(join(repo, "docs", "b.md"), "a2\n");
+    writeFileSync(join(repo, "stray.txt"), "nobody's\n");
+    const early = ws("split", "a1", "-m", "a1: the parser", "--repo", repo);
+    expect([early.code, early.stderr]).toEqual([1, "ws: a1 is running: split its files out once it is done\n"]);
+    state("agent", "a1", "--status", "done");
+    state("agent", "a2", "--status", "done");
+    const one = ws("split", "a1", "-m", "a1: the parser", "--repo", repo);
+    expect(one.code).toBe(0);
+    expect(one.stdout).toMatch(/^split a1: \w+ a1: the parser: src\/a\.ts\n$/);
+    expect(lastEvent()).toMatchObject({ agent: "a1", kind: "integrated" });
+    expect(ws("split", "a2", "-m", "a2: the docs", "--repo", repo).code).toBe(0);
+    const files = 'description.first_line() ++ ":" ++ self.diff().files().map(|f| f.path()).join(",") ++ "\\n"';
+    expect(jj(repo, "log", "--no-graph", "-r", "@-- | @- | @", "-T", files)).toBe(":stray.txt\na2: the docs:docs/b.md\na1: the parser:src/a.ts\n");
+    expect(ws("split", "a1", "-m", "again", "--repo", repo).stderr).toBe("ws: nothing in the shared working copy's @ is in a1's lane (src/)\n");
+    expect(readJson(join(dir, "state.json"))["workspaces"]).toBeUndefined();
+  });
+
+  test("split is a shared fleet's: an isolated one integrates by rebasing", () => {
+    state("set", "--workspaces", "isolated");
+    state("agent", "a1", "--task", "t", "--milestone", "m1", "--lane", "src/", "--status", "done");
+    expect(ws("split", "a1", "-m", "x", "--repo", repo).stderr).toContain("split integrates a fleet whose workers share one working copy");
+    expect(ws("split", "a1", "--repo", repo).code).toBe(1);
+  });
+});
+
+describe("prune is part of integrating", () => {
+  test("after the worker's change is rebased into the stack and it is done, prune --apply removes its workspace and the warning stops", () => {
+    state("agent", "a1", "--task", "t", "--milestone", "m1", "--lane", "one.txt");
+    ws("add", "a1", "--repo", repo);
+    const at = join(base, "repo-a1");
+    work(at, "one.txt", "a1: one");
+    // Integrate: rebase its changes under the coordinator's @, the gates pass, mark it done.
+    jj(repo, "rebase", "-r", "(::a1@ ~ ::@) ~ a1@", "-B", "@");
+    const done = fleet(["state", dir, "agent", "a1", "--status", "done", "--no-render"], env);
+    expect(done.stderr).toContain("then prune it (`fleet ws <dir> prune`, a dry run, then --apply), or hand it to the next worker of its lane (`fleet ws <dir> add <next> --reuse a1`)");
+    expect(ws("prune", "--apply").stdout).toBe(`pruned a1: ${at} deleted\n`);
+    expect(existsSync(at)).toBe(false);
+    expect(fleet(["state", dir, "event", "x", "--no-render"], env).stderr).not.toContain("still there");
+    expect(jj(repo, "log", "--no-graph", "-r", "@-", "-T", "description")).toBe("a1: one\n");
   });
 });

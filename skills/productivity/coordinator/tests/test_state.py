@@ -418,6 +418,50 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class SharedWorkingCopyTest(Fleet):
+    """`set --workspaces shared`: the workers share one working copy, so lanes that meet are refused, not warned."""
+
+    def test_the_mode_is_recorded_shown_and_checked(self):
+        self.assertNotIn("workspace_mode", self.state())
+        self.ok("set", "--workspaces", "shared")
+        self.assertEqual(self.state()["workspace_mode"], "shared")
+        self.assertTrue(self.run_cli("show").stdout.startswith("p [running, shared working copy] "))
+        self.assertIn("[--workspaces isolated|shared]", self.run_cli("show").stdout)
+        self.ok("set", "--workspaces", "isolated")
+        self.assertEqual(self.state()["workspace_mode"], "isolated")
+        self.assertTrue(self.run_cli("show").stdout.startswith("p [running] "))
+        self.assertEqual(self.run_cli("set", "--workspaces", "bogus").returncode, 2)
+        data = self.state() | {"workspace_mode": "bogus"}
+        (self.root / "state.json").write_text(json.dumps(data))
+        self.assertIn("render_dashboard: workspace_mode 'bogus' not in ['isolated', 'shared']", self.refused("event", "x"))
+
+    def test_a_running_lane_that_meets_a_live_one_is_refused(self):
+        self.ok("set", "--workspaces", "shared")
+        self.ok("agent", "a1", "--task", "t", "--milestone", "m1", "--lane", "src/usage/**")
+        result = self.run_cli("agent", "a2", "--task", "t", "--milestone", "m1", "--lane", "src/usage/x.ts")
+        self.assertEqual((result.returncode, result.stdout), (1, ""))
+        self.assertEqual(result.stderr, "state: a2's lane overlaps a1's (running: src/usage/x.ts), and this fleet's workers share one working copy "
+                                        "(`set --workspaces shared`), where two workers on the same files overwrite each other: record it "
+                                        "`--status queued` until that worker is done, or give the task to that worker.\n")
+        self.assertEqual([a["id"] for a in self.state()["agents"]], ["a1"])
+        self.ok("agent", "a2", "--task", "t", "--milestone", "m1", "--lane", "src/usage/x.ts", "--status", "queued")
+        self.ok("agent", "a1", "--status", "blocked")
+        self.assertIn("overlaps a1's (blocked", self.refused("agent", "a2", "--status", "running"))
+        self.ok("agent", "a1", "--status", "done")
+        said = self.run_cli("agent", "a2", "--status", "running")
+        self.assertEqual(said.returncode, 0)
+        self.assertNotIn("overlaps", said.stderr)
+
+    def test_disjoint_lanes_run_together_and_isolated_fleets_only_warn(self):
+        self.ok("set", "--workspaces", "shared")
+        self.ok("agent", "a1", "--task", "t", "--milestone", "m1", "--lane", "src/*.ts")
+        self.assertNotIn("overlaps", self.run_cli("agent", "a2", "--task", "t", "--milestone", "m1", "--lane", "src/a/b.ts").stderr)
+        self.ok("set", "--workspaces", "isolated")
+        said = self.run_cli("agent", "a3", "--task", "t", "--milestone", "m1", "--lane", "src/**")
+        self.assertEqual(said.returncode, 0)
+        self.assertIn("state: a3's lane overlaps a1's (running: src/**); a2's (running: src/**).", said.stderr)
+
+
 class StageFiveRulesTest(Fleet):
     """The rules the skills asked a coordinator or a manager to remember, kept by the CLI (fleet/RULES.md)."""
 

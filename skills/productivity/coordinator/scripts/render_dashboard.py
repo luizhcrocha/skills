@@ -25,6 +25,7 @@ REQUIRED = {
 STATUSES = {"running", "paused", "blocked", "done"}
 AGENT_STATUSES = {"queued", "running", "blocked", "done", "failed", "stopped"}
 STEP_STATUSES = {"done", "current", "pending", "blocked"}
+WORKSPACE_MODES = {"isolated", "shared"}  # a jj workspace per worker (the default), or one working copy they share
 RESERVED = {"user", "coordinator"}  # the two chat participants that are not workers
 MENTIONABLE = re.compile(r"[A-Za-z0-9_.-]+")
 
@@ -42,6 +43,8 @@ def validate(state: dict) -> None:
             fail(f"'{key}' should be {typ.__name__}")
     if state["status"] not in STATUSES:
         fail(f"status '{state['status']}' not in {sorted(STATUSES)}")
+    if "workspace_mode" in state and state["workspace_mode"] not in WORKSPACE_MODES:
+        fail(f"workspace_mode '{state['workspace_mode']}' not in {sorted(WORKSPACE_MODES)}")
     ids = set()
     for a in state["agents"]:
         for k in ("id", "name", "task", "status", "lane", "milestone"):

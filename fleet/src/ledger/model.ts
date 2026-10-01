@@ -180,6 +180,9 @@ export interface Ledger {
   events: LedgerEvent[];
   links?: Link[];
   kept?: Kept[];
+  /** How the fleet's workers share the repository: `shared` (one working copy) or `isolated` (a jj workspace
+   * each, the default when absent). `set --workspaces` writes it. */
+  workspace_mode?: string;
 }
 
 /** The keys a row came with, in their order, and the ones this model does not know. */
@@ -716,6 +719,7 @@ export const LEDGER_KEYS = [
   "events",
   "links",
   "kept",
+  "workspace_mode",
 ] as const;
 
 const REQUIRED: ReadonlyArray<readonly [string, "str" | "list"]> = [
@@ -762,6 +766,7 @@ export function decodeLedger(object: JsonObject): Ledger | Refusal {
     decisions: f.rows("decisions", readDecision),
     links: f.rows("links", readLink),
     kept: f.rows("kept", readKept),
+    workspace_mode: f.optStr("workspace_mode"),
   });
   const done = f.done(row, LEDGER_KEYS);
 

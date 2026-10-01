@@ -26,6 +26,9 @@ export const DECISION_STATUSES = ["open", "decided", "withdrawn"] as const;
 /** A grilling question's statuses. */
 export const QUESTION_STATUSES = ["open", "answered", "dropped"] as const;
 
+/** How a fleet's workers share the repository (`set --workspaces`): a jj workspace each, or one working copy. */
+export const WORKSPACE_MODES = ["isolated", "shared"] as const;
+
 /** Who looks at a decision first. */
 export const ASKS = ["user", "manager"] as const;
 
@@ -55,6 +58,11 @@ function controlled(name: string): boolean {
 /** The first fault in `ledger`, or undefined when it holds (the defaults are then filled). */
 export function validate(ledger: Ledger): Refusal | undefined {
   if (!has(STATUSES, ledger.status)) return invalid(`status '${ledger.status}' not in ${list(STATUSES)}`);
+
+  if (ledger.workspace_mode !== undefined && !has(WORKSPACE_MODES, ledger.workspace_mode)) {
+    return invalid(`workspace_mode '${ledger.workspace_mode}' not in ${list(WORKSPACE_MODES)}`);
+  }
+
   const ids = new Set<string>();
 
   for (const a of ledger.agents) {

@@ -21,7 +21,7 @@ import * as commands from "../ledger/commands.ts";
 import { ledgerText, parseLedger, type Ledger } from "../ledger/model.ts";
 import { nextStepId, number } from "../ledger/numbers.ts";
 import { showLines } from "../ledger/show.ts";
-import { AGENT_STATUSES, ASKS, KINDS, STATUSES, STEP_STATUSES, validate } from "../ledger/validate.ts";
+import { AGENT_STATUSES, ASKS, KINDS, STATUSES, STEP_STATUSES, validate, WORKSPACE_MODES } from "../ledger/validate.ts";
 import { readChat } from "../chat/store.ts";
 import { activeWorkspaces, leftOpen, offPolicy, overlapping, staleNow, staleRows, unpruned, unrecorded } from "../ledger/warnings.ts";
 import { readObject } from "../registry.ts";
@@ -46,7 +46,7 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
   {
     name: "set",
     positionals: [],
-    options: [opt.value("--status", { choices: STATUSES }), opt.value("--now"), opt.value("--goal")],
+    options: [opt.value("--status", { choices: STATUSES }), opt.value("--now"), opt.value("--goal"), opt.value("--workspaces", { choices: WORKSPACE_MODES })],
   },
   { name: "milestone", positionals: ID, options: [opt.value("--title")] },
   {
@@ -300,7 +300,7 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<nu
 
     const seen = result ?? ledger;
     const settingDone = cmd === "set" && args.str("status") === "done";
-    const running = cmd === "agent" && (args.list("lane") !== undefined || args.str("status") === "running" || (args.str("task") ?? "") !== "");
+    const running = cmd === "agent" && commands.startsLane(args);
 
     const warnings = [
       cmd === "init" ? undefined : deafWarning(machine, root),

@@ -18,7 +18,7 @@ import type { Machine } from "../world.ts";
 import { dropKey, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, milestoneOfStep, nextStepId } from "./numbers.ts";
 import { ID, KINDS } from "./validate.ts";
-import { closedNamed, isLive, UNFINISHED } from "./warnings.ts";
+import { closedNamed, isLive, sharedOverlap, UNFINISHED } from "./warnings.ts";
 
 /** One run of one ledger command. */
 export interface Run {
@@ -131,17 +131,20 @@ export function init(already: boolean, run: Run): Effect.Effect<Ledger, Refusal>
   return Effect.succeed({ role: "manager", ...base });
 }
 
-/** `set`: the fleet's status, Now line or goal. */
+/** `set`: the fleet's status, Now line, goal, or how its workers share the repository (`--workspaces`). */
 export function set(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
   const status = run.args.str("status");
   const now = run.args.str("now");
   const goal = run.args.str("goal");
+  const workspaces = run.args.str("workspaces");
 
   if (status !== undefined) ledger.status = status;
 
   if (now !== undefined) ledger.now = now;
 
   if (goal !== undefined) ledger.goal = goal;
+
+  if (workspaces !== undefined) ledger.workspace_mode = workspaces;
 
   if (now !== undefined) {
     ledger.now_at = stamp(run);
@@ -501,6 +504,7 @@ export function agent(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
       const stepId = args.str("step");
 
       if (given(stepId)) yield* setStep(ledger, stepId, "current", fresh.id);
+      yield* refuseSharedOverlap(ledger, fresh.id, args);
       run.say(
         `recorded ${fresh.id} (${fresh.name}); its brief opens with: Read ${join(run.root, "brief.md")} first; your id is ${fresh.id}.`,
       );
@@ -592,8 +596,24 @@ export function agent(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
       });
     }
 
+    yield* refuseSharedOverlap(ledger, a.id, args);
+
     return ledger;
   });
+}
+
+/** Whether an `agent` command puts the worker's lane to work: it gives `--lane`, `--task` or `--status running`.
+ * Only such a command is checked for lanes that meet (the warning, and the refusal in a shared fleet). */
+export function startsLane(args: Args): boolean {
+  return args.list("lane") !== undefined || args.str("status") === "running" || (args.str("task") ?? "") !== "";
+}
+
+/** In a fleet that shares one working copy, a running worker whose lane meets another live worker's is
+ * refused: there, two workers on the same files overwrite each other's edits as they make them. */
+function refuseSharedOverlap(ledger: Ledger, id: string, args: Args): Step$ {
+  const reason = startsLane(args) ? sharedOverlap(ledger, id) : undefined;
+
+  return reason === undefined ? Effect.void : refuse(reason);
 }
 
 // -- roadblocks -----------------------------------------------------------------------------------

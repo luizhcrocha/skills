@@ -97,9 +97,11 @@ empty `roadmap`, `agents`, `roadblocks`, `decisions`, `events`; `role: "manager"
 role is manager, whose roadmap starts with the landing queue, milestone `landings` ("Landings and
 deploys"). Refused when `state.json` exists. Prints no warnings.
 
-**set** `[--status running|paused|blocked|done] [--now TEXT] [--goal G]`: sets what is given.
+**set** `[--status running|paused|blocked|done] [--now TEXT] [--goal G] [--workspaces isolated|shared]`: sets what is given.
 `--now` stamps `now_at`, even with the same words, and warns about each decision the text
-[names by number](#warnings) that is closed.
+[names by number](#warnings) that is closed. `--workspaces` writes `workspace_mode`: `isolated` (a jj
+workspace per worker that edits code; the default, also when the key is absent) or `shared` (the workers
+share one working copy, the repo's default workspace; see [Workspaces](#workspaces-fleet-ws)).
 
 **milestone** `ID [--title T]`: new: needs `--title`, appended with `steps: []`. Known: `--title`
 renames it. Milestones are never removed.
@@ -137,6 +139,13 @@ renames it. Milestones are never removed.
   statuses leave the step's status alone, open-25). `--log` logs an event whose kind follows the
   status (blocked → blocked, done or failed → reported, stopped → note, else note), important
   when `--important` or the status is failed.
+- **Lanes that meet in a shared working copy are refused.** In a fleet with `workspace_mode: "shared"`, an
+  `agent` command that gives `--lane`, `--task` or `--status running` and leaves its row running is refused
+  when its lane meets a running or blocked worker's (the rule of [Warnings](#warnings) 6, L7): `state: a2's
+  lane overlaps a1's (running: src/x.ts), and this fleet's workers share one working copy (\`set --workspaces
+  shared\`), where two workers on the same files overwrite each other: record it \`--status queued\` until
+  that worker is done, or give the task to that worker.` Checked last, after the step and the log; a
+  blocked worker counts, since its edits are still in the copy. An isolated fleet warns instead.
 - A model outside the policy (Opus, Sonnet, Fable; `haiku` is the one `--model` takes) is recorded
   and warned about, see [Warnings](#warnings) (L3). The page marks it on the worker's row.
 - A worker left done whose report or log reads as unfinished (refused, parked, not met, unmet,
@@ -259,7 +268,7 @@ known. New: needs url and title, kind defaults to dev, `since` = now, logs `Page
 `Dev server <title>: <url>` tagged with agent and decision. Known: fields given are set.
 
 **show**: prints the ledger and the command cheat sheet; writes nothing. Pinned lines:
-`<project> [<status>(, manager)] <now>`; per milestone `  <id> <title> (<done>/<steps>)` and
+`<project> [<status>(, manager)(, shared working copy)] <now>`; per milestone `  <id> <title> (<done>/<steps>)` and
 per step `    <id:<6> <status:<8> <title>( @agent)`; per worker
 `  agent <id:<16> <status:<8> <skill:<15> <model:<6> <tokens:>8> tok  lane=<a,b or ->( round N)`;
 per roadblock, decision, link and kept note a line with its number; then
@@ -288,8 +297,10 @@ decisions[]   {id, ref, kind, title, question, why, blocking, agent, options[]: 
 events[]      {at, agent|null, kind, text, important?: true, decision?}   append-only
 links[]?      {id, ref, url, title, kind (dev|page), decision, agent, note, since}
 kept[]?       {id, text, at}
-workspaces[]? {id (the jj workspace's name), agent, path, repo (the default workspace's root),
-               base (change id), added, status (active|pruned), pruned?}   written by `fleet ws` only
+workspace_mode? "isolated" | "shared"   `set --workspaces`; absent reads as isolated
+workspaces[]? {id (the jj workspace's name), agent (its worker now), path, repo (the default workspace's root),
+               base (change id), added, status (active|pruned), pruned?,
+               handovers[]? {from (the worker that held it before), at}}   written by `fleet ws` only
 ```
 
 **Text on the page.** The page shows a decision's `question`, `why`, `reason`, its options'
@@ -304,10 +315,12 @@ the text as given; the format is the page's (`fleet/page/src/text.ts`).
 
 `workspaces` is a key neither state.py nor `fleet state` knows: both keep it as it is (Python
 round-trips the whole object, TypeScript keeps a ledger's unknown keys in place), and the page's view
-passes it through. No oracle trace has it.
+passes it through. No oracle trace has it. `workspace_mode` is both implementations' (`set
+--workspaces`, the refusal above, `show`, validation), pinned by the `workspaces` trace and the model.
 
 Validation (step 8, every write) requires `project, goal, status, now, started` as strings and
-`roadmap, agents, roadblocks, events` as lists, the statuses above, the agent, step, roadblock and
+`roadmap, agents, roadblocks, events` as lists, the statuses above, `workspace_mode`, when present,
+`isolated` or `shared` (`render_dashboard: workspace_mode 'both' not in ['isolated', 'shared']`), the agent, step, roadblock and
 event keys listed, and the decision rules above. It fills the defaults it checks (agents' tokens,
 duration_ms, skill, model, brief, report, rounds; decisions' optional fields), so a hand-written or
 older ledger comes out complete after one command.
@@ -359,13 +372,15 @@ After the handler succeeds, before validation, on stderr, in this order (not for
    plain path covers itself and everything under it; in a glob `*`, `?` and `[...]` stay in one
    segment, `**` as a whole segment spans any number of them, `{a,b}` is either. So `src/*.ts` and
    `src/a/b.ts` don't meet; `src/**` and `src/a/b.ts` do, and so do `src/x.ts` and `src/*.ts`.
-   Decided on the product of the two globs' automata (`lanes.py`, `fleet/src/ledger/lanes.ts`).
+   Decided on the product of the two globs' automata (`lanes.py`, `fleet/src/ledger/lanes.ts`). In a
+   fleet whose workers share one working copy the same meeting is refused instead (`agent`, above).
 7. **A model outside the policy** (`state: a1 is recorded on haiku, outside the model policy (opus,
    sonnet, fable): spawning it on haiku needs the user's OK.`) on an `agent` command that gives such
    a `--model` (L3).
 8. *TypeScript only* (Python's ledger has no `workspaces`, and no trace does): **a done worker's
    workspace not pruned** (`state: a1's workspace a1 still there though its worker is done: bring its
-   changes into the stack, then \`fleet ws <dir> prune\` (a dry run, then --apply).`) on every command,
+   changes into the stack, then prune it (\`fleet ws <dir> prune\`, a dry run, then --apply), or hand it
+   to the next worker of its lane (\`fleet ws <dir> add <next> --reuse a1\`).`), naming both ways out, on every command,
    and on `set --status done` **the workspaces left** (`state: the fleet is done with workspace(s) a1
    not pruned: ...`).
 
@@ -700,7 +715,11 @@ hook: a broken `chat.jsonl` or ledger is skipped, an error is logged.
 
 ## Workspaces (`fleet ws`)
 
-One jj workspace per worker that edits code; the coordinator's own (`default`) is the stack.
+A worker that edits code works in a jj workspace; the coordinator's own (`default`) is the stack. A new
+workspace pays its own setup (dependencies, a dev shell, build caches), so the policy (Luiz, 2026-10-01)
+makes as few as the work allows: sequential work **reuses** a lane's workspace (the default); a **fresh**
+one is for parallel workers whose files could meet, risky experiments, and arena or swarm comparisons; and
+a fleet may opt into one **shared** working copy (`workspace_mode: "shared"`).
 
 - `fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH]`: `jj workspace add <repo>-NAME -r
   <BASE's commit> --name NAME`, beside the default workspace of the repo `--repo` (else the cwd) is
@@ -709,8 +728,42 @@ One jj workspace per worker that edits code; the coordinator's own (`default`) i
   else NAME), path, repo, base, added, status: active}`, logs a note, renders the page, and prints the
   path and the line for the brief.
   A worker the ledger has no row for yet is warned about (`ws: no worker row a9 yet: record it ...`):
-  a worker is recorded, then briefed and spawned.
-- `fleet ws DIR list`: per active workspace, its worker and the worker's status and last-seen, then
+  a worker is recorded, then briefed and spawned. A recorded, unpruned workspace whose worker is not
+  running, queued or blocked and whose lane meets the new worker's (L7) is named, and the fresh one is
+  still made: `ws: a1's workspace a1 covers b2's lane and nobody works in it (a1 done): reuse it: \`fleet
+  ws DIR add b2 --reuse a1\` keeps its setup; a fresh one is for parallel work that could meet, a risky
+  experiment, or a comparison`.
+- `fleet ws DIR add WORKER --reuse WORKSPACE|WORKER [-r BASE]`: hands the active workspace named
+  WORKSPACE (else the one whose worker is WORKER) to WORKER. Refused: none found; it is WORKER's already;
+  its worker is running, queued or blocked (`ws: workspace a1 is a1's, and a1 is running: a workspace
+  changes hands once its worker is done or stopped, never while it works there`); WORKER already holds
+  one; its directory is no longer that jj workspace of that repo; `--agent` or `--repo` given. The
+  workspace is snapshotted (a stale one updated first), then WORKER gets a change of its own: `jj new
+  BASE` when `-r` is given, else `jj new` on top of what the last holder left unless its `@` is empty and
+  undescribed, so the next worker never amends the last one's change. The row's `agent` becomes WORKER,
+  `base` the new `@`'s parent, and `handovers` gains `{from: <the last holder>, at}`; a note event
+  (`Workspace a1 handed from a1 (done) to b1 at PATH, on <change>.`), the page rendered, and the same two
+  lines printed (`workspace a1 for b1 at PATH, reused from a1, on <change>`, then the brief line).
+- **Shared mode** (`fleet state DIR set --workspaces shared`; isolated is the default). The workers share
+  the coordinator's own working copy, the repo's `default` workspace, rather than one named shared
+  workspace: it is already set up, which is the point of the mode (a named one would pay the setup once
+  more and leave two working copies to keep in step), and `jj split` integrates on it directly. Only the
+  coordinator moves history; the cost is that its own edits and history moves wait while workers write.
+  There `fleet ws DIR add NAME [--agent ID] [--repo PATH]` makes and records nothing: it prints `shared:
+  a1 gets no workspace of its own: this fleet's workers share one working copy, <root> ...` and the brief
+  line for it (`-r` and `--reuse` are refused: there is no workspace to base or hand over); `agent` refuses
+  a running lane that meets a live one ([state's agent](#commands)); `fleet brief` gives the shared-copy
+  rules. Choose it for a repo whose setup is expensive and lanes that are truly disjoint.
+- `fleet ws DIR split WORKER -m MESSAGE [--repo PATH]`: shared mode's integration. Refused in an isolated
+  fleet, for a worker with no row, one still running, queued or blocked, one with no lane, and when
+  nothing in the default workspace's `@` is in its lane. After a snapshot, the files `@` changes (a
+  rename's both paths) that the worker's lane holds (the lane rule of [Warnings](#warnings) 6) go into
+  `jj split -r @ -m MESSAGE root-file:"<path>"...` (with `ui.editor` set to `true`, so jj never waits on an
+  editor): one described change below what is left in `@`, which keeps its change and description. The
+  files on disk do not change, so workers still running carry on. Logs an `integrated` event (`Split a1's
+  lane out of the shared working copy as <change> (N file(s)).`), prints `split a1: <change>: <files>`.
+  One split per finished worker gives one described change per worker, in the order they were split.
+- `fleet ws DIR list`: per active workspace (in a shared fleet with none, a line saying so), its worker and the worker's status and last-seen, then
   its `@` (empty, conflicted) and what it holds ahead of the stack, and the files those changes touch
   that are in none of the worker's lane entries (`outside its lane (src/): README: stop it ...`; an
   entry holds what it covers by the lane rule of [Warnings](#warnings) 6: a glob's `*` stays in its
@@ -740,9 +793,17 @@ rule's disposition are in [RULES.md](RULES.md)). Beside the refusals and warning
   "done when" dropped), `Skill:` (a skill of this plugin whose SKILL.md says
   `disable-model-invocation: true` is read with the Read tool, by its path, since the Skill tool
   refuses it to a worker; any other is called with the Skill tool as `<plugin>:<skill>`; `none`
-  prints no line), `Lane:`, `Workspace:` (the active `workspaces[]` row of the worker), `Step:` (the
-  worker's current step) and `Chat:`. On stderr, for the coordinator: a missing completion criterion,
-  a lane with no workspace, and the model to spawn it on with the `--task-id` to record after. A worker
+  prints no line), `Lane:`, `Workspace:`, `Step:` (the worker's current step) and `Chat:`. `Workspace:`
+  carries the rules of history that go with the fleet's mode, so `assets/brief.md` says them once for both:
+  in an isolated fleet, the active `workspaces[]` row of the worker, `yours alone`, who held it before when
+  it was handed over (`It was a1's before you: what a1 left is under your @`), and that the worker ends
+  with its changes described there while rebasing, bookmarks and pushes are the coordinator's; in a shared
+  fleet, for a worker with a lane, the shared working copy (a recorded workspace's repo, else the default
+  workspace of the repo the command runs in), that the worker edits only its lane there, moves no history
+  and describes nothing (no `jj new`, `jj edit`, `jj rebase`, `jj describe`, nor `split`, `squash`,
+  `commit`, `abandon`, `restore`), and that the coordinator splits the copy by lane paths into one
+  described change per worker. On stderr, for the coordinator: a missing completion criterion, a lane
+  with no workspace (isolated only), and the model to spawn it on with the `--task-id` to record after. A worker
   with no row is refused: it is recorded first. Matched by id, then by name.
 - `fleet turn [DIR]` says whether the fleet holds the landing turn: the manager's `landings` step whose
   agent is the fleet's registry name is current. Exit 0 when it does, when no manager is served (the
@@ -809,7 +870,9 @@ recommendation attached.
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |
 | the plugin's hook (`fleet_listen_guard`, `fleet_chat_nudge`) | nothing in DIR; the session's `fleet-guard` and `fleet-nudge` state in the plugin's data folder |
-| `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / deleted |
+| `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / deleted (a shared fleet's `add` writes nothing) |
+| `fleet ws add --reuse` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; a new change in the workspace (`jj new`) |
+| `fleet ws split` | `DIR/state.json` (`events`, `updated`), `DIR/index.html`; the default workspace's `@` split in two |
 
 ## Oracle traces
 
@@ -864,7 +927,8 @@ Stage 2 runs `run.py check` on each trace in `oracle/traces/` with
 or sets `FLEET_ORACLE_IMPL='{"state": "fleet state", "chat": "fleet chat", "fleets": "fleet fleets", "subst": {"<its dir>": "$SKILL"}}'`
 for `test_corpus.py` and `test_model.py`. The corpus: `ledger-lifecycle`, `decisions`, `hold`,
 `plan-and-grill`, `chat`, `manager` (written by hand from the tests), `manager-news` (the manager's
-`--fleets` watch and `fleets waiting`), `emptied` (open-7),
+`--fleets` watch and `fleets waiting`), `emptied` (open-7), `workspaces` (`set --workspaces`, the shared
+fleet's refusal of lanes that meet, the isolated fleet's warning, `show`, validation, a render),
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each
 hand-written trace, the same steps with every state command rendering, plus `render-page` (a
 session's scratchpad with its transcript, links, markup and U+2028 in the text, unread chat, a
@@ -876,7 +940,8 @@ new implementation once it's the reference. Either way, review the diff.
 
 `oracle/test_model.py` drives 25 random sequences of 60 steps (a fresh seed each run;
 `FLEET_MODEL_SEED`, `FLEET_MODEL_SEQS`, `FLEET_MODEL_STEPS`) through state.py and chat.py, with a
-model: milestones and their step order, workers (status, milestone, rounds, name, tokens),
+model: milestones and their step order, workers (status, milestone, rounds, name, tokens, lane), the
+fleet's `workspace_mode` (two sequences in five start shared),
 decisions (kind, status, number, place, options, recommendation, hold), roadblocks, kept notes, links,
 the event count, and the chat's messages. The clock moves 0-25 minutes per step. Checked after
 every step:
@@ -887,7 +952,8 @@ every step:
 - stderr is exactly the warnings the model expects: the stale Now line with its age in minutes,
   live rows in a paused or done fleet, a chat nobody reads (computed on the ledger before the
   command), a Now line naming a closed decision, an answer on the page not recorded, decisions left
-  open by `set --status done`; on a validation refusal, those plus the reason, and nothing on stdout;
+  open by `set --status done`, lanes that meet in an isolated fleet (a refusal in a shared one); on a
+  validation refusal, those plus the reason, and nothing on stdout;
 - `show`'s first line, milestone lines, worker lines, decision lines and event count, against
   `state.json`;
 - `inbox`'s messages against the model's open messages; `chat.jsonl` against the model's;

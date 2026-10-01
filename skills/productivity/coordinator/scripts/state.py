@@ -2,7 +2,7 @@
 """Record fleet events in the dashboard state and re-render, one command per event.
 
     state.py DIR init --project P --goal G [--now TEXT] [--role manager]
-    state.py DIR set [--status S] [--now TEXT] [--goal G]
+    state.py DIR set [--status S] [--now TEXT] [--goal G] [--workspaces isolated|shared]
     state.py DIR milestone ID --title T
     state.py DIR step ID [--milestone M --title T] [--status S] [--agent A]
                          [--before STEP | --after STEP] [--remove REASON]
@@ -60,6 +60,7 @@ import spend  # noqa: E402
 STATUSES = sorted(render_dashboard.STATUSES)
 AGENT_STATUSES = sorted(render_dashboard.AGENT_STATUSES)
 STEP_STATUSES = sorted(render_dashboard.STEP_STATUSES)
+WORKSPACE_MODES = sorted(render_dashboard.WORKSPACE_MODES)
 # The plugin's fleet CLI, which every printed command names: this script is the TypeScript fleet's
 # oracle (fleet/SPEC.md), and the commands it prints are the CLI's.
 FLEET = Path(__file__).resolve().parents[4] / "fleet" / "bin" / "fleet"
@@ -154,6 +155,8 @@ def cmd_set(state, args):
     for key in ("status", "now", "goal"):
         if getattr(args, key) is not None:
             state[key] = getattr(args, key)
+    if args.workspaces is not None:  # how the workers share the repository: a jj workspace each, or one working copy
+        state["workspace_mode"] = args.workspaces
     if args.now is not None:
         state["now_at"] = now()  # the page greys a now-line that has not been said again for a while
         for said in closed_named(state, args.now):
@@ -317,14 +320,15 @@ def left_open(state: dict, args) -> str | None:
             f"(`decision ID --withdraw \"why\"`), or name it in your last message as left open on purpose.")
 
 
-def overlapping(state: dict, args) -> str | None:
-    """What to say when a worker recorded as running shares files with another running or blocked worker's
-    lane: two workers on the same files collide at integration, so the task waits or joins that queue."""
-    if args.cmd != "agent" or not state:
-        return None
-    a = find(state["agents"], args.id)
-    if a is None or a.get("status") != "running" or not (args.lane is not None or args.status == "running" or args.task):
-        return None
+def starts_lane(args) -> bool:
+    """Whether an `agent` command puts the worker's lane to work: only such a command is checked for lanes that meet."""
+    return args.lane is not None or args.status == "running" or bool(args.task)
+
+
+def lane_hits(state: dict, a: dict) -> list[str]:
+    """Per running or blocked worker whose lane meets running worker `a`'s (L7): its id, status and the entries."""
+    if a.get("status") != "running":
+        return []
     hits = []
     for other in state["agents"]:
         if other is a or other.get("status") not in ("running", "blocked"):
@@ -332,10 +336,33 @@ def overlapping(state: dict, args) -> str | None:
         shared = sorted({x for x in a.get("lane") or [] for y in other.get("lane") or [] if lanes.meet(x, y)})
         if shared:
             hits.append(f"{other['id']}'s ({other['status']}: {', '.join(shared)})")
+    return hits
+
+
+def overlapping(state: dict, args) -> str | None:
+    """What to say when a worker recorded as running shares files with another running or blocked worker's
+    lane: two workers on the same files collide at integration, so the task waits or joins that queue. A fleet
+    that shares one working copy refuses it instead (`shared_overlap`)."""
+    if args.cmd != "agent" or not state or state.get("workspace_mode") == "shared" or not starts_lane(args):
+        return None
+    a = find(state["agents"], args.id)
+    hits = lane_hits(state, a) if a else []
     if not hits:
         return None
     return (f"state: {a['id']}'s lane overlaps {'; '.join(hits)}. A task whose files overlap a running lane waits "
             f"(`--status queued`) or joins that worker's queue.")
+
+
+def shared_overlap(state: dict, a: dict, args) -> None:
+    """In a fleet whose workers share one working copy, refuse a running worker whose lane meets a live one's:
+    there two workers on the same files overwrite each other's edits as they make them."""
+    if state.get("workspace_mode") != "shared" or not starts_lane(args):
+        return
+    hits = lane_hits(state, a)
+    if hits:
+        fail(f"{a['id']}'s lane overlaps {'; '.join(hits)}, and this fleet's workers share one working copy (`set --workspaces shared`), "
+             f"where two workers on the same files overwrite each other: record it `--status queued` until that worker is done, "
+             f"or give the task to that worker.")
 
 
 def off_policy(state: dict, args) -> str | None:
@@ -459,6 +486,7 @@ def cmd_agent(state, args):
         log(state, "spawned", args.log or f"Spawned on {a['model']} following {a['skill']}.", a["id"])
         if args.step:
             set_step(state, args.step, "current", a["id"])
+        shared_overlap(state, a, args)
         print(f"recorded {a['id']} ({a['name']}); its brief opens with: Read {Path(args.dir).resolve() / 'brief.md'} first; your id is {a['id']}.")
         return state
     if a["status"] == "done" and args.status == "running":  # sent back after its report
@@ -489,6 +517,7 @@ def cmd_agent(state, args):
     if args.log:
         kind = {"blocked": "blocked", "done": "reported", "failed": "reported", "stopped": "note"}.get(a["status"], "note")
         log(state, kind, args.log, a["id"], args.important or a["status"] == "failed")
+    shared_overlap(state, a, args)
     return state
 
 
@@ -829,7 +858,7 @@ def cmd_event(state, args):
 
 CHEATSHEET = f"""
 commands (fleet state DIR <command>; an unknown ID creates the row, a known ID changes the fields given):
-  set [--status {"|".join(STATUSES)}] [--now TEXT] [--goal G]
+  set [--status {"|".join(STATUSES)}] [--now TEXT] [--goal G] [--workspaces {"|".join(WORKSPACE_MODES)}]
   milestone ID --title T
   step ID --milestone M --title T [--status {"|".join(STEP_STATUSES)}] [--agent A]
         [--before STEP | --after STEP] [--remove REASON]
@@ -855,7 +884,8 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
 
 def cmd_show(state, args):
     role = ", manager" if state.get("role") == "manager" else ""
-    print(f"{state['project']} [{state['status']}{role}] {state['now']}")
+    shared = ", shared working copy" if state.get("workspace_mode") == "shared" else ""
+    print(f"{state['project']} [{state['status']}{role}{shared}] {state['now']}")
     for m in state["roadmap"]:
         done = sum(s["status"] == "done" for s in m["steps"])
         print(f"  {m['id']} {m['title']} ({done}/{len(m['steps'])})")
@@ -904,6 +934,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("init"); s.add_argument("--project", required=True); s.add_argument("--goal", required=True); s.add_argument("--now")
     s.add_argument("--role", choices=["coordinator", "manager"], help="manager: this ledger is the manager's, over every coordinator on the machine")
     s = sub.add_parser("set"); s.add_argument("--status", choices=STATUSES); s.add_argument("--now"); s.add_argument("--goal")
+    s.add_argument("--workspaces", choices=WORKSPACE_MODES, help="isolated: a jj workspace per worker (the default); shared: one working copy, lanes disjoint")
     s = sub.add_parser("milestone"); s.add_argument("id"); s.add_argument("--title")
     s = sub.add_parser("step"); s.add_argument("id"); s.add_argument("--milestone"); s.add_argument("--title")
     s.add_argument("--status", choices=STEP_STATUSES); s.add_argument("--agent", help="agent id, or '' to clear")
