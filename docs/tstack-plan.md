@@ -23,7 +23,7 @@ this repo's skills once step 1 lands.
 | D9 | Testing follows a ladder chosen by risk and maturity (below), after the tdd merge. |
 | D11 | Models: Sonnet for research, reading and legwork; Opus for judgement; Fable for decisive single roles (a judge, a synthesizer, the advisor, the hardest task), never for fan-out, rerun on Opus when Fable is unavailable. |
 | D12 | **Evolving lint rules.** Lessons that repeat become lint rules, in each language's native linter: Oxlint JS plugins for TS (anti-slop as the seed), Clippy config (dylint for custom lints) for Rust, Roslyn analyzers/.editorconfig for C#, ruff config for Python, golangci-lint for Go, clang-tidy for C/C++, statix for Nix. Rules are **vendored** into each repo (anti-slop style), so the repo's own checks and CI enforce them. Proposals come automatically from reflect's structural-enforcement backlog, review/interrogate findings seen 2+ times, comment-sicko's MUST KILL flags, memo gotchas and automate-me; each rule ships with tests from the real incident, runs in trial across Luiz's repos (hits, false positives), and is promoted warn → error with Luiz's yes; rules that never fire are retired. |
-| D13 | **The fleet is rewritten in TypeScript** on Bun with Effect 4, as a plugin-level `fleet/` package shared by the coordinator, the manager, tuca-mode and the hub; the page and service are **the control plane** (systemd user unit `fleet-hub`, installed by dotfiles home-manager on every Linux machine). The Python implementation is the oracle during the port: a model-based test drives random command sequences through both and their state must match before the cutover; the existing 207 tests become the spec. The per-tool-call heartbeat stays in the Python hook dispatcher (a file write the hub reads). Staged, one agent per stage: 1 oracle harness + model-based test on today's state.py; 2 TS core (state, chat, decisions, registry CLIs) passing the ported tests and the differential test; 3 hub (HTTP, SSE, page, proxy, Tailscale federation) + the dotfiles service; 4 heartbeats and one jj workspace per worker with `fleet ws prune`; 5 rules restated in prose become code; 6 the advisor agent (Fable); then the cutover. |
+| D13 | **The fleet is rewritten in TypeScript** on Bun with Effect 4, as a plugin-level `fleet/` package shared by the coordinator, the manager, tuca-mode and the hub; the page and service are **the control plane** (systemd user unit `fleet-hub`, installed by dotfiles home-manager on every Linux machine). The Python implementation is the oracle during the port: a model-based test drives random command sequences through both and their state must match before the cutover; the existing 207 tests become the spec. The per-tool-call heartbeat stays in the Python hook dispatcher (a file write the hub reads). Staged, one agent per stage: 1 oracle harness + model-based test on today's state.py; 2 TS core (state, chat, decisions, registry CLIs) passing the ported tests and the differential test; 3 hub (HTTP, SSE, page, proxy, Tailscale federation) + the dotfiles service; 4 heartbeats and one jj workspace per worker with `fleet ws prune`; 5 rules restated in prose become code; 6 the advisor agent (Fable; **done**: `agents/advisor.md` and `fleet advisor`, see fleet/SPEC.md "The advisor"); then the cutover. |
 
 ## Order of work
 
@@ -126,7 +126,10 @@ to a plugin-level `fleet/` package. Changes, in order:
    stale Now lines, unrecorded answers), each with a test.
 5. An `advisor` agent (Fable, falling back to Opus when Fable is unavailable; read-only tools, long-lived): a coordinator starts
    one per fleet when workers need judgement; workers ask it through
-   SendMessage before asking the user.
+   SendMessage before asking the user. **Done**: `agents/advisor.md`
+   (`tstack:advisor`) and `fleet advisor DIR` (the `advisor` row, kept
+   queued so it is never a silent worker; its prompt; the Opus restart on a
+   failed Fable spawn); each answer is recorded on the fleet's chat.
 The coordinator's state machine (`state.py`) gets a model-based test (rung 5)
 before the refactor, so the refactor is checked against it.
 

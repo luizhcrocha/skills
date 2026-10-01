@@ -56,6 +56,8 @@ The coordinator recorded it for you (`--asks manager`). Read it in full: `python
 - **Inform**: another fleet's work bears on it. Say which fleet and what (it is already doing this, it will change these facts, it owns that file). The coordinator revises or withdraws.
 - **Pass it on**, when it is the user's. Tell the coordinator to pass it on (`decision <id> --asks user`). It then shows on your page's list, and the user answers it on the fleet's page.
 
+A fleet that runs an advisor (the `advisor` row in `fleets.py show`) asks it before you: its decision carries the advisor's recommendation, and the ruling is on the fleet's chat (`say --as advisor`). Weigh that recommendation against what only you see (other fleets, `standing.md`) instead of redoing it; a question the advisor could have settled from the fleet's own record goes back to the coordinator to ask it first.
+
 Log what you did: `state.py <dir> event --kind decision --agent <fleet> "d3 answered from standing: one lock window"`.
 
 Decisions of your own (a landing to approve, an order to choose between fleets) you record in your ledger as any coordinator does, and the user answers them on your page.
@@ -92,6 +94,8 @@ A fleet's name is its session's: the registry reads it from the session's title,
 - **What each session left running.** `fleets.py procs` lists, per fleet, the background processes its session started, with their age. One that outlived its purpose is its session's to stop: tell it.
 - **Where the user goes.** Your Links view lists every fleet's pages and dev servers, and every port the machine serves that no link names, with the fleet that started it. One left unnamed goes back to that fleet to record (`link`) or to stop.
 - **Whose files a landing moves.** `fleets.py whose FROM TO`, in the repository, sorts the files by owning fleet from `<dir>/owners` (one `FLEET GLOB` per line, first match wins; keep it with the owners in `standing.md`).
+
+A fleet's advisor runs on Fable, restarted on Opus when Fable is unavailable (its row's model says which). When one fleet reports Fable unavailable, tell the others: their next advisor spawn goes straight to Opus.
 
 A monitor agent you spawn (app metrics, runs, executions, reporting back to you) runs on the default Sonnet (`model: "sonnet"`), as the coordinator's model table says. When a new default model comes out, the fleets move their agents to it (the coordinator's SKILL.md, "A new default model"); yours too.
 
