@@ -29,19 +29,19 @@ Your value is the hop you save the user. A question you settle from what another
 
 ## Setup
 
-The manager runs on the coordinator skill's scripts and page. Resolve its directory once (`find -L ~/.claude .claude -name SKILL.md -path "*/coordinator/*" | head -1`), and read its `DASHBOARD.md`: the state CLI, the chat, and the decisions work for you as they do for a coordinator. Below, `<scripts>` is that skill's `scripts/` and `<dir>` is `<scratchpad>/manager`.
+The manager runs on the plugin's fleet CLI, `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet`, written `fleet` below; it is not on PATH, so run it by that path (when the variable shows unexpanded, the plugin's root is three directories above this skill's). Read the coordinator skill's `DASHBOARD.md` (`${CLAUDE_PLUGIN_ROOT}/skills/productivity/coordinator/DASHBOARD.md`): the state CLI, the chat, and the decisions work for you as they do for a coordinator. Below, `<dir>` is `<scratchpad>/manager`.
 
-1. `python3 <scripts>/fleets.py list` names the fleets being served: each one's name, session, address, directory, what it is doing, its lanes in flight, and its open decisions.
-2. `python3 <scripts>/state.py <dir> init --role manager --project "<this machine, or the programme>" --goal "<what the fleets are landing together>"`: the ledger starts with the landing queue, milestone `landings`.
-3. `<scripts>/../../../../fleet/bin/fleet serve <dir>` puts the manager on the machine's hub (the `fleet-hub` service), and give the user the hub's address (the printed one without its `f/manager/`): it is the one address for everything, since every fleet's page is served under it at `f/<fleet>/`, the index lists them all (and the fleets of the user's other machines that run a hub), and every page's header has a switcher. When it says no hub runs, ask the user to start it (`systemctl --user start fleet-hub`); the fallback until the cutover is `python3 <scripts>/serve_dashboard.py <dir>`, the manager's own server with each fleet at `f/<fleet>/` under it. The page shows every coordinator with the way to its page, and one list of what waits on the user across all of them.
-4. `ListAgents` names this session. Record it, so coordinators can write to you: `python3 <scripts>/fleets.py name <dir> <session>`.
-5. Arm the chat watch as a background Bash command (`run_in_background: true`): `python3 <scripts>/chat.py <dir> watch --as manager --all --resume --once`. It exits with the first news (a message, or a fleet not reading its chat), which wakes you; handle it and arm the same command again.
+1. `fleet fleets list` names the fleets being served: each one's name, session, address, directory, what it is doing, its lanes in flight, and its open decisions.
+2. `fleet state <dir> init --role manager --project "<this machine, or the programme>" --goal "<what the fleets are landing together>"`: the ledger starts with the landing queue, milestone `landings`.
+3. `fleet serve <dir>` puts the manager on the machine's hub (the `fleet-hub` service), and give the user the hub's address (the printed one without its `f/manager/`): it is the one address for everything, since every fleet's page is served under it at `f/<fleet>/`, the index lists them all (and the fleets of the user's other machines that run a hub), and every page's header has a switcher. When it says no hub runs, ask the user to start it (`systemctl --user start fleet-hub`), or on a machine without the service run `fleet hub` as a background command of this session meanwhile. The page shows every coordinator with the way to its page, and one list of what waits on the user across all of them.
+4. `ListAgents` names this session. Record it, so coordinators can write to you: `fleet fleets name <dir> <session>`.
+5. Arm the chat watch as a background Bash command (`run_in_background: true`): `fleet chat <dir> watch --as manager --all --resume --once`. It exits with the first news (a message, or a fleet not reading its chat), which wakes you; handle it and arm the same command again.
 6. Write to each coordinator (`SendMessage` to its session) that a manager is present: your session, your page, the path of `standing.md`, and that decisions, questions for other fleets, and landings now come to you. Ask each for what it owns, what it has in flight, and what it is waiting on.
 7. Fill `standing.md` from their answers and from what the user tells you.
 
-Setup is done when every fleet in `fleets.py list` has answered, and `standing.md` names an owner for every lane in flight.
+Setup is done when every fleet in `fleet fleets list` has answered, and `standing.md` names an owner for every lane in flight.
 
-A fleet that starts later appears in `fleets.py list` and on your page. Greet it the same way when you see it.
+A fleet that starts later appears in `fleet fleets list` and on your page. Greet it the same way when you see it.
 
 ## What coordinators send you
 
@@ -49,22 +49,22 @@ A coordinator writes to your session, and its first line says what it is. Answer
 
 ### A decision
 
-The coordinator recorded it for you (`--asks manager`). Read it in full: `python3 <scripts>/fleets.py decision <fleet> <id>`. Then one of four:
+The coordinator recorded it for you (`--asks manager`). Read it in full: `fleet fleets decision <fleet> <id>`. Then one of four:
 
 - **Answer it**, when `standing.md`, another fleet's ledger, or what you have seen settles it, and it is not the user's. Say the answer and where it comes from. The coordinator records it as decided, with you as the source.
 - **Ask** the coordinator for what is missing, when you cannot tell whose it is or what the options cost.
 - **Inform**: another fleet's work bears on it. Say which fleet and what (it is already doing this, it will change these facts, it owns that file). The coordinator revises or withdraws.
 - **Pass it on**, when it is the user's. Tell the coordinator to pass it on (`decision <id> --asks user`). It then shows on your page's list, and the user answers it on the fleet's page.
 
-A fleet that runs an advisor (the `advisor` row in `fleets.py show`) asks it before you: its decision carries the advisor's recommendation, and the ruling is on the fleet's chat (`say --as advisor`). Weigh that recommendation against what only you see (other fleets, `standing.md`) instead of redoing it; a question the advisor could have settled from the fleet's own record goes back to the coordinator to ask it first.
+A fleet that runs an advisor (the `advisor` row in `fleet fleets show`) asks it before you: its decision carries the advisor's recommendation, and the ruling is on the fleet's chat (`say --as advisor`). Weigh that recommendation against what only you see (other fleets, `standing.md`) instead of redoing it; a question the advisor could have settled from the fleet's own record goes back to the coordinator to ask it first.
 
-Log what you did: `state.py <dir> event --kind decision --agent <fleet> "d3 answered from standing: one lock window"`.
+Log what you did: `fleet state <dir> event --kind decision --agent <fleet> "d3 answered from standing: one lock window"`.
 
 Decisions of your own (a landing to approve, an order to choose between fleets) you record in your ledger as any coordinator does, and the user answers them on your page.
 
 ### A question for another fleet
 
-Answer from what you know when you know it: `standing.md`, the fleets' ledgers (`fleets.py list`), what passed through you. Otherwise carry it to the fleet that owns the matter and carry the answer back, each in the sender's words, marked as relayed.
+Answer from what you know when you know it: `standing.md`, the fleets' ledgers (`fleet fleets list`), what passed through you. Otherwise carry it to the fleet that owns the matter and carry the answer back, each in the sender's words, marked as relayed.
 
 When the matter needs rounds (a review of a diff, a diagnosis with measurements), open a **direct line**: tell both coordinators the question, its bounds, and that the outcome comes back to you. They settle it between them, with diffs as files on disk and a numbered summary. Log the outcome when it comes.
 
@@ -84,16 +84,16 @@ Something another fleet should know (a schema changed, a shared tool's version m
 
 ## What the user writes on your page
 
-The chat's watch prints each message, and every 30 seconds it also looks at the other fleets: a line `! <fleet> does not read its chat: ...` means the user's messages have waited there unread for two minutes. `SendMessage` that fleet's session to arm its watch, with the numbers waiting. `fleets.py list` shows the same per fleet (`chat: not read now`), and when each session last wrote its transcript (`session last active`), which tells a live coordinator from a page left serving after its session ended. A `(quoting ...)` or `[side chat #N]` line works as it does for a coordinator (its SKILL.md, "Respond"): answer the excerpt, and keep a side chat brief, with `--re`. One addressed to you, answer on the page: `chat.py <dir> say --as manager --re <N> "<answer>"`. One addressed to a coordinator (`@acme-billing`), or one about what a coordinator is doing: see [Said once](#said-once).
+The chat's watch prints each message, and every 30 seconds it also looks at the other fleets: a line `! <fleet> does not read its chat: ...` means the user's messages have waited there unread for two minutes. `SendMessage` that fleet's session to arm its watch, with the numbers waiting. `fleet fleets list` shows the same per fleet (`chat: not read now`), and when each session last wrote its transcript (`session last active`), which tells a live coordinator from a page left serving after its session ended. A `(quoting ...)` or `[side chat #N]` line works as it does for a coordinator (its SKILL.md, "Respond"): answer the excerpt, and keep a side chat brief, with `--re`. One addressed to you, answer on the page: `fleet chat <dir> say --as manager --re <N> "<answer>"`. One addressed to a coordinator (`@acme-billing`), or one about what a coordinator is doing: see [Said once](#said-once).
 
 A fleet's name is its session's: the registry reads it from the session's title, so a `/rename` carries over by itself. Call a fleet by that name only, in your chat, in `standing.md`, and in `SendMessage`.
 
 ## The machine
 
-- **One heavy check at a time.** `fleets.py gate` says who holds the gate slot; a fleet takes it before a test suite or a build that loads the machine, and frees it after. Your page shows the holder. Settle a dispute over it as you settle a turn.
-- **What each session left running.** `fleets.py procs` lists, per fleet, the background processes its session started, with their age. One that outlived its purpose is its session's to stop: tell it.
+- **One heavy check at a time.** `fleet fleets gate` says who holds the gate slot; a fleet takes it before a test suite or a build that loads the machine, and frees it after. Your page shows the holder. Settle a dispute over it as you settle a turn.
+- **What each session left running.** `fleet fleets procs` lists, per fleet, the background processes its session started, with their age. One that outlived its purpose is its session's to stop: tell it.
 - **Where the user goes.** Your Links view lists every fleet's pages and dev servers, and every port the machine serves that no link names, with the fleet that started it. One left unnamed goes back to that fleet to record (`link`) or to stop.
-- **Whose files a landing moves.** `fleets.py whose FROM TO`, in the repository, sorts the files by owning fleet from `<dir>/owners` (one `FLEET GLOB` per line, first match wins; keep it with the owners in `standing.md`).
+- **Whose files a landing moves.** `fleet fleets whose FROM TO`, in the repository, sorts the files by owning fleet from `<dir>/owners` (one `FLEET GLOB` per line, first match wins; keep it with the owners in `standing.md`).
 
 A fleet's advisor runs on Fable, restarted on Opus when Fable is unavailable (its row's model says which). When one fleet reports Fable unavailable, tell the others: their next advisor spawn goes straight to Opus.
 
@@ -107,13 +107,13 @@ Waiting on the user is a subscription, never a status re-read: whoever asks arms
 
 Every message between sessions is paid for twice: the sender writes it, the receiver reads it, and both read it again on every later turn. So each thing is said once, by the one who knows it, where the user will read it.
 
-- **A silent worker is checked, not assumed.** Your watch prints `! <fleet>'s worker b50 ... has written nothing since ...` after twenty minutes (`fleets.py show` marks it too): `SendMessage` that fleet to check it.
-- **A wait is named by its number and read at its source.** Before you tell the user something waits on him, read the decision's current state (`fleets.py decision <fleet> <number>`), never an earlier message; name it by fleet and number ("waits on Luiz: infra I2"). A Now line naming a closed decision is flagged on the page, and `set --now` warns.
+- **A silent worker is checked, not assumed.** Your watch prints `! <fleet>'s worker b50 ... has written nothing since ...` after twenty minutes (`fleet fleets show` marks it too): `SendMessage` that fleet to check it.
+- **A wait is named by its number and read at its source.** Before you tell the user something waits on him, read the decision's current state (`fleet fleets decision <fleet> <number>`), never an earlier message; name it by fleet and number ("waits on Luiz: infra I2"). A Now line naming a closed decision is flagged on the page, and `set --now` warns.
 - **What the page computes is not written.** Under your Now line the page lists the running workers, the current steps and the next ones; the fleets' pages do the same. Your Now line says what they cannot: whose turn it is, what waits on whom, a rule the user just set.
 - **Your own answers too.** What you answer the user on your page (the chat, a side chat) is written there only. The turn that answered ends, in your session, with one line naming where: "Answered #42 on the page." The user reads the page from any device.
 
-- **Answer from the ledger first.** `python3 <scripts>/fleets.py show <fleet>` prints what a fleet is doing: its now-line and when it was said, the workers running with their task and last report, its latest events, its open decisions and roadblocks, and whether it reads its chat. A question about what a fleet is doing is answered from that, and the coordinator is not asked.
-- **When only the coordinator knows**, forward the user's question with its number and the page it was asked on: "#14 on the manager's page: <text>. Answer there: `python3 <scripts>/chat.py <dir> say --as <fleet> --re 14 \"...\"`". The coordinator answers the user there, once. You do not repeat, summarise, or acknowledge its answer; the user has read it.
+- **Answer from the ledger first.** `fleet fleets show <fleet>` prints what a fleet is doing: its now-line and when it was said, the workers running with their task and last report, its latest events, its open decisions and roadblocks, and whether it reads its chat. A question about what a fleet is doing is answered from that, and the coordinator is not asked.
+- **When only the coordinator knows**, forward the user's question with its number and the page it was asked on: "#14 on the manager's page: <text>. Answer there: `fleet chat <dir> say --as <fleet> --re 14 \"...\"`". The coordinator answers the user there, once. You do not repeat, summarise, or acknowledge its answer; the user has read it.
 - **A question of yours** goes to the coordinator by `SendMessage` and comes back the same way. What you then tell the user is what they need from it, not the exchange.
 - **A message carries what the receiver lacks**: no quoting what it sent you, no restating the thread, no reply that only acknowledges. When you relay the user's words, cite where they are ("#12 on the manager's page") instead of copying a long text.
 
@@ -127,15 +127,15 @@ Keep the user's words as they said them. Your summary of a decision for the user
 
 ## The plan's usage
 
-Your page shows, for each fleet, what its workers spent and what its coordinator itself spent (`python3 <scripts>/fleets.py list` prints both). A coordinator that reads far more than its workers write is doing work it should delegate; say so to it.
+Your page shows, for each fleet, what its workers spent and what its coordinator itself spent (`fleet fleets list` prints both). A coordinator that reads far more than its workers write is doing work it should delegate; say so to it.
 
-Your page also shows how full the plan's 5-hour and 7-day windows are, and `python3 <scripts>/usage.py show` prints the same. Read it before you give a turn to work that spawns many workers, and when a window is nearly full say so to the user and to the fleets, with when it resets: a fleet that knows can finish what is in hand instead of starting what it cannot finish. When the page says there is no reading yet, the user's status line does not capture it; the line to add is in the coordinator skill's `DASHBOARD.md`.
+Your page also shows how full the plan's 5-hour and 7-day windows are, and `fleet usage show` prints the same. Read it before you give a turn to work that spawns many workers, and when a window is nearly full say so to the user and to the fleets, with when it resets: a fleet that knows can finish what is in hand instead of starting what it cannot finish. When the page says there is no reading yet, the user's status line does not capture it; the line to add is in the coordinator skill's `DASHBOARD.md`.
 
 ## Staying current
 
 Every message is also a reason to look again at what you hold:
 
-- `fleets.py list`: a fleet that is new, one that is gone, a decision that waits on you, lanes that now overlap.
+- `fleet fleets list`: a fleet that is new, one that is gone, a decision that waits on you, lanes that now overlap.
 - The decisions on your page: one that another fleet's landing answered or made moot is the coordinator's to close; tell it.
 - `standing.md`: an owner that changed, a deploy that went out.
 
@@ -145,4 +145,4 @@ Lead with what waits on them across the fleets, by title and fleet. Then the tur
 
 ## When you stop
 
-Tell every coordinator that the manager is leaving, and give the turn back. `<scripts>/../../../../fleet/bin/fleet serve <dir> --stop` (or `python3 <scripts>/serve_dashboard.py <dir> --stop` under the fallback) takes you out of the registry; from then on each fleet passes its open decisions to the user itself.
+Tell every coordinator that the manager is leaving, and give the turn back. `fleet serve <dir> --stop` takes you out of the registry; from then on each fleet passes its open decisions to the user itself.

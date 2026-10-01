@@ -36,7 +36,7 @@ Ask it of every message from Luiz, the task given with this invocation included:
 
 Every tuca-mode session is a coordinator. The mindset always: your context is the scarce resource, so hand a subagent what a fresh window does as well (reading, research, sweeps, independent lanes) and keep the judgement, the integration and the reply. Quick wins, entangled work and shared scaffolding stay yours.
 
-The machinery only once it is earned: when you spawn a worker that outlives one turn, or the task runs as several lanes, keep the ledger and the dashboard as the coordinator skill runs them. It is user-invoked, so read `${CLAUDE_PLUGIN_ROOT}/skills/productivity/coordinator/SKILL.md` and follow its loop (Intake, Route, Pick the model, Brief, Track, Respond, Integrate) with its state CLI.
+The machinery only once it is earned: when you spawn a worker that outlives one turn, or the task runs as several lanes, keep the ledger and the dashboard as the coordinator skill runs them. It is user-invoked, so read `${CLAUDE_PLUGIN_ROOT}/skills/productivity/coordinator/SKILL.md` and follow its loop (Intake, Route, Pick the model, Brief, Track, Respond, Integrate) with the plugin's fleet CLI, `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet` (`fleet` in that skill and in the playbooks, run by this path).
 
 N checks, measurements or attempts that come back as one verdict table (coverage matrices, races, gauntlets) → `tstack:swarm`. "Run this whole project", "fan these out", a batch of independent tasks that change code → the orchestrate skill (`tstack:orchestrate`) for the partition, under the coordinator's ledger for anything that runs longer than the session's attention.
 

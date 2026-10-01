@@ -41,7 +41,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | C21 | C, track | A task whose files overlap a running lane waits or joins that queue | mech | lanes, statuses | warn | **stage 5**: `agent` warns (both implementations); L7: when some path matches both entries' globs |
 | C22 | C, track | One jj workspace per worker that edits code | mech | lane, `workspaces[]` | warn | **stage 5**: `fleet brief` warns on a lane with no workspace |
 | C23 | C, track | Integrate a finished worker, then prune its workspace | mech | statuses, `workspaces[]` | warn | **stage 5**: every state command warns while a done worker's workspace is active (TS) |
-| C24 | C, track | Python-path fleets share one working copy; land from a second workspace | judg (transitional) | | | prose until the cutover |
+| C24 | C, track | Python-path fleets share one working copy; land from a second workspace | judg (transitional) | | | **gone at the cutover**: no fleet runs on the Python path, and C22 gives every worker its own workspace |
 | C25 | C, track | Record tokens and duration from each notification | mech | transcript | auto | code (`--task-id` measuring); prose cut to the `--task-id` line |
 | C26 | C, respond | A running row is not proof of work: twenty minutes silent is checked | mech | heartbeats, transcripts | warn, page | code (stage 4: page, watch, `fleets list`, hub); **stage 5** adds `fleets show`; prose cut |
 | C27 | C, respond | A worker's `blocked:` becomes a roadblock at once | judg (what it needs) | | | prose |
@@ -88,7 +88,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | B1 | B | Standards (deep modules, CONTEXT.md terms, ADRs, lang-ts) | judg | | | prose |
 | B2 | B, lane | Edit only the lane; stop and report a file outside it | mech (after the fact) | jj, lane | print | **stage 5**: `fleet ws list` names files outside the lane |
 | B3 | B, lane | Work in the workspace the brief names; history moves are the coordinator's | mech (workspace) | | print | **stage 5**: `fleet brief` prints the workspace; history moves stay prose |
-| B4 | B, lane | Leave running what you did not start; stop what you started | judg (mostly) | procs | | prose (`fleets.py procs` lists what each session left) |
+| B4 | B, lane | Leave running what you did not start; stop what you started | judg (mostly) | procs | | prose (`fleet fleets procs` lists what each session left) |
 | B5 | B, lane | Monitors and research agents on Sonnet | judg | | | prose |
 | B6 | B, chat | Read the inbox at each checkpoint, answer with `--re` | mech (open messages) | chat | print | **Luiz** (L1, decided): stays in brief.md; a message left unanswered ten minutes is nudged on the coordinator's watch (C32) |
 | B7 | B, chat | Steering inside the lane and criterion is taken; anything else goes to the coordinator | judg | | | prose |
@@ -105,12 +105,12 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | M4 | M, decision | Answer, ask, inform or pass it on | judg | | | prose |
 | M5 | M, question | Answer from what you know, else relay marked as relayed; a direct line for rounds | judg | | | prose |
 | M6 | M, landing | Queue each landing as a `landings` step for the fleet, in the order of the turns | mech | | | code (the step commands) |
-| M7 | M, landing | Check a landing against standing.md and other fleets' lanes | judg / mech (`whose`) | owners | print | code (`fleets.py whose`) |
+| M7 | M, landing | Check a landing against standing.md and other fleets' lanes | judg / mech (`whose`) | owners | print | code (`fleet fleets whose`) |
 | M8 | M, landing | A push or deploy needs the user's first-hand word | judg | | | prose |
 | M9 | M, landing | One fleet has the turn; the next is given when the one before is closed or given back | mech | landing queue | refuse | **stage 5**: `step --status current` refused while another landing is current (both) |
 | M10 | M, landing | Close a landing: done, `integrated` event, standing.md, notice to the fleets touched | judg (who is touched) | | | prose |
 | M11 | M, chat | A fleet that does not read its chat is told | mech | chat, watch | warn (watch) | code |
-| M12 | M, said once | Answer from the ledger first (`fleets.py show`) | judg | | | prose |
+| M12 | M, said once | Answer from the ledger first (`fleet fleets show`) | judg | | | prose |
 | M13 | M, said once | A wait is named by number and read at its source | mech (closed) | | warn | code (`set --now` names a closed decision, in a fleet's ledger too) |
 | M14 | M, said once | A silent worker is checked, not assumed | mech | heartbeats | warn | code (watch); **stage 5**: `fleets show` marks it; prose cut |
 | M15 | M, waiting | An unrecorded answer is chased with the fleet | mech | chat, ledger | warn | code (watch, stage 2); **stage 5**: the fleet's own state commands warn too |
@@ -133,7 +133,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | P1 | land.md, step 2 | Take the landing turn | mech | | refuse | **stage 5**: `land-check` stops without it |
 | P2 | land.md, step 7 | `@` on a fresh empty change after the push | mech | jj | warn | later: `land-check` runs before the push; a post-push check is a new command |
 | P3 | workspace-prune.md | Fleet workspaces go through `fleet ws prune`; the dry run first | mech | | refuse | code (stage 4); stale lines about heartbeats and prune fixed |
-| P4 | session-pickup.md | Resume a fleet from `state.py show` | mech | | print | code |
+| P4 | session-pickup.md | Resume a fleet from `fleet state show` | mech | | print | code |
 | P5 | babysit.md | One babysitter per stack | judg | | | prose |
 
 ## SPEC open items that were rules in disguise

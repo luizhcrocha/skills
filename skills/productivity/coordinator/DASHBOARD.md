@@ -1,16 +1,16 @@
 # Fleet dashboard
 
-The dashboard is the user's window into the fleet and the coordinator's ledger, from one file: `state.json`. The state CLI is the only way you touch it: one command per event, which validates the change and renders the page. The page itself is a fixed template, never rewritten by hand.
+The dashboard is the user's window into the fleet and the coordinator's ledger, from one file: `state.json`. The state CLI (`fleet state`) is the only way you touch it: one command per event, which validates the change and renders the page. The page itself is a fixed template, never rewritten by hand. `fleet` is the plugin's CLI, `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet`, run by the path [SKILL.md](SKILL.md) gives it.
 
 ## Where things live
 
-- **Decisions' evidence**: `<scratchpad>/coordinator/decisions/<id>.html`, one HTML fragment per decision that has one, copied there by `state.py decision --body` (see [Decisions](#decisions)).
-- **Chat**: `<scratchpad>/coordinator/chat.jsonl`, the conversation between the user and the fleet, appended only through the page and `scripts/chat.py` (see [Chat](#chat)).
+- **Decisions' evidence**: `<scratchpad>/coordinator/decisions/<id>.html`, one HTML fragment per decision that has one, copied there by `fleet state <dir> decision --body` (see [Decisions](#decisions)).
+- **Chat**: `<scratchpad>/coordinator/chat.jsonl`, the conversation between the user and the fleet, appended only through the page and `fleet chat` (see [Chat](#chat)).
 - **Brief**: `<scratchpad>/coordinator/brief.md`, what every worker reads before its task, written by `init` from [assets/brief.md](assets/brief.md) with this fleet's paths. It is yours to add to, and no command overwrites it.
-- **State**: `<scratchpad>/coordinator/state.json`, created and changed only through `scripts/state.py` (below). [assets/example-state.json](assets/example-state.json) shows a filled-in state for reference.
-- **Render**: done by every `state.py` command. `scripts/render_dashboard.py` is what it calls, and the only reason to run it directly is `--fragment` for the Artifact tool.
-- **Publish**: put the fleet on the machine's hub, once per session: `<skill-dir>/../../../fleet/bin/fleet serve <scratchpad>/coordinator` (the plugin's `fleet` CLI). The hub is one server per machine that is always running (the `fleet-hub` user service): it serves every fleet of the machine at one address, `http://<magicdns-name>:7420/`, whose index lists every fleet on this machine and on the user's other machines that run a hub, and this fleet's page at `…/f/<fleet>/`, which the command prints. A fleet registers and appears; nothing else starts. Give the user the URL once. Every later state change reaches the page on its own: the hub streams each change of `state.json` and each chat message to it, and the page re-renders in place, filters intact. `fleet serve <scratchpad>/coordinator --stop` takes the fleet off when the session ends. When the command says no hub runs on this machine, ask the user to start it (`systemctl --user start fleet-hub`); until then, or on a machine without the service, the fallback until the cutover is the old per-fleet server: `python3 <skill-dir>/scripts/serve_dashboard.py <scratchpad>/coordinator` (its own port behind `tailscale serve`, https; `--stop`, `--restart`).
-  If the user asks for a claude.ai artifact instead (no tailnet on their device), render with `--fragment` to `dashboard.html` and publish it with the Artifact tool (`icon: "chart"`, a one-sentence `description`), republishing the same path after every state change; open viewers receive each republish without reloading. An artifact has no server behind it, so it shows the fleet and has no chat: the decisions are listed and readable, and the user answers them in the session. Publish each decision's evidence beside the page, under the path the page asks for (`files: {"decisions/d1.html": "<scratchpad>/coordinator/decisions/d1.html"}`).
+- **State**: `<scratchpad>/coordinator/state.json`, created and changed only through `fleet state` (below). [assets/example-state.json](assets/example-state.json) shows a filled-in state for reference.
+- **Render**: done by every `fleet state` command. `fleet render <state.json> <out.html> --fragment` renders by hand, and the only reason to is the Artifact tool (below).
+- **Publish**: put the fleet on the machine's hub, once per session: `fleet serve <scratchpad>/coordinator`. The hub is one server per machine that is always running (the `fleet-hub` user service): it serves every fleet of the machine at one address, `http://<magicdns-name>:7420/`, whose index lists every fleet on this machine and on the user's other machines that run a hub, and this fleet's page at `…/f/<fleet>/`, which the command prints. A fleet registers and appears; nothing else starts. Give the user the URL once. Every later state change reaches the page on its own: the hub streams each change of `state.json` and each chat message to it, and the page re-renders in place, filters intact. `fleet serve <scratchpad>/coordinator --stop` takes the fleet off when the session ends. When the command says no hub runs on this machine, ask the user to start it (`systemctl --user start fleet-hub`). On a machine without the service, run the hub as a background command of your session (`fleet hub`, `run_in_background: true`) and tell the user it lasts as long as the session.
+  If the user asks for a claude.ai artifact instead (no tailnet on their device), render with `fleet render <scratchpad>/coordinator/state.json <scratchpad>/coordinator/dashboard.html --fragment` and publish it with the Artifact tool (`icon: "chart"`, a one-sentence `description`), republishing the same path after every state change; open viewers receive each republish without reloading. An artifact has no server behind it, so it shows the fleet and has no chat: the decisions are listed and readable, and the user answers them in the session. Publish each decision's evidence beside the page, under the path the page asks for (`files: {"decisions/d1.html": "<scratchpad>/coordinator/decisions/d1.html"}`).
 
 ## State schema
 
@@ -87,14 +87,14 @@ events[]     activity log, oldest first
 
 ## The state CLI
 
-`python3 <skill-dir>/scripts/state.py <scratchpad>/coordinator <command>`. Create and update share a verb: an unknown id with its required fields creates the row, a known id changes only the fields given. Timestamps are stamped for you, ids you reference are checked, and every command renders.
+`fleet state <scratchpad>/coordinator <command>`. Create and update share a verb: an unknown id with its required fields creates the row, a known id changes only the fields given. Timestamps are stamped for you, ids you reference are checked, and every command renders.
 
 | Event | Command |
 | :-- | :-- |
 | A manager's intake | `init --role manager --project P --goal G`, then `milestone landings --title "Landings and deploys"` |
 | Intake done | `init --project P --goal G`, then `milestone m1 --title T` and `step s1 --milestone m1 --title T` per step, then `event --kind decision "why the split"` for anything non-obvious |
 | Worker about to be spawned | `agent a1 --task T --skill tdd --milestone m1 --lane src/x.ts test/x.test.ts --step s1 --brief "done when ..."` (model defaults to opus; logs the spawn, marks the step current, prints the line its brief opens with) |
-| Its brief | `<skill-dir>/../../../fleet/bin/fleet brief <dir> a1` prints the part the row holds (opening line, task, criterion, skill and how to load it, lane, workspace, step, chat id); you add the context below it |
+| Its brief | `fleet brief <dir> a1` prints the part the row holds (opening line, task, criterion, skill and how to load it, lane, workspace, step, chat id); you add the context below it |
 | Notification arrives | `agent a1 --status done --tokens N --duration-ms N --report "..." --step s1 --log "what it verified"` (the step follows the status; the log becomes a `reported` event; tokens are the worker's total so far) |
 | Worker sent back after its report | `agent a1 --status running --step s1 --log "sent back: ..."` (counts a new round) |
 | Worker blocked | `roadblock r1 --title T --detail D --severity serious --needs coordinator --agent a1` (marks the worker blocked, logs it) |
@@ -111,7 +111,7 @@ events[]     activity log, oldest first
 | Where a decision or a grilling came from | `--step S` (its milestone follows), `--milestone M`, `--agent A` on `decision` or `grill`; a closed one takes `--step`/`--milestone` too. The decision's page says "From <milestone>, step <step>, for <worker>", and the Plan shows the chips |
 | A dev server or a page built for the user | `link ID --url U --title T --kind dev\|page [--decision D] [--note "what to do there"]`; `--drop "why"` when it stops |
 | A step whose id you would otherwise invent | `step next --milestone M --title T` records it under the next free id and prints it |
-| A heavy check on the shared machine (a test suite under load, a full build) | `fleets.py gate take <fleet> "what"` before, `fleets.py gate free <fleet>` after; while another fleet holds it, `take` refuses and names the holder |
+| A heavy check on the shared machine (a test suite under load, a full build) | `fleet fleets gate take <fleet> "what"` before, `fleet fleets gate free <fleet>` after; while another fleet holds it, `take` refuses and names the holder |
 | Workers were paused, stopped, or ended unseen | `park "why"` (or `park --agent a1 --agent a2 "why"`): every live row stops in one command, with one log line. Every command warns while rows still say running in a paused or done fleet |
 | Session ends | `set --status done --now "..."` (names the decisions still open and the workspaces not pruned) |
 | Before a landing, with a manager | `fleet turn <dir>`: exit 0 when the manager gave this fleet the turn (or no manager is served); `land-check` runs it too |
@@ -120,7 +120,7 @@ events[]     activity log, oldest first
 
 ## Fleets and the manager
 
-`fleet serve` (or the fallback `serve_dashboard.py`) records the fleet in a registry on this machine and forgets it on `--stop`. A fleet is known there by a name made from its project (`acme-billing`; a second fleet of the same project is `acme-billing-2`). `python3 <skill-dir>/scripts/fleets.py`:
+`fleet serve` records the fleet in a registry on this machine and forgets it on `--stop`. A fleet is known there by a name made from its project (`acme-billing`; a second fleet of the same project is `acme-billing-2`). `fleet fleets`:
 
 | Command | What it does |
 | :-- | :-- |
@@ -133,15 +133,15 @@ A ledger made with `init --role manager` is a manager's. Its page is sent every 
 
 ### What a coordinator itself spends
 
-The ledger counts the workers' tokens as they report. What the coordinator spends on coordinating them is read from its session's transcript (`python3 <skill-dir>/scripts/spend.py <dashboard-dir>` prints it): the tokens it wrote, the tokens it read, and how much of that came from the cache. The page shows it beside the workers' tokens, and a manager's page shows it for every fleet. A session resumed under a new id writes to another transcript, which the figure does not follow.
+The ledger counts the workers' tokens as they report. What the coordinator spends on coordinating them is read from its session's transcript (`fleet spend <dashboard-dir>` prints it): the tokens it wrote, the tokens it read, and how much of that came from the cache. The page shows it beside the workers' tokens, and a manager's page shows it for every fleet. A session resumed under a new id writes to another transcript, which the figure does not follow.
 
 ### The plan's usage
 
-A manager's page shows how full the plan's 5-hour and 7-day windows are and when each resets. The figures are the ones Claude Code hands a status line (`rate_limits`, for a subscription, after a session's first response), captured on the way through: the user's status line command in `settings.json` becomes `python3 <skill-dir>/scripts/usage.py capture -- <the command it had>`, which keeps the reading and runs the status line as it was. Every session on the machine runs the status line, so the reading follows whichever session worked last. `python3 <skill-dir>/scripts/usage.py show` prints what is held. `settings.json` is the user's: give them the line, and change it only on their word.
+A manager's page shows how full the plan's 5-hour and 7-day windows are and when each resets. The figures are the ones Claude Code hands a status line (`rate_limits`, for a subscription, after a session's first response), captured on the way through: the user's status line command in `settings.json` becomes `<the CLI's full path> usage capture -- <the command it had>`, which keeps the reading and runs the status line as it was. Every session on the machine runs the status line, so the reading follows whichever session worked last. `fleet usage show` prints what is held. `settings.json` is the user's: give them the line, and change it only on their word.
 
 ## Decisions
 
-`state.py <scratchpad>/coordinator decision ID ...` opens a decision with an unknown id and changes an open one with a known id. When to open one, and what goes in it, is in [SKILL.md](SKILL.md#decisions).
+`fleet state <scratchpad>/coordinator decision ID ...` opens a decision with an unknown id and changes an open one with a known id. When to open one, and what goes in it, is in [SKILL.md](SKILL.md#decisions).
 
 | Event | Command |
 | :-- | :-- |
@@ -169,7 +169,7 @@ A manager's page shows how full the plan's 5-hour and 7-day windows are and when
 
 The page has a chat where the user writes to the fleet and mentions who should answer: `@coordinator`, or a worker by id or name, with autocompletion from the ledger. A reply also goes to whoever wrote the message it answers. A message with neither a mention nor a reply goes to the coordinator. The conversation is `chat.jsonl`, append-only and numbered; a message stays **open** for a recipient until that recipient answers it with `--re`, so a message you missed is still in your inbox and the page shows the user who it is waiting on.
 
-`python3 <skill-dir>/scripts/chat.py <scratchpad>/coordinator <command>`:
+`fleet chat <scratchpad>/coordinator <command>`:
 
 | Command | What it does |
 | :-- | :-- |
@@ -179,11 +179,11 @@ The page has a chat where the user writes to the fleet and mentions who should a
 | `say --as WHO [--re N] TEXT` | appends a message from `WHO`, answering message `N`; mentions in `TEXT` address other agents |
 | `log [--after N]` | the whole conversation |
 
-**Arm the watch** right after starting the server, as a background Bash command (`run_in_background: true`): `python3 <skill-dir>/scripts/chat.py <dashboard-dir> watch --as coordinator --all --resume --once`. It waits without costing anything, and exits with the first messages that land, which wakes you with them, also when you are idle. Handle them, then arm the same command again: `--resume` starts after the last line printed, so nothing is missed or shown twice. A background command has no deadline, so a quiet chat costs no turns. (The Monitor tool also works, without `--once`, but a monitor expires every 30 minutes and each expiry costs a turn.)
+**Arm the watch** right after starting the server, as a background Bash command (`run_in_background: true`): `fleet chat <dashboard-dir> watch --as coordinator --all --resume --once`. It waits without costing anything, and exits with the first messages that land, which wakes you with them, also when you are idle. Handle them, then arm the same command again: `--resume` starts after the last line printed, so nothing is missed or shown twice. A background command has no deadline, so a quiet chat costs no turns. (The Monitor tool also works, without `--once`, but a monitor expires every 30 minutes and each expiry costs a turn.)
 
-A running watch keeps its process id in `DIR/watch-coordinator.pid`, and what it printed is what was read. So the page tells the user when nobody reads the chat and marks each of their messages "Not read yet" until a watch prints it; every `state.py` command prints a `chat:` warning on stderr while the user's messages wait unread; and a manager is told after two minutes, and reaches you with `SendMessage`. On that warning, arm the watch: it prints what waited first. A fleet with nothing running still keeps its watch armed: the watch is how the user reaches you.
+A running watch keeps its process id in `DIR/watch-coordinator.pid`, and what it printed is what was read. So the page tells the user when nobody reads the chat and marks each of their messages "Not read yet" until a watch prints it; every `fleet state` command prints a `chat:` warning on stderr while the user's messages wait unread; and a manager is told after two minutes, and reaches you with `SendMessage`. On that warning, arm the watch: it prints what waited first. A fleet with nothing running still keeps its watch armed: the watch is how the user reaches you.
 
-**Who may write.** Text typed on the page lands in agents' contexts, so the server names the sender. Behind `tailscale serve` only the tailnet login of this machine's user may post, and the message records it as `author`, printed in every line from the user (`#12 user (luiz@github) -> a1 (auth-impl): ...`). Only the server writes as the user: `say --as user` is refused. Agents name themselves with `--as`, so a line from an agent is that agent's word and carries no authority of the user's. On the plain-http fallback the chat is read-only. A message in the chat is the user speaking: it carries the authority of the same words typed in the session, and the same limits, so a destructive or outward-facing step asked for in the chat is confirmed before it runs.
+**Who may write.** Text typed on the page lands in agents' contexts, so the server names the sender. The hub lets only the tailnet login that owns this machine post (it asks Tailscale who each request comes from; this machine itself may post too), and the message records it as `author`, printed in every line from the user (`#12 user (luiz@github) -> a1 (auth-impl): ...`). Only the server writes as the user: `say --as user` is refused. Agents name themselves with `--as`, so a line from an agent is that agent's word and carries no authority of the user's. A message in the chat is the user speaking: it carries the authority of the same words typed in the session, and the same limits, so a destructive or outward-facing step asked for in the chat is confirmed before it runs.
 
 ## What the page shows
 
@@ -199,9 +199,9 @@ The page is built for a phone first, one view at a time: Decisions, Plan, Fleet,
 - On a manager's page, under the totals: the plan's usage, one meter per window, with when it resets and how old the reading is.
 - On a manager's page: Decisions lists the manager's own and, from every fleet, the ones that wait on the user, each opening on its fleet's page. The Fleet tab reads Fleets and lists the coordinators: what each is doing, its workers by status, what waits in it, its lanes in flight, and the way to its page. A coordinator's name opens its sheet, with a button that starts a message to it.
 - Chat: the conversation in threads, each reply under the message it answers. The user's message shows who it is waiting on until each recipient has answered. The composer completes `@` from the roster and says who the message will reach. A viewer who may not write sees the conversation with the reason in place of the composer.
-- Links: the pages and dev servers the fleet named (up or down, each opening in a new tab), and what the machine serves through `tailscale serve` that no link names, with the process, its directory, and the fleet that started it (found from its parent processes, else from the first transcript that wrote its address). A manager's page lists every fleet's. `served.py` prints the same.
+- Links: the pages and dev servers the fleet named (up or down, each opening in a new tab), and what the machine serves through `tailscale serve` that no link names, with the process, its directory, and the fleet that started it (found from its parent processes, else from the first transcript that wrote its address). A manager's page lists every fleet's. `fleet served` prints the same.
 - Stuck: at the top of every page, an answer the fleet has had for five minutes without recording it, and a chat nobody reads while the user's messages wait there; on the manager's page, every fleet's.
-- One address: a manager's server also serves each fleet's page at `/f/<fleet>/` (the page, its chat, its decisions and its live stream, passed through to the fleet's own server after the manager's server checks the post), and every page's header has a switcher between the manager and the fleets. On the manager's page the fleets' links go there; a fleet's page keeps its own address as well. Each page keeps its browser storage (drafts, what was read) under its own path.
+- One address: the hub serves every fleet's page at `/f/<fleet>/` and the manager's at `/f/manager/` (each page with its chat, its decisions and its live stream), and every page's header has a switcher between the manager and the fleets. Each page keeps its browser storage (drafts, what was read) under its own path.
 - Numbers: every decision, link and roadblock has one, given when it is recorded and kept: D a choice, A an action, I an input, S a secret, G a grilling, L a link, R a roadblock (D3, A1, L2). The page shows them, the chat's lines carry them (`[D3 d-cuts]`), and every command takes one in place of the id, written in capitals (`decision D3 --decide ...`).
 - Search: Ctrl/⌘K, or the magnifier in the header, finds anything the page holds (decisions and actions, links, roadblocks, plan steps, workers, coordinators on a manager's page, chat messages, the log) and goes there. A number (`D3`) comes first; `d`, `l`, `r`, `p`, `w`, `c`, `f` and a space look in one group.
 - An answer sent counts at once: the decision leaves "waits on you" when the user sends it, and comes back only when the fleet replies to the answer. Record it as soon as the watch prints it, before other work, so the fleet acts on it and the page says it is decided.

@@ -5,7 +5,7 @@
 1. List every workspace: `jj workspace list` from the main workspace, with each one's directory (`jj workspace root --name <ws>` or the path its `.jj/repo` points from). Paths come from jj, never typed by hand.
 2. Run every check per workspace. A workspace is a candidate only when all hold:
    - Not `default`, not a landing workspace (`*-land`, `deploy`), not one Luiz marked protected.
-   - No running worker on it: `fleets.py list` and `fleets.py show <fleet>` from the coordinator's scripts show no live lane there.
+   - No running worker on it: `fleet fleets list` and `fleet fleets show <fleet>` show no live lane there.
    - No heartbeat in 20 minutes: `fleet ws <dashboard-dir> list` shows when each fleet worker was last seen; elsewhere, the newest mtime under the directory, `.jj` excluded.
    - No process with its cwd inside: `readlink /proc/*/cwd` matched against the directory.
    - No uncommitted work: inside it, `jj workspace update-stale` then `jj status` shows an empty `@`.

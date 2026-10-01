@@ -40,7 +40,7 @@ where observations_fts match '<words>' and o.project = '<repo folder>'
 order by bm25(observations_fts) limit 20;
 ```
 
-**Fleet ledgers**, when the question touches work a coordinator ran. Ledgers sit in session scratchpads: `/tmp/claude-<uid>/<project>/<session>/scratchpad/coordinator/state.json` (the project segment is the repo path with `/` turned into `-`). Live fleets: `python3 <coordinator skill>/scripts/fleets.py list`, then `fleets.py show <fleet>` and `fleets.py decision <fleet> <id>`. For any ledger, read its `decisions` directly:
+**Fleet ledgers**, when the question touches work a coordinator ran. Ledgers sit in session scratchpads: `/tmp/claude-<uid>/<project>/<session>/scratchpad/coordinator/state.json` (the project segment is the repo path with `/` turned into `-`). Live fleets, through the plugin's fleet CLI (`<plugin root>/fleet/bin/fleet`, the plugin root being three directories above the `why` skill's): `fleet fleets list`, then `fleet fleets show <fleet>` and `fleet fleets decision <fleet> <id>`. For any ledger, read its `decisions` directly:
 
 ```
 python3 -c 'import json,sys; [print(d["id"], d["status"], d.get("closed"), d["title"], "|", d.get("answer"), "|", d.get("resolution")) for d in json.load(open(sys.argv[1])).get("decisions", [])]' <state.json>

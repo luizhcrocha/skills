@@ -6,6 +6,12 @@ the code and [DASHBOARD.md](../skills/productivity/coordinator/DASHBOARD.md), an
 the 209 Python tests, the 50 page tests, the model-based test and the golden traces in
 [oracle/](oracle/).
 
+Since the cutover (D13) the TypeScript `fleet` CLI (`fleet/bin/fleet`) is the fleet: every skill, agent
+and hook names it, and nothing tells an agent to run the Python scripts. They stay in the repo as the
+oracle only: the golden traces are recorded from them, and the model test, the corpus and their own
+tests keep running against them, so a change of behaviour is made in both and checked by the
+differential test.
+
 How to read it:
 
 - A rule stated here is pinned: a test, the model or a golden trace fails when it changes.
@@ -69,7 +75,7 @@ given. Every ID argument also takes the row's number (D3, L2, R1) where rows hav
    `render_dashboard: <reason>`, and nothing is written or said on stdout (open-2, fixed).
 9. `state.json` is written, then what the handler held is printed (JSON, two-space indent, UTF-8 unescaped, a final newline; key order
    isn't part of the contract). `brief.md` is written from `SKILL/assets/brief.md` when missing
-   (`{skill_dir}` → SKILL, `{dashboard_dir}` → DIR), and so is `standing.md` from
+   (`{fleet}` → the CLI's path, `<plugin>/fleet/bin/fleet`; `{skill_dir}` → SKILL; `{dashboard_dir}` → DIR), and so is `standing.md` from
    `assets/standing.md` in a manager's DIR. What the user added to either is kept.
 10. Output: with `--no-render`, `state.json updated (<command> <id>)` (the id empty for commands
     without one, e.g. `state.json updated (set )`). Otherwise the page is rendered to
@@ -185,7 +191,7 @@ Checked in this order:
    - Logs `asked` (`<title>: <question>`, prefixed `For the manager: ` when asks is manager),
      important when blocking and not for the manager, tagged with the decision. Prints
      `asked <id>. Arm its answer's wake now, as a background command (run_in_background):
-     \`python3 SKILL/scripts/chat.py DIR wait <id>\`: it exits with the user's answer the moment it is given.`
+     \`FLEET chat DIR wait <id>\`: it exits with the user's answer the moment it is given.`
 5. Known and open: `--supersedes` is refused. A new `--question` for a choice needs its options
    again (`--option`) or `--same-options`. The fields given are set (an empty value clears);
    `--option` replaces all options; `--blocking`/`--not-blocking`; `--asks` changes who looks

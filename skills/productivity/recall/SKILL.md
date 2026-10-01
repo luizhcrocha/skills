@@ -86,7 +86,7 @@ Verify what the mining surfaced against the repo as it is now:
 - `jj log -r 'trunk()..' --no-graph -T 'change_id.short() ++ " " ++ if(empty, "(empty) ", "") ++ working_copies ++ " " ++ bookmarks ++ " " ++ description.first_line() ++ "\n"'` for unlanded work and the workspace holding it, `jj log -r 'trunk()' -n 1` for what landed last, `jj st`.
 - `gh pr list --state open --author @me` and `gh pr view <n>` for the PRs named; run `gh` from the main workspace (a secondary jj workspace has no `.git`). No GitHub remote: skip it and say so.
 - `memo open` for the open threads.
-- Fleet ledgers when a coordinator ran in the window: `python3 ${CLAUDE_PLUGIN_ROOT}/skills/productivity/coordinator/scripts/fleets.py list`, or the `decisions` of a `state.json` under the session scratchpads (the `why` skill's `references/sources/agent-memory.md` shows where).
+- Fleet ledgers when a coordinator ran in the window: `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet fleets list`, or the `decisions` of a `state.json` under the session scratchpads (the `why` skill's `references/sources/agent-memory.md` shows where).
 
 A change a transcript calls landed is landed only if `trunk()` contains it; a claim of "tests green" is a claim until a check shows it.
 

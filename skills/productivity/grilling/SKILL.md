@@ -29,8 +29,8 @@ The session is done when the frontier is empty: every branch of the design tree 
 
 ## On a fleet dashboard
 
-When this session runs a coordinator's or a manager's dashboard, the rounds go on its page, where each question has its own answer and none is lost among chat messages. The dashboard's `state.py` is in the coordinator skill's `scripts/`:
+When this session runs a coordinator's or a manager's dashboard, the rounds go on its page, where each question has its own answer and none is lost among chat messages. The dashboard's state CLI is the plugin's `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet state` (`fleet state` below, run by that path):
 
-- A round: `state.py <dir> grill <id> --title "<what is being decided>" --ask "<title> | <question, with its choices and what each leads to> | <recommended answer> | <why: the reason, the evidence (a file, a figure, a finding), and what it costs or rules out>"`, one `--ask` per frontier question. The page shows the reason under the recommendation; a question without one reads as a guess. A reason missed in an earlier round: `--reason "Q3: why"`. Follow-ups: `--of Q2` on the command that asks them. Then tell the user the page (`<dashboard url>#decision/<id>`), in one line.
+- A round: `fleet state <dir> grill <id> --title "<what is being decided>" --ask "<title> | <question, with its choices and what each leads to> | <recommended answer> | <why: the reason, the evidence (a file, a figure, a finding), and what it costs or rules out>"`, one `--ask` per frontier question. The page shows the reason under the recommendation; a question without one reads as a guess. A reason missed in an earlier round: `--reason "Q3: why"`. Follow-ups: `--of Q2` on the command that asks them. Then tell the user the page (`<dashboard url>#decision/<id>`), in one line.
 - Answers arrive in the chat watch as `[<id>]` lines of `Q3: ...`. Record each: `--answer "Q3: <their words>"`. A question that stopped mattering: `--drop "Q4: why"`; one you would now ask differently: `--revise "Q3: <title> | <question> | <recommendation> | <why>"`.
 - The frontier is empty and the user has confirmed: `--done "<what was agreed>"`.
