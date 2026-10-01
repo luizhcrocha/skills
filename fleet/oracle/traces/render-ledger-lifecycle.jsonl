@@ -1,0 +1,20 @@
+{"trace": 1, "name": "render-ledger-lifecycle", "about": "ledger-lifecycle.jsonl with every state command rendering the page: index.html is compared byte for byte (its sha256), so the page's payload (fleets.view) is pinned at every step"}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "acme-billing", "--goal", "usage records land"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "Usage records"]}
+{"cli": "state", "argv": ["$DIR", "step", "s1", "--milestone", "m1", "--title", "schema"]}
+{"cli": "state", "argv": ["$DIR", "step", "s2", "--milestone", "m1", "--title", "writer"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a1", "--task", "write the schema", "--skill", "tdd", "--milestone", "m1", "--lane", "db/schema.sql", "--step", "s1", "--brief", "done when the migration runs"], "clock": "2026-01-05T09:05:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--kind", "decision", "--title", "Key shape", "--question", "uuid or ulid?", "--why", "blocks the schema", "--blocking", "--agent", "a1", "--option", "A: uuid | random", "--option", "B: ulid | sortable", "--recommend", "B", "--reason", "sorts by time"], "clock": "2026-01-05T09:10:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "roadblock", "r1", "--title", "key shape", "--detail", "needs the user's choice", "--severity", "serious", "--needs", "user", "--agent", "a1", "--decision", "d1"]}
+{"cli": "state", "argv": ["$DIR", "set", "--now", "a1 waits on D1"], "clock": "2026-01-05T09:12:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "D1", "--decide", "B: ulid", "--resolution", "answered on the page (#1)"], "clock": "2026-01-05T09:30:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--why", "too late"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a1", "--status", "done", "--tokens", "1200", "--duration-ms", "60000", "--report", "migration runs", "--step", "s1", "--log", "verified"], "clock": "2026-01-05T09:50:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "agent", "a2", "--task", "the writer", "--milestone", "m1", "--step", "s2"]}
+{"cli": "state", "argv": ["$DIR", "set", "--status", "paused"], "clock": "2026-01-05T10:20:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "park", "Luiz paused the fleet"]}
+{"cli": "state", "argv": ["$DIR", "keep", "ws-a2", "a2's workspace holds the half-done writer"]}
+{"cli": "state", "argv": ["$DIR", "event", "--agent", "nobody", "x"]}
+{"cli": "state", "argv": ["$DIR", "note", "x"]}
+{"cli": "state", "argv": ["$DIR", "show"], "clock": "2026-01-05T11:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "set", "--now", "paused for the night"]}

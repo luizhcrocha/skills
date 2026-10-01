@@ -1,0 +1,35 @@
+{"trace": 1, "name": "render-decisions", "about": "decisions.jsonl with every state command rendering the page: index.html is compared byte for byte (its sha256), so the page's payload (fleets.view) is pinned at every step"}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "M"]}
+{"cli": "state", "argv": ["$DIR", "step", "s1", "--milestone", "m1", "--title", "schema"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a1", "--task", "t", "--milestone", "m1", "--name", "invoice-gen"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--kind", "decision", "--title", "Key shape", "--question", "uuid or ulid?", "--why", "blocks the schema", "--blocking", "--agent", "a1", "--option", "A: uuid | random", "--option", "B: ulid | sortable", "--recommend", "B", "--reason", "sorts by time"], "clock": "2026-01-05T09:05:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "d2", "--kind", "decision", "--title", "One option", "--question", "q", "--why", "w", "--option", "A: a | x", "--recommend", "A", "--reason", "r"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d2", "--kind", "decision", "--title", "Bad rec", "--question", "q", "--why", "w", "--option", "A: uuid | random", "--option", "B: ulid | sortable", "--recommend", "C", "--reason", "r"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d2", "--kind", "input", "--title", "Region", "--question", "which region?", "--why", "w", "--step", "s1"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d3", "--kind", "secret", "--title", "Stripe key", "--question", "where is it?", "--why", "w", "--manual", "secretspec set STRIPE"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d3", "--kind", "secret", "--title", "Stripe key", "--question", "where is it?", "--why", "w", "--secret", "STRIPE_TEST_KEY", "--manual", "secretspec set STRIPE_TEST_KEY", "--asks", "manager"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d4", "--kind", "action", "--title", "Rotate", "--question", "rotate the token?", "--why", "w"]}
+{"fixture": "write", "path": "$W/evidence.html", "content": "<h2>Evidence</h2><p>as of 09:10</p>\n"}
+{"cli": "state", "argv": ["$DIR", "decision", "d4", "--kind", "action", "--title", "Rotate", "--question", "rotate the token?", "--why", "w", "--manual", "just rotate", "--body", "$W/evidence.html"], "clock": "2026-01-05T09:10:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--question", "uuid, ulid or serial?", "--why", "still blocks"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--question", "uuid, ulid or serial?", "--same-options", "--log", "the question widened"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--not-blocking"], "clock": "2026-01-05T09:20:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "S1", "--asks", "user", "--blocking"]}
+{"cli": "state", "argv": ["$DIR", "decision", "A1", "--no-body"]}
+{"cli": "state", "argv": ["$DIR", "decision", "D1", "--decide", "B: ulid"]}
+{"cli": "state", "argv": ["$DIR", "decision", "D1", "--decide", "B: ulid", "--resolution", "answered on the page (#4)"], "clock": "2026-01-05T09:30:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--why", "late"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--decide", "A"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--step", "s1"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d5", "--kind", "decision", "--title", "Key again", "--question", "q", "--why", "w", "--option", "A: uuid | random", "--option", "B: ulid | sortable", "--recommend", "B", "--reason", "sorts by time", "--supersedes", "d2"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d5", "--kind", "decision", "--title", "Key again", "--question", "q", "--why", "w", "--option", "A: uuid | random", "--option", "B: ulid | sortable", "--recommend", "B", "--reason", "sorts by time", "--supersedes", "D1"]}
+{"cli": "state", "argv": ["$DIR", "decision", "I1", "--withdraw", "found in the ADR"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d6", "--title", "Deploy now?", "--question", "ship it?", "--decide", "yes", "--resolution", "said in the session"], "clock": "2026-01-05T09:40:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "bad id", "--kind", "input", "--title", "T", "--question", "q", "--why", "w"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d7", "--kind", "input", "--title", "T", "--question", "q", "--why", "w", "--agent", "ghost"]}
+{"cli": "state", "argv": ["$DIR", "decision", "g2", "--kind", "grill", "--title", "t", "--question", "q", "--why", "w"]}
+{"cli": "state", "argv": ["$DIR", "decision", "D4", "--kind", "input", "--title", "Looks like a number", "--question", "q", "--why", "w"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d8", "--kind", "decision", "--title", "Later", "--question", "q", "--why", "w", "--option", "A: uuid | random", "--option", "B: ulid | sortable", "--recommend", "B", "--reason", "sorts by time"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d8", "--kind", "decision", "--title", "Later", "--question", "q", "--why", "w", "--option", "A: uuid | random", "--option", "B: ulid | sortable", "--recommend", "B", "--reason", "sorts by time"]}
+{"cli": "state", "argv": ["$DIR", "show"], "clock": "2026-01-05T10:00:00+00:00"}

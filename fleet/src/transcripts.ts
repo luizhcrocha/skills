@@ -4,11 +4,12 @@
  * `<session>/subagents/agent-<id>.jsonl`. Any other DIR has none, and every figure read here is absent
  * (open-23: stage 4 replaces this with the heartbeat).
  */
+import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
 
 import { stampOf } from "./clock.ts";
 import { isDir, listDir, mtimeOf, readBytes, readText, resolvePath } from "./files.ts";
-import { asNumber, asObject, asString, parseJson, type JsonObject } from "./json.ts";
+import { asNumber, asObject, asString, parseJson, truthy, type JsonObject } from "./json.ts";
 import * as Option from "effect/Option";
 
 /** Where Claude Code keeps transcripts: `$CLAUDE_CONFIG_DIR`, else `~/.claude`. */
@@ -134,36 +135,95 @@ export interface Spent {
   readonly answers: number;
 }
 
-/** What the session that owns `root` spent, or undefined when it has no transcript. */
+interface Held {
+  offset: number;
+  inode: bigint;
+  looked: number;
+  spent: Spent;
+  readonly answers: Map<string, readonly [number, number, number, number]>;
+}
+
+/** Reads what sessions spent, each transcript from where the last look stopped (Python's `spend.of`):
+ * a long-running reader (the hub) reads a growing transcript once. */
+export class SpendReader {
+  private readonly held = new Map<string, Held>();
+
+  /** What the session that owns `root` spent, or undefined when it has no transcript. The transcript
+   * is looked at again once `waitS` seconds have passed since the last look. */
+  of(root: string, config: string, waitS = 5): Spent | undefined {
+    const path = transcriptOf(root, config);
+
+    if (path === undefined) return undefined;
+    const now = performance.now() / 1000;
+    let held = this.held.get(path);
+
+    if (held !== undefined && now - held.looked < waitS) return held.spent;
+    let stat: { readonly size: bigint; readonly ino: bigint };
+
+    try {
+      stat = statSync(path, { bigint: true });
+    } catch {
+      this.held.delete(path);
+
+      return undefined;
+    }
+
+    const size = Number(stat.size);
+
+    if (held === undefined || size < held.offset || stat.ino !== held.inode) {
+      held = { offset: 0, inode: stat.ino, looked: now, spent: { output: 0, input: 0, cached: 0, answers: 0 }, answers: new Map() };
+    }
+
+    if (size > held.offset) {
+      const chunk = readRange(path, held.offset, size);
+      const whole = chunk.subarray(0, chunk.lastIndexOf(0x0a) + 1);
+      held.offset += whole.length;
+
+      for (const line of whole.toString("utf8").split("\n")) {
+        if (!line.includes('"usage"')) continue;
+        const record = asObject(Option.getOrUndefined(parseJson(line)));
+        const message = asObject(record?.["message"]);
+
+        if (record === undefined || record["type"] !== "assistant" || truthy(record["isSidechain"]) || message === undefined) continue;
+        const usage = asObject(message["usage"]);
+        const id = asString(message["id"]);
+
+        if (usage !== undefined && id !== undefined) held.answers.set(id, figures(usage));
+      }
+    }
+
+    let output = 0;
+    let input = 0;
+    let cached = 0;
+
+    for (const [o, fresh, written, read] of held.answers.values()) {
+      output += o;
+      input += fresh + written;
+      cached += read;
+    }
+
+    held.looked = now;
+    held.spent = { output, input: input + cached, cached, answers: held.answers.size };
+    this.held.set(path, held);
+
+    return held.spent;
+  }
+}
+
+function readRange(path: string, from: number, to: number): Buffer {
+  const chunk = Buffer.alloc(to - from);
+  const fd = openSync(path, "r");
+
+  try {
+    readSync(fd, chunk, 0, chunk.length, from);
+  } finally {
+    closeSync(fd);
+  }
+
+  return chunk;
+}
+
+/** What the session that owns `root` spent, read now, or undefined when it has no transcript. */
 export function spentBy(root: string, config: string): Spent | undefined {
-  const path = transcriptOf(root, config);
-  const text = path === undefined ? undefined : readText(path);
-
-  if (text === undefined) return undefined;
-  const whole = text.slice(0, text.lastIndexOf("\n") + 1);
-  const answers = new Map<string, readonly [number, number, number, number]>();
-
-  for (const line of whole.split("\n")) {
-    if (!line.includes('"usage"')) continue;
-    const record = asObject(Option.getOrUndefined(parseJson(line)));
-    const message = asObject(record?.["message"]);
-
-    if (record === undefined || record["type"] !== "assistant" || record["isSidechain"] === true || message === undefined) continue;
-    const usage = asObject(message["usage"]);
-    const id = asString(message["id"]);
-
-    if (usage !== undefined && id !== undefined) answers.set(id, figures(usage));
-  }
-
-  let output = 0;
-  let input = 0;
-  let cached = 0;
-
-  for (const [o, fresh, written, read] of answers.values()) {
-    output += o;
-    input += fresh + written;
-    cached += read;
-  }
-
-  return { output, input: input + cached, cached, answers: answers.size };
+  return new SpendReader().of(root, config, 0);
 }

@@ -1,0 +1,45 @@
+{"trace": 1, "name": "render-plan-and-grill", "about": "plan-and-grill.jsonl with every state command rendering the page: index.html is compared byte for byte (its sha256), so the page's payload (fleets.view) is pinned at every step"}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "Usage records"]}
+{"cli": "state", "argv": ["$DIR", "milestone", "m2", "--title", "Verify and ship"]}
+{"cli": "state", "argv": ["$DIR", "milestone", "m3"]}
+{"cli": "state", "argv": ["$DIR", "step", "l1", "--milestone", "m1", "--title", "billing: push master"]}
+{"cli": "state", "argv": ["$DIR", "step", "l0", "--milestone", "m1", "--title", "usage: the repair"]}
+{"cli": "state", "argv": ["$DIR", "step", "l2", "--milestone", "m1", "--title", "usage: deploy"]}
+{"cli": "state", "argv": ["$DIR", "step", "l0", "--before", "l1"]}
+{"cli": "state", "argv": ["$DIR", "step", "l0", "--after", "l2"]}
+{"cli": "state", "argv": ["$DIR", "step", "l9", "--milestone", "m1", "--title", "infra: rebuild the index", "--before", "l2"]}
+{"cli": "state", "argv": ["$DIR", "step", "s1", "--milestone", "m2", "--title", "elsewhere"]}
+{"cli": "state", "argv": ["$DIR", "step", "l0", "--before", "s1"]}
+{"cli": "state", "argv": ["$DIR", "step", "l0", "--after", "l7"]}
+{"cli": "state", "argv": ["$DIR", "step", "l0", "--before", "l0"]}
+{"cli": "state", "argv": ["$DIR", "step", "l0", "--milestone", "m2"]}
+{"cli": "state", "argv": ["$DIR", "step", "l0", "--title", "usage: five case pass changes", "--status", "current"]}
+{"cli": "state", "argv": ["$DIR", "step", "l2", "--remove", "queued twice"]}
+{"cli": "state", "argv": ["$DIR", "step", "l2", "--remove", "again"]}
+{"cli": "state", "argv": ["$DIR", "step", "next", "--milestone", "m1", "--title", "c"]}
+{"cli": "state", "argv": ["$DIR", "step", "next", "--milestone", "m2", "--title", "d"]}
+{"cli": "state", "argv": ["$DIR", "step", "next", "--milestone", "m9", "--title", "e"]}
+{"cli": "state", "argv": ["$DIR", "step", "s9", "--milestone", "m1", "--title", "T", "--agent", "nobody"]}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--ask", "a | b | c | d"], "clock": "2026-01-05T09:10:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--title", "T", "--ask", "a | b | c"]}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--title", "Tab", "--ask", "Where | tab or sidebar? | tab | a tab opens first on a phone", "--ask", "Secrets | how? | refs | a value never passes the page", "--step", "l9"]}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--answer", "Q1: a sidebar", "--of", "q1", "--ask", "Side | left or right? | left | the chat is on the right"], "clock": "2026-01-05T09:20:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--reason", "Q2: refs resolve where the code reads them"]}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--revise", "Q2: Secrets | how, again? | refs | still"]}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--done", "x"]}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--answer", "left"]}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--drop", "Q2: settled in the session", "--answer", "Q3: left", "--done", "a left sidebar"], "clock": "2026-01-05T09:30:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--ask", "late | q | r | w"]}
+{"cli": "state", "argv": ["$DIR", "keep", "hunk-open", "pglite.worker.ts: hold the ENOENT rejection"]}
+{"cli": "state", "argv": ["$DIR", "keep", "hunk-open", "pglite.worker.ts: hold it, reworded"]}
+{"cli": "state", "argv": ["$DIR", "keep", "x"]}
+{"cli": "state", "argv": ["$DIR", "keep", "x", "--drop", "y"]}
+{"cli": "state", "argv": ["$DIR", "keep", "hunk-open", "--drop", "landed in l3"]}
+{"cli": "state", "argv": ["$DIR", "link", "l1"]}
+{"cli": "state", "argv": ["$DIR", "link", "review", "--url", "https://box.ts.net:47843/", "--title", "Lab review", "--kind", "page"]}
+{"cli": "state", "argv": ["$DIR", "link", "review", "--decision", "d9"]}
+{"cli": "state", "argv": ["$DIR", "link", "L1", "--note", "mark each hit", "--decision", "G1"]}
+{"cli": "state", "argv": ["$DIR", "link", "dev", "--url", "http://127.0.0.1:5173/", "--title", "Vite"]}
+{"cli": "state", "argv": ["$DIR", "link", "review", "--drop", "the review is done"]}
+{"cli": "state", "argv": ["$DIR", "show"], "clock": "2026-01-05T10:00:00+00:00"}

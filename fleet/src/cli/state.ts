@@ -3,7 +3,6 @@
  * one command is SPEC's: refuse `note`, strip `--no-render`/`-q`, parse, make DIR, read the ledger, run
  * the handler, print the warnings, then number, stamp, check and write, and render the page.
  */
-import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 import * as Effect from "effect/Effect";
@@ -14,6 +13,10 @@ import { stampOf } from "../clock.ts";
 import { Refusal, stateRefusal, UsageError } from "../errors.ts";
 import { exists, makeDirs, readText, resolvePath, SKILL_DIR, writeText } from "../files.ts";
 import { Out } from "../io.ts";
+import { parseObject } from "../json.ts";
+import { cliLookups } from "../page/lookups.ts";
+import { pageHtml, readTemplate, TEMPLATE, writePage } from "../page/render.ts";
+import { view } from "../page/view.ts";
 import * as commands from "../ledger/commands.ts";
 import { ledgerText, parseLedger, type Ledger } from "../ledger/model.ts";
 import { nextStepId, number } from "../ledger/numbers.ts";
@@ -211,31 +214,29 @@ function ensureBrief(root: string, ledger: Ledger): void {
   if (ledger.role === "manager" && !exists(standing)) writeText(standing, readText(join(SKILL_DIR, "assets", "standing.md")) ?? "");
 }
 
-/** What the renderer reads from the environment: the command's own, not the process's. */
-const RENDER_ENV = ["FLEET_HOME", "FLEET_NOW", "FLEET_DISCOVER", "TZ", "HOME", "CLAUDE_CONFIG_DIR", "XDG_STATE_HOME"] as const;
-
-/** The page, rendered by the Python renderer until stage 3 brings the hub: it validates, stamps
- * `updated`, writes state.json again and writes DIR/index.html around `fleets.view()`. */
-function render(machine: Machine, root: string, quiet: boolean): Effect.Effect<number, never, Out> {
+/** The page: `updated` stamped again, state.json written a second time (open-15), and DIR/index.html
+ * written around the page's view of the ledger, as Python's `render_dashboard.main` does. */
+function render(machine: Machine, root: string, ledger: Ledger, quiet: boolean): Effect.Effect<number, never, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
-    const env = { ...process.env };
+    ledger.updated = stampOf(machine.now());
+    const text = ledgerText(ledger);
+    writeText(join(root, "state.json"), text);
+    const template = readTemplate();
+    const html = template === undefined ? new Error(`cannot read ${TEMPLATE}`) : pageHtml(template, view(machine, cliLookups(), Option.getOrElse(parseObject(text), () => ({})), root), false);
 
-    for (const name of RENDER_ENV) {
-      const value = machine.env(name);
+    if (html instanceof Error) {
+      out.err(`render_dashboard: ${html.message}\n`);
 
-      if (value === undefined) delete env[name];
-      else env[name] = value;
+      return 1;
     }
 
-    const script = join(SKILL_DIR, "scripts", "render_dashboard.py");
-    const done = spawnSync("python3", [script, join(root, "state.json"), join(root, "index.html")], { encoding: "utf8", env });
+    const page = join(root, "index.html");
+    writePage(page, html);
 
-    if (!quiet && done.stdout !== "") out.out(done.stdout);
+    if (!quiet) out.out(`rendered ${page} (${ledger.agents.length} agents, updated ${ledger.updated})\n`);
 
-    if (done.stderr !== "") out.err(done.stderr);
-
-    return done.status ?? 1;
+    return 0;
   });
 }
 
@@ -323,7 +324,7 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<nu
       return 0;
     }
 
-    return yield* render(machine, root, quiet);
+    return yield* render(machine, root, result, quiet);
   });
 }
 

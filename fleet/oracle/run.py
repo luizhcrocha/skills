@@ -111,8 +111,8 @@ class Session:
     # -- observing ----------------------------------------------------------------------------
     def _read(self, path: Path, rel: str):
         data = path.read_bytes()
-        if rel.endswith("index.html"):
-            return {"present": True}  # the page is the template around fleets.view(): stage 3's contract
+        if rel.endswith("index.html"):  # the page is the template around fleets.view(), compared byte for byte
+            return {"sha256": hashlib.sha256(self.canon(data.decode("utf-8", "replace")).encode()).hexdigest()}
         if rel.endswith(".jsonl"):
             rows = []
             for line in data.split(b"\n"):
