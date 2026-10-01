@@ -1,4 +1,39 @@
 #!/bin/sh
-# The fleet CLI: `fleet state|chat|fleets|hub|serve|render|usage|spend|served ...`, run by Bun from the TypeScript sources.
+# The fleet CLI: `fleet state|chat|fleets|ws|brief|turn|advisor|hub|serve|render|usage|spend|served ...`,
+# run by Bun from the TypeScript sources. A plugin installed from the marketplace has no node_modules:
+# the first run installs the locked dependencies, and so does a run after bun.lock or package.json
+# changed, quietly unless the install fails.
 here=$(dirname "$(readlink -f "$0")")
-exec bun "$here/../src/main.ts" "$@"
+root=$(dirname "$here")
+
+if ! command -v bun >/dev/null 2>&1; then
+  needs=$(sed -n '/"bun": *"/{s/.*"bun": *"\([^"]*\)".*/\1/p;q;}' "$root/package.json")
+  echo "fleet: needs Bun ${needs:-(see $root/package.json)} on PATH, and there is none: install it (https://bun.sh)" >&2
+  exit 127
+fi
+
+stamp=$root/node_modules/.fleet-installed
+if [ ! -f "$stamp" ] || [ "$root/bun.lock" -nt "$stamp" ] || [ "$root/package.json" -nt "$stamp" ]; then
+  # One install at a time: a coordinator and its workers may all start on a fresh install.
+  lock=$root/.install.lock
+  tries=0
+  until mkdir "$lock" 2>/dev/null; do
+    tries=$((tries + 1))
+    if [ "$tries" -gt 600 ]; then
+      echo "fleet: another install has held $lock for 60 s; remove it if no install runs" >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  if [ ! -f "$stamp" ] || [ "$root/bun.lock" -nt "$stamp" ] || [ "$root/package.json" -nt "$stamp" ]; then
+    if ! log=$(cd "$root" && bun install --frozen-lockfile 2>&1); then
+      rmdir "$lock"
+      printf 'fleet: installing its dependencies failed (bun install --frozen-lockfile in %s):\n%s\n' "$root" "$log" >&2
+      exit 1
+    fi
+    touch "$stamp"
+  fi
+  rmdir "$lock"
+fi
+
+exec bun "$root/src/main.ts" "$@"
