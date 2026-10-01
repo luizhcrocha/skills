@@ -119,6 +119,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | M17 | M, usage | Read the usage windows before giving a turn to work that spawns many workers | mech (reading) / judg | usage reading | print | later: `step --status current` in `landings` could print the windows; stays later until there are thresholds (L6, decided) |
 | M18 | M, usage | A coordinator that reads far more than its workers write is told | mech (ratio) / judg (threshold) | spend | | later: needs a threshold (L6, decided: stays later) |
 | M19 | M, stop | Tell every coordinator, give the turn back, `serve --stop` | judg | | | prose |
+| M20 | M, waiting | What waits on the user is read from the fleets' ledgers (`fleet fleets waiting`), never from the manager's memory or standing.md; what the user does on a fleet's page reaches the manager's watch (`--fleets`, armed while something the manager owns or relays waits on the user) | mech | ledgers, chats, registry | print | code (2026-10-01): `fleets waiting`, `chat watch --fleets` with per-fleet cursors and a `--batch` window (both); prose: run it before saying anything waits |
 
 ## tuca-mode and its fleet playbooks
 

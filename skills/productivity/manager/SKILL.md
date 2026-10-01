@@ -35,7 +35,7 @@ The manager runs on the plugin's fleet CLI, `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fle
 2. `fleet state <dir> init --role manager --project "<this machine, or the programme>" --goal "<what the fleets are landing together>"`: the ledger starts with the landing queue, milestone `landings`.
 3. `fleet serve <dir>` puts the manager on the machine's hub (the `fleet-hub` service), and give the user the hub's address (the printed one without its `f/manager/`): it is the one address for everything, since every fleet's page is served under it at `f/<fleet>/`, the index lists them all (and the fleets of the user's other machines that run a hub), and every page's header has a switcher. When it says no hub runs, ask the user to start it (`systemctl --user start fleet-hub`), or on a machine without the service run `fleet hub` as a background command of this session meanwhile. The page shows every coordinator with the way to its page, and one list of what waits on the user across all of them.
 4. `ListAgents` names this session. Record it, so coordinators can write to you: `fleet fleets name <dir> <session>`.
-5. Arm the chat watch as a background Bash command (`run_in_background: true`, `timeout: 3300000`, as DASHBOARD.md explains): `fleet chat <dir> watch --as manager --all --resume --once`. It exits with the first news (a message, or a fleet not reading its chat), which wakes you; handle it and arm the same command again.
+5. Arm the chat watch as a background Bash command (`run_in_background: true`, `timeout: 3300000`, as DASHBOARD.md explains): `fleet chat <dir> watch --as manager --all --resume --once`. It exits with the first news (a message, or a fleet not reading its chat), which wakes you; handle it and arm the watch again. While something you own or relay waits on the user (a decision you passed on, a question you asked them, a landing waiting on their go), add `--fleets`: see [Waiting on the user](#waiting-on-the-user).
 6. Write to each coordinator (`SendMessage` to its session) that a manager is present: your session, your page, the path of `standing.md`, and that decisions, questions for other fleets, and landings now come to you. Ask each for what it owns, what it has in flight, and what it is waiting on.
 7. Fill `standing.md` from their answers and from what the user tells you.
 
@@ -103,14 +103,23 @@ A monitor agent you spawn (app metrics, runs, executions, reporting back to you)
 
 ## Waiting on the user
 
-Waiting on the user is a subscription, never a status re-read: whoever asks arms the `wait` command opening the decision prints, as a background command. A fleet's every state command warns while an answer on its page is unrecorded; your watch prints `! <fleet> has not recorded the user's answer to A6 ...` after two minutes: `SendMessage` that fleet to record it, and tell no one it still waits on the user. When the answer means the fleet must act first (a fix, a new command), it records it with `decision A6 --hold "<what it does first>"` and re-presents the item by revising it; the same for your own decisions. `fleet fleets show` names a held item and its reason.
+**What waits on the user is what `fleet fleets waiting` prints**, and nothing else: every open decision for the user across the fleets' ledgers (yours included), with since when, and `ANSWERED at ...; not recorded yet` when the user answered on a page and the fleet has not recorded it. Run it before you tell the user anything waits on them, every time. Your memory, your notes and `standing.md` never decide what is waiting: the user answers on any fleet's page, and only the ledgers know. An answered item is not asked again; an unrecorded answer is the fleet's to record.
+
+Waiting on the user is a subscription, never a status re-read: whoever asks arms the `wait` command opening the decision prints, as a background command. While something you own or relay waits on the user, arm your watch with `--fleets` (`fleet chat <dir> watch --as manager --all --resume --once --fleets`, same `timeout: 3300000`, `run_in_background: true`); when nothing does, the plain watch. With `--fleets` it also prints what the user does on every fleet's page:
+
+- `infra: you answered D18 <title>: <first line>`, `infra: you wrote to coordinator: <first line>`;
+- `infra I2 opened for you: <title>`, and `infra D18 decided: ...`, `withdrawn: ...`, `held: ...`.
+
+The first such line waits two minutes for more (`--batch 120`), so one wake covers a burst of the user's answers; a message to you still wakes you at once. On each line, update your picture: what was answered or decided no longer waits, and you do not ask the user for it again. Its cursors are per fleet, so `--resume` misses nothing and tells nothing twice.
+
+A fleet's every state command warns while an answer on its page is unrecorded; your watch prints `! <fleet> has not recorded the user's answer to A6 ...` after two minutes: `SendMessage` that fleet to record it, and tell no one it still waits on the user. When the answer means the fleet must act first (a fix, a new command), it records it with `decision A6 --hold "<what it does first>"` and re-presents the item by revising it; the same for your own decisions. A held item is off `fleet fleets waiting`; `fleet fleets show` names it and its reason.
 
 ## Said once
 
 Every message between sessions is paid for twice: the sender writes it, the receiver reads it, and both read it again on every later turn. So each thing is said once, by the one who knows it, where the user will read it.
 
 - **A silent worker is checked, not assumed.** Your watch prints `! <fleet>'s worker b50 ... has written nothing since ...` after twenty minutes (`fleet fleets show` marks it too): `SendMessage` that fleet to check it.
-- **A wait is named by its number and read at its source.** Before you tell the user something waits on him, read the decision's current state (`fleet fleets decision <fleet> <number>`), never an earlier message; name it by fleet and number ("waits on Luiz: infra I2"). A Now line naming a closed decision is flagged on the page, and `set --now` warns.
+- **A wait is named by its number and read at its source.** Before you tell the user something waits on him, run `fleet fleets waiting` (and `fleet fleets decision <fleet> <number>` for the detail), never an earlier message or your own list; name it by fleet and number ("waits on Luiz: infra I2"). A Now line naming a closed decision is flagged on the page, and `set --now` warns.
 - **What the page computes is not written.** Under your Now line the page lists the running workers, the current steps and the next ones; the fleets' pages do the same. Your Now line says what they cannot: whose turn it is, what waits on whom, a rule the user just set.
 - **Your own answers too.** What you answer the user on your page (the chat, a side chat) is written there only. The turn that answered ends, in your session, with one line naming where: "Answered #42 on the page." The user reads the page from any device.
 
@@ -143,7 +152,7 @@ Every message is also a reason to look again at what you hold:
 
 ## Reporting to the user
 
-Lead with what waits on them across the fleets, by title and fleet. Then the turn: who has it, who is next. Then what changed since your last message. Give the page's address once, and again when they seem to have lost it.
+Lead with what waits on them across the fleets, by title and fleet, as `fleet fleets waiting` prints it at that moment. Then the turn: who has it, who is next. Then what changed since your last message. Give the page's address once, and again when they seem to have lost it.
 
 ## When you stop
 
