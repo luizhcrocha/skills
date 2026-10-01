@@ -22,6 +22,34 @@
           { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook\" PreCompact", "timeout": 10 }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook\" PostToolUse", "timeout": 5, "async": true }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook\" PostToolUseFailure", "timeout": 5, "async": true }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook\" SubagentStart", "timeout": 5, "async": true }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook\" SubagentStop", "timeout": 5, "async": true }
+        ]
+      }
     ]
   }
 }

@@ -23,6 +23,7 @@ HOOK = ROOT / "hooks" / "tstack-hook"
 HOOKS_JSON = ROOT / "hooks" / "hooks.json"
 MEMO = ROOT / "scripts" / "memo"
 TUCA = ROOT / "bin" / "tuca-mode"
+HEARTBEAT_ONLY = ("PostToolUse", "PostToolUseFailure", "SubagentStart", "SubagentStop")
 
 
 def tool_use(name, **tool_input):
@@ -416,6 +417,145 @@ class NeverBreakTest(HookCase):
         self.assertIn("# memo", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
 
 
+def load_hook():
+    """hooks/tstack-hook as a module, to time a handler without the interpreter's start-up."""
+    from importlib.machinery import SourceFileLoader
+    from importlib.util import module_from_spec, spec_from_loader
+    loader = SourceFileLoader("tstack_hook_under_test", str(HOOK))
+    module = module_from_spec(spec_from_loader("tstack_hook_under_test", loader))
+    loader.exec_module(module)
+    return module
+
+
+class HeartbeatTest(HookCase):
+    """fleet_heartbeat: one file per session (and subagent) in DIR/heartbeats/, inside a fleet only."""
+
+    def setUp(self):
+        super().setUp()
+        self.env["MEMO_QUIET"] = "1"
+        self.pad = self.tmp / "scratchpad"
+        self.fleet = self.pad / "coordinator"
+        self.fleet.mkdir(parents=True)
+        (self.fleet / "state.json").write_text('{"project": "p"}')
+        (self.pad / "notes").mkdir()  # a folder without a ledger is no fleet
+
+    def tool(self, event="PostToolUse", **extra):
+        return {**self.base(event), "scratchpad_dir": str(self.pad), "tool_name": "Edit",
+                "tool_input": {"file_path": str(self.repo / "a.py")}, "tool_use_id": "toolu_1", **extra}
+
+    def beats(self, fleet=None):
+        folder = (fleet or self.fleet) / "heartbeats"
+        return {p.name: json.loads(p.read_text()) for p in sorted(folder.glob("*.json"))} if folder.is_dir() else {}
+
+    def test_a_tool_call_in_a_fleet_writes_the_sessions_heartbeat(self):
+        r = self.hook("PostToolUse", self.tool(), env={"FLEET_NOW": "2026-01-05T09:00:00+00:00", "TZ": "UTC"})
+        self.assertSilent(r)
+        beat = self.beats()["sess-1.json"]
+        self.assertEqual(beat, {
+            "session": "sess-1", "agent": None, "agent_type": None, "worker": None, "cwd": str(self.repo),
+            "workspace": None, "path": str(self.repo / "a.py"), "tool": "Edit", "event": "PostToolUse",
+            "at": "2026-01-05T09:00:00+00:00", "transcript": str(self.transcript), "agent_transcript": None})
+        self.assertEqual([p.name for p in (self.fleet / "heartbeats").iterdir()], ["sess-1.json"])  # no tmp left
+        self.assertFalse((self.pad / "notes" / "heartbeats").exists())
+
+    def test_the_next_call_replaces_it_and_subagents_beat_apart(self):
+        self.hook("PostToolUse", self.tool(), env={"FLEET_NOW": "2026-01-05T09:00:00+00:00", "TZ": "UTC"})
+        self.hook("PostToolUse", self.tool(tool_name="Bash", tool_input={"command": "ls"}),
+                  env={"FLEET_NOW": "2026-01-05T09:07:00+00:00", "TZ": "UTC"})
+        self.hook("PostToolUse", self.tool(agent_id="ab12", agent_type="general-purpose"), env={"TZ": "UTC"})
+        self.hook("SubagentStop", {**self.tool("SubagentStop", agent_id="cd34", agent_transcript_path="/t/agent-cd34.jsonl")})
+        beats = self.beats()
+        self.assertEqual(sorted(beats), ["sess-1.ab12.json", "sess-1.cd34.json", "sess-1.json"])
+        self.assertEqual((beats["sess-1.json"]["tool"], beats["sess-1.json"]["at"], beats["sess-1.json"]["path"]),
+                         ("Bash", "2026-01-05T09:07:00+00:00", None))
+        self.assertEqual((beats["sess-1.ab12.json"]["agent"], beats["sess-1.ab12.json"]["agent_type"]), ("ab12", "general-purpose"))
+        self.assertEqual((beats["sess-1.cd34.json"]["event"], beats["sess-1.cd34.json"]["agent_transcript"]),
+                         ("SubagentStop", "/t/agent-cd34.jsonl"))
+
+    def test_session_start_and_stop_beat_and_say_only_what_they_said(self):
+        r = self.hook("SessionStart", {**self.base("SessionStart", source="startup"), "scratchpad_dir": str(self.pad)})
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("heartbeat", r.stdout)
+        self.assertEqual(self.beats()["sess-1.json"]["event"], "SessionStart")
+        self.hook("PostToolUse", self.tool(tool_name="Grep"))
+        self.assertSilent(self.hook("Stop", {**self.base("Stop"), "scratchpad_dir": str(self.pad)}))
+        self.assertEqual((self.beats()["sess-1.json"]["event"], self.beats()["sess-1.json"]["tool"]), ("Stop", "Grep"))
+
+    def test_fleet_dir_and_fleet_worker_name_a_worker_launched_on_its_own(self):
+        other = self.tmp / "elsewhere" / "fleet"
+        other.mkdir(parents=True)
+        (other / "state.json").write_text("{}")
+        self.assertSilent(self.hook("PostToolUse", self.tool(), env={"FLEET_DIR": str(other), "FLEET_WORKER": "a1"}))
+        self.assertEqual(self.beats(other)["sess-1.json"]["worker"], "a1")
+        self.assertEqual(self.beats(), {})  # FLEET_DIR wins over the scratchpad
+
+    def test_the_jj_workspace_is_named(self):
+        main = self.tmp / "jjmain"
+        main.mkdir()
+        subprocess.run(["jj", "git", "init"], cwd=main, check=True, capture_output=True)
+        lane = self.tmp / "jjmain-a1"
+        subprocess.run(["jj", "workspace", "add", str(lane), "--name", "a1"], cwd=main, check=True, capture_output=True)
+        (lane / "src").mkdir()
+        self.hook("PostToolUse", self.tool(cwd=str(lane / "src")))
+        self.assertEqual(self.beats()["sess-1.json"]["workspace"], "a1")
+        self.hook("PostToolUse", self.tool(cwd=str(main)))
+        self.assertEqual(self.beats()["sess-1.json"]["workspace"], "default")
+
+    def test_a_no_op_outside_a_fleet(self):
+        cases = [
+            self.base("PostToolUse", tool_name="Edit"),  # no scratchpad named
+            {**self.tool(), "scratchpad_dir": str(self.pad / "notes")},  # a scratchpad without a ledger
+            {**self.tool(), "scratchpad_dir": "relative/path"},
+        ]
+        for payload in cases:
+            self.assertSilent(self.hook("PostToolUse", payload))
+        self.assertSilent(self.hook("PostToolUse", self.tool(), env={"FLEET_DIR": str(self.tmp / "no-ledger")}))
+        self.assertEqual(self.beats(), {})
+        self.assertEqual(list(self.tmp.rglob("heartbeats")), [])
+
+    def test_never_raises(self):
+        odd = [
+            {**self.tool(), "agent_id": 7, "tool_input": ["x"], "tool_name": {"a": 1}},
+            {**self.tool(), "session_id": ""},
+            {**self.tool(), "scratchpad_dir": 42},
+            {**self.tool(), "cwd": str(self.tmp / "gone")},
+        ]
+        for payload in odd:
+            self.assertSilent(self.hook("PostToolUse", payload))
+        shutil.rmtree(self.fleet / "heartbeats")  # the odd input above still beat
+        (self.fleet / "heartbeats").write_text("a file where the folder goes")
+        for event in ("PostToolUse", "PostToolUseFailure", "SubagentStart", "SubagentStop", "Stop"):
+            self.assertSilent(self.hook(event, self.tool(event)))
+        self.assertIn("PostToolUse fleet_heartbeat failed", self.log())
+        broken = self.tmp / "broken-jj"
+        (broken / ".jj" / "working_copy").mkdir(parents=True)
+        (broken / ".jj" / "repo").mkdir()
+        (broken / ".jj" / "working_copy" / "checkout").write_bytes(b"\x12\xff")  # truncated
+        (self.fleet / "heartbeats").unlink()
+        self.assertSilent(self.hook("PostToolUse", self.tool(cwd=str(broken))))
+        self.assertIsNone(self.beats()["sess-1.json"]["workspace"])
+
+    def test_the_handler_takes_a_few_milliseconds(self):
+        module = load_hook()
+        lane = self.tmp / "deep" / "a" / "b" / "c"
+        lane.mkdir(parents=True)
+        payload = self.tool(cwd=str(lane))
+        times = []
+        for _ in range(200):
+            hook = module.Hook("PostToolUse", payload, self.env)
+            started = time.perf_counter()
+            module.fleet_heartbeat(hook)
+            times.append((time.perf_counter() - started) * 1000)
+        print(f"\n  heartbeat handler: median {statistics.median(times):.2f} ms, best {min(times):.2f} ms",
+              end="", file=sys.stderr)
+        self.assertLess(statistics.median(times), 3, times[:20])
+        quiet = module.Hook("PostToolUse", self.base("PostToolUse"), self.env)
+        started = time.perf_counter()
+        for _ in range(200):
+            module.fleet_heartbeat(quiet)
+        self.assertLess((time.perf_counter() - started) * 1000 / 200, 0.5)  # outside a fleet: next to nothing
+
+
 class HooksJsonTest(unittest.TestCase):
     def test_every_registered_event_is_dispatched(self):
         config = json.loads(HOOKS_JSON.read_text())
@@ -429,7 +569,11 @@ class HooksJsonTest(unittest.TestCase):
                     self.assertEqual(h["type"], "command")
                     self.assertEqual(h["command"], f'"${{CLAUDE_PLUGIN_ROOT}}/hooks/tstack-hook" {event}')
                     self.assertLessEqual(h.get("timeout", 60), 10)
+                    # what nobody reads runs in the background: a tool call never waits on a heartbeat
+                    self.assertEqual(h.get("async", False), event in HEARTBEAT_ONLY, event)
         self.assertEqual(config["hooks"]["SessionStart"][0]["matcher"], "startup|resume|clear|compact")
+        for event in HEARTBEAT_ONLY:
+            self.assertNotIn("matcher", config["hooks"][event][0])  # every tool
         self.assertTrue(os.access(HOOK, os.X_OK))
         self.assertTrue(os.access(MEMO, os.X_OK))
         self.assertEqual((ROOT / "bin" / "memo").resolve(), MEMO.resolve())

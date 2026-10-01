@@ -3,8 +3,8 @@
 
 A handler is a small function `handler(hook) -> str | None` listed under its
 event in HANDLERS; what the handlers of one event return is joined and emitted
-in the shape that event takes (EMIT). To add one (fleet heartbeat, say), write
-the function and list it.
+in the shape that event takes (EMIT). To add one, write the function and list
+it; a new event also goes in hooks.json (async when nothing reads its output).
 
 The rule that outranks the rest: a hook never breaks a session. Any error, in
 a handler or in the dispatcher, is logged to ${CLAUDE_PLUGIN_DATA}/hook.log and
@@ -235,10 +235,120 @@ def tuca_mode(hook):
                             bin=ROOT / "bin" / "tuca-mode", session=hook.session_id, data=hook.data_dir)
 
 
+def fleet_dirs(hook):
+    """The fleets this session works for (fleet/SPEC.md, Heartbeats): $FLEET_DIR when it names a
+    ledger (a worker launched as its own process), else each folder of the session's scratchpad that
+    holds a state.json (a coordinator's DIR is <scratchpad>/coordinator; its subagents share it)."""
+    given = hook.env.get("FLEET_DIR")
+    if given:
+        return [given] if os.path.isfile(os.path.join(given, "state.json")) else []
+    pad = hook.input.get("scratchpad_dir")
+    if not isinstance(pad, str) or not os.path.isabs(pad):
+        return []
+    try:
+        with os.scandir(pad) as entries:
+            return [e.path for e in entries if e.is_dir() and os.path.isfile(os.path.join(e.path, "state.json"))]
+    except OSError:
+        return []
+
+
+def _varint(data, i):
+    value = shift = 0
+    while True:
+        byte = data[i]
+        i += 1
+        value |= (byte & 0x7F) << shift
+        shift += 7
+        if not byte & 0x80:
+            return value, i
+
+
+def jj_workspace_name(root):
+    """The name jj gave the workspace at root: field 3 of .jj/working_copy/checkout (a protobuf
+    message: operation id, workspace name), read without a jj process."""
+    try:
+        data = (root / ".jj" / "working_copy" / "checkout").read_bytes()
+    except OSError:
+        return None
+    i = 0
+    try:
+        while i < len(data):
+            key, i = _varint(data, i)
+            if key & 7 != 2:  # every field of this message is length-delimited
+                return None
+            size, i = _varint(data, i)
+            if key >> 3 == 3:
+                return data[i:i + size].decode("utf-8", "replace")
+            i += size
+    except IndexError:  # a truncated file: no name
+        pass
+    return None
+
+
+def fleet_stamp(env):
+    """Now as the fleet stamps it (the coordinator's scripts/clock.py): $FLEET_NOW when it is set,
+    in local time with its offset, to the second."""
+    from datetime import datetime, timezone
+    at = None
+    if env.get("FLEET_NOW"):
+        try:
+            at = datetime.fromisoformat(env["FLEET_NOW"])
+            at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+        except ValueError:
+            at = None
+    return (at or datetime.now(timezone.utc)).astimezone().isoformat(timespec="seconds")
+
+
+def fleet_heartbeat(hook):
+    """Every tool call, session start and stop, subagent start and stop: one small file per session
+    (and per subagent) in DIR/heartbeats/, which the hub reads for a worker's last-seen and the
+    silent-worker warning. A no-op outside a fleet; one atomic write per fleet, no process."""
+    dirs = fleet_dirs(hook)
+    if not dirs or not hook.session_id:
+        return None
+    data = hook.input
+
+    def text(key):
+        value = data.get(key)
+        return value if isinstance(value, str) and value else None
+
+    agent = text("agent_id")
+    tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+    paths = (tool_input.get(k) for k in ("file_path", "notebook_path", "path"))
+    path = next((p for p in paths if isinstance(p, str) and os.path.isabs(p)), None)
+    found = jj_workspace(hook.cwd)
+    beat = {
+        "session": hook.session_id, "agent": agent, "agent_type": text("agent_type"),
+        "worker": hook.env.get("FLEET_WORKER") or None, "cwd": hook.cwd,
+        "workspace": jj_workspace_name(found[0]) if found else None, "path": path,
+        "tool": text("tool_name"), "event": hook.event, "at": fleet_stamp(hook.env),
+        "transcript": text("transcript_path"), "agent_transcript": text("agent_transcript_path"),
+    }
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", hook.session_id + (f".{agent}" if agent else ""))
+    for d in dirs:
+        folder = Path(d) / "heartbeats"
+        folder.mkdir(exist_ok=True)
+        path = folder / f"{name}.json"
+        if beat["tool"] is None:  # a start or a stop keeps the last tool the session ran
+            try:
+                last = json.loads(path.read_text()).get("tool")
+                beat["tool"] = last if isinstance(last, str) else None
+            except (OSError, ValueError, AttributeError):
+                pass
+        tmp = folder / f".{name}.{os.getpid()}"
+        tmp.write_text(json.dumps(beat))
+        os.replace(tmp, path)
+    return None
+
+
 HANDLERS = {
-    "SessionStart": [memo_wake, jj_hints, tuca_mode],
-    "Stop": [memo_nudge],
+    "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_heartbeat],
+    "Stop": [memo_nudge, fleet_heartbeat],
     "PreCompact": [memo_precompact],
+    "PostToolUse": [fleet_heartbeat],
+    "PostToolUseFailure": [fleet_heartbeat],
+    "SubagentStart": [fleet_heartbeat],
+    "SubagentStop": [fleet_heartbeat],
 }
 
 
