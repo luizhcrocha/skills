@@ -19,7 +19,8 @@ How to read it:
 Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 [The ledger](#the-ledger-statejson) · [Numbers](#numbers-refs) · [Warnings](#warnings) ·
 [chat.py](#chatpy-the-chat) · [fleets.py and the registry](#fleetspy-and-the-registry) ·
-[The other scripts](#the-other-scripts) · [The hub](#the-hub-fleet-hub) · [Files by writer](#files-by-writer) ·
+[The other scripts](#the-other-scripts) · [The hub](#the-hub-fleet-hub) · [Heartbeats](#heartbeats) ·
+[Workspaces](#workspaces-fleet-ws) · [Files by writer](#files-by-writer) ·
 [Oracle traces](#oracle-traces) · [The model](#the-model-based-test) · [Open](#open)
 
 ## Environment
@@ -36,6 +37,8 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `FLEET_UNHEARD_S` | chat.py | how long the user's message waits unread before a manager's watch tells (default 120 s) |
 | `TAILSCALE` | serve_dashboard.py, `fleet hub`, `fleet serve`, `fleet served` | the tailscale binary |
 | `FLEET_HUB_PORT` | `fleet hub`, `fleet serve` | the hub's port (default 7420); `--port` wins |
+| `FLEET_DIR` | the plugin's hook (`fleet_heartbeat`) | the fleet DIR a session works for when its scratchpad holds none: a worker launched as its own Claude Code process. See [Heartbeats](#heartbeats) |
+| `FLEET_WORKER` | the plugin's hook | the worker id such a process is; written into its heartbeat |
 
 A DIR at `…/<project>/<session>/scratchpad/<name>` names a session transcript; any other DIR has
 none, and every figure read from a transcript (spend, worker tokens, liveness) is absent.
@@ -250,7 +253,13 @@ decisions[]   {id, ref, kind, title, question, why, blocking, agent, options[]: 
 events[]      {at, agent|null, kind, text, important?: true, decision?}   append-only
 links[]?      {id, ref, url, title, kind (dev|page), decision, agent, note, since}
 kept[]?       {id, text, at}
+workspaces[]? {id (the jj workspace's name), agent, path, repo (the default workspace's root),
+               base (change id), added, status (active|pruned), pruned?}   written by `fleet ws` only
 ```
+
+`workspaces` is a key neither state.py nor `fleet state` knows: both keep it as it is (Python
+round-trips the whole object, TypeScript keeps a ledger's unknown keys in place), and the page's view
+passes it through. No oracle trace has it.
 
 Validation (step 8, every write) requires `project, goal, status, now, started` as strings and
 `roadmap, agents, roadblocks, events` as lists, the statuses above, the agent, step, roadblock and
@@ -471,6 +480,67 @@ itself. A manager made later appears the same way, on the same address.
   the https address when that matters. The stream's `hello` says `{write, reason?, you?}` from the
   same rule. A message's `author` is the login (the owner's, from loopback).
 
+## Heartbeats
+
+The per-tool-call heartbeat stays in the plugin's Python hook dispatcher (D13): `hooks/tstack-hook`'s
+`fleet_heartbeat` runs on PostToolUse, PostToolUseFailure, SubagentStart and SubagentStop (registered
+`async`, so no tool call waits on it) and, inside the synchronous dispatcher, on SessionStart and Stop.
+
+- **Which fleet**: a session belongs to the fleet whose DIR is `$FLEET_DIR` when that is set and holds
+  a `state.json`; else to each folder of its scratchpad (`scratchpad_dir` in the hook's input, Claude
+  Code 2.1.257+) that holds a `state.json`. A coordinator's DIR is `<scratchpad>/coordinator`, and its
+  subagents share its session and scratchpad, so every worker spawned as a subagent beats with no
+  setup; a worker launched as its own process (`claude -p` in its workspace) gets `FLEET_DIR` (and
+  `FLEET_WORKER`) from whoever launches it. Anything else is no fleet, and the handler does nothing.
+  Why not the registry: it is machine-wide (one served fleet would make every session on the machine
+  beat), it needs the fleet served first, and reading it means a file per fleet on every tool call;
+  the scratchpad is the tie the fleet already uses (open-23) and costs one directory listing.
+- **The file**: `DIR/heartbeats/<session>.json`, or `<session>.<agent_id>.json` for a subagent, replaced
+  atomically (a dot-file then a rename): `{session, agent, agent_type, worker, cwd, workspace, path,
+  tool, event, at, transcript, agent_transcript}`. `workspace` is the jj workspace's name, read from
+  `.jj/working_copy/checkout` (no jj process); `path` is the tool's absolute `file_path`,
+  `notebook_path` or `path`; `at` is a stamp from the fleet's clock (`FLEET_NOW`, local time with its
+  offset). A start or a stop (no tool) keeps the `tool` the file already had. Measured: 0.35 ms median in process inside a fleet, under 0.5 ms outside one; the hook
+  process itself is Python's start-up (~30 ms), off the tool call's path since it runs async.
+- **Never breaks**: a failure is logged to the plugin's `hook.log`, and the hook exits 0 with nothing
+  on stdout. It writes nothing to `state.json` or `chat.jsonl`, so no trace sees it.
+- **Reading** (`src/heartbeat.ts`): each heartbeat is tied to a worker row by, in order, `worker`; the
+  row whose `task_id` is the subagent's `agent`; the id the subagent's transcript gives it on its first
+  line (`your id is X`, as before); the `workspaces[]` row whose name is `workspace` or whose path holds
+  `cwd` or `path`; a workspace named after a worker. A worker's last-seen is its newest heartbeat, else
+  (no heartbeat) its transcript's mtime. The page's view sets the worker's `active` from it, adds
+  `beat: {tool, event}` when a heartbeat says it (the row reads "seen 3 min ago", its title the tool),
+  and the silent rule (`SILENT_S`, twenty minutes) reads the same map: a running or blocked worker not
+  seen for twenty minutes is silent on the page, in `fleets list`, the hub's index and the chat watches.
+  Python's view still reads transcripts only; with no heartbeat both agree, which is every trace.
+
+## Workspaces (`fleet ws`)
+
+One jj workspace per worker that edits code; the coordinator's own (`default`) is the stack.
+
+- `fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH]`: `jj workspace add <repo>-NAME -r
+  <BASE's commit> --name NAME`, beside the default workspace of the repo `--repo` (else the cwd) is
+  in. BASE defaults to `@-` there and must name one commit. Refused: an invalid name or `default`, a
+  name the ledger or jj already has, an existing directory, no jj repo. Records `{id, agent (--agent,
+  else NAME), path, repo, base, added, status: active}`, logs a note, renders the page, and prints the
+  path and the line for the brief.
+- `fleet ws DIR list`: per active workspace, its worker and the worker's status and last-seen, then
+  its `@` (empty, conflicted) and what it holds ahead of the stack. Read with `--ignore-working-copy`:
+  a worker's files are never snapshotted under it while it works.
+- `fleet ws DIR prune [--apply | --dry-run]`: a workspace goes when (1) its worker's row is not
+  running, queued or blocked (done, failed, stopped, or no row: gone); (2) its directory, if it is
+  there, is the one jj knows as that workspace (`jj workspace root --name`) and its `.jj/repo` points
+  at that repo's store; (3) after a snapshot of its files (a stale workspace is updated first: jj then
+  keeps its unsnapshotted files in a copy of its change) nothing is ahead of the stack:
+  `(::(NAME@ | change_id(<its change>)) ~ ::default@ ~ immutable()) ~ (empty() & description(exact:""))`
+  is empty (integrated, abandoned, or empty). Going: `jj workspace forget NAME`, the directory deleted,
+  the row `status: pruned` with `pruned`, an `integrated` event. Kept: `ws: kept NAME: <why>` on
+  stderr, naming the changes not in the stack; exit 1 when any is kept. Only a recorded directory is
+  ever deleted, so a workspace made by hand, or a recorded path that is something else now, is never
+  touched. **The default is the dry run** (prints what would go and what stays): the delete reaches
+  files jj never snapshots (ignored ones: `.env`, build output, a worker's notes), and a worker marked
+  done too early loses its directory, so the delete takes a second, deliberate command, `--apply`.
+
 ## Files by writer
 
 | Writer | Files |
@@ -486,6 +556,8 @@ itself. A manager made later appears the same way, on the same address.
 | `fleet serve` | `REGISTRY/<fleet>.json` (removed with `--stop`) |
 | `fleet hub` | `REGISTRY/hub/hub.json` while it runs; `DIR/chat.jsonl` on a post |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
+| the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |
+| `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / deleted |
 
 ## Oracle traces
 
@@ -658,7 +730,9 @@ below, open-1 fixed in both; argparse's usage and error texts (exit 2) match too
 22. **`step next` takes its letters from the milestone's last lettered step**, so a milestone
     with mixed prefixes switches letters with its last step.
 23. **Worker figures come from transcripts found by path shape** (`…/<project>/<session>/scratchpad/<name>`)
-    and the `your id is X` / `You are X` regex; D13 stage 4 replaces this with the heartbeat.
+    and the `your id is X` / `You are X` regex. *Stage 4*: a worker's heartbeat is read first
+    ([Heartbeats](#heartbeats)); the transcript stands in for a worker with none, and still gives
+    the tokens and duration.
 24. **`agent --step S` with a status that doesn't map** (queued, failed, stopped) points S at the
     worker and leaves S's status alone.
 25. **Registry reads delete and rename entries**: `fleets.py list` or a manager's `state.py set
