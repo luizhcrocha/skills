@@ -26,6 +26,8 @@ export function StatePill(props: { readonly d: Decision; readonly pending: Retur
         const pending = props.pending;
 
         if (d.status !== "open") return <Pill s={d.status} />;
+
+        if (Core.isHeld(d)) return <PillAs cls="held" text="with the fleet" />;
         const g = grill();
 
         if (g) return g.toAnswer ? <PillAs cls="open" text={`${g.toAnswer} to answer`} /> : <PillAs cls="held" text={g.waiting ? "answers sent" : "all answered"} />;
@@ -67,9 +69,18 @@ function Lead(): JSX.Element {
     const msgs: readonly Message[] = m.messages();
     const every = m.everyDecision();
     const l = Core.leadOf(every.filter((d) => Core.awaiting(d, msgs)));
-    const sent = every.filter((d) => d.status === "open" && d.asks !== "manager" && !Core.awaiting(d, msgs)).length;
+    const away = every.filter((d) => d.status === "open" && d.asks !== "manager" && !Core.awaiting(d, msgs));
+    const held = away.filter((d) => Core.isHeld(d));
+    const sent = away.length - held.length;
 
-    return sent && l.tone === "clear" ? { ...l, detail: `${sent === 1 ? "Your answer waits" : String(sent) + " answers wait"} to be recorded.` } : l;
+    const detail = [
+      sent ? `${sent === 1 ? "Your answer waits" : String(sent) + " answers wait"} to be recorded.` : "",
+      held.length ? `${Core.kindCount(held, ["is", "are"])} with the fleet, back to you when it is ready.` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    return detail && l.tone === "clear" ? { ...l, detail } : l;
   });
 
   const stuck = createMemo(() => Core.stuckOf(m.state, m.state.coordinators, m.messages(), m.tick()));
@@ -128,7 +139,7 @@ function Lead(): JSX.Element {
                     <Show when={href()} fallback={name()}>
                       <a href={href()}>{name()}</a>
                     </Show>
-                    : {r().what}, {m.ago(r().since)}. {why()}
+                    : {r().what === "answer not recorded" ? `${Core.kindWord(r().kind)} answered, not recorded` : r().what}, {m.ago(r().since)}. {why()}
                   </li>
                 );
               }}
@@ -230,7 +241,7 @@ function DecisionList(): JSX.Element {
         <For each={Core.BUCKETS} keyed={(b) => b[0]}>
           {(b) => (
             <button type="button" data-bucket={b()[0]} aria-pressed={tf(ui.bucket() === b()[0])} onClick={() => ui.setBucket(b()[0])}>
-              {b()[1]} <span class="n">{all().filter((r) => r.bucket === b()[0]).length}</span>
+              {b()[1]} <span class="n">{String(all().filter((r) => r.bucket === b()[0]).length)}</span>
             </button>
           )}
         </For>
@@ -258,7 +269,7 @@ function DecisionList(): JSX.Element {
                     <PillAs cls="plain" text={"in " + String(d().fleet)} />
                   </Show>
                 </span>
-                <span class="detail">{open() ? d().question : d().status === "decided" ? `Decided: ${d().answer || ""}` : `Withdrawn: ${d().resolution || ""}`}</span>
+                <span class="detail">{open() ? (Core.isHeld(d()) ? `With the fleet: ${String(d().held)}` : d().question) : d().status === "decided" ? `Decided: ${d().answer || ""}` : `Withdrawn: ${d().resolution || ""}`}</span>
                 <span class="meta">
                   {open()
                     ? `${originText(m, d()) ? "From " + originText(m, d()) + ". " : ""}${d().why ? (d().blocking ? "Blocks: " : "Meanwhile: ") + String(d().why) + ". " : ""}Asked ${m.ago(d().opened)}${d().revised ? ", changed " + m.ago(d().revised) : ""}`

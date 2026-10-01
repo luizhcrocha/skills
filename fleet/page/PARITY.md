@@ -43,6 +43,7 @@ How a row was checked:
 | Glance: running (names open the worker), current, next, "and N more" | core (`glanceOf`); shot |
 | Started / updated | shot |
 | Decision lists: Waits on you / Waiting / Done, with counts, remembered per browser | core (`bucketOf`, `decisionRows`); shot |
+| Held by the fleet (`--hold`): under Waiting with "With the fleet: <reason>" and a "with the fleet" pill, never stuck; its page shows the reason and when it was held; a reply to an answer no longer hands an item back, a revision after it does; what waits named by kind ("1 decision and 1 action wait on you") | core (`awaiting`, `isHeld`, `kindCount`, `stuckOf`); dom (`held.test.tsx`) |
 | A row: number, title, state pills (grilling count, answered and not read, with the manager, blocks work), new/changed mark, kind, fleet; question or decision; origin, why, asked/changed/closed | core; shot |
 | Totals: a fleet's and a manager's figures, alert colours, tooltips, spend | shot (both roles) |
 | Plan usage meters on a manager's page, reset and read times | core (`usageOf`); shot (manager) |

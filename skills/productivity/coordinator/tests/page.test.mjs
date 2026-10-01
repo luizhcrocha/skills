@@ -436,12 +436,15 @@ test("excerptOf: the selection with its blank space made one, cut to what a mess
   assert.equal(Core.excerptOf("y".repeat(3000)).length, 2000);
 });
 
-test("awaiting: an answer sent stops the wait at once, unless the fleet replied to it", () => {
+test("awaiting: an answer sent stops the wait at once; a reply does not hand it back, a revision after it does", () => {
   const d = { id: "d1", kind: "decision", status: "open", asks: "user", opened: "2026-09-29T10:00:00Z" };
   const answer = { id: 4, from: "user", decision: "d1", at: "2026-09-29T10:05:00Z", text: "yes" };
   assert.equal(Core.awaiting(d, []), true);
   assert.equal(Core.awaiting(d, [answer]), false);
-  assert.equal(Core.awaiting(d, [answer, { id: 5, from: "coordinator", re: 4, text: "which?", at: "2026-09-29T10:06:00Z" }]), true);
+  const reply = { id: 5, from: "coordinator", re: 4, text: "Rerun when I post the new command", at: "2026-09-29T10:06:00Z" };
+  assert.equal(Core.awaiting(d, [answer, reply]), false, "the fleet's reply leaves it with the fleet");
+  assert.equal(Core.awaiting({ ...d, revised: "2026-09-29T10:30:00Z" }, [answer, reply]), true, "revised after the answer: it asks anew");
+  assert.equal(Core.awaiting({ ...d, revised: "2026-09-29T10:01:00Z" }, [answer]), false, "revised before the answer");
   assert.equal(Core.awaiting({ ...d, answered: true }, []), false, "a fleet's decision on the manager's page");
   assert.equal(Core.awaiting({ ...d, asks: "manager" }, []), false);
   assert.equal(Core.awaiting({ ...d, status: "decided" }, []), false);
@@ -482,6 +485,42 @@ test("bucketOf: waits on you, waiting on someone else, or done", () => {
   assert.equal(Core.bucketOf({ ...d, status: "withdrawn" }, []), "done");
   const g = { id: "g1", kind: "grill", status: "open", asks: "user", opened: "x", questions: [{ id: "q1", title: "t", status: "answered", asked: "x" }] };
   assert.equal(Core.bucketOf(g, []), "waiting", "a grilling with nothing left to answer waits on the fleet");
+  const q = { ...g, questions: [{ id: "q1", title: "t", status: "open", asked: "x" }] };
+  assert.equal(Core.bucketOf(q, []), "active", "a grilling with questions left waits on you");
+});
+
+test("held: an item the fleet holds sits in Waiting with its reason, never stuck, until it is revised", () => {
+  const d = { id: "a1", ref: "A1", title: "Run the pipeline role cut", kind: "action", status: "open", asks: "user", opened: "2026-09-29T10:00:00Z" };
+  const answer = { id: 4, from: "user", decision: "a1", at: "2026-09-29T10:05:00Z", text: "it needs a code change first" };
+  const held = { ...d, held: "fix the role cut first", held_at: "2026-09-29T10:06:00Z" };
+  assert.equal(Core.isHeld(held), true);
+  assert.equal(Core.isHeld({ ...held, status: "decided" }), false);
+  assert.equal(Core.awaiting(held, [answer]), false);
+  assert.equal(Core.awaiting(held, []), false, "held even with no answer on the page (said in the session)");
+  assert.equal(Core.bucketOf(held, [answer]), "waiting");
+  const now = Date.parse("2026-09-29T11:00:00Z");
+  assert.deepEqual(Core.stuckOf({ decisions: [d] }, [], [answer], now).map((r) => [r.ref, r.what, r.kind]), [["A1", "answer not recorded", "action"]]);
+  assert.equal(Core.stuckOf({ decisions: [held] }, [], [answer], now).length, 0, "the hold recorded the answer");
+  const later = { ...answer, id: 6, at: "2026-09-29T10:20:00Z", text: "actually, run it" };
+  assert.equal(Core.stuckOf({ decisions: [held] }, [], [answer, later], now).length, 1, "an answer after the hold is news again");
+  const back = { id: "a1", ref: "A1", title: d.title, kind: "action", status: "open", asks: "user", opened: d.opened, revised: "2026-09-29T10:40:00Z" };
+  assert.equal(Core.awaiting(back, [answer]), true, "revised (the hold cleared): back on your list");
+  assert.equal(Core.leadOf([back]).headline, "1 action waits on you.");
+});
+
+test("kindCount: items named by kind, plural and mixed, three kinds or more as things", () => {
+  const k = (...kinds) => kinds.map((kind) => ({ kind }));
+  assert.equal(Core.kindCount(k("action")), "1 action waits");
+  assert.equal(Core.kindCount(k("decision", "decision")), "2 decisions wait");
+  assert.equal(Core.kindCount(k("action", "decision")), "1 decision and 1 action wait");
+  assert.equal(Core.kindCount(k("grill", "input", "input")), "2 inputs and 1 grilling wait");
+  assert.equal(Core.kindCount(k("decision", "action", "secret")), "3 things wait");
+  assert.equal(Core.kindCount(k("poll")), "1 decision waits", "a kind the page does not know reads as a decision");
+  assert.equal(Core.kindCount(k("action"), ["is", "are"]), "1 action is");
+  assert.equal(Core.kindCount([]), "");
+  assert.equal(Core.kindWord("grill"), "grilling");
+  assert.equal(Core.leadOf([item("d1"), item("a1", { kind: "action", blocking: true })]).headline, "1 decision and 1 action wait on you.");
+  assert.equal(Core.leadOf([item("s1", { kind: "secret" }), item("i1", { kind: "input" }), item("d1")]).headline, "3 things wait on you.");
 });
 
 test("stuckOf: an answer the fleet has not recorded after five minutes, a chat nobody reads", () => {

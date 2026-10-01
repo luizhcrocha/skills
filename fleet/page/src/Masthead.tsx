@@ -320,7 +320,7 @@ export function Masthead(): JSX.Element {
         </button>
       </header>
       <nav class="tabs" id="dock" aria-label="Views">
-        <a href="#decisions" data-view="decisions" aria-current={tab("decisions")}>
+        <a href="#decisions" data-view="decisions" aria-current={tab("decisions")} title={asked().length ? `${Core.kindCount(asked())} on you` : "Nothing waits on you"}>
           <svg class="i" viewBox="0 0 24 24" aria-hidden="true">
             <circle cx="12" cy="12" r="8.5" />
             <path d="m8.5 12.2 2.4 2.4 4.6-5" />

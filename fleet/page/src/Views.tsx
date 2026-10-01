@@ -172,8 +172,10 @@ export function PlanView(): JSX.Element {
 
 /** A manager's fleets in words: who works, what waits, what it spent. */
 function fleetFacts(c: Coordinator): string {
-  const waiting = c.decisions.filter((d) => d.asks !== "manager");
-  const held = c.decisions.length - waiting.length;
+  const yours = c.decisions.filter((d) => d.asks !== "manager");
+  const held = c.decisions.length - yours.length;
+  const waiting = yours.filter((d) => !Core.isHeld(d) && !d.answered);
+  const fleets = yours.filter((d) => Core.isHeld(d));
 
   const workers = Object.entries(c.workers)
     .filter(([, n]) => Number(n) > 0)
@@ -183,7 +185,8 @@ function fleetFacts(c: Coordinator): string {
   return (
     [
       workers ? "Workers: " + workers : "No workers yet",
-      waiting.length ? `${plural(waiting.length, "decision")} wait${waiting.length === 1 ? "s" : ""} on you` : "",
+      waiting.length ? `${Core.kindCount(waiting)} on you` : "",
+      fleets.length ? `${Core.kindCount(fleets, ["is", "are"])} with the fleet` : "",
       held ? `${held} with the manager` : "",
       c.roadblocks ? plural(c.roadblocks, "open roadblock") : "",
       c.tokens ? "Its workers: " + fmtShort(c.tokens) + " tokens" : "",

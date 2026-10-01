@@ -120,6 +120,10 @@ export interface Decision {
   readonly page?: boolean;
   readonly href?: string;
   readonly fleet?: string;
+  /** What the fleet does first with the viewer's answer: the item is with the fleet until it is re-presented. */
+  readonly held?: string | null;
+  /** When the fleet held it. */
+  readonly held_at?: string | null;
 }
 
 /** A worker. */
@@ -420,6 +424,8 @@ export interface StuckRow {
   readonly what: string;
   readonly id?: string;
   readonly agent?: string;
+  /** The kind of the item an unrecorded answer is about. */
+  readonly kind?: string;
 }
 
 const TOKEN = /[A-Za-z0-9_.-]/u;
@@ -1277,25 +1283,28 @@ function viewOf(hash: string | null | undefined): Place {
   return { view: "decisions", decision: null, anchor: null };
 }
 
+/** Whether the fleet holds the item: it has the viewer's answer and works on it before it comes back. */
+const isHeld = (d: Pick<Decision, "status" | "held"> | null | undefined): boolean => Boolean(d && d.status === "open" && isText(d.held) && d.held);
+
 /**
- * Whether a decision still waits on the viewer: open, theirs (not the manager's), and not answered already.
- * An answer sent counts at once, before the fleet records it, unless the fleet replied to it (a follow-up
- * hands it back); a fleet's decision on the manager's page says so itself.
+ * Whether a decision still waits on the viewer: open, theirs (not the manager's), not held by the fleet, and
+ * not answered since it was last asked. An answer sent counts at once, before the fleet records it; a fleet's
+ * reply to it does not hand it back (the chat shows the reply), a revision after it does (the item asks
+ * anew). A grilling waits while questions are left; a fleet's decision on the manager's page says so itself.
  */
 function awaiting(d: Decision | null | undefined, messages: Iterable<Message> | null | undefined): boolean {
-  if (!d || d.status !== "open" || d.asks === "manager" || d.answered) return false;
+  if (!d || d.status !== "open" || d.asks === "manager" || d.answered || isHeld(d)) return false;
   const list = [...(messages ?? [])];
 
   if (d.kind === "grill") return grillState(d, list).toAnswer > 0;
-  const pending = pendingAnswer(d, list);
 
-  return !pending || pending.replies.length > 0;
+  return !pendingAnswer(d, list);
 }
 
 /**
  * Which list a decision belongs in: "active" while it waits on the viewer, "waiting" while it is open but
- * with someone else (an answer sent and not recorded, the manager's to look at, a grilling with nothing left
- * to answer), "done" once decided or withdrawn.
+ * with someone else (an answer sent and not recorded, held by the fleet, the manager's to look at, a grilling
+ * with nothing left to answer), "done" once decided or withdrawn.
  */
 function bucketOf(d: Decision | null | undefined, messages: Iterable<Message> | null | undefined): string {
   if (!d || d.status !== "open") return "done";
@@ -1338,7 +1347,10 @@ function stuckOf(
     if (d.status !== "open" || d.kind === "grill") continue;
     const p = pendingAnswer(d, list);
 
-    if (p && !p.replies.length && now - stamp(p.answer.at) > STUCK_MS) rows.push({ fleet: "", ref: d.ref || "", title: d.title, since: p.answer.at, what: "answer not recorded", id: d.id });
+    // A hold records the answers given until then; one given after it is news again.
+    if (!p || p.replies.length || (isHeld(d) && stamp(p.answer.at) <= stamp(d.held_at))) continue;
+
+    if (now - stamp(p.answer.at) > STUCK_MS) rows.push({ fleet: "", ref: d.ref || "", title: d.title, since: p.answer.at, what: "answer not recorded", id: d.id, kind: d.kind });
   }
 
   const hearing = own.hearing;
@@ -1354,7 +1366,7 @@ function stuckOf(
 
     for (const w of Array.isArray(c.silent) ? c.silent : []) if (w && isText(w["active"])) rows.push({ fleet, ref: String(w["id"]), title: String(w["name"] || w["id"]), since: w["active"], what: "worker silent" });
 
-    for (const d of c.decisions ?? []) if (isText(d.answered) && now - stamp(d.answered) > STUCK_MS) rows.push({ fleet, ref: d.ref || "", title: d.title, since: d.answered, what: "answer not recorded", id: d.id });
+    for (const d of c.decisions ?? []) if (isText(d.answered) && now - stamp(d.answered) > STUCK_MS) rows.push({ fleet, ref: d.ref || "", title: d.title, since: d.answered, what: "answer not recorded", id: d.id, kind: d.kind });
     const h = c.hearing;
 
     if (h && !h.on && h.unread && now - stamp(h.since) > STUCK_MS) rows.push({ fleet, ref: "", title: `${h.unread} message${h.unread === 1 ? "" : "s"} from you unread`, since: h.since, what: "chat not read" });
@@ -1363,13 +1375,47 @@ function stuckOf(
   return rows.sort((a, b) => stamp(a.since) - stamp(b.since));
 }
 
-/** What waits on the user, as the sentence the page opens with. */
-function leadOf(decisions: readonly Pick<Decision, "status" | "asks" | "blocking">[] | null | undefined): Lead {
+/** Each kind of item in words, singular and plural, in the order a count names them. */
+const KIND_NAMES: readonly (readonly [string, string, string])[] = [
+  ["decision", "decision", "decisions"],
+  ["action", "action", "actions"],
+  ["input", "input", "inputs"],
+  ["secret", "secret", "secrets"],
+  ["grill", "grilling", "grillings"],
+];
+
+/** An item's kind as one word ("action", "grilling"); one the page does not know reads as a decision. */
+const kindWord = (kind: string | null | undefined): string => (KIND_NAMES.find((k) => k[0] === kind) ?? KIND_NAMES[0] ?? ["", "decision"])[1];
+
+/**
+ * Items counted by kind, in words, with the verb agreeing: "1 action waits", "2 decisions wait", "1 decision
+ * and 1 action wait"; three kinds or more are "3 things wait". Empty for no items.
+ */
+function kindCount(items: readonly Pick<Decision, "kind">[] | null | undefined, verb: readonly [string, string] = ["waits", "wait"]): string {
+  const list = items ?? [];
+
+  if (!list.length) return "";
+
+  const known = (kind: string): boolean => KIND_NAMES.some((k) => k[0] === kind);
+
+  const parts = KIND_NAMES.flatMap(([kind, one, many]) => {
+    const n = list.filter((d) => (known(d.kind) ? d.kind : "decision") === kind).length;
+
+    return n ? [`${n} ${n === 1 ? one : many}`] : [];
+  });
+
+  const words = parts.length > 2 ? `${list.length} things` : parts.join(" and ");
+
+  return `${words} ${list.length === 1 ? verb[0] : verb[1]}`;
+}
+
+/** What waits on the user, as the sentence the page opens with: the items given, counted by kind. */
+function leadOf(decisions: readonly Pick<Decision, "status" | "asks" | "blocking" | "kind">[] | null | undefined): Lead {
   const open = (decisions ?? []).filter((d) => d.status === "open" && d.asks !== "manager");
   const holding = open.filter((d) => d.blocking).length;
 
   if (!open.length) return { headline: "Nothing waits on you.", detail: "", tone: "clear" };
-  const headline = open.length === 1 ? "1 decision waits on you." : `${open.length} decisions wait on you.`;
+  const headline = `${kindCount(open)} on you.`;
 
   if (!holding) return { headline, detail: "Work goes on meanwhile.", tone: "waiting" };
   const detail = open.length === 1 ? "It blocks work." : holding === open.length ? (holding === 2 ? "Both block work." : "All of them block work.") : `${holding} of them block${holding === 1 ? "s" : ""} work.`;
@@ -1495,8 +1541,11 @@ export const Core = {
   decisionRoute,
   pendingAnswer,
   awaiting,
+  isHeld,
   bucketOf,
   BUCKETS,
+  kindWord,
+  kindCount,
   stuckOf,
   silentWorker,
   findRows,

@@ -583,7 +583,9 @@ function Answer(props: { readonly d: Decision }): JSX.Element {
                 Sent {clock(p().answer.at)}.{" "}
                 {p().replies.length
                   ? `The ${m.host()} replied; answer again below if it asks you something.`
-                  : Core.unreadBy(m.state.hearing, p().answer)
+                  : Core.isHeld(props.d) && Core.stamp(p().answer.at) <= Core.stamp(props.d.held_at)
+                    ? `The ${m.host()} has it and works on it first.`
+                    : Core.unreadBy(m.state.hearing, p().answer)
                     ? `The ${m.host()} has not read it yet${m.state.hearing?.on ? "" : ": it is not reading the chat right now"}. Your answer is kept.`
                     : `The ${m.host()} has read it and has yet to record it; the fleet acts on it once it is recorded.`}
               </span>
@@ -731,6 +733,15 @@ function Info(props: { readonly d: Decision }): JSX.Element {
             </p>
           </div>
         )}
+      </Show>
+      <Show when={Core.isHeld(d())}>
+        <div class="note held" role="status">
+          <h3>With the fleet</h3>
+          <p>{d().held}</p>
+          <span class="dv-meta">
+            Held {clock(d().held_at)}, {m.ago(d().held_at)}. It comes back to you when the {m.host()} asks again.
+          </span>
+        </div>
       </Show>
       <Show when={open() && d().asks === "manager"}>
         <div class="note">
