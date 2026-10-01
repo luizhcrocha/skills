@@ -59,14 +59,14 @@ given. Every ID argument also takes the row's number (D3, L2, R1) where rows hav
 4. `DIR` is created (mkdir -p), even when the command then fails (open-17).
 5. `state.json` is read. Missing, with any command but `init`: refused, `no state.json in DIR; run \`init\` first`.
 6. The command's handler runs on the ledger in memory. A refusal exits **1** with
-   `state: <reason>` on stderr, and nothing is written.
+   `state: <reason>` on stderr, and nothing is written. What the handler says on stdout (`asked d8…`,
+   `recorded a1…`, `recorded step s7`) is held until step 9.
 7. The [warnings](#warnings) are printed to stderr: the chat's, then live rows, then the Now line.
    `show` ends here.
 8. Worker figures are measured from transcripts (`--task-id` rows); numbers are given; `updated` is
    stamped; the ledger is validated. A validation fault exits **1** with
-   `render_dashboard: <reason>`. Nothing is written, but whatever the handler printed to stdout
-   (`asked d8…`, `recorded a1…`, `recorded step s7`) has already been printed (open-2).
-9. `state.json` is written (JSON, two-space indent, UTF-8 unescaped, a final newline; key order
+   `render_dashboard: <reason>`, and nothing is written or said on stdout (open-2, fixed).
+9. `state.json` is written, then what the handler held is printed (JSON, two-space indent, UTF-8 unescaped, a final newline; key order
    isn't part of the contract). `brief.md` is written from `SKILL/assets/brief.md` when missing
    (`{skill_dir}` → SKILL, `{dashboard_dir}` → DIR), and so is `standing.md` from
    `assets/standing.md` in a manager's DIR. What the user added to either is kept.
@@ -85,7 +85,8 @@ The values each flag takes are in the tables. Unless a row says otherwise, a ref
 **init** `--project P --goal G [--now TEXT] [--role coordinator|manager]`: creates the ledger:
 `status` running, `now` TEXT or `Intake in progress.`, `now_at` = `started` = `updated` = now,
 empty `roadmap`, `agents`, `roadblocks`, `decisions`, `events`; `role: "manager"` first when the
-role is manager. Refused when `state.json` exists. Prints no warnings.
+role is manager, whose roadmap starts with the landing queue, milestone `landings` ("Landings and
+deploys"). Refused when `state.json` exists. Prints no warnings.
 
 **set** `[--status running|paused|blocked|done] [--now TEXT] [--goal G]`: sets what is given.
 `--now` stamps `now_at`, even with the same words, and warns about each decision the text
@@ -109,6 +110,9 @@ renames it. Milestones are never removed.
   the ledger with those letters has (`l17` after `l16`, whichever milestone `l16` is in).
 - Validation: a step's agent must be a worker row, except in a manager's ledger, whose steps name
   fleets (`render_dashboard: step X points at unknown agent 'A'`).
+- One turn: in a manager's ledger, a step of `landings` made current (new or known) while another step
+  of `landings` is current is refused: `l1 (<title>) has the turn: one landing at a time. Close it
+  (\`step l1 --status done\`) or give it back (\`step l1 --status pending\`) first`.
 
 **agent** `ID [--task T --milestone M] [--skill implement|diagnosing-bugs|prototype|research|tdd|none] [--model opus|sonnet|haiku|fable] [--lane PATH...] [--status queued|running|blocked|done|failed|stopped] [--tokens N] [--duration-ms N] [--task-id ID] [--report R] [--brief B] [--name N] [--step S] [--log TEXT] [--important]`
 - `--milestone`, when given, must be known: `unknown milestone 'M' (the roadmap has: m1, m2)`.
@@ -138,12 +142,14 @@ renames it. Milestones are never removed.
   MeasuredTest; out of the oracle, which has no transcripts*).
 
 **roadblock** `ID [--title T --detail D --severity warning|serious|critical --needs user|coordinator|worker] [--agent A] [--decision D] [--resolved | --open] [--important]`
+- `--agent`, when given, must be known (`unknown agent 'A'`, checked first; a manager's ledger takes
+  any name), on creation and on update (open-3, fixed).
 - `--decision`, when given, must name an open decision, on creation and on update. The number is
   stored as the decision's id.
 - New: needs title, detail, severity, needs; `--needs user` also needs `--decision`. Stored with
   `since` = now, `resolved` false. Logs `blocked` (`<title>: <detail>`), important when
-  `--important` or needs user, tagged with the decision. A worker named by `--agent` that has a row
-  is marked blocked. An agent without a row is stored as given (open-3).
+  `--important` or needs user, tagged with the decision. The worker named by `--agent` is marked
+  blocked.
 - Known: the fields given are set. `--resolved` resolves: `resolved` true, logs `resolved`
   (`<title> resolved.`), and its worker, when blocked, goes back to running. This happens again on
   a resolved roadblock (open-4). `--open` sets `resolved` false, with no event and no re-blocking.
@@ -210,9 +216,10 @@ Checked in this order:
 logs one event (kind note by default). `--agent` must be a worker row (a manager's: any name).
 
 **park** `[--agent A]... REASON`: every live row (running, queued, blocked), or only the named
-ones, becomes stopped with `updated` = now; one note event, `Stopped a1, a2: REASON`. A named
+ones, becomes stopped with `updated` = now; each current step of a stopped worker goes back to
+pending, keeping its agent (open-5, fixed); one note event, `Stopped a1, a2: REASON`. A named
 worker without a row is refused; no live row among them: `no worker row is running, queued, or
-blocked`. Steps are left as they were (open-5).
+blocked`.
 
 **keep** `ID [TEXT | --drop REASON]`: `kept[]` (created on first use) holds `{id, text, at}`. TEXT
 creates or rewrites; `--drop` removes it and logs `Dropped ID (<text>): REASON`; dropping an
@@ -273,7 +280,8 @@ On every write, each decision, link and roadblock without a `ref` is given one: 
 kind (decision **D**, action **A**, input **I**, secret **S**, grill **G**, link **L**, roadblock
 **R**), and 1 + the highest number of that letter already given, skipping a number that another row of
 the same list has as its id (open-1). Decisions are numbered in
-`opened` order (a string sort, open-13), links and roadblocks in list order. A number, once given,
+`opened` order (as instants, open-13; a stamp that does not parse sorts after, as text), links and
+roadblocks in list order. A number, once given,
 never changes, even when a decision's kind changes (open-7).
 
 Lookup: `find(rows, key)` returns the row whose id is `key`, else the one whose ref is `key`, so an
@@ -297,6 +305,25 @@ After the handler succeeds, before validation, on stderr, in this order (not for
    If it is no longer what is happening, say it again: \`state.py <dir> set --now "..."\` (the same
    words also restamp it).`) when `now_at` is 30 minutes old or older (`never stamped` when it's
    missing or doesn't parse), except on `set --now`.
+
+4. **An answer not recorded** (`state: the user answered D3 (<title>) as #14 at 09:12; record it
+   before any other work: \`state.py <dir> decision D3 --decide "..." --resolution "answered on the
+   page (#14)"\`, then answer #14 with --re.`), one line per open decision of the ledger the command
+   leaves whose answer the user gave on the page after it was opened or last revised (instants), with
+   no reply from anyone but the user. Not for `init`.
+5. **Decisions left open** (`state: the fleet is done with D1, A2 still open: withdraw each with its
+   reason (\`decision ID --withdraw "why"\`), or name it in your last message as left open on
+   purpose.`) on the `set --status done` that finds them open.
+6. **Lanes that meet** (`state: a2's lane overlaps a1's (running: src/x.ts). A task whose files
+   overlap a running lane waits (\`--status queued\`) or joins that worker's queue.`) on an `agent`
+   command that gives `--lane`, `--task` or `--status running` and leaves its row running, when its
+   lane meets a running or blocked worker's: two entries meet when one's directory part before any
+   glob character (`src/usage/**` → `src/usage`, `*.md` → everything) is the other's or holds it.
+7. *TypeScript only* (Python's ledger has no `workspaces`, and no trace does): **a done worker's
+   workspace not pruned** (`state: a1's workspace a1 still there though its worker is done: bring its
+   changes into the stack, then \`fleet ws <dir> prune\` (a dry run, then --apply).`) on every command,
+   and on `set --status done` **the workspaces left** (`state: the fleet is done with workspace(s) a1
+   not pruned: ...`).
 
 Also from `set --now`: for each `[DAISGLR]<digits>` in the text that names a closed decision,
 `state: the Now line names <ref> (<title>) is <status>: check the decision's state before saying
@@ -356,9 +383,10 @@ that long without recording it, a running worker silent for 20 minutes. Each is 
 
 `wait`: a closed decision prints `<ref> is already <status>: <answer or resolution>` and exits
 0. An answer already given (a user message tagged with the decision, sent at or after its
-`revised` or `opened` stamp, compared as strings, open-13) and not replied to by the fleet prints
-at once. Otherwise it waits for the next such message. It never re-reads the ledger: a decision
-withdrawn while it waits leaves it waiting forever (open-21).
+`revised` or `opened` stamp, compared as instants, open-13) and not replied to by the fleet prints
+at once. Otherwise it waits for the next such message, and reads the ledger again at every poll: a
+decision closed meanwhile (withdrawn, or decided in the session) prints as a closed one does and
+exits 0 (open-21, fixed).
 
 **Listening** (`listening(DIR)`, the page and the warnings): `on` when the host's watch pid is
 alive, or its `.left` is younger than 10 minutes, or the host sent a message in the last 10
@@ -381,7 +409,7 @@ to a taken one. `user`, `coordinator` and `manager` are reserved.
 | Command | Output | Exit |
 | :-- | :-- | :-- |
 | `list` | per live fleet: `<id>  <role>  session <session or (not named yet)>  <status>  <url>  <dir>`, then `now:`, `lanes in flight:`, `session last active`, silent workers, `chat: not read now…`, tokens, and each open decision `<ref> <id> [<kind>, for the user/manager(, blocks work)] <title>(  ANSWERED at HH:MM, not recorded)`; or `no fleet is being served on this machine` | 0 |
-| `show FLEET` | now (with when it was said), chat, live workers with their last report, open decisions (and an answer not recorded), open roadblocks, the last 8 events | 1 unknown fleet |
+| `show FLEET` | now (with when it was said), chat, live workers with their last report (and `silent since HH:MM: check it before saying it runs` under a silent one), open decisions (and an answer not recorded), open roadblocks, the last 8 events | 1 unknown fleet |
 | `manager` | `manager  session …  <url>  <dir>` and where `standing.md` is | 1 when none |
 | `decision FLEET ID` | the decision in full; the page as `<url>#decision/<id>` | 1 unknown fleet or decision |
 | `gate` | `free` or `held by <fleet> since <stamp>: <what>` (a hold by a fleet no longer served is forgotten) | 0 |
@@ -524,9 +552,13 @@ One jj workspace per worker that edits code; the coordinator's own (`default`) i
   name the ledger or jj already has, an existing directory, no jj repo. Records `{id, agent (--agent,
   else NAME), path, repo, base, added, status: active}`, logs a note, renders the page, and prints the
   path and the line for the brief.
+  A worker the ledger has no row for yet is warned about (`ws: no worker row a9 yet: record it ...`):
+  a worker is recorded, then briefed and spawned.
 - `fleet ws DIR list`: per active workspace, its worker and the worker's status and last-seen, then
-  its `@` (empty, conflicted) and what it holds ahead of the stack. Read with `--ignore-working-copy`:
-  a worker's files are never snapshotted under it while it works.
+  its `@` (empty, conflicted) and what it holds ahead of the stack, and the files those changes touch
+  that are in none of the worker's lane entries (`outside its lane (src/): README: stop it ...`; an
+  entry holds itself, what is under it, and what it matches as a glob). Read with
+  `--ignore-working-copy`: a worker's files are never snapshotted under it while it works.
 - `fleet ws DIR prune [--apply | --dry-run]`: a workspace goes when (1) its worker's row is not
   running, queued or blocked (done, failed, stopped, or no row: gone); (2) its directory, if it is
   there, is the one jj knows as that workspace (`jj workspace root --name`) and its `.jj/repo` points
@@ -540,6 +572,28 @@ One jj workspace per worker that edits code; the coordinator's own (`default`) i
   touched. **The default is the dry run** (prints what would go and what stays): the delete reaches
   files jj never snapshots (ignored ones: `.env`, build output, a worker's notes), and a worker marked
   done too early loses its directory, so the delete takes a second, deliberate command, `--apply`.
+
+## Rules as commands (`fleet brief`, `fleet turn`)
+
+Rules the skills asked the model to remember, now kept by the CLI (stage 5; the inventory and each
+rule's disposition are in [RULES.md](RULES.md)). Beside the refusals and warnings above:
+
+- `fleet brief DIR WORKER` prints the part of a worker's brief the ledger holds: the line it opens with
+  (`Read DIR/brief.md first; your id is a1.`), `Task:`, `Done when:` (the row's `brief`, a leading
+  "done when" dropped), `Skill:` (a skill of this plugin whose SKILL.md says
+  `disable-model-invocation: true` is read with the Read tool, by its path, since the Skill tool
+  refuses it to a worker; any other is called with the Skill tool as `<plugin>:<skill>`; `none`
+  prints no line), `Lane:`, `Workspace:` (the active `workspaces[]` row of the worker), `Step:` (the
+  worker's current step) and `Chat:`. On stderr, for the coordinator: a missing completion criterion,
+  a lane with no workspace, and the model to spawn it on with the `--task-id` to record after. A worker
+  with no row is refused: it is recorded first. Matched by id, then by name.
+- `fleet turn [DIR]` says whether the fleet holds the landing turn: the manager's `landings` step whose
+  agent is the fleet's registry name is current. Exit 0 when it does, when no manager is served (the
+  fleet lands on its own word), or, without DIR, when the session runs no served fleet; exit 1 (`turn:
+  acme does not hold the landing turn (l1 (...) has it, infra's; yours, l2, waits in the queue). Ask the
+  manager ...`) otherwise, or when DIR is not served while a manager is. Without DIR the fleet is the
+  registry entry whose pid is among the command's parents (the session that serves it). The plugin's
+  `land-check` runs it before its verdict: exit 1 makes the verdict `stop`, with the reason in `turn`.
 
 ## Files by writer
 
@@ -632,7 +686,8 @@ every step:
 - the ledger's shape equals the model's (the fields above, the step order, the event count);
 - stderr is exactly the warnings the model expects: the stale Now line with its age in minutes,
   live rows in a paused or done fleet, a chat nobody reads (computed on the ledger before the
-  command), a Now line naming a closed decision; on a validation refusal, those plus the reason;
+  command), a Now line naming a closed decision, an answer on the page not recorded, decisions left
+  open by `set --status done`; on a validation refusal, those plus the reason, and nothing on stdout;
 - `show`'s first line, milestone lines, worker lines, decision lines and event count, against
   `state.json`;
 - `inbox`'s messages against the model's open messages; `chat.jsonl` against the model's;
@@ -665,17 +720,15 @@ below, open-1 fixed in both; argparse's usage and error texts (exit 2) match too
    Numbering now skips a number another row of the same list has as its id (D5 there), for
    decisions, links and roadblocks alike; validation still refuses a new decision whose id is a
    number already given. Trace: `decisions.jsonl` steps 31-33. The model follows it.
-2. **A refused write has already printed its success text.** The handler prints (`asked d8. Arm
-   its answer's wake now…`, `recorded a1 …`, `recorded step s7`) before validation refuses the
-   ledger; the warnings print too. Stage 2 should validate before printing anything but warnings.
-   *Stage 2*: kept. The handlers print through the CLI's output seam, so validating first is a
-   local change there once the oracle's expectation moves.
-3. **`roadblock --agent` isn't checked.** A worker nobody recorded is stored, and only a
-   recorded one is marked blocked. Every other `--agent` is checked. Also, `--needs user`
-   requires a decision only at creation.
+2. **Fixed (stage 5, both): a refused write had already printed its success text.** What a handler
+   says is held until the ledger is checked and written; a refusal prints only the warnings and its
+   reason. The model checks that a refused state command prints nothing on stdout.
+3. **Fixed (stage 5, both): `roadblock --agent` wasn't checked.** It is now, as every other
+   `--agent` is. Still open: `--needs user` requires a decision only at creation.
 4. **Resolving a resolved roadblock** logs `resolved` again and sends its worker, if blocked for
    another reason, back to running.
-5. **`park` leaves the parked workers' steps current.**
+5. **Fixed (stage 5, both): `park` left the parked workers' steps current.** They go back to
+   pending and keep their agent.
 6. **`step --remove` leaves a decision's `step` dangling**: it still names the removed step, and
    validation doesn't check a decision's step or milestone.
 7. **A known decision takes any `--kind`**, a grilling included (`decision g1 --kind input`
@@ -706,9 +759,10 @@ below, open-1 fixed in both; argparse's usage and error texts (exit 2) match too
     own; decide the wording and re-record those lines.
     *Stage 2*: kept word for word, so a coordinator can switch CLIs mid-fleet; the cutover
     re-records them.
-13. **Stamps are local time, compared as strings.** `wait`, `_answered_at` and numbering by
-    `opened` compare ISO strings, which misorders stamps across an offset change (DST, a moved
-    machine). The oracle pins `TZ=UTC`. Stage 2 should compare instants.
+13. **Fixed (stage 5, both): stamps were compared as strings.** `wait`, the answered-at check and
+    numbering by `opened` compare instants now (`clock.at_or_after` / `atOrAfter`, `clock.order` /
+    `byInstant`); a stamp that does not parse falls back to its text. The page's own script still
+    compares what it compares.
 14. **Liveness reads processes and file times**: watch pid files (`os.kill(pid, 0)`), `.left`
     mtime, transcript mtimes (silent workers, session activity). The oracle doesn't exercise them
     (no watch runs across steps, no transcripts). A watch dates `.left` by the clock seam.
@@ -724,9 +778,8 @@ below, open-1 fixed in both; argparse's usage and error texts (exit 2) match too
     already stored, so `roadblock r1 --resolved --decision d1` after d1 closed is refused.
 20. **A manager's ledger accepts any name as a worker** (`known()`), so a typo in `--agent` is
     stored.
-21. **`chat wait` never returns for a decision closed without an answer** (withdrawn, or decided
-    in the session): it doesn't re-read the ledger. It has to be killed.
-    *Stage 2*: kept.
+21. **Fixed (stage 5, both): `chat wait` never returned for a decision closed without an answer.**
+    It reads the ledger at every poll and ends as it does for one closed before it started.
 22. **`step next` takes its letters from the milestone's last lettered step**, so a milestone
     with mixed prefixes switches letters with its last step.
 23. **Worker figures come from transcripts found by path shape** (`…/<project>/<session>/scratchpad/<name>`)

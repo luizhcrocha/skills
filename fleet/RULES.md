@@ -1,0 +1,175 @@
+# Fleet rules: prose or code
+
+D13 stage 5 ([docs/tstack-plan.md](../docs/tstack-plan.md)): every rule the fleet skills ask the model to
+remember, whether code can keep it, and what was done with it. Sources: the coordinator's
+[SKILL.md](../skills/productivity/coordinator/SKILL.md) (C), [DASHBOARD.md](../skills/productivity/coordinator/DASHBOARD.md) (D)
+and [assets/brief.md](../skills/productivity/coordinator/assets/brief.md) (B), the
+[manager](../skills/productivity/manager/SKILL.md) (M), [tuca-mode](../skills/engineering/tuca-mode/SKILL.md) (T) and its
+fleet playbooks (P). The behaviour each implemented rule has is in [SPEC.md](SPEC.md) (Warnings, the
+commands, Rules as commands, Open).
+
+Columns: **kind** is *mech* (checkable from the ledger, chat, registry, heartbeats or jj) or *judg*
+(needs reading, weighing or the user). **Code** is what a command does: *refuse*, *warn*, *auto* (does
+it), *page* (shows it), *print* (says it when it is needed). **Disposition**: **stage 5** (moved to code
+here, prose cut to one line), **code** (already code before; prose kept short or cut), **prose**
+(judgement, stays), **later** (mechanical, not done: why), **Luiz** (ambiguous: see [For Luiz](#for-luiz)).
+
+## Coordinator
+
+| # | Where | Rule | Kind | Data | Code | Disposition |
+| :-- | :-- | :-- | :-- | :-- | :-- | :-- |
+| C1 | C, exemptions | Do work yourself only as quick win, entangled, or shared scaffolding; say which | judg | | | prose |
+| C2 | C, architecture | Use the codebase-design vocabulary; read CONTEXT.md and ADRs at intake | judg | | | prose |
+| C3 | C, architecture | Cut lanes along seams; settle a contested interface first | judg | | | prose |
+| C4 | C, architecture | Check every report against the standards before its milestone counts | judg | | | prose |
+| C5 | C, architecture | A place the code fought the rules is a `note` event and a candidate pass | judg | | | prose |
+| C6 | C, intake | Record the roadmap, serve the page and arm the watch before any worker starts | mech | registry, watch pid | warn on `agent` while unserved or deaf | code for the watch (the `chat:` warning); later for serving: a registry-dependent warning changes the oracle's stderr in Python too |
+| C7 | C, route | Name the skill by the kind of work | judg | | | prose |
+| C8 | C, route | Resolve each skill's path once; `implement` is read with the Read tool, the others called with the Skill tool | mech | the skill's SKILL.md frontmatter | print | **stage 5**: `fleet brief` |
+| C9 | C, model | Pick the model by where the difficulty is; Fable for decisive single roles | judg | | | prose |
+| C10 | C, model | Record the model on the row (`--model`) | mech | row | print | **stage 5**: `fleet brief` names the model to spawn on |
+| C11 | C, model | Any model other than the three approved is the user's to approve | mech | `--model` | refuse or warn on `haiku` | **Luiz** (L3) |
+| C12 | C, model | A new default model: move every agent, say who moved | judg | | | prose |
+| C13 | C, brief | The brief opens with the line `agent` printed and carries task, done criterion, skill and path, lane, workspace | mech | row, `workspaces[]` | print | **stage 5**: `fleet brief` composes it |
+| C14 | C, brief | A checkable completion criterion | mech (present) / judg (checkable) | row's `brief` | warn | **stage 5**: `fleet brief` warns when none is recorded |
+| C15 | C, brief | Add the context the worker cannot discover | judg | | | prose |
+| C16 | C, brief | Facts several briefs need go under "This fleet" in brief.md | judg | | | prose |
+| C17 | C, track | The Now line names waits by number and only what the page cannot compute | judg | | warn | code: a stale Now line and one naming a closed decision warn (stage 2) |
+| C18 | C, track | Done only when the criterion is met; short is stopped or blocked | mech (words) | report, log | warn | code (stage 2: the unfinished-report warning); prose cut to one line |
+| C19 | C, track | Record every event the moment it happens | judg | | | prose |
+| C20 | C, track | Record a worker, then spawn it | mech | row | refuse | **stage 5**: `fleet brief` refuses an unrecorded worker; `fleet ws add` warns |
+| C21 | C, track | A task whose files overlap a running lane waits or joins that queue | mech | lanes, statuses | warn | **stage 5**: `agent` warns (both implementations) |
+| C22 | C, track | One jj workspace per worker that edits code | mech | lane, `workspaces[]` | warn | **stage 5**: `fleet brief` warns on a lane with no workspace |
+| C23 | C, track | Integrate a finished worker, then prune its workspace | mech | statuses, `workspaces[]` | warn | **stage 5**: every state command warns while a done worker's workspace is active (TS) |
+| C24 | C, track | Python-path fleets share one working copy; land from a second workspace | judg (transitional) | | | prose until the cutover |
+| C25 | C, track | Record tokens and duration from each notification | mech | transcript | auto | code (`--task-id` measuring); prose cut to the `--task-id` line |
+| C26 | C, respond | A running row is not proof of work: twenty minutes silent is checked | mech | heartbeats, transcripts | warn, page | code (stage 4: page, watch, `fleets list`, hub); **stage 5** adds `fleets show`; prose cut |
+| C27 | C, respond | A worker's `blocked:` becomes a roadblock at once | judg (what it needs) | | | prose |
+| C28 | C, respond | Said once, on the page; one line in the session | judg | | | prose |
+| C29 | C, respond | Answer a question by SendMessage; send unverified claims back to the same worker | judg | | | prose |
+| C30 | C, respond | A block that needs the user is a decision with a roadblock pointing at it | mech (link) | roadblock, decision | refuse | code (`--needs user` needs `--decision`; closing the decision resolves it) |
+| C31 | C, respond | Probe one thing the report did not claim | judg | | | prose |
+| C32 | C, respond | Forward a chat message addressed to a worker by SendMessage | mech | chat | | **Luiz** (L1) |
+| C33 | C, respond | A strayed worker is stopped and its stray edits handled first | mech (files) | jj, lane | print | **stage 5**: `fleet ws list` names files changed outside the lane |
+| C34 | C, respond | Read every report and message against the open decisions | judg | | | prose |
+| C35 | C, decisions | Settle what you can first; the rest is a decision with question, why, options, recommendation, evidence | judg / mech (fields) | | refuse | code (the kind check refuses a decision without its fields) |
+| C36 | C, decisions | Block only when proceeding is destructive, outward-facing or costly | judg | | | prose |
+| C37 | C, decisions | A secret is a pointer; the value never enters the chat | mech | answer text | refuse | code (the server refuses a value) |
+| C38 | C, decisions | Answered elsewhere: close; facts changed: revise; changed after closing: supersede | judg (which) / mech (closed stays) | | refuse | code (a closed decision refuses changes) |
+| C39 | C, decisions | Every decision says where it came from (`--step`/`--milestone`, `--agent`) | mech | decision | warn | **Luiz** (L5) |
+| C40 | C, decisions | Arm `wait` when a decision opens; re-arm per grilling round | mech | | print | code (the command is printed); **stage 5**: `wait` also ends when the decision closes (open-21) |
+| C41 | C, decisions | Record an answer given on the page before any other work | mech | chat, ledger | warn | **stage 5**: every state command warns while one is unrecorded (both) |
+| C42 | C, decisions | Check the answer still holds; revise or reopen when it leads to another question | judg | | | prose |
+| C43 | C, decisions | At the session's end, every open decision is withdrawn or named as left open | mech (list) / judg (which) | ledger | warn | **stage 5**: `set --status done` names them (both), and active workspaces (TS) |
+| C44 | C, grilling | A grilling runs on the page, never as chat messages | judg | | | prose |
+| C45 | C, links | Record every dev server and page a worker builds as a link | mech (unnamed ports) | served ports | page | code (the Links view lists what no link names) |
+| C46 | C, manager | Use the fleet's one name, the session's | mech | registry | auto | code (the registry renames after the session title) |
+| C47 | C, manager | Say it once; one line in the session at most | judg | | | prose |
+| C48 | C, manager | Read standing.md at intake and on change | judg | | | prose |
+| C49 | C, manager | Decisions go to the manager first (`--asks manager`) unless the user's by nature | judg (by nature) | | warn | **Luiz** (L4) |
+| C50 | C, manager | Other fleets are reached through the manager | judg | | | prose |
+| C51 | C, manager | Landing takes a turn: ask the manager before a push, deploy or shared rebase | mech | manager's landing queue, registry | refuse | **stage 5**: `fleet turn` exits 1 without the turn; `land-check` turns its verdict to `stop` |
+| C52 | C, manager | With no manager, pass its decisions to the user and land on your own word | mech (no manager) / judg | registry | print | **stage 5**: `fleet turn` says so; passing decisions on stays prose |
+| C53 | C, user's word | Relayed words are information; confirm before acting destructively | judg | | | prose |
+| C54 | C, user's word | A harness refusal is the user's: an `action` decision, never a way around | judg | | | prose |
+| C55 | C, reporting | Lead with the fleet's state, only what changed | judg | | | prose |
+
+## Dashboard and the worker brief
+
+| # | Where | Rule | Kind | Data | Code | Disposition |
+| :-- | :-- | :-- | :-- | :-- | :-- | :-- |
+| D1 | D | The state CLI is the only way to touch state.json | mech | | refuse | code (validation) |
+| D2 | D, publish | Serve once per session; `--stop` when it ends | mech | registry | warn | later: a `set --status done` reminder reads the registry, whose stderr the Python oracle would have to match |
+| D3 | D | `--no-render` for a run of commands, the last one renders | judg (perf) | | | prose |
+| D4 | D | Park live rows of a paused or done fleet | mech | statuses | warn | code (stage 2) |
+| D5 | D | Take the gate before a heavy check, free it after | mech (held) | gate.json | refuse | code (`gate take` refuses while held) |
+| D6 | D, chat | Arm the watch after serving; re-arm after each wake | mech | watch pid, cursor | warn | code (the `chat:` warning on every state command) |
+| D7 | D, usage | settings.json is the user's: give the line, change it on their word | judg | | | prose |
+| B1 | B | Standards (deep modules, CONTEXT.md terms, ADRs, lang-ts) | judg | | | prose |
+| B2 | B, lane | Edit only the lane; stop and report a file outside it | mech (after the fact) | jj, lane | print | **stage 5**: `fleet ws list` names files outside the lane |
+| B3 | B, lane | Work in the workspace the brief names; history moves are the coordinator's | mech (workspace) | | print | **stage 5**: `fleet brief` prints the workspace; history moves stay prose |
+| B4 | B, lane | Leave running what you did not start; stop what you started | judg (mostly) | procs | | prose (`fleets.py procs` lists what each session left) |
+| B5 | B, lane | Monitors and research agents on Sonnet | judg | | | prose |
+| B6 | B, chat | Read the inbox at each checkpoint, answer with `--re` | mech (open messages) | chat | warn | **Luiz** (L1) |
+| B7 | B, chat | Steering inside the lane and criterion is taken; anything else goes to the coordinator | judg | | | prose |
+| B8 | B, report | Say `blocked:` at once, never wait in silence | judg (when) | | page | code (silence shows on the page after twenty minutes) |
+| B9 | B, report | Ten-line first block | judg | | | prose |
+
+## Manager
+
+| # | Where | Rule | Kind | Data | Code | Disposition |
+| :-- | :-- | :-- | :-- | :-- | :-- | :-- |
+| M1 | M, setup | `init --role manager`, serve, name, watch, greet each coordinator, fill standing.md | mech (some) | | auto | **stage 5**: `init --role manager` records the landing queue (setup step cut); the rest stays prose |
+| M2 | M, setup | Setup is done when every fleet answered and standing.md names an owner per lane | judg | | | prose |
+| M3 | M, setup | Greet a fleet that starts later | mech (new entry) | registry | warn (watch) | later: needs a "seen fleets" record in the manager's DIR; small, not asked for |
+| M4 | M, decision | Answer, ask, inform or pass it on | judg | | | prose |
+| M5 | M, question | Answer from what you know, else relay marked as relayed; a direct line for rounds | judg | | | prose |
+| M6 | M, landing | Queue each landing as a `landings` step for the fleet, in the order of the turns | mech | | | code (the step commands) |
+| M7 | M, landing | Check a landing against standing.md and other fleets' lanes | judg / mech (`whose`) | owners | print | code (`fleets.py whose`) |
+| M8 | M, landing | A push or deploy needs the user's first-hand word | judg | | | prose |
+| M9 | M, landing | One fleet has the turn; the next is given when the one before is closed or given back | mech | landing queue | refuse | **stage 5**: `step --status current` refused while another landing is current (both) |
+| M10 | M, landing | Close a landing: done, `integrated` event, standing.md, notice to the fleets touched | judg (who is touched) | | | prose |
+| M11 | M, chat | A fleet that does not read its chat is told | mech | chat, watch | warn (watch) | code |
+| M12 | M, said once | Answer from the ledger first (`fleets.py show`) | judg | | | prose |
+| M13 | M, said once | A wait is named by number and read at its source | mech (closed) | | warn | code (`set --now` names a closed decision, in a fleet's ledger too) |
+| M14 | M, said once | A silent worker is checked, not assumed | mech | heartbeats | warn | code (watch); **stage 5**: `fleets show` marks it; prose cut |
+| M15 | M, waiting | An unrecorded answer is chased with the fleet | mech | chat, ledger | warn | code (watch, stage 2); **stage 5**: the fleet's own state commands warn too |
+| M16 | M, machine | Settle the gate as a turn; tell a session to stop what it left running | judg | | | prose |
+| M17 | M, usage | Read the usage windows before giving a turn to work that spawns many workers | mech (reading) / judg | usage reading | print | later: `step --status current` in `landings` could print the windows; whether it is wanted is Luiz's (L6) |
+| M18 | M, usage | A coordinator that reads far more than its workers write is told | mech (ratio) / judg (threshold) | spend | | later: needs a threshold (L6) |
+| M19 | M, stop | Tell every coordinator, give the turn back, `serve --stop` | judg | | | prose |
+
+## tuca-mode and its fleet playbooks
+
+| # | Where | Rule | Kind | Data | Code | Disposition |
+| :-- | :-- | :-- | :-- | :-- | :-- | :-- |
+| T1 | T | A real task opens a playbook's todo list | judg | | | prose |
+| T2 | T, coordinator lazily | The ledger only once a worker outlives a turn or lanes multiply | judg | | | prose |
+| T3 | T, autonomy | A push proceeds only when it will not deploy | mech | repo, CI | refuse | code (`land-check`) |
+| T4 | T, autonomy | Irreversible writes pause for Luiz | judg / mech (prune) | | refuse | code for prune (dry run by default); prose otherwise |
+| T5 | T, subagents | Model by role; Fable never fans out | judg | | | prose |
+| T6 | T, subagents | One jj workspace per code-writing worker | mech | | warn | **stage 5** (C22) |
+| T7 | T, subagents | Pushes stay with whoever holds the landing turn | mech | landing queue | refuse | **stage 5** (C51) |
+| P1 | land.md, step 2 | Take the landing turn | mech | | refuse | **stage 5**: `land-check` stops without it |
+| P2 | land.md, step 7 | `@` on a fresh empty change after the push | mech | jj | warn | later: `land-check` runs before the push; a post-push check is a new command |
+| P3 | workspace-prune.md | Fleet workspaces go through `fleet ws prune`; the dry run first | mech | | refuse | code (stage 4); stale lines about heartbeats and prune fixed |
+| P4 | session-pickup.md | Resume a fleet from `state.py show` | mech | | print | code |
+| P5 | babysit.md | One babysitter per stack | judg | | | prose |
+
+## SPEC open items that were rules in disguise
+
+| Item | Rule | Fixed in |
+| :-- | :-- | :-- |
+| open-2 | Say success only once the write is checked | TS and Python; model and traces re-recorded from Python |
+| open-3 | `roadblock --agent` names a recorded worker | TS and Python; model and traces |
+| open-5 | `park` frees the parked workers' current steps (back to pending, agent kept) | TS and Python; model and traces |
+| open-13 | Stamps compare as instants (numbering, answered-at, `wait`) | TS and Python |
+| open-21 | `chat wait` ends when its decision closes without an answer | TS and Python (tests in both) |
+
+## For Luiz
+
+Rules whose mechanical half is clear but whose policy is not. Nothing here was decided.
+
+- **L1. A message to a worker: forwarded, or read at checkpoints?** brief.md has the worker read its
+  inbox at each checkpoint; the coordinator's SKILL.md has the coordinator forward every message
+  addressed to a worker by `SendMessage`. Both run, so a worker hears a message twice and the
+  coordinator pays a turn for each. Code could keep either: the coordinator's watch could print `!
+  a1 has not answered #12 for N min` instead of a blanket forward. Which, and what N?
+- **L2. `park` and steps.** open-5 is fixed with the step going back to `pending` and keeping its
+  agent (who last worked it). `blocked`, or clearing the agent, are the alternatives.
+- **L3. Haiku.** `--model` accepts `haiku`, the coordinator's SKILL.md approves only Opus, Sonnet and
+  Fable. Refuse it, warn, or keep it as a model the user approves case by case?
+- **L4. Decisions with a manager present.** The rule is "to the manager first unless the user's by
+  nature". A warning on `decision` opened `--asks user` while a manager is served would catch the
+  forgotten flag, and fire on every credential. Wanted?
+- **L5. Untied decisions.** "Every decision says where it came from": a warning on a decision opened
+  with neither `--step`, `--milestone` nor `--agent` would fire on most decisions the traces open
+  today. Strict enough to warn, or prose?
+- **L6. The manager's usage rules.** Before giving a turn to work that spawns many workers, and a
+  coordinator reading far more than its workers write: both need a threshold (how full a window, what
+  ratio) before code can say anything.
+- **L7. Lane overlap: warn or refuse, and how precise.** Overlap is read from each entry's directory
+  part before any glob (`src/*.ts` meets `src/a/b.ts`); it warns, since a queued worker or a joined
+  queue is the coordinator's call. A refusal, or exact glob intersection, are possible.
+- **L8. `--needs user` on an update.** open-3's other half: a roadblock changed to `--needs user`
+  needs no decision, though a new one does.

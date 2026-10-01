@@ -30,6 +30,9 @@ workspace. Exit 0 when the verdict is "push", 1 for "ask" or "stop", 2 on error.
                        "stop": not a fast-forward, several heads, nothing to
                        push, or a revision jj would refuse to push
     reasons            one line per finding behind the verdict
+    turn               in a fleet whose machine serves a manager, why this fleet
+                       may not land yet (`fleet turn`): the manager has not given
+                       it the landing turn. The verdict is then "stop"
 
 --apply-skip-ci appends " [skip ci]" to head's subject when suggest_skip_ci
 holds (idempotent, head only), then reports on the rewritten head.
@@ -39,6 +42,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -559,6 +563,33 @@ def land_check(repo, bookmark, head_rev=None, remote="origin", apply_skip_ci=Fal
     return result
 
 
+def landing_turn():
+    """`fleet turn` for the fleet this session serves: (exit code, what it said), or None when the fleet
+    CLI cannot run. Exit 1 means a manager is served and the turn is another fleet's, or nobody's yet."""
+    fleet = Path(__file__).resolve().parent.parent / "fleet" / "bin" / "fleet"
+    if not fleet.exists() or shutil.which("bun") is None:
+        return None
+    try:
+        r = subprocess.run([str(fleet), "turn"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.returncode, (r.stdout if r.returncode == 0 else r.stderr).strip()
+
+
+def with_turn(result, turn):
+    """The verdict once the landing turn is known: without it, a fleet under a manager stops."""
+    if turn is None:
+        return result
+    code, said = turn
+    if code == 1:
+        result["verdict"] = "stop"
+        result["turn"] = said.removeprefix("turn: ")
+        result["reasons"].append(result["turn"])
+    elif " holds the landing turn" in said:
+        result["reasons"].append(said)
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="land-check", description=__doc__.split("\n\n")[0],
                                      formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -576,6 +607,7 @@ def main(argv=None):
     except CheckError as e:
         print(f"land-check: {e}", file=sys.stderr)
         return 2
+    result = with_turn(result, landing_turn())
     print(json.dumps(result, indent=2))
     return 0 if result["verdict"] == "push" else 1
 

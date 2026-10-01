@@ -33,6 +33,7 @@ import { view } from "../page/view.ts";
 import { changes, jj, literal, unintegratedRevset, why, workspaceNames, workspaceRoot, type Change } from "../ws/jj.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
+import { globMatches } from "./fleets.ts";
 
 const USAGE = "usage: fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] | list | prune [--apply | --dry-run]";
 
@@ -155,6 +156,11 @@ function add(machine: Machine, root: string, raw: JsonObject, argv: readonly str
     const fault = save(machine, root, raw, [...(asArray(raw["workspaces"]) ?? []), row], [event(machine, raw, agent, "note", `Workspace ${name} for ${agent} at ${path}, on ${described(from)}.`)]);
 
     if (fault !== undefined) return yield* Effect.fail(fault);
+
+    if (agentRow(raw, agent) === undefined) {
+      out.err(`ws: no worker row ${agent} yet: record it (\`fleet state ${root} agent ${agent} --task T --milestone M ...\`) before you brief and spawn it\n`);
+    }
+
     out.out(`workspace ${name} for ${agent} at ${path}, on ${described(from)}\n`);
     out.out(`brief: your working copy is ${path}; edit, build and describe your changes there only. The coordinator rebases them onto the stack and prunes the workspace.\n`);
 
@@ -199,10 +205,34 @@ function list(machine: Machine, root: string, raw: JsonObject): Effect.Effect<nu
       const conflicted = tip.conflict || ahead.some((c) => c.conflict);
       const lead = ahead.length === 0 ? "nothing ahead of the stack" : `${ahead.length} change(s) ahead of the stack: ${ahead.map(described).join("; ")}`;
       out.out(`    @ ${described(tip)}${conflicted ? ", conflicted" : ""}; ${lead}\n`);
+      const lane = asArray(row?.["lane"])?.flatMap((e) => asString(e) ?? []) ?? [];
+      const strayed = lane.length === 0 || ahead.length === 0 ? [] : outsideLane(r.repo, unintegratedRevset(r.id, tip.change), lane);
+
+      if (strayed.length > 0) {
+        out.out(`    outside its lane (${lane.join(", ")}): ${strayed.join(", ")}: stop it and handle these edits before anything else runs on them\n`);
+      }
     }
 
     return 0;
   });
+}
+
+/** Whether a repository path is in a lane: the entry itself, under it, or matched by it as a glob. */
+export function inLane(path: string, lane: readonly string[]): boolean {
+  return lane.some((entry) => {
+    const e = entry.trim().replace(/^\.\//, "").replace(/\/+$/, "");
+
+    return path === e || path.startsWith(`${e}/`) || globMatches(path, e);
+  });
+}
+
+/** The files the commits of `revset` touch that are in none of the lane's entries. */
+function outsideLane(repo: string, revset: string, lane: readonly string[]): string[] {
+  const touched = jj(repo, ["log", "--no-graph", "-r", revset, "-T", 'self.diff().files().map(|f| f.path() ++ "\\n").join("")'], true);
+
+  if (!touched.ok) return [];
+
+  return [...new Set(touched.stdout.split("\n").filter((p) => p !== "" && !inLane(p, lane)))].sort();
 }
 
 // -- prune --------------------------------------------------------------------------------------

@@ -126,6 +126,28 @@ describe("fleet ws list", () => {
   test("nothing recorded", () => {
     expect(ws("list").stdout).toBe(`no workspace: \`fleet ws ${dir} add NAME\` makes one per worker\n`);
   });
+
+  test("files a worker changed outside its lane are named", () => {
+    state("agent", "a1", "--task", "t", "--milestone", "m1", "--lane", "src/");
+    ws("add", "a1", "--repo", repo);
+    const a1 = join(base, "repo-a1");
+    mkdirSync(join(a1, "src"));
+    writeFileSync(join(a1, "src", "ok.ts"), "in the lane\n");
+    work(a1, "README", "a1: strays");
+    const ran = ws("list");
+    expect(ran.stdout).toContain("    outside its lane (src/): README: stop it and handle these edits before anything else runs on them\n");
+    expect(ran.stdout).not.toContain("src/ok.ts:");
+  });
+});
+
+describe("a workspace for a worker the ledger has not recorded", () => {
+  test("is made, with a warning: a worker is recorded before it is briefed and spawned", () => {
+    const ran = ws("add", "a9", "--repo", repo);
+    expect(ran.code).toBe(0);
+    expect(ran.stderr).toContain("ws: no worker row a9 yet: record it");
+    state("agent", "a1", "--task", "t", "--milestone", "m1");
+    expect(ws("add", "a1", "--repo", repo).stderr).toBe("");
+  });
 });
 
 /** Where two workers worked. */

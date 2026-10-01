@@ -4,6 +4,7 @@ repos that push to a bare git remote.
 Run: just test-scripts  (or python3 -m unittest discover -s scripts/tests)
 """
 
+import atexit
 import json
 import os
 import shutil
@@ -19,7 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 CHECK = ROOT / "scripts" / "land-check"
 HAVE_JJ = shutil.which("jj") is not None and shutil.which("git") is not None
 ENV = {**os.environ, "JJ_EDITOR": "true", "EDITOR": "true", "JJ_USER": "Test", "JJ_EMAIL": "test@example.com",
-       "JJ_CONFIG": ""}
+       "JJ_CONFIG": "", "FLEET_HOME": tempfile.mkdtemp(prefix="land-check-registry-")}  # no fleet: the turn never applies
+atexit.register(shutil.rmtree, ENV["FLEET_HOME"], True)
 
 sys.dont_write_bytecode = True
 _loader = SourceFileLoader("land_check", str(CHECK))
@@ -323,6 +325,53 @@ class NoHabitTest(RepoCase):
         self.assertFalse(result["skip_ci_habit"])
         self.assertFalse(result["suggest_skip_ci"])
         self.assertEqual(result["verdict"], "ask")
+
+
+@unittest.skipUnless(shutil.which("bun"), "needs bun for the fleet CLI")
+class LandingTurnTest(unittest.TestCase):
+    """In a fleet whose machine serves a manager, land-check stops until the manager gave the fleet the turn
+    (`fleet turn`, which finds the fleet by this process: its registry entry's pid is among the parents)."""
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.home, True)
+        saved = os.environ.get("FLEET_HOME")
+        self.addCleanup(lambda: os.environ.__setitem__("FLEET_HOME", saved) if saved else os.environ.pop("FLEET_HOME", None))
+        os.environ["FLEET_HOME"] = str(self.home / "registry")
+        (self.home / "registry").mkdir()
+        self.serve("acme", "coordinator", {"roadmap": []})
+
+    def serve(self, name, role, ledger):
+        d = self.home / name
+        d.mkdir()
+        base = {"project": name, "goal": "g", "status": "running", "now": "", "started": "2026-01-05T09:00:00+00:00",
+                "agents": [], "roadblocks": [], "decisions": [], "events": []}
+        (d / "state.json").write_text(json.dumps({**base, **ledger, **({"role": "manager"} if role == "manager" else {})}))
+        entry = {"id": name, "role": role, "dir": str(d.resolve()), "url": "http://x/", "pid": os.getpid(), "session": None,
+                 "since": "2026-01-05T09:00:00+00:00"}
+        (self.home / "registry" / f"{name}.json").write_text(json.dumps(entry))
+
+    def queue(self, *steps):
+        return {"roadmap": [{"id": "landings", "title": "Landings and deploys",
+                             "steps": [{"id": i, "title": t, "status": st, "agent": a} for i, t, st, a in steps]}]}
+
+    def verdict(self):
+        return lc.with_turn({"verdict": "push", "reasons": []}, lc.landing_turn())
+
+    def test_without_a_manager_the_verdict_stands(self):
+        self.assertEqual(self.verdict(), {"verdict": "push", "reasons": []})
+
+    def test_the_turn_held_by_another_fleet_stops(self):
+        self.serve("manager", "manager", self.queue(("l1", "infra: push", "current", "infra"), ("l2", "acme: push", "pending", "acme")))
+        result = self.verdict()
+        self.assertEqual(result["verdict"], "stop")
+        self.assertIn("acme does not hold the landing turn (l1 (infra: push) has it, infra's; yours, l2, waits in the queue)", result["turn"])
+
+    def test_the_turn_held_by_this_fleet_pushes(self):
+        self.serve("manager", "manager", self.queue(("l1", "infra: push", "done", "infra"), ("l2", "acme: push", "current", "acme")))
+        result = self.verdict()
+        self.assertEqual(result["verdict"], "push")
+        self.assertIn("acme holds the landing turn: l2 (acme: push)", result["reasons"][0])
 
 
 if __name__ == "__main__":
