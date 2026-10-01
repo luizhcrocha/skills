@@ -161,6 +161,14 @@ function validateDecisions(ledger: Ledger): Refusal | undefined {
     d.resolution ??= null;
     d.revised ??= null;
     d.closed ??= null;
+
+    if ((d.held !== undefined && d.held !== null) || (d.held_at !== undefined && d.held_at !== null)) {
+      if (d.held === undefined || d.held === null || d.held === "" || d.held_at === undefined || d.held_at === null) {
+        return invalid(`decision ${d.id} is held without its reason and when (held, held_at)`);
+      }
+
+      if (d.status !== "open") return invalid(`decision ${d.id} is ${d.status} and still held`);
+    }
   }
 
   for (const d of rows) {

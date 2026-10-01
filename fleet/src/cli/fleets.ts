@@ -127,7 +127,8 @@ function list(machine: Machine): Effect.Effect<void, never, Out> {
         const answered = answeredAt(d, said);
         say(
           `    ${ref} ${str(d["id"])} [${marks}] ${str(d["title"])}`.replaceAll("     ", "    ") +
-            (answered === undefined ? "" : `  ANSWERED at ${answered.slice(11, 16)}, not recorded`),
+            (answered === undefined ? "" : `  ANSWERED at ${answered.slice(11, 16)}, not recorded`) +
+            (truthy(d["held"]) ? `  held by the fleet: ${str(d["held"])}` : ""),
         );
       }
     }
@@ -167,6 +168,8 @@ function show(machine: Machine, fleet: string): Effect.Effect<void, Refusal, Out
       const asks = truthy(d["asks"]) ? str(d["asks"]) : "user";
       const ref = truthy(d["ref"]) ? str(d["ref"]) : "";
       say(`    decision ${ref} ${str(d["id"])} [${asks}${truthy(d["blocking"]) ? ", blocks work" : ""}] ${str(d["title"])}: ${str(d["question"])}`);
+
+      if (truthy(d["held"])) say(`        held by the fleet since ${str(d["held_at"]).slice(11, 16)}: ${str(d["held"])}`);
       const at = answeredAt(d, said);
 
       if (at !== undefined) {

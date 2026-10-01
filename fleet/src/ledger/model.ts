@@ -125,6 +125,10 @@ export interface Decision {
   step?: string | null;
   milestone?: string | null;
   ref?: string;
+  /** What the fleet does first with the user's answer, while it keeps the item off the user's list. */
+  held?: string | null;
+  /** When it was held. */
+  held_at?: string | null;
 }
 
 /** One entry of the append-only event log. */
@@ -606,6 +610,8 @@ export const DECISION_KEYS = [
   "milestone",
   "ref",
   "questions",
+  "held",
+  "held_at",
 ] as const;
 
 function readDecision(object: JsonObject): Fields | Decision {
@@ -644,6 +650,8 @@ function readDecision(object: JsonObject): Fields | Decision {
     step: f.nullStr("step"),
     milestone: f.nullStr("milestone"),
     ref: f.optStr("ref"),
+    held: f.nullStr("held"),
+    held_at: f.nullStr("held_at"),
   });
 
   return f.done(row, DECISION_KEYS);

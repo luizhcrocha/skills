@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -274,6 +275,104 @@ class LedgerTest(Fleet):
         self.ok("decision", *SCHEMA)
         good = (self.root / "state.json").read_text()
         for change, word in [({"status": "maybe"}, "status"), ({"kind": "poll"}, "kind"), ({"supersedes": "d9"}, "d9")]:
+            state = json.loads(good)
+            state["decisions"][0].update(change)
+            (self.root / "state.json").write_text(json.dumps(state))
+            self.assertIn(word, self.refused("set", "--now", "x"))
+
+
+ACTION = ["a1", "--kind", "action", "--title", "Run the role cut", "--question", "Run the pipeline role cut?",
+          "--why", "the cut feeds the next milestone", "--manual", "just cut --roles"]
+
+
+class HoldTest(Fleet):
+    """The user answered, and the fleet must do something before the item can proceed: it holds it (off the
+    user's list, the answer counted as recorded) until it re-presents it with new words."""
+
+    def answer(self, text: str = "needs a code change first", at: str = "2999-01-01T00:00:00+00:00") -> None:
+        line = {"id": 1, "at": at, "from": "user", "to": ["coordinator"], "text": text, "re": None, "decision": "a1"}
+        (self.root / "chat.jsonl").write_text(json.dumps(line) + "\n")
+
+    def hold(self, reason: str = "fix the role cut first") -> None:
+        os.environ["FLEET_NOW"] = "2999-01-01T00:01:00+00:00"
+        try:
+            self.ok("decision", "A1", "--hold", reason)
+        finally:
+            del os.environ["FLEET_NOW"]
+
+    def test_holding_an_answered_item_records_the_answer_and_logs_why(self):
+        self.ok("decision", *ACTION)
+        self.answer()
+        self.assertIn("the user answered A1", self.run_cli("event", "x").stderr)
+        self.hold()
+        d = self.item("a1")
+        self.assertEqual((d["status"], d["held"]), ("open", "fix the role cut first"))
+        self.assertEqual(datetime.fromisoformat(d["held_at"]), datetime.fromisoformat("2999-01-01T00:01:00+00:00"))
+        event = self.state()["events"][-1]
+        self.assertEqual((event["kind"], event["text"], event["decision"], event.get("important")),
+                         ("note", "Run the role cut held by the fleet: fix the role cut first", "a1", None))
+        self.assertNotIn("the user answered", self.run_cli("event", "y").stderr)
+        show = subprocess.run([sys.executable, STATE, str(self.root), "show"], capture_output=True, text=True).stdout
+        self.assertIn("decision a1 OPEN, held by the fleet (fix the role cut first) [action] Run the role cut", show)
+
+    def test_an_answer_given_after_the_hold_is_news_again(self):
+        self.ok("decision", *ACTION)
+        self.answer()
+        self.hold()
+        self.answer("actually, run it now", at="2999-01-01T00:02:00+00:00")
+        self.assertIn("the user answered A1", self.run_cli("event", "x").stderr)
+
+    def test_unhold_takes_the_hold_back(self):
+        self.ok("decision", *ACTION)
+        self.assertIn("is not held", self.refused("decision", "a1", "--unhold"))
+        self.hold()
+        self.ok("decision", "a1", "--unhold")
+        self.assertNotIn("held", self.item("a1"))
+        self.assertEqual(self.state()["events"][-1]["text"], "Run the role cut no longer held by the fleet")
+
+    def test_a_revision_that_re_presents_it_clears_the_hold(self):
+        self.ok("decision", *ACTION)
+        self.hold()
+        self.ok("decision", "a1", "--why", "it still feeds the next milestone")
+        self.assertEqual(self.item("a1")["held"], "fix the role cut first", "a revision of the why alone does not re-present it")
+        self.ok("decision", "a1", "--manual", "just cut --roles --fixed", "--log", "the new command")
+        self.assertNotIn("held", self.item("a1"))
+        self.assertNotIn("held_at", self.item("a1"))
+        self.assertEqual((self.state()["events"][-1]["kind"], self.item("a1")["change"]), ("asked", "the new command"))
+        self.hold()
+        self.ok("decision", "a1", "--question", "Run the fixed role cut?")
+        self.assertNotIn("held", self.item("a1"))
+
+    def test_closing_clears_the_hold_and_a_closed_item_refuses_one(self):
+        self.ok("decision", *ACTION)
+        self.hold()
+        self.ok("decision", "a1", "--decide", "ran it", "--resolution", "said in the session")
+        self.assertNotIn("held", self.item("a1"))
+        self.assertIn("is already decided", self.refused("decision", "a1", "--hold", "again"))
+        self.assertIn("is already decided", self.refused("decision", "a1", "--unhold"))
+        self.ok("decision", *SCHEMA)
+        self.ok("decision", "d1", "--hold", "x")
+        self.ok("decision", "d1", "--withdraw", "moot")
+        self.assertNotIn("held", self.item("d1"))
+
+    def test_a_hold_names_an_open_item_and_a_reason(self):
+        self.assertIn("unknown decision 'a9'", self.refused("decision", "a9", "--hold", "x"))
+        self.ok("decision", *ACTION)
+        self.assertIn("--hold says what the fleet does first", self.refused("decision", "a1", "--hold", " "))
+        self.assertEqual(self.run_cli("decision", "a1", "--hold", "x", "--withdraw", "y").returncode, 2)
+
+    def test_a_new_grilling_round_clears_the_hold(self):
+        self.ok("grill", "g1", "--title", "Rules", "--ask", "t | q | r | w")
+        self.ok("decision", "g1", "--hold", "reading the code first")
+        self.assertEqual(self.item("g1")["held"], "reading the code first")
+        self.ok("grill", "g1", "--ask", "t2 | q2 | r2 | w2")
+        self.assertNotIn("held", self.item("g1"))
+
+    def test_a_ledger_held_without_its_stamp_or_closed_and_held_is_refused(self):
+        self.ok("decision", *ACTION)
+        good = (self.root / "state.json").read_text()
+        stamped = {"held": "x", "held_at": "2026-01-01T00:00:00+00:00", "status": "withdrawn"}
+        for change, word in [({"held": "x"}, "held without"), (stamped, "still held")]:
             state = json.loads(good)
             state["decisions"][0].update(change)
             (self.root / "state.json").write_text(json.dumps(state))

@@ -609,7 +609,8 @@ def cmd_wait(root, args) -> None:
         messages = tail.read() if not first else read(root)
         for m in messages:
             d = wanted.get(m.get("decision"))
-            if d and m["from"] == "user" and (not first or clock.at_or_after(m["at"], d.get("revised") or d.get("opened") or "")):
+            if d and m["from"] == "user" and (not first or clock.at_or_after(m["at"], d.get("revised") or d.get("opened") or "")
+                                               and not (d.get("held") and clock.at_or_after(d.get("held_at") or "", m["at"]))):
                 if first and any(r.get("re") == m["id"] and r["from"] != "user" for r in messages):
                     continue  # answered already, and replied to: not news
                 _show(root, [m])

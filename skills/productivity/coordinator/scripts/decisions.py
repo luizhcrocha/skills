@@ -67,9 +67,12 @@ def number(state: dict) -> None:
 
 def answered_at(d: dict, said: list[dict]) -> str | None:
     """When the user's answer to the open decision `d`, given after it last changed and not replied to, was
-    sent: the fleet has it and has not recorded it. None when there is none."""
+    sent: the fleet has it and has not recorded it. None when there is none. A held decision (`held`, the
+    fleet works on it first) has recorded every answer given until `held_at`."""
     since = d.get("revised") or d.get("opened") or ""
+    held = d.get("held_at") if d.get("held") else None  # held: the fleet has the answers given until then
     answers = [m for m in said if m.get("decision") == d.get("id") and m["from"] == "user" and clock.at_or_after(m["at"], since)
+               and not (held and clock.at_or_after(held, m["at"]))
                and not any(r.get("re") == m["id"] and r["from"] != "user" for r in said)]
     return answers[-1]["at"] if answers else None
 
@@ -149,6 +152,11 @@ def validate(state: dict, fail) -> None:
         for k in ("why", "recommend", "reason", "secret", "manual", "agent", "supersedes", "change", "step", "milestone",
                   "answer", "resolution", "revised", "closed"):
             d.setdefault(k, None)
+        if d.get("held") is not None or d.get("held_at") is not None:
+            if not isinstance(d.get("held"), str) or not d["held"] or not isinstance(d.get("held_at"), str):
+                fail(f"decision {d['id']} is held without its reason and when (held, held_at)")
+            if d["status"] != "open":
+                fail(f"decision {d['id']} is {d['status']} and still held")
     for d in rows:
         if d["supersedes"] and d["supersedes"] not in ids:
             fail(f"decision {d['id']} supersedes unknown decision '{d['supersedes']}'")

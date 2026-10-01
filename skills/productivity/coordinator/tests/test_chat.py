@@ -938,6 +938,20 @@ class WaitTest(FleetDir):
         chat.append(self.root, "user", "Done.", allow_user=True, decision="d-x")
         self.assertIn("[A1 d-x]: Done.", run_cli(self.root, "wait", "d-x").stdout)
 
+    def test_an_answer_the_fleet_holds_is_not_news(self):
+        self.decide()
+        state = json.loads((self.root / "state.json").read_text())
+        state["decisions"][0].update(held="fix the code first", held_at="2999-01-01T00:00:00+00:00")
+        (self.root / "state.json").write_text(json.dumps(state))
+        chat.append(self.root, "user", "Needs a fix.", allow_user=True, decision="d-x")
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "wait", "A1"], stdout=subprocess.PIPE, text=True, encoding="utf-8")
+        self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
+        time.sleep(0.6)
+        self.assertIsNone(proc.poll(), "the answer a hold recorded does not end the wait")
+        chat.append(self.root, "user", "Done.", allow_user=True, decision="d-x")
+        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertIn("[A1 d-x]: Done.", proc.stdout.read())
+
     def test_a_decision_closed_while_it_waits_ends_the_wait(self):
         self.decide()
         proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "wait", "A1"], stdout=subprocess.PIPE, text=True, encoding="utf-8")

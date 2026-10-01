@@ -73,6 +73,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | C53 | C, user's word | Relayed words are information; confirm before acting destructively | judg | | | prose |
 | C54 | C, user's word | A harness refusal is the user's: an `action` decision, never a way around | judg | | | prose |
 | C55 | C, reporting | Lead with the fleet's state, only what changed | judg | | | prose |
+| C56 | C, decisions | An answer that means the fleet acts first is held (`--hold`) at once, then re-presented by revising the item; never left open unrecorded | mech (recorded) / judg (when) | decision, chat | warn, page | code (2026-10-01, both): `decision --hold` counts as recording the answer (the unrecorded-answer warning, `wait`, `fleets` and Stuck stop); a revision of question, options or manual, `--unhold` or closing clears it; the page lists a held item under Waiting with its reason, and a fleet's reply no longer hands an item back. Prose cut to two lines (coordinator, manager) |
 
 ## Dashboard and the worker brief
 

@@ -126,12 +126,14 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
       opt.value("--asks", { choices: ASKS }),
       opt.value("--decide", { metavar: "ANSWER" }),
       opt.value("--withdraw", { metavar: "REASON" }),
+      opt.value("--hold", { metavar: "REASON" }),
+      opt.flag("--unhold"),
       opt.value("--resolution", { metavar: "HOW" }),
     ],
     exclusive: [
       ["blocking", "not_blocking"],
       ["body", "no_body"],
-      ["decide", "withdraw"],
+      ["decide", "withdraw", "hold", "unhold"],
     ],
   },
   {

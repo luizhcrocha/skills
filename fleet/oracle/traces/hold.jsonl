@@ -1,0 +1,31 @@
+{"trace": 1, "name": "hold", "about": "An answered item the fleet must work on first: `decision --hold` records the answer (the unrecorded-answer warning stops), keeps the item open off the user's list, and is cleared by a revision of the question, options or manual (re-presented), by --unhold, and by closing; what it refuses; a later answer is news again; the page rendered with a held item."}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "M", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "a1", "--kind", "action", "--title", "Run the role cut", "--question", "Run the pipeline role cut?", "--why", "it feeds the next milestone", "--manual", "just cut --roles", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--kind", "decision", "--title", "Lock window", "--question", "lock now or tonight?", "--why", "w", "--option", "A: now | a short lock", "--option", "B: tonight | no lock by day", "--recommend", "B", "--reason", "nobody works then", "--no-render"]}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 1, "at": "2026-01-05T09:05:00+00:00", "from": "user", "to": ["coordinator"], "text": "it needs a code change first", "re": null, "decision": "a1"}, "clock": "2026-01-05T09:05:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "event", "the user answered the role cut", "--no-render"], "clock": "2026-01-05T09:06:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "A1", "--hold", "fix the role cut first", "--no-render"], "clock": "2026-01-05T09:07:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "event", "working on the fix", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "show"]}
+{"cli": "state", "argv": ["$DIR", "decision", "a1", "--unhold", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "a1", "--unhold", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "a1", "--hold", "fix the role cut first", "--no-render"], "clock": "2026-01-05T09:08:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "a1", "--why", "it still feeds the next milestone", "--no-render"], "clock": "2026-01-05T09:10:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "a1", "--manual", "just cut --roles --fixed", "--log", "the role cut is fixed: run this", "--no-render"], "clock": "2026-01-05T09:20:00+00:00"}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 2, "at": "2026-01-05T09:25:00+00:00", "from": "user", "to": ["coordinator"], "text": "ran it", "re": null, "decision": "a1"}, "clock": "2026-01-05T09:25:00+00:00"}
+{"cli": "chat", "argv": ["$DIR", "wait", "A1"]}
+{"cli": "state", "argv": ["$DIR", "decision", "zz", "--hold", "x", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "a1", "--hold", "  ", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "a1", "--hold", "x", "--withdraw", "y", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "a1", "--hold", "the cut failed on one role", "--no-render"], "clock": "2026-01-05T09:30:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "event", "fixing the last role", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--hold", "measuring the lock first", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--withdraw", "the lock is gone", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--hold", "again", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--unhold", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--title", "Role rules", "--ask", "Admins | may admins cut? | yes | they own it", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "g1", "--hold", "reading the role code first", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--ask", "Guests | may guests cut? | no | read only", "--no-render"], "clock": "2026-01-05T09:40:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "a1", "--hold", "one more fix"]}
+{"cli": "state", "argv": ["$DIR", "show"]}

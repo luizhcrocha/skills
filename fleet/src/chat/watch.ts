@@ -108,6 +108,8 @@ function numberedDecisions(root: string): JsonObject[] {
     status: d.status,
     opened: d.opened,
     revised: d.revised ?? null,
+    held: d.held ?? null,
+    held_at: d.held_at ?? null,
   }));
 }
 
@@ -339,7 +341,7 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
   return Effect.gen(function* () {
     const out = yield* Out;
     const ledger = numberedLedger(root);
-    const wanted = new Map<string, { readonly label: string; readonly since: string }>();
+    const wanted = new Map<string, { readonly label: string; readonly since: string; readonly held: string | undefined }>();
 
     for (const key of keys) {
       const d = ledger === undefined ? undefined : findDecision(ledger, key);
@@ -354,7 +356,7 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
       }
 
       const revised = d.revised ?? "";
-      wanted.set(d.id, { label, since: revised !== "" ? revised : d.opened });
+      wanted.set(d.id, { label, since: revised !== "" ? revised : d.opened, held: d.held !== undefined && d.held !== null && d.held !== "" ? (d.held_at ?? "") : undefined });
     }
 
     let tail: Tail | undefined;
@@ -369,6 +371,9 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
         if (d === undefined || m.from !== "user") continue;
 
         if (first && !atOrAfter(pyText(m.at), d.since)) continue;
+
+        // A held decision has recorded the answers given until it was held.
+        if (first && d.held !== undefined && atOrAfter(d.held, pyText(m.at))) continue;
 
         if (first && messages.some((r) => r.re === m.id && r.from !== "user")) continue;
 

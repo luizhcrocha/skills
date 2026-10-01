@@ -176,19 +176,24 @@ export function summary(machine: Machine, lookups: Lookups, entry: Entry): JsonO
     silent: silentWorkers(machine, entry.dir, state).map((w) => ({ id: w.id, name: w.name, active: w.active })),
     decisions: rows(state, "decisions")
       .filter((d) => d["status"] === "open" && asString(d["id"]) !== undefined)
-      .map((d) => ({
-        id: d["id"] ?? null,
-        ref: d["ref"] ?? null,
-        kind: d["kind"] === undefined ? "decision" : d["kind"],
-        title: d["title"] ?? null,
-        question: d["question"] ?? null,
-        why: d["why"] ?? null,
-        blocking: d["blocking"] === true,
-        asks: truthy(d["asks"]) ? (d["asks"] ?? "user") : "user",
-        opened: d["opened"] ?? null,
-        revised: d["revised"] ?? null,
-        answered: answeredAt(d, said) ?? null,
-      })),
+      .map((d) => {
+        const row = {
+          id: d["id"] ?? null,
+          ref: d["ref"] ?? null,
+          kind: d["kind"] === undefined ? "decision" : d["kind"],
+          title: d["title"] ?? null,
+          question: d["question"] ?? null,
+          why: d["why"] ?? null,
+          blocking: d["blocking"] === true,
+          asks: truthy(d["asks"]) ? (d["asks"] ?? "user") : "user",
+          opened: d["opened"] ?? null,
+          revised: d["revised"] ?? null,
+          answered: answeredAt(d, said) ?? null,
+        };
+
+        // Held: the fleet works on the user's answer first (only a held decision has the keys, as in Python).
+        return truthy(d["held"]) ? { ...row, held: d["held"] ?? null, held_at: d["held_at"] ?? null } : row;
+      }),
   };
 }
 

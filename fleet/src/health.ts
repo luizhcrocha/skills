@@ -5,7 +5,7 @@
  */
 import { atOrAfter, stampOf } from "./clock.ts";
 import type { Message } from "./chat/store.ts";
-import { asArray, asObject, asString, pyRepr, type JsonObject } from "./json.ts";
+import { asArray, asObject, asString, pyRepr, truthy, type JsonObject } from "./json.ts";
 import { workerActivity } from "./heartbeat.ts";
 import { secondsNow, type Machine } from "./world.ts";
 
@@ -23,12 +23,14 @@ function str(value: JsonObject[string] | undefined): string {
 }
 
 /** When the user's answer to the open decision `d`, given after it last changed and not replied to,
- * was sent (stamps compared as instants, open-13); undefined when there is none. */
+ * was sent (stamps compared as instants, open-13); undefined when there is none. A held decision
+ * (`held`, the fleet works on it first) has recorded every answer given until `held_at`. */
 export function answeredAt(d: JsonObject, said: readonly Message[]): string | undefined {
   const revised = d["revised"];
   const opened = d["opened"];
   const since = revised !== undefined && revised !== null && revised !== "" ? str(revised) : str(opened);
   const id = d["id"];
+  const heldAt = truthy(d["held"]) ? str(d["held_at"]) : undefined;
 
   const answers = said.filter(
     (m) =>
@@ -36,6 +38,7 @@ export function answeredAt(d: JsonObject, said: readonly Message[]): string | un
       pyRepr(m.decision) === pyRepr(id) &&
       m.from === "user" &&
       atOrAfter(str(m.at), since) &&
+      !(heldAt !== undefined && heldAt !== "" && atOrAfter(heldAt, str(m.at))) &&
       !said.some((r) => r.from !== "user" && r.re === m.id),
   );
 

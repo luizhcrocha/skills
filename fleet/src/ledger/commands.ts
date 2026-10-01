@@ -777,11 +777,24 @@ function setBody(run: Run, d: Decision): Step$ {
   return Effect.void;
 }
 
+/** The decision is no longer held by the fleet: re-presented, closed, or the hold taken back. */
+function unheld(d: Decision): void {
+  delete d.held;
+  delete d.held_at;
+  dropKey(d, "held");
+  dropKey(d, "held_at");
+}
+
+function isHeld(d: Decision): boolean {
+  return given(d.held ?? undefined);
+}
+
 function close(run: Run, ledger: Ledger, d: Decision, outcome: { readonly status: string; readonly answer: string | null; readonly resolution: string }): void {
   d.status = outcome.status;
   d.answer = outcome.answer;
   d.resolution = outcome.resolution;
   d.closed = stamp(run);
+  unheld(d);
 
   if (outcome.status === "decided") {
     log(run, ledger, { kind: "decision", text: `${d.title ?? "None"}: ${outcome.answer ?? "None"} (${outcome.resolution})`, agent: d.agent ?? null, decision: d.id });
@@ -840,6 +853,8 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
     const decide = args.str("decide");
     const withdraw = args.str("withdraw");
     const resolution = args.str("resolution");
+    const hold = args.str("hold");
+    const unhold = args.flag("unhold");
 
     if (decide !== undefined && !given(resolution)) {
       return yield* refuse('--decide says what was chosen and --resolution how it came ("answered on the page (#14)", "said in the session")');
@@ -851,6 +866,8 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
     const options = args.list("option");
     const body = args.str("body");
 
+    if (d === undefined && (hold !== undefined || unhold)) return yield* refuse(`unknown decision '${id}'`);
+
     if (d !== undefined && d.status !== "open") {
       const onlyPlace =
         (args.str("step") !== undefined || args.str("milestone") !== undefined) &&
@@ -858,7 +875,9 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         (options === undefined || options.length === 0) &&
         !given(body) &&
         decide === undefined &&
-        withdraw === undefined;
+        withdraw === undefined &&
+        hold === undefined &&
+        !unhold;
 
       if (onlyPlace) {
         yield* placeOf(ledger, d, run);
@@ -942,6 +961,10 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       d = fresh;
     } else {
       if (given(supersedes)) return yield* refuse("--supersedes is given when the new decision is opened");
+
+      if (unhold && !isHeld(d)) return yield* refuse(`${d.title ?? "None"} is not held: --unhold takes back a --hold`);
+
+      if (hold !== undefined && hold.trim() === "") return yield* refuse("--hold says what the fleet does first, before the item comes back to the user");
       const question = args.str("question");
       const asksAnew = question !== undefined && question !== d.question;
       const kindNow = given(args.str("kind")) ? args.str("kind") : d.kind;
@@ -1004,6 +1027,18 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
           important: passedOn && row.blocking === true,
           decision: row.id,
         });
+
+        // Re-presented with new words: back on the user's list.
+        if (changed.includes("question") || changed.includes("option") || changed.includes("manual")) unheld(row);
+      }
+
+      if (hold !== undefined) {
+        row.held = hold;
+        row.held_at = stamp(run);
+        log(run, ledger, { kind: "note", text: `${row.title ?? "None"} held by the fleet: ${hold}`, agent: row.agent ?? null, decision: row.id });
+      } else if (unhold) {
+        unheld(row);
+        log(run, ledger, { kind: "note", text: `${row.title ?? "None"} no longer held by the fleet`, agent: row.agent ?? null, decision: row.id });
       }
     }
 
@@ -1182,6 +1217,9 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
 
     if (added.length > 0 || revisions.length > 0 || reasons.length > 0) {
       if (!created) row.revised = stamp(run);
+
+      // A new round re-presents it.
+      if (added.length > 0 || revisions.length > 0) unheld(row);
 
       const words =
         added.length > 0

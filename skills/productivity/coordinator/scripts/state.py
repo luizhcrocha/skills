@@ -17,7 +17,7 @@
                              [--recommend R --reason WHY]
                              [--secret NAME] [--manual TEXT] [--body FILE | --no-body]
                              [--agent A] [--supersedes ID] [--log TEXT] [--asks user|manager]
-                             [--decide ANSWER --resolution HOW | --withdraw REASON]
+                             [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]
     state.py DIR event [--agent A] [--kind K] [--important] TEXT
     state.py DIR park [--agent A]... REASON
     state.py DIR keep ID [TEXT | --drop REASON]
@@ -588,8 +588,15 @@ def set_body(root: Path, d: dict, args) -> None:
         d["body"] = True
 
 
+def unheld(d: dict) -> None:
+    """The decision is no longer held by the fleet: re-presented, closed, or the hold taken back."""
+    d.pop("held", None)
+    d.pop("held_at", None)
+
+
 def close(state, d: dict, status: str, answer: str | None, resolution: str) -> None:
     d.update(status=status, answer=answer, resolution=resolution, closed=now())
+    unheld(d)
     if status == "decided":
         log(state, "decision", f"{d['title']}: {answer} ({resolution})", d["agent"], decision=d["id"])
     else:
@@ -628,10 +635,12 @@ def cmd_decision(state, args):
         fail("--decide says what was chosen and --resolution how it came (\"answered on the page (#14)\", \"said in the session\")")
     if args.agent and not known(state, args.agent):
         fail(f"unknown agent '{args.agent}'")
+    if d is None and (args.hold is not None or args.unhold):
+        fail(f"unknown decision '{args.id}'")
     if d is not None and d["status"] != "open":
         only_place = (args.step is not None or args.milestone is not None) and not any(
             getattr(args, k) is not None for k in FIELDS if k not in ("step", "milestone")) and not args.option and not args.body \
-            and args.decide is None and args.withdraw is None
+            and args.decide is None and args.withdraw is None and args.hold is None and not args.unhold
         if only_place:  # where it came from is not what was decided: it can be said of a closed one too
             place_of(state, d, args)
             return state
@@ -669,6 +678,10 @@ def cmd_decision(state, args):
     else:
         if args.supersedes:
             fail("--supersedes is given when the new decision is opened")
+        if args.unhold and not d.get("held"):
+            fail(f"{d['title']} is not held: --unhold takes back a --hold")
+        if args.hold is not None and not args.hold.strip():
+            fail("--hold says what the fleet does first, before the item comes back to the user")
         asks_anew = args.question is not None and args.question != d["question"]
         if asks_anew and (args.kind or d["kind"]) == "decision" and not args.option and not args.same_options:
             fail("the question changed, and the options on the page would be the old question's: give them again "
@@ -698,6 +711,14 @@ def cmd_decision(state, args):
             d["revised"], d["change"] = now(), args.log or None
             text = f"{d['title']} now asks you: {d['question']}" if passed_on else f"{d['title']} changed: {args.log or ', '.join(changed)}"
             log(state, "asked", text, d["agent"], passed_on and d["blocking"], d["id"])
+            if any(k in changed for k in ("question", "option", "manual")):
+                unheld(d)  # re-presented with new words: back on the user's list
+        if args.hold is not None:
+            d["held"], d["held_at"] = args.hold, now()
+            log(state, "note", f"{d['title']} held by the fleet: {args.hold}", d["agent"], decision=d["id"])
+        elif args.unhold:
+            unheld(d)
+            log(state, "note", f"{d['title']} no longer held by the fleet", d["agent"], decision=d["id"])
     if args.decide is not None:
         close(state, d, "decided", args.decide, args.resolution)
     elif args.withdraw is not None:
@@ -786,6 +807,8 @@ def cmd_grill(state, args):
     if new or args.revise or args.reason:
         if not created:
             d["revised"] = now()  # the page shows the round as new since the viewer last looked
+        if new or args.revise:
+            unheld(d)  # a new round re-presents it
         words = f"{len(new)} new question{'s' if len(new) != 1 else ''}" if new else "a question revised" if args.revise else "reasons added"
         log(state, "asked", f"{d['title']}: {words}", d["agent"], d["blocking"], d["id"])
     if args.done is not None:
@@ -816,7 +839,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
   decision ID --kind {"|".join(decisions.KINDS)} --title T --question Q --why W [--blocking | --not-blocking]
         [--option "KEY: label | consequence"]... [--same-options] [--recommend R --reason WHY] [--secret NAME] [--manual TEXT]
         [--body FILE | --no-body] [--agent A] [--supersedes ID] [--log TEXT] [--asks {"|".join(decisions.ASKS)}]
-        [--decide ANSWER --resolution HOW | --withdraw REASON]
+        [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]
   event [--kind {"|".join(KINDS)}] [--agent A] [--important] TEXT   (a note is `event --kind note TEXT`)
   park [--agent A]... REASON     stop every live worker row (or those named) in one command
   keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace
@@ -845,6 +868,8 @@ def cmd_show(state, args):
         status = ("OPEN, blocking" if d.get("blocking") else "OPEN") if d["status"] == "open" else d["status"]
         if d["status"] == "open" and d.get("asks") == "manager":
             status += ", with the manager"
+        if d["status"] == "open" and d.get("held"):
+            status += f", held by the fleet ({d['held']})"
         outcome = d.get("answer") or d.get("resolution")
         print(f"  {d.get('ref', '')} decision {d['id']} {status} [{d['kind']}] {d['title']}" + (f": {outcome}" if outcome else ""))
     for link in state.get("links", []):
@@ -914,6 +939,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--log", help="what changed, shown to the user on the page")
     s.add_argument("--asks", choices=decisions.ASKS, help="who looks at it first: the user, or the manager when there is one")
     g = s.add_mutually_exclusive_group(); g.add_argument("--decide", metavar="ANSWER"); g.add_argument("--withdraw", metavar="REASON")
+    g.add_argument("--hold", metavar="REASON", help="the user answered and the fleet works on it first: off the user's list until revised")
+    g.add_argument("--unhold", action="store_true", help="take back a --hold")
     s.add_argument("--resolution", metavar="HOW", help="with --decide: how the answer came")
     s = sub.add_parser("event"); s.add_argument("text"); s.add_argument("--agent"); s.add_argument("--kind", choices=KINDS)
     s.add_argument("--important", action="store_true", help="the user should see this now: toast, sound, badge")

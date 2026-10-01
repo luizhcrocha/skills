@@ -351,6 +351,120 @@ describe("ledger", () => {
   });
 });
 
+const ACTION = [
+  "a1",
+  "--kind",
+  "action",
+  "--title",
+  "Run the role cut",
+  "--question",
+  "Run the pipeline role cut?",
+  "--why",
+  "the cut feeds the next milestone",
+  "--manual",
+  "just cut --roles",
+];
+
+/** The user answered, and the fleet must do something before the item can proceed: it holds it (off the
+ * user's list, the answer counted as recorded) until it re-presents it with new words. */
+describe("hold", () => {
+  const answer = (text = "needs a code change first", at = "2999-01-01T00:00:00+00:00"): void => {
+    writeFileSync(join(root, "chat.jsonl"), `${JSON.stringify({ id: 1, at, from: "user", to: ["coordinator"], text, re: null, decision: "a1" })}\n`);
+  };
+
+  const hold = (reason = "fix the role cut first"): void => {
+    const result = fleet(["state", root, "decision", "A1", "--hold", reason, "--no-render"], { ...env, FLEET_NOW: "2999-01-01T00:01:00+00:00" });
+    expect(result.code, result.stderr).toBe(0);
+  };
+
+  test("holding an answered item records the answer and logs why", () => {
+    ok("decision", ...ACTION);
+    answer();
+    expect(run("event", "x").stderr).toContain("the user answered A1");
+    hold();
+    const d = item("a1");
+    expect([d["status"], d["held"], Date.parse(String(d["held_at"]))]).toEqual(["open", "fix the role cut first", Date.parse("2999-01-01T00:01:00+00:00")]);
+    const e = lastEvent();
+    expect([e["kind"], e["text"], e["decision"], e["important"]]).toEqual(["note", "Run the role cut held by the fleet: fix the role cut first", "a1", undefined]);
+    expect(run("event", "y").stderr).not.toContain("the user answered");
+    expect(fleet(["state", root, "show"], env).stdout).toContain("decision a1 OPEN, held by the fleet (fix the role cut first) [action] Run the role cut");
+  });
+
+  test("an answer given after the hold is news again", () => {
+    ok("decision", ...ACTION);
+    answer();
+    hold();
+    answer("actually, run it now", "2999-01-01T00:02:00+00:00");
+    expect(run("event", "x").stderr).toContain("the user answered A1");
+  });
+
+  test("unhold takes the hold back", () => {
+    ok("decision", ...ACTION);
+    expect(refused("decision", "a1", "--unhold")).toContain("is not held");
+    hold();
+    ok("decision", "a1", "--unhold");
+    expect(item("a1")).not.toHaveProperty("held");
+    expect(lastEvent()["text"]).toBe("Run the role cut no longer held by the fleet");
+  });
+
+  test("a revision that re-presents it clears the hold", () => {
+    ok("decision", ...ACTION);
+    hold();
+    ok("decision", "a1", "--why", "it still feeds the next milestone");
+    expect(item("a1")["held"]).toBe("fix the role cut first");
+    ok("decision", "a1", "--manual", "just cut --roles --fixed", "--log", "the new command");
+    expect(item("a1")).not.toHaveProperty("held");
+    expect(item("a1")).not.toHaveProperty("held_at");
+    expect([lastEvent()["kind"], item("a1")["change"]]).toEqual(["asked", "the new command"]);
+    hold();
+    ok("decision", "a1", "--question", "Run the fixed role cut?");
+    expect(item("a1")).not.toHaveProperty("held");
+  });
+
+  test("closing clears the hold, and a closed item refuses one", () => {
+    ok("decision", ...ACTION);
+    hold();
+    ok("decision", "a1", "--decide", "ran it", "--resolution", "said in the session");
+    expect(item("a1")).not.toHaveProperty("held");
+    expect(refused("decision", "a1", "--hold", "again")).toContain("is already decided");
+    expect(refused("decision", "a1", "--unhold")).toContain("is already decided");
+    ok("decision", ...SCHEMA);
+    ok("decision", "d1", "--hold", "x");
+    ok("decision", "d1", "--withdraw", "moot");
+    expect(item("d1")).not.toHaveProperty("held");
+  });
+
+  test("a hold names an open item and a reason", () => {
+    expect(refused("decision", "a9", "--hold", "x")).toContain("unknown decision 'a9'");
+    ok("decision", ...ACTION);
+    expect(refused("decision", "a1", "--hold", " ")).toContain("--hold says what the fleet does first");
+    expect(run("decision", "a1", "--hold", "x", "--withdraw", "y").code).toBe(2);
+  });
+
+  test("a new grilling round clears the hold", () => {
+    ok("grill", "g1", "--title", "Rules", "--ask", "t | q | r | w");
+    ok("decision", "g1", "--hold", "reading the code first");
+    expect(item("g1")["held"]).toBe("reading the code first");
+    ok("grill", "g1", "--ask", "t2 | q2 | r2 | w2");
+    expect(item("g1")).not.toHaveProperty("held");
+  });
+
+  test("a ledger held without its stamp, or closed and held, is refused", () => {
+    ok("decision", ...ACTION);
+    const good = readFileSync(join(root, "state.json"), "utf8");
+
+    for (const [change, word] of [
+      [{ held: "x" }, "held without"],
+      [{ held: "x", held_at: "2026-01-01T00:00:00+00:00", status: "withdrawn" }, "still held"],
+    ] as const) {
+      const ledger = JSON.parse(good);
+      Object.assign(ledger.decisions[0], change);
+      writeFileSync(join(root, "state.json"), JSON.stringify(ledger));
+      expect(refused("set", "--now", "x")).toContain(word);
+    }
+  });
+});
+
 describe("answers", () => {
   test("an open item takes an answer", () => {
     ok("decision", ...SCHEMA);

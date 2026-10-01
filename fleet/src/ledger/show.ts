@@ -21,7 +21,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
   decision ID --kind ${KINDS.join("|")} --title T --question Q --why W [--blocking | --not-blocking]
         [--option "KEY: label | consequence"]... [--same-options] [--recommend R --reason WHY] [--secret NAME] [--manual TEXT]
         [--body FILE | --no-body] [--agent A] [--supersedes ID] [--log TEXT] [--asks ${ASKS.join("|")}]
-        [--decide ANSWER --resolution HOW | --withdraw REASON]
+        [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]
   event [--kind ${EVENT_KINDS.join("|")}] [--agent A] [--important] TEXT   (a note is \`event --kind note TEXT\`)
   park [--agent A]... REASON     stop every live worker row (or those named) in one command
   keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace
@@ -79,6 +79,8 @@ export function showLines(ledger: Ledger): string[] {
     let status = d.status === "open" ? (d.blocking === true ? "OPEN, blocking" : "OPEN") : d.status;
 
     if (d.status === "open" && d.asks === "manager") status += ", with the manager";
+
+    if (d.status === "open" && d.held !== undefined && d.held !== null && d.held !== "") status += `, held by the fleet (${d.held})`;
     const answer = d.answer ?? "";
     const outcome = answer !== "" ? answer : (d.resolution ?? "");
     lines.push(`  ${d.ref ?? ""} decision ${d.id} ${status} [${d.kind}] ${d.title ?? "None"}${outcome === "" ? "" : `: ${outcome}`}`);

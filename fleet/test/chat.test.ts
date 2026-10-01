@@ -581,6 +581,20 @@ describe("wait", () => {
     user("Done.", { decision: "d-x" });
     expect(cli("wait", "d-x").stdout).toContain("[A1 d-x]: Done.");
   });
+
+  test("an answer the fleet holds is not news", async () => {
+    writeDecisions([
+      { id: "d-x", ref: "A1", kind: "action", title: "Do it", question: "q", status: "open", opened: "2026-01-01T00:00:00+00:00", held: "fix the code first", held_at: "2999-01-01T00:00:00+00:00" },
+    ]);
+    user("Needs a fix.", { decision: "d-x" });
+    const { proc, lines } = start(["chat", root, "wait", "A1"], env);
+    procs.push(proc);
+    await sleep(600);
+    expect(proc.exitCode).toBeNull();
+    user("Done.", { decision: "d-x" });
+    expect(await proc.exited).toBe(0);
+    expect(await lines.rest()).toContain("[A1 d-x]: Done.");
+  });
 });
 
 describe("the manager relays the unheard", () => {

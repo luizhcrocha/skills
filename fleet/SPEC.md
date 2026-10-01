@@ -164,7 +164,7 @@ renames it. Milestones are never removed.
   (`<title> resolved.`), and its worker, when blocked, goes back to running. This happens again on
   a resolved roadblock (open-4). `--open` sets `resolved` false, with no event and no re-blocking.
 
-**decision** `ID [--kind decision|input|secret|action --title T --question Q --why W] [--blocking | --not-blocking] [--option "KEY: label | consequence"]... [--same-options] [--recommend R --reason WHY] [--secret NAME] [--manual TEXT] [--body FILE | --no-body] [--agent A] [--supersedes ID] [--step S] [--milestone M] [--log TEXT] [--asks user|manager] [--decide ANSWER --resolution HOW | --withdraw REASON]`
+**decision** `ID [--kind decision|input|secret|action --title T --question Q --why W] [--blocking | --not-blocking] [--option "KEY: label | consequence"]... [--same-options] [--recommend R --reason WHY] [--secret NAME] [--manual TEXT] [--body FILE | --no-body] [--agent A] [--supersedes ID] [--step S] [--milestone M] [--log TEXT] [--asks user|manager] [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]`
 
 Checked in this order:
 1. `--decide` without `--resolution`: refused.
@@ -198,14 +198,29 @@ Checked in this order:
    first; the kind check runs on the result; `--body`/`--no-body` (the latter deletes the file).
    When anything changed, `revised` = now, `change` = `--log`, and an `asked` event is logged:
    `<title> now asks you: <question>` (important when blocking) when `--asks user` passes a
-   manager's decision on, else `<title> changed: <--log, or the changed fields>`.
+   manager's decision on, else `<title> changed: <--log, or the changed fields>`. A revision
+   that gives `--question`, `--option` or `--manual` re-presents the item: it clears a hold.
+   **Hold** (`--hold REASON`, `--unhold`; one of `--decide`/`--withdraw`/`--hold`/`--unhold`,
+   else exit 2): the user answered and the fleet must act before the item can proceed. Only on a
+   known decision (`unknown decision 'X'`); a closed one refuses as in 3. `--hold` with a blank
+   REASON is refused (`--hold says what the fleet does first, before the item comes back to the
+   user`); `--unhold` on one not held is refused (`<title> is not held: --unhold takes back a
+   --hold`). Applied after the revision above: `--hold` sets `held` = REASON and `held_at` = now
+   (again on a held one: both replaced) and logs a `note`, `<title> held by the fleet: <reason>`,
+   not important, tagged with the decision; `--unhold` removes both keys and logs `<title> no
+   longer held by the fleet`. A held decision counts as recorded: every answer given until
+   `held_at` is the fleet's ([warning 4](#warnings), `chat wait`, `fleets`, the page's Stuck).
+   `show` reads `OPEN, held by the fleet (<reason>)`.
 6. `--decide ANSWER --resolution HOW` closes it decided: logs `decision`
    (`<title>: <answer> (<resolution>)`). `--withdraw REASON` closes it withdrawn: logs `resolved`
-   (`<title> withdrawn: <reason>`). Either sets `closed` = now and resolves every open roadblock
-   waiting on it (each logging its own `resolved`, and unblocking its worker).
+   (`<title> withdrawn: <reason>`). Either sets `closed` = now, removes a hold, and resolves every
+   open roadblock waiting on it (each logging its own `resolved`, and unblocking its worker).
 7. Validation: ids unique; no id equal to another decision's number; `supersedes` and
    roadblocks' `decision` name existing ids; defaults are filled (`asks` user, `blocking` false,
-   `page` true, `body` false, the optional fields null, a grilling's `questions` []).
+   `page` true, `body` false, the optional fields null, a grilling's `questions` []). `held` and
+   `held_at` are present only on a held decision, both strings (`decision X is held without its
+   reason and when (held, held_at)`), and only on an open one (`decision X is <status> and still
+   held`); no default fills them.
 
 **grill** `ID [--title T --why W] [--ask "TITLE | QUESTION | RECOMMENDATION | WHY"]... [--of Q] [--answer "Q3: ..."]... [--drop "Q4: why"]... [--revise "Q3: T | Q | R | W"]... [--reason "Q3: why"]... [--blocking] [--agent A] [--step S] [--milestone M] [--done SUMMARY]`
 - A known ID that is not a grilling: `X is a <kind>, not a grilling`. A closed one is refused.
@@ -218,7 +233,7 @@ Checked in this order:
 - `question` becomes `N question(s) to answer` or `Every question is answered`.
 - New questions, revisions or reasons log `asked` (`<title>: N new question(s)` / `a question
   revised` / `reasons added`), important when blocking; on a known grilling they stamp
-  `revised`. The first round prints the `wait` line.
+  `revised`, and new questions or revisions clear a hold. The first round prints the `wait` line.
 - `--done SUMMARY` needs no open question (`Q2, Q3 still open: answer them, drop them, or ask
   what is left`) and closes it decided with resolution `grilling finished`.
 
@@ -266,7 +281,8 @@ decisions[]   {id, ref, kind, title, question, why, blocking, agent, options[]: 
                recommend, reason, secret, manual, body, page, supersedes, status (open|decided|withdrawn),
                answer, resolution, change, asks (user|manager), opened, revised, closed, step, milestone,
                questions[]? (grill: {id: "q<n>", title, body, recommend, reason, of, status
-               (open|answered|dropped), answer, asked, answered?, dropped?})}
+               (open|answered|dropped), answer, asked, answered?, dropped?}),
+               held?, held_at? (the fleet works on the answer first; removed when re-presented or closed)}
 events[]      {at, agent|null, kind, text, important?: true, decision?}   append-only
 links[]?      {id, ref, url, title, kind (dev|page), decision, agent, note, since}
 kept[]?       {id, text, at}
@@ -319,8 +335,8 @@ After the handler succeeds, before validation, on stderr, in this order (not for
 4. **An answer not recorded** (`state: the user answered D3 (<title>) as #14 at 09:12; record it
    before any other work: \`fleet state <dir> decision D3 --decide "..." --resolution "answered on the
    page (#14)"\`, then answer #14 with --re.`), one line per open decision of the ledger the command
-   leaves whose answer the user gave on the page after it was opened or last revised (instants), with
-   no reply from anyone but the user. Not for `init`.
+   leaves whose answer the user gave on the page after it was opened or last revised (instants), and
+   after `held_at` when it is held, with no reply from anyone but the user. Not for `init`.
 5. **Decisions left open** (`state: the fleet is done with D1, A2 still open: withdraw each with its
    reason (\`decision ID --withdraw "why"\`), or name it in your last message as left open on
    purpose.`) on the `set --status done` that finds them open.
@@ -402,8 +418,8 @@ left this long is forwarded). Each told once (`watch-coordinator.told`). `--once
 
 `wait`: a closed decision prints `<ref> is already <status>: <answer or resolution>` and exits
 0. An answer already given (a user message tagged with the decision, sent at or after its
-`revised` or `opened` stamp, compared as instants, open-13) and not replied to by the fleet prints
-at once. Otherwise it waits for the next such message, and reads the ledger again at every poll: a
+`revised` or `opened` stamp, compared as instants, open-13, and after `held_at` on a held one) and
+not replied to by the fleet prints at once. Otherwise it waits for the next such message, and reads the ledger again at every poll: a
 decision closed meanwhile (withdrawn, or decided in the session) prints as a closed one does and
 exits 0 (open-21, fixed).
 
@@ -427,8 +443,8 @@ to a taken one. `user`, `coordinator` and `manager` are reserved.
 
 | Command | Output | Exit |
 | :-- | :-- | :-- |
-| `list` | per live fleet: `<id>  <role>  session <session or (not named yet)>  <status>  <url>  <dir>`, then `now:`, `lanes in flight:`, `session last active`, silent workers, `chat: not read now…`, tokens, and each open decision `<ref> <id> [<kind>, for the user/manager(, blocks work)] <title>(  ANSWERED at HH:MM, not recorded)`; or `no fleet is being served on this machine` | 0 |
-| `show FLEET` | now (with when it was said), chat, live workers with their last report (and `silent since HH:MM: check it before saying it runs` under a silent one), open decisions (and an answer not recorded), open roadblocks, the last 8 events | 1 unknown fleet |
+| `list` | per live fleet: `<id>  <role>  session <session or (not named yet)>  <status>  <url>  <dir>`, then `now:`, `lanes in flight:`, `session last active`, silent workers, `chat: not read now…`, tokens, and each open decision `<ref> <id> [<kind>, for the user/manager(, blocks work)] <title>(  ANSWERED at HH:MM, not recorded)(  held by the fleet: <reason>)`; or `no fleet is being served on this machine` | 0 |
+| `show FLEET` | now (with when it was said), chat, live workers with their last report (and `silent since HH:MM: check it before saying it runs` under a silent one), open decisions (and `held by the fleet since HH:MM: <reason>`, and an answer not recorded), open roadblocks, the last 8 events | 1 unknown fleet |
 | `manager` | `manager  session …  <url>  <dir>` and where `standing.md` is | 1 when none |
 | `decision FLEET ID` | the decision in full; the page as `<url>#decision/<id>` | 1 unknown fleet or decision |
 | `gate` | `free` or `held by <fleet> since <stamp>: <what>` (a hold by a fleet no longer served is forgotten) | 0 |
@@ -764,7 +780,7 @@ run.py record TRACE...                          TRACE's .expected.jsonl, from th
 Stage 2 runs `run.py check` on each trace in `oracle/traces/` with
 `--impl state="fleet state" --impl chat="fleet chat" --impl fleets="fleet fleets" --subst <its dir>='$SKILL'`,
 or sets `FLEET_ORACLE_IMPL='{"state": "fleet state", "chat": "fleet chat", "fleets": "fleet fleets", "subst": {"<its dir>": "$SKILL"}}'`
-for `test_corpus.py` and `test_model.py`. The corpus: `ledger-lifecycle`, `decisions`,
+for `test_corpus.py` and `test_model.py`. The corpus: `ledger-lifecycle`, `decisions`, `hold`,
 `plan-and-grill`, `chat`, `manager` (written by hand from the tests), `emptied` (open-7),
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each
 hand-written trace, the same steps with every state command rendering, plus `render-page` (a
@@ -778,7 +794,7 @@ new implementation once it's the reference. Either way, review the diff.
 `oracle/test_model.py` drives 25 random sequences of 60 steps (a fresh seed each run;
 `FLEET_MODEL_SEED`, `FLEET_MODEL_SEQS`, `FLEET_MODEL_STEPS`) through state.py and chat.py, with a
 model: milestones and their step order, workers (status, milestone, rounds, name, tokens),
-decisions (kind, status, number, place, options, recommendation), roadblocks, kept notes, links,
+decisions (kind, status, number, place, options, recommendation, hold), roadblocks, kept notes, links,
 the event count, and the chat's messages. The clock moves 0-25 minutes per step. Checked after
 every step:
 

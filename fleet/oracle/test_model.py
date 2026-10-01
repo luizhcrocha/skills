@@ -258,6 +258,7 @@ class Model:
 
     def close(self, did: str, status: str, answer) -> None:
         self.decisions[did].update(status=status, answer=answer)
+        self.decisions[did].pop("held", None)  # closing ends a hold
         self.log()
         for rid, r in self.roadblocks.items():
             if r["decision"] == did and not r["resolved"]:
@@ -272,8 +273,10 @@ class Model:
         if c.get("agent") and c["agent"] not in self.agents:
             raise Refused("unknown agent")
         d = self.decisions.get(did) if did else None
+        if d is None and ("hold" in c or "unhold" in c):
+            raise Refused("a hold names a known decision")
         if d is not None and d["status"] != "open":
-            only_place = ("step" in c) and not any(k in c for k in self.FIELDS + ("options", "decide", "withdraw"))
+            only_place = ("step" in c) and not any(k in c for k in self.FIELDS + ("options", "decide", "withdraw", "hold", "unhold"))
             if only_place:
                 self.place(d, c)
                 return
@@ -300,6 +303,8 @@ class Model:
         else:
             if c.get("supersedes"):
                 raise Refused("--supersedes is given when the new decision is opened")
+            if c.get("unhold") and not d.get("held"):
+                raise Refused("--unhold takes back a --hold")
             if "question" in c and c["question"] != d["question"] and (c.get("kind") or d["kind"]) == "decision" \
                     and not c.get("options"):
                 raise Refused("a new question comes with its options")
@@ -314,6 +319,14 @@ class Model:
             self.check_kind(d)
             if changed:
                 d["since"] = self.clock
+                self.log()
+                if any(k in changed for k in ("question", "options", "manual")):
+                    d.pop("held", None)  # re-presented: back on the user's list
+            if "hold" in c:
+                d["held"], d["held_at"] = c["hold"], self.clock
+                self.log()
+            elif c.get("unhold"):
+                d.pop("held", None)
                 self.log()
         if "decide" in c:
             self.close(did, "decided", c["decide"])
@@ -345,6 +358,7 @@ class Model:
         if c.get("ask"):
             if not created:
                 d["since"] = self.clock
+            d.pop("held", None)  # a new round re-presents it
             self.log()
         if "done" in c:
             if "open" in qs:
@@ -461,11 +475,13 @@ class Model:
         return found
 
     def answered(self, did: str) -> bool:
-        """The user answered decision `did` on the page after it last changed, and nobody replied to the answer."""
+        """The user answered decision `did` on the page after it last changed, and after the fleet held it, and
+        nobody replied to the answer."""
         d = self.decisions[did]
         replied = {m["re"] for m in self.messages if m["from"] != "user" and m["re"] is not None}
-        return any(m["from"] == "user" and m.get("decision") == did and m["at"] >= d["since"] and m["id"] not in replied
-                   for m in self.messages)
+        held = d["held_at"] if d.get("held") else None
+        return any(m["from"] == "user" and m.get("decision") == did and m["at"] >= d["since"] and (held is None or m["at"] > held)
+                   and m["id"] not in replied for m in self.messages)
 
     def closed_ref(self, key: str) -> bool:
         did = self.find(self.decisions, key)
@@ -556,7 +572,7 @@ class Model:
             "status": self.status, "now": self.now,
             "roadmap": [[mid, [[s, self.steps[s]["status"], self.steps[s]["agent"]] for s in steps]] for mid, steps in self.milestones.items()],
             "agents": [[k, a["status"], a["milestone"], a["rounds"], a["name"], a["tokens"]] for k, a in self.agents.items()],
-            "decisions": [[k, d["kind"], d["status"], d["ref"], d["step"], d["milestone"], d["agent"]] for k, d in self.decisions.items()],
+            "decisions": [[k, d["kind"], d["status"], d["ref"], d["step"], d["milestone"], d["agent"], d.get("held")] for k, d in self.decisions.items()],
             "roadblocks": [[k, r["resolved"], r["ref"], r["agent"], r["decision"]] for k, r in self.roadblocks.items()],
             "kept": None if self.kept is None else [[k, v] for k, v in self.kept.items()],
             "links": None if self.links is None else [[k, r["ref"], r["decision"]] for k, r in self.links.items()],
@@ -569,7 +585,7 @@ def shape_of(state: dict) -> dict:
         "status": state["status"], "now": state["now"],
         "roadmap": [[m["id"], [[s["id"], s["status"], s["agent"]] for s in m["steps"]]] for m in state["roadmap"]],
         "agents": [[a["id"], a["status"], a["milestone"], a["rounds"], a["name"], a["tokens"]] for a in state["agents"]],
-        "decisions": [[d["id"], d["kind"], d["status"], d["ref"], d["step"], d["milestone"], d["agent"]] for d in state["decisions"]],
+        "decisions": [[d["id"], d["kind"], d["status"], d["ref"], d["step"], d["milestone"], d["agent"], d.get("held")] for d in state["decisions"]],
         "roadblocks": [[r["id"], r["resolved"], r["ref"], r["agent"], r["decision"]] for r in state["roadblocks"]],
         "kept": None if "kept" not in state else [[k["id"], k["text"]] for k in state["kept"]],
         "links": None if "links" not in state else [[x["id"], x["ref"], x["decision"]] for x in state["links"]],
@@ -655,7 +671,8 @@ def gen(rng: random.Random, m: Model) -> dict:
     if cmd == "decision":
         did = pick(dec_ids)
         exists = Model.find(m.decisions, did) is not None
-        what = pick(["decide", "withdraw", "revise", "place"]) if exists and maybe(0.8) else pick(["open"] * 4 + ["elsewhere"])
+        what = pick(["decide", "withdraw", "revise", "place", "hold", "hold", "unhold", "represent"]) if exists and maybe(0.8) \
+            else pick(["open"] * 4 + ["elsewhere"] + (["hold"] if maybe(0.2) else []))
         c = {"cmd": "decision", "id": did}
         if what == "decide":
             c["decide"] = "B"
@@ -665,6 +682,12 @@ def gen(rng: random.Random, m: Model) -> dict:
             c["withdraw"] = "no longer needed"
         elif what == "revise":
             c.update(why="the facts changed", log="what changed")
+        elif what == "hold":
+            c["hold"] = pick(["fix the code first", "the command was wrong"])
+        elif what == "unhold":
+            c["unhold"] = True
+        elif what == "represent":
+            c.update(manual="the fixed command", log="the new command")
         elif what == "place":
             c["step"] = pick(step_ids + ["s9"])
         elif what == "elsewhere":
@@ -767,12 +790,12 @@ def to_step(c: dict, clock: str, render: bool, next_id: int) -> dict:
         argv += [c["id"]]
     flags = {"status", "now", "title", "milestone", "agent", "before", "after", "remove", "task", "name", "step", "log",
              "tokens", "model", "detail", "severity", "needs", "decision", "kind", "question", "why", "recommend", "reason",
-             "secret", "manual", "supersedes", "decide", "resolution", "withdraw", "url", "done", "log"}
+             "secret", "manual", "supersedes", "decide", "resolution", "withdraw", "url", "done", "log", "hold"}
     if cmd not in ("event", "park", "keep"):
         for key, value in c.items():
             if key in flags:
                 argv += ["--" + key, str(value)]
-        for key in ("resolved", "open"):
+        for key in ("resolved", "open", "unhold"):
             if c.get(key):
                 argv.append("--" + key)
         if cmd == "link" and "drop" in c:

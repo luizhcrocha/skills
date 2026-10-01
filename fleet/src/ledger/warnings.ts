@@ -112,7 +112,7 @@ export function unrecorded(ledger: Ledger, said: readonly Message[]): string[] {
 
   for (const d of numbered.decisions ?? []) {
     if (d.status !== "open") continue;
-    const at = answeredAt({ id: d.id, opened: d.opened, revised: d.revised ?? null }, said);
+    const at = answeredAt({ id: d.id, opened: d.opened, revised: d.revised ?? null, held: d.held ?? null, held_at: d.held_at ?? null }, said);
 
     if (at === undefined) continue;
     const m = [...said].reverse().find((x) => x.decision === d.id && x.from === "user" && x.at === at);

@@ -200,7 +200,7 @@ def summary(entry: dict) -> dict:
         "decisions": [{"id": d.get("id"), "ref": d.get("ref"), "kind": d.get("kind", "decision"), "title": d.get("title"), "question": d.get("question"),
                        "why": d.get("why"), "blocking": d.get("blocking") is True, "asks": d.get("asks") or "user",
                        "opened": d.get("opened"), "revised": d.get("revised"),
-                       "answered": _answered_at(d, said)}
+                       "answered": _answered_at(d, said), **({"held": d["held"], "held_at": d.get("held_at")} if d.get("held") else {})}
                       for d in rows("decisions") if d.get("status") == "open" and isinstance(d.get("id"), str)],
     }
 
@@ -319,7 +319,8 @@ def cmd_list() -> None:
         for d in s["decisions"]:
             marks = ", ".join(filter(None, [d["kind"], "for the manager" if d["asks"] == "manager" else "for the user", "blocks work" if d["blocking"] else ""]))
             print(f"    {d.get('ref') or ''} {d['id']} [{marks}] {d['title']}".replace("     ", "    ")
-                  + (f"  ANSWERED at {d['answered'][11:16]}, not recorded" if d.get("answered") else ""))
+                  + (f"  ANSWERED at {d['answered'][11:16]}, not recorded" if d.get("answered") else "")
+                  + (f"  held by the fleet: {d['held']}" if d.get("held") else ""))
 
 
 def cmd_show(fleet: str) -> None:
@@ -348,6 +349,8 @@ def cmd_show(fleet: str) -> None:
     for d in rows("decisions"):
         if d.get("status") == "open":
             print(f"    decision {d.get('ref') or ''} {d.get('id')} [{d.get('asks') or 'user'}{', blocks work' if d.get('blocking') else ''}] {d.get('title')}: {d.get('question')}")
+            if d.get("held"):
+                print(f"        held by the fleet since {str(d.get('held_at'))[11:16]}: {d['held']}")
             at = _answered_at(d, said)
             if at:
                 m = next(m for m in reversed(said) if m.get("decision") == d.get("id") and m["at"] == at)
