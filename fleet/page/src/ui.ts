@@ -8,6 +8,7 @@
 import { createEffect, createMemo, createSignal, flush } from "solid-js";
 
 import { createCarets } from "./carets.ts";
+import { decisionTrail } from "./chatlog.ts";
 import { Core, type Decision, type FindRow, type Json, type JsonRecord } from "./core.ts";
 import type { Model } from "./model.ts";
 import { createNotify } from "./notify.ts";
@@ -456,11 +457,20 @@ export function createUi(m: Model) {
       openWorker(g.id);
     } else if (g.kind === "view") location.hash = g.hash;
     else if (g.kind === "message") {
+      /* Decision activity the chat leaves out is read on its decision's page. */
+      const about = decisionTrail(m.messages()).get(g.id);
+
+      if (about !== undefined && !m.decisionActivity()) {
+        location.hash = "#decision/" + about;
+
+        return;
+      }
+
       m.setFocus(g.side ?? null);
       m.setQuote(null);
       flush();
       openChat();
-      const el = refs.chatLog?.querySelector(`article.msg[data-id="${g.id}"]`);
+      const el = refs.chatLog?.querySelector(`[data-id="${g.id}"]`);
 
       if (el) {
         el.scrollIntoView({ block: "center" });

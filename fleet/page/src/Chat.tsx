@@ -1,240 +1,17 @@
 /**
- * The chat: docked beside the page on a wide screen, a full-height view over it elsewhere. The conversation
- * is threads in the order of their latest message, replies under what they answer, side chats as links;
- * each message's node is made once and only its changed parts are touched, so focus, a selection and
- * scroll survive every update. The composer keeps its draft, lists people after "@" and skills after a
- * leading "/", and says who the text would reach.
+ * The chat: docked beside the page on a wide screen, a full-height view over it elsewhere. Its head says
+ * the connection and holds the switch for decision activity; the conversation is `ChatLog.tsx`'s. The
+ * composer keeps its draft, lists people after "@" and skills after a leading "/", and says who the text
+ * would reach.
  */
 import { createEffect, createMemo, createSignal, untrack } from "solid-js";
-import { For, Show, type JSX } from "@solidjs/web";
+import type { JSX } from "@solidjs/web";
 
-import { CloseIcon, Pill, usePage, When, Who, tf } from "./bits.tsx";
+import { CloseIcon, usePage, tf } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
-import { Core, type Entry, type Message, type Side, type Thread } from "./core.ts";
-
-/** Who sent a message, as the chat shows it. */
-function useSender(): (msg: Message) => { label: string; colour: string; status: string } {
-  const { m } = usePage();
-
-  return (msg) => {
-    if (msg.from === "user") return { label: msg.author || "You", colour: "var(--accent)", status: "" };
-
-    if (msg.from === m.host()) return { label: m.host(), colour: "var(--accent)", status: m.state.status };
-    const p = m.person(msg.from);
-
-    return { label: p ? p.name : msg.from, colour: m.colourOfId(msg.from), status: p ? p.status : "" };
-  };
-}
-
-/** One message, its parts kept apart so an update touches only what changed. */
-function MessageView(props: { readonly entry: Entry; readonly rootId: number }): JSX.Element {
-  const { m } = usePage();
-  const sender = useSender();
-  const msg = (): Message => props.entry.message;
-  const s = createMemo(() => sender(msg()));
-  const fromFleet = (): boolean => msg().from !== "user";
-  const canReply = (): boolean => fromFleet() && m.chatWritable();
-  const parent = (): Message | undefined => (msg().re != null && msg().re !== props.rootId ? m.messageById(msg().re) : undefined);
-  const about = () => (msg().decision ? m.decisionById(msg().decision) : undefined);
-
-  return (
-    <article class={`msg from-${fromFleet() ? "fleet" : "user"}${canReply() ? " can-reply" : ""}${m.reply() === msg().id ? " replying" : ""}`} data-id={String(msg().id)} style={`--c:${s().colour}`}>
-      <div class="msg-head">
-        <Show when={m.person(msg().from)} fallback={<b>{s().label}</b>}>
-          <Who id={msg().from} />
-        </Show>
-        <Show when={s().status && msg().from !== m.host()}>
-          <Pill s={s().status} />
-        </Show>
-        <When at={msg().at} relative />
-      </div>
-      <Show when={canReply()}>
-        <button type="button" class="reply-btn" data-reply={String(msg().id)} aria-label={`Reply to ${s().label}`}>
-          Reply
-        </button>
-      </Show>
-      <Show when={parent()}>{(p) => <p class="msg-re">Answering {sender(p()).label}</p>}</Show>
-      <Show when={msg().decision}>
-        <p class="msg-re">
-          About{" "}
-          <Show when={about()} fallback={msg().decision}>
-            {(d) => (
-              <a href={"#decision/" + msg().decision}>
-                <Show when={d().ref}>
-                  <span class="ref">{d().ref}</span>{" "}
-                </Show>
-                {d().title}
-              </a>
-            )}
-          </Show>
-        </p>
-      </Show>
-      <Show when={msg().quote}>
-        {(q) => (
-          <blockquote class="msg-quote">
-            <Show when={q().from}>
-              <span class="from">From {q().from}</span>
-            </Show>
-            {q().text}
-          </blockquote>
-        )}
-      </Show>
-      <p class="msg-text">
-        <For each={msg().parts} keyed={false}>
-          {(p) => (
-            <Show when={p().mention} fallback={p().text}>
-              {(id) => (
-                <span class="mention" style={`--c:${m.colourOfId(id())}`} title={p().text}>
-                  @{m.nameOf(id())}
-                </span>
-              )}
-            </Show>
-          )}
-        </For>
-      </p>
-      <Show when={msg().from === "user"}>
-        <Show
-          when={!(Core.unreadBy(m.state.hearing, msg()) && props.entry.waiting.length)}
-          fallback={<p class="wait unread">Not read yet</p>}
-        >
-          <Show when={props.entry.waiting.length} fallback={<p class="wait done">Answered</p>}>
-            <p class="wait">
-              Waiting on{" "}
-              <For each={props.entry.waiting} keyed={(r) => r}>
-                {(r) => (
-                  <Show
-                    when={m.person(r())}
-                    fallback={
-                      <span class="chip">
-                        <span class="swatch" style={`--c:${m.colourOfId(r())}`} />
-                        {m.nameOf(r())}
-                      </span>
-                    }
-                  >
-                    <Who id={r()} />
-                  </Show>
-                )}
-              </For>
-            </p>
-          </Show>
-        </Show>
-      </Show>
-    </article>
-  );
-}
-
-/** A row of the conversation: a thread, or the way into a side chat. */
-type Row = { readonly kind: "thread"; readonly key: string; readonly last: number; readonly thread: Thread } | { readonly kind: "side"; readonly key: string; readonly last: number; readonly side: Side };
-
-/** The thread a row holds, or null for a side chat. */
-const threadOf = (row: Row): Thread | null => (row.kind === "thread" ? row.thread : null);
-
-/** The side chat a row holds, or null for a thread. */
-const sideOf = (row: Row): Side | null => (row.kind === "side" ? row.side : null);
-
-/** What a side chat's row shows of it: the text it quotes, else its first message. */
-const sideText = (side: Side): string => (side.quote ? side.quote.text : side.first).replace(/\s+/gu, " ").slice(0, 120);
-
-/** The conversation. */
-function Log(): JSX.Element {
-  const { m, ui } = usePage();
-
-  const rows = createMemo((): Row[] => {
-    const all = m.messages();
-    const focus = m.focus();
-    const threads = (list: readonly Message[]): Row[] => Core.fold(list).map((t) => ({ kind: "thread", key: "t:" + String(t.root.message.id), last: t.last, thread: t }));
-
-    if (focus != null) return threads(all.filter((x) => x.side === focus));
-
-    return [...threads(all.filter((x) => x.side == null)), ...Core.sidesOf(all).map((side): Row => ({ kind: "side", key: "side:" + String(side.id), last: side.last, side }))].sort((a, b) => a.last - b.last);
-  });
-
-  const empty = (): string =>
-    m.focus() != null
-      ? `A side chat, apart from the main one. Ask about the quote, and the ${m.host()} answers here.`
-      : m.chatAvailable()
-        ? m.chatWritable()
-          ? m.managed()
-            ? "No messages yet. Write to the manager, or type @ to reach a coordinator."
-            : "No messages yet. Write to the coordinator, or type @ to reach a worker."
-          : "No messages yet."
-        : "";
-
-  return (
-    <ol
-      class="chat-log"
-      id="chat-log"
-      ref={(el) => (ui.refs.chatLog = el)}
-      onClick={(e) => {
-        const t = e.target instanceof Element ? e.target : null;
-        const side = t?.closest<HTMLElement>("[data-side]");
-
-        if (side) {
-          m.setFocus(Number(side.dataset["side"]));
-          m.setQuote(null);
-          m.setReply(null);
-          ui.toBottom();
-
-          return;
-        }
-
-        const r = t?.closest<HTMLElement>("[data-reply]");
-
-        if (r) {
-          ui.replyTo(Number(r.dataset["reply"]));
-
-          return;
-        }
-
-        if (t?.closest("button, a") || String(getSelection() ?? "")) return;
-        const art = t?.closest<HTMLElement>(".msg.can-reply");
-
-        if (art) ui.replyTo(Number(art.dataset["id"]));
-      }}
-    >
-      <For each={rows()} keyed={(r) => r.key} fallback={<Show when={empty()}>{<li class="chat-empty">{empty()}</li>}</Show>}>
-        {(row) => (
-          <Show
-            when={threadOf(row())}
-            fallback={
-              <Show when={sideOf(row())}>
-                {(side) => (
-                  <li class="side-link">
-                    <button type="button" data-side={String(side().id)}>
-                      <b>Side chat</b>{" "}
-                      <span class="from">
-                        {side().count} message{side().count === 1 ? "" : "s"}
-                      </span>
-                      <br />
-                      {sideText(side())}
-                    </button>
-                  </li>
-                )}
-              </Show>
-            }
-          >
-            {(t) => (
-              <li class="thread">
-                <MessageView entry={t().root} rootId={t().root.message.id} />
-                <Show when={t().replies.length}>
-                  <ol class="replies">
-                    <For each={t().replies} keyed={(r) => r.message.id}>
-                      {(r) => (
-                        <li>
-                          <MessageView entry={r()} rootId={t().root.message.id} />
-                        </li>
-                      )}
-                    </For>
-                  </ol>
-                </Show>
-              </li>
-            )}
-          </Show>
-        )}
-      </For>
-    </ol>
-  );
-}
+import { Log, useSender } from "./ChatLog.tsx";
+import { decisionTrail } from "./chatlog.ts";
+import type { Message } from "./core.ts";
 
 /** The composer. */
 function Composer(): JSX.Element {
@@ -392,8 +169,17 @@ export function Chat(): JSX.Element {
   const [announce, setAnnounce] = createSignal("");
   const sender = useSender();
 
+  /* A live message is read out, unless it is decision activity the chat does not show. */
   m.onMessage((msg, live) => {
-    if (live && msg.from !== "user") setAnnounce(`${sender(msg).label}: ${msg.text}`);
+    if (live && msg.from !== "user" && (m.decisionActivity() || !decisionTrail([...m.messages(), msg]).has(msg.id))) setAnnounce(`${sender(msg).label}: ${msg.text}`);
+  });
+
+  /** How many messages of the conversation shown are decision activity: left out, or shown as markers. */
+  const activity = createMemo(() => {
+    const trail = decisionTrail(m.messages());
+    const focus = m.focus();
+
+    return m.messages().filter((x) => trail.has(x.id) && (focus == null ? x.side == null : x.side === focus)).length;
   });
 
   return (
@@ -445,6 +231,15 @@ export function Chat(): JSX.Element {
           <CloseIcon />
         </button>
       </header>
+      <div class="chat-tools" id="chat-tools">
+        <span class="hidden-note" id="chat-decisions-note" hidden={m.decisionActivity() || !activity()}>
+          {activity()} decision message{activity() === 1 ? "" : "s"} hidden
+        </span>
+        <button type="button" class="switch" id="chat-decisions" role="switch" aria-checked={tf(m.decisionActivity())} onClick={() => m.setDecisionActivity(!m.decisionActivity())}>
+          <span class="switch-track" aria-hidden="true" />
+          Decision activity
+        </button>
+      </div>
       <div class="side-head" id="side-head" hidden={m.focus() == null}>
         <button
           type="button"

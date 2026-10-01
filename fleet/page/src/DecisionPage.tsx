@@ -11,6 +11,7 @@ import { For, Match, Show, Switch, type JSX } from "@solidjs/web";
 import { PillAs, RefTag, usePage, Who } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
 import { Core, type Decision, type GrillEntry, type JsonRecord } from "./core.ts";
+import { DecisionThread } from "./DecisionThread.tsx";
 import { clock } from "./format.ts";
 import { KIND_WORDS, StatePill } from "./Overview.tsx";
 
@@ -847,6 +848,7 @@ export function DecisionPage(): JSX.Element {
         </Show>
       </div>
       <Evidence d={d()} />
+      <DecisionThread id={m.viewing()} />
       <div class="dv-answer" id="dv-answer">
         <Show when={d()?.id} keyed>
           {(id) => <AnswerFor id={id} />}

@@ -8,12 +8,16 @@ How a row was checked:
 
 - **core**: `skills/productivity/coordinator/tests/page.test.mjs`, unchanged, 50 tests, run against
   the `fleet-core` script the build emits from `src/core.ts`.
-- **dom**: `test/inplace.test.tsx` (happy-dom, through the stream's own handlers), by test name.
-- **cdp**: `test/browser.test.ts` (the built template in headless Chromium, fed by a real event
+- **dom**: `test/inplace.test.tsx` and, for the chat, `test/chat.test.tsx` (happy-dom, through the
+  stream's own handlers), by test name.
+- **cdp**: `test/browser.test.ts` and, for the chat, `test/chat-browser.test.ts` (the built template in
+  headless Chromium, fed by a real event
   stream from `test/harness.ts`), and the real run on a scratch hub.
 - **shot**: `test/screens.ts`, old and new template on the same fixtures (`test/fixtures.ts`), at
   390×900 and 1280×900, light and dark; compared side by side and by pixel count (every view but
-  the redesigned panel differs from the old in under 0.1% of its pixels: font hinting).
+  the redesigned panel differs from the old in under 0.1% of its pixels: font hinting). For the chat,
+  `test/screens.ts --chat` on `chatView` and `chatConversation` (a day and a half: a decision's answer and
+  its acknowledgement, a worker's report, a side chat, a long status, a reply), named `chat-*`.
 - **read**: ported line by line from the old script, behaviour read against it.
 
 ## Masthead and navigation
@@ -84,11 +88,20 @@ How a row was checked:
 |---|---|
 | Docked beside the page at ≥1100px, collapsible and remembered (collapsed by default when unavailable); an overlay below, with a history entry (Back closes), focus returned, the page inert, Tab kept inside, Escape closes | shot (390 chat, 1280); read |
 | Connection state (Connecting, Live, Reconnecting, Unavailable), "as <login>", the unavailable note | shot |
-| Threads ordered by latest message, replies under what they answer, side chats as links, side chat view with Back | core (`fold`, `sidesOf`); dom "a reply joins its thread" |
-| Message: sender (worker name opens it), status pill, time, Reply (and tap to reply), Answering, About <decision>, quote, mention chips, waiting / not read / answered | shot; core (`unreadBy`) |
-| Messages append without rebuilding the conversation; it stays at its end when it was there | dom "a chat message is appended"; cdp "a chat event appends one message" |
-| Read up to the newest fleet message while in view; unread badge | core (`unreadCount`); read |
-| Screen reader announcement of a live message | read |
+| **changed (2026-10-01)** A messenger's layout, for Luiz's report from his phone: "Chat is looking like a log, without clear separation." The viewer's messages (`from: user`) sit on the right in bubbles tinted with the accent; the fleet's on the left, under the sender's name and spawn colour (`colourOfId`; the worker's name still opens it, with its status pill). No bubble is wider than 80% of the log; no full-width cards, no left borders. Messages run in the order sent (`src/chatlog.ts`, `chatRows`); threads are kept as reply quotes instead of nesting | dom "the viewer's messages and the fleet's are told apart"; cdp "at 390 px / at 1280 px the viewer's messages sit on the right and the fleet's on the left, none wider than 80%"; shot `chat-{390,1280}-{light,dark}{,-top}`, old and new template |
+| **new** Consecutive messages of one sender within five minutes share one name and time; the bubbles of a run are stacked with tightened corners | dom "a run of one sender within five minutes is one name and time"; dom "a new message is appended in place" (the run grows on the same nodes); shot |
+| **new** A separator per day: Today, Yesterday, the weekday and date, the year when not this one (the time beside a name is the time of day) | dom "the viewer's messages and the fleet's are told apart, each under a day"; shot `-top` |
+| **changed** A reply shows a one-line quote of what it answers (sender in their colour, the first line), unless that message is right above it; a tap scrolls there and marks it. Replaces the nested indentation and "Answering <name>" | dom "a reply quotes what it answers on one line", "a reply is appended at the end, quoting what it answers"; cdp (tap size) |
+| Side chats as links where their last message falls, side chat view with Back, the quote of a page excerpt in the bubble | core (`sidesOf`); dom "a side chat is a link where its last message falls" |
+| Message: Reply (a button beside a fleet bubble, on hover with a mouse, once per run on a touch screen; a tap on any fleet bubble replies to it), the reply being written outlined, mention chips, waiting / not read / answered under the viewer's own | shot; core (`unreadBy`); dom "a new message is appended in place" (`.replying`) |
+| **changed (2026-10-01)** Decision activity is left out of the chat by default, for Luiz: the chat aggregates the control plane, and decision answers in it are clutter. A message that carries `decision` (an answer, a grilling's answers, a note, or the fleet's message about one) and every message whose `re` chain leads to one (`decisionTrail`). They stay in `chat.jsonl` (the record, and what wakes the sessions); only the view changes | dom "decision activity is left out by default", "a later reply to the decision's thread joins it, and stays out of the chat"; cdp "decision activity: left out of the chat…" |
+| **new** "Decision activity" switch under the chat's head (a row that lines up with the tabs), off by default, remembered per browser (`chat-decisions`, through the page's guarded storage); while off it says how many are hidden. On, each is a one-line marker that links to the decision: "You answered D18 · …", "coordinator on D18: …" | dom "decision activity is left out by default, a marker each when asked for, and remembered"; cdp (reload keeps it); shot `chat-*-activity` |
+| **new** The decision's page shows its thread under the question, "In the chat": the viewer's answers and notes on the right, the fleet's replies on the left, in the chat's bubbles (`src/DecisionThread.tsx`, mounted once in `DecisionPage`) | dom "a decision's page holds its thread"; cdp; shot `chat-*-decision` |
+| **changed** The finder's hit on decision activity the chat leaves out opens the decision's page | dom "the finder leads to a decision's page" |
+| Phone first: every control in the chat (Reply, a reply's quote, the switch, a side chat, a marker, a name, close, send) is at least 44 px each way at 390 px | cdp "on a phone every control in the chat is at least 44 px each way" |
+| Messages append without rebuilding the conversation (every row keeps its node; a run's earlier bubble is updated in place); the chat keeps its scroll, or stays at its end when it was there; the draft, the open reply and the caret lists survive | dom "a chat message is appended", "a new message is appended in place"; cdp "a chat event appends one message", "a chat event is appended in place: the rows keep their nodes, the chat its scroll, the composer its draft" |
+| **changed** Read up to the newest fleet message while in view; the Chat tab's unread badge counts decision activity only while the chat shows it (the Decisions tab and the notifications cover it) | core (`unreadCount`); dom "the Chat tab counts unread decision activity only while the chat shows it" |
+| Screen reader announcement of a live message (not of decision activity the chat leaves out) | read |
 | Composer: draft kept across reloads and every update, grows to eight lines, Enter / Shift+Enter / coarse pointer, IME, Escape blurs | core (`keyOf`); dom "a typed chat draft"; cdp |
 | @mention list: opens on "@", narrows, arrows, Enter/Tab pick, Escape dismisses, tap | core (`mentionAt`, `filterRoster`, `insertMention`) |
 | "To" line from `chat/preview`; reply and quote chips; read-only and deaf notes; send errors keep the draft | read |

@@ -7,6 +7,7 @@ import { createEffect, createMemo } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
 import { ChatIcon, Mark, Pill, usePage, When, tf } from "./bits.tsx";
+import { unreadInChat } from "./chatlog.ts";
 import { Core, type NoticePrefs } from "./core.ts";
 import { faviconOf } from "./mark.ts";
 
@@ -238,7 +239,8 @@ export function Masthead(): JSX.Element {
   const n = ui.notify;
   const asked = createMemo(() => m.everyDecision().filter((d) => Core.awaiting(d, m.messages())));
   const openBlocks = createMemo(() => m.state.roadblocks.filter((r) => !r.resolved).length);
-  const chatUnread = createMemo(() => Core.unreadCount(m.messages(), m.read()));
+  /* Decision activity counts only while the chat shows it; the Decisions tab and the notifications cover it otherwise. */
+  const chatUnread = createMemo(() => unreadInChat(m.messages(), m.read(), m.decisionActivity()));
   const unread = createMemo(() => n.unread());
   const tab = (view: string): "true" | "false" => tf(m.place().view === view);
 

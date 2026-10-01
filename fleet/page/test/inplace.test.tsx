@@ -222,7 +222,7 @@ test("a half-written answer on a decision's page survives a state update", () =>
 
 test("a chat message is appended: the conversation's nodes stay, one article is added", () => {
   const articles = [...root.querySelectorAll("#chat-log article.msg")];
-  const threads = [...root.querySelectorAll("#chat-log > li")];
+  const rows = [...root.querySelectorAll("#chat-log > li")];
 
   expect(articles.length).toBe(5);
   page.ui.addMessage({ id: 6, at: new Date(NOW).toISOString(), from: "a3", to: ["user"], text: "Key found." }, true);
@@ -231,18 +231,18 @@ test("a chat message is appended: the conversation's nodes stay, one article is 
   const now = [...root.querySelectorAll("#chat-log article.msg")];
   expect(now.length).toBe(6);
   articles.forEach((a) => expect(now).toContain(a));
-  threads.forEach((t) => expect(t.isConnected).toBe(true));
+  rows.forEach((t) => expect(t.isConnected).toBe(true));
   expect(now.at(-1)?.textContent).toContain("Key found.");
 });
 
-test("a reply joins its thread without rebuilding it", () => {
-  const thread = root.querySelector("#chat-log article.msg[data-id='5']")?.closest("li.thread");
+test("a reply is appended at the end, quoting what it answers, without rebuilding the conversation", () => {
   const root5 = root.querySelector("#chat-log article.msg[data-id='5']");
-  page.ui.addMessage({ id: 7, at: new Date(NOW).toISOString(), from: "user", to: ["coordinator"], text: "On it.", re: 5 }, true);
+  page.ui.addMessage({ id: 7, at: new Date(NOW).toISOString(), from: "user", to: ["a2"], text: "And the notes?", re: 4 }, true);
   flush();
 
   expect(root.querySelector("#chat-log article.msg[data-id='5']")).toBe(root5 ?? null);
-  expect(root.querySelector("#chat-log article.msg[data-id='7']")?.closest("li.thread")).toBe(thread ?? null);
+  expect([...root.querySelectorAll("#chat-log article.msg")].at(-1)?.getAttribute("data-id")).toBe("7");
+  expect(root.querySelector("#chat-log article.msg[data-id='7'] .re-line")?.getAttribute("data-goto")).toBe("4");
 });
 
 /** Type `text` into the composer with the caret at its end. */

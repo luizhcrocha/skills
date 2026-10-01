@@ -212,6 +212,8 @@ export function createModel(initial: State) {
   const [collapsedPref, setCollapsedPref] = createSignal<boolean | null>(prefs.get<boolean | null>("chat-collapsed", null));
   const [read, setRead] = createSignal(prefs.get("chat-read", 0));
   const [sending, setSending] = createSignal(false);
+  /** Whether the chat shows decision activity (answers, notes and the replies to them) as markers; off unless asked for. */
+  const [decisionActivity, setDecisionActivity] = createSignal(prefs.get("chat-decisions", false) === true);
   const [visible, setVisible] = createSignal(document.visibilityState === "visible");
 
   document.addEventListener("visibilitychange", () => setVisible(document.visibilityState === "visible"));
@@ -327,6 +329,11 @@ export function createModel(initial: State) {
     },
     sending,
     setSending,
+    decisionActivity,
+    setDecisionActivity: (on: boolean) => {
+      setDecisionActivity(on);
+      prefs.set("chat-decisions", on);
+    },
     chatAvailable,
     chatWritable,
     chatCollapsed,
