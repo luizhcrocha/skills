@@ -179,7 +179,7 @@ Checked in this order:
      closed at once.
    - Otherwise needs kind, title, question, why, and what its kind shows: **decision** at least
      two options, `--recommend` among the option keys, and `--reason`; **secret** `--secret` and
-     `--manual`; **action** `--manual`; **input** nothing more. Kind **grill** is refused here
+     `--manual`; **action** `--manual`, and no options or `--recommend` (a yes or no on what the fleet would do is a decision); **input** nothing more. Kind **grill** is refused here
      (it is opened with `grill`). An option is `KEY: label | consequence` with a key matching the
      id pattern; keys are unique.
    - The row: `kind, title, question, why, blocking, agent, options[], recommend, reason, secret,

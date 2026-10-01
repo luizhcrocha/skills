@@ -571,6 +571,8 @@ def check_kind(d: dict) -> None:
         fail("a secret names what the code expects: give --secret NAME (the key in secretspec.toml)")
     if d["kind"] in ("secret", "action") and not d["manual"]:
         fail(f"{'a secret' if d['kind'] == 'secret' else 'an action'} gives the manual route: give --manual with the steps or commands")
+    if d["kind"] == "action" and (d["options"] or d["recommend"]):
+        fail("an action is a step only the user takes, with no options to choose: a yes or no on what the fleet would do is a decision (--kind decision, with the options and --recommend)")
 
 
 def set_body(root: Path, d: dict, args) -> None:

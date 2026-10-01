@@ -243,6 +243,8 @@ class Model:
             raise Refused("a secret needs --secret")
         if d["kind"] in ("secret", "action") and not d.get("manual"):
             raise Refused("needs --manual")
+        if d["kind"] == "action" and (d["options"] or d.get("recommend")):
+            raise Refused("an action takes no options")
 
     def place(self, d: dict, c: dict) -> None:
         if c.get("step"):
@@ -700,6 +702,9 @@ def gen(rng: random.Random, m: Model) -> dict:
                 c.update(recommend=pick(["A", "B"]) if maybe(0.9) else "C", reason="R")
             if kind in ("action", "secret") and maybe(0.9):
                 c["manual"] = "by hand"
+            if kind == "action" and maybe(0.1):
+                c["options"] = ["yes: do it | done", "no: leave it | kept"]
+                c.update(recommend="yes", reason="R")
             if kind == "secret" and maybe(0.9):
                 c["secret"] = "KEY"
             if maybe(0.1):

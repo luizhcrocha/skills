@@ -751,6 +751,10 @@ function checkKind(d: Decision): Step$ {
     return refuse(`${d.kind === "secret" ? "a secret" : "an action"} gives the manual route: give --manual with the steps or commands`);
   }
 
+  if (d.kind === "action" && ((d.options ?? []).length > 0 || given(d.recommend ?? undefined))) {
+    return refuse("an action is a step only the user takes, with no options to choose: a yes or no on what the fleet would do is a decision (--kind decision, with the options and --recommend)");
+  }
+
   return Effect.void;
 }
 

@@ -126,7 +126,7 @@ When a milestone's workers are done: bring each worker's changes from its worksp
 
 ## Decisions
 
-Everything that needs the user is a **decision** in the ledger: a choice between options, an input, a secret, an action only they can take. The user works through one list on the dashboard, and each decision has a page built for deciding. A question that lives only in a message is lost by the next report: record it, then name it in your message by its title.
+Everything that needs the user is a **decision** in the ledger: a choice between options, an input, a secret, an action only they can take. Pick the kind by who acts next: asking leave to do something yourself (delete, push, spend) is a `decision` with yes and no options, and you act on the answer; an `action` is a step only the user can take, with `--manual` and no options (the CLI refuses options on one). The user works through one list on the dashboard, and each decision has a page built for deciding. A question that lives only in a message is lost by the next report: record it, then name it in your message by its title.
 
 Settle what you can first: from this conversation, `CONTEXT.md`, the ADRs, a worker's report, one quick read. What remains is the user's.
 
