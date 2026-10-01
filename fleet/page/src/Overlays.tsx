@@ -1,11 +1,12 @@
 /**
  * What opens over the page: the finder (Ctrl/⌘K), the worker sheet (a worker's or a coordinator's detail,
- * opened from its name anywhere), and the toolbar a text selection offers (Reply, Side chat).
+ * opened from its name anywhere), and the toolbar a text selection offers (Copy, Reply, Side chat).
  */
-import { createEffect, createMemo, onCleanup } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
 import { ChatIcon, CloseIcon, Pill, usePage, tf } from "./bits.tsx";
+import { copyText, selectAndCopy, type Copied } from "./clip.ts";
 import { Core, type Agent, type Coordinator } from "./core.ts";
 import { evidence } from "./DecisionPage.tsx";
 import { fmtDur, fmtInt, spentWords } from "./format.ts";
@@ -312,16 +313,73 @@ export function WorkerSheet(): JSX.Element {
   );
 }
 
+/** How long a selection must rest, after the pointer or key that made it is released, before the bar shows. */
+const SETTLE_MS = 250;
+
+/** The room the bar keeps from the selection, and on a touch screen the extra room the selection's handles take. */
+const GAP = 8;
+
+const HANDLES = 30;
+
+/** A selection's place on screen: its first and its last line, and the box around it. */
+interface SelBox {
+  readonly first: { readonly top: number; readonly bottom: number };
+  readonly last: { readonly top: number; readonly bottom: number };
+  readonly left: number;
+  readonly width: number;
+}
+
+/** Where the bar sits, in the viewport. */
+interface ToolAt {
+  readonly top: number;
+  readonly left: number;
+}
+
 /**
- * Text selected anywhere on the page (or in a decision's evidence) offers two things: Reply puts it on the
- * composer as a quote, Side chat opens a conversation of its own about it. The bar sits under the
- * selection, clear of the menu phones show above it.
+ * Where the bar of height `h` and width `w` goes for a selection at `box`, in a viewport `vw` by `vh`:
+ * never over the selection. With a mouse, above its first line, or below its last when there is no room
+ * above; on a touch screen below its last line, clear of the handles and of the menu the phone shows above
+ * it, or above when there is no room below. Always inside the viewport's width.
+ */
+export function toolPlace(box: SelBox, w: number, h: number, vw: number, vh: number, touch: boolean): ToolAt {
+  const above = box.first.top - GAP - h;
+  const below = box.last.bottom + (touch ? HANDLES : GAP);
+  const fitsAbove = above >= GAP;
+  const fitsBelow = below + h <= vh - GAP;
+  const top = touch ? (fitsBelow || !fitsAbove ? below : above) : fitsAbove || !fitsBelow ? above : below;
+
+  return { top: Math.min(Math.max(GAP, top), vh - h - GAP), left: Math.min(Math.max(GAP, box.left + box.width / 2 - w / 2), Math.max(GAP, vw - w - GAP)) };
+}
+
+/** The box of a range: its first line, its last line, and around it all. */
+function boxOf(range: Range): SelBox {
+  const rects = [...range.getClientRects()].filter((r) => r.width > 0 || r.height > 0);
+  const all = range.getBoundingClientRect();
+  const first = rects[0] ?? all;
+  const last = rects.at(-1) ?? all;
+
+  return { first: { top: first.top, bottom: first.bottom }, last: { top: last.top, bottom: last.bottom }, left: all.left, width: all.width };
+}
+
+/**
+ * Text selected anywhere on the page (or in a decision's evidence) offers Copy, and where the chat can be
+ * written Reply (the text on the composer as a quote) and Side chat (a conversation of its own about it).
+ * The bar never covers the selection and leaves the browser's own handling alone: it listens to no
+ * `contextmenu` or `copy`, and prevents nothing in the text, so a right-click opens the browser's menu
+ * with Copy. It shows once the selection rests (the pointer or key released, then SETTLE_MS), never during
+ * a drag, and closes on a right-click, Escape, a scroll, or a press anywhere else.
  */
 export function SelTool(): JSX.Element {
   const { m, ui } = usePage();
   let tool: HTMLDivElement | undefined;
   let framePicked = false;
-  let selTimer: ReturnType<typeof setTimeout> | undefined;
+  let settle: ReturnType<typeof setTimeout> | undefined;
+  let pressed = false;
+  let touch = false;
+  /* The text exactly as selected, for Copy; `picked` holds the excerpt a quote takes. */
+  let raw = "";
+  const [copied, setCopied] = createSignal<Copied | "">("");
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
 
   const sender = (id: number): string => {
     const msg = m.messageById(id);
@@ -355,53 +413,91 @@ export function SelTool(): JSX.Element {
   };
 
   const hide = (): void => {
+    clearTimeout(settle);
+    framePicked = false;
+    raw = "";
+    setCopied("");
     ui.setPicked(null);
     ui.setToolAt(null);
   };
 
-  function show(text: string, from: string, rect: { top: number; bottom: number; left: number; width: number }): void {
-    const excerpt = Core.excerptOf(text);
-
-    if (!excerpt || !m.chatWritable() || !tool) {
+  function show(text: string, from: string, box: SelBox): void {
+    if (!text.trim() || !tool) {
       hide();
 
       return;
     }
 
-    ui.setPicked({ text: excerpt, from });
+    raw = text;
+    setCopied("");
+    ui.setPicked({ text: Core.excerptOf(text), from });
     tool.hidden = false;
-    const w = tool.offsetWidth;
-    const h = tool.offsetHeight;
-    const pad = 8;
-    let top = rect.bottom + pad;
-
-    if (top + h > innerHeight - pad) top = Math.max(pad, rect.top - h - pad);
-    ui.setToolAt({ top, left: Math.min(Math.max(pad, rect.left + rect.width / 2 - w / 2), innerWidth - w - pad) });
+    ui.setToolAt(toolPlace(box, tool.offsetWidth, tool.offsetHeight, innerWidth, innerHeight, touch));
   }
 
+  /* The page's own selection, once it rests. */
+  const showSelection = (): void => {
+    const sel = getSelection();
+
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+    const node = sel.anchorNode;
+    const el = node && (node instanceof Element ? node : node.parentElement);
+
+    if (!el || el.closest("textarea, input, .composer, #seltool, .seltool") || !el.closest("#app, #decision, #chat-log")) return;
+    show(sel.toString(), whereOf(node), boxOf(sel.getRangeAt(0)));
+  };
+
+  const later = (): void => {
+    clearTimeout(settle);
+    settle = setTimeout(showSelection, SETTLE_MS);
+  };
+
   const onSelection = (): void => {
-    clearTimeout(selTimer);
-    selTimer = setTimeout(() => {
-      const sel = getSelection();
+    const sel = getSelection();
 
-      if (!sel || sel.isCollapsed || !sel.rangeCount) {
-        if (!framePicked) hide();
+    if (!sel || sel.isCollapsed) {
+      if (!framePicked) hide();
 
-        return;
-      }
+      return;
+    }
 
-      const node = sel.anchorNode;
-      const el = node && (node instanceof Element ? node : node.parentElement);
+    /* While the selection moves, the bar is away; a selection made without a pointer (the keyboard) shows once it rests. */
+    if (ui.picked() && !framePicked) {
+      ui.setPicked(null);
+      ui.setToolAt(null);
+    }
 
-      if (!el || el.closest("textarea, input, .composer, #seltool, .seltool") || !el.closest("#app, #decision, #chat-log")) {
-        hide();
+    if (!pressed) later();
+    else clearTimeout(settle);
+  };
 
-        return;
-      }
+  /* Passive: the page notes the press and its release, and prevents nothing. */
+  const onDown = (e: PointerEvent): void => {
+    touch = e.pointerType === "touch" || e.pointerType === "pen";
 
-      framePicked = false;
-      show(sel.toString(), whereOf(node), sel.getRangeAt(0).getBoundingClientRect());
-    }, 180);
+    if (tool?.contains(e.target instanceof Node ? e.target : null)) return;
+    pressed = e.button === 0;
+    hide();
+  };
+
+  const onUp = (e: PointerEvent): void => {
+    if (e.button !== 0 || !pressed) return;
+    pressed = false;
+    later();
+  };
+
+  /* A long press on a phone hands the touch to the browser's selection: the press is over, and the selection shows the bar once it rests. */
+  const onCancel = (): void => {
+    pressed = false;
+  };
+
+  const onTouchEnd = (): void => {
+    pressed = false;
+    later();
+  };
+
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === "Escape" && (ui.picked() || framePicked)) hide();
   };
 
   /* A selection inside the evidence frame arrives as a message: its text and where it sits in the frame. */
@@ -413,41 +509,54 @@ export function SelTool(): JSX.Element {
     const r = e.data.rect ?? {};
 
     if (!e.data.text) {
-      if (framePicked) {
-        framePicked = false;
-        hide();
-      }
+      if (framePicked) hide();
 
       return;
     }
 
-    framePicked = true;
     const d = m.decisionById(m.viewing());
-    show(String(e.data.text), "the evidence" + (d ? " of " + d.title : ""), { top: box.top + (r.top || 0), bottom: box.top + (r.bottom || 0), left: box.left + (r.left || 0), width: r.width || 0 });
+    const top = box.top + (r.top || 0);
+    const bottom = box.top + (r.bottom || 0);
+    show(String(e.data.text), "the evidence" + (d ? " of " + d.title : ""), { first: { top, bottom }, last: { top, bottom }, left: box.left + (r.left || 0), width: r.width || 0 });
+    framePicked = true;
   };
 
-  /* A scroll moves the selection: the bar follows it while it lasts. */
   const onScroll = (): void => {
-    if (!ui.picked() || framePicked) return;
-    const sel = getSelection();
-
-    if (!sel || sel.isCollapsed || !sel.rangeCount) {
-      hide();
-
-      return;
-    }
-
-    show(sel.toString(), ui.picked()?.from ?? "", sel.getRangeAt(0).getBoundingClientRect());
+    if (ui.picked()) hide();
   };
 
   document.addEventListener("selectionchange", onSelection);
+  document.addEventListener("pointerdown", onDown, { capture: true, passive: true });
+  document.addEventListener("pointerup", onUp, { capture: true, passive: true });
+  document.addEventListener("pointercancel", onCancel, { capture: true, passive: true });
+  document.addEventListener("touchend", onTouchEnd, { capture: true, passive: true });
+  document.addEventListener("keydown", onKey);
   addEventListener("message", onMessage);
   addEventListener("scroll", onScroll, { passive: true, capture: true });
   onCleanup(() => {
+    clearTimeout(settle);
+    clearTimeout(copiedTimer);
     document.removeEventListener("selectionchange", onSelection);
+    document.removeEventListener("pointerdown", onDown, { capture: true });
+    document.removeEventListener("pointerup", onUp, { capture: true });
+    document.removeEventListener("pointercancel", onCancel, { capture: true });
+    document.removeEventListener("touchend", onTouchEnd, { capture: true });
+    document.removeEventListener("keydown", onKey);
     removeEventListener("message", onMessage);
     removeEventListener("scroll", onScroll, { capture: true });
   });
+
+  const copy = (): void => {
+    copyText(
+      raw,
+      () => selectAndCopy(null),
+      (how) => {
+        setCopied(how);
+        clearTimeout(copiedTimer);
+        copiedTimer = setTimeout(() => setCopied(""), 2000);
+      },
+    );
+  };
 
   return (
     <div
@@ -458,12 +567,20 @@ export function SelTool(): JSX.Element {
       hidden={!ui.picked()}
       style={ui.toolAt() ? `top:${ui.toolAt()?.top ?? 0}px;left:${ui.toolAt()?.left ?? 0}px` : undefined}
       ref={(el) => (tool = el)}
+      /* A press on the bar keeps the selection (a press on the text is the browser's). */
       onPointerDown={(e) => e.preventDefault()}
       onClick={(e) => {
         const b = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-sel]") : null;
         const quote = ui.picked();
 
         if (!b || !quote) return;
+
+        if (b.dataset["sel"] === "copy") {
+          copy();
+
+          return;
+        }
+
         hide();
         getSelection()?.removeAllRanges();
         m.setQuote(quote);
@@ -473,12 +590,17 @@ export function SelTool(): JSX.Element {
         ui.refs.say?.focus();
       }}
     >
-      <button type="button" data-sel="reply">
-        Reply
+      <button type="button" data-sel="copy">
+        {copied() === "copied" ? "Copied" : copied() === "selected" ? "Press Ctrl+C" : "Copy"}
       </button>
-      <button type="button" data-sel="side">
-        Side chat
-      </button>
+      <Show when={m.chatWritable() && ui.picked()?.text}>
+        <button type="button" data-sel="reply">
+          Reply
+        </button>
+        <button type="button" data-sel="side">
+          Side chat
+        </button>
+      </Show>
     </div>
   );
 }

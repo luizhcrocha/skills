@@ -7,8 +7,9 @@
  * `--extra` adds the open notifications panel, the chat overlay on a phone and a decision's page.
  * `--chat` shoots only the chat, on the conversation of `chatConversation` (the overlay on a phone, the
  * docked panel at 1280), at its end and scrolled to its start, with decision activity left out and shown,
- * and D18's page with its thread. `--code` shoots code blocks on `codeView`: A2 (Luiz's Modal clean-up,
- * prose and a nu block), A3 (an old one-command `--manual`), and a chat message with a block.
+ * and D18's page with its thread. `--code` shoots code blocks and the selection toolbar on `codeView`:
+ * A2 (Luiz's Modal clean-up, prose and a nu block), A3 (an old one-command `--manual`), a chat message
+ * with a block, and a selection with its toolbar, in a decision's text and in the chat.
  */
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -101,7 +102,28 @@ async function shootChat(): Promise<void> {
   harness.stop();
 }
 
-/** Code blocks, at both widths and in both themes. */
+/** Select the text of `selector` as a finger or a mouse would, and wait for the toolbar. */
+async function select(page: Page, selector: string, touch: boolean): Promise<void> {
+  await page.evaluate(
+    (sel: string, t: boolean) => {
+      const el = document.querySelector(sel);
+      el?.scrollIntoView({ block: "center" });
+      const range = document.createRange();
+
+      if (el) range.selectNodeContents(el);
+      const opts = { bubbles: true, pointerType: t ? "touch" : "mouse", button: 0, isPrimary: true };
+      el?.dispatchEvent(new PointerEvent("pointerdown", opts));
+      getSelection()?.removeAllRanges();
+      getSelection()?.addRange(range);
+      el?.dispatchEvent(new PointerEvent("pointerup", opts));
+    },
+    selector,
+    touch,
+  );
+  await page.waitForFunction(() => document.querySelector<HTMLElement>("#seltool")?.hidden === false);
+}
+
+/** Code blocks and the selection toolbar, at both widths and in both themes. */
 async function shootCode(): Promise<void> {
   const harness = serveHarness({ template, view: codeView(now), messages: codeChat(now), skills });
 
@@ -127,6 +149,11 @@ async function shootCode(): Promise<void> {
         await shoot(page, `code-${w}-${theme}-${name}`);
       }
 
+      await page.goto(harness.url + "#decision/a8", { waitUntil: "networkidle2" });
+      await select(page, "#dv-answer .manual-rich > p", phone);
+      await shoot(page, `sel-${w}-${theme}-decision`);
+      await page.evaluate(() => getSelection()?.removeAllRanges());
+
       if (phone) await page.click("#chat-toggle");
       await page.evaluate(() => {
         const log = document.querySelector("#chat-log");
@@ -134,6 +161,8 @@ async function shootCode(): Promise<void> {
         if (log) log.scrollTop = log.scrollHeight;
       });
       await shoot(page, `code-${w}-${theme}-chat`);
+      await select(page, '#chat-log article[data-id="4"] .msg-text p', phone);
+      await shoot(page, `sel-${w}-${theme}-chat`);
       await page.close();
     }
   }
