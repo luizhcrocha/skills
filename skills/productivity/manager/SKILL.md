@@ -41,6 +41,8 @@ The manager runs on the plugin's fleet CLI, `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fle
 
 Setup is done when every fleet in `fleet fleets list` has answered, and `standing.md` names an owner for every lane in flight.
 
+**Resumed** (a restart, `claude -r`, a new plugin version): the ledger survives, the hub entry does not, since it lives only as long as the session that served it. Run steps 3 to 5 again before anything else (`fleet serve <dir>`, `fleet fleets name`, the watch), and ask each coordinator that was serving to do the same.
+
 A fleet that starts later appears in `fleet fleets list` and on your page. Greet it the same way when you see it.
 
 ## What coordinators send you
