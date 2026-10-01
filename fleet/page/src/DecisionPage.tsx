@@ -578,25 +578,18 @@ function Answer(props: { readonly d: Decision }): JSX.Element {
         {(p) => (
           <>
             <div class="note pending" role="status">
+              {/* The answer and the replies are in the thread above ("In the chat"); this says only where the answer stands. */}
               <h3>Your answer</h3>
-              <p>{p().answer.text}</p>
               <span class="dv-meta">
                 Sent {clock(p().answer.at)}.{" "}
-                {p().replies.length
-                  ? `The ${m.host()} replied; answer again below if it asks you something.`
-                  : Core.isHeld(props.d) && Core.stamp(p().answer.at) <= Core.stamp(props.d.held_at)
-                    ? `The ${m.host()} has it and works on it first.`
+                {Core.isHeld(props.d) && Core.stamp(p().answer.at) <= Core.stamp(props.d.held_at)
+                  ? `The ${m.host()} has it and works on it first.`
+                  : p().replies.length
+                    ? `The ${m.host()} replied above; answer again if it asks you something.`
                     : Core.unreadBy(m.state.hearing, p().answer)
-                    ? `The ${m.host()} has not read it yet${m.state.hearing?.on ? "" : ": it is not reading the chat right now"}. Your answer is kept.`
-                    : `The ${m.host()} has read it and has yet to record it; the fleet acts on it once it is recorded.`}
+                      ? `The ${m.host()} has not read it yet${m.state.hearing?.on ? "" : ": it is not reading the chat right now"}. Your answer is kept.`
+                      : `The ${m.host()} has read it and has yet to record it; the fleet acts on it once it is recorded.`}
               </span>
-              <For each={p().replies} keyed={(r) => r.id}>
-                {(r) => (
-                  <p>
-                    <span class="by">{m.nameOf(r().from)}</span> {r().text}
-                  </p>
-                )}
-              </For>
             </div>
             <Show
               when={mode() === "pending+form"}
