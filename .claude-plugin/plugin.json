@@ -1,6 +1,6 @@
 {
   "name": "tstack",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "description": "Luiz Rocha's engineering stack for Claude Code: skills, agents and hooks for rigorous, jj-based work.",
   "author": {
     "name": "Luiz Rocha",
