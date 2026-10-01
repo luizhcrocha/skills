@@ -83,7 +83,7 @@ const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 export function usageLines(home: string, nowS: number): string[] {
   const held = readUsage(home);
 
-  if (held === undefined) return ["no usage captured yet: the status line has not run through `usage.py capture`"];
+  if (held === undefined) return ["no usage captured yet: the status line has not run through `fleet usage capture`"];
   const lines: string[] = [];
 
   for (const [window, label] of WINDOWS) {

@@ -131,7 +131,7 @@ export function participant(roster: Roster, who: string, allowUser: boolean): st
     reason:
       `unknown participant '${who}': no worker row by that id or name in this DIR's state.json ` +
       `(${known}). Check DIR is your fleet's dashboard directory (your brief names it), and that ` +
-      `the coordinator recorded you (\`state.py DIR agent ${who} ...\`) before you started; else use --as ${roster.host}`,
+      `the coordinator recorded you (\`fleet state DIR agent ${who} ...\`) before you started; else use --as ${roster.host}`,
   });
 }
 
@@ -429,7 +429,7 @@ export function deafWarning(machine: Machine, root: string): string | undefined 
 
   return (
     `chat: the user wrote ${heard.unread} message(s) since #${heard.seen} that no watch has read. ` +
-    `Arm \`chat.py ${root} watch --as ${hostOf(root)} --all --resume --once\` as a background command; it prints them first.`
+    `Arm \`fleet chat ${root} watch --as ${hostOf(root)} --all --resume --once\` as a background command; it prints them first.`
   );
 }
 

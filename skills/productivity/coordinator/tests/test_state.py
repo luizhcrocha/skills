@@ -395,7 +395,8 @@ class ManagerTest(unittest.TestCase):
 class BriefTest(Fleet):
     def test_the_shared_brief_is_written_once_with_this_fleets_paths(self):
         brief = (self.root / "brief.md").read_text()
-        self.assertIn(str(SKILL / "scripts" / "chat.py"), brief)
+        self.assertIn(f"{SKILL.parents[2] / 'fleet' / 'bin' / 'fleet'} chat {self.root} inbox", brief)
+        self.assertNotIn("python3", brief)
         self.assertIn(str(self.root), brief)
         self.assertNotIn("{", brief)
         for heading in ["## Standards", "## Lane", "## Chat", "## Report", "## This fleet"]:

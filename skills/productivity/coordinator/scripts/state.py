@@ -60,6 +60,9 @@ import spend  # noqa: E402
 STATUSES = sorted(render_dashboard.STATUSES)
 AGENT_STATUSES = sorted(render_dashboard.AGENT_STATUSES)
 STEP_STATUSES = sorted(render_dashboard.STEP_STATUSES)
+# The plugin's fleet CLI, which every printed command names: this script is the TypeScript fleet's
+# oracle (fleet/SPEC.md), and the commands it prints are the CLI's.
+FLEET = Path(__file__).resolve().parents[4] / "fleet" / "bin" / "fleet"
 SKILLS = ["implement", "diagnosing-bugs", "prototype", "research", "tdd", "none"]
 MODELS = ["opus", "sonnet", "haiku", "fable"]
 POLICY_MODELS = ["opus", "sonnet", "fable"]  # any other model is the user's to approve, case by case (L3)
@@ -267,7 +270,7 @@ def stale_now(state: dict, args) -> str | None:
         return None
     when = f"said {int(age // 60)} min ago" if age is not None else "never stamped"
     return (f"state: the page's Now line ({when}) reads: \"{str(state.get('now', ''))[:160]}\". If it is no longer what is "
-            f"happening, say it again: `state.py <dir> set --now \"...\"` (the same words also restamp it).")
+            f"happening, say it again: `fleet state <dir> set --now \"...\"` (the same words also restamp it).")
 
 
 def stale_rows(state: dict) -> str | None:
@@ -278,7 +281,7 @@ def stale_rows(state: dict) -> str | None:
     if not rows:
         return None
     return (f"state: {', '.join(rows)} still read as {'/'.join(LIVE)} while the fleet is {state['status']}; "
-            f"if they are not working, `state.py <dir> park \"why\"` stops their rows in one command.")
+            f"if they are not working, `fleet state <dir> park \"why\"` stops their rows in one command.")
 
 
 def unrecorded(root, state: dict) -> list[str]:
@@ -297,7 +300,7 @@ def unrecorded(root, state: dict) -> list[str]:
             continue
         m = next(x for x in reversed(said) if x.get("decision") == d["id"] and x["from"] == "user" and x["at"] == at)
         lines.append(f"state: the user answered {d['ref']} ({d['title']}) as #{m['id']} at {str(at)[11:16]}; record it before any other "
-                     f"work: `state.py <dir> decision {d['ref']} --decide \"...\" --resolution \"answered on the page (#{m['id']})\"`, "
+                     f"work: `fleet state <dir> decision {d['ref']} --decide \"...\" --resolution \"answered on the page (#{m['id']})\"`, "
                      f"then answer #{m['id']} with --re.")
     return lines
 
@@ -661,7 +664,7 @@ def cmd_decision(state, args):
         rows.append(d)
         if not made_elsewhere:
             print(f"asked {d['id']}. Arm its answer's wake now, as a background command (run_in_background): "
-                  f"`python3 {Path(__file__).resolve().parent / 'chat.py'} {Path(args.dir).resolve()} wait {d['id']}`: "
+                  f"`{FLEET} chat {Path(args.dir).resolve()} wait {d['id']}`: "
                   f"it exits with the user's answer the moment it is given.")
     else:
         if args.supersedes:
@@ -779,7 +782,7 @@ def cmd_grill(state, args):
     d["question"] = f"{len(open_)} question{'s' if len(open_) != 1 else ''} to answer" if open_ else "Every question is answered"
     if new and created:
         print(f"asked {d['id']}. Arm its answers' wake now, as a background command (run_in_background): "
-              f"`python3 {Path(__file__).resolve().parent / 'chat.py'} {Path(args.dir).resolve()} wait {d['id']}`; arm it again after each round.")
+              f"`{FLEET} chat {Path(args.dir).resolve()} wait {d['id']}`; arm it again after each round.")
     if new or args.revise or args.reason:
         if not created:
             d["revised"] = now()  # the page shows the round as new since the viewer last looked
@@ -800,7 +803,7 @@ def cmd_event(state, args):
 
 
 CHEATSHEET = f"""
-commands (state.py DIR <command>; an unknown ID creates the row, a known ID changes the fields given):
+commands (fleet state DIR <command>; an unknown ID creates the row, a known ID changes the fields given):
   set [--status {"|".join(STATUSES)}] [--now TEXT] [--goal G]
   milestone ID --title T
   step ID --milestone M --title T [--status {"|".join(STEP_STATUSES)}] [--agent A]
@@ -860,14 +863,14 @@ def ensure_brief(root: Path, state: dict) -> None:
     path = root / "brief.md"
     if not path.exists():
         template = (skill / "assets" / "brief.md").read_text()
-        path.write_text(template.replace("{skill_dir}", str(skill)).replace("{dashboard_dir}", str(root)))
+        path.write_text(template.replace("{fleet}", str(FLEET)).replace("{skill_dir}", str(skill)).replace("{dashboard_dir}", str(root)))
     standing = root / "standing.md"
     if state.get("role") == "manager" and not standing.exists():
         standing.write_text((skill / "assets" / "standing.md").read_text())
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(prog="fleet state", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("dir", help="directory holding state.json and index.html")
     sub = p.add_subparsers(dest="cmd", required=True)
 

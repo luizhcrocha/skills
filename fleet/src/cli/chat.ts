@@ -37,7 +37,7 @@ export const CHAT_COMMANDS: readonly CommandSpec[] = [
   { name: "log", positionals: [], options: [opt.value("--after", { int: true })] },
 ];
 
-const PROG = "chat.py";
+const PROG = "fleet chat";
 
 const HELP = `usage: ${PROG} DIR {say,inbox,wait,watch,log} ...
 

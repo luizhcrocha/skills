@@ -8,7 +8,7 @@ import { AGENT_STATUSES, ASKS, KINDS, STATUSES, STEP_STATUSES } from "./validate
 
 /** The command cheat sheet `show` ends with: each command with the values its flags take. */
 export const CHEATSHEET = `
-commands (state.py DIR <command>; an unknown ID creates the row, a known ID changes the fields given):
+commands (fleet state DIR <command>; an unknown ID creates the row, a known ID changes the fields given):
   set [--status ${STATUSES.join("|")}] [--now TEXT] [--goal G]
   milestone ID --title T
   step ID --milestone M --title T [--status ${STEP_STATUSES.join("|")}] [--agent A]

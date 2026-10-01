@@ -326,7 +326,7 @@ describe("the plan's usage", () => {
   });
 
   test("the CLI prints what it holds", () => {
-    expect(spawnFleet(["usage", "show"], env).stdout).toBe("no usage captured yet: the status line has not run through `usage.py capture`\n");
+    expect(spawnFleet(["usage", "show"], env).stdout).toBe("no usage captured yet: the status line has not run through `fleet usage capture`\n");
     capture(status({ used_percentage: 42.5, resets_at: SOON }, { used_percentage: 61, resets_at: LATER }), "true");
     const out = spawnFleet(["usage", "show"], env).stdout;
     expect(out).toContain("5-hour window: 42.5% used");

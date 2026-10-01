@@ -11,7 +11,7 @@ import * as Option from "effect/Option";
 import { deafWarning } from "../chat/chat.ts";
 import { stampOf } from "../clock.ts";
 import { Refusal, stateRefusal, UsageError } from "../errors.ts";
-import { exists, makeDirs, readText, resolvePath, SKILL_DIR, writeText } from "../files.ts";
+import { exists, FLEET_BIN, makeDirs, readText, resolvePath, SKILL_DIR, writeText } from "../files.ts";
 import { Out } from "../io.ts";
 import { parseObject } from "../json.ts";
 import { cliLookups } from "../page/lookups.ts";
@@ -176,7 +176,7 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
   { name: "show", positionals: [], options: [] },
 ];
 
-const PROG = "state.py";
+const PROG = "fleet state";
 
 const HELP = `usage: ${PROG} DIR COMMAND [ARGS] [--no-render] [-q]
 
@@ -208,7 +208,7 @@ function ensureBrief(root: string, ledger: Ledger): void {
 
   if (!exists(brief)) {
     const template = readText(join(SKILL_DIR, "assets", "brief.md")) ?? "";
-    writeText(brief, template.replaceAll("{skill_dir}", SKILL_DIR).replaceAll("{dashboard_dir}", root));
+    writeText(brief, template.replaceAll("{fleet}", FLEET_BIN).replaceAll("{skill_dir}", SKILL_DIR).replaceAll("{dashboard_dir}", root));
   }
 
   const standing = join(root, "standing.md");

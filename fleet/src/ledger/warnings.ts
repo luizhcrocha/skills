@@ -42,7 +42,7 @@ export function staleRows(ledger: Ledger): string | undefined {
 
   return (
     `state: ${rows.join(", ")} still read as ${LIVE.join("/")} while the fleet is ${ledger.status}; ` +
-    `if they are not working, \`state.py <dir> park "why"\` stops their rows in one command.`
+    `if they are not working, \`fleet state <dir> park "why"\` stops their rows in one command.`
   );
 }
 
@@ -58,7 +58,7 @@ export function staleNow(machine: Machine, ledger: Ledger): string | undefined {
 
   return (
     `state: the page's Now line (${when}) reads: "${now}". If it is no longer what is ` +
-    `happening, say it again: \`state.py <dir> set --now "..."\` (the same words also restamp it).`
+    `happening, say it again: \`fleet state <dir> set --now "..."\` (the same words also restamp it).`
   );
 }
 
@@ -119,7 +119,7 @@ export function unrecorded(ledger: Ledger, said: readonly Message[]): string[] {
     const n = m?.id ?? "?";
     lines.push(
       `state: the user answered ${d.ref ?? d.id} (${d.title ?? "None"}) as #${n} at ${at.slice(11, 16)}; record it before any other ` +
-        `work: \`state.py <dir> decision ${d.ref ?? d.id} --decide "..." --resolution "answered on the page (#${n})"\`, then answer #${n} with --re.`,
+        `work: \`fleet state <dir> decision ${d.ref ?? d.id} --decide "..." --resolution "answered on the page (#${n})"\`, then answer #${n} with --re.`,
     );
   }
 

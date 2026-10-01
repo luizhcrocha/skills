@@ -24,7 +24,7 @@ import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 
 const USAGE =
-  "usage: fleets.py list | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET WHAT | free FLEET] | procs | whose FROM TO";
+  "usage: fleet fleets list | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET WHAT | free FLEET] | procs | whose FROM TO";
 
 function fail(reason: string): Effect.Effect<never, Refusal> {
   return Effect.fail(new Refusal({ speaker: "fleets", reason }));
@@ -140,7 +140,7 @@ function show(machine: Machine, fleet: string): Effect.Effect<void, Refusal, Out
     const say = (line: string): void => out.out(`${line}\n`);
     const entry = machine.registry.live().find((e) => e.id === fleet);
 
-    if (entry === undefined) return yield* fail(`no fleet '${fleet}' is being served; \`fleets.py list\` names the ones that are`);
+    if (entry === undefined) return yield* fail(`no fleet '${fleet}' is being served; \`fleet fleets list\` names the ones that are`);
     const state = numbered(stateOf(entry) ?? {});
     say(`${fleet}  ${state["status"] === undefined ? "unknown" : str(state["status"])}  ${entry.url}`);
     say(`    now: ${state["now"] === undefined ? "" : str(state["now"])}` + (truthy(state["now_at"]) ? `  (said ${str(state["now_at"])})` : ""));
@@ -203,7 +203,7 @@ function decision(machine: Machine, fleet: string, id: string): Effect.Effect<vo
     const say = (line: string): void => out.out(`${line}\n`);
     const entry = machine.registry.live().find((e) => e.id === fleet);
 
-    if (entry === undefined) return yield* fail(`no fleet '${fleet}' is being served; \`fleets.py list\` names the ones that are`);
+    if (entry === undefined) return yield* fail(`no fleet '${fleet}' is being served; \`fleet fleets list\` names the ones that are`);
     const decisions = rows(stateOf(entry) ?? {}, "decisions").map((d) => ({ d, id: str(d["id"]), ref: asString(d["ref"]) ?? "" }));
     const d = find(decisions, id)?.d;
 
@@ -262,7 +262,7 @@ function gate(machine: Machine, argv: readonly string[]): Effect.Effect<void, Re
     const [what, fleet = "", reason = ""] = argv;
 
     if (what === "take" && argv.length === 3) {
-      if (held !== undefined && held["fleet"] !== fleet) return yield* fail(`${heldText(held)}; take it when \`fleets.py gate\` says free`);
+      if (held !== undefined && held["fleet"] !== fleet) return yield* fail(`${heldText(held)}; take it when \`fleet fleets gate\` says free`);
 
       if (!registry.live().some((e) => e.id === fleet)) return yield* fail(`no fleet '${fleet}' is being served`);
       registry.takeGate(fleet, reason, stampOf(machine.now()));
@@ -272,7 +272,7 @@ function gate(machine: Machine, argv: readonly string[]): Effect.Effect<void, Re
       registry.freeGate();
       out.out("free\n");
     } else {
-      return yield* fail("usage: fleets.py gate | gate take FLEET WHAT | gate free FLEET");
+      return yield* fail("usage: fleet fleets gate | gate take FLEET WHAT | gate free FLEET");
     }
   });
 }
@@ -321,7 +321,7 @@ function whose(machine: Machine, argv: readonly string[]): Effect.Effect<void, R
   return Effect.gen(function* () {
     const out = yield* Out;
 
-    if (argv.length !== 2) return yield* fail("usage: fleets.py whose FROM TO   (run in the repository; owners from the manager's DIR/owners)");
+    if (argv.length !== 2) return yield* fail("usage: fleet fleets whose FROM TO   (run in the repository; owners from the manager's DIR/owners)");
     const found = machine.registry.manager();
     const ownersFile = found === undefined ? undefined : join(found.dir, "owners");
 

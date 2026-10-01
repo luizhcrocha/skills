@@ -39,6 +39,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
 SKILL = REPO / "skills" / "productivity" / "coordinator"
+FLEET = REPO / "fleet" / "bin" / "fleet"  # the CLI every printed command names, in both implementations
 CLIS = ("state", "chat", "fleets")
 START = "2026-01-05T09:00:00+00:00"  # the clock of a step that names none, before any step named one
 STEP_TIMEOUT_S = 20
@@ -69,7 +70,7 @@ class Session:
         self.clock = START
         self.pid = str(os.getpid())
         # Longest first, so $DIR wins over $W; the implementation's own paths first of all.
-        pairs = {**(subst if subst is not None else python_subst()), str(self.dir): "$DIR", str(self.w): "$W",
+        pairs = {str(FLEET): "$FLEET", **(subst if subst is not None else python_subst()), str(self.dir): "$DIR", str(self.w): "$W",
                  str(self.registry): "$REGISTRY", str(self.home): "$USERHOME", str(base): "$TMP"}
         self.subst = sorted(pairs.items(), key=lambda kv: -len(kv[0]))
         self.view: dict[str, object] = {}

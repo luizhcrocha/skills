@@ -156,7 +156,7 @@ def name(root, session: str) -> dict | str:
     registry, on the manager's page and in the manager's chat too. The entry, or why not."""
     entry = find(root)
     if not entry:
-        return f"{root} is not being served; start it with serve_dashboard.py first"
+        return f"{root} is not being served; serve it with `fleet serve` first"
     new = "manager" if entry["role"] == "manager" else slug(session)  # the manager's chat host keeps its name
     if not new or (new in KEPT and entry["role"] != "manager"):
         return f"'{session}' cannot name a fleet; the chat keeps {sorted(KEPT)} for itself"
@@ -327,7 +327,7 @@ def cmd_show(fleet: str) -> None:
     import chat
     entry = next((e for e in live() if e["id"] == fleet), None)
     if not entry:
-        fail(f"no fleet '{fleet}' is being served; `fleets.py list` names the ones that are")
+        fail(f"no fleet '{fleet}' is being served; `fleet fleets list` names the ones that are")
     state = _read(Path(entry["dir"]) / "state.json") or {}
     import decisions
     decisions.number(state)
@@ -381,7 +381,7 @@ def cmd_gate(argv: list[str]) -> None:
         return
     if argv[0] == "take" and len(argv) == 3:
         if held and held["fleet"] != argv[1]:
-            fail(f"held by {held['fleet']} since {held['since']}: {held['what']}; take it when `fleets.py gate` says free")
+            fail(f"held by {held['fleet']} since {held['since']}: {held['what']}; take it when `fleet fleets gate` says free")
         if not any(e["id"] == argv[1] for e in live()):
             fail(f"no fleet '{argv[1]}' is being served")
         _gate_path().parent.mkdir(parents=True, exist_ok=True)
@@ -393,7 +393,7 @@ def cmd_gate(argv: list[str]) -> None:
         _gate_path().unlink(missing_ok=True)
         print("free")
     else:
-        fail("usage: fleets.py gate | gate take FLEET WHAT | gate free FLEET")
+        fail("usage: fleet fleets gate | gate take FLEET WHAT | gate free FLEET")
 
 
 def processes(root) -> list[dict]:
@@ -438,7 +438,7 @@ def cmd_whose(argv: list[str]) -> None:
     import fnmatch
     import subprocess
     if len(argv) != 2:
-        fail("usage: fleets.py whose FROM TO   (run in the repository; owners from the manager's DIR/owners)")
+        fail("usage: fleet fleets whose FROM TO   (run in the repository; owners from the manager's DIR/owners)")
     found = manager()
     owners_file = Path(found["dir"]) / "owners" if found else None
     if not owners_file or not owners_file.exists():
@@ -469,7 +469,7 @@ def cmd_manager() -> None:
 def cmd_decision(fleet: str, id_: str) -> None:
     entry = next((e for e in live() if e["id"] == fleet), None)
     if not entry:
-        fail(f"no fleet '{fleet}' is being served; `fleets.py list` names the ones that are")
+        fail(f"no fleet '{fleet}' is being served; `fleet fleets list` names the ones that are")
     rows = (_read(Path(entry["dir"]) / "state.json") or {}).get("decisions", [])
     import decisions
     d = decisions.find({"decisions": [r for r in rows if isinstance(r, dict)]}, id_)
@@ -518,7 +518,7 @@ def main(argv: list[str]) -> None:
             fail(entry)
         print(f"this fleet is {entry['id']}, the session {entry['session']}: use that one name everywhere")
     else:
-        fail("usage: fleets.py list | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET WHAT | free FLEET] | procs | whose FROM TO")
+        fail("usage: fleet fleets list | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET WHAT | free FLEET] | procs | whose FROM TO")
 
 
 if __name__ == "__main__":

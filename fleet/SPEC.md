@@ -298,20 +298,20 @@ either. Where a reference is stored or printed as an address, it's the id.
 After the handler succeeds, before validation, on stderr, in this order (not for `init`):
 
 1. **A chat nobody reads** (`chat: the user wrote N message(s) since #S that no watch has read.
-   Arm \`chat.py DIR watch --as <host> --all --resume --once\` as a background command; it prints
+   Arm \`fleet chat DIR watch --as <host> --all --resume --once\` as a background command; it prints
    them first.`) when the host isn't listening and the user's messages wait unread. See
    `listening` under [chat.py](#chatpy-the-chat). It reads `state.json` as it was before the
    command.
 2. **Live rows in a still fleet** (`state: a1, a2 still read as running/queued/blocked while the
-   fleet is paused; if they are not working, \`state.py <dir> park "why"\` stops their rows in one
+   fleet is paused; if they are not working, \`fleet state <dir> park "why"\` stops their rows in one
    command.`) when the status is paused or done and some row is live.
 3. **A stale Now line** (`state: the page's Now line (said N min ago) reads: "<now, 160 chars>".
-   If it is no longer what is happening, say it again: \`state.py <dir> set --now "..."\` (the same
+   If it is no longer what is happening, say it again: \`fleet state <dir> set --now "..."\` (the same
    words also restamp it).`) when `now_at` is 30 minutes old or older (`never stamped` when it's
    missing or doesn't parse), except on `set --now`.
 
 4. **An answer not recorded** (`state: the user answered D3 (<title>) as #14 at 09:12; record it
-   before any other work: \`state.py <dir> decision D3 --decide "..." --resolution "answered on the
+   before any other work: \`fleet state <dir> decision D3 --decide "..." --resolution "answered on the
    page (#14)"\`, then answer #14 with --re.`), one line per open decision of the ledger the command
    leaves whose answer the user gave on the page after it was opened or last revised (instants), with
    no reply from anyone but the user. Not for `init`.
@@ -703,7 +703,8 @@ A result file has a header line (`{"results": NAME, "trace": 1}`), then one line
 when the file doesn't end in a newline), `index.html` as `{"sha256": …}` of its text with the
 session's paths as tokens (so the page is compared byte for byte), other text as text,
 binary as `{"sha256": …}`. `*.pid`, `*.tmp`, `server.log` and `__pycache__` are ignored. In every
-string, the session's paths read back as `$DIR`, `$W`, `$REGISTRY`, `$USERHOME`, `$TMP`, and the
+string, the session's paths read back as `$DIR`, `$W`, `$REGISTRY`, `$USERHOME`, `$TMP`, the fleet
+CLI's path (`<repo>/fleet/bin/fleet`, which both implementations print) as `$FLEET`, and the
 implementation's own directory as `$SKILL` (`--subst PATH=TOKEN`); a `pid` equal to the runner's
 reads `$PID`. With the clock pinned, timestamps are deterministic and are compared as they are.
 
@@ -808,11 +809,12 @@ below, open-1 fixed in both; argparse's usage and error texts (exit 2) match too
     every command stamps, validates and renders.
 11. **`--no-render` and `-q` are stripped anywhere in argv**, values included: `event -q` records
     nothing (argparse then misses TEXT), and a note can't say `-q`.
-12. **Printed commands name the Python scripts**: the `wait` hint, the chat warning, brief.md's
-    and standing.md's commands (`python3 $SKILL/scripts/chat.py …`). The stage 2 CLI prints its
-    own; decide the wording and re-record those lines.
-    *Stage 2*: kept word for word, so a coordinator can switch CLIs mid-fleet; the cutover
-    re-records them.
+12. **Fixed (the cutover, both): printed commands named the Python scripts.** Every command either
+    implementation prints names the fleet CLI: `fleet state <dir> …`, `fleet chat …`, `fleet fleets …`,
+    `fleet usage capture`, and argparse's usage says `fleet state` and `fleet chat`. The ones meant to
+    be run as printed (the `wait` hint, brief.md's chat lines, from its `{fleet}` placeholder) give its
+    full path, `<plugin>/fleet/bin/fleet`. The traces were re-recorded from Python: only stdout,
+    stderr, `brief.md` and the page's hash changed.
 13. **Fixed (stage 5, both): stamps were compared as strings.** `wait`, the answered-at check and
     numbering by `opened` compare instants now (`clock.at_or_after` / `atOrAfter`, `clock.order` /
     `byInstant`); a stamp that does not parse falls back to its text. The page's own script still

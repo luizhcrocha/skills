@@ -270,7 +270,7 @@ describe("the CLI", () => {
   test("anything else prints the usage and fails", () => {
     const result = cli("frob");
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("usage: fleets.py list");
+    expect(result.stderr).toContain("usage: fleet fleets list");
   });
 });
 

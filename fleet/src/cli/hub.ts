@@ -166,7 +166,7 @@ function render(machine: Machine, argv: readonly string[]): Effect.Effect<number
     const [statePath, outPath] = paths;
 
     if (paths.length !== 2 || statePath === undefined || outPath === undefined) {
-      return yield* refuse("render_dashboard", "usage: render_dashboard.py STATE_JSON OUT_HTML [--fragment]");
+      return yield* refuse("render_dashboard", "usage: fleet render STATE_JSON OUT_HTML [--fragment]");
     }
 
     const text = readText(statePath);

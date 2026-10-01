@@ -207,7 +207,7 @@ def _participant(roster: list[dict], who: str, allow_user: bool) -> str:
         known = f"the last ids it has are {', '.join(ids[-5:])}" if ids else "it has no worker yet"
         raise ChatError(f"unknown participant '{who}': no worker row by that id or name in this DIR's state.json "
                         f"({known}). Check DIR is your fleet's dashboard directory (your brief names it), and that "
-                        f"the coordinator recorded you (`state.py DIR agent {who} ...`) before you started; else use --as {_host_of(roster)}")
+                        f"the coordinator recorded you (`fleet state DIR agent {who} ...`) before you started; else use --as {_host_of(roster)}")
     return found
 
 
@@ -402,7 +402,7 @@ def deaf_warning(root) -> str | None:
         return None
     who = host(root)
     return (f"chat: the user wrote {heard['unread']} message(s) since #{heard['seen']} that no watch has read. "
-            f"Arm `chat.py {root} watch --as {who} --all --resume --once` as a background command; it prints them first.")
+            f"Arm `fleet chat {root} watch --as {who} --all --resume --once` as a background command; it prints them first.")
 
 
 def _unrecorded(e: dict, told: dict) -> list[str]:
@@ -430,7 +430,7 @@ def _unrecorded(e: dict, told: dict) -> list[str]:
         m = next(m for m in reversed(said) if m.get("decision") == d.get("id") and m["at"] == at)
         lines.append(f"! {e['id']} has not recorded the user's answer to {d.get('ref') or d.get('id')} ({_one_line(d.get('title'))}), "
                      f"given at {at[11:16]} as #{m['id']}: \"{_one_line(m['text'])[:120]}\". SendMessage its session "
-                     f"({e.get('session') or e['id']}) to record it: `state.py <dir> decision {d.get('ref') or d.get('id')} --decide ...`.")
+                     f"({e.get('session') or e['id']}) to record it: `fleet state <dir> decision {d.get('ref') or d.get('id')} --decide ...`.")
     return lines
 
 
@@ -522,7 +522,7 @@ def _fleets_unheard(me: str) -> list[str]:
             pass
         lines.append(f"! {e['id']} does not read its chat: {heard['unread']} message(s) from the user since "
                      f"#{heard['seen']}, the oldest at {heard['since'][11:16]}. SendMessage its session "
-                     f"({e.get('session') or e['id']}) to arm its watch; `chat.py {e['dir']} log --after {heard['seen']}` shows them." + gone)
+                     f"({e.get('session') or e['id']}) to arm its watch; `fleet chat {e['dir']} log --after {heard['seen']}` shows them." + gone)
     if lines:
         told_path.write_text(json.dumps(told))
     return lines
@@ -613,7 +613,7 @@ def cmd_wait(root, args) -> None:
                 if first and any(r.get("re") == m["id"] and r["from"] != "user" for r in messages):
                     continue  # answered already, and replied to: not news
                 _show(root, [m])
-                print(f"-> the user answered {d.get('ref') or d['id']}: record it first, `state.py {root} decision {d.get('ref') or d['id']} --decide ...`", flush=True)
+                print(f"-> the user answered {d.get('ref') or d['id']}: record it first, `fleet state {root} decision {d.get('ref') or d['id']} --decide ...`", flush=True)
                 return
         if first:
             tail = Tail(root, max((m["id"] for m in messages), default=0))
@@ -642,7 +642,7 @@ def cmd_log(root, args) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(prog="fleet chat", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("dir", help="the dashboard directory, holding state.json and chat.jsonl")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("say"); s.add_argument("--as", dest="who", required=True); s.add_argument("--re", type=int)

@@ -132,7 +132,7 @@ function unrecorded(machine: Machine, entry: { readonly id: string; readonly dir
     lines.push(
       `! ${entry.id} has not recorded the user's answer to ${ref} (${oneLine(d["title"])}), ` +
         `given at ${at.slice(11, 16)} as #${m?.id ?? "?"}: "${[...oneLine(m?.text ?? "")].slice(0, 120).join("")}". SendMessage its session ` +
-        `(${entry.session ?? entry.id}) to record it: \`state.py <dir> decision ${ref} --decide ...\`.`,
+        `(${entry.session ?? entry.id}) to record it: \`fleet state <dir> decision ${ref} --decide ...\`.`,
     );
   }
 
@@ -172,7 +172,7 @@ export function fleetsUnheard(machine: Machine, me: string): string[] {
     lines.push(
       `! ${e.id} does not read its chat: ${heard.unread} message(s) from the user since ` +
         `#${heard.seen}, the oldest at ${since.slice(11, 16)}. SendMessage its session ` +
-        `(${e.session ?? e.id}) to arm its watch; \`chat.py ${e.dir} log --after ${heard.seen}\` shows them.${gone}`,
+        `(${e.session ?? e.id}) to arm its watch; \`fleet chat ${e.dir} log --after ${heard.seen}\` shows them.${gone}`,
     );
   }
 
@@ -373,7 +373,7 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
         if (first && messages.some((r) => r.re === m.id && r.from !== "user")) continue;
 
         for (const line of renderLines(machine, root, [m])) out.out(`${line}\n`);
-        out.out(`-> the user answered ${d.label}: record it first, \`state.py ${root} decision ${d.label} --decide ...\`\n`);
+        out.out(`-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide ...\`\n`);
 
         return;
       }

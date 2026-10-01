@@ -6,12 +6,12 @@
  * twenty minutes would read as a silent worker. It takes the milestone of the current step, else the
  * first. Run again to record the agentId once spawned, or a restart on Opus when Fable is unavailable.
  */
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import * as Effect from "effect/Effect";
 
 import { Refusal } from "../errors.ts";
-import { resolvePath, SKILL_DIR } from "../files.ts";
+import { FLEET_BIN, resolvePath } from "../files.ts";
 import { Out, recordingOut } from "../io.ts";
 import { decodeLedger, type Ledger } from "../ledger/model.ts";
 import { readObject } from "../registry.ts";
@@ -27,8 +27,6 @@ const MODELS = ["fable", "opus"] as const;
 const USAGE = "usage: fleet advisor DIR [--model fable|opus] [--task-id ID] [--log TEXT]";
 
 const TASK = "Answers the fleet's judgement questions before they reach the user";
-
-const FLEET_BIN = join(resolve(SKILL_DIR, "..", "..", ".."), "fleet", "bin", "fleet");
 
 function refuse(reason: string): Effect.Effect<never, Refusal> {
   return Effect.fail(new Refusal({ speaker: "advisor", reason }));

@@ -844,7 +844,7 @@
    roster list, the conversation's threads, the decisions' order and answers, the viewer's
    preferences. Pure functions over plain
    values, run by the page below and by tests/page.test.mjs, which evaluates this element alone.
-   Who a message reaches, and which @tokens are mentions, is scripts/chat.py's rule alone: the
+   Who a message reaches, and which @tokens are mentions, is the fleet chat's rule alone (fleet/src/chat): the
    page renders the `parts` and `to` the server resolved. */
 var FleetCore = (function () {
   "use strict";
@@ -1362,7 +1362,7 @@ var FleetCore = (function () {
   let STATE = null;
   try { STATE = Core.parseState(JSON.parse($("fleet-state").textContent)); } catch { STATE = null; }
   if (!STATE) {
-    $("app").innerHTML = '<div class="error">No fleet state embedded. Render this template with scripts/render_dashboard.py.</div>';
+    $("app").innerHTML = '<div class="error">No fleet state embedded. Render this template with fleet render.</div>';
     $("chat").hidden = true; $("masthead").hidden = true;
     return;
   }
@@ -1942,7 +1942,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
         <div class="meter" role="meter" aria-label="${r.label}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${r.percent}"><span style="width:${r.percent}%"></span></div>
         <span class="meta">${esc(until(r))}</span>
       </div>`).join("") + (read ? `<p class="usage-note">Read ${esc(ago(new Date(read).toISOString()))}, from the status line of the session that worked last.</p>` : "")
-      : '<p class="usage-note">No reading yet. It appears once a session\'s status line runs through <code>usage.py capture</code>.</p>');
+      : '<p class="usage-note">No reading yet. It appears once a session\'s status line runs through <code>fleet usage capture</code>.</p>');
   }
 
   /* A manager's fleets: who coordinates what, what each is doing now, what waits in it, and the way to its page. */

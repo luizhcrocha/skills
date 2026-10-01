@@ -12,7 +12,7 @@ import { stampOf } from "../clock.ts";
 import type { Args } from "../cli/args.ts";
 import { stateRefusal, type Refusal } from "../errors.ts";
 import { pyStr } from "../json.ts";
-import { makeDirs, readOrWhy, remove, SKILL_DIR, writeBytes } from "../files.ts";
+import { FLEET_BIN, makeDirs, readOrWhy, remove, writeBytes } from "../files.ts";
 import { workerFigures } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
 import { dropKey, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
@@ -826,7 +826,7 @@ function placeOf(ledger: Ledger, d: Decision, run: Run): Step$ {
 }
 
 function waitHint(run: Run, id: string): string {
-  return `\`python3 ${join(SKILL_DIR, "scripts", "chat.py")} ${run.root} wait ${id}\``;
+  return `\`${FLEET_BIN} chat ${run.root} wait ${id}\``;
 }
 
 /** `decision`: open, revise, place, decide or withdraw a decision; one decided elsewhere is recorded closed. */

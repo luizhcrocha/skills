@@ -107,7 +107,7 @@ class ReadTest(Machine):
 
     def test_the_cli_prints_what_it_holds(self):
         none = subprocess.run([sys.executable, USAGE, "show"], capture_output=True, text=True)
-        self.assertEqual((none.returncode, none.stdout), (0, "no usage captured yet: the status line has not run through `usage.py capture`\n"))
+        self.assertEqual((none.returncode, none.stdout), (0, "no usage captured yet: the status line has not run through `fleet usage capture`\n"))
         self.capture(status({"used_percentage": 42.5, "resets_at": SOON}, {"used_percentage": 61, "resets_at": LATER}), "true")
         out = subprocess.run([sys.executable, USAGE, "show"], capture_output=True, text=True).stdout
         self.assertIn("5-hour window: 42.5% used", out)

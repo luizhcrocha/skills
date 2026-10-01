@@ -256,7 +256,7 @@ export class Registry {
   name(root: string, session: string): Entry | { readonly why: string } {
     const entry = this.find(root);
 
-    if (entry === undefined) return { why: `${root} is not being served; start it with serve_dashboard.py first` };
+    if (entry === undefined) return { why: `${root} is not being served; serve it with \`fleet serve\` first` };
     const next = entry.role === "manager" ? "manager" : slug(session);
 
     if (next === "" || (isKept(next) && entry.role !== "manager")) {

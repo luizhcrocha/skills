@@ -17,9 +17,11 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** The coordinator skill's directory: the templates (assets/) and the Python scripts the printed
- * commands name, during the migration (open-12). */
+/** The coordinator skill's directory: the templates (assets/) brief.md and the page are made from. */
 export const SKILL_DIR = resolvePath(fileURLToPath(new URL("../../skills/productivity/coordinator", import.meta.url)));
+
+/** This CLI's own path, `<plugin>/fleet/bin/fleet`, as every printed command names it. */
+export const FLEET_BIN = join(resolve(SKILL_DIR, "..", "..", ".."), "fleet", "bin", "fleet");
 
 /** `path` made absolute with its symlinks followed, as far as it exists. */
 export function resolvePath(path: string): string {

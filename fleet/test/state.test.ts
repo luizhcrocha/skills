@@ -539,7 +539,8 @@ describe("brief", () => {
 
   test("the shared brief is written once with this fleet's paths", () => {
     const brief = readFileSync(join(f.root, "brief.md"), "utf8");
-    expect(brief).toContain(join(SKILL, "scripts", "chat.py"));
+    expect(brief).toContain(`${join(SKILL, "..", "..", "..", "fleet", "bin", "fleet")} chat ${f.root} inbox`);
+    expect(brief).not.toContain("python3");
     expect(brief).toContain(f.root);
     expect(brief).not.toContain("{");
 

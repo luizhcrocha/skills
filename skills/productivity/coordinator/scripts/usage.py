@@ -93,7 +93,7 @@ def capture(command: list[str]) -> int:
 def show() -> None:
     held = read()
     if not held:
-        print("no usage captured yet: the status line has not run through `usage.py capture`")
+        print("no usage captured yet: the status line has not run through `fleet usage capture`")
         return
     now = clock.time()
     for window, label in WINDOWS.items():
