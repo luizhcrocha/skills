@@ -3,8 +3,10 @@
 
 A handler is a small function `handler(hook) -> str | None` listed under its
 event in HANDLERS; what the handlers of one event return is joined and emitted
-in the shape that event takes (EMIT). To add one, write the function and list
-it; a new event also goes in hooks.json (async when nothing reads its output).
+in the shape that event takes (EMIT). A Stop handler that returns a Block
+keeps the turn going instead (the block decision, its text the reason). To add
+one, write the function and list it; a new event also goes in hooks.json
+(async when nothing reads its output).
 
 The rule that outranks the rest: a hook never breaks a session. Any error, in
 a handler or in the dispatcher, is logged to ${CLAUDE_PLUGIN_DATA}/hook.log and
@@ -33,6 +35,7 @@ class Hook:
         state = env.get("XDG_STATE_HOME") or str(Path(env.get("HOME", "/tmp")) / ".local" / "state")
         self.data_dir = Path(env.get("CLAUDE_PLUGIN_DATA") or Path(state) / "tstack")
         self.session_id = str(data.get("session_id") or "")
+        self._states = {}
         cwd = data.get("cwd")
         self.cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else (env.get("CLAUDE_PROJECT_DIR") or os.getcwd())
         # Inside a subagent the input carries agent_id: that is a worker.
@@ -48,12 +51,17 @@ class Hook:
         return self.data_dir / "sessions" / f"{safe}.{name}.json"
 
     def load_state(self, name):
-        try:
-            return json.loads(self.session_file(name).read_text())
-        except (OSError, ValueError):
-            return {}
+        """The session's state `name` (a dict, {} when missing or broken), read once per hook."""
+        if name not in self._states:
+            try:
+                state = json.loads(self.session_file(name).read_text())
+            except (OSError, ValueError):
+                state = {}
+            self._states[name] = state if isinstance(state, dict) else {}
+        return self._states[name]
 
     def save_state(self, name, state):
+        self._states[name] = state
         path = self.session_file(name)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f".{path.name}.{os.getpid()}")
@@ -341,11 +349,317 @@ def fleet_heartbeat(hook):
     return None
 
 
+class Block(str):
+    """What a Stop handler returns to keep the turn going: the text becomes the block's reason."""
+
+
+def fleet_worker(hook):
+    """A worker of a fleet: a subagent (agent_id), TSTACK_ROLE=worker, or a process launched with
+    FLEET_WORKER. The listening rules below are the coordinator's and the manager's only."""
+    return hook.is_worker or bool(hook.env.get("FLEET_WORKER"))
+
+
+def read_ledger(d):
+    """DIR/state.json as a dict, or None when it is missing or does not parse."""
+    try:
+        with open(os.path.join(d, "state.json"), "rb") as f:
+            ledger = json.loads(f.read())
+    except (OSError, ValueError):
+        return None
+    return ledger if isinstance(ledger, dict) else None
+
+
+def fleet_role(ledger):
+    """The host of a fleet's chat (the ledger's role): manager, else coordinator."""
+    return "manager" if isinstance(ledger, dict) and ledger.get("role") == "manager" else "coordinator"
+
+
+def fleet_cli():
+    return f"{ROOT}/fleet/bin/fleet"
+
+
+def _tokens(args, depth=0):
+    """A command line's words; a word holding a shell command (`bash -c '... eval ...'`) is split too."""
+    import shlex
+    out = []
+    for a in args:
+        if depth < 3 and any(c.isspace() for c in a):
+            try:
+                out.extend(_tokens(shlex.split(a), depth + 1))
+                continue
+            except ValueError:
+                pass
+        out.append(a)
+    return out
+
+
+def _is_watch(args, cwd, d, role):
+    """Whether this command line runs `fleet chat D watch --as ROLE` for the fleet at d."""
+    words = _tokens(args)
+    for i in range(len(words) - 2):
+        if words[i] != "chat" or words[i + 2] != "watch":
+            continue
+        rest = words[i + 3:]
+        as_role = any((w == "--as" and j + 1 < len(rest) and rest[j + 1].lower() == role)
+                      or w.lower() == f"--as={role}" for j, w in enumerate(rest))
+        if not as_role:
+            continue
+        given = os.path.expanduser(words[i + 1])
+        if not os.path.isabs(given):
+            if not cwd:  # no way to resolve it: the pid file or the command named the fleet
+                return True
+            given = os.path.join(cwd, given)
+        if os.path.realpath(given) == os.path.realpath(d):
+            return True
+    return False
+
+
+def _proc(pid):
+    """(argv, cwd) of a live process, or None. /proc on Linux, `ps` elsewhere (no cwd)."""
+    if os.path.isdir("/proc/self"):
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                args = f.read().decode("utf-8", "replace").split("\0")
+        except OSError:
+            return None
+        try:
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except OSError:
+            cwd = ""
+        return [a for a in args if a], cwd
+    import subprocess
+    try:
+        out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True,
+                             timeout=2).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return ([out], "") if out else None
+
+
+def _all_procs():
+    """Every process's (argv, cwd), to find a watch that has not written its pid file yet."""
+    if os.path.isdir("/proc/self"):
+        me = os.getpid()
+        for name in os.listdir("/proc"):
+            if name.isdigit() and int(name) != me:
+                found = _proc(int(name))
+                if found:
+                    yield found
+        return
+    import subprocess
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "command="], capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return
+    for line in out.splitlines():
+        yield [line], ""
+
+
+def watch_alive(d, role):
+    """Whether a chat watch as ROLE runs for the fleet at d: the pid in DIR/watch-ROLE.pid is alive and
+    is that watch (its command line, so a reused pid does not count); else, a watch just armed that has
+    not written its pid file yet (Bun takes a moment to start), found among the running processes."""
+    try:
+        with open(os.path.join(d, f"watch-{role}.pid")) as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        pid = 0
+    if pid > 0:
+        found = _proc(pid)
+        if found and _is_watch(found[0], found[1], d, role):
+            return True
+    return any(_is_watch(args, cwd, d, role) for args, cwd in _all_procs())
+
+
+def watch_command(d, role):
+    return f"{fleet_cli()} chat {d} watch --as {role} --all --resume --once"
+
+
+DEAF = ("Your chat watch isn't running, so the user's messages and answers go unheard. Arm it as a "
+        "background command (`run_in_background: true`, `timeout: 3300000`): `{command}`.")
+DEAF_MANAGER = (" While something you own or relay waits on the user (a decision you passed on, a question "
+                "you asked them, a landing waiting on their go), add `--fleets` (manager SKILL.md, Waiting on "
+                "the user).")
+GUARD_AGAIN_S = 15
+
+
+def fleet_listen_guard(hook):
+    """Stop: a coordinator or manager does not end a turn deaf. When a fleet it hosts (running or blocked;
+    a paused or done one is left alone) has no live chat watch as its role, the turn goes on with the
+    command that arms it. Never twice in a row: not when this stop already follows a stop hook's block
+    (stop_hook_active), nor within GUARD_AGAIN_S of the last block."""
+    if fleet_worker(hook) or hook.input.get("stop_hook_active"):
+        return None
+    dirs = fleet_dirs(hook)
+    if not dirs:
+        return None
+    state = hook.load_state("fleet-guard") if hook.session_id else {}
+    last = state.get("blocked_at")
+    if isinstance(last, (int, float)) and 0 <= time.time() - last < GUARD_AGAIN_S:
+        return None
+    lines = []
+    for d in dirs:
+        ledger = read_ledger(d)
+        if ledger is None or ledger.get("status") in ("paused", "done"):
+            continue
+        role = fleet_role(ledger)
+        if watch_alive(d, role):
+            continue
+        lines.append(DEAF.format(command=watch_command(d, role)) + (DEAF_MANAGER if role == "manager" else ""))
+    if not lines:
+        return None
+    if hook.session_id:
+        hook.save_state("fleet-guard", {"blocked_at": time.time()})
+    return Block("\n".join(lines))
+
+
+NUDGE_EVERY_S = 60
+NUDGE_TAIL = 64 * 1024  # a session's first look reads this much of the chat's end, not all of it
+NUDGE_SHOWN = 3
+
+
+def fleet_now(env):
+    """Now on the fleet's clock, in epoch seconds: $FLEET_NOW when set (scripts/clock.py), else the machine's."""
+    return _instant(env.get("FLEET_NOW")) or time.time()
+
+
+def _instant(text):
+    """An ISO 8601 stamp in epoch seconds (no offset reads as UTC), or None."""
+    from datetime import datetime, timezone
+    if not isinstance(text, str) or not text:
+        return None
+    try:
+        at = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return (at if at.tzinfo else at.replace(tzinfo=timezone.utc)).timestamp()
+
+
+def _one_line(text, size):
+    flat = " ".join(str(text).split())
+    return flat if len(flat) <= size else flat[:size] + "…"
+
+
+def _chat_since(path, offset):
+    """(new offset, messages) of DIR/chat.jsonl after a byte offset: whole lines only (a torn last line
+    waits for the next look). With no offset yet, only the file's last NUDGE_TAIL bytes are read. A chat
+    that shrank is read again from its tail."""
+    with open(path, "rb") as f:
+        size = os.fstat(f.fileno()).st_size
+        fresh = not isinstance(offset, int) or offset < 0 or offset > size
+        start = max(0, size - NUDGE_TAIL) if fresh else offset
+        f.seek(start)
+        chunk = f.read()
+    if fresh and start > 0:  # the first line is cut: skip it
+        cut = chunk.find(b"\n") + 1
+        chunk, start = chunk[cut:], start + cut
+    end = chunk.rfind(b"\n") + 1
+    messages = []
+    for line in chunk[:end].splitlines():
+        # Only the user's messages and replies (re) matter here: skip the rest unparsed.
+        if b'"user"' not in line and (b'"re": null' in line or b'"re":null' in line):
+            continue
+        try:
+            m = json.loads(line)
+        except ValueError:
+            continue
+        if (isinstance(m, dict) and isinstance(m.get("id"), int) and isinstance(m.get("from"), str)
+                and isinstance(m.get("to"), list) and isinstance(m.get("text"), str)):
+            messages.append(m)
+    return start + end, messages, fresh
+
+
+def fleet_chat_nudge(hook):
+    """PostToolUse: a coordinator or manager busy mid-turn hears its chat. At most once per NUDGE_EVERY_S
+    per session, it reads the fleet's chat.jsonl from where it last stopped, and tells the session of each
+    message from the user to its role left unread (after the watch's cursor) and unanswered, and of each
+    answer to an open decision left unrecorded, for FLEET_NUDGE_MIN minutes (3) on the fleet's clock.
+    Each message is told once. No process; the ledger is read only when something is due."""
+    if fleet_worker(hook) or not hook.session_id:
+        return None
+    dirs = fleet_dirs(hook)
+    if not dirs:
+        return None
+    now = fleet_now(hook.env)
+    state = hook.load_state("fleet-nudge")
+    checked = state.get("checked")
+    if isinstance(checked, (int, float)) and 0 <= now - checked < NUDGE_EVERY_S:
+        return None
+    try:
+        wait_s = float(hook.env.get("FLEET_NUDGE_MIN") or 3) * 60
+    except ValueError:
+        wait_s = 180.0
+    fleets = state.get("fleets") if isinstance(state.get("fleets"), dict) else {}
+    lines = []
+    for d in dirs:
+        seen = fleets.get(d) if isinstance(fleets.get(d), dict) else {}
+        try:
+            offset, messages, fresh = _chat_since(os.path.join(d, "chat.jsonl"), seen.get("offset"))
+        except OSError:
+            continue
+        pending = {} if fresh or not isinstance(seen.get("pending"), dict) else seen["pending"]
+        told = seen.get("told") if isinstance(seen.get("told"), list) else []
+        for m in messages:
+            if m["from"] == "user":
+                if m["id"] not in told:
+                    pending[str(m["id"])] = {"at": m.get("at"), "to": m["to"], "text": _one_line(m["text"], 80),
+                                             "decision": m.get("decision")}
+            elif isinstance(m.get("re"), int):
+                pending.pop(str(m["re"]), None)
+        due = {k: p for k, p in pending.items() if not isinstance(p, dict)
+               or (_instant(p.get("at")) is not None and now - _instant(p["at"]) >= wait_s)}
+        if due:
+            ledger = read_ledger(d) or {}
+            role = fleet_role(ledger)
+            try:
+                with open(os.path.join(d, f"watch-{role}.cursor")) as f:
+                    cursor = int(f.read().strip())
+            except (OSError, ValueError):
+                cursor = 0
+            listed = ledger.get("decisions") if isinstance(ledger.get("decisions"), list) else []
+            decisions = {x["id"]: x for x in listed if isinstance(x, dict) and isinstance(x.get("id"), str)}
+            for k in sorted(due, key=lambda k: int(k) if k.isdigit() else 0):
+                p = pending.pop(k)
+                if not isinstance(p, dict) or not k.isdigit():
+                    continue
+                minutes = int((now - _instant(p["at"])) // 60)
+                said = p.get("text") or ""
+                if p.get("decision"):
+                    dec = decisions.get(p["decision"]) if isinstance(p["decision"], str) else None
+                    if not dec or dec.get("status") != "open":
+                        continue
+                    since = _instant(dec.get("revised") or dec.get("opened"))
+                    if since is not None and _instant(p["at"]) < since:
+                        continue  # an answer to the question before it was revised
+                    if dec.get("held") and (_instant(dec.get("held_at")) or 0) >= _instant(p["at"]):
+                        continue  # held after this answer: the fleet works on it first
+                    ref = dec.get("ref") or dec.get("id")
+                    lines.append(
+                        f'Fleet: #{k} from the user answers {ref} ({_one_line(dec.get("title") or "", 60)}), '
+                        f'not recorded for {minutes} min: "{said}". Record it now (`{fleet_cli()} state {d} '
+                        f'decision {ref} --decide "..." --resolution "answered on the page (#{k})"`), then '
+                        f"answer #{k} with --re.")
+                else:
+                    to = p.get("to") if isinstance(p.get("to"), list) else []
+                    if (to and role not in to) or int(k) <= cursor:
+                        continue
+                    lines.append(
+                        f'Fleet: #{k} from the user, unread for {minutes} min: "{said}". Read the chat now '
+                        f"(`{fleet_cli()} chat {d} inbox --as {role}`) and answer or record it.")
+                told.append(int(k))
+        fleets[d] = {"offset": offset, "pending": dict(list(pending.items())[-500:]), "told": told[-200:]}
+    hook.save_state("fleet-nudge", {**state, "checked": now, "fleets": fleets})
+    if not lines:
+        return None
+    more = len(lines) - NUDGE_SHOWN
+    return "\n".join(lines[:NUDGE_SHOWN] + ([f"Fleet: and {more} more."] if more > 0 else []))
+
+
 HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_heartbeat],
-    "Stop": [memo_nudge, fleet_heartbeat],
+    "Stop": [memo_nudge, fleet_listen_guard, fleet_heartbeat],
     "PreCompact": [memo_precompact],
-    "PostToolUse": [fleet_heartbeat],
+    "PostToolUse": [fleet_heartbeat, fleet_chat_nudge],
     "PostToolUseFailure": [fleet_heartbeat],
     "SubagentStart": [fleet_heartbeat],
     "SubagentStop": [fleet_heartbeat],
@@ -360,16 +674,19 @@ EMIT = {
     "SessionStart": _context,
     "Stop": _context,
     "PreCompact": lambda event, text: text,
+    "PostToolUse": _context,
 }
 
 
 def dispatch(event, raw, env):
-    """The text to print for this event, or "" for nothing."""
+    """The text to print for this event, or "" for nothing. On Stop, a handler's Block turns the whole
+    output into the block decision, whose reason (every handler's text) Claude reads as it goes on."""
     data = json.loads(raw) if raw.strip() else {}
     if not isinstance(data, dict):
         raise ValueError("hook input is not a JSON object")
     hook = Hook(event, data, env)
     parts = []
+    blocked = False
     for handler in HANDLERS.get(event, ()):
         try:
             text = handler(hook)
@@ -378,8 +695,11 @@ def dispatch(event, raw, env):
             continue
         if text and text.strip():
             parts.append(text.strip())
+            blocked = blocked or isinstance(text, Block)
     if not parts or event not in EMIT:
         return ""
+    if blocked and event == "Stop":
+        return json.dumps({"decision": "block", "reason": "\n\n".join(parts)})
     return EMIT[event](event, "\n\n".join(parts))
 
 

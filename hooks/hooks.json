@@ -26,7 +26,7 @@
     "PostToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook\" PostToolUse", "timeout": 5, "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook\" PostToolUse", "timeout": 5 }
         ]
       }
     ],

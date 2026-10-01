@@ -23,7 +23,7 @@ HOOK = ROOT / "hooks" / "tstack-hook"
 HOOKS_JSON = ROOT / "hooks" / "hooks.json"
 MEMO = ROOT / "scripts" / "memo"
 TUCA = ROOT / "bin" / "tuca-mode"
-HEARTBEAT_ONLY = ("PostToolUse", "PostToolUseFailure", "SubagentStart", "SubagentStop")
+HEARTBEAT_ONLY = ("PostToolUseFailure", "SubagentStart", "SubagentStop")
 
 
 def tool_use(name, **tool_input):
@@ -436,7 +436,8 @@ class HeartbeatTest(HookCase):
         self.pad = self.tmp / "scratchpad"
         self.fleet = self.pad / "coordinator"
         self.fleet.mkdir(parents=True)
-        (self.fleet / "state.json").write_text('{"project": "p"}')
+        # paused: the Stop guard (StopGuardTest) leaves it alone, so a stop here only beats
+        (self.fleet / "state.json").write_text('{"project": "p", "status": "paused"}')
         (self.pad / "notes").mkdir()  # a folder without a ledger is no fleet
 
     def tool(self, event="PostToolUse", **extra):
@@ -556,6 +557,291 @@ class HeartbeatTest(HookCase):
         self.assertLess((time.perf_counter() - started) * 1000 / 200, 0.5)  # outside a fleet: next to nothing
 
 
+class FleetCase(HookCase):
+    """A coordinator's fleet in its scratchpad, for the listening rules (the Stop guard, the nudge)."""
+
+    def setUp(self):
+        super().setUp()
+        self.env["MEMO_QUIET"] = "1"
+        self.pad = self.tmp / "scratchpad"
+        self.fleet = self.pad / "coordinator"
+        self.fleet.mkdir(parents=True)
+        self.ledger()
+        self.fleet_cli = f"{ROOT}/fleet/bin/fleet"
+
+    def ledger(self, **fields):
+        state = {"project": "p", "goal": "g", "status": "running", "now": "n", "started": "2026-01-05T08:00:00+00:00",
+                 "roadmap": [], "agents": [], "roadblocks": [], "decisions": [], "events": [], **fields}
+        (self.fleet / "state.json").write_text(json.dumps(state))
+
+    def say(self, id, at, text="hi", frm="user", to=("coordinator",), re=None, **extra):
+        with open(self.fleet / "chat.jsonl", "a") as f:
+            f.write(json.dumps({"id": id, "at": at, "from": frm, "to": list(to), "text": text, "re": re,
+                                "parts": [{"text": text}], **extra}) + "\n")
+
+    def payload(self, event, **extra):
+        return {**self.base(event), "scratchpad_dir": str(self.pad), **extra}
+
+    def watch(self, fleet=None, role="coordinator", pid_file=True):
+        """A process whose command line is a chat watch's (`... chat DIR watch --as ROLE ...`)."""
+        fleet = fleet or self.fleet
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "chat", str(fleet), "watch",
+                                 "--as", role, "--all", "--resume", "--once"])
+        self.addCleanup(lambda: (proc.kill(), proc.wait()))
+        if pid_file:
+            (self.fleet / f"watch-{role}.pid").write_text(str(proc.pid))
+        return proc
+
+
+class StopGuardTest(FleetCase):
+    """fleet_listen_guard: a coordinator or manager does not end a turn with no chat watch."""
+
+    def stop(self, env=None, **extra):
+        return self.hook("Stop", self.payload("Stop", stop_hook_active=False, **extra), env=env)
+
+    def blocked(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)
+        self.assertEqual(out["decision"], "block")
+        return out["reason"]
+
+    def fresh(self):
+        shutil.rmtree(self.data / "sessions", ignore_errors=True)  # forget the last block
+
+    def test_blocks_with_no_watch_and_names_the_command(self):
+        reason = self.blocked(self.stop())
+        self.assertTrue(reason.startswith("Your chat watch isn't running, so the user's messages and answers go unheard."))
+        self.assertIn("(`run_in_background: true`, `timeout: 3300000`)", reason)
+        self.assertIn(f"`{self.fleet_cli} chat {self.fleet} watch --as coordinator --all --resume --once`", reason)
+        self.assertNotIn("--fleets", reason)
+        self.assertSilent(self.stop())  # never twice within a few seconds
+
+    def test_the_manager_is_told_its_role_and_the_fleets_rule(self):
+        self.ledger(role="manager")
+        reason = self.blocked(self.stop())
+        self.assertIn(f"chat {self.fleet} watch --as manager --all --resume --once`", reason)
+        self.assertIn("add `--fleets`", reason)
+
+    def test_passes_with_a_live_watch(self):
+        self.watch()
+        self.assertSilent(self.stop())
+
+    def test_a_watch_not_yet_in_its_pid_file_counts(self):
+        self.watch(pid_file=False)
+        self.assertSilent(self.stop())
+
+    def test_a_dead_reused_or_foreign_pid_does_not_count(self):
+        pid_file = self.fleet / "watch-coordinator.pid"
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        pid_file.write_text(str(dead.pid))
+        self.blocked(self.stop())
+        self.fresh()
+        pid_file.write_text(str(os.getpid()))  # alive, but not a watch
+        self.blocked(self.stop())
+        self.fresh()
+        other = self.tmp / "other" / "coordinator"
+        other.mkdir(parents=True)
+        pid_file.write_text(str(self.watch(fleet=other, pid_file=False).pid))  # another fleet's watch
+        self.blocked(self.stop())
+        self.fresh()
+        pid_file.write_text(str(self.watch(role="manager", pid_file=False).pid))  # the wrong role
+        self.blocked(self.stop())
+
+    def test_passes_with_stop_hook_active(self):
+        self.assertSilent(self.hook("Stop", self.payload("Stop", stop_hook_active=True)))
+
+    def test_passes_for_a_paused_or_done_fleet(self):
+        for status in ("paused", "done"):
+            self.ledger(status=status)
+            self.assertSilent(self.stop())
+        self.ledger(status="blocked")
+        self.blocked(self.stop())
+
+    def test_passes_for_a_worker(self):
+        self.assertSilent(self.stop(agent_id="a1"))
+        self.assertSilent(self.stop(env={"FLEET_WORKER": "a1", "FLEET_DIR": str(self.fleet)}))
+        self.assertSilent(self.stop(env={"TSTACK_ROLE": "worker"}))
+
+    def test_blocks_headless_and_through_fleet_dir(self):
+        self.blocked(self.stop(env={"CLAUDE_CODE_SESSION_ATTENDED": "0", "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}))
+        self.fresh()
+        self.blocked(self.hook("Stop", self.base("Stop"), env={"FLEET_DIR": str(self.fleet)}))
+
+    def test_silent_outside_a_fleet_and_on_a_broken_ledger(self):
+        self.assertSilent(self.hook("Stop", self.base("Stop")))
+        (self.fleet / "state.json").write_text("{not json")
+        self.assertSilent(self.stop())
+        (self.fleet / "state.json").write_text("[1, 2]")
+        self.assertSilent(self.stop())
+        self.assertNotIn("failed", self.log())
+
+
+class ChatNudgeTest(FleetCase):
+    """fleet_chat_nudge: a session busy mid-turn is told of the user's messages its chat left waiting."""
+
+    def tool(self, now, env=None, **extra):
+        r = self.hook("PostToolUse", self.payload("PostToolUse", tool_name="Bash", tool_input={"command": "ls"}, **extra),
+                      env={"FLEET_NOW": now, "TZ": "UTC", **(env or {})})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        if not r.stdout:
+            return ""
+        out = json.loads(r.stdout)
+        self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "PostToolUse")
+        return out["hookSpecificOutput"]["additionalContext"]
+
+    def test_fires_after_three_minutes_not_before_and_once(self):
+        text = "please delete the five finished workspaces,\nall of them " * 3
+        self.say(1, "2026-01-05T09:00:00+00:00", text)
+        self.assertEqual(self.tool("2026-01-05T09:02:00+00:00"), "")
+        context = self.tool("2026-01-05T09:04:10+00:00")
+        first = " ".join(text.split())[:80]
+        self.assertEqual(len(first), 80)
+        self.assertEqual(context,
+                         f'Fleet: #1 from the user, unread for 4 min: "{first}…". Read the chat now '
+                         f"(`{self.fleet_cli} chat {self.fleet} inbox --as coordinator`) and answer or record it.")
+        self.assertEqual(self.tool("2026-01-05T09:10:00+00:00"), "")  # told once
+
+    def test_fleet_nudge_min_sets_the_wait(self):
+        self.say(1, "2026-01-05T09:00:00+00:00")
+        self.assertEqual(self.tool("2026-01-05T09:04:00+00:00", env={"FLEET_NUDGE_MIN": "5"}), "")
+        self.assertIn("#1", self.tool("2026-01-05T09:05:00+00:00", env={"FLEET_NUDGE_MIN": "5"}))
+
+    def test_throttled_to_once_a_minute(self):
+        self.say(1, "2026-01-05T08:00:00+00:00")
+        self.assertIn("#1", self.tool("2026-01-05T09:00:00+00:00"))
+        self.say(2, "2026-01-05T08:30:00+00:00")
+        self.assertEqual(self.tool("2026-01-05T09:00:30+00:00"), "")
+        self.assertIn("#2 from the user, unread for 31 min", self.tool("2026-01-05T09:01:00+00:00"))
+
+    def test_read_answered_or_someone_elses_is_not_told(self):
+        self.ledger(agents=[{"id": "a1", "name": "a1"}])
+        self.say(1, "2026-01-05T08:00:00+00:00")  # read: the watch printed up to #1
+        (self.fleet / "watch-coordinator.cursor").write_text("1")
+        self.say(2, "2026-01-05T08:00:00+00:00")
+        self.say(3, "2026-01-05T08:01:00+00:00", "on it", frm="coordinator", to=("user",), re=2)  # answered
+        self.say(4, "2026-01-05T08:00:00+00:00", to=("a1",))  # to a worker: the watch forwards it
+        self.say(5, "2026-01-05T08:00:00+00:00", "and this?")
+        context = self.tool("2026-01-05T09:00:00+00:00")
+        self.assertEqual([line.split(" from")[0] for line in context.splitlines()], ["Fleet: #5"])
+
+    def test_a_decision_answer_not_recorded(self):
+        decision = {"id": "x7", "ref": "A7", "kind": "action", "title": "Delete five finished worker workspaces?",
+                    "status": "open", "opened": "2026-01-05T08:00:00+00:00"}
+        self.ledger(decisions=[decision])
+        self.say(1, "2026-01-05T08:10:00+00:00", "yes", decision="x7")
+        (self.fleet / "watch-coordinator.cursor").write_text("1")  # read, and still not recorded
+        context = self.tool("2026-01-05T08:22:00+00:00")
+        self.assertEqual(context,
+                         'Fleet: #1 from the user answers A7 (Delete five finished worker workspaces?), not recorded '
+                         f'for 12 min: "yes". Record it now (`{self.fleet_cli} state {self.fleet} decision A7 --decide '
+                         '"..." --resolution "answered on the page (#1)"`), then answer #1 with --re.')
+        self.say(2, "2026-01-05T08:20:00+00:00", "yes, again", decision="x7")
+        self.ledger(decisions=[{**decision, "status": "decided"}])  # recorded meanwhile
+        self.assertEqual(self.tool("2026-01-05T08:30:00+00:00"), "")
+        self.ledger(decisions=[{**decision, "held": "fixing first", "held_at": "2026-01-05T08:45:00+00:00"}])
+        self.say(3, "2026-01-05T08:40:00+00:00", "go", decision="x7")  # held after it: the fleet works on it
+        self.assertEqual(self.tool("2026-01-05T08:50:00+00:00"), "")
+
+    def test_at_most_three_lines_and_the_count(self):
+        for n in range(1, 6):
+            self.say(n, "2026-01-05T08:00:00+00:00", f"message {n}")
+        lines = self.tool("2026-01-05T09:00:00+00:00").splitlines()
+        self.assertEqual(len(lines), 4)
+        self.assertEqual(lines[-1], "Fleet: and 2 more.")
+
+    def test_the_manager_reads_as_manager(self):
+        self.ledger(role="manager")
+        self.say(1, "2026-01-05T08:00:00+00:00", to=("manager",))
+        self.assertIn(f"chat {self.fleet} inbox --as manager`", self.tool("2026-01-05T09:00:00+00:00"))
+
+    def test_never_for_a_worker(self):
+        self.say(1, "2026-01-05T08:00:00+00:00")
+        self.assertEqual(self.tool("2026-01-05T09:00:00+00:00", agent_id="a1"), "")
+        self.assertEqual(self.tool("2026-01-05T09:00:00+00:00", env={"FLEET_WORKER": "a1", "FLEET_DIR": str(self.fleet)}), "")
+        self.assertEqual(self.tool("2026-01-05T09:00:00+00:00", env={"TSTACK_ROLE": "worker"}), "")
+        self.assertIn("#1", self.tool("2026-01-05T09:00:00+00:00"))  # the coordinator still is
+
+    def test_a_chat_written_after_the_first_look_and_a_torn_line(self):
+        self.say(1, "2026-01-05T08:59:00+00:00")
+        self.assertEqual(self.tool("2026-01-05T09:00:00+00:00"), "")
+        line = json.dumps({"id": 2, "at": "2026-01-05T09:00:00+00:00", "from": "user", "to": ["coordinator"],
+                           "text": "two", "re": None})
+        with open(self.fleet / "chat.jsonl", "a") as f:
+            f.write(line[:20])
+        self.assertIn("#1", self.tool("2026-01-05T09:05:00+00:00"))
+        with open(self.fleet / "chat.jsonl", "a") as f:
+            f.write(line[20:] + "\n")
+        self.assertIn("#2", self.tool("2026-01-05T09:06:00+00:00"))
+
+    def test_never_raises_on_a_broken_chat_or_ledger(self):
+        with open(self.fleet / "chat.jsonl", "wb") as f:
+            f.write(os.urandom(2048) + b"\n[1]\nnull\n" + b'{"id": "x", "from": "user", "to": [], "text": "t"}\n'
+                    + b'{"id": 9, "at": "yesterday", "from": "user", "to": ["coordinator"], "text": "t", "re": null}\n'
+                    + b'{"id": 10, "at": 5, "from": "user", "to": "coordinator", "text": "t", "re": null}\n'
+                    + b'{"id": 11, "at": "2026-01-05T08:00:00", "from": "user", "to": ["coordinator"], "text": "naive",'
+                    + b' "re": null, "decision": ["odd"]}\n')
+        self.assertEqual(self.tool("2026-01-05T09:00:00+00:00"), "")  # 11 answers a decision that is not there
+        for n, ledger in enumerate(("{not json", "[]", '{"decisions": "none", "role": 7}')):
+            (self.fleet / "state.json").write_text(ledger)
+            self.say(20 + n, "2026-01-05T08:00:00+00:00")
+            self.assertIn(f"#{20 + n} from the user, unread for", self.tool(f"2026-01-05T1{n}:00:00+00:00"))
+        (self.fleet / "chat.jsonl").unlink()
+        (self.fleet / "chat.jsonl").mkdir()  # a folder where the chat goes
+        self.assertEqual(self.tool("2026-01-05T12:00:00+00:00"), "")
+        state = self.data / "sessions" / "sess-1.fleet-nudge.json"
+        state.write_text('{"checked": "x", "fleets": {"' + str(self.fleet) + '": {"offset": -3, "pending": [], "told": 4}}}')
+        self.assertEqual(self.tool("2026-01-05T13:00:00+00:00"), "")
+        self.assertNotIn("failed", self.log())
+
+    def test_the_handler_takes_under_two_milliseconds(self):
+        """2,000 lines (workers talking, the user's messages answered), measured as its worst case: each run
+        is a session's first look (no offset kept) and something is due, so the ledger is read too."""
+        n = 0
+        for i in range(400):
+            at = "2026-01-05T08:00:00+00:00"
+            n += 1
+            self.say(n, at, f"please look at item {i} " * 4)
+            for k in range(3):
+                n += 1
+                self.say(n, at, f"worker note {k} on item {i}: " + "x" * 120, frm="a1", to=("coordinator", "user"))
+            n += 1
+            self.say(n, at, "done", frm="coordinator", to=("user",), re=n - 4)
+        self.say(n + 1, "2026-01-05T08:00:00+00:00", "still there?")
+        self.assertEqual(len((self.fleet / "chat.jsonl").read_text().splitlines()), 2001)
+        module = load_hook()
+        env = {**self.env, "FLEET_NOW": "2026-01-05T09:00:00+00:00"}
+        payload = self.payload("PostToolUse", tool_name="Bash")
+        state = self.data / "sessions" / "sess-1.fleet-nudge.json"
+        times = []
+        for _ in range(100):
+            state.unlink(missing_ok=True)
+            hook = module.Hook("PostToolUse", payload, env)
+            started = time.perf_counter()
+            out = module.fleet_chat_nudge(hook)
+            times.append((time.perf_counter() - started) * 1000)
+            self.assertIn(f"#{n + 1} from the user", out)
+        steady = []
+        for _ in range(100):  # the usual run: an offset kept, a line or two new
+            saved = json.loads(state.read_text())
+            saved["checked"] = 0
+            state.write_text(json.dumps(saved))
+            self.say(n + 2, "2026-01-05T08:59:00+00:00", frm="a1", to=("coordinator",))
+            hook = module.Hook("PostToolUse", payload, env)
+            started = time.perf_counter()
+            module.fleet_chat_nudge(hook)
+            steady.append((time.perf_counter() - started) * 1000)
+        print(f"\n  chat nudge on 2,000 lines: first look median {statistics.median(times):.2f} ms, "
+              f"then {statistics.median(steady):.2f} ms", end="", file=sys.stderr)
+        self.assertLess(statistics.median(times), 2, times[:20])
+        self.assertLess(statistics.median(steady), 2, steady[:20])
+        quiet = module.Hook("PostToolUse", self.base("PostToolUse"), self.env)
+        started = time.perf_counter()
+        for _ in range(200):
+            module.fleet_chat_nudge(quiet)
+        self.assertLess((time.perf_counter() - started) * 1000 / 200, 0.5)  # outside a fleet: next to nothing
+
+
 class HooksJsonTest(unittest.TestCase):
     def test_every_registered_event_is_dispatched(self):
         config = json.loads(HOOKS_JSON.read_text())
@@ -572,7 +858,7 @@ class HooksJsonTest(unittest.TestCase):
                     # what nobody reads runs in the background: a tool call never waits on a heartbeat
                     self.assertEqual(h.get("async", False), event in HEARTBEAT_ONLY, event)
         self.assertEqual(config["hooks"]["SessionStart"][0]["matcher"], "startup|resume|clear|compact")
-        for event in HEARTBEAT_ONLY:
+        for event in (*HEARTBEAT_ONLY, "PostToolUse"):
             self.assertNotIn("matcher", config["hooks"][event][0])  # every tool
         self.assertTrue(os.access(HOOK, os.X_OK))
         self.assertTrue(os.access(MEMO, os.X_OK))

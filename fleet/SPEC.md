@@ -26,6 +26,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 [The ledger](#the-ledger-statejson) · [Numbers](#numbers-refs) · [Warnings](#warnings) ·
 [chat.py](#chatpy-the-chat) · [fleets.py and the registry](#fleetspy-and-the-registry) ·
 [The other scripts](#the-other-scripts) · [The hub](#the-hub-fleet-hub) · [Heartbeats](#heartbeats) ·
+[Listening hooks](#listening-hooks) ·
 [Workspaces](#workspaces-fleet-ws) · [The advisor](#the-advisor-fleet-advisor) · [Files by writer](#files-by-writer) ·
 [Oracle traces](#oracle-traces) · [The model](#the-model-based-test) · [Open](#open)
 
@@ -45,7 +46,8 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `TAILSCALE` | serve_dashboard.py, `fleet hub`, `fleet serve`, `fleet served` | the tailscale binary |
 | `FLEET_HUB_PORT` | `fleet hub`, `fleet serve` | the hub's port (default 7420); `--port` wins |
 | `FLEET_DIR` | the plugin's hook (`fleet_heartbeat`) | the fleet DIR a session works for when its scratchpad holds none: a worker launched as its own Claude Code process. See [Heartbeats](#heartbeats) |
-| `FLEET_WORKER` | the plugin's hook | the worker id such a process is; written into its heartbeat |
+| `FLEET_WORKER` | the plugin's hook | the worker id such a process is; written into its heartbeat. A session with it is a worker: the listening hooks leave it alone |
+| `FLEET_NUDGE_MIN` | the plugin's hook (`fleet_chat_nudge`) | how long the user's message waits unread, or an answer unrecorded, before the session is told mid-turn (default 3 minutes). See [Listening hooks](#listening-hooks) |
 
 A DIR at `…/<project>/<session>/scratchpad/<name>` names a session transcript; any other DIR has
 none, and every figure read from a transcript (spend, worker tokens, liveness) is absent.
@@ -626,8 +628,9 @@ itself. A manager made later appears the same way, on the same address.
 ## Heartbeats
 
 The per-tool-call heartbeat stays in the plugin's Python hook dispatcher (D13): `hooks/tstack-hook`'s
-`fleet_heartbeat` runs on PostToolUse, PostToolUseFailure, SubagentStart and SubagentStop (registered
-`async`, so no tool call waits on it) and, inside the synchronous dispatcher, on SessionStart and Stop.
+`fleet_heartbeat` runs on PostToolUseFailure, SubagentStart and SubagentStop (registered `async`, so no
+tool call waits on it) and, inside the synchronous dispatcher, on SessionStart, Stop and PostToolUse
+(synchronous since the chat nudge reads its output: see [Listening hooks](#listening-hooks)).
 
 - **Which fleet**: a session belongs to the fleet whose DIR is `$FLEET_DIR` when that is set and holds
   a `state.json`; else to each folder of its scratchpad (`scratchpad_dir` in the hook's input, Claude
@@ -644,7 +647,7 @@ The per-tool-call heartbeat stays in the plugin's Python hook dispatcher (D13): 
   `.jj/working_copy/checkout` (no jj process); `path` is the tool's absolute `file_path`,
   `notebook_path` or `path`; `at` is a stamp from the fleet's clock (`FLEET_NOW`, local time with its
   offset). A start or a stop (no tool) keeps the `tool` the file already had. Measured: 0.35 ms median in process inside a fleet, under 0.5 ms outside one; the hook
-  process itself is Python's start-up (~30 ms), off the tool call's path since it runs async.
+  process itself is Python's start-up (~30 ms), which a PostToolUse now waits for.
 - **Never breaks**: a failure is logged to the plugin's `hook.log`, and the hook exits 0 with nothing
   on stdout. It writes nothing to `state.json` or `chat.jsonl`, so no trace sees it.
 - **Reading** (`src/heartbeat.ts`): each heartbeat is tied to a worker row by, in order, `worker`; the
@@ -656,6 +659,44 @@ The per-tool-call heartbeat stays in the plugin's Python hook dispatcher (D13): 
   and the silent rule (`SILENT_S`, twenty minutes) reads the same map: a running or blocked worker not
   seen for twenty minutes is silent on the page, in `fleets list`, the hub's index and the chat watches.
   Python's view still reads transcripts only; with no heartbeat both agree, which is every trace.
+
+## Listening hooks
+
+A host deaf to its chat leaves the user's messages unread and answers unrecorded: the watch exits with
+the news it prints, and a session that forgets to arm it again, or works a long turn of its own, hears
+nothing. Two handlers of the same dispatcher (`hooks/tstack-hook`) make listening mechanical, for the
+coordinator and the manager only. Membership is the heartbeat's (`$FLEET_DIR`, else the scratchpad's
+folders holding a `state.json`); the role is the ledger's (`role: "manager"`, else coordinator). A worker
+(a subagent's `agent_id`, `FLEET_WORKER`, `TSTACK_ROLE=worker`) is out of both. Neither ever fails the
+hook: a broken `chat.jsonl` or ledger is skipped, an error is logged.
+
+- **The Stop guard** (`fleet_listen_guard`, Stop). When a fleet the session hosts is running or blocked
+  (not paused, not done) and no chat watch as its role is alive, the hook returns
+  `{"decision": "block", "reason": ...}`, so the turn goes on with: `Your chat watch isn't running, so
+  the user's messages and answers go unheard. Arm it as a background command (`run_in_background:
+  true`, `timeout: 3300000`): `<plugin>/fleet/bin/fleet chat DIR watch --as ROLE --all --resume --once`.`
+  The manager's adds when `--fleets` goes on. A watch is alive when `DIR/watch-ROLE.pid` holds a live pid
+  whose command line (`/proc/PID/cmdline`, `ps -p` on the Mac) is `... chat DIR watch --as ROLE`, DIR
+  resolved against the process's cwd; failing that, any process with that command line (a watch armed
+  this instant, before Bun wrote its pid file). Never twice in a row: not on a stop that already follows
+  a stop hook's block (`stop_hook_active`), nor within 15 s of its last block (the session's
+  `fleet-guard` state). Headless runs are guarded too.
+- **The mid-turn nudge** (`fleet_chat_nudge`, PostToolUse). At most once a minute per session (on the
+  fleet's clock, `FLEET_NOW`), it reads `chat.jsonl` from the byte offset it stopped at (a session's
+  first look reads only the last 64 KiB; a torn last line waits), keeps the user's messages not yet
+  answered (`re`) as pending in the session's `fleet-nudge` state, and when one has waited
+  `FLEET_NUDGE_MIN` minutes reads the ledger and the watch's cursor once and tells the session, as
+  PostToolUse `additionalContext`, one line per item, at most three and `Fleet: and N more.`:
+  - a message to the role (or to no one named) after the cursor: `Fleet: #81 from the user, unread for 4
+    min: "<first 80 chars>". Read the chat now (`<fleet> chat DIR inbox --as ROLE`) and answer or record
+    it.`;
+  - an answer to a decision still open (given after it was opened or revised, and not held after it),
+    read or not: `Fleet: #82 from the user answers A7 (<title>), not recorded for 12 min: "<text>". Record
+    it now (`<fleet> state DIR decision A7 --decide "..." --resolution "answered on the page (#82)"`),
+    then answer #82 with --re.`
+  Each message is told once. No process, no ledger read until something is due. Measured on a chat of
+  2,000 lines: 0.96 ms median in process for a first look with an item due, 0.20 ms for the usual look
+  from a kept offset.
 
 ## Workspaces (`fleet ws`)
 
@@ -767,6 +808,7 @@ recommendation attached.
 | `fleet hub` | `REGISTRY/hub/hub.json` while it runs; `DIR/chat.jsonl` on a post |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |
+| the plugin's hook (`fleet_listen_guard`, `fleet_chat_nudge`) | nothing in DIR; the session's `fleet-guard` and `fleet-nudge` state in the plugin's data folder |
 | `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / deleted |
 
 ## Oracle traces
