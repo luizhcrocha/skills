@@ -112,6 +112,12 @@ class AgentTest(Fleet):
         self.assertIn("your id is a1", out)
         self.assertIn(str(self.root / "brief.md"), out)
 
+    def test_a_name_two_workers_share_is_refused_naming_the_id_first(self):
+        self.ok("agent", "a1", "--task", "t", "--milestone", "m1", "--name", "n1")
+        self.ok("agent", "a2", "--task", "t", "--milestone", "m1", "--name", "n2")
+        said = self.refused("agent", "A1", "--task", "t", "--milestone", "m1", "--name", "n2")
+        self.assertIn("agent A1 is called 'a1', which is also agent a1", said, "the same words on every run, whatever the hash seed")
+
     def test_a_worker_sent_back_after_its_report_starts_a_new_round(self):
         self.ok("agent", "a1", "--task", "t", "--milestone", "m1")
         self.assertEqual(self.state()["agents"][0]["rounds"], 1)

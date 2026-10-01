@@ -65,7 +65,7 @@ def validate(state: dict) -> None:
         a.setdefault("rounds", 1)
     taken = {}
     for a in state["agents"]:
-        for label in {a["id"].lower(), a["name"].lower()}:
+        for label in dict.fromkeys((a["id"].lower(), a["name"].lower())):  # the id first: a set named either, by hash seed
             if label in RESERVED:
                 fail(f"agent {a['id']} cannot be called '{label}': that name is a chat participant")
             if label in taken:

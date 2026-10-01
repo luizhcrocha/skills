@@ -516,7 +516,8 @@ says what happens now. Fixed in this stage: a decision's number given to `roadbl
 `link --decision` or `--supersedes` is now kept as its id (it was stored verbatim: the first two
 were refused after printing success, the link never tied to its decision), and `fleets.py
 decision FLEET A1` prints the id's page address (it printed `#decision/A1`, which the page
-doesn't find).
+doesn't find). And the refusal of a name two workers share names the id before the name: it
+iterated a set, so which label it named changed with the hash seed (found by the differential test).
 
 1. **Fixed: a decision whose id reads as a later number blocked every decision of that letter.**
    Opening `D4` as an input (numbered I2) was accepted; the next choice would have been numbered
