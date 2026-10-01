@@ -1,0 +1,179 @@
+/**
+ * The final check every write passes (Python's `render_dashboard.validate` and `decisions.validate`): the
+ * statuses, the ids, the names a mention must tell apart, what steps, roadblocks and decisions point at.
+ * It fills the defaults it checks, so an older ledger comes out complete after one command. The first
+ * fault refuses the write, worded as Python words it.
+ */
+import { invalid, type Refusal } from "../errors.ts";
+import { pyStr } from "../json.ts";
+import type { Ledger } from "./model.ts";
+
+/** The fleet's statuses. */
+export const STATUSES = ["blocked", "done", "paused", "running"] as const;
+
+/** A worker's statuses. */
+export const AGENT_STATUSES = ["blocked", "done", "failed", "queued", "running", "stopped"] as const;
+
+/** A step's statuses. */
+export const STEP_STATUSES = ["blocked", "current", "done", "pending"] as const;
+
+/** The kinds of decision. */
+export const KINDS = ["decision", "input", "secret", "action", "grill"] as const;
+
+/** A decision's statuses. */
+export const DECISION_STATUSES = ["open", "decided", "withdrawn"] as const;
+
+/** A grilling question's statuses. */
+export const QUESTION_STATUSES = ["open", "answered", "dropped"] as const;
+
+/** Who looks at a decision first. */
+export const ASKS = ["user", "manager"] as const;
+
+/** An id: letters, digits, `_`, `.`, `-`. */
+export const ID = /^[A-Za-z0-9_.-]+$/;
+
+const RESERVED = new Set(["user", "coordinator"]);
+
+function list(values: readonly string[]): string {
+  return `[${values.map((v) => pyStr(v)).join(", ")}]`;
+}
+
+function has(values: readonly string[], value: string | undefined): boolean {
+  return value !== undefined && values.includes(value);
+}
+
+function controlled(name: string): boolean {
+  for (const char of name) {
+    const code = char.codePointAt(0) ?? 0;
+
+    if (code < 32 || (code >= 127 && code < 160) || char === "\u2028" || char === "\u2029") return true;
+  }
+
+  return false;
+}
+
+/** The first fault in `ledger`, or undefined when it holds (the defaults are then filled). */
+export function validate(ledger: Ledger): Refusal | undefined {
+  if (!has(STATUSES, ledger.status)) return invalid(`status '${ledger.status}' not in ${list(STATUSES)}`);
+  const ids = new Set<string>();
+
+  for (const a of ledger.agents) {
+    if (!has(AGENT_STATUSES, a.status)) {
+      return invalid(`agent ${a.id} status '${a.status}' not in ${list(AGENT_STATUSES)}`);
+    }
+
+    if (ids.has(a.id)) return invalid(`duplicate agent id '${a.id}'`);
+
+    if (!ID.test(a.id)) {
+      return invalid(`agent id ${pyStr(a.id)} should be letters, digits, '_', '.', or '-', so it can be mentioned in the chat`);
+    }
+
+    if (controlled(a.name)) return invalid(`agent ${a.id} name has a control character`);
+    ids.add(a.id);
+    a.tokens ??= 0;
+    a.duration_ms ??= 0;
+    a.skill ??= "none";
+    a.model ??= "opus";
+    a.brief ??= "";
+    a.report ??= "";
+    a.rounds ??= 1;
+  }
+
+  const taken = new Map<string, string>();
+
+  for (const a of ledger.agents) {
+    for (const label of new Set([a.id.toLowerCase(), a.name.toLowerCase()])) {
+      if (RESERVED.has(label)) return invalid(`agent ${a.id} cannot be called '${label}': that name is a chat participant`);
+      const other = taken.get(label);
+
+      if (other !== undefined) {
+        return invalid(`agent ${a.id} is called '${label}', which is also agent ${other}; a mention could not tell them apart`);
+      }
+
+      taken.set(label, a.id);
+    }
+  }
+
+  const manager = ledger.role === "manager";
+
+  for (const m of ledger.roadmap) {
+    for (const s of m.steps) {
+      if (!has(STEP_STATUSES, s.status)) return invalid(`step ${s.id} status not in ${list(STEP_STATUSES)}`);
+
+      // A manager's step names the coordinator whose turn it is, and coordinators come and go.
+      if (s.agent !== undefined && s.agent !== null && s.agent !== "" && !ids.has(s.agent) && !manager) {
+        return invalid(`step ${s.id} points at unknown agent '${s.agent}'`);
+      }
+    }
+  }
+
+  return validateDecisions(ledger);
+}
+
+function validateDecisions(ledger: Ledger): Refusal | undefined {
+  ledger.decisions ??= [];
+  const rows = ledger.decisions;
+  const ids = new Set<string>();
+
+  for (const d of rows) {
+    if (!ID.test(d.id)) return invalid(`decision id ${pyStr(d.id)} should be letters, digits, '_', '.', or '-'`);
+
+    if (ids.has(d.id)) return invalid(`duplicate decision id '${d.id}'`);
+
+    if (rows.some((o) => o !== d && o.ref === d.id)) {
+      return invalid(`decision id '${d.id}' is another decision's number; pick another id`);
+    }
+
+    if (!has(KINDS, d.kind)) return invalid(`decision ${d.id} kind '${d.kind}' not in ${list(KINDS)}`);
+
+    if (!has(DECISION_STATUSES, d.status)) {
+      return invalid(`decision ${d.id} status '${d.status}' not in ${list(DECISION_STATUSES)}`);
+    }
+
+    d.options ??= [];
+
+    if (d.kind === "grill") {
+      d.questions ??= [];
+
+      if (!d.questions.every((q) => has(QUESTION_STATUSES, q.status))) {
+        return invalid(`grilling ${d.id} has a question without id, title, or a status in ${list(QUESTION_STATUSES)}`);
+      }
+    }
+
+    ids.add(d.id);
+    d.asks ??= "user";
+
+    if (!has(ASKS, d.asks)) return invalid(`decision ${d.id} asks '${d.asks}', not one of ${list(ASKS)}`);
+    d.blocking ??= false;
+    d.page ??= true;
+    d.body ??= false;
+    d.why ??= null;
+    d.recommend ??= null;
+    d.reason ??= null;
+    d.secret ??= null;
+    d.manual ??= null;
+    d.agent ??= null;
+    d.supersedes ??= null;
+    d.change ??= null;
+    d.step ??= null;
+    d.milestone ??= null;
+    d.answer ??= null;
+    d.resolution ??= null;
+    d.revised ??= null;
+    d.closed ??= null;
+  }
+
+  for (const d of rows) {
+    if (d.supersedes !== undefined && d.supersedes !== null && d.supersedes !== "" && !ids.has(d.supersedes)) {
+      return invalid(`decision ${d.id} supersedes unknown decision '${d.supersedes}'`);
+    }
+  }
+
+  for (const r of ledger.roadblocks) {
+    if (r.decision !== undefined && r.decision !== null && r.decision !== "" && !ids.has(r.decision)) {
+      return invalid(`roadblock ${r.id} points at unknown decision '${r.decision}'`);
+    }
+  }
+
+  return undefined;
+}
