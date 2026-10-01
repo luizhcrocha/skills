@@ -513,6 +513,9 @@ describe("listening", () => {
     const { proc, lines } = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume"], env);
     procs.push(proc);
     expect(await lines.next()).toBe("#1 user -> coordinator: status?\n");
+
+    // The watch writes its cursor right after the line it printed: give it that moment under load.
+    for (let tries = 0; tries < 40 && listening(m, root).seen !== 1; tries += 1) await sleep(50);
     expect(listening(m, root)).toEqual({ on: true, seen: 1, unread: 0, since: null });
     expect(deafWarning(m, root)).toBeUndefined();
     proc.kill("SIGTERM");
