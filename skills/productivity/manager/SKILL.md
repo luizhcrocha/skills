@@ -74,7 +74,7 @@ A coordinator asks for the turn before anything that goes out or moves history o
 1. Queue it: `step l4 --milestone landings --title "<fleet>: <what> (<files>)" --agent <fleet>`. The queue reads in the order of the turns: place a landing with `--before` or `--after` another, give it new words with `--title` when what it lands changes, and take out one queued in error with `--remove "why"`.
 2. Check it against `standing.md` (what a landing needs, who owns the files) and against the lanes in flight of the other fleets. A landing that touches another fleet's files goes to that fleet as a diff first.
 3. Get the user's word when it is needed. A push or a deploy the user has approved first-hand, for this landing or as a standing rule in `standing.md`, goes ahead. Any other becomes a decision on your page (`--kind action` or `decision`, `--blocking`).
-4. Give the turn: `step l4 --status current`, and tell the coordinator. It lands from its own workspace and reports the commit and the files that moved.
+4. Give the turn: `step l4 --status current`, and tell the coordinator. It lands from its own workspace (its workers' changes already rebased into its stack from their own workspaces, `fleet ws`) and reports the commit and the files that moved.
 5. Close it: `step l4 --status done`, `event --kind integrated --agent <fleet> "l4 landed as <commit>: <files>"`, the deploy in `standing.md`, and a notice to every fleet whose lanes touch what moved: the commit, the files, what to rebase.
 
 One fleet has the turn. The next turn is given when the one before is closed or given back.

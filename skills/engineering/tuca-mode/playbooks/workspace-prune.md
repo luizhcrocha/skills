@@ -1,6 +1,6 @@
 # Workspace prune
 
-**You own the safety gate. Remove only finished workspaces, only on Luiz's yes.** Deletion is on the pause list, and there is no review to catch a slip, so the checks below are the review. The `fleet ws prune` command (docs/tstack-plan.md, fleet step 2) does not exist yet: this playbook runs its checks by hand and says so in the reply.
+**You own the safety gate. Remove only finished workspaces, only on Luiz's yes.** Deletion is on the pause list, and there is no review to catch a slip, so the checks below are the review. Workspaces a fleet made (`fleet ws add`) go through `fleet ws <dashboard-dir> prune`: it runs these checks itself, its default is the dry run (step 3), and `--apply` is step 5 after Luiz's yes. The steps below are for every other workspace, checked by hand, as the reply says.
 
 1. List every workspace: `jj workspace list` from the main workspace, with each one's directory (`jj workspace root --name <ws>` or the path its `.jj/repo` points from). Paths come from jj, never typed by hand.
 2. Run every check per workspace. A workspace is a candidate only when all hold:

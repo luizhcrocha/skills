@@ -1265,7 +1265,8 @@ var FleetCore = (function () {
      fleet's page `fleets` holds the page itself; on the manager's, every coordinator. Each row: {fleet,
      ref, title, since, what}. */
   const STUCK_MS = 5 * 60 * 1000, SILENT_MS = 20 * 60 * 1000;
-  /* A worker the ledger says runs whose transcript has not moved for SILENT_MS. */
+  /* A worker the ledger says runs that has not been seen for SILENT_MS: no tool call by its heartbeat,
+     else nothing written to its transcript. */
   const silentWorker = (a, now) => (a.status === "running" || a.status === "blocked") && typeof a.active === "string" && now - stamp(a.active) > SILENT_MS;
   function stuckOf(own, coordinators, messages, now) {
     const rows = [];
@@ -2017,7 +2018,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
           <td class="c-lane lane">${(a.lane || []).length ? a.lane.map((l) => `<code>${esc(l)}</code>`).join("") : '<span class="faint">read-only</span>'}</td>
           <td class="c-tokens right num" data-label="Tokens">${a.tokens ? fmtInt(a.tokens) : '<span class="faint">pending</span>'}</td>
           <td class="c-time right num" data-label="Time">${esc(fmtDur(a.duration_ms)) || '<span class="faint">none</span>'}</td>
-          <td class="c-upd ${Core.silentWorker(a, Date.now()) ? "silent" : "muted"}" title="${esc(a.active ? "last wrote " + a.active : a.updated)}">${esc(a.active && (a.status === "running" || a.status === "blocked") ? "active " + ago(a.active) : ago(a.updated))}</td>
+          <td class="c-upd ${Core.silentWorker(a, Date.now()) ? "silent" : "muted"}" title="${esc(a.active ? (a.beat ? `last ${a.beat.tool || a.beat.event || "heartbeat"} at ` : "last wrote ") + a.active : a.updated)}">${esc(a.active && (a.status === "running" || a.status === "blocked") ? (a.beat ? "seen " : "active ") + ago(a.active) : ago(a.updated))}</td>
           <td class="c-act"><button class="expand" type="button" data-id="${esc(a.id)}" aria-expanded="${open}">${open ? "Hide brief" : "Brief and report"}</button></td>
         </tr>` + (open ? `<tr class="detail"><td colspan="10">${briefAndReport(a, "h4")}</td></tr>` : "");
       }).join("") + "</tbody>");
@@ -2285,7 +2286,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     $("worker-body").innerHTML = `
       <div class="sheet-head" style="--c:${colorOf(a)}"><span class="swatch"></span><h2 id="worker-name">${esc(a.name)}</h2>${pill(a.status)}<button type="button" class="icon-btn" data-close data-focus="x" aria-label="Close" title="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
       <p>${esc(a.task)}</p>
-      <dl class="facts">${fact("Skill", esc(a.skill || "none"))}${fact("Model", esc(a.model || "opus"))}${fact("Milestone", esc(ms ? ms.title : a.milestone || "none"))}${fact("Tokens", a.tokens ? `<span class="num">${fmtInt(a.tokens)}</span>` : "pending")}${fact("Time", esc(fmtDur(a.duration_ms)) || "none")}${(a.rounds || 1) > 1 ? fact("Round", `<span class="num">${esc(a.rounds)}</span>`) : ""}${fact("Updated", esc(ago(a.updated)) || "unknown")}${a.active ? fact("Last activity", esc(ago(a.active))) : ""}</dl>
+      <dl class="facts">${fact("Skill", esc(a.skill || "none"))}${fact("Model", esc(a.model || "opus"))}${fact("Milestone", esc(ms ? ms.title : a.milestone || "none"))}${fact("Tokens", a.tokens ? `<span class="num">${fmtInt(a.tokens)}</span>` : "pending")}${fact("Time", esc(fmtDur(a.duration_ms)) || "none")}${(a.rounds || 1) > 1 ? fact("Round", `<span class="num">${esc(a.rounds)}</span>`) : ""}${fact("Updated", esc(ago(a.updated)) || "unknown")}${a.active ? (a.beat ? fact("Last seen", esc(`${ago(a.active)}${a.beat.tool ? ", " + a.beat.tool : ""}`)) : fact("Last activity", esc(ago(a.active)))) : ""}</dl>
       <div><h3>Lane</h3><div class="lane">${(a.lane || []).length ? a.lane.map((l) => `<code>${esc(l)}</code>`).join("") : "read-only"}</div></div>
       ${briefAndReport(a, "h3")}
       <div class="sheet-actions">${chatAvailable() ? `<button type="button" class="btn primary" data-write="${esc(a.id)}" data-focus="write"${chat.write.ok ? "" : ` disabled aria-describedby="write-why"`}><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 0 1-12.4 7.5L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/></svg>Message ${esc(a.name)}</button>` : ""}<button type="button" class="btn" data-close data-focus="close">Close</button></div>

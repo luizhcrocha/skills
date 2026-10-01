@@ -85,13 +85,14 @@ When the approved model for a task is unavailable (its limit is reached), spawn 
 
 A worker starts with an empty window. Everything it needs is in the brief or it does not exist. A brief has two parts.
 
-**What every worker of the fleet follows** is a file, `<dashboard-dir>/brief.md`, which the state CLI writes at `init`: the standards, the rules of a lane and of the shared working copy, how to use the chat, and the shape of the report (a first block of ten lines you can act on, the detail below it). Read it once at intake and add under "This fleet" the facts workers keep needing: addresses and ports, what is running and has to stay up, the setup a fresh workspace needs. A fact you caught yourself writing into a second brief belongs there.
+**What every worker of the fleet follows** is a file, `<dashboard-dir>/brief.md`, which the state CLI writes at `init`: the standards, the rules of a lane and of the worker's own workspace, how to use the chat, and the shape of the report (a first block of ten lines you can act on, the detail below it). Read it once at intake and add under "This fleet" the facts workers keep needing: addresses and ports, what is running and has to stay up, the setup a fresh workspace needs. A fact you caught yourself writing into a second brief belongs there.
 
 **What is this worker's** you write each time, opening with the line the state CLI printed when you recorded the worker ("Read `<dashboard-dir>/brief.md` first; your id is a1."):
 
 - The task, and what **done** looks like: a checkable completion criterion ("tests in `x.test.ts` pass, and the diff touches only your lane"), because a vague bound invites the worker to stop early.
 - The skill to follow (name plus path, per step 2).
 - Its **lane**: the exact files and directories it may edit.
+- Its **workspace**, for a worker that edits code: the path `fleet ws` printed (below, in Track).
 - The context it cannot discover: decisions from this conversation, the domain vocabulary in `CONTEXT.md`, relevant ADRs, the user's constraints.
 
 Similar tasks get one template brief with the blanks filled per worker. Skill outputs the workers would all recompute (a research finding, a scan), compute once and paste.
@@ -106,13 +107,15 @@ Record a worker, then spawn it. The id you gave it in the ledger is the id in it
 
 Lanes are how conflicts are avoided. Before spawning, check the ledger: a task whose files overlap a running lane waits, or joins that worker's queue. Two workers on the same file overwrite each other silently, and you find out at integration.
 
-The working copy belongs to the workers while any of them runs. Moving it to another change (`jj new`, `jj edit`) takes their files from under them. Land from a second workspace (`jj workspace add`); `jj split` by paths, `jj describe`, and a rebase that only brings in upstream files are safe in place.
+**One jj workspace per worker that edits code.** Your session's working copy (the repo's `default` workspace) is the stack; no worker edits it. Record the worker, then `<skill-dir>/../../../fleet/bin/fleet ws <dashboard-dir> add <id> [-r <base>]` makes `../<repo>-<id>` on the base (default `@-`), records it in the ledger, and prints the path for the brief. A worker that only reads (research, review) needs none. `fleet ws <dashboard-dir> list` shows each workspace's tip and what it holds ahead of the stack, conflicts included, and when its worker was last seen. Integrating a finished worker is yours: rebase its described changes under your `@` (`jj rebase -r '(::<id>@ ~ ::@) ~ <id>@' -B @`), resolve conflicts by intent, run the gates, mark the worker done, then `fleet ws <dashboard-dir> prune` (a dry run: what goes, and each workspace kept with why) and `prune --apply`. Prune deletes only the workspaces it made whose worker is no longer live and whose changes are all in the stack; anything else it refuses by name, and the refusal is the next thing to integrate or ask about.
+
+Until the cutover, a fleet on the Python path (`state.py`, no `fleet ws`) shares one working copy: it belongs to the workers while any of them runs, and moving it (`jj new`, `jj edit`) takes their files from under them. There, land from a second workspace (`jj workspace add`); `jj split` by paths, `jj describe`, and a rebase that only brings in upstream files are safe in place.
 
 Token and duration figures arrive in the task notification when a worker finishes or replies, as the worker's total so far. Record the latest the moment the notification lands; it is kept nowhere else.
 
 ### 6. Respond
 
-**A running row is not proof of work.** The page shows each worker's last activity from its transcript, and your chat watch prints `! worker b50 ... has written nothing since 16:30` when one has been silent for twenty minutes: ask it where it stands (`SendMessage`), or park it with the reason, and never report it as running from its row alone. A refusal reported by a worker (`blocked: ...`) becomes a roadblock at once, with the action the user can take.
+**A running row is not proof of work.** The page shows when each worker was last seen: its last tool call, from the heartbeat the plugin's hook writes in `<dashboard-dir>/heartbeats/`, else the last write to its transcript; and your chat watch prints `! worker b50 ... has written nothing since 16:30` when one has been silent for twenty minutes: ask it where it stands (`SendMessage`), or park it with the reason, and never report it as running from its row alone. A refusal reported by a worker (`blocked: ...`) becomes a roadblock at once, with the action the user can take.
 
 **Said once, on the page.** What you answer the user on the page is written there only. The turn that answered ends, in your session, with one line naming where: "Answered #42 on the page." The user reads the page, from any device; the same words in the session are paid twice, written and then read on every later turn.
 
@@ -131,7 +134,7 @@ Between events, explain to the user what is happening in plain terms: who is on 
 
 ### 7. Integrate
 
-When a milestone's workers are done: run the project's checks yourself (types, tests, lint; a quick win), resolve anything left at the seams between lanes, mark the milestone done, and move the roadmap's current step forward. A milestone counts as done when its checks pass and its reports clear the standards, not when its workers report.
+When a milestone's workers are done: bring each worker's changes from its workspace into the stack and prune the workspaces (Track, above), run the project's checks yourself (types, tests, lint; a quick win), resolve anything left at the seams between lanes, mark the milestone done, and move the roadmap's current step forward. A milestone counts as done when its checks pass and its reports clear the standards, not when its workers report.
 
 ## Decisions
 
