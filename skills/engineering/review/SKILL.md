@@ -102,3 +102,5 @@ A change can pass one axis and fail the other:
 Reporting them separately stops one axis from masking the other.
 
 For an adversarial pass that tries to break the change (a contested design, a risky diff), use `tstack:interrogate`.
+
+For a UI diff that adds or changes motion (transitions, keyframes, Motion, springs, gestures), also run `tstack:review-animations` on it and add its findings table and verdict after the summary.

@@ -219,3 +219,52 @@ map = [
   { from = "src", to = "lint/ts/anti-slop" },
   { from = "LICENSE", to = "lint/ts/anti-slop/LICENSE" },
 ]
+
+# Emil Kowalski's UI and animation skills (MIT), imported 2026-10-01
+# (docs/tstack-plan.md D15). Each file is adapted in place: frontmatter, the
+# "Initial Response" greeting and the author's self-citations removed, the
+# skills we did not take unlinked, D11 models and jj in improve-animations.
+# Long skills got a lean SKILL.md of our own; their upstream body maps to a
+# reference file, so upstream edits still 3-way merge.
+[upstream.emilkowalski]
+url = "https://github.com/emilkowalski/skills.git"
+base = "d16ebe60d09a5ba2afcb7054ede9d0a10c9f6128"
+units = ["skills/*"]
+ignore = [
+  # Repo plumbing (.gitattributes, .gitignore, .pl), the license and the
+  # README, which is the author's.
+  ".*", "LICENSE", "README.md",
+  # Linked from no skill; its rows repeat review-animations' STANDARDS.md
+  # (performance) and pick-ui-library (virtualization).
+  "performance-cheatsheet.md",
+  # Decided, not copied (Luiz, 2026-10-01): React Native and Expo are outside
+  # tstack's stack.
+  "skills/animate-expo",
+  # Decided, not copied (Luiz, 2026-10-01): a guide to one toast library;
+  # pick-ui-library still names it for toasts.
+  "skills/ask-sonner",
+]
+map = [
+  # animation-vocabulary merged into animate as its naming mode (2026-10-01):
+  # one listing entry fewer, and the glossary sits beside the recipes.
+  { from = "skills/animation-vocabulary/SKILL.md", to = "skills/engineering/animate/VOCABULARY.md" },
+  { from = "skills/animate", to = "skills/engineering/animate" },
+  # apple-design, emil-design-eng (renamed design-engineering) and
+  # mobile-native: our own lean SKILL.md; the upstream body is the reference.
+  { from = "skills/apple-design/SKILL.md", to = "skills/engineering/apple-design/references/fluid-interfaces.md" },
+  { from = "skills/emil-design-eng/SKILL.md", to = "skills/engineering/design-engineering/references/craft.md" },
+  { from = "skills/mobile-native/SKILL.md", to = "skills/engineering/mobile-native/references/fixes.md" },
+  { from = "skills/find-animation-opportunities", to = "skills/engineering/find-animation-opportunities" },
+  { from = "skills/improve-animations", to = "skills/engineering/improve-animations" },
+  { from = "skills/pick-ui-library", to = "skills/engineering/pick-ui-library" },
+  { from = "skills/review-animations", to = "skills/engineering/review-animations" },
+  # prototype merged into ours (mattpocock's, above) by hand: its ideas went
+  # into UI.md, which this maps to, so an upstream edit lands there as a
+  # conflict to resolve by intent. PICKER.md is verbatim.
+  { from = "skills/prototype/SKILL.md", to = "skills/engineering/prototype/UI.md" },
+  { from = "skills/prototype/PICKER.md", to = "skills/engineering/prototype/PICKER.md" },
+  # write-swift became lang-swift (the lang-* contract): our SKILL.md and
+  # sources.md; the upstream body is references/modern-swift.md, its version
+  # notes moved to Swift 6.4.
+  { from = "skills/write-swift/SKILL.md", to = "skills/engineering/lang-swift/references/modern-swift.md" },
+]
