@@ -8,9 +8,9 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
-import type { JsonObject } from "../src/json.ts";
+import { asArray, asObject, type JsonObject } from "../src/json.ts";
 import type { Registry } from "../src/registry.ts";
-import { baseEnv, fleet, machine, now, tmp, type Environment, type Ran } from "./support.ts";
+import { baseEnv, fleet, machine, now, readJson, tmp, type Environment, type Ran } from "./support.ts";
 
 let base: string;
 
@@ -259,6 +259,39 @@ describe("the CLI", () => {
       expect(result.code).toBe(1);
       expect(result.stderr).toContain(word);
     }
+  });
+
+  test("waiting is what the ledgers say waits on the user", () => {
+    expect(cli("waiting").stdout).toBe("no fleet is being served on this machine\n");
+    const at = "2026-09-28T10:00:00+00:00";
+
+    const infra = makeFleet("i", "infra", {
+      decisions: [
+        { id: "rerun", kind: "action", title: "Re-run CA1014", question: "q", status: "open", opened: at },
+        { id: "upload", kind: "action", title: "Small test upload", question: "q", status: "open", asks: "manager", opened: at },
+        { id: "key", kind: "secret", title: "Neon key", question: "q", status: "open", blocking: true, opened: at, revised: "2026-09-28T10:20:00+00:00" },
+        { id: "later", kind: "decision", title: "Held", question: "q", status: "open", opened: at, held: "after the cost work" },
+        { id: "old", kind: "input", title: "Old", question: "q", status: "decided", opened: at },
+      ],
+    });
+
+    register(infra, "u1");
+    register(makeFleet("m", "everything", { role: "manager" }), "u9");
+    expect(cli("waiting").stdout).toBe("infra A1 [action] Re-run CA1014  since 2026-09-28 10:00\ninfra S1 [secret, blocks work] Neon key  since 2026-09-28 10:20\n");
+
+    writeFileSync(
+      join(infra, "chat.jsonl"),
+      `${JSON.stringify({ id: 1, at: "2026-09-28T10:30:00+00:00", from: "user", to: ["coordinator"], text: "Re-run after the cost improvements work is done", re: null, decision: "rerun" })}\n`,
+    );
+
+    expect(cli("waiting").stdout).toContain(
+      "infra A1 [action] Re-run CA1014  since 2026-09-28 10:00  ANSWERED at 10:30 (#1): Re-run after the cost improvements work is done; not recorded yet\n",
+    );
+
+    const state = readJson(join(infra, "state.json"));
+    const rows = (asArray(state["decisions"]) ?? []).map((d) => ({ ...asObject(d), status: "decided" }));
+    writeFileSync(join(infra, "state.json"), JSON.stringify({ ...state, decisions: rows }));
+    expect(cli("waiting").stdout).toBe("nothing waits on the user\n");
   });
 
   test("name needs a served fleet", () => {

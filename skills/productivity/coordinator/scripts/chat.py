@@ -4,7 +4,7 @@
     chat.py DIR say   --as WHO [--re N] [--decision D] TEXT
                                                  append a message from WHO; print the line written
     chat.py DIR inbox --as WHO                   the messages open for WHO, oldest first
-    chat.py DIR watch --as WHO [--after N | --resume] [--all] [--once]
+    chat.py DIR watch --as WHO [--after N | --resume] [--all] [--once] [--fleets [--batch SECONDS]]
                                                  every message open for WHO with id > N, then each
                                                  new one as it lands; never exits on its own. --all
                                                  also streams every message from the user. --resume
@@ -16,6 +16,11 @@
                                                  fleet where the user's messages wait unread, and a
                                                  coordinator's for each message a worker left
                                                  unanswered for FLEET_NUDGE_S (ten minutes).
+                                                 --fleets (the manager's) also prints what the user
+                                                 does on every other fleet's page: a message or an
+                                                 answer, a decision opened for them, decided,
+                                                 withdrawn or held. With --once, the first such line
+                                                 waits --batch seconds (120) for more, then exits.
     chat.py DIR wait  DECISION...                wait for the user's answer to one of these decisions,
                                                  print it and exit: armed as a background command when
                                                  a decision is opened, it wakes the session at once
@@ -528,8 +533,133 @@ def _fleets_unheard(me: str) -> list[str]:
     return lines
 
 
+_BREAKS = "\n\r\v\f\x1c\x1d\x1e\x85  "
+FIRST_LINE_MAX = 200  # characters of a message's first line a fleet's news line carries
+
+
+def first_line(value) -> str:
+    """The first line of `value` that has text, as one printed line of at most FIRST_LINE_MAX characters,
+    with ` …` when there is more."""
+    text = str(value).lstrip(" \t" + _BREAKS)
+    cut = next((i for i, c in enumerate(text) if c in _BREAKS), len(text))
+    line, more = _one_line(text[:cut]).strip(" "), any(c not in _BREAKS and c not in " \t" for c in text[cut:])
+    if len(line) > FIRST_LINE_MAX:
+        line, more = line[:FIRST_LINE_MAX].rstrip(" "), True
+    return line + (" …" if more else "")
+
+
+def _mark(d: dict) -> str:
+    """Where a decision stands, as the manager's watch compares it: `open:<who looks first>`, `held`, or its status."""
+    if d.get("status") == "open":
+        return "held" if d.get("held") else "open:" + str(d.get("asks") or "user")
+    return str(d.get("status"))
+
+
+def _news_of(fleet: str, d: dict, mark: str) -> str | None:
+    """The line for a decision of `fleet` that now stands at `mark`, or None when that is not news for the manager."""
+    head = f"{fleet} {d.get('ref') or d['id']}"
+    title = _one_line(d.get("title"))
+    if mark == "open:user":
+        return f"{head} opened for you: {title}" + (" (blocks work)" if d.get("blocking") is True else "")
+    if mark == "held":
+        said = first_line(d["held"]) if isinstance(d.get("held"), str) else ""
+    elif mark == "decided":
+        said = first_line(d.get("answer") or d.get("resolution") or "")
+    elif mark == "withdrawn":
+        said = first_line(d.get("resolution") or "")
+    else:
+        return None
+    return f"{head} {mark}: {title}" + (f": {said}" if said else "")
+
+
+class FleetNews:
+    """What the user did on the other fleets' pages, for a manager's watch: each message from the user (an
+    answer to a decision or not), each decision opened for the user, and each one decided, withdrawn or held.
+
+    Cursors are per fleet, kept by its directory (a fleet keeps it through a rename) in
+    DIR/watch-manager.fleets.json: the last message id read and where each decision stood. A fleet seen for the
+    first time is read from then on; with `resume` the cursors of the last watch are taken up, so nothing is
+    missed or told twice."""
+
+    def __init__(self, me, resume: bool):
+        self.me, self.path = str(me), Path(me) / "watch-manager.fleets.json"
+        self.seen: dict[str, dict] = {}
+        if resume:
+            try:
+                rows = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                rows = []
+            for r in rows if isinstance(rows, list) else []:
+                if isinstance(r, dict) and isinstance(r.get("dir"), str) and isinstance(r.get("chat"), int) \
+                        and isinstance(r.get("decisions"), dict):
+                    self.seen[r["dir"]] = r
+        self.tails: dict[str, Tail] = {}
+        self.states: dict[str, tuple] = {}
+        self.saved = None
+
+    def _decisions(self, root: str) -> list[dict]:
+        """The decisions of `root`'s ledger with their numbers, read again only when the file changed."""
+        import copy
+        import decisions
+        try:
+            st = os.stat(Path(root) / "state.json")
+            key = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            key = None
+        held = self.states.get(root)
+        if held and held[0] == key:
+            return held[1]
+        state = copy.deepcopy(_state(root))
+        decisions.number(state)
+        rows = [d for d in state.get("decisions", []) if isinstance(d, dict) and isinstance(d.get("id"), str)]
+        self.states[root] = (key, rows)
+        return rows
+
+    def read(self) -> list[str]:
+        """The news since the last read, one line each, fleet by fleet (messages, then decisions)."""
+        lines = []
+        for e in fleets.live():
+            root = e["dir"]
+            if e["role"] == "manager" or root == self.me:
+                continue
+            rows = self._decisions(root)
+            before = self.seen.get(root)
+            if root not in self.tails:
+                self.tails[root] = Tail(root, before["chat"] if before else 0)
+            said = self.tails[root].read()
+            last = max([before["chat"] if before else 0] + [m["id"] for m in said])
+            marks = {d["id"]: _mark(d) for d in rows}
+            self.seen[root] = {"fleet": e["id"], "dir": root, "chat": last, "decisions": marks}
+            if before is None:
+                continue  # first seen: from now on
+            for m in said:
+                if m["from"] != "user":
+                    continue
+                if m.get("decision"):
+                    d = next((d for d in rows if d["id"] == m["decision"]), None) or \
+                        next((d for d in rows if d.get("ref") and d["ref"] == m["decision"]), None)
+                    what = f"{d.get('ref') or d['id']} {_one_line(d.get('title'))}" if d else _one_line(m["decision"])
+                    lines.append(f"{e['id']}: you answered {what}: {first_line(m['text'])}")
+                else:
+                    lines.append(f"{e['id']}: you wrote to {_one_line(', '.join(map(str, m['to'])))}: {first_line(m['text'])}")
+            for d in rows:
+                if before["decisions"].get(d["id"]) != marks[d["id"]]:
+                    line = _news_of(e["id"], d, marks[d["id"]])
+                    if line:
+                        lines.append(line)
+        return lines
+
+    def save(self) -> None:
+        text = json.dumps(list(self.seen.values()), ensure_ascii=False)
+        if text != self.saved:
+            self.path.write_text(text + "\n", encoding="utf-8")
+            self.saved = text
+
+
 def cmd_watch(root, args) -> None:
     who = _participant(_agents(root), args.who, allow_user=False)
+    if args.fleets and who != "manager":
+        raise ChatError("--fleets is the manager's: only a watch `--as manager` follows the other fleets' pages")
     cursor = _cursor(root, who)
     pulse = _pulse(root, who)
     pulse.write_text(str(os.getpid()))
@@ -570,13 +700,30 @@ def _watch(root, args, who: str, cursor: Path) -> None:
                    for m in _open_among(messages, r) if m["from"] == "user"}
     first = [m for m in messages if m["id"] > after and m["id"] in wanted]
     show(first)
+    news = FleetNews(root, args.resume) if args.fleets else None
+
+    def tell() -> list[str]:
+        told = news.read() if news else []
+        for line in told:
+            print(line, flush=True)
+        if news:
+            news.save()
+        return told
+
+    # The other fleets' news comes in batches: the first opens a window of --batch seconds, and the watch
+    # tells all that lands in it before it exits, so one wake covers a burst of the user's actions.
+    window = time.monotonic() + args.batch if tell() else None
     if args.once and first:
         return
     checked = 0.0
     while True:
+        if args.once and window is not None and time.monotonic() >= window:
+            return
         time.sleep(POLL_S)
         new = [m for m in tail.read() if who in m["to"] or (args.all and m["from"] == "user")]
         show(new)
+        if tell() and window is None:
+            window = time.monotonic() + args.batch
         lines = []
         if who in ("manager", "coordinator") and time.monotonic() - checked >= FLEETS_S:
             checked = time.monotonic()
@@ -654,6 +801,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--after", type=int, default=0); s.add_argument("--all", action="store_true")
     s.add_argument("--resume", action="store_true", help="start after the last message a watch as WHO printed")
     s.add_argument("--once", action="store_true", help="exit after the first batch it prints: a background task that wakes its session only when there is news")
+    s.add_argument("--fleets", action="store_true", help="a manager's: also what the user does on every other fleet's page")
+    s.add_argument("--batch", type=int, default=120, metavar="SECONDS",
+                   help="with --fleets --once: how long the first news of the other fleets waits for more before the watch exits")
     s = sub.add_parser("log"); s.add_argument("--after", type=int, default=0)
     return p
 

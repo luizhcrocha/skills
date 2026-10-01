@@ -201,6 +201,33 @@ class CliTest(Machine):
             self.assertEqual(result.returncode, 1)
             self.assertIn(word, result.stderr)
 
+    def test_waiting_is_what_the_ledgers_say_waits_on_the_user(self):
+        self.assertEqual(self.cli("waiting").stdout, "no fleet is being served on this machine\n")
+        at = "2026-09-28T10:00:00+00:00"
+        infra = self.fleet("i", "infra", decisions=[
+            {"id": "rerun", "kind": "action", "title": "Re-run CA1014", "question": "q", "status": "open", "opened": at},
+            {"id": "upload", "kind": "action", "title": "Small test upload", "question": "q", "status": "open", "asks": "manager", "opened": at},
+            {"id": "key", "kind": "secret", "title": "Neon key", "question": "q", "status": "open", "blocking": True, "opened": at,
+             "revised": "2026-09-28T10:20:00+00:00"},
+            {"id": "later", "kind": "decision", "title": "Held", "question": "q", "status": "open", "opened": at, "held": "after the cost work"},
+            {"id": "old", "kind": "input", "title": "Old", "question": "q", "status": "decided", "opened": at}])
+        fleets.register(infra, "u1", os.getpid())
+        m = self.fleet("m", "everything", role="manager")
+        fleets.register(m, "u9", os.getpid())
+        self.assertEqual(self.cli("waiting").stdout,
+                         "infra A1 [action] Re-run CA1014  since 2026-09-28 10:00\n"
+                         "infra S1 [secret, blocks work] Neon key  since 2026-09-28 10:20\n")
+        (infra / "chat.jsonl").write_text(json.dumps({"id": 1, "at": "2026-09-28T10:30:00+00:00", "from": "user", "to": ["coordinator"],
+                                                     "text": "Re-run after the cost improvements work is done", "re": None,
+                                                     "decision": "rerun"}) + "\n")
+        self.assertIn("infra A1 [action] Re-run CA1014  since 2026-09-28 10:00  ANSWERED at 10:30 (#1): "
+                      "Re-run after the cost improvements work is done; not recorded yet\n", self.cli("waiting").stdout)
+        state = json.loads((infra / "state.json").read_text())
+        for d in state["decisions"]:
+            d["status"] = "decided" if d["status"] == "open" else d["status"]
+        (infra / "state.json").write_text(json.dumps(state))
+        self.assertEqual(self.cli("waiting").stdout, "nothing waits on the user\n")
+
     def test_name_needs_a_served_fleet(self):
         result = self.cli("name", str(self.fleet("a", "billing")), "x")
         self.assertEqual(result.returncode, 1)

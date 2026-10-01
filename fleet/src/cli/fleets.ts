@@ -1,5 +1,5 @@
 /**
- * `fleet fleets …` (Python's `fleets.py` CLI): the fleets served on this machine, one fleet, the manager,
+ * `fleet fleets …` (Python's `fleets.py` CLI): the fleets served on this machine, what waits on the user, one fleet, the manager,
  * a decision in full, the gate, background processes, whose files a landing moves, and naming a fleet.
  */
 import { spawnSync } from "node:child_process";
@@ -7,7 +7,8 @@ import { join } from "node:path";
 
 import * as Effect from "effect/Effect";
 
-import { listening } from "../chat/chat.ts";
+import { listening, oneLine } from "../chat/chat.ts";
+import { firstLine } from "../chat/news.ts";
 import { readChat } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
 import { Refusal } from "../errors.ts";
@@ -24,7 +25,7 @@ import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 
 const USAGE =
-  "usage: fleet fleets list | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET WHAT | free FLEET] | procs | whose FROM TO";
+  "usage: fleet fleets list | waiting | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET WHAT | free FLEET] | procs | whose FROM TO";
 
 function fail(reason: string): Effect.Effect<never, Refusal> {
   return Effect.fail(new Refusal({ speaker: "fleets", reason }));
@@ -132,6 +133,51 @@ function list(machine: Machine): Effect.Effect<void, never, Out> {
         );
       }
     }
+  });
+}
+
+/** What waits on the user, from every served fleet's ledger (the manager's own included): each open
+ * decision for the user that its fleet does not hold, with since when, and the answer the user sent that
+ * the fleet has not recorded yet. The one list: nothing else says what waits on the user. */
+function waiting(machine: Machine): Effect.Effect<void, never, Out> {
+  return Effect.gen(function* () {
+    const out = yield* Out;
+    const say = (line: string): void => out.out(`${line}\n`);
+    const entries = machine.registry.live();
+
+    if (entries.length === 0) {
+      say("no fleet is being served on this machine");
+
+      return;
+    }
+
+    let found = 0;
+
+    for (const e of entries) {
+      const state = numbered(stateOf(e) ?? {});
+      const said = readChat(e.dir);
+
+      for (const d of rows(state, "decisions")) {
+        const asks = truthy(d["asks"]) ? str(d["asks"]) : "user";
+
+        if (asString(d["id"]) === undefined || d["status"] !== "open" || asks !== "user" || truthy(d["held"])) continue;
+        found += 1;
+        const marks = [truthy(d["kind"]) ? str(d["kind"]) : "decision", ...(d["blocking"] === true ? ["blocks work"] : [])].join(", ");
+        const since = truthy(d["revised"]) ? str(d["revised"]) : truthy(d["opened"]) ? str(d["opened"]) : "";
+        const ref = truthy(d["ref"]) ? str(d["ref"]) : str(d["id"]);
+        let line = `${e.id} ${ref} [${marks}] ${oneLine(d["title"])}  since ${since.slice(0, 16).replace("T", " ")}`;
+        const at = answeredAt(d, said);
+
+        if (at !== undefined) {
+          const m = [...said].reverse().find((x) => x.decision !== undefined && pyRepr(x.decision) === pyRepr(d["id"]) && str(x.at) === at);
+          line += `  ANSWERED at ${at.slice(11, 16)} (#${m?.id ?? "?"}): ${firstLine(m?.text ?? "")}; not recorded yet`;
+        }
+
+        say(line);
+      }
+    }
+
+    if (found === 0) say("nothing waits on the user");
   });
 }
 
@@ -374,6 +420,8 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<vo
   if (argv.length === 1 && cmd === "list") return list(machine);
 
   if (argv.length === 1 && cmd === "manager") return manager(machine);
+
+  if (argv.length === 1 && cmd === "waiting") return waiting(machine);
 
   if (cmd === "gate") return gate(machine, argv.slice(1));
 

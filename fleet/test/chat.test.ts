@@ -6,11 +6,13 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, utimesSync, writeF
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import * as Option from "effect/Option";
 
 import { address, append, deafWarning, listening, openFor, READING_GRACE_S, type Draft } from "../src/chat/chat.ts";
+import { FleetNews, firstLine } from "../src/chat/news.ts";
 import { readChat, type Message, type Part } from "../src/chat/store.ts";
 import { ChatError } from "../src/errors.ts";
-import { asArray, asObject, asString, type Json, type JsonObject } from "../src/json.ts";
+import { asArray, asObject, asString, parseJson, type Json, type JsonObject } from "../src/json.ts";
 import type { Machine } from "../src/world.ts";
 import { baseEnv, fleet, machine, now, readJson, sleep, start, tmp, type Lines, type Environment, type Ran } from "./support.ts";
 
@@ -620,6 +622,148 @@ describe("the manager relays the unheard", () => {
     const answered = append(m, billing.dir, { sender: "coordinator", text: "here", re: 1 }, now());
     expect(answered).not.toBeInstanceOf(ChatError);
     expect(listening(m, billing.dir).unread).toBe(0);
+  });
+});
+
+describe("the manager hears the fleets (watch --fleets)", () => {
+  let infra: string;
+  let billing: string;
+
+  function dirOf(id: string): string {
+    const entry = m.registry.live().find((e) => e.id === id);
+
+    if (entry === undefined) throw new Error(`${id} is not served`);
+
+    return entry.dir;
+  }
+
+  function change(dir: string, id: string, fields: JsonObject): void {
+    const state = readJson(join(dir, "state.json"));
+    const rows = (asArray(state["decisions"]) ?? []).map((d) => (asObject(d)?.["id"] === id ? { ...asObject(d), ...fields } : d));
+    writeFileSync(join(dir, "state.json"), JSON.stringify({ ...state, decisions: rows }));
+  }
+
+  function on(dir: string, sender: string, text: string, more: Omit<Draft, "sender" | "text"> = {}): void {
+    const sent = append(m, dir, { sender, text, allowUser: sender === "user", ...more }, now());
+
+    if (sent instanceof ChatError) throw new Error(sent.reason);
+  }
+
+  /** A manager's watch with --fleets, and all it prints once it ends. */
+  interface Watching {
+    readonly proc: Bun.Subprocess<"ignore", "pipe", "inherit">;
+    readonly out: () => Promise<string>;
+  }
+
+  function watchFleets(...args: string[]): Watching {
+    const { proc, lines } = start(["chat", root, "watch", "--as", "manager", "--all", "--fleets", ...args], env);
+    procs.push(proc);
+
+    return { proc, out: async () => lines.rest() };
+  }
+
+  beforeEach(() => {
+    asManager(["billing", "billing"], ["infra", "infra"]);
+    infra = dirOf("infra");
+    billing = dirOf("billing");
+    const state = readJson(join(infra, "state.json"));
+
+    writeFileSync(
+      join(infra, "state.json"),
+      JSON.stringify({
+        ...state,
+        decisions: [
+          { id: "rerun", kind: "action", title: "Re-run CA1014", question: "now?", status: "open", opened: "2026-01-01T00:00:00+00:00", asks: "user" },
+          { id: "upload", kind: "action", title: "Small test upload", question: "upload?", status: "open", opened: "2026-01-01T00:01:00+00:00", asks: "manager" },
+        ],
+      }),
+    );
+  });
+
+  test("a user answer on another fleet wakes the manager's watch", async () => {
+    const { proc, out: procOut } = watchFleets("--resume", "--once", "--batch", "0");
+    await sleep(1000);
+    expect(proc.exitCode, "a fleet seen for the first time is read from then on: nothing yet").toBeNull();
+    on(infra, "user", "Re-run after the cost improvements work is done\nthanks", { decision: "rerun" });
+    expect(await proc.exited).toBe(0);
+    expect(await procOut()).toBe("infra: you answered A1 Re-run CA1014: Re-run after the cost improvements work is done …\n");
+  });
+
+  test("cursors are per fleet: resume misses nothing and tells nothing twice", async () => {
+    const { proc, out: procOut } = watchFleets("--resume", "--once", "--batch", "0");
+    await sleep(1000);
+    on(billing, "user", "where are we?");
+    expect(await proc.exited).toBe(0);
+    expect(await procOut()).toBe("billing: you wrote to coordinator: where are we?\n");
+    // No watch runs: what lands on both fleets meanwhile waits for the next one.
+    on(billing, "coordinator", "halfway", { re: 1 });
+    on(infra, "user", "@coordinator is the gate green?");
+    on(billing, "user", "thanks");
+    const { proc: again, out: againOut } = watchFleets("--resume", "--once", "--batch", "0");
+    expect(await again.exited).toBe(0);
+    expect(await againOut()).toBe("billing: you wrote to coordinator: thanks\ninfra: you wrote to coordinator: @coordinator is the gate green?\n");
+    const rows = asArray(Option.getOrUndefined(parseJson(readFileSync(join(root, "watch-manager.fleets.json"), "utf8")))) ?? [];
+    expect(Object.fromEntries(rows.map((r) => [String(asObject(r)?.["fleet"]), asObject(r)?.["chat"]]))).toEqual({ billing: 3, infra: 1 });
+    user("@infra and you?");
+    const { proc: third, out: thirdOut } = watchFleets("--resume", "--once", "--batch", "0");
+    expect(await third.exited).toBe(0);
+    expect(await thirdOut(), "the manager's own chat prints once, and nothing from a fleet is told twice").toBe(
+      "#1 user -> infra: @infra and you?\n",
+    );
+  });
+
+  test("decided, withdrawn, held, and opened for the user", () => {
+    const news = new FleetNews(m, root, false);
+    expect(news.read(), "first seen: from now on").toEqual([]);
+    change(infra, "rerun", { held: "re-run after the cost improvements work is done\nthen report" });
+    change(infra, "upload", { asks: "user", blocking: true });
+    expect(news.read()).toEqual([
+      "infra A1 held: Re-run CA1014: re-run after the cost improvements work is done …",
+      "infra A2 opened for you: Small test upload (blocks work)",
+    ]);
+    change(infra, "rerun", { held: null, status: "decided", answer: "after the cost work", resolution: "answered on the page (#1)" });
+    change(infra, "upload", { status: "withdrawn", resolution: "no longer needed" });
+    expect(news.read()).toEqual(["infra A1 decided: Re-run CA1014: after the cost work", "infra A2 withdrawn: Small test upload: no longer needed"]);
+    expect(news.read(), "told once").toEqual([]);
+  });
+
+  test("a burst is one wake", async () => {
+    const { proc, out: procOut } = watchFleets("--resume", "--once", "--batch", "2");
+    await sleep(1000);
+    const started = performance.now();
+    on(infra, "user", "first");
+    await sleep(800);
+    expect(proc.exitCode, "the first news waits for more").toBeNull();
+    on(billing, "user", "second");
+    change(infra, "upload", { asks: "user" });
+    expect(await proc.exited).toBe(0);
+    expect(performance.now() - started).toBeGreaterThanOrEqual(1900);
+    expect(await procOut()).toBe(
+      "infra: you wrote to coordinator: first\nbilling: you wrote to coordinator: second\ninfra A2 opened for you: Small test upload\n",
+    );
+  });
+
+  test("the manager's own chat still wakes at once", async () => {
+    const { proc, out: procOut } = watchFleets("--resume", "--once", "--batch", "60");
+    await sleep(1000);
+    on(infra, "user", "first");
+    await sleep(800);
+    expect(proc.exitCode).toBeNull();
+    user("are you there?");
+    expect(await proc.exited).toBe(0);
+    expect(await procOut()).toBe("infra: you wrote to coordinator: first\n#1 user -> manager: are you there?\n");
+  });
+
+  test("only the manager follows the fleets", () => {
+    const out = fleet(["chat", infra, "watch", "--as", "coordinator", "--fleets"], env);
+    expect(out.code).toBe(1);
+    expect(out.stderr).toContain("--fleets is the manager's");
+  });
+
+  test("a first line is one line", () => {
+    expect(firstLine("  \n\tok\tthen\nmore")).toBe("ok then …");
+    expect(firstLine("x".repeat(205))).toBe(`${"x".repeat(200)} …`);
+    expect(firstLine("one\n  \n")).toBe("one");
   });
 });
 

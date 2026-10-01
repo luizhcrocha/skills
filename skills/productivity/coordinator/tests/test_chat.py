@@ -1000,6 +1000,113 @@ class ManagerRelaysTheUnheardTest(FleetDir):
         self.assertEqual(chat.listening(fleet["dir"])["unread"], 0, "an answered message no longer waits")
 
 
+class ManagerHearsTheFleetsTest(FleetDir):
+    """`watch --as manager --fleets`: what the user does on another fleet's page wakes the manager."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
+        as_manager(self.root, ("billing", "billing"), ("infra", "infra"))
+        self.infra = Path(next(e for e in chat.fleets.live() if e["id"] == "infra")["dir"])
+        self.billing = Path(next(e for e in chat.fleets.live() if e["id"] == "billing")["dir"])
+        self.decisions(self.infra, {"id": "rerun", "kind": "action", "title": "Re-run CA1014", "question": "now?", "status": "open",
+                                    "opened": "2026-01-01T00:00:00+00:00", "asks": "user"},
+                       {"id": "upload", "kind": "action", "title": "Small test upload", "question": "upload?", "status": "open",
+                        "opened": "2026-01-01T00:01:00+00:00", "asks": "manager"})
+
+    def decisions(self, root: Path, *rows: dict) -> None:
+        state = json.loads((root / "state.json").read_text())
+        state["decisions"] = list(rows)
+        (root / "state.json").write_text(json.dumps(state))
+
+    def change(self, root: Path, id_: str, **fields) -> None:
+        state = json.loads((root / "state.json").read_text())
+        next(d for d in state["decisions"] if d["id"] == id_).update(fields)
+        (root / "state.json").write_text(json.dumps(state))
+
+    def watch(self, *args: str) -> subprocess.Popen:
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "manager", "--all", "--fleets", *args],
+                                stdout=subprocess.PIPE, text=True, encoding="utf-8")
+        self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
+        return proc
+
+    def test_a_user_answer_on_another_fleet_wakes_the_managers_watch(self):
+        proc = self.watch("--resume", "--once", "--batch", "0")
+        time.sleep(1.0)
+        self.assertIsNone(proc.poll(), "a fleet seen for the first time is read from then on: nothing yet")
+        chat.append(self.infra, "user", "Re-run after the cost improvements work is done\nthanks", allow_user=True, decision="rerun")
+        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertEqual(proc.stdout.read(), "infra: you answered A1 Re-run CA1014: Re-run after the cost improvements work is done …\n")
+
+    def test_cursors_are_per_fleet_and_resume_misses_nothing_and_tells_nothing_twice(self):
+        proc = self.watch("--resume", "--once", "--batch", "0")
+        time.sleep(1.0)
+        chat.append(self.billing, "user", "where are we?", allow_user=True)
+        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertEqual(proc.stdout.read(), "billing: you wrote to coordinator: where are we?\n")
+        # No watch runs: what lands on both fleets meanwhile waits for the next one.
+        chat.append(self.billing, "coordinator", "halfway", 1)
+        chat.append(self.infra, "user", "@coordinator is the gate green?", allow_user=True)
+        chat.append(self.billing, "user", "thanks", allow_user=True)
+        again = self.watch("--resume", "--once", "--batch", "0")
+        self.assertEqual(again.wait(timeout=10), 0)
+        self.assertEqual(again.stdout.read(), "billing: you wrote to coordinator: thanks\ninfra: you wrote to coordinator: @coordinator is the gate green?\n")
+        rows = json.loads((self.root / "watch-manager.fleets.json").read_text())
+        self.assertEqual({r["fleet"]: r["chat"] for r in rows}, {"billing": 3, "infra": 1})
+        chat.append(self.root, "user", "@infra and you?", allow_user=True)
+        third = self.watch("--resume", "--once", "--batch", "0")
+        self.assertEqual(third.wait(timeout=10), 0)
+        self.assertEqual(third.stdout.read(), "#1 user -> infra: @infra and you?\n",
+                         "the manager's own chat prints once, and nothing from a fleet is told twice")
+
+    def test_decided_withdrawn_held_and_opened_for_the_user(self):
+        news = chat.FleetNews(self.root, resume=False)
+        self.assertEqual(news.read(), [], "first seen: from now on")
+        self.change(self.infra, "rerun", held="re-run after the cost improvements work is done\nthen report")
+        self.change(self.infra, "upload", asks="user", blocking=True)
+        self.assertEqual(news.read(), ["infra A1 held: Re-run CA1014: re-run after the cost improvements work is done …",
+                                       "infra A2 opened for you: Small test upload (blocks work)"])
+        self.change(self.infra, "rerun", held=None, status="decided", answer="after the cost work", resolution="answered on the page (#1)")
+        self.change(self.infra, "upload", status="withdrawn", resolution="no longer needed")
+        self.assertEqual(news.read(), ["infra A1 decided: Re-run CA1014: after the cost work",
+                                       "infra A2 withdrawn: Small test upload: no longer needed"])
+        self.assertEqual(news.read(), [], "told once")
+
+    def test_a_burst_is_one_wake(self):
+        proc = self.watch("--resume", "--once", "--batch", "2")
+        time.sleep(1.0)
+        start = time.monotonic()
+        chat.append(self.infra, "user", "first", allow_user=True)
+        time.sleep(0.8)
+        self.assertIsNone(proc.poll(), "the first news waits for more")
+        chat.append(self.billing, "user", "second", allow_user=True)
+        self.change(self.infra, "upload", asks="user")
+        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertGreaterEqual(time.monotonic() - start, 1.9)
+        self.assertEqual(proc.stdout.read(), "infra: you wrote to coordinator: first\nbilling: you wrote to coordinator: second\n"
+                                             "infra A2 opened for you: Small test upload\n")
+
+    def test_the_managers_own_chat_still_wakes_at_once(self):
+        proc = self.watch("--resume", "--once", "--batch", "60")
+        time.sleep(1.0)
+        chat.append(self.infra, "user", "first", allow_user=True)
+        time.sleep(0.8)
+        self.assertIsNone(proc.poll())
+        chat.append(self.root, "user", "are you there?", allow_user=True)
+        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertEqual(proc.stdout.read(), "infra: you wrote to coordinator: first\n#1 user -> manager: are you there?\n")
+
+    def test_only_the_manager_follows_the_fleets(self):
+        out = run_cli(self.infra, "watch", "--as", "coordinator", "--fleets")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("--fleets is the manager's", out.stderr)
+
+    def test_a_first_line_is_one_line(self):
+        self.assertEqual(chat.first_line("  \n\tok\tthen\nmore"), "ok then …")
+        self.assertEqual(chat.first_line("x" * 205), "x" * 200 + " …")
+        self.assertEqual(chat.first_line("one\n  \n"), "one")
+
+
 class ManagerIsNotInAFleetsChatTest(FleetDir):
     def test_a_fleets_chat_has_no_manager(self):
         self.assertEqual(chat.address(self.root, "user", "@manager hello", allow_user=True)["to"], ["coordinator"])

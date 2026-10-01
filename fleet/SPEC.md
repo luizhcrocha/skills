@@ -398,7 +398,7 @@ its id.
 | `say --as WHO [--re N] [--decision D] TEXT` | appends | the stored line | 1 refused |
 | `inbox --as WHO` | the messages open for WHO (`user` allowed) | one line each, oldest first | 1 unknown WHO |
 | `log [--after N]` | every message with id > N | one line each | 0 |
-| `watch --as WHO [--after N \| --resume] [--all] [--once]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands | one line each | 0 on SIGTERM or `--once` |
+| `watch --as WHO [--after N \| --resume] [--all] [--once] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager |
 | `wait DECISION...` | waits for the user's answer to one of these open decisions | the answer's line, then `-> the user answered <ref>: record it first, ...` | 1 unknown decision |
 
 A printed line: `#<id> <from>( (<name or author>)) -> <to, each with its name>( [<ref> <decision>])( [side chat #N])( (quoting <from>: "<quote>"))`
@@ -415,6 +415,35 @@ one of its workers that the worker has not answered (no message of its own with 
 `FLEET_NUDGE_S`: `! worker a1 (notes-impl) has not answered #12 from user for 10 min: "<text, 120
 chars>". Forward it (SendMessage a1).` (L1: workers read their inbox at checkpoints; only a message
 left this long is forwarded). Each told once (`watch-coordinator.told`). `--once` exits after the first batch it prints.
+
+**The other fleets' news** (`watch --as manager --fleets`, M20): the manager's watch also reads every
+served fleet's `chat.jsonl` and `state.json` (the manager's own DIR and any `manager` entry left out) and
+prints one line per event, fleet by fleet in registry order, its messages before its decisions:
+
+- a message from the user on that fleet's page: `<fleet>: you answered <ref> <title>: <first line>` when
+  it carries a decision (looked up by id, then by number; an unknown one prints as given), else
+  `<fleet>: you wrote to <to, joined by ", ">: <first line>`;
+- a decision of that fleet that now stands somewhere new: opened for the user (new with `asks` user,
+  passed on with `--asks user`, or back from held) `<fleet> <ref> opened for you: <title>( (blocks work))`;
+  `<fleet> <ref> decided: <title>: <first line of the answer, else the resolution>`;
+  `<fleet> <ref> withdrawn: <title>: <first line of the reason>`; held (open, with a non-empty `held`)
+  `<fleet> <ref> held: <title>(: <first line of held, when it is text>)`. A decision opened for the
+  manager is not news (the coordinator writes to the manager's session).
+
+Nothing else of a fleet is (no worker's message, no reply of its coordinator). A *first line* is the
+text's first line that has text, one-lined as a message is, spaces trimmed, cut at 200 characters, with
+` …` when the text goes on. Where each decision stands is `open:<asks>`, `held` or its status; a decision
+is news when that changes. The cursors are per fleet, by its directory (a renamed fleet keeps them), in
+`DIR/watch-manager.fleets.json`: `[{fleet, dir, chat (the last message id read), decisions {id: where it
+stands}}]`. A fleet seen for the first time is read from then on, printing nothing; `--resume` takes up
+the cursors the last watch left, so a fleet's news is printed once, whenever the watch runs. The
+manager's own chat is printed as before and never again as a fleet's.
+
+`--once` with `--fleets`: a message to the manager (and a `!` line) still ends the watch at once; the
+first news of the other fleets opens a window of `--batch` seconds (120 by default, an int), and the
+watch prints all that lands in it, then exits, so one wake covers a burst of the user's actions. The
+window runs on the machine's monotonic clock, as `FLEET_CHECK_S` does: a pinned `FLEET_NOW` dates what
+the watch measures, not its pace. `--batch 0` exits with the first batch (the traces).
 
 `wait`: a closed decision prints `<ref> is already <status>: <answer or resolution>` and exits
 0. An answer already given (a user message tagged with the decision, sent at or after its
@@ -443,6 +472,7 @@ to a taken one. `user`, `coordinator` and `manager` are reserved.
 
 | Command | Output | Exit |
 | :-- | :-- | :-- |
+| `waiting` | what waits on the user, from every live fleet's ledger, the manager's included: per open decision that asks the user and is not held, `<fleet> <ref> [<kind>(, blocks work)] <title>  since <revised or opened, YYYY-MM-DD HH:MM>`, then `  ANSWERED at HH:MM (#N): <first line>; not recorded yet` when the user's answer waits unrecorded; `nothing waits on the user`, or `no fleet is being served on this machine` | 0 |
 | `list` | per live fleet: `<id>  <role>  session <session or (not named yet)>  <status>  <url>  <dir>`, then `now:`, `lanes in flight:`, `session last active`, silent workers, `chat: not read now…`, tokens, and each open decision `<ref> <id> [<kind>, for the user/manager(, blocks work)] <title>(  ANSWERED at HH:MM, not recorded)(  held by the fleet: <reason>)`; or `no fleet is being served on this machine` | 0 |
 | `show FLEET` | now (with when it was said), chat, live workers with their last report (and `silent since HH:MM: check it before saying it runs` under a silent one), open decisions (and `held by the fleet since HH:MM: <reason>`, and an answer not recorded), open roadblocks, the last 8 events | 1 unknown fleet |
 | `manager` | `manager  session …  <url>  <dir>` and where `standing.md` is | 1 when none |
@@ -719,7 +749,7 @@ recommendation attached.
 | a `state.py` write | `DIR/state.json` (twice when rendering), `DIR/brief.md` and (manager) `DIR/standing.md` when missing, `DIR/index.html` unless `--no-render` |
 | `decision --body` / `--no-body` | `DIR/decisions/<id>.html` written / deleted |
 | `chat say` | `DIR/chat.jsonl` (created on first message) |
-| `chat watch` | `DIR/watch-WHO.pid`, `.cursor`, `.left`, `watch-coordinator.told`, `watch-manager.told` |
+| `chat watch` | `DIR/watch-WHO.pid`, `.cursor`, `.left`, `watch-coordinator.told`, `watch-manager.told`, and with `--fleets` `watch-manager.fleets.json` |
 | any reader of the registry (`fleets.py`, a manager's `chat.py`/`state.py`, the render) | deletes dead `REGISTRY/*.json`, renames entries after a session title |
 | `fleets.py gate take/free`, `name` | `REGISTRY/gate/gate.json`, `REGISTRY/<fleet>.json` |
 | `serve_dashboard.py` | `DIR/server.json`, `DIR/server.log`, `REGISTRY/<fleet>.json` |
@@ -781,7 +811,8 @@ Stage 2 runs `run.py check` on each trace in `oracle/traces/` with
 `--impl state="fleet state" --impl chat="fleet chat" --impl fleets="fleet fleets" --subst <its dir>='$SKILL'`,
 or sets `FLEET_ORACLE_IMPL='{"state": "fleet state", "chat": "fleet chat", "fleets": "fleet fleets", "subst": {"<its dir>": "$SKILL"}}'`
 for `test_corpus.py` and `test_model.py`. The corpus: `ledger-lifecycle`, `decisions`, `hold`,
-`plan-and-grill`, `chat`, `manager` (written by hand from the tests), `emptied` (open-7),
+`plan-and-grill`, `chat`, `manager` (written by hand from the tests), `manager-news` (the manager's
+`--fleets` watch and `fleets waiting`), `emptied` (open-7),
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each
 hand-written trace, the same steps with every state command rendering, plus `render-page` (a
 session's scratchpad with its transcript, links, markup and U+2028 in the text, unread chat, a

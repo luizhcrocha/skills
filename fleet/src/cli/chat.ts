@@ -32,7 +32,15 @@ export const CHAT_COMMANDS: readonly CommandSpec[] = [
   {
     name: "watch",
     positionals: [],
-    options: [AS, opt.value("--after", { int: true }), opt.flag("--all"), opt.flag("--resume"), opt.flag("--once")],
+    options: [
+      AS,
+      opt.value("--after", { int: true }),
+      opt.flag("--all"),
+      opt.flag("--resume"),
+      opt.flag("--once"),
+      opt.flag("--fleets"),
+      opt.value("--batch", { int: true, metavar: "SECONDS" }),
+    ],
   },
   { name: "log", positionals: [], options: [opt.value("--after", { int: true })] },
 ];
@@ -45,8 +53,11 @@ The chat between the user (on the dashboard) and the fleet, stored in DIR/chat.j
 
     say   --as WHO [--re N] [--decision D] TEXT   append a message from WHO; print the line written
     inbox --as WHO                                the messages open for WHO, oldest first
-    watch --as WHO [--after N | --resume] [--all] [--once]
-                                                  what is open for WHO, then each new message as it lands
+    watch --as WHO [--after N | --resume] [--all] [--once] [--fleets [--batch SECONDS]]
+                                                  what is open for WHO, then each new message as it lands;
+                                                  --fleets (the manager's) also what the user does on every
+                                                  other fleet's page, its first line waiting --batch (120 s)
+                                                  for more under --once
     wait  DECISION...                             wait for the user's answer to one of these decisions
     log   [--after N]                             the whole conversation, oldest first`;
 
@@ -121,6 +132,8 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<vo
         all: args.flag("all"),
         resume: args.flag("resume"),
         once: args.flag("once"),
+        fleets: args.flag("fleets"),
+        batch: args.int("batch") ?? 120,
       });
     } else {
       yield* wait(machine, root, args.list("decision") ?? []);

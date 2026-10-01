@@ -3,6 +3,8 @@
 
     fleets.py list              every live fleet: its name, role, session, status, address, directory,
                                 what it is doing, and the decisions open in it
+    fleets.py waiting           what waits on the user, from every fleet's ledger: each open decision
+                                for the user, since when, and an answer sent but not recorded yet
     fleets.py show FLEET        what one fleet is doing, from its ledger: now-line, live workers and
                                 their last report, open decisions and roadblocks, latest events
     fleets.py manager           how to reach the manager; exits 1 when there is none
@@ -323,6 +325,38 @@ def cmd_list() -> None:
                   + (f"  held by the fleet: {d['held']}" if d.get("held") else ""))
 
 
+def cmd_waiting() -> None:
+    """What waits on the user, from every served fleet's ledger (the manager's own included): each open
+    decision for the user that its fleet does not hold, with since when, and the answer the user sent
+    that the fleet has not recorded yet. The one list: nothing else says what waits on the user."""
+    import chat
+    import decisions
+    entries = live()
+    if not entries:
+        print("no fleet is being served on this machine")
+        return
+    found = 0
+    for e in entries:
+        state = _read(Path(e["dir"]) / "state.json") or {}
+        decisions.number(state)
+        said = chat.read(e["dir"])
+        for d in state.get("decisions", []):
+            if not isinstance(d, dict) or not isinstance(d.get("id"), str) or d.get("status") != "open" \
+                    or (d.get("asks") or "user") != "user" or d.get("held"):
+                continue
+            found += 1
+            marks = ", ".join([str(d.get("kind") or "decision")] + (["blocks work"] if d.get("blocking") is True else []))
+            since = str(d.get("revised") or d.get("opened") or "")
+            line = f"{e['id']} {d.get('ref') or d['id']} [{marks}] {chat._one_line(d.get('title'))}  since {since[:16].replace('T', ' ')}"
+            at = _answered_at(d, said)
+            if at:
+                m = next(m for m in reversed(said) if m.get("decision") == d.get("id") and m["at"] == at)
+                line += f"  ANSWERED at {at[11:16]} (#{m['id']}): {chat.first_line(m['text'])}; not recorded yet"
+            print(line)
+    if not found:
+        print("nothing waits on the user")
+
+
 def cmd_show(fleet: str) -> None:
     """What one fleet is doing, from its ledger alone: enough to answer "what is X doing" without asking X."""
     import chat
@@ -505,6 +539,8 @@ def main(argv: list[str]) -> None:
         cmd_list()
     elif argv == ["manager"]:
         cmd_manager()
+    elif argv == ["waiting"]:
+        cmd_waiting()
     elif argv and argv[0] == "gate":
         cmd_gate(argv[1:])
     elif argv == ["procs"]:
@@ -521,7 +557,7 @@ def main(argv: list[str]) -> None:
             fail(entry)
         print(f"this fleet is {entry['id']}, the session {entry['session']}: use that one name everywhere")
     else:
-        fail("usage: fleet fleets list | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET WHAT | free FLEET] | procs | whose FROM TO")
+        fail("usage: fleet fleets list | waiting | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET WHAT | free FLEET] | procs | whose FROM TO")
 
 
 if __name__ == "__main__":

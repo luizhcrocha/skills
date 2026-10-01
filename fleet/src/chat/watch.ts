@@ -35,6 +35,7 @@ import {
   rosterOf,
   stateOfDir,
 } from "./chat.ts";
+import { FleetNews } from "./news.ts";
 import { readChat, Tail, type Message } from "./store.ts";
 import * as Option from "effect/Option";
 
@@ -47,6 +48,10 @@ export interface WatchRequest {
   readonly all: boolean;
   readonly resume: boolean;
   readonly once: boolean;
+  /** A manager's: also what the user does on every other fleet's page. */
+  readonly fleets: boolean;
+  /** With `fleets` and `once`: how long the first news of the other fleets waits for more. */
+  readonly batch: number;
 }
 
 function seconds(env: (name: string) => string | undefined, name: string, fallback: number): number {
@@ -244,6 +249,11 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
     const who = participant(roster, request.who, false);
 
     if (who instanceof ChatError) return yield* Effect.fail(who);
+
+    if (request.fleets && who !== "manager") {
+      return yield* Effect.fail(new ChatError({ reason: "--fleets is the manager's: only a watch `--as manager` follows the other fleets' pages" }));
+    }
+
     const cursor = cursorPath(root, who);
     const pulse = pulsePath(root, who);
     const pid = String(process.pid);
@@ -286,15 +296,32 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
 
         const first = messages.filter((m) => m.id > after && wanted.has(m.id));
         show(first);
+        const news = request.fleets ? new FleetNews(machine, resolvePath(root), request.resume) : undefined;
+
+        const tell = (): boolean => {
+          const told = news?.read() ?? [];
+
+          for (const line of told) out.out(`${line}\n`);
+          news?.save();
+
+          return told.length > 0;
+        };
+
+        // The other fleets' news comes in batches: the first opens a window of --batch seconds, and the
+        // watch tells all that lands in it before it exits, so one wake covers a burst of the user's actions.
+        let window = tell() ? performance.now() / 1000 + request.batch : undefined;
 
         if (request.once && first.length > 0) return;
         const checkS = seconds(machine.env, "FLEET_CHECK_S", 30);
         let checked = -Infinity;
 
         for (;;) {
+          if (request.once && window !== undefined && performance.now() / 1000 >= window) return;
           yield* Effect.sleep(POLL_MS);
           const fresh = tail.read().filter((m) => m.to.includes(who) || (request.all && m.from === "user"));
           show(fresh);
+
+          if (tell() && window === undefined) window = performance.now() / 1000 + request.batch;
           let lines: string[] = [];
 
           if ((who === "manager" || who === "coordinator") && performance.now() / 1000 - checked >= checkS) {

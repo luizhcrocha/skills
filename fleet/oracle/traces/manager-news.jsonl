@@ -1,0 +1,37 @@
+{"trace": 1, "name": "manager-news", "about": "The manager hears what the user does on the other fleets' pages: `fleet fleets waiting` lists what waits on the user from every ledger, and `chat watch --as manager --fleets` prints each answer, message, decision opened for the user, decided or withdrawn on a fleet's page, with per-fleet cursors kept through --resume (nothing missed, nothing told twice)."}
+{"cli": "state", "argv": ["$W/manager", "init", "--role", "manager", "--project", "this machine", "--goal", "land in order", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "acme-billing", "--goal", "usage records land", "--no-render"]}
+{"cli": "state", "argv": ["$W/infra", "init", "--project", "infra", "--goal", "the deploy gate", "--no-render"]}
+{"cli": "fleets", "argv": ["waiting"]}
+{"fixture": "write", "path": "$REGISTRY/manager.json", "content": "{\"id\": \"manager\", \"role\": \"manager\", \"dir\": \"$W/manager\", \"url\": \"http://box:7420/f/manager/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:00:00+00:00\"}\n"}
+{"fixture": "write", "path": "$REGISTRY/acme-billing.json", "content": "{\"id\": \"acme-billing\", \"role\": \"coordinator\", \"dir\": \"$DIR\", \"url\": \"http://box:7420/f/acme-billing/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:30:00+00:00\"}\n"}
+{"fixture": "write", "path": "$REGISTRY/infra.json", "content": "{\"id\": \"infra\", \"role\": \"coordinator\", \"dir\": \"$W/infra\", \"url\": \"http://box:7420/f/infra/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:40:00+00:00\"}\n"}
+{"cli": "fleets", "argv": ["waiting"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--kind", "input", "--title", "Neon key", "--question", "which branch?", "--why", "w", "--blocking", "--no-render"], "clock": "2026-01-05T09:05:00+00:00"}
+{"cli": "state", "argv": ["$W/infra", "decision", "rerun", "--kind", "action", "--title", "Re-run CA1014", "--question", "re-run it now?", "--why", "w", "--manual", "just rerun", "--no-render"]}
+{"cli": "state", "argv": ["$W/infra", "decision", "upload", "--kind", "action", "--title", "Small test upload", "--question", "upload?", "--why", "w", "--manual", "just upload", "--asks", "manager", "--no-render"]}
+{"cli": "state", "argv": ["$W/manager", "decision", "order", "--kind", "decision", "--title", "Who lands first", "--question", "acme or infra?", "--why", "w", "--option", "acme: acme first | infra waits", "--option", "infra: infra first | acme waits", "--recommend", "infra", "--reason", "smaller", "--no-render"]}
+{"cli": "fleets", "argv": ["waiting"]}
+{"fixture": "append", "path": "$W/manager/chat.jsonl", "content": {"id": 1, "at": "2026-01-05T09:06:00+00:00", "from": "user", "to": ["manager"], "text": "status?", "re": null}}
+{"cli": "chat", "argv": ["$W/manager", "watch", "--as", "manager", "--all", "--resume", "--once", "--fleets", "--batch", "0"]}
+{"fixture": "append", "path": "$W/infra/chat.jsonl", "content": {"id": 1, "at": "2026-01-05T09:10:00+00:00", "from": "user", "to": ["coordinator"], "text": "Re-run after the cost improvements work is done\nthanks", "re": null, "decision": "rerun"}}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 1, "at": "2026-01-05T09:11:00+00:00", "from": "user", "to": ["coordinator"], "text": "  \n\twhere are we?", "re": null}}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 2, "at": "2026-01-05T09:11:30+00:00", "from": "coordinator", "to": ["user"], "text": "halfway", "re": 1}}
+{"cli": "fleets", "argv": ["waiting"], "clock": "2026-01-05T09:12:00+00:00"}
+{"cli": "state", "argv": ["$W/infra", "decision", "upload", "--asks", "user", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "I1", "--withdraw", "the worker found the branch", "--no-render"]}
+{"cli": "chat", "argv": ["$W/manager", "watch", "--as", "manager", "--all", "--resume", "--once", "--fleets", "--batch", "0"]}
+{"cli": "state", "argv": ["$W/infra", "decision", "A1", "--decide", "after the cost work", "--resolution", "answered on the page (#1)", "--no-render"], "clock": "2026-01-05T09:15:00+00:00"}
+{"fixture": "append", "path": "$W/manager/chat.jsonl", "content": {"id": 2, "at": "2026-01-05T09:15:30+00:00", "from": "user", "to": ["manager"], "text": "and now?", "re": null}}
+{"cli": "chat", "argv": ["$W/manager", "watch", "--as", "manager", "--all", "--resume", "--once", "--fleets", "--batch", "0"]}
+{"fixture": "append", "path": "$W/manager/chat.jsonl", "content": {"id": 3, "at": "2026-01-05T09:16:00+00:00", "from": "user", "to": ["manager"], "text": "anything else?", "re": null}}
+{"cli": "chat", "argv": ["$W/manager", "watch", "--as", "manager", "--all", "--resume", "--once", "--fleets", "--batch", "0"]}
+{"cli": "fleets", "argv": ["waiting"]}
+{"cli": "state", "argv": ["$W/infra", "decision", "A2", "--hold", "fix the uploader first\nthen ask again", "--no-render"], "clock": "2026-01-05T09:20:00+00:00"}
+{"cli": "fleets", "argv": ["waiting"]}
+{"cli": "chat", "argv": ["$W/manager", "watch", "--as", "manager", "--resume", "--once", "--fleets", "--batch", "0"]}
+{"cli": "state", "argv": ["$W/infra", "decision", "A2", "--unhold", "--no-render"], "clock": "2026-01-05T09:25:00+00:00"}
+{"cli": "chat", "argv": ["$W/manager", "watch", "--as", "manager", "--resume", "--once", "--fleets", "--batch", "0"]}
+{"cli": "fleets", "argv": ["waiting"]}
+{"cli": "chat", "argv": ["$DIR", "watch", "--as", "coordinator", "--fleets"]}
+{"cli": "chat", "argv": ["$W/manager", "watch", "--as", "manager", "--fleets", "--batch", "soon"]}
