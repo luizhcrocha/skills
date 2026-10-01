@@ -1481,7 +1481,7 @@ var FleetCore = (function () {
     $("top-project").textContent = STATE.project;
     paint($("top-status"), pill(STATE.status));
     $("top-manager").hidden = !STATE.manager;
-    if (STATE.manager) $("top-manager").href = hubRoot();
+    if (STATE.manager) $("top-manager").href = managerPage();
     renderSwitch();
     $("tab-fleet").textContent = MANAGED() ? "Fleets" : "Fleet";
     $("h-totals").textContent = MANAGED() ? "The fleets" : "The fleet";
@@ -2339,6 +2339,9 @@ img,svg,video,canvas{max-width:100%;height:auto}
      the manager's root, and /f/<fleet>/ under it. Null when there is no manager. */
   const hubRoot = () => UNDER_HUB || STATE.role === "manager" ? "/" : STATE.manager ? STATE.manager.url : null;
   const fleetPage = (id) => hubRoot() + "f/" + encodeURIComponent(id) + "/";
+  /* The manager's own page: on the hub its /f/<id>/ (the hub's root is the index of every fleet, not the manager). */
+  const managerPage = () => STATE.role === "manager" ? (UNDER_HUB ? location.pathname.replace(/^(\/f\/[^/]+\/).*$/, "$1") : "/")
+    : STATE.manager ? (UNDER_HUB ? "/f/" + encodeURIComponent(STATE.manager.id) + "/" : STATE.manager.url) : null;
   function renderSwitch() {
     const root = hubRoot(), ids = STATE.role === "manager" ? STATE.coordinators.map((c) => c.id) : [...(STATE.fleets || [])];
     const el = $("switch");
@@ -2347,7 +2350,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
     const here = STATE.role === "manager" ? "" : UNDER_HUB ? decodeURIComponent(location.pathname.split("/")[2]) : String(STATE.fleet || "");
     /* This page's own fleet is always listed: missing from the list, the browser would select the first entry and the page would read as the manager's. */
     if (here && !ids.includes(here)) ids.push(here);
-    const options = [`<option value="${esc(root)}"${STATE.role === "manager" ? " selected" : ""}>Manager</option>`]
+    const options = [`<option value="${esc(managerPage() || root)}"${STATE.role === "manager" ? " selected" : ""}>Manager</option>`]
       .concat(ids.map((id) => `<option value="${esc(fleetPage(id))}"${id === here ? " selected" : ""}>${esc(id)}</option>`));
     if (STATE.role !== "manager" && !here) options.push(`<option value="" selected>${esc(STATE.project)}</option>`);
     paint(el.querySelector("select"), options.join(""));
