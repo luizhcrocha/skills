@@ -373,7 +373,10 @@ class NudgeTest(FleetDir):
         self.assertEqual(lines.next(), '! worker a1 (notes-impl) has not answered #1 from coordinator for 10 min: '
                                        '"@a1 rebase on main first". Forward it (SendMessage a1).\n')
         self.assertEqual(proc.wait(timeout=5), 0)
-        self.assertTrue(self.watch_at(12)[1].quiet(1.5))
+        quiet, lines = self.watch_at(12)
+        self.assertTrue(lines.quiet(1.5))
+        quiet.kill()  # else it is still watching when #2 and #3 land, and its --resume cursor takes #3
+        quiet.wait()
         chat.append(self.root, "coordinator", "@a1 and run the tests")
         chat.append(self.root, "a1", "on it", re=2)
         self.assertEqual(self.watch_at(30)[1].next(), "#3 a1 (notes-impl) -> user, coordinator: on it [re #2]\n")
