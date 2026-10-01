@@ -183,7 +183,7 @@ Checked in this order:
    (`<title>: <answer> (<resolution>)`). `--withdraw REASON` closes it withdrawn: logs `resolved`
    (`<title> withdrawn: <reason>`). Either sets `closed` = now and resolves every open roadblock
    waiting on it (each logging its own `resolved`, and unblocking its worker).
-7. Validation: ids unique; no id equal to another decision's number (open-1); `supersedes` and
+7. Validation: ids unique; no id equal to another decision's number; `supersedes` and
    roadblocks' `decision` name existing ids; defaults are filled (`asks` user, `blocking` false,
    `page` true, `body` false, the optional fields null, a grilling's `questions` []).
 
@@ -261,7 +261,8 @@ older ledger comes out complete after one command.
 
 On every write, each decision, link and roadblock without a `ref` is given one: a letter for its
 kind (decision **D**, action **A**, input **I**, secret **S**, grill **G**, link **L**, roadblock
-**R**), and 1 + the highest number of that letter already given. Decisions are numbered in
+**R**), and 1 + the highest number of that letter already given, skipping a number that another row of
+the same list has as its id (open-1). Decisions are numbered in
 `opened` order (a string sort, open-13), links and roadblocks in list order. A number, once given,
 never changes, even when a decision's kind changes (open-7).
 
@@ -517,13 +518,12 @@ were refused after printing success, the link never tied to its decision), and `
 decision FLEET A1` prints the id's page address (it printed `#decision/A1`, which the page
 doesn't find).
 
-1. **A decision whose id reads as a later number blocks every decision of that letter.**
-   Opening `D4` as an input (numbered I2) is accepted. The next choice would be numbered D4, which
-   validation refuses (`decision id 'D4' is another decision's number; pick another id`, naming
-   the old decision, not the new one), and so does every choice after it, because D4 is never
-   given. Minimal trace: `decisions.jsonl` steps 31-33. Fix options: skip numbers that are other
-   rows' ids, or refuse ids shaped like `[DAISG]\d+` when they're opened. Not a one-line fix; left
-   for Luiz. The model follows it (`QUIRK(open-1)`).
+1. **Fixed: a decision whose id reads as a later number blocked every decision of that letter.**
+   Opening `D4` as an input (numbered I2) was accepted; the next choice would have been numbered
+   D4, which validation refused, naming the old decision, and so was every choice after it.
+   Numbering now skips a number another row of the same list has as its id (D5 there), for
+   decisions, links and roadblocks alike; validation still refuses a new decision whose id is a
+   number already given. Trace: `decisions.jsonl` steps 31-33. The model follows it.
 2. **A refused write has already printed its success text.** The handler prints (`asked d8. Arm
    its answer's wake now…`, `recorded a1 …`, `recorded step s7`) before validation refuses the
    ledger; the warnings print too. Stage 2 should validate before printing anything but warnings.
@@ -559,7 +559,7 @@ doesn't find).
 15. **`state.json` is written in place, not atomically**, and twice per rendered command; readers
     (the server, a manager) tolerate a half-written file by skipping it. Stage 2: write once,
     atomically.
-16. **A validation refusal can only name the first fault**, and some name the wrong row (open-1).
+16. **A validation refusal can only name the first fault.**
 17. **Every `state.py` command creates DIR**, even one refused for want of a ledger.
 18. **`closed_named` matches L and R numbers** but looks them up among decisions only (a
     harmless miss).

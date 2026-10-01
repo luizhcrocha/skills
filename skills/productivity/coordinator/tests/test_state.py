@@ -267,6 +267,13 @@ class NumberTest(Fleet):
         self.assertEqual([d["id"] for d in self.state()["decisions"]], ["x", "i1"], "a lower-case id is an id, not a number")
 
 
+    def test_a_number_skips_an_id_that_reads_as_it(self):
+        opt = ["--option", "a: A | x", "--option", "b: B | y", "--recommend", "a", "--reason", "r"]
+        self.ok("decision", "D2", "--kind", "input", "--title", "T", "--question", "q", "--why", "w")
+        self.ok("decision", "x", "--kind", "decision", "--title", "X", "--question", "q", "--why", "w", *opt)
+        self.ok("decision", "y", "--kind", "decision", "--title", "Y", "--question", "q", "--why", "w", *opt)
+        self.assertEqual([(d["id"], d["ref"]) for d in self.state()["decisions"]], [("D2", "I1"), ("x", "D1"), ("y", "D3")])
+
     def test_a_number_given_for_a_decision_is_kept_as_its_id(self):
         self.ok("decision", "key", "--kind", "input", "--title", "Key", "--question", "q", "--why", "w")
         self.ok("roadblock", "r1", "--title", "T", "--detail", "D", "--severity", "serious", "--needs", "user", "--decision", "I1")

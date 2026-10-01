@@ -35,24 +35,30 @@ def find(state: dict, id_: str) -> dict | None:
         next((d for d in rows if d.get("ref") and d["ref"] == id_), None)
 
 
-def _next(rows: list, prefix: str) -> int:
+def _next(rows: list, prefix: str, row: dict) -> str:
+    """The number `row` gets: `prefix` and 1 + the highest number given, skipping any that another row
+    has as its id, since a lookup finds an id before a number."""
     taken = [int(r["ref"][len(prefix):]) for r in rows if re.fullmatch(prefix + r"\d+", str(r.get("ref", "")))]
-    return max(taken, default=0) + 1
+    ids = {r.get("id") for r in rows if r is not row}
+    n = max(taken, default=0) + 1
+    while f"{prefix}{n}" in ids:
+        n += 1
+    return f"{prefix}{n}"
 
 
 def number(state: dict) -> None:
     """Give each decision, link and roadblock without one its number: a letter for its kind (D a
     decision, A an action, I an input, S a secret, G a grilling, L a link, R a roadblock) and the next
-    free number for that letter, in the order they were opened. A number, once given, stays."""
+    free number for that letter, in the order they were opened, skipping a number that another row of
+    the same list has as its id. A number, once given, stays."""
     rows = [d for d in state.get("decisions", []) if isinstance(d, dict)]
     for d in sorted((d for d in rows if not d.get("ref")), key=lambda d: str(d.get("opened", ""))):
-        prefix = PREFIX.get(d.get("kind"), "D")
-        d["ref"] = f"{prefix}{_next(rows, prefix)}"
+        d["ref"] = _next(rows, PREFIX.get(d.get("kind"), "D"), d)
     for key, prefix in ROW_PREFIX.items():
         items = [r for r in state.get(key, []) if isinstance(r, dict)]
         for r in items:
             if not r.get("ref"):
-                r["ref"] = f"{prefix}{_next(items, prefix)}"
+                r["ref"] = _next(items, prefix, r)
 
 
 def closed_because(item: dict) -> str:

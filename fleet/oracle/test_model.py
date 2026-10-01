@@ -399,11 +399,14 @@ class Model:
     def number(self) -> None:
         for rows, prefix_of in ((self.decisions, lambda d: PREFIX.get(d["kind"], "D")), (self.roadblocks, lambda r: "R"),
                                 (self.links or {}, lambda r: "L")):
-            for r in rows.values():
+            for k, r in rows.items():
                 if not r.get("ref"):
                     p = prefix_of(r)
                     taken = [int(x["ref"][len(p):]) for x in rows.values() if re.fullmatch(p + r"\d+", x.get("ref") or "")]
-                    r["ref"] = f"{p}{max(taken, default=0) + 1}"
+                    n = max(taken, default=0) + 1
+                    while f"{p}{n}" in rows and f"{p}{n}" != k:  # a number skips another row's id (open-1, fixed)
+                        n += 1
+                    r["ref"] = f"{p}{n}"
 
     def validate(self) -> None:
         taken = set()
@@ -418,7 +421,7 @@ class Model:
         refs = {d["ref"]: k for k, d in self.decisions.items()}
         for k in self.decisions:
             if k in refs and refs[k] != k:
-                raise Refused("QUIRK(open-1): a decision's id is another decision's number")
+                raise Refused("a new decision's id is a number another decision already has")
 
     # -- the warnings every command but init prints on stderr ---------------------------------------
     def warnings(self, c: dict, before: "Model") -> dict:

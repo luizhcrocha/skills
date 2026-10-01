@@ -1,4 +1,4 @@
-{"trace": 1, "name": "decisions", "about": "Every kind of decision opened, revised, answered, withdrawn, superseded and recorded after the fact; what each refuses; numbers in place of ids, and a later decision refused because an earlier id reads as a number (open-1)."}
+{"trace": 1, "name": "decisions", "about": "Every kind of decision opened, revised, answered, withdrawn, superseded and recorded after the fact; what each refuses; numbers in place of ids, and an id that reads as a number, which the next number of its letter skips (open-1, fixed)."}
 {"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "M", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "step", "s1", "--milestone", "m1", "--title", "schema", "--no-render"]}
