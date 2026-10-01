@@ -12,7 +12,7 @@ Columns: **kind** is *mech* (checkable from the ledger, chat, registry, heartbea
 (needs reading, weighing or the user). **Code** is what a command does: *refuse*, *warn*, *auto* (does
 it), *page* (shows it), *print* (says it when it is needed). **Disposition**: **stage 5** (moved to code
 here, prose cut to one line), **code** (already code before; prose kept short or cut), **prose**
-(judgement, stays), **later** (mechanical, not done: why), **Luiz** (ambiguous: see [For Luiz](#for-luiz)).
+(judgement, stays), **later** (mechanical, not done: why), **Luiz** (was ambiguous; each is now decided, see [For Luiz](#for-luiz)).
 
 ## Coordinator
 
@@ -28,7 +28,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | C8 | C, route | Resolve each skill's path once; `implement` is read with the Read tool, the others called with the Skill tool | mech | the skill's SKILL.md frontmatter | print | **stage 5**: `fleet brief` |
 | C9 | C, model | Pick the model by where the difficulty is; Fable for decisive single roles | judg | | | prose |
 | C10 | C, model | Record the model on the row (`--model`) | mech | row | print | **stage 5**: `fleet brief` names the model to spawn on |
-| C11 | C, model | Any model other than the three approved is the user's to approve | mech | `--model` | refuse or warn on `haiku` | **Luiz** (L3) |
+| C11 | C, model | Any model other than the three approved is the user's to approve | mech | `--model` | warn, page | **Luiz** (L3, decided): `agent --model haiku` (any model outside the three) is recorded with a warning that it is the user's to approve (both); the page marks the row |
 | C12 | C, model | A new default model: move every agent, say who moved | judg | | | prose |
 | C13 | C, brief | The brief opens with the line `agent` printed and carries task, done criterion, skill and path, lane, workspace | mech | row, `workspaces[]` | print | **stage 5**: `fleet brief` composes it |
 | C14 | C, brief | A checkable completion criterion | mech (present) / judg (checkable) | row's `brief` | warn | **stage 5**: `fleet brief` warns when none is recorded |
@@ -38,7 +38,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | C18 | C, track | Done only when the criterion is met; short is stopped or blocked | mech (words) | report, log | warn | code (stage 2: the unfinished-report warning); prose cut to one line |
 | C19 | C, track | Record every event the moment it happens | judg | | | prose |
 | C20 | C, track | Record a worker, then spawn it | mech | row | refuse | **stage 5**: `fleet brief` refuses an unrecorded worker; `fleet ws add` warns |
-| C21 | C, track | A task whose files overlap a running lane waits or joins that queue | mech | lanes, statuses | warn | **stage 5**: `agent` warns (both implementations) |
+| C21 | C, track | A task whose files overlap a running lane waits or joins that queue | mech | lanes, statuses | warn | **stage 5**: `agent` warns (both implementations); L7: when some path matches both entries' globs |
 | C22 | C, track | One jj workspace per worker that edits code | mech | lane, `workspaces[]` | warn | **stage 5**: `fleet brief` warns on a lane with no workspace |
 | C23 | C, track | Integrate a finished worker, then prune its workspace | mech | statuses, `workspaces[]` | warn | **stage 5**: every state command warns while a done worker's workspace is active (TS) |
 | C24 | C, track | Python-path fleets share one working copy; land from a second workspace | judg (transitional) | | | prose until the cutover |
@@ -47,16 +47,16 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | C27 | C, respond | A worker's `blocked:` becomes a roadblock at once | judg (what it needs) | | | prose |
 | C28 | C, respond | Said once, on the page; one line in the session | judg | | | prose |
 | C29 | C, respond | Answer a question by SendMessage; send unverified claims back to the same worker | judg | | | prose |
-| C30 | C, respond | A block that needs the user is a decision with a roadblock pointing at it | mech (link) | roadblock, decision | refuse | code (`--needs user` needs `--decision`; closing the decision resolves it) |
+| C30 | C, respond | A block that needs the user is a decision with a roadblock pointing at it | mech (link) | roadblock, decision | refuse | code (`--needs user` needs `--decision`, on update too since L8; closing the decision resolves it) |
 | C31 | C, respond | Probe one thing the report did not claim | judg | | | prose |
-| C32 | C, respond | Forward a chat message addressed to a worker by SendMessage | mech | chat | | **Luiz** (L1) |
+| C32 | C, respond | Forward a chat message addressed to a worker by SendMessage | mech | chat | print | **Luiz** (L1, decided): the coordinator's watch prints a nudge for a message a worker left unanswered ten minutes, and only that one is forwarded (both); prose cut to one line |
 | C33 | C, respond | A strayed worker is stopped and its stray edits handled first | mech (files) | jj, lane | print | **stage 5**: `fleet ws list` names files changed outside the lane |
 | C34 | C, respond | Read every report and message against the open decisions | judg | | | prose |
 | C35 | C, decisions | Settle what you can first; the rest is a decision with question, why, options, recommendation, evidence | judg / mech (fields) | | refuse | code (the kind check refuses a decision without its fields) |
 | C36 | C, decisions | Block only when proceeding is destructive, outward-facing or costly | judg | | | prose |
 | C37 | C, decisions | A secret is a pointer; the value never enters the chat | mech | answer text | refuse | code (the server refuses a value) |
 | C38 | C, decisions | Answered elsewhere: close; facts changed: revise; changed after closing: supersede | judg (which) / mech (closed stays) | | refuse | code (a closed decision refuses changes) |
-| C39 | C, decisions | Every decision says where it came from (`--step`/`--milestone`, `--agent`) | mech | decision | warn | **Luiz** (L5) |
+| C39 | C, decisions | Every decision says where it came from (`--step`/`--milestone`, `--agent`) | mech | decision | | **Luiz** (L5, decided): prose, no warning |
 | C40 | C, decisions | Arm `wait` when a decision opens; re-arm per grilling round | mech | | print | code (the command is printed); **stage 5**: `wait` also ends when the decision closes (open-21) |
 | C41 | C, decisions | Record an answer given on the page before any other work | mech | chat, ledger | warn | **stage 5**: every state command warns while one is unrecorded (both) |
 | C42 | C, decisions | Check the answer still holds; revise or reopen when it leads to another question | judg | | | prose |
@@ -66,7 +66,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | C46 | C, manager | Use the fleet's one name, the session's | mech | registry | auto | code (the registry renames after the session title) |
 | C47 | C, manager | Say it once; one line in the session at most | judg | | | prose |
 | C48 | C, manager | Read standing.md at intake and on change | judg | | | prose |
-| C49 | C, manager | Decisions go to the manager first (`--asks manager`) unless the user's by nature | judg (by nature) | | warn | **Luiz** (L4) |
+| C49 | C, manager | Decisions go to the manager first (`--asks manager`) unless the user's by nature | judg (by nature) | | | **Luiz** (L4, decided): prose, no warning |
 | C50 | C, manager | Other fleets are reached through the manager | judg | | | prose |
 | C51 | C, manager | Landing takes a turn: ask the manager before a push, deploy or shared rebase | mech | manager's landing queue, registry | refuse | **stage 5**: `fleet turn` exits 1 without the turn; `land-check` turns its verdict to `stop` |
 | C52 | C, manager | With no manager, pass its decisions to the user and land on your own word | mech (no manager) / judg | registry | print | **stage 5**: `fleet turn` says so; passing decisions on stays prose |
@@ -90,7 +90,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | B3 | B, lane | Work in the workspace the brief names; history moves are the coordinator's | mech (workspace) | | print | **stage 5**: `fleet brief` prints the workspace; history moves stay prose |
 | B4 | B, lane | Leave running what you did not start; stop what you started | judg (mostly) | procs | | prose (`fleets.py procs` lists what each session left) |
 | B5 | B, lane | Monitors and research agents on Sonnet | judg | | | prose |
-| B6 | B, chat | Read the inbox at each checkpoint, answer with `--re` | mech (open messages) | chat | warn | **Luiz** (L1) |
+| B6 | B, chat | Read the inbox at each checkpoint, answer with `--re` | mech (open messages) | chat | print | **Luiz** (L1, decided): stays in brief.md; a message left unanswered ten minutes is nudged on the coordinator's watch (C32) |
 | B7 | B, chat | Steering inside the lane and criterion is taken; anything else goes to the coordinator | judg | | | prose |
 | B8 | B, report | Say `blocked:` at once, never wait in silence | judg (when) | | page | code (silence shows on the page after twenty minutes) |
 | B9 | B, report | Ten-line first block | judg | | | prose |
@@ -115,8 +115,8 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | M14 | M, said once | A silent worker is checked, not assumed | mech | heartbeats | warn | code (watch); **stage 5**: `fleets show` marks it; prose cut |
 | M15 | M, waiting | An unrecorded answer is chased with the fleet | mech | chat, ledger | warn | code (watch, stage 2); **stage 5**: the fleet's own state commands warn too |
 | M16 | M, machine | Settle the gate as a turn; tell a session to stop what it left running | judg | | | prose |
-| M17 | M, usage | Read the usage windows before giving a turn to work that spawns many workers | mech (reading) / judg | usage reading | print | later: `step --status current` in `landings` could print the windows; whether it is wanted is Luiz's (L6) |
-| M18 | M, usage | A coordinator that reads far more than its workers write is told | mech (ratio) / judg (threshold) | spend | | later: needs a threshold (L6) |
+| M17 | M, usage | Read the usage windows before giving a turn to work that spawns many workers | mech (reading) / judg | usage reading | print | later: `step --status current` in `landings` could print the windows; stays later until there are thresholds (L6, decided) |
+| M18 | M, usage | A coordinator that reads far more than its workers write is told | mech (ratio) / judg (threshold) | spend | | later: needs a threshold (L6, decided: stays later) |
 | M19 | M, stop | Tell every coordinator, give the turn back, `serve --stop` | judg | | | prose |
 
 ## tuca-mode and its fleet playbooks
@@ -142,34 +142,43 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | :-- | :-- | :-- |
 | open-2 | Say success only once the write is checked | TS and Python; model and traces re-recorded from Python |
 | open-3 | `roadblock --agent` names a recorded worker | TS and Python; model and traces |
-| open-5 | `park` frees the parked workers' current steps (back to pending, agent kept) | TS and Python; model and traces |
+| open-5 | `park` frees the parked workers' current steps (back to pending, agent kept) | TS and Python; model and traces; kept as is (L2, decided) |
 | open-13 | Stamps compare as instants (numbering, answered-at, `wait`) | TS and Python |
 | open-21 | `chat wait` ends when its decision closes without an answer | TS and Python (tests in both) |
 
 ## For Luiz
 
-Rules whose mechanical half is clear but whose policy is not. Nothing here was decided.
+Rules whose mechanical half was clear but whose policy was not. Luiz decided each on 2026-10-01; his
+choice follows the question.
 
-- **L1. A message to a worker: forwarded, or read at checkpoints?** brief.md has the worker read its
-  inbox at each checkpoint; the coordinator's SKILL.md has the coordinator forward every message
-  addressed to a worker by `SendMessage`. Both run, so a worker hears a message twice and the
-  coordinator pays a turn for each. Code could keep either: the coordinator's watch could print `!
-  a1 has not answered #12 for N min` instead of a blanket forward. Which, and what N?
+- **L1. A message to a worker: forwarded, or read at checkpoints?** brief.md had the worker read its
+  inbox at each checkpoint, and the coordinator's SKILL.md had the coordinator forward every message
+  addressed to a worker by `SendMessage`: a worker heard a message twice and the coordinator paid a
+  turn for each. *Decided: checkpoints and a nudge.* brief.md stays; the coordinator's watch prints `!
+  worker a1 (...) has not answered #12 from user for 10 min: "...". Forward it (SendMessage a1).` once
+  a message to a worker has had no `--re` from it for ten minutes (`FLEET_NUDGE_S`), each told once,
+  and only then is it forwarded. Both implementations; SKILL.md's rule is one line naming the nudge.
 - **L2. `park` and steps.** open-5 is fixed with the step going back to `pending` and keeping its
-  agent (who last worked it). `blocked`, or clearing the agent, are the alternatives.
-- **L3. Haiku.** `--model` accepts `haiku`, the coordinator's SKILL.md approves only Opus, Sonnet and
-  Fable. Refuse it, warn, or keep it as a model the user approves case by case?
-- **L4. Decisions with a manager present.** The rule is "to the manager first unless the user's by
-  nature". A warning on `decision` opened `--asks user` while a manager is served would catch the
-  forgotten flag, and fire on every credential. Wanted?
-- **L5. Untied decisions.** "Every decision says where it came from": a warning on a decision opened
-  with neither `--step`, `--milestone` nor `--agent` would fire on most decisions the traces open
-  today. Strict enough to warn, or prose?
-- **L6. The manager's usage rules.** Before giving a turn to work that spawns many workers, and a
-  coordinator reading far more than its workers write: both need a threshold (how full a window, what
-  ratio) before code can say anything.
-- **L7. Lane overlap: warn or refuse, and how precise.** Overlap is read from each entry's directory
-  part before any glob (`src/*.ts` meets `src/a/b.ts`); it warns, since a queued worker or a joined
-  queue is the coordinator's call. A refusal, or exact glob intersection, are possible.
-- **L8. `--needs user` on an update.** open-3's other half: a roadblock changed to `--needs user`
-  needs no decision, though a new one does.
+  agent (who last worked it); `blocked`, or clearing the agent, were the alternatives. *Decided: keep
+  it.*
+- **L3. Haiku.** `--model` accepts `haiku`; the coordinator's SKILL.md approves only Opus, Sonnet and
+  Fable. *Decided: accepted with a warning.* `agent --model` outside the three records it and prints
+  `state: a1 is recorded on haiku, outside the model policy (opus, sonnet, fable): spawning it on haiku
+  needs the user's OK.` (both); the page marks the row "needs your OK".
+- **L4. Decisions with a manager present.** A warning on `decision --asks user` while a manager is
+  served would catch the forgotten flag, and fire on every credential. *Decided: no warning; prose.*
+- **L5. Untied decisions.** A warning on a decision opened with neither `--step`, `--milestone` nor
+  `--agent` would fire on most decisions the traces open today. *Decided: prose only.*
+- **L6. The manager's usage rules** (M17, M18) need a threshold (how full a window, what ratio) before
+  code can say anything. *Decided: stays later, until there are thresholds.*
+- **L7. Lane overlap: warn or refuse, and how precise.** Overlap was read from each entry's directory
+  part before any glob (`src/*.ts` met `src/a/b.ts`). *Decided: still a warning, on the exact
+  intersection.* Two entries meet when some path matches both: a plain path covers itself and what is
+  under it, `*`, `?` and `[...]` stay in a segment, `**` spans segments, `{a,b}` is either. So
+  `src/*.ts` and `src/a/b.ts` no longer meet; `src/**` and `src/a/b.ts` do; a file and a glob that
+  matches it do. Decided on the product of the globs' automata (`lanes.py`, `src/ledger/lanes.ts`),
+  property-tested against matching every short path (fast-check in TS, a seeded generator in Python).
+  `fleet ws list` reads a lane by the same rule.
+- **L8. `--needs user` on an update.** A roadblock changed to `--needs user` needed no decision, though
+  a new one did. *Decided: the same as on creation.* It is refused unless `--decision` is given or the
+  roadblock already names one (both).

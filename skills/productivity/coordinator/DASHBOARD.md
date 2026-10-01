@@ -34,7 +34,7 @@ agents[]     one row per worker, in spawn order (its position picks its chart co
   name       what the user calls it ("auth-impl")
   task       one sentence
   skill      implement | diagnosing-bugs | prototype | research | tdd | none
-  model      opus | sonnet | haiku | fable
+  model      opus | sonnet | haiku | fable (haiku is outside the policy: recorded with a warning, the user's to approve)
   status     queued | running | blocked | done | failed | stopped
   lane[]     files or globs the worker may edit
   milestone  milestone id
@@ -174,7 +174,7 @@ The page has a chat where the user writes to the fleet and mentions who should a
 | Command | What it does |
 | :-- | :-- |
 | `wait DECISION...` | waits for the user's answer to one of these decisions (ids or numbers), prints it and exits; armed as a background command when a decision is opened, it wakes the session the moment the user answers |
-| `watch --as coordinator --all [--resume] [--once]` | streams one line per message from the user, whoever it is addressed to: first the open ones, then each new one as it lands. `--resume` starts after the last line a watch of yours printed (`--after N` names the number yourself); `--once` exits after the first lines it prints |
+| `watch --as coordinator --all [--resume] [--once]` | streams one line per message from the user, whoever it is addressed to: first the open ones, then each new one as it lands. `--resume` starts after the last line a watch of yours printed (`--after N` names the number yourself); `--once` exits after the first lines it prints. It also prints a `!` line for a worker silent twenty minutes, and for a message to a worker left unanswered ten minutes (forward that one by `SendMessage`) |
 | `inbox --as WHO` | the messages open for `WHO`, oldest first |
 | `say --as WHO [--re N] TEXT` | appends a message from `WHO`, answering message `N`; mentions in `TEXT` address other agents |
 | `log [--after N]` | the whole conversation |

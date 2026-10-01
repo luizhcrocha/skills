@@ -35,6 +35,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `FLEET_DISCOVER=0` | served.py | skip discovering the machine's served ports (tests) |
 | `FLEET_CHECK_S` | chat.py | how often a manager's or coordinator's watch looks at the fleets (default 30 s) |
 | `FLEET_UNHEARD_S` | chat.py | how long the user's message waits unread before a manager's watch tells (default 120 s) |
+| `FLEET_NUDGE_S` | chat.py | how long a message to a worker waits unanswered before the coordinator's watch tells (default 600 s, L1) |
 | `TAILSCALE` | serve_dashboard.py, `fleet hub`, `fleet serve`, `fleet served` | the tailscale binary |
 | `FLEET_HUB_PORT` | `fleet hub`, `fleet serve` | the hub's port (default 7420); `--port` wins |
 | `FLEET_DIR` | the plugin's hook (`fleet_heartbeat`) | the fleet DIR a session works for when its scratchpad holds none: a worker launched as its own Claude Code process. See [Heartbeats](#heartbeats) |
@@ -128,6 +129,8 @@ renames it. Milestones are never removed.
   statuses leave the step's status alone, open-25). `--log` logs an event whose kind follows the
   status (blocked → blocked, done or failed → reported, stopped → note, else note), important
   when `--important` or the status is failed.
+- A model outside the policy (Opus, Sonnet, Fable; `haiku` is the one `--model` takes) is recorded
+  and warned about, see [Warnings](#warnings) (L3). The page marks it on the worker's row.
 - A worker left done whose report or log reads as unfinished (refused, parked, not met, unmet,
   couldn't, could not, failed to, gave up, incomplete, unfinished, blocked on, waiting on, skipped,
   not done) is warned about on stderr when the command set `--status done` or `--report`. It's
@@ -150,7 +153,8 @@ renames it. Milestones are never removed.
   `since` = now, `resolved` false. Logs `blocked` (`<title>: <detail>`), important when
   `--important` or needs user, tagged with the decision. The worker named by `--agent` is marked
   blocked.
-- Known: the fields given are set. `--resolved` resolves: `resolved` true, logs `resolved`
+- Known: `--needs user` refused as on creation when the roadblock would be left without a decision
+  (no `--decision`, and none recorded) (L8). The fields given are set. `--resolved` resolves: `resolved` true, logs `resolved`
   (`<title> resolved.`), and its worker, when blocked, goes back to running. This happens again on
   a resolved roadblock (open-4). `--open` sets `resolved` false, with no event and no re-blocking.
 
@@ -317,9 +321,15 @@ After the handler succeeds, before validation, on stderr, in this order (not for
 6. **Lanes that meet** (`state: a2's lane overlaps a1's (running: src/x.ts). A task whose files
    overlap a running lane waits (\`--status queued\`) or joins that worker's queue.`) on an `agent`
    command that gives `--lane`, `--task` or `--status running` and leaves its row running, when its
-   lane meets a running or blocked worker's: two entries meet when one's directory part before any
-   glob character (`src/usage/**` → `src/usage`, `*.md` → everything) is the other's or holds it.
-7. *TypeScript only* (Python's ledger has no `workspaces`, and no trace does): **a done worker's
+   lane meets a running or blocked worker's: two entries meet when some path matches both (L7). A
+   plain path covers itself and everything under it; in a glob `*`, `?` and `[...]` stay in one
+   segment, `**` as a whole segment spans any number of them, `{a,b}` is either. So `src/*.ts` and
+   `src/a/b.ts` don't meet; `src/**` and `src/a/b.ts` do, and so do `src/x.ts` and `src/*.ts`.
+   Decided on the product of the two globs' automata (`lanes.py`, `fleet/src/ledger/lanes.ts`).
+7. **A model outside the policy** (`state: a1 is recorded on haiku, outside the model policy (opus,
+   sonnet, fable): spawning it on haiku needs the user's OK.`) on an `agent` command that gives such
+   a `--model` (L3).
+8. *TypeScript only* (Python's ledger has no `workspaces`, and no trace does): **a done worker's
    workspace not pruned** (`state: a1's workspace a1 still there though its worker is done: bring its
    changes into the stack, then \`fleet ws <dir> prune\` (a dry run, then --apply).`) on every command,
    and on `set --status done` **the workspaces left** (`state: the fleet is done with workspace(s) a1
@@ -378,8 +388,11 @@ are dropped, so a message is always one line.
 touched when it ends. A manager's watch prints `!` lines every `FLEET_CHECK_S`: a fleet that
 doesn't read its chat while the user waits more than `FLEET_UNHEARD_S`, an answer a fleet has had
 that long without recording it, a running worker silent for 20 minutes. Each is told once
-(`watch-manager.told`). A coordinator's watch prints its own silent workers
-(`watch-coordinator.told`). `--once` exits after the first batch it prints.
+(`watch-manager.told`). A coordinator's watch prints its own silent workers, and each message to
+one of its workers that the worker has not answered (no message of its own with that `re`) for
+`FLEET_NUDGE_S`: `! worker a1 (notes-impl) has not answered #12 from user for 10 min: "<text, 120
+chars>". Forward it (SendMessage a1).` (L1: workers read their inbox at checkpoints; only a message
+left this long is forwarded). Each told once (`watch-coordinator.told`). `--once` exits after the first batch it prints.
 
 `wait`: a closed decision prints `<ref> is already <status>: <answer or resolution>` and exits
 0. An answer already given (a user message tagged with the decision, sent at or after its
@@ -557,7 +570,8 @@ One jj workspace per worker that edits code; the coordinator's own (`default`) i
 - `fleet ws DIR list`: per active workspace, its worker and the worker's status and last-seen, then
   its `@` (empty, conflicted) and what it holds ahead of the stack, and the files those changes touch
   that are in none of the worker's lane entries (`outside its lane (src/): README: stop it ...`; an
-  entry holds itself, what is under it, and what it matches as a glob). Read with
+  entry holds what it covers by the lane rule of [Warnings](#warnings) 6: a glob's `*` stays in its
+  segment). Read with
   `--ignore-working-copy`: a worker's files are never snapshotted under it while it works.
 - `fleet ws DIR prune [--apply | --dry-run]`: a workspace goes when (1) its worker's row is not
   running, queued or blocked (done, failed, stopped, or no row: gone); (2) its directory, if it is
@@ -764,7 +778,7 @@ below, open-1 fixed in both; argparse's usage and error texts (exit 2) match too
    says is held until the ledger is checked and written; a refusal prints only the warnings and its
    reason. The model checks that a refused state command prints nothing on stdout.
 3. **Fixed (stage 5, both): `roadblock --agent` wasn't checked.** It is now, as every other
-   `--agent` is. Still open: `--needs user` requires a decision only at creation.
+   `--agent` is; and `--needs user` requires a decision on update too (L8, 2026-10-01).
 4. **Resolving a resolved roadblock** logs `resolved` again and sends its worker, if blocked for
    another reason, back to running.
 5. **Fixed (stage 5, both): `park` left the parked workers' steps current.** They go back to
