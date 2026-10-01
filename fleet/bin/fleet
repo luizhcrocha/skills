@@ -6,6 +6,31 @@
 here=$(dirname "$(readlink -f "$0")")
 root=$(dirname "$here")
 
+# A session keeps the plugin folder it started with, and Claude Code installs each version in its own
+# folder, so a long-lived session would run an old fleet forever. Hand over to the newest tstack on this
+# machine: the checkout in CLAUDE_CODE_PLUGIN_DIRS, the marketplace clone, every cached version. A tie
+# stays here. FLEET_NO_FORWARD=1 (set below, and usable by hand) runs this copy as it is.
+version_of() { sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$1/../.claude-plugin/plugin.json" 2>/dev/null | head -n 1; }
+if [ -z "${FLEET_NO_FORWARD:-}" ]; then
+  mine=$(version_of "$root")
+  best=$root
+  best_v=$mine
+  for cand in ${CLAUDE_CODE_PLUGIN_DIRS:+$(printf '%s' "$CLAUDE_CODE_PLUGIN_DIRS" | tr ':' ' ')} \
+    "$HOME/.claude/plugins/marketplaces/tstack" "$HOME"/.claude/plugins/cache/tstack/tstack/*; do
+    [ -x "$cand/fleet/bin/fleet" ] || continue
+    v=$(version_of "$cand/fleet")
+    [ -n "$v" ] || continue
+    if [ -z "$best_v" ] || { [ "$v" != "$best_v" ] && [ "$(printf '%s\n%s\n' "$best_v" "$v" | sort -V | tail -n 1)" = "$v" ]; }; then
+      best=$cand/fleet
+      best_v=$v
+    fi
+  done
+  if [ "$best" != "$root" ]; then
+    export FLEET_NO_FORWARD=1
+    exec "$best/bin/fleet" "$@"
+  fi
+fi
+
 if ! command -v bun >/dev/null 2>&1; then
   needs=$(sed -n '/"bun": *"/{s/.*"bun": *"\([^"]*\)".*/\1/p;q;}' "$root/package.json")
   echo "fleet: needs Bun ${needs:-(see $root/package.json)} on PATH, and there is none: install it (https://bun.sh)" >&2
