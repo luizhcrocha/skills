@@ -1,6 +1,6 @@
 ---
 name: arena
-description: Run N parallel attempts at the same task under distinct constraints, pick a base, graft the strongest parts of the others into it by hand. Use for "arena this", competing designs or implementations of one contested shape, or when one attempt at a non-trivial artifact would lock in the wrong shape.
+description: "Run N parallel attempts at one task under distinct constraints, pick a base, graft the best of the others. Use for \"arena this\" or competing designs of one contested shape."
 ---
 
 # Arena

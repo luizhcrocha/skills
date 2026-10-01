@@ -1,6 +1,6 @@
 ---
 name: lint-evolve
-description: Turn a repeated lesson into a lint rule in the language's native linter, tested on the real incident and trialled across Luiz's repos. Use for "make this a lint rule", a reflect Backlog item tagged structural, a review or interrogate finding seen twice or matching a memo gotcha, a comment-sicko MUST KILL a lint could catch, a memo gotcha a linter could catch, or an automate-me mechanical repeat.
+description: "Turn a repeated lesson into a native lint rule, tested on the real incident and trialled across Luiz's repos. Use for \"make this a lint rule\", or a finding, gotcha or MUST KILL seen twice that a linter could catch."
 ---
 
 # Lint evolve

@@ -1,6 +1,6 @@
 ---
 name: create-verification-skill
-description: Generate a project-local verify-<app> skill that launches the app and drives it the way a user does (web, Electron, CLI, TUI, service), with a feature map, proven once. Use when a repo has no scripted way to prove behaviour on the real surface, for "make a verify skill for this repo", or when proving a change keeps meaning improvising the launch and the clicks.
+description: "Generate a project-local verify-<app> skill that launches the app and drives it like a user, with a feature map. Use for \"make a verify skill\", or when proving a change means improvising the launch."
 ---
 
 # Create a verification skill

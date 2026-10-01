@@ -1,6 +1,6 @@
 ---
 name: lint-audit
-description: Audit tstack's lint rules against their registry and trials, then propose promotions, retirements and skill fixes and re-vendor the packs into Luiz's repos. Use for "lint audit", "audit the lint rules", a periodic run, or after a lint pack changed.
+description: "Audit tstack's lint rules against their registry and trials; propose promotions and retirements; re-vendor the packs. Use for \"lint audit\", a periodic run, or after a lint pack changed."
 ---
 
 # Lint audit

@@ -1,6 +1,6 @@
 ---
 name: review
-description: "Review the changes since a fixed point (a bookmark, change, commit or tag; by default the landing bookmark's remote) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a stack, a PR, work-in-progress changes, or asks to \"review since X\"."
+description: "Review changes since a fixed point (default: the landing bookmark's remote) on two axes, Standards and Spec, in parallel. Use to review a branch, stack, PR or WIP, or \"review since X\"."
 ---
 
 Two-axis review of the diff between `@` and a fixed point:

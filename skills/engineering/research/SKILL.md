@@ -1,6 +1,6 @@
 ---
 name: research
-description: Investigate a question against high-trust primary sources and capture the findings as a Markdown file in the repo. Use when the user wants a topic researched, docs or API facts gathered, or reading legwork delegated to a background agent.
+description: "Investigate a question against primary sources and save the findings as Markdown in the repo. Use to research a topic, gather docs or API facts, or delegate reading to a background agent."
 ---
 
 Spin up a **background agent** to do the research, so you keep working while it reads. It runs on the default Sonnet (`model: "sonnet"`), whoever spawns it, a worker researching for its own task included. Use Opus only when the question itself needs judgement: sources that contradict each other, a design trade-off to weigh, a conclusion someone will build on without checking.

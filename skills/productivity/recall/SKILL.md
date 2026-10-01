@@ -1,6 +1,6 @@
 ---
 name: recall
-description: Answer from the record what we know or what happened before, or catch Luiz up on this project's recent work. Use for "what do we know about X", earlier sessions, past decisions, whether something was already done; and for "catch me up", "where did I leave off", "what have I been working on".
+description: "Answer from the record what we know or did before, or catch Luiz up on recent work. Use for \"what do we know about X\", past decisions, \"catch me up\", \"where did I leave off\"."
 argument-hint: "[what do we know about X | catch me up (on X) (last N days)]"
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: swarm
-description: Fan out N parallel workers over slices or race arms, drain them, and return one PASS / ISSUES / BLOCKED report. Use for "swarm this", coverage matrices (every package, route, platform or commit), races and best-of runs, gauntlets of parallel checks, and exploration partitions.
+description: "Fan out N parallel workers over slices or race arms and return one PASS / ISSUES / BLOCKED report. Use for \"swarm this\", coverage matrices, races, best-of runs, gauntlets of checks."
 ---
 
 # Swarm

@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Take a set of pending tasks, or user given tasks, and run them in parallel across agents — picking subagents, a dynamic workflow, or an agent team — partitioned so the workers never touch the same files. Use when the user wants to parallelize work, fan out tasks, "orchestrate" a batch of changes, run a workflow, or coordinate multiple agents on one codebase.
+description: "Run pending or given tasks in parallel across agents (subagents, a workflow or a team), partitioned so workers never share files. Use to parallelize work, fan out tasks, or \"orchestrate\" a batch."
 ---
 
 # Orchestrator

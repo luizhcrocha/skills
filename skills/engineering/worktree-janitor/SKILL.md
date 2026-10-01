@@ -1,6 +1,6 @@
 ---
 name: worktree-janitor
-description: Shape a messy jj @ into a clean, described stack (split by intent down to single hunks, fixups absorbed, conflicts resolved, repo-style messages, empty @ on top; siblings joined by a merge when asked), then audit it mechanically. Use before landing or pushing a jj stack, and when @ holds unrelated edits, lacks a description, or carries conflicts.
+description: "Shape a messy jj @ into a clean, described stack (split by intent, fixups absorbed, conflicts resolved, empty @ on top), then audit it. Use before landing or pushing, or when @ holds mixed or undescribed edits."
 ---
 
 # Worktree janitor

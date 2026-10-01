@@ -1,6 +1,6 @@
 ---
 name: resolving-merge-conflicts
-description: "Resolve merge conflicts by intent: jj changes left conflicted by a rebase, squash or workspace update, or an in-progress git merge/rebase. Use when `jj log` marks a change (conflict), a rebase reports new conflicts, or git stops mid-merge."
+description: "Resolve conflicts by intent: jj changes left conflicted by a rebase, squash or workspace update, or a git merge/rebase. Use when `jj log` shows (conflict) or git stops mid-merge."
 ---
 
 In jj a conflict is recorded in the commit. A rebase always finishes; the conflicted changes carry the conflict until someone resolves it, and their descendants rebase on top of it. Nothing is mid-rebase, so there is nothing to continue or abort. In a plain git repo (no `.jj`), see [Git fallback](#git-fallback).

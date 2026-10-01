@@ -1,6 +1,6 @@
 ---
 name: how
-description: Explain how code works, at the level of a senior engineer onboarding onto a subsystem. Use for "how does X work", "zoom out", "give me a map of this area", a walkthrough before changing unfamiliar code, and placement or ownership questions ("where should this live", "which module owns this", "is this the right layer").
+description: "Explain how code works, as onboarding a senior engineer. Use for \"how does X work\", \"zoom out\", a map of an area, a walkthrough before changing unfamiliar code, or \"where should this live\"."
 ---
 
 # How

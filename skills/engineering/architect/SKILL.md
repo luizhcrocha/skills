@@ -1,6 +1,6 @@
 ---
 name: architect
-description: Sketch types, signatures and the module map before code, from competing candidates, then implement against the sketch and scrap it when implementation proves it wrong. Use for "architect this", "design this first", "sketch the types", or non-trivial work where jumping to code would lock in the wrong shape.
+description: "Sketch types, signatures and the module map from competing candidates before code, then implement against it. Use for \"architect this\", \"design this first\", \"sketch the types\", or non-trivial work."
 ---
 
 # Architect

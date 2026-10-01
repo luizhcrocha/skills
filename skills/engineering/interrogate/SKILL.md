@@ -1,6 +1,6 @@
 ---
 name: interrogate
-description: "Adversarial review: three fresh Opus reviewers, each on its own lens (correctness and security, maintainability, intent), try to break a change, and the lead sorts their findings into a verdict. Use for \"interrogate\", \"adversarial review\", \"tear this apart\", \"stress test this\", \"find blind spots\", a contested design, or a thermo-nuclear / harsh maintainability review."
+description: "Adversarial review: three fresh reviewers (correctness and security, maintainability, intent) try to break a change; the lead gives a verdict. Use for \"interrogate\", \"tear this apart\", \"stress test this\", a contested design."
 ---
 
 # Interrogate

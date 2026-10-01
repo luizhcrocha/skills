@@ -1,6 +1,6 @@
 ---
 name: no-comments
-description: Strip narrating comments from a diff with fresh eyes, fix what they were papering over, and offer to encode claimed constraints as types, tests or lints. Use before landing a stack (the Land playbook runs it), when a playbook asks, or on "no comments", "strip the comments", "deslop the comments".
+description: "Strip narrating comments from a diff, fix what they papered over, offer to encode claims as types, tests or lints. Use before landing, when a playbook asks, or \"no comments\", \"deslop the comments\"."
 ---
 
 # No comments

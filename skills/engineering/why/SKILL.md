@@ -1,6 +1,6 @@
 ---
 name: why
-description: Find out why code is the way it is, from every record that could say so, as a cited, confidence-tiered answer. Use for "why does X work this way", "why did we pick Y", where a threshold or guard came from, regressions and postmortems, and before changing code whose reasons are unknown.
+description: "Find why code is the way it is, from every record, as a cited, confidence-tiered answer. Use for \"why does X work this way\", \"why did we pick Y\", regressions, postmortems, before changing code of unknown reason."
 ---
 
 # Why

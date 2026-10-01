@@ -1,6 +1,6 @@
 ---
 name: explain
-description: Explain a piece of work plainly so a person understands it now (what it is, how it works, why it is that way), woven from how and why into one conversational account. Use for "explain this change to me", "help me really understand X", "walk me through this PR or subsystem". A map of an area is how; learning a topic over sessions is teach.
+description: "Explain a piece of work plainly (what, how, why) as one conversational account. Use for \"explain this change to me\", \"help me really understand X\", \"walk me through this PR\"."
 ---
 
 # Explain

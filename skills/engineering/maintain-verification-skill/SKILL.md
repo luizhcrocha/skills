@@ -1,6 +1,6 @@
 ---
 name: maintain-verification-skill
-description: Audit a project's verify-<app> skill and feature map against the app as it is now, with Sonnet source readers per feature and one live pass driving every feature, then at most one jj change of proven corrections. Use for "audit the verify skill", when a verify skill failed to launch or drive, or after churn in the app's user-facing surface.
+description: "Audit a verify-<app> skill and feature map against the app as it is now, with one live pass, then one change of proven fixes. Use for \"audit the verify skill\", a failed verify run, or UI churn."
 ---
 
 # Maintain a verification skill

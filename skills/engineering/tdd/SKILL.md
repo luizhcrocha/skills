@@ -1,6 +1,6 @@
 ---
 name: tdd
-description: Test-driven development and choosing the right evidence. Use when writing or changing tests, building features or fixing bugs test-first, "red-green-refactor", deciding what kind of test a change needs (example, integration, property, model-based, fuzz, mutation, simulation), or proving a change works.
+description: "Test-first development and choosing the right evidence (example, integration, property, model-based, fuzz, mutation, simulation). Use when writing tests, fixing bugs test-first, \"red-green-refactor\", or proving a change works."
 ---
 
 # Test-Driven Development

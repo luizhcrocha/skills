@@ -1,6 +1,6 @@
 ---
 name: show-me-your-work
-description: Keep a reviewable decision trail for long, unattended or multi-phase work: a TSV log, one row per decision (what, why, evidence, result), audited against the transcript and reviewed by a fresh Opus agent before hand-back. Use for autonomous runs, hillclimbs, bespoke playbooks, and work Luiz reviews after stepping away.
+description: "Keep a reviewable decision log (what, why, evidence, result) for long or unattended work, audited and reviewed before hand-back. Use for autonomous runs, hillclimbs, bespoke playbooks."
 ---
 
 # Show me your work
