@@ -33,7 +33,7 @@ The manager runs on the coordinator skill's scripts and page. Resolve its direct
 
 1. `python3 <scripts>/fleets.py list` names the fleets being served: each one's name, session, address, directory, what it is doing, its lanes in flight, and its open decisions.
 2. `python3 <scripts>/state.py <dir> init --role manager --project "<this machine, or the programme>" --goal "<what the fleets are landing together>"`.
-3. `python3 <scripts>/serve_dashboard.py <dir>`, and give the user the address: it is the one address for everything, since each fleet's page is served under it at `f/<fleet>/`, with a switcher in every page's header. The page shows every coordinator with the way to its page, and one list of what waits on the user across all of them.
+3. `<scripts>/../../../../fleet/bin/fleet serve <dir>` puts the manager on the machine's hub (the `fleet-hub` service), and give the user the hub's address (the printed one without its `f/manager/`): it is the one address for everything, since every fleet's page is served under it at `f/<fleet>/`, the index lists them all (and the fleets of the user's other machines that run a hub), and every page's header has a switcher. When it says no hub runs, ask the user to start it (`systemctl --user start fleet-hub`); the fallback until the cutover is `python3 <scripts>/serve_dashboard.py <dir>`, the manager's own server with each fleet at `f/<fleet>/` under it. The page shows every coordinator with the way to its page, and one list of what waits on the user across all of them.
 4. `ListAgents` names this session. Record it, so coordinators can write to you: `python3 <scripts>/fleets.py name <dir> <session>`.
 5. Arm the chat watch as a background Bash command (`run_in_background: true`): `python3 <scripts>/chat.py <dir> watch --as manager --all --resume --once`. It exits with the first news (a message, or a fleet not reading its chat), which wakes you; handle it and arm the same command again.
 6. Record the landing queue: `milestone landings --title "Landings and deploys"`.
@@ -144,4 +144,4 @@ Lead with what waits on them across the fleets, by title and fleet. Then the tur
 
 ## When you stop
 
-Tell every coordinator that the manager is leaving, and give the turn back. `python3 <scripts>/serve_dashboard.py <dir> --stop` takes you out of the registry; from then on each fleet passes its open decisions to the user itself.
+Tell every coordinator that the manager is leaving, and give the turn back. `<scripts>/../../../../fleet/bin/fleet serve <dir> --stop` (or `python3 <scripts>/serve_dashboard.py <dir> --stop` under the fallback) takes you out of the registry; from then on each fleet passes its open decisions to the user itself.

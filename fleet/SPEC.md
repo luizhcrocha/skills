@@ -19,7 +19,7 @@ How to read it:
 Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 [The ledger](#the-ledger-statejson) · [Numbers](#numbers-refs) · [Warnings](#warnings) ·
 [chat.py](#chatpy-the-chat) · [fleets.py and the registry](#fleetspy-and-the-registry) ·
-[The other scripts](#the-other-scripts) · [Files by writer](#files-by-writer) ·
+[The other scripts](#the-other-scripts) · [The hub](#the-hub-fleet-hub) · [Files by writer](#files-by-writer) ·
 [Oracle traces](#oracle-traces) · [The model](#the-model-based-test) · [Open](#open)
 
 ## Environment
@@ -34,7 +34,8 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `FLEET_DISCOVER=0` | served.py | skip discovering the machine's served ports (tests) |
 | `FLEET_CHECK_S` | chat.py | how often a manager's or coordinator's watch looks at the fleets (default 30 s) |
 | `FLEET_UNHEARD_S` | chat.py | how long the user's message waits unread before a manager's watch tells (default 120 s) |
-| `TAILSCALE` | serve_dashboard.py | the tailscale binary |
+| `TAILSCALE` | serve_dashboard.py, `fleet hub`, `fleet serve`, `fleet served` | the tailscale binary |
+| `FLEET_HUB_PORT` | `fleet hub`, `fleet serve` | the hub's port (default 7420); `--port` wins |
 
 A DIR at `…/<project>/<session>/scratchpad/<name>` names a session transcript; any other DIR has
 none, and every figure read from a transcript (spend, worker tokens, liveness) is absent.
@@ -384,7 +385,11 @@ to a taken one. `user`, `coordinator` and `manager` are reserved.
 
 ## The other scripts
 
-These are stage 3's (the hub), listed here so nothing is lost. The oracle doesn't trace them.
+Stage 3 ported all of them but serve_dashboard.py, which [the hub](#the-hub-fleet-hub) replaces:
+`fleet render`, `fleet served`, `fleet spend` and `fleet usage` do what the scripts below do, and
+`fleet state` renders the page itself (no Python at run time). The page is in the oracle: the
+`render-*` traces record `index.html` by its hash, so its bytes, `fleets.view()` included, are pinned
+at every rendering step.
 
 - **serve_dashboard.py** `DIR [--restart | --stop]`: serves DIR on a free port (the recorded one
   on restart) over `tailscale serve` (https), else plain http on the Tailscale IP with the chat
@@ -413,6 +418,59 @@ These are stage 3's (the hub), listed here so nothing is lost. The oracle doesn'
   in `REGISTRY/usage/reading.json`, then runs COMMAND on the same stdin and exits with its code
   (127 when it can't run). `show` prints each window.
 
+## The hub (`fleet hub`)
+
+One server per machine, always on (the `fleet-hub` systemd user unit), in place of a
+serve_dashboard.py per fleet. A fleet appears on it when it is in the registry: `fleet serve DIR`
+registers DIR (its entry lives while the Claude Code session that ran the command does: the nearest
+`claude` among its parents, or `--pid`) and prints `http://<this machine>:<port>/f/<fleet>/`; a
+fleet still served by serve_dashboard.py appears too, since the hub reads every fleet's files
+itself. A manager made later appears the same way, on the same address.
+
+- **Where it listens**: 127.0.0.1 and this machine's Tailscale IPv4, port `--port`, else
+  `$FLEET_HUB_PORT`, else 7420; never 0.0.0.0. Without Tailscale (absent, stopped) it serves
+  loopback alone and binds the tailnet address once Tailscale is up (checked every 30 s). A taken
+  loopback port exits 1. `REGISTRY/hub/hub.json` holds `{pid, port, url, https, since}` while it
+  runs. `--https PORT` also runs `tailscale serve --bg --https=PORT http://127.0.0.1:<port>` (and
+  turns it off on exit): the page's browser alerts need a secure page.
+- **Routes**: `GET /` the index (every fleet of this machine, then each peer hub's, with the plan's
+  usage, the gate and what else the machine serves), `GET /events` its stream (`fleets` events, on
+  change, `: ping` every 15 s), `GET /api/fleets` this machine's fleets (`{name, fleets: [summary
+  without index, role]}`, what a peer hub reads). `/f/<fleet>/…` is serve_dashboard.py's routes for
+  that fleet, same bodies and status codes: the page (rendered from `state.json` at each load, the
+  file `index.html` when the state can't be read), `GET /chat?after=N`, `GET /events` (`hello`,
+  `state` on connect and on change, `chat` with `id:`, pings; `Last-Event-ID` or `after`), `POST
+  /chat` (201; 403 policy or cross-origin `Origin`; 415; 413 over 16 KiB; 400 bad body, `ChatError`,
+  unknown decision or a secret's value; 409 an answer to a closed decision; 500 store failure),
+  `POST /chat/preview`, the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
+  sandbox CSP; dot files and paths out of DIR 404). `/f/<fleet>` redirects (301) to `/f/<fleet>/`;
+  `/f/<a>/f/<b>/…` is `/f/<b>/…`, so the manager's page, whose coordinators' links are relative,
+  works under `/f/manager/`. 421 on a `Host` the hub doesn't answer to (loopback, `localhost`, the
+  Tailscale IP, the MagicDNS name and short name, at its port; the https name with `--https`).
+- **Live updates**: each stream looks at `state.json` and `chat.jsonl` every 300 ms (as
+  serve_dashboard.py did); the view of a fleet is computed once for every client, again when the
+  file changes or after 2 s (spend, liveness, links). The page already used SSE and polls
+  `state.json` only when the stream fails, so it is unchanged.
+- **Federation**: every 30 s the hub reads `tailscale status --json` and asks each online peer at
+  `http://<its Tailscale IP>:<same port>/api/fleets` (2.5 s timeout). Peers that answer are listed on
+  the index; a peer's fleet is `/f/<fleet>@<machine>/…` (the machine is the first label of its
+  MagicDNS name; `@` is in no fleet id), passed through to the peer's `/f/<fleet>/…`, streams
+  included. Only machines in the last tailscale status are reached, so the path names no arbitrary
+  host. A post is checked by this hub's rules first, then by the peer's, which sees this machine.
+- **Who may write (auth)**: the hub trusts the tailnet, not headers from the network. Tailscale
+  already decides who reaches the Tailscale IP (the tailnet's ACLs) and encrypts the traffic; the
+  hub asks `tailscale whois` who owns the machine a request comes from (cached 60 s), and only the
+  login that owns this machine (`Self.UserID` in tailscale status) may post. A request on loopback
+  comes from this machine and may post (any local process could write `chat.jsonl` itself); when it
+  carries `Tailscale-User-Login` it came through `tailscale serve`, and that login is checked. Any
+  other source address reads only. Why not `tailscale serve` with identity headers as the default:
+  it needs the user to be Tailscale's operator and the tailnet's HTTPS certificates, it changes
+  tailscaled's persistent config from a service, and a plain listener that took those headers on
+  trust would let any tailnet peer claim any login; `whois` is tailscaled's own answer. The cost: the
+  default address is plain http (inside WireGuard), where browsers withhold alerts; `--https` adds
+  the https address when that matters. The stream's `hello` says `{write, reason?, you?}` from the
+  same rule. A message's `author` is the login (the owner's, from loopback).
+
 ## Files by writer
 
 | Writer | Files |
@@ -425,6 +483,8 @@ These are stage 3's (the hub), listed here so nothing is lost. The oracle doesn'
 | any reader of the registry (`fleets.py`, a manager's `chat.py`/`state.py`, the render) | deletes dead `REGISTRY/*.json`, renames entries after a session title |
 | `fleets.py gate take/free`, `name` | `REGISTRY/gate/gate.json`, `REGISTRY/<fleet>.json` |
 | `serve_dashboard.py` | `DIR/server.json`, `DIR/server.log`, `REGISTRY/<fleet>.json` |
+| `fleet serve` | `REGISTRY/<fleet>.json` (removed with `--stop`) |
+| `fleet hub` | `REGISTRY/hub/hub.json` while it runs; `DIR/chat.jsonl` on a post |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 
 ## Oracle traces
@@ -460,7 +520,8 @@ A result file has a header line (`{"results": NAME, "trace": 1}`), then one line
 
 `changed` holds every file under `$W` and `$REGISTRY` the step added or changed: `.json` parsed,
 `.jsonl` as a list of parsed lines (`{"raw": …}` for one that doesn't parse, `{"torn": true}` last
-when the file doesn't end in a newline), `index.html` as `{"present": true}`, other text as text,
+when the file doesn't end in a newline), `index.html` as `{"sha256": …}` of its text with the
+session's paths as tokens (so the page is compared byte for byte), other text as text,
 binary as `{"sha256": …}`. `*.pid`, `*.tmp`, `server.log` and `__pycache__` are ignored. In every
 string, the session's paths read back as `$DIR`, `$W`, `$REGISTRY`, `$USERHOME`, `$TMP`, and the
 implementation's own directory as `$SKILL` (`--subst PATH=TOKEN`); a `pid` equal to the runner's
@@ -477,8 +538,11 @@ Stage 2 runs `run.py check` on each trace in `oracle/traces/` with
 `--impl state="fleet state" --impl chat="fleet chat" --impl fleets="fleet fleets" --subst <its dir>='$SKILL'`,
 or sets `FLEET_ORACLE_IMPL='{"state": "fleet state", "chat": "fleet chat", "fleets": "fleet fleets", "subst": {"<its dir>": "$SKILL"}}'`
 for `test_corpus.py` and `test_model.py`. The corpus: `ledger-lifecycle`, `decisions`,
-`plan-and-grill`, `chat`, `manager` (written by hand from the tests), and `model-seed-1`,
-`model-seed-2` (random sequences). Where a behaviour marked open changes on purpose, re-record
+`plan-and-grill`, `chat`, `manager` (written by hand from the tests), `emptied` (open-7),
+`model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each
+hand-written trace, the same steps with every state command rendering, plus `render-page` (a
+session's scratchpad with its transcript, links, markup and U+2028 in the text, unread chat, a
+manager with a coordinator's summary, the plan's usage and the gate). Where a behaviour marked open changes on purpose, re-record
 the trace with the Python oracle and edit the expected lines by hand, or record them from the
 new implementation once it's the reference. Either way, review the diff.
 
@@ -545,13 +609,22 @@ below, open-1 fixed in both; argparse's usage and error texts (exit 2) match too
 7. **A known decision takes any `--kind`**, a grilling included (`decision g1 --kind input`
    turns a grilling into an input and keeps its questions), and a kind change keeps the number
    of the old letter.
+   *Stage 3*: an emptied field (`decision --title ""`, `--question ""`, `link --url ""`,
+   `--title ""`) was written by the TypeScript fleet as the string `"None"`; it is JSON null now,
+   as Python's `or None` writes it, and prints as `None` where Python prints it (the change event,
+   `show`, a closed decision's refusal, `fleets decision`). A ledger Python wrote with such a null
+   reads in TypeScript (it was refused). `--kind ""` is refused by its choices in both. Trace:
+   `emptied.jsonl`.
 8. **`chat say --decision X` is stored unchecked**: a number or an unknown id is kept as given,
    and the page, `wait` and `listening` match decisions by id.
-9. **The page's payload isn't in the oracle.** `index.html` is recorded as present only;
-   `fleets.view()` (spent, links up or down, discovered servers, the manager's coordinators and
-   usage) is stage 3's contract, pinned by test_fleets, test_spend, test_usage and the page tests.
-   *Stage 2*: the TypeScript `state` renders by running `render_dashboard.py` (with the command's
-   own environment) until stage 3's hub serves the page.
+9. **Fixed: the page's payload wasn't in the oracle.** `index.html` is recorded by its hash now,
+   and the `render-*` traces render at every step, so `fleets.view()` (spent, links up or down,
+   the manager's coordinators and usage, the gate) is compared byte for byte. The TypeScript
+   `state` renders the page itself (stage 3). Left out: a figure read from a file time (a worker's
+   or a session's `active`, silent workers) and the machine's served ports, which no trace can
+   pin; test/page.test.ts covers them. A float with no fraction (`61.0`) in a hand-written
+   `reading.json` prints as `61` in TypeScript, where Python keeps `61.0` (JavaScript reads both as
+   one number; the status line, being JSON from JavaScript, never writes `61.0`).
 10. **`show` never renders** and ignores `--no-render`/`-q`, though state.py's docstring says
     every command stamps, validates and renders.
 11. **`--no-render` and `-q` are stripped anywhere in argv**, values included: `event -q` records
