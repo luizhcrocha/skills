@@ -1,0 +1,4 @@
+#!/bin/sh
+# The fleet CLI: `fleet state|chat|fleets ...`, run by Bun from the TypeScript sources.
+here=$(dirname "$(readlink -f "$0")")
+exec bun "$here/../src/main.ts" "$@"

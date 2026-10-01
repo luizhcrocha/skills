@@ -1,0 +1,23 @@
+{
+  "name": "@tstack/fleet",
+  "private": true,
+  "type": "module",
+  "description": "The fleet's core CLIs (state, chat, fleets) in TypeScript on Bun and Effect 4: D13 stage 2, matched against the Python oracle.",
+  "bin": { "fleet": "./bin/fleet" },
+  "engines": { "bun": ">=1.4.2" },
+  "packageManager": "bun@1.4.2",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "lint": "oxlint -c .oxlintrc.json --deny-warnings src test",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.118"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.86.0",
+    "@types/bun": "1.4.2",
+    "oxlint": "1.86.0",
+    "typescript": "7.0.2"
+  }
+}
