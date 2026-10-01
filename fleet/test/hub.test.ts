@@ -17,6 +17,7 @@ import { collapse } from "../src/hub/hub.ts";
 import { hello, postRefusal, viewerOf, writerRefusal } from "../src/hub/policy.ts";
 import { lsofListenersOf } from "../src/hub/served.ts";
 import { startHub, type Running } from "../src/hub/server.ts";
+import { frontmatter } from "../src/hub/skills.ts";
 import { isTailnetIp, tailnetOf } from "../src/hub/tailnet.ts";
 import { asArray, asObject, asString, type JsonObject } from "../src/json.ts";
 import { elapsedOf, lsofFiles, parentsOf } from "../src/procs.ts";
@@ -228,6 +229,15 @@ describe("a fleet's chat through the hub", () => {
     expect(asArray((await request("GET", "/f/p/chat")).body["messages"])?.length).toBe(2);
   });
 
+  test("a command typed on the page is stored as it was typed, and reaches GET /chat and the stream", async () => {
+    const stream = await Stream.open("/f/p/events");
+    const sent = await post({ text: "/tstack:tdd fix the parser" });
+    expect([sent.status, sent.body["from"], sent.body["to"], sent.body["text"]]).toEqual([201, "user", ["coordinator"], "/tstack:tdd fix the parser"]);
+    expect(asArray((await request("GET", "/f/p/chat")).body["messages"])).toEqual([sent.body]);
+    expect(data(await stream.nextOf("chat"))).toEqual(sent.body);
+    stream.close();
+  });
+
   test("a refused post stores nothing and says why", async () => {
     say("user", "one");
 
@@ -428,6 +438,109 @@ describe("preview", () => {
         if (c["parts"] !== undefined) expect(got.body["parts"]).toEqual(c["parts"]);
       }
     }
+  });
+});
+
+describe("the skills a fleet's session can run", () => {
+  let config: string;
+
+  let repo: string;
+
+  function skillFile(dir: string, lines: readonly string[]): void {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, dir.endsWith("commands") ? "" : "SKILL.md"), ["---", ...lines, "---", "", "The body is never read."].join("\n"));
+  }
+
+  function file(path: string, text: string): void {
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, text);
+  }
+
+  function plugin(dir: string, name: string): string {
+    file(join(dir, ".claude-plugin", "plugin.json"), JSON.stringify({ name }));
+
+    return dir;
+  }
+
+  beforeEach(() => {
+    config = join(base, "home", ".claude");
+    repo = join(base, "repo");
+    env = { ...env, HOME: join(base, "home"), CLAUDE_CONFIG_DIR: config };
+    const good = plugin(join(base, "cache", "good"), "good");
+    const off = plugin(join(base, "cache", "off"), "off");
+    const otherTstack = plugin(join(base, "cache", "tstack"), "tstack");
+    const elsewhere = plugin(join(base, "cache", "elsewhere"), "elsewhere");
+    skillFile(join(good, "skills", "lint"), ["name: lint", "description: >", "  Lint the code,", "  every file.", 'argument-hint: "[path]"']);
+    skillFile(join(good, "skills", "hidden"), ["description: only the model runs it", "user-invocable: false"]);
+    file(join(good, "commands", "ship.md"), "---\ndescription: 'Ship it, don''t wait'\ndisable-model-invocation: true\n---\nbody\n");
+    skillFile(join(off, "skills", "x"), ["description: disabled"]);
+    skillFile(join(otherTstack, "skills", "tdd"), ["description: an older tstack"]);
+    skillFile(join(elsewhere, "skills", "y"), ["description: another project's"]);
+
+    const installs = {
+      "good@mk": [{ scope: "user", installPath: good }],
+      "off@mk": [{ scope: "user", installPath: off }],
+      "tstack@tstack": [{ scope: "user", installPath: otherTstack }],
+      "elsewhere@mk": [{ scope: "project", projectPath: join(base, "other-repo"), installPath: elsewhere }],
+    };
+
+    file(join(config, "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: installs }));
+    file(join(config, "settings.json"), JSON.stringify({ enabledPlugins: { "good@mk": true, "off@mk": false } }));
+    skillFile(join(config, "skills", "notes"), ["name: notes", "description: |", "  Keep notes.", "  Two lines."]);
+    skillFile(join(config, "skills", "shared"), ["description: the user's"]);
+    mkdirSync(join(repo, ".jj"), { recursive: true });
+    skillFile(join(repo, ".claude", "skills", "deploy"), ["description: Deploy the app", "disable-model-invocation: true", "allowed-tools:", "  - Bash"]);
+    skillFile(join(repo, ".claude", "skills", "shared"), ["description: the project's"]);
+  });
+
+  function byName(body: JsonObject): Map<string, JsonObject> {
+    return new Map((asArray(body["skills"]) ?? []).map((s) => [asString(asObject(s)?.["name"]) ?? "", asObject(s) ?? {}]));
+  }
+
+  test("lists this plugin's, the enabled plugins', the user's and the project's, sorted, each once", async () => {
+    const dir = join(base, "-repo", "abc", "scratchpad", "coordinator");
+    mkdirSync(dir, { recursive: true });
+    writeState(dir, [], { project: "s" });
+    file(join(config, "projects", "-repo", "abc.jsonl"), `${JSON.stringify({ type: "mode" })}\n${JSON.stringify({ type: "user", cwd: repo })}\n`);
+    register(dir, "s");
+    await start();
+    const got = await request("GET", "/f/s/skills");
+    expect([got.status, got.headers.get("Content-Type"), got.body["builtins"]]).toEqual([200, "application/json; charset=utf-8", false]);
+    const skills = byName(got.body);
+    const names = [...skills.keys()];
+    expect(names).toEqual([...names].sort());
+    expect(skills.get("good:lint")).toEqual({ name: "good:lint", description: "Lint the code, every file.", hint: "[path]", source: "plugin", model: true });
+    expect(skills.get("good:ship")).toEqual({ name: "good:ship", description: "Ship it, don't wait", hint: "", source: "plugin", model: false });
+    expect(skills.get("notes")).toEqual({ name: "notes", description: "Keep notes.\nTwo lines.", hint: "", source: "user", model: true });
+    expect(skills.get("deploy")).toEqual({ name: "deploy", description: "Deploy the app", hint: "", source: "project", model: false });
+    expect([skills.get("shared")?.["description"], skills.get("shared")?.["source"]]).toEqual(["the user's", "user"]);
+    expect(skills.get("tstack:tdd")?.["source"]).toBe("plugin");
+    expect(asString(skills.get("tstack:tdd")?.["description"])).toStartWith("Test-first");
+    expect(names.filter((n) => n === "tstack:tdd").length).toBe(1);
+
+    for (const gone of ["good:hidden", "off:x", "elsewhere:y"]) expect(skills.has(gone)).toBe(false);
+  });
+
+  test("without a transcript the ledger's workspace names the repository; the list is held for a minute", async () => {
+    writeState(root, [], { workspaces: [{ id: "w1", agent: "a1", path: join(base, "repo-w1"), repo, status: "active" }] });
+    await start();
+    const first = await request("GET", "/f/p/skills");
+    expect(byName(first.body).get("deploy")?.["source"]).toBe("project");
+    skillFile(join(config, "skills", "later"), ["description: added after"]);
+    expect(await request("GET", "/f/p/skills")).toMatchObject({ status: 200, body: first.body });
+  });
+
+  test("a fleet whose repository nothing records lists no project skills, and an unknown fleet is a 404", async () => {
+    await start();
+    const skills = byName((await request("GET", "/f/p/skills")).body);
+    expect([skills.has("deploy"), skills.get("shared")?.["source"], skills.has("good:lint")]).toEqual([false, "user", true]);
+    expect((await request("GET", "/f/nobody/skills")).status).toBe(404);
+  });
+
+  test("the frontmatter's scalars: plain, quoted, folded and literal; lists and the body are skipped", () => {
+    const text = ["---", "name: a", 'description: "say \\"hi\\""', "hint: >-", "  one", "  two", "", "  three", "tools:", "  - Bash", "plain: x # note", "---", "body: no"].join("\n");
+    expect(Object.fromEntries(frontmatter(text))).toEqual({ name: "a", description: 'say "hi"', hint: "one two\nthree", plain: "x" });
+    expect(frontmatter("no frontmatter\nname: x").size).toBe(0);
   });
 });
 
@@ -698,6 +811,8 @@ describe("a peer hub's fleets", () => {
     expect(seen.length).toBe(count);
     const events = await fetch(`http://127.0.0.1:${port}/f/infra@stub/events`);
     expect([events.status, await events.text()]).toEqual([200, 'event: hello\ndata: {"write": true}\n\n']);
+    expect((await request("GET", "/f/infra@stub/skills")).status).toBe(200);
+    expect(seen.at(-1)?.path).toBe("/f/infra/skills");
     expect((await request("GET", "/f/infra@nowhere/")).status).toBe(404);
   });
 });

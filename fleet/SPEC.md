@@ -498,11 +498,43 @@ itself. A manager made later appears the same way, on the same address.
   `state` on connect and on change, `chat` with `id:`, pings; `Last-Event-ID` or `after`), `POST
   /chat` (201; 403 policy or cross-origin `Origin`; 415; 413 over 16 KiB; 400 bad body, `ChatError`,
   unknown decision or a secret's value; 409 an answer to a closed decision; 500 store failure),
-  `POST /chat/preview`, the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
+  `POST /chat/preview`, `GET /skills` (below), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
   sandbox CSP; dot files and paths out of DIR 404). `/f/<fleet>` redirects (301) to `/f/<fleet>/`;
   `/f/<a>/f/<b>/…` is `/f/<b>/…`, so the manager's page, whose coordinators' links are relative,
   works under `/f/manager/`. 421 on a `Host` the hub doesn't answer to (loopback, `localhost`, the
   Tailscale IP, the MagicDNS name and short name, at its port; the https name with `--https`).
+- **Skills** (`GET /f/<fleet>/skills`, the page's composer lists them on a `/` at the start of a
+  message): `{"skills": [{name, description, hint, source, model}], "builtins": false}`, sorted by
+  name (code point order). `source` is `plugin`, `user` or `project`; `hint` is the `argument-hint`
+  or empty; `model` is false when `disable-model-invocation: true`. A skill with `user-invocable:
+  false` is left out (the user cannot type it). Read from disk, frontmatter only (the top-level
+  scalar keys; plain, quoted, `>` and `|` blocks), held 60 s per fleet. The sources, with Claude
+  Code's config directory (`$CLAUDE_CONFIG_DIR`, else `~/.claude`) as `CONFIG`:
+  1. this plugin (the checkout the hub runs from): its `skills/` and the dirs its
+     `.claude-plugin/plugin.json` `skills` lists, named `tstack:<name>`;
+  2. every other plugin in `CONFIG/plugins/installed_plugins.json` (a `project` or `local` install
+     only when its `projectPath` is the fleet's repository) that is enabled: `enabledPlugins`
+     (`<plugin>@<marketplace>`) of `CONFIG/settings.json`, then of the repository's
+     `.claude/settings.json` and `.claude/settings.local.json`, the later winning, else the plugin's
+     `defaultEnabled` (true when absent). A plugin named as this one is skipped. Its skills as
+     above, plus its commands (`commands/*.md`, or what the manifest's `commands` names, which
+     replaces that default), named `<plugin>:<name>`;
+  3. the user's `CONFIG/skills/*/SKILL.md` and `CONFIG/commands/*.md`;
+  4. the project's `.claude/skills/*/SKILL.md` and `.claude/commands/*.md`, in the directory the
+     fleet's session started in and each parent up to the repository root (`.jj` or `.git`). That
+     directory is the first `cwd` the session's transcript records, else the `repo` of the ledger's
+     first `workspaces[]` row; with neither, no project skills.
+
+  A skill is named by its frontmatter `name` when that is a valid name (`[a-z0-9-]`, 64 at most),
+  else by its directory; a command by its file name. Plugins' names are namespaced and never
+  collide; of two bare names the first read wins, in the order above (Claude Code runs a personal
+  skill over a project's with the same name), a skill before a command, the nearer directory first.
+  `builtins` is false: Claude Code's built-in commands (`/clear`, `/compact`) are listed by no file
+  on disk (only a running session's `system/init` message, which mixes them with skills), so they
+  are not offered. A message the user sends that starts with `/<name> [args]` is stored as typed,
+  with no field of its own: the host (and a worker, by `brief.md`) runs that skill with those
+  arguments, as if typed in its session, and answers with `--re`. serve_dashboard.py has no such
+  route; its 404 leaves the composer without a list.
 - **Live updates**: each stream looks at `state.json` and `chat.jsonl` every 300 ms (as
   serve_dashboard.py did); the view of a fleet is computed once for every client, again when the
   file changes or after 2 s (spend, liveness, links). The page already used SSE and polls

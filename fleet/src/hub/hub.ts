@@ -6,7 +6,8 @@
  *   stream, `/api/fleets` this machine's fleets as JSON (what a peer hub reads).
  * - `/f/<fleet>/…` a fleet of this machine, as serve_dashboard.py served it: the page (rendered from
  *   state.json on each load), `GET /chat`, `GET /events` (SSE: `hello`, `state`, `chat`, pings),
- *   `POST /chat`, `POST /chat/preview`, and the files under its DIR (`decisions/*` sandboxed), with the
+ *   `POST /chat`, `POST /chat/preview`, `GET /skills` (what the session can be told to run, held 60 s),
+ *   and the files under its DIR (`decisions/*` sandboxed), with the
  *   same status codes. `/f/<a>/f/<b>/…` is `/f/<b>/…` (a manager's page links its fleets relatively).
  * - `/f/<fleet>@<machine>/…` a fleet of a peer hub, passed through: this hub checks a post by its own
  *   rules first, then the peer checks this machine (its owner's login) by its rules.
@@ -32,6 +33,7 @@ import { indexHtml } from "./index-page.ts";
 import { ProbeCache } from "./probes.ts";
 import { hello, postRefusal, viewerOf, type Viewer } from "./policy.ts";
 import { Served } from "./served.ts";
+import { PLUGIN_ROOT, readSkills, repoOf } from "./skills.ts";
 import { readTailnet, whois, type Tailnet } from "./tailnet.ts";
 
 import * as Option from "effect/Option";
@@ -47,6 +49,9 @@ export const PING_MS = 15_000;
 
 /** How long a computed view serves an unchanged state.json before the derived figures are read again. */
 const VIEW_TTL_MS = 2000;
+
+/** How long a fleet's list of skills is served before the files are read again. */
+const SKILLS_TTL_MS = 60_000;
 
 /** How often the hub reads the tailnet and asks the peer hubs for their fleets. */
 const PEERS_MS = 30_000;
@@ -182,6 +187,7 @@ export class Hub {
   private readonly probes = new ProbeCache();
   private readonly spend = new SpendReader();
   private readonly views = new Map<string, Viewed>();
+  private readonly skillLists = new Map<string, { readonly body: string; readonly at: number }>();
   private readonly logins = new Map<string, { readonly login: string | undefined; readonly at: number }>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private readonly lookups: Lookups;
@@ -451,6 +457,8 @@ export class Hub {
 
     if (rest === "/chat") return jsonResponse(200, { messages: readChat(root, afterParam(params)).map((m) => m.stored) });
 
+    if (rest === "/skills") return new Response(req.method === "HEAD" ? null : this.skillsOf(root), { headers: { "Content-Type": "application/json; charset=utf-8", ...NO_STORE } });
+
     if (rest === "/events") {
       keepOpen();
       const viewer = await this.viewer(req, ip);
@@ -465,6 +473,19 @@ export class Hub {
     }
 
     return this.file(req, root, rest === "/" ? "/index.html" : rest);
+  }
+
+  /** What `GET /f/<fleet>/skills` answers: the skills the fleet's session can run, read again after 60 s. */
+  skillsOf(root: string): string {
+    const held = this.skillLists.get(root);
+
+    if (held !== undefined && performance.now() - held.at < SKILLS_TTL_MS) return held.body;
+    const config = this.options.machine.config;
+    const skills = readSkills({ config, plugin: PLUGIN_ROOT, repo: repoOf(root, config) });
+    const body = dumps({ skills: skills.map((s) => ({ ...s })), builtins: false }, { ensureAscii: false });
+    this.skillLists.set(root, { body, at: performance.now() });
+
+    return body;
   }
 
   /** The page of the fleet at `root`, rendered from its state.json now; undefined while it cannot be. */
