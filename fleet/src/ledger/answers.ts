@@ -5,7 +5,7 @@
  */
 import { join } from "node:path";
 
-import { asArray, asObject, asString, truthy, type JsonObject } from "../json.ts";
+import { asArray, asObject, asString, pyRepr, truthy, type JsonObject } from "../json.ts";
 import { readObject } from "../registry.ts";
 import { find } from "./numbers.ts";
 
@@ -50,7 +50,7 @@ export function answerRefusal(root: string, id: string, text: string): string | 
   if (item["status"] !== "open") {
     const resolution = item["resolution"];
 
-    return `${asString(item["title"]) ?? ""} is already ${asString(item["status"]) ?? ""}: ${truthy(resolution) ? (asString(resolution) ?? "") : "no reason recorded"}`;
+    return `${asString(item["title"]) ?? pyRepr(item["title"])} is already ${asString(item["status"]) ?? pyRepr(item["status"])}: ${truthy(resolution) ? (asString(resolution) ?? pyRepr(resolution)) : "no reason recorded"}`;
   }
 
   if (item["kind"] === "secret") {

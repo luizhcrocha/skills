@@ -91,7 +91,7 @@ export function closedNamed(machine: Machine, ledger: Ledger, text: string): str
     const target = ledgers.get(fleet);
     const d = target === undefined ? undefined : findDecision(target, ref);
 
-    if (d !== undefined && d.status !== "open") found.push(`${fleet === "" ? "" : `${fleet} `}${ref} (${d.title}) is ${d.status}`);
+    if (d !== undefined && d.status !== "open") found.push(`${fleet === "" ? "" : `${fleet} `}${ref} (${d.title ?? "None"}) is ${d.status}`);
   }
 
   return found;

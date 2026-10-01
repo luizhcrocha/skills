@@ -199,7 +199,7 @@ export function link(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
     if (drop !== undefined) {
       if (item === undefined) return yield* refuse(`no link '${id}'`);
       links.splice(links.indexOf(item), 1);
-      log(run, ledger, { kind: "note", text: `Link ${id} (${item.title}) removed: ${drop}` });
+      log(run, ledger, { kind: "note", text: `Link ${id} (${item.title ?? "None"}) removed: ${drop}` });
 
       return ledger;
     }
@@ -238,7 +238,7 @@ export function link(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
       links.push(fresh);
       log(run, ledger, {
         kind: "note",
-        text: `${fresh.kind === "page" ? "Page" : "Dev server"} ${fresh.title}: ${fresh.url}`,
+        text: `${fresh.kind === "page" ? "Page" : "Dev server"} ${fresh.title ?? "None"}: ${fresh.url ?? "None"}`,
         agent: agent ?? null,
         decision,
       });
@@ -246,15 +246,14 @@ export function link(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
       return ledger;
     }
 
+    // An emptied field is stored as null, as Python's `or None` stores it (open-7).
     const orNull = (value: string): string | null => (value === "" ? null : value);
-    // Python stores None for an emptied field; url, title and kind print it as "None".
-    const orNone = (value: string): string => (value === "" ? "None" : value);
 
-    if (url !== undefined) item.url = orNone(url);
+    if (url !== undefined) item.url = orNull(url);
 
-    if (title !== undefined) item.title = orNone(title);
+    if (title !== undefined) item.title = orNull(title);
 
-    if (kind !== undefined) item.kind = orNone(kind);
+    if (kind !== undefined) item.kind = kind;
 
     if (decision !== undefined) item.decision = orNull(decision);
 
@@ -572,8 +571,8 @@ export function agent(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
 // -- roadblocks -----------------------------------------------------------------------------------
 
 /** Why a closed decision or roadblock takes no more edits. */
-export function closedBecause(item: { readonly title: string; readonly status: string; readonly resolution?: string | null | undefined }): string {
-  return `${item.title} is already ${item.status}: ${given(item.resolution ?? undefined) ? item.resolution : "no reason recorded"}`;
+export function closedBecause(item: { readonly title: string | null; readonly status: string; readonly resolution?: string | null | undefined }): string {
+  return `${item.title ?? "None"} is already ${item.status}: ${given(item.resolution ?? undefined) ? item.resolution : "no reason recorded"}`;
 }
 
 function openDecision(ledger: Ledger, id: string): Effect.Effect<Decision, Refusal> {
@@ -748,9 +747,9 @@ function close(run: Run, ledger: Ledger, d: Decision, outcome: { readonly status
   d.closed = stamp(run);
 
   if (outcome.status === "decided") {
-    log(run, ledger, { kind: "decision", text: `${d.title}: ${outcome.answer ?? "None"} (${outcome.resolution})`, agent: d.agent ?? null, decision: d.id });
+    log(run, ledger, { kind: "decision", text: `${d.title ?? "None"}: ${outcome.answer ?? "None"} (${outcome.resolution})`, agent: d.agent ?? null, decision: d.id });
   } else {
-    log(run, ledger, { kind: "resolved", text: `${d.title} withdrawn: ${outcome.resolution}`, agent: d.agent ?? null, decision: d.id });
+    log(run, ledger, { kind: "resolved", text: `${d.title ?? "None"} withdrawn: ${outcome.resolution}`, agent: d.agent ?? null, decision: d.id });
   }
 
   for (const r of ledger.roadblocks) {
@@ -843,7 +842,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
         if (old === undefined) return yield* refuse(`unknown decision '${supersedes}'`);
 
-        if (old.status === "open") return yield* refuse(`${old.title} is still open; change it instead of superseding it`);
+        if (old.status === "open") return yield* refuse(`${old.title ?? "None"} is still open; change it instead of superseding it`);
         supersedes = old.id;
       }
 
@@ -887,7 +886,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         const forManager = fresh.asks === "manager";
         log(run, ledger, {
           kind: "asked",
-          text: `${forManager ? "For the manager: " : ""}${fresh.title}: ${fresh.question}`,
+          text: `${forManager ? "For the manager: " : ""}${fresh.title ?? "None"}: ${fresh.question ?? "None"}`,
           agent: fresh.agent ?? null,
           important: (fresh.blocking ?? false) && !forManager,
           decision: fresh.id,
@@ -930,8 +929,9 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
         if (value === undefined) continue;
 
-        // Python stores None for an emptied field; kind, title and question print it as "None".
-        if (key === "kind" || key === "title" || key === "question") row[key] = value === "" ? "None" : value;
+        // An emptied field is stored as null, as Python's `or None` stores it (open-7); kind takes no
+        // empty value (its choices refuse it).
+        if (key === "kind") row[key] = value;
         else row[key] = value === "" ? null : value;
       }
 
@@ -962,7 +962,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         row.change = given(logText) ? logText : null;
         log(run, ledger, {
           kind: "asked",
-          text: passedOn ? `${row.title} now asks you: ${row.question}` : `${row.title} changed: ${given(logText) ? logText : changed.join(", ")}`,
+          text: passedOn ? `${row.title ?? "None"} now asks you: ${row.question ?? "None"}` : `${row.title ?? "None"} changed: ${given(logText) ? logText : changed.join(", ")}`,
           agent: row.agent ?? null,
           important: passedOn && row.blocking === true,
           decision: row.id,
@@ -1153,7 +1153,7 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
             ? "a question revised"
             : "reasons added";
 
-      log(run, ledger, { kind: "asked", text: `${row.title}: ${words}`, agent: row.agent ?? null, important: row.blocking === true, decision: row.id });
+      log(run, ledger, { kind: "asked", text: `${row.title ?? "None"}: ${words}`, agent: row.agent ?? null, important: row.blocking === true, decision: row.id });
     }
 
     const done = args.str("done");

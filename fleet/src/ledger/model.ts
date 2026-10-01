@@ -98,8 +98,10 @@ export interface Question {
 export interface Decision {
   id: string;
   kind: string;
-  title: string;
-  question: string;
+  /** Null once emptied (`--title ""`), as Python stores it. */
+  title: string | null;
+  /** Null once emptied (`--question ""`), as Python stores it. */
+  question: string | null;
   why?: string | null;
   blocking?: boolean;
   agent?: string | null;
@@ -138,8 +140,10 @@ export interface LedgerEvent {
 /** A dev server or a purpose-built page the user opens. */
 export interface Link {
   id: string;
-  url: string;
-  title: string;
+  /** Null once emptied (`--url ""`), as Python stores it. */
+  url: string | null;
+  /** Null once emptied (`--title ""`), as Python stores it. */
+  title: string | null;
   kind: string;
   decision?: string | null;
   agent?: string | null;
@@ -241,6 +245,17 @@ class Fields {
     if (text === undefined) this.wrong(key, "a string");
 
     return text;
+  }
+
+  /** A string or null that must be there (a field an empty value clears, as Python's `or None` does). */
+  strOrNull(key: string, message?: string): string | null {
+    if (this.object[key] === undefined) {
+      this.missing(key, message);
+
+      return null;
+    }
+
+    return this.nullStr(key) ?? null;
   }
 
   nullStr(key: string): string | null | undefined {
@@ -601,8 +616,8 @@ function readDecision(object: JsonObject): Fields | Decision {
   const row: Decision = {
     id: f.str("id", missing("id")),
     kind: f.str("kind", missing("kind")),
-    title: f.str("title", missing("title")),
-    question: f.str("question", missing("question")),
+    title: f.strOrNull("title", missing("title")),
+    question: f.strOrNull("question", missing("question")),
     status: f.str("status", missing("status")),
     opened: f.str("opened", missing("opened")),
   };
@@ -656,7 +671,7 @@ export const LINK_KEYS = ["id", "url", "title", "kind", "decision", "agent", "no
 
 function readLink(object: JsonObject): Fields | Link {
   const f = new Fields(object, `link ${asString(object["id"]) ?? "?"}`);
-  const row: Link = { id: f.str("id"), url: f.str("url"), title: f.str("title"), kind: f.str("kind") };
+  const row: Link = { id: f.str("id"), url: f.strOrNull("url"), title: f.strOrNull("title"), kind: f.str("kind") };
   present(row, {
     decision: f.nullStr("decision"),
     agent: f.nullStr("agent"),

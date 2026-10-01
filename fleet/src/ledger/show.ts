@@ -81,10 +81,10 @@ export function showLines(ledger: Ledger): string[] {
     if (d.status === "open" && d.asks === "manager") status += ", with the manager";
     const answer = d.answer ?? "";
     const outcome = answer !== "" ? answer : (d.resolution ?? "");
-    lines.push(`  ${d.ref ?? ""} decision ${d.id} ${status} [${d.kind}] ${d.title}${outcome === "" ? "" : `: ${outcome}`}`);
+    lines.push(`  ${d.ref ?? ""} decision ${d.id} ${status} [${d.kind}] ${d.title ?? "None"}${outcome === "" ? "" : `: ${outcome}`}`);
   }
 
-  for (const l of ledger.links ?? []) lines.push(`  ${l.ref ?? ""} link ${l.id} [${l.kind}] ${l.title}: ${l.url}`);
+  for (const l of ledger.links ?? []) lines.push(`  ${l.ref ?? ""} link ${l.id} [${l.kind}] ${l.title ?? "None"}: ${l.url ?? "None"}`);
 
   for (const k of ledger.kept ?? []) lines.push(`  kept ${k.id}: ${k.text}`);
   lines.push(`  ${ledger.events.length} events, updated ${ledger.updated ?? ""}`);

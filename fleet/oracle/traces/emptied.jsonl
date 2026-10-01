@@ -1,0 +1,16 @@
+{"trace": 1, "name": "emptied", "about": "open-7: an emptied field (`--title \"\"`, `--question \"\"`, `--url \"\"`) is stored as JSON null, as Python's `or None` stores it, and prints as None wherever Python prints it: the change event, show, a decision recorded on it, the refusal of a closed one, the page (rendered) and a manager's list."}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--kind", "input", "--title", "Region", "--question", "eu or us?", "--why", "latency", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--title", "", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--question", "", "--why", "", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--kind", "", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "link", "l1", "--url", "http://127.0.0.1:9/", "--title", "Dev", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "link", "l1", "--url", "", "--title", "", "--note", "", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "show"]}
+{"cli": "state", "argv": ["$DIR", "event", "rendered with nulls"]}
+{"cli": "state", "argv": ["$DIR", "decision", "I1", "--decide", "eu", "--resolution", "the user said so", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d1", "--title", "again", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "link", "l1", "--drop", "gone", "--no-render"]}
+{"fixture": "write", "path": "$REGISTRY/p.json", "content": "{\"id\": \"p\", \"role\": \"coordinator\", \"dir\": \"$DIR\", \"url\": \"https://box.ts.net:40002/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:30:00+00:00\"}\n"}
+{"cli": "fleets", "argv": ["decision", "p", "d1"]}
+{"cli": "fleets", "argv": ["list"]}
