@@ -20,7 +20,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 [The ledger](#the-ledger-statejson) · [Numbers](#numbers-refs) · [Warnings](#warnings) ·
 [chat.py](#chatpy-the-chat) · [fleets.py and the registry](#fleetspy-and-the-registry) ·
 [The other scripts](#the-other-scripts) · [The hub](#the-hub-fleet-hub) · [Heartbeats](#heartbeats) ·
-[Workspaces](#workspaces-fleet-ws) · [Files by writer](#files-by-writer) ·
+[Workspaces](#workspaces-fleet-ws) · [The advisor](#the-advisor-fleet-advisor) · [Files by writer](#files-by-writer) ·
 [Oracle traces](#oracle-traces) · [The model](#the-model-based-test) · [Open](#open)
 
 ## Environment
@@ -594,6 +594,46 @@ rule's disposition are in [RULES.md](RULES.md)). Beside the refusals and warning
   manager ...`) otherwise, or when DIR is not served while a manager is. Without DIR the fleet is the
   registry entry whose pid is among the command's parents (the session that serves it). The plugin's
   `land-check` runs it before its verdict: exit 1 makes the verdict `stop`, with the reason in `turn`.
+
+## The advisor (`fleet advisor`)
+
+One per fleet, started by the coordinator when workers need judgement (D13 stage 6): the plugin's
+`advisor` agent (`agents/advisor.md`, `tstack:advisor`), on Fable, read-only, long-lived. Workers and the
+coordinator ask it through `SendMessage` before a question goes to the user; it rules from the ledger's
+decisions, its earlier answers, the repo (`CONTEXT.md`, ADRs, `jj log`), `memo recall` and the
+principles, or says the question is the user's, and the asker then opens a decision with its
+recommendation attached.
+
+`fleet advisor DIR [--model fable|opus] [--task-id ID] [--log TEXT]` (TypeScript only; it writes through
+`fleet state`, so the coordinator, the ledger's one writer, runs it):
+
+- **The row.** The worker row `advisor`: task `Answers the fleet's judgement questions before they
+  reach the user`, skill none, no lane, model fable (or the row's, or `--model`), status **queued**. New:
+  in the milestone of the current step, else the first; logs `Advisor started on <model>.` (or
+  `--log`). Known: model, status, `--task-id` and `--log` as given. An empty roadmap is refused, and so
+  is a model other than fable or opus (`advisor: the advisor runs on fable, or on opus when Fable is
+  unavailable; not 'sonnet'`).
+- **Why queued.** The advisor waits between questions; a `running` row with no tool call for twenty
+  minutes is a silent worker on the page, in `fleets show` and the watches. `queued` is live (the page
+  lists it, `set --status done` names it, `park` stops it) and is never silent.
+- **Why a row.** It puts `advisor` on the chat roster (`say --as advisor`, `@advisor`), and its model
+  and tokens on the page (`--task-id` measures them from its transcript).
+- **Output.** Without `--task-id`: the advisor's prompt on stdout (its DIR, the CLI's path, where the
+  ledger, the brief and the chat are, the line that records an answer, its model), and on stderr how to
+  spawn it (`subagent_type "tstack:advisor"`, `model`, in the background) and how to restart it on Opus.
+  With `--task-id`: `advisor recorded on <model> as <ID>`, and on stderr the line for "This fleet" in
+  `brief.md` that tells workers to `SendMessage <ID>` before asking the user.
+- **Fable unavailable.** Claude Code has no fallback for a subagent's model on limits, credits or
+  access (`--fallback-model` covers the main loop's overload only). The Agent call's `model` overrides
+  the agent's frontmatter, so the coordinator reads the failed spawn (an error naming the model, a
+  usage or credit limit, no access), runs `fleet advisor DIR --model opus --log "Fable unavailable:
+  <the error>"`, spawns again with `model: "opus"`, and says so in its next message.
+- **Each answer is recorded on the chat**, not the ledger: `fleet chat DIR say --as advisor "<asker>
+  asked: <question> | <verdict> | <reason> | <confidence>"`. The page shows both; the chat is the store
+  a participant other than the coordinator may append to (under its lock, while `state.json` has one
+  writer and no lock), the message reaches the user, who can overrule it with a reply, and it
+  survives a restart: the new advisor reads `chat log` for its earlier rulings. The asker is named
+  without `@`, so the record is not opened in the asker's inbox.
 
 ## Files by writer
 
