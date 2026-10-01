@@ -62,7 +62,7 @@ A fleet that runs an advisor (the `advisor` row in `fleet fleets show`) asks it 
 
 Log what you did: `fleet state <dir> event --kind decision --agent <fleet> "d3 answered from standing: one lock window"`.
 
-Decisions of your own (a landing to approve, an order to choose between fleets) you record in your ledger as any coordinator does, and the user answers them on your page.
+Decisions of your own (a landing to approve, an order to choose between fleets) you record in your ledger as any coordinator does, and the user answers them on your page. An answer or its note that starts with `/<skill> [args]` (the note on its own line, a grilling's answer after `Q1: `) is the user typing that command: record the answer as given, and run the command with the Skill tool and those arguments; for an answer, run it before you act on the decision.
 
 ### A question for another fleet
 

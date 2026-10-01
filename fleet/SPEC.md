@@ -511,8 +511,8 @@ itself. A manager made later appears the same way, on the same address.
   `/f/<a>/f/<b>/…` is `/f/<b>/…`, so the manager's page, whose coordinators' links are relative,
   works under `/f/manager/`. 421 on a `Host` the hub doesn't answer to (loopback, `localhost`, the
   Tailscale IP, the MagicDNS name and short name, at its port; the https name with `--https`).
-- **Skills** (`GET /f/<fleet>/skills`, the page's composer lists them on a `/` at the start of a
-  message): `{"skills": [{name, description, hint, source, model}], "builtins": false}`, sorted by
+- **Skills** (`GET /f/<fleet>/skills`, the page lists them on a `/` at the start of a message in
+  the composer, and of an answer or a note on a decision's page): `{"skills": [{name, description, hint, source, model}], "builtins": false}`, sorted by
   name (code point order). `source` is `plugin`, `user` or `project`; `hint` is the `argument-hint`
   or empty; `model` is false when `disable-model-invocation: true`. A skill with `user-invocable:
   false` is left out (the user cannot type it). Read from disk, frontmatter only (the top-level
