@@ -12,7 +12,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.118"
+    "effect": "4.0.0"
   },
   "devDependencies": {
     "@oxlint/plugins": "1.86.0",

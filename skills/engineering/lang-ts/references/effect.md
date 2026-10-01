@@ -12,7 +12,7 @@ Load this file when changed behavior is already organized around Effect or uses 
 - Do not introduce parallel constructor-injection, schema, or testing architecture inside an Effect responsibility without a concrete interoperability need or explicit architectural rationale.
 - Dependency-bearing modules in Effect architecture use Effect Services/Tags/Layers rather than ad hoc dependency bags.
 - Expected failures in Effect-based modules use Effect's typed error channel.
-- Effect custom errors use the repository's established Effect tagged-error mechanism, such as `Schema.TaggedErrorClass`.
+- Effect custom errors use the repository's established Effect tagged-error mechanism, such as `Schema.TaggedError`.
 - When Effect is the established schema model, use Effect Schema for refined values and schema-derived domain construction.
 - Sensitive values use Effect's Redacted value type in Effect codebases.
 - Layers that construct cleanup-requiring resources own acquisition and cleanup.
@@ -56,7 +56,7 @@ Expected failures belong in Effect's typed error channel. Do not convert ordinar
 Use the local established tagged-error mechanism:
 
 ```ts
-class UserNotFound extends Schema.TaggedErrorClass<UserNotFound>()("UserNotFound", {
+class UserNotFound extends Schema.TaggedError<UserNotFound>()("UserNotFound", {
   userId: UserIdSchema,
 }) {}
 ```

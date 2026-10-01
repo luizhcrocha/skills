@@ -10,7 +10,7 @@ Luiz's taste: correctness first, precise domain models, typed failures, deep mod
 
 ## Version target
 
-Latest stable on 2026-09-30 (rows and release notes in `references/sources.md`): TypeScript 7.0.2 (the native `tsc`), Node 24 LTS (24.21.0; 26.10.0 is Current), Vite+ 1.0.0 (`vp`, bundling Vitest 5.0.1, Oxlint 1.85.0, Oxfmt 0.70.0), fast-check 4.10.2, StrykerJS 10.0.0, Zod 4.6.5, Effect 3.22.2 stable with Effect 4 at 4.0.0-rc.118 (Luiz's Effect code is on the 4 RC).
+Latest stable on 2026-09-30 (rows and release notes in `references/sources.md`): TypeScript 7.0.2 (the native `tsc`), Node 24 LTS (24.21.0; 26.10.0 is Current), Vite+ 1.0.0 (`vp`, bundling Vitest 5.0.1, Oxlint 1.85.0, Oxfmt 0.70.0), fast-check 4.10.2, StrykerJS 10.0.0, Zod 4.6.5, Effect 4.0.0 (stable since 2026-09-30; move code on the 4 RC to it).
 
 A project's pinned version wins: read `package.json` (`engines`, `packageManager`, dependencies), the lockfile and `devenv.nix` first, and `vp toolchain` for what Vite+ bundles.
 
@@ -75,7 +75,7 @@ Substitutes come in through constructor or factory parameters, Effect layers or 
 - Iterator helpers (`.values().map(...).toArray()`) type-check only with `lib` at `ES2025` or later; `ES2024` lacks them.
 - A Node-pool test proves nothing about workerd. Keep the pool-workers config's `compatibilityDate` equal to `wrangler.jsonc`'s; the test config does not read it.
 - `@effect/sql-pg` on the Worker driver cannot type an empty array in `sql.in`, while PGlite accepts it: a PGlite-green test can fail on Postgres. Run the Postgres tier before a deploy that touches SQL.
-- Standalone Vitest, Oxlint and Oxfmt can be ahead of what Vite+ bundles; `@effect/vitest` 4 RCs need Vitest 5 (Vite+ 1.0 or later), and `@oxlint/plugins` pins to the bundled Oxlint.
+- Standalone Vitest, Oxlint and Oxfmt can be ahead of what Vite+ bundles; `@effect/vitest` 4 needs Vitest 5 (Vite+ 1.0 or later), and `@oxlint/plugins` pins to the bundled Oxlint.
 - `@typescript/native-preview` is a stale dev build; TypeScript 7 is `typescript@7`.
 - With `exactOptionalPropertyTypes`, `field?: T` (may be absent) and `field: T | undefined` (present, maybe undefined) are different contracts.
 - A test gate is judged by its counts (files and tests run), not by the absence of failures.

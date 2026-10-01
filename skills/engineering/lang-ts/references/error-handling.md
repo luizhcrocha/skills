@@ -29,7 +29,7 @@ Expected failures are part of the contract. Defects are not. Keep that line shar
 
 Failure representation order:
 
-1. In Effect-based responsibilities, use Effect's typed error channel and the established Effect tagged-error mechanism such as `Schema.TaggedErrorClass`.
+1. In Effect-based responsibilities, use Effect's typed error channel and the established Effect tagged-error mechanism such as `Schema.TaggedError`.
 2. Outside Effect, use `better-result` for typed results when it is already a dependency, explicitly accepted for the package, or adding it is in scope for new code with no established result convention.
 3. If `better-result` is not already available and adding it is not in scope, use the repository's established result shape or a small local tagged union.
 4. Outside Effect, prefer `TaggedError` from `better-result` for custom expected-failure classes when available, even if the codebase does not adopt `Result` as the return type.
