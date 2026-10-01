@@ -519,6 +519,10 @@ decision FLEET A1` prints the id's page address (it printed `#decision/A1`, whic
 doesn't find). And the refusal of a name two workers share names the id before the name: it
 iterated a set, so which label it named changed with the hash seed (found by the differential test).
 
+Stage 2's TypeScript fleet (`fleet/`, `fleet state|chat|fleets`) does what Python does for every item
+below, open-1 fixed in both; argparse's usage and error texts (exit 2) match too, wrapped to
+`COLUMNS`. Where it keeps a behaviour on purpose for the migration, the item says *Stage 2*.
+
 1. **Fixed: a decision whose id reads as a later number blocked every decision of that letter.**
    Opening `D4` as an input (numbered I2) was accepted; the next choice would have been numbered
    D4, which validation refused, naming the old decision, and so was every choice after it.
@@ -528,6 +532,8 @@ iterated a set, so which label it named changed with the hash seed (found by the
 2. **A refused write has already printed its success text.** The handler prints (`asked d8. Arm
    its answer's wake now…`, `recorded a1 …`, `recorded step s7`) before validation refuses the
    ledger; the warnings print too. Stage 2 should validate before printing anything but warnings.
+   *Stage 2*: kept. The handlers print through the CLI's output seam, so validating first is a
+   local change there once the oracle's expectation moves.
 3. **`roadblock --agent` isn't checked.** A worker nobody recorded is stored, and only a
    recorded one is marked blocked. Every other `--agent` is checked. Also, `--needs user`
    requires a decision only at creation.
@@ -544,6 +550,8 @@ iterated a set, so which label it named changed with the hash seed (found by the
 9. **The page's payload isn't in the oracle.** `index.html` is recorded as present only;
    `fleets.view()` (spent, links up or down, discovered servers, the manager's coordinators and
    usage) is stage 3's contract, pinned by test_fleets, test_spend, test_usage and the page tests.
+   *Stage 2*: the TypeScript `state` renders by running `render_dashboard.py` (with the command's
+   own environment) until stage 3's hub serves the page.
 10. **`show` never renders** and ignores `--no-render`/`-q`, though state.py's docstring says
     every command stamps, validates and renders.
 11. **`--no-render` and `-q` are stripped anywhere in argv**, values included: `event -q` records
@@ -551,6 +559,8 @@ iterated a set, so which label it named changed with the hash seed (found by the
 12. **Printed commands name the Python scripts**: the `wait` hint, the chat warning, brief.md's
     and standing.md's commands (`python3 $SKILL/scripts/chat.py …`). The stage 2 CLI prints its
     own; decide the wording and re-record those lines.
+    *Stage 2*: kept word for word, so a coordinator can switch CLIs mid-fleet; the cutover
+    re-records them.
 13. **Stamps are local time, compared as strings.** `wait`, `_answered_at` and numbering by
     `opened` compare ISO strings, which misorders stamps across an offset change (DST, a moved
     machine). The oracle pins `TZ=UTC`. Stage 2 should compare instants.
@@ -560,6 +570,7 @@ iterated a set, so which label it named changed with the hash seed (found by the
 15. **`state.json` is written in place, not atomically**, and twice per rendered command; readers
     (the server, a manager) tolerate a half-written file by skipping it. Stage 2: write once,
     atomically.
+    *Stage 2*: kept (one write with `--no-render`, the renderer's second otherwise).
 16. **A validation refusal can only name the first fault.**
 17. **Every `state.py` command creates DIR**, even one refused for want of a ledger.
 18. **`closed_named` matches L and R numbers** but looks them up among decisions only (a
@@ -570,6 +581,7 @@ iterated a set, so which label it named changed with the hash seed (found by the
     stored.
 21. **`chat wait` never returns for a decision closed without an answer** (withdrawn, or decided
     in the session): it doesn't re-read the ledger. It has to be killed.
+    *Stage 2*: kept.
 22. **`step next` takes its letters from the milestone's last lettered step**, so a milestone
     with mixed prefixes switches letters with its last step.
 23. **Worker figures come from transcripts found by path shape** (`…/<project>/<session>/scratchpad/<name>`)

@@ -1,4 +1,4 @@
-# Tasks for the tstack plugin. Needs only python3 (3.11+), node and jj/git,
+# Tasks for the tstack plugin. Needs only python3 (3.11+), node, bun and jj/git,
 # which the machine provides; there is no dev shell.
 
 default:
@@ -9,7 +9,7 @@ sync-upstream *args:
     python3 scripts/sync_upstream.py {{args}}
 
 # Every test in the repo
-test: test-scripts test-coordinator test-lint-ts test-fleet
+test: test-scripts test-coordinator test-lint-ts test-fleet test-fleet-ts
 
 # The repo scripts (sync-upstream) against throwaway git repos
 test-scripts:
@@ -27,6 +27,13 @@ test-coordinator:
 # The fleet oracle: the model-based test of the ledger (FLEET_MODEL_SEED=N replays a sequence) and the golden traces
 test-fleet:
     python3 -m unittest discover -s fleet/oracle -p 'test_*.py'
+
+# The TypeScript fleet (fleet/): strict types, the lint/ts packs, its own tests, then the oracle's golden traces and model test run against it
+test-fleet-ts:
+    cd fleet && bun install --frozen-lockfile --silent
+    cd lint/ts && npm install --no-audit --no-fund --prefer-offline --silent
+    cd fleet && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/oxlint -c .oxlintrc.json --deny-warnings src test && bun test
+    FLEET_ORACLE_IMPL='{"state": "{{justfile_directory()}}/fleet/bin/fleet state", "chat": "{{justfile_directory()}}/fleet/bin/fleet chat", "fleets": "{{justfile_directory()}}/fleet/bin/fleet fleets", "subst": {"{{justfile_directory()}}/skills/productivity/coordinator": "$SKILL"}}' python3 -m unittest discover -s fleet/oracle -p 'test_*.py'
 
 # The lang-* skills' sources tables as JSON (--skill NAME, --stale DAYS)
 lang-sources *args:

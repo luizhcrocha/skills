@@ -1,0 +1,402 @@
+/**
+ * The decisions seam (ported from the coordinator's tests/test_decisions.py): what waits on the user,
+ * through the state CLI, and the rule for what an answer may be.
+ */
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { beforeEach, describe, expect, test } from "bun:test";
+
+import { asArray, asObject, type JsonObject } from "../src/json.ts";
+import { answerRefusal } from "../src/ledger/answers.ts";
+import { baseEnv, fleet, readJson, tmp, type Environment, type Ran } from "./support.ts";
+
+const SCHEMA = [
+  "d1",
+  "--kind",
+  "decision",
+  "--title",
+  "Invoice schema",
+  "--question",
+  "Migrate the invoice table or keep both shapes?",
+  "--why",
+  "invoice-gen cannot write usage lines until this is settled",
+  "--option",
+  "A: migrate now | one shape, a 20 minute lock on invoices",
+  "--option",
+  "B: keep both | no lock, two code paths until the next release",
+  "--recommend",
+  "A",
+  "--reason",
+  "the table is small and the second path costs every later change",
+];
+
+let root: string;
+
+let env: Environment;
+
+function run(...args: string[]): Ran {
+  return fleet(["state", root, ...args, "--no-render"], env);
+}
+
+function ok(...args: string[]): string {
+  const result = run(...args);
+  expect(result.code, result.stderr).toBe(0);
+
+  return result.stdout;
+}
+
+function refused(...args: string[]): string {
+  const result = run(...args);
+  expect(result.code, result.stdout).toBe(1);
+  expect(result.stderr).not.toContain("Traceback");
+
+  return result.stderr;
+}
+
+function state(): JsonObject {
+  return readJson(join(root, "state.json"));
+}
+
+function rows(key: string): JsonObject[] {
+  return (asArray(state()[key]) ?? []).map((r) => asObject(r) ?? {});
+}
+
+function item(id = "d1"): JsonObject {
+  return rows("decisions").find((d) => d["id"] === id) ?? {};
+}
+
+function lastEvent(): JsonObject {
+  return rows("events").at(-1) ?? {};
+}
+
+beforeEach(() => {
+  root = tmp();
+  env = baseEnv(tmp());
+  ok("init", "--project", "p", "--goal", "g");
+  ok("milestone", "m1", "--title", "M");
+  ok("agent", "a1", "--task", "t", "--milestone", "m1", "--name", "invoice-gen");
+});
+
+describe("open", () => {
+  test("a new item is open with its four fields and is announced", () => {
+    ok("decision", ...SCHEMA, "--blocking", "--agent", "a1");
+    const d = item();
+    expect([d["status"], d["kind"], d["blocking"], d["agent"], d["page"]]).toEqual(["open", "decision", true, "a1", true]);
+    expect(d["options"]).toEqual([
+      { id: "A", label: "migrate now", consequence: "one shape, a 20 minute lock on invoices" },
+      { id: "B", label: "keep both", consequence: "no lock, two code paths until the next release" },
+    ]);
+    expect([d["recommend"], d["revised"], d["closed"]]).toEqual(["A", null, null]);
+    const event = lastEvent();
+    expect([event["kind"], event["decision"], event["agent"], event["important"]]).toEqual(["asked", "d1", "a1", true]);
+    expect(String(event["text"])).toContain("Migrate the invoice table");
+  });
+
+  test("an item that does not block is a routine event", () => {
+    ok("decision", ...SCHEMA);
+    expect(item()["blocking"]).toBe(false);
+    expect(lastEvent()).not.toHaveProperty("important");
+  });
+
+  test("a new item needs its fields", () => {
+    expect(refused("decision", "d1", "--kind", "input", "--title", "T", "--why", "w")).toContain("--question");
+    expect(refused("decision", "d1", "--kind", "input", "--title", "T", "--question", "q")).toContain("--why");
+    expect(rows("decisions")).toEqual([]);
+  });
+
+  test("each kind needs what its answer control shows", () => {
+    const base = ["--title", "T", "--question", "q", "--why", "w"];
+    expect(refused("decision", "d1", "--kind", "decision", ...base, "--option", "A: only one | c", "--recommend", "A", "--reason", "r")).toContain(
+      "two options",
+    );
+    expect(refused("decision", "d1", "--kind", "decision", ...base, "--option", "A: x | c", "--option", "B: y | c")).toContain("--recommend");
+    expect(
+      refused("decision", "d1", "--kind", "decision", ...base, "--option", "A: x | c", "--option", "B: y | c", "--recommend", "C", "--reason", "r"),
+    ).toContain("not one of the options");
+    expect(refused("decision", "d1", "--kind", "secret", ...base)).toContain("--secret");
+    expect(refused("decision", "d1", "--kind", "secret", ...base, "--secret", "NEO4J_PASSWORD")).toContain("--manual");
+    expect(refused("decision", "d1", "--kind", "action", ...base)).toContain("--manual");
+    ok("decision", "d1", "--kind", "input", ...base);
+    ok("decision", "d2", "--kind", "secret", ...base, "--secret", "NEO4J_PASSWORD", "--manual", "secretspec set NEO4J_PASSWORD");
+    ok("decision", "d3", "--kind", "action", ...base, "--manual", "tailscale up");
+  });
+
+  test("an option is key, label and consequence", () => {
+    const base = ["decision", "d1", "--kind", "decision", "--title", "T", "--question", "q", "--why", "w", "--recommend", "A", "--reason", "r"];
+    expect(refused(...base, "--option", "A: no consequence", "--option", "B: y | c")).toContain("KEY: label | consequence");
+    expect(refused(...base, "--option", "just words | c", "--option", "B: y | c")).toContain("KEY: label | consequence");
+    expect(refused(...base, "--option", "A: x | c", "--option", "A: y | c")).toContain("twice");
+  });
+
+  test("an id is a token and an agent is known", () => {
+    expect(refused("decision", "d/1", ...SCHEMA.slice(1))).toContain("letters");
+    expect(refused("decision", ...SCHEMA, "--agent", "nobody")).toContain("unknown agent");
+  });
+});
+
+describe("revise", () => {
+  test("changing an open item stamps revised and says what changed", () => {
+    ok("decision", ...SCHEMA);
+    ok("decision", "d1", "--why", "invoice-gen and the stripe adapter both wait", "--log", "the adapter now waits on this too");
+    const d = item();
+    expect(d["why"]).toBe("invoice-gen and the stripe adapter both wait");
+    expect(d["change"]).toBe("the adapter now waits on this too");
+    expect(d["revised"]).not.toBeNull();
+    const event = lastEvent();
+    expect([event["kind"], event["decision"]]).toEqual(["asked", "d1"]);
+    expect(String(event["text"])).toContain("the adapter now waits on this too");
+    expect(event).not.toHaveProperty("important");
+  });
+
+  test("a revision keeps the kind consistent", () => {
+    ok("decision", ...SCHEMA);
+    expect(refused("decision", "d1", "--recommend", "Z")).toContain("not one of the options");
+    expect(refused("decision", "d1", "--option", "A: only | c")).toContain("two options");
+  });
+
+  test("a new question comes with its options", () => {
+    ok("decision", ...SCHEMA, "--blocking");
+    const said = refused("decision", "d1", "--question", "Approve deploys of this kind as a rule?", "--not-blocking");
+    expect(said).toContain("--option");
+    expect(said).toContain("--same-options");
+    expect(item()["question"]).toBe("Migrate the invoice table or keep both shapes?");
+    ok(
+      "decision",
+      "d1",
+      "--question",
+      "Approve deploys of this kind as a rule?",
+      "--option",
+      "yes: As a rule | no ask per deploy",
+      "--option",
+      "no: Ask each time | one decision per deploy",
+      "--recommend",
+      "yes",
+      "--reason",
+      "r",
+    );
+    const ids = (): unknown[] => (asArray(item()["options"]) ?? []).map((o) => asObject(o)?.["id"]);
+    expect(ids()).toEqual(["yes", "no"]);
+    ok("decision", "d1", "--question", "Approve deploys of this kind, as a rule?", "--same-options");
+    expect(ids()).toEqual(["yes", "no"]);
+  });
+
+  test("only a choice has options to carry", () => {
+    ok("decision", "d2", "--kind", "input", "--title", "T", "--question", "q", "--why", "w");
+    ok("decision", "d2", "--question", "another question");
+    ok("decision", ...SCHEMA);
+    ok("decision", "d1", "--question", "Migrate the invoice table or keep both shapes?", "--why", "same question, new reason");
+  });
+
+  test("blocking can be lifted", () => {
+    ok("decision", ...SCHEMA, "--blocking");
+    ok("decision", "d1", "--not-blocking", "--why", "the fleet proceeds on A until you say otherwise");
+    expect(item()["blocking"]).toBe(false);
+  });
+
+  test("the body is copied beside the page and removed on request", () => {
+    const source = join(root, "analysis.html");
+    writeFileSync(source, "<table><tr><td>rows</td><td>1,204</td></tr></table>");
+    ok("decision", ...SCHEMA, "--body", source);
+    expect(item()["body"]).toBe(true);
+    expect(readFileSync(join(root, "decisions", "d1.html"), "utf8")).toBe(readFileSync(source, "utf8"));
+    writeFileSync(source, "<p>new figures</p>");
+    ok("decision", "d1", "--body", source, "--log", "figures as of 15:00");
+    expect(readFileSync(join(root, "decisions", "d1.html"), "utf8")).toBe("<p>new figures</p>");
+    expect(item()["revised"]).not.toBeNull();
+    ok("decision", "d1", "--no-body");
+    expect(item()["body"]).toBe(false);
+    expect(existsSync(join(root, "decisions", "d1.html"))).toBe(false);
+    expect(refused("decision", "d1", "--body", join(root, "missing.html"))).toContain("cannot read");
+  });
+});
+
+describe("close", () => {
+  test("deciding records the answer and how it came", () => {
+    ok("decision", ...SCHEMA);
+    ok("decision", "d1", "--decide", "B: keep both", "--resolution", "answered on the page (#14)");
+    const d = item();
+    expect([d["status"], d["answer"], d["resolution"]]).toEqual(["decided", "B: keep both", "answered on the page (#14)"]);
+    expect(d["closed"]).not.toBeNull();
+    const event = lastEvent();
+    expect([event["kind"], event["decision"]]).toEqual(["decision", "d1"]);
+    expect(String(event["text"])).toContain("B: keep both");
+  });
+
+  test("deciding needs how and withdrawing needs why", () => {
+    ok("decision", ...SCHEMA);
+    expect(refused("decision", "d1", "--decide", "A")).toContain("--resolution");
+    expect(item()["status"]).toBe("open");
+    ok("decision", "d1", "--withdraw", "the worker found the answer in the migration notes");
+    const d = item();
+    expect([d["status"], d["resolution"], d["answer"]]).toEqual(["withdrawn", "the worker found the answer in the migration notes", null]);
+    expect(lastEvent()["kind"]).toBe("resolved");
+  });
+
+  test("a closed item is not edited or closed again", () => {
+    ok("decision", ...SCHEMA);
+    ok("decision", "d1", "--decide", "A", "--resolution", "said in the session");
+
+    for (const args of [["--why", "new"], ["--decide", "B", "--resolution", "x"], ["--withdraw", "moot"]]) {
+      expect(refused("decision", "d1", ...args)).toContain("--supersedes d1");
+    }
+
+    expect(item()["answer"]).toBe("A");
+  });
+
+  test("a new item supersedes a closed one", () => {
+    ok("decision", ...SCHEMA);
+    expect(refused("decision", "d2", ...SCHEMA.slice(1), "--supersedes", "d1")).toContain("still open");
+    ok("decision", "d1", "--decide", "A", "--resolution", "said in the session");
+    ok("decision", "d2", ...SCHEMA.slice(1), "--supersedes", "d1");
+    expect(item("d2")["supersedes"]).toBe("d1");
+    expect(refused("decision", "d3", ...SCHEMA.slice(1), "--supersedes", "d9")).toContain("unknown decision");
+  });
+
+  test("a decision made elsewhere is recorded closed and has no page", () => {
+    ok("decision", "d1", "--title", "Model for the rename sweep", "--question", "Haiku for the rename sweep?", "--decide", "yes", "--resolution", "said in the session");
+    const d = item();
+    expect([d["status"], d["kind"], d["page"], d["answer"]]).toEqual(["decided", "decision", false, "yes"]);
+    expect(rows("events").filter((e) => e["decision"] === "d1").map((e) => e["kind"])).toEqual(["decision"]);
+  });
+});
+
+describe("asks", () => {
+  test("a decision asks the user unless it is put to the manager", () => {
+    ok("decision", ...SCHEMA);
+    expect(item()["asks"]).toBe("user");
+  });
+
+  test("one put to the manager does not call the user", () => {
+    ok("decision", ...SCHEMA, "--blocking", "--asks", "manager");
+    expect(item()["asks"]).toBe("manager");
+    const event = lastEvent();
+    expect(event["kind"]).toBe("asked");
+    expect(event).not.toHaveProperty("important");
+    expect(String(event["text"]).startsWith("For the manager: ")).toBe(true);
+  });
+
+  test("passing it to the user calls them", () => {
+    ok("decision", ...SCHEMA, "--blocking", "--asks", "manager");
+    ok("decision", "d1", "--asks", "user", "--log", "the manager passed it on: the choice is yours");
+    const d = item();
+    expect([d["asks"], d["change"]]).toEqual(["user", "the manager passed it on: the choice is yours"]);
+    const event = lastEvent();
+    expect([event["kind"], event["important"], event["decision"]]).toEqual(["asked", true, "d1"]);
+  });
+});
+
+describe("roadblocks", () => {
+  const ROADBLOCK = ["roadblock", "r1", "--title", "Schema undecided", "--detail", "invoice-gen is stopped", "--severity", "serious", "--needs", "user", "--agent", "a1"];
+
+  test("a roadblock that needs the user names its decision", () => {
+    expect(refused(...ROADBLOCK)).toContain("--decision");
+    expect(refused(...ROADBLOCK, "--decision", "d1")).toContain("unknown decision");
+    ok("decision", ...SCHEMA, "--blocking", "--agent", "a1");
+    ok(...ROADBLOCK, "--decision", "d1");
+    expect(rows("roadblocks")[0]?.["decision"]).toBe("d1");
+    ok("roadblock", "r2", "--title", "T", "--detail", "D", "--severity", "warning", "--needs", "coordinator");
+  });
+
+  test("closing the decision clears its roadblocks and frees the worker", () => {
+    ok("decision", ...SCHEMA, "--blocking", "--agent", "a1");
+    ok(...ROADBLOCK, "--decision", "d1");
+    expect(rows("agents")[0]?.["status"]).toBe("blocked");
+    ok("decision", "d1", "--decide", "A", "--resolution", "answered on the page");
+    expect(rows("roadblocks")[0]?.["resolved"]).toBe(true);
+    expect(rows("agents")[0]?.["status"]).toBe("running");
+  });
+
+  test("a roadblock cannot hang on a closed decision", () => {
+    ok("decision", ...SCHEMA);
+    ok("decision", "d1", "--withdraw", "moot");
+    expect(refused(...ROADBLOCK, "--decision", "d1")).toContain("withdrawn");
+  });
+});
+
+describe("ledger", () => {
+  test("show lists what waits and what was decided", () => {
+    ok("decision", ...SCHEMA, "--blocking");
+    ok("decision", "d2", "--kind", "input", "--title", "Rate limit", "--question", "q", "--why", "w");
+    ok("decision", "d2", "--decide", "200 per minute", "--resolution", "said in the chat (#3)");
+    const out = fleet(["state", root, "show"], env).stdout;
+    expect(out).toContain("decision d1 OPEN, blocking [decision] Invoice schema");
+    expect(out).toContain("decision d2 decided [input] Rate limit: 200 per minute");
+  });
+
+  test("a state from before decisions still renders", () => {
+    const old = { ...state() };
+    delete old["decisions"];
+    writeFileSync(join(root, "state.json"), JSON.stringify(old));
+    const result = fleet(["state", root, "set", "--now", "later"], env);
+    expect(result.code, result.stderr).toBe(0);
+    expect(state()["decisions"]).toEqual([]);
+    expect(existsSync(join(root, "index.html"))).toBe(true);
+  });
+
+  test("a state whose decisions are malformed is refused", () => {
+    ok("decision", ...SCHEMA);
+    const good = readFileSync(join(root, "state.json"), "utf8");
+
+    for (const [change, word] of [
+      [{ status: "maybe" }, "status"],
+      [{ kind: "poll" }, "kind"],
+      [{ supersedes: "d9" }, "d9"],
+    ] as const) {
+      const ledger = JSON.parse(good);
+      Object.assign(ledger.decisions[0], change);
+      writeFileSync(join(root, "state.json"), JSON.stringify(ledger));
+      expect(refused("set", "--now", "x")).toContain(word);
+    }
+  });
+});
+
+describe("answers", () => {
+  test("an open item takes an answer", () => {
+    ok("decision", ...SCHEMA);
+    expect(answerRefusal(root, "d1", "B: keep both")).toBeUndefined();
+    expect(answerRefusal(root, "d1", "None of these: split the table instead")).toBeUndefined();
+  });
+
+  test("an unknown or closed item refuses with the reason", () => {
+    expect(answerRefusal(root, "d1", "A")).toContain("unknown decision");
+    ok("decision", ...SCHEMA);
+    ok("decision", "d1", "--withdraw", "the worker found the answer in the migration notes");
+    const said = answerRefusal(root, "d1", "A") ?? "";
+    expect(said).toContain("withdrawn");
+    expect(said).toContain("the worker found the answer in the migration notes");
+  });
+
+  test("a secret takes a reference or an item name and never a value", () => {
+    ok("decision", "d1", "--kind", "secret", "--title", "Neo4j password", "--question", "Where is the Neo4j password?", "--why", "w", "--secret", "NEO4J_PASSWORD", "--manual", "secretspec set NEO4J_PASSWORD");
+
+    for (const fine of [
+      "op://Engineering/Neo4j Aura/password",
+      "op://dev/abcdefghijklmnopqrstuvwxyz/section/credential",
+      "Neo4j Aura (prod)",
+      "NEO4J_PASSWORD in the Engineering vault",
+      "Set by hand.",
+    ]) {
+      expect(answerRefusal(root, "d1", fine), fine).toBeUndefined();
+    }
+
+    for (const value of [
+      "sk-ant-api03-Zk9xQ2",
+      "ghp_16C7e42F292c6912E7710c838347Ae178B4a",
+      "xoxb-12345-abcdef",
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc",
+      "f3a9c1d27b6e4f0a8d5c2b1e9f7a6d3c",
+      "AKIAIOSFODNN7EXAMPLE",
+      "the password is hunter2hunter2hunter2",
+      "-----BEGIN PRIVATE KEY-----",
+      "x".repeat(300),
+    ]) {
+      expect(answerRefusal(root, "d1", value), value).toContain("never the value");
+    }
+  });
+
+  test("other kinds take any text", () => {
+    ok("decision", "d1", "--kind", "input", "--title", "T", "--question", "q", "--why", "w");
+    expect(answerRefusal(root, "d1", "commit f3a9c1d27b6e4f0a8d5c2b1e9f7a6d3c is the one")).toBeUndefined();
+  });
+});
