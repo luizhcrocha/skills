@@ -22,6 +22,8 @@ Do a piece of work yourself when one of these holds, and say which one when you 
 
 Anything else goes to a worker.
 
+**Small or coupled work stays together.** A small follow-up to a worker's task (a fix its report missed, a note from your review) goes back to that worker by `SendMessage` (`agent <id> --status running` starts its next round), or is yours as a quick win; it never gets a new worker. Two tasks whose files depend on each other (one changes what the other imports, a test and the code under it) are one worker's task.
+
 ## Architecture discipline
 
 Hold the line on design the way `/improve-codebase-architecture` does, and hold every worker to it. A fleet accelerates entropy: five workers each adding a shallow wrapper produce a ball of mud faster than one agent could, and nobody but the coordinator sees the whole picture.
@@ -97,7 +99,15 @@ The Now line (`set --now`) names what it waits on by number (A6, I2), so the pag
 
 `agent` warns when a running worker's lane meets another running lane: that task waits (`--status queued`) or joins that worker's queue.
 
-**One jj workspace per worker that edits code**; your session's working copy (`default`) is the stack, and no worker edits it. `fleet ws <dashboard-dir> add <id> [-r <base>]`, run from the repository (or with `--repo <repo>`: the dashboard directory is outside it), makes and records it (`fleet brief` warns when a worker with a lane has none); `fleet ws <dashboard-dir> list` shows what each holds ahead of the stack, the files a worker changed outside its lane, and when it was last seen. Integrating is yours: rebase its changes under your `@` (`jj rebase -r '(::<id>@ ~ ::@) ~ <id>@' -B @`), resolve by intent, run the gates, mark the worker done, then `fleet ws <dashboard-dir> prune` (a dry run) and `prune --apply`. Every state command warns while a done worker's workspace is still there; what prune keeps, it names with why.
+**Workspaces.** Your session's working copy (`default`) is the stack. A worker that edits code works in a jj workspace, and a new one pays its own setup (dependencies, a dev shell, build caches: minutes and gigabytes in a large repo), so a fleet makes as few as its work allows:
+
+- **Sequential work reuses** (the default). A worker that continues or follows another's lane takes that lane's workspace once its worker is done or stopped: `fleet ws <dashboard-dir> add <id> --reuse <workspace|worker>` hands it over on a fresh change and records who held it before (refused while that worker still runs). `add` warns when an idle workspace already covers the new worker's lane.
+- **A fresh workspace** is right for parallel workers whose files could meet, a risky experiment, and an arena or swarm comparison: `fleet ws <dashboard-dir> add <id> [-r <base>]`, run from the repository (or with `--repo <repo>`: the dashboard directory is outside it).
+- **Shared mode**, opt-in per fleet (`fleet state <dashboard-dir> set --workspaces shared`): no worker gets a workspace; every worker edits your `default` working copy, and only you move history. Choose it for a repo whose setup is expensive and lanes that are truly disjoint. `agent` refuses a running worker whose lane meets a live one's, `fleet ws add` makes nothing, and `fleet brief` gives the workers the shared-copy rules (no `jj new`, `edit`, `rebase`, `describe`; they describe nothing). While they work, your own edits and history moves wait.
+
+`fleet brief` names the workspace either way (and warns, in an isolated fleet, when a worker with a lane has none); `fleet ws <dashboard-dir> list` shows what each holds ahead of the stack, the files a worker changed outside its lane, and when it was last seen.
+
+**Integrating is yours, and pruning is part of it.** In an isolated fleet: rebase the worker's changes under your `@` (`jj rebase -r '(::<id>@ ~ ::@) ~ <id>@' -B @`), resolve by intent, run the gates, mark the worker done, then `fleet ws <dashboard-dir> prune --apply` for its workspace, unless the next worker of its lane reuses it (`--reuse`). In a shared fleet: once a worker is done, `fleet ws <dashboard-dir> split <id> -m "<its change's description>"` cuts its lane's files out of `@` into one described change (`jj split` by its lane's paths; the files on disk do not move, so the other workers carry on), one change per worker, then run the gates. Every state command warns while a done worker's workspace is still there, naming both ways out (prune it, or hand it to the next worker); what prune keeps, it names with why.
 
 Record `--task-id <agentId>` once the worker is spawned: its tokens and duration are then read from its transcript on every command.
 
@@ -122,7 +132,7 @@ Between events, explain to the user what is happening in plain terms: who is on 
 
 ### 7. Integrate
 
-When a milestone's workers are done: bring each worker's changes from its workspace into the stack and prune the workspaces (Track, above), run the project's checks yourself (types, tests, lint; a quick win), resolve anything left at the seams between lanes, mark the milestone done, and move the roadmap's current step forward. A milestone counts as done when its checks pass and its reports clear the standards, not when its workers report.
+When a milestone's workers are done: bring each worker's changes into the stack and prune each workspace or hand it to the lane's next worker (Track, above), run the project's checks yourself (types, tests, lint; a quick win), resolve anything left at the seams between lanes, mark the milestone done, and move the roadmap's current step forward. A milestone counts as done when its checks pass and its reports clear the standards, not when its workers report.
 
 ## Decisions
 

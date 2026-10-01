@@ -96,7 +96,10 @@ events[]     activity log, oldest first
 | A manager's intake | `init --role manager --project P --goal G`, then `milestone landings --title "Landings and deploys"` |
 | Intake done | `init --project P --goal G`, then `milestone m1 --title T` and `step s1 --milestone m1 --title T` per step, then `event --kind decision "why the split"` for anything non-obvious |
 | Worker about to be spawned | `agent a1 --task T --skill tdd --milestone m1 --lane src/x.ts test/x.test.ts --step s1 --brief "done when ..."` (model defaults to opus; logs the spawn, marks the step current, prints the line its brief opens with) |
-| Its brief | `fleet brief <dir> a1` prints the part the row holds (opening line, task, criterion, skill and how to load it, lane, workspace, step, chat id); you add the context below it |
+| Its brief | `fleet brief <dir> a1` prints the part the row holds (opening line, task, criterion, skill and how to load it, lane, workspace and its rules of history, step, chat id); you add the context below it |
+| Its workspace | the lane's idle one: `fleet ws <dir> add a1 --reuse a0` (hands it over once a0 is done or stopped, records who held it); a fresh one only for parallel work that could meet, a risky experiment or a comparison: `fleet ws <dir> add a1 [-r BASE]` |
+| The workers share one working copy (an expensive setup, disjoint lanes) | `set --workspaces shared` (`isolated` is the default): `fleet ws add` makes nothing, `agent` refuses a running lane that meets a live one, and each finished worker is integrated by `fleet ws <dir> split a1 -m "<description>"` |
+| A worker's changes are in the stack, gates green | `fleet ws <dir> prune --apply` for its workspace, unless the lane's next worker reuses it |
 | Notification arrives | `agent a1 --status done --tokens N --duration-ms N --report "..." --step s1 --log "what it verified"` (the step follows the status; the log becomes a `reported` event; tokens are the worker's total so far) |
 | Worker sent back after its report | `agent a1 --status running --step s1 --log "sent back: ..."` (counts a new round) |
 | Worker blocked | `roadblock r1 --title T --detail D --severity serious --needs coordinator --agent a1` (marks the worker blocked, logs it) |
