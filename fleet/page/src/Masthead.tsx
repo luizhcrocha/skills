@@ -261,9 +261,21 @@ export function Masthead(): JSX.Element {
     <div class="masthead" id="masthead">
       <header class="top">
         <div class="top-name">
-          <span class="mark" id="top-mark" aria-hidden="true">
-            <Mark />
-          </span>
+          {/* The mark is the way home: the hub's index of every fleet (off the hub, the manager's page). */}
+          <Show
+            when={m.hubRoot()}
+            fallback={
+              <span class="mark" id="top-mark" aria-hidden="true">
+                <Mark />
+              </span>
+            }
+          >
+            {(home) => (
+              <a class="mark" id="top-mark" href={home()} aria-label="Home: every fleet" title="Home: every fleet">
+                <Mark />
+              </a>
+            )}
+          </Show>
           <h1 id="top-project">{m.state.project}</h1>
           <span id="top-status">
             <Pill s={m.state.status} />
