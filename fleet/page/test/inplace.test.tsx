@@ -1,7 +1,7 @@
 /**
  * The page updates in place: a `state` event that changes one worker leaves every other row's DOM as it
  * was, and what the viewer has open, chosen or typed survives it; a chat message is appended without
- * rebuilding the conversation. Also the composer's "/" list of skills. Run in happy-dom, through the same
+ * rebuilding the conversation. Also the "/" list of skills, in the composer and in the decision page's fields. Run in happy-dom, through the same
  * paths the stream takes (`takeState` for `state`, `addMessage` for `chat`).
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -25,6 +25,7 @@ const SKILLS = [
 /** What the page posts to `chat`, as these tests read it. */
 interface Said {
   readonly text: string;
+  readonly decision?: string;
 }
 
 /** A message as the stream carries it: plain JSON. */
@@ -324,6 +325,172 @@ test("a /command is sent as typed, arguments and all; an unknown one too", async
   key(say, "Enter");
   await new Promise((r) => setTimeout(r, 0));
   expect(chatPosts().map((p) => p.text)).toContain("/not-a-skill now");
+});
+
+/** Open decision `id`'s page. */
+function openDecision(id: string): void {
+  location.hash = "#decision/" + id;
+  page.ui.route();
+  flush();
+}
+
+/** Type `text` into `field`, focused, with the caret at its end. */
+async function typeIn(field: HTMLTextAreaElement | HTMLInputElement, text: string): Promise<void> {
+  field.focus();
+  field.value = text;
+  field.setSelectionRange(text.length, text.length);
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 0));
+  flush();
+}
+
+/** The lists under a caret that are open (the finder's results are a listbox of their own, always there). */
+const openLists = (): string[] => [...root.querySelectorAll<HTMLElement>('ul.mentions[role="listbox"]')].flatMap((l) => (l.hidden ? [] : [l.id]));
+
+/** The fields on a decision's page that send words to the session, by the decision that shows them. */
+const SLASH_FIELDS = [
+  { decision: "d1", field: '#dv-answer textarea[name="note"]', list: "dv-note-skills" },
+  { decision: "g1", field: '#dv-answer textarea[name="q1-text"]', list: "dv-skills-q1" },
+] as const;
+
+for (const f of SLASH_FIELDS) {
+  test(`${f.field} on ${f.decision}: "/" opens its own list, narrowed as typed; arrows, Enter or Tab pick into it; Escape closes`, async () => {
+    openDecision(f.decision);
+    const field = root.querySelector<HTMLTextAreaElement>(f.field);
+
+    if (!field) throw new Error("no field");
+    const names = (): string[] => [...root.querySelectorAll(`#${f.list} li .m-name`)].map((li) => li.textContent ?? "");
+    const selected = (): string | null | undefined => root.querySelector(`#${f.list} li[aria-selected="true"] .m-name`)?.textContent;
+
+    expect(field.getAttribute("role")).toBe("combobox");
+    expect(field.getAttribute("aria-controls")).toBe(f.list);
+    expect(field.getAttribute("aria-expanded")).toBe("false");
+
+    await typeIn(field, "/");
+    expect(openLists()).toEqual([f.list]);
+    expect(names()).toEqual(["tstack:tdd", "tstack:research", "deploy"]);
+    expect(field.getAttribute("aria-expanded")).toBe("true");
+    expect(field.getAttribute("aria-activedescendant")).toBe(root.querySelector(`#${f.list} li[aria-selected="true"]`)?.id ?? "none");
+
+    await typeIn(field, "/tst");
+    expect(names()).toEqual(["tstack:tdd", "tstack:research"]);
+    key(field, "ArrowDown");
+    expect(selected()).toBe("tstack:research");
+    expect(field.getAttribute("aria-activedescendant")).toBe(f.list + "-1");
+    key(field, "Enter");
+    expect(field.value).toBe("/tstack:research ");
+    expect(field.selectionStart).toBe("/tstack:research ".length);
+    expect(openLists()).toEqual([]);
+    expect(field.getAttribute("aria-expanded")).toBe("false");
+
+    await typeIn(field, "/de");
+    expect(names()[0]).toBe("deploy");
+    key(field, "Tab");
+    expect(field.value).toBe("/deploy ");
+
+    await typeIn(field, "/t");
+    expect(openLists()).toEqual([f.list]);
+    key(field, "Escape");
+    expect(openLists()).toEqual([]);
+    expect(field.value).toBe("/t");
+
+    await typeIn(field, "say /tdd");
+    expect(openLists()).toEqual([]);
+    await typeIn(field, "@coord");
+    expect(openLists()).toEqual([]);
+    expect(posted.filter((p) => p.url === "chat")).toEqual([]);
+  });
+}
+
+test("a picked skill is kept as the decision's draft, and a grilling's own answer is chosen by it", async () => {
+  openDecision("g1");
+  const field = root.querySelector<HTMLTextAreaElement>('#dv-answer textarea[name="q1-text"]');
+
+  if (!field) throw new Error("no field");
+  await typeIn(field, "/res");
+  key(field, "Enter");
+  expect(root.querySelector<HTMLInputElement>('#dv-answer input[name="q1"][value="own"]')?.checked).toBe(true);
+  expect(JSON.stringify(localStorage)).toContain("/tstack:research ");
+});
+
+test("a click on a skill picks it into its field", async () => {
+  openDecision("d1");
+  const field = root.querySelector<HTMLTextAreaElement>('#dv-answer textarea[name="note"]');
+
+  if (!field) throw new Error("no field");
+  await typeIn(field, "/");
+  root.querySelector<HTMLElement>("#dv-note-skills li[data-i='2']")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  flush();
+  expect(field.value).toBe("/deploy ");
+});
+
+test("one list is open at a time, and an open one survives a state update on the same nodes", async () => {
+  await type("/");
+  expect(openLists()).toEqual(["mentions"]);
+  openDecision("d1");
+  const field = root.querySelector<HTMLTextAreaElement>('#dv-answer textarea[name="note"]');
+
+  if (!field) throw new Error("no field");
+  await typeIn(field, "/tst");
+  expect(openLists()).toEqual(["dv-note-skills"]);
+  const list = root.querySelector("#dv-note-skills");
+  const first = list?.querySelector("li");
+  key(field, "ArrowDown");
+  stateEvent(changed("a2", (a) => ({ ...a, tokens: 6 })));
+
+  expect(root.querySelector('#dv-answer textarea[name="note"]')).toBe(field);
+  expect(root.querySelector("#dv-note-skills")).toBe(list ?? null);
+  expect(list?.querySelector("li")).toBe(first ?? null);
+  expect(openLists()).toEqual(["dv-note-skills"]);
+  expect(root.querySelector('#dv-note-skills li[aria-selected="true"] .m-name')?.textContent).toBe("tstack:research");
+  expect(document.activeElement).toBe(field);
+});
+
+test("a decision's answer that starts with a /command is sent as typed, tagged with the decision", async () => {
+  openDecision("g1");
+  const field = root.querySelector<HTMLTextAreaElement>('#dv-answer textarea[name="q1-text"]');
+
+  if (!field) throw new Error("no field");
+  await typeIn(field, "/tst");
+  key(field, "Enter");
+  await typeIn(field, field.value + "who reads notes");
+  root.querySelector<HTMLFormElement>("#dv-answer form")?.requestSubmit();
+  await new Promise((r) => setTimeout(r, 0));
+  flush();
+  expect(chatPosts()).toEqual([{ text: "Q1: /tstack:tdd who reads notes", decision: "g1" }]);
+});
+
+test("fields whose text is data or a search open no list on /: an input's value, a secret's reference, the finder, the worker search", async () => {
+  openDecision("i1");
+  const value = root.querySelector<HTMLTextAreaElement>('#dv-answer textarea[name="value"]');
+
+  if (!value) throw new Error("no input field");
+  await typeIn(value, "/");
+  expect(openLists()).toEqual([]);
+  expect(value.getAttribute("role")).toBeNull();
+
+  openDecision("s1");
+  const ref = root.querySelector<HTMLInputElement>('#dv-answer input[name="value"]');
+
+  if (!ref) throw new Error("no reference field");
+  await typeIn(ref, "/");
+  expect(openLists()).toEqual([]);
+
+  location.hash = "#fleet";
+  page.ui.route();
+  flush();
+  const search = root.querySelector<HTMLInputElement>("#f-q");
+
+  if (!search) throw new Error("no worker search");
+  await typeIn(search, "/");
+  expect(openLists()).toEqual([]);
+
+  const find = page.ui.refs.findQ;
+
+  if (!find) throw new Error("no finder");
+  await typeIn(find, "/");
+  expect(openLists()).toEqual([]);
+  expect(posted.filter((p) => p.url === "skills")).toEqual([]);
 });
 
 test("the notification settings sit behind the gear, folded into one line, and the choice is kept", () => {

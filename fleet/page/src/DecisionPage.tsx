@@ -9,6 +9,7 @@ import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "so
 import { For, Match, Show, Switch, type JSX } from "@solidjs/web";
 
 import { PillAs, RefTag, usePage, Who } from "./bits.tsx";
+import { CaretList } from "./CaretList.tsx";
 import { Core, type Decision, type GrillEntry, type JsonRecord } from "./core.ts";
 import { clock } from "./format.ts";
 import { KIND_WORDS, StatePill } from "./Overview.tsx";
@@ -161,6 +162,22 @@ function Manual(props: { readonly d: Decision; readonly title: string }): JSX.El
         <pre class="manual">{props.d.manual}</pre>
       </div>
     </Show>
+  );
+}
+
+/**
+ * A field whose words go to the session, with the list of skills a leading "/" opens under it; picking
+ * one puts "/<skill> " in the field. The field takes `caret` as its ref.
+ */
+function SlashField(props: { readonly id: string; readonly children: (caret: (el: HTMLTextAreaElement) => void) => JSX.Element }): JSX.Element {
+  const { ui } = usePage();
+  const caret = ui.carets.make({ id: props.id });
+
+  return (
+    <div class="caret-wrap">
+      {props.children((el) => caret.attach(el))}
+      <CaretList caret={caret} under />
+    </div>
   );
 }
 
@@ -347,7 +364,9 @@ function Grill(props: { readonly d: Decision }): JSX.Element {
           <input type="radio" name={e().q.id} value="own" />
           <span class="label">My answer</span>
         </label>
-        <textarea name={e().q.id + "-text"} rows="2" aria-label={`Your answer to ${e().q.id.toUpperCase()}`} />
+        <SlashField id={"dv-skills-" + e().q.id}>
+          {(caret) => <textarea name={e().q.id + "-text"} rows="2" aria-label={`Your answer to ${e().q.id.toUpperCase()}`} ref={caret} />}
+        </SlashField>
         <label class="option later">
           <input type="radio" name={e().q.id} value="later" checked />
           <span class="label">Later</span>
@@ -425,10 +444,12 @@ function Form(props: { readonly d: Decision }): JSX.Element {
   const kind = createMemo(() => props.d.kind);
 
   const note = (label: string): JSX.Element => (
-    <label class="field">
-      {label}
-      <textarea name="note" rows="2" autocomplete="off" />
-    </label>
+    <div class="field">
+      <label for="dv-note">{label}</label>
+      <SlashField id="dv-note-skills">
+        {(caret) => <textarea id="dv-note" name="note" rows="2" autocomplete="off" ref={caret} />}
+      </SlashField>
+    </div>
   );
 
   return (

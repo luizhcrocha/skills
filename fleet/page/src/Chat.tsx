@@ -9,7 +9,8 @@ import { createEffect, createMemo, createSignal, untrack } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
 import { CloseIcon, Pill, usePage, When, Who, tf } from "./bits.tsx";
-import { Core, type Entry, type Message, type RosterRow, type Side, type Skill, type Thread } from "./core.ts";
+import { CaretList } from "./CaretList.tsx";
+import { Core, type Entry, type Message, type Side, type Thread } from "./core.ts";
 
 /** Who sent a message, as the chat shows it. */
 function useSender(): (msg: Message) => { label: string; colour: string; status: string } {
@@ -235,101 +236,6 @@ function Log(): JSX.Element {
   );
 }
 
-/** The list under the caret: people after "@", skills after a leading "/". */
-function PickList(): JSX.Element {
-  const { m, ui } = usePage();
-
-  const mentionItems = (): readonly RosterRow[] | null => {
-    const open = ui.list();
-
-    return open?.kind === "mention" ? open.items : null;
-  };
-
-  const commandItems = (): readonly Skill[] | null => {
-    const open = ui.list();
-
-    return open?.kind === "command" ? open.items : null;
-  };
-
-  /* The highlighted row stays in view. */
-  createEffect(
-    () => [ui.list(), ui.listIndex()] as const,
-    ([open, i]) => {
-      const list = ui.refs.mentions;
-      const opt = list?.children[i];
-
-      if (!open || !list || !(opt instanceof HTMLElement)) return;
-
-      if (opt.offsetTop < list.scrollTop) list.scrollTop = opt.offsetTop - 4;
-      else if (opt.offsetTop + opt.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = opt.offsetTop + opt.offsetHeight - list.clientHeight + 4;
-    },
-  );
-
-  return (
-    <ul
-      class={"mentions" + (ui.list()?.kind === "command" ? " skills" : "")}
-      id="mentions"
-      role="listbox"
-      aria-label={ui.list()?.kind === "command" ? "Run a skill" : "Mention someone"}
-      hidden={!ui.list()}
-      ref={(el) => (ui.refs.mentions = el)}
-      onPointerDown={(e) => e.preventDefault()}
-      onClick={(e) => {
-        const li = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-i]") : null;
-
-        if (li) {
-          ui.pick(Number(li.dataset["i"]));
-          ui.refs.say?.focus();
-        }
-      }}
-    >
-      <Show when={mentionItems()}>
-        {(items) => (
-          <For each={items()} keyed={(r) => r.id}>
-            {(r, i) => (
-              <li role="option" id={"mention-" + String(i())} data-i={String(i())} aria-selected={tf(i() === ui.listIndex())} style={`--c:${m.colourOfId(r().id)}`}>
-                <span class="swatch" />
-                <span class="m-main">
-                  <span class="m-name">{r().name}</span>
-                  <Show when={r().name !== r().id}>
-                    <span class="faint">{r().id}</span>
-                  </Show>
-                  <Pill s={r().status} />
-                </span>
-                <Show when={r().task}>
-                  <span class="m-task">{r().task}</span>
-                </Show>
-              </li>
-            )}
-          </For>
-        )}
-      </Show>
-      <Show when={commandItems()}>
-        {(items) => (
-          <For each={items()} keyed={(s) => s.name}>
-            {(s, i) => (
-              <li role="option" id={"mention-" + String(i())} data-i={String(i())} aria-selected={tf(i() === ui.listIndex())} class="skill">
-                <span class="slash" aria-hidden="true">
-                  /
-                </span>
-                <span class="m-main">
-                  <span class="m-name">{s().name}</span>
-                  <Show when={s().hint}>
-                    <span class="faint">{s().hint}</span>
-                  </Show>
-                </span>
-                <Show when={s().description}>
-                  <span class="m-task">{s().description}</span>
-                </Show>
-              </li>
-            )}
-          </For>
-        )}
-      </Show>
-    </ul>
-  );
-}
-
 /** The composer. */
 function Composer(): JSX.Element {
   const { m, ui } = usePage();
@@ -370,7 +276,7 @@ function Composer(): JSX.Element {
 
   return (
     <div class="composer" id="composer">
-      <PickList />
+      <CaretList caret={ui.composer} ref={(el) => (ui.refs.mentions = el)} />
       <p class="chat-error" id="chat-error" role="alert" hidden={!ui.error() || readOnly()}>
         {ui.error()}
       </p>
@@ -443,7 +349,7 @@ function Composer(): JSX.Element {
           aria-autocomplete="list"
           aria-controls="mentions"
           aria-expanded={tf(Boolean(ui.list()))}
-          aria-activedescendant={ui.list() ? "mention-" + String(ui.listIndex()) : undefined}
+          aria-activedescendant={ui.list() ? ui.composer.optionId(ui.listIndex()) : undefined}
           disabled={!m.chatWritable()}
           ref={(el) => {
             ui.refs.say = el;

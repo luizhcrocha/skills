@@ -645,6 +645,9 @@
   .mentions .slash { grid-area: sw; font-family: var(--mono); font-weight: 700; color: var(--accent); justify-self: center; }
   .mentions.skills .m-name { font-family: var(--mono); font-size: 0.9em; font-stretch: 100%; }
   .mentions.skills .m-task { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+  /* A field on the page that writes to the session opens its list of skills under itself. */
+  .caret-wrap { position: relative; }
+  .mentions.under { top: calc(100% + 2px); bottom: auto; left: 0; right: 0; z-index: 30; font-weight: 400; font-stretch: 100%; color: var(--text); scroll-margin-bottom: 12px; }
   .chat:not(.available) .reply-btn { display: none; }
 
   @media (min-width: 1100px) {

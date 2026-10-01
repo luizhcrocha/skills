@@ -2,7 +2,9 @@
  * The built template in a real browser (headless Chromium over CDP), fed by a real event stream: a
  * `state` event that changes one worker leaves a marked row node, the window's scroll, the chat's
  * scroll, an open sheet, the switcher and a typed draft as they were, and a `chat` event appends one
- * message. Skipped when no Chromium is found (FLEET_CHROMIUM, or chromium on the PATH).
+ * message. Every field that writes to the session (the composer, a decision's note, a grilling's own
+ * answer) opens its list of skills on "/", typed with real keys; the fields whose text is data or a
+ * search do not. Skipped when no Chromium is found (FLEET_CHROMIUM, or chromium on the PATH).
  */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -30,6 +32,12 @@ const found = chromium !== "" && existsSync(chromium);
 
 const NOW = Date.parse("2026-10-01T12:00:00Z");
 
+const SKILLS = [
+  { name: "tstack:tdd", description: "Test-first development.", hint: "[what to fix]", source: "plugin" },
+  { name: "tstack:research", description: "Investigate a question.", hint: "<question>", source: "plugin" },
+  { name: "deploy", description: "Deploy the site.", hint: "", source: "project" },
+];
+
 let browser: Browser;
 
 let harness: Harness;
@@ -38,7 +46,7 @@ let page: Page;
 
 beforeAll(async () => {
   if (!found) return;
-  harness = serveHarness({ template: readFileSync(TEMPLATE, "utf8"), view: coordinatorView(NOW), messages: coordinatorChat(NOW) });
+  harness = serveHarness({ template: readFileSync(TEMPLATE, "utf8"), view: coordinatorView(NOW), messages: coordinatorChat(NOW), skills: SKILLS });
   browser = await puppeteer.launch({ executablePath: chromium, headless: true, args: ["--no-sandbox"] });
   page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 700 });
@@ -109,4 +117,108 @@ test.skipIf(!found)("a chat event appends one message and leaves the others' nod
   harness.say({ id: 6, at: new Date(NOW).toISOString(), from: "a3", to: ["user"], text: "Found the key." });
   await page.waitForFunction(() => document.querySelectorAll("#chat-log article.msg").length === 6);
   expect(await page.evaluate(() => window.first === document.querySelector("#chat-log article.msg"))).toBe(true);
+});
+
+/** The open lists under a caret, with where each sits against the focused field. */
+async function shown(): Promise<{ id: string; names: string[]; selected: string; below: boolean; above: boolean; expanded: string | null | undefined }[]> {
+  return page.evaluate(() => {
+    const field = document.activeElement;
+    const box = field?.getBoundingClientRect();
+
+    return [...document.querySelectorAll<HTMLElement>('ul.mentions[role="listbox"]')].flatMap((l) => {
+      if (l.hidden || l.getClientRects().length === 0) return [];
+      const r = l.getBoundingClientRect();
+
+      return [
+        {
+          id: l.id,
+          names: [...l.querySelectorAll(".m-name")].map((n) => n.textContent ?? ""),
+          selected: l.querySelector('[aria-selected="true"] .m-name')?.textContent ?? "",
+          below: box !== undefined && r.top >= box.bottom - 1,
+          above: box !== undefined && r.bottom <= box.top + 1,
+          expanded: field?.getAttribute("aria-expanded"),
+        },
+      ];
+    });
+  });
+}
+
+/** Focus `selector` on the page at `hash`, emptied. */
+async function focusField(hash: string, selector: string): Promise<void> {
+  await page.evaluate((h) => {
+    location.hash = h;
+  }, hash);
+  await page.waitForSelector(selector, { visible: true });
+  await page.evaluate((sel) => {
+    const el = document.querySelector<HTMLTextAreaElement | HTMLInputElement>(sel);
+
+    if (!el) return;
+    el.value = "";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.focus();
+  }, selector);
+}
+
+const value = (selector: string): Promise<string> => page.evaluate((sel) => document.querySelector<HTMLTextAreaElement>(sel)?.value ?? "", selector);
+
+const IN_SCOPE = [
+  { name: "the chat's composer", hash: "#fleet", field: "#say", list: "mentions", side: "above" },
+  { name: "a decision's note", hash: "#decision/d1", field: '#dv-answer textarea[name="note"]', list: "dv-note-skills", side: "below" },
+  { name: "a grilling's own answer", hash: "#decision/g1", field: '#dv-answer textarea[name="q1-text"]', list: "dv-skills-q1", side: "below" },
+] as const;
+
+for (const f of IN_SCOPE) {
+  test.skipIf(!found)(`${f.name}: "/" opens its list, typing narrows it, arrows and Enter or Tab pick into the field, Escape closes`, async () => {
+    await focusField(f.hash, f.field);
+    await page.keyboard.type("/");
+    await page.waitForFunction((id) => document.querySelectorAll(`#${id} li`).length === 3, {}, f.list);
+    let lists = await shown();
+    expect(lists.map((l) => l.id)).toEqual([f.list]);
+    expect(lists[0]?.[f.side]).toBe(true);
+    expect(lists[0]?.expanded).toBe("true");
+
+    await page.keyboard.type("tst");
+    lists = await shown();
+    expect(lists[0]?.names).toEqual(["tstack:tdd", "tstack:research"]);
+    await page.keyboard.press("ArrowDown");
+    expect((await shown())[0]?.selected).toBe("tstack:research");
+    await page.keyboard.press("Enter");
+    expect(await value(f.field)).toBe("/tstack:research ");
+    expect(await shown()).toEqual([]);
+
+    await focusField(f.hash, f.field);
+    await page.keyboard.type("/dep");
+    await page.keyboard.press("Tab");
+    expect(await value(f.field)).toBe("/deploy ");
+    expect(await page.evaluate((sel) => document.activeElement === document.querySelector(sel), f.field)).toBe(true);
+
+    await focusField(f.hash, f.field);
+    await page.keyboard.type("/t");
+    expect((await shown()).map((l) => l.id)).toEqual([f.list]);
+    await page.keyboard.press("Escape");
+    expect(await shown()).toEqual([]);
+    expect(await value(f.field)).toBe("/t");
+    await focusField(f.hash, f.field);
+  });
+}
+
+test.skipIf(!found)("the fields whose text is data or a search open no list on /", async () => {
+  for (const [hash, selector] of [
+    ["#decision/i1", '#dv-answer textarea[name="value"]'],
+    ["#decision/s1", '#dv-answer input[name="value"]'],
+    ["#fleet", "#f-q"],
+  ] as const) {
+    await focusField(hash, selector);
+    await page.keyboard.type("/t");
+    expect(await shown()).toEqual([]);
+    await focusField(hash, selector);
+  }
+
+  await page.keyboard.down("Control");
+  await page.keyboard.press("k");
+  await page.keyboard.up("Control");
+  await page.waitForFunction(() => document.querySelector<HTMLDialogElement>("#finder")?.open === true);
+  await page.keyboard.type("/t");
+  expect(await shown()).toEqual([]);
+  await page.keyboard.press("Escape");
 });

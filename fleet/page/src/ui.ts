@@ -1,19 +1,16 @@
 /**
  * What the viewer does on the page, across its parts: the view in the address, the chat's place (docked,
- * collapsed, an overlay with its history entry), the composer (its draft, the @mention and /command lists,
- * the "To" line, sending), the worker sheet, the finder, the notifications panel, the selection toolbar.
+ * collapsed, an overlay with its history entry), the composer (its draft, its @mention and /command list,
+ * the "To" line, sending), the lists under the caret of every field that writes to a session, the
+ * worker sheet, the finder, the notifications panel, the selection toolbar.
  * The state of these lives here, in signals no update of the fleet's state touches.
  */
 import { createEffect, createMemo, createSignal, flush } from "solid-js";
 
-import { Core, type Decision, type FindRow, type Json, type JsonRecord, type RosterRow, type Skill, type TokenAt } from "./core.ts";
+import { createCarets } from "./carets.ts";
+import { Core, type Decision, type FindRow, type Json, type JsonRecord } from "./core.ts";
 import type { Model } from "./model.ts";
 import { createNotify } from "./notify.ts";
-
-/** An open list under the caret: people to mention, or skills to run. */
-export type Pick =
-  | { readonly kind: "mention"; readonly items: readonly RosterRow[]; readonly at: TokenAt }
-  | { readonly kind: "command"; readonly items: readonly Skill[]; readonly at: TokenAt };
 
 /** The timer and sequence number of the recipients preview. */
 interface PreviewTimer {
@@ -183,9 +180,8 @@ export function createUi(m: Model) {
 
   /* ------------------------------------------------------------------ the composer */
 
-  const [list, setList] = createSignal<Pick | null>(null);
-  const [listIndex, setListIndex] = createSignal(0);
-  let dismissed = -1;
+  const carets = createCarets(m);
+  const composer = carets.make({ id: "mentions", option: "mention-", mentions: true, field: () => refs.say });
   const [to, setTo] = createSignal<readonly string[] | null>(null);
   const [error, setError] = createSignal("");
   const sized = Boolean(globalThis.CSS?.supports?.("field-sizing", "content"));
@@ -202,9 +198,7 @@ export function createUi(m: Model) {
     say.style.height = String(Math.min(say.scrollHeight, line * 8 + pad)) + "px";
   }
 
-  function closeList(): void {
-    setList(null);
-  }
+  const closeList = (): void => composer.close();
 
   /** A message from the stream or a send: the conversation stays at its end when it was there. */
   function addMessage(data: Json, live: boolean): void {
@@ -214,73 +208,11 @@ export function createUi(m: Model) {
     if (stick) toBottom();
   }
 
-  /** The list under the caret: skills while the first word starts with "/", people after an "@". */
-  function updateList(): void {
-    const say = refs.say;
+  /** The composer's list under the caret: skills while the first word starts with "/", people after an "@". */
+  const updateList = (): void => composer.update();
 
-    if (!say) return;
-    const collapsed = say.selectionStart === say.selectionEnd && document.activeElement === say;
-    const command = collapsed ? Core.commandAt(say.value, say.selectionStart) : null;
-    const at = collapsed && !command ? Core.mentionAt(say.value, say.selectionStart) : null;
-    const token = command ?? at;
-
-    if (!token || token.start === dismissed) {
-      if (!token) dismissed = -1;
-      closeList();
-
-      return;
-    }
-
-    const was = list();
-    const same = was !== null && was.at.query === token.query && was.at.start === token.start && was.kind === (command ? "command" : "mention");
-
-    if (command) {
-      if (!m.skillsFresh()) {
-        void m.loadSkills().then(() => {
-          if (refs.say && document.activeElement === refs.say && Core.commandAt(refs.say.value, refs.say.selectionStart)?.query === command.query) updateList();
-        });
-      }
-
-      const items = Core.filterSkills(m.skills(), command.query);
-
-      if (!items.length) {
-        closeList();
-
-        return;
-      }
-
-      setList({ kind: "command", items, at: command });
-      setListIndex(same ? Math.min(listIndex(), items.length - 1) : 0);
-    } else if (at) {
-      const items = Core.filterRoster(m.roster(), at.query);
-
-      if (!items.length) {
-        closeList();
-
-        return;
-      }
-
-      setList({ kind: "mention", items, at });
-      setListIndex(same ? Math.min(listIndex(), items.length - 1) : 0);
-    }
-
-    flush();
-  }
-
-  /** Put the picked person or skill in the text, the caret after it. */
-  function pick(i: number): void {
-    const open = list();
-    const say = refs.say;
-
-    if (!open || !say) return;
-    const out = open.kind === "command" ? (open.items[i] ? Core.insertCommand(say.value, open.at, open.items[i]) : null) : open.items[i] ? Core.insertMention(say.value, open.at, open.items[i]) : null;
-
-    if (!out) return;
-    say.value = out.text;
-    say.setSelectionRange(out.caret, out.caret);
-    closeList();
-    afterEdit();
-  }
+  /** Put the picked person or skill in the composer, the caret after it. */
+  const pick = (i: number): void => composer.pick(i);
 
   /** The "To" line: who the server says this text would reach, asked once the viewer pauses. */
   function askPreview(now = false): void {
@@ -330,33 +262,10 @@ export function createUi(m: Model) {
   }
 
   function onKey(e: KeyboardEvent): void {
-    const open = list();
-    const action = Core.keyOf(e, m.coarse(), open !== null);
+    if (composer.key(e)) return;
+    const action = Core.keyOf(e, m.coarse(), composer.list() !== null);
 
     if (!action) return;
-
-    if ((action === "next" || action === "prev") && open) {
-      e.preventDefault();
-      setListIndex((listIndex() + (action === "next" ? 1 : -1) + open.items.length) % open.items.length);
-      flush();
-
-      return;
-    }
-
-    if (action === "pick") {
-      e.preventDefault();
-      pick(listIndex());
-
-      return;
-    }
-
-    if (action === "close") {
-      e.preventDefault();
-      dismissed = open ? open.at.start : -1;
-      closeList();
-
-      return;
-    }
 
     if (action === "blur") {
       refs.say?.blur();
@@ -687,9 +596,11 @@ export function createUi(m: Model) {
     nearBottom,
     toBottom,
     addMessage,
-    list,
-    listIndex,
-    setListIndex,
+    carets,
+    composer,
+    list: composer.list,
+    listIndex: composer.index,
+    setListIndex: composer.setIndex,
     pick,
     closeList,
     updateList,

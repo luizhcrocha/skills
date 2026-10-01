@@ -61,6 +61,8 @@ How a row was checked:
 | A half-written answer survives every state update, and is kept per decision and revision across reloads | dom "a half-written answer" |
 | Answer sent: "Your answer", read or not by the host, its replies; Answer again; Ask in the chat; Change my answer | core (`pendingAnswer`, `awaiting`); read |
 | Read-only copy says why it cannot answer | read |
+| **new** `/` at the start of a field that writes words to the session lists the skills under that field, as the composer does (narrowed as typed, arrows, Enter or Tab pick into it, Escape closes, a tap picks; combobox, listbox and `aria-activedescendant`): a grilling question's own answer, and the note on a decision or an action. Picking keeps the draft and, in a grilling, chooses "My answer". The answer goes as typed (`Q1: /tstack:tdd …`, the note on its own line); the coordinator and the manager run it with the Skill tool, an answer's before acting on the decision. One list is open on the page at a time, and it survives a state update | dom `"/" opens its own list` (both fields), "a picked skill is kept as the decision's draft", "a click on a skill picks it", "one list is open at a time", "a decision's answer that starts with a /command"; cdp "a decision's note", "a grilling's own answer"; real run on a scratch hub; shot (390, 1280) |
+| Left without the `/` list, on purpose: an input decision's value and a secret's reference are data, so a leading `/` stays literal text; the finder and the worker search (`f-q`) are searches, not words to a session | dom and cdp "the fields whose text is data or a search open no list on /" |
 
 ## Plan, Fleet, Links, Log
 
@@ -91,6 +93,7 @@ How a row was checked:
 | "To" line from `chat/preview`; reply and quote chips; read-only and deaf notes; send errors keep the draft | read |
 | Message <worker> from its sheet starts the text with its @name | read |
 | **new** `/` at the start of a message lists the skills the session can run (name, argument hint, description) from `GET skills`, narrowed as typed; arrows, Enter or Tab pick, Escape closes; a tap list above the keyboard on a phone; picking inserts `/<plugin:skill> `; any `/text` is still sendable | dom "a leading / lists", "arrows move through the skills", "a /command is sent as typed"; core (`commandAt`, `filterSkills`, `insertCommand`) |
+| The composer's list is the page's one caret list (`src/carets.ts`, `src/CaretList.tsx`), shared with the decision page's fields; the composer (the main chat and a side chat, one field) adds `@` | dom (the composer's tests above, unchanged); cdp "the chat's composer" |
 | **new** Hub `GET /f/<fleet>/skills` (plugins installed and enabled, user and project skills, 60 s cache), and the host and workers running a `/skill` message with the Skill tool | fleet/test/hub.test.ts (fixture HOME: two plugins, one disabled, a user skill, a project skill; a `/` chat round trip) |
 
 ## Notifications
