@@ -12,8 +12,9 @@ import { chatCli } from "./chat.ts";
 import { fleetsCli } from "./fleets.ts";
 import { CONTROL_CLIS, controlCli } from "./hub.ts";
 import { stateCli } from "./state.ts";
+import { wsCli } from "./ws.ts";
 
-const USAGE = "usage: fleet {state,chat,fleets,hub,serve,render,usage,spend,served} ...\n";
+const USAGE = "usage: fleet {state,chat,fleets,ws,hub,serve,render,usage,spend,served} ...\n";
 
 function dispatch(argv: readonly string[]): Effect.Effect<number, never, Out | World> {
   const [cli, ...rest] = argv;
@@ -23,6 +24,8 @@ function dispatch(argv: readonly string[]): Effect.Effect<number, never, Out | W
   if (cli === "chat") return chatCli(rest);
 
   if (cli === "fleets") return fleetsCli(rest);
+
+  if (cli === "ws") return wsCli(rest);
   const control = CONTROL_CLIS.find((c) => c === cli);
 
   if (control !== undefined) return controlCli(control, rest);
@@ -30,7 +33,7 @@ function dispatch(argv: readonly string[]): Effect.Effect<number, never, Out | W
   return Effect.gen(function* () {
     const out = yield* Out;
 
-    out.err(`${USAGE}fleet: error: the first argument is state, chat, fleets, hub, serve, render, usage, spend or served\n`);
+    out.err(`${USAGE}fleet: error: the first argument is state, chat, fleets, ws, hub, serve, render, usage, spend or served\n`);
 
     return 2;
   });

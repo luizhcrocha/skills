@@ -5,7 +5,7 @@
 import * as Schema from "effect/Schema";
 
 /** Who refuses: the prefix the Python script that refused printed. */
-export const Speaker = Schema.Literals(["state", "chat", "fleets", "render_dashboard", "hub", "serve", "usage", "spend"]);
+export const Speaker = Schema.Literals(["state", "chat", "fleets", "render_dashboard", "hub", "serve", "usage", "spend", "ws"]);
 
 /** A refused command: nothing is written, the CLI exits 1. */
 export class Refusal extends Schema.TaggedError<Refusal>()("Refusal", {
