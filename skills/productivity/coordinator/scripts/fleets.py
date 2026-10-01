@@ -225,12 +225,9 @@ def silent_workers(root, state: dict) -> list[dict]:
 
 
 def _answered_at(d: dict, said: list[dict]) -> str | None:
-    """When the user's answer to the open decision `d`, given after it last changed and not replied to, was
-    sent: the fleet has it and has not recorded it. None when there is none."""
-    since = str(d.get("revised") or d.get("opened") or "")
-    answers = [m for m in said if m.get("decision") == d.get("id") and m["from"] == "user" and str(m["at"]) >= since
-               and not any(r.get("re") == m["id"] and r["from"] != "user" for r in said)]
-    return answers[-1]["at"] if answers else None
+    """When the user's answer to the open decision `d` was sent and not recorded (decisions.answered_at)."""
+    import decisions
+    return decisions.answered_at(d, said)
 
 
 def _index(state: dict) -> list[dict]:
@@ -339,9 +336,12 @@ def cmd_show(fleet: str) -> None:
     print(f"    now: {state.get('now', '')}" + (f"  (said {state['now_at']})" if state.get("now_at") else ""))
     heard = chat.listening(entry["dir"])
     print(f"    chat: {'read' if heard['on'] else 'not read now'}" + (f"; {heard['unread']} from the user unread since #{heard['seen']}" if heard["unread"] else ""))
+    silent = {w["id"]: w for w in silent_workers(entry["dir"], state)}
     for a in rows("agents"):
         if a.get("status") in ("running", "blocked", "queued"):
             print(f"    {a.get('id')} ({a.get('name')}) {a.get('status')} since {a.get('updated') or a.get('started')}: {a.get('task')}")
+            if a.get("id") in silent:
+                print(f"        silent since {silent[a['id']]['active'][11:16]}: check it before saying it runs")
             if a.get("report"):
                 print(f"        last report: {str(a['report'])[:300]}")
     said = chat.read(entry["dir"])

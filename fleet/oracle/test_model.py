@@ -206,6 +206,8 @@ class Model:
 
     def do_roadblock(self, c):
         rid = self.find(self.roadblocks, c["id"])
+        if c.get("agent") and c["agent"] not in self.agents:
+            raise Refused("unknown agent")  # open-3, fixed: --agent names a worker row, as everywhere else
         if c.get("decision"):
             c = {**c, "decision": self.open_decision(c["decision"])}  # a number is kept as the id it names
         if rid is None:
@@ -213,10 +215,9 @@ class Model:
                 raise Refused("new roadblock needs its fields")
             if c["needs"] == "user" and not c.get("decision"):
                 raise Refused("a roadblock that needs the user names its decision")
-            # QUIRK(open-3): an agent nobody recorded is stored as given; only a known one is marked blocked.
             self.roadblocks[c["id"]] = {"resolved": False, "agent": c.get("agent") or None, "decision": c.get("decision") or None}
             self.log()
-            if c.get("agent") in self.agents:
+            if c.get("agent"):
                 self.agents[c["agent"]]["status"] = "blocked"
             return
         r = self.roadblocks[rid]
@@ -290,6 +291,7 @@ class Model:
             if not elsewhere:
                 self.check_kind(d)
                 self.log()
+            d["since"] = self.clock
             self.decisions[did] = d
         else:
             if c.get("supersedes"):
@@ -307,6 +309,7 @@ class Model:
                 d["options"] = [o.split(":")[0] for o in c["options"]]
             self.check_kind(d)
             if changed:
+                d["since"] = self.clock
                 self.log()
         if "decide" in c:
             self.close(did, "decided", c["decide"])
@@ -326,7 +329,7 @@ class Model:
                 raise Refused("a new grilling needs --title and --ask")
             did = c["id"]
             d = {"kind": "grill", "status": "open", "answer": None, "step": None, "milestone": None, "options": [],
-                 "agent": None, "questions": [], "title": c["title"], "question": ""}
+                 "agent": None, "questions": [], "title": c["title"], "question": "", "since": self.clock}
             self.decisions[did] = d
         qs = d["questions"]
         for q in c.get("answer", []):
@@ -336,6 +339,8 @@ class Model:
             qs[n - 1] = "answered"
         qs += ["open"] * len(c.get("ask", []))
         if c.get("ask"):
+            if not created:
+                d["since"] = self.clock
             self.log()
         if "done" in c:
             if "open" in qs:
@@ -357,6 +362,9 @@ class Model:
             raise Refused("no worker row is live")
         for k in rows:
             self.agents[k]["status"] = "stopped"
+        for st in self.steps.values():  # open-5, fixed: a parked worker's current step is nobody's now
+            if st["status"] == "current" and st["agent"] in rows:
+                st["status"] = "pending"
         self.log()
 
     def do_keep(self, c):
@@ -440,7 +448,18 @@ class Model:
                 found["now"] = f"(said {int(age // 60)} min ago)" if age is not None else "(never stamped)"
         elif any(self.closed_ref(m) for m in REF.findall(c["now"])):
             found["names"] = "the Now line names"
+        if any(d["status"] == "open" and self.answered(k) for k, d in self.decisions.items()):
+            found["answer"] = "state: the user answered"
+        if c["cmd"] == "set" and c.get("status") == "done" and any(d["status"] == "open" for d in self.decisions.values()):
+            found["open"] = "state: the fleet is done with"
         return found
+
+    def answered(self, did: str) -> bool:
+        """The user answered decision `did` on the page after it last changed, and nobody replied to the answer."""
+        d = self.decisions[did]
+        replied = {m["re"] for m in self.messages if m["from"] != "user" and m["re"] is not None}
+        return any(m["from"] == "user" and m.get("decision") == did and m["at"] >= d["since"] and m["id"] not in replied
+                   for m in self.messages)
 
     def closed_ref(self, key: str) -> bool:
         did = self.find(self.decisions, key)
@@ -848,8 +867,10 @@ def check_step(c: dict, step: dict, expected: tuple[int, dict], got: dict, befor
         for d in new["decisions"]:
             need(any(f"{d['ref']} decision {d['id']} " in line for line in out), f"show leaves out decision {d['id']}")
         need(f"  {len(new['events'])} events, updated {new['updated']}" in out, "show's event count")
-    if c.get("printed"):
+    if c.get("printed") and got["exit"] == 0:
         need(c["printed"] in got["stdout"], f"expected {c['printed']!r} in stdout: {got['stdout']!r}")
+    if step.get("cli") == "state" and got["exit"] == 1:
+        need(got["stdout"] == "", f"a refused command printed on stdout (open-2): {got['stdout']!r}")
     chat = after.get("$DIR/chat.jsonl") or []
     was_chat = before.get("$DIR/chat.jsonl") or []
     need(chat[:len(was_chat)] == was_chat, "the chat is append-only")

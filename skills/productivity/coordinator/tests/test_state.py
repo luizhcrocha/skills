@@ -141,6 +141,12 @@ class ParkTest(Fleet):
         self.assertEqual(self.state()["events"][-1]["text"], "Stopped a1, a2: Luiz paused the UI work")
         self.assertIn("no worker row is running", self.refused("park", "again"))
 
+    def test_park_frees_the_parked_workers_current_steps(self):
+        self.ok("step", "s1", "--milestone", "m1", "--title", "t")
+        self.ok("agent", "a1", "--task", "t", "--milestone", "m1", "--step", "s1")
+        self.ok("park", "the session ends")
+        self.assertEqual(self.state()["roadmap"][0]["steps"][0], {"id": "s1", "title": "t", "status": "pending", "agent": "a1"})
+
     def test_park_can_name_the_workers(self):
         for a in ("a1", "a2"):
             self.ok("agent", a, "--task", "t", "--milestone", "m1")
@@ -409,3 +415,43 @@ class BriefTest(Fleet):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StageFiveRulesTest(Fleet):
+    """The rules the skills asked a coordinator or a manager to remember, kept by the CLI (fleet/RULES.md)."""
+
+    def test_a_refused_write_prints_nothing_on_stdout(self):
+        self.ok("agent", "a1", "--task", "t", "--milestone", "m1")
+        result = self.run_cli("agent", "a2", "--task", "t", "--milestone", "m1", "--name", "a1")
+        self.assertEqual((result.returncode, result.stdout), (1, ""))
+
+    def test_a_roadblock_names_a_recorded_worker(self):
+        self.assertIn("unknown agent 'ghost'", self.refused("roadblock", "r1", "--title", "T", "--detail", "D", "--severity", "warning",
+                                                            "--needs", "worker", "--agent", "ghost"))
+
+    def test_an_answer_on_the_page_is_recorded_before_other_work(self):
+        self.ok("decision", "d1", "--kind", "input", "--title", "Region", "--question", "Which?", "--why", "w")
+        line = {"id": 1, "at": "2999-01-01T00:00:00+00:00", "from": "user", "to": ["coordinator"], "text": "eu", "re": None, "decision": "d1"}
+        (self.root / "chat.jsonl").write_text(json.dumps(line) + "\n")
+        self.assertIn("state: the user answered I1 (Region) as #1", self.run_cli("event", "x").stderr)
+        self.ok("decision", "I1", "--decide", "eu", "--resolution", "answered on the page (#1)")
+        self.assertNotIn("the user answered", self.run_cli("event", "y").stderr)
+
+    def test_done_with_open_decisions_names_them(self):
+        self.ok("decision", "d1", "--kind", "input", "--title", "Region", "--question", "Which?", "--why", "w")
+        self.assertIn("the fleet is done with I1 still open", self.run_cli("set", "--status", "done").stderr)
+
+    def test_a_running_lane_that_meets_another_is_warned_about(self):
+        self.ok("agent", "a1", "--task", "t", "--milestone", "m1", "--lane", "src/usage/**")
+        said = self.run_cli("agent", "a2", "--task", "t", "--milestone", "m1", "--lane", "src/usage/x.ts").stderr
+        self.assertIn("a2's lane overlaps a1's (running: src/usage/x.ts)", said)
+
+    def test_a_managers_queue_gives_one_turn_at_a_time(self):
+        manager = self.root.parent / "manager"
+        run = lambda *a: subprocess.run([sys.executable, STATE, str(manager), *a, "--no-render"], capture_output=True, text=True)  # noqa: E731
+        self.assertEqual(run("init", "--role", "manager", "--project", "box", "--goal", "g").returncode, 0)
+        self.assertEqual(json.loads((manager / "state.json").read_text())["roadmap"][0]["id"], "landings")
+        run("step", "l1", "--milestone", "landings", "--title", "infra", "--agent", "infra", "--status", "current")
+        refused = run("step", "l2", "--milestone", "landings", "--title", "acme", "--agent", "acme", "--status", "current")
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("l1 (infra) has the turn: one landing at a time", refused.stderr)

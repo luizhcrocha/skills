@@ -55,3 +55,26 @@ export function clockFrom(fixed: string | undefined): Layer.Layer<Clock> {
 
   return Layer.succeed(Clock, { now: () => (at === undefined ? new Date() : new Date(at)) });
 }
+
+/** Whether stamp `a` is at or after stamp `b`, as instants; as strings when either does not parse (open-13:
+ * two offsets, a DST change or a moved machine, misorder the strings). */
+export function atOrAfter(a: string, b: string): boolean {
+  const x = parseInstant(a);
+  const y = parseInstant(b);
+
+  return x !== undefined && y !== undefined ? x >= y : a >= b;
+}
+
+/** Stamps in time order, those that do not parse after them, as strings (Python's `clock.order`). */
+export function byInstant(a: string, b: string): number {
+  const x = parseInstant(a);
+  const y = parseInstant(b);
+
+  if (x !== undefined && y !== undefined) return x - y;
+
+  if (x !== undefined) return -1;
+
+  if (y !== undefined) return 1;
+
+  return a < b ? -1 : a > b ? 1 : 0;
+}

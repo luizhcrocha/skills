@@ -8,13 +8,13 @@ import { join } from "node:path";
 
 import * as Effect from "effect/Effect";
 
-import { parseInstant } from "../clock.ts";
+import { atOrAfter, parseInstant } from "../clock.ts";
 import { ChatError } from "../errors.ts";
 import { readText, remove, resolvePath, writeText } from "../files.ts";
 import { answeredAt, silentWorkers } from "../health.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
-import { decodeLedger } from "../ledger/model.ts";
+import { decodeLedger, type Decision, type Ledger } from "../ledger/model.ts";
 import { findDecision, number } from "../ledger/numbers.ts";
 import { Refusal } from "../errors.ts";
 import { readObject } from "../registry.ts";
@@ -282,16 +282,31 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
   });
 }
 
+function numberedLedger(root: string): Ledger | undefined {
+  const decoded = decodeLedger(stateOfDir(root));
+  const ledger = decoded instanceof Refusal ? undefined : decoded;
+
+  if (ledger !== undefined) number(ledger);
+
+  return ledger;
+}
+
+/** What `wait` says of a decision already closed. */
+function closedLine(d: Decision): string {
+  const label = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
+  const answer = d.answer ?? "";
+
+  return `${label} is already ${d.status}: ${answer !== "" ? answer : (d.resolution ?? "None")}\n`;
+}
+
 /** `wait`: the user's answer to one of these open decisions (ids or numbers), printed the moment it is
- * given; one given already and not replied to prints at once. It never re-reads the ledger (open-21). */
+ * given; one given already and not replied to prints at once. The ledger is read again at every poll, so
+ * a decision closed meanwhile (withdrawn, or decided without an answer on the page) ends the wait as one
+ * closed before does (open-21). */
 export function wait(machine: Machine, root: string, keys: readonly string[]): Effect.Effect<void, ChatError, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
-    const raw = stateOfDir(root);
-    const decoded = decodeLedger(raw);
-    const ledger = decoded instanceof Refusal ? undefined : decoded;
-
-    if (ledger !== undefined) number(ledger);
+    const ledger = numberedLedger(root);
     const wanted = new Map<string, { readonly label: string; readonly since: string }>();
 
     for (const key of keys) {
@@ -301,8 +316,7 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
       const label = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
 
       if (d.status !== "open") {
-        const answer = d.answer ?? "";
-        out.out(`${label} is already ${d.status}: ${answer !== "" ? answer : (d.resolution ?? "None")}\n`);
+        out.out(closedLine(d));
 
         return;
       }
@@ -322,7 +336,7 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
 
         if (d === undefined || m.from !== "user") continue;
 
-        if (first && pyText(m.at) < d.since) continue;
+        if (first && !atOrAfter(pyText(m.at), d.since)) continue;
 
         if (first && messages.some((r) => r.re === m.id && r.from !== "user")) continue;
 
@@ -333,6 +347,15 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
       }
 
       if (tail === undefined) tail = new Tail(root, messages.reduce((max, m) => Math.max(max, m.id), 0));
+      const now = numberedLedger(root);
+      const closed = [...wanted.keys()].map((id) => (now === undefined ? undefined : findDecision(now, id))).find((d) => d !== undefined && d.status !== "open");
+
+      if (closed !== undefined) {
+        out.out(closedLine(closed));
+
+        return;
+      }
+
       yield* Effect.sleep(POLL_MS);
     }
   });

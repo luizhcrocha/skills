@@ -1,8 +1,8 @@
 /**
  * The ledger's commands (Python's `state.py` handlers): one per event, create and update sharing a verb.
  * Each takes the ledger as read (a fresh copy it may change) and the command's arguments, prints what
- * the command says, and gives back the ledger to write (none for `show`) or a refusal. A refusal after
- * a print leaves the print (open-2), as Python's does.
+ * the command says, and gives back the ledger to write (none for `show`) or a refusal. What it says is
+ * printed only once the ledger it gives back is checked (open-2).
  */
 import { join } from "node:path";
 
@@ -101,6 +101,9 @@ function milestoneIds(ledger: Ledger): string {
 
 // -- init, set ------------------------------------------------------------------------------------
 
+/** A manager's landing queue: one step per landing, in the order of the turns; the current one has the turn. */
+export const LANDINGS = "landings";
+
 /** `init`: a new ledger. */
 export function init(already: boolean, run: Run): Effect.Effect<Ledger, Refusal> {
   if (already) return refuse("state.json already exists; use `set` to change it");
@@ -121,8 +124,11 @@ export function init(already: boolean, run: Run): Effect.Effect<Ledger, Refusal>
     events: [],
   };
 
+  if (run.args.str("role") !== "manager") return Effect.succeed(base);
+  base.roadmap.push({ id: LANDINGS, title: "Landings and deploys", steps: [] });
+
   // A manager's ledger says so first, as Python writes it.
-  return Effect.succeed(run.args.str("role") === "manager" ? { role: "manager", ...base } : base);
+  return Effect.succeed({ role: "manager", ...base });
 }
 
 /** `set`: the fleet's status, Now line or goal. */
@@ -167,6 +173,13 @@ export function park(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
   for (const a of rows) {
     a.status = "stopped";
     a.updated = stamp(run);
+  }
+
+  // A parked worker's current step is nobody's now; it keeps who last worked it (open-5).
+  const stopped = new Set(rows.map((a) => a.id));
+
+  for (const m of ledger.roadmap) {
+    for (const s of m.steps) if (s.status === "current" && stopped.has(s.agent ?? "")) s.status = "pending";
   }
 
   log(run, ledger, { kind: "note", text: `Stopped ${rows.map((a) => a.id).join(", ")}: ${run.args.str("reason") ?? ""}` });
@@ -408,9 +421,24 @@ export function step(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
     const after = args.str("after");
 
     if (given(before) || given(after)) yield* place(ledger, m, target, before, after);
+    yield* oneTurn(ledger, m, target);
 
     return ledger;
   });
+}
+
+/** In a manager's landing queue one landing has the turn: another is made current only once the one that
+ * has it is done or given back. */
+function oneTurn(ledger: Ledger, m: Milestone, target: Step): Step$ {
+  if (ledger.role !== "manager" || m.id !== LANDINGS || target.status !== "current") return Effect.void;
+  const held = m.steps.find((s) => s !== target && s.status === "current");
+
+  if (held === undefined) return Effect.void;
+
+  return refuse(
+    `${held.id} (${held.title}) has the turn: one landing at a time. Close it (\`step ${held.id} --status done\`) ` +
+      `or give it back (\`step ${held.id} --status pending\`) first`,
+  );
 }
 
 // -- workers --------------------------------------------------------------------------------------
@@ -599,10 +627,13 @@ export function roadblock(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refus
     const args = run.args;
     const id = args.str("id") ?? "";
     const r = find(ledger.roadblocks, id);
+    const agent = args.str("agent");
+
+    // open-3: a roadblock's worker is a worker row, as every other --agent is.
+    if (given(agent) && !known(ledger, agent)) return yield* refuse(`unknown agent '${agent}'`);
     let decision = args.str("decision");
 
     if (given(decision)) decision = (yield* openDecision(ledger, decision)).id;
-    const agent = args.str("agent");
 
     if (r === undefined) {
       yield* require(run, ["title", "detail", "severity", "needs"], "roadblock");

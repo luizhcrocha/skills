@@ -562,7 +562,7 @@ def _watch(root, args, who: str, cursor: Path) -> None:
 def cmd_wait(root, args) -> None:
     """Wait for the user's answer to any of these decisions (ids or numbers), print it and exit: the
     subscription a coordinator arms when it asks, so it knows at once, whatever its chat watch is doing.
-    An answer given already and not recorded prints at once."""
+    An answer given already and not recorded prints at once; one closed meanwhile ends the wait too."""
     import decisions
     state = _state(root)
     decisions.number(state)
@@ -581,7 +581,7 @@ def cmd_wait(root, args) -> None:
         messages = tail.read() if not first else read(root)
         for m in messages:
             d = wanted.get(m.get("decision"))
-            if d and m["from"] == "user" and (not first or str(m["at"]) >= str(d.get("revised") or d.get("opened") or "")):
+            if d and m["from"] == "user" and (not first or clock.at_or_after(m["at"], d.get("revised") or d.get("opened") or "")):
                 if first and any(r.get("re") == m["id"] and r["from"] != "user" for r in messages):
                     continue  # answered already, and replied to: not news
                 _show(root, [m])
@@ -590,7 +590,23 @@ def cmd_wait(root, args) -> None:
         if first:
             tail = Tail(root, max((m["id"] for m in messages), default=0))
             first = False
+        if _closed_meanwhile(root, wanted):
+            return
         time.sleep(POLL_S)
+
+
+def _closed_meanwhile(root, wanted: dict) -> bool:
+    """A decision waited on that was closed while `wait` waited (withdrawn, or decided without an answer on
+    the page): said as `wait` says it of one closed before, so the wait ends instead of hanging."""
+    import decisions
+    state = _state(root)
+    for did in wanted:
+        d = decisions.find(state, did) if state.get("decisions") else None
+        if d is not None and d.get("status") != "open":
+            decisions.number(state)
+            print(f"{d.get('ref') or did} is already {d['status']}: {d.get('answer') or d.get('resolution')}", flush=True)
+            return True
+    return False
 
 
 def cmd_log(root, args) -> None:

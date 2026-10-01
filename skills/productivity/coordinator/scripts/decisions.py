@@ -8,7 +8,11 @@ render_dashboard.py checks the rows with `validate`.
 """
 import json
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import clock  # noqa: E402
 
 KINDS = ["decision", "input", "secret", "action", "grill"]
 QUESTION_STATUSES = ["open", "answered", "dropped"]
@@ -52,13 +56,22 @@ def number(state: dict) -> None:
     free number for that letter, in the order they were opened, skipping a number that another row of
     the same list has as its id. A number, once given, stays."""
     rows = [d for d in state.get("decisions", []) if isinstance(d, dict)]
-    for d in sorted((d for d in rows if not d.get("ref")), key=lambda d: str(d.get("opened", ""))):
+    for d in sorted((d for d in rows if not d.get("ref")), key=lambda d: clock.order(d.get("opened", ""))):
         d["ref"] = _next(rows, PREFIX.get(d.get("kind"), "D"), d)
     for key, prefix in ROW_PREFIX.items():
         items = [r for r in state.get(key, []) if isinstance(r, dict)]
         for r in items:
             if not r.get("ref"):
                 r["ref"] = _next(items, prefix, r)
+
+
+def answered_at(d: dict, said: list[dict]) -> str | None:
+    """When the user's answer to the open decision `d`, given after it last changed and not replied to, was
+    sent: the fleet has it and has not recorded it. None when there is none."""
+    since = d.get("revised") or d.get("opened") or ""
+    answers = [m for m in said if m.get("decision") == d.get("id") and m["from"] == "user" and clock.at_or_after(m["at"], since)
+               and not any(r.get("re") == m["id"] and r["from"] != "user" for r in said)]
+    return answers[-1]["at"] if answers else None
 
 
 def closed_because(item: dict) -> str:

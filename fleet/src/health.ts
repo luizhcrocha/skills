@@ -3,7 +3,7 @@
  * recorded, the workers the ledger says run but whose transcripts are silent. Read by `fleet fleets`
  * and by a manager's or coordinator's chat watch.
  */
-import { stampOf } from "./clock.ts";
+import { atOrAfter, stampOf } from "./clock.ts";
 import type { Message } from "./chat/store.ts";
 import { asArray, asObject, asString, pyRepr, type JsonObject } from "./json.ts";
 import { workerActivity } from "./heartbeat.ts";
@@ -23,7 +23,7 @@ function str(value: JsonObject[string] | undefined): string {
 }
 
 /** When the user's answer to the open decision `d`, given after it last changed and not replied to,
- * was sent (strings compared, open-13); undefined when there is none. */
+ * was sent (stamps compared as instants, open-13); undefined when there is none. */
 export function answeredAt(d: JsonObject, said: readonly Message[]): string | undefined {
   const revised = d["revised"];
   const opened = d["opened"];
@@ -35,7 +35,7 @@ export function answeredAt(d: JsonObject, said: readonly Message[]): string | un
       m.decision !== undefined &&
       pyRepr(m.decision) === pyRepr(id) &&
       m.from === "user" &&
-      str(m.at) >= since &&
+      atOrAfter(str(m.at), since) &&
       !said.some((r) => r.from !== "user" && r.re === m.id),
   );
 

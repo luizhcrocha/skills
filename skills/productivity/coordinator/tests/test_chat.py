@@ -909,6 +909,17 @@ class WaitTest(FleetDir):
         chat.append(self.root, "user", "Done.", allow_user=True, decision="d-x")
         self.assertIn("[A1 d-x]: Done.", run_cli(self.root, "wait", "d-x").stdout)
 
+    def test_a_decision_closed_while_it_waits_ends_the_wait(self):
+        self.decide()
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "wait", "A1"], stdout=subprocess.PIPE, text=True, encoding="utf-8")
+        self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
+        time.sleep(0.6)
+        state = json.loads((self.root / "state.json").read_text())
+        state["decisions"][0].update(status="withdrawn", resolution="the worker found it")
+        (self.root / "state.json").write_text(json.dumps(state))
+        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertEqual(proc.stdout.read(), "A1 is already withdrawn: the worker found it\n")
+
 
 class WatchOnceTest(FleetDir):
     def test_a_watch_once_waits_for_news_prints_it_and_exits(self):

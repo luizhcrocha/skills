@@ -110,10 +110,14 @@ def cmd_init(state, args):
         "now": args.now or "Intake in progress.", "now_at": now(), "started": now(), "updated": now(),
         "roadmap": [], "agents": [], "roadblocks": [], "decisions": [], "events": [],
     }
-    return {"role": "manager", **state} if args.role == "manager" else state
+    if args.role == "manager":  # the landing queue: one step per landing, the current one holds the turn
+        state["roadmap"].append({"id": LANDINGS, "title": "Landings and deploys", "steps": []})
+        return {"role": "manager", **state}
+    return state
 
 
 REF = re.compile(r"\b([DAISGLR]\d+)\b")
+LANDINGS = "landings"
 
 
 def closed_named(state: dict, text: str) -> list[str]:
@@ -170,6 +174,11 @@ def cmd_park(state, args):
     for a in rows:
         a["status"] = "stopped"
         a["updated"] = now()
+    stopped = {a["id"] for a in rows}
+    for m in state["roadmap"]:
+        for st in m["steps"]:
+            if st.get("status") == "current" and st.get("agent") in stopped:
+                st["status"] = "pending"  # nobody works it now; the step keeps who last did
     log(state, "note", f"Stopped {', '.join(a['id'] for a in rows)}: {args.reason}")
     return state
 
@@ -270,6 +279,74 @@ def stale_rows(state: dict) -> str | None:
             f"if they are not working, `state.py <dir> park \"why\"` stops their rows in one command.")
 
 
+def unrecorded(root, state: dict) -> list[str]:
+    """What to say for each answer the user gave on the page that the ledger has not recorded: the page
+    shows it as sent and the fleet has not acted on it, so it is recorded before any other work."""
+    if not state or not state.get("decisions"):
+        return []
+    import copy
+    numbered = copy.deepcopy(state)
+    decisions.number(numbered)
+    said = chat.read(root)
+    lines = []
+    for d in numbered["decisions"]:
+        at = d.get("status") == "open" and decisions.answered_at(d, said)
+        if not at:
+            continue
+        m = next(x for x in reversed(said) if x.get("decision") == d["id"] and x["from"] == "user" and x["at"] == at)
+        lines.append(f"state: the user answered {d['ref']} ({d['title']}) as #{m['id']} at {str(at)[11:16]}; record it before any other "
+                     f"work: `state.py <dir> decision {d['ref']} --decide \"...\" --resolution \"answered on the page (#{m['id']})\"`, "
+                     f"then answer #{m['id']} with --re.")
+    return lines
+
+
+def left_open(state: dict, args) -> str | None:
+    """What to say when the fleet is set done with decisions still open: each is withdrawn with its reason,
+    or named in the last message as left open on purpose."""
+    if args.cmd != "set" or args.status != "done" or not state:
+        return None
+    still = [d.get("ref") or d["id"] for d in state.get("decisions", []) if d.get("status") == "open"]
+    if not still:
+        return None
+    return (f"state: the fleet is done with {', '.join(still)} still open: withdraw each with its reason "
+            f"(`decision ID --withdraw \"why\"`), or name it in your last message as left open on purpose.")
+
+
+def lane_root(entry: str) -> str:
+    """The directory part of a lane entry before any glob character: what it can touch, at most."""
+    entry = entry.strip().removeprefix("./").rstrip("/")
+    cut = min((entry.index(c) for c in "*?[{" if c in entry), default=None)
+    if cut is None:
+        return entry
+    return entry[:cut].rpartition("/")[0]
+
+
+def lanes_meet(a: str, b: str) -> bool:
+    x, y = lane_root(a), lane_root(b)
+    return x == y or not x or not y or y.startswith(x + "/") or x.startswith(y + "/")
+
+
+def overlapping(state: dict, args) -> str | None:
+    """What to say when a worker recorded as running shares files with another running or blocked worker's
+    lane: two workers on the same files collide at integration, so the task waits or joins that queue."""
+    if args.cmd != "agent" or not state:
+        return None
+    a = find(state["agents"], args.id)
+    if a is None or a.get("status") != "running" or not (args.lane is not None or args.status == "running" or args.task):
+        return None
+    hits = []
+    for other in state["agents"]:
+        if other is a or other.get("status") not in ("running", "blocked"):
+            continue
+        shared = sorted({x for x in a.get("lane") or [] for y in other.get("lane") or [] if lanes_meet(x, y)})
+        if shared:
+            hits.append(f"{other['id']}'s ({other['status']}: {', '.join(shared)})")
+    if not hits:
+        return None
+    return (f"state: {a['id']}'s lane overlaps {'; '.join(hits)}. A task whose files overlap a running lane waits "
+            f"(`--status queued`) or joins that worker's queue.")
+
+
 def cmd_milestone(state, args):
     m = find(state["roadmap"], args.id)
     if m is None:
@@ -345,7 +422,19 @@ def cmd_step(state, args):
             step["title"] = args.title
     if args.before or args.after:
         place(m, step, state, args.before, args.after)
+    one_turn(state, m, step)
     return state
+
+
+def one_turn(state: dict, m: dict, step: dict) -> None:
+    """In a manager's landing queue one landing has the turn: another is made current only once the one
+    that has it is done or given back."""
+    if state.get("role") != "manager" or m["id"] != LANDINGS or step.get("status") != "current":
+        return
+    held = next((x for x in m["steps"] if x is not step and x.get("status") == "current"), None)
+    if held:
+        fail(f"{held['id']} ({held['title']}) has the turn: one landing at a time. Close it (`step {held['id']} --status done`) "
+             f"or give it back (`step {held['id']} --status pending`) first")
 
 
 def cmd_agent(state, args):
@@ -422,6 +511,8 @@ def resolve(state, r: dict) -> None:
 
 def cmd_roadblock(state, args):
     r = find(state["roadblocks"], args.id)
+    if args.agent and not known(state, args.agent):
+        fail(f"unknown agent '{args.agent}'")
     if args.decision:
         args.decision = open_decision(state, args.decision)["id"]  # a number (D3) is kept as the id it names
     if r is None:
@@ -858,17 +949,23 @@ def main(argv: list[str]) -> None:
         fail(f"no state.json in {root}; run `init` first")
 
     handler = globals()[f"cmd_{args.cmd}"]
-    result = handler(state, args)
-    for warning in (chat.deaf_warning(root) if args.cmd != "init" else None, stale_rows(result or state), stale_now(result or state, args)):
+    said = io.StringIO()  # what the command says waits until the ledger is checked: a refused write says nothing (open-2)
+    with contextlib.redirect_stdout(said):
+        result = handler(state, args)
+    seen = result or state
+    for warning in (chat.deaf_warning(root) if args.cmd != "init" else None, stale_rows(seen), stale_now(seen, args),
+                    *(unrecorded(root, seen) if args.cmd != "init" else []), left_open(seen, args), overlapping(seen, args)):
         if warning:
             sys.stderr.write(warning + "\n")
     if result is None:
+        sys.stdout.write(said.getvalue())
         return
     measure(root, result)
     decisions.number(result)
     result["updated"] = now()
     render_dashboard.validate(result)
     path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
+    sys.stdout.write(said.getvalue())
     ensure_brief(root, result)
     if args.no_render:
         print(f"state.json updated ({args.cmd} {getattr(args, 'id', '')})".rstrip())

@@ -13,7 +13,7 @@ import { asArray, asObject, type JsonObject } from "../src/json.ts";
 import { cliLookups } from "../src/page/lookups.ts";
 import { view } from "../src/page/view.ts";
 import { machineOf, type Machine } from "../src/world.ts";
-import { tmp } from "./support.ts";
+import { baseEnv, fleet, tmp } from "./support.ts";
 
 const NOW = Date.parse("2026-01-05T10:00:00Z");
 
@@ -142,6 +142,19 @@ describe("last seen", () => {
     ]);
     // a worker the ledger no longer runs is never silent
     expect(silentWorkers(machine, dir, ledger({ agents: [{ id: "a3", name: "x", task: "t", status: "done", lane: [], milestone: "m" }] }))).toEqual([]);
+  });
+
+  test("`fleets show` marks a silent worker under its row, so the manager checks it before saying it runs", () => {
+    beat("w3", { worker: "a3", at: "2026-01-05T09:00:00+00:00" });
+    beat("w2", { worker: "a2", at: "2026-01-05T09:58:00+00:00" });
+    writeFileSync(join(dir, "state.json"), JSON.stringify(ledger({ agents: asArray(ledger()["agents"])?.slice(1) ?? [] })));
+    mkdirSync(join(base, "registry"), { recursive: true });
+    writeFileSync(join(base, "registry", "acme.json"), JSON.stringify({ id: "acme", role: "coordinator", dir, url: "http://box/f/acme/", pid: process.pid, session: null, since: "t" }));
+    const env = baseEnv(join(base, "registry"), { CLAUDE_CONFIG_DIR: config, FLEET_NOW: "2026-01-05T10:00:00+00:00", TZ: "UTC" });
+    const lines = fleet(["fleets", "show", "acme"], env).stdout.split("\n");
+    const a3 = lines.findIndex((l) => l.startsWith("    a3 (three) blocked"));
+    expect(lines[a3 + 1]).toBe("        silent since 09:00: check it before saying it runs");
+    expect(lines.some((l) => l.startsWith("        silent") && lines[lines.indexOf(l) - 1]?.startsWith("    a2"))).toBe(false);
   });
 
   test("the page's view: active from the heartbeat, with what it last ran; none without one", () => {

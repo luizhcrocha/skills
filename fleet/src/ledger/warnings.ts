@@ -1,12 +1,17 @@
 /**
  * What a ledger command says on stderr beside its work: live rows in a still fleet, a stale Now line, a
- * Now line naming a closed decision (in this ledger, or on a manager's in a fleet's), and a worker
- * recorded done whose report reads as unfinished. The chat's warning is the chat's ({@link ../chat/chat.ts}).
+ * Now line naming a closed decision (in this ledger, or on a manager's in a fleet's), a worker recorded
+ * done whose report reads as unfinished, an answer on the page not recorded, decisions left open when the
+ * fleet is done, lanes that overlap, and a done worker's workspace not pruned. The chat's warning is the
+ * chat's ({@link ../chat/chat.ts}).
  */
 import { join } from "node:path";
 
+import type { Message } from "../chat/store.ts";
 import { parseInstant } from "../clock.ts";
 import { Refusal } from "../errors.ts";
+import { answeredAt } from "../health.ts";
+import { asArray, asObject, asString, type JsonObject } from "../json.ts";
 import { readObject } from "../registry.ts";
 import { secondsNow, type Machine } from "../world.ts";
 import { copyLedger, decodeLedger, type Ledger } from "./model.ts";
@@ -95,4 +100,126 @@ export function closedNamed(machine: Machine, ledger: Ledger, text: string): str
   }
 
   return found;
+}
+
+/** For each answer the user gave on the page that the ledger has not recorded: the page shows it as sent
+ * and the fleet has not acted on it, so it is recorded before any other work. */
+export function unrecorded(ledger: Ledger, said: readonly Message[]): string[] {
+  const numbered = copyLedger(ledger);
+  number(numbered);
+  const lines: string[] = [];
+
+  for (const d of numbered.decisions ?? []) {
+    if (d.status !== "open") continue;
+    const at = answeredAt({ id: d.id, opened: d.opened, revised: d.revised ?? null }, said);
+
+    if (at === undefined) continue;
+    const m = [...said].reverse().find((x) => x.decision === d.id && x.from === "user" && x.at === at);
+    const n = m?.id ?? "?";
+    lines.push(
+      `state: the user answered ${d.ref ?? d.id} (${d.title ?? "None"}) as #${n} at ${at.slice(11, 16)}; record it before any other ` +
+        `work: \`state.py <dir> decision ${d.ref ?? d.id} --decide "..." --resolution "answered on the page (#${n})"\`, then answer #${n} with --re.`,
+    );
+  }
+
+  return lines;
+}
+
+/** When the fleet is set done with decisions still open: each is withdrawn with its reason, or named in
+ * the last message as left open on purpose. */
+export function leftOpen(ledger: Ledger, settingDone: boolean): string | undefined {
+  const still = settingDone ? (ledger.decisions ?? []).filter((d) => d.status === "open").map((d) => (d.ref !== undefined && d.ref !== "" ? d.ref : d.id)) : [];
+
+  if (still.length === 0) return undefined;
+
+  return (
+    `state: the fleet is done with ${still.join(", ")} still open: withdraw each with its reason ` +
+    `(\`decision ID --withdraw "why"\`), or name it in your last message as left open on purpose.`
+  );
+}
+
+/** The directory part of a lane entry before any glob character: what it can touch, at most. */
+export function laneRoot(entry: string): string {
+  let e = entry.trim();
+
+  if (e.startsWith("./")) e = e.slice(2);
+  e = e.replace(/\/+$/, "");
+  const cut = [..."*?[{"].flatMap((c) => (e.includes(c) ? [e.indexOf(c)] : []));
+
+  if (cut.length === 0) return e;
+  const head = e.slice(0, Math.min(...cut));
+  const slash = head.lastIndexOf("/");
+
+  return slash < 0 ? "" : head.slice(0, slash);
+}
+
+/** Whether two lane entries can touch the same file. */
+export function lanesMeet(a: string, b: string): boolean {
+  const x = laneRoot(a);
+  const y = laneRoot(b);
+
+  return x === y || x === "" || y === "" || y.startsWith(`${x}/`) || x.startsWith(`${y}/`);
+}
+
+/** When worker `id`, recorded as running, shares files with another running or blocked worker's lane: two
+ * workers on the same files collide at integration, so the task waits or joins that worker's queue. */
+export function overlapping(ledger: Ledger, id: string): string | undefined {
+  const a = ledger.agents.find((x) => x.id === id);
+
+  if (a?.status !== "running") return undefined;
+  const hits: string[] = [];
+
+  for (const other of ledger.agents) {
+    if (other === a || (other.status !== "running" && other.status !== "blocked")) continue;
+    const shared = [...new Set((a.lane ?? []).filter((x) => (other.lane ?? []).some((y) => lanesMeet(x, y))))].sort();
+
+    if (shared.length > 0) hits.push(`${other.id}'s (${other.status}: ${shared.join(", ")})`);
+  }
+
+  if (hits.length === 0) return undefined;
+
+  return (
+    `state: ${a.id}'s lane overlaps ${hits.join("; ")}. A task whose files overlap a running lane waits ` +
+    "(`--status queued`) or joins that worker's queue."
+  );
+}
+
+/** A workspace `fleet ws add` recorded and `prune` has not removed. */
+export interface ActiveWorkspace {
+  readonly id: string;
+  readonly agent: string;
+  readonly path: string;
+}
+
+/** The workspaces of a ledger that are still active, from its raw JSON (`workspaces` is `fleet ws`'s key). */
+export function activeWorkspaces(raw: JsonObject | undefined): ActiveWorkspace[] {
+  return (asArray(raw?.["workspaces"]) ?? []).flatMap((item) => {
+    const row = asObject(item);
+    const id = asString(row?.["id"]);
+
+    return row === undefined || id === undefined || row["status"] === "pruned" ? [] : [{ id, agent: asString(row["agent"]) ?? id, path: asString(row["path"]) ?? "" }];
+  });
+}
+
+/** When a worker is done and its workspace is still there, or the fleet is set done with workspaces left:
+ * a done worker's changes are integrated into the stack and its workspace pruned. */
+export function unpruned(ledger: Ledger, workspaces: readonly ActiveWorkspace[], settingDone: boolean): string[] {
+  const done = workspaces.filter((w) => ledger.agents.some((a) => a.id === w.agent && a.status === "done"));
+  const lines: string[] = [];
+
+  if (done.length > 0) {
+    lines.push(
+      `state: ${done.map((w) => `${w.agent}'s workspace ${w.id}`).join(", ")} still there though its worker is done: ` +
+        "bring its changes into the stack, then `fleet ws <dir> prune` (a dry run, then --apply).",
+    );
+  }
+
+  if (settingDone && workspaces.length > 0) {
+    lines.push(
+      `state: the fleet is done with workspace(s) ${workspaces.map((w) => w.id).join(", ")} not pruned: ` +
+        "`fleet ws <dir> list` says what each holds; integrate it or keep it with its reason, then `fleet ws <dir> prune`.",
+    );
+  }
+
+  return lines;
 }

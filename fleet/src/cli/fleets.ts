@@ -147,10 +147,15 @@ function show(machine: Machine, fleet: string): Effect.Effect<void, Refusal, Out
     const heard = listening(machine, entry.dir);
     say(`    chat: ${heard.on ? "read" : "not read now"}` + (heard.unread > 0 ? `; ${heard.unread} from the user unread since #${heard.seen}` : ""));
 
+    const silent = new Map(silentWorkers(machine, entry.dir, state).map((w) => [w.id, w]));
+
     for (const a of rows(state, "agents")) {
       if (a["status"] !== "running" && a["status"] !== "blocked" && a["status"] !== "queued") continue;
       const since = truthy(a["updated"]) ? a["updated"] : a["started"];
       say(`    ${str(a["id"])} (${str(a["name"])}) ${str(a["status"])} since ${str(since)}: ${str(a["task"])}`);
+      const quiet = silent.get(str(a["id"]));
+
+      if (quiet !== undefined) say(`        silent since ${quiet.active.slice(11, 16)}: check it before saying it runs`);
 
       if (truthy(a["report"])) say(`        last report: ${[...str(a["report"])].slice(0, 300).join("")}`);
     }
@@ -287,7 +292,7 @@ function procs(machine: Machine): Effect.Effect<void, never, Out> {
 }
 
 /** Python's `fnmatch.fnmatch` on a POSIX path: `*` matches across `/`. */
-function globMatches(path: string, glob: string): boolean {
+export function globMatches(path: string, glob: string): boolean {
   let pattern = "";
 
   for (let i = 0; i < glob.length; i += 1) {

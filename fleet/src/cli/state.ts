@@ -22,7 +22,9 @@ import { ledgerText, parseLedger, type Ledger } from "../ledger/model.ts";
 import { nextStepId, number } from "../ledger/numbers.ts";
 import { showLines } from "../ledger/show.ts";
 import { AGENT_STATUSES, ASKS, KINDS, STATUSES, STEP_STATUSES, validate } from "../ledger/validate.ts";
-import { staleNow, staleRows } from "../ledger/warnings.ts";
+import { readChat } from "../chat/store.ts";
+import { activeWorkspaces, leftOpen, overlapping, staleNow, staleRows, unpruned, unrecorded } from "../ledger/warnings.ts";
+import { readObject } from "../registry.ts";
 import { World, type Machine } from "../world.ts";
 import { opt, parseCommand, usageWidth, type CommandSpec } from "./args.ts";
 import { exitOf, printUsage } from "./exit.ts";
@@ -271,12 +273,15 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<nu
 
     if (ledger === undefined && cmd !== "init") return yield* Effect.fail(stateRefusal(`no state.json in ${root}; run \`init\` first`));
 
+    // What the command says waits until the ledger it gives back is checked: a refused write says nothing (open-2).
+    const said: string[] = [];
+
     const run: commands.Run = {
       machine,
       root,
       cmd,
       args,
-      say: (line) => out.out(`${line}\n`),
+      say: (line) => said.push(`${line}\n`),
       warn: (line) => out.err(`${line}\n`),
     };
 
@@ -292,17 +297,27 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<nu
     }
 
     const seen = result ?? ledger;
+    const settingDone = cmd === "set" && args.str("status") === "done";
+    const running = cmd === "agent" && (args.list("lane") !== undefined || args.str("status") === "running" || (args.str("task") ?? "") !== "");
 
     const warnings = [
       cmd === "init" ? undefined : deafWarning(machine, root),
       seen === undefined ? undefined : staleRows(seen),
       seen === undefined || cmd === "init" || (cmd === "set" && args.str("now") !== undefined) ? undefined : staleNow(machine, seen),
+      ...(seen === undefined || cmd === "init" ? [] : unrecorded(seen, readChat(root))),
+      seen === undefined ? undefined : leftOpen(seen, settingDone),
+      seen === undefined || !running ? undefined : overlapping(seen, args.str("id") ?? ""),
+      ...(seen === undefined ? [] : unpruned(seen, activeWorkspaces(readObject(path)), settingDone)),
     ];
 
     for (const warning of warnings) if (warning !== undefined) run.warn(warning);
 
+    const flush = (): void => {
+      for (const line of said) out.out(line);
+    };
+
     if (cmd === "show") {
-      if (ledger !== undefined) for (const line of showLines(ledger)) run.say(line);
+      if (ledger !== undefined) for (const line of showLines(ledger)) out.out(`${line}\n`);
 
       return 0;
     }
@@ -316,10 +331,11 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<nu
     if (fault !== undefined) return yield* Effect.fail(fault);
     writeText(path, ledgerText(result));
     ensureBrief(root, result);
+    flush();
 
     if (noRender) {
       const id = spec.positionals.some((p) => p.dest === "id") ? (nextStep ?? args.str("id") ?? "") : "";
-      run.say(`state.json updated (${cmd} ${id})`);
+      out.out(`state.json updated (${cmd} ${id})\n`);
 
       return 0;
     }

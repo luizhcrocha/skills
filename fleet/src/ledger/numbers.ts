@@ -3,6 +3,7 @@
  * after it is recorded: a letter for its kind and 1 + the highest number of that letter, skipping a
  * number another row of the list has as its id (open-1). A lookup takes an id first, then a number.
  */
+import { byInstant } from "../clock.ts";
 import type { Decision, Ledger, Milestone } from "./model.ts";
 
 /** The letter of each decision kind's number (an unknown kind numbers as a decision). */
@@ -50,12 +51,12 @@ function nextRef(rows: readonly Numbered[], prefix: string, row: Numbered): stri
   return `${prefix}${n}`;
 }
 
-/** Give each decision, link and roadblock without a number its number (decisions in `opened` order,
- * compared as strings, open-13; links and roadblocks in list order). */
+/** Give each decision, link and roadblock without a number its number (decisions in `opened` order, as
+ * instants, open-13; links and roadblocks in list order). */
 export function number(ledger: Ledger): void {
   const decisions = ledger.decisions ?? [];
   const waiting = decisions.filter((d) => d.ref === undefined || d.ref === "");
-  const byOpened = [...waiting].sort((a, b) => (a.opened < b.opened ? -1 : a.opened > b.opened ? 1 : 0));
+  const byOpened = [...waiting].sort((a, b) => byInstant(a.opened, b.opened));
 
   for (const d of byOpened) d.ref = nextRef(decisions, PREFIX.get(d.kind) ?? "D", d);
 

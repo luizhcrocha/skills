@@ -26,3 +26,26 @@ def stamp() -> str:
 def time() -> float:
     """now() as seconds since the epoch, for ages measured against file times and stamps."""
     return now().timestamp()
+
+
+def instant(text) -> float | None:
+    """The instant an ISO 8601 stamp names, as seconds since the epoch (a stamp without an offset is
+    UTC); None when it does not parse. Stamps are compared as instants, never as strings: two offsets
+    (a DST change, a moved machine) misorder the strings."""
+    try:
+        at = datetime.fromisoformat(str(text).strip())
+    except ValueError:
+        return None
+    return (at if at.tzinfo else at.replace(tzinfo=timezone.utc)).timestamp()
+
+
+def at_or_after(a, b) -> bool:
+    """Whether stamp `a` is at or after stamp `b`, as instants; as strings when either does not parse."""
+    x, y = instant(a), instant(b)
+    return x >= y if x is not None and y is not None else str(a) >= str(b)
+
+
+def order(text) -> tuple:
+    """A sort key that puts stamps in time order, and those that do not parse after them, as strings."""
+    at = instant(text)
+    return (0, at, "") if at is not None else (1, 0.0, str(text))
