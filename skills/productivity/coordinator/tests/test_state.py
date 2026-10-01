@@ -446,6 +446,29 @@ class StageFiveRulesTest(Fleet):
         said = self.run_cli("agent", "a2", "--task", "t", "--milestone", "m1", "--lane", "src/usage/x.ts").stderr
         self.assertIn("a2's lane overlaps a1's (running: src/usage/x.ts)", said)
 
+    def test_lanes_meet_when_some_path_matches_both_globs(self):  # L7
+        self.ok("agent", "a1", "--task", "t", "--milestone", "m1", "--lane", "src/*.ts")
+        self.assertNotIn("overlaps", self.run_cli("agent", "a2", "--task", "t", "--milestone", "m1", "--lane", "src/a/b.ts").stderr)
+        said = self.run_cli("agent", "a3", "--task", "t", "--milestone", "m1", "--lane", "src/**").stderr
+        self.assertIn("state: a3's lane overlaps a1's (running: src/**); a2's (running: src/**).", said)
+
+    def test_a_model_outside_the_policy_is_recorded_with_a_warning(self):  # L3
+        said = self.run_cli("agent", "a1", "--task", "t", "--milestone", "m1", "--model", "haiku")
+        self.assertEqual(said.returncode, 0)
+        self.assertIn("state: a1 is recorded on haiku, outside the model policy (opus, sonnet, fable): spawning it on haiku "
+                      "needs the user's OK.", said.stderr)
+        self.assertEqual(self.state()["agents"][0]["model"], "haiku")
+        self.assertNotIn("model policy", self.run_cli("agent", "a1", "--model", "fable").stderr)
+
+    def test_a_roadblock_changed_to_need_the_user_names_its_decision(self):  # L8
+        self.ok("roadblock", "r1", "--title", "T", "--detail", "D", "--severity", "warning", "--needs", "coordinator")
+        self.assertIn("record the `decision` first", self.refused("roadblock", "r1", "--needs", "user"))
+        self.assertEqual(self.state()["roadblocks"][0]["needs"], "coordinator")
+        self.ok("decision", "d1", "--kind", "input", "--title", "Region", "--question", "Which?", "--why", "w")
+        self.ok("roadblock", "r1", "--needs", "user", "--decision", "d1")
+        self.assertEqual(self.state()["roadblocks"][0]["needs"], "user")
+        self.ok("roadblock", "r1", "--needs", "user", "--title", "T2")
+
     def test_a_managers_queue_gives_one_turn_at_a_time(self):
         manager = self.root.parent / "manager"
         run = lambda *a: subprocess.run([sys.executable, STATE, str(manager), *a, "--no-render"], capture_output=True, text=True)  # noqa: E731

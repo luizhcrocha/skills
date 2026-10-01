@@ -2013,7 +2013,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
           <td class="c-name">${whoButton(a.id, "agent-name")}</td>
           <td class="c-task task">${esc(a.task)}</td>
           <td class="c-skill" data-label="Skill">${esc(a.skill || "none")}</td>
-          <td class="c-model" data-label="Model">${esc(a.model || "opus")}</td>
+          <td class="c-model" data-label="Model">${esc(a.model || "opus")}${["opus", "sonnet", "fable"].includes(a.model || "opus") ? "" : ' <span class="pill warning" title="Outside the model policy (Opus, Sonnet, Fable): yours to approve">needs your OK</span>'}</td>
           <td class="c-status">${pill(a.status)}</td>
           <td class="c-lane lane">${(a.lane || []).length ? a.lane.map((l) => `<code>${esc(l)}</code>`).join("") : '<span class="faint">read-only</span>'}</td>
           <td class="c-tokens right num" data-label="Tokens">${a.tokens ? fmtInt(a.tokens) : '<span class="faint">pending</span>'}</td>

@@ -23,7 +23,7 @@ import { nextStepId, number } from "../ledger/numbers.ts";
 import { showLines } from "../ledger/show.ts";
 import { AGENT_STATUSES, ASKS, KINDS, STATUSES, STEP_STATUSES, validate } from "../ledger/validate.ts";
 import { readChat } from "../chat/store.ts";
-import { activeWorkspaces, leftOpen, overlapping, staleNow, staleRows, unpruned, unrecorded } from "../ledger/warnings.ts";
+import { activeWorkspaces, leftOpen, offPolicy, overlapping, staleNow, staleRows, unpruned, unrecorded } from "../ledger/warnings.ts";
 import { readObject } from "../registry.ts";
 import { World, type Machine } from "../world.ts";
 import { opt, parseCommand, usageWidth, type CommandSpec } from "./args.ts";
@@ -307,6 +307,7 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<nu
       ...(seen === undefined || cmd === "init" ? [] : unrecorded(seen, readChat(root))),
       seen === undefined ? undefined : leftOpen(seen, settingDone),
       seen === undefined || !running ? undefined : overlapping(seen, args.str("id") ?? ""),
+      seen === undefined || cmd !== "agent" ? undefined : offPolicy(args.str("id") ?? "", args.str("model")),
       ...(seen === undefined ? [] : unpruned(seen, activeWorkspaces(readObject(path)), settingDone)),
     ];
 

@@ -15,6 +15,7 @@ import { asArray, asObject, asString, type JsonObject } from "../json.ts";
 import { readObject } from "../registry.ts";
 import { secondsNow, type Machine } from "../world.ts";
 import { copyLedger, decodeLedger, type Ledger } from "./model.ts";
+import { lanesMeet } from "./lanes.ts";
 import { findDecision, number } from "./numbers.ts";
 
 /** The statuses of a worker row that is still at work. */
@@ -138,29 +139,6 @@ export function leftOpen(ledger: Ledger, settingDone: boolean): string | undefin
   );
 }
 
-/** The directory part of a lane entry before any glob character: what it can touch, at most. */
-export function laneRoot(entry: string): string {
-  let e = entry.trim();
-
-  if (e.startsWith("./")) e = e.slice(2);
-  e = e.replace(/\/+$/, "");
-  const cut = [..."*?[{"].flatMap((c) => (e.includes(c) ? [e.indexOf(c)] : []));
-
-  if (cut.length === 0) return e;
-  const head = e.slice(0, Math.min(...cut));
-  const slash = head.lastIndexOf("/");
-
-  return slash < 0 ? "" : head.slice(0, slash);
-}
-
-/** Whether two lane entries can touch the same file. */
-export function lanesMeet(a: string, b: string): boolean {
-  const x = laneRoot(a);
-  const y = laneRoot(b);
-
-  return x === y || x === "" || y === "" || y.startsWith(`${x}/`) || x.startsWith(`${y}/`);
-}
-
 /** When worker `id`, recorded as running, shares files with another running or blocked worker's lane: two
  * workers on the same files collide at integration, so the task waits or joins that worker's queue. */
 export function overlapping(ledger: Ledger, id: string): string | undefined {
@@ -182,6 +160,16 @@ export function overlapping(ledger: Ledger, id: string): string | undefined {
     `state: ${a.id}'s lane overlaps ${hits.join("; ")}. A task whose files overlap a running lane waits ` +
     "(`--status queued`) or joins that worker's queue."
   );
+}
+
+/** The worker models the policy approves; any other is the user's to approve, case by case (L3). */
+export const POLICY_MODELS: readonly string[] = ["opus", "sonnet", "fable"];
+
+/** When `agent` records worker `id` on a model outside the policy: accepted, and the user's to approve. */
+export function offPolicy(id: string, model: string | undefined): string | undefined {
+  if (model === undefined || model === "" || POLICY_MODELS.includes(model)) return undefined;
+
+  return `state: ${id} is recorded on ${model}, outside the model policy (${POLICY_MODELS.join(", ")}): spawning it on ${model} needs the user's OK.`;
 }
 
 /** A workspace `fleet ws add` recorded and `prune` has not removed. */

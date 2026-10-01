@@ -53,6 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chat  # noqa: E402
 import clock  # noqa: E402
 import decisions  # noqa: E402
+import lanes  # noqa: E402
 import render_dashboard  # noqa: E402
 import spend  # noqa: E402
 
@@ -61,6 +62,7 @@ AGENT_STATUSES = sorted(render_dashboard.AGENT_STATUSES)
 STEP_STATUSES = sorted(render_dashboard.STEP_STATUSES)
 SKILLS = ["implement", "diagnosing-bugs", "prototype", "research", "tdd", "none"]
 MODELS = ["opus", "sonnet", "haiku", "fable"]
+POLICY_MODELS = ["opus", "sonnet", "fable"]  # any other model is the user's to approve, case by case (L3)
 SEVERITIES = ["warning", "serious", "critical"]
 NEEDS = ["user", "coordinator", "worker"]
 KINDS = ["spawned", "reported", "blocked", "resolved", "asked", "decision", "note", "integrated"]
@@ -312,20 +314,6 @@ def left_open(state: dict, args) -> str | None:
             f"(`decision ID --withdraw \"why\"`), or name it in your last message as left open on purpose.")
 
 
-def lane_root(entry: str) -> str:
-    """The directory part of a lane entry before any glob character: what it can touch, at most."""
-    entry = entry.strip().removeprefix("./").rstrip("/")
-    cut = min((entry.index(c) for c in "*?[{" if c in entry), default=None)
-    if cut is None:
-        return entry
-    return entry[:cut].rpartition("/")[0]
-
-
-def lanes_meet(a: str, b: str) -> bool:
-    x, y = lane_root(a), lane_root(b)
-    return x == y or not x or not y or y.startswith(x + "/") or x.startswith(y + "/")
-
-
 def overlapping(state: dict, args) -> str | None:
     """What to say when a worker recorded as running shares files with another running or blocked worker's
     lane: two workers on the same files collide at integration, so the task waits or joins that queue."""
@@ -338,13 +326,22 @@ def overlapping(state: dict, args) -> str | None:
     for other in state["agents"]:
         if other is a or other.get("status") not in ("running", "blocked"):
             continue
-        shared = sorted({x for x in a.get("lane") or [] for y in other.get("lane") or [] if lanes_meet(x, y)})
+        shared = sorted({x for x in a.get("lane") or [] for y in other.get("lane") or [] if lanes.meet(x, y)})
         if shared:
             hits.append(f"{other['id']}'s ({other['status']}: {', '.join(shared)})")
     if not hits:
         return None
     return (f"state: {a['id']}'s lane overlaps {'; '.join(hits)}. A task whose files overlap a running lane waits "
             f"(`--status queued`) or joins that worker's queue.")
+
+
+def off_policy(state: dict, args) -> str | None:
+    """What to say when `agent` records a worker on a model outside the policy: accepted, and the user's
+    to approve before it is spawned on it."""
+    if args.cmd != "agent" or not state or not args.model or args.model in POLICY_MODELS:
+        return None
+    return (f"state: {args.id} is recorded on {args.model}, outside the model policy ({', '.join(POLICY_MODELS)}): "
+            f"spawning it on {args.model} needs the user's OK.")
 
 
 def cmd_milestone(state, args):
@@ -528,6 +525,8 @@ def cmd_roadblock(state, args):
         if args.agent and find(state["agents"], args.agent):
             find(state["agents"], args.agent)["status"] = "blocked"
         return state
+    if args.needs == "user" and not (args.decision if args.decision is not None else r.get("decision")):  # L8: as a new one does
+        fail("a roadblock that needs the user names what it asks: record the `decision` first, then pass --decision ID")
     for key in ("title", "detail", "severity", "needs", "agent", "decision"):
         if getattr(args, key) is not None:
             r[key] = getattr(args, key)
@@ -954,7 +953,7 @@ def main(argv: list[str]) -> None:
         result = handler(state, args)
     seen = result or state
     for warning in (chat.deaf_warning(root) if args.cmd != "init" else None, stale_rows(seen), stale_now(seen, args),
-                    *(unrecorded(root, seen) if args.cmd != "init" else []), left_open(seen, args), overlapping(seen, args)):
+                    *(unrecorded(root, seen) if args.cmd != "init" else []), left_open(seen, args), overlapping(seen, args), off_policy(seen, args)):
         if warning:
             sys.stderr.write(warning + "\n")
     if result is None:

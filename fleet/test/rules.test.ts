@@ -132,6 +132,40 @@ describe("lanes", () => {
     expect(ok("agent", "a3", "--task", "T", "--milestone", "m1", "--lane", "src/billing/").stderr).not.toContain("overlaps");
     expect(ok("agent", "a4", "--task", "T", "--milestone", "m1", "--lane", "src/usage/y.ts", "--status", "queued").stderr).not.toContain("overlaps");
   });
+
+  test("lanes meet when some path matches both globs, not when their directories nest (L7)", () => {
+    ok("agent", "a1", "--task", "T", "--milestone", "m1", "--lane", "src/*.ts");
+    expect(ok("agent", "a2", "--task", "T", "--milestone", "m1", "--lane", "src/a/b.ts").stderr).not.toContain("overlaps");
+    expect(ok("agent", "a3", "--task", "T", "--milestone", "m1", "--lane", "src/**").stderr).toContain(
+      "state: a3's lane overlaps a1's (running: src/**); a2's (running: src/**).",
+    );
+    ok("agent", "a3", "--status", "queued");
+    expect(ok("agent", "a4", "--task", "T", "--milestone", "m1", "--lane", "src/x.ts").stderr).toContain("a4's lane overlaps a1's (running: src/x.ts).");
+  });
+});
+
+describe("models outside the policy (L3)", () => {
+  test("haiku is recorded, with a warning that it is the user's to approve", () => {
+    const ran = ok("agent", "a1", "--task", "T", "--milestone", "m1", "--model", "haiku");
+    expect(ran.stderr).toContain("state: a1 is recorded on haiku, outside the model policy (opus, sonnet, fable): spawning it on haiku needs the user's OK.");
+    expect(rows("agents")[0]?.["model"]).toBe("haiku");
+    expect(ok("agent", "a1", "--model", "sonnet").stderr).not.toContain("model policy");
+    expect(ok("agent", "a1", "--model", "haiku").stderr).toContain("outside the model policy");
+    expect(ok("agent", "a2", "--task", "T", "--milestone", "m1").stderr).not.toContain("model policy");
+  });
+});
+
+describe("a roadblock changed to need the user (L8)", () => {
+  test("names its decision, as a new one does", () => {
+    ok("roadblock", "r1", "--title", "T", "--detail", "D", "--severity", "warning", "--needs", "coordinator");
+    const ran = refused("roadblock", "r1", "--needs", "user");
+    expect(ran.stderr).toContain("a roadblock that needs the user names what it asks: record the `decision` first, then pass --decision ID");
+    expect(rows("roadblocks")[0]?.["needs"]).toBe("coordinator");
+    ok("decision", "d1", ...CHOICE);
+    ok("roadblock", "r1", "--needs", "user", "--decision", "d1");
+    expect(rows("roadblocks")[0]?.["needs"]).toBe("user");
+    expect(ok("roadblock", "r1", "--needs", "user", "--title", "T2").code).toBe(0);
+  });
 });
 
 describe("the landing queue of a manager", () => {

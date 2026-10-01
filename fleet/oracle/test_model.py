@@ -48,6 +48,8 @@ AGENTS = ["a1", "a2", "a3", "A1"]              # A1 and a1 cannot both be: a men
 NAMES = ["impl", "coordinator", "a2"]           # "coordinator" is the chat's; "a2" is another worker's id
 DECISIONS = ["d1", "d2", "d3", "D1", "D2", "I1"]  # capitals are numbers when a row has them
 ROADBLOCKS = ["r1", "r2", "R1"]
+MODELS = ["opus", "sonnet", "haiku", "fable"]
+POLICY_MODELS = ("opus", "sonnet", "fable")  # L3: any other is accepted with a warning
 KEPT = ["k1", "k2"]
 LINKS = ["l1", "l2", "L1"]
 NOW_TEXTS = ["building", "waits on D1", "A1 next", "checking I1 and D2", "quiet"]
@@ -221,6 +223,8 @@ class Model:
                 self.agents[c["agent"]]["status"] = "blocked"
             return
         r = self.roadblocks[rid]
+        if c.get("needs") == "user" and not (c["decision"] if "decision" in c else r["decision"]):
+            raise Refused("changed to need the user, a roadblock names its decision (L8)")
         for key in ("agent", "decision"):
             if key in c:
                 r[key] = c[key]
@@ -452,6 +456,8 @@ class Model:
             found["answer"] = "state: the user answered"
         if c["cmd"] == "set" and c.get("status") == "done" and any(d["status"] == "open" for d in self.decisions.values()):
             found["open"] = "state: the fleet is done with"
+        if c["cmd"] == "agent" and c.get("model") not in (None, *POLICY_MODELS):
+            found["model"] = "outside the model policy"
         return found
 
     def answered(self, did: str) -> bool:
@@ -613,6 +619,8 @@ def gen(rng: random.Random, m: Model) -> dict:
     if cmd == "agent":
         aid = pick(agent_ids + AGENTS)
         c = {"cmd": "agent", "id": aid}
+        if maybe(0.15):
+            c["model"] = pick(MODELS)
         if aid not in m.agents:
             c.update(task="T", milestone=pick(list(m.milestones) or MILESTONES) if maybe(0.9) else "m9")
             if maybe(0.1):
@@ -639,7 +647,7 @@ def gen(rng: random.Random, m: Model) -> dict:
             c.update(title="T", detail="D", severity=pick(["warning", "serious"]), needs=pick(["coordinator", "worker", "user"]))
             if maybe(0.7):
                 c["agent"] = pick(agent_ids + ["ghost"])
-            if c["needs"] == "user" or maybe(0.2):
+            if c["needs"] == "user" and maybe(0.9) or maybe(0.2):  # L8: a user's roadblock with no decision is refused
                 c["decision"] = pick(dec_ids)
             return c
         c[pick(["resolved", "open"])] = True
@@ -758,7 +766,7 @@ def to_step(c: dict, clock: str, render: bool, next_id: int) -> dict:
     elif cmd not in ("show", "note", "set"):
         argv += [c["id"]]
     flags = {"status", "now", "title", "milestone", "agent", "before", "after", "remove", "task", "name", "step", "log",
-             "tokens", "detail", "severity", "needs", "decision", "kind", "question", "why", "recommend", "reason",
+             "tokens", "model", "detail", "severity", "needs", "decision", "kind", "question", "why", "recommend", "reason",
              "secret", "manual", "supersedes", "decide", "resolution", "withdraw", "url", "done", "log"}
     if cmd not in ("event", "park", "keep"):
         for key, value in c.items():

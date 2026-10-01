@@ -670,6 +670,13 @@ export function roadblock(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refus
       return ledger;
     }
 
+    const needsNow = args.str("needs");
+
+    // L8: changed to need the user, a roadblock names its decision, as a new one does.
+    if (needsNow === "user" && !given(decision !== undefined ? decision : (r.decision ?? undefined))) {
+      return yield* refuse("a roadblock that needs the user names what it asks: record the `decision` first, then pass --decision ID");
+    }
+
     const title = args.str("title");
 
     if (title !== undefined) r.title = title;
@@ -679,9 +686,8 @@ export function roadblock(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refus
     const severity = args.str("severity");
 
     if (severity !== undefined) r.severity = severity;
-    const needs = args.str("needs");
 
-    if (needs !== undefined) r.needs = needs;
+    if (needsNow !== undefined) r.needs = needsNow;
 
     if (agent !== undefined) r.agent = agent;
 

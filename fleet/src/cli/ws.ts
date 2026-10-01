@@ -25,6 +25,7 @@ import { exists, isDir, readText, resolvePath, writeText } from "../files.ts";
 import { workerActivity } from "../heartbeat.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
+import { laneMatches } from "../ledger/lanes.ts";
 import { decodeLedger } from "../ledger/model.ts";
 import { validate } from "../ledger/validate.ts";
 import { cliLookups } from "../page/lookups.ts";
@@ -33,7 +34,6 @@ import { view } from "../page/view.ts";
 import { changes, jj, literal, unintegratedRevset, why, workspaceNames, workspaceRoot, type Change } from "../ws/jj.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
-import { globMatches } from "./fleets.ts";
 
 const USAGE = "usage: fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] | list | prune [--apply | --dry-run]";
 
@@ -217,13 +217,10 @@ function list(machine: Machine, root: string, raw: JsonObject): Effect.Effect<nu
   });
 }
 
-/** Whether a repository path is in a lane: the entry itself, under it, or matched by it as a glob. */
+/** Whether a repository path is in a lane: the entry itself, under it, or matched by it as a glob (the
+ * lane's own glob rule, the one overlap is read by). */
 export function inLane(path: string, lane: readonly string[]): boolean {
-  return lane.some((entry) => {
-    const e = entry.trim().replace(/^\.\//, "").replace(/\/+$/, "");
-
-    return path === e || path.startsWith(`${e}/`) || globMatches(path, e);
-  });
+  return lane.some((entry) => laneMatches(path, entry));
 }
 
 /** The files the commits of `revset` touch that are in none of the lane's entries. */
