@@ -2,7 +2,7 @@
  * What the session transcripts say (Python's `spend.py`): a DIR at `…/<project>/<session>/scratchpad/<name>`
  * names its session's transcript under `$CLAUDE_CONFIG_DIR/projects/`, and its workers' under
  * `<session>/subagents/agent-<id>.jsonl`. Any other DIR has none, and every figure read here is absent
- * (open-23: stage 4 replaces this with the heartbeat).
+ * (open-23: a worker's heartbeat, [heartbeat.ts](heartbeat.ts), is read first).
  */
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
@@ -39,6 +39,14 @@ export function activeAt(root: string, config: string): string | undefined {
 
 const WHO = /(?:your id is|You are) ([A-Za-z][A-Za-z0-9_.-]*?)[,.\s"]/;
 
+/** The worker id a subagent's transcript was given on its first line (its brief's `your id is X`), or
+ * undefined. */
+export function workerNamedIn(path: string): string | undefined {
+  const head = readBytes(path)?.subarray(0, 20000).toString("utf8");
+
+  return head === undefined ? undefined : WHO.exec(head.split("\n")[0] ?? "")?.[1];
+}
+
 function subagents(root: string, config: string): string | undefined {
   const transcript = transcriptOf(root, config);
 
@@ -55,11 +63,7 @@ export function lastActivity(root: string, config: string): Map<string, number> 
   for (const name of listDir(folder)) {
     if (!name.startsWith("agent-") || !name.endsWith(".jsonl")) continue;
     const path = join(folder, name);
-    const head = readBytes(path)?.subarray(0, 20000).toString("utf8");
-
-    if (head === undefined) continue;
-    const firstLine = head.split("\n")[0] ?? "";
-    const id = WHO.exec(firstLine)?.[1];
+    const id = workerNamedIn(path);
     const at = mtimeOf(path);
 
     if (id === undefined || at === undefined) continue;

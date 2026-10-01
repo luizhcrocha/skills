@@ -6,10 +6,11 @@
 import { stampOf } from "./clock.ts";
 import type { Message } from "./chat/store.ts";
 import { asArray, asObject, asString, pyRepr, type JsonObject } from "./json.ts";
-import { lastActivity } from "./transcripts.ts";
+import { workerActivity } from "./heartbeat.ts";
 import { secondsNow, type Machine } from "./world.ts";
 
-/** A running worker that has written nothing for this long is silent. */
+/** A running worker that has made no tool call (by its heartbeat) or written nothing (by its transcript,
+ * without one) for this long is silent. */
 export const SILENT_S = 20 * 60;
 
 /** A local stamp of seconds since the epoch. */
@@ -50,10 +51,10 @@ export interface Silent {
   readonly active: string;
 }
 
-/** The workers of DIR the ledger says are running or blocked whose transcript has not moved for
- * {@link SILENT_S}, oldest silence first. */
+/** The workers of DIR the ledger says are running or blocked that have not been seen for
+ * {@link SILENT_S} (their last heartbeat, else their transcript), oldest silence first. */
 export function silentWorkers(machine: Machine, root: string, state: JsonObject): Silent[] {
-  const seen = lastActivity(root, machine.config);
+  const seen = workerActivity(root, machine.config, state);
   const now = secondsNow(machine);
   const rows: Silent[] = [];
 
@@ -63,7 +64,7 @@ export function silentWorkers(machine: Machine, root: string, state: JsonObject)
     const status = a?.["status"];
 
     if (a === undefined || id === undefined || (status !== "running" && status !== "blocked")) continue;
-    const at = seen.get(id);
+    const at = seen.get(id)?.at;
 
     if (at === undefined || now - at <= SILENT_S) continue;
     const name = a["name"];

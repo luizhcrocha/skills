@@ -13,7 +13,8 @@ import { resolvePath } from "../files.ts";
 import { answeredAt, isoOf, silentWorkers } from "../health.ts";
 import { asArray, asNumber, asObject, asString, truthy, type Json, type JsonObject } from "../json.ts";
 import { readObject, type Entry } from "../registry.ts";
-import { activeAt, lastActivity, SpendReader, type Spent } from "../transcripts.ts";
+import { workerActivity } from "../heartbeat.ts";
+import { activeAt, SpendReader, type Spent } from "../transcripts.ts";
 import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
 import { numberState, pyStr } from "./number.ts";
@@ -216,14 +217,17 @@ export function view(machine: Machine, lookups: Lookups, given: JsonObject, root
   let state: JsonObject = numberState(given);
   const heard = listening(machine, root);
   state = { ...state, spent: spentJson(lookups.spend.of(root, machine.config)), chat: { on: heard.on, seen: heard.seen, unread: heard.unread, since: heard.since } };
-  const seen = lastActivity(root, machine.config);
+  const seen = workerActivity(root, machine.config, state);
 
+  // `active` is when the worker was last seen; `beat`, only when a heartbeat says it, what it last ran.
   const agents = (asArray(state["agents"]) ?? []).map((item) => {
     const a = asObject(item);
     const id = asString(a?.["id"]);
     const at = id === undefined ? undefined : seen.get(id);
 
-    return a === undefined || at === undefined ? item : { ...a, active: isoOf(at) };
+    if (a === undefined || at === undefined) return item;
+
+    return at.by === "heartbeat" ? { ...a, active: isoOf(at.at), beat: { tool: at.tool, event: at.event } } : { ...a, active: isoOf(at.at) };
   });
 
   state = { ...state, agents };
