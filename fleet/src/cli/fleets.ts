@@ -3,8 +3,7 @@
  * a decision in full, the gate, background processes, whose files a landing moves, and naming a fleet.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, readlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import * as Effect from "effect/Effect";
 
@@ -12,12 +11,13 @@ import { listening } from "../chat/chat.ts";
 import { readChat } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
 import { Refusal } from "../errors.ts";
-import { exists, readText, resolvePath } from "../files.ts";
+import { exists, readText } from "../files.ts";
 import { answeredAt, silentWorkers } from "../health.ts";
 import { Out } from "../io.ts";
 import { asArray, asNumber, asObject, asString, pyRepr, truthy, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger } from "../ledger/model.ts";
 import { find, number } from "../ledger/numbers.ts";
+import { processes } from "../procs.ts";
 import { stateOf } from "../registry.ts";
 import { activeAt, spentBy } from "../transcripts.ts";
 import { World, type Machine } from "../world.ts";
@@ -270,46 +270,6 @@ function gate(machine: Machine, argv: readonly string[]): Effect.Effect<void, Re
       return yield* fail("usage: fleets.py gate | gate take FLEET WHAT | gate free FLEET");
     }
   });
-}
-
-/** A background process a fleet's session started. */
-interface Proc {
-  readonly pid: number;
-  readonly started: number;
-  readonly command: string;
-}
-
-function processes(root: string): Proc[] {
-  const tasks = join(dirname(dirname(resolvePath(root))), "tasks");
-  const boot = Number(/^btime (\d+)/m.exec(readText("/proc/stat") ?? "")?.[1]);
-
-  if (Number.isNaN(boot)) return [];
-  const tick = 100;
-  const found: Proc[] = [];
-
-  for (const name of readdirSync("/proc")) {
-    if (!/^\d+$/.test(name)) continue;
-    let links: string[];
-
-    try {
-      links = readdirSync(join("/proc", name, "fd")).map((fd) => readlinkSync(join("/proc", name, "fd", fd)));
-    } catch {
-      continue;
-    }
-
-    if (!links.some((l) => l.startsWith(`${tasks}/`))) continue;
-
-    try {
-      const stat = (readText(join("/proc", name, "stat")) ?? "").split(")").at(-1)?.trim().split(/\s+/) ?? [];
-      const args = readFileSync(join("/proc", name, "cmdline")).toString("utf8").replaceAll("\0", " ").trim();
-      const wrapped = /eval '([^']*)'/.exec(args)?.[1];
-      found.push({ pid: Number(name), started: boot + Number(stat[19]) / tick, command: wrapped ?? args });
-    } catch {
-      continue;
-    }
-  }
-
-  return found.sort((a, b) => a.started - b.started);
 }
 
 function procs(machine: Machine): Effect.Effect<void, never, Out> {

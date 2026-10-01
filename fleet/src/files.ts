@@ -119,6 +119,13 @@ const STRERROR = new Map(Object.entries({
   ENAMETOOLONG: "File name too long",
 }));
 
+/** Why an operation failed, in the words of C's `strerror` (as Python's `exc.strerror` reports it). */
+export function strerror(cause: unknown): string {
+  const code = cause instanceof Error && "code" in cause ? String(cause.code) : "";
+
+  return STRERROR.get(code) ?? (cause instanceof Error ? cause.message : String(cause));
+}
+
 /** The bytes of `path`, or why it cannot be read, in the words of C's `strerror` (as Python reports it). */
 export function readOrWhy(path: string): Buffer | { readonly why: string } {
   try {
