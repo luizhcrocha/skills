@@ -104,3 +104,12 @@ test("parseEmbedMessage: a frame's height or an answer it sent, anything else no
 
   for (const data of [null, undefined, "x", [], { height: 3 }, { fleetEmbed: true }, { fleetEmbed: true, height: -1 }, { fleetEmbed: true, height: "3" }, { fleetEmbed: true, answered: "" }, { fleetEvidence: true, height: 3 }]) expect(parseEmbedMessage(data)).toBeNull();
 });
+
+test("parseEmbedMessage: a selection in the frame, its place and where it is; cleared, no place", () => {
+  const rect = { top: 10, bottom: 28, left: 4.5, width: 80 };
+  expect(parseEmbedMessage({ fleetEmbed: true, select: { text: "per line", rect, from: "Rounding" } })).toEqual({ kind: "select", text: "per line", rect, from: "Rounding" });
+  expect(parseEmbedMessage({ fleetEmbed: true, select: { text: "", rect: null, from: "" } })).toEqual({ kind: "select", text: "", rect: null, from: "" });
+
+  for (const select of [null, "per line", { text: 3, rect, from: "" }, { text: "x", rect: null, from: "" }, { text: "x", rect: { ...rect, top: "10" }, from: "" }, { text: "x", rect: { top: 1, bottom: 2, left: 3 }, from: "" }, { text: "x", rect, from: null }])
+    expect(parseEmbedMessage({ fleetEmbed: true, select })).toBeNull();
+});

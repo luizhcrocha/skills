@@ -16,18 +16,20 @@ import { goLive } from "./live.ts";
 import { Masthead, Toasts } from "./Masthead.tsx";
 import { createModel, type Model } from "./model.ts";
 import { Overview } from "./Overview.tsx";
-import { Finder, SelTool, WorkerSheet } from "./Overlays.tsx";
+import { Finder, forwardSelections, SelTool, WorkerSheet } from "./Overlays.tsx";
 import { createUi, type Ui } from "./ui.ts";
 import { FleetView, LinksView, LogView, PlanView, useVisibleAgents } from "./Views.tsx";
 
 /**
  * The decision's page alone, in a frame of the manager's page: its height told to the manager, which sizes
- * the frame by it. Whatever leads elsewhere in this fleet (a worker, another view) opens its own page beside.
+ * the frame by it, and text selected in it, which the manager's toolbar shows over the frame. Whatever leads
+ * elsewhere in this fleet (a worker, another view) opens its own page beside.
  */
 function Embedded(props: { readonly live: boolean }): JSX.Element {
   const { m, ui } = usePage();
 
   document.documentElement.classList.add("embed");
+  forwardSelections();
   listen(window, "hashchange", () => ui.route());
   listen(document, "click", (e) => {
     const t = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-agent], a[href^='#']") : null;

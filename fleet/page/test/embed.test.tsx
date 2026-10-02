@@ -2,7 +2,8 @@
  * Working through what waits on the user from the manager's page: a fleet's decision opens on the manager's
  * own decision page, as that fleet's page in a frame (`?embed=1`); the frame shows the decision alone and
  * tells the manager its height and an answer sent; the manager steps to the previous and next, and once one
- * is answered goes on to the next (or, with that turned off, says what comes next). Run in happy-dom.
+ * is answered goes on to the next (or, with that turned off, says what comes next); text selected in the frame
+ * shows the manager's selection toolbar over it, and its Reply writes to that fleet's coordinator. Run in happy-dom.
  */
 import { afterEach, expect, test } from "bun:test";
 import { flush } from "solid-js";
@@ -11,6 +12,7 @@ import type { DetachedWindowAPI } from "happy-dom";
 
 import { App } from "../src/App.tsx";
 import { Core, type Json } from "../src/core.ts";
+import { evidence } from "../src/DecisionPage.tsx";
 import type { Model } from "../src/model.ts";
 import type { Ui } from "../src/ui.ts";
 import { coordinatorView, managerView, type View } from "./fixtures.ts";
@@ -413,4 +415,104 @@ test("viewed normally, the fleet's page keeps its masthead, chat and back link, 
   expect(root.querySelector("#decision .dv-back")).not.toBeNull();
   expect(root.querySelector("#dv-queue")).toBeNull();
   expect(root.querySelector("#dv-answer button[data-discuss]")).not.toBeNull();
+});
+
+/** `el` placed at `top`, `left` of its viewport, as a browser lays it out. */
+function placeAt<T extends Element>(el: T | null | undefined, top: number, left: number): T {
+  if (!el) throw new Error("nothing to place");
+  el.getBoundingClientRect = () => new DOMRect(left, top, 800, 600);
+
+  return el;
+}
+
+const tool = (): HTMLElement | null => document.getElementById("seltool");
+
+const SELECTED = { text: "per line or on the total", rect: { top: 100, bottom: 118, left: 40, width: 60 }, from: "Rounding rule for totals" };
+
+test("text selected in a fleet's frame shows the manager's toolbar over it, and Reply writes to that fleet's coordinator", async () => {
+  open("/f/manager/", managerView(NOW));
+  go("#decision/billing/d1");
+  const f = placeAt(frame(), 200, 30);
+  arrive({ fleetEmbed: true, select: SELECTED }, f.contentWindow);
+  expect(tool()?.hidden).toBe(false);
+  expect([tool()?.style.top, tool()?.style.left]).toEqual(["292px", "100px"]);
+  expect([...(tool()?.querySelectorAll("button") ?? [])].map((b) => b.textContent)).toEqual(["Copy", "Reply", "Side chat"]);
+  tool()?.querySelector<HTMLButtonElement>('[data-sel="reply"]')?.click();
+  flush();
+  expect(tool()?.hidden).toBe(true);
+  const say = root.querySelector<HTMLTextAreaElement>("#say");
+  expect(say?.value).toBe("@billing ");
+  expect(document.activeElement).toBe(say);
+  expect(root.querySelector("#quote-text")?.textContent).toBe("Quoting Rounding rule for totals, in billing: per line or on the total");
+
+  if (say) say.value += "why not per line?";
+  page.ui.afterEdit();
+  await page.ui.send();
+  expect(posted).toEqual([{ text: "@billing why not per line?", quote: { text: "per line or on the total", from: "Rounding rule for totals, in billing" } }]);
+});
+
+test("Side chat on text selected in a fleet's frame opens a side chat addressed to that fleet's coordinator", () => {
+  open("/f/manager/", managerView(NOW));
+  go("#decision/billing/d1");
+  arrive({ fleetEmbed: true, select: SELECTED }, frame()?.contentWindow);
+  tool()?.querySelector<HTMLButtonElement>('[data-sel="side"]')?.click();
+  flush();
+  expect(root.querySelector<HTMLTextAreaElement>("#say")?.value).toBe("@billing ");
+  expect(page.m.focus()).toBe("new");
+  expect(root.querySelector("#quote-text")?.textContent).toBe("Side chat on Rounding rule for totals, in billing: per line or on the total");
+});
+
+test("a selection from anything but the fleet's frame is ignored, and the frame's cleared selection hides the toolbar", () => {
+  open("/f/manager/", managerView(NOW));
+  go("#decision/billing/d1");
+  arrive({ fleetEmbed: true, select: SELECTED }, window);
+  arrive({ fleetEmbed: true, select: SELECTED }, null);
+  expect(tool()?.hidden).toBe(true);
+  arrive({ fleetEmbed: true, select: SELECTED }, frame()?.contentWindow);
+  expect(tool()?.hidden).toBe(false);
+  arrive({ fleetEmbed: true, select: { text: "", rect: null, from: "" } }, window);
+  expect(tool()?.hidden).toBe(false);
+  arrive({ fleetEmbed: true, select: { text: "", rect: null, from: "" } }, frame()?.contentWindow);
+  expect(tool()?.hidden).toBe(true);
+});
+
+/** The selections the embedded page told its parent of. */
+const selects = (): Json[] => toParent.filter((d) => d !== null && Object(d) === d && !Array.isArray(d) && "select" in Object(d));
+
+test("embedded, the fleet's page tells the manager of text selected in it once it rests, and of the selection cleared", async () => {
+  open("/f/billing/?embed=1#decision/d1", coordinatorView(NOW));
+  page.ui.route();
+  flush();
+  const range = document.createRange();
+  range.selectNodeContents(root.querySelector("#dv-info h1") ?? root);
+  getSelection()?.removeAllRanges();
+  getSelection()?.addRange(range);
+  document.dispatchEvent(new Event("selectionchange"));
+  expect(selects()).toEqual([]);
+  await new Promise((r) => setTimeout(r, 250));
+  const rect = { top: expect.any(Number), bottom: expect.any(Number), left: expect.any(Number), width: expect.any(Number) };
+  expect(selects()).toEqual([{ fleetEmbed: true, select: { text: String(getSelection()), rect, from: "Rounding rule for totals" } }]);
+  expect(String(getSelection())).toContain("Rounding rule for totals");
+  getSelection()?.removeAllRanges();
+  document.dispatchEvent(new Event("selectionchange"));
+  await new Promise((r) => setTimeout(r, 250));
+  expect(selects().at(-1)).toEqual({ fleetEmbed: true, select: { text: "", rect: null, from: "" } });
+});
+
+test("embedded, the fleet's page passes its evidence frame's selection on to the manager, placed in the page", () => {
+  const view = coordinatorView(NOW);
+  // SAFETY: the fixture's decisions are records, as coordinatorView writes them.
+  const decisions = view["decisions"] as View[];
+  open("/f/billing/?embed=1#decision/d1", { ...view, decisions: decisions.map((d) => (d["id"] === "d1" ? { ...d, body: true } : d)) });
+  page.ui.route();
+  flush();
+  const ev = placeAt(evidence.frame, 300, 16);
+  arrive({ fleetSelect: true, text: "one-cent drift", rect: { top: 10, bottom: 28, left: 5, width: 90 } }, ev.contentWindow);
+  expect(selects()).toEqual([{ fleetEmbed: true, select: { text: "one-cent drift", rect: { top: 310, bottom: 328, left: 21, width: 90 }, from: "the evidence of Rounding rule for totals" } }]);
+  arrive({ fleetSelect: true, text: "elsewhere", rect: { top: 1, bottom: 2, left: 3, width: 4 } }, window);
+  arrive({ fleetSelect: true, text: "", rect: null }, ev.contentWindow);
+  expect(selects()).toEqual([
+    { fleetEmbed: true, select: { text: "one-cent drift", rect: { top: 310, bottom: 328, left: 21, width: 90 }, from: "the evidence of Rounding rule for totals" } },
+    { fleetEmbed: true, select: { text: "", rect: null, from: "" } },
+  ]);
 });

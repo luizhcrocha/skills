@@ -5,11 +5,13 @@
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
-import { ChatIcon, CloseIcon, Pill, usePage, tf } from "./bits.tsx";
+import { ChatIcon, CloseIcon, listen, Pill, usePage, tf } from "./bits.tsx";
 import { copyText, selectAndCopy, type Copied } from "./clip.ts";
-import { Core, type Agent, type Coordinator } from "./core.ts";
+import { Core, type Agent, type Coordinator, type Json } from "./core.ts";
 import { evidence } from "./DecisionPage.tsx";
+import { parseEmbedMessage, parseEvidenceSelect, postSelect, type SelRect } from "./embed.ts";
 import { fmtDur, fmtInt, spentWords } from "./format.ts";
+import type { Model } from "./model.ts";
 import { BriefAndReport } from "./Views.tsx";
 
 /** One box to find anything the page holds and go there. */
@@ -361,18 +363,99 @@ function boxOf(range: Range): SelBox {
   return { first: { top: first.top, bottom: first.bottom }, last: { top: last.top, bottom: last.bottom }, left: all.left, width: all.width };
 }
 
+/** Where on the page `node` is, as a quote names it: the chat and its sender, the decision, a view. */
+function whereOf(m: Model, node: Node | null): string {
+  const el = node && (node instanceof Element ? node : node.parentElement);
+
+  if (!el) return "";
+
+  if (el.closest("#chat-log")) {
+    const art = el.closest<HTMLElement>("article.msg");
+    const msg = m.messageById(art ? Number(art.dataset["id"]) : NaN);
+
+    if (!msg) return "the chat";
+
+    return "the chat, " + (msg.from === "user" ? msg.author || "You" : msg.from === m.host() ? m.host() : m.nameOf(msg.from));
+  }
+
+  if (el.closest("#decision")) {
+    const d = m.decisionById(m.viewing());
+
+    return d ? d.title : "a decision";
+  }
+
+  const view = el.closest<HTMLElement>("section.view[data-view]");
+
+  return view ? ({ decisions: "Decisions", plan: "the Plan", fleet: m.managed() ? "Fleets" : "the Fleet", links: "Links", log: "the Log" }[view.dataset["view"] ?? ""] ?? "") : "the page's head";
+}
+
+/** `r`, a place in `frame`'s viewport, in the viewport of the page that holds the frame. */
+function within(frame: HTMLIFrameElement, r: SelRect | null): SelRect {
+  const box = frame.getBoundingClientRect();
+
+  return { top: box.top + (r?.top ?? 0), bottom: box.top + (r?.bottom ?? 0), left: box.left + (r?.left ?? 0), width: r?.width ?? 0 };
+}
+
+/** How long the frame's selection rests before the manager is told of it, as the evidence frame's script waits. */
+const FORWARD_MS = 180;
+
+/**
+ * Inside the manager's frame (`?embed=1`), where the page has no toolbar of its own: text selected on the
+ * decision's page, and its evidence frame's, told to the manager, whose toolbar shows over the frame.
+ */
+export function forwardSelections(): void {
+  const { m } = usePage();
+  let settle: ReturnType<typeof setTimeout> | undefined;
+  let told = false;
+
+  const tell = (): void => {
+    const sel = getSelection();
+    const node = sel?.anchorNode ?? null;
+    const el = node && (node instanceof Element ? node : node.parentElement);
+
+    if (!sel || sel.isCollapsed || !sel.rangeCount || !el || el.closest("textarea, input, .composer") || !el.closest("#decision")) {
+      /* Only a selection of this page's own is cleared: the evidence frame's is the frame's to clear. */
+      if (told) postSelect("", null, "");
+      told = false;
+
+      return;
+    }
+
+    const r = sel.getRangeAt(0).getBoundingClientRect();
+    postSelect(sel.toString(), { top: r.top, bottom: r.bottom, left: r.left, width: r.width }, whereOf(m, node));
+    told = true;
+  };
+
+  listen(document, "selectionchange", () => {
+    clearTimeout(settle);
+    settle = setTimeout(tell, FORWARD_MS);
+  });
+  listen(window, "message", (e) => {
+    const frame = evidence.frame;
+    const said = frame && e.source === frame.contentWindow ? parseEvidenceSelect(e.data) : null;
+
+    if (!frame || !said) return;
+    const d = m.decisionById(m.viewing());
+    postSelect(said.text, within(frame, said.rect), "the evidence" + (d ? " of " + d.title : ""));
+  });
+  onCleanup(() => clearTimeout(settle));
+}
+
 /**
  * Text selected anywhere on the page (or in a decision's evidence) offers Copy, and where the chat can be
  * written Reply (the text on the composer as a quote) and Side chat (a conversation of its own about it).
  * The bar never covers the selection and leaves the browser's own handling alone: it listens to no
  * `contextmenu` or `copy`, and prevents nothing in the text, so a right-click opens the browser's menu
  * with Copy. It shows once the selection rests (the pointer or key released, then SETTLE_MS), never during
- * a drag, and closes on a right-click, Escape, a scroll, or a press anywhere else.
+ * a drag, and closes on a right-click, Escape, a scroll, or a press anywhere else. On a manager's page,
+ * text selected in a fleet's decision (its page in a frame) shows the bar too, and its Reply and Side chat
+ * write to that fleet's coordinator.
  */
 export function SelTool(): JSX.Element {
   const { m, ui } = usePage();
   let tool: HTMLDivElement | undefined;
-  let framePicked = false;
+  /* Picked in a frame, not on the page: in a fleet's frame, the fleet a reply goes to. */
+  let framePicked: { readonly fleet: string | null } | null = null;
   let settle: ReturnType<typeof setTimeout> | undefined;
   let pressed = false;
   let touch = false;
@@ -381,40 +464,9 @@ export function SelTool(): JSX.Element {
   const [copied, setCopied] = createSignal<Copied | "">("");
   let copiedTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const sender = (id: number): string => {
-    const msg = m.messageById(id);
-
-    if (!msg) return "";
-
-    return msg.from === "user" ? msg.author || "You" : msg.from === m.host() ? m.host() : m.nameOf(msg.from);
-  };
-
-  const whereOf = (node: Node | null): string => {
-    const el = node && (node instanceof Element ? node : node.parentElement);
-
-    if (!el) return "";
-
-    if (el.closest("#chat-log")) {
-      const art = el.closest<HTMLElement>("article.msg");
-      const id = art ? Number(art.dataset["id"]) : NaN;
-
-      return m.messageById(id) ? "the chat, " + sender(id) : "the chat";
-    }
-
-    if (el.closest("#decision")) {
-      const d = m.decisionById(m.viewing());
-
-      return d ? d.title : "a decision";
-    }
-
-    const view = el.closest<HTMLElement>("section.view[data-view]");
-
-    return view ? ({ decisions: "Decisions", plan: "the Plan", fleet: m.managed() ? "Fleets" : "the Fleet", links: "Links", log: "the Log" }[view.dataset["view"] ?? ""] ?? "") : "the page's head";
-  };
-
   const hide = (): void => {
     clearTimeout(settle);
-    framePicked = false;
+    framePicked = null;
     raw = "";
     setCopied("");
     ui.setPicked(null);
@@ -444,7 +496,7 @@ export function SelTool(): JSX.Element {
     const el = node && (node instanceof Element ? node : node.parentElement);
 
     if (!el || el.closest("textarea, input, .composer, #seltool, .seltool") || !el.closest("#app, #decision, #chat-log")) return;
-    show(sel.toString(), whereOf(node), boxOf(sel.getRangeAt(0)));
+    show(sel.toString(), whereOf(m, node), boxOf(sel.getRangeAt(0)));
   };
 
   const later = (): void => {
@@ -500,25 +552,38 @@ export function SelTool(): JSX.Element {
     if (e.key === "Escape" && (ui.picked() || framePicked)) hide();
   };
 
-  /* A selection inside the evidence frame arrives as a message: its text and where it sits in the frame. */
-  const onMessage = (e: MessageEvent<{ readonly fleetSelect?: boolean; readonly text?: string; readonly rect?: { top?: number; bottom?: number; left?: number; width?: number } | null } | null>): void => {
-    const frame = evidence.frame;
-
-    if (!frame || e.source !== frame.contentWindow || !e.data || e.data.fleetSelect !== true) return;
-    const box = frame.getBoundingClientRect();
-    const r = e.data.rect ?? {};
-
-    if (!e.data.text) {
+  /* Text selected in `frame`, at `r` in its viewport; empty once the frame's selection is cleared. */
+  const pickIn = (frame: HTMLIFrameElement, text: string, r: SelRect | null, from: string, fleet: string | null): void => {
+    if (!text) {
       if (framePicked) hide();
 
       return;
     }
 
+    const { top, bottom, left, width } = within(frame, r);
+    show(text, from, { first: { top, bottom }, last: { top, bottom }, left, width });
+    framePicked = { fleet };
+  };
+
+  /* A selection inside the evidence frame, or a fleet's frame on the manager's page, arrives as a message. */
+  const onMessage = (e: MessageEvent<Json>): void => {
+    const fleetFrame = document.querySelector<HTMLIFrameElement>("#dv-embed");
+    const fleet = Core.parseFleetDecision(m.viewing())?.fleet;
+
+    if (fleetFrame && fleet && e.source === fleetFrame.contentWindow) {
+      const said = parseEmbedMessage(e.data);
+
+      if (said?.kind === "select") pickIn(fleetFrame, said.text, said.rect, said.from ? said.from + ", in " + fleet : fleet, fleet);
+
+      return;
+    }
+
+    const frame = evidence.frame;
+    const said = frame && e.source === frame.contentWindow ? parseEvidenceSelect(e.data) : null;
+
+    if (!frame || !said) return;
     const d = m.decisionById(m.viewing());
-    const top = box.top + (r.top || 0);
-    const bottom = box.top + (r.bottom || 0);
-    show(String(e.data.text), "the evidence" + (d ? " of " + d.title : ""), { first: { top, bottom }, last: { top, bottom }, left: box.left + (r.left || 0), width: r.width || 0 });
-    framePicked = true;
+    pickIn(frame, said.text, said.rect, "the evidence" + (d ? " of " + d.title : ""), null);
   };
 
   const onScroll = (): void => {
@@ -572,6 +637,7 @@ export function SelTool(): JSX.Element {
       onClick={(e) => {
         const b = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-sel]") : null;
         const quote = ui.picked();
+        const fleet = framePicked?.fleet;
 
         if (!b || !quote) return;
 
@@ -586,6 +652,13 @@ export function SelTool(): JSX.Element {
         m.setQuote(quote);
         m.setReply(null);
         m.setFocus(b.dataset["sel"] === "side" ? "new" : null);
+
+        if (fleet) {
+          ui.writeTo(fleet);
+
+          return;
+        }
+
         ui.openChat();
         ui.refs.say?.focus();
       }}
