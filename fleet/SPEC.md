@@ -506,6 +506,18 @@ the manager is `manager`; a coordinator is the slug of its session title, else o
 (`[^A-Za-z0-9_.-]+` → `-`, trimmed, lower-cased), `-fleet` added to a reserved name, `-2`, `-3`
 to a taken one. `user`, `coordinator` and `manager` are reserved.
 
+A fleet's **summary** (`summary(entry)`: each of the manager's page's `coordinators[]`, and `/api/fleets`
+without `index`) is `{id, url, session, dir, name, project, goal, status, now, updated, workers, tokens,
+spent, chat, active, now_at, lanes, roadblocks, index, silent, decisions}`. `decisions` holds each open
+decision with a string id: `{id, ref, kind, title, question, why, blocking, asks, opened, revised,
+answered, said, questions?, held?, held_at?}`. `answered` is when the user's answer was sent and not
+recorded (`answered_at`, as `wait` reads it). `said` is the fleet's chat about it: the user's messages
+tagged with it and the replies to them (a message not from the user whose `re` names one), each
+`{id, at, from, to, text, re, decision}`, oldest first. `questions`, on a grilling only, is its open
+questions as `{id, of, status, asked}`. With `said` and `questions` the manager's page decides whether
+a fleet's item waits on the user by the fleet's own page's rule (`awaiting` in `page/src/core.ts`), on
+the inputs that page has; `held` and `held_at` are there only on a held decision.
+
 | Command | Output | Exit |
 | :-- | :-- | :-- |
 | `waiting` | what waits on the user, from every live fleet's ledger, the manager's included: per open decision that asks the user and is not held, `<fleet> <ref> [<kind>(, blocks work)] <title>  since <revised or opened, YYYY-MM-DD HH:MM>`, then `  ANSWERED at HH:MM (#N): <first line>; not recorded yet` when the user's answer waits unrecorded; `nothing waits on the user`, or `no fleet is being served on this machine` | 0 |

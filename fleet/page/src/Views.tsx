@@ -175,7 +175,7 @@ export function PlanView(): JSX.Element {
 function fleetFacts(c: Coordinator): string {
   const yours = c.decisions.filter((d) => d.asks !== "manager");
   const held = c.decisions.length - yours.length;
-  const waiting = yours.filter((d) => !Core.isHeld(d) && !d.answered);
+  const waiting = yours.filter((d) => Core.awaiting(d, []));
   const fleets = yours.filter((d) => Core.isHeld(d));
 
   const workers = Object.entries(c.workers)

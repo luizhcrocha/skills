@@ -143,6 +143,55 @@ class ManagerTest(Machine):
         self.assertEqual(c["lanes"], ["src/billing/**"])
         self.assertEqual([(d["id"], d["asks"], d["blocking"]) for d in c["decisions"]], [("d1", "user", True), ("d2", "manager", False)])
 
+    def test_the_managers_view_of_a_fleets_open_item_carries_the_fleets_chat_about_it_and_of_a_grilling_its_open_questions(self):
+        at = "2026-10-02T13:57:11-05:00"
+
+        def q(id_, status, of=None):
+            return {"id": id_, "title": "T", "body": "B", "recommend": "R", "reason": "W", "of": of, "status": status,
+                    "answer": "yes" if status == "answered" else None, "asked": at}
+
+        def grill(id_, questions):
+            return {"id": id_, "kind": "grill", "title": id_, "question": "q", "status": "open", "opened": at, "questions": questions}
+
+        a = self.fleet("a", "ui", decisions=[
+            grill("G3", [q("q1", "answered"), q("q2", "answered"), q("q3", "answered")]),
+            grill("G4", [q("q1", "open"), q("q2", "open")]),
+            grill("G5", [q("q1", "open")]),
+            grill("G6", [q("q1", "open"), q("q2", "open", of="q1")]),
+            {"id": "d1", "kind": "decision", "title": "Schema", "question": "q", "status": "open", "opened": at},
+        ])
+
+        def line(**m):
+            return json.dumps({"to": ["coordinator"], "re": None, **m}) + "\n"
+
+        (a / "chat.jsonl").write_text(
+            line(id=1, at="2026-10-02T13:58:00-05:00", **{"from": "user"}, text="Q1: Yes, merge", decision="G5", author="luiz")
+            + line(id=2, at="2026-10-02T13:59:00-05:00", **{"from": "user"}, text="Q1: Yes", decision="G6")
+            + line(id=3, at="2026-10-02T14:00:00-05:00", **{"from": "coordinator"}, to=["user"], text="which merge?", re=2)
+            + line(id=4, at="2026-10-02T14:01:00-05:00", **{"from": "user"}, text="a", decision="d1")
+            + line(id=5, at="2026-10-02T14:02:00-05:00", **{"from": "coordinator"}, to=["user"], text="noted", re=4))
+        fleets.register(a, "u1", os.getpid())
+        m = self.fleet("m", "everything", role="manager")
+        fleets.register(m, "u9", os.getpid())
+        rows = {d["id"]: d for d in fleets.view(json.loads((m / "state.json").read_text()), m)["coordinators"][0]["decisions"]}
+
+        def opened(id_, of=None):
+            return {"id": id_, "of": of, "status": "open", "asked": at}
+
+        def message(id_, when, sender, text, re, decision):
+            return {"id": id_, "at": when, "from": sender, "to": ["coordinator" if sender == "user" else "user"], "text": text, "re": re, "decision": decision}
+
+        self.assertEqual((rows["G3"]["questions"], rows["G3"]["said"]), ([], []))
+        self.assertEqual((rows["G4"]["questions"], rows["G4"]["said"]), ([opened("q1"), opened("q2")], []))
+        self.assertEqual((rows["G5"]["questions"], rows["G5"]["said"]),
+                         ([opened("q1")], [message(1, "2026-10-02T13:58:00-05:00", "user", "Q1: Yes, merge", None, "G5")]))
+        self.assertEqual(rows["G6"]["said"], [message(2, "2026-10-02T13:59:00-05:00", "user", "Q1: Yes", None, "G6"),
+                                              message(3, "2026-10-02T14:00:00-05:00", "coordinator", "which merge?", 2, None)])
+        self.assertEqual(rows["G6"]["questions"], [opened("q1"), opened("q2", of="q1")])
+        self.assertEqual(rows["d1"]["said"], [message(4, "2026-10-02T14:01:00-05:00", "user", "a", None, "d1"),
+                                              message(5, "2026-10-02T14:02:00-05:00", "coordinator", "noted", 4, None)])
+        self.assertNotIn("questions", rows["d1"])
+
     def test_a_fleet_whose_state_cannot_be_read_is_shown_as_such(self):
         a = self.fleet("a", "billing")
         fleets.register(a, "u", os.getpid())

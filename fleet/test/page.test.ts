@@ -103,6 +103,46 @@ describe("the view", () => {
     expect(index).toContainEqual(["workers", "a1", "#agent-a1"]);
   });
 
+  test("the manager's view of a fleet's open item carries the fleet's chat about it, and of a grilling its open questions", () => {
+    const at = "2026-10-02T13:57:11-05:00";
+    const q = (id: string, status: string): JsonObject => ({ id, title: "T", body: "B", recommend: "R", reason: "W", of: null, status, answer: status === "answered" ? "yes" : null, asked: at });
+    const grill = (id: string, questions: JsonObject[]): JsonObject => ({ id, kind: "grill", title: id, question: "q", status: "open", opened: at, questions });
+
+    const decisions = [
+      grill("G3", [q("q1", "answered"), q("q2", "answered"), q("q3", "answered")]),
+      grill("G4", [q("q1", "open"), q("q2", "open")]),
+      grill("G5", [q("q1", "open")]),
+      grill("G6", [q("q1", "open"), { ...q("q2", "open"), of: "q1" }]),
+      { id: "d1", kind: "decision", title: "Schema", question: "q", status: "open", opened: at },
+    ];
+
+    const a = makeFleet("a", "ui", { decisions });
+    const line = (m: JsonObject): string => `${JSON.stringify({ to: ["coordinator"], re: null, ...m })}\n`;
+    writeFileSync(
+      join(a, "chat.jsonl"),
+      line({ id: 1, at: "2026-10-02T13:58:00-05:00", from: "user", text: "Q1: Yes, merge", decision: "G5", author: "luiz" }) +
+        line({ id: 2, at: "2026-10-02T13:59:00-05:00", from: "user", text: "Q1: Yes", decision: "G6" }) +
+        line({ id: 3, at: "2026-10-02T14:00:00-05:00", from: "coordinator", to: ["user"], text: "which merge?", re: 2 }) +
+        line({ id: 4, at: "2026-10-02T14:01:00-05:00", from: "user", text: "a", decision: "d1" }) +
+        line({ id: 5, at: "2026-10-02T14:02:00-05:00", from: "coordinator", to: ["user"], text: "noted", re: 4 }),
+    );
+    register(a, "u1");
+    const m = makeFleet("m", "everything", { role: "manager" });
+    register(m, "u9");
+    const c = asObject(asArray(viewOf({ project: "m", role: "manager" }, m)["coordinators"])?.[0]) ?? {};
+    const row = (id: string): JsonObject => asObject((asArray(c["decisions"]) ?? []).find((d) => asObject(d)?.["id"] === id)) ?? {};
+    const open = (id: string, of: string | null = null): JsonObject => ({ id, of, status: "open", asked: at });
+    const message = (id: number, when: string, from: string, text: string, re: number | null, decision: string | null): JsonObject => ({ id, at: when, from, to: [from === "user" ? "coordinator" : "user"], text, re, decision });
+
+    expect([row("G3")["questions"], row("G3")["said"]]).toEqual([[], []]);
+    expect([row("G4")["questions"], row("G4")["said"]]).toEqual([[open("q1"), open("q2")], []]);
+    expect([row("G5")["questions"], row("G5")["said"]]).toEqual([[open("q1")], [message(1, "2026-10-02T13:58:00-05:00", "user", "Q1: Yes, merge", null, "G5")]]);
+    expect(row("G6")["said"]).toEqual([message(2, "2026-10-02T13:59:00-05:00", "user", "Q1: Yes", null, "G6"), message(3, "2026-10-02T14:00:00-05:00", "coordinator", "which merge?", 2, null)]);
+    expect(row("G6")["questions"]).toEqual([open("q1"), open("q2", "q1")]);
+    expect(row("d1")["said"]).toEqual([message(4, "2026-10-02T14:01:00-05:00", "user", "a", null, "d1"), message(5, "2026-10-02T14:02:00-05:00", "coordinator", "noted", 4, null)]);
+    expect(Object.keys(row("d1"))).not.toContain("questions");
+  });
+
   test("a fleet whose state cannot be read is shown as such", () => {
     const a = makeFleet("a", "billing");
     register(a, "u");

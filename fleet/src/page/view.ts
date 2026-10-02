@@ -7,7 +7,7 @@
  */
 import { join } from "node:path";
 
-import { readChat } from "../chat/store.ts";
+import { readChat, type Message } from "../chat/store.ts";
 import { listening } from "../chat/chat.ts";
 import { resolvePath } from "../files.ts";
 import { answeredAt, isoOf, silentWorkers } from "../health.ts";
@@ -140,6 +140,24 @@ function intOf(value: Json | undefined): number {
   return text !== undefined && /^[+-]?\d+$/.test(text) ? Number(text) : 0;
 }
 
+/** The fleet's chat about the open item `d`, which its page reads to tell whether it waits on the user: the
+ * user's messages tagged with it and the replies to them, each with what that rule reads. */
+function saidAbout(d: JsonObject, said: readonly Message[]): JsonObject[] {
+  const answers = new Set(said.flatMap((m) => (m.from === "user" && m.decision === d["id"] ? [m.id] : [])));
+  const about = (m: Message): boolean => answers.has(m.id) || (m.from !== "user" && answers.has(asNumber(m.re) ?? Number.NaN));
+
+  return said.flatMap((m) => (about(m) ? [{ id: m.id, at: m.at ?? null, from: m.from, to: m.stored["to"] ?? [], text: m.text, re: m.re, decision: m.decision ?? null }] : []));
+}
+
+/** A grilling's questions still open, with what its page reads to count those left to answer. */
+function openQuestions(d: JsonObject): JsonObject[] {
+  return (asArray(d["questions"]) ?? []).flatMap((item) => {
+    const q = asObject(item);
+
+    return q !== undefined && q["status"] === "open" ? [{ id: q["id"] ?? null, of: q["of"] ?? null, status: "open", asked: q["asked"] ?? null }] : [];
+  });
+}
+
 /** A fleet as the manager's page and the manager read it: who it is, what it does, what waits in it,
  * what its workers and its coordinator spent. */
 export function summary(machine: Machine, lookups: Lookups, entry: Entry): JsonObject {
@@ -192,10 +210,13 @@ export function summary(machine: Machine, lookups: Lookups, entry: Entry): JsonO
           opened: d["opened"] ?? null,
           revised: d["revised"] ?? null,
           answered: answeredAt(d, said) ?? null,
+          said: saidAbout(d, said),
         };
 
+        const asked = d["kind"] === "grill" ? { ...row, questions: openQuestions(d) } : row;
+
         // Held: the fleet works on the user's answer first (only a held decision has the keys, as in Python).
-        return truthy(d["held"]) ? { ...row, held: d["held"] ?? null, held_at: d["held_at"] ?? null } : row;
+        return truthy(d["held"]) ? { ...asked, held: d["held"] ?? null, held_at: d["held_at"] ?? null } : asked;
       }),
   };
 }

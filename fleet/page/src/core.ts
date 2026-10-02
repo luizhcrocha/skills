@@ -132,6 +132,8 @@ export interface Decision {
   readonly page?: boolean;
   /** On a manager's page, the fleet that holds the decision. */
   readonly fleet?: string;
+  /** On a manager's page, that fleet's chat about it: the user's answers there and the fleet's replies. */
+  readonly said?: readonly Message[] | undefined;
   /** What the fleet does first with the viewer's answer: the item is with the fleet until it is re-presented. */
   readonly held?: string | null;
   /** When the fleet held it. */
@@ -936,9 +938,10 @@ export interface GrillEntry {
  * line of theirs about this grilling since the question was asked, and whether the fleet replied to it),
  * and how many still wait on the viewer.
  */
-function grillState(item: Decision, messages: Iterable<Message> | null | undefined): Grilling {
+function grillState(given: Decision, messages: Iterable<Message> | null | undefined): Grilling {
+  const { item, chat } = asItsFleet(given, messages);
   const qs = Array.isArray(item.questions) ? item.questions.filter((q) => q && isText(q.id)) : [];
-  const list = [...(messages ?? [])].sort((a, b) => a.id - b.id);
+  const list = [...chat].sort((a, b) => a.id - b.id);
 
   const sentFor = (q: Question): GrillEntry["sent"] => {
     let sent: { text: string; at: string; id: number } | null = null;
@@ -1179,6 +1182,7 @@ function parseState(value: Json | undefined): State | null {
       blocking: d["blocking"] === true,
       asks: d["asks"] === "manager" ? "manager" : "user",
       options: list(d["options"]),
+      said: Array.isArray(d["said"]) ? d["said"].flatMap((m) => parseMessage(m) ?? []) : undefined,
     };
 
     // SAFETY: a decision keeps the ledger's fields as they are and gets the ones the page relies on here; the
@@ -1453,12 +1457,26 @@ const isHeld = (d: Pick<Decision, "status" | "held"> | null | undefined): boolea
  * anew). A grilling waits while questions are left; a fleet's decision on the manager's page says so itself.
  */
 function awaiting(d: Decision | null | undefined, messages: Iterable<Message> | null | undefined): boolean {
-  if (!d || d.status !== "open" || d.asks === "manager" || d.answered || isHeld(d)) return false;
-  const list = [...(messages ?? [])];
+  if (!d || d.status !== "open" || d.asks === "manager" || isHeld(d)) return false;
 
-  if (d.kind === "grill") return grillState(d, list).toAnswer > 0;
+  // A fleet's row from a summary without its chat: what the summary says was answered.
+  if (!d.said && d.answered) return false;
+  const { item, chat } = asItsFleet(d, messages);
 
-  return !pendingAnswer(d, list);
+  if (item.kind === "grill") return grillState(item, chat).toAnswer > 0;
+
+  return !pendingAnswer(item, chat);
+}
+
+/**
+ * A decision as its own fleet's page holds it, with the chat that page reads about it: a fleet's on the
+ * manager's page is `<fleet>/<id>` there and carries that fleet's chat about it (`said`), which the manager's
+ * chat is not; any other is itself, with the chat given.
+ */
+function asItsFleet(d: Decision, messages: Iterable<Message> | null | undefined): { item: Decision; chat: Iterable<Message> } {
+  const { said, ...item } = d;
+
+  return said ? { item: { ...item, id: d.id.slice(d.id.lastIndexOf("/") + 1) }, chat: said } : { item: d, chat: messages ?? [] };
 }
 
 /**

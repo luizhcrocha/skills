@@ -239,7 +239,9 @@ def summary(entry: dict) -> dict:
         "decisions": [{"id": d.get("id"), "ref": d.get("ref"), "kind": d.get("kind", "decision"), "title": d.get("title"), "question": d.get("question"),
                        "why": d.get("why"), "blocking": d.get("blocking") is True, "asks": d.get("asks") or "user",
                        "opened": d.get("opened"), "revised": d.get("revised"),
-                       "answered": _answered_at(d, said), **({"held": d["held"], "held_at": d.get("held_at")} if d.get("held") else {})}
+                       "answered": _answered_at(d, said), "said": _said_about(d, said),
+                       **({"questions": _open_questions(d)} if d.get("kind") == "grill" else {}),
+                       **({"held": d["held"], "held_at": d.get("held_at")} if d.get("held") else {})}
                       for d in rows("decisions") if d.get("status") == "open" and isinstance(d.get("id"), str)],
     }
 
@@ -267,6 +269,21 @@ def _answered_at(d: dict, said: list[dict]) -> str | None:
     """When the user's answer to the open decision `d` was sent and not recorded (decisions.answered_at)."""
     import decisions
     return decisions.answered_at(d, said)
+
+
+def _said_about(d: dict, said: list[dict]) -> list[dict]:
+    """The fleet's chat about the open item `d`, which its page reads to tell whether it waits on the user: the
+    user's messages tagged with it and the replies to them, each with what that rule reads."""
+    answers = {m["id"] for m in said if m["from"] == "user" and m.get("decision") == d.get("id")}
+    return [{"id": m["id"], "at": m.get("at"), "from": m["from"], "to": list(m["to"]), "text": m["text"], "re": m["re"],
+             "decision": m.get("decision")}
+            for m in said if m["id"] in answers or (m["from"] != "user" and isinstance(m["re"], (int, float)) and not isinstance(m["re"], bool) and m["re"] in answers)]
+
+
+def _open_questions(d: dict) -> list[dict]:
+    """A grilling's questions still open, with what its page reads to count those left to answer."""
+    return [{"id": q.get("id"), "of": q.get("of"), "status": "open", "asked": q.get("asked")}
+            for q in d.get("questions") or [] if isinstance(q, dict) and q.get("status") == "open"]
 
 
 def _index(state: dict) -> list[dict]:

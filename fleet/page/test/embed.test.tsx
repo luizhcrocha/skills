@@ -304,6 +304,33 @@ test("on the manager's page the Stuck box and the finder open a fleet's decision
   expect(frame()?.getAttribute("src")).toBe("/f/billing/?embed=1#decision/d1");
 });
 
+test("a fleet's grilling waits on the user on the manager's page while its own page would: questions left that the user has not answered in that fleet's chat", () => {
+  const asked = before(30);
+  const q = (id: string): View => ({ id, of: null, status: "open", asked });
+  const said = (id: number, text: string, decision: string | null, more: View = {}): View => ({ id, at: before(20), from: "user", to: ["coordinator"], text, re: null, decision, ...more });
+  const grill = (id: string, questions: View[], heard: View[], answered: string | null): View => ({ id, ref: id, kind: "grill", title: "Grilling " + id, question: "q", why: null, blocking: false, asks: "user", opened: asked, revised: null, answered, questions, said: heard });
+
+  /* As the summary sends them: G3 every question answered (the fleet's turn), G4 none (the user's), G5 every
+     one answered in the fleet's chat, G6 one of two; d5 answered there and replied to by the fleet. */
+  open(
+    "/f/manager/",
+    withFleet(managerView(NOW), "billing", [
+      grill("G3", [], [], null),
+      grill("G4", [q("q1"), q("q2")], [], null),
+      grill("G5", [q("q1")], [said(1, "Q1: yes", "G5")], before(20)),
+      grill("G6", [q("q1"), q("q2")], [said(2, "Q1: yes", "G6")], before(20)),
+      { ...INFRA_D4, id: "d5", ref: "D5", said: [said(3, "a", "d5"), { ...said(4, "which a?", null, { from: "coordinator", to: ["user"], re: 3 }), at: before(19) }] },
+    ]),
+  );
+  const listed = (): (string | null)[] => [...root.querySelectorAll<HTMLAnchorElement>("#decision-list a.ask")].map((a) => a.getAttribute("href"));
+
+  expect(listed().toSorted()).toEqual(["#decision/billing/G4", "#decision/billing/G6", "#decision/d9"]);
+  expect(page.m.queue().ids.toSorted()).toEqual(["billing/G4", "billing/G6", "d9"]);
+  root.querySelector<HTMLButtonElement>('[data-bucket="waiting"]')?.click();
+  flush();
+  expect(listed().toSorted()).toEqual(["#decision/billing/G3", "#decision/billing/G5", "#decision/billing/d5"]);
+});
+
 test("on a fleet's own page a <fleet>/<id> address names no decision, as before", () => {
   open("/f/billing/", coordinatorView(NOW));
   go("#decision/billing/d1");
