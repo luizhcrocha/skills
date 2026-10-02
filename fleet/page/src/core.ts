@@ -88,6 +88,16 @@ export interface Question {
   readonly dropped?: string;
 }
 
+/** The call auto mode refused, which a permission lets through once. */
+export interface RefusedCall {
+  readonly tool: string;
+  readonly call: string;
+  readonly rule: string;
+  readonly cause: string;
+  readonly root: string;
+  readonly agent_id: string | null;
+}
+
 /** A decision as the page renders it. */
 export interface Decision {
   readonly id: string;
@@ -124,6 +134,8 @@ export interface Decision {
   readonly held?: string | null;
   /** When the fleet held it. */
   readonly held_at?: string | null;
+  /** A permission's refused call. */
+  readonly refusal?: RefusedCall | null;
 }
 
 /** A worker. */
@@ -1013,15 +1025,16 @@ export interface AnswerForm {
 
 /**
  * What the page posts for the answer given in `form`: {text}, or {error} saying what is missing. A decision
- * is one option with an optional note, or "none" with a note that says what instead.
+ * is one option with an optional note, or "none" with a note that says what instead; a permission is one of
+ * its two options with an optional note.
  */
 function answerText(item: Decision, form: AnswerForm): { text: string } | { error: string } {
   const note = String(form.note ?? "").trim();
   const value = String(form.value ?? "").trim();
   const withNote = (text: string): Posted => ({ text: note ? text + "\n" + note : text });
 
-  if (item.kind === "decision") {
-    if (form.choice === "none") return note ? { text: "None of these: " + note } : { error: "Say what you want instead." };
+  if (item.kind === "decision" || item.kind === "permission") {
+    if (form.choice === "none" && item.kind === "decision") return note ? { text: "None of these: " + note } : { error: "Say what you want instead." };
     const option = (item.options || []).find((o) => o.id === form.choice);
 
     return option ? withNote(option.id + ": " + String(option.label)) : { error: "Pick one option." };
@@ -1465,6 +1478,7 @@ const KIND_NAMES: readonly (readonly [string, string, string])[] = [
   ["input", "input", "inputs"],
   ["secret", "secret", "secrets"],
   ["grill", "grilling", "grillings"],
+  ["permission", "permission", "permissions"],
 ];
 
 /** An item's kind as one word ("action", "grilling"); one the page does not know reads as a decision. */

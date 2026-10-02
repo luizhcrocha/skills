@@ -12,7 +12,7 @@ import { dayTime, fmtDur, fmtInt, fmtShort, spentWords } from "./format.ts";
 import { keyed } from "./model.ts";
 
 /** What each kind of decision asks for. */
-export const KIND_WORDS: Lookup = { decision: "a choice", input: "your input", secret: "a secret", action: "something to do", grill: "a grilling" };
+export const KIND_WORDS: Lookup = { decision: "a choice", input: "your input", secret: "a secret", action: "something to do", grill: "a grilling", permission: "a permission" };
 
 /** A decision's state as a pill (or two). */
 export function StatePill(props: { readonly d: Decision; readonly pending: ReturnType<typeof Core.pendingAnswer> }): JSX.Element {

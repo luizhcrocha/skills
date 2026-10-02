@@ -14,7 +14,7 @@ import { Core, type Decision, type GrillEntry, type JsonRecord } from "./core.ts
 import { DecisionThread } from "./DecisionThread.tsx";
 import { clock } from "./format.ts";
 import { KIND_WORDS, StatePill } from "./Overview.tsx";
-import { ManualText, Rich } from "./Rich.tsx";
+import { CodeBlock, ManualText, Rich } from "./Rich.tsx";
 
 const TOKENS = ["bg", "card", "card-2", "text", "muted", "faint", "line", "accent", "accent-soft", "you", "run", "good", "warning", "serious", "critical", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
 
@@ -491,6 +491,41 @@ function Form(props: { readonly d: Decision }): JSX.Element {
           </div>
         </AnswerForm>
       </Match>
+      <Match when={kind() === "permission"}>
+        <AnswerForm d={props.d}>
+          <Show when={props.d.refusal}>
+            {(r) => (
+              <div class="dv-block refused">
+                <h3>The call auto mode refused</h3>
+                <CodeBlock lang="sh" text={r().call} />
+                <dl>
+                  <dt>Refused because</dt>
+                  <dd>{r().cause}</dd>
+                  <dt>Rule</dt>
+                  <dd>
+                    <code>{r().rule}</code>
+                  </dd>
+                  <dt>Goes into</dt>
+                  <dd>
+                    <code>{r().root.replace(/\/+$/u, "") + "/.claude/settings.local.json"}</code>
+                  </dd>
+                </dl>
+              </div>
+            )}
+          </Show>
+          <fieldset>
+            <legend>Your answer</legend>
+            <Options d={props.d} pick />
+          </fieldset>
+          {note("Note for the worker, if you want to add one")}
+          <div class="sheet-actions">
+            <button type="submit" class="btn primary">
+              Send my answer
+            </button>
+            <Discuss />
+          </div>
+        </AnswerForm>
+      </Match>
       <Match when={kind() === "secret"}>
         <AnswerForm d={props.d}>
           <p>
@@ -550,7 +585,7 @@ function Answer(props: { readonly d: Decision }): JSX.Element {
   });
 
   const shown = (): JSX.Element => (
-    <Show when={props.d.kind === "decision" && props.d.options.length}>
+    <Show when={(props.d.kind === "decision" || props.d.kind === "permission") && props.d.options.length}>
       <div class="dv-block">
         <h3>Options</h3>
         <div class="options">
