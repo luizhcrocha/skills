@@ -37,6 +37,13 @@
         ]
       }
     ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook\" PermissionDenied", "timeout": 30, "async": true }
+        ]
+      }
+    ],
     "SubagentStart": [
       {
         "hooks": [

@@ -842,6 +842,364 @@ class ChatNudgeTest(FleetCase):
         self.assertLess((time.perf_counter() - started) * 1000 / 200, 0.5)  # outside a fleet: next to nothing
 
 
+STAND_IN = """#!{python}
+import json, os, sys
+with open(os.environ["STAND_IN_LOG"], "a") as f:
+    f.write(json.dumps(sys.argv[1:]) + "\\n")
+if os.environ.get("STAND_IN_FAIL"):
+    sys.stderr.write("refused: " + os.environ["STAND_IN_FAIL"] + "\\n")
+    sys.exit(2)
+"""
+
+
+def options(argv):
+    """A recorded `state DIR decision ID ...` argv as (positionals, {flag: value or True})."""
+    positionals, found, i = [], {}, 0
+    while i < len(argv):
+        word = argv[i]
+        if word.startswith("--"):
+            flag, eq, value = word.partition("=")
+            if eq:
+                found[flag] = value
+            elif i + 1 < len(argv) and not argv[i + 1].startswith("--"):
+                found[flag] = argv[i + 1]
+                i += 1
+            else:
+                found[flag] = True
+        else:
+            positionals.append(word)
+        i += 1
+    return positionals, found
+
+
+class PermissionDeniedTest(FleetCase):
+    """fleet_permission_denied: a refused call opens the permission item (or an action) through the fleet CLI."""
+
+    PUSH = "git push --force origin HEAD:main"
+
+    def setUp(self):
+        super().setUp()
+        self.calls = self.tmp / "cli-calls.jsonl"
+        cli = self.tmp / "fleet-stand-in"
+        cli.write_text(STAND_IN.format(python=sys.executable))
+        cli.chmod(0o755)
+        self.project = self.tmp / "project"
+        self.project.mkdir()
+        self.env.update({"TSTACK_FLEET_CLI": str(cli), "STAND_IN_LOG": str(self.calls),
+                         "CLAUDE_PROJECT_DIR": str(self.project)})
+        self.ledger(agents=[{"id": "a2", "name": "a2", "task_id": "ab12cd34"}])
+
+    def refuse(self, command=PUSH, tool="Bash", tool_input=None, env=None, **extra):
+        payload = self.payload("PermissionDenied", tool_name=tool, reason="[Git Destructive]",
+                               tool_input=tool_input if tool_input is not None else {"command": command},
+                               tool_use_id="toolu_9", **extra)
+        r = self.hook("PermissionDenied", payload, env=env)
+        self.assertSilent(r)
+        return r
+
+    def recorded(self):
+        if not self.calls.exists():
+            return []
+        return [options(json.loads(line)) for line in self.calls.read_text().splitlines()]
+
+    def only(self):
+        calls = self.recorded()
+        self.assertEqual(len(calls), 1, calls)
+        return calls[0]
+
+    @staticmethod
+    def expected_id(caller, call):
+        import hashlib
+        return "p-" + hashlib.sha1(f"{caller}\n{call}".encode()).hexdigest()[:8]
+
+    def test_a_workers_bash_refusal_opens_a_permission(self):
+        self.refuse(agent_id="ab12cd34")
+        positionals, opts = self.only()
+        self.assertEqual(positionals, ["state", str(self.fleet), "decision", self.expected_id("ab12cd34", self.PUSH)])
+        self.assertEqual(opts["--kind"], "permission")
+        self.assertEqual((opts["--tool"], opts["--call"], opts["--cause"], opts["--root"]),
+                         ("Bash", self.PUSH, "[Git Destructive]", str(self.project)))
+        self.assertEqual((opts["--agent-id"], opts["--agent"], opts["--blocking"]), ("ab12cd34", "a2", True))
+        self.assertIn("a2", opts["--title"])
+        self.assertIn(self.PUSH, opts["--title"])
+        self.assertNotIn("\n", opts["--question"])
+        self.assertTrue(opts["--question"].endswith("?"), opts["--question"])
+        self.assertIn("[Git Destructive]", opts["--why"])
+        for absent in ("--manual", "--option", "--recommend"):
+            self.assertNotIn(absent, opts)
+
+    def test_the_root_falls_back_to_the_inputs_cwd(self):
+        env = {k: v for k, v in self.env.items() if k != "CLAUDE_PROJECT_DIR"}
+        self.env = env
+        self.refuse(agent_id="ab12cd34")
+        self.assertEqual(self.only()[1]["--root"], str(self.repo))
+
+    def test_the_caller_is_the_ledgers_row_else_fleet_worker_else_none(self):
+        self.refuse(agent_id="ffff0000", env={"FLEET_WORKER": "w9"})
+        self.refuse(agent_id="ffff0000")
+        self.refuse()
+        unknown_env, unknown, main = [c[1] for c in self.recorded()]
+        self.assertEqual((unknown_env["--agent"], unknown_env["--agent-id"]), ("w9", "ffff0000"))
+        self.assertNotIn("--agent", unknown)
+        self.assertEqual(unknown["--agent-id"], "ffff0000")
+        self.assertNotIn("--agent", main)
+        self.assertNotIn("--agent-id", main)
+        self.assertEqual(self.recorded()[2][0][3], self.expected_id("main", self.PUSH))
+        self.assertIn("coordinator", main["--title"])
+
+    def test_the_same_caller_and_call_keep_one_id(self):
+        self.refuse(agent_id="ab12cd34")
+        self.refuse(agent_id="ab12cd34")
+        self.refuse(agent_id="ab12cd34", command=self.PUSH + " 2>&1")
+        self.refuse(agent_id="ee55ee55")
+        ids = [c[0][3] for c in self.recorded()]
+        self.assertEqual(ids[0], ids[1])
+        self.assertEqual(len(set(ids)), 3)
+
+    def test_a_closed_row_makes_the_next_refusal_a_new_one(self):
+        base = self.expected_id("ab12cd34", self.PUSH)
+        agents = [{"id": "a2", "name": "a2", "task_id": "ab12cd34"}]
+        self.ledger(agents=agents, decisions=[{"id": base, "status": "decided"}])
+        self.refuse(agent_id="ab12cd34")
+        self.ledger(agents=agents, decisions=[{"id": base, "status": "decided"}, {"id": f"{base}-2", "status": "open"}])
+        self.refuse(agent_id="ab12cd34")
+        self.ledger(agents=agents, decisions=[{"id": base, "status": "withdrawn"}, {"id": f"{base}-2", "status": "decided"}])
+        self.refuse(agent_id="ab12cd34")
+        self.ledger(agents=agents, decisions=[{"id": base, "status": "open"}])
+        self.refuse(agent_id="ab12cd34")
+        self.assertEqual([c[0][3] for c in self.recorded()], [f"{base}-2", f"{base}-2", f"{base}-3", base])
+        for _, opts in self.recorded():
+            self.assertNotIn("--supersedes", opts)
+
+    def test_a_call_no_exact_rule_can_hold_opens_an_action(self):
+        for command in ("git push --force \\\n  origin HEAD:main", "rm -rf build/*"):
+            self.calls.unlink(missing_ok=True)
+            self.refuse(agent_id="ab12cd34", command=command)
+            positionals, opts = self.only()
+            self.assertEqual(opts["--kind"], "action")
+            self.assertEqual(positionals[3], self.expected_id("ab12cd34", command))
+            self.assertEqual(opts["--manual"].split("```nu\n", 1)[1], command + "\n```")
+            self.assertEqual((opts["--agent"], opts["--blocking"]), ("a2", True))
+            self.assertIn("[Git Destructive]", opts["--why"])
+            for absent in ("--tool", "--call", "--cause", "--root", "--agent-id"):
+                self.assertNotIn(absent, opts)
+
+    def test_another_tools_refusal_opens_an_action_with_its_input(self):
+        written = {"file_path": "/x/.claude/settings.local.json", "content": "```\n{}\n```"}
+        self.refuse(tool="Write", tool_input=written, agent_id="ab12cd34")
+        _, opts = self.only()
+        self.assertEqual(opts["--kind"], "action")
+        self.assertIn("Write", opts["--title"])
+        fence = "````"
+        body = opts["--manual"].split(fence + "json\n", 1)[1].rsplit("\n" + fence, 1)[0]
+        self.assertEqual(json.loads(body), written)
+
+    def test_a_value_that_looks_like_a_flag_stays_a_value(self):
+        self.refuse(agent_id="ab12cd34", command="-rf")
+        argv = json.loads(self.calls.read_text())
+        self.assertIn("--call=-rf", argv)
+
+    def test_every_fleet_of_the_session_gets_it(self):
+        other = self.pad / "manager"
+        other.mkdir()
+        (other / "state.json").write_text(json.dumps({"role": "manager", "agents": []}))
+        self.refuse()
+        dirs = sorted(c[0][1] for c in self.recorded())
+        self.assertEqual(dirs, sorted([str(self.fleet), str(other)]))
+
+    def test_nothing_outside_a_fleet(self):
+        r = self.hook("PermissionDenied", {**self.base("PermissionDenied"), "tool_name": "Bash",
+                                           "tool_input": {"command": "ls"}, "reason": "x"})
+        self.assertSilent(r)
+        self.assertEqual(self.recorded(), [])
+
+    def test_a_failing_or_missing_cli_is_logged_and_silent(self):
+        self.refuse(agent_id="ab12cd34", env={"STAND_IN_FAIL": "relative root"})
+        self.assertEqual(len(self.recorded()), 1)
+        self.assertIn("refused: relative root", self.log())
+        self.assertIn("PermissionDenied", self.log())
+        self.refuse(agent_id="ab12cd34", env={"TSTACK_FLEET_CLI": str(self.tmp / "no-such-cli")})
+        self.assertIn("no-such-cli", self.log())
+
+    def test_odd_input_never_breaks_it(self):
+        for extra in ({"tool_input": ["x"]}, {"tool_input": {"command": 7}}, {"tool_name": None},
+                      {"agent_id": 5}, {"reason": None}, {"cwd": 3}):
+            self.assertSilent(self.hook("PermissionDenied", {**self.payload("PermissionDenied", tool_name="Bash",
+                                        tool_input={"command": "ls"}, reason="r"), **extra}))
+        (self.fleet / "state.json").write_text('{"agents": "none"}')
+        self.refuse(agent_id="ab12cd34")
+        self.assertNotIn("--agent", self.recorded()[-1][1])
+
+
+class GrantRemovalTest(FleetCase):
+    """fleet_grant_sweep: a grant is taken back once its call ran, or once it is older than the TTL."""
+
+    RULE = "Bash(git push --force origin HEAD:main)"
+
+    def setUp(self):
+        super().setUp()
+        self.settings = self.tmp / "project" / ".claude" / "settings.local.json"
+        self.settings.parent.mkdir(parents=True)
+        self.write_settings({"permissions": {"allow": ["Bash(ls)", self.RULE, "Bash(üñí)"], "deny": ["Bash(rm)"]},
+                             "env": {"A": "1"}})
+        self.grants = self.fleet / "grants.jsonl"
+
+    def write_settings(self, value):
+        self.settings.write_text(json.dumps(value))
+
+    def grant(self, decision="p-1a2b3c4d", rule=RULE, at="2026-01-05T09:00:00+00:00", file=None, op="grant"):
+        with open(self.grants, "a") as f:
+            f.write(json.dumps({"op": op, "decision": decision, "ref": "P1", "rule": rule,
+                                "file": str(file or self.settings), "at": at, "by": "local", "reload": "live"}) + "\n")
+
+    def run_tool(self, command, now="2026-01-05T09:05:00+00:00", event="PostToolUse", tool="Bash", env=None):
+        payload = self.payload(event, tool_name=tool, tool_input={"command": command})
+        r = self.hook(event, payload, env={"FLEET_NOW": now, "TZ": "UTC", **(env or {})})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("failed", self.log())
+
+    def lines(self):
+        return [json.loads(line) for line in self.grants.read_text().splitlines()]
+
+    def allow(self):
+        return json.loads(self.settings.read_text())["permissions"]["allow"]
+
+    def test_the_granted_call_takes_its_rule_back(self):
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main")
+        self.assertEqual(self.allow(), ["Bash(ls)", "Bash(üñí)"])
+        text = self.settings.read_text()
+        self.assertEqual(json.loads(text), {"permissions": {"allow": ["Bash(ls)", "Bash(üñí)"], "deny": ["Bash(rm)"]},
+                                            "env": {"A": "1"}})
+        self.assertTrue(text.endswith("}\n"))
+        self.assertIn('\n  "permissions": {\n    "allow": [\n      "Bash(ls)"', text)
+        self.assertIn("üñí", text)
+        self.assertEqual(sorted(p.name for p in self.settings.parent.iterdir()), ["settings.local.json"])
+        self.assertEqual(self.lines()[-1], {"op": "remove", "decision": "p-1a2b3c4d", "rule": self.RULE,
+                                            "file": str(self.settings), "at": "2026-01-05T09:05:00+00:00",
+                                            "why": "used"})
+
+    def test_a_failed_call_counts_as_used(self):
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main", event="PostToolUseFailure")
+        self.assertNotIn(self.RULE, self.allow())
+        self.assertEqual(self.lines()[-1]["why"], "used")
+
+    def test_another_call_leaves_it_until_it_expires(self):
+        self.grant()
+        for command, tool in (("git push --force origin HEAD:main 2>&1", "Bash"), ("ls", "Bash"),
+                              ("git push --force origin HEAD:main", "Write")):
+            self.run_tool(command, tool=tool, now="2026-01-05T09:29:59+00:00")
+        self.assertIn(self.RULE, self.allow())
+        self.assertEqual(len(self.lines()), 1)
+        self.run_tool("ls", now="2026-01-05T09:30:00+00:00")
+        self.assertEqual(self.allow(), ["Bash(ls)", "Bash(üñí)"])
+        self.assertEqual(self.lines()[-1]["why"], "expired")
+
+    def test_fleet_grant_ttl_min_sets_the_age(self):
+        self.grant()
+        self.run_tool("ls", now="2026-01-05T09:04:00+00:00", env={"FLEET_GRANT_TTL_MIN": "5"})
+        self.assertIn(self.RULE, self.allow())
+        self.run_tool("ls", now="2026-01-05T09:05:00+00:00", env={"FLEET_GRANT_TTL_MIN": "5"})
+        self.assertNotIn(self.RULE, self.allow())
+
+    def test_a_removed_grant_is_not_taken_back_twice(self):
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main")
+        self.write_settings({"permissions": {"allow": [self.RULE]}})  # granted again by hand, outside the hub
+        self.run_tool("git push --force origin HEAD:main", now="2026-01-05T10:00:00+00:00")
+        self.assertEqual(self.allow(), [self.RULE])
+        self.assertEqual([line["op"] for line in self.lines()], ["grant", "remove"])
+
+    def test_a_second_grant_of_the_same_rule_is_its_own(self):
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main")
+        self.grant(decision="p-99999999", at="2026-01-05T09:10:00+00:00")
+        self.write_settings({"permissions": {"allow": [self.RULE]}})
+        self.run_tool("git push --force origin HEAD:main", now="2026-01-05T09:11:00+00:00")
+        self.assertEqual(self.allow(), [])
+        self.assertEqual([(line["op"], line["decision"]) for line in self.lines()],
+                         [("grant", "p-1a2b3c4d"), ("remove", "p-1a2b3c4d"), ("grant", "p-99999999"),
+                          ("remove", "p-99999999")])
+
+    def test_a_missing_file_or_rule_still_closes_the_grant(self):
+        self.write_settings({"permissions": {"allow": ["Bash(ls)"]}})
+        self.grant()
+        other = self.tmp / "gone" / ".claude" / "settings.local.json"
+        self.grant(decision="p-00000002", file=other)
+        self.run_tool("git push --force origin HEAD:main")
+        self.assertEqual(self.allow(), ["Bash(ls)"])
+        self.assertFalse(other.exists())
+        self.assertEqual([line["op"] for line in self.lines()], ["grant", "grant", "remove", "remove"])
+
+    def test_an_emptied_list_stays_and_so_does_the_file(self):
+        self.write_settings({"permissions": {"allow": [self.RULE]}})
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main")
+        self.assertEqual(json.loads(self.settings.read_text()), {"permissions": {"allow": []}})
+
+    def test_a_broken_settings_file_is_logged_and_the_grant_stays_open(self):
+        self.settings.write_text("{not json")
+        self.grant()
+        payload = self.payload("PostToolUse", tool_name="Bash", tool_input={"command": "git push --force origin HEAD:main"})
+        self.assertSilent(self.hook("PostToolUse", payload, env={"FLEET_NOW": "2026-01-05T09:05:00+00:00"}))
+        self.assertIn("settings.local.json", self.log())
+        self.assertEqual(self.settings.read_text(), "{not json")
+        self.assertEqual(len(self.lines()), 1)
+
+    def test_only_a_claude_settings_local_file_is_touched(self):
+        elsewhere = self.tmp / "notes.json"
+        elsewhere.write_text(json.dumps({"permissions": {"allow": [self.RULE]}}))
+        self.grant(file=elsewhere)
+        self.grant(decision="p-00000003", file="relative/.claude/settings.local.json")
+        self.run_tool("git push --force origin HEAD:main", now="2026-01-05T11:00:00+00:00")
+        self.assertEqual(elsewhere.read_text(), json.dumps({"permissions": {"allow": [self.RULE]}}))
+        self.assertEqual(len(self.lines()), 2)
+
+    def test_odd_lines_are_skipped_and_a_torn_one_waits(self):
+        with open(self.grants, "w") as f:
+            f.write("not json\n[1]\nnull\n" + json.dumps({"op": "grant", "decision": 5, "rule": self.RULE}) + "\n")
+        self.grant(at="yesterday")  # an age it cannot read: expired
+        with open(self.grants, "a") as f:
+            f.write('{"op": "grant", "decision": "p-torn", "rule": "Bash(ls)", "fi')
+        self.run_tool("ls")
+        self.assertEqual(self.allow(), ["Bash(ls)", "Bash(üñí)"])
+        text = self.grants.read_text()
+        self.assertIn('"fi\n{"op": "remove"', text)
+        self.assertEqual(json.loads(text.splitlines()[-1])["why"], "expired")
+
+    def test_through_fleet_dir_too(self):
+        self.grant()
+        payload = {**self.base("PostToolUse"), "tool_name": "Bash", "tool_input": {"command": "git push --force origin HEAD:main"}}
+        self.assertSilent(self.hook("PostToolUse", payload, env={"FLEET_DIR": str(self.fleet), "FLEET_WORKER": "a1"}))
+        self.assertNotIn(self.RULE, self.allow())
+
+    def test_without_grants_it_costs_next_to_nothing(self):
+        module = load_hook()
+        payload = self.payload("PostToolUse", tool_name="Bash", tool_input={"command": "ls"})
+        hook = module.Hook("PostToolUse", payload, self.env)
+        module.fleet_dirs(hook)
+        started = time.perf_counter()
+        for _ in range(500):
+            module.fleet_grant_sweep(hook)
+        per_call = (time.perf_counter() - started) * 1000 / 500
+        print(f"\n  grant sweep with no grants.jsonl: {per_call * 1000:.0f} µs", end="", file=sys.stderr)
+        self.assertLess(per_call, 0.1)
+        self.grant(at="2026-01-05T09:00:00+00:00")
+        self.grant(decision="p-2", op="remove")
+        self.grant(decision="p-2")
+        env = {**self.env, "FLEET_NOW": "2026-01-05T09:01:00+00:00"}
+        times = []
+        for _ in range(200):
+            hook = module.Hook("PostToolUse", payload, env)
+            started = time.perf_counter()
+            module.fleet_grant_sweep(hook)
+            times.append((time.perf_counter() - started) * 1000)
+        print(f", with live grants not due: median {statistics.median(times):.3f} ms", end="", file=sys.stderr)
+        self.assertLess(statistics.median(times), 1, times[:20])
+        self.assertIn(self.RULE, self.allow())
+
+
 class HooksJsonTest(unittest.TestCase):
     def test_every_registered_event_is_dispatched(self):
         config = json.loads(HOOKS_JSON.read_text())
@@ -854,9 +1212,10 @@ class HooksJsonTest(unittest.TestCase):
                 for h in group["hooks"]:
                     self.assertEqual(h["type"], "command")
                     self.assertEqual(h["command"], f'"${{CLAUDE_PLUGIN_ROOT}}/hooks/tstack-hook" {event}')
-                    self.assertLessEqual(h.get("timeout", 60), 10)
+                    # the refusal's handler starts the fleet CLI (Bun): it gets the time a start takes
+                    self.assertLessEqual(h.get("timeout", 60), 30 if event == "PermissionDenied" else 10)
                     # what nobody reads runs in the background: a tool call never waits on a heartbeat
-                    self.assertEqual(h.get("async", False), event in HEARTBEAT_ONLY, event)
+                    self.assertEqual(h.get("async", False), event in (*HEARTBEAT_ONLY, "PermissionDenied"), event)
         self.assertEqual(config["hooks"]["SessionStart"][0]["matcher"], "startup|resume|clear|compact")
         for event in (*HEARTBEAT_ONLY, "PostToolUse"):
             self.assertNotIn("matcher", config["hooks"][event][0])  # every tool

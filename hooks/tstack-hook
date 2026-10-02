@@ -36,6 +36,7 @@ class Hook:
         self.data_dir = Path(env.get("CLAUDE_PLUGIN_DATA") or Path(state) / "tstack")
         self.session_id = str(data.get("session_id") or "")
         self._states = {}
+        self._fleet_dirs = None
         cwd = data.get("cwd")
         self.cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else (env.get("CLAUDE_PROJECT_DIR") or os.getcwd())
         # Inside a subagent the input carries agent_id: that is a worker.
@@ -246,7 +247,14 @@ def tuca_mode(hook):
 def fleet_dirs(hook):
     """The fleets this session works for (fleet/SPEC.md, Heartbeats): $FLEET_DIR when it names a
     ledger (a worker launched as its own process), else each folder of the session's scratchpad that
-    holds a state.json (a coordinator's DIR is <scratchpad>/coordinator; its subagents share it)."""
+    holds a state.json (a coordinator's DIR is <scratchpad>/coordinator; its subagents share it).
+    Looked up once per hook."""
+    if hook._fleet_dirs is None:
+        hook._fleet_dirs = _find_fleet_dirs(hook)
+    return hook._fleet_dirs
+
+
+def _find_fleet_dirs(hook):
     given = hook.env.get("FLEET_DIR")
     if given:
         return [given] if os.path.isfile(os.path.join(given, "state.json")) else []
@@ -655,12 +663,219 @@ def fleet_chat_nudge(hook):
     return "\n".join(lines[:NUDGE_SHOWN] + ([f"Fleet: and {more} more."] if more > 0 else []))
 
 
+CLI_TIMEOUT_S = 25
+GRANT_TTL_MIN = 30
+
+
+def _permission_id(ledger, agent_id, call):
+    """The refusal's decision id: p-<8 hex of sha1(caller, call)>, so a second refusal of the same call by
+    the same caller revises its open row; when that row is closed, the first of -2, -3 ... absent or open."""
+    import hashlib
+    base = "p-" + hashlib.sha1(f"{agent_id or 'main'}\n{call}".encode()).hexdigest()[:8]
+    listed = ledger.get("decisions") if isinstance(ledger.get("decisions"), list) else []
+    status = {x["id"]: x.get("status") for x in listed if isinstance(x, dict) and isinstance(x.get("id"), str)}
+    n = 1
+    while True:
+        candidate = base if n == 1 else f"{base}-{n}"
+        if status.get(candidate, "open") == "open":
+            return candidate
+        n += 1
+
+
+def _refused_worker(ledger, agent_id, env):
+    """The worker row of the refused caller: the agents row whose task_id is the harness's agent id,
+    else $FLEET_WORKER, else None (the session's main thread)."""
+    agents = ledger.get("agents") if isinstance(ledger.get("agents"), list) else []
+    for row in agents:
+        if agent_id and isinstance(row, dict) and row.get("task_id") == agent_id and isinstance(row.get("id"), str):
+            return row["id"]
+    return env.get("FLEET_WORKER") or None
+
+
+def _fenced(lang, text):
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}{lang}\n{text}\n{fence}"
+
+
+def _option(flag, value):
+    """One option's argv words; a value the CLI's parser would read as a flag is joined to it."""
+    value = str(value)
+    return [f"{flag}={value}"] if value.startswith("-") and " " not in value else [flag, value]
+
+
+def fleet_permission_denied(hook):
+    """PermissionDenied: the harness refused a call; open the item that lets the user answer it, in each
+    fleet. A Bash call an exact rule can hold (no newline, no `*`) opens a `permission` decision the hub
+    grants once; any other refused call opens an `action` holding the exact call, for the user to run."""
+    dirs = fleet_dirs(hook)
+    if not dirs:
+        return None
+    data = hook.input
+    tool = data.get("tool_name") if isinstance(data.get("tool_name"), str) else "a tool"
+    tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+    agent_id = data.get("agent_id") if isinstance(data.get("agent_id"), str) and data.get("agent_id") else None
+    reason = data.get("reason") if isinstance(data.get("reason"), str) and data.get("reason").strip() else "no reason given"
+    project = hook.env.get("CLAUDE_PROJECT_DIR")
+    root = project if project and os.path.isabs(project) else hook.cwd
+    command = tool_input.get("command") if tool == "Bash" else None
+    if isinstance(command, str):
+        call, exact = command, "\n" not in command and "*" not in command
+        manual = f"Run it yourself, in the project ({root}):\n\n{_fenced('nu', command)}"
+    else:
+        call, exact = f"{tool}\n{json.dumps(tool_input, sort_keys=True)}", False
+        shown = json.dumps(tool_input, indent=2, ensure_ascii=False)
+        manual = f"The {tool} call as the harness saw it, for you to make yourself:\n\n{_fenced('json', shown)}"
+    cli = hook.env.get("TSTACK_FLEET_CLI") or fleet_cli()
+    for d in dirs:
+        try:
+            _open_refusal(hook, d, cli, tool, call, exact, manual, agent_id, reason, root)
+        except Exception:  # one fleet failing does not keep the item from the others
+            log(hook.data_dir, f"{hook.event} fleet_permission_denied failed for {d}\n{traceback.format_exc()}")
+    return None
+
+
+def _open_refusal(hook, d, cli, tool, call, exact, manual, agent_id, reason, root):
+    import subprocess
+    ledger = read_ledger(d) or {}
+    worker = _refused_worker(ledger, agent_id, hook.env)
+    who = worker or (f"subagent {agent_id}" if agent_id else fleet_role(ledger))
+    shown = call if tool == "Bash" else tool
+    argv = [cli, "state", d, "decision", _permission_id(ledger, agent_id, call),
+            *_option("--kind", "permission" if exact else "action"),
+            *_option("--title", f"{who}: {tool} refused, {_one_line(shown, 70)}"),
+            *_option("--question", f"Let {who} run this exact call once?" if exact
+                     else f"The harness refused {who}'s {tool} call; will you make it yourself?"),
+            *_option("--why", f"Auto mode's classifier refused it ({reason}), and only you can let it through."),
+            "--blocking"]
+    if exact:
+        argv += [*_option("--tool", "Bash"), *_option("--call", call), *_option("--cause", reason),
+                 *_option("--root", root)]
+        if agent_id:
+            argv += _option("--agent-id", agent_id)
+    else:
+        argv += _option("--manual", manual)
+    if worker:
+        argv += _option("--agent", worker)
+    done = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=dict(hook.env), check=False,
+                          timeout=CLI_TIMEOUT_S)
+    if done.returncode:
+        raise RuntimeError(f"{cli} state exited {done.returncode}: {(done.stderr or done.stdout).strip()}")
+
+
+def _grant_file(value):
+    """A grant's settings file, when it is one the hook may rewrite: an absolute <root>/.claude/settings.local.json."""
+    if not isinstance(value, str) or not os.path.isabs(value):
+        return None
+    path = Path(value)
+    return value if path.name == "settings.local.json" and path.parent.name == ".claude" else None
+
+
+def _due_grants(raw, used, now, ttl_s):
+    """The active grants of a grants.jsonl to take back now, as (grant, why): its rule is the call that
+    just ran (used), or it is older than the TTL (expired). Whole lines only; odd ones are skipped."""
+    active = {}
+    for line in raw[:raw.rfind(b"\n") + 1].splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict) or not isinstance(entry.get("decision"), str) or not isinstance(entry.get("rule"), str):
+            continue
+        key = (entry["decision"], entry["rule"])
+        if entry.get("op") == "grant" and _grant_file(entry.get("file")):
+            active[key] = entry
+        elif entry.get("op") == "remove":
+            active.pop(key, None)
+    due = []
+    for grant in active.values():
+        at = _instant(grant.get("at"))
+        if used is not None and grant["rule"] == used:
+            due.append((grant, "used"))
+        elif at is None or now - at >= ttl_s:
+            due.append((grant, "expired"))
+    return due
+
+
+def _take_back(file, rule):
+    """Remove rule from the file's permissions.allow, every other key and entry left as they are; a file
+    or rule already gone is nothing to do. Written as the hub writes it: atomically, two-space JSON."""
+    try:
+        with open(file, encoding="utf-8") as f:
+            text = f.read()
+    except FileNotFoundError:
+        return
+    try:
+        settings = json.loads(text)
+    except ValueError as e:
+        raise ValueError(f"{file} does not parse: {e}") from None
+    permissions = settings.get("permissions") if isinstance(settings, dict) else None
+    allow = permissions.get("allow") if isinstance(permissions, dict) else None
+    if not isinstance(allow, list) or rule not in allow:
+        return
+    permissions["allow"] = [r for r in allow if r != rule]
+    tmp = os.path.join(os.path.dirname(file), f".settings.local.json.{os.getpid()}")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
+    os.replace(tmp, file)
+
+
+def fleet_grant_sweep(hook):
+    """PostToolUse, PostToolUseFailure: a grant the hub wrote for a refused call is taken back once that call
+    has run, or once it is older than FLEET_GRANT_TTL_MIN (30); each removal is appended to grants.jsonl.
+    One open per fleet when there is no grants.jsonl."""
+    dirs = fleet_dirs(hook)
+    if not dirs:
+        return None
+    tool_input = hook.input.get("tool_input") if isinstance(hook.input.get("tool_input"), dict) else {}
+    command = tool_input.get("command") if hook.input.get("tool_name") == "Bash" else None
+    used = f"Bash({command})" if isinstance(command, str) else None
+    try:
+        ttl_s = float(hook.env.get("FLEET_GRANT_TTL_MIN") or GRANT_TTL_MIN) * 60
+    except ValueError:
+        ttl_s = GRANT_TTL_MIN * 60.0
+    now = fleet_now(hook.env)
+    for d in dirs:
+        path = os.path.join(d, "grants.jsonl")
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except FileNotFoundError:
+            continue
+        if _due_grants(raw, used, now, ttl_s):
+            _sweep(hook, path, used, now, ttl_s)
+    return None
+
+
+def _sweep(hook, path, used, now, ttl_s):
+    """Take back what is due in one grants.jsonl, under a lock so two hooks never rewrite one settings file at once."""
+    import fcntl
+    with open(path, "a+b") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        raw = f.read()
+        lead = b"\n" if raw and not raw.endswith(b"\n") else b""
+        for grant, why in _due_grants(raw, used, now, ttl_s):
+            try:
+                _take_back(grant["file"], grant["rule"])
+            except Exception:  # this grant stays open for the next call; the others go on
+                log(hook.data_dir, f"{hook.event} fleet_grant_sweep failed for {grant['decision']}\n"
+                                   f"{traceback.format_exc()}")
+                continue
+            removal = {"op": "remove", "decision": grant["decision"], "rule": grant["rule"], "file": grant["file"],
+                       "at": fleet_stamp(hook.env), "why": why}
+            f.write(lead + json.dumps(removal, ensure_ascii=False).encode() + b"\n")
+            f.flush()
+            lead = b""
+
+
 HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_heartbeat],
     "Stop": [memo_nudge, fleet_listen_guard, fleet_heartbeat],
     "PreCompact": [memo_precompact],
-    "PostToolUse": [fleet_heartbeat, fleet_chat_nudge],
-    "PostToolUseFailure": [fleet_heartbeat],
+    "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_chat_nudge],
+    "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep],
+    "PermissionDenied": [fleet_permission_denied],
     "SubagentStart": [fleet_heartbeat],
     "SubagentStop": [fleet_heartbeat],
 }
