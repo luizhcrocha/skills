@@ -3,13 +3,17 @@
  * clock) and where it prints. The process entry point gives it the process's own; tests give it theirs.
  */
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import { advisorCli } from "../advisor/advisor.ts";
 import { clockFrom } from "../clock.ts";
+import { readText } from "../files.ts";
 import { Env, Out } from "../io.ts";
+import { asObject, asString, parseObject } from "../json.ts";
 import type { Entry } from "../registry.ts";
 import { World, worldLayer, type Machine } from "../world.ts";
 import { briefCli } from "./brief.ts";
@@ -22,7 +26,15 @@ import { tellCli } from "./tell.ts";
 import { turnCli } from "./turn.ts";
 import { wsCli } from "./ws.ts";
 
-const USAGE = "usage: fleet {ls,tell,state,chat,fleets,ws,preview,brief,turn,advisor,hub,serve,render,usage,spend,served} ...\n";
+const USAGE = "usage: fleet {version,ls,tell,state,chat,fleets,ws,preview,brief,turn,advisor,hub,serve,render,usage,spend,served} ...\n";
+
+/** This copy of tstack: its version (from the plugin's manifest) and where it is, for `fleet version`. */
+function versionLine(): string {
+  const root = join(import.meta.dir, "..", "..", "..");
+  const manifest = asObject(Option.getOrUndefined(parseObject(readText(join(root, ".claude-plugin", "plugin.json")) ?? "")));
+
+  return `fleet (tstack ${asString(manifest?.["version"]) ?? "unknown"}) at ${root}`;
+}
 
 /** The commands whose first argument is a fleet's directory. */
 const DIR_CLIS: ReadonlySet<string> = new Set(["state", "chat", "ws", "preview", "brief", "turn", "advisor", "serve", "spend"]);
@@ -73,6 +85,12 @@ function dispatch(argv: readonly string[]): Effect.Effect<number, never, Out | W
     const [cli, ...rest] = argv;
 
     // `fleet ls` and `fleet list`: the served fleets, as `fleet fleets list` prints them.
+    if (cli === "version" || cli === "--version" || cli === "-v" || cli === "-V") {
+      out.out(`${versionLine()}\n`);
+
+      return 0;
+    }
+
     if (cli === "ls" || cli === "list") return yield* fleetsCli(["list", ...rest]);
 
     if (cli === "tell") return yield* tellCli(rest);
