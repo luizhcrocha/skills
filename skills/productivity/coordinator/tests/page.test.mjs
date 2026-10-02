@@ -95,6 +95,35 @@ test("insertMention: '@name ' at the caret, replacing the query and the rest of 
   assert.deepEqual(Core.insertMention("@no", Core.mentionAt("@no", 3), notes), { text: "@a4 ", caret: 4 }, "a name that is not a mention token inserts the id");
 });
 
+test("commandAt: the /query ending at the caret, when the / starts the field or follows a space or a newline", () => {
+  assert.deepEqual(Core.commandAt("/", 1), { start: 0, end: 1, query: "" });
+  assert.deepEqual(Core.commandAt("/tst more", 4), { start: 0, end: 4, query: "tst" });
+  assert.deepEqual(Core.commandAt("please run /tst", 15), { start: 11, end: 15, query: "tst" });
+  assert.deepEqual(Core.commandAt("line one\n/res", 13), { start: 9, end: 13, query: "res" });
+  assert.deepEqual(Core.commandAt("run /tstack:tdd now", 9), { start: 4, end: 9, query: "tsta" }, "the query stops at the caret");
+});
+
+test("commandAt: no command inside a word, in a path or URL, after a space, or without a /", () => {
+  assert.equal(Core.commandAt("a/b", 3), null);
+  assert.equal(Core.commandAt("see https://x/y", 15), null);
+  assert.equal(Core.commandAt("see https:/", 11), null);
+  assert.equal(Core.commandAt("see https://", 12), null);
+  assert.equal(Core.commandAt("(/tst", 5), null);
+  assert.equal(Core.commandAt("/tst ", 5), null);
+  assert.equal(Core.commandAt("plain words", 5), null);
+  assert.equal(Core.commandAt("", 0), null);
+});
+
+test("insertCommand: '/name ' in place of the token, the rest of its word too, the caret after it", () => {
+  const skill = { name: "tstack:bro" };
+  assert.deepEqual(Core.insertCommand("/tst", Core.commandAt("/tst", 4), skill), { text: "/tstack:bro ", caret: 12 });
+  assert.deepEqual(Core.insertCommand("please run /tst", Core.commandAt("please run /tst", 15), skill), { text: "please run /tstack:bro ", caret: 23 });
+  const mid = "run /tsxx then more";
+  assert.deepEqual(Core.insertCommand(mid, Core.commandAt(mid, 7), skill), { text: "run /tstack:bro then more", caret: 16 }, "an existing space is reused");
+  const lead = "/t fix it";
+  assert.deepEqual(Core.insertCommand(lead, Core.commandAt(lead, 2), skill), { text: "/tstack:bro fix it", caret: 12 });
+});
+
 const msg = (id, from, to, re = null, text = "m" + id) => ({ id, at: "2026-09-28T10:00:0" + (id % 10) + "Z", from, to, text, re });
 
 test("fold: replies join the thread of what they answer, however deep", () => {

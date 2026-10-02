@@ -1,6 +1,7 @@
 /**
- * The list under the caret, for any field whose text goes to a session as words: skills while the text
- * starts with "/", and, where the field asks for them, people after an "@". A caret owns its field's open
+ * The list under the caret, for any field whose text goes to a session as words: skills after a "/" that
+ * starts a word anywhere in the text, and, where the field asks for them, people after an "@". Both find
+ * their token the same way (`Core.commandAt`, `Core.mentionAt`). A caret owns its field's open
  * list, the keys that move through it, pick from it and close it, and the field's combobox state; the
  * list's view is `CaretList`. Every caret of the page shares one open list, so opening one closes the
  * others. The lists live in signals no update of the fleet's state touches.

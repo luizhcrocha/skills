@@ -279,8 +279,50 @@ test("a leading / lists the session's skills, narrowed as it is typed", async ()
   expect(listed()).toEqual(["deploy"]);
   await type("/zzz");
   expect(root.querySelector<HTMLElement>("#mentions")?.hidden).toBe(true);
-  await type("say /tdd");
+});
+
+test("a / that starts a word anywhere in the message lists the skills, and a pick replaces only that word", async () => {
+  let say = await type("please run /tst");
+  expect(root.querySelector<HTMLElement>("#mentions")?.hidden).toBe(false);
+  expect(listed()).toEqual(["tstack:tdd", "tstack:research"]);
+  key(say, "ArrowDown");
+  key(say, "Enter");
+  expect(say.value).toBe("please run /tstack:research ");
+  expect(say.selectionStart).toBe("please run /tstack:research ".length);
   expect(root.querySelector<HTMLElement>("#mentions")?.hidden).toBe(true);
+
+  say = await type("first line\n/dep");
+  expect(listed()).toEqual(["deploy"]);
+  key(say, "Tab");
+  expect(say.value).toBe("first line\n/deploy ");
+
+  say = await type("run /tst the tests");
+  say.setSelectionRange(8, 8);
+  say.dispatchEvent(new Event("input", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 0));
+  flush();
+  expect(listed()).toEqual(["tstack:tdd", "tstack:research"]);
+  key(say, "Enter");
+  expect(say.value).toBe("run /tstack:tdd the tests");
+  expect(say.selectionStart).toBe("run /tstack:tdd ".length);
+
+  say = await type("say /t");
+  key(say, "Escape");
+  expect(root.querySelector<HTMLElement>("#mentions")?.hidden).toBe(true);
+  expect(say.value).toBe("say /t");
+});
+
+test("a / inside a word, a path or a URL lists nothing; @ still lists people anywhere", async () => {
+  for (const text of ["a/b", "see src/tst", "see https://x/tst", "see https:/", "see https://"]) {
+    await type(text);
+    expect(root.querySelector<HTMLElement>("#mentions")?.hidden).toBe(true);
+  }
+
+  await type("ask @coord");
+  expect(root.querySelector<HTMLElement>("#mentions")?.hidden).toBe(false);
+  expect(root.querySelector("#mentions")?.getAttribute("aria-label")).toBe("Mention someone");
+  await type("/tst then @coord");
+  expect(root.querySelector("#mentions")?.getAttribute("aria-label")).toBe("Mention someone");
 });
 
 test("arrows move through the skills, Enter or Tab puts one in, Escape closes the list", async () => {
@@ -395,6 +437,10 @@ for (const f of SLASH_FIELDS) {
     expect(field.value).toBe("/t");
 
     await typeIn(field, "say /tdd");
+    expect(openLists()).toEqual([f.list]);
+    key(field, "Enter");
+    expect(field.value).toBe("say /tstack:tdd ");
+    await typeIn(field, "see a/tdd");
     expect(openLists()).toEqual([]);
     await typeIn(field, "@coord");
     expect(openLists()).toEqual([]);

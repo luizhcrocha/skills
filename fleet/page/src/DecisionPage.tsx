@@ -172,8 +172,8 @@ function Manual(props: { readonly d: Decision; readonly title: string }): JSX.El
 }
 
 /**
- * A field whose words go to the session, with the list of skills a leading "/" opens under it; picking
- * one puts "/<skill> " in the field. The field takes `caret` as its ref.
+ * A field whose words go to the session, with the list of skills a "/" starting a word opens under it;
+ * picking one puts "/<skill> " in place of that word. The field takes `caret` as its ref.
  */
 function SlashField(props: { readonly id: string; readonly children: (caret: (el: HTMLTextAreaElement) => void) => JSX.Element }): JSX.Element {
   const { ui } = usePage();

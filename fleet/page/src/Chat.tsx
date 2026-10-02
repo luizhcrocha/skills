@@ -1,8 +1,8 @@
 /**
  * The chat: docked beside the page on a wide screen, a full-height view over it elsewhere. Its head says
  * the connection and holds the switch for decision activity; the conversation is `ChatLog.tsx`'s. The
- * composer keeps its draft, lists people after "@" and skills after a leading "/", and says who the text
- * would reach.
+ * composer keeps its draft, lists people after "@" and skills after a "/" that starts a word, and says who
+ * the text would reach.
  */
 import { createEffect, createMemo, createSignal, untrack } from "solid-js";
 import type { JSX } from "@solidjs/web";

@@ -202,6 +202,25 @@ for (const f of IN_SCOPE) {
   });
 }
 
+for (const f of IN_SCOPE) {
+  test.skipIf(!found)(`${f.name}: a "/" that starts a word mid-text opens the list, and a pick replaces only that word; "a/b" opens nothing`, async () => {
+    await focusField(f.hash, f.field);
+    await page.keyboard.type("please run /tst");
+    await page.waitForFunction((id) => document.querySelectorAll(`#${id} li`).length === 2, {}, f.list);
+    const lists = await shown();
+    expect(lists.map((l) => l.id)).toEqual([f.list]);
+    expect(lists[0]?.[f.side]).toBe(true);
+    await page.keyboard.press("Enter");
+    expect(await value(f.field)).toBe("please run /tstack:tdd ");
+    expect(await shown()).toEqual([]);
+
+    await focusField(f.hash, f.field);
+    await page.keyboard.type("see a/tst and https://x/tst");
+    expect(await shown()).toEqual([]);
+    await focusField(f.hash, f.field);
+  });
+}
+
 test.skipIf(!found)("the fields whose text is data or a search open no list on /", async () => {
   for (const [hash, selector] of [
     ["#decision/i1", '#dv-answer textarea[name="value"]'],

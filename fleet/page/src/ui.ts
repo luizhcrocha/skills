@@ -245,7 +245,7 @@ export function createUi(m: Model) {
     if (stick) toBottom();
   }
 
-  /** The composer's list under the caret: skills while the first word starts with "/", people after an "@". */
+  /** The composer's list under the caret: skills after a "/" that starts a word, people after an "@". */
   const updateList = (): void => composer.update();
 
   /** Put the picked person or skill in the composer, the caret after it. */

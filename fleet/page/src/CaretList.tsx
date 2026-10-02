@@ -1,6 +1,6 @@
 /**
  * A field's list under the caret, as a listbox: people after "@" (in the chat's composer), skills after a
- * leading "/". It holds the field's focus while it is tapped, so it serves as the tap list on a phone; a
+ * "/" that starts a word. It holds the field's focus while it is tapped, so it serves as the tap list on a phone; a
  * row picks on a click. The composer's opens above it; a field on the page opens it under itself.
  */
 import { createEffect } from "solid-js";

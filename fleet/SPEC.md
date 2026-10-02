@@ -688,8 +688,8 @@ itself. A manager made later appears the same way, on the same address.
   Tailscale IP, the MagicDNS name and short name, at its port; the https name with `--https`). On a
   root-mode preview's public port every path is that preview's (no index, no fleets), with the same 421
   rule at that port.
-- **Skills** (`GET /f/<fleet>/skills`, the page lists them on a `/` at the start of a message in
-  the composer, and of an answer or a note on a decision's page): `{"skills": [{name, description, hint, source, model}], "builtins": false}`, sorted by
+- **Skills** (`GET /f/<fleet>/skills`, the page lists them on a `/` at the start of a word, anywhere in
+  the composer, and in an answer or a note on a decision's page; not in `a/b` or a URL): `{"skills": [{name, description, hint, source, model}], "builtins": false}`, sorted by
   name (code point order). `source` is `plugin`, `user` or `project`; `hint` is the `argument-hint`
   or empty; `model` is false when `disable-model-invocation: true`. A skill with `user-invocable:
   false` is left out (the user cannot type it). Read from disk, frontmatter only (the top-level
@@ -716,9 +716,10 @@ itself. A manager made later appears the same way, on the same address.
   skill over a project's with the same name), a skill before a command, the nearer directory first.
   `builtins` is false: Claude Code's built-in commands (`/clear`, `/compact`) are listed by no file
   on disk (only a running session's `system/init` message, which mixes them with skills), so they
-  are not offered. A message the user sends that starts with `/<name> [args]` is stored as typed,
-  with no field of its own: the host (and a worker, by `brief.md`) runs that skill with those
-  arguments, as if typed in its session, and answers with `--re`. serve_dashboard.py has no such
+  are not offered. A message the user sends with `/<name>` at the start of a word, anywhere in it, is stored
+  as typed, with no field of its own: the host (and a worker, by `brief.md`) runs that skill with the
+  message's other words as its arguments (its quote as context), as if typed in its session, several
+  in the order written, and answers with `--re`. Only a listed name counts; a path or URL never does. serve_dashboard.py has no such
   route; its 404 leaves the composer without a list.
 - **Delivery to the coordinators** (TypeScript only: serve_dashboard.py stores the message and delivers
   nothing, so the manager forwards it as before). A message the user posts on the manager's page (not an

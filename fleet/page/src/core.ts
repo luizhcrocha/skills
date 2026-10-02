@@ -589,22 +589,30 @@ function rosterOf(state: RosterSource | null | undefined): RosterRow[] {
 }
 
 /**
- * The mention being typed at the caret: {start, end, query} when the caret ends "@query" and the "@" starts
- * a word (so an address like a@b does not open the list), else null.
+ * The token being typed at the caret: {start, end, query} when the caret ends `trigger` and a run of `chars`,
+ * and `opens` allows the character before the trigger (undefined at the start of the text), else null.
  */
-function mentionAt(given: string | null | undefined, caret?: number | null): TokenAt | null {
+function tokenAt(given: string | null | undefined, caret: number | null | undefined, trigger: string, chars: RegExp, opens: (before: string | undefined) => boolean): TokenAt | null {
   const text = String(given ?? "");
   let i = Math.max(0, Math.min(caret ?? text.length, text.length));
   const end = i;
 
-  while (i > 0 && TOKEN.test(text[i - 1] ?? "")) i--;
+  while (i > 0 && chars.test(text[i - 1] ?? "")) i--;
 
-  if (i === 0 || text[i - 1] !== "@") return null;
+  if (i === 0 || text[i - 1] !== trigger) return null;
   const start = i - 1;
 
-  if (start > 0 && TOKEN.test(text[start - 1] ?? "")) return null;
+  if (!opens(start > 0 ? text[start - 1] : undefined)) return null;
 
   return { start, end, query: text.slice(i, end) };
+}
+
+/**
+ * The mention being typed at the caret: {start, end, query} when the caret ends "@query" and the "@" starts
+ * a word (so an address like a@b does not open the list), else null.
+ */
+function mentionAt(given: string | null | undefined, caret?: number | null): TokenAt | null {
+  return tokenAt(given, caret, "@", TOKEN, (before) => before === undefined || !TOKEN.test(before));
 }
 
 /**
@@ -648,18 +656,12 @@ function insertMention(given: string | null | undefined, at: TokenAt, entry: { r
 const COMMAND = /[A-Za-z0-9_.:-]/u;
 
 /**
- * The command being typed: {start: 0, end, query} while the message starts with "/" and the caret is still
- * in that first word, else null. "/" alone lists every skill.
+ * The command being typed at the caret: {start, end, query} when the caret ends "/query" and the "/" starts
+ * the text or follows a space or a newline (so a path like a/b or a URL does not open the list), else null.
+ * "/" alone lists every skill.
  */
 function commandAt(given: string | null | undefined, caret?: number | null): TokenAt | null {
-  const text = String(given ?? "");
-  const end = Math.max(0, Math.min(caret ?? text.length, text.length));
-
-  if (!text.startsWith("/") || end === 0) return null;
-
-  for (let i = 1; i < end; i++) if (!COMMAND.test(text[i] ?? "")) return null;
-
-  return { start: 0, end, query: text.slice(1, end) };
+  return tokenAt(given, caret, "/", COMMAND, (before) => before === undefined || /\s/u.test(before));
 }
 
 /**
@@ -687,16 +689,16 @@ function filterSkills(skills: readonly Skill[], query: string | null | undefined
   return starts.concat(has, says);
 }
 
-/** The text with the command at `at` replaced by "/name ", and the caret after it; the rest of the first word goes too. */
+/** The text with the command at `at` replaced by "/name ", and the caret after it; the rest of the word under the caret goes too. */
 function insertCommand(given: string | null | undefined, at: TokenAt, skill: { readonly name: string }): Edited {
   const text = String(given ?? "");
   let end = at.end;
 
   while (end < text.length && COMMAND.test(text[end] ?? "")) end++;
-  const token = "/" + skill.name;
+  const token = "/" + skill.name + " ";
   const after = text.slice(end).replace(/^ /u, "");
 
-  return { text: token + " " + after, caret: token.length + 1 };
+  return { text: text.slice(0, at.start) + token + after, caret: at.start + token.length };
 }
 
 /**

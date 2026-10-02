@@ -745,7 +745,7 @@
   .mentions .m-main { grid-area: main; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-width: 0; }
   .mentions .m-name { font-weight: 700; font-stretch: var(--narrow); }
   .mentions .m-task { grid-area: task; font-size: var(--fs-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* The skills a leading "/" lists: the name, its argument hint, and what it does. */
+  /* The skills a "/" lists: the name, its argument hint, and what it does. */
   .mentions .slash { grid-area: sw; font-family: var(--mono); font-weight: 700; color: var(--accent); justify-self: center; }
   .mentions.skills .m-name { font-family: var(--mono); font-size: 0.9em; font-stretch: 100%; }
   .mentions.skills .m-task { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
