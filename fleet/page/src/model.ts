@@ -215,6 +215,8 @@ export function createModel(initial: State) {
   const [sending, setSending] = createSignal(false);
   /** Whether the chat shows decision activity (answers, notes and the replies to them) as markers; off unless asked for. */
   const [decisionActivity, setDecisionActivity] = createSignal(prefs.get("chat-decisions", false) === true);
+  /** Whether the decision's page goes on to the next that waits once the one shown is answered; on unless turned off. */
+  const [advance, setAdvance] = createSignal(prefs.get("decision-advance", true) === true);
   const [visible, setVisible] = createSignal(document.visibilityState === "visible");
 
   document.addEventListener("visibilitychange", () => setVisible(document.visibilityState === "visible"));
@@ -339,6 +341,11 @@ export function createModel(initial: State) {
     setDecisionActivity: (on: boolean) => {
       setDecisionActivity(on);
       prefs.set("chat-decisions", on);
+    },
+    advance,
+    setAdvance: (on: boolean) => {
+      setAdvance(on);
+      prefs.set("decision-advance", on);
     },
     chatAvailable,
     chatWritable,

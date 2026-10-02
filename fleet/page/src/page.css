@@ -555,6 +555,7 @@
   .dv-queue { display: grid; gap: 10px; }
   .dv-queue-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
   .dv-queue .btn[aria-disabled] { color: var(--faint); cursor: default; }
+  .dv-queue-row .switch { margin-left: auto; }
   .dv-fleet { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: -10px; }
   .dv-embed { display: block; width: 100%; height: 70dvh; border: 0; background: transparent; }
   html.embed .dv { max-width: none; padding: 2px 2px 8px; }

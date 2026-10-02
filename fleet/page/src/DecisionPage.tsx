@@ -4,12 +4,13 @@
  * The answer's form is built once per decision and shape, so a half-written answer survives every update
  * of the state; it is also kept in this browser per decision and revision, and put back when the form is
  * built again. On a manager's page, another fleet's decision is that fleet's own page in a frame (`?embed=1`),
- * and the page walks what waits on the user: previous, next, and what comes next once one is answered.
+ * and the page walks what waits on the user: previous, next, and once one is answered the next (or, with that
+ * turned off, what comes next).
  */
 import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { For, Match, Show, Switch, type JSX } from "@solidjs/web";
 
-import { listen, PillAs, RefTag, usePage, Who } from "./bits.tsx";
+import { listen, PillAs, RefTag, tf, usePage, Who } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
 import { Core, type Decision, type GrillEntry, type JsonRecord, type Queue } from "./core.ts";
 import { DecisionThread } from "./DecisionThread.tsx";
@@ -879,11 +880,15 @@ function QueueTitle(props: { readonly id: string }): JSX.Element {
   );
 }
 
-/** Previous and next among what waits on the user, and once the decision shown is answered, what comes next. */
+/**
+ * Previous and next among what waits on the user, and once the decision shown is answered, the next (said
+ * there with the one answered, which Previous goes back to) or, turned off or with nothing next, what comes next.
+ */
 function QueueNav(): JSX.Element {
   const { m, ui } = usePage();
   const q = (): Queue => m.queue();
-  const done = (): boolean => Boolean(m.viewing()) && ui.answered() === m.viewing();
+  const done = (): boolean => Boolean(m.viewing()) && ui.answered() === m.viewing() && ui.advancedFrom() !== m.viewing();
+  const from = (): string | null => (done() || ui.advancedFrom() === m.viewing() ? null : ui.advancedFrom());
   const [next, setNext] = createSignal<HTMLAnchorElement>();
 
   createEffect(
@@ -916,10 +921,23 @@ function QueueNav(): JSX.Element {
           </Show>
         </p>
       </Show>
+      <Show when={from()}>
+        {(id) => (
+          <p class="note decided" role="status" id="dv-advanced">
+            <span>
+              Answered <QueueTitle id={id()} />.
+            </span>
+          </p>
+        )}
+      </Show>
       <div class="dv-queue-row">
-        {step(q().prev, "Previous", "prev")}
+        {step(from() ?? q().prev, "Previous", "prev")}
         <span class="dv-meta">{q().at ? `${q().at} of ${q().ids.length} waiting on you` : `${q().ids.length} waiting on you`}</span>
         {step(q().next, "Next", "next")}
+        <button type="button" class="switch" id="dv-advance" role="switch" aria-checked={tf(m.advance())} onClick={() => m.setAdvance(!m.advance())}>
+          <span class="switch-track" aria-hidden="true" />
+          Go to the next once answered
+        </button>
       </div>
     </nav>
   );

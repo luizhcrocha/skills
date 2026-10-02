@@ -498,6 +498,8 @@ export function createUi(m: Model) {
   const [answered, setAnswered] = createSignal<string | null>(null);
   let shownId: string | null = null;
   let shownWaited = false;
+  /** The decision answered that the page went on from, said on the one it went to until the user moves on. */
+  const [advancedFrom, setAdvancedFrom] = createSignal<string | null>(null);
 
   /* Answered here, in a fleet's page inside this one, or anywhere the next state tells of: it left the queue while shown. */
   createEffect(
@@ -511,6 +513,15 @@ export function createUi(m: Model) {
       shownWaited = now.waits;
     },
   );
+
+  /* Once the decision shown is answered, the page goes on to the next that waits, when asked to and there is one. */
+  createEffect(answered, (id) => {
+    const next = m.queue().next;
+
+    if (!id || id !== m.viewing() || !next || !m.advance()) return;
+    setAdvancedFrom(id);
+    location.hash = Core.decisionHref(next);
+  });
 
   /* Opening a decision's page records the revision seen; a revision since the last look is said. */
   createEffect(
@@ -566,6 +577,9 @@ export function createUi(m: Model) {
     const place = id ? "decision/" + id : at.view;
 
     if (id && was !== id) setChangedNote(null);
+
+    /* The going-on itself leaves the decision answered; leaving the one it landed on, any way, ends the note. */
+    if (was !== id && was !== advancedFrom()) setAdvancedFrom(null);
     m.setPlace(at);
 
     if (!m.docked() && m.chatOpen()) {
@@ -664,6 +678,7 @@ export function createUi(m: Model) {
     revisionOf,
     answered,
     setAnswered,
+    advancedFrom,
     picked,
     setPicked,
     toolAt,

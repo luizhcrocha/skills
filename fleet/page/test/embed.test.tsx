@@ -1,8 +1,8 @@
 /**
  * Working through what waits on the user from the manager's page: a fleet's decision opens on the manager's
  * own decision page, as that fleet's page in a frame (`?embed=1`); the frame shows the decision alone and
- * tells the manager its height and an answer sent; the manager steps to the previous and next, and says
- * what comes next once one is answered. Run in happy-dom.
+ * tells the manager its height and an answer sent; the manager steps to the previous and next, and once one
+ * is answered goes on to the next (or, with that turned off, says what comes next). Run in happy-dom.
  */
 import { afterEach, expect, test } from "bun:test";
 import { flush } from "solid-js";
@@ -74,6 +74,21 @@ function go(hash: string): void {
   flush();
 }
 
+/** The page once the hash changes and the posts made settle, as a browser runs them after the event. */
+async function settle(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 0));
+  flush();
+}
+
+/** The switch "Go to the next once answered", turned off. */
+function stayOnAnswer(): void {
+  const toggle = root.querySelector<HTMLButtonElement>("#dv-advance");
+  expect(toggle?.getAttribute("aria-checked")).toBe("true");
+  toggle?.click();
+  flush();
+  expect(toggle?.getAttribute("aria-checked")).toBe("false");
+}
+
 afterEach(async () => {
   await new Promise((r) => setTimeout(r, 0));
   dispose?.();
@@ -142,38 +157,114 @@ test("previous and next walk what waits on the user, in the list's order, the ma
   expect(root.querySelector("#dv-info h1")?.textContent).toBe("D1 Which fleet gets the gate first");
 });
 
-test("an answer sent in the frame says what comes next, with Next focused, and stays on the page", () => {
+test("an answer sent in the frame goes on to the next, says which was answered, and Previous goes back to it", async () => {
   open("/f/manager/", managerView(NOW));
   go("#decision/billing/d1");
+  arrive({ fleetEmbed: true, answered: "d2" }, frame()?.contentWindow);
+  await settle();
+  expect(location.hash).toBe("#decision/billing/d1");
+  arrive({ fleetEmbed: true, answered: "d1" }, frame()?.contentWindow);
+  expect(root.querySelector("#dv-answered")).toBeNull();
+  await settle();
+  expect(location.hash).toBe("#decision/d9");
+  expect(page.m.viewing()).toBe("d9");
+  expect(root.querySelector("#dv-advanced")?.textContent).toBe("Answered D1 Rounding rule for totals in billing.");
+  expect(root.querySelector("#dv-advanced")?.getAttribute("role")).toBe("status");
+  expect(root.querySelector("#dv-answered")).toBeNull();
+  expect(document.activeElement).toBe(root.querySelector("#decision"));
+  expect(queueHref("prev")).toBe("#decision/billing/d1");
+  go("#decision/billing/d1");
+  expect(root.querySelector("#dv-advanced")).toBeNull();
+});
+
+test("going to another decision by any other way clears the note of the one answered", async () => {
+  open("/f/manager/", managerView(NOW));
+  go("#decision/billing/d1");
+  arrive({ fleetEmbed: true, answered: "d1" }, frame()?.contentWindow);
+  await settle();
+  expect(root.querySelector("#dv-advanced")).not.toBeNull();
+  go("#decisions");
+  go("#decision/d9");
+  expect(root.querySelector("#dv-advanced")).toBeNull();
+});
+
+test("turned off, an answer sent in the frame says what comes next, with Next focused, and stays on the page", async () => {
+  open("/f/manager/", managerView(NOW));
+  go("#decision/billing/d1");
+  stayOnAnswer();
   arrive({ fleetEmbed: true, answered: "d2" }, frame()?.contentWindow);
   expect(root.querySelector("#dv-answered")).toBeNull();
   arrive({ fleetEmbed: true, answered: "d1" }, frame()?.contentWindow);
   expect(root.querySelector("#dv-answered")?.textContent).toBe("Answered. Next: D1 Which fleet gets the gate first");
   expect(document.activeElement).toBe(root.querySelector('#dv-queue a[data-queue="next"]'));
+  await settle();
   expect(location.hash).toBe("#decision/billing/d1");
+  expect(root.querySelector("#dv-advanced")).toBeNull();
 });
 
-test("a fleet's decision that leaves the queue on the next state is answered too", () => {
-  const view = managerView(NOW);
-  open("/f/manager/", view);
-  go("#decision/billing/d1");
+/** The manager's view with billing's d1 answered, as the next state tells it. */
+function billingAnswered(view: View): string {
   const billing = Core.parseState(view)?.coordinators.find((c) => c.id === "billing");
   const d1 = { ...billing?.decisions[0], answered: new Date(NOW).toISOString() };
   // SAFETY: the fixture's coordinators are records, as managerView writes them.
   const coordinators = view["coordinators"] as View[];
-  const answered = coordinators.map((c) => (c["id"] === "billing" ? { ...c, decisions: [d1] } : c));
-  page.m.takeState(JSON.stringify({ ...view, coordinators: answered }));
+
+  return JSON.stringify({ ...view, coordinators: coordinators.map((c) => (c["id"] === "billing" ? { ...c, decisions: [d1] } : c)) });
+}
+
+test("a fleet's decision that leaves the queue on the next state goes on to the next", async () => {
+  const view = managerView(NOW);
+  open("/f/manager/", view);
+  go("#decision/billing/d1");
+  page.m.takeState(billingAnswered(view));
+  flush();
+  await settle();
+  expect(location.hash).toBe("#decision/d9");
+  expect(root.querySelector("#dv-advanced")?.textContent).toBe("Answered D1 Rounding rule for totals in billing.");
+  expect(document.activeElement).toBe(root.querySelector("#decision"));
+  expect(queueHref("prev")).toBe("#decision/billing/d1");
+});
+
+test("turned off, a fleet's decision that leaves the queue on the next state is answered too", async () => {
+  const view = managerView(NOW);
+  open("/f/manager/", view);
+  go("#decision/billing/d1");
+  stayOnAnswer();
+  page.m.takeState(billingAnswered(view));
   flush();
   expect(root.querySelector("#dv-answered")?.textContent).toBe("Answered. Next: D1 Which fleet gets the gate first");
   expect(queueLine()).toBe("1 waiting on you");
+  await settle();
+  expect(location.hash).toBe("#decision/billing/d1");
   go("#decision/d9");
   expect(root.querySelector("#dv-answered")).toBeNull();
+});
+
+test("going on is a setting kept in this browser, on unless turned off", () => {
+  open("/f/manager/", managerView(NOW));
+  expect(page.m.advance()).toBe(true);
+  go("#decision/billing/d1");
+  stayOnAnswer();
+  dispose?.();
+  root.remove();
+  root = document.createElement("div");
+  document.body.append(root);
+  const state = Core.parseState(managerView(NOW));
+
+  if (!state) throw new Error("the fixture is not a state");
+  dispose = render(() => <App state={state} live={false} expose={(p) => (page = p)} />, root);
+  flush();
+  expect(page.m.advance()).toBe(false);
+  page.ui.route();
+  flush();
+  expect(root.querySelector("#dv-advance")?.getAttribute("aria-checked")).toBe("false");
 });
 
 test("a fleet's decision answered and then gone from the next state keeps Next on the one that followed it", () => {
   const view = withFleet(managerView(NOW), "infra", [INFRA_D4]);
   open("/f/manager/", view);
   go("#decision/infra/d4");
+  stayOnAnswer();
   expect(queueLine()).toBe("2 of 3 waiting on you");
   arrive({ fleetEmbed: true, answered: "d4" }, frame()?.contentWindow);
   page.m.takeState(JSON.stringify(withFleet(view, "infra", [])));
@@ -190,6 +281,7 @@ test("the manager's own decision, answered and then decided, keeps Next on the o
   const own = view["decisions"] as View[];
   open("/f/manager/", { ...view, decisions: [...own, d8] });
   go("#decision/d9");
+  stayOnAnswer();
   root.querySelector<HTMLInputElement>('#dv-answer input[name="choice"][value="a"]')?.click();
   root.querySelector<HTMLFormElement>("#dv-answer form")?.requestSubmit();
   await new Promise((r) => setTimeout(r, 0));
@@ -230,6 +322,9 @@ test("the manager's own decision answered on its page says nothing else waits wh
   expect(posted).toHaveLength(1);
   expect(root.querySelector("#dv-answered")?.textContent).toBe("Answered. Nothing else waits on you.");
   expect(toParent).toEqual([]);
+  await settle();
+  expect(location.hash).toBe("#decision/d9");
+  expect(root.querySelector("#dv-advanced")).toBeNull();
 });
 
 test("embedded, a fleet's page is its decision alone, tells its height, and tells the manager of an answer", async () => {
