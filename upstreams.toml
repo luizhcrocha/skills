@@ -25,7 +25,7 @@
 url = "https://github.com/mattpocock/skills.git"
 base = "d81f3a183412e71a5b1e84ca21bc1a35eea03a60"
 units = ["skills/*/*"]
-# Repo plumbing, and bucket READMEs (ours, per CLAUDE.md), are never synced.
+# Repo plumbing, and bucket READMEs (ours, per AGENTS.md), are never synced.
 ignore = [
   ".*", "AGENTS.md", "CHANGELOG.md", "CLAUDE.md", "LICENSE", "README.md",
   "docs", "package.json", "package-lock.json", "scripts", "skills/*/README.md",
