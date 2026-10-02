@@ -482,6 +482,17 @@ class HeartbeatTest(HookCase):
         self.assertSilent(self.hook("Stop", {**self.base("Stop"), "scratchpad_dir": str(self.pad)}))
         self.assertEqual((self.beats()["sess-1.json"]["event"], self.beats()["sess-1.json"]["tool"]), ("Stop", "Grep"))
 
+    def test_the_project_dir_is_written_when_absolute(self):
+        project = self.tmp / "project"
+        self.hook("PostToolUse", self.tool(), env={"CLAUDE_PROJECT_DIR": str(project)})
+        beat = self.beats()["sess-1.json"]
+        self.assertEqual((beat["project"], beat["cwd"]), (str(project), str(self.repo)))
+        for given in ("relative/project", ""):
+            self.hook("PostToolUse", self.tool(), env={"CLAUDE_PROJECT_DIR": given})
+            self.assertNotIn("project", self.beats()["sess-1.json"], given)
+        self.hook("PostToolUse", self.tool())
+        self.assertNotIn("project", self.beats()["sess-1.json"])
+
     def test_fleet_dir_and_fleet_worker_name_a_worker_launched_on_its_own(self):
         other = self.tmp / "elsewhere" / "fleet"
         other.mkdir(parents=True)

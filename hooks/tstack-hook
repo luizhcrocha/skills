@@ -340,7 +340,10 @@ def fleet_heartbeat(hook):
         "tool": text("tool_name"), "event": hook.event, "at": fleet_stamp(hook.env),
         "transcript": text("transcript_path"), "agent_transcript": text("agent_transcript_path"),
     }
-    name = re.sub(r"[^A-Za-z0-9_.-]", "_", hook.session_id + (f".{agent}" if agent else ""))
+    project = hook.env.get("CLAUDE_PROJECT_DIR")
+    if project and os.path.isabs(project):
+        beat["project"] = project
+    name =re.sub(r"[^A-Za-z0-9_.-]", "_", hook.session_id + (f".{agent}" if agent else ""))
     for d in dirs:
         folder = Path(d) / "heartbeats"
         folder.mkdir(exist_ok=True)
