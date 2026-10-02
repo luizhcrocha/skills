@@ -335,7 +335,8 @@ export interface State {
   readonly fleet?: string;
   readonly fleets?: readonly string[];
   readonly coordinators: readonly Coordinator[];
-  readonly usage: { readonly [window: string]: UsageWindow | undefined } | null;
+  /** The account whose session captured last: its email (`account`, null when not recorded), `seen`, its windows, and `others`, the same for each other account. */
+  readonly usage: JsonRecord | null;
   readonly gate: { readonly fleet: string; readonly what: string; readonly since: string } | null;
   readonly spent: Spent | null;
   readonly hearing: Hearing | null;
@@ -1665,16 +1666,17 @@ function toastOf<T extends { readonly important?: boolean }>(pending: readonly T
   return { shown, more: pending.length - 1, sticky: urgent.length > 0 };
 }
 
-/** The usage windows the page shows, with their labels. */
-const WINDOWS: readonly (readonly [string, string])[] = [
-  ["five_hour", "Session, 5 hours"],
-  ["seven_day", "Week, 7 days"],
+/** The usage windows the page shows, with their labels and, for another account's line, their short names. */
+const WINDOWS: readonly (readonly [string, string, string])[] = [
+  ["five_hour", "Session, 5 hours", "session"],
+  ["seven_day", "Week, 7 days", "week"],
 ];
 
 /** A usage window as the page shows it. */
 export interface UsageRow {
   readonly key: string;
   readonly label: string;
+  readonly short: string;
   readonly percent: number;
   readonly tone: string;
   readonly reset: boolean;
@@ -1684,22 +1686,51 @@ export interface UsageRow {
 
 /**
  * The plan's usage as the status line last saw it, one row per window: how full it is, when it resets, when
- * it was read. A window that reset since the reading starts again from nothing.
+ * it was read. A window that reset since the reading starts again from nothing. `usage` is the account whose
+ * session captured last (its windows at the top), or one of the others.
  */
-function usageOf(usage: State["usage"] | null | undefined, now: number): UsageRow[] {
+function usageOf(usage: Json | undefined, now: number): UsageRow[] {
   const rows: UsageRow[] = [];
 
-  for (const [key, label] of WINDOWS) {
-    const r = usage?.[key];
+  if (!isRow(usage)) return rows;
 
-    if (!r || !Number.isFinite(r.used_percentage) || !Number.isFinite(r.resets_at)) continue;
-    const resetsAt = Number(r.resets_at) * 1000;
+  for (const [key, label, short] of WINDOWS) {
+    const r = usage[key];
+
+    if (!isRow(r) || !Number.isFinite(r["used_percentage"]) || !Number.isFinite(r["resets_at"])) continue;
+    const resetsAt = Number(r["resets_at"]) * 1000;
     const reset = resetsAt <= now;
-    const percent = reset ? 0 : Math.max(0, Math.min(100, Math.round(Number(r.used_percentage))));
-    rows.push({ key, label, percent, tone: percent >= 90 ? "critical" : percent >= 75 ? "warning" : "ok", reset, resetsAt, readAt: Number.isFinite(r.at) ? Number(r.at) * 1000 : 0 });
+    const percent = reset ? 0 : Math.max(0, Math.min(100, Math.round(Number(r["used_percentage"]))));
+    const readAt = Number.isFinite(r["at"]) ? Number(r["at"]) * 1000 : 0;
+    rows.push({ key, label, short, percent, tone: percent >= 90 ? "critical" : percent >= 75 ? "warning" : "ok", reset, resetsAt, readAt });
   }
 
   return rows;
+}
+
+/** Whose the reading is: the email of the account whose session captured last, or null when not recorded. */
+function usageAccountOf(usage: Json | undefined): string | null {
+  return isRow(usage) && isText(usage["account"]) && usage["account"] !== "" ? usage["account"] : null;
+}
+
+/** Another account's reading: its email (null when not recorded) and its windows that have not reset. */
+export interface UsageOther {
+  readonly account: string | null;
+  readonly rows: readonly UsageRow[];
+}
+
+/**
+ * The other accounts with a reading inside a window, in the order sent (the latest first): a window that
+ * reset says nothing of now, and an account with none left is left out.
+ */
+function usageOthersOf(usage: Json | undefined, now: number): UsageOther[] {
+  const others = isRow(usage) && Array.isArray(usage["others"]) ? usage["others"] : [];
+
+  return others.flatMap((o: Json) => {
+    const rows = usageOf(o, now).filter((r) => !r.reset);
+
+    return isRow(o) && rows.length ? [{ account: isText(o["account"]) ? o["account"] : null, rows }] : [];
+  });
 }
 
 /** The notification settings, each off, important or all, and who they are about. */
@@ -1723,6 +1754,8 @@ export const Core = {
   hostOf,
   rosterOf,
   usageOf,
+  usageAccountOf,
+  usageOthersOf,
   mentionAt,
   filterRoster,
   insertMention,

@@ -34,7 +34,7 @@ import { pageHtml, readTemplate, writePage } from "../page/render.ts";
 import { view } from "../page/view.ts";
 import { ancestry, exeOf, isClaudeBinary, nameOf } from "../procs.ts";
 import { spentBy } from "../transcripts.ts";
-import { keepUsage, usageLines } from "../usage.ts";
+import { accountOf, keepUsage, usageLines } from "../usage.ts";
 import { secondsNow, World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 
@@ -236,7 +236,9 @@ function usage(machine: Machine, argv: readonly string[]): Effect.Effect<number,
 
     try {
       given = Buffer.from(yield* Effect.promise(() => Bun.stdin.arrayBuffer()));
-      keepUsage(home, asObject(Option.getOrUndefined(parseJson(given.toString("utf8"))))?.["rate_limits"], secondsNow(machine), process.pid);
+      const limits = asObject(Option.getOrUndefined(parseJson(given.toString("utf8"))))?.["rate_limits"];
+
+      if (limits !== undefined) keepUsage(home, limits, secondsNow(machine), process.pid, accountOf(machine.env));
     } catch {
       // the status line comes first: nothing here may stop it
     }

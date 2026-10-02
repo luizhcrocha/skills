@@ -339,13 +339,28 @@ test("usageOf: each window the status line saw, how full it is, and whether it h
   const rows = Core.usageOf({ five_hour: { used_percentage: 42.4, resets_at: s("2026-09-29T01:00:00Z"), at: s("2026-09-28T21:59:30Z") },
     seven_day: { used_percentage: 91, resets_at: s("2026-10-05T21:00:00Z"), at: s("2026-09-28T21:50:00Z") } }, now);
   assert.deepEqual(rows, [
-    { key: "five_hour", label: "Session, 5 hours", percent: 42, tone: "ok", reset: false, resetsAt: Date.parse("2026-09-29T01:00:00Z"), readAt: Date.parse("2026-09-28T21:59:30Z") },
-    { key: "seven_day", label: "Week, 7 days", percent: 91, tone: "critical", reset: false, resetsAt: Date.parse("2026-10-05T21:00:00Z"), readAt: Date.parse("2026-09-28T21:50:00Z") }]);
+    { key: "five_hour", label: "Session, 5 hours", short: "session", percent: 42, tone: "ok", reset: false, resetsAt: Date.parse("2026-09-29T01:00:00Z"), readAt: Date.parse("2026-09-28T21:59:30Z") },
+    { key: "seven_day", label: "Week, 7 days", short: "week", percent: 91, tone: "critical", reset: false, resetsAt: Date.parse("2026-10-05T21:00:00Z"), readAt: Date.parse("2026-09-28T21:50:00Z") }]);
   assert.equal(Core.usageOf({ five_hour: { used_percentage: 80, resets_at: s("2026-09-29T01:00:00Z"), at: 1 } }, now)[0].tone, "warning");
   const past = Core.usageOf({ five_hour: { used_percentage: 97, resets_at: s("2026-09-28T21:00:00Z"), at: s("2026-09-28T20:00:00Z") } }, now);
   assert.deepEqual([past[0].reset, past[0].tone, past[0].percent], [true, "ok", 0], "a window that reset since the reading starts again from nothing");
   for (const none of [null, undefined, {}, { five_hour: "soon" }, { five_hour: { used_percentage: "many", resets_at: 1 } }]) assert.deepEqual(Core.usageOf(none, now), []);
   assert.equal(Core.usageOf({ five_hour: { used_percentage: 140, resets_at: s("2026-09-29T01:00:00Z"), at: 1 } }, now)[0].percent, 100);
+});
+
+test("usageOthersOf: the other accounts' windows that have not reset, each account once, as sent", () => {
+  const now = Date.parse("2026-09-28T22:00:00Z"), s = (iso) => Date.parse(iso) / 1000;
+  const usage = { account: "home@example.com", seen: s("2026-09-28T21:59:00Z"), seven_day: { used_percentage: 30, resets_at: s("2026-10-05T21:00:00Z"), at: 1 },
+    others: [
+      { account: "work@example.com", seen: s("2026-09-28T14:00:00Z"), five_hour: { used_percentage: 41, resets_at: s("2026-09-28T21:00:00Z"), at: 1 }, seven_day: { used_percentage: 100, resets_at: s("2026-10-01T09:00:00Z"), at: 1 } },
+      { account: null, seen: 5, seven_day: { used_percentage: 64, resets_at: s("2026-10-02T09:00:00Z"), at: 1 } },
+      { account: "gone@example.com", seen: 4, five_hour: { used_percentage: 90, resets_at: s("2026-09-28T20:00:00Z"), at: 1 } }] };
+  assert.deepEqual(Core.usageOf(usage, now).map((r) => [r.key, r.percent]), [["seven_day", 30]], "the account that worked last is the main reading");
+  assert.deepEqual([Core.usageAccountOf(usage), Core.usageAccountOf(usage.others[1]), Core.usageAccountOf({ five_hour: {} }), Core.usageAccountOf(null)], ["home@example.com", null, null, null]);
+  assert.deepEqual(Core.usageOthersOf(usage, now).map((o) => [o.account, o.rows.map((r) => [r.key, r.percent, r.tone])]), [
+    ["work@example.com", [["seven_day", 100, "critical"]]],
+    [null, [["seven_day", 64, "ok"]]]], "a window that reset says nothing of now, and an account with none left is left out");
+  for (const none of [null, undefined, {}, usage.others[0], { others: "x" }, { others: [null, 3] }]) assert.deepEqual(Core.usageOthersOf(none, now), []);
 });
 
 test("parseState: what a coordinator itself spent is four figures, or none", () => {

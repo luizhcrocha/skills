@@ -52,6 +52,7 @@ How a row was checked:
 | A row: number, title, state pills (grilling count, answered and not read, with the manager, blocks work), new/changed mark, kind, fleet; question or decision; origin, why, asked/changed/closed | core; shot |
 | Totals: a fleet's and a manager's figures, alert colours, tooltips, spend | shot (both roles) |
 | Plan usage meters on a manager's page, reset and read times | core (`usageOf`); shot (manager) |
+| **changed (2026-10-02)** Plan usage per account: the meters are the account whose session captured last, named above them ("Account not recorded" for a reading from before accounts or a session with no login); below, one muted line per other account still inside a window (`work@example.com: week 100%`). For Luiz: the page said 7-day 100% from another login's session while the account in use was not full | core (`usageOf`, `usageOthersOf`); dom `usage.test.tsx`; shot (manager) |
 
 ## Decision's page
 

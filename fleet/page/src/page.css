@@ -214,6 +214,8 @@
   .usage-row.warning .meter span { background: var(--warning); }
   .usage-row.critical .meter span { background: var(--critical); }
   .usage-row .meta, .usage-note { grid-column: 1 / -1; font-size: var(--fs-s); color: var(--muted); }
+  .usage-account { font-weight: 600; font-stretch: var(--narrow); overflow-wrap: anywhere; }
+  .usage-other { font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
 
   /* a manager's fleets: one strip per coordinator */
   .strip { display: grid; gap: 3px; padding: 12px 14px 12px 13px; border-left: 4px solid var(--c, var(--line)); }

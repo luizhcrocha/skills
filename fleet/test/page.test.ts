@@ -13,7 +13,7 @@ import { mentionedBy } from "../src/hub/served.ts";
 import { asArray, asObject, type Json, type JsonObject } from "../src/json.ts";
 import { cliLookups } from "../src/page/lookups.ts";
 import { unlisted, view, type Found } from "../src/page/view.ts";
-import type { Entry } from "../src/registry.ts";
+import { readObject, type Entry } from "../src/registry.ts";
 import { SpendReader } from "../src/transcripts.ts";
 import { readUsage } from "../src/usage.ts";
 import { baseEnv, machine, spawnFleet, tmp, type Environment, type Ran } from "./support.ts";
@@ -306,11 +306,44 @@ describe("the plan's usage", () => {
     return JSON.stringify({ ...Object.fromEntries(line), ...rest });
   }
 
-  function capture(stdin: string, ...command: string[]): Ran {
-    const done = Bun.spawnSync([join(import.meta.dir, "..", "bin", "fleet"), "usage", "capture", "--", ...command], { env, stdin: Buffer.from(stdin), stdout: "pipe", stderr: "pipe" });
+  function captureAs(config: string, stdin: string, ...command: string[]): Ran {
+    const done = Bun.spawnSync([join(import.meta.dir, "..", "bin", "fleet"), "usage", "capture", "--", ...command], {
+      env: { ...env, CLAUDE_CONFIG_DIR: config },
+      stdin: Buffer.from(stdin),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
 
     return { code: done.exitCode ?? -1, stdout: done.stdout.toString(), stderr: done.stderr.toString() };
   }
+
+  function capture(stdin: string, ...command: string[]): Ran {
+    return captureAs(join(base, "config"), stdin, ...command);
+  }
+
+  /** A config directory whose `.claude.json` says who is logged in, as Claude Code writes it. */
+  function login(name: string, email: string): string {
+    const config = join(base, name);
+    mkdirSync(config, { recursive: true });
+    const account = { accountUuid: `uuid-${name}`, emailAddress: email, organizationUuid: `org-${name}`, organizationName: `${email}'s Organization` };
+    writeFileSync(join(config, ".claude.json"), JSON.stringify({ numStartups: 3, oauthAccount: account, projects: {} }));
+
+    return config;
+  }
+
+  const readingFile = (): string => join(home(), "usage", "reading.json");
+
+  /** The page's reading and then each other account's: what `window` is at in each. */
+  const percents = (held: JsonObject | undefined, window: string): Json[] =>
+    [held, ...(asArray(held?.["others"]) ?? [])].map((r) => asObject(asObject(r)?.[window])?.["used_percentage"] ?? null);
+
+  /** The page's reading and then each other account's: who each is. */
+  const accounts = (held: JsonObject | undefined): Json[] =>
+    [held, ...(asArray(held?.["others"]) ?? [])].map((r) => {
+      const name = asObject(r)?.["account"];
+
+      return name === undefined ? "absent" : name;
+    });
 
   const used = (window: string): Json | undefined => asObject(readUsage(home())?.[window])?.["used_percentage"];
 
@@ -363,6 +396,70 @@ describe("the plan's usage", () => {
     capture(status({ used_percentage: 42, resets_at: SOON }), "true");
     expect(asObject(asObject(viewOf({ project: "p", role: "manager" }, home())["usage"])?.["five_hour"])?.["used_percentage"]).toBe(42);
     expect(viewOf({ project: "p" }, home())["usage"]).toBeUndefined();
+  });
+
+  test("the page shows the account that worked last, and the others below it", () => {
+    const work = login("work", "work@example.com");
+    const away = login("home", "home@example.com");
+    captureAs(work, status({ used_percentage: 40, resets_at: SOON }, { used_percentage: 100, resets_at: LATER }), "true");
+    captureAs(away, status({ used_percentage: 12, resets_at: SOON + 600 }, { used_percentage: 30, resets_at: LATER + 600 }), "true");
+    const held = readUsage(home());
+    expect(accounts(held)).toEqual(["home@example.com", "work@example.com"]);
+    expect(percents(held, "seven_day")).toEqual([30, 100]);
+    expect(percents(held, "five_hour")).toEqual([12, 40]);
+    captureAs(work, status({ used_percentage: 41, resets_at: SOON }, { used_percentage: 100, resets_at: LATER }), "true");
+    expect(accounts(readUsage(home()))).toEqual(["work@example.com", "home@example.com"]);
+  });
+
+  test("within one account usage only grows", () => {
+    const work = login("work", "work@example.com");
+    captureAs(work, status(undefined, { used_percentage: 30, resets_at: LATER }), "true");
+    captureAs(work, status(undefined, { used_percentage: 20, resets_at: LATER }), "true");
+    expect(percents(readUsage(home()), "seven_day")).toEqual([30]);
+  });
+
+  test("the file before accounts reads as an account not recorded, and is kept as one", () => {
+    mkdirSync(join(home(), "usage"), { recursive: true });
+    const flat = { five_hour: { used_percentage: 40, resets_at: SOON, at: SOON - 4000 }, seven_day: { used_percentage: 100, resets_at: LATER, at: SOON - 9000 } };
+    writeFileSync(readingFile(), JSON.stringify(flat));
+    const held = readUsage(home());
+    expect([held?.["account"], held?.["seen"], percents(held, "five_hour"), percents(held, "seven_day"), held?.["others"]]).toEqual([null, SOON - 4000, [40], [100], []]);
+    captureAs(login("home", "home@example.com"), status({ used_percentage: 5, resets_at: SOON + 600 }, { used_percentage: 30, resets_at: LATER + 600 }), "true");
+    const after = readUsage(home());
+    expect([accounts(after), percents(after, "seven_day")]).toEqual([["home@example.com", null], [30, 100]]);
+    const kept = readObject(readingFile());
+    expect(Object.keys(kept ?? {})).toEqual(["accounts"]);
+    expect(Object.keys(asObject(kept?.["accounts"]) ?? {})).toEqual(["uuid-home:org-home", "unknown"]);
+  });
+
+  test("a session with no login is an account not recorded; an unreadable login keeps nothing", () => {
+    capture(status({ used_percentage: 9, resets_at: SOON }), "true");
+    expect([accounts(readUsage(home())), percents(readUsage(home()), "five_hour")]).toEqual([[null], [9]]);
+    const broken = join(base, "broken");
+    mkdirSync(broken, { recursive: true });
+    writeFileSync(join(broken, ".claude.json"), '{"oauthAccount": {"accountUu');
+    expect(captureAs(broken, status({ used_percentage: 70, resets_at: SOON }), "echo", "ok")).toEqual({ code: 0, stdout: "ok\n", stderr: "" });
+    expect(percents(readUsage(home()), "five_hour")).toEqual([9]);
+  });
+
+  test("another account whose windows have all reset is dropped", () => {
+    mkdirSync(join(home(), "usage"), { recursive: true });
+    const past = Math.trunc(Date.now() / 1000) - 60;
+    writeFileSync(readingFile(), JSON.stringify({ accounts: { gone: { email: "gone@example.com", seen: past - 9000, five_hour: { used_percentage: 99, resets_at: past, at: past - 9000 } } } }));
+    captureAs(login("home", "home@example.com"), status({ used_percentage: 5, resets_at: SOON }), "true");
+    expect(Object.keys(asObject(readObject(readingFile())?.["accounts"]) ?? {})).toEqual(["uuid-home:org-home"]);
+  });
+
+  test("the CLI names each account", () => {
+    captureAs(login("work", "work@example.com"), status(undefined, { used_percentage: 100, resets_at: LATER }), "true");
+    captureAs(login("home", "home@example.com"), status(undefined, { used_percentage: 30, resets_at: LATER }), "true");
+    const out = spawnFleet(["usage", "show"], env).stdout.split("\n");
+    expect([out[0], out[1]?.slice(0, 26), out[2], out[3]?.slice(0, 27)]).toEqual([
+      "home@example.com, the session that worked last:",
+      "  7-day window: 30% used, ",
+      "work@example.com:",
+      "  7-day window: 100% used, ",
+    ]);
   });
 
   test("the CLI prints what it holds", () => {

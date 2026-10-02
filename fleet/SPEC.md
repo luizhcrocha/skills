@@ -506,7 +506,7 @@ decision (by id), and that some recipient has only here (not every one of them i
 `REGISTRY/<fleet>.json`, one per fleet being served:
 `{id, role (coordinator|manager), dir, url, pid, session, since}`, written atomically (a `.tmp`
 then a rename). `REGISTRY/gate/gate.json` is `{fleet, what, since}`. `REGISTRY/usage/reading.json`
-holds the plan usage. Every read of the registry (`live()`) deletes the entry of a fleet whose
+holds the plan usage per account, `{"accounts": {KEY: {email, seen, five_hour?, seven_day?}}}` (see usage.py). Every read of the registry (`live()`) deletes the entry of a fleet whose
 pid is dead or whose record is malformed. It also renames a fleet whose session got a custom title
 (`<transcript>/custom-title.json`) to the title's slug, unless that is taken or reserved. Names:
 the manager is `manager`; a coordinator is the slug of its session title, else of its project
@@ -579,10 +579,23 @@ at every rendering step.
   wrote its address).
 - **spend.py** `DIR`: `<output> tokens written and <input> read (<cached>% from the cache) in <n> answers`
   from the session transcript, or `no transcript for DIR: …`; exit 1 on bad usage.
-- **usage.py** `capture [-- COMMAND...]` keeps a status line's `rate_limits` (a window's figure
-  replaces the held one when it resets later, or resets at the same time with a higher percentage)
-  in `REGISTRY/usage/reading.json`, then runs COMMAND on the same stdin and exits with its code
-  (127 when it can't run). `show` prints each window.
+- **usage.py** `capture [-- COMMAND...]` keeps a status line's `rate_limits` in
+  `REGISTRY/usage/reading.json` under the account the session is logged in as, then runs COMMAND on
+  the same stdin and exits with its code (127 when it can't run). The status line's input names no
+  account, so the account is read from the session's config: `$CLAUDE_CONFIG_DIR/.claude.json`, else
+  `~/.claude.json` (where Claude Code keeps it), its `oauthAccount` only. KEY is
+  `<accountUuid>:<organizationUuid>` (the organization's plan carries the limits; `<accountUuid>`
+  alone without one), `email` its `emailAddress` or null; a config with no file or no login is
+  `unknown` (email null), and a file there that does not parse keeps nothing. Per account, a window's
+  figure replaces the held one when it resets later, or resets at the same time with a higher
+  percentage (`at`: when it was taken); a window the input leaves out is kept. Every capture with a
+  window sets the account's `seen` and writes it first in `accounts`; another account whose windows
+  have all reset is dropped; the file is written only when its bytes change. The flat file from
+  before accounts (`{five_hour, seven_day}`) reads as `unknown`, `seen` its newest `at`.
+  The manager's view gets `usage`: the account with the highest `seen` (the first on a tie),
+  `{account: email, seen, five_hour?, seven_day?, others: [the same, without others, for every other
+  account, highest seen first]}`, or null. `show` prints each account (`<email>, the session that
+  worked last:` then `<email>:`, `an account not recorded` for null) and its windows indented.
 
 ## The hub (`fleet hub`)
 

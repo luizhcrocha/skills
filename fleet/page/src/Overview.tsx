@@ -347,10 +347,15 @@ function Tiles(): JSX.Element {
   );
 }
 
-/** A manager's page shows the plan's usage, as the status line of whichever session worked last saw it. */
+/**
+ * A manager's page shows the plan's usage, as the status line of whichever session worked last saw it,
+ * named by that session's account; below it, a line for each other account still inside a window.
+ */
 function Usage(): JSX.Element {
   const { m } = usePage();
   const rows = createMemo(() => Core.usageOf(m.state.usage, m.now()));
+  const others = createMemo(() => Core.usageOthersOf(m.state.usage, m.now()));
+  const account = (): string => Core.usageAccountOf(m.state.usage) ?? "Account not recorded";
 
   const until = (r: ReturnType<typeof Core.usageOf>[number]): string =>
     r.reset ? "has reset since this reading" : r.resetsAt - m.now() < 86400e3 ? "resets in " + fmtDur(r.resetsAt - m.now()) : "resets " + dayTime(r.resetsAt);
@@ -369,6 +374,7 @@ function Usage(): JSX.Element {
             </p>
           }
         >
+          <p class="usage-account">{account()}</p>
           <For each={rows()} keyed={(r) => r.key}>
             {(r) => (
               <div class={"usage-row " + r().tone}>
@@ -384,6 +390,13 @@ function Usage(): JSX.Element {
           <Show when={read()}>
             <p class="usage-note">Read {m.ago(new Date(read()).toISOString())}, from the status line of the session that worked last.</p>
           </Show>
+          <For each={others()} keyed={(o) => o.account ?? ""}>
+            {(o) => (
+              <p class="usage-other">
+                {o().account ?? "Account not recorded"}: {o().rows.map((r) => `${r.short} ${r.percent}%`).join(", ")}
+              </p>
+            )}
+          </For>
         </Show>
       </div>
     </div>
