@@ -16,7 +16,7 @@ import { fill, lastError } from "../src/preview/devserver.ts";
 import { readRecord, type PreviewRecord } from "../src/preview/record.ts";
 import { isRunning as alive } from "../src/preview/devserver.ts";
 import { SpendReader } from "../src/transcripts.ts";
-import { baseEnv, fleet, machine, readJson, SKILL, sleep, tmp, type Environment } from "./support.ts";
+import { baseEnv, fleet, machine, readJson, SKILL, sleep, spawnFleet, tmp, type Environment } from "./support.ts";
 
 /** The stand-in dev server, told its port and base as a Vite command would be. */
 const STUB = `${process.execPath} ${join(import.meta.dir, "stub-dev.ts")} {port} {base}`;
@@ -438,6 +438,26 @@ describe("root mode", () => {
     expect(status).toContain(`http://127.0.0.2:${pub}/`);
     expect(status).toContain("no secure context");
     expect(status).toContain("no hub runs");
+  });
+});
+
+describe("the dev servers' environment", () => {
+  test("every dev server the preview starts (combined, per-worker, root mode or not) inherits the environment `start` ran in, unchanged", async () => {
+    const cmd = `${process.execPath} ${join(import.meta.dir, "env-dev.ts")} {port} FLEET_TEST_SECRET`;
+    const secret = { ...env, FLEET_TEST_SECRET: "from secretspec run", FLEET_PREVIEW_PORTS: portRange().join("-") };
+    const valueAt = async (port: number | undefined): Promise<string> => (await fetch(`http://127.0.0.1:${String(port ?? 0)}/`)).text();
+
+    const combined = spawnFleet(["preview", dir, "start", "--cmd", cmd], secret);
+    expect([combined.code, combined.stderr]).toEqual([0, ""]);
+    expect(await valueAt(record().server?.port)).toBe("from secretspec run");
+
+    const own = spawnFleet(["preview", dir, "start", "--per-worker", "a1", "--root", "--cmd", cmd], secret);
+    expect([own.code, own.stderr]).toEqual([0, ""]);
+    expect(await valueAt(record().workers.find((w) => w.worker === "a1")?.port)).toBe("from secretspec run");
+
+    expect(spawnFleet(["preview", dir, "stop"], secret).code).toBe(0);
+    expect(spawnFleet(["preview", dir, "start", "--root", "--cmd", cmd], secret).code).toBe(0);
+    expect(await valueAt(record().server?.port)).toBe("from secretspec run");
   });
 });
 
