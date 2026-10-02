@@ -10,8 +10,14 @@
  */
 import { isLoopback, isTailnetIp } from "./tailnet.ts";
 
-/** Most bytes a posted message may have. */
-export const MAX_POST_BYTES = 16 * 1024;
+/** Most bytes a posted message may have: the session's chat watch prints each message into an agent's
+ * context, and 256 KiB (about 64k tokens) is the most one message should cost. */
+export const MAX_POST_BYTES = 256 * 1024;
+
+/** What a 413 says of a post of `bytes`: how big it is, the most it may be, and what to do instead. */
+export function tooBig(bytes: number): string {
+  return `This message is ${Math.ceil(bytes / 1024)} KiB; the most a message can be is ${MAX_POST_BYTES / 1024} KiB. Shorten it, or put the long part in a file and give its path.`;
+}
 
 /** Who sent a request. */
 export interface Viewer {
@@ -60,12 +66,15 @@ export function writerRefusal(owner: string | undefined, viewer: Viewer): string
   return undefined;
 }
 
-/** The stream's first event: whether this viewer may write, and who they are. */
-export function hello(owner: string | undefined, viewer: Viewer): { readonly write: boolean; readonly reason?: string; readonly you?: string } {
+/** The stream's first event: whether this viewer may write, who they are, and the most bytes a post may have. */
+export function hello(
+  owner: string | undefined,
+  viewer: Viewer,
+): { readonly write: boolean; readonly reason?: string; readonly you?: string; readonly max_bytes: number } {
   const denied = writerRefusal(owner, viewer);
   const you = viewer.login === undefined ? {} : { you: viewer.login };
 
-  return denied === undefined ? { write: true, ...you } : { write: false, reason: denied, ...you };
+  return denied === undefined ? { write: true, ...you, max_bytes: MAX_POST_BYTES } : { write: false, reason: denied, ...you, max_bytes: MAX_POST_BYTES };
 }
 
 /** Why a post is refused before its body is read, as [status, error], or undefined. */
@@ -92,7 +101,7 @@ export function postRefusal(
 
   if (!/^\d+$/.test(length)) return [400, "bad Content-Length"];
 
-  if (Number(length) > MAX_POST_BYTES) return [413, `a message is at most ${MAX_POST_BYTES / 1024} KiB`];
+  if (Number(length) > MAX_POST_BYTES) return [413, tooBig(Number(length))];
 
   return undefined;
 }

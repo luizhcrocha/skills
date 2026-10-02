@@ -236,7 +236,9 @@ def main(argv: list[str]) -> None:
     start(root, record, existing)
 
 
-MAX_POST_BYTES = 16 * 1024
+# The session's chat watch prints each message into an agent's context: 256 KiB (about 64k tokens) is the
+# most one message should cost.
+MAX_POST_BYTES = 256 * 1024
 FLEET_PATH = re.compile(r"^/f/([A-Za-z0-9_.-]+)(/.*)?$")
 # What a passed-through request carries to the fleet's server: the viewer's tailnet identity, the body's
 # type and length, where a stream resumes. The rest (cookies, the viewer's Host and Origin) stays here.
@@ -259,10 +261,16 @@ def writer_refusal(policy: str, login: str | None) -> str | None:
     return None
 
 
+def too_big(size: int) -> str:
+    """What a 413 says of a post of `size` bytes: how big it is, the most it may be, and what to do instead."""
+    return (f"This message is {-(-size // 1024)} KiB; the most a message can be is {MAX_POST_BYTES // 1024} KiB. "
+            "Shorten it, or put the long part in a file and give its path.")
+
+
 def hello(policy: str, login: str | None) -> dict:
     denied = writer_refusal(policy, login)
     event = {"write": False, "reason": denied} if denied else {"write": True}
-    return {**event, "you": login} if login else event
+    return {**event, **({"you": login} if login else {}), "max_bytes": MAX_POST_BYTES}
 
 
 def post_refusal(policy: str, hosts: set[str], headers) -> tuple[int, str] | None:
@@ -283,7 +291,7 @@ def post_refusal(policy: str, hosts: set[str], headers) -> tuple[int, str] | Non
     if not length.isdigit():
         return 400, "bad Content-Length"
     if int(length) > MAX_POST_BYTES:
-        return 413, f"a message is at most {MAX_POST_BYTES // 1024} KiB"
+        return 413, too_big(int(length))
     return None
 
 

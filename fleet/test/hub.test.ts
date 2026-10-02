@@ -244,7 +244,7 @@ describe("a fleet's chat through the hub", () => {
     const cases: (readonly [number, Answer])[] = [
       [415, await request("POST", "/f/p/chat", '{"text": "hi"}', { "Content-Type": "text/plain" })],
       [403, await post({ text: "hi" }, { Origin: "https://evil.example" })],
-      [413, await post({ text: "x".repeat(17000) })],
+      [413, await post({ text: "x".repeat(300_000) })],
       [400, await post({ text: "  " })],
       [400, await post({ text: "hi", re: 9 })],
       [400, await post("not json")],
@@ -258,6 +258,23 @@ describe("a fleet's chat through the hub", () => {
     }
 
     expect(readChat(root).length).toBe(1);
+  });
+
+  test("a message of 78 KB is taken; one over 256 KiB is a 413 that says how big it is and what to do", async () => {
+    const long = await post({ text: "y".repeat(78_000) });
+    expect([long.status, asString(long.body["text"])?.length]).toEqual([201, 78_000]);
+    const over = await post({ text: "x".repeat(300_000) });
+    expect([over.status, over.body]).toEqual([
+      413,
+      { error: "This message is 293 KiB; the most a message can be is 256 KiB. Shorten it, or put the long part in a file and give its path." },
+    ]);
+    expect(readChat(root).length).toBe(1);
+  });
+
+  test("hello tells the page the most bytes a post may have", async () => {
+    const stream = await Stream.open("/f/p/events");
+    expect(data(await stream.next())).toEqual({ write: true, max_bytes: 256 * 1024 });
+    stream.close();
   });
 
   test("a same-origin post is taken", async () => {
@@ -411,7 +428,7 @@ describe("preview", () => {
       [421, await preview({ text: "hi" }, { Host: "evil.com" })],
       [415, await request("POST", "/f/p/chat/preview", '{"text": "hi"}', { "Content-Type": "text/plain" })],
       [403, await preview({ text: "hi" }, { Origin: "https://evil.example" })],
-      [413, await preview({ text: "x".repeat(17000) })],
+      [413, await preview({ text: "x".repeat(300_000) })],
       [400, await preview({ text: "hi", re: 9 })],
       [400, await preview("not json")],
     ];
@@ -663,7 +680,7 @@ describe("who may write", () => {
     const sent = await post({ text: "hi" });
     expect([sent.status, sent.body["author"]]).toEqual([201, undefined]);
     const stream = await Stream.open("/f/p/events");
-    expect(data(await stream.next())).toEqual({ write: true });
+    expect(data(await stream.next())).toEqual({ write: true, max_bytes: 256 * 1024 });
     stream.close();
   });
 
@@ -680,7 +697,7 @@ describe("who may write", () => {
     const local = await post({ text: "from this machine" });
     expect([local.status, local.body["author"]]).toEqual([201, OWNER]);
     const stream = await Stream.open("/f/p/events", { "Tailscale-User-Login": "eve@example.com" });
-    expect(data(await stream.next())).toEqual({ write: false, reason: `only ${OWNER} can write here`, you: "eve@example.com" });
+    expect(data(await stream.next())).toEqual({ write: false, reason: `only ${OWNER} can write here`, you: "eve@example.com", max_bytes: 256 * 1024 });
     stream.close();
     expect((await request("GET", "/f/p/chat", undefined, { Host: `box.tail.ts.net:${port}` })).status).toBe(200);
   });
@@ -696,7 +713,7 @@ describe("who may write", () => {
       `only ${OWNER} can write here`,
       `only ${OWNER} can write here`,
     ]);
-    expect(hello(OWNER, theirs)).toEqual({ write: false, reason: `only ${OWNER} can write here`, you: "eve@example.com" });
+    expect(hello(OWNER, theirs)).toEqual({ write: false, reason: `only ${OWNER} can write here`, you: "eve@example.com", max_bytes: 256 * 1024 });
     expect(postRefusal(undefined, outside, new Set(), header)?.[0]).toBe(403);
     expect([isTailnetIp("100.64.0.1"), isTailnetIp("100.127.255.1"), isTailnetIp("100.128.0.1"), isTailnetIp("fd7a:115c:a1e0::1"), isTailnetIp("10.0.0.1")]).toEqual([
       true,

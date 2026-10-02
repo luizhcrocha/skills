@@ -546,15 +546,21 @@ at every rendering step.
   read-only. `DIR/server.json` is `{pid, port, url, tls, post}` (`post`: `login:<tailnet login>`,
   or `closed`), and the worker logs to `DIR/server.log`. It registers the fleet, prints the URL,
   and in a coordinator's DIR prints how to reach the manager (`/f/<fleet>/` on the manager's
-  address). Routes: `GET /chat?after=N`; `GET /events` (SSE: `hello {write, reason?, you?}`,
+  address). Routes: `GET /chat?after=N`; `GET /events` (SSE: `hello {write, reason?, you?, max_bytes}`,
   `state` on connect and on change, `chat` with `id:`, `: ping` every 15 s; resumes from
   `Last-Event-ID` or `after`); `POST /chat` (201 with the message; 403 by the post policy or a
-  cross-origin `Origin`, 415 not JSON, 413 over 16 KiB, 400 bad body or `ChatError`, 409 an answer
+  cross-origin `Origin`, 415 not JSON, 413 over 256 KiB, 400 bad body or `ChatError`, 409 an answer
   to a closed decision, 400 a secret that reads as a value, 500 store failure); `POST
   /chat/preview` (who a text would reach; stores nothing); files under DIR with `Cache-Control:
   no-store`, `DIR/decisions/*` sandboxed by CSP; 421 on an unknown `Host`; on a manager's server
   `/f/<fleet>/…` proxied to that fleet's server. Pinned by test_chat, test_chat_serve and
   page.test.mjs.
+  The most a post may be is `MAX_POST_BYTES`, 256 KiB, given to the page as `hello`'s `max_bytes`; the
+  413 says `This message is N KiB; the most a message can be is 256 KiB. Shorten it, or put the long part
+  in a file and give its path.` (N the body's size, rounded up), and the page says the same before
+  sending a body over the limit, keeping the text. Why 256 KiB and not unlimited: the session's chat
+  watch prints every message into an agent's context, and 256 KiB, about 64k tokens, is the most one
+  message should cost.
 - **render_dashboard.py** `STATE OUT [--fragment]`: validates, stamps `updated`, rewrites STATE,
   and writes the page: `assets/dashboard.html` with `/*__STATE__*/` replaced by `fleets.view(state)`
   (`<` escaped), as a full document or a bare fragment. The template is built, not written by hand:
@@ -620,7 +626,7 @@ itself. A manager made later appears the same way, on the same address.
   that fleet, same bodies and status codes: the page (rendered from `state.json` at each load, the
   file `index.html` when the state can't be read), `GET /chat?after=N`, `GET /events` (`hello`,
   `state` on connect and on change, `chat` with `id:`, pings; `Last-Event-ID` or `after`), `POST
-  /chat` (201; 403 policy or cross-origin `Origin`; 415; 413 over 16 KiB; 400 bad body, `ChatError`,
+  /chat` (201; 403 policy or cross-origin `Origin`; 415; 413 over 256 KiB; 400 bad body, `ChatError`,
   unknown decision or a secret's value; 409 an answer to a closed decision, or an allow-once a
   [permission](#permission-grants) cannot grant; 500 store failure),
   `POST /chat/preview`, `GET /skills` (below), the preview (`/preview/…`, HTTP and WebSocket, and `POST
@@ -682,7 +688,7 @@ itself. A manager made later appears the same way, on the same address.
   tailscaled's persistent config from a service, and a plain listener that took those headers on
   trust would let any tailnet peer claim any login; `whois` is tailscaled's own answer. The cost: the
   default address is plain http (inside WireGuard), where browsers withhold alerts; `--https` adds
-  the https address when that matters. The stream's `hello` says `{write, reason?, you?}` from the
+  the https address when that matters. The stream's `hello` says `{write, reason?, you?, max_bytes}` from the
   same rule. A message's `author` is the login (the owner's, from loopback).
 
 ## Permission grants

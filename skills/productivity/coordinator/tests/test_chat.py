@@ -443,7 +443,7 @@ class ChatRouteTest(ServerTest):
         cases = [
             (415, self.request("POST", "/chat", b'{"text": "hi"}', {"Content-Type": "text/plain"})),
             (403, self.post({"text": "hi"}, {"Origin": "https://evil.example"})),
-            (413, self.post({"text": "x" * 17000})),
+            (413, self.post({"text": "x" * 300_000})),
             (400, self.post({"text": "  "})),
             (400, self.post({"text": "hi", "re": 9})),
             (400, self.post(b"not json")),
@@ -451,6 +451,14 @@ class ChatRouteTest(ServerTest):
         for expected, (status, body) in cases:
             self.assertEqual(status, expected, body)
             self.assertIsInstance(body["error"], str)
+        self.assertEqual(len(chat.read(self.root)), 1)
+
+    def test_a_long_message_is_taken_and_one_over_256_kib_is_refused_with_what_to_do(self):
+        status, message = self.post({"text": "y" * 78_000})
+        self.assertEqual((status, len(message["text"])), (201, 78_000))
+        status, body = self.post({"text": "x" * 300_000})
+        self.assertEqual((status, body), (413, {"error": "This message is 293 KiB; the most a message can be is 256 KiB. "
+                                                         "Shorten it, or put the long part in a file and give its path."}))
         self.assertEqual(len(chat.read(self.root)), 1)
 
     def test_post_accepts_a_same_origin_request(self):
@@ -508,7 +516,7 @@ class EventsRouteTest(ServerTest):
         self.assertEqual(stream.response.getheader("Cache-Control"), "no-store")
         self.assertEqual(stream.response.getheader("X-Accel-Buffering"), "no")
         hello, state = stream.next(), stream.next()
-        self.assertEqual((hello["event"], json.loads(hello["data"])), ("hello", {"write": True}))
+        self.assertEqual((hello["event"], json.loads(hello["data"])), ("hello", {"write": True, "max_bytes": 256 * 1024}))
         self.assertEqual(state["event"], "state")
         self.assertNotIn("id", hello)
         self.assertNotIn("id", state)
@@ -516,7 +524,7 @@ class EventsRouteTest(ServerTest):
 
     def test_hello_names_the_login_when_the_request_carries_one(self):
         hello = self.open(headers={"Tailscale-User-Login": "luiz@example.com"}).next()
-        self.assertEqual(json.loads(hello["data"]), {"write": True, "you": "luiz@example.com"})
+        self.assertEqual(json.loads(hello["data"]), {"write": True, "you": "luiz@example.com", "max_bytes": 256 * 1024})
 
     def test_replay_after_last_event_id_then_a_live_message(self):
         for text in ["one", "two", "three"]:
@@ -576,7 +584,7 @@ class PreviewRouteTest(ServerTest):
             (421, self.preview({"text": "hi"}, {"Host": "evil.com"})),
             (415, self.request("POST", "/chat/preview", b'{"text": "hi"}', {"Content-Type": "text/plain"})),
             (403, self.preview({"text": "hi"}, {"Origin": "https://evil.example"})),
-            (413, self.preview({"text": "x" * 17000})),
+            (413, self.preview({"text": "x" * 300_000})),
             (400, self.preview({"text": "hi", "re": 9})),
             (400, self.preview(b"not json")),
         ]
@@ -690,10 +698,10 @@ class LoginPolicyTest(ServerTest):
             return json.loads(stream.next()["data"])
 
         refused = "only Luiz@Example.com can write here"
-        self.assertEqual(hello(), {"write": False, "reason": refused})
+        self.assertEqual(hello(), {"write": False, "reason": refused, "max_bytes": 256 * 1024})
         self.assertEqual(hello({"Tailscale-User-Login": "eve@example.com"}),
-                         {"write": False, "reason": refused, "you": "eve@example.com"})
-        self.assertEqual(hello({"Tailscale-User-Login": "luiz@example.com"}), {"write": True, "you": "luiz@example.com"})
+                         {"write": False, "reason": refused, "you": "eve@example.com", "max_bytes": 256 * 1024})
+        self.assertEqual(hello({"Tailscale-User-Login": "luiz@example.com"}), {"write": True, "you": "luiz@example.com", "max_bytes": 256 * 1024})
 
     def test_the_other_refusals_still_apply_to_the_named_login(self):
         me = {"Tailscale-User-Login": "luiz@example.com"}
@@ -715,7 +723,7 @@ class ClosedPolicyTest(ServerTest):
             stream = Stream(self.port, headers=headers)
             self.addCleanup(stream.close)
             self.assertEqual(json.loads(stream.next()["data"]),
-                             {"write": False, "reason": "chat is read-only on this address; open the https address", **extra})
+                             {"write": False, "reason": "chat is read-only on this address; open the https address", **extra, "max_bytes": 256 * 1024})
 
 
 class OpenPolicyTest(ServerTest):
@@ -730,7 +738,7 @@ class OpenPolicyTest(ServerTest):
         for headers, extra in [({}, {}), ({"Tailscale-User-Login": "eve@example.com"}, {"you": "eve@example.com"})]:
             stream = Stream(self.port, headers=headers)
             self.addCleanup(stream.close)
-            self.assertEqual(json.loads(stream.next()["data"]), {"write": True, **extra})
+            self.assertEqual(json.loads(stream.next()["data"]), {"write": True, **extra, "max_bytes": 256 * 1024})
 
 
 def write_decisions(root: Path, *rows: dict) -> None:

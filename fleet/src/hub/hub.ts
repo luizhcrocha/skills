@@ -40,7 +40,7 @@ import type { Machine } from "../world.ts";
 import { indexHtml } from "./index-page.ts";
 import { ProbeCache } from "./probes.ts";
 import { grantRefusal } from "./grants.ts";
-import { grantor, hello, postRefusal, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
+import { grantor, hello, MAX_POST_BYTES, postRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
 import { previewTarget, proxyHttp, proxySocket, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
 import { PLUGIN_ROOT, readSkills, repoOf } from "./skills.ts";
@@ -533,7 +533,7 @@ export class Hub {
     if (refusal !== undefined) return jsonResponse(refusal[0], { error: refusal[1] }, { Connection: "close" });
     const raw = await req.text();
 
-    if (Buffer.byteLength(raw) > 16 * 1024) return jsonResponse(413, { error: "a choice is at most 16 KiB" });
+    if (Buffer.byteLength(raw) > MAX_POST_BYTES) return jsonResponse(413, { error: `a choice is at most ${MAX_POST_BYTES / 1024} KiB` });
     const body = Option.getOrUndefined(parseObject(raw));
     const worker = asString(body?.["worker"]);
     const include = body?.["include"];
@@ -640,7 +640,7 @@ export class Hub {
     if (refusal !== undefined) return jsonResponse(refusal[0], { error: refusal[1] }, { Connection: "close" });
     const raw = await req.text();
 
-    if (Buffer.byteLength(raw) > 16 * 1024) return jsonResponse(413, { error: "a message is at most 16 KiB" });
+    if (Buffer.byteLength(raw) > MAX_POST_BYTES) return jsonResponse(413, { error: tooBig(Buffer.byteLength(raw)) });
     const body = raw.trim() === "" ? undefined : Option.getOrUndefined(parseObject(raw));
 
     if (body === undefined) return jsonResponse(400, { error: "the body is not a JSON object" });
