@@ -1,7 +1,8 @@
 /**
  * A decision's thread, on its page: the viewer's answers and notes on it and the fleet's replies, in the
  * chat's bubbles (the viewer's on the right, the fleet's on the left). The chat leaves this activity out
- * unless asked, so this is where it is read. Nothing when there is none yet.
+ * unless asked, so this is where it is read; inside the manager's frame, also what was written about it there
+ * and the replies. Nothing when there is none yet.
  */
 import { createMemo } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
@@ -12,8 +13,9 @@ import { decisionThread } from "./chatlog.ts";
 
 /** Decision `id`'s thread. */
 export function DecisionThread(props: { readonly id: string | null }): JSX.Element {
-  const { m } = usePage();
-  const items = createMemo(() => (props.id ? decisionThread(m.messages(), props.id) : []));
+  const { m, ui } = usePage();
+  const items = createMemo(() => (props.id ? decisionThread(m.messages(), props.id, ui.askedAbout(props.id)) : []));
+
   let list: HTMLOListElement | undefined;
 
   return (

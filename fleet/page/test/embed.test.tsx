@@ -3,7 +3,8 @@
  * own decision page, as that fleet's page in a frame (`?embed=1`); the frame shows the decision alone and
  * tells the manager its height and an answer sent; the manager steps to the previous and next, and once one
  * is answered goes on to the next (or, with that turned off, says what comes next); text selected in the frame
- * shows the manager's selection toolbar over it, and its Reply writes to that fleet's coordinator. Run in happy-dom.
+ * shows the manager's selection toolbar over it, and its Reply writes to that fleet's coordinator; what would
+ * open the fleet's chat (Change my answer, Ask in the chat) writes in the frame itself. Run in happy-dom.
  */
 import { afterEach, expect, test } from "bun:test";
 import { flush } from "solid-js";
@@ -47,10 +48,10 @@ function open(address: string, view: View): void {
     if (url === "skills") return new Response(JSON.stringify({ skills: [], builtins: false }), { status: 200 });
 
     if (url === "chat") {
-      const body: { text: string; decision?: string } = JSON.parse(String(init?.body));
+      const body: { text: string; decision?: string; re?: number } = JSON.parse(String(init?.body));
       posted.push(body);
 
-      return new Response(JSON.stringify({ id: 98 + posted.length, at: new Date(NOW).toISOString(), from: "user", to: ["coordinator"], text: body.text, decision: body.decision }), { status: 201 });
+      return new Response(JSON.stringify({ id: 98 + posted.length, at: new Date(NOW).toISOString(), from: "user", to: ["coordinator"], text: body.text, decision: body.decision, re: body.re }), { status: 201 });
     }
 
     return new Response("{}", { status: 404 });
@@ -366,7 +367,7 @@ test("embedded, a fleet's page is its decision alone, tells its height, and tell
   expect(root.querySelector("#decision .dv-back")).toBeNull();
   expect(root.querySelector("#dv-queue")).toBeNull();
   expect(root.querySelector("#dv-info h1")?.textContent).toBe("D1 Rounding rule for totals");
-  expect(root.querySelector("#dv-answer [data-discuss]")?.getAttribute("href")).toBe("/f/billing/#decision/d1");
+  expect(root.querySelector("#dv-answer button[data-discuss]")).not.toBeNull();
   expect(toParent).toContainEqual({ fleetEmbed: true, height: expect.any(Number) });
   root.querySelector<HTMLInputElement>('#dv-answer input[name="choice"][value="b"]')?.click();
   root.querySelector<HTMLFormElement>("#dv-answer form")?.requestSubmit();
@@ -427,7 +428,7 @@ function placeAt<T extends Element>(el: T | null | undefined, top: number, left:
 
 const tool = (): HTMLElement | null => document.getElementById("seltool");
 
-const SELECTED = { text: "per line or on the total", rect: { top: 100, bottom: 118, left: 40, width: 60 }, from: "Rounding rule for totals" };
+const SELECTED = { text: "per line or on the total", rect: { top: 100, bottom: 118, left: 40, width: 60 }, from: "Rounding rule for totals", touch: false };
 
 test("text selected in a fleet's frame shows the manager's toolbar over it, and Reply writes to that fleet's coordinator", async () => {
   open("/f/manager/", managerView(NOW));
@@ -491,12 +492,12 @@ test("embedded, the fleet's page tells the manager of text selected in it once i
   expect(selects()).toEqual([]);
   await new Promise((r) => setTimeout(r, 250));
   const rect = { top: expect.any(Number), bottom: expect.any(Number), left: expect.any(Number), width: expect.any(Number) };
-  expect(selects()).toEqual([{ fleetEmbed: true, select: { text: String(getSelection()), rect, from: "Rounding rule for totals" } }]);
+  expect(selects()).toEqual([{ fleetEmbed: true, select: { text: String(getSelection()), rect, from: "Rounding rule for totals", touch: false } }]);
   expect(String(getSelection())).toContain("Rounding rule for totals");
   getSelection()?.removeAllRanges();
   document.dispatchEvent(new Event("selectionchange"));
   await new Promise((r) => setTimeout(r, 250));
-  expect(selects().at(-1)).toEqual({ fleetEmbed: true, select: { text: "", rect: null, from: "" } });
+  expect(selects().at(-1)).toEqual({ fleetEmbed: true, select: { text: "", rect: null, from: "", touch: false } });
 });
 
 test("embedded, the fleet's page passes its evidence frame's selection on to the manager, placed in the page", () => {
@@ -507,12 +508,143 @@ test("embedded, the fleet's page passes its evidence frame's selection on to the
   page.ui.route();
   flush();
   const ev = placeAt(evidence.frame, 300, 16);
-  arrive({ fleetSelect: true, text: "one-cent drift", rect: { top: 10, bottom: 28, left: 5, width: 90 } }, ev.contentWindow);
-  expect(selects()).toEqual([{ fleetEmbed: true, select: { text: "one-cent drift", rect: { top: 310, bottom: 328, left: 21, width: 90 }, from: "the evidence of Rounding rule for totals" } }]);
+  arrive({ fleetSelect: true, text: "one-cent drift", rect: { top: 10, bottom: 28, left: 5, width: 90 }, touch: true }, ev.contentWindow);
+  expect(selects()).toEqual([{ fleetEmbed: true, select: { text: "one-cent drift", rect: { top: 310, bottom: 328, left: 21, width: 90 }, from: "the evidence of Rounding rule for totals", touch: true } }]);
   arrive({ fleetSelect: true, text: "elsewhere", rect: { top: 1, bottom: 2, left: 3, width: 4 } }, window);
   arrive({ fleetSelect: true, text: "", rect: null }, ev.contentWindow);
   expect(selects()).toEqual([
-    { fleetEmbed: true, select: { text: "one-cent drift", rect: { top: 310, bottom: 328, left: 21, width: 90 }, from: "the evidence of Rounding rule for totals" } },
-    { fleetEmbed: true, select: { text: "", rect: null, from: "" } },
+    { fleetEmbed: true, select: { text: "one-cent drift", rect: { top: 310, bottom: 328, left: 21, width: 90 }, from: "the evidence of Rounding rule for totals", touch: true } },
+    { fleetEmbed: true, select: { text: "", rect: null, from: "", touch: false } },
   ]);
+});
+
+test("a touch selection in a fleet's frame puts the toolbar below it, clear of the handles", () => {
+  open("/f/manager/", managerView(NOW));
+  go("#decision/billing/d1");
+  const f = placeAt(frame(), 200, 30);
+  arrive({ fleetEmbed: true, select: { ...SELECTED, touch: true } }, f.contentWindow);
+  expect([tool()?.style.top, tool()?.style.left]).toEqual(["348px", "100px"]);
+});
+
+test("embedded, a pointer of touch marks the selection told to the manager as a touch one", async () => {
+  open("/f/billing/?embed=1#decision/d1", coordinatorView(NOW));
+  page.ui.route();
+  flush();
+  const h1 = root.querySelector("#dv-info h1") ?? root;
+  h1.dispatchEvent(new PointerEvent("pointerdown", { pointerType: "touch", bubbles: true }));
+  const range = document.createRange();
+  range.selectNodeContents(h1);
+  getSelection()?.removeAllRanges();
+  getSelection()?.addRange(range);
+  document.dispatchEvent(new Event("selectionchange"));
+  await new Promise((r) => setTimeout(r, 250));
+  expect(selects().at(-1)).toMatchObject({ select: { touch: true } });
+  getSelection()?.removeAllRanges();
+});
+
+/** The fleet's view with d1 decided, its answer and the coordinator's reply in the chat. */
+function decidedD1(): View {
+  const view = coordinatorView(NOW);
+  // SAFETY: the fixture's decisions are records, as coordinatorView writes them.
+  const decisions = view["decisions"] as View[];
+
+  return { ...view, decisions: decisions.map((d) => (d["id"] === "d1" ? { ...d, status: "decided", answer: "b: Round the total", resolution: "Answered on the page.", closed: before(5) } : d)) };
+}
+
+const asking = (): HTMLTextAreaElement | null => root.querySelector<HTMLTextAreaElement>("#dv-ask textarea");
+
+const threadIds = (): string[] => [...root.querySelectorAll("#dv-thread article.msg")].map((a) => a.getAttribute("data-id") ?? "");
+
+test("embedded, Change my answer writes to the fleet's coordinator in the frame, and its reply shows in the thread", async () => {
+  open("/f/billing/?embed=1#decision/d1", decidedD1());
+  page.ui.route();
+  page.ui.addMessage({ id: 20, at: before(10), from: "user", to: ["coordinator"], text: "b: Round the total", decision: "d1" }, false);
+  page.ui.addMessage({ id: 21, at: before(6), from: "coordinator", to: ["user"], text: "Recorded.", re: 20 }, false);
+  flush();
+  expect(asking()).toBeNull();
+  root.querySelector<HTMLButtonElement>("#dv-answer [data-change]")?.click();
+  flush();
+  const say = asking();
+  const text = 'About "Rounding rule for totals": I want to change my answer. ';
+  expect(say?.value).toBe(text);
+  expect(document.activeElement).toBe(say);
+  expect([say?.selectionStart, say?.selectionEnd]).toEqual([text.length, text.length]);
+
+  if (say) say.value += "Per line after all.";
+  root.querySelector<HTMLButtonElement>("#dv-ask [data-ask-send]")?.click();
+  await settle();
+  expect(posted).toEqual([{ text: text + "Per line after all.", re: 21 }]);
+  expect(asking()).toBeNull();
+  expect(root.querySelector("#dv-ask-sent")?.textContent).toBe("Sent to the coordinator. Its reply shows above, in the chat.");
+  expect(threadIds()).toEqual(["20", "21", "99"]);
+  page.ui.addMessage({ id: 100, at: new Date(NOW).toISOString(), from: "coordinator", to: ["user"], text: "Reopened as D1.", re: 99 }, true);
+  flush();
+  expect(threadIds()).toEqual(["20", "21", "99", "100"]);
+  expect(toParent.filter((d) => d !== null && Object(d) === d && "answered" in Object(d))).toEqual([]);
+});
+
+test("embedded, Ask in the chat writes in the frame too, and a decision with no thread yet shows the message and its reply", async () => {
+  open("/f/billing/?embed=1#decision/d1", coordinatorView(NOW));
+  page.ui.route();
+  flush();
+  root.querySelector<HTMLButtonElement>("#dv-answer button[data-discuss]")?.click();
+  flush();
+  expect(asking()?.value).toBe('About "Rounding rule for totals": ');
+
+  if (asking()) (asking() ?? { value: "" }).value += "what does Stripe do?";
+  root.querySelector<HTMLButtonElement>("#dv-ask [data-ask-send]")?.click();
+  await settle();
+  expect(posted).toEqual([{ text: 'About "Rounding rule for totals": what does Stripe do?' }]);
+  expect(threadIds()).toEqual(["99"]);
+  page.ui.addMessage({ id: 100, at: new Date(NOW).toISOString(), from: "coordinator", to: ["user"], text: "It rounds the total.", re: 99 }, true);
+  flush();
+  expect(threadIds()).toEqual(["99", "100"]);
+});
+
+test("embedded, a message the server refuses stays in the frame's composer with the reason", async () => {
+  open("/f/billing/?embed=1#decision/d1", decidedD1());
+  page.ui.route();
+  flush();
+  root.querySelector<HTMLButtonElement>("#dv-answer [data-change]")?.click();
+  flush();
+  const ok = globalThis.fetch;
+  // SAFETY: the page calls only `fetch` itself; the stub refuses every message.
+  globalThis.fetch = (async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ error: "the chat is closed" }), { status: 403 })) as typeof fetch;
+  root.querySelector<HTMLButtonElement>("#dv-ask [data-ask-send]")?.click();
+  await settle();
+  globalThis.fetch = ok;
+  expect(asking()?.value).toBe('About "Rounding rule for totals": I want to change my answer. ');
+  expect(root.querySelector("#dv-ask [role=alert]")?.textContent).toBe("the chat is closed");
+  expect(root.querySelector("#dv-ask-sent")).toBeNull();
+});
+
+test("embedded, another decision's link asks the manager to open it, and Ctrl+K opens the manager's finder", () => {
+  const view = coordinatorView(NOW);
+  // SAFETY: the fixture's decisions are records, as coordinatorView writes them.
+  const decisions = view["decisions"] as View[];
+  open("/f/billing/?embed=1#decision/d1", { ...view, decisions: decisions.map((d) => (d["id"] === "d1" ? { ...d, supersedes: "a7" } : d)) });
+  page.ui.route();
+  flush();
+  const link = root.querySelector<HTMLAnchorElement>('#dv-info a[href="#decision/a7"]');
+  expect(link).not.toBeNull();
+  link?.click();
+  flush();
+  expect(location.hash).toBe("#decision/d1");
+  expect(toParent).toContainEqual({ fleetEmbed: true, open: "a7" });
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }));
+  expect(toParent).toContainEqual({ fleetEmbed: true, finder: true });
+});
+
+test("on the manager's page, the fleet's frame opens another of its decisions on the manager's page, and the finder", () => {
+  open("/f/manager/", managerView(NOW));
+  go("#decision/billing/d1");
+  arrive({ fleetEmbed: true, open: "d7" }, window);
+  expect(location.hash).toBe("#decision/billing/d1");
+  arrive({ fleetEmbed: true, open: "d7" }, frame()?.contentWindow);
+  page.ui.route();
+  flush();
+  expect(location.hash).toBe("#decision/billing/d7");
+  expect(frame()?.getAttribute("src")).toBe("/f/billing/?embed=1#decision/d7");
+  arrive({ fleetEmbed: true, finder: true }, frame()?.contentWindow);
+  expect(page.ui.finderOpen()).toBe(true);
 });

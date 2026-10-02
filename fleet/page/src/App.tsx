@@ -11,7 +11,7 @@ import { listen, PageContext, usePage } from "./bits.tsx";
 import { Chat } from "./Chat.tsx";
 import { Core, type State } from "./core.ts";
 import { DecisionPage } from "./DecisionPage.tsx";
-import { postHeight } from "./embed.ts";
+import { postFinder, postHeight, postOpen } from "./embed.ts";
 import { goLive } from "./live.ts";
 import { Masthead, Toasts } from "./Masthead.tsx";
 import { createModel, type Model } from "./model.ts";
@@ -22,8 +22,9 @@ import { FleetView, LinksView, LogView, PlanView, useVisibleAgents } from "./Vie
 
 /**
  * The decision's page alone, in a frame of the manager's page: its height told to the manager, which sizes
- * the frame by it, and text selected in it, which the manager's toolbar shows over the frame. Whatever leads
- * elsewhere in this fleet (a worker, another view) opens its own page beside.
+ * the frame by it, and text selected in it, which the manager's toolbar shows over the frame. Another of the
+ * fleet's decisions, and the finder (Ctrl/⌘K), open on the manager's page; whatever leads elsewhere in this
+ * fleet (a worker, another view) opens its own page beside.
  */
 function Embedded(props: { readonly live: boolean }): JSX.Element {
   const { m, ui } = usePage();
@@ -35,9 +36,20 @@ function Embedded(props: { readonly live: boolean }): JSX.Element {
     const t = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-agent], a[href^='#']") : null;
     const hash = t?.dataset["agent"] ? "#agent-" + t.dataset["agent"] : (t?.getAttribute("href") ?? "");
 
-    if (!t || !hash.startsWith("#") || Core.decisionRoute(hash)) return;
+    if (!t || !hash.startsWith("#")) return;
+    const id = Core.decisionRoute(hash);
+
+    if (id === m.viewing()) return;
     e.preventDefault();
-    open(location.pathname + hash, "_blank", "noopener");
+
+    if (id) postOpen(id);
+    else open(location.pathname + hash, "_blank", "noopener");
+  });
+  listen(document, "keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      postFinder();
+    }
   });
 
   if ("ResizeObserver" in globalThis) {

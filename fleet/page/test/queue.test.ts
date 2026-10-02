@@ -107,9 +107,18 @@ test("parseEmbedMessage: a frame's height or an answer it sent, anything else no
 
 test("parseEmbedMessage: a selection in the frame, its place and where it is; cleared, no place", () => {
   const rect = { top: 10, bottom: 28, left: 4.5, width: 80 };
-  expect(parseEmbedMessage({ fleetEmbed: true, select: { text: "per line", rect, from: "Rounding" } })).toEqual({ kind: "select", text: "per line", rect, from: "Rounding" });
-  expect(parseEmbedMessage({ fleetEmbed: true, select: { text: "", rect: null, from: "" } })).toEqual({ kind: "select", text: "", rect: null, from: "" });
+  expect(parseEmbedMessage({ fleetEmbed: true, select: { text: "per line", rect, from: "Rounding", touch: false } })).toEqual({ kind: "select", text: "per line", rect, from: "Rounding", touch: false });
+  expect(parseEmbedMessage({ fleetEmbed: true, select: { text: "per line", rect, from: "Rounding", touch: true } })).toEqual({ kind: "select", text: "per line", rect, from: "Rounding", touch: true });
+  expect(parseEmbedMessage({ fleetEmbed: true, select: { text: "", rect: null, from: "" } })).toEqual({ kind: "select", text: "", rect: null, from: "", touch: false });
 
   for (const select of [null, "per line", { text: 3, rect, from: "" }, { text: "x", rect: null, from: "" }, { text: "x", rect: { ...rect, top: "10" }, from: "" }, { text: "x", rect: { top: 1, bottom: 2, left: 3 }, from: "" }, { text: "x", rect, from: null }])
     expect(parseEmbedMessage({ fleetEmbed: true, select })).toBeNull();
+});
+
+test("parseEmbedMessage: another decision of the fleet to open, or the finder; anything else nothing", () => {
+  expect(parseEmbedMessage({ fleetEmbed: true, open: "d4" })).toEqual({ kind: "open", id: "d4" });
+  expect(parseEmbedMessage({ fleetEmbed: true, finder: true })).toEqual({ kind: "finder" });
+
+  for (const data of [{ fleetEmbed: true, open: "" }, { fleetEmbed: true, open: 4 }, { fleetEmbed: true, open: "d4/x" }, { fleetEmbed: true, finder: "yes" }, { fleetEmbed: false, open: "d4" }])
+    expect(parseEmbedMessage(data)).toBeNull();
 });

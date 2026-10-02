@@ -173,12 +173,18 @@ export function chatRows(all: readonly Message[], focus: number | "new" | null, 
   return rows;
 }
 
-/** Decision `id`'s thread: the viewer's answers and notes on it and every reply to them, in order, as the chat would show them. */
-export function decisionThread(all: readonly Message[], id: string): Item[] {
+/**
+ * Decision `id`'s thread: the viewer's answers and notes on it, the messages `also` names, and every reply
+ * to them, in order, as the chat would show them.
+ */
+export function decisionThread(all: readonly Message[], id: string, also: readonly number[] = []): Item[] {
   const sorted = [...all].sort((a, b) => a.id - b.id);
   const trail = decisionTrail(sorted);
   const item = itemsOf(sorted);
-  const items = sorted.flatMap((m) => (trail.get(m.id) === id ? [item(m)] : []));
+  const named = new Set(also);
+
+  for (const m of sorted) if (m.re != null && named.has(m.re)) named.add(m.id);
+  const items = sorted.flatMap((m) => (trail.get(m.id) === id || named.has(m.id) ? [item(m)] : []));
 
   group(items);
   quote(items, new Set(items.map((it) => it.message.id)));

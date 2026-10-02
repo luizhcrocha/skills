@@ -13,6 +13,7 @@ import { For, Match, Show, Switch, type JSX } from "@solidjs/web";
 import { listen, PillAs, RefTag, tf, usePage, Who } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
 import { Core, type Decision, type GrillEntry, type JsonRecord, type Queue } from "./core.ts";
+import { decisionThread } from "./chatlog.ts";
 import { DecisionThread } from "./DecisionThread.tsx";
 import { FRAME_MAX_PX, parseEmbedMessage, postAnswered } from "./embed.ts";
 import { clock } from "./format.ts";
@@ -23,7 +24,7 @@ const TOKENS = ["bg", "card", "card-2", "text", "muted", "faint", "line", "accen
 
 const esc = (s: string): string => s.replace(/[&<>"']/gu, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
 
-/** The evidence's document: the fragment with the page's base styles and theme, reporting its height and selection. */
+/** The evidence's document: the fragment with the page's base styles and theme, reporting its height and selection (and whether a touch made it). */
 function frameDoc(html: string): string {
   const cs = getComputedStyle(document.documentElement);
   const vars = TOKENS.map((t) => `--${t}:${cs.getPropertyValue("--" + t).trim()}`).join(";");
@@ -45,7 +46,7 @@ img,svg,video,canvas{max-width:100%;height:auto}
 .num{font-variant-numeric:tabular-nums;font-stretch:84%;text-align:right}
 .muted{color:var(--muted)}.good{color:var(--good)}.warning{color:var(--warning)}.critical{color:var(--critical)}
 </style></head><body>${html}
-<scr` + `ipt>(function(){var post=function(){parent.postMessage({fleetEvidence:true,height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post();var t=0;document.addEventListener("selectionchange",function(){clearTimeout(t);t=setTimeout(function(){var s=getSelection(),r=s&&s.rangeCount&&!s.isCollapsed?s.getRangeAt(0).getBoundingClientRect():null;parent.postMessage({fleetSelect:true,text:r?String(s):"",rect:r?{top:r.top,bottom:r.bottom,left:r.left,width:r.width}:null},"*")},180)})})()</scr` + `ipt></body></html>`;
+<scr` + `ipt>(function(){var post=function(){parent.postMessage({fleetEvidence:true,height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post();var t=0,touch=false;document.addEventListener("pointerdown",function(e){touch=e.pointerType==="touch"||e.pointerType==="pen"},true);document.addEventListener("selectionchange",function(){clearTimeout(t);t=setTimeout(function(){var s=getSelection(),r=s&&s.rangeCount&&!s.isCollapsed?s.getRangeAt(0).getBoundingClientRect():null;parent.postMessage({fleetSelect:true,text:r?String(s):"",rect:r?{top:r.top,bottom:r.bottom,left:r.left,width:r.width}:null,touch:touch},"*")},180)})})()</scr` + `ipt></body></html>`;
 }
 
 /** What the server answers when it refuses a message. */
@@ -186,23 +187,131 @@ function SlashField(props: { readonly id: string; readonly children: (caret: (el
   );
 }
 
-/** "Ask in the chat": inside the manager's page, the chat is on this fleet's own page. */
+/** "Ask in the chat": inside the manager's page, which shows no chat of this fleet's, written on the decision's page. */
 function Discuss(): JSX.Element {
   const { m, ui } = usePage();
 
   return (
-    <Show
-      when={m.embed}
-      fallback={
-        <button type="button" class="btn" data-discuss onClick={() => ui.openChat()}>
-          Ask in the chat
-        </button>
-      }
-    >
-      <a class="btn" data-discuss href={location.pathname + Core.decisionHref(m.viewing() ?? "")} target="_blank" rel="noopener">
+    <Show when={!m.embed || m.chatWritable()}>
+      <button type="button" class="btn" data-discuss onClick={() => (m.embed ? ui.askAbout(m.decisionById(m.viewing())) : ui.openChat())}>
         Ask in the chat
-      </a>
+      </button>
     </Show>
+  );
+}
+
+/**
+ * Inside the manager's frame, which has no chat: a message about the decision, written on its page and sent
+ * to this fleet's chat as the composer sends it (to the coordinator), as a reply to the decision's thread when
+ * it has one, so the thread above shows it and the answer.
+ */
+function AskHere(props: { readonly d: Decision }): JSX.Element {
+  const { m, ui } = usePage();
+  const [error, setError] = createSignal("");
+  const [sent, setSent] = createSignal(false);
+  const [sending, setSending] = createSignal(false);
+  const asking = createMemo(() => (ui.askHere()?.id === props.d.id ? ui.askHere() : null));
+  let box: HTMLTextAreaElement | undefined;
+
+  createEffect(asking, (a) => {
+    if (!a || !box) return;
+    setSent(false);
+    setError("");
+    box.value = a.text;
+    box.focus();
+    box.setSelectionRange(a.text.length, a.text.length);
+    /* The frame is sized to its content and only the manager's page scrolls: the box is brought into view
+       there again once the manager has grown the frame to hold it (the frame's window resizes). */
+    const el = box;
+    el.scrollIntoView({ block: "center" });
+    addEventListener(
+      "resize",
+      () => {
+        if (document.activeElement === el) el.scrollIntoView({ block: "center" });
+      },
+      { once: true },
+    );
+  });
+
+  async function send(): Promise<void> {
+    const text = box?.value.trim() ?? "";
+
+    if (!text || sending()) return;
+    const thread = decisionThread(m.messages(), props.d.id, ui.askedAbout(props.d.id)).map((it) => it.message);
+    /* A reply to the viewer's own message or the host's is addressed to the host, as a plain message is. */
+    const re = thread.filter((x) => x.from === "user" || x.from === m.host()).at(-1)?.id;
+
+    setSending(true);
+    setError("");
+
+    try {
+      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(re === undefined ? { text } : { text, re }) });
+      let body: ServerError | null = null;
+
+      try {
+        body = await res.json();
+      } catch {
+        body = null;
+      }
+
+      if (res.status !== 201) {
+        setError(body?.error || `The server refused the message (${res.status}). It is kept here.`);
+
+        return;
+      }
+
+      ui.addMessage(body, true);
+      const id = Number(body?.["id"]);
+
+      if (re === undefined && Number.isInteger(id)) ui.setAskedHere([...ui.askedHere(), { decision: props.d.id, id }]);
+      ui.setAskHere(null);
+      setSent(true);
+    } catch {
+      setError("Could not reach the dashboard's server. Your message is kept here; send it again when the server is back.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <>
+      <Show when={asking()}>
+        <div class="dv-ask" id="dv-ask">
+          <label class="field">
+            To the {m.host()}
+            <textarea
+              rows="3"
+              autocomplete="off"
+              ref={(el) => (box = el)}
+              onKeyDown={(e) => {
+                const action = Core.keyOf(e, m.coarse(), false);
+
+                if (action === "send") {
+                  e.preventDefault();
+                  void send();
+                } else if (action === "blur") box?.blur();
+              }}
+            />
+          </label>
+          <p class="chat-error" role="alert" hidden={!error()}>
+            {error()}
+          </p>
+          <div class="sheet-actions">
+            <button type="button" class="btn primary" data-ask-send disabled={sending()} onClick={() => void send()}>
+              Send
+            </button>
+            <button type="button" class="btn" onClick={() => ui.setAskHere(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      </Show>
+      <Show when={sent() && !asking()}>
+        <p class="dv-meta" id="dv-ask-sent" role="status">
+          Sent to the {m.host()}. Its reply shows above, in the chat.
+        </p>
+      </Show>
+    </>
   );
 }
 
@@ -961,6 +1070,10 @@ function FleetFrame(props: { readonly fleet: string; readonly id: string }): JSX
     if (frame && said?.kind === "height") frame.style.height = String(Math.min(Math.ceil(said.height), FRAME_MAX_PX)) + "px";
 
     if (said?.kind === "answered" && props.fleet + "/" + said.id === m.viewing()) ui.setAnswered(m.viewing());
+
+    if (said?.kind === "open") location.hash = Core.decisionHref(props.fleet + "/" + said.id);
+
+    if (said?.kind === "finder") ui.openFinder();
   });
 
   return (
@@ -1033,6 +1146,7 @@ function OwnDecision(props: { readonly d: Decision | undefined }): JSX.Element {
         <Show when={d()?.id} keyed>
           {(id) => <AnswerFor id={id} />}
         </Show>
+        <Show when={m.embed ? d() : undefined}>{(found) => <AskHere d={found()} />}</Show>
       </div>
     </>
   );

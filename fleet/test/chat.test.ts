@@ -210,6 +210,13 @@ describe("recipients", () => {
     expect(sent.text).toBe("ping @bob about it");
   });
 
+  test("the user's reply to their own answer, or to the coordinator's reply to it, goes to the coordinator, as a plain message does", () => {
+    const answer = user("b: Round the total", { decision: "d1" });
+    const recorded = send("coordinator", "Recorded.", { re: answer.id });
+    expect(user("I want to change my answer.", { re: answer.id }).to).toEqual(["coordinator"]);
+    expect(user("I want to change my answer.", { re: recorded.id }).to).toEqual(["coordinator"]);
+  });
+
   test("an agent message goes to the user plus its mentions", () => {
     expect(send("notes-impl", "done").to).toEqual(["user"]);
     const sent = send("coordinator", "@a1 over to you");

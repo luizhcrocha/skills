@@ -407,6 +407,7 @@ export function forwardSelections(): void {
   const { m } = usePage();
   let settle: ReturnType<typeof setTimeout> | undefined;
   let told = false;
+  let touch = false;
 
   const tell = (): void => {
     const sel = getSelection();
@@ -415,17 +416,20 @@ export function forwardSelections(): void {
 
     if (!sel || sel.isCollapsed || !sel.rangeCount || !el || el.closest("textarea, input, .composer") || !el.closest("#decision")) {
       /* Only a selection of this page's own is cleared: the evidence frame's is the frame's to clear. */
-      if (told) postSelect("", null, "");
+      if (told) postSelect("", null, "", false);
       told = false;
 
       return;
     }
 
     const r = sel.getRangeAt(0).getBoundingClientRect();
-    postSelect(sel.toString(), { top: r.top, bottom: r.bottom, left: r.left, width: r.width }, whereOf(m, node));
+    postSelect(sel.toString(), { top: r.top, bottom: r.bottom, left: r.left, width: r.width }, whereOf(m, node), touch);
     told = true;
   };
 
+  listen(document, "pointerdown", (e) => {
+    touch = e.pointerType === "touch" || e.pointerType === "pen";
+  });
   listen(document, "selectionchange", () => {
     clearTimeout(settle);
     settle = setTimeout(tell, FORWARD_MS);
@@ -436,7 +440,7 @@ export function forwardSelections(): void {
 
     if (!frame || !said) return;
     const d = m.decisionById(m.viewing());
-    postSelect(said.text, within(frame, said.rect), "the evidence" + (d ? " of " + d.title : ""));
+    postSelect(said.text, within(frame, said.rect), "the evidence" + (d ? " of " + d.title : ""), said.touch);
   });
   onCleanup(() => clearTimeout(settle));
 }
@@ -552,14 +556,15 @@ export function SelTool(): JSX.Element {
     if (e.key === "Escape" && (ui.picked() || framePicked)) hide();
   };
 
-  /* Text selected in `frame`, at `r` in its viewport; empty once the frame's selection is cleared. */
-  const pickIn = (frame: HTMLIFrameElement, text: string, r: SelRect | null, from: string, fleet: string | null): void => {
+  /* Text selected in `frame`, at `r` in its viewport, by a touch or not; empty once the frame's selection is cleared. */
+  const pickIn = (frame: HTMLIFrameElement, text: string, r: SelRect | null, from: string, fleet: string | null, byTouch: boolean): void => {
     if (!text) {
       if (framePicked) hide();
 
       return;
     }
 
+    touch = byTouch;
     const { top, bottom, left, width } = within(frame, r);
     show(text, from, { first: { top, bottom }, last: { top, bottom }, left, width });
     framePicked = { fleet };
@@ -573,7 +578,7 @@ export function SelTool(): JSX.Element {
     if (fleetFrame && fleet && e.source === fleetFrame.contentWindow) {
       const said = parseEmbedMessage(e.data);
 
-      if (said?.kind === "select") pickIn(fleetFrame, said.text, said.rect, said.from ? said.from + ", in " + fleet : fleet, fleet);
+      if (said?.kind === "select") pickIn(fleetFrame, said.text, said.rect, said.from ? said.from + ", in " + fleet : fleet, fleet, said.touch);
 
       return;
     }
@@ -583,7 +588,7 @@ export function SelTool(): JSX.Element {
 
     if (!frame || !said) return;
     const d = m.decisionById(m.viewing());
-    pickIn(frame, said.text, said.rect, "the evidence" + (d ? " of " + d.title : ""), null);
+    pickIn(frame, said.text, said.rect, "the evidence" + (d ? " of " + d.title : ""), null, said.touch);
   };
 
   const onScroll = (): void => {

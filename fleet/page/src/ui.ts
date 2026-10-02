@@ -373,8 +373,29 @@ export function createUi(m: Model) {
     say.setSelectionRange(say.value.length, say.value.length);
   }
 
-  /** "Change my answer": the chat, with a first line about the decision. */
+  /* ------------------------------------------------------------------ writing from the manager's frame */
+
+  /** Inside the manager's frame, which has no chat: the decision a message is being written about on its page, and the words it starts with. */
+  const [askHere, setAskHere] = createSignal<{ readonly id: string; readonly text: string } | null>(null);
+  /** The messages sent from the frame about a decision with no thread to reply in: its thread shows them, and the replies to them. */
+  const [askedHere, setAskedHere] = createSignal<readonly { readonly decision: string; readonly id: number }[]>([]);
+
+  /** The messages sent from the frame about decision `id` with no thread to reply in. */
+  const askedAbout = (id: string): number[] => askedHere().flatMap((a) => (a.decision === id ? [a.id] : []));
+
+  /** "Ask in the chat" inside the manager's frame: a message about `d`, written on its page. */
+  function askAbout(d: Decision | undefined): void {
+    if (d && m.chatWritable()) setAskHere({ id: d.id, text: `About "${d.title}": ` });
+  }
+
+  /** "Change my answer": the chat, with a first line about the decision; inside the manager's frame, written on the decision's page. */
   function changeAnswer(d: Decision | undefined): void {
+    if (m.embed) {
+      if (d && m.chatWritable()) setAskHere({ id: d.id, text: `About "${d.title}": I want to change my answer. ` });
+
+      return;
+    }
+
     openChat();
     const say = refs.say;
 
@@ -658,6 +679,12 @@ export function createUi(m: Model) {
     clearReply,
     writeTo,
     changeAnswer,
+    askAbout,
+    askHere,
+    setAskHere,
+    askedHere,
+    setAskedHere,
+    askedAbout,
     sheetFor,
     openWorker,
     finderOpen,
