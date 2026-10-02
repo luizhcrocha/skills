@@ -22,6 +22,7 @@ import { activeAt } from "../transcripts.ts";
 import { secondsNow, type Machine } from "../world.ts";
 import {
   cursorPath,
+  handedOver,
   hostOf,
   intOf,
   leftPath,
@@ -34,6 +35,7 @@ import {
   renderLines,
   rosterOf,
   stateOfDir,
+  waitsHere,
 } from "./chat.ts";
 import { FleetNews } from "./news.ts";
 import { readChat, Tail, type Message } from "./store.ts";
@@ -290,7 +292,7 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
 
         if (request.all) {
           for (const r of new Set([hostOf(root), ...rosterOf(machine, root).members.map((m) => m.id)])) {
-            for (const m of openAmong(messages, r)) if (m.from === "user") wanted.add(m.id);
+            for (const m of openAmong(messages, r)) if (m.from === "user" && !handedOver(m).has(r)) wanted.add(m.id);
           }
         }
 
@@ -318,7 +320,7 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
         for (;;) {
           if (request.once && window !== undefined && performance.now() / 1000 >= window) return;
           yield* Effect.sleep(POLL_MS);
-          const fresh = tail.read().filter((m) => m.to.includes(who) || (request.all && m.from === "user"));
+          const fresh = tail.read().filter((m) => m.to.includes(who) || (request.all && m.from === "user" && waitsHere(m)));
           show(fresh);
 
           if (tell() && window === undefined) window = performance.now() / 1000 + request.batch;

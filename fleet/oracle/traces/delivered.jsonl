@@ -1,0 +1,26 @@
+{"trace": 1, "name": "delivered", "about": "The hub delivers the user's message to a coordinator, written on the manager's page, into that coordinator's own chat (`delivered` on the manager's message, `via` on the coordinator's copy and on the answer mirrored back): the manager's watch leaves out what every coordinator it names already has, marks what it still shows, its news of the fleets leaves the delivered copies out, and every printed line carries the marks."}
+{"cli": "state", "argv": ["$W/manager", "init", "--role", "manager", "--project", "this machine", "--goal", "land in order", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "acme-billing", "--goal", "usage records land", "--no-render"]}
+{"cli": "state", "argv": ["$W/infra", "init", "--project", "infra", "--goal", "the deploy gate", "--no-render"]}
+{"fixture": "write", "path": "$REGISTRY/manager.json", "content": "{\"id\": \"manager\", \"role\": \"manager\", \"dir\": \"$W/manager\", \"url\": \"http://box:7420/f/manager/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:00:00+00:00\"}\n"}
+{"fixture": "write", "path": "$REGISTRY/acme-billing.json", "content": "{\"id\": \"acme-billing\", \"role\": \"coordinator\", \"dir\": \"$DIR\", \"url\": \"http://box:7420/f/acme-billing/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:30:00+00:00\"}\n"}
+{"fixture": "write", "path": "$REGISTRY/infra.json", "content": "{\"id\": \"infra\", \"role\": \"coordinator\", \"dir\": \"$W/infra\", \"url\": \"http://box:7420/f/infra/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:40:00+00:00\"}\n"}
+{"fixture": "append", "path": "$W/manager/chat.jsonl", "content": {"id": 1, "at": "2026-01-05T09:01:00+00:00", "from": "user", "to": ["acme-billing"], "text": "@acme-billing where are we?", "re": null, "parts": [{"text": "@acme-billing", "mention": "acme-billing"}, {"text": " where are we?"}], "author": "luiz@github", "delivered": [{"fleet": "acme-billing", "id": 1}]}}
+{"fixture": "append", "path": "$W/manager/chat.jsonl", "content": {"id": 2, "at": "2026-01-05T09:02:00+00:00", "from": "user", "to": ["manager", "infra"], "text": "@manager and @infra: who lands first?", "re": null, "delivered": [{"fleet": "infra", "id": 1}]}}
+{"fixture": "append", "path": "$W/manager/chat.jsonl", "content": {"id": 3, "at": "2026-01-05T09:03:00+00:00", "from": "user", "to": ["infra"], "text": "@infra is the gate green?", "re": null}}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 1, "at": "2026-01-05T09:01:00+00:00", "from": "user", "to": ["coordinator"], "text": "@acme-billing where are we?", "re": null, "parts": [{"text": "@acme-billing where are we?"}], "author": "luiz@github", "via": {"fleet": "manager", "id": 1}}}
+{"fixture": "append", "path": "$W/infra/chat.jsonl", "content": {"id": 1, "at": "2026-01-05T09:02:00+00:00", "from": "user", "to": ["coordinator"], "text": "@manager and @infra: who lands first?", "re": null, "via": {"fleet": "manager", "id": 2}}}
+{"cli": "chat", "argv": ["$W/manager", "inbox", "--as", "user"], "clock": "2026-01-05T09:04:00+00:00"}
+{"cli": "chat", "argv": ["$W/manager", "watch", "--as", "manager", "--all", "--once"]}
+{"cli": "chat", "argv": ["$DIR", "watch", "--as", "coordinator", "--all", "--once"]}
+{"cli": "chat", "argv": ["$DIR", "say", "--as", "coordinator", "--re", "1", "halfway: two workers on milestone 2"], "clock": "2026-01-05T09:05:00+00:00"}
+{"fixture": "append", "path": "$W/manager/chat.jsonl", "content": {"id": 4, "at": "2026-01-05T09:05:01+00:00", "from": "acme-billing", "to": ["user"], "text": "halfway: two workers on milestone 2", "re": 1, "via": {"fleet": "acme-billing", "id": 2}}}
+{"cli": "chat", "argv": ["$W/manager", "log"]}
+{"cli": "chat", "argv": ["$W/manager", "inbox", "--as", "user"]}
+{"fixture": "append", "path": "$W/manager/chat.jsonl", "content": {"id": 5, "at": "2026-01-05T09:06:00+00:00", "from": "user", "to": ["manager"], "text": "and you?", "re": null}}
+{"cli": "chat", "argv": ["$W/manager", "watch", "--as", "manager", "--all", "--resume", "--once", "--fleets", "--batch", "0"]}
+{"fixture": "append", "path": "$W/manager/chat.jsonl", "content": {"id": 6, "at": "2026-01-05T09:07:00+00:00", "from": "user", "to": ["acme-billing"], "text": "thanks", "re": 4, "delivered": [{"fleet": "acme-billing", "id": 3}]}}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 3, "at": "2026-01-05T09:07:00+00:00", "from": "user", "to": ["coordinator"], "text": "thanks", "re": 2, "via": {"fleet": "manager", "id": 6}}}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 4, "at": "2026-01-05T09:07:30+00:00", "from": "user", "to": ["coordinator"], "text": "typed on the fleet's own page", "re": null}}
+{"cli": "chat", "argv": ["$W/manager", "watch", "--as", "manager", "--all", "--resume", "--once", "--fleets", "--batch", "0"]}
+{"cli": "chat", "argv": ["$DIR", "log", "--after", "2"]}

@@ -308,6 +308,50 @@ export function oneLine(value: Json | undefined): string {
   return [...text].filter((char) => !isControl(char)).join("");
 }
 
+/** The coordinators the hub delivered this message to, into their own chats (`delivered`, on a message the
+ * user wrote on the manager's page): each answers it there, so the manager does not forward it. */
+export function handedOver(m: Message): Set<string> {
+  const rows = asArray(m.stored["delivered"]) ?? [];
+
+  return new Set(rows.flatMap((r) => {
+    const fleet = asString(asObject(r)?.["fleet"]);
+
+    return fleet === undefined ? [] : [fleet];
+  }));
+}
+
+/** Whether a recipient of `m` has it only in this chat: one the hub did not deliver it to. */
+export function waitsHere(m: Message): boolean {
+  const handed = handedOver(m);
+
+  return m.to.some((r) => !handed.has(r));
+}
+
+/** A message the hub delivered from the manager's page (`via` the manager). */
+export function fromManager(m: Message): boolean {
+  return asObject(m.stored["via"])?.["fleet"] === "manager";
+}
+
+/** ` [delivered to infra #7]` on a message the hub delivered, ` [via manager #12]` on its copy and on an
+ * answer mirrored back. */
+function marks(m: Message): string {
+  let out = "";
+
+  const rows = (asArray(m.stored["delivered"]) ?? []).flatMap((r) => {
+    const row = asObject(r);
+
+    return row === undefined || row["fleet"] === undefined || row["fleet"] === null ? [] : [row];
+  });
+
+
+  if (rows.length > 0) out += ` [delivered to ${rows.map((r) => `${oneLine(r["fleet"])} #${oneLine(r["id"] ?? null)}`).join(", ")}]`;
+  const via = asObject(m.stored["via"]);
+
+  if (via !== undefined && via["fleet"] !== undefined && via["fleet"] !== null) out += ` [via ${oneLine(via["fleet"])} #${oneLine(via["id"] ?? null)}]`;
+
+  return out;
+}
+
 /** Each message as its one printed line: `#12 user (login) -> a1 (notes-impl) [D1 d1]: text [re #9]`. */
 export function renderLines(machine: Machine, root: string, messages: readonly Message[]): string[] {
   const names = new Map(rosterOf(machine, root).members.map((m) => [m.id, m.name]));
@@ -335,6 +379,7 @@ export function renderLines(machine: Machine, root: string, messages: readonly M
     }
 
     if (truthy(m.side)) line += ` [side chat #${pyText(m.side)}]`;
+    line += marks(m);
     const quote = asObject(m.quote);
     const quoted = asString(quote?.["text"]);
 
@@ -415,7 +460,9 @@ export function listening(machine: Machine, root: string): Listening {
       m.id > seen &&
       m.from === "user" &&
       !answered.has(String(m.id)) &&
-      !(truthy(m.decision) && closed.has(pyRepr(m.decision))),
+      !(truthy(m.decision) && closed.has(pyRepr(m.decision))) &&
+      // So does one the hub delivered to every coordinator it names: each reads it in its own chat.
+      waitsHere(m),
   );
 
   return { on, seen, unread: unread.length, since: unread[0]?.at ?? null };

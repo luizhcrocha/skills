@@ -14,7 +14,7 @@ import { asArray, asNumber, asObject, asString, dumps, parseJson, pyRepr, truthy
 import { decodeLedger } from "../ledger/model.ts";
 import { number } from "../ledger/numbers.ts";
 import type { Machine } from "../world.ts";
-import { oneLine, pyText, stateOfDir } from "./chat.ts";
+import { fromManager, oneLine, pyText, stateOfDir } from "./chat.ts";
 import { Tail } from "./store.ts";
 
 const BREAKS = new Set(["\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", " ", " "]);
@@ -189,7 +189,8 @@ export class FleetNews {
       if (before === undefined) continue;
 
       for (const m of said) {
-        if (m.from !== "user") continue;
+        // A message the hub delivered from the manager's page is the manager's own news.
+        if (m.from !== "user" || fromManager(m)) continue;
 
         if (truthy(m.decision)) {
           const key = pyRepr(m.decision);

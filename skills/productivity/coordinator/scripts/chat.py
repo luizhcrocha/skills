@@ -314,6 +314,37 @@ def _one_line(value) -> str:
     return _CONTROL.sub("", _LINE_BREAK.sub(" \u23ce ", str(value)).replace("\t", " "))
 
 
+def handed_over(m: dict) -> set:
+    """The coordinators the hub delivered this message to, into their own chats (`delivered`, on a message the
+    user wrote on the manager's page): each answers it there, so the manager does not forward it."""
+    rows = m.get("delivered")
+    return {r["fleet"] for r in rows if isinstance(r, dict) and isinstance(r.get("fleet"), str)} if isinstance(rows, list) else set()
+
+
+def _waits_here(m: dict) -> bool:
+    """Whether a recipient of `m` has it only in this chat: one the hub did not deliver it to."""
+    handed = handed_over(m)
+    return any(r not in handed for r in m["to"])
+
+
+def _from_manager(m: dict) -> bool:
+    """A message the hub delivered from the manager's page (`via` the manager)."""
+    return isinstance(m.get("via"), dict) and m["via"].get("fleet") == "manager"
+
+
+def _marks(m: dict) -> str:
+    """` [delivered to infra #7]` on a message the hub delivered, ` [via manager #12]` on its copy and on an
+    answer mirrored back."""
+    out = ""
+    rows = [r for r in m.get("delivered") or [] if isinstance(r, dict) and r.get("fleet") is not None] \
+        if isinstance(m.get("delivered"), list) else []
+    if rows:
+        out += " [delivered to " + ", ".join(f"{_one_line(r['fleet'])} #{_one_line(r.get('id'))}" for r in rows) + "]"
+    if isinstance(m.get("via"), dict) and m["via"].get("fleet") is not None:
+        out += f" [via {_one_line(m['via']['fleet'])} #{_one_line(m['via'].get('id'))}]"
+    return out
+
+
 def _render(root, messages: list[dict]) -> list[str]:
     """Each message as its one printed line: `#12 user (login) -> a1 (notes-impl) [d1]: text [re #9]`,
     the `[d1]` on a message about that decision."""
@@ -329,6 +360,7 @@ def _render(root, messages: list[dict]) -> list[str]:
         f" -> {', '.join(map(label, m['to']))}"
         + (f" [{_one_line((refs.get(m['decision']) + ' ') if refs.get(m['decision']) else '')}{_one_line(m['decision'])}]" if m.get("decision") else "")
         + (f" [side chat #{m['side']}]" if m.get("side") else "")
+        + _marks(m)
         + (f" (quoting{' ' + _one_line(m['quote']['from']) if m['quote'].get('from') else ''}: \"{_one_line(m['quote']['text'])}\")" if isinstance(m.get("quote"), dict) and isinstance(m["quote"].get("text"), str) else "")
         + f": {_one_line(m['text'])}"
         + (f" [re #{_one_line(m['re'])}]" if m["re"] is not None else "")
@@ -395,8 +427,9 @@ def listening(root) -> dict:
     state = _state(root)
     closed = {d.get("id") for d in state.get("decisions", []) if isinstance(d, dict) and d.get("status") != "open"}
     # Unread is what still waits: a message someone answered, or an answer to a decision since closed, does not.
+    # So does one the hub delivered to every coordinator it names: each reads it in its own chat.
     unread = [m for m in messages if m["id"] > seen and m["from"] == "user" and m["id"] not in answered
-              and not (m.get("decision") and m["decision"] in closed)]
+              and not (m.get("decision") and m["decision"] in closed) and _waits_here(m)]
     return {"on": on, "seen": seen, "unread": len(unread), "since": unread[0]["at"] if unread else None}
 
 
@@ -633,8 +666,8 @@ class FleetNews:
             if before is None:
                 continue  # first seen: from now on
             for m in said:
-                if m["from"] != "user":
-                    continue
+                if m["from"] != "user" or _from_manager(m):
+                    continue  # a message the hub delivered from the manager's page is the manager's own news
                 if m.get("decision"):
                     d = next((d for d in rows if d["id"] == m["decision"]), None) or \
                         next((d for d in rows if d.get("ref") and d["ref"] == m["decision"]), None)
@@ -697,7 +730,7 @@ def _watch(root, args, who: str, cursor: Path) -> None:
     wanted = {m["id"] for m in _open_among(messages, who)}
     if args.all:
         wanted |= {m["id"] for r in (host(root), *{a["id"] for a in _members(_agents(root))})
-                   for m in _open_among(messages, r) if m["from"] == "user"}
+                   for m in _open_among(messages, r) if m["from"] == "user" and r not in handed_over(m)}
     first = [m for m in messages if m["id"] > after and m["id"] in wanted]
     show(first)
     news = FleetNews(root, args.resume) if args.fleets else None
@@ -720,7 +753,7 @@ def _watch(root, args, who: str, cursor: Path) -> None:
         if args.once and window is not None and time.monotonic() >= window:
             return
         time.sleep(POLL_S)
-        new = [m for m in tail.read() if who in m["to"] or (args.all and m["from"] == "user")]
+        new = [m for m in tail.read() if who in m["to"] or (args.all and m["from"] == "user" and _waits_here(m))]
         show(new)
         if tell() and window is None:
             window = time.monotonic() + args.batch

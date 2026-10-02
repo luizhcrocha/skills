@@ -781,3 +781,50 @@ describe("a fleet's chat has no manager", () => {
     expect(cli("say", "--as", "manager", "x").code).toBe(1);
   });
 });
+
+describe("what the hub delivered from the manager's page (delivered, via)", () => {
+  let billing: string;
+
+  function line(dir: string, message: JsonObject): void {
+    appendFileSync(join(dir, "chat.jsonl"), `${JSON.stringify({ at: now(), re: null, ...message })}\n`);
+  }
+
+  beforeEach(() => {
+    asManager(["billing", "billing"], ["infra", "infra"]);
+    billing = m.registry.live().find((e) => e.id === "billing")?.dir ?? "";
+  });
+
+  test("the manager's watch leaves out what the coordinators have in their own chats, and marks what it shows", async () => {
+    line(root, { id: 1, from: "user", to: ["billing"], text: "@billing hello", delivered: [{ fleet: "billing", id: 1 }] });
+    line(root, { id: 2, from: "user", to: ["manager", "infra"], text: "@manager and @infra", delivered: [{ fleet: "infra", id: 1 }] });
+    line(root, { id: 3, from: "user", to: ["infra"], text: "@infra not delivered" });
+    const lines = watching("watch", "--as", "manager", "--all");
+    expect(await lines.next()).toBe("#2 user -> manager, infra [delivered to infra #1]: @manager and @infra\n");
+    expect(await lines.next()).toBe("#3 user -> infra: @infra not delivered\n");
+    line(root, { id: 4, from: "user", to: ["billing", "infra"], text: "@billing @infra both", delivered: [{ fleet: "billing", id: 2 }, { fleet: "infra", id: 2 }] });
+    line(root, { id: 5, from: "user", to: ["manager"], text: "and you?" });
+    expect(await lines.next()).toBe("#5 user -> manager: and you?\n");
+  });
+
+  test("the coordinator's watch prints it as the user's, marked as from the manager's page; the mirrored answer is marked too", async () => {
+    line(billing, { id: 1, from: "user", to: ["coordinator"], text: "@billing hello", author: "luiz@github", via: { fleet: "manager", id: 4 } });
+    const { proc, lines } = start(["chat", billing, "watch", "--as", "coordinator", "--all", "--once"], env);
+    procs.push(proc);
+    expect(await lines.next()).toBe("#1 user (luiz@github) -> coordinator [via manager #4]: @billing hello\n");
+    line(root, { id: 4, from: "user", to: ["billing"], text: "@billing hello", delivered: [{ fleet: "billing", id: 1 }] });
+    line(root, { id: 5, from: "billing", to: ["user"], text: "hi", re: 4, via: { fleet: "billing", id: 2 } });
+    expect(cli("log").stdout).toBe("#4 user -> billing [delivered to billing #1]: @billing hello\n#5 billing -> user [via billing #2]: hi [re #4]\n");
+  });
+
+  test("the manager does not count it unread, and its news of the fleets leaves it out", () => {
+    line(root, { id: 1, from: "user", to: ["billing"], text: "@billing hello", delivered: [{ fleet: "billing", id: 1 }] });
+    line(root, { id: 2, from: "user", to: ["manager", "billing"], text: "@manager @billing", delivered: [{ fleet: "billing", id: 2 }] });
+    expect(listening(m, root).unread).toBe(1);
+    const news = new FleetNews(m, root, false);
+    expect(news.read()).toEqual([]);
+    line(billing, { id: 1, from: "user", to: ["coordinator"], text: "@billing hello", via: { fleet: "manager", id: 1 } });
+    line(billing, { id: 2, from: "user", to: ["coordinator"], text: "typed on billing's own page" });
+    expect(news.read()).toEqual(["billing: you wrote to coordinator: typed on billing's own page"]);
+    expect(listening(m, billing).unread).toBe(2);
+  });
+});
