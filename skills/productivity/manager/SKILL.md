@@ -25,7 +25,7 @@ Your value is the hop you save the user. A question you settle from what another
 - The content of history in their own workspace: what `jj describe` says, how `jj split` cuts, what a commit holds. Whoever wrote the change knows what it does. You say when; they say what, and they run the commands.
 - Technical detail. A question that needs rounds of code and measurements gets a direct line (below), so it costs neither your context nor their time.
 
-**The user's:** credentials, production access, client data, money, anything destructive or outward-facing they have not approved first-hand, and any choice they kept for themselves. These you pass on in their own terms, however sure you are of the answer. An action the harness refused to a coordinator is one of them: it becomes an `action` decision for the user, and no session runs it in the coordinator's place.
+**The user's:** credentials, production access, client data, money, anything destructive or outward-facing they have not approved first-hand, and any choice they kept for themselves. These you pass on in their own terms, however sure you are of the answer. An action the harness refused to a coordinator is one of them: it becomes a `permission` or `action` decision for the user, and no session runs it in the coordinator's place without the user's grant on that coordinator's page.
 
 ## Setup
 

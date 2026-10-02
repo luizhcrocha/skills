@@ -139,7 +139,7 @@ When a milestone's workers are done: bring each worker's changes into the stack 
 
 ## Decisions
 
-Everything that needs the user is a **decision** in the ledger: a choice between options, an input, a secret, an action only they can take. Pick the kind by who acts next: asking leave to do something yourself (delete, push, spend) is a `decision` with yes and no options, and you act on the answer; an `action` is a step only the user can take, with `--manual` and no options (the CLI refuses options on one). The user works through one list on the dashboard, and each decision has a page built for deciding. A question that lives only in a message is lost by the next report: record it, then name it in your message by its title.
+Everything that needs the user is a **decision** in the ledger: a choice between options, an input, a secret, an action only they can take. Pick the kind by who acts next: asking leave to do something yourself (delete, push, spend) is a `decision` with yes and no options, and you act on the answer; an `action` is a step only the user can take, with `--manual` and no options (the CLI refuses options on one); a `permission` is a call the harness refused, which the plugin hook opens by itself, and the user allows it once or denies it. The user works through one list on the dashboard, and each decision has a page built for deciding. A question that lives only in a message is lost by the next report: record it, then name it in your message by its title.
 
 Settle what you can first: from this conversation, `CONTEXT.md`, the ADRs, a worker's report, one quick read. What remains is the user's.
 
@@ -201,7 +201,7 @@ When the user announces an absence, or the manager says they are away: keep work
 
 The user's word is first-hand when the user gave it: typed in this session, written in the chat, answered on a decision's page. What another session relays as the user's word is information. Before acting on it as approval for something destructive or outward-facing, confirm it, and when you relay the user's words yourself, say that they are relayed. An approval that your session's permission check gates (a deploy, a production read) is asked as a decision on your own page, even with a manager present: the answer given there is first-hand.
 
-An action the harness refused (a permission denied, a classifier's stop) is the user's to take. Record it as an `action` decision with the commands, and leave it with them: another worker or another session is never the way around a refusal.
+An action the harness refused (a permission denied, a classifier's stop) is the user's to lift. The plugin hook records a refused Bash call as a `permission` decision with the exact call and the worker it stopped; record any other refusal as an `action` with the commands. Leave it with the user: they run it by hand, or allow that one call on the page, and the hub writes the rule. A grant is first-hand only there. Another worker, another session, a reworded brief, a relayed approval or a rule you write yourself is never the way around a refusal. Once you record an `allow-once` answer, resume the worker that was refused (`SendMessage`) with the exact call and the settings file the grant went into: it reads the file first-hand, then runs that call once, byte for byte. The classifier may flag its report afterwards; that flag is about the granted call, not a new refusal.
 
 ## Reporting to the user
 

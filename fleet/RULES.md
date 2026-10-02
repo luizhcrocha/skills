@@ -71,7 +71,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | C51 | C, manager | Landing takes a turn: ask the manager before a push, deploy or shared rebase | mech | manager's landing queue, registry | refuse | **stage 5**: `fleet turn` exits 1 without the turn; `land-check` turns its verdict to `stop` |
 | C52 | C, manager | With no manager, pass its decisions to the user and land on your own word | mech (no manager) / judg | registry | print | **stage 5**: `fleet turn` says so; passing decisions on stays prose |
 | C53 | C, user's word | Relayed words are information; confirm before acting destructively | judg | | | prose |
-| C54 | C, user's word | A harness refusal is the user's: an `action` decision, never a way around | judg | | | prose |
+| C54 | C, user's word | A harness refusal is the user's to lift: a `permission` decision (allowed once, the hub writes the rule) or an `action`, never a way around | judg / mech (grant) | | | prose; code for the grant |
 | C55 | C, reporting | Lead with the fleet's state, only what changed | judg | | | prose |
 | C57 | C, exemptions | A small follow-up goes back to the same worker (SendMessage) or is the coordinator's quick win, never a new worker | judg | | | prose (L9) |
 | C58 | C, exemptions | Two tasks whose files depend on each other are one worker | judg | | | prose (L9) |
