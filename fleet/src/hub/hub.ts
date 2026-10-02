@@ -8,7 +8,9 @@
  *   state.json on each load), `GET /chat`, `GET /events` (SSE: `hello`, `state`, `chat`, pings),
  *   `POST /chat`, `POST /chat/preview`, `GET /skills` (what the session can be told to run, held 60 s),
  *   and the files under its DIR (`decisions/*` sandboxed), with the
- *   same status codes. `/f/<a>/f/<b>/…` is `/f/<b>/…` (a manager's page links its fleets relatively).
+ *   same status codes. `/f/<a>/f/<b>/…` is `/f/<b>/…` (a manager's page links its fleets relatively), and
+ *   a fleet's old id, from before its session's number was dropped (`/f/3.ui-coordinator/…`), moves (301)
+ *   to its id while the entry lives.
  * - `/f/<fleet>/preview/…` and `/f/<fleet>/preview/<worker>/…` the fleet's preview dev servers, HTTP and
  *   WebSocket (`preview-proxy.ts`); `POST /f/<fleet>/preview-workers` takes a worker in or out of the
  *   combined preview, under the chat's write policy.
@@ -419,7 +421,12 @@ export class Hub {
     const at = name.indexOf("@");
 
     if (at >= 0) return this.proxy(req, ip, name.slice(0, at), name.slice(at + 1), rest, url.search, keepOpen);
-    const entry = this.entries().find((e) => e.id === name);
+    const entries = this.entries();
+    const entry = entries.find((e) => e.id === name);
+    // A fleet whose id dropped its session's number (`3.ui-coordinator`) is still found at the old address.
+    const moved = entry === undefined ? entries.find((e) => e.aliases.includes(name)) : undefined;
+
+    if (moved !== undefined) return new Response(null, { status: 301, headers: { Location: `/f/${encodeURIComponent(moved.id)}${rest}${url.search}`, ...NO_STORE } });
 
     if (entry === undefined) return jsonResponse(404, { error: `no fleet '${name}' is being served; the hub's index lists the ones that are` });
 

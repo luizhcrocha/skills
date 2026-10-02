@@ -91,12 +91,12 @@ def live() -> list[dict]:
         title = title_of(entry["dir"])
         if not title or title == entry.get("session"):
             continue
-        new = entry["id"] if entry["role"] == "manager" else slug(title)
+        new = entry["id"] if entry["role"] == "manager" else fleet_name(title)
         if not new or new in KEPT and entry["role"] != "manager" or any(e["id"] == new for e in entries if e is not entry):
             new = entry["id"]
         if new != entry["id"]:
             (home() / f"{entry['id']}.json").unlink(missing_ok=True)
-        entries[i] = _write({**entry, "id": new, "session": title})
+        entries[i] = _write(_with_aliases({**entry, "id": new, "session": title}, aliases_after(entry, entry["id"], new)))
     return sorted(entries, key=lambda e: str(e.get("since", "")))
 
 
@@ -123,10 +123,14 @@ def register(root, url: str, pid: int) -> dict:
     known = next((e for e in map(_read, sorted(home().glob("*.json"))) if e and e.get("dir") == str(root) and e.get("id")), None)
     role, others = role_of(state), [e for e in live() if e["dir"] != str(root)]
     title = title_of(root)
-    if title and role != "manager" and slug(title) and slug(title) not in KEPT and slug(title) not in {e["id"] for e in others}:
-        name = slug(title)
+    free = lambda n: bool(n) and n not in KEPT and n not in {e["id"] for e in others}  # noqa: E731
+    if title and role != "manager" and free(fleet_name(title)):
+        name = fleet_name(title)
     elif known:
-        name = known["id"]
+        # An entry named before session numbers were dropped (`3.ui-coordinator`) drops its number now.
+        session = known.get("session")
+        unnumbered_id = fleet_name(session) if isinstance(session, str) and role != "manager" else known["id"]
+        name = unnumbered_id if drops_number(known["id"], unnumbered_id) and free(unnumbered_id) else known["id"]
     else:
         base = "manager" if role == "manager" else slug(str((state or {}).get("project") or root.parent.name)) or "fleet"
         if role != "manager" and base in KEPT:
@@ -137,9 +141,10 @@ def register(root, url: str, pid: int) -> dict:
             name = f"{base}-{n}"
     if known and known["id"] != name:
         (home() / f"{known['id']}.json").unlink(missing_ok=True)
-    return _write({"id": name, "role": role, "dir": str(root), "url": url, "pid": pid,
-                   "session": title or (known.get("session") if known else None),
-                   "since": known["since"] if known else clock.stamp()})
+    return _write(_with_aliases({"id": name, "role": role, "dir": str(root), "url": url, "pid": pid,
+                                 "session": title or (known.get("session") if known else None),
+                                 "since": known["since"] if known else clock.stamp()},
+                                aliases_after(known, known["id"], name) if known else []))
 
 
 def unregister(root) -> None:
@@ -153,20 +158,52 @@ def slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", text).strip("-.").lower()
 
 
+def unnumbered(session: str) -> str:
+    """A session's name without the number Claude Code puts before it on a restart: `3.ui-coordinator`
+    is `ui-coordinator`."""
+    return re.sub(r"^[0-9]+\.(?=[\s\S])", "", session, count=1)
+
+
+def fleet_name(session: str) -> str:
+    """The fleet name a session's name gives: its slug, without the session's number."""
+    return slug(unnumbered(session))
+
+
+def drops_number(old: str, new: str) -> bool:
+    """Whether `new` is the id `old` without its session's number (`3.ui-coordinator` to `ui-coordinator`)."""
+    return old != new and re.match(r"[0-9]+\.", old) is not None and unnumbered(old) == new
+
+
+def aliases_after(entry: dict, old: str, new: str) -> list:
+    """The aliases an entry keeps once its id goes from `old` to `new`: `old` joins them when `new` is
+    `old` without its session's number. The hub sends an alias's address on to the fleet's."""
+    given = entry.get("aliases")
+    kept = [a for a in given if isinstance(a, str) and a != new] if isinstance(given, list) else []
+    if drops_number(old, new) and old not in kept:
+        kept.append(old)
+    return kept
+
+
+def _with_aliases(entry: dict, aliases: list) -> dict:
+    if aliases:
+        return {**entry, "aliases": aliases}
+    return {k: v for k, v in entry.items() if k != "aliases"}
+
+
 def name(root, session: str) -> dict | str:
     """Give the fleet served from DIR its one name: the session's, which becomes its name in the
     registry, on the manager's page and in the manager's chat too. The entry, or why not."""
     entry = find(root)
     if not entry:
         return f"{root} is not being served; serve it with `fleet serve` first"
-    new = "manager" if entry["role"] == "manager" else slug(session)  # the manager's chat host keeps its name
+    new = "manager" if entry["role"] == "manager" else fleet_name(session)  # the manager's chat host keeps its name
     if not new or (new in KEPT and entry["role"] != "manager"):
         return f"'{session}' cannot name a fleet; the chat keeps {sorted(KEPT)} for itself"
     if any(e["id"] == new for e in live() if e["dir"] != entry["dir"]):
         return f"another fleet is already called '{new}'; pick another session name"
     if new != entry["id"]:
         (home() / f"{entry['id']}.json").unlink(missing_ok=True)
-    return _write({**entry, "id": new, "session": session})
+    return _write(_with_aliases({**entry, "id": new, "session": session}, aliases_after(entry, entry["id"], new)))
 
 
 def manager() -> dict | None:

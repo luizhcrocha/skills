@@ -567,6 +567,11 @@ itself. A manager made later appears the same way, on the same address.
   loopback port exits 1. `REGISTRY/hub/hub.json` holds `{pid, port, url, https, since}` while it
   runs. `--https PORT` also runs `tailscale serve --bg --https=PORT http://127.0.0.1:<port>` (and
   turns it off on exit): the page's browser alerts need a secure page.
+- **Who holds the port**: `hub.json` records `supervised` (started by systemd or launchd). A supervised
+  hub that finds loopback's port held by a hub started by hand (the recorded pid runs `… hub`) stops it
+  (SIGTERM, up to 5 s) and binds, logging `took over from a hub started by hand (pid N)`; anything else
+  on the port stays an error. A hub started by hand while one already serves prints that one's address,
+  says it leaves it, and exits 0.
 - **New code**: the page is read at each request, the server's code only at start. Under a
   supervisor (systemd's `INVOCATION_ID`, launchd's `XPC_SERVICE_NAME`), or with `--reload`, the hub
   looks at its sources (`fleet/src/**`, `package.json`, `bun.lock`) every 15 s and, once a change has

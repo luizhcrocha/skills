@@ -298,3 +298,22 @@ class GateTest(unittest.TestCase):
         self.assertEqual(self.cli("gate", "free", "ui").returncode, 1)
         self.assertEqual(self.cli("gate", "free", "infra").returncode, 0)
         self.assertEqual(self.cli("gate", "take", "ui", "browser tests").returncode, 0)
+
+
+class NameTest(unittest.TestCase):
+    """A fleet's name drops the number Claude Code puts before a restarted session's name."""
+
+    def test_the_number_goes(self):
+        self.assertEqual(fleets.unnumbered("3.ui-coordinator"), "ui-coordinator")
+        self.assertEqual(fleets.unnumbered("ui-coordinator"), "ui-coordinator")
+        self.assertEqual(fleets.unnumbered("3."), "3.")
+        self.assertEqual(fleets.unnumbered("v2.ui"), "v2.ui")
+        self.assertEqual(fleets.fleet_name("3.UI Coordinator"), "ui-coordinator")
+
+    def test_the_old_id_is_kept_as_an_alias(self):
+        self.assertTrue(fleets.drops_number("3.ui-coordinator", "ui-coordinator"))
+        self.assertFalse(fleets.drops_number("ui-coordinator", "billing"))
+        self.assertEqual(fleets.aliases_after({}, "3.ui-coordinator", "ui-coordinator"), ["3.ui-coordinator"])
+        self.assertEqual(fleets.aliases_after({"aliases": ["2.ui-coordinator"]}, "3.ui-coordinator", "ui-coordinator"),
+                         ["2.ui-coordinator", "3.ui-coordinator"])
+        self.assertEqual(fleets.aliases_after({}, "billing", "invoices"), [])

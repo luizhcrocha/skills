@@ -75,9 +75,19 @@ function hub(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
 
     if (port === undefined || (httpsText !== undefined && https === undefined)) return yield* refuse("hub", "a port is a number from 1 to 65535");
     const log = (line: string): void => out.err(`hub: ${line}\n`);
+    const underSupervisor = supervised(machine.env);
+    const serving = underSupervisor ? undefined : runningHub(machine.registry.place.home);
+
+    // A hub started by hand leaves a running hub alone: under a supervisor it would only be stopped again.
+    if (serving !== undefined) {
+      out.out(`${serving.url}\n`);
+      log(`a hub already serves ${serving.url} (pid ${String(serving.pid)}${serving.supervised ? ", the service" : ""}); leaving it`);
+
+      return 0;
+    }
 
     const running = yield* Effect.promise(() =>
-      startHub({ port, machine, tailscale: tailscaleBin(machine.env), peers, hosts: [], https }, log),
+      startHub({ port, machine, tailscale: tailscaleBin(machine.env), peers, hosts: [], https, supervised: underSupervisor }, log),
     );
 
     if (running instanceof Error) return yield* refuse("hub", running.message);

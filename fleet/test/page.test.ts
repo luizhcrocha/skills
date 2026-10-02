@@ -342,7 +342,7 @@ describe("served ports", () => {
       writeFileSync(path, lines.map(([at, text]) => `${JSON.stringify({ timestamp: at, text })}\n`).join(""));
       const dir = `/tmp/x/-home-x/${sid}/scratchpad/coordinator`;
 
-      return { id, role, dir, url: "", session: null, since: "", raw: {} };
+      return { id, role, dir, url: "", session: null, since: "", aliases: [], raw: {} };
     };
 
     const infra = fleetOf("infra", "s1", [["2026-09-29T10:00:00Z", "serving on https://box.ts.net:5555/"]]);

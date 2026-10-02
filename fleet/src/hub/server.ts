@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { stampOf } from "../clock.ts";
 import { makeDirs, readText, remove, writeAtomic } from "../files.ts";
 import { asNumber, asObject, asString, dumps, parseObject } from "../json.ts";
+import { commandOf } from "../procs.ts";
 import { alive } from "../registry.ts";
 import { Hub, type HubOptions } from "./hub.ts";
 import { previewSockets, type SocketData } from "./preview-proxy.ts";
@@ -25,8 +26,16 @@ export function hubRecordPath(home: string): string {
   return join(home, "hub", "hub.json");
 }
 
+/** A hub's record: where it runs, and whether a supervisor (systemd, launchd) started it. */
+export interface HubRecord {
+  readonly pid: number;
+  readonly port: number;
+  readonly url: string;
+  readonly supervised: boolean;
+}
+
 /** What a running hub recorded: its pid, port and address, or undefined when none runs. */
-export function runningHub(home: string): { readonly pid: number; readonly port: number; readonly url: string } | undefined {
+export function runningHub(home: string): HubRecord | undefined {
   const record = asObject(Option.getOrUndefined(parseObject(readText(hubRecordPath(home)) ?? "")));
   const pid = asNumber(record?.["pid"]);
   const port = asNumber(record?.["port"]);
@@ -34,7 +43,12 @@ export function runningHub(home: string): { readonly pid: number; readonly port:
 
   if (pid === undefined || port === undefined || url === undefined || !alive(pid)) return undefined;
 
-  return { pid, port, url };
+  return { pid, port, url, supervised: record?.["supervised"] === true };
+}
+
+/** Whether `pid` runs the fleet's hub: its command line is `… main.ts hub …` or `… fleet hub …`. */
+export function isHubProcess(pid: number): boolean {
+  return /(?:main\.ts|fleet)\s+hub(?:\s|$)/.test(commandOf(pid));
 }
 
 /** A running hub. */
@@ -51,6 +65,8 @@ type Server = Bun.Server<SocketData>;
 /** What the hub starts with: its options, and the https port `tailscale serve` exposes it on, if any. */
 export interface StartOptions extends HubOptions {
   readonly https: number | undefined;
+  /** Started by systemd or launchd: it takes the port over from a hub started by hand. */
+  readonly supervised?: boolean;
 }
 
 /** Start the hub; why not when loopback's port is taken. */
@@ -76,14 +92,16 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
     });
 
   const servers: Server[] = [];
+  const home = options.machine.registry.place.home;
+  const bound = await bindLoopback(listen, home, options.supervised === true, log);
 
-  try {
-    servers.push(listen("127.0.0.1"));
-  } catch (cause: unknown) {
+  if (bound instanceof Error) {
     hub.stop();
 
-    return new Error(`cannot listen on 127.0.0.1:${port}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    return new Error(`cannot listen on 127.0.0.1:${port}: ${bound.message}`);
   }
+
+  servers.push(bound);
 
   let tailnetBound: string | undefined;
 
@@ -117,9 +135,11 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
     }
   }
 
-  const home = options.machine.registry.place.home;
   makeDirs(join(home, "hub"));
-  writeAtomic(hubRecordPath(home), `${dumps({ pid: process.pid, port, url, https: https ?? null, since: stampOf(options.machine.now()) }, { indent: 2 })}\n`);
+  writeAtomic(
+    hubRecordPath(home),
+    `${dumps({ pid: process.pid, port, url, https: https ?? null, supervised: options.supervised === true, since: stampOf(options.machine.now()) }, { indent: 2 })}\n`,
+  );
   log(`serving ${url} (127.0.0.1:${port}${tailnetBound === undefined ? "" : `, ${tailnetBound}:${port}`})`);
 
   return {
@@ -136,4 +156,40 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
       if (asNumber(asObject(Option.getOrUndefined(parseObject(readText(hubRecordPath(home)) ?? "")))?.["pid"]) === process.pid) remove(hubRecordPath(home));
     },
   };
+}
+
+/**
+ * Listen on loopback. A supervised hub that finds the port held by a hub started by hand (a session ran
+ * `fleet hub` while the service was down) stops that one and takes the port, instead of failing every few
+ * seconds while the hand-started one keeps it. Anything else on the port stays the caller's error.
+ */
+async function bindLoopback(listen: (hostname: string) => Server, home: string, supervised: boolean, log: (line: string) => void): Promise<Server | Error> {
+  const attempt = (): Server | Error => {
+    try {
+      return listen("127.0.0.1");
+    } catch (cause: unknown) {
+      return cause instanceof Error ? cause : new Error(String(cause));
+    }
+  };
+
+  const first = attempt();
+
+  if (!(first instanceof Error) || !supervised) return first;
+  const other = runningHub(home);
+
+  if (other === undefined || other.supervised || other.pid === process.pid || !isHubProcess(other.pid)) return first;
+  process.kill(other.pid, "SIGTERM");
+
+  for (let waited = 0; waited < 5_000; waited += 200) {
+    await Bun.sleep(200);
+    const next = attempt();
+
+    if (!(next instanceof Error)) {
+      log(`took over from a hub started by hand (pid ${String(other.pid)})`);
+
+      return next;
+    }
+  }
+
+  return first;
 }

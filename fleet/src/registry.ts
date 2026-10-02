@@ -9,7 +9,7 @@ import { join } from "node:path";
 import * as Option from "effect/Option";
 
 import { isDir, listDir, makeDirs, readText, remove, resolvePath, writeAtomic, writeText } from "./files.ts";
-import { asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject } from "./json.ts";
+import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject } from "./json.ts";
 import { transcriptOf } from "./transcripts.ts";
 
 /** The names the chat keeps for itself. */
@@ -28,6 +28,8 @@ export interface Entry {
   readonly url: string;
   readonly session: string | null;
   readonly since: string;
+  /** The ids it had before its session's number was dropped (`3.ui-coordinator`): the hub sends them on to `id`. */
+  readonly aliases: readonly string[];
   /** The entry as written, with what this model does not read. */
   readonly raw: JsonObject;
 }
@@ -57,6 +59,38 @@ export function slug(text: string): string {
     .replace(/[^A-Za-z0-9_.-]+/g, "-")
     .replace(/^[-.]+|[-.]+$/g, "")
     .toLowerCase();
+}
+
+/** A session's name without the number Claude Code puts before it on a restart: `3.ui-coordinator` is `ui-coordinator`. */
+export function unnumbered(session: string): string {
+  return session.replace(/^[0-9]+\.(?=[\s\S])/, "");
+}
+
+/** The fleet name a session's name gives: its slug, without the session's number. */
+export function fleetName(session: string): string {
+  return slug(unnumbered(session));
+}
+
+/** Whether `to` is the id `from` without its session's number (`3.ui-coordinator` to `ui-coordinator`). */
+export function dropsNumber(from: string, to: string): boolean {
+  return from !== to && /^[0-9]+\./.test(from) && unnumbered(from) === to;
+}
+
+/** The aliases an entry keeps once its id goes from `from` to `to`: `from` joins them when `to` is `from` without its session's number. */
+export function aliasesAfter(raw: JsonObject, from: string, to: string): string[] {
+  const kept = aliasesOf(raw).filter((a) => a !== to);
+
+  if (dropsNumber(from, to) && !kept.includes(from)) kept.push(from);
+
+  return kept;
+}
+
+/** `raw` with `aliases` set to `aliases`, or without the key when there are none. */
+function withAliases(raw: JsonObject, aliases: readonly string[]): JsonObject {
+  if (aliases.length > 0) return { ...raw, aliases: [...aliases] };
+  const { aliases: _dropped, ...rest } = raw;
+
+  return rest;
 }
 
 /** The role a ledger gives its DIR's host. */
@@ -110,8 +144,17 @@ function entryOf(raw: JsonObject): Entry | undefined {
     url: asString(raw["url"]) ?? "",
     session: asString(raw["session"]) ?? null,
     since: asString(raw["since"]) ?? "",
+    aliases: aliasesOf(raw),
     raw,
   };
+}
+
+function aliasesOf(raw: JsonObject): string[] {
+  return (asArray(raw["aliases"]) ?? []).flatMap((a) => {
+    const alias = asString(a);
+
+    return alias === undefined ? [] : [alias];
+  });
 }
 
 /** The registry of this machine's fleets. */
@@ -141,8 +184,8 @@ export class Registry {
     return title === undefined || title === "" ? undefined : title;
   }
 
-  private write(raw: JsonObject, changes: Readonly<Record<string, Json>>): Entry {
-    const next: JsonObject = { ...raw, ...changes };
+  private write(raw: JsonObject, changes: Readonly<Record<string, Json>>, aliases: readonly string[]): Entry {
+    const next = withAliases({ ...raw, ...changes }, aliases);
     makeDirs(this.place.home);
     const id = asString(next["id"]) ?? "";
     writeAtomic(this.path(id), `${dumps(next, { indent: 2 })}\n`);
@@ -154,6 +197,7 @@ export class Registry {
       url: asString(next["url"]) ?? "",
       session: asString(next["session"]) ?? null,
       since: asString(next["since"]) ?? "",
+      aliases: aliasesOf(next),
       raw: next,
     };
   }
@@ -175,13 +219,13 @@ export class Registry {
       const title = this.titleOf(entry.dir);
 
       if (title === undefined || title === entry.session) return;
-      let next = entry.role === "manager" ? entry.id : slug(title);
+      let next = entry.role === "manager" ? entry.id : fleetName(title);
       const kept = isKept(next) && entry.role !== "manager";
 
       if (next === "" || kept || entries.some((e) => e !== entry && e.id === next)) next = entry.id;
 
       if (next !== entry.id) remove(this.path(entry.id));
-      entries[i] = this.write(entry.raw, { id: next, session: title });
+      entries[i] = this.write(entry.raw, { id: next, session: title }, aliasesAfter(entry.raw, entry.id, next));
     });
 
     return entries.sort((a, b) => (a.since < b.since ? -1 : a.since > b.since ? 1 : 0));
@@ -213,12 +257,16 @@ export class Registry {
     const title = this.titleOf(dir);
     const kept = isKept;
     const knownId = asString(known?.["id"]);
+    const knownSession = asString(known?.["session"]);
+    const free = (id: string): boolean => id !== "" && !kept(id) && !others.some((e) => e.id === id);
     let name: string;
 
-    if (title !== undefined && role !== "manager" && slug(title) !== "" && !kept(slug(title)) && !others.some((e) => e.id === slug(title))) {
-      name = slug(title);
+    if (title !== undefined && role !== "manager" && free(fleetName(title))) {
+      name = fleetName(title);
     } else if (knownId !== undefined) {
-      name = knownId;
+      // An entry named before session numbers were dropped (`3.ui-coordinator`) drops its number now.
+      const unnumberedId = knownSession === undefined || role === "manager" ? knownId : fleetName(knownSession);
+      name = dropsNumber(knownId, unnumberedId) && free(unnumberedId) ? unnumberedId : knownId;
     } else {
       const project = asString(state?.["project"]);
       let base = role === "manager" ? "manager" : slug(project !== undefined && project !== "" ? project : (dir.split("/").at(-2) ?? ""));
@@ -238,6 +286,7 @@ export class Registry {
     return this.write(
       {},
       { id: name, role, dir, url, pid, session, since: known === undefined ? stamp : (asString(known["since"]) ?? stamp) },
+      known === undefined || knownId === undefined ? [] : aliasesAfter(known, knownId, name),
     );
   }
 
@@ -257,7 +306,7 @@ export class Registry {
     const entry = this.find(root);
 
     if (entry === undefined) return { why: `${root} is not being served; serve it with \`fleet serve\` first` };
-    const next = entry.role === "manager" ? "manager" : slug(session);
+    const next = entry.role === "manager" ? "manager" : fleetName(session);
 
     if (next === "" || (isKept(next) && entry.role !== "manager")) {
       return { why: `'${session}' cannot name a fleet; the chat keeps ['coordinator', 'manager', 'user'] for itself` };
@@ -269,7 +318,7 @@ export class Registry {
 
     if (next !== entry.id) remove(this.path(entry.id));
 
-    return this.write(entry.raw, { id: next, session });
+    return this.write(entry.raw, { id: next, session }, aliasesAfter(entry.raw, entry.id, next));
   }
 
   private gatePath(): string {
