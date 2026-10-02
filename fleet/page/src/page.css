@@ -129,6 +129,11 @@
   .tabs [aria-current="true"], .tabs [aria-expanded="true"] { color: var(--text); }
   .tabs [aria-current="true"]::after, .tabs [aria-expanded="true"]::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 3px; border-radius: 3px 3px 0 0; background: var(--text); }
   .tabs .to-chat { margin-left: auto; }
+  /* A narrow column (the page beside the docked chat at its narrowest) packs the tabs closer, so all six fit. */
+  @container main (max-width: 640px) {
+    .tabs a, .tabs button { gap: 6px; padding: 0 8px; }
+    .tabs [aria-current="true"]::after, .tabs [aria-expanded="true"]::after { left: 8px; right: 8px; }
+  }
   .badge { min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 10px; background: var(--you); color: var(--bg); font-size: 0.75rem; font-weight: 700; font-variant-numeric: tabular-nums; display: grid; place-items: center; line-height: 1; }
   .badge.alert { background: var(--critical); }
   @media (max-width: 759.98px) {
@@ -745,23 +750,30 @@
   .mentions.under { top: calc(100% + 2px); bottom: auto; left: 0; right: 0; z-index: 30; font-weight: 400; font-stretch: 100%; color: var(--text); scroll-margin-bottom: 12px; }
   .chat:not(.available) .reply-btn { display: none; }
 
-  @media (min-width: 1100px) {
+  @media (min-width: 920px) {
     .shell { display: grid; grid-template-columns: minmax(0, 1fr) var(--chat-w); }
     .shell.chat-collapsed { grid-template-columns: minmax(0, 1fr); }
     .chat { position: sticky; top: 0; height: 100dvh; border-left: 1px solid var(--line); }
     .shell.chat-collapsed .chat { display: none; }
     :root:has(.shell:not(.chat-collapsed)) .toasts { right: calc(var(--chat-w) + 16px); }
   }
-  @media (max-width: 1099.98px) {
+  /* Below the docked width the chat is a sheet over the page, and looks it: a scrim dims the page behind
+     it (inert while the sheet is open), and a click on it closes the sheet. */
+  .chat-scrim { display: none; }
+  @media (max-width: 919.98px) {
     .chat { position: fixed; z-index: 45; top: var(--vv-top, 0px); right: 0; height: var(--vv-h, 100dvh); width: min(440px, 100%); box-shadow: var(--shadow); border-left: 1px solid var(--line); }
     .chat:not(.open) { display: none; }
     .chat-head { padding-top: max(6px, env(safe-area-inset-top, 0px)); }
+    .chat-scrim { display: block; position: fixed; inset: 0; z-index: 44; background: rgb(10 16 13 / 0.5); }
   }
   @media (max-width: 759.98px) {
+    .chat-scrim { display: none; }
     .chat { width: 100%; border-left: 0; }
     .chat-head { min-height: 56px; }
     html.chat-open, html.chat-open body { overflow: hidden; overscroll-behavior: none; }
   }
-  @media (prefers-reduced-motion: no-preference) and (max-width: 1099.98px) {
+  @media (prefers-reduced-motion: no-preference) and (max-width: 919.98px) {
     .chat.open { animation: rise 200ms ease-out; }
+    .chat-scrim { animation: fade-in 200ms ease-out; }
+    @keyframes fade-in { from { opacity: 0; } }
   }

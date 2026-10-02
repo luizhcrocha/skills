@@ -158,6 +158,7 @@ function Body(props: { readonly live: boolean }): JSX.Element {
           <DecisionPage />
         </div>
         <Chat />
+        <div class="chat-scrim" id="chat-scrim" aria-hidden="true" hidden={!modal()} onClick={() => ui.closeChat()} />
       </div>
       <SelTool />
       <Finder />

@@ -56,6 +56,12 @@ export function keyed<T>(rows: readonly T[], key: (row: T) => string): { key: st
   });
 }
 
+/**
+ * The narrowest window the chat docks in, beside the page; below it the chat is a sheet over the page.
+ * page.css's media queries say the same number (dock.test.tsx holds them to it).
+ */
+export const DOCK_MIN_PX = 920;
+
 /** The media queries the layout follows, as signals. */
 function media(query: string): Accessor<boolean> {
   const list = globalThis.matchMedia?.(query);
@@ -105,7 +111,7 @@ export function createModel(initial: State) {
   );
 
   const phone = media("(max-width: 759.98px)");
-  const docked = media("(min-width: 1100px)");
+  const docked = media(`(min-width: ${String(DOCK_MIN_PX)}px)`);
   const coarse = media("(pointer: coarse)");
 
   /* ------------------------------------------------------------------ the fleet's state */
