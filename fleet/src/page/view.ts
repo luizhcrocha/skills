@@ -19,6 +19,8 @@ import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
 import { isRunning, lastError, logTail } from "../preview/devserver.ts";
 import { readRecord, type DevServer } from "../preview/record.ts";
+import { readPortStates } from "../hub/preview-ports.ts";
+import { runningHub } from "../hub/server.ts";
 import { candidates, everyMs, included } from "../preview/updater.ts";
 import { numberState, pyStr } from "./number.ts";
 import { splitUrl } from "./url.ts";
@@ -240,8 +242,17 @@ function foundJson(found: readonly Found[]): JsonObject[] {
   return found.map((x) => ({ port: x.port, url: x.url, target: x.target, pid: x.pid, cwd: x.cwd, command: x.command, fleet: x.fleet, up: x.up }));
 }
 
-/** A dev server as the page shows it: whether it runs and answers, its port, its last error. */
-function serverView(lookups: Lookups, s: DevServer | null): JsonObject {
+/** Why the running hub cannot listen on a root-mode preview's public port, or null. */
+function publicError(machine: Machine, port: number | null): string | null {
+  const home = machine.registry.place.home;
+  const hub = port === null ? undefined : runningHub(home);
+
+  return hub === undefined ? null : (readPortStates(home, hub.pid)?.find((p) => p.port === port)?.error ?? null);
+}
+
+/** A dev server as the page shows it: whether it runs and answers, its port, its last error, and in root
+ * mode its public port (the page links this host at it) and why the hub cannot listen there. */
+function serverView(machine: Machine, lookups: Lookups, s: DevServer | null): JsonObject {
   const running = s !== null && s.pid !== null && isRunning(s.pid);
 
   return {
@@ -249,6 +260,8 @@ function serverView(lookups: Lookups, s: DevServer | null): JsonObject {
     up: running && s !== null ? (lookups.up([`http://127.0.0.1:${s.port}/`])[0] ?? false) : false,
     port: s?.port ?? null,
     log: s === null ? null : lastError(logTail(s.log)),
+    public: s?.public ?? null,
+    public_error: running ? publicError(machine, s?.public ?? null) : null,
   };
 }
 
@@ -276,7 +289,7 @@ export function previewView(machine: Machine, lookups: Lookups, root: string, st
   return {
     url: combined ? "preview/" : null,
     address: combined && address !== null ? `${address}preview/` : null,
-    ...serverView(lookups, combined ? record.server : null),
+    ...serverView(machine, lookups, combined ? record.server : null),
     updater: record.updater !== null && isRunning(record.updater),
     every: everyMs(machine) / 1000,
     workers,
@@ -287,7 +300,7 @@ export function previewView(machine: Machine, lookups: Lookups, root: string, st
       worker: w.worker,
       url: `preview/${encodeURIComponent(w.worker)}/`,
       address: address === null ? null : `${address}preview/${encodeURIComponent(w.worker)}/`,
-      ...serverView(lookups, w),
+      ...serverView(machine, lookups, w),
     })),
   };
 }

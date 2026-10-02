@@ -237,6 +237,10 @@ export interface PreviewServer {
   readonly port: number | null;
   /** Its log's last error, while the server has not reloaded since. */
   readonly log: string;
+  /** In root mode, the public port the hub serves it at, at the root of its own origin (this host); else null. */
+  readonly public: number | null;
+  /** Why the hub cannot listen on that port, or "". */
+  readonly publicError: string;
 }
 
 /** A dev server in one worker's own workspace. */
@@ -1137,6 +1141,8 @@ function previewOf(v: Json | undefined): Preview | null {
     up: r["up"] === true,
     port: Number.isFinite(r["port"]) ? Number(r["port"]) : null,
     log: text(r["log"]),
+    public: Number.isInteger(r["public"]) && Number(r["public"]) > 0 && Number(r["public"]) < 65536 ? Number(r["public"]) : null,
+    publicError: text(r["public_error"]),
   });
 
   return {

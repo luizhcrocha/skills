@@ -524,6 +524,41 @@ function Chart(props: { readonly rows: () => readonly Agent[] }): JSX.Element {
   );
 }
 
+/** A root-mode preview's own origin: this host at its public port, plain http (the hub serves it there). */
+function rootAddress(port: number): string {
+  return `http://${location.hostname}:${String(port)}/`;
+}
+
+/** A root-mode preview's link to its own origin, and why the hub cannot listen there when it cannot. */
+function RootLink(props: { readonly server: PreviewServer; readonly id?: string }): JSX.Element {
+  return (
+    <Show when={props.server.public}>
+      {(port) => (
+        <>
+          <p class="meta">
+            At its own address:{" "}
+            <a
+              class="preview-root-link"
+              id={props.id}
+              href={rootAddress(port())}
+              target="_blank"
+              rel="noopener"
+              title="Served at the root, in plain http: no secure context there, so copying to the clipboard does not work"
+            >
+              {rootAddress(port())}
+            </a>
+          </p>
+          <Show when={props.server.publicError}>
+            <p class="meta deaf-line">
+              The hub cannot listen on port {String(port())}: {props.server.publicError}
+            </p>
+          </Show>
+        </>
+      )}
+    </Show>
+  );
+}
+
 /** A preview's dev server in words: up, starting, stopped. */
 function serverPill(s: PreviewServer): { readonly cls: string; readonly text: string } {
   return s.running ? (s.up ? { cls: "running", text: "up" } : { cls: "open", text: "starting" }) : { cls: "stopped", text: "stopped" };
@@ -581,6 +616,7 @@ function PreviewPart(props: { readonly preview: Preview }): JSX.Element {
             <Show when={p().address}>
               <p class="meta lane">{p().address}</p>
             </Show>
+            <RootLink server={p()} id="preview-root-link" />
             <p class="meta">
               Every worker's edits as they are now, merged on the stack and served live; looked at every {String(p().every)} s
               {p().updated ? ", last changed " + m.ago(p().updated) : ""}.
@@ -657,6 +693,7 @@ function PreviewPart(props: { readonly preview: Preview }): JSX.Element {
               <Show when={o().address}>
                 <p class="meta lane">{o().address}</p>
               </Show>
+              <RootLink server={o()} />
               <Show when={o().log}>
                 <pre class="preview-pre">{o().log}</pre>
               </Show>

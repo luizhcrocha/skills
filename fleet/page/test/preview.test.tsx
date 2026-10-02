@@ -16,6 +16,9 @@ import { coordinatorView, type View } from "./fixtures.ts";
 
 const NOW = Date.now();
 
+/** a4's own preview. */
+const OWN: View = { worker: "a4", url: "preview/a4/", address: "https://box.tail.ts.net:7443/f/billing/preview/a4/", running: true, up: false, port: 5174, log: null };
+
 const PREVIEW: View = {
   url: "preview/",
   address: "https://box.tail.ts.net:7443/f/billing/preview/",
@@ -32,7 +35,7 @@ const PREVIEW: View = {
   conflicts: [],
   error: null,
   updated: new Date(NOW - 60_000).toISOString(),
-  per_worker: [{ worker: "a4", url: "preview/a4/", address: "https://box.tail.ts.net:7443/f/billing/preview/a4/", running: true, up: false, port: 5174, log: null }],
+  per_worker: [OWN],
 };
 
 let page: { m: Model; ui: Ui };
@@ -158,4 +161,28 @@ test("a fleet with no preview shows no block, and the ledger's dev command is no
   flush();
   expect(root.querySelector("#preview")).toBeNull();
   expect(root.querySelector("#preview-links")).toBeNull();
+});
+
+test("a root-mode preview links its own origin, this host at its public port in plain http, and says when the hub cannot listen there", () => {
+  page.m.takeState(
+    JSON.stringify(
+      withPreview({
+        ...PREVIEW,
+        public: 7501,
+        public_error: null,
+        per_worker: [{ ...OWN, public: 7502, public_error: "cannot listen on 127.0.0.1:7502: port 7502 is in use" }],
+      }),
+    ),
+  );
+  flush();
+  const own = root.querySelector("#preview-root-link");
+  expect(own?.getAttribute("href")).toBe(`http://${location.hostname}:7501/`);
+  expect(own?.getAttribute("title")).toContain("no secure context");
+  const worker = [...root.querySelectorAll("#preview .preview-root-link")].map((a) => a.getAttribute("href"));
+  expect(worker).toEqual([`http://${location.hostname}:7501/`, `http://${location.hostname}:7502/`]);
+  expect(root.querySelector("#preview")?.textContent).toContain("The hub cannot listen on port 7502: cannot listen on 127.0.0.1:7502: port 7502 is in use");
+});
+
+test("a preview that is not in root mode has no link of its own origin", () => {
+  expect(root.querySelector("#preview .preview-root-link")).toBeNull();
 });

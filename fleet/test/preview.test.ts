@@ -401,6 +401,9 @@ describe("root mode", () => {
     expect(preview("start", "--cmd", STUB).code).toBe(0);
     expect(record().server?.base).toBe("/");
     expect(record().server?.public).toBe(record().ports.combined);
+    const lookups = { up: (urls: readonly string[]) => urls.map(() => false), discovered: () => [], spend: new SpendReader() };
+    const shown = asObject(view(machine(env), lookups, readJson(join(dir, "state.json")), dir)["preview"]);
+    expect(shown).toMatchObject({ public: record().server?.public ?? 0, public_error: null });
   });
 
   test("a port of the range already taken on this machine is skipped, and a range with none free is refused", () => {
