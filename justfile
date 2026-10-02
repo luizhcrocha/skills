@@ -43,7 +43,7 @@ build-page:
 test-page:
     cd fleet/page && bun install --frozen-lockfile --silent
     cd lint/ts && npm install --no-audit --no-fund --prefer-offline --silent
-    cd fleet/page && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/oxlint -c .oxlintrc.json --deny-warnings src test build.ts && bun build.ts --check && bun test --conditions browser --timeout 20000
+    cd fleet/page && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/oxlint -c .oxlintrc.json --deny-warnings src test build.ts && bun build.ts --check && TZ=UTC bun test --conditions browser --timeout 20000
 
 # The lang-* skills' sources tables as JSON (--skill NAME, --stale DAYS)
 lang-sources *args:

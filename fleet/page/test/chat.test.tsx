@@ -4,7 +4,7 @@
  * chats, decision activity left out (a marker each when asked for, a thread on the decision's page), and a
  * message appended in place with the draft kept. Where things sit on the screen is `browser.test.ts`'s.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, setSystemTime, test } from "bun:test";
 import { flush } from "solid-js";
 import { render } from "@solidjs/web";
 
@@ -16,6 +16,11 @@ import type { Ui } from "../src/ui.ts";
 import { chatConversation, chatView, type Message } from "./fixtures.ts";
 
 const NOW = Date.parse("2026-10-01T12:00:00Z");
+
+// The page labels days ("Today", "Yesterday") from its own clock: hold it at NOW, or the labels move with the calendar.
+beforeAll(() => setSystemTime(new Date(NOW)));
+
+afterAll(() => setSystemTime());
 
 let page: { m: Model; ui: Ui };
 
