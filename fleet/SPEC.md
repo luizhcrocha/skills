@@ -1051,7 +1051,11 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   is given a **public port**, on which the hub serves it over TLS at the root of an origin of its own,
   `https://<MagicDNS name>:<port>/`, with this machine's Tailscale certificate (see [the
   hub](#the-hub-fleet-hub)); the certificate names the MagicDNS name, so that is the one address, never
-  the tailnet IP, and without Tailscale there is none. The port is given once per preview (the combined one, each worker's) and kept in the
+  the tailnet IP, and without Tailscale there is none. The port speaks HTTP/2 (ALPN `h2`, Node's `http2`
+  secure server, `fleet/src/hub/preview-serve.ts`) and HTTP/1.1 for clients without it and for
+  WebSockets: over HTTP/1.1 a browser opens 6 connections per origin, so an app that holds long polls
+  open (Casos keeps 17) queued every other request behind them. Any port the hub serves over TLS itself
+  goes through that server, never `Bun.serve`'s `tls`, which has no HTTP/2. The port is given once per preview (the combined one, each worker's) and kept in the
   record's `ports {combined, workers {<worker>: port}}` across stops and starts, so the address stays
   good; `server.public` (and a per-worker server's) names it while that start runs in root mode. It comes
   from `FLEET_PREVIEW_PORTS` (`LO-HI`), **7500-7599** by default: beside the hub's 7420 and 7443, clear of

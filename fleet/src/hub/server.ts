@@ -5,7 +5,8 @@
  * it at https://<this machine>:<https>/ (Tailscale's certificate; the browser's alerts need a secure page).
  * `REGISTRY/hub/hub.json` says where it runs, for `fleet serve`. It also serves the public port of each
  * root-mode preview over TLS, in the same two places (`preview-ports.ts`), with this machine's Tailscale
- * certificate held in memory and renewed as it nears its end (`preview-tls.ts`).
+ * certificate held in memory and renewed as it nears its end (`preview-tls.ts`), in HTTP/2 and HTTP/1.1
+ * (`preview-serve.ts`).
  */
 import { join } from "node:path";
 
@@ -17,6 +18,7 @@ import { alive } from "../registry.ts";
 import { Hub, type HubOptions, type Rooted } from "./hub.ts";
 import { PreviewPorts } from "./preview-ports.ts";
 import { previewSockets, type SocketData, type Upgrade } from "./preview-proxy.ts";
+import { servePreviewPort, type PortListener } from "./preview-serve.ts";
 import { PreviewCertificate, tailscaleCertificate, type CertificateSource } from "./preview-tls.ts";
 import { tailscale } from "./tailnet.ts";
 
@@ -110,13 +112,8 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
 
   const listen = (hostname: string): Server => Bun.serve<SocketData>({ hostname, port, ...handlers((req, ip, keepOpen, upgrade) => hub.fetch(req, ip, keepOpen, upgrade)) });
 
-  const listenRooted = (hostname: string, at: number, slot: Rooted, tls: { readonly cert: string; readonly key: string }): Server =>
-    Bun.serve<SocketData>({
-      hostname,
-      port: at,
-      tls: { cert: tls.cert, key: tls.key },
-      ...handlers((req, ip, keepOpen, upgrade) => hub.fetchRooted(req, ip, slot, keepOpen, upgrade)),
-    });
+  const listenRooted = (hostname: string, at: number, slot: Rooted, tls: { readonly cert: string; readonly key: string }): PortListener =>
+    servePreviewPort(hostname, at, tls, (req, ip, upgrade) => hub.fetchRooted(req, ip, slot, () => {}, upgrade));
 
   const servers: Server[] = [];
   const home = options.machine.registry.place.home;

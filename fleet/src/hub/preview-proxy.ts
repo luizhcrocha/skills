@@ -73,7 +73,7 @@ export function previewTarget(record: PreviewRecord | undefined, fleet: string, 
 const HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "trailer", "host", "content-length", "accept-encoding"]);
 
 /** Whether a request header says who the request is from, which only `proxiedIdentity` sets. */
-function isIdentity(key: string): boolean {
+export function isIdentity(key: string): boolean {
   const k = key.toLowerCase();
 
   return k.startsWith("tailscale-") || k === "x-forwarded-for";

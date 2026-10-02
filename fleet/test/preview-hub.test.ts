@@ -7,6 +7,7 @@
  * own Tailscale-* headers.
  */
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { connect as connectH2, type ClientHttp2Session, type OutgoingHttpHeaders } from "node:http2";
 import { join } from "node:path";
 import { connect } from "node:tls";
 
@@ -16,6 +17,7 @@ import { readRecord, recordJson, type DevServer, type PreviewRecord } from "../s
 import { viewerOf } from "../src/hub/policy.ts";
 import { previewSockets, proxiedIdentity, type SocketData } from "../src/hub/preview-proxy.ts";
 import type { Certificate, CertificateSource } from "../src/hub/preview-tls.ts";
+import { servePreviewPort } from "../src/hub/preview-serve.ts";
 import { hubRecordPath, previewPortsPath, startHub, type Running } from "../src/hub/server.ts";
 import { baseEnv, fleet, machine, selfSigned, tmp, type Environment, type Pem } from "./support.ts";
 
@@ -67,13 +69,27 @@ function freePort(): number {
   return got;
 }
 
-/** A stand-in dev server named `name`: answers with what it was asked, redirects `/old` to `/new`, echoes on a socket
- * on the protocol it was asked for, if any. */
+/** The long polls a stand-in server holds (`/poll`), each answered once `release` is called. */
+let held: Promise<void> = Promise.resolve();
+
+let release: () => void = () => {};
+
+/** Hold every `/poll` from now until `release` is called. */
+function holdPolls(): void {
+  held = new Promise((resolve) => {
+    release = resolve;
+  });
+}
+
+/** A stand-in dev server named `name`: answers with what it was asked, redirects `/old` to `/new`, holds `/poll`
+ * as a long poll (`holdPolls`), answers `/body` with the body it was sent, echoes on a socket on the protocol it was
+ * asked for, if any. */
 function stub(name: string): number {
   const server = Bun.serve<undefined>({
     hostname: "127.0.0.1",
     port: 0,
-    fetch(req, srv) {
+    idleTimeout: 0,
+    async fetch(req, srv) {
       const url = new URL(req.url);
       seen.push(identityOf(req.headers));
       marks.push(req.headers.get("x-forwarded-prefix"));
@@ -90,6 +106,14 @@ function stub(name: string): number {
       asked.push({ server: name, path: url.pathname, host: req.headers.get("host") ?? "", method: req.method });
 
       if (url.pathname.endsWith("/old")) return new Response(null, { status: 302, headers: { Location: "/new" } });
+
+      if (url.pathname === "/poll") {
+        await held;
+
+        return new Response(`${name} polled`);
+      }
+
+      if (url.pathname === "/body") return new Response(`${name} ${req.method} ${(await req.text()).length}`, { headers: { Connection: "keep-alive", "Keep-Alive": "timeout=5" } });
 
       return new Response(`${name} ${req.method} ${url.pathname}`);
     },
@@ -160,6 +184,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  release();
   await hub?.stop();
 
   for (const s of stubs.splice(0)) void s.stop(true);
@@ -442,6 +467,40 @@ describe("a preview at the root of a public port of its own", () => {
     return got;
   }
 
+  /** An HTTP/2 connection to `host`:`port` that trusts `pem` alone; it fails when the server does not speak h2. */
+  async function h2(port: number, host = "127.0.0.1"): Promise<ClientHttp2Session> {
+    const session = connectH2(`https://${host}:${port}`, { ca: pem.cert });
+
+    await new Promise<void>((resolve, reject) => {
+      session.once("connect", () => resolve());
+      session.once("error", reject);
+    });
+
+    return session;
+  }
+
+  /** What `session` answers for `path` (with `headers`, and `body` if any): its status and body, and how long it took. */
+  function ask(session: ClientHttp2Session, path: string, init: { readonly method?: string; readonly headers?: OutgoingHttpHeaders; readonly body?: string } = {}): Promise<{ status: number; body: string; ms: number }> {
+    const start = performance.now();
+
+    return new Promise((resolve, reject) => {
+      const stream = session.request({ ...init.headers, ":path": path, ":method": init.method ?? "GET" }, { endStream: init.body === undefined });
+      let status = 0;
+      let body = "";
+      stream.setEncoding("utf8");
+      stream.on("response", (headers) => {
+        status = Number(headers[":status"]);
+      });
+      stream.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      stream.on("end", () => resolve({ status, body, ms: performance.now() - start }));
+      stream.on("error", reject);
+
+      if (init.body !== undefined) stream.end(init.body);
+    });
+  }
+
   /** Whether `url` answers at all: "answered", or "failed" when nothing there speaks HTTP. */
   const answers = (url: string): Promise<string> => fetch(url, { tls: { rejectUnauthorized: false } }).then(() => "answered", () => "failed");
 
@@ -480,6 +539,45 @@ describe("a preview at the root of a public port of its own", () => {
     expect(state.ports).toEqual([{ port: publicPort, fleet: "shop", worker: null, loopback: true, tailnet: "127.0.0.2", url: `https://box.example.ts.net:${publicPort}/`, error: null }]);
   });
 
+  test("the public port speaks HTTP/2 (ALPN h2) on loopback and the tailnet address, and HTTP/1.1 to a client that does not", async () => {
+    writeRecord({ server: server(stub("root"), "/", publicPort) });
+    (await hubOnTailnet()).syncPreviews();
+
+    for (const host of ["127.0.0.1", "127.0.0.2"]) {
+      const session = await h2(publicPort, host);
+      expect(session.alpnProtocol).toBe("h2");
+      expect(await ask(session, "/api/x?y=1")).toMatchObject({ status: 200, body: "root GET /api/x" });
+      expect(marks.at(-1)).toBe("/");
+      session.close();
+    }
+
+    const session = await h2(publicPort);
+    expect(await ask(session, "/body", { method: "POST", body: "x".repeat(100_000) })).toMatchObject({ status: 200, body: "root POST 100000" });
+    expect((await ask(session, "/", { headers: { ":authority": "evil.example" } })).status).toBe(421);
+    session.close();
+
+    const plain = await get(rootAt("127.0.0.1", "/api/x"));
+    expect([plain.status, await plain.text()]).toEqual([200, "root GET /api/x"]);
+  });
+
+  test("20 long polls held open and 10 quick requests on one connection: the quick ones answer at once", async () => {
+    writeRecord({ server: server(stub("root"), "/", publicPort) });
+    (await hubOnTailnet()).syncPreviews();
+    holdPolls();
+    const session = await h2(publicPort);
+    const polls = Array.from({ length: 20 }, (_, i) => ask(session, `/poll?n=${i}`));
+    await Bun.sleep(200);
+
+    const quick = await Promise.all(Array.from({ length: 10 }, (_, i) => ask(session, `/src/m${i}.ts`)));
+    expect(quick.map((q) => q.body)).toEqual(Array.from({ length: 10 }, (_, i) => `root GET /src/m${i}.ts`));
+    expect(Math.max(...quick.map((q) => q.ms))).toBeLessThan(500);
+    expect(asked.filter((a) => a.path === "/poll")).toHaveLength(20);
+
+    release();
+    expect((await Promise.all(polls)).map((p) => p.body)).toEqual(Array.from({ length: 20 }, () => "root polled"));
+    session.close();
+  });
+
   test("HTTP and the wss socket carry the identity the hub verified: tailscale serve's on loopback, none for a plain local one", async () => {
     writeRecord({ server: server(stub("root"), "/", publicPort) });
     (await hubOnTailnet()).syncPreviews();
@@ -501,38 +599,36 @@ describe("a preview at the root of a public port of its own", () => {
     plain.close();
   });
 
-  test("a tailnet peer's forged Tailscale headers are replaced by the login Tailscale gives it, on HTTP and the WebSocket", async () => {
+  test("a tailnet peer's forged Tailscale headers are replaced by the login Tailscale gives it, on h2 and the wss WebSocket", async () => {
     writeRecord({ workers: [{ ...server(stub("a1"), "/", publicPort), worker: "a1" }] });
     const running = await hubOnTailnet();
     running.syncPreviews();
     const slot = running.hub.rootedPreviews().find((p) => p.port === publicPort);
     expect(slot).toMatchObject({ port: publicPort, fleet: "shop", worker: "a1" });
 
-    const listener = Bun.serve<SocketData>({
-      hostname: "127.0.0.1",
-      port: 0,
-      websocket: previewSockets,
-      fetch(req, srv) {
-        const headers = new Headers(req.headers);
-        headers.set("Host", `127.0.0.1:${publicPort}`);
+    if (slot === undefined) throw new Error("no slot");
+    const at = freePort();
 
-        if (slot === undefined) throw new Error("no slot");
+    const listener = servePreviewPort("127.0.0.1", at, pem, (req, _ip, upgrade) => {
+      const headers = new Headers(req.headers);
+      headers.set("Host", `127.0.0.1:${publicPort}`);
 
-        return running.hub.fetchRooted(new Request(req.url, { method: req.method, headers }), "100.101.1.2", slot, () => {}, (data, answer) => srv.upgrade(req, { data, headers: answer }));
-      },
+      return running.hub.fetchRooted(new Request(req.url, { method: req.method, headers }), "100.101.1.2", slot, () => {}, upgrade);
     });
 
-    peers.push(listener);
-    expect(await (await fetch(`http://127.0.0.1:${String(listener.port)}/api/me`, { headers: FORGED })).text()).toBe("a1 GET /api/me");
-    expect(seen.at(-1)).toEqual({ "tailscale-user-login": OWNER, "x-forwarded-for": "100.101.1.2" });
+    try {
+      const session = await h2(at);
+      expect(await ask(session, "/api/me", { headers: FORGED })).toMatchObject({ status: 200, body: "a1 GET /api/me" });
+      expect(seen.at(-1)).toEqual({ "tailscale-user-login": OWNER, "x-forwarded-for": "100.101.1.2" });
+      session.close();
 
-    const socket = new WebSocket(`ws://127.0.0.1:${String(listener.port)}/api/sala`, { headers: FORGED });
-    await new Promise<void>((resolve, reject) => {
-      socket.addEventListener("open", () => resolve());
-      socket.addEventListener("error", () => reject(new Error("socket failed")));
-    });
-    expect(seen.at(-1)).toEqual({ "tailscale-user-login": OWNER, "x-forwarded-for": "100.101.1.2" });
-    socket.close();
+      const socket = await wss(at, "/api/sala", FORGED);
+      expect(await echo(socket, "hi")).toBe("a1 echo:hi");
+      expect(seen.at(-1)).toEqual({ "tailscale-user-login": OWNER, "x-forwarded-for": "100.101.1.2" });
+      socket.close();
+    } finally {
+      await listener.stop(true);
+    }
   });
 
   test("the listener goes when the preview stops and comes back with it, and after a hub restart", async () => {
