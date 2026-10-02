@@ -94,7 +94,23 @@ export interface Question {
   dropped?: string | null;
 }
 
-/** A decision, input, secret, action or grilling: what waits on the user (or the manager). */
+/** The tool call the harness refused, which the user may let through once (a decision of kind `permission`). */
+export interface RefusedCall {
+  /** `Bash`: the first cut handles Bash alone. */
+  tool: string;
+  /** The command, byte for byte as the harness saw it. */
+  call: string;
+  /** `Bash(<call>)`: the exact allow rule the hub adds. */
+  rule: string;
+  /** The classifier's reason, e.g. `[Git Destructive]`. */
+  cause: string;
+  /** The session's project directory: the grant goes into `<root>/.claude/settings.local.json`. */
+  root: string;
+  /** The harness's id of the refused caller; null on the session's main thread. */
+  agent_id: string | null;
+}
+
+/** A decision, input, secret, action, grilling or permission: what waits on the user (or the manager). */
 export interface Decision {
   id: string;
   kind: string;
@@ -129,6 +145,8 @@ export interface Decision {
   held?: string | null;
   /** When it was held. */
   held_at?: string | null;
+  /** The refused call a permission lets through. */
+  refusal?: RefusedCall | null;
 }
 
 /** One entry of the append-only event log. */
@@ -192,7 +210,7 @@ interface Origin {
 }
 
 /** Any row of the ledger, the ledger included. */
-export type Row = Step | Milestone | Agent | Roadblock | Choice | Question | Decision | LedgerEvent | Link | Kept | Ledger;
+export type Row = Step | Milestone | Agent | Roadblock | Choice | Question | RefusedCall | Decision | LedgerEvent | Link | Kept | Ledger;
 
 const origins = new WeakMap<Row, Origin>();
 
@@ -370,6 +388,30 @@ class Fields {
     });
 
     return out;
+  }
+
+  /** One nested row, or null; undefined when absent. */
+  row<T>(key: string, read: (object: JsonObject) => Fields | T): T | null | undefined {
+    const value = this.object[key];
+
+    if (value === undefined || value === null) return value;
+    const object = asObject(value);
+
+    if (object === undefined) {
+      this.wrong(key, "an object or null");
+
+      return undefined;
+    }
+
+    const row = read(object);
+
+    if (row instanceof Fields) {
+      this.fault ??= row.fault;
+
+      return undefined;
+    }
+
+    return row;
   }
 
   /** `row`, with where its keys came from remembered; or this reader when it found a fault. */
@@ -615,7 +657,19 @@ export const DECISION_KEYS = [
   "questions",
   "held",
   "held_at",
+  "refusal",
 ] as const;
+
+const REFUSAL_KEYS = ["tool", "call", "rule", "cause", "root", "agent_id"] as const;
+
+function readRefusal(decision: string): (object: JsonObject) => Fields | RefusedCall {
+  return (object) => {
+    const f = new Fields(object, `decision ${decision}'s refusal`);
+    const row: RefusedCall = { tool: f.str("tool"), call: f.str("call"), rule: f.str("rule"), cause: f.str("cause"), root: f.str("root"), agent_id: f.strOrNull("agent_id") };
+
+    return f.done(row, REFUSAL_KEYS);
+  };
+}
 
 function readDecision(object: JsonObject): Fields | Decision {
   const id = asString(object["id"]) ?? "?";
@@ -655,6 +709,7 @@ function readDecision(object: JsonObject): Fields | Decision {
     ref: f.optStr("ref"),
     held: f.nullStr("held"),
     held_at: f.nullStr("held_at"),
+    refusal: f.row("refusal", readRefusal(id)),
   });
 
   return f.done(row, DECISION_KEYS);
@@ -821,6 +876,7 @@ function encodeDecision(d: Decision): Encoded {
       ...d,
       options: d.options?.map((o) => encodeRow(o, { ...o })),
       questions: d.questions?.map((q) => encodeRow(q, { ...q })),
+      refusal: d.refusal === undefined || d.refusal === null ? d.refusal : encodeRow(d.refusal, { ...d.refusal }),
     },
   );
 }

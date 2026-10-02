@@ -13,6 +13,7 @@ export const PREFIX = new Map([
   ["input", "I"],
   ["secret", "S"],
   ["grill", "G"],
+  ["permission", "P"],
 ]);
 
 /** A row with an id and maybe a number. */

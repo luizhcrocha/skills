@@ -39,7 +39,8 @@ import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
 import { indexHtml } from "./index-page.ts";
 import { ProbeCache } from "./probes.ts";
-import { hello, postRefusal, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
+import { grantRefusal } from "./grants.ts";
+import { grantor, hello, postRefusal, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
 import { previewTarget, proxyHttp, proxySocket, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
 import { PLUGIN_ROOT, readSkills, repoOf } from "./skills.ts";
@@ -316,7 +317,7 @@ export class Hub {
   }
 
   private viewer(req: Request, ip: string): Promise<Viewer> {
-    return viewerOf(ip, (name) => req.headers.get(name), this.owner, (at) => this.login(at));
+    return viewerOf(ip, (name) => req.headers.get(name), this.owner, (at) => this.login(at), this.tailnet?.self.ip);
   }
 
   // -- the fleets of this machine --------------------------------------------------------------
@@ -699,6 +700,12 @@ export class Hub {
       if (quote instanceof ChatError) return jsonResponse(400, { error: quote.reason });
 
       if (side instanceof ChatError) return jsonResponse(400, { error: side.reason });
+
+      if (decision !== undefined) {
+        const ungranted = grantRefusal({ dir: root, decision, text, by: grantor(viewer), at: stampOf(machine.now()) });
+
+        if (ungranted !== undefined) return jsonResponse(409, { error: ungranted });
+      }
 
       const draft: Building<Draft> = { sender: "user", text, re, allowUser: true };
 

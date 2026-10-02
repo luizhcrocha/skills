@@ -17,6 +17,7 @@ import { workerFigures } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
 import { dropKey, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, milestoneOfStep, nextStepId } from "./numbers.ts";
+import { makeRefusedCall, permissionOptions } from "./permission.ts";
 import { ID, KINDS } from "./validate.ts";
 import { closedNamed, isLive, sharedOverlap, UNFINISHED } from "./warnings.ts";
 
@@ -778,6 +779,45 @@ function checkKind(d: Decision): Step$ {
   return Effect.void;
 }
 
+const REFUSAL_FLAGS = ["tool", "call", "cause", "root", "agent_id"] as const;
+
+/** A permission's refused call from the flags given, over the one it had, with the two options that follow
+ * from it; whether it changed. Any other kind takes none of these flags. */
+function setRefusal(run: Run, d: Decision): Effect.Effect<boolean, Refusal> {
+  return Effect.gen(function* () {
+    const args = run.args;
+    const named = REFUSAL_FLAGS.filter((k) => args.str(k) !== undefined);
+
+    if (d.kind !== "permission") {
+      if (named.length === 0) return false;
+
+      return yield* refuse(`--${named.map((k) => k.replace("_", "-")).join(", --")} name the refused call of a permission (--kind permission)`);
+    }
+
+    if ((args.list("option") ?? []).length > 0) return yield* refuse("a permission's options are allow-once and deny, which the CLI sets: --option is not taken");
+
+    if (args.str("recommend") !== undefined) return yield* refuse("a permission is the user's call alone: --recommend is not taken");
+    const before = d.refusal ?? undefined;
+
+    if (named.length === 0 && before !== undefined) return false;
+    const tool = args.str("tool") ?? before?.tool;
+    const call = args.str("call") ?? before?.call;
+    const cause = args.str("cause") ?? before?.cause;
+    const root = args.str("root") ?? before?.root;
+
+    if (tool === undefined || call === undefined || cause === undefined || root === undefined) {
+      return yield* refuse("a permission names the refused call: give --tool, --call, --cause and --root (and --agent-id for a subagent's call)");
+    }
+
+    const agentId = args.str("agent_id");
+    const refusal = yield* makeRefusedCall({ tool, call, cause, root, agentId: agentId === undefined ? (before?.agent_id ?? null) : given(agentId) ? agentId : null });
+    d.refusal = refusal;
+    d.options = permissionOptions(refusal);
+
+    return before === undefined || (["tool", "call", "rule", "cause", "root", "agent_id"] as const).some((k) => before[k] !== refusal[k]);
+  });
+}
+
 function setBody(run: Run, d: Decision): Step$ {
   const target = join(run.root, "decisions", `${d.id}.html`);
 
@@ -960,6 +1000,8 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
       yield* placeOf(ledger, fresh, run);
 
+      yield* setRefusal(run, fresh);
+
       if (!elsewhere) {
         yield* checkKind(fresh);
         yield* setBody(run, fresh);
@@ -1037,6 +1079,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         changed.push("asks");
       }
 
+      if (yield* setRefusal(run, row)) changed.push("refusal");
       yield* checkKind(row);
       yield* setBody(run, row);
 
@@ -1053,7 +1096,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         });
 
         // Re-presented with new words: back on the user's list.
-        if (changed.includes("question") || changed.includes("option") || changed.includes("manual")) unheld(row);
+        if (["question", "option", "manual", "refusal"].some((k) => changed.includes(k))) unheld(row);
       }
 
       if (hold !== undefined) {

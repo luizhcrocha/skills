@@ -514,3 +514,94 @@ describe("answers", () => {
     expect(answerRefusal(root, "d1", "commit f3a9c1d27b6e4f0a8d5c2b1e9f7a6d3c is the one")).toBeUndefined();
   });
 });
+
+describe("permission", () => {
+  const CALL = "git push --force origin HEAD:main 2>&1";
+
+  /** The command the plugin's hook runs for a refused call, with `more` after it. */
+  function refusal(id: string, ...more: string[]): string[] {
+    return [
+      "decision",
+      id,
+      "--kind",
+      "permission",
+      "--title",
+      "Force-push main",
+      "--question",
+      "Let a1's refused call run once?",
+      "--why",
+      "auto mode refused it",
+      "--tool",
+      "Bash",
+      "--call",
+      CALL,
+      "--cause",
+      "[Git Destructive]",
+      "--root",
+      "/work/repo",
+      ...more,
+    ];
+  }
+
+  test("a refused call opens a permission, numbered P, with the exact rule and the two options the CLI sets", () => {
+    ok(...refusal("p-1a2b3c4d", "--agent-id", "agent-7f", "--agent", "a1", "--blocking"));
+    const d = item("p-1a2b3c4d");
+    expect([d["kind"], d["status"], d["ref"], d["agent"], d["blocking"], d["recommend"]]).toEqual(["permission", "open", "P1", "a1", true, null]);
+    expect(d["refusal"]).toEqual({
+      tool: "Bash",
+      call: CALL,
+      rule: `Bash(${CALL})`,
+      cause: "[Git Destructive]",
+      root: "/work/repo",
+      agent_id: "agent-7f",
+    });
+    expect(d["options"]).toEqual([
+      {
+        id: "allow-once",
+        label: "Allow this call once",
+        consequence: `the hub adds Bash(${CALL}) to /work/repo/.claude/settings.local.json; the plugin hook removes it once the call has run, or after 30 minutes`,
+      },
+      { id: "deny", label: "Deny", consequence: "the worker stays stopped; your note goes to it" },
+    ]);
+  });
+
+  test("a value that starts with a dash is given as --flag=value", () => {
+    const args = refusal("p1").filter((a, i, all) => a !== "--call" && all[i - 1] !== "--call" && a !== "--cause" && all[i - 1] !== "--cause");
+    ok(...args, "--call=-x is not a command but a value", "--cause=-[Odd]");
+    const r = asObject(item("p1")["refusal"] ?? null);
+    expect([r?.["call"], r?.["cause"], r?.["rule"]]).toEqual(["-x is not a command but a value", "-[Odd]", "Bash(-x is not a command but a value)"]);
+  });
+
+  test("the session's main thread has no agent id", () => {
+    ok(...refusal("p1"));
+    expect(asObject(item("p1")["refusal"] ?? null)?.["agent_id"]).toBeNull();
+  });
+
+  test("a call an exact rule cannot hold, a relative root, a tool other than Bash, or options of its own are refused", () => {
+    const with_ = (flag: string, value: string): string[] => {
+      const args = refusal("p1");
+      args[args.indexOf(flag) + 1] = value;
+
+      return args;
+    };
+
+    expect(refused(...with_("--call", "git push\nrm -rf /"))).toContain("newline");
+    expect(refused(...with_("--call", "rm -rf build/*"))).toContain("*");
+    expect(refused(...with_("--root", "work/repo"))).toContain("absolute");
+    expect(refused(...with_("--tool", "Edit"))).toContain("Bash");
+    expect(refused(...refusal("p1", "--option", "a: x | y"))).toContain("--option");
+    expect(refused(...refusal("p1", "--recommend", "allow-once", "--reason", "r"))).toContain("--recommend");
+    expect(refused("decision", "p1", "--kind", "permission", "--title", "T", "--question", "q", "--why", "w")).toContain("--call");
+    expect(refused("decision", "d1", "--kind", "input", "--title", "T", "--question", "q", "--why", "w", "--call", "ls")).toContain("permission");
+    expect(rows("decisions")).toEqual([]);
+  });
+
+  test("the same refusal again revises the open row, and it closes as any decision does", () => {
+    ok(...refusal("p1", "--agent-id", "agent-7f"));
+    ok(...refusal("p1", "--agent-id", "agent-7f"));
+    expect(rows("decisions").length).toBe(1);
+    expect(item("p1")["revised"]).not.toBeNull();
+    ok("decision", "P1", "--decide", "allow-once: Allow this call once", "--resolution", "answered on the page (#3)");
+    expect([item("p1")["status"], item("p1")["answer"]]).toEqual(["decided", "allow-once: Allow this call once"]);
+  });
+});

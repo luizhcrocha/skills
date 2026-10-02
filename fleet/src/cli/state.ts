@@ -21,7 +21,7 @@ import * as commands from "../ledger/commands.ts";
 import { ledgerText, parseLedger, type Ledger } from "../ledger/model.ts";
 import { nextStepId, number } from "../ledger/numbers.ts";
 import { showLines } from "../ledger/show.ts";
-import { AGENT_STATUSES, ASKS, KINDS, STATUSES, STEP_STATUSES, validate, WORKSPACE_MODES } from "../ledger/validate.ts";
+import { AGENT_STATUSES, ASKS, SHARED_KINDS, STATUSES, STEP_STATUSES, validate, WORKSPACE_MODES } from "../ledger/validate.ts";
 import { readChat } from "../chat/store.ts";
 import { activeWorkspaces, leftOpen, offPolicy, overlapping, staleNow, staleRows, unpruned, unrecorded } from "../ledger/warnings.ts";
 import { readObject } from "../registry.ts";
@@ -104,7 +104,7 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
     name: "decision",
     positionals: ID,
     options: [
-      opt.value("--kind", { choices: KINDS }),
+      opt.value("--kind", { choices: SHARED_KINDS, unlisted: ["permission"] }),
       opt.value("--title"),
       opt.value("--question"),
       opt.value("--why"),
@@ -129,6 +129,11 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
       opt.value("--hold", { metavar: "REASON" }),
       opt.flag("--unhold"),
       opt.value("--resolution", { metavar: "HOW" }),
+      opt.value("--tool", { hidden: true }),
+      opt.value("--call", { hidden: true }),
+      opt.value("--cause", { hidden: true }),
+      opt.value("--root", { hidden: true }),
+      opt.value("--agent-id", { hidden: true }),
     ],
     exclusive: [
       ["blocking", "not_blocking"],

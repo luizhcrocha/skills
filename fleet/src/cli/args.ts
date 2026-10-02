@@ -17,9 +17,14 @@ export interface OptionSpec {
   readonly dest: string;
   readonly takes: Takes;
   readonly choices?: readonly string[];
+  /** Values taken besides `choices` that the usage and the invalid-choice error leave out: TypeScript's own,
+   * which the Python twin's text, pinned by the oracle traces, does not have. */
+  readonly unlisted?: readonly string[];
   readonly int?: boolean;
   readonly required?: boolean;
   readonly metavar?: string;
+  /** Left out of the usage, as argparse leaves an option with `help=SUPPRESS`. */
+  readonly hidden?: boolean;
 }
 
 /** One positional argument of a command. */
@@ -149,15 +154,16 @@ export interface UsageParts {
 export function usageParts(spec: CommandSpec): UsageParts {
   const opt: (string | undefined)[] = ["[-h]"];
   const inGroup = new Set((spec.exclusive ?? []).flat());
+  const shown = spec.options.filter((o) => o.hidden !== true);
 
-  for (const o of spec.options) {
+  for (const o of shown) {
     const meta = metavarOf(o);
     const part = o.takes === "flag" ? o.flag : o.takes === "star" ? `${o.flag} [${meta} ...]` : `${o.flag} ${meta}`;
     opt.push(o.required === true || inGroup.has(o.dest) ? part : `[${part}]`);
   }
 
   for (const group of spec.exclusive ?? []) {
-    const start = spec.options.findIndex((o) => o.dest === group[0]) + 1;
+    const start = shown.findIndex((o) => o.dest === group[0]) + 1;
     const end = start + group.length;
     const parts = opt.slice(start, end).filter((p): p is string => p !== undefined);
     const last = parts.length - 1;
@@ -295,7 +301,7 @@ export function parseArgs(prog: string, spec: CommandSpec, argv: readonly string
       continue;
     }
 
-    if (option.choices !== undefined && !option.choices.includes(value)) {
+    if (option.choices !== undefined && !option.choices.includes(value) && option.unlisted?.includes(value) !== true) {
       return error(
         `argument ${option.flag}: invalid choice: ${pyStr(value)} (choose from ${option.choices.map((c) => pyStr(c)).join(", ")})`,
       );

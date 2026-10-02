@@ -17,8 +17,11 @@ export const AGENT_STATUSES = ["blocked", "done", "failed", "queued", "running",
 /** A step's statuses. */
 export const STEP_STATUSES = ["blocked", "current", "done", "pending"] as const;
 
-/** The kinds of decision. */
-export const KINDS = ["decision", "input", "secret", "action", "grill"] as const;
+/** The kinds of decision the Python twin has too: the ones `show` and the CLI's choices name. */
+export const SHARED_KINDS = ["decision", "input", "secret", "action", "grill"] as const;
+
+/** The kinds of decision; `permission` is TypeScript's alone (SPEC.md, Permission grants). */
+export const KINDS = [...SHARED_KINDS, "permission"] as const;
 
 /** A decision's statuses. */
 export const DECISION_STATUSES = ["open", "decided", "withdrawn"] as const;

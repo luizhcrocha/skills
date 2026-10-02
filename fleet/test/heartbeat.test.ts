@@ -89,7 +89,7 @@ function transcript(agent: string, worker: string, at: number): void {
 }
 
 describe("which worker beat", () => {
-  const plain: Beat = { session: SESSION, agent: null, worker: null, cwd: null, workspace: null, path: null, tool: null, event: null, stamp: "", at: 0, transcript: null, agentTranscript: null };
+  const plain: Beat = { session: SESSION, agent: null, worker: null, cwd: null, project: null, workspace: null, path: null, tool: null, event: null, stamp: "", at: 0, transcript: null, agentTranscript: null };
   const state = ledger({ workspaces: [{ id: "lane-b", agent: "a3", path: "/repos/p-lane-b", status: "active" }, { id: "old", agent: "a2", path: "/repos/p-old", status: "pruned" }] });
   const none = (): undefined => undefined;
 

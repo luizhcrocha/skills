@@ -4,7 +4,7 @@
 import { pyRepr } from "../json.ts";
 import { EVENT_KINDS, MODELS, NEEDS, SEVERITIES, SKILLS } from "./commands.ts";
 import type { Ledger } from "./model.ts";
-import { AGENT_STATUSES, ASKS, KINDS, STATUSES, STEP_STATUSES, WORKSPACE_MODES } from "./validate.ts";
+import { AGENT_STATUSES, ASKS, SHARED_KINDS, STATUSES, STEP_STATUSES, WORKSPACE_MODES } from "./validate.ts";
 
 /** The command cheat sheet `show` ends with: each command with the values its flags take. */
 export const CHEATSHEET = `
@@ -18,7 +18,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
         [--task-id ID | --tokens N --duration-ms N] [--report R] [--log TEXT] [--important]
   roadblock ID --title T --detail D --severity ${SEVERITIES.join("|")} --needs ${NEEDS.join("|")} [--agent A]
         [--decision D] [--resolved | --open]
-  decision ID --kind ${KINDS.join("|")} --title T --question Q --why W [--blocking | --not-blocking]
+  decision ID --kind ${SHARED_KINDS.join("|")} --title T --question Q --why W [--blocking | --not-blocking]
         [--option "KEY: label | consequence"]... [--same-options] [--recommend R --reason WHY] [--secret NAME] [--manual TEXT]
         [--body FILE | --no-body] [--agent A] [--supersedes ID] [--log TEXT] [--asks ${ASKS.join("|")}]
         [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]

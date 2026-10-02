@@ -19,22 +19,34 @@ export interface Viewer {
   readonly login: string | undefined;
   /** Whether the request comes from this machine and names no other login. */
   readonly local: boolean;
+  /** The login `tailscale whois` gives the address of a peer that is not this machine: the only login the
+   * hub takes as proven, since a local process can claim any header. */
+  readonly peer: string | undefined;
 }
 
-/** Who sent a request from `ip` with these headers; `whois` asks Tailscale who owns a tailnet address. */
+/** Who sent a request from `ip` with these headers; `whois` asks Tailscale who owns a tailnet address, and
+ * `self` is this machine's own tailnet address. */
 export async function viewerOf(
   ip: string,
   header: (name: string) => string | null,
   owner: string | undefined,
   whois: (ip: string) => Promise<string | undefined>,
+  self?: string,
 ): Promise<Viewer> {
   if (isLoopback(ip)) {
     const given = header("Tailscale-User-Login");
 
-    return given === null || given === "" ? { login: owner, local: true } : { login: given, local: false };
+    return given === null || given === "" ? { login: owner, local: true, peer: undefined } : { login: given, local: false, peer: undefined };
   }
 
-  return { login: isTailnetIp(ip) ? await whois(ip) : undefined, local: false };
+  const login = isTailnetIp(ip) ? await whois(ip) : undefined;
+
+  return { login, local: false, peer: self !== undefined && ip.replace(/^::ffff:/, "") === self ? undefined : login };
+}
+
+/** Who a grant says gave it: `tailnet:<login>` for a peer Tailscale vouches for, else `local`. */
+export function grantor(viewer: Viewer): string {
+  return viewer.peer === undefined ? "local" : `tailnet:${viewer.peer}`;
 }
 
 /** Why `viewer` may not write, or undefined when they may. */

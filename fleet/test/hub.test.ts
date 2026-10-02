@@ -5,7 +5,7 @@
  * Every test starts a real hub on a free loopback port, with a registry of its own and a fake
  * `tailscale` that names this machine's owner.
  */
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -14,7 +14,7 @@ import { append } from "../src/chat/chat.ts";
 import { readChat } from "../src/chat/store.ts";
 import { ChatError } from "../src/errors.ts";
 import { collapse } from "../src/hub/hub.ts";
-import { hello, postRefusal, viewerOf, writerRefusal } from "../src/hub/policy.ts";
+import { grantor, hello, postRefusal, viewerOf, writerRefusal } from "../src/hub/policy.ts";
 import { lsofListenersOf } from "../src/hub/served.ts";
 import { startHub, type Running } from "../src/hub/server.ts";
 import { frontmatter } from "../src/hub/skills.ts";
@@ -832,4 +832,166 @@ describe("fleet serve", () => {
     expect([stopped.code, stopped.stdout]).toEqual([0, "stopped http://127.0.0.1:47999/f/acme-billing/\n"]);
     expect(machine(env).registry.find(fresh)).toBeUndefined();
   });
+});
+
+describe("a permission's answer grants the call once", () => {
+  const CALL = "git push --force origin HEAD:main";
+  const RULE = `Bash(${CALL})`;
+
+  let session: string;
+
+  let settings: string;
+
+  function permission(over: JsonObject = {}): JsonObject {
+    return {
+      id: "p-1a2b3c4d",
+      ref: "P1",
+      kind: "permission",
+      title: "Force-push main",
+      question: "q",
+      status: "open",
+      resolution: null,
+      opened: "2026-01-01T00:00:00+00:00",
+      refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "[Git Destructive]", root: session, agent_id: "agent-7f" },
+      ...over,
+    };
+  }
+
+  function withRows(...decisions: JsonObject[]): void {
+    writeState(root, [{ id: "a1", name: "notes-impl" }], { decisions });
+  }
+
+  function grants(): JsonObject[] {
+    try {
+      return readFileSync(join(root, "grants.jsonl"), "utf8")
+        .split("\n")
+        .filter((l) => l !== "")
+        .map((l) => asObject(JSON.parse(l)) ?? {});
+    } catch {
+      return [];
+    }
+  }
+
+  const allow = { text: "allow-once: Allow this call once", decision: "p-1a2b3c4d" };
+
+  beforeEach(() => {
+    session = join(base, "repo");
+    settings = join(session, ".claude", "settings.local.json");
+    mkdirSync(join(session, ".claude"), { recursive: true });
+    mkdirSync(join(root, "heartbeats"), { recursive: true });
+    writeFileSync(join(root, "heartbeats", "s1.json"), JSON.stringify({ session: "s1", at: "2026-01-01T00:00:00+00:00", cwd: session }));
+    withRows(permission());
+  });
+
+  test("allow-once adds the exact rule to the session's settings, keeps the rest, records the grant, then stores the answer", async () => {
+    writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)"], deny: ["Bash(rm -rf /)"] }, model: "opus" }));
+    await start();
+    const sent = await post(allow);
+    expect([sent.status, sent.body["decision"]]).toEqual([201, "p-1a2b3c4d"]);
+    const text = readFileSync(settings, "utf8");
+    expect(text).toBe(`${JSON.stringify({ permissions: { allow: ["Bash(ls)", RULE], deny: ["Bash(rm -rf /)"] }, model: "opus" }, null, 2)}\n`);
+    const [grant, ...more] = grants();
+    expect(more).toEqual([]);
+    expect(Object.keys(grant ?? {})).toEqual(["op", "decision", "ref", "rule", "file", "at", "by", "reload"]);
+    expect([grant?.["op"], grant?.["decision"], grant?.["ref"], grant?.["rule"], grant?.["file"], grant?.["by"], grant?.["reload"]]).toEqual([
+      "grant",
+      "p-1a2b3c4d",
+      "P1",
+      RULE,
+      settings,
+      "local",
+      "live",
+    ]);
+    expect(String(grant?.["at"])).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$/);
+    expect(readChat(root).map((m) => m.stored["decision"])).toEqual(["p-1a2b3c4d"]);
+  });
+
+  test("an absent settings file starts empty", async () => {
+    await start();
+    expect((await post(allow)).status).toBe(201);
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
+  });
+
+  test("a rule already there is someone's own: the hub writes nothing and records no grant, and the answer is stored", async () => {
+    const mine = JSON.stringify({ permissions: { allow: [RULE] } });
+    writeFileSync(settings, mine);
+    await start();
+    expect((await post(allow)).status).toBe(201);
+    expect([readFileSync(settings, "utf8"), grants(), readChat(root).length]).toEqual([mine, [], 1]);
+  });
+
+  test("a session without a .claude folder gets one, and the grant says the session must restart to see it", async () => {
+    const fresh = join(base, "fresh");
+    mkdirSync(fresh);
+    writeFileSync(join(root, "heartbeats", "s2.json"), JSON.stringify({ session: "s2", at: "2026-01-01T00:00:00+00:00", cwd: fresh }));
+    withRows(permission({ refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "c", root: fresh, agent_id: null } }));
+    await start();
+    expect((await post(allow)).status).toBe(201);
+    expect(JSON.parse(readFileSync(join(fresh, ".claude", "settings.local.json"), "utf8"))).toEqual({ permissions: { allow: [RULE] } });
+    expect(grants()[0]?.["reload"]).toBe("restart");
+  });
+
+  test("a session is known by its project directory too, when its shell has moved elsewhere", async () => {
+    writeFileSync(join(root, "heartbeats", "s1.json"), JSON.stringify({ session: "s1", at: "2026-01-01T00:00:00+00:00", cwd: join(session, "src"), project: session }));
+    await start();
+    expect((await post(allow)).status).toBe(201);
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
+  });
+
+  test("deny is stored as any answer, and grants nothing", async () => {
+    await start();
+    expect((await post({ text: "deny: Deny\nnot on main", decision: "p-1a2b3c4d" })).status).toBe(201);
+    expect([existsSync(settings), grants()]).toEqual([false, []]);
+  });
+
+  test("a row the hub cannot trust, or settings it cannot read, refuse with the reason and store nothing", async () => {
+    const elsewhere = join(base, "elsewhere");
+    mkdirSync(elsewhere);
+    const refusal = (over: JsonObject): JsonObject => permission({ refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "c", root: session, agent_id: null, ...over } });
+
+    const cases: (readonly [string, JsonObject])[] = [
+      ["no session of this fleet", refusal({ root: elsewhere })],
+      ["no session of this fleet", refusal({ root: join(base, "missing") })],
+      ["absolute", refusal({ root: "repo" })],
+      ["rule", refusal({ rule: "Bash(git push:*)" })],
+      ["*", refusal({ call: "rm -rf *", rule: "Bash(rm -rf *)" })],
+      ["Bash", refusal({ tool: "Edit", rule: `Edit(${CALL})` })],
+      ["refused call", permission({ refusal: null })],
+    ];
+
+    await start();
+
+    for (const [word, row] of cases) {
+      withRows(row);
+      const got = await post(allow);
+      expect([got.status, asString(got.body["error"])?.includes(word)]).toEqual([409, true]);
+    }
+
+    withRows(permission());
+    expect((await post({ ...allow, quote: 5 })).status).toBe(400);
+    expect(existsSync(settings)).toBe(false);
+    writeFileSync(settings, "{ not json");
+    const bad = await post(allow);
+    expect([bad.status, asString(bad.body["error"])?.includes("settings.local.json")]).toEqual([409, true]);
+    expect(readFileSync(settings, "utf8")).toBe("{ not json");
+    expect([readChat(root), grants(), existsSync(join(elsewhere, ".claude"))]).toEqual([[], [], false]);
+  });
+
+  test("a login claimed in a header on this machine is only this machine's word: the grant says local", async () => {
+    const fake = join(base, "tailscale");
+    writeFileSync(fake, FAKE_TAILSCALE);
+    chmodSync(fake, 0o755);
+    await start({ tailscale: fake });
+    expect((await post(allow, { "Tailscale-User-Login": OWNER })).status).toBe(201);
+    expect(grants()[0]?.["by"]).toBe("local");
+  });
+});
+
+test("a grant names the tailnet login Tailscale gives a peer, and this machine's own address as local", async () => {
+  const header = (): string | null => null;
+  const whois = (ip: string): Promise<string | undefined> => Promise.resolve(ip === "100.101.1.2" ? OWNER : undefined);
+  const peer = await viewerOf("100.101.1.2", header, OWNER, whois, "100.69.1.1");
+  const self = await viewerOf("100.69.1.1", header, OWNER, whois, "100.69.1.1");
+  const forged = await viewerOf("127.0.0.1", (name) => (name === "Tailscale-User-Login" ? OWNER : null), OWNER, whois, "100.69.1.1");
+  expect([grantor(peer), grantor(self), grantor(forged)]).toEqual([`tailnet:${OWNER}`, "local", "local"]);
 });

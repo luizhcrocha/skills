@@ -21,6 +21,8 @@ export interface Beat {
   /** `$FLEET_WORKER` of the process that beat: a worker launched as its own session. */
   readonly worker: string | null;
   readonly cwd: string | null;
+  /** The session's project directory (`$CLAUDE_PROJECT_DIR`), where its settings live; the cwd follows its shell. */
+  readonly project: string | null;
   /** The jj workspace the session's cwd is in, by name. */
   readonly workspace: string | null;
   /** The absolute path the tool call named, if any. */
@@ -61,6 +63,7 @@ export function readBeats(root: string): Beat[] {
         agent: text(o, "agent"),
         worker: text(o, "worker"),
         cwd: text(o, "cwd"),
+        project: text(o, "project"),
         workspace: text(o, "workspace"),
         path: text(o, "path"),
         tool: text(o, "tool"),

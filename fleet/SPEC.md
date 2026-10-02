@@ -194,7 +194,8 @@ Checked in this order:
      two options, `--recommend` among the option keys, and `--reason`; **secret** `--secret` and
      `--manual`; **action** `--manual`, and no options or `--recommend` (a yes or no on what the fleet would do is a decision); **input** nothing more. Kind **grill** is refused here
      (it is opened with `grill`). An option is `KEY: label | consequence` with a key matching the
-     id pattern; keys are unique.
+     id pattern; keys are unique. **permission** (TypeScript only: see [Permission
+     grants](#permission-grants)) takes the refused call instead of options.
    - The row: `kind, title, question, why, blocking, agent, options[], recommend, reason, secret,
      manual, body, page, supersedes, status: open, answer, resolution, change, asks (default
      user), opened, revised, closed, step, milestone`. `--step S` sets step and its milestone;
@@ -295,7 +296,8 @@ decisions[]   {id, ref, kind, title, question, why, blocking, agent, options[]: 
                answer, resolution, change, asks (user|manager), opened, revised, closed, step, milestone,
                questions[]? (grill: {id: "q<n>", title, body, recommend, reason, of, status
                (open|answered|dropped), answer, asked, answered?, dropped?}),
-               held?, held_at? (the fleet works on the answer first; removed when re-presented or closed)}
+               held?, held_at? (the fleet works on the answer first; removed when re-presented or closed),
+               refusal? (permission, TypeScript only: {tool, call, rule, cause, root, agent_id})}
 events[]      {at, agent|null, kind, text, important?: true, decision?}   append-only
 links[]?      {id, ref, url, title, kind (dev|page), decision, agent, note, since}
 kept[]?       {id, text, at}
@@ -330,8 +332,8 @@ older ledger comes out complete after one command.
 ## Numbers (refs)
 
 On every write, each decision, link and roadblock without a `ref` is given one: a letter for its
-kind (decision **D**, action **A**, input **I**, secret **S**, grill **G**, link **L**, roadblock
-**R**), and 1 + the highest number of that letter already given, skipping a number that another row of
+kind (decision **D**, action **A**, input **I**, secret **S**, grill **G**, permission **P**
+(TypeScript only), link **L**, roadblock **R**), and 1 + the highest number of that letter already given, skipping a number that another row of
 the same list has as its id (open-1). Decisions are numbered in
 `opened` order (as instants, open-13; a stamp that does not parse sorts after, as text), links and
 roadblocks in list order. A number, once given,
@@ -602,7 +604,8 @@ itself. A manager made later appears the same way, on the same address.
   file `index.html` when the state can't be read), `GET /chat?after=N`, `GET /events` (`hello`,
   `state` on connect and on change, `chat` with `id:`, pings; `Last-Event-ID` or `after`), `POST
   /chat` (201; 403 policy or cross-origin `Origin`; 415; 413 over 16 KiB; 400 bad body, `ChatError`,
-  unknown decision or a secret's value; 409 an answer to a closed decision; 500 store failure),
+  unknown decision or a secret's value; 409 an answer to a closed decision, or an allow-once a
+  [permission](#permission-grants) cannot grant; 500 store failure),
   `POST /chat/preview`, `GET /skills` (below), the preview (`/preview/…`, HTTP and WebSocket, and `POST
   /preview-workers`; see [The preview](#the-preview-fleet-preview)), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
   sandbox CSP; dot files and paths out of DIR 404). `/f/<fleet>` redirects (301) to `/f/<fleet>/`;
@@ -665,6 +668,49 @@ itself. A manager made later appears the same way, on the same address.
   the https address when that matters. The stream's `hello` says `{write, reason?, you?}` from the
   same rule. A message's `author` is the login (the owner's, from loopback).
 
+## Permission grants
+
+TypeScript only: `state.py` has no `permission` kind, no trace has one, and the oracle's usage texts
+stay Python's (below). Auto mode refuses a worker's tool call; the plugin's hook opens a permission for
+it, the user answers on the page, and the hub, not an agent (Claude Code's classifier refuses an agent
+that writes its own allow rule), adds a one-time allow rule to the session's settings. The hook
+removes the rule once the call has run, or after `FLEET_GRANT_TTL_MIN` (30) minutes.
+
+- **Opening** (`fleet state DIR decision ID --kind permission --title T --question Q --why W --tool
+  Bash --call CALL --cause CAUSE --root ROOT [--agent-id AID] [--agent WORKER] [--blocking]`): the row
+  gets `refusal: {tool, call, rule, cause, root, agent_id}` with `rule` = `Bash(CALL)` and `agent_id`
+  null without `--agent-id`, and the two options the CLI sets: `allow-once: Allow this call once |
+  the hub adds <rule> to <root>/.claude/settings.local.json; the plugin hook removes it once the call
+  has run, or after 30 minutes` and `deny: Deny | the worker stays stopped; your note goes to it`.
+  Refused: a tool other than Bash, a CALL with a newline or a `*` (an exact rule cannot hold it: the
+  hook opens an action with `--manual` instead), a relative ROOT, `--option`, `--recommend`, a
+  permission without `--tool --call --cause --root`, and those flags on any other kind. A value that
+  starts with `-` is given as `--call=VALUE`. The same command on the open row revises it (a changed
+  refusal re-presents it and clears a hold); `--decide`, `--withdraw` and `--hold` work as for any
+  decision. `permission` is accepted by `--kind` but left out of its listed choices, and the five
+  flags out of the usage (as argparse's `help=SUPPRESS`), so every usage text stays the twin's.
+- **Answering**: the page's form shows the call as an `sh` block, its cause, the rule and the file it
+  goes into, the two options and a note; the answer is `allow-once: Allow this call once` or `deny:
+  Deny`, the note on the next line.
+- **Granting** (`src/hub/grants.ts`, before `POST /chat` stores an answer that starts with
+  `allow-once` to a permission): the row must be open, its `refusal` a Bash call without newline or
+  `*` whose `rule` is `Bash(<call>)`, and its `root` absolute, a directory, and the `project` or `cwd`
+  of a heartbeat in `DIR/heartbeats/` (a session of this fleet: the ledger is writable by agents, the
+  hub is not). `<root>/.claude/settings.local.json` (absent reads as `{}`; one that does not parse
+  refuses) gets the rule added to `permissions.allow`, every other key and entry kept, written
+  through a temp file in its folder and a rename, two-space JSON with a final newline. A missing
+  `.claude` is made, and the grant says `reload: restart` (Claude Code watches only a settings folder
+  that existed when the session started), else `live`. Then one line is appended to `DIR/grants.jsonl`:
+  `{"op": "grant", decision, ref, rule, file, at, by, reload}`, `by` being `tailnet:<login>` for a
+  tailnet peer that is not this machine (`tailscale whois`), else `local` (loopback, whatever header it
+  carries, or this machine's own tailnet address); then the answer is stored. A rule already in `permissions.allow` is
+  someone's own: the hub writes nothing and appends no grant line, so the hook never removes it, and the
+  answer is stored as usual. A failed check answers
+  409 with the reason and stores nothing. A `deny` is stored as any answer.
+- **Removal** (the plugin's hook, PostToolUse and PostToolUseFailure): a `remove` line, `{"op":
+  "remove", decision, rule, file, at, why: used|expired}`, ends the grant with the same `decision` and
+  `rule`.
+
 ## Heartbeats
 
 The per-tool-call heartbeat stays in the plugin's Python hook dispatcher (D13): `hooks/tstack-hook`'s
@@ -682,8 +728,9 @@ tool call waits on it) and, inside the synchronous dispatcher, on SessionStart, 
   beat), it needs the fleet served first, and reading it means a file per fleet on every tool call;
   the scratchpad is the tie the fleet already uses (open-23) and costs one directory listing.
 - **The file**: `DIR/heartbeats/<session>.json`, or `<session>.<agent_id>.json` for a subagent, replaced
-  atomically (a dot-file then a rename): `{session, agent, agent_type, worker, cwd, workspace, path,
-  tool, event, at, transcript, agent_transcript}`. `workspace` is the jj workspace's name, read from
+  atomically (a dot-file then a rename): `{session, agent, agent_type, worker, cwd, project, workspace, path,
+  tool, event, at, transcript, agent_transcript}`. `project` is `$CLAUDE_PROJECT_DIR`, the session's
+  project directory, which a [permission grant](#permission-grants) names; `cwd` follows its shell. `workspace` is the jj workspace's name, read from
   `.jj/working_copy/checkout` (no jj process); `path` is the tool's absolute `file_path`,
   `notebook_path` or `path`; `at` is a stamp from the fleet's clock (`FLEET_NOW`, local time with its
   offset). A start or a stop (no tool) keeps the `tool` the file already had. Measured: 0.35 ms median in process inside a fleet, under 0.5 ms outside one; the hook
@@ -984,7 +1031,8 @@ recommendation attached.
 | `fleets.py gate take/free`, `name` | `REGISTRY/gate/gate.json`, `REGISTRY/<fleet>.json` |
 | `serve_dashboard.py` | `DIR/server.json`, `DIR/server.log`, `REGISTRY/<fleet>.json` |
 | `fleet serve` | `REGISTRY/<fleet>.json` (removed with `--stop`) |
-| `fleet hub` | `REGISTRY/hub/hub.json` while it runs; `DIR/chat.jsonl` on a post |
+| `fleet hub` | `REGISTRY/hub/hub.json` while it runs; `DIR/chat.jsonl` on a post; on an allow-once to a permission, `<root>/.claude/settings.local.json` (and its folder) and `DIR/grants.jsonl` |
+| the plugin's hook (grant removal) | `<root>/.claude/settings.local.json`, `DIR/grants.jsonl` (`remove` lines) |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |
 | the plugin's hook (`fleet_listen_guard`, `fleet_chat_nudge`) | nothing in DIR; the session's `fleet-guard` and `fleet-nudge` state in the plugin's data folder |
