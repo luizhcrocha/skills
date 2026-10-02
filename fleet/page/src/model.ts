@@ -6,7 +6,7 @@
  */
 import { createMemo, createSignal, createStore, flush, reconcile, type Accessor } from "solid-js";
 
-import { Core, type Agent, type Coordinator, type Decision, type Json, type JsonRecord, type Message, type Place, type Prefs, type RosterRow, type Skill, type State } from "./core.ts";
+import { Core, type Agent, type Coordinator, type Decision, type Json, type JsonRecord, type Message, type Place, type Prefs, type Queue, type RosterRow, type Skill, type State } from "./core.ts";
 import { agoAt } from "./format.ts";
 
 /** Someone the page can name: a worker, or on a manager's page a coordinator under its fleet's name. */
@@ -90,6 +90,8 @@ export function createModel(initial: State) {
   /* Under the manager's address every fleet's page shares one browser storage: each keeps its own under
      its path (/f/<fleet>/). A page at its own address keeps the plain prefix it always had. */
   const underHub = /^\/f\/[^/]+\//u.test(location.pathname);
+  /** Shown inside the manager's page (`?embed=1`): the decision's page alone, with no chat and no notifications. */
+  const embed = new URLSearchParams(location.search).get("embed") === "1";
 
   const prefs: Prefs = Core.prefsOf(
     (() => {
@@ -169,12 +171,11 @@ export function createModel(initial: State) {
   const roster = createMemo((): RosterRow[] => Core.rosterOf(state));
   const decisionById = (id: string | null | undefined): Decision | undefined => (id ? state.decisions.find((d) => d.id === id) : undefined);
 
-  /** The ledger's decisions, and on a manager's page the ones open in each fleet, answered on that fleet's page. */
-  const everyDecision = createMemo((): Decision[] =>
-    state.decisions.concat(
-      state.coordinators.flatMap((c) => c.decisions.map((d) => ({ ...d, id: c.id + "/" + d.id, fleet: c.id, href: c.url ? c.url + "#decision/" + encodeURIComponent(d.id) : "" }))),
-    ),
-  );
+  /** The ledger's decisions, and on a manager's page the ones open in each fleet, as "<fleet>/<id>". */
+  const everyDecision = createMemo((): Decision[] => state.decisions.concat(state.coordinators.flatMap((c) => c.decisions.map((d) => ({ ...d, id: c.id + "/" + d.id, fleet: c.id })))));
+  const everyById = createMemo(() => new Map(everyDecision().map((d) => [d.id, d])));
+  /** A decision of this ledger or, on a manager's page, a fleet's ("<fleet>/<id>"). */
+  const decisionAnywhere = (id: string | null | undefined): Decision | undefined => (id ? everyById().get(id) : undefined);
 
   /* Where the manager's page and the fleets' pages live, so moving between them stays on one address: the
      manager's root, and /f/<fleet>/ under it. Null when there is no manager. */
@@ -221,7 +222,7 @@ export function createModel(initial: State) {
   const chatAvailable = (): boolean => conn() !== "unavailable" && conn() !== "off";
   const chatWritable = (): boolean => chatAvailable() && write().ok;
   const chatCollapsed = (): boolean => collapsedPref() ?? conn() === "unavailable";
-  const chatInView = (): boolean => visible() && (docked() ? !chatCollapsed() : chatOpen());
+  const chatInView = (): boolean => !embed && visible() && (docked() ? !chatCollapsed() : chatOpen());
   const messageListeners: ((m: Message, live: boolean) => void)[] = [];
 
   /** A message from the stream or from a send, kept once by its id. `live` marks one that arrived after the first replay. */
@@ -241,8 +242,11 @@ export function createModel(initial: State) {
 
   /* ------------------------------------------------------------------ the view */
 
-  const [place, setPlace] = createSignal<Place>(Core.viewOf(location.hash));
+  const [place, setPlace] = createSignal<Place>(Core.viewOf(location.hash, initial.role === "manager"));
   const viewing = (): string | null => place().decision;
+  /** The queue as it was while the decision shown last waited on the viewer. */
+  const [waited, setWaited] = createSignal<readonly string[]>([]);
+  const queue = createMemo((): Queue => Core.queueOf(everyDecision(), chat.list, viewing(), waited()));
 
   /* ------------------------------------------------------------------ the composer */
 
@@ -274,6 +278,7 @@ export function createModel(initial: State) {
   return {
     prefs,
     underHub,
+    embed,
     phone,
     docked,
     coarse,
@@ -294,6 +299,7 @@ export function createModel(initial: State) {
     roster,
     decisionById,
     everyDecision,
+    decisionAnywhere,
     hubRoot,
     fleetPage,
     managerPage,
@@ -341,6 +347,9 @@ export function createModel(initial: State) {
     place,
     setPlace,
     viewing,
+    queue,
+    waited,
+    setWaited,
     draft,
     setDraft,
     skills,

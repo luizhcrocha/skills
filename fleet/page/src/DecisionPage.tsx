@@ -3,15 +3,17 @@
  * (a frame without this page's origin, reloaded only when the item is revised), and the control to answer.
  * The answer's form is built once per decision and shape, so a half-written answer survives every update
  * of the state; it is also kept in this browser per decision and revision, and put back when the form is
- * built again.
+ * built again. On a manager's page, another fleet's decision is that fleet's own page in a frame (`?embed=1`),
+ * and the page walks what waits on the user: previous, next, and what comes next once one is answered.
  */
 import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { For, Match, Show, Switch, type JSX } from "@solidjs/web";
 
-import { PillAs, RefTag, usePage, Who } from "./bits.tsx";
+import { listen, PillAs, RefTag, usePage, Who } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
-import { Core, type Decision, type GrillEntry, type JsonRecord } from "./core.ts";
+import { Core, type Decision, type GrillEntry, type JsonRecord, type Queue } from "./core.ts";
 import { DecisionThread } from "./DecisionThread.tsx";
+import { FRAME_MAX_PX, parseEmbedMessage, postAnswered } from "./embed.ts";
 import { clock } from "./format.ts";
 import { KIND_WORDS, StatePill } from "./Overview.tsx";
 import { CodeBlock, ManualText, Rich } from "./Rich.tsx";
@@ -100,7 +102,7 @@ function Evidence(props: { readonly d: Decision | undefined }): JSX.Element {
     if (!frame || e.source !== frame.contentWindow || !e.data || e.data.fleetEvidence !== true) return;
     const height = Number(e.data.height);
 
-    if (height > 0) frame.style.height = String(Math.min(Math.ceil(height) + 2, 20000)) + "px";
+    if (height > 0) frame.style.height = String(Math.min(Math.ceil(height) + 2, FRAME_MAX_PX)) + "px";
   };
 
   addEventListener("message", onMessage);
@@ -183,14 +185,23 @@ function SlashField(props: { readonly id: string; readonly children: (caret: (el
   );
 }
 
-/** "Ask in the chat". */
+/** "Ask in the chat": inside the manager's page, the chat is on this fleet's own page. */
 function Discuss(): JSX.Element {
-  const { ui } = usePage();
+  const { m, ui } = usePage();
 
   return (
-    <button type="button" class="btn" data-discuss onClick={() => ui.openChat()}>
-      Ask in the chat
-    </button>
+    <Show
+      when={m.embed}
+      fallback={
+        <button type="button" class="btn" data-discuss onClick={() => ui.openChat()}>
+          Ask in the chat
+        </button>
+      }
+    >
+      <a class="btn" data-discuss href={location.pathname + Core.decisionHref(m.viewing() ?? "")} target="_blank" rel="noopener">
+        Ask in the chat
+      </a>
+    </Show>
   );
 }
 
@@ -283,6 +294,9 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
 
       m.prefs.remove(draftKey());
       ui.addMessage(body, true);
+
+      /* A grilling answered in part still waits; the manager hears of it once nothing is left to answer. */
+      if (m.embed && !Core.awaiting(m.decisionById(d.id) ?? d, m.messages())) postAnswered(d.id);
     } catch {
       setError("Could not reach the dashboard's server. Your answer is kept here; send it again when the server is back.");
     } finally {
@@ -734,7 +748,7 @@ function Info(props: { readonly d: Decision }): JSX.Element {
           <Show when={before()}>
             {(b) => (
               <>
-                . Replaces <a href={"#decision/" + b().id}>{b().title}</a>
+                . Replaces <a href={Core.decisionHref(b().id)}>{b().title}</a>
               </>
             )}
           </Show>
@@ -759,7 +773,7 @@ function Info(props: { readonly d: Decision }): JSX.Element {
           <div class="note changed">
             <h3>Replaced</h3>
             <p>
-              A newer decision takes its place: <a href={"#decision/" + s().id}>{s().title}</a>
+              A newer decision takes its place: <a href={Core.decisionHref(s().id)}>{s().title}</a>
             </p>
           </div>
         )}
@@ -848,19 +862,138 @@ function AnswerFor(props: { readonly id: string }): JSX.Element {
   );
 }
 
+function QueueTitle(props: { readonly id: string }): JSX.Element {
+  const { m } = usePage();
+  const d = createMemo(() => m.decisionAnywhere(props.id));
+
+  return (
+    <Show when={d()} fallback={props.id}>
+      {(found) => (
+        <>
+          <RefTag of={found()} />
+          {found().title}
+          <Show when={found().fleet}>{(f) => <span class="muted"> in {f()}</span>}</Show>
+        </>
+      )}
+    </Show>
+  );
+}
+
+/** Previous and next among what waits on the user, and once the decision shown is answered, what comes next. */
+function QueueNav(): JSX.Element {
+  const { m, ui } = usePage();
+  const q = (): Queue => m.queue();
+  const done = (): boolean => Boolean(m.viewing()) && ui.answered() === m.viewing();
+  const [next, setNext] = createSignal<HTMLAnchorElement>();
+
+  createEffect(
+    () => [done(), next()] as const,
+    ([on, el]) => {
+      if (on) el?.focus();
+    },
+  );
+
+  const step = (id: string | null, label: string, rel: string): JSX.Element => (
+    <Show when={id} fallback={<span class="btn small" aria-disabled="true">{label}</span>}>
+      {(to) => (
+        <a class="btn small" rel={rel} data-queue={rel} href={Core.decisionHref(to())} ref={rel === "next" ? setNext : undefined}>
+          {label}
+        </a>
+      )}
+    </Show>
+  );
+
+  return (
+    <nav class="dv-queue" id="dv-queue" aria-label="What waits on you">
+      <Show when={done()}>
+        <p class="note decided" role="status" id="dv-answered">
+          <Show when={q().next} fallback="Answered. Nothing else waits on you.">
+            {(id) => (
+              <span>
+                Answered. Next: <QueueTitle id={id()} />
+              </span>
+            )}
+          </Show>
+        </p>
+      </Show>
+      <div class="dv-queue-row">
+        {step(q().prev, "Previous", "prev")}
+        <span class="dv-meta">{q().at ? `${q().at} of ${q().ids.length} waiting on you` : `${q().ids.length} waiting on you`}</span>
+        {step(q().next, "Next", "next")}
+      </div>
+    </nav>
+  );
+}
+
+/** Another fleet's decision: that fleet's page in a frame, showing only the decision, sized by the height it reports. */
+function FleetFrame(props: { readonly fleet: string; readonly id: string }): JSX.Element {
+  const { m, ui } = usePage();
+  const item = createMemo(() => m.decisionAnywhere(props.fleet + "/" + props.id));
+  let frame: HTMLIFrameElement | undefined;
+
+  const title = (): string => {
+    const d = item();
+
+    return d ? `${d.ref ?? ""} ${d.title}, in ${props.fleet}`.trim() : `A decision of ${props.fleet}`;
+  };
+
+  listen(window, "message", (e) => {
+    const said = frame && e.source === frame.contentWindow ? parseEmbedMessage(e.data) : null;
+
+    if (frame && said?.kind === "height") frame.style.height = String(Math.min(Math.ceil(said.height), FRAME_MAX_PX)) + "px";
+
+    if (said?.kind === "answered" && props.fleet + "/" + said.id === m.viewing()) ui.setAnswered(m.viewing());
+  });
+
+  return (
+    <>
+      <p class="dv-meta dv-fleet">
+        <PillAs cls="plain" text={"in " + props.fleet} />{" "}
+        <a href={m.fleetPage(props.fleet) + Core.decisionHref(props.id)}>Open on {props.fleet}'s page</a>
+      </p>
+      <iframe
+        class="dv-embed"
+        id="dv-embed"
+        title={title()}
+        src={m.fleetPage(props.fleet) + "?embed=1" + Core.decisionHref(props.id)}
+        ref={(el) => (frame = el)}
+      />
+    </>
+  );
+}
+
 /** The decision's page. */
 export function DecisionPage(): JSX.Element {
   const { m, ui } = usePage();
   const d = createMemo(() => m.decisionById(m.viewing()));
+  const theirs = createMemo(() => (m.managed() ? Core.parseFleetDecision(m.viewing()) : null));
 
   return (
     <main class="wrap dv" id="decision" tabindex="-1" hidden={!m.viewing()} ref={(el) => (ui.refs.decision = el)}>
-      <a class="dv-back" href="#decisions">
-        <svg class="i" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M15 5l-7 7 7 7" />
-        </svg>
-        All decisions
-      </a>
+      <Show when={!m.embed}>
+        <a class="dv-back" href="#decisions">
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M15 5l-7 7 7 7" />
+          </svg>
+          All decisions
+        </a>
+      </Show>
+      <Show when={m.managed() && m.viewing()}>
+        <QueueNav />
+      </Show>
+      <Show when={theirs()} fallback={<OwnDecision d={d()} />}>
+        {(t) => <FleetFrame fleet={t().fleet} id={t().id} />}
+      </Show>
+    </main>
+  );
+}
+
+function OwnDecision(props: { readonly d: Decision | undefined }): JSX.Element {
+  const { m } = usePage();
+  const d = (): Decision | undefined => props.d;
+
+  return (
+    <>
       <div class="dv-info" id="dv-info">
         <Show
           when={d()}
@@ -883,6 +1016,6 @@ export function DecisionPage(): JSX.Element {
           {(id) => <AnswerFor id={id} />}
         </Show>
       </div>
-    </main>
+    </>
   );
 }

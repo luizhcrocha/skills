@@ -130,7 +130,7 @@ export interface Decision {
   readonly manual?: string;
   readonly body?: boolean | string;
   readonly page?: boolean;
-  readonly href?: string;
+  /** On a manager's page, the fleet that holds the decision. */
   readonly fleet?: string;
   /** What the fleet does first with the viewer's answer: the item is with the fleet until it is re-presented. */
   readonly held?: string | null;
@@ -783,13 +783,14 @@ function findRows(state: Partial<State>, messages: Iterable<Message> | null | un
     for (const x of Array.isArray(c.index) ? c.index : []) {
       if (!x || !isText(x["title"]) || !isText(x["group"])) continue;
       const hint = x["hint"];
+      const decision = x["group"] === "decisions" && isText(x["hash"]) ? decisionRoute(x["hash"]) : null;
       rows.push({
         group: x["group"],
         ref: String(x["ref"] || ""),
         title: one(x["title"]),
         sub: one(x["sub"]),
         hint: c.id + (hint ? ", " + String(hint) : ""),
-        go: { kind: "url", url: c.url ? c.url + String(x["hash"] || "") : "" },
+        go: decision ? { kind: "decision", id: c.id + "/" + decision } : { kind: "url", url: c.url ? c.url + String(x["hash"] || "") : "" },
       });
     }
   }
@@ -907,8 +908,8 @@ const stamp = (iso: string | null | undefined | boolean): number => {
  * The decisions as the user should read them: open and blocking first, then the other open ones, oldest
  * first in each, then the ones the manager looks at first, then the closed ones, newest first. `seen` maps
  * an id to the revision the viewer last opened; an open item never opened is marked "new", one revised
- * since is "changed". A row with an `href` is another fleet's, opened on that fleet's page, and carries no
- * mark here.
+ * since is "changed". A row with a `fleet` is another fleet's, whose own page knows whether it was seen, and
+ * carries no mark here.
  */
 function decisionRows(decisions: readonly Decision[] | null | undefined, seen: { readonly [id: string]: string | undefined } | null | undefined): { item: Decision; mark: string }[] {
   const rank = (d: Decision): number => (d.status !== "open" ? 3 : d.asks === "manager" ? 2 : d.blocking ? 0 : 1);
@@ -916,7 +917,7 @@ function decisionRows(decisions: readonly Decision[] | null | undefined, seen: {
 
   return rows.map((d) => {
     const last = seen?.[d.id];
-    const mark = d.status !== "open" || d.href ? "" : !last ? "new" : d.revised && stamp(d.revised) > stamp(last) ? "changed" : "";
+    const mark = d.status !== "open" || d.fleet ? "" : !last ? "new" : d.revised && stamp(d.revised) > stamp(last) ? "changed" : "";
 
     return { item: d, mark };
   });
@@ -993,11 +994,69 @@ function grillAnswerText(item: Decision, picks: readonly { readonly id: string; 
   return lines.length ? { text: lines.join("\n") } : { error: "Answer at least one question." };
 }
 
-/** The decision a location hash names ("#decision/d1"), or null. */
-function decisionRoute(hash: string | null | undefined): string | null {
-  const m = /^#decision\/([A-Za-z0-9_.-]+)$/u.exec(String(hash ?? ""));
+/** A segment of a decision's address, decoded, when it is one `rule` allows. */
+function segment(text: string, rule: RegExp): string | null {
+  try {
+    const v = decodeURIComponent(text);
 
-  return m ? (m[1] ?? null) : null;
+    return rule.test(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The decision a location hash names ("#decision/d1"), or null. On a manager's page (`fleets`) it may name
+ * another fleet's as "#decision/<fleet>/<id>"; a fleet's id may hold the "@" of a peer's.
+ */
+function decisionRoute(hash: string | null | undefined, fleets = false): string | null {
+  const m = /^#decision\/([^/]+)(?:\/([^/]+))?$/u.exec(String(hash ?? ""));
+
+  if (!m) return null;
+  const [, first = "", second] = m;
+
+  if (second === undefined) return segment(first, /^[A-Za-z0-9_.-]+$/u);
+  const fleet = fleets ? segment(first, /^[A-Za-z0-9_.@-]+$/u) : null;
+  const id = segment(second, /^[A-Za-z0-9_.-]+$/u);
+
+  return fleet && id ? fleet + "/" + id : null;
+}
+
+/** The address of a decision's page: each segment encoded, so "<fleet>/<id>" stays a route. */
+const decisionHref = (id: string): string => "#decision/" + id.split("/").map(encodeURIComponent).join("/");
+
+/** The fleet and its own id, for a decision the manager's page names as "<fleet>/<id>"; null for the page's own. */
+function parseFleetDecision(id: string | null | undefined): { fleet: string; id: string } | null {
+  const at = String(id ?? "").indexOf("/");
+
+  return id && at > 0 ? { fleet: id.slice(0, at), id: id.slice(at + 1) } : null;
+}
+
+/** What waits on the viewer, in order, and where one decision stands in it. */
+export interface Queue {
+  readonly ids: readonly string[];
+  /** The decision's place, from 1; 0 when it does not wait on the viewer. */
+  readonly at: number;
+  readonly prev: string | null;
+  readonly next: string | null;
+}
+
+/**
+ * The decisions that wait on the viewer in the order of the "Waits on you" list, and the ones before and
+ * after `id`. A decision still open keeps its place in that order once answered. One decided since, or gone
+ * from the state (a fleet's lists only its open ones), is placed by `waited`, the queue as it was while it
+ * waited; else the next is the queue's first.
+ */
+function queueOf(decisions: readonly Decision[] | null | undefined, messages: Iterable<Message> | null | undefined, id: string | null | undefined, waited: readonly string[] = []): Queue {
+  const list = [...(messages ?? [])];
+  const rows = decisionRows(decisions, null).filter((r) => r.item.status === "open");
+  const ids = rows.filter((r) => awaiting(r.item, list)).map((r) => r.item.id);
+  const shown = id ?? "";
+  const listed = rows.some((r) => r.item.id === shown);
+  const order = (listed || !waited.includes(shown) ? rows.map((r) => r.item.id) : waited).filter((x) => x === shown || ids.includes(x));
+  const here = order.indexOf(shown);
+
+  return { ids, at: ids.indexOf(shown) + 1, prev: here > 0 ? (order[here - 1] ?? null) : null, next: (here < 0 ? ids[0] : order[here + 1]) ?? null };
 }
 
 /**
@@ -1366,10 +1425,10 @@ export interface Place {
 
 /**
  * Where a location hash leads: the view, the decision it opens, the element to scroll to. The addresses the
- * page had as one long scroll still lead to where their section went.
+ * page had as one long scroll still lead to where their section went. `fleets` as for `decisionRoute`.
  */
-function viewOf(hash: string | null | undefined): Place {
-  const decision = decisionRoute(hash);
+function viewOf(hash: string | null | undefined, fleets = false): Place {
+  const decision = decisionRoute(hash, fleets);
   const name = String(hash ?? "").replace(/^#/u, "");
   const moved = MOVED[name];
 
@@ -1641,6 +1700,9 @@ export const Core = {
   toastOf,
   decisionRows,
   decisionRoute,
+  decisionHref,
+  parseFleetDecision,
+  queueOf,
   pendingAnswer,
   awaiting,
   isHeld,

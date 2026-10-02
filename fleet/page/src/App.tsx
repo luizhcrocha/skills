@@ -1,15 +1,17 @@
 /**
  * The page: the masthead, one view at a time (or a decision's page), the chat beside or over it, and what
  * opens over everything. Here too are the page-wide listeners: the address, a name that opens its worker,
- * Ctrl/⌘K, a click outside the notifications panel, the visual viewport the chat overlay sits in.
+ * Ctrl/⌘K, a click outside the notifications panel, the visual viewport the chat overlay sits in. Inside
+ * the manager's page (`?embed=1`) it is the decision's page alone.
  */
 import { createEffect, onCleanup, onSettled } from "solid-js";
 import { type JSX } from "@solidjs/web";
 
-import { PageContext, usePage } from "./bits.tsx";
+import { listen, PageContext, usePage } from "./bits.tsx";
 import { Chat } from "./Chat.tsx";
-import type { State } from "./core.ts";
+import { Core, type State } from "./core.ts";
 import { DecisionPage } from "./DecisionPage.tsx";
+import { postHeight } from "./embed.ts";
 import { goLive } from "./live.ts";
 import { Masthead, Toasts } from "./Masthead.tsx";
 import { createModel, type Model } from "./model.ts";
@@ -18,12 +20,38 @@ import { Finder, SelTool, WorkerSheet } from "./Overlays.tsx";
 import { createUi, type Ui } from "./ui.ts";
 import { FleetView, LinksView, LogView, PlanView, useVisibleAgents } from "./Views.tsx";
 
-/** Listen on `target` while the component lives. */
-function listen<K extends keyof DocumentEventMap>(target: Document, type: K, fn: (e: DocumentEventMap[K]) => void): void;
-function listen<K extends keyof WindowEventMap>(target: Window, type: K, fn: (e: WindowEventMap[K]) => void): void;
-function listen(target: Document | Window, type: string, fn: (e: Event) => void): void {
-  target.addEventListener(type, fn);
-  onCleanup(() => target.removeEventListener(type, fn));
+/**
+ * The decision's page alone, in a frame of the manager's page: its height told to the manager, which sizes
+ * the frame by it. Whatever leads elsewhere in this fleet (a worker, another view) opens its own page beside.
+ */
+function Embedded(props: { readonly live: boolean }): JSX.Element {
+  const { m, ui } = usePage();
+
+  document.documentElement.classList.add("embed");
+  listen(window, "hashchange", () => ui.route());
+  listen(document, "click", (e) => {
+    const t = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-agent], a[href^='#']") : null;
+    const hash = t?.dataset["agent"] ? "#agent-" + t.dataset["agent"] : (t?.getAttribute("href") ?? "");
+
+    if (!t || !hash.startsWith("#") || Core.decisionRoute(hash)) return;
+    e.preventDefault();
+    open(location.pathname + hash, "_blank", "noopener");
+  });
+
+  if ("ResizeObserver" in globalThis) {
+    const watch = new ResizeObserver(postHeight);
+    watch.observe(document.documentElement);
+    onCleanup(() => watch.disconnect());
+  }
+
+  onSettled(() => {
+    ui.route();
+    postHeight();
+
+    if (props.live) goLive(m, ui);
+  });
+
+  return <DecisionPage />;
 }
 
 /** The page's parts, under the context. */
@@ -132,7 +160,7 @@ export function App(props: { readonly state: State; readonly live?: boolean; rea
 
   return (
     <PageContext value={{ m, ui }}>
-      <Body live={props.live !== false} />
+      {m.embed ? <Embedded live={props.live !== false} /> : <Body live={props.live !== false} />}
     </PageContext>
   );
 }

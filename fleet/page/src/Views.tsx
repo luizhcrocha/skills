@@ -20,7 +20,7 @@ function DecisionChips(props: { readonly list: readonly Decision[] }): JSX.Eleme
   return (
     <For each={props.list} keyed={(d) => d.id}>
       {(d) => (
-        <a class={"dchip " + (Core.awaiting(d(), m.messages()) ? "open" : d().status === "open" ? "held" : "closed")} href={"#decision/" + d().id} title={d().title}>
+        <a class={"dchip " + (Core.awaiting(d(), m.messages()) ? "open" : d().status === "open" ? "held" : "closed")} href={Core.decisionHref(d().id)} title={d().title}>
           {d().ref || d().id}
         </a>
       )}
@@ -127,7 +127,7 @@ function Roadblocks(): JSX.Element {
                 </p>
                 <Show when={ask()}>
                   {(d) => (
-                    <a class="block-link" href={"#decision/" + d().id}>
+                    <a class="block-link" href={Core.decisionHref(d().id)}>
                       Decide: {d().title}
                     </a>
                   )}
@@ -739,7 +739,7 @@ function LinkRow(props: { readonly link: Link }): JSX.Element {
       </Show>
       <Show when={l().decision ? m.decisionById(l().decision) : undefined}>
         {(d) => (
-          <a class="block-link" href={"#decision/" + l().decision}>
+          <a class="block-link" href={Core.decisionHref(l().decision)}>
             For: {d().title}
           </a>
         )}
@@ -897,7 +897,7 @@ export function LogView(props: { readonly rows: () => readonly Agent[] }): JSX.E
                         {(d) => (
                           <>
                             {" "}
-                            <a href={"#decision/" + d().id}>Open {d().ref || ""}</a>
+                            <a href={Core.decisionHref(d().id)}>Open {d().ref || ""}</a>
                           </>
                         )}
                       </Show>

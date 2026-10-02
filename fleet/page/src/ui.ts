@@ -448,7 +448,7 @@ export function createUi(m: Model) {
     refs.finder?.close();
     const g = r.go;
 
-    if (g.kind === "decision") location.hash = "#decision/" + g.id;
+    if (g.kind === "decision") location.hash = Core.decisionHref(g.id);
     else if (g.kind === "url" && g.url) {
       if (newTab || /^https?:/u.test(g.url)) window.open(g.url, "_blank", "noopener");
       else location.href = g.url;
@@ -461,7 +461,7 @@ export function createUi(m: Model) {
       const about = decisionTrail(m.messages()).get(g.id);
 
       if (about !== undefined && !m.decisionActivity()) {
-        location.hash = "#decision/" + about;
+        location.hash = Core.decisionHref(about);
 
         return;
       }
@@ -493,6 +493,24 @@ export function createUi(m: Model) {
   };
 
   const revisionOf = (d: Decision): string => d.revised || d.opened || "";
+
+  /** The decision shown that was answered while it was shown, said with what comes next. */
+  const [answered, setAnswered] = createSignal<string | null>(null);
+  let shownId: string | null = null;
+  let shownWaited = false;
+
+  /* Answered here, in a fleet's page inside this one, or anywhere the next state tells of: it left the queue while shown. */
+  createEffect(
+    () => ({ id: m.viewing(), waits: m.queue().at > 0, ids: m.queue().ids }),
+    (now) => {
+      if (now.waits && now.ids.join("\n") !== m.waited().join("\n")) m.setWaited(now.ids);
+
+      if (now.id !== shownId) setAnswered(null);
+      else if (now.id && shownWaited && !now.waits) setAnswered(now.id);
+      shownId = now.id;
+      shownWaited = now.waits;
+    },
+  );
 
   /* Opening a decision's page records the revision seen; a revision since the last look is said. */
   createEffect(
@@ -533,7 +551,7 @@ export function createUi(m: Model) {
   });
 
   m.onMessage((msg, live) => {
-    if (live && msg.from !== "user" && !m.chatInView()) notify.message(msg);
+    if (live && !m.embed && msg.from !== "user" && !m.chatInView()) notify.message(msg);
   });
 
   /* ------------------------------------------------------------------ the view in the address */
@@ -542,7 +560,7 @@ export function createUi(m: Model) {
 
   /** One view at a time: the tab of the view in the address is current, and a decision's page stands in for the views while it is open. */
   function route(): void {
-    const at = Core.viewOf(location.hash);
+    const at = Core.viewOf(location.hash, m.managed());
     const id = at.decision;
     const was = m.viewing();
     const place = id ? "decision/" + id : at.view;
@@ -644,6 +662,8 @@ export function createUi(m: Model) {
     bucket,
     setBucket,
     revisionOf,
+    answered,
+    setAnswered,
     picked,
     setPicked,
     toolAt,

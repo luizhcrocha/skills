@@ -1,13 +1,21 @@
 /**
  * The small pieces every view uses: the context the components read the model from, a state pill, a row's
- * number, a worker's name as a control that opens it, a moment, and the icons.
+ * number, a worker's name as a control that opens it, a moment, the icons, and a listener for a component's life.
  */
-import { createContext, useContext } from "solid-js";
+import { createContext, onCleanup, useContext } from "solid-js";
 import { Show, type JSX } from "@solidjs/web";
 
 import { clock, fullTime } from "./format.ts";
 import type { Model } from "./model.ts";
 import type { Ui } from "./ui.ts";
+
+/** Listen on `target` while the component lives. */
+export function listen<K extends keyof DocumentEventMap>(target: Document, type: K, fn: (e: DocumentEventMap[K]) => void): void;
+export function listen<K extends keyof WindowEventMap>(target: Window, type: K, fn: (e: WindowEventMap[K]) => void): void;
+export function listen(target: Document | Window, type: string, fn: (e: Event) => void): void {
+  target.addEventListener(type, fn);
+  onCleanup(() => target.removeEventListener(type, fn));
+}
 
 /** What every component reads: the model and the viewer's controls. */
 export interface Page {

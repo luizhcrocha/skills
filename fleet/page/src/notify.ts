@@ -132,7 +132,7 @@ export function createNotify(m: Model, hooks: NotifyHooks) {
         n.close();
 
         if (e.chat) hooks.openChat();
-        else if (e.decision) location.hash = "#decision/" + e.decision;
+        else if (e.decision) location.hash = Core.decisionHref(e.decision);
         else if (!hooks.panelOpen()) hooks.openPanel();
       };
     } catch {
@@ -275,7 +275,7 @@ export function createNotify(m: Model, hooks: NotifyHooks) {
         return true;
       }
     } else if (t.shown.chat) hooks.openChat();
-    else if (t.shown.decision) location.hash = "#decision/" + t.shown.decision;
+    else if (t.shown.decision) location.hash = Core.decisionHref(t.shown.decision);
     else if (!hooks.panelOpen()) {
       hooks.openPanel();
 

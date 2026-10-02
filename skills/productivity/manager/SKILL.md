@@ -56,7 +56,7 @@ The coordinator recorded it for you (`--asks manager`). Read it in full: `fleet 
 - **Answer it**, when `standing.md`, another fleet's ledger, or what you have seen settles it, and it is not the user's. Say the answer and where it comes from. The coordinator records it as decided, with you as the source.
 - **Ask** the coordinator for what is missing, when you cannot tell whose it is or what the options cost.
 - **Inform**: another fleet's work bears on it. Say which fleet and what (it is already doing this, it will change these facts, it owns that file). The coordinator revises or withdraws.
-- **Pass it on**, when it is the user's. Tell the coordinator to pass it on (`decision <id> --asks user`). It then shows on your page's list, and the user answers it on the fleet's page.
+- **Pass it on**, when it is the user's. Tell the coordinator to pass it on (`decision <id> --asks user`). It then shows on your page's list, and the user answers it on your page, which shows that fleet's decision page in a frame (or on the fleet's own page); the answer goes to that fleet's chat.
 
 A fleet that runs an advisor (the `advisor` row in `fleet fleets show`) asks it before you: its decision carries the advisor's recommendation, and the ruling is on the fleet's chat (`say --as advisor`). Weigh that recommendation against what only you see (other fleets, `standing.md`) instead of redoing it; a question the advisor could have settled from the fleet's own record goes back to the coordinator to ask it first.
 

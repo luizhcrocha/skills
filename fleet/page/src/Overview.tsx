@@ -112,7 +112,7 @@ function Lead(): JSX.Element {
                 const href = (): string => {
                   const row = r();
 
-                  return row.agent ? "#agent-" + encodeURIComponent(row.agent) : row.id ? (row.fleet ? m.fleetPage(row.fleet) : "") + "#decision/" + encodeURIComponent(row.id) : row.fleet ? m.fleetPage(row.fleet) : "";
+                  return row.agent ? "#agent-" + encodeURIComponent(row.agent) : row.id ? Core.decisionHref(row.fleet ? row.fleet + "/" + row.id : row.id) : row.fleet ? m.fleetPage(row.fleet) : "";
                 };
 
                 const name = (): JSX.Element => (
@@ -254,7 +254,7 @@ function DecisionList(): JSX.Element {
             const waits = (): boolean => r().bucket === "active";
 
             return (
-              <a class={"ask " + (waits() ? "open" : open() ? "held" : "closed") + (waits() && d().blocking ? " blocking" : "")} href={d().href || "#decision/" + d().id}>
+              <a class={"ask " + (waits() ? "open" : open() ? "held" : "closed") + (waits() && d().blocking ? " blocking" : "")} href={Core.decisionHref(d().id)}>
                 <span class="ask-head">
                   <b>
                     <RefTag of={d()} />

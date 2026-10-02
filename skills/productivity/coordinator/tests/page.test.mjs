@@ -196,6 +196,7 @@ test("decisionRows: an open item is new until seen, and changed when revised aft
 test("decisionRoute: the decision a location hash names", () => {
   assert.equal(Core.decisionRoute("#decision/d1"), "d1");
   assert.equal(Core.decisionRoute("#decision/schema.v2-a"), "schema.v2-a");
+  assert.equal(Core.decisionRoute("#decision/billing/d1", true), "billing/d1", "another fleet's, on the manager's page");
   for (const hash of ["", "#", "#decisions", "#decision/", "#decision/a/b", "#decision/a b", "#roadmap", undefined]) assert.equal(Core.decisionRoute(hash), null, String(hash));
 });
 
@@ -326,9 +327,9 @@ test("decisionRows and leadOf: what is with the manager waits on the manager, af
     item("d1", { asks: "manager", blocking: true, opened: "2026-09-28T09:00:00Z" }),
     item("d2", { opened: "2026-09-28T10:00:00Z" }),
     item("d3", { status: "decided", closed: "2026-09-28T11:00:00Z" }),
-    item("billing/d1", { href: "https://box:1/#decision/d1", blocking: true }),
+    item("billing/d1", { fleet: "billing", blocking: true }),
   ], {});
-  assert.deepEqual(rows.map((r) => [r.item.id, r.mark]), [["billing/d1", ""], ["d2", "new"], ["d1", "new"], ["d3", ""]], "another fleet's row is opened on that fleet's page, which knows whether it was seen");
+  assert.deepEqual(rows.map((r) => [r.item.id, r.mark]), [["billing/d1", ""], ["d2", "new"], ["d1", "new"], ["d3", ""]], "another fleet's row: that fleet's page knows whether it was seen");
   assert.deepEqual(Core.leadOf([item("d1", { asks: "manager", blocking: true })]), { headline: "Nothing waits on you.", detail: "", tone: "clear" });
   assert.deepEqual(Core.leadOf([item("d1", { asks: "manager", blocking: true }), item("d2")]), { headline: "1 decision waits on you.", detail: "Work goes on meanwhile.", tone: "waiting" });
 });

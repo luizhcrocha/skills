@@ -552,6 +552,12 @@
   .dv-body { display: grid; gap: 8px; }
   .dv-body iframe { display: block; width: 100%; height: 160px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
   .dv-body iframe.fixed { height: 70dvh; }
+  .dv-queue { display: grid; gap: 10px; }
+  .dv-queue-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .dv-queue .btn[aria-disabled] { color: var(--faint); cursor: default; }
+  .dv-fleet { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: -10px; }
+  .dv-embed { display: block; width: 100%; height: 70dvh; border: 0; background: transparent; }
+  html.embed .dv { max-width: none; padding: 2px 2px 8px; }
   /* On a phone the way to answer stays under the thumb while the page scrolls above it. */
   @media (max-width: 759.98px) {
     .dv .sheet-actions .btn { flex: 1; justify-content: center; }
