@@ -599,6 +599,15 @@ itself. A manager made later appears the same way, on the same address.
   loopback port exits 1. `REGISTRY/hub/hub.json` holds `{pid, port, url, https, since}` while it
   runs. `--https PORT` also runs `tailscale serve --bg --https=PORT http://127.0.0.1:<port>` (and
   turns it off on exit): the page's browser alerts need a secure page.
+- **The public ports of root-mode previews**: for each [root-mode preview](#the-preview-fleet-preview)
+  whose record names a public port and a started dev server (a pid recorded), the hub also listens on that
+  port, in the same two places (127.0.0.1 and the Tailscale IPv4, never 0.0.0.0), and passes every path
+  there to that dev server at its root. It looks every second and at start, so a restarted hub listens
+  again from the records alone, and it lets a port go when the preview stops. A port it cannot take (held
+  by another process) is logged and reported, never fatal: `REGISTRY/hub/previews.json` holds `{pid,
+  ports[] {port, fleet, worker, loopback, tailnet, error}}` while it runs, read by `fleet preview status`
+  and the page. A port named by two records goes to the first; the hub's own port is never one. Plain
+  http, no `tailscale serve` entry per preview (TLS on these ports is a later step).
 - **Dev-server ports**: `fleet ws add` records a `port` on each workspace it makes: the first one from
   `FLEET_PORT_BASE` (5300) that no active workspace or preview of any fleet this machine serves holds; a
   handed-over workspace keeps its port. `fleet brief` gives a worker with a lane a `Dev server:` line: the
@@ -641,7 +650,9 @@ itself. A manager made later appears the same way, on the same address.
   sandbox CSP; dot files and paths out of DIR 404). `/f/<fleet>` redirects (301) to `/f/<fleet>/`;
   `/f/<a>/f/<b>/…` is `/f/<b>/…`, so the manager's page, whose coordinators' links are relative,
   works under `/f/manager/`. 421 on a `Host` the hub doesn't answer to (loopback, `localhost`, the
-  Tailscale IP, the MagicDNS name and short name, at its port; the https name with `--https`).
+  Tailscale IP, the MagicDNS name and short name, at its port; the https name with `--https`). On a
+  root-mode preview's public port every path is that preview's (no index, no fleets), with the same 421
+  rule at that port.
 - **Skills** (`GET /f/<fleet>/skills`, the page lists them on a `/` at the start of a message in
   the composer, and of an answer or a note on a decision's page): `{"skills": [{name, description, hint, source, model}], "builtins": false}`, sorted by
   name (code point order). `source` is `plugin`, `user` or `project`; `hint` is the `argument-hint`
@@ -985,6 +996,41 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
 - `start --per-worker WORKER`: a dev server in that worker's own workspace (installed first when it has
   no node_modules), base `/f/<fleet>/preview/<worker>/`, logging to `DIR/preview/<worker>.log`. No merge,
   no updater: its files are the worker's.
+- **Root mode** (`start --root`, `start --per-worker WORKER --root`, or the ledger's `preview.root`, set
+  by `fleet preview DIR set --root` and taken back by `set --no-root`, kept beside `preview.cmd`): for an
+  app that only runs at its root, whose client asks for `/api/...`, `/api/shapes` or a WebSocket at
+  `/api/sala` absolutely (the Casos app: about 600 such lines across 100 files), so under
+  `/f/<fleet>/preview/` its pages load and every data call 404s at the hub's root. The dev server is told
+  base `/` (Vite: `--base /`; `{base}` is `/`) and its own free 127.0.0.1 port as before, and the preview
+  is given a **public port**, on which the hub serves it at the root of an origin of its own,
+  `http://<MagicDNS name>:<port>/` and `http://<tailnet IP>:<port>/` (`http://127.0.0.1:<port>/` without
+  Tailscale). The port is given once per preview (the combined one, each worker's) and kept in the
+  record's `ports {combined, workers {<worker>: port}}` across stops and starts, so the address stays
+  good; `server.public` (and a per-worker server's) names it while that start runs in root mode. It comes
+  from `FLEET_PREVIEW_PORTS` (`LO-HI`), **7500-7599** by default: beside the hub's 7420 and 7443, clear of
+  the ports this machine's other servers use (Vite's 5173, 5300 and up for workers' dev servers, the
+  apps' 24116-24118, 9787-9791, 8444) and below the kernel's ephemeral range (32768 and up on Linux, 49152
+  on the Mac), where the dev servers' own free ports land. A port is skipped when another fleet's record
+  holds it, when it is the hub's (7420, 7443, or what `hub.json` records), when `tailscale serve` exposes
+  it, or when something listens on it on 127.0.0.1 or the tailnet IP now; a range with none left is
+  refused. `start` and `status` print the public address and what the hub says of the port (`the hub
+  listens on it (127.0.0.1 and <ip>)`, `the hub cannot listen on port N: …`, `no hub runs`); `start`
+  waits up to 3 s for a running hub to take the port. These addresses are plain http, so the page there
+  has no secure context: `navigator.clipboard` and the other secure-context APIs are unavailable. The
+  `/f/<fleet>/preview/` path still leads to the same server, with the prefix stripped.
+  - **Security**: the dev server stays on 127.0.0.1; only the hub faces the tailnet, on the two addresses
+    it binds its own port on. The public port carries the same identity rule as `/f/<fleet>/preview/`
+    (below): the client's `Tailscale-*` and `X-Forwarded-For` dropped, then set from what the hub
+    verified; `Host` rewritten to `127.0.0.1:<dev port>`; a write (not GET, HEAD or OPTIONS) the chat's
+    writers' only; a stopped dev server 502. Every request and WebSocket carries `X-Forwarded-Prefix: /`,
+    the proxy marker: an app's guard that reads `X-Forwarded-Prefix` as "came through a proxy" (the Casos
+    dev guard does) asks such a request for a login instead of trusting loopback.
+- **The dev servers' environment**: every dev server the preview starts (combined, per-worker, root mode
+  or not), its install and the updater inherit the environment `fleet preview DIR start` ran in,
+  unchanged but for `PORT`, `BROWSER`, `NO_COLOR` and `FORCE_COLOR`. Dev secrets come that way only:
+  `secretspec run -- fleet preview DIR start ...`; nothing writes or copies a secret file. Nothing else
+  starts a dev server (the updater merges, the hub proxies), so a server that dies is started again by
+  `start`, under the same `secretspec run --`.
 - `status`: the address, the dev server (pid, port, answering), the updater, each worker's workspace
   (`[x]` merged at its commit and change, `[ ]` and why not: `running`, `taken in`, `taken out`, `done,
   merged`, `done, already in the stack`, `done, its workspace is gone`), the conflicts, the updater's last error and
@@ -995,8 +1041,9 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   is running (...)`) or when its @ holds changes of its own; otherwise it forgets it, abandons its merge
   commit, deletes the directory and the record.
 - **The record**, `DIR/preview.json`: `{fleet, workspace, path, repo, server {cmd, port, pid, base, path,
-  log, started}, updater, include[], exclude[], merged[] {id, workspace, commit, change}, stack, commit,
-  conflicts[] {path, workers[]}, error, updated, workers[] (per-worker servers)}`. It is not a key of
+  log, started, public}, updater, include[], exclude[], merged[] {id, workspace, commit, change}, stack,
+  commit, conflicts[] {path, workers[]}, error, updated, workers[] (per-worker servers), ports {combined,
+  workers}}`. It is not a key of
   `state.json`: it has three writers (the coordinator's commands, the updater, the hub), and `state.json`
   has one writer and no lock. Each change is made under an exclusive `flock` on `DIR/preview.lock` and
   written whole through a rename. A pid counts as running when the process exists and is no zombie.
@@ -1012,7 +1059,8 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   root), `Host` set to the server's own `127.0.0.1:<port>` (Vite refuses a host it does not know, such as
   the tailnet name), hop-by-hop headers and `Accept-Encoding` dropped. A WebSocket upgrade (Vite's HMR, on
   the `vite-hmr` protocol, its token in the query) is piped to `ws://127.0.0.1:<port><path>` both ways,
-  the protocol echoed, messages queued until the dev server's end opens. A request that could change
+  the protocol echoed, messages queued until the dev server's end opens. HTTP and the WebSocket alike
+  carry `X-Forwarded-Prefix` (the hub's path for the server), the proxy marker. A request that could change
   something there (not GET, HEAD or OPTIONS) is the chat's writers' only (403 otherwise); a missing
   preview is 404, a stopped server 502. `POST /f/<fleet>/preview-workers` `{worker, include}` takes a worker
   in or out under the chat's post policy (403, 415, 413, 400 as for `POST /chat`) and answers `{include,
@@ -1036,11 +1084,16 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   MagicDNS host (config or an undocumented environment variable), a serve port allocated and freed per
   preview, and changes to tailscaled's persistent config; it stays the way for a server whose base is
   set only in its config (Next's `basePath`), which this does not do yet. A page with hard-coded absolute
-  URLs (`/icons.svg`) misses the base either way.
+  URLs (`/icons.svg`) misses the base either way: that is what root mode is for, on a port the hub owns
+  (no `tailscale serve` entry per preview and no change to the app), at the cost of plain http.
 - **The page** (the view's `preview`, only when `DIR/preview.json` exists, so no trace changes): `{url
   ("preview/", or null with only per-worker ones), address, running, up, port, log, updater, every,
   workers[] {id, name, status, included, commit, change}, conflicts[], error, updated, per_worker[]
-  {worker, url, address, running, up, port, log}}`. The Fleet view's Preview block shows the link, a box
+  {worker, url, address, running, up, port, log, public, public_error}, public, public_error}`, `public`
+  the root-mode public port or null and `public_error` the running hub's word on it. The Fleet view's
+  Preview block links a root-mode preview (and each per-worker one) at `http://<the page's own
+  host>:<public>/`, says it is plain http (no secure context, no clipboard) in the link's title, and
+  shows `public_error`. It also shows the link, a box
   per worker's workspace (disabled for a viewer who may not write; put back when the hub refuses), the
   conflicts with the workers' names, the build error and each per-worker preview; the Links view lists
   the combined and per-worker links. The hub's view of a fleet is recomputed when `state.json` or
