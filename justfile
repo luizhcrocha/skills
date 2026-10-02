@@ -47,18 +47,18 @@ test-coordinator-page:
 test-fleet:
     python3 -m unittest discover -s fleet/oracle -p 'test_*.py'
 
-# The TypeScript fleet (fleet/): strict types, the lint/ts packs, its own tests, then the oracle's golden traces and model test run against it
+# The TypeScript fleet (fleet/): strict types, the lint/ts packs, its own tests (bun --parallel=4: four worker processes, a fresh global per file), then the oracle's golden traces and model test run against it
 test-fleet-ts: _deps-fleet _deps-lint
-    cd fleet && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/oxlint -c .oxlintrc.json --deny-warnings src test && bun test
+    cd fleet && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/oxlint -c .oxlintrc.json --deny-warnings src test && bun test --parallel=4
     FLEET_ORACLE_IMPL='{"state": "{{justfile_directory()}}/fleet/bin/fleet state", "chat": "{{justfile_directory()}}/fleet/bin/fleet chat", "fleets": "{{justfile_directory()}}/fleet/bin/fleet fleets", "subst": {"{{justfile_directory()}}/skills/productivity/coordinator": "$SKILL"}}' python3 -m unittest discover -s fleet/oracle -p 'test_*.py'
 
 # Build the dashboard page (fleet/page, Solid 2.0) into the coordinator's template, assets/dashboard.html; commit the result
 build-page:
     cd fleet/page && bun install --frozen-lockfile --silent && bun build.ts
 
-# The dashboard page (fleet/page): strict types, the lint/ts packs, the committed template against a fresh build, then its DOM tests and its headless-Chromium tests (skipped without Chromium)
+# The dashboard page (fleet/page): strict types, the lint/ts packs, the committed template against a fresh build, then its DOM tests and its headless-Chromium tests (skipped without Chromium), four bun worker processes
 test-page: _deps-page _deps-lint
-    cd fleet/page && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/oxlint -c .oxlintrc.json --deny-warnings src test build.ts && bun build.ts --check && TZ=UTC bun test --conditions browser --timeout 20000
+    cd fleet/page && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/oxlint -c .oxlintrc.json --deny-warnings src test build.ts && bun build.ts --check && TZ=UTC bun test --conditions browser --timeout 20000 --parallel=4
 
 # The lang-* skills' sources tables as JSON (--skill NAME, --stale DAYS)
 lang-sources *args:
