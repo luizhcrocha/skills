@@ -10,7 +10,7 @@ For the rest of this session you run a **fleet**: workers do the work, you coord
 
 You still own the outcome. A coordinator who spawns and forgets is worse than no coordinator: the value is in the brief, the tracking, and the integration.
 
-**The fleet CLI** is `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet`, written `fleet` below and in [DASHBOARD.md](DASHBOARD.md); it is not on PATH, so run it by that path (when the variable shows unexpanded, the plugin's root is three directories above this skill's). `fleet state <dashboard-dir> …` is the ledger, `fleet chat` the chat, `fleet fleets` the machine's fleets, and `fleet ws`, `fleet brief`, `fleet advisor`, `fleet turn` and `fleet serve` are named where they are used. Its first run installs its dependencies (Bun is the one requirement).
+**The fleet CLI** is `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet`, written `fleet` below and in [DASHBOARD.md](DASHBOARD.md); it is not on PATH, so run it by that path (when the variable shows unexpanded, the plugin's root is three directories above this skill's). `fleet state <dashboard-dir> …` is the ledger, `fleet chat` the chat, `fleet fleets` the machine's fleets, and `fleet ws`, `fleet preview`, `fleet brief`, `fleet advisor`, `fleet turn` and `fleet serve` are named where they are used. Its first run installs its dependencies (Bun is the one requirement).
 
 ## Do it yourself only with a named exemption
 
@@ -106,6 +106,8 @@ The Now line (`set --now`) names what it waits on by number (A6, I2), so the pag
 - **Shared mode**, opt-in per fleet (`fleet state <dashboard-dir> set --workspaces shared`): no worker gets a workspace; every worker edits your `default` working copy, and only you move history. Choose it for a repo whose setup is expensive and lanes that are truly disjoint. `agent` refuses a running worker whose lane meets a live one's, `fleet ws add` makes nothing, and `fleet brief` gives the workers the shared-copy rules (no `jj new`, `edit`, `rebase`, `describe`; they describe nothing). While they work, your own edits and history moves wait.
 
 `fleet brief` names the workspace either way (and warns, in an isolated fleet, when a worker with a lane has none); `fleet ws <dashboard-dir> list` shows what each holds ahead of the stack, the files a worker changed outside its lane, and when it was last seen.
+
+**UI work: start a preview once its workers run** (`fleet preview <dashboard-dir> start`), so the user sees every worker's in-progress UI merged in one live page before anything is integrated, and give the user its link (the page's Fleet and Links views carry it too); [DASHBOARD.md](DASHBOARD.md) has its commands.
 
 **Integrating is yours, and pruning is part of it.** In an isolated fleet: rebase the worker's changes under your `@` (`jj rebase -r '(::<id>@ ~ ::@) ~ <id>@' -B @`), resolve by intent, run the gates, mark the worker done, then `fleet ws <dashboard-dir> prune --apply` for its workspace, unless the next worker of its lane reuses it (`--reuse`). In a shared fleet: once a worker is done, `fleet ws <dashboard-dir> split <id> -m "<its change's description>"` cuts its lane's files out of `@` into one described change (`jj split` by its lane's paths; the files on disk do not move, so the other workers carry on), one change per worker, then run the gates. Every state command warns while a done worker's workspace is still there, naming both ways out (prune it, or hand it to the next worker); what prune keeps, it names with why.
 
