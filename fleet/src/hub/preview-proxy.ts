@@ -31,8 +31,9 @@ export interface SocketData {
   readonly upstream: { socket: WebSocket | undefined; readonly queue: (string | Uint8Array)[] };
 }
 
-/** Upgrade the request being answered to a proxied socket, with these response headers; whether it was. */
-export type Upgrade = (data: SocketData, headers: Readonly<Record<string, string>>) => boolean;
+/** Upgrade the request being answered to a proxied socket, with these response headers; whether it was.
+ * A `Headers`, since Bun 1.4.2's `server.upgrade` throws on an empty object (`{}`) but takes an empty `Headers`. */
+export type Upgrade = (data: SocketData, headers: Headers) => boolean;
 
 /** Where a preview path goes. */
 export interface Target {
@@ -151,7 +152,7 @@ export function proxySocket(req: Request, target: Target, search: string, upgrad
   const data: SocketData = { url: `ws://127.0.0.1:${target.server.port}${target.path}${search}`, protocols, headers: identity, upstream: { socket: undefined, queue: [] } };
   const first = protocols[0];
 
-  if (upgrade(data, first === undefined ? {} : { "Sec-WebSocket-Protocol": first })) return undefined;
+  if (upgrade(data, new Headers(first === undefined ? {} : { "Sec-WebSocket-Protocol": first }))) return undefined;
 
   return new Response(JSON.stringify({ error: "the WebSocket upgrade failed" }), { status: 400, headers: { "Content-Type": "application/json; charset=utf-8" } });
 }

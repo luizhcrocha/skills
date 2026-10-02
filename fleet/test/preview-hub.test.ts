@@ -60,7 +60,8 @@ function freePort(): number {
   return got;
 }
 
-/** A stand-in dev server named `name`: answers with what it was asked, redirects `/old` to `/new`, echoes on a socket. */
+/** A stand-in dev server named `name`: answers with what it was asked, redirects `/old` to `/new`, echoes on a socket
+ * on the protocol it was asked for, if any. */
 function stub(name: string): number {
   const server = Bun.serve<undefined>({
     hostname: "127.0.0.1",
@@ -72,7 +73,10 @@ function stub(name: string): number {
       if ((req.headers.get("upgrade") ?? "").toLowerCase() === "websocket") {
         asked.push({ server: name, path: `${url.pathname}${url.search}`, host: req.headers.get("host") ?? "", method: "WS" });
 
-        return srv.upgrade(req, { data: undefined, headers: { "Sec-WebSocket-Protocol": "vite-hmr" } }) ? undefined : new Response("no", { status: 400 });
+        const protocol = req.headers.get("sec-websocket-protocol")?.split(",")[0]?.trim();
+        const upgraded = protocol === undefined ? srv.upgrade(req, { data: undefined }) : srv.upgrade(req, { data: undefined, headers: { "Sec-WebSocket-Protocol": protocol } });
+
+        return upgraded ? undefined : new Response("no", { status: 400 });
       }
 
       asked.push({ server: name, path: url.pathname, host: req.headers.get("host") ?? "", method: req.method });
@@ -188,6 +192,27 @@ describe("the preview through the hub", () => {
     socket.send("ping");
     expect(await got).toBe("combined echo:ping");
     expect(asked.find((a) => a.method === "WS")).toEqual({ server: "combined", path: "/f/shop/preview/?token=t0k", host: `127.0.0.1:${port}`, method: "WS" });
+    socket.close();
+  });
+
+  test("a WebSocket that asks for no protocol is piped too", async () => {
+    const port = stub("combined");
+    writeRecord({ server: server(port, "/f/shop/preview/") });
+    const socket = new WebSocket(`ws://127.0.0.1:${hubPort}/f/shop/preview/`);
+
+    const got = new Promise<string>((resolve, reject) => {
+      socket.addEventListener("message", (e) => resolve(String(e.data)));
+      socket.addEventListener("error", () => reject(new Error("socket failed")));
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener("open", () => resolve());
+      socket.addEventListener("error", () => reject(new Error("socket failed")));
+    });
+    expect(socket.protocol).toBe("");
+    socket.send("ping");
+    expect(await got).toBe("combined echo:ping");
+    expect(asked.find((a) => a.method === "WS")).toEqual({ server: "combined", path: "/f/shop/preview/", host: `127.0.0.1:${port}`, method: "WS" });
     socket.close();
   });
 
