@@ -567,6 +567,13 @@ itself. A manager made later appears the same way, on the same address.
   loopback port exits 1. `REGISTRY/hub/hub.json` holds `{pid, port, url, https, since}` while it
   runs. `--https PORT` also runs `tailscale serve --bg --https=PORT http://127.0.0.1:<port>` (and
   turns it off on exit): the page's browser alerts need a secure page.
+- **Fleets by name**: wherever a command takes a fleet's directory first (`state`, `chat`, `ws`,
+  `preview`, `brief`, `turn`, `advisor`, `serve`, `spend`), a bare name (no `/`, not a directory here)
+  is looked up among the fleets this machine serves: its id on the hub, an id it had before, or its
+  session's name wins; else the one fleet whose id or session starts with it, else the one containing
+  it (any case). `fleet preview ui start` is ui-coordinator's directory when it is the only fit. Several
+  fits refuse with exit 2 (`fleet: 'coord' fits infra-coordinator, ui-coordinator: give more of the
+  name`); no fit passes as given. `fleet ls` (or `fleet list`) is `fleet fleets list`.
 - **Who holds the port**: `hub.json` records `supervised` (started by systemd or launchd). A supervised
   hub that finds loopback's port held by a hub started by hand (the recorded pid runs `… hub`) stops it
   (SIGTERM, up to 5 s) and binds, logging `took over from a hub started by hand (pid N)`; anything else
