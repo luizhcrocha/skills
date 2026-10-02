@@ -17,6 +17,9 @@
  * - `/f/<fleet>@<machine>/…` a fleet of a peer hub, passed through: this hub checks a post by its own
  *   rules first, then the peer checks this machine (its owner's login) by its rules.
  *
+ * A preview in root mode is served apart, at the root of a public port of its own (`fetchRooted`,
+ * `preview-ports.ts`): every path there goes to its dev server as it is, under the same identity rule.
+ *
  * A request whose Host this hub does not answer to is refused (421), against DNS rebinding.
  */
 import { join, normalize } from "node:path";
@@ -31,7 +34,8 @@ import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, t
 import { answerRefusal } from "../ledger/answers.ts";
 import { pageHtml, readTemplate } from "../page/render.ts";
 import { pick, readLedger } from "../preview/updater.ts";
-import { readRecord, recordPath } from "../preview/record.ts";
+import { isRunning } from "../preview/devserver.ts";
+import { readRecord, recordPath, type DevServer } from "../preview/record.ts";
 import { PreviewError } from "../errors.ts";
 import { summary, view, type Lookups } from "../page/view.ts";
 import type { Entry } from "../registry.ts";
@@ -42,7 +46,7 @@ import { indexHtml } from "./index-page.ts";
 import { ProbeCache } from "./probes.ts";
 import { grantRefusal } from "./grants.ts";
 import { grantor, hello, MAX_POST_BYTES, postRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
-import { previewTarget, proxiedIdentity, proxyHttp, proxySocket, type Upgrade } from "./preview-proxy.ts";
+import { previewTarget, proxiedIdentity, proxyHttp, proxySocket, type Target, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
 import { PLUGIN_ROOT, readSkills, repoOf } from "./skills.ts";
 import { readTailnet, whois, type Tailnet } from "./tailnet.ts";
@@ -85,6 +89,15 @@ export interface HubOptions {
   readonly peers: boolean;
   /** Further `host:port` names the hub answers to (a `tailscale serve` https name). */
   readonly hosts: readonly string[];
+}
+
+/** A root-mode preview the hub serves at the root of its public port: which fleet, which dev server. */
+export interface Rooted {
+  readonly port: number;
+  readonly fleet: string;
+  readonly dir: string;
+  /** The worker of a per-worker preview; undefined for the combined one. */
+  readonly worker: string | undefined;
 }
 
 /** A peer hub, as it last answered. */
@@ -516,12 +529,19 @@ export class Hub {
     return this.file(req, root, rest === "/" ? "/index.html" : rest);
   }
 
-  /** A preview path, passed to its dev server: a WebSocket (HMR) piped, anything else asked and answered. A
-   * request that could change something there (not GET, HEAD or OPTIONS) is the chat's writers' only. */
+  /** A preview path, passed to its dev server (`pass`). */
   private async preview(req: Request, ip: string, entry: Entry, tail: string, search: string, keepOpen: () => void, upgrade: Upgrade | undefined): Promise<Response | undefined> {
     const target = previewTarget(readRecord(entry.dir), entry.id, tail);
 
     if (!("server" in target)) return jsonResponse(target[0], { error: target[1].replace("DIR", entry.dir) });
+
+    return this.pass(req, ip, target, search, keepOpen, upgrade);
+  }
+
+  /** Pass a request to a preview's dev server: a WebSocket piped, anything else asked and answered, with the
+   * identity the hub verified. A request that could change something there (not GET, HEAD or OPTIONS) is the
+   * chat's writers' only. */
+  private async pass(req: Request, ip: string, target: Target, search: string, keepOpen: () => void, upgrade: Upgrade | undefined): Promise<Response | undefined> {
     const viewer = await this.viewer(req, ip);
     const identity = proxiedIdentity(ip, viewer, req.headers);
 
@@ -540,6 +560,57 @@ export class Hub {
     keepOpen();
 
     return proxyHttp(req, target, search, identity);
+  }
+
+  // -- root mode -------------------------------------------------------------------------------
+
+  /** The root-mode previews of this machine's fleets the hub listens for: each recorded dev server with a
+   * public port, while it is started (its pid recorded). A port named twice goes to the first; the hub's own never. */
+  rootedPreviews(): Rooted[] {
+    const found: Rooted[] = [];
+    const ports = new Set<number>([this.options.port]);
+
+    for (const entry of this.entries()) {
+      const record = readRecord(entry.dir);
+
+      if (record === undefined) continue;
+      const servers: (readonly [string | undefined, DevServer | null])[] = [[undefined, record.server], ...record.workers.map((w) => [w.worker, w] as const)];
+
+      for (const [worker, server] of servers) {
+        if (server === null || server.public === null || server.pid === null || ports.has(server.public)) continue;
+        ports.add(server.public);
+        found.push({ port: server.public, fleet: entry.id, dir: entry.dir, worker });
+      }
+    }
+
+    return found;
+  }
+
+  /** Whether `host` (`host:port`, lower case) names this machine at `port`: loopback, or its tailnet name or address. */
+  answersAt(host: string, port: number): boolean {
+    const self = this.tailnet?.self;
+    const names = ["127.0.0.1", "localhost", "[::1]", self?.dns, self?.name, self?.ip].flatMap((n) => (n === undefined ? [] : [`${n.toLowerCase()}:${port}`]));
+
+    return names.includes(host);
+  }
+
+  /** Answer one request from `ip` on `slot`'s public port: every path goes to its dev server at its root,
+   * WebSocket or not, as `/f/<fleet>/preview/` does, with `X-Forwarded-Prefix: /`. A Host that is not this
+   * machine at that port is refused (421), against DNS rebinding. */
+  async fetchRooted(req: Request, ip: string, slot: Rooted, keepOpen: () => void, upgrade?: Upgrade): Promise<Response | undefined> {
+    if (!this.answersAt((req.headers.get("Host") ?? "").toLowerCase(), slot.port)) return jsonResponse(421, { error: "unknown host" }, { Connection: "close" });
+    const record = readRecord(slot.dir);
+    const server = slot.worker === undefined ? record?.server : record?.workers.find((w) => w.worker === slot.worker);
+
+    if (server === undefined || server === null || server.pid === null || !isRunning(server.pid)) {
+      const start = slot.worker === undefined ? `fleet preview ${slot.dir} start --root` : `fleet preview ${slot.dir} start --per-worker ${slot.worker} --root`;
+
+      return jsonResponse(502, { error: `this preview's dev server is not running: \`${start}\`` });
+    }
+
+    const url = new URL(req.url);
+
+    return this.pass(req, ip, { server, path: url.pathname, prefix: "/" }, url.search, keepOpen, upgrade);
   }
 
   /** `POST /f/<fleet>/preview-workers` `{worker, include}`: a worker taken into the combined preview or out

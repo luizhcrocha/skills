@@ -6,7 +6,7 @@
  * under the chat's write policy. The dev server sees only the identity the hub verified: never a client's
  * own Tailscale-* headers.
  */
-import { chmodSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readRecord, recordJson, type DevServer, type PreviewRecord } from "../src/preview/record.ts";
 import { viewerOf } from "../src/hub/policy.ts";
 import { previewSockets, proxiedIdentity, type SocketData } from "../src/hub/preview-proxy.ts";
-import { startHub, type Running } from "../src/hub/server.ts";
+import { hubRecordPath, previewPortsPath, startHub, type Running } from "../src/hub/server.ts";
 import { baseEnv, fleet, machine, tmp, type Environment } from "./support.ts";
 
 let base: string;
@@ -32,6 +32,9 @@ const asked: { readonly server: string; readonly path: string; readonly host: st
 
 /** The identity headers (Tailscale-*, X-Forwarded-For) each request to a stand-in server carried. */
 const seen: Record<string, string>[] = [];
+
+/** The proxy marker (`X-Forwarded-Prefix`) each request to a stand-in server carried, or null. */
+const marks: (string | null)[] = [];
 
 const stubs: ReturnType<typeof Bun.serve>[] = [];
 
@@ -69,6 +72,7 @@ function stub(name: string): number {
     fetch(req, srv) {
       const url = new URL(req.url);
       seen.push(identityOf(req.headers));
+      marks.push(req.headers.get("x-forwarded-prefix"));
 
       if ((req.headers.get("upgrade") ?? "").toLowerCase() === "websocket") {
         asked.push({ server: name, path: `${url.pathname}${url.search}`, host: req.headers.get("host") ?? "", method: "WS" });
@@ -97,8 +101,8 @@ function stub(name: string): number {
   return server.port ?? 0;
 }
 
-function server(port: number, base$: string): DevServer {
-  return { cmd: "stub", port, pid: process.pid, base: base$, path: dir, log: join(dir, "x.log"), started: "" };
+function server(port: number, base$: string, public$: number | null = null): DevServer {
+  return { cmd: "stub", port, pid: process.pid, base: base$, path: dir, log: join(dir, "x.log"), started: "", public: public$ };
 }
 
 function writeRecord(record: Partial<PreviewRecord>): void {
@@ -118,6 +122,7 @@ function writeRecord(record: Partial<PreviewRecord>): void {
     error: null,
     updated: null,
     workers: [],
+    ports: { combined: null, workers: {} },
     ...record,
   };
 
@@ -145,6 +150,7 @@ beforeEach(async () => {
   hub = started;
   asked.length = 0;
   seen.length = 0;
+  marks.length = 0;
 });
 
 afterEach(async () => {
@@ -350,5 +356,149 @@ describe("POST preview-workers", () => {
     expect((await post(JSON.stringify({ worker: "a1", include: true }), { Origin: "http://evil.example" })).status).toBe(403);
     expect((await post(JSON.stringify({ worker: "a1", include: true }), { "Tailscale-User-Login": "someone@else" })).status).toBe(403);
     expect((await fetch(at("/preview-workers"), { method: "POST", body: "{}" })).status).toBe(415);
+  });
+});
+
+/** A tailscale that says this machine is box.example.ts.net at 127.0.0.2 (a loopback address a test can
+ * bind, standing in for its tailnet address), owned by OWNER, and that 100.101.1.2 is OWNER's machine. */
+const TAILNET_TAILSCALE = `#!/bin/sh
+case "$1 $2 $3" in
+  "status --json "*) printf '%s' '${JSON.stringify({ BackendState: "Running", Self: { DNSName: "box.example.ts.net.", TailscaleIPs: ["127.0.0.2"], UserID: 1 }, User: { "1": { LoginName: OWNER } }, Peer: {} })}' ;;
+  "whois --json 100.101.1.2") printf '%s' '{"UserProfile": {"LoginName": "${OWNER}", "DisplayName": "Luiz"}}' ;;
+  *) exit 1 ;;
+esac
+`;
+
+describe("a preview at the root of a public port of its own", () => {
+  let publicPort: number;
+
+  /** The hub again, now on a machine whose tailnet address is 127.0.0.2. */
+  async function hubOnTailnet(): Promise<Running> {
+    await hub?.stop();
+    const tailscale = join(base, "tailnet-tailscale");
+    writeFileSync(tailscale, TAILNET_TAILSCALE);
+    chmodSync(tailscale, 0o755);
+    env = { ...env, TAILSCALE: tailscale };
+    const started = await startHub({ port: hubPort, machine: machine(env), tailscale, peers: false, hosts: [], https: undefined }, () => {});
+
+    if (started instanceof Error) throw started;
+    hub = started;
+
+    return started;
+  }
+
+  const rootAt = (host: string, path: string): string => `http://${host}:${publicPort}${path}`;
+
+  beforeEach(() => {
+    publicPort = freePort();
+  });
+
+  test("the hub listens on it on loopback and the tailnet address, and passes every path to the dev server at its root, with the proxy marker", async () => {
+    const port = stub("root");
+    writeRecord({ server: server(port, "/", publicPort) });
+    const running = await hubOnTailnet();
+    running.syncPreviews();
+
+    const page = await fetch(rootAt("127.0.0.1", "/"));
+    expect([page.status, await page.text()]).toEqual([200, "root GET /"]);
+    expect(await (await fetch(rootAt("127.0.0.1", "/api/x?y=1"))).text()).toBe("root GET /api/x");
+    expect(asked.at(-1)).toEqual({ server: "root", path: "/api/x", host: `127.0.0.1:${port}`, method: "GET" });
+    expect(marks.at(-1)).toBe("/");
+    expect(await (await fetch(rootAt("127.0.0.2", "/api/x"))).text()).toBe("root GET /api/x");
+    expect((await fetch(rootAt("127.0.0.1", "/"), { headers: { Host: "evil.example" } })).status).toBe(421);
+
+    const socket = new WebSocket(`ws://127.0.0.1:${publicPort}/api/sala?room=1`);
+
+    const got = new Promise<string>((resolve, reject) => {
+      socket.addEventListener("message", (e) => resolve(String(e.data)));
+      socket.addEventListener("error", () => reject(new Error("socket failed")));
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener("open", () => resolve());
+      socket.addEventListener("error", () => reject(new Error("socket failed")));
+    });
+    socket.send("ping");
+    expect(await got).toBe("root echo:ping");
+    expect(asked.find((a) => a.method === "WS")).toEqual({ server: "root", path: "/api/sala?room=1", host: `127.0.0.1:${port}`, method: "WS" });
+    expect(marks.at(-1)).toBe("/");
+    socket.close();
+
+    const state = JSON.parse(readFileSync(previewPortsPath(join(base, "registry")), "utf8"));
+    expect(state.ports).toEqual([{ port: publicPort, fleet: "shop", worker: null, loopback: true, tailnet: "127.0.0.2", error: null }]);
+  });
+
+  test("a tailnet peer's forged Tailscale headers are replaced by the login Tailscale gives it, on HTTP and the WebSocket", async () => {
+    writeRecord({ workers: [{ ...server(stub("a1"), "/", publicPort), worker: "a1" }] });
+    const running = await hubOnTailnet();
+    running.syncPreviews();
+    const slot = running.hub.rootedPreviews().find((p) => p.port === publicPort);
+    expect(slot).toMatchObject({ port: publicPort, fleet: "shop", worker: "a1" });
+
+    const listener = Bun.serve<SocketData>({
+      hostname: "127.0.0.1",
+      port: 0,
+      websocket: previewSockets,
+      fetch(req, srv) {
+        const headers = new Headers(req.headers);
+        headers.set("Host", `127.0.0.1:${publicPort}`);
+
+        if (slot === undefined) throw new Error("no slot");
+
+        return running.hub.fetchRooted(new Request(req.url, { method: req.method, headers }), "100.101.1.2", slot, () => {}, (data, answer) => srv.upgrade(req, { data, headers: answer }));
+      },
+    });
+
+    peers.push(listener);
+    expect(await (await fetch(`http://127.0.0.1:${String(listener.port)}/api/me`, { headers: FORGED })).text()).toBe("a1 GET /api/me");
+    expect(seen.at(-1)).toEqual({ "tailscale-user-login": OWNER, "x-forwarded-for": "100.101.1.2" });
+
+    const socket = new WebSocket(`ws://127.0.0.1:${String(listener.port)}/api/sala`, { headers: FORGED });
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener("open", () => resolve());
+      socket.addEventListener("error", () => reject(new Error("socket failed")));
+    });
+    expect(seen.at(-1)).toEqual({ "tailscale-user-login": OWNER, "x-forwarded-for": "100.101.1.2" });
+    socket.close();
+  });
+
+  test("the listener goes when the preview stops and comes back with it, and after a hub restart", async () => {
+    const port = stub("root");
+    writeRecord({ server: server(port, "/", publicPort) });
+    const first = await hubOnTailnet();
+    first.syncPreviews();
+    expect((await fetch(rootAt("127.0.0.1", "/"))).status).toBe(200);
+
+    writeRecord({ server: { ...server(port, "/", publicPort), pid: null } });
+    first.syncPreviews();
+    expect(await fetch(rootAt("127.0.0.1", "/")).then(() => "answered", () => "refused")).toBe("refused");
+
+    writeRecord({ server: server(port, "/", publicPort) });
+    first.syncPreviews();
+    expect((await fetch(rootAt("127.0.0.1", "/"))).status).toBe(200);
+
+    await hubOnTailnet();
+    expect(await (await fetch(rootAt("127.0.0.1", "/again"))).text()).toBe("root GET /again");
+  });
+
+  test("a public port another process holds is reported in the preview's status, and the hub keeps running", async () => {
+    const holder = Bun.serve({ hostname: "127.0.0.1", port: publicPort, fetch: () => new Response("someone else") });
+
+    try {
+      writeRecord({ server: server(stub("root"), "/", publicPort) });
+      const running = await hubOnTailnet();
+      running.syncPreviews();
+      expect((await fetch(`http://127.0.0.1:${hubPort}/api/fleets`)).status).toBe(200);
+      const state = JSON.parse(readFileSync(previewPortsPath(join(base, "registry")), "utf8"));
+      expect(state.ports[0]).toMatchObject({ port: publicPort, loopback: false });
+      expect(String(state.ports[0].error)).toContain(`127.0.0.1:${publicPort}`);
+      expect(readFileSync(hubRecordPath(join(base, "registry")), "utf8")).toContain(String(process.pid));
+
+      const status = fleet(["preview", dir, "status"], env);
+      expect(status.stdout).toContain(`http://box.example.ts.net:${publicPort}/`);
+      expect(status.stdout).toContain(`the hub cannot listen on port ${publicPort}`);
+    } finally {
+      void holder.stop(true);
+    }
   });
 });

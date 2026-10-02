@@ -3,7 +3,8 @@
  * any other interface), the same port on both. Tailscale down at start is not fatal: the hub serves on
  * loopback and binds the tailnet address once it comes up. With `https`, `tailscale serve` also exposes
  * it at https://<this machine>:<https>/ (Tailscale's certificate; the browser's alerts need a secure page).
- * `REGISTRY/hub/hub.json` says where it runs, for `fleet serve`.
+ * `REGISTRY/hub/hub.json` says where it runs, for `fleet serve`. It also listens on the public port of each
+ * root-mode preview, in the same two places (`preview-ports.ts`).
  */
 import { join } from "node:path";
 
@@ -12,11 +13,17 @@ import { makeDirs, readText, remove, writeAtomic } from "../files.ts";
 import { asNumber, asObject, asString, dumps, parseObject } from "../json.ts";
 import { commandOf } from "../procs.ts";
 import { alive } from "../registry.ts";
-import { Hub, type HubOptions } from "./hub.ts";
-import { previewSockets, type SocketData } from "./preview-proxy.ts";
+import { Hub, type HubOptions, type Rooted } from "./hub.ts";
+import { PreviewPorts } from "./preview-ports.ts";
+import { previewSockets, type SocketData, type Upgrade } from "./preview-proxy.ts";
 import { tailscale } from "./tailnet.ts";
 
 import * as Option from "effect/Option";
+
+export { previewPortsPath, readPortStates, type PortState } from "./preview-ports.ts";
+
+/** How often the hub looks for root-mode previews to listen for, or to let go of. */
+const PREVIEW_PORTS_MS = 1000;
 
 /** The hub's port unless told otherwise. */
 export const DEFAULT_PORT = 7420;
@@ -58,6 +65,8 @@ export interface Running {
   readonly url: string;
   /** Stop serving, take the https address back, forget the record. */
   readonly stop: () => Promise<void>;
+  /** Listen for the root-mode previews the records name now, and let go of the others (it runs every second). */
+  readonly syncPreviews: () => void;
 }
 
 type Server = Bun.Server<SocketData>;
@@ -75,14 +84,14 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
   await hub.start();
   const port = options.port;
 
-  const listen = (hostname: string): Server =>
+  const serve = (hostname: string, at: number, answer: (req: Request, ip: string, keepOpen: () => void, upgrade: Upgrade) => Promise<Response | undefined>): Server =>
     Bun.serve<SocketData>({
       hostname,
-      port,
+      port: at,
       idleTimeout: 60,
       websocket: previewSockets,
       fetch: (req, server) =>
-        hub.fetch(
+        answer(
           req,
           server.requestIP(req)?.address ?? "",
           () => server.timeout(req, 0),
@@ -90,6 +99,11 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
         ),
       error: (cause) => new Response(dumps({ error: cause.message }), { status: 500, headers: { "Content-Type": "application/json" } }),
     });
+
+  const listen = (hostname: string): Server => serve(hostname, port, (req, ip, keepOpen, upgrade) => hub.fetch(req, ip, keepOpen, upgrade));
+
+  const listenRooted = (hostname: string, at: number, slot: Rooted): Server =>
+    serve(hostname, at, (req, ip, keepOpen, upgrade) => hub.fetchRooted(req, ip, slot, keepOpen, upgrade));
 
   const servers: Server[] = [];
   const home = options.machine.registry.place.home;
@@ -121,6 +135,18 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
 
   bindTailnet();
   const rebind = setInterval(bindTailnet, 30_000);
+  const previews = new PreviewPorts({ wanted: () => hub.rootedPreviews(), tailnetIp: () => hub.net?.self.ip, listen: listenRooted, home, log });
+
+  const syncPreviews = (): void => {
+    try {
+      previews.sync();
+    } catch (cause: unknown) {
+      log(`the root-mode previews' ports: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  };
+
+  syncPreviews();
+  const repreview = setInterval(syncPreviews, PREVIEW_PORTS_MS);
   const self = hub.net?.self;
   let url = self === undefined ? `http://127.0.0.1:${port}/` : `http://${self.dns}:${port}/`;
   const https = options.https;
@@ -145,8 +171,11 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
   return {
     hub,
     url,
+    syncPreviews,
     stop: async () => {
       clearInterval(rebind);
+      clearInterval(repreview);
+      previews.stop();
       hub.stop();
 
       for (const server of servers) void server.stop(true);

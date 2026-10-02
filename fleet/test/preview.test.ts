@@ -5,7 +5,7 @@
  * the worker's files; a conflict is recorded with the workers that touch the file; `include` and `exclude`
  * change the merge; `stop` stops what runs; `fleet ws prune` never deletes a live preview.
  */
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -334,6 +334,107 @@ describe("a per-worker preview", () => {
     expect(preview("stop", "--per-worker", "a1").code).toBe(0);
     expect(alive(w?.pid ?? undefined)).toBe(false);
     expect(preview("start", "--per-worker", "nobody", "--cmd", STUB).stderr).toContain("nobody has no active workspace");
+  });
+});
+
+/** A tailscale that says this machine is box.example.ts.net at 127.0.0.2 (a loopback address a test can bind,
+ * standing in for its tailnet address). */
+const TAILNET_STATUS = JSON.stringify({ BackendState: "Running", Self: { DNSName: "box.example.ts.net.", TailscaleIPs: ["127.0.0.2"], UserID: 1 }, User: { "1": { LoginName: "luiz@example.com" } }, Peer: {} });
+
+/** A range of ports for the public ports, from a free one up. */
+function portRange(): readonly [number, number] {
+  const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") });
+  const lo = probe.port ?? 0;
+  void probe.stop(true);
+
+  return [lo, lo + 30];
+}
+
+describe("root mode", () => {
+  test("set --root records it in the ledger beside the command, and --no-root takes it back", () => {
+    expect(preview("set", "--cmd", STUB, "--root").code).toBe(0);
+    expect(asObject(readJson(join(dir, "state.json"))["preview"])).toEqual({ cmd: STUB, root: true });
+    const back = preview("set", "--no-root");
+    expect([back.code, back.stderr]).toEqual([0, ""]);
+    expect(asObject(readJson(join(dir, "state.json"))["preview"])).toEqual({ cmd: STUB });
+  });
+
+  test("start --root tells the dev server base / and gives the preview a public port of its own, stable across restarts", async () => {
+    const [lo, hi] = portRange();
+    env["FLEET_PREVIEW_PORTS"] = `${lo}-${hi}`;
+    const inRange = (port: number | null | undefined): boolean => port !== null && port !== undefined && port >= lo && port <= hi;
+
+    const ran = preview("start", "--root", "--cmd", STUB);
+    expect([ran.code, ran.stderr]).toEqual([0, ""]);
+    const first = record();
+    expect(first.server?.base).toBe("/");
+    expect(first.server?.cmd).toEndWith(` ${String(first.server?.port)} /`);
+    const pub = first.server?.public ?? null;
+    expect(inRange(pub)).toBe(true);
+    expect(first.ports.combined).toBe(pub);
+    expect(ran.stdout).toContain(`http://127.0.0.1:${String(pub)}/`);
+    expect(await (await fetch(`http://127.0.0.1:${String(first.server?.port)}/a.txt`)).text()).toBe("base\n");
+
+    expect(preview("stop").code).toBe(0);
+    expect(preview("start", "--root", "--cmd", STUB).code).toBe(0);
+    expect(record().server?.public).toBe(pub);
+    expect(record().server?.port).not.toBe(first.server?.port ?? 0);
+
+    const own = preview("start", "--per-worker", "a1", "--root", "--cmd", STUB);
+    expect([own.code, own.stderr]).toEqual([0, ""]);
+    const mine = record().workers.find((w) => w.worker === "a1")?.public ?? null;
+    expect(inRange(mine)).toBe(true);
+    expect(mine).not.toBe(pub);
+    expect(record().ports.workers).toEqual({ a1: mine ?? 0 });
+    expect(own.stdout).toContain(`http://127.0.0.1:${String(mine)}/`);
+    expect(preview("stop", "--per-worker", "a1").code).toBe(0);
+    expect(preview("start", "--per-worker", "a1", "--root", "--cmd", STUB).code).toBe(0);
+    expect(record().workers.find((w) => w.worker === "a1")?.public).toBe(mine);
+  });
+
+  test("the ledger's root puts a start in root mode; without it a start is not, and has no public port", () => {
+    env["FLEET_PREVIEW_PORTS"] = portRange().join("-");
+    expect(preview("start", "--cmd", STUB).code).toBe(0);
+    expect(record().server).toMatchObject({ base: "/f/shop/preview/", public: null });
+    expect(preview("stop").code).toBe(0);
+    expect(preview("set", "--root").code).toBe(0);
+    expect(preview("start", "--cmd", STUB).code).toBe(0);
+    expect(record().server?.base).toBe("/");
+    expect(record().server?.public).toBe(record().ports.combined);
+  });
+
+  test("a port of the range already taken on this machine is skipped, and a range with none free is refused", () => {
+    const taken = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") });
+    const port = taken.port ?? 0;
+
+    try {
+      env["FLEET_PREVIEW_PORTS"] = `${port}-${port + 20}`;
+      expect(preview("start", "--root", "--cmd", STUB).code).toBe(0);
+      expect(record().server?.public).not.toBe(port);
+      expect(preview("stop").code).toBe(0);
+
+      env["FLEET_PREVIEW_PORTS"] = `${port}-${port}`;
+      const full = preview("start", "--per-worker", "a1", "--root", "--cmd", STUB);
+      expect(full.code).not.toBe(0);
+      expect(full.stderr).toContain(`no free port in FLEET_PREVIEW_PORTS (${port}-${port})`);
+    } finally {
+      void taken.stop(true);
+    }
+  });
+
+  test("status gives the public address by the machine's tailnet name and address, in plain http", () => {
+    const tailscale = join(base, "tailscale");
+    writeFileSync(tailscale, `#!/bin/sh\ncase "$1 $2" in\n  "status --json") printf '%s' '${TAILNET_STATUS}' ;;\n  *) exit 1 ;;\nesac\n`);
+    chmodSync(tailscale, 0o755);
+    env["TAILSCALE"] = tailscale;
+    env["FLEET_PREVIEW_PORTS"] = portRange().join("-");
+    expect(preview("start", "--root", "--cmd", STUB).code).toBe(0);
+    const pub = String(record().server?.public);
+    const status = preview("status").stdout;
+    expect(status).toContain(`http://box.example.ts.net:${pub}/`);
+    expect(status).toContain(`http://127.0.0.2:${pub}/`);
+    expect(status).toContain("no secure context");
+    expect(status).toContain("no hub runs");
   });
 });
 

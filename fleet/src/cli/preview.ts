@@ -2,22 +2,28 @@
  * `fleet preview DIR …`: the fleet's live UI preview, every worker's in-progress edits in one page before
  * any of it is integrated.
  *
- * - `start [--cmd C] [--port N] [--setup C] [--repo PATH]`: the combined preview. A jj workspace `preview`
+ * - `start [--cmd C] [--port N] [--setup C] [--repo PATH] [--root]`: the combined preview. A jj workspace `preview`
  *   beside the repo (made once, recorded in the ledger as the fleet's preview, never a worker's) whose @ is
  *   the merge of the included workers' working copies on the stack; the repo's dev server started there in
  *   the background; and the updater, which keeps the merge and its files current every `FLEET_PREVIEW_S`
  *   seconds. The hub serves it at `/f/<fleet>/preview/`.
- * - `start --per-worker WORKER [--cmd C] [--port N] [--setup C]`: a dev server in that worker's own
- *   workspace, at `/f/<fleet>/preview/<worker>/`. No merge.
+ * - `start --per-worker WORKER [--cmd C] [--port N] [--setup C] [--root]`: a dev server in that worker's
+ *   own workspace, at `/f/<fleet>/preview/<worker>/`. No merge.
  * - `status`: the address, the workers and their commits, the conflicts, the dev servers' last error.
  * - `include WORKER` / `exclude WORKER`: take a worker into the merge, or out of it.
  * - `stop [--per-worker WORKER]`: stop the dev servers and the updater (or that worker's server). The
  *   workspace stays for the next start; `fleet ws DIR prune` removes it once nothing runs there.
- * - `set --cmd C [--setup C]`: the dev command (and install) the fleet's previews run, in the ledger.
+ * - `set [--cmd C] [--setup C] [--root | --no-root]`: the dev command (and install) the fleet's previews
+ *   run, and whether they run in root mode, in the ledger.
  * - `updater`: the updater's loop, which `start` runs in the background.
  *
  * The command is `--cmd`, else the ledger's, else `<package manager> run dev` when package.json has a
  * `dev` script; `{port}` and `{base}` in it are filled in, and Vite is told its port, host and base.
+ *
+ * Root mode (`--root`, or the ledger's `preview.root`) is for an app that only runs at its root (it asks
+ * for `/api/...` absolutely): the dev server is told base `/`, and the preview is given a public port
+ * (`preview/ports.ts`), on which the hub serves it at the root of an origin of its own,
+ * `http://<this machine>:<port>/`. The `/f/<fleet>/preview/` path still leads to it too.
  */
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,14 +31,17 @@ import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 
 import { stampOf } from "../clock.ts";
+import { readPortStates, runningHub } from "../hub/server.ts";
+import { readTailnetSync, tailscaleBin, type Tailnet } from "../hub/tailnet.ts";
 import { PreviewError, Refusal } from "../errors.ts";
 import { exists, isDir, readText, resolvePath } from "../files.ts";
 import { Out } from "../io.ts";
-import { asArray, asObject, asString, type Json, type JsonObject } from "../json.ts";
+import { asArray, asBoolean, asObject, asString, type Json, type JsonObject } from "../json.ts";
 import { upAllSync } from "../page/probe.ts";
 import { isRunning, lastError, freePort, logTail, planCommand, fill, runSetup, setupCommand, startDetached, startServer, stopGroup, tail } from "../preview/devserver.ts";
 import { readCopies, stackOf } from "../preview/merge.ts";
 import { logDir, readRecord, updateRecord, type DevServer, type PreviewRecord, type WorkerServer } from "../preview/record.ts";
+import { allocate } from "../preview/ports.ts";
 import { candidates, everyMs, freshMemory, included, lookOnce, pick, runUpdater, standing } from "../preview/updater.ts";
 import { jj, why, workspaceNames, workspaceRoot } from "../ws/jj.ts";
 import { World, type Machine } from "../world.ts";
@@ -40,8 +49,8 @@ import { exitOf } from "./exit.ts";
 import { belongs, event, load, save } from "./ws.ts";
 
 const USAGE =
-  "usage: fleet preview DIR start [--cmd C] [--port N] [--setup C] [--repo PATH] [--per-worker WORKER] | status | include WORKER | exclude WORKER | " +
-  "stop [--per-worker WORKER] | set --cmd C [--setup C]";
+  "usage: fleet preview DIR start [--cmd C] [--port N] [--setup C] [--repo PATH] [--per-worker WORKER] [--root] | status | include WORKER | exclude WORKER | " +
+  "stop [--per-worker WORKER] | set [--cmd C] [--setup C] [--root | --no-root]";
 
 /** The jj workspace the combined preview runs in. */
 const PREVIEW = "preview";
@@ -83,17 +92,25 @@ function passedEnv(machine: Machine): Record<string, string> {
   return Object.fromEntries(PASSED.flatMap((k) => (machine.env(k) === undefined ? [] : [[k, machine.env(k) ?? ""]])));
 }
 
-/** The ledger's `preview` entry: the dev command and install the fleet recorded. */
 /** A dev command and its install, as given or recorded. */
 interface Commands {
   readonly cmd: string | undefined;
   readonly setup: string | undefined;
 }
 
-function recordedCommand(raw: JsonObject): Commands {
+/** The ledger's `preview` entry: the dev command and install the fleet recorded, and whether its previews run in root mode. */
+function recordedCommand(raw: JsonObject): Commands & { readonly root: boolean } {
   const entry = asObject(raw["preview"]);
 
-  return { cmd: asString(entry?.["cmd"]), setup: asString(entry?.["setup"]) };
+  return { cmd: asString(entry?.["cmd"]), setup: asString(entry?.["setup"]), root: asBoolean(entry?.["root"]) === true };
+}
+
+/** The flags that take no value. */
+const SWITCHES = ["--root", "--no-root"] as const;
+
+/** Whether a start runs in root mode: `--root`, else the ledger's `preview.root`. */
+function rootMode(given: ReadonlyMap<string, string>, raw: JsonObject): boolean {
+  return given.has("--root") || recordedCommand(raw).root;
 }
 
 /** The ledger's row for the preview's workspace, when it has an active one. */
@@ -146,11 +163,21 @@ function cameNote(came: Came): string {
   return came === "up" ? "" : came === "starting" ? ", not answering yet" : ", exited at start";
 }
 
-/** A dev server for `dir`: installed when it needs it, its command planned, filled and started. */
+/** Where a dev server is reached: its base under the hub, and in root mode its public port's slot. */
+interface Place {
+  readonly root: string;
+  /** The hub's path for it, `/f/<fleet>/preview/` or `…/preview/<worker>/`. */
+  readonly base: string;
+  /** In root mode: the dev server runs at `/` and gets a public port; `worker` undefined for the combined preview. */
+  readonly rooted: { readonly worker: string | undefined } | undefined;
+}
+
+/** A dev server for `dir`: installed when it needs it, its public port given in root mode, its command
+ * planned, filled and started. */
 function launch(
   machine: Machine,
   dir: string,
-  base: string,
+  place: Place,
   log: string,
   given: Commands & { readonly port: string | undefined },
   recorded: Commands,
@@ -163,6 +190,9 @@ function launch(
   if (!Number.isInteger(port) || port <= 0 || port >= 65536) return new PreviewError({ reason: "a port is a number from 1 to 65535" });
 
   if (given.port !== undefined && upAllSync([`http://127.0.0.1:${port}/`])[0] === true) return new PreviewError({ reason: `port ${port} is taken; give another, or leave --port out for a free one` });
+  const pub = place.rooted === undefined ? null : allocate(machine, place.root, place.rooted, tailnetOf(machine));
+
+  if (pub instanceof PreviewError) return pub;
   const setup = setupCommand(dir, given.setup ?? recorded.setup);
 
   if (setup !== undefined) {
@@ -171,12 +201,67 @@ function launch(
     if (failed !== undefined) return new PreviewError({ reason: failed });
   }
 
-  const ready = fill(dir, planned.template, port, base);
+  const ready = fill(dir, planned.template, port, pub === null ? place.base : "/");
   const pid = startServer(dir, ready.cmd, port, log, passedEnv(machine));
 
   if (pid instanceof PreviewError) return pid;
 
-  return { cmd: ready.cmd, port, pid, base: ready.base, path: dir, log, started: stampOf(machine.now()) };
+  return { cmd: ready.cmd, port, pid, base: ready.base, path: dir, log, started: stampOf(machine.now()), public: pub };
+}
+
+/** This machine on the tailnet, read once per command (one machine each). */
+const tailnets = new WeakMap<Machine, { readonly net: Tailnet | undefined }>();
+
+function tailnetOf(machine: Machine): Tailnet | undefined {
+  const held = tailnets.get(machine) ?? { net: readTailnetSync(tailscaleBin(machine.env)) };
+  tailnets.set(machine, held);
+
+  return held.net;
+}
+
+/** A root-mode dev server's public address: by the machine's tailnet name and address (loopback without
+ * Tailscale), and what the hub says of the port. Undefined when it is not in root mode. */
+function publicLine(machine: Machine, server: DevServer): string | undefined {
+  const port = server.public;
+
+  if (port === null) return undefined;
+  const self = tailnetOf(machine)?.self;
+  const addresses = self === undefined ? [`http://127.0.0.1:${port}/`] : [`http://${self.dns}:${port}/`, ...(self.ip === undefined ? [] : [`http://${self.ip}:${port}/`])];
+
+  return `  public: ${addresses.join(" and ")} (plain http, so no secure context: the clipboard cannot be copied to there); ${hubSays(machine, port, running(server))}\n`;
+}
+
+/** What the running hub says of a public port. */
+function hubSays(machine: Machine, port: number, on: boolean): string {
+  const home = machine.registry.place.home;
+  const hub = runningHub(home);
+
+  if (hub === undefined) return "no hub runs: `fleet hub` serves it";
+
+  if (!on) return "the hub listens on it while the dev server runs";
+  const state = readPortStates(home, hub.pid)?.find((p) => p.port === port);
+
+  if (state === undefined) return "the hub does not listen on it yet (it looks every second)";
+
+  if (state.error !== null) return `the hub cannot listen on port ${port}: ${state.error}`;
+
+  return `the hub listens on it (127.0.0.1${state.tailnet === null ? "" : ` and ${state.tailnet}`})`;
+}
+
+/** Wait (at most 3 s) until the running hub has taken up a new public port, or said it cannot. */
+function waitHub(machine: Machine, port: number | null): void {
+  const home = machine.registry.place.home;
+  const hub = runningHub(home);
+
+  if (port === null || hub === undefined) return;
+  const deadline = Date.now() + 3000;
+
+  while (Date.now() < deadline) {
+    const state = readPortStates(home, hub.pid)?.find((p) => p.port === port);
+
+    if (state !== undefined && (state.loopback || state.error !== null)) return;
+    Bun.sleepSync(100);
+  }
 }
 
 // -- start --------------------------------------------------------------------------------------
@@ -265,6 +350,7 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
       error: null,
       updated: now?.updated ?? null,
       workers: now?.workers ?? [],
+      ports: now?.ports ?? { combined: null, workers: {} },
     }));
 
     // The first merge before the dev server reads the files.
@@ -275,7 +361,8 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
     const since = (readText(log) ?? "").length;
 
     if (!running(server)) {
-      const started = launch(machine, path, `/f/${at.fleet}/preview/`, log, { cmd: given.get("--cmd"), port: given.get("--port"), setup: given.get("--setup") }, recordedCommand(raw));
+      const place: Place = { root, base: `/f/${at.fleet}/preview/`, rooted: rootMode(given, raw) ? { worker: undefined } : undefined };
+      const started = launch(machine, path, place, log, { cmd: given.get("--cmd"), port: given.get("--port"), setup: given.get("--setup") }, recordedCommand(raw));
 
       if (started instanceof PreviewError) return yield* refuse(started.reason);
       server = started;
@@ -296,7 +383,11 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
     }
 
     const kept = server;
-    const record = updateRecord(root, (now) => (now === undefined ? undefined : { ...now, server: kept, updater }));
+
+    const record = updateRecord(root, (now) =>
+      now === undefined ? undefined : { ...now, server: kept, updater, ports: kept.public === null ? now.ports : { ...now.ports, combined: kept.public } },
+    );
+
     const came = waitUp(kept, Number(machine.env("FLEET_PREVIEW_WAIT_S") ?? 30));
     const workers = (record?.merged ?? []).map((m) => m.id);
     const address = `${at.url}preview/`;
@@ -308,6 +399,8 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
     out.out(`preview: ${address}\n`);
     out.out(`  dev server: ${kept.cmd} (pid ${kept.pid}, port ${kept.port}${cameNote(came)}), log ${kept.log}\n`);
     out.out(`  updater: pid ${updater}, every ${everyMs(machine) / 1000} s; merged: ${workers.length === 0 ? "the stack alone" : workers.join(", ")}\n`);
+    waitHub(machine, kept.public);
+    out.out(publicLine(machine, kept) ?? "");
 
     const said = cameLine(came, kept, root, since);
 
@@ -346,7 +439,8 @@ function startPerWorker(machine: Machine, root: string, raw: JsonObject, worker:
     if (running(before)) return yield* refuse(`${cand.id}'s preview already runs at ${at.url}preview/${cand.id}/ (pid ${before.pid}); stop it first`);
     const log = join(logDir(root), `${cand.id}.log`);
     const since = (readText(log) ?? "").length;
-    const started = launch(machine, cand.path, `/f/${at.fleet}/preview/${cand.id}/`, log, { cmd: given.get("--cmd"), port: given.get("--port"), setup: given.get("--setup") }, recordedCommand(raw));
+    const place: Place = { root, base: `/f/${at.fleet}/preview/${cand.id}/`, rooted: rootMode(given, raw) ? { worker: cand.id } : undefined };
+    const started = launch(machine, cand.path, place, log, { cmd: given.get("--cmd"), port: given.get("--port"), setup: given.get("--setup") }, recordedCommand(raw));
 
     if (started instanceof PreviewError) return yield* refuse(started.reason);
     const server: WorkerServer = { ...started, worker: cand.id };
@@ -368,9 +462,12 @@ function startPerWorker(machine: Machine, root: string, raw: JsonObject, worker:
         error: null,
         updated: null,
         workers: [],
+        ports: { combined: null, workers: {} },
       };
 
-      return { ...base, workers: [...base.workers.filter((w) => w.worker !== cand.id), server] };
+      const ports = server.public === null ? base.ports : { ...base.ports, workers: { ...base.ports.workers, [cand.id]: server.public } };
+
+      return { ...base, workers: [...base.workers.filter((w) => w.worker !== cand.id), server], ports };
     });
 
     const came = waitUp(server, Number(machine.env("FLEET_PREVIEW_WAIT_S") ?? 30));
@@ -380,6 +477,8 @@ function startPerWorker(machine: Machine, root: string, raw: JsonObject, worker:
     if (fault !== undefined) return yield* Effect.fail(fault);
     out.out(`preview of ${cand.id}: ${address}\n`);
     out.out(`  dev server: ${server.cmd} (pid ${server.pid}, port ${server.port}${cameNote(came)}) in ${cand.path}, log ${server.log}\n`);
+    waitHub(machine, server.public);
+    out.out(publicLine(machine, server) ?? "");
     const said = cameLine(came, server, root, since);
 
     if (said !== undefined) out.err(said);
@@ -420,7 +519,7 @@ function status(machine: Machine, root: string, raw: JsonObject): Effect.Effect<
       out.out(`preview: ${base}preview/ (${running(record.server) ? "running" : "stopped"})\n`);
       out.out(`  workspace ${record.workspace} at ${record.path}, @ ${record.commit?.slice(0, 12) ?? "?"}${record.conflicts.length > 0 ? " (conflicted)" : ""}, merged ${record.updated ?? "never"}\n`);
 
-      if (record.server !== null) out.out(`  dev server: ${serverLine(record.server)}\n`);
+      if (record.server !== null) out.out(`  dev server: ${serverLine(record.server)}\n${publicLine(machine, record.server) ?? ""}`);
       out.out(`  updater: ${updater ? `pid ${record.updater}, every ${everyMs(machine) / 1000} s` : "not running"}\n`);
       const all = candidates(raw);
 
@@ -442,7 +541,7 @@ function status(machine: Machine, root: string, raw: JsonObject): Effect.Effect<
 
     for (const w of record.workers) {
       out.out(`preview of ${w.worker}: ${base}preview/${w.worker}/ (${running(w) ? "running" : "stopped"})\n`);
-      out.out(`  dev server: ${serverLine(w)} in ${w.path}\n`);
+      out.out(`  dev server: ${serverLine(w)} in ${w.path}\n${publicLine(machine, w) ?? ""}`);
       const error = lastError(logTail(w.log));
 
       if (error !== null) out.out(`  dev server's last error (${w.log}):\n${indent(error)}\n`);
@@ -518,15 +617,21 @@ function setCommand(machine: Machine, root: string, raw: JsonObject, given: Map<
     const out = yield* Out;
     const cmd = given.get("--cmd");
     const setup = given.get("--setup");
+    const atRoot = given.has("--root") ? true : given.has("--no-root") ? false : undefined;
 
-    if (rest.length > 0 || (cmd === undefined && setup === undefined)) return yield* refuse(USAGE);
+    if (rest.length > 0 || (given.has("--root") && given.has("--no-root")) || (cmd === undefined && setup === undefined && atRoot === undefined)) return yield* refuse(USAGE);
     const before = asObject(raw["preview"]) ?? {};
     const given$ = [["cmd", cmd] as const, ["setup", setup] as const].flatMap(([key, value]) => (value === undefined ? [] : [[key, value] as const]));
-    const entry: JsonObject = Object.fromEntries([...Object.entries(before), ...given$]);
+    const kept = Object.entries(before).filter(([key]) => key !== "root");
+    const rooted = (atRoot ?? asBoolean(before["root"]) === true) ? [["root", true] as const] : [];
+    const entry: JsonObject = Object.fromEntries([...kept, ...given$, ...rooted]);
     const fault = save(machine, root, { ...raw, preview: entry }, undefined, []);
 
     if (fault !== undefined) return yield* Effect.fail(fault);
-    out.out(`the fleet's previews run ${asString(entry["cmd"]) ?? "the repo's dev script"}${asString(entry["setup"]) === undefined ? "" : `, after ${asString(entry["setup"]) ?? ""}`}\n`);
+    out.out(
+      `the fleet's previews run ${asString(entry["cmd"]) ?? "the repo's dev script"}${asString(entry["setup"]) === undefined ? "" : `, after ${asString(entry["setup"]) ?? ""}`}` +
+        `${entry["root"] === true ? ", in root mode (at / on a public port of their own)" : ""}\n`,
+    );
 
     return 0;
   });
@@ -543,19 +648,26 @@ function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
     const raw = load(root);
 
     if (raw instanceof Refusal) return yield* refuse(raw.reason);
-    const parsed = options(args, ["--cmd", "--port", "--setup", "--repo", "--per-worker"]);
+    const switches = new Set(args.filter((a) => SWITCHES.some((s) => s === a)));
+
+    const parsed = options(
+      args.filter((a) => !switches.has(a)),
+      ["--cmd", "--port", "--setup", "--repo", "--per-worker"],
+    );
 
     if (parsed instanceof PreviewError) return yield* refuse(`${parsed.reason}: ${USAGE}`);
     const [given, rest] = parsed;
+
+    for (const s of switches) given.set(s, "");
     const worker = given.get("--per-worker");
 
-    if (command === "start" && rest.length === 0) return yield* worker === undefined ? startCombined(machine, root, raw, given) : startPerWorker(machine, root, raw, worker, given);
+    if (command === "start" && rest.length === 0 && !switches.has("--no-root")) return yield* worker === undefined ? startCombined(machine, root, raw, given) : startPerWorker(machine, root, raw, worker, given);
 
     if (command === "status" && args.length === 0) return yield* status(machine, root, raw);
 
     if ((command === "include" || command === "exclude") && args.length === 1) return yield* choose(machine, root, raw, args[0], command === "include");
 
-    if (command === "stop" && rest.length === 0 && [...given.keys()].every((k) => k === "--per-worker")) return yield* stop(machine, root, raw, worker);
+    if (command === "stop" && rest.length === 0 && switches.size === 0 && [...given.keys()].every((k) => k === "--per-worker")) return yield* stop(machine, root, raw, worker);
 
     if (command === "set") return yield* setCommand(machine, root, raw, given, rest);
 

@@ -1,7 +1,8 @@
 /**
  * The preview's record, `DIR/preview.json`: where the combined preview's workspace is, the dev servers
- * (the combined one and each per-worker one) with their pids and ports, the updater's pid, which workers
- * the user took in or out, and what the last merge held (each worker's commit, the conflicts and which
+ * (the combined one and each per-worker one) with their pids and ports, the public port each root-mode
+ * preview was given (`ports.ts`), the updater's pid, which workers the user took in or out, and what the
+ * last merge held (each worker's commit, the conflicts and which
  * workers touch each file, the updater's last failure).
  *
  * It is a file of its own, not a key of `state.json`, because it has three writers: the coordinator's
@@ -35,6 +36,8 @@ export interface DevServer {
   /** Its stdout and stderr. */
   readonly log: string;
   readonly started: string;
+  /** In root mode, the public port the hub serves it at, at the root of an origin of its own; else null. */
+  readonly public: number | null;
 }
 
 /** A per-worker preview: a dev server in that worker's own workspace. */
@@ -81,6 +84,14 @@ export interface PreviewRecord {
   /** When the merge last changed. */
   readonly updated: string | null;
   readonly workers: readonly WorkerServer[];
+  /** The public port each preview was given in root mode, kept across its stops and starts. */
+  readonly ports: PublicPorts;
+}
+
+/** The public ports given: the combined preview's, and each per-worker one's by worker. */
+export interface PublicPorts {
+  readonly combined: number | null;
+  readonly workers: Readonly<Record<string, number>>;
 }
 
 /** Where the record is. */
@@ -103,6 +114,24 @@ function pidOf(value: Json | undefined): number | null {
   return n !== undefined && Number.isInteger(n) && n > 1 ? n : null;
 }
 
+function portOf(value: Json | undefined): number | null {
+  const n = asNumber(value);
+
+  return n !== undefined && Number.isInteger(n) && n > 0 && n < 65536 ? n : null;
+}
+
+function portsOf(value: Json | undefined): PublicPorts {
+  const o = asObject(value);
+
+  const workers = Object.entries(asObject(o?.["workers"]) ?? {}).flatMap(([worker, port]) => {
+    const n = portOf(port);
+
+    return n === null ? [] : [[worker, n] as const];
+  });
+
+  return { combined: portOf(o?.["combined"]), workers: Object.fromEntries(workers) };
+}
+
 function serverOf(value: Json | undefined): DevServer | null {
   const o = asObject(value);
   const cmd = asString(o?.["cmd"]);
@@ -111,7 +140,7 @@ function serverOf(value: Json | undefined): DevServer | null {
 
   if (o === undefined || cmd === undefined || port === undefined || path === undefined) return null;
 
-  return { cmd, port, pid: pidOf(o["pid"]), base: asString(o["base"]) ?? "/", path, log: asString(o["log"]) ?? "", started: asString(o["started"]) ?? "" };
+  return { cmd, port, pid: pidOf(o["pid"]), base: asString(o["base"]) ?? "/", path, log: asString(o["log"]) ?? "", started: asString(o["started"]) ?? "", public: portOf(o["public"]) };
 }
 
 /** The record as `text` holds it; undefined when it is not one. */
@@ -163,6 +192,7 @@ export function parseRecord(text: string): PreviewRecord | undefined {
     error: asString(o["error"]) ?? null,
     updated: asString(o["updated"]) ?? null,
     workers,
+    ports: portsOf(o["ports"]),
   };
 }
 
@@ -174,7 +204,7 @@ export function readRecord(root: string): PreviewRecord | undefined {
 }
 
 function serverJson(s: DevServer): JsonObject {
-  return { cmd: s.cmd, port: s.port, pid: s.pid, base: s.base, path: s.path, log: s.log, started: s.started };
+  return { cmd: s.cmd, port: s.port, pid: s.pid, base: s.base, path: s.path, log: s.log, started: s.started, public: s.public };
 }
 
 /** The record as JSON. */
@@ -195,6 +225,7 @@ export function recordJson(r: PreviewRecord): JsonObject {
     error: r.error,
     updated: r.updated,
     workers: r.workers.map((w) => ({ worker: w.worker, ...serverJson(w) })),
+    ports: { combined: r.ports.combined, workers: { ...r.ports.workers } },
   };
 }
 

@@ -5,9 +5,10 @@
  * Tailscale address and over `tailscale serve`'s https.
  *
  * Vite runs with its base at that path (`--base`), so the path goes to it as it is; its HMR client opens
- * its socket at the page's own origin under the base, which is this route. Two things are rewritten:
- * `Host`, to the dev server's own address (Vite refuses a host it does not know, such as the tailnet
- * name), and nothing else. A dev server run at its root (base `/`) is asked for the path without the
+ * its socket at the page's own origin under the base, which is this route. `Host` is rewritten to the dev
+ * server's own address (Vite refuses a host it does not know, such as the tailnet name), and every request
+ * and socket carries `X-Forwarded-Prefix` (the hub's path for the server, `/` for a root-mode preview on its
+ * public port), the marker by which an app knows it came through a proxy and asks for a login. A dev server run at its root (base `/`) is asked for the path without the
  * prefix, and its redirects are put back under it.
  *
  * Who the request is from is the hub's word, never the client's: every `Tailscale-*` header and
@@ -26,7 +27,7 @@ import { isLoopback } from "./tailnet.ts";
 export interface SocketData {
   readonly url: string;
   readonly protocols: readonly string[];
-  /** The identity headers the dev server's socket is opened with (`proxiedIdentity`). */
+  /** The headers the dev server's socket is opened with: the identity (`proxiedIdentity`) and the proxy marker. */
   readonly headers: Headers;
   readonly upstream: { socket: WebSocket | undefined; readonly queue: (string | Uint8Array)[] };
 }
@@ -142,14 +143,16 @@ export async function proxyHttp(req: Request, target: Target, search: string, id
 }
 
 /** Upgrade a WebSocket request for `target` (HMR) to a socket piped to the dev server's, opened with
- * `identity` (`proxiedIdentity`). */
+ * `identity` (`proxiedIdentity`) and the proxy marker (`X-Forwarded-Prefix`), as an HTTP request is. */
 export function proxySocket(req: Request, target: Target, search: string, upgrade: Upgrade, identity: Headers): Response | undefined {
   const protocols = (req.headers.get("Sec-WebSocket-Protocol") ?? "")
     .split(",")
     .map((p) => p.trim())
     .filter((p) => p !== "");
 
-  const data: SocketData = { url: `ws://127.0.0.1:${target.server.port}${target.path}${search}`, protocols, headers: identity, upstream: { socket: undefined, queue: [] } };
+  const headers = new Headers(identity);
+  headers.set("X-Forwarded-Prefix", target.prefix);
+  const data: SocketData = { url: `ws://127.0.0.1:${target.server.port}${target.path}${search}`, protocols, headers, upstream: { socket: undefined, queue: [] } };
   const first = protocols[0];
 
   if (upgrade(data, new Headers(first === undefined ? {} : { "Sec-WebSocket-Protocol": first }))) return undefined;
