@@ -21,7 +21,8 @@
  */
 import { join, normalize } from "node:path";
 
-import { address, append, type Draft } from "../chat/chat.ts";
+import { address, append, hostOf, type Draft } from "../chat/chat.ts";
+import { Courier, deliveries } from "../chat/relay.ts";
 import { readChat, Tail } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
 import { ChatError } from "../errors.ts";
@@ -200,6 +201,8 @@ export class Hub {
   private readonly skillLists = new Map<string, { readonly body: string; readonly at: number }>();
   private readonly logins = new Map<string, { readonly login: string | undefined; readonly at: number }>();
   private timer: ReturnType<typeof setInterval> | undefined;
+  private courierTimer: ReturnType<typeof setInterval> | undefined;
+  private readonly courier = new Courier();
   private readonly lookups: Lookups;
 
   constructor(options: HubOptions) {
@@ -244,11 +247,24 @@ export class Hub {
   async start(): Promise<void> {
     await this.refresh();
     this.timer = setInterval(() => void this.refresh(), PEERS_MS);
+    this.courierTimer = setInterval(() => this.relay(), POLL_MS);
   }
 
   /** Stop looking. */
   stop(): void {
     if (this.timer !== undefined) clearInterval(this.timer);
+
+    if (this.courierTimer !== undefined) clearInterval(this.courierTimer);
+  }
+
+  /** Mirror onto the manager's page what the coordinators answered in their own chats to the messages the
+   * hub delivered from it; how many it wrote. Runs every POLL_MS. */
+  relay(): number {
+    try {
+      return this.courier.relay(this.options.machine);
+    } catch {
+      return 0;
+    }
   }
 
   /** Read the tailnet again, and ask each online peer for its fleets. */
@@ -720,6 +736,25 @@ export class Hub {
       if (quote !== undefined) draft.quote = quote;
 
       if (side !== undefined) draft.side = side;
+
+      // On the manager's page, a message to live coordinators goes into their own chats too (an answer to
+      // one of the manager's decisions stays the manager's).
+      if (decision === undefined && hostOf(root) === "manager") {
+        draft.alongside = (stored, known) => {
+          const delivered = deliveries(machine, root, known, (asArray(stored["to"]) ?? []).flatMap((t) => asString(t) ?? []), {
+            id: asNumber(stored["id"]) ?? 0,
+            at: asString(stored["at"]) ?? "",
+            text,
+            re,
+            side: stored["side"],
+            author: asString(stored["author"]),
+            quote: stored["quote"],
+          });
+
+          return delivered.length === 0 ? undefined : { delivered: delivered.map((d) => ({ fleet: d.fleet, id: d.id })) };
+        };
+      }
+
       const message = append(machine, root, draft, stampOf(machine.now()));
 
       if (message instanceof ChatError) return jsonResponse(400, { error: message.reason });

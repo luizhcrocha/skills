@@ -787,6 +787,121 @@ describe("the index and the manager", () => {
   });
 });
 
+describe("the user's word to a coordinator on the manager's page", () => {
+  let manager: string;
+
+  let infra: string;
+
+  const fields = (m: { readonly stored: JsonObject } | undefined, ...keys: string[]): unknown[] => keys.map((k) => m?.stored[k]);
+
+  beforeEach(async () => {
+    manager = join(base, "m", "manager");
+    mkdirSync(manager, { recursive: true });
+    writeState(manager, [{ id: "a9", name: "scout" }], { role: "manager", project: "all" });
+    register(manager, "manager");
+    infra = join(base, "infra", "coordinator");
+    mkdirSync(infra, { recursive: true });
+    writeState(infra, [], { project: "infra" });
+    register(infra, "infra");
+    await start();
+  });
+
+  const toManager = (payload: JsonObject): Promise<Answer> => post(payload, {}, "/f/manager/chat");
+
+  const relay = (): void => {
+    running?.hub.relay();
+  };
+
+  test("is delivered into the coordinator's own chat, as the user's to it, with where it was written", async () => {
+    const sent = await toManager({ text: "@p hello" });
+    expect(sent.status).toBe(201);
+    expect([sent.body["id"], sent.body["to"], sent.body["delivered"]]).toEqual([1, ["p"], [{ fleet: "p", id: 1 }]]);
+    const got = readChat(root);
+    expect(got.length).toBe(1);
+    expect(fields(got[0], "id", "from", "to", "text", "re", "via")).toEqual([1, "user", ["coordinator"], "@p hello", null, { fleet: "manager", id: 1 }]);
+    expect(readChat(infra)).toEqual([]);
+  });
+
+  test("the coordinator's reply in its own chat is mirrored once onto the manager's page, as its answer to the original", async () => {
+    await toManager({ text: "@p hello" });
+    say("a1", "a worker's word is not the coordinator's", { re: 1 });
+    say("coordinator", "hi", { re: 1 });
+    say("coordinator", "not a reply");
+    relay();
+    relay();
+    const mirrored = readChat(manager).filter((m) => m.from !== "user");
+    expect(mirrored.map((m) => fields(m, "id", "from", "to", "text", "re", "via"))).toEqual([[2, "p", ["user"], "hi", 1, { fleet: "p", id: 3 }]]);
+    await running?.stop();
+    running = undefined;
+    await start();
+    relay();
+    expect(readChat(manager).length).toBe(2);
+  });
+
+  test("the hub mirrors by itself, without being asked", async () => {
+    await toManager({ text: "@p hello" });
+    say("coordinator", "hi", { re: 1 });
+
+    for (let tries = 0; tries < 40 && readChat(manager).length < 2; tries += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(readChat(manager).at(-1)?.text).toBe("hi");
+  });
+
+  test("a message to two coordinators reaches both chats, and each answer comes back under its fleet's name", async () => {
+    say("coordinator", "an earlier line of p's own");
+    const sent = await toManager({ text: "@p and @infra, status?" });
+    expect(sent.body["delivered"]).toEqual([
+      { fleet: "p", id: 2 },
+      { fleet: "infra", id: 1 },
+    ]);
+    expect(fields(readChat(infra)[0], "to", "via")).toEqual([["coordinator"], { fleet: "manager", id: 1 }]);
+    say("coordinator", "p: green", { re: 2 });
+    const answer = append(machine(env), infra, { sender: "coordinator", text: "infra: red", re: 1 }, "2026-01-01T00:00:00+00:00");
+
+    if (answer instanceof ChatError) throw new Error(answer.reason);
+    relay();
+    expect(readChat(manager).slice(1).map((m) => fields(m, "from", "text", "re", "via")).sort()).toEqual([
+      ["infra", "infra: red", 1, { fleet: "infra", id: 2 }],
+      ["p", "p: green", 1, { fleet: "p", id: 3 }],
+    ]);
+  });
+
+  test("a side chat and its quote go across as a side chat of the coordinator's, and its answer comes back inside it", async () => {
+    const opened = await toManager({ text: "@p why this?", side: "new", quote: { text: "keep both", from: "p's decision Invoice schema" } });
+    expect([opened.body["side"], opened.body["delivered"]]).toEqual([1, [{ fleet: "p", id: 1 }]]);
+    expect(fields(readChat(root)[0], "side", "quote", "via")).toEqual([1, { text: "keep both", from: "p's decision Invoice schema" }, { fleet: "manager", id: 1 }]);
+    say("coordinator", "an aside of p's own");
+    const more = await toManager({ text: "@p and the other one?", side: 1 });
+    expect(more.body["delivered"]).toEqual([{ fleet: "p", id: 3 }]);
+    expect(fields(readChat(root)[2], "side", "via")).toEqual([1, { fleet: "manager", id: 2 }]);
+    say("coordinator", "both", { re: 3 });
+    relay();
+    expect(fields(readChat(manager).at(-1), "from", "re", "side", "text")).toEqual(["p", 2, 1, "both"]);
+  });
+
+  test("a reply to a mirrored answer goes to the coordinator as a reply to its own message", async () => {
+    await toManager({ text: "@p hello" });
+    say("coordinator", "hi", { re: 1 });
+    relay();
+    const reply = await toManager({ text: "thanks, go ahead", re: 2 });
+    expect([reply.status, reply.body["to"], reply.body["delivered"]]).toEqual([201, ["p"], [{ fleet: "p", id: 3 }]]);
+    expect(fields(readChat(root)[2], "from", "to", "re", "via")).toEqual(["user", ["coordinator"], 2, { fleet: "manager", id: 3 }]);
+  });
+
+  test("what is not for a live coordinator is stored as before: to the manager, a fleet no longer served, a page that is not the manager's", async () => {
+    const plain = await toManager({ text: "what lands next?" });
+    expect([plain.body["to"], plain.body["delivered"]]).toEqual([["manager"], undefined]);
+    const gone = await toManager({ text: "@gone hello" });
+    expect([gone.body["to"], gone.body["delivered"]]).toEqual([["manager"], undefined]);
+    const worker = await toManager({ text: "@a9 look" });
+    expect([worker.body["to"], worker.body["delivered"]]).toEqual([["a9"], undefined]);
+    const both = await toManager({ text: "@manager and @p" });
+    expect([both.body["to"], both.body["delivered"]]).toEqual([["manager", "p"], [{ fleet: "p", id: 1 }]]);
+    const own = await post({ text: "@a1 status?" });
+    expect(own.body["delivered"]).toBeUndefined();
+    expect(readChat(root).map((m) => m.text)).toEqual(["@manager and @p", "@a1 status?"]);
+  });
+});
+
 describe("a peer hub's fleets", () => {
   test("show on the index and are passed through, posts checked here first", async () => {
     const seen: { method: string; path: string; body: string; type: string | null }[] = [];

@@ -198,6 +198,9 @@ export interface Draft {
   readonly quote?: JsonObject;
   /** "new" opens a side chat; a number continues one. */
   readonly side?: number | "new";
+  /** Called under the store's lock with the message about to be stored and what the store holds: the
+   * fields it returns are stored with it (the hub's delivery to the coordinators, `delivered`). */
+  readonly alongside?: (message: JsonObject, known: readonly Message[]) => JsonObject | undefined;
 }
 
 /** Append a message and return it as stored, with the recipients and parts `address` resolves. */
@@ -248,8 +251,9 @@ export function append(machine: Machine, root: string, draft: Draft, at: string)
     if (quote !== undefined) message.quote = quote;
 
     if (side !== undefined && truthy(side)) message.side = side;
+    const built: JsonObject = { ...message };
 
-    return { ...message };
+    return { ...built, ...draft.alongside?.(built, known) };
   });
 
   return stored instanceof Error && !(stored instanceof ChatError) ? new ChatError({ reason: stored.message }) : stored;
