@@ -2,7 +2,8 @@
  * What the ported tests share: throwaway directories, the `fleet` binary run as a process (the CLI is
  * the test surface, as the Python tests ran the scripts), and a machine for the module interfaces.
  */
-import { mkdtempSync, readFileSync, realpathSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +25,28 @@ export const SKILL = realpathSync(fileURLToPath(new URL("../../skills/productivi
 /** A fresh directory, resolved. */
 export function tmp(prefix = "fleet-test-"): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+}
+
+/** A certificate and its key, in PEM. */
+export interface Pem {
+  readonly cert: string;
+  readonly key: string;
+}
+
+/** A self-signed certificate made by openssl now, for `names` (DNS names, or IPv4 addresses), named `cn`. */
+export function selfSigned(names: readonly string[], cn: string = names[0] ?? "test"): Pem {
+  const dir = tmp("fleet-cert-");
+  const san = names.map((n) => (/^[\d.]+$/.test(n) ? `IP:${n}` : `DNS:${n}`)).join(",");
+  const args = ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", join(dir, "key.pem"), "-out", join(dir, "cert.pem"), "-days", "30", "-subj", `/CN=${cn}`, "-addext", `subjectAltName=${san}`];
+  const done = spawnSync("openssl", args, { encoding: "utf8" });
+
+  try {
+    if (done.status !== 0) throw new Error(`openssl: ${done.stderr}`);
+
+    return { cert: readFileSync(join(dir, "cert.pem"), "utf8"), key: readFileSync(join(dir, "key.pem"), "utf8") };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** What a process gave back. */

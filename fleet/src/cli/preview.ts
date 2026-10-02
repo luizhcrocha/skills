@@ -27,7 +27,8 @@
  * Root mode (`--root`, or the ledger's `preview.root`) is for an app that only runs at its root (it asks
  * for `/api/...` absolutely): the dev server is told base `/`, and the preview is given a public port
  * (`preview/ports.ts`), on which the hub serves it at the root of an origin of its own,
- * `http://<this machine>:<port>/`. The `/f/<fleet>/preview/` path still leads to it too.
+ * `https://<this machine's MagicDNS name>:<port>/`, with the machine's Tailscale certificate (none, no
+ * port: never plain http). The `/f/<fleet>/preview/` path still leads to it too.
  */
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -233,16 +234,16 @@ function tailnetOf(machine: Machine): Tailnet | undefined {
   return held.net;
 }
 
-/** A root-mode dev server's public address: by the machine's tailnet name and address (loopback without
- * Tailscale), and what the hub says of the port. Undefined when it is not in root mode. */
+/** A root-mode dev server's public address, `https://<MagicDNS name>:<port>/` (the name the certificate is
+ * for; none without Tailscale), and what the hub says of the port. Undefined when it is not in root mode. */
 function publicLine(machine: Machine, server: DevServer): string | undefined {
   const port = server.public;
 
   if (port === null) return undefined;
   const self = tailnetOf(machine)?.self;
-  const addresses = self === undefined ? [`http://127.0.0.1:${port}/`] : [`http://${self.dns}:${port}/`, ...(self.ip === undefined ? [] : [`http://${self.ip}:${port}/`])];
+  const address = self === undefined ? `port ${port}, no https address: this machine has no MagicDNS name (is Tailscale running?)` : `https://${self.dns}:${port}/`;
 
-  return `  public: ${addresses.join(" and ")} (plain http, so no secure context: the clipboard cannot be copied to there); ${hubSays(machine, port, running(server))}\n`;
+  return `  public: ${address}; ${hubSays(machine, port, running(server))}\n`;
 }
 
 /** What the running hub says of a public port. */
@@ -257,9 +258,9 @@ function hubSays(machine: Machine, port: number, on: boolean): string {
 
   if (state === undefined) return "the hub does not listen on it yet (it looks every second)";
 
-  if (state.error !== null) return `the hub cannot listen on port ${port}: ${state.error}`;
+  if (state.error !== null) return `the hub cannot serve https on port ${port}: ${state.error}`;
 
-  return `the hub listens on it (127.0.0.1${state.tailnet === null ? "" : ` and ${state.tailnet}`})`;
+  return `the hub serves it over https (on loopback${state.tailnet === null ? "" : " and the tailnet"})`;
 }
 
 /** Wait (at most 3 s) until the running hub has taken up a new public port, or said it cannot. */

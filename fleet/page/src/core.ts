@@ -237,9 +237,11 @@ export interface PreviewServer {
   readonly port: number | null;
   /** Its log's last error, while the server has not reloaded since. */
   readonly log: string;
-  /** In root mode, the public port the hub serves it at, at the root of its own origin (this host); else null. */
+  /** In root mode, the public port the hub serves it at, at the root of its own origin; else null. */
   readonly public: number | null;
-  /** Why the hub cannot listen on that port, or "". */
+  /** The https address the hub serves that port at (`https://<MagicDNS name>:<port>/`), or "" while it does not. */
+  readonly publicUrl: string;
+  /** Why the hub cannot serve https on that port, or "". */
   readonly publicError: string;
 }
 
@@ -1143,6 +1145,7 @@ function previewOf(v: Json | undefined): Preview | null {
     port: Number.isFinite(r["port"]) ? Number(r["port"]) : null,
     log: text(r["log"]),
     public: Number.isInteger(r["public"]) && Number(r["public"]) > 0 && Number(r["public"]) < 65536 ? Number(r["public"]) : null,
+    publicUrl: text(r["public_url"]).startsWith("https://") ? text(r["public_url"]) : "",
     publicError: text(r["public_error"]),
   });
 

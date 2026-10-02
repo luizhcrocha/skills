@@ -499,7 +499,8 @@ describe("root mode", () => {
     const pub = first.server?.public ?? null;
     expect(inRange(pub)).toBe(true);
     expect(first.ports.combined).toBe(pub);
-    expect(ran.stdout).toContain(`http://127.0.0.1:${String(pub)}/`);
+    expect(ran.stdout).toContain(`public: port ${String(pub)}, no https address: this machine has no MagicDNS name (is Tailscale running?)`);
+    expect(ran.stdout).not.toContain(`http://127.0.0.1:${String(pub)}/`);
     expect(await (await fetch(`http://127.0.0.1:${String(first.server?.port)}/a.txt`)).text()).toBe("base\n");
 
     expect(preview("stop").code).toBe(0);
@@ -513,7 +514,7 @@ describe("root mode", () => {
     expect(inRange(mine)).toBe(true);
     expect(mine).not.toBe(pub);
     expect(record().ports.workers).toEqual({ a1: mine ?? 0 });
-    expect(own.stdout).toContain(`http://127.0.0.1:${String(mine)}/`);
+    expect(own.stdout).toContain(`public: port ${String(mine)}, no https address`);
     expect(preview("stop", "--per-worker", "a1").code).toBe(0);
     expect(preview("start", "--per-worker", "a1", "--root", "--cmd", STUB).code).toBe(0);
     expect(record().workers.find((w) => w.worker === "a1")?.public).toBe(mine);
@@ -530,7 +531,7 @@ describe("root mode", () => {
     expect(record().server?.public).toBe(record().ports.combined);
     const lookups = { up: (urls: readonly string[]) => urls.map(() => false), discovered: () => [], spend: new SpendReader() };
     const shown = asObject(view(machine(env), lookups, readJson(join(dir, "state.json")), dir)["preview"]);
-    expect(shown).toMatchObject({ public: record().server?.public ?? 0, public_error: null });
+    expect(shown).toMatchObject({ public: record().server?.public ?? 0, public_url: null, public_error: null });
   });
 
   test("a port of the range already taken on this machine is skipped, and a range with none free is refused", () => {
@@ -552,7 +553,7 @@ describe("root mode", () => {
     }
   });
 
-  test("status gives the public address by the machine's tailnet name and address, in plain http", () => {
+  test("status gives the public address in https by the machine's MagicDNS name alone, never by its address", () => {
     const tailscale = join(base, "tailscale");
     writeFileSync(tailscale, `#!/bin/sh\ncase "$1 $2" in\n  "status --json") printf '%s' '${TAILNET_STATUS}' ;;\n  *) exit 1 ;;\nesac\n`);
     chmodSync(tailscale, 0o755);
@@ -561,10 +562,10 @@ describe("root mode", () => {
     expect(preview("start", "--root", "--cmd", STUB).code).toBe(0);
     const pub = String(record().server?.public);
     const status = preview("status").stdout;
-    expect(status).toContain(`http://box.example.ts.net:${pub}/`);
-    expect(status).toContain(`http://127.0.0.2:${pub}/`);
-    expect(status).toContain("no secure context");
-    expect(status).toContain("no hub runs");
+    expect(status).toContain(`public: https://box.example.ts.net:${pub}/; no hub runs`);
+    expect(status).not.toContain("127.0.0.2");
+    expect(status).not.toMatch(new RegExp(`http://[^ ]*:${pub}/`));
+    expect(status).not.toContain("secure context");
   });
 });
 

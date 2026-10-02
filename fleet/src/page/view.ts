@@ -19,7 +19,7 @@ import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
 import { isRunning, lastError, logTail } from "../preview/devserver.ts";
 import { readRecord, type DevServer } from "../preview/record.ts";
-import { readPortStates } from "../hub/preview-ports.ts";
+import { readPortStates, type PortState } from "../hub/preview-ports.ts";
 import { runningHub } from "../hub/server.ts";
 import { candidates, everyMs, included } from "../preview/updater.ts";
 import { numberState, pyStr } from "./number.ts";
@@ -242,18 +242,21 @@ function foundJson(found: readonly Found[]): JsonObject[] {
   return found.map((x) => ({ port: x.port, url: x.url, target: x.target, pid: x.pid, cwd: x.cwd, command: x.command, fleet: x.fleet, up: x.up }));
 }
 
-/** Why the running hub cannot listen on a root-mode preview's public port, or null. */
-function publicError(machine: Machine, port: number | null): string | null {
+/** What the running hub says of a root-mode preview's public port: the https address it serves it at, or why it cannot serve it. */
+function publicState(machine: Machine, port: number | null): Pick<PortState, "url" | "error"> {
   const home = machine.registry.place.home;
   const hub = port === null ? undefined : runningHub(home);
+  const state = hub === undefined ? undefined : readPortStates(home, hub.pid)?.find((p) => p.port === port);
 
-  return hub === undefined ? null : (readPortStates(home, hub.pid)?.find((p) => p.port === port)?.error ?? null);
+  return { url: state?.url ?? null, error: state?.error ?? null };
 }
 
 /** A dev server as the page shows it: whether it runs and answers, its port, its last error, and in root
- * mode its public port (the page links this host at it) and why the hub cannot listen there. */
+ * mode its public port, the https address the hub serves it at (the page links it), and why the hub
+ * cannot serve https there. */
 function serverView(machine: Machine, lookups: Lookups, s: DevServer | null): JsonObject {
   const running = s !== null && s.pid !== null && isRunning(s.pid);
+  const pub = running ? publicState(machine, s?.public ?? null) : { url: null, error: null };
 
   return {
     running,
@@ -261,7 +264,8 @@ function serverView(machine: Machine, lookups: Lookups, s: DevServer | null): Js
     port: s?.port ?? null,
     log: s === null ? null : lastError(logTail(s.log)),
     public: s?.public ?? null,
-    public_error: running ? publicError(machine, s?.public ?? null) : null,
+    public_url: pub.url,
+    public_error: pub.error,
   };
 }
 

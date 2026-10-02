@@ -8,14 +8,18 @@
  */
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { connect } from "node:tls";
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 
 import { readRecord, recordJson, type DevServer, type PreviewRecord } from "../src/preview/record.ts";
 import { viewerOf } from "../src/hub/policy.ts";
 import { previewSockets, proxiedIdentity, type SocketData } from "../src/hub/preview-proxy.ts";
+import type { Certificate, CertificateSource } from "../src/hub/preview-tls.ts";
 import { hubRecordPath, previewPortsPath, startHub, type Running } from "../src/hub/server.ts";
-import { baseEnv, fleet, machine, tmp, type Environment } from "./support.ts";
+import { baseEnv, fleet, machine, selfSigned, tmp, type Environment, type Pem } from "./support.ts";
+
+const DAY = 24 * 60 * 60 * 1000;
 
 let base: string;
 
@@ -374,14 +378,23 @@ esac
 describe("a preview at the root of a public port of its own", () => {
   let publicPort: number;
 
-  /** The hub again, now on a machine whose tailnet address is 127.0.0.2. */
-  async function hubOnTailnet(): Promise<Running> {
+  /** The certificate the hub is given in these tests, for this machine's name and the addresses it listens on. */
+  let pem: Pem;
+
+  /** A source that hands out `pem` (or what `answers` hold, in turn), valid 60 days. */
+  const sourceOf =
+    (answers: (Certificate | Error)[] = []): CertificateSource =>
+    () =>
+      Promise.resolve(answers.shift() ?? { ...pem, notAfter: new Date(Date.now() + 60 * DAY) });
+
+  /** The hub again, now on a machine whose tailnet address is 127.0.0.2, with this certificate source. */
+  async function hubOnTailnet(certificate: CertificateSource = sourceOf()): Promise<Running> {
     await hub?.stop();
     const tailscale = join(base, "tailnet-tailscale");
     writeFileSync(tailscale, TAILNET_TAILSCALE);
     chmodSync(tailscale, 0o755);
     env = { ...env, TAILSCALE: tailscale };
-    const started = await startHub({ port: hubPort, machine: machine(env), tailscale, peers: false, hosts: [], https: undefined }, () => {});
+    const started = await startHub({ port: hubPort, machine: machine(env), tailscale, peers: false, hosts: [], https: undefined, certificate }, () => {});
 
     if (started instanceof Error) throw started;
     hub = started;
@@ -389,45 +402,103 @@ describe("a preview at the root of a public port of its own", () => {
     return started;
   }
 
-  const rootAt = (host: string, path: string): string => `http://${host}:${publicPort}${path}`;
+  const rootAt = (host: string, path: string, port = publicPort): string => `https://${host}:${port}${path}`;
 
-  beforeEach(() => {
-    publicPort = freePort();
-  });
+  /** A request over TLS that trusts `pem` alone. */
+  const get = (url: string, init: RequestInit = {}): Promise<Response> => fetch(url, { ...init, tls: { ca: pem.cert } });
 
-  test("the hub listens on it on loopback and the tailnet address, and passes every path to the dev server at its root, with the proxy marker", async () => {
-    const port = stub("root");
-    writeRecord({ server: server(port, "/", publicPort) });
-    const running = await hubOnTailnet();
-    running.syncPreviews();
+  /** The common name of the certificate served at `port`. */
+  const servedName = (port: number): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const socket = connect({ host: "127.0.0.1", port, rejectUnauthorized: false }, () => {
+        resolve(String(socket.getPeerCertificate().subject.CN));
+        socket.end();
+      });
 
-    const page = await fetch(rootAt("127.0.0.1", "/"));
-    expect([page.status, await page.text()]).toEqual([200, "root GET /"]);
-    expect(await (await fetch(rootAt("127.0.0.1", "/api/x?y=1"))).text()).toBe("root GET /api/x");
-    expect(asked.at(-1)).toEqual({ server: "root", path: "/api/x", host: `127.0.0.1:${port}`, method: "GET" });
-    expect(marks.at(-1)).toBe("/");
-    expect(await (await fetch(rootAt("127.0.0.2", "/api/x"))).text()).toBe("root GET /api/x");
-    expect((await fetch(rootAt("127.0.0.1", "/"), { headers: { Host: "evil.example" } })).status).toBe(421);
-
-    const socket = new WebSocket(`ws://127.0.0.1:${publicPort}/api/sala?room=1`);
-
-    const got = new Promise<string>((resolve, reject) => {
-      socket.addEventListener("message", (e) => resolve(String(e.data)));
-      socket.addEventListener("error", () => reject(new Error("socket failed")));
+      socket.on("error", reject);
     });
+
+  /** A wss socket to `port` at `path`, open, with `headers`. */
+  async function wss(port: number, path: string, headers: { readonly [key: string]: string } = {}): Promise<WebSocket> {
+    const socket = new WebSocket(`wss://127.0.0.1:${port}${path}`, { headers, tls: { ca: pem.cert } });
 
     await new Promise<void>((resolve, reject) => {
       socket.addEventListener("open", () => resolve());
       socket.addEventListener("error", () => reject(new Error("socket failed")));
     });
-    socket.send("ping");
-    expect(await got).toBe("root echo:ping");
+
+    return socket;
+  }
+
+  /** What `socket` answers to `text`. */
+  function echo(socket: WebSocket, text: string): Promise<string> {
+    const got = new Promise<string>((resolve, reject) => {
+      socket.addEventListener("message", (e) => resolve(String(e.data)), { once: true });
+      socket.addEventListener("error", () => reject(new Error("socket failed")));
+    });
+
+    socket.send(text);
+
+    return got;
+  }
+
+  /** Whether `url` answers at all: "answered", or "failed" when nothing there speaks HTTP. */
+  const answers = (url: string): Promise<string> => fetch(url, { tls: { rejectUnauthorized: false } }).then(() => "answered", () => "failed");
+
+  beforeAll(() => {
+    pem = selfSigned(["box.example.ts.net", "127.0.0.1", "127.0.0.2"], "first");
+  });
+
+  beforeEach(() => {
+    publicPort = freePort();
+  });
+
+  test("the hub serves it over TLS on loopback and the tailnet address, every path to the dev server at its root, with the proxy marker", async () => {
+    const port = stub("root");
+    writeRecord({ server: server(port, "/", publicPort) });
+    const running = await hubOnTailnet();
+    running.syncPreviews();
+
+    const page = await get(rootAt("127.0.0.1", "/"));
+    expect([page.status, await page.text()]).toEqual([200, "root GET /"]);
+    expect(await (await get(rootAt("127.0.0.1", "/api/x?y=1"))).text()).toBe("root GET /api/x");
+    expect(asked.at(-1)).toEqual({ server: "root", path: "/api/x", host: `127.0.0.1:${port}`, method: "GET" });
+    expect(marks.at(-1)).toBe("/");
+    expect(await (await get(rootAt("127.0.0.2", "/api/x"))).text()).toBe("root GET /api/x");
+    expect(await (await get(rootAt("127.0.0.1", "/api/x"), { headers: { Host: `box.example.ts.net:${publicPort}` } })).text()).toBe("root GET /api/x");
+    expect((await get(rootAt("127.0.0.1", "/"), { headers: { Host: "evil.example" } })).status).toBe(421);
+    expect(await answers(`http://127.0.0.1:${publicPort}/`)).toBe("failed");
+    expect(await answers(`http://127.0.0.2:${publicPort}/`)).toBe("failed");
+
+    const socket = await wss(publicPort, "/api/sala?room=1");
+    expect(await echo(socket, "ping")).toBe("root echo:ping");
     expect(asked.find((a) => a.method === "WS")).toEqual({ server: "root", path: "/api/sala?room=1", host: `127.0.0.1:${port}`, method: "WS" });
     expect(marks.at(-1)).toBe("/");
     socket.close();
 
     const state = JSON.parse(readFileSync(previewPortsPath(join(base, "registry")), "utf8"));
-    expect(state.ports).toEqual([{ port: publicPort, fleet: "shop", worker: null, loopback: true, tailnet: "127.0.0.2", error: null }]);
+    expect(state.ports).toEqual([{ port: publicPort, fleet: "shop", worker: null, loopback: true, tailnet: "127.0.0.2", url: `https://box.example.ts.net:${publicPort}/`, error: null }]);
+  });
+
+  test("HTTP and the wss socket carry the identity the hub verified: tailscale serve's on loopback, none for a plain local one", async () => {
+    writeRecord({ server: server(stub("root"), "/", publicPort) });
+    (await hubOnTailnet()).syncPreviews();
+
+    expect(await (await get(rootAt("127.0.0.1", "/api/me"), { headers: SERVED })).text()).toBe("root GET /api/me");
+    expect(seen.at(-1)).toEqual({ "tailscale-user-login": OWNER, "tailscale-user-name": "Luiz", "tailscale-user-profile-pic": "http://x/l.png" });
+    await get(rootAt("127.0.0.1", "/api/me"), { headers: { "Tailscale-User-Name": "Mallory" } });
+    expect(seen.at(-1)).toEqual({});
+
+    seen.length = 0;
+    const served = await wss(publicPort, "/api/sala", SERVED);
+    expect(await echo(served, "hi")).toBe("root echo:hi");
+    expect(asked.at(-1)?.method).toBe("WS");
+    expect(seen.at(-1)).toEqual({ "tailscale-user-login": OWNER, "tailscale-user-name": "Luiz", "tailscale-user-profile-pic": "http://x/l.png" });
+    served.close();
+    const plain = await wss(publicPort, "/api/sala");
+    expect(await echo(plain, "hi")).toBe("root echo:hi");
+    expect(seen.at(-1)).toEqual({});
+    plain.close();
   });
 
   test("a tailnet peer's forged Tailscale headers are replaced by the login Tailscale gives it, on HTTP and the WebSocket", async () => {
@@ -469,18 +540,67 @@ describe("a preview at the root of a public port of its own", () => {
     writeRecord({ server: server(port, "/", publicPort) });
     const first = await hubOnTailnet();
     first.syncPreviews();
-    expect((await fetch(rootAt("127.0.0.1", "/"))).status).toBe(200);
+    expect((await get(rootAt("127.0.0.1", "/"))).status).toBe(200);
 
     writeRecord({ server: { ...server(port, "/", publicPort), pid: null } });
     first.syncPreviews();
-    expect(await fetch(rootAt("127.0.0.1", "/")).then(() => "answered", () => "refused")).toBe("refused");
+    expect(await answers(rootAt("127.0.0.1", "/"))).toBe("failed");
 
     writeRecord({ server: server(port, "/", publicPort) });
     first.syncPreviews();
-    expect((await fetch(rootAt("127.0.0.1", "/"))).status).toBe(200);
+    expect((await get(rootAt("127.0.0.1", "/"))).status).toBe(200);
 
     await hubOnTailnet();
-    expect(await (await fetch(rootAt("127.0.0.1", "/again"))).text()).toBe("root GET /again");
+    expect(await (await get(rootAt("127.0.0.1", "/again"))).text()).toBe("root GET /again");
+  });
+
+  test("without a certificate the hub opens no port, in http or otherwise, and says why in the preview's status", async () => {
+    writeRecord({ server: server(stub("root"), "/", publicPort) });
+    const running = await hubOnTailnet(sourceOf([new Error("your Tailscale account does not support getting TLS certs")]));
+    running.syncPreviews();
+    expect(await answers(`http://127.0.0.1:${publicPort}/`)).toBe("failed");
+    expect(await answers(`https://127.0.0.1:${publicPort}/`)).toBe("failed");
+    expect(await answers(`http://127.0.0.2:${publicPort}/`)).toBe("failed");
+    expect((await fetch(`http://127.0.0.1:${hubPort}/api/fleets`)).status).toBe(200);
+
+    const state = JSON.parse(readFileSync(previewPortsPath(join(base, "registry")), "utf8"));
+    expect(state.ports).toEqual([
+      {
+        port: publicPort,
+        fleet: "shop",
+        worker: null,
+        loopback: false,
+        tailnet: null,
+        url: null,
+        error: "tailscale cert box.example.ts.net: your Tailscale account does not support getting TLS certs",
+      },
+    ]);
+
+    const status = fleet(["preview", dir, "status"], env).stdout;
+    expect(status).toContain(`https://box.example.ts.net:${publicPort}/`);
+    expect(status).toContain(`the hub cannot serve https on port ${publicPort}: tailscale cert box.example.ts.net: your Tailscale account does not support getting TLS certs`);
+    expect(status).not.toMatch(new RegExp(`http://[^ ]*:${publicPort}/`));
+  });
+
+  test("a renewal swaps the certificate on every preview port, keeps the open sockets, and leaves the hub's own port alone", async () => {
+    const other = freePort();
+    writeRecord({ server: server(stub("root"), "/", publicPort), workers: [{ ...server(stub("a1"), "/", other), worker: "a1" }] });
+    const soon = { ...pem, notAfter: new Date(Date.now() + 2 * DAY) };
+    const second = selfSigned(["box.example.ts.net", "127.0.0.1", "127.0.0.2"], "second");
+    const running = await hubOnTailnet(sourceOf([soon, { ...second, notAfter: new Date(Date.now() + 60 * DAY) }]));
+    running.syncPreviews();
+    expect([await servedName(publicPort), await servedName(other)]).toEqual(["first", "first"]);
+    const open = await wss(publicPort, "/api/sala");
+    expect(await echo(open, "before")).toBe("root echo:before");
+
+    await running.checkCertificate();
+    running.syncPreviews();
+    expect([await servedName(publicPort), await servedName(other)]).toEqual(["second", "second"]);
+    expect(await echo(open, "after")).toBe("root echo:after");
+    open.close();
+    pem = second;
+    expect(await (await get(rootAt("127.0.0.1", "/x", other))).text()).toBe("a1 GET /x");
+    expect((await fetch(`http://127.0.0.1:${hubPort}/api/fleets`)).status).toBe(200);
   });
 
   test("a public port another process holds is reported in the preview's status, and the hub keeps running", async () => {
@@ -497,8 +617,8 @@ describe("a preview at the root of a public port of its own", () => {
       expect(readFileSync(hubRecordPath(join(base, "registry")), "utf8")).toContain(String(process.pid));
 
       const status = fleet(["preview", dir, "status"], env);
-      expect(status.stdout).toContain(`http://box.example.ts.net:${publicPort}/`);
-      expect(status.stdout).toContain(`the hub cannot listen on port ${publicPort}`);
+      expect(status.stdout).toContain(`https://box.example.ts.net:${publicPort}/`);
+      expect(status.stdout).toContain(`the hub cannot serve https on port ${publicPort}`);
     } finally {
       void holder.stop(true);
     }

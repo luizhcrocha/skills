@@ -524,33 +524,25 @@ function Chart(props: { readonly rows: () => readonly Agent[] }): JSX.Element {
   );
 }
 
-/** A root-mode preview's own origin: this host at its public port, plain http (the hub serves it there). */
-function rootAddress(port: number): string {
-  return `http://${location.hostname}:${String(port)}/`;
-}
-
-/** A root-mode preview's link to its own origin, and why the hub cannot listen there when it cannot. */
+/** A root-mode preview's link to the https address the hub serves it at, and why the hub cannot serve https there when it cannot. */
 function RootLink(props: { readonly server: PreviewServer; readonly id?: string }): JSX.Element {
   return (
     <Show when={props.server.public}>
       {(port) => (
         <>
-          <p class="meta">
-            At its own address:{" "}
-            <a
-              class="preview-root-link"
-              id={props.id}
-              href={rootAddress(port())}
-              target="_blank"
-              rel="noopener"
-              title="Served at the root, in plain http: no secure context there, so copying to the clipboard does not work"
-            >
-              {rootAddress(port())}
-            </a>
-          </p>
+          <Show when={props.server.publicUrl}>
+            {(url) => (
+              <p class="meta">
+                At its own address:{" "}
+                <a class="preview-root-link" id={props.id} href={url()} target="_blank" rel="noopener">
+                  {url()}
+                </a>
+              </p>
+            )}
+          </Show>
           <Show when={props.server.publicError}>
             <p class="meta deaf-line">
-              The hub cannot listen on port {String(port())}: {props.server.publicError}
+              The hub cannot serve https on port {String(port())}: {props.server.publicError}
             </p>
           </Show>
         </>

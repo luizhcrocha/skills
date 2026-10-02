@@ -3,8 +3,9 @@
  * any other interface), the same port on both. Tailscale down at start is not fatal: the hub serves on
  * loopback and binds the tailnet address once it comes up. With `https`, `tailscale serve` also exposes
  * it at https://<this machine>:<https>/ (Tailscale's certificate; the browser's alerts need a secure page).
- * `REGISTRY/hub/hub.json` says where it runs, for `fleet serve`. It also listens on the public port of each
- * root-mode preview, in the same two places (`preview-ports.ts`).
+ * `REGISTRY/hub/hub.json` says where it runs, for `fleet serve`. It also serves the public port of each
+ * root-mode preview over TLS, in the same two places (`preview-ports.ts`), with this machine's Tailscale
+ * certificate held in memory and renewed as it nears its end (`preview-tls.ts`).
  */
 import { join } from "node:path";
 
@@ -16,6 +17,7 @@ import { alive } from "../registry.ts";
 import { Hub, type HubOptions, type Rooted } from "./hub.ts";
 import { PreviewPorts } from "./preview-ports.ts";
 import { previewSockets, type SocketData, type Upgrade } from "./preview-proxy.ts";
+import { PreviewCertificate, tailscaleCertificate, type CertificateSource } from "./preview-tls.ts";
 import { tailscale } from "./tailnet.ts";
 
 import * as Option from "effect/Option";
@@ -24,6 +26,9 @@ export { previewPortsPath, readPortStates, type PortState } from "./preview-port
 
 /** How often the hub looks for root-mode previews to listen for, or to let go of. */
 const PREVIEW_PORTS_MS = 1000;
+
+/** How often the hub looks whether the preview ports' certificate is due (it asks Tailscale only then). */
+const CERTIFICATE_MS = 60_000;
 
 /** The hub's port unless told otherwise. */
 export const DEFAULT_PORT = 7420;
@@ -67,6 +72,8 @@ export interface Running {
   readonly stop: () => Promise<void>;
   /** Listen for the root-mode previews the records name now, and let go of the others (it runs every second). */
   readonly syncPreviews: () => void;
+  /** Ask for the preview ports' certificate if it is due (it runs every minute); `syncPreviews` then serves it. */
+  readonly checkCertificate: () => Promise<void>;
 }
 
 type Server = Bun.Server<SocketData>;
@@ -76,6 +83,8 @@ export interface StartOptions extends HubOptions {
   readonly https: number | undefined;
   /** Started by systemd or launchd: it takes the port over from a hub started by hand. */
   readonly supervised?: boolean;
+  /** Where the preview ports' certificate comes from; `tailscale cert` unless told otherwise. */
+  readonly certificate?: CertificateSource;
 }
 
 /** Start the hub; why not when loopback's port is taken. */
@@ -84,26 +93,30 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
   await hub.start();
   const port = options.port;
 
-  const serve = (hostname: string, at: number, answer: (req: Request, ip: string, keepOpen: () => void, upgrade: Upgrade) => Promise<Response | undefined>): Server =>
+  /** What every listener answers with: `answer`, given the client's address, a way to keep the request
+   * open, and the upgrade to a proxied socket. */
+  const handlers = (answer: (req: Request, ip: string, keepOpen: () => void, upgrade: Upgrade) => Promise<Response | undefined>) => ({
+    idleTimeout: 60,
+    websocket: previewSockets,
+    fetch: (req: Request, server: Server) =>
+      answer(
+        req,
+        server.requestIP(req)?.address ?? "",
+        () => server.timeout(req, 0),
+        (data, headers) => server.upgrade(req, { data, headers }),
+      ),
+    error: (cause: Error) => new Response(dumps({ error: cause.message }), { status: 500, headers: { "Content-Type": "application/json" } }),
+  });
+
+  const listen = (hostname: string): Server => Bun.serve<SocketData>({ hostname, port, ...handlers((req, ip, keepOpen, upgrade) => hub.fetch(req, ip, keepOpen, upgrade)) });
+
+  const listenRooted = (hostname: string, at: number, slot: Rooted, tls: { readonly cert: string; readonly key: string }): Server =>
     Bun.serve<SocketData>({
       hostname,
       port: at,
-      idleTimeout: 60,
-      websocket: previewSockets,
-      fetch: (req, server) =>
-        answer(
-          req,
-          server.requestIP(req)?.address ?? "",
-          () => server.timeout(req, 0),
-          (data, headers) => server.upgrade(req, { data, headers }),
-        ),
-      error: (cause) => new Response(dumps({ error: cause.message }), { status: 500, headers: { "Content-Type": "application/json" } }),
+      tls: { cert: tls.cert, key: tls.key },
+      ...handlers((req, ip, keepOpen, upgrade) => hub.fetchRooted(req, ip, slot, keepOpen, upgrade)),
     });
-
-  const listen = (hostname: string): Server => serve(hostname, port, (req, ip, keepOpen, upgrade) => hub.fetch(req, ip, keepOpen, upgrade));
-
-  const listenRooted = (hostname: string, at: number, slot: Rooted): Server =>
-    serve(hostname, at, (req, ip, keepOpen, upgrade) => hub.fetchRooted(req, ip, slot, keepOpen, upgrade));
 
   const servers: Server[] = [];
   const home = options.machine.registry.place.home;
@@ -135,7 +148,11 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
 
   bindTailnet();
   const rebind = setInterval(bindTailnet, 30_000);
-  const previews = new PreviewPorts({ wanted: () => hub.rootedPreviews(), tailnetIp: () => hub.net?.self.ip, listen: listenRooted, home, log });
+  const certificate = new PreviewCertificate({ source: options.certificate ?? tailscaleCertificate(options.tailscale), name: () => hub.net?.self.dns, now: () => Date.now(), log });
+  const checkCertificate = (): Promise<void> => certificate.check();
+  await checkCertificate();
+  const recertify = setInterval(() => void checkCertificate(), CERTIFICATE_MS);
+  const previews = new PreviewPorts({ wanted: () => hub.rootedPreviews(), tailnetIp: () => hub.net?.self.ip, certificate: () => certificate.current(), listen: listenRooted, home, log });
 
   const syncPreviews = (): void => {
     try {
@@ -172,9 +189,11 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
     hub,
     url,
     syncPreviews,
+    checkCertificate,
     stop: async () => {
       clearInterval(rebind);
       clearInterval(repreview);
+      clearInterval(recertify);
       previews.stop();
       hub.stop();
 

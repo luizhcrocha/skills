@@ -163,24 +163,26 @@ test("a fleet with no preview shows no block, and the ledger's dev command is no
   expect(root.querySelector("#preview-links")).toBeNull();
 });
 
-test("a root-mode preview links its own origin, this host at its public port in plain http, and says when the hub cannot listen there", () => {
+test("a root-mode preview links the https address the hub serves it at, and says when the hub cannot serve https there", () => {
   page.m.takeState(
     JSON.stringify(
       withPreview({
         ...PREVIEW,
         public: 7501,
+        public_url: "https://box.example.ts.net:7501/",
         public_error: null,
-        per_worker: [{ ...OWN, public: 7502, public_error: "cannot listen on 127.0.0.1:7502: port 7502 is in use" }],
+        per_worker: [{ ...OWN, public: 7502, public_url: null, public_error: "tailscale cert box.example.ts.net: HTTPS is disabled" }],
       }),
     ),
   );
   flush();
   const own = root.querySelector("#preview-root-link");
-  expect(own?.getAttribute("href")).toBe(`http://${location.hostname}:7501/`);
-  expect(own?.getAttribute("title")).toContain("no secure context");
-  const worker = [...root.querySelectorAll("#preview .preview-root-link")].map((a) => a.getAttribute("href"));
-  expect(worker).toEqual([`http://${location.hostname}:7501/`, `http://${location.hostname}:7502/`]);
-  expect(root.querySelector("#preview")?.textContent).toContain("The hub cannot listen on port 7502: cannot listen on 127.0.0.1:7502: port 7502 is in use");
+  expect(own?.getAttribute("href")).toBe("https://box.example.ts.net:7501/");
+  expect(own?.textContent).toBe("https://box.example.ts.net:7501/");
+  expect(own?.getAttribute("title") ?? "").not.toContain("secure context");
+  const links = [...root.querySelectorAll("#preview .preview-root-link")].map((a) => a.getAttribute("href"));
+  expect(links).toEqual(["https://box.example.ts.net:7501/"]);
+  expect(root.querySelector("#preview")?.textContent).toContain("The hub cannot serve https on port 7502: tailscale cert box.example.ts.net: HTTPS is disabled");
 });
 
 test("a preview that is not in root mode has no link of its own origin", () => {
