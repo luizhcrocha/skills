@@ -56,7 +56,7 @@ If the workspace exists, run `jj workspace update-stale` in it and start from `t
 
 Current skills share one more change off `trunk()` that only bumps their `checked on` dates: `lang-*: sources checked <date>, all current`, so the next run's staleness is right.
 
-Run `just test` in the workspace (the helper's tests check that every sources table parses). Report the change ids, one line each, and leave the workspace for Luiz. Done when every changed skill has its described change and the tests pass.
+Run `just test-changed` in the workspace (it runs test-scripts, whose tests check that every sources table parses). Report the change ids, one line each, and leave the workspace for Luiz. Done when every changed skill has its described change and the tests pass.
 
 ## Running it periodically
 

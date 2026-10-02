@@ -60,7 +60,7 @@ cd ~/repos/luizhcrocha/skills; jj workspace add ../skills-reflect -r 'trunk()' -
 - Substantive skill edit (a new section, a new table, more than ~10 lines), `tune description: <skill path>`, or `new skill: <kebab-name>`: write it under `tstack:writing-for-agents` (SKILL-MECHANICS.md for descriptions and invocation) and tuca-mode's Authoring a skill playbook. A new skill is registered the way the repo's `AGENTS.md` or `CLAUDE.md` says (plugin.json, the top-level and bucket READMEs).
 - `memo <kind>`: a durable project fact, gotcha or decision that is not a skill edit becomes a memo note in the project it is about (`tstack:memo`).
 
-In the tstack workspace, run `just test` and `just validate`, describe the change in the repo's style (`jj log` shows it; `tstack:unslop` for the words) naming what each edit fixes, then `jj new`. Never push or move a bookmark: the change is for Luiz to review, and landing it is his call or a Land run he asks for.
+In the tstack workspace, run `just test-changed` (the suites your change touches, `just validate` among them for prose), describe the change in the repo's style (`jj log` shows it; `tstack:unslop` for the words) naming what each edit fixes, then `jj new`. Never push or move a bookmark: the change is for Luiz to review, and landing it is his call or a Land run he asks for.
 
 Backlog items do not wait for approval: each becomes a memo `open` note in the owning repo's workspace (the pattern, what was hit, the suggested mechanism, one line), so it ships inside the same change. An item whose mechanism is a lint rule then goes to `tstack:lint-evolve`, with the note's id as its evidence.
 
@@ -68,7 +68,7 @@ Backlog items do not wait for approval: each becomes a memo `open` note in the o
 
 Short list, no preamble:
 
-- Change: `<change id>` in `<workspace path>`, with `just test` / `just validate` results.
+- Change: `<change id>` in `<workspace path>`, with the `just test-changed` result.
 - Edits applied: `<skill path>`. What changed, one line each.
 - New skills: `<skill path>`. One line each (rare).
 - Memo notes: `<id>` `<kind>`, one line each, backlog `open` notes included.

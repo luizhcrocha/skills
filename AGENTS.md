@@ -12,3 +12,10 @@ Every skill in `engineering/`, `productivity/`, or `misc/` must have a reference
 Each skill entry in the top-level `README.md` must link the skill name to its `SKILL.md`.
 
 Each bucket folder has a `README.md` that lists every skill in the bucket with a one-line description, with the skill name linked to its `SKILL.md`.
+
+## Testing
+
+- `just test-changed [REVSET]` runs only the suites whose inputs changed in REVSET (default `master@origin..@`, the stack) and prints which it chose and why. The table is `SCOPE` in `scripts/gates`; a path it doesn't name runs everything. A worker runs this before it reports.
+- `just test` runs every suite in parallel, each one's output grouped under its PASS/FAIL line and duration. The lead runs it once per landing, on the stack's head, not after each worker.
+- One suite alone: `just test-fleet-ts`, `just test-page`, and the rest in `just --list`.
+- A page change (fleet/page, rebuilt into `assets/dashboard.html` by `just build-page`) re-records no oracle trace: the traces keep the state a rendered `index.html` carries, not its bytes. Re-record a trace only when the fleet's behaviour changes on purpose (fleet/SPEC.md, "Oracle traces").

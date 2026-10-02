@@ -8,30 +8,47 @@ default:
 sync-upstream *args:
     python3 scripts/sync_upstream.py {{args}}
 
-# Every test in the repo
-test: test-scripts test-coordinator test-lint-ts test-fleet test-fleet-ts test-page
+# Every test in the repo, the suites in parallel, each one's output grouped under its PASS/FAIL line (--jobs 1 runs them one by one)
+test *args:
+    python3 scripts/gates all {{args}}
+
+# Only the suites whose inputs changed in REVSET (default: the stack, master@origin..@), in parallel; scripts/gates SCOPE says which (--dry-run)
+test-changed revset='master@origin..@' *args:
+    python3 scripts/gates changed '{{revset}}' {{args}}
+
+# The installs the suites share; scripts/gates runs each once before the suites, so none races another in one node_modules
+_deps-lint:
+    cd lint/ts && npm install --no-audit --no-fund --prefer-offline --silent
+
+_deps-fleet:
+    cd fleet && bun install --frozen-lockfile --silent
+
+_deps-page:
+    cd fleet/page && bun install --frozen-lockfile --silent
 
 # The repo scripts (sync-upstream) against throwaway git repos
 test-scripts:
     python3 -m unittest discover -s scripts/tests -v
 
 # The TypeScript lint pack's RuleTester suites (anti-slop fork, tstack rules), on the pinned Oxlint
-test-lint-ts:
-    cd lint/ts && npm install --no-audit --no-fund --prefer-offline --silent && node run-tests.mjs
+test-lint-ts: _deps-lint
+    cd lint/ts && node run-tests.mjs
 
 # The coordinator's scripts and dashboard page
 test-coordinator:
     python3 -m unittest discover -s skills/productivity/coordinator/tests -p 'test_*.py'
     node --test 'skills/productivity/coordinator/tests/*.test.mjs'
 
+# The coordinator's page.test.mjs alone: the built page's rules that need no browser
+test-coordinator-page:
+    node --test skills/productivity/coordinator/tests/page.test.mjs
+
 # The fleet oracle: the model-based test of the ledger (FLEET_MODEL_SEED=N replays a sequence) and the golden traces
 test-fleet:
     python3 -m unittest discover -s fleet/oracle -p 'test_*.py'
 
 # The TypeScript fleet (fleet/): strict types, the lint/ts packs, its own tests, then the oracle's golden traces and model test run against it
-test-fleet-ts:
-    cd fleet && bun install --frozen-lockfile --silent
-    cd lint/ts && npm install --no-audit --no-fund --prefer-offline --silent
+test-fleet-ts: _deps-fleet _deps-lint
     cd fleet && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/oxlint -c .oxlintrc.json --deny-warnings src test && bun test
     FLEET_ORACLE_IMPL='{"state": "{{justfile_directory()}}/fleet/bin/fleet state", "chat": "{{justfile_directory()}}/fleet/bin/fleet chat", "fleets": "{{justfile_directory()}}/fleet/bin/fleet fleets", "subst": {"{{justfile_directory()}}/skills/productivity/coordinator": "$SKILL"}}' python3 -m unittest discover -s fleet/oracle -p 'test_*.py'
 
@@ -40,9 +57,7 @@ build-page:
     cd fleet/page && bun install --frozen-lockfile --silent && bun build.ts
 
 # The dashboard page (fleet/page): strict types, the lint/ts packs, the committed template against a fresh build, then its DOM tests and its headless-Chromium tests (skipped without Chromium)
-test-page:
-    cd fleet/page && bun install --frozen-lockfile --silent
-    cd lint/ts && npm install --no-audit --no-fund --prefer-offline --silent
+test-page: _deps-page _deps-lint
     cd fleet/page && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/oxlint -c .oxlintrc.json --deny-warnings src test build.ts && bun build.ts --check && TZ=UTC bun test --conditions browser --timeout 20000
 
 # The lang-* skills' sources tables as JSON (--skill NAME, --stale DAYS)

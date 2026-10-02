@@ -135,7 +135,7 @@ Between events, explain to the user what is happening in plain terms: who is on 
 
 ### 7. Integrate
 
-When a milestone's workers are done: bring each worker's changes into the stack and prune each workspace or hand it to the lane's next worker (Track, above), run the project's checks yourself (types, tests, lint; a quick win), resolve anything left at the seams between lanes, mark the milestone done, and move the roadmap's current step forward. A milestone counts as done when its checks pass and its reports clear the standards, not when its workers report.
+When a milestone's workers are done: bring each worker's changes into the stack and prune each workspace or hand it to the lane's next worker (Track, above), run the project's checks yourself (types, tests, lint; a quick win), the full gate once per landing (in tstack, `just test`; a worker runs the scoped `just test-changed`, so name that in its completion criterion), resolve anything left at the seams between lanes, mark the milestone done, and move the roadmap's current step forward. A milestone counts as done when its checks pass and its reports clear the standards, not when its workers report.
 
 ## Decisions
 
