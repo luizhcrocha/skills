@@ -572,6 +572,11 @@ itself. A manager made later appears the same way, on the same address.
   handed-over workspace keeps its port. `fleet brief` gives a worker with a lane a `Dev server:` line: the
   fleet's per-worker preview when the combined preview's server runs, else its port (Vite
   `--port N --strictPort`, else `PORT=N`), stopped before it reports.
+- **`fleet tell FLEET|all TEXT`**: the user's words from a terminal, through the page's door: a POST
+  to the hub's `/f/<fleet>/chat` on loopback, so the message is the user's (`author` the hub's owner),
+  addressed as the page addresses it (`@worker` in the text). `all` is every fleet served; a name
+  resolves as below. It refuses inside a Claude Code session (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`):
+  an agent writes as itself with `chat say`. No hub running refuses too.
 - **Fleets by name**: wherever a command takes a fleet's directory first (`state`, `chat`, `ws`,
   `preview`, `brief`, `turn`, `advisor`, `serve`, `spend`), a bare name (no `/`, not a directory here)
   is looked up among the fleets this machine serves: its id on the hub, an id it had before, or its

@@ -10,6 +10,7 @@ import * as Layer from "effect/Layer";
 import { advisorCli } from "../advisor/advisor.ts";
 import { clockFrom } from "../clock.ts";
 import { Env, Out } from "../io.ts";
+import type { Entry } from "../registry.ts";
 import { World, worldLayer, type Machine } from "../world.ts";
 import { briefCli } from "./brief.ts";
 import { chatCli } from "./chat.ts";
@@ -17,10 +18,11 @@ import { fleetsCli } from "./fleets.ts";
 import { previewCli } from "./preview.ts";
 import { CONTROL_CLIS, controlCli } from "./hub.ts";
 import { stateCli } from "./state.ts";
+import { tellCli } from "./tell.ts";
 import { turnCli } from "./turn.ts";
 import { wsCli } from "./ws.ts";
 
-const USAGE = "usage: fleet {ls,state,chat,fleets,ws,preview,brief,turn,advisor,hub,serve,render,usage,spend,served} ...\n";
+const USAGE = "usage: fleet {ls,tell,state,chat,fleets,ws,preview,brief,turn,advisor,hub,serve,render,usage,spend,served} ...\n";
 
 /** The commands whose first argument is a fleet's directory. */
 const DIR_CLIS: ReadonlySet<string> = new Set(["state", "chat", "ws", "preview", "brief", "turn", "advisor", "serve", "spend"]);
@@ -42,20 +44,26 @@ export function withFleetDir(argv: readonly string[], machine: Machine): string[
   const [cli, first, ...more] = argv;
 
   if (cli === undefined || first === undefined || !DIR_CLIS.has(cli) || first.includes("/") || first.startsWith("-") || existsSync(first)) return [...argv];
-  const live = machine.registry.live();
-  const exact = live.find((e) => e.id === first || e.aliases.includes(first) || e.session === first);
-
-  if (exact !== undefined) return [cli, exact.dir, ...more];
-  const said = first.toLowerCase();
-  const names = (e: (typeof live)[number]): string[] => [e.id, e.session ?? ""].map((n) => n.toLowerCase());
-  const starting = live.filter((e) => names(e).some((n) => n.startsWith(said)));
-  const fits = starting.length > 0 ? starting : live.filter((e) => names(e).some((n) => n.includes(said)));
+  const fits = fleetsNamed(machine.registry.live(), first);
 
   if (fits.length === 1 && fits[0] !== undefined) return [cli, fits[0].dir, ...more];
 
   if (fits.length > 1) return { name: first, fits: fits.map((e) => e.id).sort() };
 
   return [...argv];
+}
+
+/** The served fleets a name fits: the one whose id, old id or session's name it is; else those whose id or
+ * session starts with it; else those containing it (any case). */
+export function fleetsNamed(live: readonly Entry[], name: string): Entry[] {
+  const exact = live.find((e) => e.id === name || e.aliases.includes(name) || e.session === name);
+
+  if (exact !== undefined) return [exact];
+  const said = name.toLowerCase();
+  const names = (e: Entry): string[] => [e.id, e.session ?? ""].map((n) => n.toLowerCase());
+  const starting = live.filter((e) => names(e).some((n) => n.startsWith(said)));
+
+  return starting.length > 0 ? starting : live.filter((e) => names(e).some((n) => n.includes(said)));
 }
 
 function dispatch(argv: readonly string[]): Effect.Effect<number, never, Out | World> {
@@ -66,6 +74,8 @@ function dispatch(argv: readonly string[]): Effect.Effect<number, never, Out | W
 
     // `fleet ls` and `fleet list`: the served fleets, as `fleet fleets list` prints them.
     if (cli === "ls" || cli === "list") return yield* fleetsCli(["list", ...rest]);
+
+    if (cli === "tell") return yield* tellCli(rest);
     const resolved = withFleetDir(argv, machine);
 
     if (!Array.isArray(resolved)) {
