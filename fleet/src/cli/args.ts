@@ -207,7 +207,9 @@ export function parseArgs(prog: string, spec: CommandSpec, argv: readonly string
     const token = argv[i] ?? "";
     i += 1;
 
-    if (rest || !looksLikeOption(token)) {
+    const named = token.startsWith("-") && token.includes("=") && spec.options.some((o) => o.flag === token.slice(0, token.indexOf("=")));
+
+    if (rest || (!named && !looksLikeOption(token))) {
       positional.push(token);
       continue;
     }
