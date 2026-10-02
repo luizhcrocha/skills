@@ -111,6 +111,10 @@ Any absence the user announces ("I'm out for half an hour", "back after lunch", 
 3. Keep your own trail the same way for what you decide while they are out (landing turns, answers you gave from `standing.md`).
 4. On their return (they write again, or the time passes and they reappear): each trail first gets the review `tstack:show-me-your-work` asks for (Fable after a long absence). Then one page message, "While you were out", opening with **Attention**: every reviewer's flags, each naming its fleet and the rows. Then what landed, what each fleet decided on its own, and what waits on them now (`fleet fleets waiting`).
 
+## tstack updates
+
+A message from the user that opens with `[auto] tstack updated` is the update timer speaking in their name: re-read the skill files it names from the new copy and follow them from then on; the coordinators get the same message on their own pages. Answer with one line saying what changed for you (or nothing).
+
 ## Waiting on the user
 
 **What waits on the user is what `fleet fleets waiting` prints**, and nothing else: every open decision for the user across the fleets' ledgers (yours included), with since when, and `ANSWERED at ...; not recorded yet` when the user answered on a page and the fleet has not recorded it. Run it before you tell the user anything waits on them, every time. Your memory, your notes and `standing.md` never decide what is waiting: the user answers on any fleet's page, and only the ledgers know. An answered item is not asked again; an unrecorded answer is the fleet's to record.
