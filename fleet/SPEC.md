@@ -613,14 +613,27 @@ itself. A manager made later appears the same way, on the same address.
   runs. `--https PORT` also runs `tailscale serve --bg --https=PORT http://127.0.0.1:<port>` (and
   turns it off on exit): the page's browser alerts need a secure page.
 - **The public ports of root-mode previews**: for each [root-mode preview](#the-preview-fleet-preview)
-  whose record names a public port and a started dev server (a pid recorded), the hub also listens on that
-  port, in the same two places (127.0.0.1 and the Tailscale IPv4, never 0.0.0.0), and passes every path
-  there to that dev server at its root. It looks every second and at start, so a restarted hub listens
-  again from the records alone, and it lets a port go when the preview stops. A port it cannot take (held
-  by another process) is logged and reported, never fatal: `REGISTRY/hub/previews.json` holds `{pid,
-  ports[] {port, fleet, worker, loopback, tailnet, error}}` while it runs, read by `fleet preview status`
-  and the page. A port named by two records goes to the first; the hub's own port is never one. Plain
-  http, no `tailscale serve` entry per preview (TLS on these ports is a later step).
+  whose record names a public port and a started dev server (a pid recorded), the hub also serves that
+  port over TLS, in the same two places (127.0.0.1 and the Tailscale IPv4, never 0.0.0.0), and passes
+  every path there to that dev server at its root. It looks every second and at start, so a restarted hub
+  listens again from the records alone, and it lets a port go when the preview stops. A port it cannot
+  take (held by another process, or no certificate) is logged and reported, never fatal:
+  `REGISTRY/hub/previews.json` holds `{pid, ports[] {port, fleet, worker, loopback, tailnet, url, error}}`
+  while it runs (`url` the `https://<MagicDNS name>:<port>/` it serves, null while it serves none), read
+  by `fleet preview status` and the page. A port named by two records goes to the first; the hub's own
+  port is never one. No `tailscale serve` entry per preview.
+  - **The certificate** is this machine's from Tailscale, the one `tailscale serve` uses: `tailscale cert
+    --cert-file - --key-file - --min-validity 336h <MagicDNS name>` through the hub's `tailscale` binary
+    (`$TAILSCALE`), read on stdout, split into the chain and the key, and held in memory: never written to
+    disk, never logged. The hub asks at start, then looks every minute: it asks again when the
+    certificate is within 14 days of its end (its `notAfter`) or the MagicDNS name has changed, once a
+    minute while it holds none, hourly while a renewal fails and the one held is still valid. A renewed
+    certificate replaces each port's listeners (the old ones stop accepting and finish their open
+    connections, HMR sockets included); the hub's own port and the other preview ports are untouched.
+  - **Fail closed**: with no certificate (Tailscale down or absent, no MagicDNS name, HTTPS certificates
+    off in the tailnet, an expired one that cannot be renewed) the hub opens no public port, in plain
+    http or otherwise, and records why as the port's `error` (`tailscale cert <name>: <what tailscale
+    said>`); `status` and the page show `the hub cannot serve https on port N: <reason>`.
 - **Dev-server ports**: `fleet ws add` records a `port` on each workspace it makes: the first one from
   `FLEET_PORT_BASE` (5300) that no active workspace or preview of any fleet this machine serves holds; a
   handed-over workspace keeps its port. `fleet brief` gives a worker with a lane a `Dev server:` line: the
@@ -1035,9 +1048,10 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   `/api/sala` absolutely (the Casos app: about 600 such lines across 100 files), so under
   `/f/<fleet>/preview/` its pages load and every data call 404s at the hub's root. The dev server is told
   base `/` (Vite: `--base /`; `{base}` is `/`) and its own free 127.0.0.1 port as before, and the preview
-  is given a **public port**, on which the hub serves it at the root of an origin of its own,
-  `http://<MagicDNS name>:<port>/` and `http://<tailnet IP>:<port>/` (`http://127.0.0.1:<port>/` without
-  Tailscale). The port is given once per preview (the combined one, each worker's) and kept in the
+  is given a **public port**, on which the hub serves it over TLS at the root of an origin of its own,
+  `https://<MagicDNS name>:<port>/`, with this machine's Tailscale certificate (see [the
+  hub](#the-hub-fleet-hub)); the certificate names the MagicDNS name, so that is the one address, never
+  the tailnet IP, and without Tailscale there is none. The port is given once per preview (the combined one, each worker's) and kept in the
   record's `ports {combined, workers {<worker>: port}}` across stops and starts, so the address stays
   good; `server.public` (and a per-worker server's) names it while that start runs in root mode. It comes
   from `FLEET_PREVIEW_PORTS` (`LO-HI`), **7500-7599** by default: beside the hub's 7420 and 7443, clear of
@@ -1046,11 +1060,12 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   on the Mac), where the dev servers' own free ports land. A port is skipped when another fleet's record
   holds it, when it is the hub's (7420, 7443, or what `hub.json` records), when `tailscale serve` exposes
   it, or when something listens on it on 127.0.0.1 or the tailnet IP now; a range with none left is
-  refused. `start` and `status` print the public address and what the hub says of the port (`the hub
-  listens on it (127.0.0.1 and <ip>)`, `the hub cannot listen on port N: …`, `no hub runs`); `start`
-  waits up to 3 s for a running hub to take the port. These addresses are plain http, so the page there
-  has no secure context: `navigator.clipboard` and the other secure-context APIs are unavailable. The
-  `/f/<fleet>/preview/` path still leads to the same server, with the prefix stripped.
+  refused. `start` and `status` print `public: https://<MagicDNS name>:<port>/` (without Tailscale,
+  `public: port N, no https address: …`) and what the hub says of the port (`the hub serves it over
+  https (on loopback and the tailnet)`, `the hub cannot serve https on port N: …`, `no hub runs`);
+  `start` waits up to 3 s for a running hub to take the port. The page there is a secure context
+  (`navigator.clipboard` works), and Vite's HMR client opens its socket as `wss` from the page's scheme.
+  The `/f/<fleet>/preview/` path still leads to the same server, with the prefix stripped.
   - **Security**: the dev server stays on 127.0.0.1; only the hub faces the tailnet, on the two addresses
     it binds its own port on. The public port carries the same identity rule as `/f/<fleet>/preview/`
     (below): the client's `Tailscale-*` and `X-Forwarded-For` dropped, then set from what the hub
@@ -1125,15 +1140,17 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   preview, and changes to tailscaled's persistent config; it stays the way for a server whose base is
   set only in its config (Next's `basePath`), which this does not do yet. A page with hard-coded absolute
   URLs (`/icons.svg`) misses the base either way: that is what root mode is for, on a port the hub owns
-  (no `tailscale serve` entry per preview and no change to the app), at the cost of plain http.
+  (no `tailscale serve` entry per preview and no change to the app), in https with the hub holding the
+  machine's certificate.
 - **The page** (the view's `preview`, only when `DIR/preview.json` exists, so no trace changes): `{url
   ("preview/", or null with only per-worker ones), address, running, up, port, log, updater, every,
   workers[] {id, name, status, included, commit, change}, conflicts[], error, updated, per_worker[]
-  {worker, url, address, running, up, port, log, public, public_error}, public, public_error}`, `public`
-  the root-mode public port or null and `public_error` the running hub's word on it. The Fleet view's
-  Preview block links a root-mode preview (and each per-worker one) at `http://<the page's own
-  host>:<public>/`, says it is plain http (no secure context, no clipboard) in the link's title, and
-  shows `public_error`. It also shows the link, a box
+  {worker, url, address, running, up, port, log, public, public_url, public_error}, public, public_url,
+  public_error}`, `public` the root-mode public port or null, `public_url` the `https://<MagicDNS
+  name>:<public>/` the running hub serves it at (null while it serves none) and `public_error` the
+  running hub's word on it. The Fleet view's Preview block links a root-mode preview (and each per-worker
+  one) at `public_url` (an `https:` address only) and shows `The hub cannot serve https on port N:
+  <public_error>`. It also shows the link, a box
   per worker's workspace (disabled for a viewer who may not write; put back when the hub refuses), the
   conflicts with the workers' names, the build error and each per-worker preview; the Links view lists
   the combined and per-worker links. The hub's view of a fleet is recomputed when `state.json` or
