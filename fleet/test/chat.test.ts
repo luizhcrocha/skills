@@ -397,10 +397,13 @@ describe("watch", () => {
   test("watch --resume starts after the last line a watch printed", async () => {
     user("@a1 one");
     user("@a1 two");
-    const first = watching("watch", "--as", "a1", "--resume");
+    const { proc, lines: first } = start(["chat", root, "watch", "--as", "a1", "--resume"], env);
+    procs.push(proc);
     expect([await first.next(), await first.next()]).toEqual(["#1 user -> a1 (notes-impl): @a1 one\n", "#2 user -> a1 (notes-impl): @a1 two\n"]);
     user("@a1 three");
     expect(await first.next()).toBe("#3 user -> a1 (notes-impl): @a1 three\n");
+    proc.kill(); // else, still watching when #4 lands, it prints it and its cursor takes #4 before the next watch reads it
+    await proc.exited;
     user("@a1 while no watch ran");
     const again = watching("watch", "--as", "a1", "--resume");
     expect(await again.next()).toBe("#4 user -> a1 (notes-impl): @a1 while no watch ran\n");

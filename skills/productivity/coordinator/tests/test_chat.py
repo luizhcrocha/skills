@@ -304,7 +304,9 @@ class WatchTest(FleetDir):
         proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", *args],
                                 stdout=subprocess.PIPE, text=True, encoding="utf-8")
         self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdout.close()))
-        return Lines(proc.stdout)
+        lines = Lines(proc.stdout)
+        lines.proc = proc
+        return lines
 
     def test_watch_prints_open_messages_then_each_new_one_as_a_flushed_line(self):
         chat.append(self.root, "user", "@a1 first", allow_user=True)
@@ -329,6 +331,8 @@ class WatchTest(FleetDir):
         self.assertEqual([first.next(), first.next()], ["#1 user -> a1 (notes-impl): @a1 one\n", "#2 user -> a1 (notes-impl): @a1 two\n"])
         chat.append(self.root, "user", "@a1 three", allow_user=True)
         self.assertEqual(first.next(), "#3 user -> a1 (notes-impl): @a1 three\n")
+        first.proc.kill()  # else, still watching when #4 lands, it prints it and its cursor takes #4 before the next watch reads it
+        first.proc.wait()
         chat.append(self.root, "user", "@a1 while no watch ran", allow_user=True)
         again = self.watch("--as", "a1", "--resume")
         self.assertEqual(again.next(), "#4 user -> a1 (notes-impl): @a1 while no watch ran\n")
@@ -368,7 +372,10 @@ class NudgeTest(FleetDir):
         os.environ["FLEET_NOW"] = "2026-01-05T09:00:00+00:00"
         self.addCleanup(os.environ.pop, "FLEET_NOW", None)
         chat.append(self.root, "coordinator", "@a1 rebase on main first")
-        self.assertTrue(self.watch_at(9)[1].quiet(1.5))
+        early, lines = self.watch_at(9)
+        self.assertTrue(lines.quiet(1.5))
+        early.kill()  # else, still watching when #3 lands, it prints it and its --resume cursor takes #3 first
+        early.wait()
         proc, lines = self.watch_at(10)
         self.assertEqual(lines.next(), '! worker a1 (notes-impl) has not answered #1 from coordinator for 10 min: '
                                        '"@a1 rebase on main first". Forward it (SendMessage a1).\n')
@@ -880,6 +887,9 @@ class ListeningTest(FleetDir):
                                 stdout=subprocess.PIPE, text=True, encoding="utf-8")
         self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdout.close()))
         self.assertEqual(Lines(proc.stdout).next(), "#1 user -> coordinator: status?\n")
+        deadline = time.monotonic() + 5  # the watch prints a line, then moves its cursor past it
+        while chat.listening(self.root)["seen"] != 1 and time.monotonic() < deadline:
+            time.sleep(0.05)
         self.assertEqual(chat.listening(self.root), {"on": True, "seen": 1, "unread": 0, "since": None})
         self.assertIsNone(chat.deaf_warning(self.root))
         proc.terminate(); proc.wait()
