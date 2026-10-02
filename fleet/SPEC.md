@@ -779,9 +779,17 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
 - **Granting** (`src/hub/grants.ts`, before `POST /chat` stores an answer that starts with
   `allow-once` to a permission): the row must be open, its `refusal` a Bash call an exact rule can hold
   whose `rule` is `Bash(<call>)`, the POST's `rule` that same rule (absent or different refuses: a row
-  revised since the page rendered it needs a fresh look), and its `root` absolute, a directory, and the `project` or `cwd`
-  of a heartbeat in `DIR/heartbeats/` (a session of this fleet: the ledger is writable by agents, the
-  hub is not). Under the settings lock (below), `<root>/.claude/settings.local.json` (absent reads as
+  revised since the page rendered it needs a fresh look), and its `root` absolute, a directory, and a
+  session root of this fleet (the ledger is writable by agents, the hub is not): the `project` or `cwd` of
+  a heartbeat in `DIR/heartbeats/`, or else the working directory, read by the hub from the OS (`procs.ts`
+  `cwdOf`), of the live process the registry's entry for DIR names as its `pid` (`fleet serve DIR
+  [--pid PID]`: the session that served it). The second covers a session that writes no heartbeats (one
+  whose fleet DIR is not in its scratchpad and that has no `FLEET_DIR`, or one started before the hook
+  wrote them). The refusal says what it checked: `... is no session of this fleet (no heartbeat names it,
+  and the fleet's registered session <pid> runs in <cwd>)`, or `... and no live session is registered
+  for this fleet`. A worker's workspace is no session root, under the fleet or beside the repo: the hook
+  records `$CLAUDE_PROJECT_DIR` as `--root`, the session's root, for a subagent's refused call too (only
+  the session root's settings apply, to its background subagents as well). Under the settings lock (below), `<root>/.claude/settings.local.json` (absent reads as
   `{}`; one that does not parse refuses) gets the rule added to `permissions.allow`, every other key and entry kept, written
   through a temp file in its folder and a rename, two-space JSON with a final newline. A missing
   `.claude` is made, and the grant says `reload: restart` (Claude Code watches only a settings folder
@@ -806,8 +814,10 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
 - **Lines**: every `grants.jsonl` line is compact JSON, one object, on both sides.
 - **What it defends**: an allow rule that lets through only the call the user saw, for its caller, once.
   Not more: a local process can POST allow-once to the hub (stamped `local`, by decision), and heartbeats
-  and the ledger are writable by agents, so the root check and the row make a forged grant flagrant, not
-  impossible. A forged `op:grant` line can make the sweep remove a rule that matches it, one added by hand
+  and the ledger are writable by agents, as is the registry (`fleet serve DIR --pid PID`), so the root
+  check and the row make a forged grant flagrant, not impossible; the registry names a process, and the
+  hub reads where it runs, so a forged entry grants only in a directory some live process of the user's
+  runs in. A forged `op:grant` line can make the sweep remove a rule that matches it, one added by hand
   included: the failure is fewer allowed calls, never more. The 30 minutes run only while some session of
   the fleet makes tool calls.
 

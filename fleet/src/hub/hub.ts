@@ -38,13 +38,13 @@ import { isRunning } from "../preview/devserver.ts";
 import { readRecord, recordPath, type DevServer } from "../preview/record.ts";
 import { PreviewError } from "../errors.ts";
 import { summary, view, type Lookups } from "../page/view.ts";
-import type { Entry } from "../registry.ts";
+import { pidOfEntry, type Entry } from "../registry.ts";
 import { SpendReader } from "../transcripts.ts";
 import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
 import { indexHtml } from "./index-page.ts";
 import { ProbeCache } from "./probes.ts";
-import { grantRefusal } from "./grants.ts";
+import { grantRefusal, registeredSession, type Registered } from "./grants.ts";
 import { grantor, hello, MAX_POST_BYTES, postRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
 import { previewTarget, proxiedIdentity, proxyHttp, proxySocket, type Target, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
@@ -795,7 +795,13 @@ export class Hub {
       if (side instanceof ChatError) return jsonResponse(400, { error: side.reason });
 
       if (decision !== undefined) {
-        const ungranted = await grantRefusal({ dir: root, decision, text, rule, by: grantor(viewer), at: stampOf(machine.now()) });
+        const registered = (): Registered | undefined => {
+          const entry = machine.registry.find(root);
+
+          return registeredSession(entry === undefined ? undefined : pidOfEntry(entry));
+        };
+
+        const ungranted = await grantRefusal({ dir: root, decision, text, rule, by: grantor(viewer), at: stampOf(machine.now()), registered });
 
         if (ungranted !== undefined) return jsonResponse(409, { error: ungranted });
       }

@@ -5,7 +5,7 @@
  * Every test starts a real hub on a free loopback port, with a registry of its own and a fake
  * `tailscale` that names this machine's owner.
  */
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { append } from "../src/chat/chat.ts";
 import { readChat } from "../src/chat/store.ts";
 import { ChatError } from "../src/errors.ts";
+import { grantRefusal, registeredSession } from "../src/hub/grants.ts";
 import { collapse } from "../src/hub/hub.ts";
 import { grantor, hello, postRefusal, viewerOf, writerRefusal } from "../src/hub/policy.ts";
 import { lsofListenersOf } from "../src/hub/served.ts";
@@ -1117,6 +1118,81 @@ describe("a permission's answer grants the call once", () => {
     await start();
     expect((await post(allow)).status).toBe(201);
     expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
+  });
+
+  describe("a fleet with no heartbeats is known by its registered session", () => {
+    const children: ReturnType<typeof Bun.spawn>[] = [];
+
+    /** A live process in `cwd`, registered as the process the fleet in `root` lives as long as. */
+    function registeredIn(cwd: string): number {
+      const child = Bun.spawn(["sleep", "60"], { cwd, stdout: "ignore", stderr: "ignore" });
+      children.push(child);
+      machine(env).registry.register(root, "u", child.pid, "2026-01-01T00:00:00+00:00");
+
+      return child.pid;
+    }
+
+    beforeEach(() => {
+      rmSync(join(root, "heartbeats"), { recursive: true, force: true });
+    });
+
+    afterEach(() => {
+      for (const child of children.splice(0)) child.kill();
+    });
+
+    test("the registry's live process for this fleet runs in the root: granted", async () => {
+      registeredIn(session);
+      await start();
+      expect((await post(allow)).status).toBe(201);
+      expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
+      expect(grants().map((g) => g["file"])).toEqual([settings]);
+    });
+
+    test("the registered process runs elsewhere: refused, saying what was checked", async () => {
+      const elsewhere = join(base, "elsewhere");
+      mkdirSync(elsewhere);
+      const pid = registeredIn(elsewhere);
+      await start();
+      const got = await post(allow);
+      expect([got.status, asString(got.body["error"])]).toEqual([
+        409,
+        `the permission's root ${session} is no session of this fleet (no heartbeat names it, and the fleet's registered session ${pid} runs in ${elsewhere})`,
+      ]);
+      expect([existsSync(settings), grants(), readChat(root)]).toEqual([false, [], []]);
+    });
+
+    test("a worker's workspace beside the session, or under the fleet, is no session root", async () => {
+      const pid = registeredIn(session);
+      const sibling = join(base, "repo-ws-a1");
+      const underFleet = join(root, "ws", "a1");
+      await start();
+
+      for (const ws of [sibling, underFleet]) {
+        mkdirSync(join(ws, ".claude"), { recursive: true });
+        withRows(permission({ refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "c", root: ws, agent_id: "agent-7f" } }));
+        const got = await post(allow);
+        expect([got.status, asString(got.body["error"])]).toEqual([
+          409,
+          `the permission's root ${ws} is no session of this fleet (no heartbeat names it, and the fleet's registered session ${pid} runs in ${session})`,
+        ]);
+        expect(existsSync(join(ws, ".claude", "settings.local.json"))).toBe(false);
+      }
+
+      expect([existsSync(settings), grants(), readChat(root)]).toEqual([false, [], []]);
+    });
+
+    test("a registered pid that has died names no session: refused", async () => {
+      const dead = Bun.spawn(["true"], { cwd: session });
+      await dead.exited;
+      expect(registeredSession(dead.pid)).toBeUndefined();
+      expect(registeredSession(process.pid)).toEqual({ pid: process.pid, cwd: process.cwd() });
+      const answered = { dir: root, decision: "p-1a2b3c4d", text: allow.text, rule: RULE, by: "local", at: "2026-01-01T00:00:00+00:00" };
+      expect(registeredSession(1)).toBeUndefined();
+      expect(await grantRefusal({ ...answered, registered: () => registeredSession(dead.pid) })).toBe(
+        `the permission's root ${session} is no session of this fleet (no heartbeat names it, and no live session is registered for this fleet)`,
+      );
+      expect([existsSync(settings), grants()]).toEqual([false, []]);
+    });
   });
 
   test("deny is stored as any answer, and grants nothing", async () => {

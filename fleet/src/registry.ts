@@ -131,6 +131,11 @@ export function alive(pid: number | undefined): boolean {
   }
 }
 
+/** The pid an entry lives as long as: the session `fleet serve` found, or `--pid`. */
+export function pidOfEntry(entry: Entry): number | undefined {
+  return pidOf(entry.raw["pid"]);
+}
+
 function entryOf(raw: JsonObject): Entry | undefined {
   const id = asString(raw["id"]);
   const dir = asString(raw["dir"]);

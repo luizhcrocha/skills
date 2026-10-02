@@ -19,6 +19,8 @@ import { readBeats } from "../heartbeat.ts";
 import { parseLedger, type Decision } from "../ledger/model.ts";
 import { findDecision } from "../ledger/numbers.ts";
 import { ALLOW_ONCE, PERMISSION_TOOL, ruleOf, settingsOf, whyNoRule } from "../ledger/permission.ts";
+import { cwdOf } from "../procs.ts";
+import { alive } from "../registry.ts";
 
 /** An answer to a decision of the fleet in `dir`, about to be stored. */
 export interface Answered {
@@ -32,6 +34,24 @@ export interface Answered {
   readonly by: string;
   /** The stamp the grant records. */
   readonly at: string;
+  /** Looks up the fleet's registered session as the OS shows it ({@link registeredSession}); called only for an
+   * allow-once whose root no heartbeat names. */
+  readonly registered: () => Registered | undefined;
+}
+
+/** The process the registry says the fleet lives as long as (`fleet serve DIR --pid`), and its working directory. */
+export interface Registered {
+  readonly pid: number;
+  /** Read from the OS (`procs.ts` `cwdOf`), "" when it cannot be read. */
+  readonly cwd: string;
+}
+
+/** The fleet's registered session, read from the OS: `pid` when that process lives, with its working directory
+ * (`fleet serve` takes no pid of 1 or less, and pid 1 runs in `/`). */
+export function registeredSession(pid: number | undefined): Registered | undefined {
+  if (pid === undefined || pid <= 1 || !alive(pid)) return undefined;
+
+  return { pid, cwd: cwdOf(pid) };
 }
 
 /** Why a permission's allow-once cannot be granted. */
@@ -52,7 +72,25 @@ interface Asked {
   readonly agentId: string | null;
 }
 
-function askedOf(dir: string, d: Decision): Asked | Ungranted {
+/**
+ * Whether `at` (resolved) is a session root of the fleet in `dir`: the project or cwd of one of its heartbeats,
+ * else the working directory of its registered session's live process. A worker's workspace is neither, so
+ * a subagent's refused call is granted at its session's root, the one the hook records. Why not, when not.
+ */
+function whyNoSession(dir: string, at: string, lookup: () => Registered | undefined): string | undefined {
+  const beats = new Set(readBeats(dir).flatMap((b) => [b.project, b.cwd].flatMap((p) => (p === null ? [] : [resolvePath(p)]))));
+
+  if (beats.has(at)) return undefined;
+  const registered = lookup();
+
+  if (registered === undefined) return "no heartbeat names it, and no live session is registered for this fleet";
+
+  if (registered.cwd !== "" && resolvePath(registered.cwd) === at) return undefined;
+
+  return `no heartbeat names it, and the fleet's registered session ${String(registered.pid)} runs in ${registered.cwd === "" ? "a directory the hub cannot read" : registered.cwd}`;
+}
+
+function askedOf(dir: string, d: Decision, registered: () => Registered | undefined): Asked | Ungranted {
   const r = d.refusal ?? undefined;
 
   if (r === undefined) return new Ungranted("the permission has no refused call to grant");
@@ -68,9 +106,11 @@ function askedOf(dir: string, d: Decision): Asked | Ungranted {
 
   if (!isAbsolute(r.root)) return new Ungranted(`the permission's root ${r.root} is not an absolute path`);
   const at = resolvePath(r.root);
-  const sessions = new Set(readBeats(dir).flatMap((b) => [b.project, b.cwd].flatMap((p) => (p === null ? [] : [resolvePath(p)]))));
 
-  if (!isDir(at) || !sessions.has(at)) return new Ungranted(`the permission's root ${r.root} is no session of this fleet (no heartbeat has it as its project or cwd)`);
+  if (!isDir(at)) return new Ungranted(`the permission's root ${r.root} is no session of this fleet (no such directory)`);
+  const notSession = whyNoSession(dir, at, registered);
+
+  if (notSession !== undefined) return new Ungranted(`the permission's root ${r.root} is no session of this fleet (${notSession})`);
 
   return { id: d.id, ref: d.ref ?? "", rule: r.rule, root: r.root, agentId: r.agent_id };
 }
@@ -168,7 +208,7 @@ export async function grantRefusal(answered: Answered): Promise<string | undefin
   const d = findDecision(ledger, answered.decision);
 
   if (d === undefined || d.kind !== "permission") return undefined;
-  const asked = askedOf(answered.dir, d);
+  const asked = askedOf(answered.dir, d, answered.registered);
 
   if (asked instanceof Ungranted) return asked.reason;
 
