@@ -2,7 +2,7 @@
  * The decisions seam (ported from the coordinator's tests/test_decisions.py): what waits on the user,
  * through the state CLI, and the rule for what an answer may be.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, test } from "bun:test";
@@ -608,6 +608,65 @@ describe("permission", () => {
     expect(refused("decision", "p1", "--kind", "permission", "--title", "T", "--question", "q", "--why", "w")).toContain("--call");
     expect(refused("decision", "d1", "--kind", "input", "--title", "T", "--question", "q", "--why", "w", "--call", "ls")).toContain("permission");
     expect(rows("decisions")).toEqual([]);
+  });
+
+  describe("a worker's workspace given as the root", () => {
+    let session: string;
+
+    let ws: string;
+
+    function beat(name: string, project: string): void {
+      mkdirSync(join(root, "heartbeats"), { recursive: true });
+      writeFileSync(join(root, "heartbeats", `${name}.json`), JSON.stringify({ session: name, at: "2026-01-01T00:00:00+00:00", cwd: project, project }));
+    }
+
+    function listed(repo: string): void {
+      writeFileSync(join(root, "state.json"), JSON.stringify({ ...state(), workspaces: [{ id: "b155", agent: "a1", path: ws, repo, status: "active" }] }));
+    }
+
+    function at(args: string[], value: string): string[] {
+      const copy = [...args];
+      copy[copy.indexOf("--root") + 1] = value;
+
+      return copy;
+    }
+
+    beforeEach(() => {
+      session = tmp("fleet-session-");
+      ws = tmp("fleet-ws-");
+    });
+
+    test("is recorded as the session root, where the subagent's session reads its permissions, and the CLI says so", () => {
+      beat("s1", session);
+      listed(session);
+      const result = run(...at(refusal("p1", "--agent", "a1"), ws));
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stderr).toContain(`--root ${ws} is b155's workspace: recorded the session root ${session}, where the subagent's session reads its permissions`);
+      const d = item("p1");
+      expect(asObject(d["refusal"] ?? null)?.["root"]).toBe(session);
+      expect(JSON.stringify(d["options"])).toContain(`${session}/.claude/settings.local.json`);
+    });
+
+    test("is refused when the session root cannot be told, naming what it should be", () => {
+      const other = tmp("fleet-other-");
+      beat("s1", session);
+      beat("s2", other);
+      listed(tmp("fleet-third-"));
+      const roots = [session, other].sort().join(" or ");
+      expect(refused(...at(refusal("p1"), ws))).toContain(
+        `a permission's root is the session root (${roots}), where the subagent's session reads its permissions, not the worker's workspace ${ws}`,
+      );
+      expect(rows("decisions")).toEqual([]);
+    });
+
+    test("a session root, or a folder the fleet does not know, is kept as given", () => {
+      beat("s1", session);
+      listed(session);
+      ok(...at(refusal("p1"), session));
+      expect(asObject(item("p1")["refusal"] ?? null)?.["root"]).toBe(session);
+      ok(...refusal("p2"));
+      expect(asObject(item("p2")["refusal"] ?? null)?.["root"]).toBe("/work/repo");
+    });
   });
 
   test("the same refusal again revises the open row, and it closes as any decision does", () => {

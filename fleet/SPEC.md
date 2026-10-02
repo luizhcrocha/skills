@@ -781,7 +781,13 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   has run, or at the first tool call of the session after 30 minutes` and `deny: Deny | the worker stays
   stopped; your note goes to it`. Refused: a tool other than Bash, a CALL no exact rule can hold (above),
   a relative ROOT, `--option`, `--recommend`, a
-  permission without `--tool --call --cause --root`, and those flags on any other kind. A value that
+  permission without `--tool --call --cause --root`, and those flags on any other kind. ROOT is the
+  session root: a ROOT that is a worker's workspace of this fleet's work (as the hub tells it, under
+  Granting) is recorded as its session's root, said on stderr (`state: --root <ws> is <name>'s
+  workspace: recorded the session root <root>, where the subagent's session reads its permissions.`),
+  or refused when that root cannot be told (`a permission's root is the session root (<roots, or "or">),
+  where the subagent's session reads its permissions, not the worker's workspace <ws>`); any other ROOT
+  is kept as given (the hub checks it again). A value that
   starts with `-` is given as `--call=VALUE`. The same command on the open row revises it (a changed
   refusal re-presents it and clears a hold); `--decide`, `--withdraw` and `--hold` work as for any
   decision. `permission` is accepted by `--kind` but left out of its listed choices, and the five
@@ -798,16 +804,37 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   `cwdOf`), of the live process the registry's entry for DIR names as its `pid` (`fleet serve DIR
   [--pid PID]`: the session that served it). The second covers a session that writes no heartbeats (one
   whose fleet DIR is not in its scratchpad and that has no `FLEET_DIR`, or one started before the hook
-  wrote them). The refusal says what it checked: `... is no session of this fleet (no heartbeat names it,
-  and the fleet's registered session <pid> runs in <cwd>)`, or `... and no live session is registered
-  for this fleet`. A worker's workspace is no session root, under the fleet or beside the repo: the hook
+  wrote them). A worker's workspace is no session root, under the fleet or beside the repo: the hook
   records `$CLAUDE_PROJECT_DIR` as `--root`, the session's root, for a subagent's refused call too (only
-  the session root's settings apply, to its background subagents as well). Under the settings lock (below), `<root>/.claude/settings.local.json` (absent reads as
+  the session root's settings apply, to its background subagents as well, so a rule written in the
+  workspace would never apply). A row recorded by hand, or by a session older than the hook, can still
+  name one: a root that is no session root but **a workspace of this fleet's work** (a `workspaces[]`
+  row of the ledger by `path`, not pruned; else a jj workspace of the same repo as a session root,
+  `jj workspace list` run in the session root with `--ignore-working-copy`) is granted at the session
+  root whose repo holds it (the ledger row's `repo`, else jj's), or at the fleet's one session root when
+  the ledger lists it and no repo matches. The session roots are each heartbeat's `project` (its `cwd`
+  when it names none) and the registered session's working directory. The grant line then carries
+  `workspace` (the root the row named) and the 201 answer a `grant` note: `This permission names
+  <name>'s workspace <ws>; the hub granted it at the session root <root>, where <agent or "the
+  worker">'s session reads its permissions.` This moves a grant only to a root the check above already
+  trusts, so a forged `workspaces[]` row widens nothing. Several session roots none of which holds the
+  workspace alone refuse: `This permission names <name>'s workspace <ws>, and none of this fleet's
+  session roots (<roots>) is the one its session reads its permissions from, so it can't be granted
+  here; ask the coordinator to record it again with --root set to that session's root.` (or, with no
+  session root, `... and no session of this fleet is known to grant it at ...`). Anything else refuses in
+  plain words, then what was checked: `This permission's folder <root> isn't part of this fleet's work,
+  so it can't be granted here; ask the coordinator to record it again from its session. (Checked: it is
+  no session root of this fleet (no heartbeat names it, and the fleet's registered session <pid> runs
+  in <cwd> | and no live session is registered for this fleet), no workspace in the ledger, and no jj
+  workspace of <roots>.)`; a root that is no directory, `This permission's folder <root> doesn't exist,
+  so it can't be granted; ...`. A row whose `agent_id` is null adds to the `grant` note that only the
+  session's main thread running the call uses the grant up, and a subagent's run leaves the rule until it
+  expires, 30 minutes after the grant (the hook matches the grant's `agent_id`). Under the settings lock (below), `<root>/.claude/settings.local.json` (absent reads as
   `{}`; one that does not parse refuses) gets the rule added to `permissions.allow`, every other key and entry kept, written
   through a temp file in its folder and a rename, two-space JSON with a final newline. A missing
   `.claude` is made, and the grant says `reload: restart` (Claude Code watches only a settings folder
   that existed when the session started), else `live`. Then one line is appended to `DIR/grants.jsonl`:
-  `{"op":"grant",decision,ref,rule,agent_id,file,at,by,reload}`, `agent_id` the row's `refusal.agent_id`
+  `{"op":"grant",decision,ref,rule,agent_id,file,at,by,reload[,workspace]}`, `agent_id` the row's `refusal.agent_id`
   (null: the session's main thread), `by` being `tailnet:<login>` for a
   tailnet peer that is not this machine (`tailscale whois`), else `local` (loopback, whatever header it
   carries, or this machine's own tailnet address); then the answer is stored. A rule already in `permissions.allow` is

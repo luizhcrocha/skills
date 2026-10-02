@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { append } from "../src/chat/chat.ts";
 import { readChat } from "../src/chat/store.ts";
 import { ChatError } from "../src/errors.ts";
-import { grantRefusal, registeredSession } from "../src/hub/grants.ts";
+import { grantAnswer, registeredSession } from "../src/hub/grants.ts";
 import { collapse } from "../src/hub/hub.ts";
 import { grantor, hello, postRefusal, viewerOf, writerRefusal } from "../src/hub/policy.ts";
 import { lsofListenersOf } from "../src/hub/served.ts";
@@ -1005,6 +1005,10 @@ describe("a permission's answer grants the call once", () => {
     writeState(root, [{ id: "a1", name: "notes-impl" }], { decisions });
   }
 
+  function withWorkspaces(workspaces: JsonObject[], ...decisions: JsonObject[]): void {
+    writeState(root, [{ id: "a1", name: "notes-impl" }], { decisions, workspaces });
+  }
+
   function grants(): JsonObject[] {
     try {
       return readFileSync(join(root, "grants.jsonl"), "utf8")
@@ -1156,12 +1160,14 @@ describe("a permission's answer grants the call once", () => {
       const got = await post(allow);
       expect([got.status, asString(got.body["error"])]).toEqual([
         409,
-        `the permission's root ${session} is no session of this fleet (no heartbeat names it, and the fleet's registered session ${pid} runs in ${elsewhere})`,
+        `This permission's folder ${session} isn't part of this fleet's work, so it can't be granted here; ask the coordinator to record it again from its session. ` +
+          `(Checked: it is no session root of this fleet (no heartbeat names it, and the fleet's registered session ${pid} runs in ${elsewhere}), ` +
+          `no workspace in the ledger, and no jj workspace of ${elsewhere}.)`,
       ]);
       expect([existsSync(settings), grants(), readChat(root)]).toEqual([false, [], []]);
     });
 
-    test("a worker's workspace beside the session, or under the fleet, is no session root", async () => {
+    test("a folder beside the session, or under the fleet, that is no workspace of this fleet's work: refused in plain words", async () => {
       const pid = registeredIn(session);
       const sibling = join(base, "repo-ws-a1");
       const underFleet = join(root, "ws", "a1");
@@ -1173,12 +1179,54 @@ describe("a permission's answer grants the call once", () => {
         const got = await post(allow);
         expect([got.status, asString(got.body["error"])]).toEqual([
           409,
-          `the permission's root ${ws} is no session of this fleet (no heartbeat names it, and the fleet's registered session ${pid} runs in ${session})`,
+          `This permission's folder ${ws} isn't part of this fleet's work, so it can't be granted here; ask the coordinator to record it again from its session. ` +
+            `(Checked: it is no session root of this fleet (no heartbeat names it, and the fleet's registered session ${pid} runs in ${session}), ` +
+            `no workspace in the ledger, and no jj workspace of ${session}.)`,
         ]);
         expect(existsSync(join(ws, ".claude", "settings.local.json"))).toBe(false);
       }
 
       expect([existsSync(settings), grants(), readChat(root)]).toEqual([false, [], []]);
+    });
+
+    test("a worker's workspace the ledger lists is granted at the session root, where the subagent's session reads its permissions", async () => {
+      registeredIn(session);
+      const ws = join(base, "repo-b155");
+      mkdirSync(join(ws, ".claude"), { recursive: true });
+      const row = permission({ agent: "b196", refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "c", root: ws, agent_id: null } });
+      withWorkspaces([{ id: "b155", agent: "b196", path: ws, repo: session, status: "active" }], row);
+      await start();
+      const got = await post(allow);
+      expect(got.status).toBe(201);
+      expect(asString(got.body["grant"])).toBe(
+        `This permission names b155's workspace ${ws}; the hub granted it at the session root ${session}, where b196's session reads its permissions. ` +
+          "The permission names no subagent (agent_id null), so only the session's main thread running the call uses the grant up; " +
+          "a subagent's run of it leaves the rule in place until it expires, 30 minutes after the grant.",
+      );
+      expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
+      expect(existsSync(join(ws, ".claude", "settings.local.json"))).toBe(false);
+      const [grant] = grants();
+      expect([grant?.["file"], grant?.["workspace"], grant?.["agent_id"]]).toEqual([settings, ws, null]);
+      expect(readChat(root).map((m) => m.stored["decision"])).toEqual(["p-1a2b3c4d"]);
+    });
+
+    test("a jj workspace of the session's repo that the ledger does not list is granted at the session root, found through jj", async () => {
+      const repo = join(base, "jjrepo");
+      const ws = join(base, "jjrepo-b2");
+      expect(Bun.spawnSync(["jj", "git", "init", repo], { stdout: "ignore", stderr: "ignore" }).exitCode).toBe(0);
+      expect(Bun.spawnSync(["jj", "-R", repo, "workspace", "add", "--name", "b2", ws], { stdout: "ignore", stderr: "ignore" }).exitCode).toBe(0);
+      registeredIn(repo);
+      withRows(permission({ refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "c", root: ws, agent_id: "agent-7f" } }));
+      await start();
+      const got = await post(allow);
+      expect([got.status, asString(got.body["grant"])]).toEqual([
+        201,
+        `This permission names b2's workspace ${ws}; the hub granted it at the session root ${repo}, where the worker's session reads its permissions.`,
+      ]);
+      const file = join(repo, ".claude", "settings.local.json");
+      expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
+      expect(existsSync(join(ws, ".claude"))).toBe(false);
+      expect([grants()[0]?.["file"], grants()[0]?.["workspace"], grants()[0]?.["reload"]]).toEqual([file, ws, "restart"]);
     });
 
     test("a registered pid that has died names no session: refused", async () => {
@@ -1188,11 +1236,36 @@ describe("a permission's answer grants the call once", () => {
       expect(registeredSession(process.pid)).toEqual({ pid: process.pid, cwd: process.cwd() });
       const answered = { dir: root, decision: "p-1a2b3c4d", text: allow.text, rule: RULE, by: "local", at: "2026-01-01T00:00:00+00:00" };
       expect(registeredSession(1)).toBeUndefined();
-      expect(await grantRefusal({ ...answered, registered: () => registeredSession(dead.pid) })).toBe(
-        `the permission's root ${session} is no session of this fleet (no heartbeat names it, and no live session is registered for this fleet)`,
-      );
+      expect(await grantAnswer({ ...answered, registered: () => registeredSession(dead.pid) })).toEqual({
+        refused:
+          `This permission's folder ${session} isn't part of this fleet's work, so it can't be granted here; ask the coordinator to record it again from its session. ` +
+          "(Checked: it is no session root of this fleet (no heartbeat names it, and no live session is registered for this fleet), no workspace in the ledger, and no jj workspace of a session root.)",
+      });
       expect([existsSync(settings), grants()]).toEqual([false, []]);
     });
+  });
+
+  test("a workspace with several session roots (two heartbeats, and the test's own registered process) and none of them its repo's: refused, naming them", async () => {
+    const other = join(base, "other");
+    mkdirSync(other);
+    writeFileSync(join(root, "heartbeats", "s2.json"), JSON.stringify({ session: "s2", at: "2026-01-01T00:00:00+00:00", cwd: other, project: other }));
+    const ws = join(base, "third-b1");
+    mkdirSync(ws);
+    withWorkspaces([{ id: "b1", agent: "a1", path: ws, repo: join(base, "third"), status: "active" }], permission({ refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "c", root: ws, agent_id: "agent-7f" } }));
+    await start();
+    const got = await post(allow);
+    expect([got.status, asString(got.body["error"])]).toEqual([
+      409,
+      `This permission names b1's workspace ${ws}, and none of this fleet's session roots (${[other, session, process.cwd()].sort().join(", ")}) is the one its session reads its permissions from, ` +
+        "so it can't be granted here; ask the coordinator to record it again with --root set to that session's root.",
+    ]);
+    expect([existsSync(settings), existsSync(join(other, ".claude")), grants(), readChat(root)]).toEqual([false, false, [], []]);
+  });
+
+  test("a root a heartbeat names is granted there as before, with no note", async () => {
+    await start();
+    const got = await post(allow);
+    expect([got.status, got.body["grant"], grants()[0]?.["file"], Object.keys(grants()[0] ?? {}).includes("workspace")]).toEqual([201, undefined, settings, false]);
   });
 
   test("deny is stored as any answer, and grants nothing", async () => {
@@ -1207,8 +1280,8 @@ describe("a permission's answer grants the call once", () => {
     const refusal = (over: JsonObject): JsonObject => permission({ refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "c", root: session, agent_id: null, ...over } });
 
     const cases: (readonly [string, JsonObject])[] = [
-      ["no session of this fleet", refusal({ root: elsewhere })],
-      ["no session of this fleet", refusal({ root: join(base, "missing") })],
+      ["isn't part of this fleet's work", refusal({ root: elsewhere })],
+      ["doesn't exist", refusal({ root: join(base, "missing") })],
       ["absolute", refusal({ root: "repo" })],
       ["rule", refusal({ rule: "Bash(git push:*)" })],
       ["*", refusal({ call: "rm -rf *", rule: "Bash(rm -rf *)" })],

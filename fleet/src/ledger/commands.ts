@@ -12,7 +12,9 @@ import { stampOf } from "../clock.ts";
 import type { Args } from "../cli/args.ts";
 import { stateRefusal, type Refusal } from "../errors.ts";
 import { pyStr } from "../json.ts";
-import { FLEET_BIN, makeDirs, readOrWhy, remove, writeBytes } from "../files.ts";
+import { FLEET_BIN, isDir, makeDirs, readOrWhy, remove, resolvePath, writeBytes } from "../files.ts";
+import { placeRoot, registeredSession } from "../hub/grants.ts";
+import { pidOfEntry } from "../registry.ts";
 import { workerFigures } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
 import { dropKey, REFUSAL_KEYS, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
@@ -796,6 +798,35 @@ function checkKind(d: Decision, manualGiven: boolean): Step$ {
 
 const REFUSAL_FLAGS = ["tool", "call", "cause", "root", "agent_id"] as const;
 
+/**
+ * The root a permission records for `root` (absolute): the session root, where a subagent's session reads its
+ * permissions. A worker's workspace of this fleet's work (hub/grants.ts `placeRoot`) is recorded as its
+ * session's root, said on stderr, or refused when that root cannot be told; any other folder is kept as given
+ * (the hook gives `$CLAUDE_PROJECT_DIR`, and the hub checks the root again when the answer comes).
+ */
+function sessionRootOf(run: Run, root: string): Effect.Effect<string, Refusal> {
+  const at = resolvePath(root);
+
+  if (!isDir(at)) return Effect.succeed(root);
+
+  const placed = placeRoot(run.root, at, () => {
+    const entry = run.machine.registry.find(run.root);
+
+    return registeredSession(entry === undefined ? undefined : pidOfEntry(entry));
+  });
+
+  if (placed.kind === "workspace") {
+    run.warn(`state: --root ${root} is ${placed.name}'s workspace: recorded the session root ${placed.root}, where the subagent's session reads its permissions.`);
+
+    return Effect.succeed(placed.root);
+  }
+
+  if (placed.kind !== "untold") return Effect.succeed(root);
+  const roots = placed.roots.length === 0 ? "the session's $CLAUDE_PROJECT_DIR; no heartbeat or live registered session of this fleet names one" : placed.roots.join(" or ");
+
+  return refuse(`a permission's root is the session root (${roots}), where the subagent's session reads its permissions, not the worker's workspace ${root}`);
+}
+
 /** A permission's refused call from the flags given, over the one it had, with the two options that follow
  * from it; whether it changed. Any other kind takes none of these flags. */
 function setRefusal(run: Run, d: Decision): Effect.Effect<boolean, Refusal> {
@@ -825,7 +856,8 @@ function setRefusal(run: Run, d: Decision): Effect.Effect<boolean, Refusal> {
     }
 
     const agentId = args.str("agent_id");
-    const refusal = yield* makeRefusedCall({ tool, call, cause, root, agentId: agentId === undefined ? (before?.agent_id ?? null) : given(agentId) ? agentId : null });
+    const made = yield* makeRefusedCall({ tool, call, cause, root, agentId: agentId === undefined ? (before?.agent_id ?? null) : given(agentId) ? agentId : null });
+    const refusal = { ...made, root: yield* sessionRootOf(run, made.root) };
     d.refusal = refusal;
     d.options = permissionOptions(refusal);
 

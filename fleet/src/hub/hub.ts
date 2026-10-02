@@ -44,7 +44,7 @@ import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
 import { indexHtml } from "./index-page.ts";
 import { ProbeCache } from "./probes.ts";
-import { grantRefusal, registeredSession, type Registered } from "./grants.ts";
+import { grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
 import { grantor, hello, MAX_POST_BYTES, postRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
 import { previewTarget, proxiedIdentity, proxyHttp, proxySocket, type Target, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
@@ -794,6 +794,8 @@ export class Hub {
 
       if (side instanceof ChatError) return jsonResponse(400, { error: side.reason });
 
+      let granted: GrantAnswer = { granted: undefined };
+
       if (decision !== undefined) {
         const registered = (): Registered | undefined => {
           const entry = machine.registry.find(root);
@@ -801,9 +803,9 @@ export class Hub {
           return registeredSession(entry === undefined ? undefined : pidOfEntry(entry));
         };
 
-        const ungranted = await grantRefusal({ dir: root, decision, text, rule, by: grantor(viewer), at: stampOf(machine.now()), registered });
+        granted = await grantAnswer({ dir: root, decision, text, rule, by: grantor(viewer), at: stampOf(machine.now()), registered });
 
-        if (ungranted !== undefined) return jsonResponse(409, { error: ungranted });
+        if ("refused" in granted) return jsonResponse(409, { error: granted.refused });
       }
 
       const draft: Building<Draft> = { sender: "user", text, re, allowUser: true };
@@ -838,7 +840,9 @@ export class Hub {
 
       if (message instanceof ChatError) return jsonResponse(400, { error: message.reason });
 
-      return jsonResponse(201, message.stored);
+      const note = "granted" in granted ? granted.granted : undefined;
+
+      return jsonResponse(201, note === undefined ? message.stored : { ...message.stored, grant: note });
     } catch (cause: unknown) {
       return jsonResponse(500, { error: `could not store the message: ${strerror(cause)}` });
     }

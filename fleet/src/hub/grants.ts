@@ -4,23 +4,25 @@
  * row's exact rule to the session's `.claude/settings.local.json` and records the grant in
  * `DIR/grants.jsonl`, before the answer is stored. The plugin's hook removes the rule once the call has
  * run. The ledger is writable by every agent and the hub is not, so the row is trusted only as far as it
- * names a session of this fleet and a rule that lets that one call through.
+ * names a session of this fleet, or a worker's workspace of its work (granted at that session's root), and a
+ * rule that lets that one call through.
  */
 import { appendFileSync, mkdirSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { isDir, readText, resolvePath, strerror } from "../files.ts";
 import * as Option from "effect/Option";
 
 import { Refusal } from "../errors.ts";
-import { asArray, asObject, type Json, type JsonObject } from "../json.ts";
+import { asArray, asObject, asString, type Json, type JsonObject } from "../json.ts";
 import { readBeats } from "../heartbeat.ts";
 import { parseLedger, type Decision } from "../ledger/model.ts";
 import { findDecision } from "../ledger/numbers.ts";
 import { ALLOW_ONCE, PERMISSION_TOOL, ruleOf, settingsOf, whyNoRule } from "../ledger/permission.ts";
 import { cwdOf } from "../procs.ts";
 import { alive } from "../registry.ts";
+import { jj } from "../ws/jj.ts";
 
 /** An answer to a decision of the fleet in `dir`, about to be stored. */
 export interface Answered {
@@ -68,8 +70,24 @@ interface Asked {
   readonly id: string;
   readonly ref: string;
   readonly rule: string;
+  /** The session root the rule goes into. */
   readonly root: string;
+  /** The worker's workspace the row named, when the grant goes to its session's root instead. */
+  readonly workspace: string | undefined;
   readonly agentId: string | null;
+  /** What the answer says about the grant beside "granted". */
+  readonly notes: readonly string[];
+}
+
+/** The fleet's registered session, looked up once. */
+function once(lookup: () => Registered | undefined): () => Registered | undefined {
+  let got: { readonly value: Registered | undefined } | undefined;
+
+  return () => {
+    got ??= { value: lookup() };
+
+    return got.value;
+  };
 }
 
 /**
@@ -90,6 +108,137 @@ function whyNoSession(dir: string, at: string, lookup: () => Registered | undefi
   return `no heartbeat names it, and the fleet's registered session ${String(registered.pid)} runs in ${registered.cwd === "" ? "a directory the hub cannot read" : registered.cwd}`;
 }
 
+/** The fleet's session roots, resolved and sorted: each heartbeat's project (its cwd when it names none), and
+ * the registered session's working directory. */
+function sessionRoots(dir: string, lookup: () => Registered | undefined): string[] {
+  const beats = readBeats(dir).flatMap((b) => {
+    const p = b.project ?? b.cwd;
+
+    return p === null ? [] : [resolvePath(p)];
+  });
+
+  const cwd = lookup()?.cwd ?? "";
+
+  return [...new Set([...beats, ...(cwd === "" ? [] : [resolvePath(cwd)])])].sort();
+}
+
+/** The ledger's `workspaces[]` row whose path is `at`: its name and its repo (the default workspace's root). */
+function listedWorkspace(dir: string, at: string): { readonly name: string; readonly repo: string | undefined } | undefined {
+  let raw: Json;
+
+  try {
+    // SAFETY: JSON.parse returns JSON values only.
+    raw = JSON.parse(readText(join(dir, "state.json")) ?? "null") as Json;
+  } catch {
+    return undefined;
+  }
+
+  for (const item of asArray(asObject(raw)?.["workspaces"]) ?? []) {
+    const row = asObject(item);
+    const path = asString(row?.["path"]);
+
+    if (row === undefined || path === undefined || !isAbsolute(path) || row["status"] === "pruned" || resolvePath(path) !== at) continue;
+    const repo = asString(row["repo"]);
+
+    return { name: asString(row["id"]) ?? basename(at), repo: repo === undefined || !isAbsolute(repo) ? undefined : resolvePath(repo) };
+  }
+
+  return undefined;
+}
+
+/** The jj workspaces of the repo at `root`, by resolved root to name; empty when `root` is no jj workspace.
+ * Read-only: `--ignore-working-copy` snapshots nothing. */
+function jjWorkspaces(root: string): Map<string, string> {
+  const run = jj(root, ["workspace", "list", "-T", 'name ++ "\\t" ++ self.root() ++ "\\n"'], true);
+
+  if (!run.ok) return new Map();
+
+  return new Map(
+    run.stdout.split("\n").flatMap((line) => {
+      const [name = "", path = ""] = line.split("\t");
+
+      return name === "" || path === "" ? [] : [[resolvePath(path), name] as const];
+    }),
+  );
+}
+
+/** Where a permission's root is granted: at itself, a session root; at its session's root, a worker's workspace
+ * of this fleet's work; nowhere, a workspace whose session root cannot be told or a folder outside the fleet. */
+export type Placement =
+  | { readonly kind: "session" }
+  | { readonly kind: "workspace"; readonly root: string; readonly name: string }
+  | { readonly kind: "untold"; readonly name: string; readonly roots: readonly string[] }
+  | { readonly kind: "outside"; readonly why: string; readonly roots: readonly string[] };
+
+/**
+ * Where the root `at` (resolved) of a permission of the fleet in `dir` is granted. A subagent obeys only its
+ * session root's `.claude/settings.local.json`, so a rule written in a worker's workspace never applies: a
+ * workspace of this fleet's work (a `workspaces[]` row of its ledger by path, else a jj workspace of the same
+ * repo as a session root) is granted at the session root whose repo holds it, or at the fleet's one session
+ * root when the ledger lists it. The ledger is the agents', so this only ever moves a grant to a session root
+ * the fleet's heartbeats or registered process already name.
+ */
+export function placeRoot(dir: string, at: string, lookup: () => Registered | undefined): Placement {
+  const registered = once(lookup);
+  const why = whyNoSession(dir, at, registered);
+
+  if (why === undefined) return { kind: "session" };
+  const roots = sessionRoots(dir, registered);
+  const listed = listedWorkspace(dir, at);
+  let owners = listed?.repo === undefined ? [] : roots.filter((r) => r === listed.repo);
+  let name = listed?.name;
+
+  if (owners.length !== 1) {
+    const byJj = roots.flatMap((r) => {
+      const n = jjWorkspaces(r).get(at);
+
+      return n === undefined ? [] : [{ root: r, name: n }];
+    });
+
+    if (byJj.length > 0) {
+      owners = byJj.map((o) => o.root);
+      name ??= byJj[0]?.name;
+    }
+  }
+
+  name ??= basename(at);
+
+  if (listed === undefined && owners.length === 0) return { kind: "outside", why, roots };
+
+  const [only] = owners.length === 1 ? owners : owners.length === 0 && roots.length === 1 ? roots : [];
+
+  return only === undefined ? { kind: "untold", name, roots } : { kind: "workspace", root: only, name };
+}
+
+const AGAIN = "ask the coordinator to record it again from its session";
+
+/** Why a permission whose root is `root` (as the row has it) and placed so cannot be granted, in plain words. */
+function unplaced(root: string, placed: Placement): string | undefined {
+  if (placed.kind === "outside") {
+    const of = placed.roots.length === 0 ? "a session root" : placed.roots.join(", ");
+
+    return (
+      `This permission's folder ${root} isn't part of this fleet's work, so it can't be granted here; ${AGAIN}. ` +
+      `(Checked: it is no session root of this fleet (${placed.why}), no workspace in the ledger, and no jj workspace of ${of}.)`
+    );
+  }
+
+  if (placed.kind !== "untold") return undefined;
+
+  if (placed.roots.length === 0) {
+    return `This permission names ${placed.name}'s workspace ${root}, and no session of this fleet is known to grant it at (no heartbeat, and no live registered session), so it can't be granted here; ${AGAIN}.`;
+  }
+
+  return (
+    `This permission names ${placed.name}'s workspace ${root}, and none of this fleet's session roots (${placed.roots.join(", ")}) is the one its session reads its permissions from, ` +
+    "so it can't be granted here; ask the coordinator to record it again with --root set to that session's root."
+  );
+}
+
+const NO_AGENT_NOTE =
+  "The permission names no subagent (agent_id null), so only the session's main thread running the call uses the grant up; " +
+  "a subagent's run of it leaves the rule in place until it expires, 30 minutes after the grant.";
+
 function askedOf(dir: string, d: Decision, registered: () => Registered | undefined): Asked | Ungranted {
   const r = d.refusal ?? undefined;
 
@@ -107,12 +256,19 @@ function askedOf(dir: string, d: Decision, registered: () => Registered | undefi
   if (!isAbsolute(r.root)) return new Ungranted(`the permission's root ${r.root} is not an absolute path`);
   const at = resolvePath(r.root);
 
-  if (!isDir(at)) return new Ungranted(`the permission's root ${r.root} is no session of this fleet (no such directory)`);
-  const notSession = whyNoSession(dir, at, registered);
+  if (!isDir(at)) return new Ungranted(`This permission's folder ${r.root} doesn't exist, so it can't be granted; ${AGAIN}.`);
+  const placed = placeRoot(dir, at, registered);
+  const refused = unplaced(r.root, placed);
 
-  if (notSession !== undefined) return new Ungranted(`the permission's root ${r.root} is no session of this fleet (${notSession})`);
+  if (refused !== undefined) return new Ungranted(refused);
+  const agentNote = r.agent_id === null ? [NO_AGENT_NOTE] : [];
+  const base = { id: d.id, ref: d.ref ?? "", rule: r.rule, agentId: r.agent_id };
 
-  return { id: d.id, ref: d.ref ?? "", rule: r.rule, root: r.root, agentId: r.agent_id };
+  if (placed.kind !== "workspace") return { ...base, root: r.root, workspace: undefined, notes: agentNote };
+  const who = d.agent ?? "the worker";
+  const moved = `This permission names ${placed.name}'s workspace ${r.root}; the hub granted it at the session root ${placed.root}, where ${who}'s session reads its permissions.`;
+
+  return { ...base, root: placed.root, workspace: r.root, notes: [moved, ...agentNote] };
 }
 
 function parsed(file: string): JsonObject | Ungranted {
@@ -195,27 +351,35 @@ function writeAtomic(file: string, text: string): void {
   renameSync(scratch, file);
 }
 
+/** What an answer to a decision does to its permission: refused (the answer is then refused and nothing is
+ * stored), or let through, with what the answer says about the grant when there is something to say. */
+export type GrantAnswer = { readonly refused: string } | { readonly granted: string | undefined };
+
+const NOTHING: GrantAnswer = { granted: undefined };
+
 /**
- * Grant the call a permission's allow-once answer lets through: why it cannot be granted (the answer is
- * then refused and nothing is stored), or undefined when it was granted or there is nothing to grant (an
- * answer to another kind, or not allow-once).
+ * Grant the call a permission's allow-once answer lets through. Nothing is granted, and nothing said, for an
+ * answer to another kind, one that is not allow-once, or a rule someone already put there.
  */
-export async function grantRefusal(answered: Answered): Promise<string | undefined> {
-  if (!answered.text.startsWith(ALLOW_ONCE)) return undefined;
+export async function grantAnswer(answered: Answered): Promise<GrantAnswer> {
+  if (!answered.text.startsWith(ALLOW_ONCE)) return NOTHING;
   const ledger = Option.getOrUndefined(parseLedger(readText(join(answered.dir, "state.json")) ?? ""));
 
-  if (ledger === undefined || ledger instanceof Refusal) return "the ledger cannot be read, so the permission cannot be checked";
+  if (ledger === undefined || ledger instanceof Refusal) return { refused: "the ledger cannot be read, so the permission cannot be checked" };
   const d = findDecision(ledger, answered.decision);
 
-  if (d === undefined || d.kind !== "permission") return undefined;
+  if (d === undefined || d.kind !== "permission") return NOTHING;
   const asked = askedOf(answered.dir, d, answered.registered);
 
-  if (asked instanceof Ungranted) return asked.reason;
+  if (asked instanceof Ungranted) return { refused: asked.reason };
 
   if (answered.rule !== asked.rule) {
-    return answered.rule === undefined
-      ? "the answer names no rule: the page sends the rule it showed, and only that rule is granted"
-      : `the page showed the rule ${answered.rule}, and the permission's rule is now ${asked.rule}: look at it again`;
+    return {
+      refused:
+        answered.rule === undefined
+          ? "the answer names no rule: the page sends the rule it showed, and only that rule is granted"
+          : `the page showed the rule ${answered.rule}, and the permission's rule is now ${asked.rule}: look at it again`,
+    };
   }
 
   const file = settingsOf(asked.root);
@@ -224,49 +388,55 @@ export async function grantRefusal(answered: Answered): Promise<string | undefin
   try {
     mkdirSync(dirname(file), { recursive: true });
   } catch (cause: unknown) {
-    return `could not grant ${asked.rule} in ${file}: ${strerror(cause)}`;
+    return { refused: `could not grant ${asked.rule} in ${file}: ${strerror(cause)}` };
   }
 
   const lock = await lockSettings(file);
 
-  if (lock instanceof Ungranted) return lock.reason;
+  if (lock instanceof Ungranted) return { refused: lock.reason };
 
   try {
-    return written(answered, asked, file, reload);
+    const done = written(answered, asked, file, reload);
+
+    if (done instanceof Ungranted) return { refused: done.reason };
+
+    return done === "kept" || asked.notes.length === 0 ? NOTHING : { granted: asked.notes.join(" ") };
   } finally {
     rmdirSync(lock);
   }
 }
 
-/** The grant's read-modify-write of `file` and its line in grants.jsonl, under the settings lock. */
-function written(answered: Answered, asked: Asked, file: string, reload: string): string | undefined {
+/** The grant's read-modify-write of `file` and its line in grants.jsonl, under the settings lock: `kept` when
+ * the rule was there already. */
+function written(answered: Answered, asked: Asked, file: string, reload: string): Ungranted | "kept" | "granted" {
   const settings = parsed(file);
 
-  if (settings instanceof Ungranted) return settings.reason;
+  if (settings instanceof Ungranted) return settings;
   const next = withRule(file, settings, asked.rule);
 
-  if (next instanceof Ungranted) return next.reason;
+  if (next instanceof Ungranted) return next;
 
   // Someone put the rule there, and nobody but them takes it out: no grant, so the hook leaves it.
-  if (next === undefined) return undefined;
+  if (next === undefined) return "kept";
   const before = readText(file);
 
   try {
     writeAtomic(file, `${JSON.stringify(next, null, 2)}\n`);
   } catch (cause: unknown) {
-    return `could not grant ${asked.rule} in ${file}: ${strerror(cause)}`;
+    return new Ungranted(`could not grant ${asked.rule} in ${file}: ${strerror(cause)}`);
   }
 
   try {
     const grant = { op: "grant", decision: asked.id, ref: asked.ref, rule: asked.rule, agent_id: asked.agentId, file, at: answered.at, by: answered.by, reload };
-    appendFileSync(join(answered.dir, "grants.jsonl"), `${JSON.stringify(grant)}\n`, "utf8");
+    const line = asked.workspace === undefined ? grant : { ...grant, workspace: asked.workspace };
+    appendFileSync(join(answered.dir, "grants.jsonl"), `${JSON.stringify(line)}\n`, "utf8");
   } catch (cause: unknown) {
     // A rule with no grant line is one the hook would never remove: take it back.
     if (before === undefined) rmSync(file, { force: true });
     else writeAtomic(file, before);
 
-    return `could not record the grant in ${join(answered.dir, "grants.jsonl")}: ${strerror(cause)}`;
+    return new Ungranted(`could not record the grant in ${join(answered.dir, "grants.jsonl")}: ${strerror(cause)}`);
   }
 
-  return undefined;
+  return "granted";
 }
