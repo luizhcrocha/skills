@@ -42,7 +42,7 @@ import { indexHtml } from "./index-page.ts";
 import { ProbeCache } from "./probes.ts";
 import { grantRefusal } from "./grants.ts";
 import { grantor, hello, MAX_POST_BYTES, postRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
-import { previewTarget, proxyHttp, proxySocket, type Upgrade } from "./preview-proxy.ts";
+import { previewTarget, proxiedIdentity, proxyHttp, proxySocket, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
 import { PLUGIN_ROOT, readSkills, repoOf } from "./skills.ts";
 import { readTailnet, whois, type Tailnet } from "./tailnet.ts";
@@ -522,22 +522,24 @@ export class Hub {
     const target = previewTarget(readRecord(entry.dir), entry.id, tail);
 
     if (!("server" in target)) return jsonResponse(target[0], { error: target[1].replace("DIR", entry.dir) });
+    const viewer = await this.viewer(req, ip);
+    const identity = proxiedIdentity(ip, viewer, req.headers);
 
     if ((req.headers.get("Upgrade") ?? "").toLowerCase() === "websocket") {
       if (upgrade === undefined) return jsonResponse(400, { error: "WebSockets are not served here" });
 
-      return proxySocket(req, target, search, upgrade);
+      return proxySocket(req, target, search, upgrade, identity);
     }
 
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
-      const denied = writerRefusal(this.owner, await this.viewer(req, ip));
+      const denied = writerRefusal(this.owner, viewer);
 
       if (denied !== undefined) return jsonResponse(403, { error: denied });
     }
 
     keepOpen();
 
-    return proxyHttp(req, target, search);
+    return proxyHttp(req, target, search, identity);
   }
 
   /** `POST /f/<fleet>/preview-workers` `{worker, include}`: a worker taken into the combined preview or out

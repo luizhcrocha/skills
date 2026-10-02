@@ -717,7 +717,10 @@ itself. A manager made later appears the same way, on the same address.
   trust would let any tailnet peer claim any login; `whois` is tailscaled's own answer. The cost: the
   default address is plain http (inside WireGuard), where browsers withhold alerts; `--https` adds
   the https address when that matters. The stream's `hello` says `{write, reason?, you?, max_bytes}` from the
-  same rule. A message's `author` is the login (the owner's, from loopback).
+  same rule. A message's `author` is the login (the owner's, from loopback). The hub never passes on
+  a client's own `Tailscale-*` headers: the preview sets them from what it verified (see [The
+  preview](#the-preview-fleet-preview)), and a fleet's page on a peer hub is asked with `Accept`,
+  `Content-Type` and `Last-Event-ID` only.
 
 ## Permission grants
 
@@ -1014,6 +1017,16 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   preview is 404, a stopped server 502. `POST /f/<fleet>/preview-workers` `{worker, include}` takes a worker
   in or out under the chat's post policy (403, 415, 413, 400 as for `POST /chat`) and answers `{include,
   exclude}`. Peer hubs' previews are not passed through.
+- **Who the dev server sees**: the hub never passes a client's `Tailscale-*` headers or
+  `X-Forwarded-For`; it sets them from what it verified (`proxiedIdentity`, HTTP and the WebSocket
+  alike). A request on loopback that carries `Tailscale-User-Login` came through `tailscale serve`, which
+  set it, so its `Tailscale-*` headers (and `X-Forwarded-For`) go on as they came; one from a tailnet
+  peer carries `Tailscale-User-Login` as `tailscale whois` gives that peer (none when it gives none) and
+  `X-Forwarded-For` its address; a plain loopback request carries none. Before this, any tailnet peer
+  that sent `Tailscale-User-Login` to the hub's tailnet address reached the dev server on loopback with
+  that login, and an app that trusts loopback plus the header (the Casos app's dev guard) answered as
+  that user. An app behind the preview may trust `Tailscale-User-Login` only from the hub's proxy, which
+  sets it; it must not trust loopback alone, since every proxied request arrives from loopback.
 - **Why a path, not a port per preview**: evidence from Vite 8.3.2 (create-vite 9.2.1) behind a Bun proxy
   in headless Chromium: with `--base` every URL the page asks for (`@vite/client`, `@react-refresh`, the
   sources, the pre-bundled deps) is under the base, and the HMR client opens its socket at the page's own
