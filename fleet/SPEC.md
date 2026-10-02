@@ -931,8 +931,8 @@ a fleet may opt into one **shared** working copy (`workspace_mode: "shared"`).
 ## The preview (`fleet preview`)
 
 Each code-writing worker edits in its own workspace, so the user saw another worker's UI only once the
-coordinator integrated it. The preview (TypeScript only, approved 2026-10-01) serves every running
-worker's in-progress edits, merged, in one live page, and optionally one worker's alone.
+coordinator integrated it. The preview (TypeScript only, approved 2026-10-01) serves every worker's edits
+not yet integrated, merged, in one live page, and optionally one worker's alone.
 
 - `fleet preview DIR start [--cmd C] [--port N] [--setup C] [--repo PATH]`: the combined preview. Refused
   in a shared fleet (its one working copy already holds every worker's edits), for a fleet not served (the
@@ -956,10 +956,14 @@ worker's in-progress edits, merged, in one live page, and optionally one worker'
     for it to answer; when its process ends first, `start` exits 1 with the last error of what this start
     appended to the log (`exited at start` on the server's line), else it says `not answering yet`.
   - **Updater**: `fleet preview DIR updater`, detached, logging to `DIR/preview/updater.log`. Every
-    `FLEET_PREVIEW_S` seconds it snapshots each included worker's workspace from outside (`jj -R <path>
+    `FLEET_PREVIEW_S` seconds it snapshots each worker's workspace not taken out from outside (`jj -R <path>
     util snapshot`: jj takes that workspace's working-copy lock, records its files and writes none of them;
     the worker's own jj commands find it as they left it), reads every workspace's @ in one `log -r
-    'working_copies()'` without a snapshot, and stops there when no commit moved. Otherwise it rebases the
+    'working_copies()'` without a snapshot, drops each worker merged until integrated (below) whose
+    workspace is gone or whose @ has no change left to integrate (no commit of `(::<its @> ~ ::(<stack> |
+    trunk())) ~ empty()`: trunk() counts because a coordinator that lands by moving a bookmark leaves the
+    default workspace's @ behind; asked once per commit, stack and trunk), and stops there when no commit
+    moved. Otherwise it rebases the
     preview's @ onto the new parents in place (`rebase -r preview@ -d …`, `--ignore-working-copy`, the
     change kept), and when the preview's @ is a commit its files are not at (a worker's snapshot rebases
     the preview's @, a descendant, in the same operation) runs `workspace update-stale` there, which
@@ -969,14 +973,18 @@ worker's in-progress edits, merged, in one live page, and optionally one worker'
   - **Conflicts** are not blocking: jj records them in the merge and writes their markers. The files are
     read from the commit (`self.conflicted_files()`, what `jj resolve --list` lists, with repository
     paths), each with the included workers whose changes ahead of the stack touch it.
-- **Picking**: a worker is in the merge when it has an active workspace and is running, queued or
-  blocked, or was taken in (`include WORKER`), unless it was taken out (`exclude WORKER`). The page's boxes
-  do the same through the hub.
+- **Picking**: a worker with an active workspace is in the merge unless it was taken out (`exclude
+  WORKER`): always when it is running, queued or blocked or was taken in (`include WORKER`); otherwise
+  (done, failed, any other status) while its changes are not in the stack, so a done worker's work shows
+  until it is integrated and drops out once its @'s changes are ancestors of the stack or of trunk(), or
+  its workspace is gone. The page's boxes take in and out through the hub; the page's `included` is the same rule, from
+  the last look's `merged`.
 - `start --per-worker WORKER`: a dev server in that worker's own workspace (installed first when it has
   no node_modules), base `/f/<fleet>/preview/<worker>/`, logging to `DIR/preview/<worker>.log`. No merge,
   no updater: its files are the worker's.
 - `status`: the address, the dev server (pid, port, answering), the updater, each worker's workspace
-  (`[x]` merged at its commit and change, `[ ]` and why not), the conflicts, the updater's last error and
+  (`[x]` merged at its commit and change, `[ ]` and why not: `running`, `taken in`, `taken out`, `done,
+  merged`, `done, already in the stack`, `done, its workspace is gone`), the conflicts, the updater's last error and
   the dev server's last error (below); the same for each per-worker preview.
 - `stop [--per-worker WORKER]`: TERM, then KILL after 3 s, to each process group (the updater first); the
   record keeps the ports with no pids. The workspace stays for the next start. **`fleet ws prune`** keeps

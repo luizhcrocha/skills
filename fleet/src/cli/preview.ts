@@ -33,7 +33,7 @@ import { upAllSync } from "../page/probe.ts";
 import { isRunning, lastError, freePort, logTail, planCommand, fill, runSetup, setupCommand, startDetached, startServer, stopGroup, tail } from "../preview/devserver.ts";
 import { readCopies, stackOf } from "../preview/merge.ts";
 import { logDir, readRecord, updateRecord, type DevServer, type PreviewRecord, type WorkerServer } from "../preview/record.ts";
-import { candidates, everyMs, freshMemory, included, lookOnce, pick, runUpdater } from "../preview/updater.ts";
+import { candidates, everyMs, freshMemory, included, lookOnce, pick, runUpdater, standing } from "../preview/updater.ts";
 import { jj, why, workspaceNames, workspaceRoot } from "../ws/jj.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
@@ -426,8 +426,7 @@ function status(machine: Machine, root: string, raw: JsonObject): Effect.Effect<
 
       for (const c of all) {
         const merged = record.merged.find((m) => m.id === c.id);
-        const why = record.exclude.includes(c.id) ? "taken out" : included(c, record) ? (record.include.includes(c.id) ? "taken in" : (c.status ?? "no row")) : `${c.status ?? "no row"}, not merged`;
-        out.out(`  ${included(c, record) ? "[x]" : "[ ]"} ${c.id} (${why})${merged === undefined ? "" : ` at ${merged.commit.slice(0, 12)} (change ${merged.change.slice(0, 8)})`}\n`);
+        out.out(`  ${included(c, record) ? "[x]" : "[ ]"} ${c.id} (${standing(c, record)})${merged === undefined ? "" : ` at ${merged.commit.slice(0, 12)} (change ${merged.change.slice(0, 8)})`}\n`);
       }
 
       if (all.length === 0) out.out("  no worker has a workspace: the preview shows the stack alone\n");

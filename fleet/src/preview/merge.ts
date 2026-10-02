@@ -1,7 +1,8 @@
 /**
  * The combined preview's merge, kept by jj: the preview workspace's @ is a merge whose parents are the
  * included workers' working-copy commits, and the stack's head when no worker already has it, so the
- * preview shows every worker's edits as they are now, on top of what is integrated.
+ * preview shows every worker's edits as they are now, on top of what is integrated. A worker that is no
+ * longer at work is in it only while its changes are not in the stack (`untilIntegrated`).
  *
  * One look (`look`) does this, and nothing more when nothing changed:
  *
@@ -11,7 +12,10 @@
  *    (a descendant) onto the new commit in the same operation.
  * 2. One read of every workspace's @ (`working_copies()`, without a snapshot) gives each worker's commit,
  *    the stack (the default workspace's @, or its parent when that @ is empty and undescribed) and the
- *    preview's @ with its parents. When the commits are the ones of the last look, it stops here.
+ *    preview's @ with its parents. A worker merged until integrated is dropped when its workspace is gone
+ *    or no commit of `::<its @> ~ ::(<stack> | trunk())` changes a file: its work is in the stack, or
+ *    landed on the trunk, where a coordinator that integrates by moving a bookmark puts it (asked once
+ *    per commit, stack and trunk). When the commits are the ones of the last look, it stops here.
  * 3. Otherwise the parents are `heads(<workers' commits> | <stack>)` and, when the preview's @ has others,
  *    it is rebased onto them in place (`rebase -r preview@ -d …`, its change kept).
  * 4. When the preview's @ is a commit its files on disk are not at yet, `workspace update-stale` writes
@@ -84,6 +88,9 @@ export interface Pick {
   readonly id: string;
   readonly workspace: string;
   readonly path: string;
+  /** Taken only while its workspace exists and its @ has changes neither the stack nor trunk() has: a
+   * worker no longer at work, whose last edits are what the user waits to see until they are integrated. */
+  readonly untilIntegrated?: boolean;
 }
 
 /** What one look found and did. */
@@ -102,11 +109,13 @@ export interface Memory {
   key: string;
   /** The preview's @ its files on disk were last written to. */
   synced: string;
+  /** Whether a worker's @ has changes not yet integrated, by `<its commit> <stack> <trunk>`. */
+  ahead: Map<string, boolean>;
 }
 
 /** A fresh memory: the first look rebuilds and writes the files. */
 export function freshMemory(): Memory {
-  return { key: "", synced: "" };
+  return { key: "", synced: "", ahead: new Map() };
 }
 
 /** The commits `revset` names, newest first; why not, when jj refuses it. */
@@ -114,6 +123,25 @@ function commits(repo: string, revset: string): string[] | PreviewError {
   const run = jj(repo, ["log", "--no-graph", "-r", revset, "-T", 'commit_id ++ "\\n"'], true);
 
   return run.ok ? run.stdout.split("\n").filter((c) => c !== "") : new PreviewError({ reason: why(run) });
+}
+
+/** Whether `commit` has a change not yet integrated: a commit of `::commit ~ (::stack | ::landed)` that
+ * changes a file, `landed` being trunk()'s commit (true when jj cannot say, so a worker is shown rather
+ * than hidden). Remembered per commit, stack and trunk once jj says. */
+function ahead(repo: string, commit: string, stack: string, landed: string, memory: Memory): boolean {
+  const key = `${commit} ${stack} ${landed}`;
+  const known = memory.ahead.get(key);
+
+  if (known !== undefined) return known;
+  const run = jj(repo, ["log", "--no-graph", "-n", "1", "-r", `(::${commit} ~ ::(${stack} | ${landed})) ~ empty()`, "-T", "commit_id"], true);
+
+  if (!run.ok) return true;
+  const found = run.stdout.trim() !== "";
+
+  if (memory.ahead.size > 1000) memory.ahead.clear();
+  memory.ahead.set(key, found);
+
+  return found;
 }
 
 /** The repository paths the commits of `revset` change. */
@@ -163,9 +191,13 @@ export function look(repo: string, previewName: string, previewPath: string, pic
 
   if (preview === undefined) return failed(`jj no longer knows the preview's workspace ${previewName}`);
   const stack = stackOf(main);
+  const trunk = picked.some((p) => p.untilIntegrated === true) ? commits(repo, "trunk()") : [];
+  const landed = trunk instanceof PreviewError ? stack : (trunk[0] ?? stack);
 
   const merged: Merged[] = picked.flatMap((p) => {
     const at = copies instanceof PreviewError ? undefined : copies.get(p.workspace);
+
+    if (p.untilIntegrated === true && (!isDir(p.path) || at === undefined || !ahead(repo, at.commit, stack, landed, memory))) return [];
 
     if (at === undefined) {
       errors.push(`jj no longer knows ${p.id}'s workspace ${p.workspace}`);

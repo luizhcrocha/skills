@@ -10,13 +10,14 @@ import * as Option from "effect/Option";
 
 import { stampOf } from "../clock.ts";
 import { PreviewError } from "../errors.ts";
-import { readText } from "../files.ts";
+import { isDir, readText } from "../files.ts";
 import { asArray, asObject, asString, parseObject, type Json, type JsonObject } from "../json.ts";
 import type { Machine } from "../world.ts";
 import { freshMemory, look, type Memory, type Pick } from "./merge.ts";
 import { readRecord, updateRecord, type PreviewRecord } from "./record.ts";
 
-/** A worker in one of these is at work: its workspace is in the preview unless taken out. */
+/** A worker in one of these is at work: its workspace is in the preview unless taken out. Any other worker
+ * is in it while its changes are not in the stack. */
 const LIVE = new Set(["running", "queued", "blocked"]);
 
 /** How often the updater looks, in seconds, unless `FLEET_PREVIEW_S` says otherwise. */
@@ -65,11 +66,38 @@ export function candidates(raw: JsonObject | undefined): Candidate[] {
   });
 }
 
-/** Whether the merge takes this worker: at work, or taken in by hand, and not taken out. */
-export function included(c: Candidate, record: { readonly include: readonly string[]; readonly exclude: readonly string[] }): boolean {
-  if (record.exclude.includes(c.id)) return false;
+/** What the record says of the workers: who was taken in or out, and whom the last look merged. */
+interface Choices {
+  readonly include: readonly string[];
+  readonly exclude: readonly string[];
+  readonly merged: readonly { readonly id: string }[];
+}
 
-  return record.include.includes(c.id) || (c.status !== undefined && LIVE.has(c.status));
+/** Whether the merge takes this worker whatever its commits: at work, or taken in by hand, and not taken out. */
+function always(c: Candidate, record: Choices): boolean {
+  return !record.exclude.includes(c.id) && (record.include.includes(c.id) || (c.status !== undefined && LIVE.has(c.status)));
+}
+
+/** Whether the merge takes this worker: not taken out, and at work, taken in, or (as the last look found)
+ * with changes the stack has not. */
+export function included(c: Candidate, record: Choices): boolean {
+  return always(c, record) || (!record.exclude.includes(c.id) && record.merged.some((m) => m.id === c.id));
+}
+
+/** Why a worker is in the merge or out of it, for `status`: taken out, taken in, its status when at work,
+ * else its status and whether its changes are merged, already in the stack, or gone with its workspace. */
+export function standing(c: Candidate, record: Choices): string {
+  const status = c.status ?? "no row";
+
+  if (record.exclude.includes(c.id)) return "taken out";
+
+  if (record.include.includes(c.id)) return "taken in";
+
+  if (always(c, record)) return status;
+
+  if (record.merged.some((m) => m.id === c.id)) return `${status}, merged`;
+
+  return isDir(c.path) ? `${status}, already in the stack` : `${status}, its workspace is gone`;
 }
 
 function sameMerge(a: PreviewRecord, b: PreviewRecord): boolean {
@@ -88,7 +116,7 @@ export function lookOnce(machine: Machine, root: string, memory: Memory): Previe
   const record = readRecord(root);
 
   if (record === undefined) return undefined;
-  const picked = candidates(readLedger(root)).filter((c) => included(c, record));
+  const picked = candidates(readLedger(root)).flatMap((c) => (record.exclude.includes(c.id) ? [] : [{ ...c, untilIntegrated: !always(c, record) }]));
   const found = look(record.repo, record.workspace, record.path, picked, memory);
 
   return updateRecord(root, (now) => {

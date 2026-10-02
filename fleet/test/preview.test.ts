@@ -1,7 +1,7 @@
 /**
  * `fleet preview`: the combined preview of every worker's in-progress edits, against throwaway jj repos and
- * a stand-in dev server (stub-dev.ts). `start` merges the running workers' working copies in a workspace of
- * its own and starts the dev server and the updater; the updater takes a worker's next edit without touching
+ * a stand-in dev server (stub-dev.ts). `start` merges the workers' working copies not yet in the stack in a
+ * workspace of its own and starts the dev server and the updater; the updater takes a worker's next edit without touching
  * the worker's files; a conflict is recorded with the workers that touch the file; `include` and `exclude`
  * change the merge; `stop` stops what runs; `fleet ws prune` never deletes a live preview.
  */
@@ -235,6 +235,43 @@ describe("include and exclude", () => {
     expect(preview("status").stdout).toContain("[x] a1 (taken in)");
 
     expect(preview("include", "nobody").stderr).toBe("preview: nobody has no active workspace in this fleet\n");
+  });
+});
+
+describe("a done worker", () => {
+  test("stays in the merge while its changes are not in the stack, drops out once they are in it or on the trunk, and is out when taken out", async () => {
+    writeFileSync(join(ws("a1"), "a.txt"), "header by a1\n");
+    writeFileSync(join(ws("a2"), "b.txt"), "footer by a2\n");
+    state("agent", "a1", "--status", "done");
+    state("agent", "a2", "--status", "done");
+    const ran = preview("start", "--cmd", STUB);
+    expect([ran.code, ran.stderr]).toEqual([0, ""]);
+    expect(ran.stdout).toContain("merged: a1, a2");
+    expect(read(join(ws("preview"), "a.txt"))).toBe("header by a1\n");
+    expect(preview("status").stdout).toContain("[x] a1 (done, merged) at ");
+
+    // a1's work lands: the stack (the default workspace's @, empty, on its parent) now has a1's commit.
+    jj(repo, "new", "a1@");
+    await until(() => record().merged.map((m) => m.id).join() === "a2");
+    expect(read(join(ws("preview"), "a.txt"))).toBe("header by a1\n");
+    const status = preview("status").stdout;
+    expect(status).toContain("[ ] a1 (done, already in the stack)");
+    expect(status).toContain("[x] a2 (done, merged) at ");
+
+    // a2's work lands on the trunk (a bookmark the coordinator moves), not in the default workspace's @.
+    jj(repo, "bookmark", "create", "main", "-r", "a2@");
+    jj(repo, "config", "set", "--repo", 'revset-aliases."trunk()"', "main");
+    await until(() => record().merged.length === 0);
+    expect(preview("status").stdout).toContain("[ ] a2 (done, already in the stack)");
+
+    // a2 starts a new change on what landed and edits: it is back until taken out.
+    jj(ws("a2"), "new");
+    writeFileSync(join(ws("a2"), "b.txt"), "footer by a2, again\n");
+    await until(() => read(join(ws("preview"), "b.txt")) === "footer by a2, again\n");
+    expect(record().merged.map((m) => m.id)).toEqual(["a2"]);
+    expect(preview("exclude", "a2").code).toBe(0);
+    await until(() => record().merged.length === 0 && read(join(ws("preview"), "b.txt")) === "base\n");
+    expect(preview("status").stdout).toContain("[ ] a2 (taken out)");
   });
 });
 
