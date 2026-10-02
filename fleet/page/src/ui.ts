@@ -297,9 +297,19 @@ export function createUi(m: Model) {
     if (quote) body.quote = { ...quote };
 
     if (focus != null) body.side = focus;
+    const json = JSON.stringify(body);
+    const over = Core.tooBig(json, m.maxBytes());
+
+    if (over) {
+      setError(over);
+      m.setSending(false);
+      flush();
+
+      return;
+    }
 
     try {
-      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: json });
       let data: Json = null;
 
       try {

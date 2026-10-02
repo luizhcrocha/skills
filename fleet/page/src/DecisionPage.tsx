@@ -241,11 +241,20 @@ function AskHere(props: { readonly d: Decision }): JSX.Element {
     /* A reply to the viewer's own message or the host's is addressed to the host, as a plain message is. */
     const re = thread.filter((x) => x.from === "user" || x.from === m.host()).at(-1)?.id;
 
+    const json = JSON.stringify(re === undefined ? { text } : { text, re });
+    const over = Core.tooBig(json, m.maxBytes());
+
+    if (over) {
+      setError(over);
+
+      return;
+    }
+
     setSending(true);
     setError("");
 
     try {
-      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(re === undefined ? { text } : { text, re }) });
+      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: json });
       let body: ServerError | null = null;
 
       try {
@@ -380,6 +389,15 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
       return;
     }
 
+    const json = JSON.stringify({ ...out, decision: d.id });
+    const over = Core.tooBig(json, m.maxBytes());
+
+    if (over) {
+      setError(over);
+
+      return;
+    }
+
     setError("");
     const buttons = [...form.querySelectorAll("button")];
     buttons.forEach((b) => {
@@ -387,7 +405,7 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
     });
 
     try {
-      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...out, decision: d.id }) });
+      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: json });
       let body: ServerError | null = null;
 
       try {

@@ -1087,6 +1087,17 @@ export interface AnswerForm {
   readonly done?: boolean;
 }
 
+/** Why `body`, the JSON a composer would post, is too big to send under the server's limit `max` (from the
+ * stream's hello), or "" when it may go or no limit is known: the size counts the body's UTF-8 bytes, as the
+ * server's Content-Length does. */
+function tooBig(body: string, max: number | undefined): string {
+  const bytes = new TextEncoder().encode(body).length;
+
+  if (max === undefined || bytes <= max) return "";
+
+  return `This message is ${Math.ceil(bytes / 1024)} KiB; the most a message can be is ${Math.floor(max / 1024)} KiB. Shorten it, or put the long part in a file and give its path.`;
+}
+
 /**
  * What the page posts for the answer given in `form`: {text}, or {error} saying what is missing. A decision
  * is one option with an optional note, or "none" with a note that says what instead; a permission is one of
@@ -1739,6 +1750,7 @@ export const Core = {
   sidesOf,
   excerptOf,
   answerText,
+  tooBig,
   parseState,
   parseMessage,
   hearingOf,

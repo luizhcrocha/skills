@@ -83,9 +83,10 @@ export function goLive(m: Model, ui: Ui): void {
     es.addEventListener("hello", (ev) => {
       try {
         // SAFETY: the hub's hello is a JSON object; each field is read through a check.
-        const h = JSON.parse(ev.data) as { readonly write?: Json; readonly reason?: Json; readonly you?: Json };
+        const h = JSON.parse(ev.data) as { readonly write?: Json; readonly reason?: Json; readonly you?: Json; readonly max_bytes?: Json };
         m.setWrite(h.write === false ? { ok: false, reason: String(h.reason || "") } : { ok: true, reason: "" });
         m.setYou(h.you === String(h.you) ? h.you : "");
+        m.setMaxBytes(Number.isSafeInteger(h.max_bytes) && Number(h.max_bytes) > 0 ? Number(h.max_bytes) : undefined);
       } catch {
         m.setWrite({ ok: true, reason: "" });
       }

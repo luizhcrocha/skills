@@ -183,3 +183,23 @@ test.skipIf(!found)("a chat event is appended in place: the rows keep their node
   })).toBe(true);
   await page.close();
 });
+
+test.skipIf(!found)("a draft over the limit the stream's hello gives is not sent: the composer says so and keeps it", async () => {
+  const page = await open(1280);
+  const before = harness.posted.length;
+  await page.evaluate(() => {
+    const say = document.querySelector<HTMLTextAreaElement>("#say");
+
+    if (!say) return;
+    say.focus();
+    say.value = "x".repeat(299_000);
+    say.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector<HTMLElement>("#chat-error")?.hidden === false);
+  expect(
+    await page.evaluate(() => ({ error: document.querySelector("#chat-error")?.textContent, kept: document.querySelector<HTMLTextAreaElement>("#say")?.value.length })),
+  ).toEqual({ error: "This message is 293 KiB; the most a message can be is 256 KiB. Shorten it, or put the long part in a file and give its path.", kept: 299_000 });
+  expect(harness.posted.length).toBe(before);
+  await page.close();
+});

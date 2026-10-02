@@ -204,6 +204,8 @@ export function createModel(initial: State) {
   const [conn, setConnSignal] = createSignal<Conn>("off");
   const [write, setWrite] = createSignal<{ ok: boolean; reason: string }>({ ok: true, reason: "" });
   const [you, setYou] = createSignal("");
+  /** The most bytes a post to the chat may have, as the stream's hello says; unknown until it does. */
+  const [maxBytes, setMaxBytes] = createSignal<number | undefined>(undefined);
   const [reply, setReply] = createSignal<number | null>(null);
   const [quote, setQuote] = createSignal<Quote | null>(null);
   /** The side chat shown: its opener's id, "new" while one is being started, null for the main chat. */
@@ -317,6 +319,8 @@ export function createModel(initial: State) {
     setWrite,
     you,
     setYou,
+    maxBytes,
+    setMaxBytes,
     reply,
     setReply,
     quote,

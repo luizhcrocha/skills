@@ -100,7 +100,7 @@ export function serveHarness(options: HarnessOptions): Harness {
           start(controller) {
             send = (text) => controller.enqueue(encoder.encode(text));
             streams.add(send);
-            send(event("hello", { write: true, you: "luiz@example.com" }));
+            send(event("hello", { write: true, you: "luiz@example.com", max_bytes: 256 * 1024 }));
             send(event("state", view));
 
             for (const m of messages) if (m.id > after) send(event("chat", m, m.id));

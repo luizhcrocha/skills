@@ -618,6 +618,44 @@ test("embedded, a message the server refuses stays in the frame's composer with 
   expect(root.querySelector("#dv-ask-sent")).toBeNull();
 });
 
+test("embedded, a message over the limit stays in the frame's composer, unsent, with how big it is", async () => {
+  open("/f/billing/?embed=1#decision/d1", decidedD1());
+  page.m.setMaxBytes(256 * 1024);
+  page.ui.route();
+  flush();
+  root.querySelector<HTMLButtonElement>("#dv-answer [data-change]")?.click();
+  flush();
+  const long = "x".repeat(299_000);
+  const box = asking();
+
+  if (box) box.value = long;
+  root.querySelector<HTMLButtonElement>("#dv-ask [data-ask-send]")?.click();
+  await settle();
+  expect(posted).toEqual([]);
+  expect(asking()?.value).toBe(long);
+  expect(root.querySelector("#dv-ask [role=alert]")?.textContent).toBe(
+    "This message is 293 KiB; the most a message can be is 256 KiB. Shorten it, or put the long part in a file and give its path.",
+  );
+});
+
+test("embedded, a 413 from the server shows its words in the frame's composer and keeps the message", async () => {
+  open("/f/billing/?embed=1#decision/d1", coordinatorView(NOW));
+  page.ui.route();
+  flush();
+  root.querySelector<HTMLButtonElement>("#dv-answer [data-discuss]")?.click();
+  flush();
+  const ok = globalThis.fetch;
+  const said = "This message is 293 KiB; the most a message can be is 256 KiB. Shorten it, or put the long part in a file and give its path.";
+  // SAFETY: the page calls only `fetch` itself; the stub refuses every message as too big.
+  globalThis.fetch = (async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ error: said }), { status: 413 })) as typeof fetch;
+  root.querySelector<HTMLButtonElement>("#dv-ask [data-ask-send]")?.click();
+  await settle();
+  globalThis.fetch = ok;
+  expect(asking()?.value).toBe('About "Rounding rule for totals": ');
+  expect(root.querySelector("#dv-ask [role=alert]")?.textContent).toBe(said);
+  expect(root.querySelector("#dv-ask-sent")).toBeNull();
+});
+
 test("embedded, another decision's link asks the manager to open it, and Ctrl+K opens the manager's finder", () => {
   const view = coordinatorView(NOW);
   // SAFETY: the fixture's decisions are records, as coordinatorView writes them.
