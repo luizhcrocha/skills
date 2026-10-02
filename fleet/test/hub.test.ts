@@ -5,7 +5,7 @@
  * Every test starts a real hub on a free loopback port, with a registry of its own and a fake
  * `tailscale` that names this machine's owner.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -872,7 +872,7 @@ describe("a permission's answer grants the call once", () => {
     }
   }
 
-  const allow = { text: "allow-once: Allow this call once", decision: "p-1a2b3c4d" };
+  const allow = { text: "allow-once: Allow this call once", decision: "p-1a2b3c4d", rule: RULE };
 
   beforeEach(() => {
     session = join(base, "repo");
@@ -892,18 +892,56 @@ describe("a permission's answer grants the call once", () => {
     expect(text).toBe(`${JSON.stringify({ permissions: { allow: ["Bash(ls)", RULE], deny: ["Bash(rm -rf /)"] }, model: "opus" }, null, 2)}\n`);
     const [grant, ...more] = grants();
     expect(more).toEqual([]);
-    expect(Object.keys(grant ?? {})).toEqual(["op", "decision", "ref", "rule", "file", "at", "by", "reload"]);
-    expect([grant?.["op"], grant?.["decision"], grant?.["ref"], grant?.["rule"], grant?.["file"], grant?.["by"], grant?.["reload"]]).toEqual([
+    expect(Object.keys(grant ?? {})).toEqual(["op", "decision", "ref", "rule", "agent_id", "file", "at", "by", "reload"]);
+    expect([grant?.["op"], grant?.["decision"], grant?.["ref"], grant?.["rule"], grant?.["agent_id"], grant?.["file"], grant?.["by"], grant?.["reload"]]).toEqual([
       "grant",
       "p-1a2b3c4d",
       "P1",
       RULE,
+      "agent-7f",
       settings,
       "local",
       "live",
     ]);
     expect(String(grant?.["at"])).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$/);
+    expect(readFileSync(join(root, "grants.jsonl"), "utf8")).toBe(`${JSON.stringify(grant)}\n`);
     expect(readChat(root).map((m) => m.stored["decision"])).toEqual(["p-1a2b3c4d"]);
+    expect(readdirSync(join(session, ".claude"))).toEqual(["settings.local.json"]);
+  });
+
+  test("a main thread's grant names no agent", async () => {
+    withRows(permission({ refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "c", root: session, agent_id: null } }));
+    await start();
+    expect((await post(allow)).status).toBe(201);
+    expect(grants()[0]?.["agent_id"]).toBeNull();
+  });
+
+  test("allow-once grants the rule the page showed: none, or one the row no longer has, refuses and stores nothing", async () => {
+    await start();
+    const { rule: _shown, ...unbound } = allow;
+
+    for (const body of [unbound, { ...allow, rule: "Bash(git push origin HEAD:main)" }]) {
+      const got = await post(body);
+      expect([got.status, asString(got.body["error"])?.includes("rule")]).toEqual([409, true]);
+    }
+
+    expect((await post({ ...allow, rule: 5 })).status).toBe(400);
+    expect([existsSync(settings), grants(), readChat(root)]).toEqual([false, [], []]);
+  });
+
+  test("the hub writes under the settings lock the hook takes: a held one refuses after a wait, a stale one is taken", async () => {
+    const lock = join(session, ".claude", ".settings.local.json.lock");
+    mkdirSync(lock);
+    await start();
+    const started = performance.now();
+    const held = await post(allow);
+    expect(performance.now() - started).toBeGreaterThanOrEqual(2000);
+    expect([held.status, asString(held.body["error"])?.includes("lock")]).toEqual([409, true]);
+    expect([existsSync(settings), grants(), readChat(root), existsSync(lock)]).toEqual([false, [], [], true]);
+    const old = new Date(Date.now() - 11_000);
+    utimesSync(lock, old, old);
+    expect((await post(allow)).status).toBe(201);
+    expect([JSON.parse(readFileSync(settings, "utf8")), existsSync(lock)]).toEqual([{ permissions: { allow: [RULE] } }, false]);
   });
 
   test("an absent settings file starts empty", async () => {

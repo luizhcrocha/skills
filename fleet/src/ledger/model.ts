@@ -660,7 +660,7 @@ export const DECISION_KEYS = [
   "refusal",
 ] as const;
 
-const REFUSAL_KEYS = ["tool", "call", "rule", "cause", "root", "agent_id"] as const;
+export const REFUSAL_KEYS = ["tool", "call", "rule", "cause", "root", "agent_id"] as const;
 
 function readRefusal(decision: string): (object: JsonObject) => Fields | RefusedCall {
   return (object) => {

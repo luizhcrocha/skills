@@ -674,16 +674,22 @@ TypeScript only: `state.py` has no `permission` kind, no trace has one, and the 
 stay Python's (below). Auto mode refuses a worker's tool call; the plugin's hook opens a permission for
 it, the user answers on the page, and the hub, not an agent (Claude Code's classifier refuses an agent
 that writes its own allow rule), adds a one-time allow rule to the session's settings. The hook
-removes the rule once the call has run, or after `FLEET_GRANT_TTL_MIN` (30) minutes.
+removes the rule once the call has run, or at the first tool call of the session after 30 minutes (one
+constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
 
+- **An exact rule**: `Bash(<call>)`, for a call that holds none of newline (`\n`, `\r`), `*` (a rule
+  reads it as a wildcard) and `\` (Claude Code's rule parser reads an escape, so the rule would not match
+  the call). This one set is `whyNoRule` in `src/ledger/permission.ts` and `NO_RULE` in the hook; the CLI
+  refuses a permission for any other call, the hook opens an action with `--manual` for it, and the hub
+  grants none.
 - **Opening** (`fleet state DIR decision ID --kind permission --title T --question Q --why W --tool
   Bash --call CALL --cause CAUSE --root ROOT [--agent-id AID] [--agent WORKER] [--blocking]`): the row
   gets `refusal: {tool, call, rule, cause, root, agent_id}` with `rule` = `Bash(CALL)` and `agent_id`
   null without `--agent-id`, and the two options the CLI sets: `allow-once: Allow this call once |
   the hub adds <rule> to <root>/.claude/settings.local.json; the plugin hook removes it once the call
-  has run, or after 30 minutes` and `deny: Deny | the worker stays stopped; your note goes to it`.
-  Refused: a tool other than Bash, a CALL with a newline or a `*` (an exact rule cannot hold it: the
-  hook opens an action with `--manual` instead), a relative ROOT, `--option`, `--recommend`, a
+  has run, or at the first tool call of the session after 30 minutes` and `deny: Deny | the worker stays
+  stopped; your note goes to it`. Refused: a tool other than Bash, a CALL no exact rule can hold (above),
+  a relative ROOT, `--option`, `--recommend`, a
   permission without `--tool --call --cause --root`, and those flags on any other kind. A value that
   starts with `-` is given as `--call=VALUE`. The same command on the open row revises it (a changed
   refusal re-presents it and clears a hold); `--decide`, `--withdraw` and `--hold` work as for any
@@ -691,25 +697,41 @@ removes the rule once the call has run, or after `FLEET_GRANT_TTL_MIN` (30) minu
   flags out of the usage (as argparse's `help=SUPPRESS`), so every usage text stays the twin's.
 - **Answering**: the page's form shows the call as an `sh` block, its cause, the rule and the file it
   goes into, the two options and a note; the answer is `allow-once: Allow this call once` or `deny:
-  Deny`, the note on the next line.
+  Deny`, the note on the next line, and the POST body carries `rule`, the rule the page showed.
 - **Granting** (`src/hub/grants.ts`, before `POST /chat` stores an answer that starts with
-  `allow-once` to a permission): the row must be open, its `refusal` a Bash call without newline or
-  `*` whose `rule` is `Bash(<call>)`, and its `root` absolute, a directory, and the `project` or `cwd`
+  `allow-once` to a permission): the row must be open, its `refusal` a Bash call an exact rule can hold
+  whose `rule` is `Bash(<call>)`, the POST's `rule` that same rule (absent or different refuses: a row
+  revised since the page rendered it needs a fresh look), and its `root` absolute, a directory, and the `project` or `cwd`
   of a heartbeat in `DIR/heartbeats/` (a session of this fleet: the ledger is writable by agents, the
-  hub is not). `<root>/.claude/settings.local.json` (absent reads as `{}`; one that does not parse
-  refuses) gets the rule added to `permissions.allow`, every other key and entry kept, written
+  hub is not). Under the settings lock (below), `<root>/.claude/settings.local.json` (absent reads as
+  `{}`; one that does not parse refuses) gets the rule added to `permissions.allow`, every other key and entry kept, written
   through a temp file in its folder and a rename, two-space JSON with a final newline. A missing
   `.claude` is made, and the grant says `reload: restart` (Claude Code watches only a settings folder
   that existed when the session started), else `live`. Then one line is appended to `DIR/grants.jsonl`:
-  `{"op": "grant", decision, ref, rule, file, at, by, reload}`, `by` being `tailnet:<login>` for a
+  `{"op":"grant",decision,ref,rule,agent_id,file,at,by,reload}`, `agent_id` the row's `refusal.agent_id`
+  (null: the session's main thread), `by` being `tailnet:<login>` for a
   tailnet peer that is not this machine (`tailscale whois`), else `local` (loopback, whatever header it
   carries, or this machine's own tailnet address); then the answer is stored. A rule already in `permissions.allow` is
   someone's own: the hub writes nothing and appends no grant line, so the hook never removes it, and the
   answer is stored as usual. A failed check answers
   409 with the reason and stores nothing. A `deny` is stored as any answer.
-- **Removal** (the plugin's hook, PostToolUse and PostToolUseFailure): a `remove` line, `{"op":
-  "remove", decision, rule, file, at, why: used|expired}`, ends the grant with the same `decision` and
-  `rule`.
+- **Removal** (the plugin's hook, PostToolUse and PostToolUseFailure): a grant is `used` when the call
+  that just ran is its rule's call and the hook's `agent_id` (absent on the main thread) is the grant's;
+  it is `expired` 30 minutes after its `at`. The hook takes the rule out under the settings lock, then
+  appends a `remove` line, `{"op":"remove",decision,rule,file,at,why}` (`why`: `used` or `expired`), which
+  ends the grant with the same `decision` and `rule`. Two hooks sweeping at once are kept apart by a
+  `flock` on `grants.jsonl`, so a grant is closed once.
+- **The settings lock**: hub and hook both make the directory `<dir of the file>/.settings.local.json.lock`
+  (an atomic `mkdir`, which Bun and Python both have; Bun has no `flock`) around the read-modify-write of
+  the settings file, retry for up to 2 s, and take over a lock older than 10 s (a crashed holder's). A
+  lock still held after 2 s refuses the grant (409) or leaves the removal for the next tool call.
+- **Lines**: every `grants.jsonl` line is compact JSON, one object, on both sides.
+- **What it defends**: an allow rule that lets through only the call the user saw, for its caller, once.
+  Not more: a local process can POST allow-once to the hub (stamped `local`, by decision), and heartbeats
+  and the ledger are writable by agents, so the root check and the row make a forged grant flagrant, not
+  impossible. A forged `op:grant` line can make the sweep remove a rule that matches it, one added by hand
+  included: the failure is fewer allowed calls, never more. The 30 minutes run only while some session of
+  the fleet makes tool calls.
 
 ## Heartbeats
 

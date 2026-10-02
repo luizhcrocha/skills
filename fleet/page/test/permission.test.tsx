@@ -37,7 +37,7 @@ const PERMISSION: View = {
   recommend: null,
   refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "[Git Destructive]", root: "/home/me/repos/billing", agent_id: "agent-7f" },
   options: [
-    { id: "allow-once", label: "Allow this call once", consequence: `the hub adds ${RULE} to ${FILE}; the plugin hook removes it once the call has run, or after 30 minutes` },
+    { id: "allow-once", label: "Allow this call once", consequence: `the hub adds ${RULE} to ${FILE}; the plugin hook removes it once the call has run, or at the first tool call of the session after 30 minutes` },
     { id: "deny", label: "Deny", consequence: "the worker stays stopped; your note goes to it" },
   ],
 };
@@ -48,7 +48,7 @@ let dispose: () => void;
 
 let root: HTMLElement;
 
-const posted: { text: string; decision?: string }[] = [];
+const posted: { text: string; decision?: string; rule?: string }[] = [];
 
 /** What the hub answers a post with: 201 and the message, or a status and its error. */
 interface HubAnswer {
@@ -71,7 +71,7 @@ beforeEach(() => {
     if (url === "skills") return new Response(JSON.stringify({ skills: [], builtins: false }), { status: 200 });
 
     if (url === "chat") {
-      const body: { text: string; decision?: string } = JSON.parse(String(init?.body));
+      const body: { text: string; decision?: string; rule?: string } = JSON.parse(String(init?.body));
       posted.push(body);
 
       return answer.status === 201
@@ -126,13 +126,13 @@ test("an answer is the option as it reads, with the note after it; none picked a
   await send(undefined);
   expect([posted, root.querySelector("#dv-error")?.textContent]).toEqual([[], "Pick one option."]);
   await send("deny", "not on main; push a branch");
-  expect(posted).toEqual([{ text: "deny: Deny\nnot on main; push a branch", decision: "p-1a2b3c4d" }]);
+  expect(posted).toEqual([{ text: "deny: Deny\nnot on main; push a branch", decision: "p-1a2b3c4d", rule: RULE }]);
 });
 
 test("the hub's refusal to grant shows on the form", async () => {
   answer = { status: 409, error: "the permission's root /tmp/x is no session of this fleet (no heartbeat has it as its cwd)" };
   await send("allow-once");
-  expect(posted).toEqual([{ text: "allow-once: Allow this call once", decision: "p-1a2b3c4d" }]);
+  expect(posted).toEqual([{ text: "allow-once: Allow this call once", decision: "p-1a2b3c4d", rule: RULE }]);
   expect(root.querySelector("#dv-error")?.textContent).toContain("no session of this fleet");
 });
 

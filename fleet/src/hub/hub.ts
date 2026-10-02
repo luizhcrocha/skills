@@ -648,7 +648,7 @@ export class Hub {
     return this.chatPost(root, rest, body, viewer);
   }
 
-  private chatPost(root: string, rest: string, body: JsonObject, viewer: Viewer): Response {
+  private async chatPost(root: string, rest: string, body: JsonObject, viewer: Viewer): Promise<Response> {
     const machine = this.options.machine;
     const text = asString(body["text"]);
     const reGiven = body["re"];
@@ -665,6 +665,10 @@ export class Hub {
     const decision = decisionGiven === undefined || decisionGiven === null ? undefined : asString(decisionGiven);
 
     if (decisionGiven !== undefined && decisionGiven !== null && decision === undefined) return jsonResponse(400, { error: "decision must be a decision id" });
+    const ruleGiven = body["rule"];
+    const rule = ruleGiven === undefined || ruleGiven === null ? undefined : asString(ruleGiven);
+
+    if (ruleGiven !== undefined && ruleGiven !== null && rule === undefined) return jsonResponse(400, { error: "rule must be the rule the page showed" });
 
     try {
       if (rest === "/chat/preview") {
@@ -702,7 +706,7 @@ export class Hub {
       if (side instanceof ChatError) return jsonResponse(400, { error: side.reason });
 
       if (decision !== undefined) {
-        const ungranted = grantRefusal({ dir: root, decision, text, by: grantor(viewer), at: stampOf(machine.now()) });
+        const ungranted = await grantRefusal({ dir: root, decision, text, rule, by: grantor(viewer), at: stampOf(machine.now()) });
 
         if (ungranted !== undefined) return jsonResponse(409, { error: ungranted });
       }

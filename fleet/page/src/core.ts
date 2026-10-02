@@ -24,6 +24,8 @@ export interface Edited {
 /** A text the page posts. */
 export interface Posted {
   readonly text: string;
+  /** A permission's rule as the page showed it: the hub grants that rule alone. */
+  readonly rule?: string;
 }
 
 /** A lookup of one text by another, for the keys a table names. */
@@ -1026,9 +1028,9 @@ export interface AnswerForm {
 /**
  * What the page posts for the answer given in `form`: {text}, or {error} saying what is missing. A decision
  * is one option with an optional note, or "none" with a note that says what instead; a permission is one of
- * its two options with an optional note.
+ * its two options with an optional note, and the rule it showed.
  */
-function answerText(item: Decision, form: AnswerForm): { text: string } | { error: string } {
+function answerText(item: Decision, form: AnswerForm): Posted | { error: string } {
   const note = String(form.note ?? "").trim();
   const value = String(form.value ?? "").trim();
   const withNote = (text: string): Posted => ({ text: note ? text + "\n" + note : text });
@@ -1037,7 +1039,10 @@ function answerText(item: Decision, form: AnswerForm): { text: string } | { erro
     if (form.choice === "none" && item.kind === "decision") return note ? { text: "None of these: " + note } : { error: "Say what you want instead." };
     const option = (item.options || []).find((o) => o.id === form.choice);
 
-    return option ? withNote(option.id + ": " + String(option.label)) : { error: "Pick one option." };
+    if (!option) return { error: "Pick one option." };
+    const posted = withNote(option.id + ": " + String(option.label));
+
+    return item.kind === "permission" && item.refusal ? { ...posted, rule: item.refusal.rule } : posted;
   }
 
   if (form.done) return withNote(item.kind === "secret" ? "Set by hand." : "Done.");

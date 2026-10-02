@@ -17,17 +17,23 @@ export const PERMISSION_TOOL = "Bash";
 /** The option that grants the call once. */
 export const ALLOW_ONCE = "allow-once";
 
+/** How long a grant the call has not used stays; the hook's GRANT_TTL_S is the same. */
+const GRANT_TTL_MIN = 30;
+
 /** The exact allow rule that lets `call` through. */
 export function ruleOf(call: string): string {
   return `${PERMISSION_TOOL}(${call})`;
 }
 
-/** Why no exact rule can let `call` through, or undefined when one can. A newline ends a rule, and a `*`
- * would match more than the call. */
+/** Why no exact rule can let `call` through, or undefined when one can: the hook's NO_RULE is the same set. A
+ * newline ends a rule, a `*` would match more than the call, and a backslash starts an escape in Claude
+ * Code's rule parser, so the rule would not match the call. */
 export function whyNoRule(call: string): string | undefined {
   if (call.includes("\n") || call.includes("\r")) return "the call has a newline, which an exact allow rule cannot hold";
 
   if (call.includes("*")) return "the call has a *, which an allow rule reads as a wildcard";
+
+  if (call.includes("\\")) return "the call has a backslash, which an allow rule reads as an escape";
 
   return undefined;
 }
@@ -64,7 +70,7 @@ export function permissionOptions(refusal: RefusedCall): Choice[] {
     {
       id: ALLOW_ONCE,
       label: "Allow this call once",
-      consequence: `the hub adds ${refusal.rule} to ${settingsOf(refusal.root)}; the plugin hook removes it once the call has run, or after 30 minutes`,
+      consequence: `the hub adds ${refusal.rule} to ${settingsOf(refusal.root)}; the plugin hook removes it once the call has run, or at the first tool call of the session after ${String(GRANT_TTL_MIN)} minutes`,
     },
     { id: "deny", label: "Deny", consequence: "the worker stays stopped; your note goes to it" },
   ];

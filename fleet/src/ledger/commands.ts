@@ -15,7 +15,7 @@ import { pyStr } from "../json.ts";
 import { FLEET_BIN, makeDirs, readOrWhy, remove, writeBytes } from "../files.ts";
 import { workerFigures } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
-import { dropKey, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
+import { dropKey, REFUSAL_KEYS, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, milestoneOfStep, nextStepId } from "./numbers.ts";
 import { makeRefusedCall, permissionOptions } from "./permission.ts";
 import { ID, KINDS } from "./validate.ts";
@@ -814,7 +814,7 @@ function setRefusal(run: Run, d: Decision): Effect.Effect<boolean, Refusal> {
     d.refusal = refusal;
     d.options = permissionOptions(refusal);
 
-    return before === undefined || (["tool", "call", "rule", "cause", "root", "agent_id"] as const).some((k) => before[k] !== refusal[k]);
+    return before === undefined || REFUSAL_KEYS.some((k) => before[k] !== refusal[k]);
   });
 }
 

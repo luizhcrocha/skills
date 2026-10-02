@@ -266,7 +266,7 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
     });
 
     try {
-      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: out.text, decision: d.id }) });
+      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...out, decision: d.id }) });
       let body: ServerError | null = null;
 
       try {

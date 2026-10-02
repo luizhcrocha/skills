@@ -559,7 +559,7 @@ describe("permission", () => {
       {
         id: "allow-once",
         label: "Allow this call once",
-        consequence: `the hub adds Bash(${CALL}) to /work/repo/.claude/settings.local.json; the plugin hook removes it once the call has run, or after 30 minutes`,
+        consequence: `the hub adds Bash(${CALL}) to /work/repo/.claude/settings.local.json; the plugin hook removes it once the call has run, or at the first tool call of the session after 30 minutes`,
       },
       { id: "deny", label: "Deny", consequence: "the worker stays stopped; your note goes to it" },
     ]);
@@ -586,7 +586,9 @@ describe("permission", () => {
     };
 
     expect(refused(...with_("--call", "git push\nrm -rf /"))).toContain("newline");
+    expect(refused(...with_("--call", "git push\rrm -rf /"))).toContain("newline");
     expect(refused(...with_("--call", "rm -rf build/*"))).toContain("*");
+    expect(refused(...with_("--call", "printf 'a\\tb'"))).toContain("backslash");
     expect(refused(...with_("--root", "work/repo"))).toContain("absolute");
     expect(refused(...with_("--tool", "Edit"))).toContain("Bash");
     expect(refused(...refusal("p1", "--option", "a: x | y"))).toContain("--option");
