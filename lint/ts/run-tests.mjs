@@ -1,4 +1,6 @@
-// Runs every RuleTester suite in the pack (anti-slop/, tstack/), one process each.
+// Runs every RuleTester suite in the pack (anti-slop/, tstack/), one node process each, the .ts run as it is
+// (Node strips the types; tsx is not needed). The suites run under node, not bun: oxlint's RuleTester refuses
+// "other runtimes" (rawTransferSupported). bun installs the pack (bun.lock).
 // anti-slop's require-readable-spacing-cli test shells out to `pnpm exec oxlint`;
 // it runs only where pnpm is installed.
 import { spawnSync } from "node:child_process";
@@ -28,7 +30,7 @@ for (const file of ["anti-slop", "tstack"]
     console.log(`skip ${name} (needs pnpm)`);
     continue;
   }
-  const run = spawnSync(process.execPath, ["--import", "tsx", file], { stdio: "inherit" });
+  const run = spawnSync("node", [file], { stdio: "inherit" });
   ran += 1;
   if (run.status !== 0) failed.push(name);
   console.log(`${run.status === 0 ? "ok  " : "FAIL"} ${name}`);

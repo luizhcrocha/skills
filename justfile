@@ -18,7 +18,7 @@ test-changed revset='master@origin..@' *args:
 
 # The installs the suites share; scripts/gates runs each once before the suites, so none races another in one node_modules
 _deps-lint:
-    cd lint/ts && npm install --no-audit --no-fund --prefer-offline --silent
+    cd lint/ts && bun install --frozen-lockfile --silent
 
 _deps-fleet:
     cd fleet && bun install --frozen-lockfile --silent

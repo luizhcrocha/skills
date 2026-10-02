@@ -8,7 +8,7 @@
     gates plan PATH...                       the suites PATH... would run, and why; runs nothing
 
 A suite is a just recipe (`just --no-deps test-page`). The installs the suites share run once,
-first, one per directory (`_deps-lint` is lint/ts's npm install, which test-lint-ts, test-fleet-ts
+first, one per directory (`_deps-lint` is lint/ts's bun install, which test-lint-ts, test-fleet-ts
 and test-page would otherwise run at the same time in one node_modules), then the suites run
 concurrently, longest first. Each suite's output is printed whole when it ends, under its
 PASS/FAIL line and duration, and a summary closes the run. Exit 1 when any suite or install
