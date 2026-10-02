@@ -32,7 +32,7 @@ import { validate } from "../ledger/validate.ts";
 import { cliLookups } from "../page/lookups.ts";
 import { pageHtml, readTemplate, writePage } from "../page/render.ts";
 import { view } from "../page/view.ts";
-import { ancestry, nameOf } from "../procs.ts";
+import { ancestry, exeOf, isClaudeBinary, nameOf } from "../procs.ts";
 import { spentBy } from "../transcripts.ts";
 import { keepUsage, usageLines } from "../usage.ts";
 import { secondsNow, World, type Machine } from "../world.ts";
@@ -119,7 +119,7 @@ function hub(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
 
 /** The Claude Code session that runs this command: the nearest `claude` among its parents, else the parent. */
 export function sessionPid(): number {
-  return ancestry(process.ppid).find((pid) => nameOf(pid) === "claude") ?? process.ppid;
+  return ancestry(process.ppid).find((pid) => isClaudeBinary(nameOf(pid), exeOf(pid))) ?? process.ppid;
 }
 
 /** The hub's address on this machine: the running hub's, else the one it will have. */

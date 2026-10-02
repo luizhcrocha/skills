@@ -153,6 +153,22 @@ export function commandOf(pid: number): string {
   }
 }
 
+/** The binary `pid` runs (/proc/PID/exe; on the Mac, ps's comm, a path), or "". */
+export function exeOf(pid: number): string {
+  if (DARWIN) return run("ps", ["-o", "comm=", "-p", String(pid)]).trim();
+
+  try {
+    return readlinkSync(join("/proc", String(pid), "exe"));
+  } catch {
+    return "";
+  }
+}
+
+/** Whether a process named `name` running `exe` is Claude Code: the native install runs `claude/versions/<version>`, so its name is the version. */
+export function isClaudeBinary(name: string, exe: string): boolean {
+  return name === "claude" || /\/claude\/versions\/[^/]+$/u.test(exe);
+}
+
 /** The short name of `pid` (/proc/PID/comm; on the Mac, the base name of ps's comm, a path), or "". */
 export function nameOf(pid: number): string {
   if (DARWIN) {

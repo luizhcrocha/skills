@@ -20,7 +20,7 @@ import { startHub, type Running } from "../src/hub/server.ts";
 import { frontmatter } from "../src/hub/skills.ts";
 import { isTailnetIp, tailnetOf } from "../src/hub/tailnet.ts";
 import { asArray, asObject, asString, type JsonObject } from "../src/json.ts";
-import { elapsedOf, lsofFiles, parentsOf } from "../src/procs.ts";
+import { elapsedOf, isClaudeBinary, lsofFiles, parentsOf } from "../src/procs.ts";
 import { baseEnv, fleet, machine, spawnFleet, tmp, type Environment } from "./support.ts";
 
 const OWNER = "luiz@example.com";
@@ -631,6 +631,17 @@ describe("the Mac's process readings (ps and lsof, no /proc)", () => {
       [1, 0],
       [412, 1],
     ]);
+  });
+
+  test("a Claude Code process: named claude, or running a binary from Claude's versions directory, whose name is the version", () => {
+    expect([
+      isClaudeBinary("claude", "/home/u/.local/share/claude/versions/2.1.287"),
+      isClaudeBinary("2.1.287", "/home/u/.local/share/claude/versions/2.1.287"),
+      isClaudeBinary("2.1.287", "/Users/u/.local/share/claude/versions/2.1.287"),
+      isClaudeBinary("zsh", "/etc/profiles/per-user/u/bin/zsh"),
+      isClaudeBinary("bun", "/nix/store/x-bun-1.4.2/bin/bun"),
+      isClaudeBinary("2.1.287", ""),
+    ]).toEqual([true, true, true, false, false, false]);
   });
 });
 
