@@ -5,7 +5,7 @@
 import * as Schema from "effect/Schema";
 
 /** Who refuses: the prefix the Python script that refused printed. */
-export const Speaker = Schema.Literals(["state", "chat", "fleets", "render_dashboard", "hub", "serve", "usage", "spend", "ws", "brief", "turn", "advisor"]);
+export const Speaker = Schema.Literals(["state", "chat", "fleets", "render_dashboard", "hub", "serve", "usage", "spend", "ws", "brief", "turn", "advisor", "preview"]);
 
 /** A refused command: nothing is written, the CLI exits 1. */
 export class Refusal extends Schema.TaggedError<Refusal>()("Refusal", {
@@ -22,6 +22,12 @@ export class UsageError extends Schema.TaggedError<UsageError>()("UsageError", {
 
 /** A refused chat message or an unknown participant (Python's `ChatError`): the CLI exits 1 with it. */
 export class ChatError extends Schema.TaggedError<ChatError>()("ChatError", {
+  reason: Schema.String,
+}) {}
+
+/** Why a preview step could not be done (a jj command, a dev server, a missing workspace): the CLI refuses
+ * with it, the updater records it. */
+export class PreviewError extends Schema.TaggedError<PreviewError>()("PreviewError", {
   reason: Schema.String,
 }) {}
 

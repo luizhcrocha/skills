@@ -17,6 +17,9 @@ import { workerActivity } from "../heartbeat.ts";
 import { activeAt, SpendReader, type Spent } from "../transcripts.ts";
 import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
+import { isRunning, lastError, logTail } from "../preview/devserver.ts";
+import { readRecord, type DevServer } from "../preview/record.ts";
+import { candidates, everyMs, included } from "../preview/updater.ts";
 import { numberState, pyStr } from "./number.ts";
 import { splitUrl } from "./url.ts";
 
@@ -216,6 +219,58 @@ function foundJson(found: readonly Found[]): JsonObject[] {
   return found.map((x) => ({ port: x.port, url: x.url, target: x.target, pid: x.pid, cwd: x.cwd, command: x.command, fleet: x.fleet, up: x.up }));
 }
 
+/** A dev server as the page shows it: whether it runs and answers, its port, its last error. */
+function serverView(lookups: Lookups, s: DevServer | null): JsonObject {
+  const running = s !== null && s.pid !== null && isRunning(s.pid);
+
+  return {
+    running,
+    up: running && s !== null ? (lookups.up([`http://127.0.0.1:${s.port}/`])[0] ?? false) : false,
+    port: s?.port ?? null,
+    log: s === null ? null : lastError(logTail(s.log)),
+  };
+}
+
+/** The fleet's preview as the page shows it, when it has one (`DIR/preview.json`): the address, every
+ * worker's workspace with whether the merge takes it, the conflicts, the dev servers' last errors. */
+export function previewView(machine: Machine, lookups: Lookups, root: string, state: JsonObject, address: string | null): JsonObject | undefined {
+  const record = readRecord(root);
+
+  if (record === undefined) return undefined;
+  const combined = record.path !== "";
+
+  const workers = candidates(state).map((c) => {
+    const merged = record.merged.find((m) => m.id === c.id);
+
+    return {
+      id: c.id,
+      name: c.name,
+      status: c.status ?? null,
+      included: included(c, record),
+      commit: merged?.commit.slice(0, 12) ?? null,
+      change: merged?.change.slice(0, 8) ?? null,
+    };
+  });
+
+  return {
+    url: combined ? "preview/" : null,
+    address: combined && address !== null ? `${address}preview/` : null,
+    ...serverView(lookups, combined ? record.server : null),
+    updater: record.updater !== null && isRunning(record.updater),
+    every: everyMs(machine) / 1000,
+    workers,
+    conflicts: record.conflicts.map((c) => ({ path: c.path, workers: [...c.workers] })),
+    error: record.error,
+    updated: record.updated,
+    per_worker: record.workers.map((w) => ({
+      worker: w.worker,
+      url: `preview/${encodeURIComponent(w.worker)}/`,
+      address: address === null ? null : `${address}preview/${encodeURIComponent(w.worker)}/`,
+      ...serverView(lookups, w),
+    })),
+  };
+}
+
 /** The state of the DIR `root` as the page shows it. */
 export function view(machine: Machine, lookups: Lookups, given: JsonObject, rootGiven: string): JsonObject {
   const root = resolvePath(rootGiven);
@@ -263,6 +318,10 @@ export function view(machine: Machine, lookups: Lookups, given: JsonObject, root
   const mine = me === undefined ? [] : lookups.discovered().filter((x) => x.fleet === me.id);
   const manager = registry.manager();
   state = { ...state, links, found: foundJson(unlisted(mine, links)) };
+  // Only a fleet with a preview gets the key: the Python oracle's view has none, and no trace has a preview.
+  const preview = previewView(machine, lookups, root, state, me?.url ?? null);
+
+  if (preview !== undefined) state = { ...state, preview };
 
   if (manager === undefined) return state;
 

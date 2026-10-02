@@ -1,5 +1,5 @@
 #!/bin/sh
-# The fleet CLI: `fleet state|chat|fleets|ws|brief|turn|advisor|hub|serve|render|usage|spend|served ...`,
+# The fleet CLI: `fleet state|chat|fleets|ws|preview|brief|turn|advisor|hub|serve|render|usage|spend|served ...`,
 # run by Bun from the TypeScript sources. A plugin installed from the marketplace has no node_modules:
 # the first run installs the locked dependencies, and so does a run after bun.lock or package.json
 # changed, quietly unless the install fails.

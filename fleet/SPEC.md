@@ -27,7 +27,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 [chat.py](#chatpy-the-chat) · [fleets.py and the registry](#fleetspy-and-the-registry) ·
 [The other scripts](#the-other-scripts) · [The hub](#the-hub-fleet-hub) · [Heartbeats](#heartbeats) ·
 [Listening hooks](#listening-hooks) ·
-[Workspaces](#workspaces-fleet-ws) · [The advisor](#the-advisor-fleet-advisor) · [Files by writer](#files-by-writer) ·
+[Workspaces](#workspaces-fleet-ws) · [The preview](#the-preview-fleet-preview) · [The advisor](#the-advisor-fleet-advisor) · [Files by writer](#files-by-writer) ·
 [Oracle traces](#oracle-traces) · [The model](#the-model-based-test) · [Open](#open)
 
 ## Environment
@@ -47,6 +47,8 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `FLEET_HUB_PORT` | `fleet hub`, `fleet serve` | the hub's port (default 7420); `--port` wins |
 | `FLEET_DIR` | the plugin's hook (`fleet_heartbeat`) | the fleet DIR a session works for when its scratchpad holds none: a worker launched as its own Claude Code process. See [Heartbeats](#heartbeats) |
 | `FLEET_WORKER` | the plugin's hook | the worker id such a process is; written into its heartbeat. A session with it is a worker: the listening hooks leave it alone |
+| `FLEET_PREVIEW_S` | `fleet preview`'s updater | how often it looks at the workers' working copies (default 3 s) |
+| `FLEET_PREVIEW_WAIT_S` | `fleet preview start` | how long it waits for a dev server to answer before saying it does not yet (default 30 s) |
 | `FLEET_NUDGE_MIN` | the plugin's hook (`fleet_chat_nudge`) | how long the user's message waits unread, or an answer unrecorded, before the session is told mid-turn (default 3 minutes). See [Listening hooks](#listening-hooks) |
 
 A DIR at `…/<project>/<session>/scratchpad/<name>` names a session transcript; any other DIR has
@@ -579,7 +581,8 @@ itself. A manager made later appears the same way, on the same address.
   `state` on connect and on change, `chat` with `id:`, pings; `Last-Event-ID` or `after`), `POST
   /chat` (201; 403 policy or cross-origin `Origin`; 415; 413 over 16 KiB; 400 bad body, `ChatError`,
   unknown decision or a secret's value; 409 an answer to a closed decision; 500 store failure),
-  `POST /chat/preview`, `GET /skills` (below), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
+  `POST /chat/preview`, `GET /skills` (below), the preview (`/preview/…`, HTTP and WebSocket, and `POST
+  /preview-workers`; see [The preview](#the-preview-fleet-preview)), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
   sandbox CSP; dot files and paths out of DIR 404). `/f/<fleet>` redirects (301) to `/f/<fleet>/`;
   `/f/<a>/f/<b>/…` is `/f/<b>/…`, so the manager's page, whose coordinators' links are relative,
   works under `/f/manager/`. 421 on a `Host` the hub doesn't answer to (loopback, `localhost`, the
@@ -783,6 +786,99 @@ a fleet may opt into one **shared** working copy (`workspace_mode: "shared"`).
   files jj never snapshots (ignored ones: `.env`, build output, a worker's notes), and a worker marked
   done too early loses its directory, so the delete takes a second, deliberate command, `--apply`.
 
+## The preview (`fleet preview`)
+
+Each code-writing worker edits in its own workspace, so the user saw another worker's UI only once the
+coordinator integrated it. The preview (TypeScript only, approved 2026-10-01) serves every running
+worker's in-progress edits, merged, in one live page, and optionally one worker's alone.
+
+- `fleet preview DIR start [--cmd C] [--port N] [--setup C] [--repo PATH]`: the combined preview. Refused
+  in a shared fleet (its one working copy already holds every worker's edits), for a fleet not served (the
+  preview is reached through the hub), and while it already runs.
+  - **Workspace**: `jj workspace add <repo>-preview --name preview` at the stack, made once and recorded in
+    `workspaces[]` as `{id: "preview", kind: "preview", agent: null, ...}`: the fleet's, never a worker's
+    (`fleet ws add --reuse preview` is refused; `list` shows it as the preview). Its @ is the merge: parents
+    `heads(<each included worker's @> | <stack>)`, the stack being the default workspace's @, or its parent
+    when that @ is empty and undescribed. One worker: that worker's @; none: the stack.
+  - **Dev server**: the command is `--cmd`, else the ledger's `preview.cmd` (`fleet preview DIR set --cmd C
+    [--setup C]`, kept by Python as it keeps any key), else `<package manager> run dev` when package.json has
+    a `dev` script, else refused with the reason. `{port}` and `{base}` in it are filled in; a command that
+    runs Vite (it names `vite`, or runs a script that does) gets `--port P --strictPort --host 127.0.0.1
+    --base /f/<fleet>/preview/` (after `--` for npm); anything else runs as given with `PORT` set, at its
+    root. The port is `--port` or a free one. A workspace with package.json and no node_modules is installed
+    first (`--setup`, else the lockfile's frozen install: `npm ci`, `pnpm|yarn|bun install
+    --frozen-lockfile`), so the install changes no tracked file. It runs detached, as its own process
+    group, logging to `DIR/preview/combined.log`.
+  - **Updater**: `fleet preview DIR updater`, detached, logging to `DIR/preview/updater.log`. Every
+    `FLEET_PREVIEW_S` seconds it snapshots each included worker's workspace from outside (`jj -R <path>
+    util snapshot`: jj takes that workspace's working-copy lock, records its files and writes none of them;
+    the worker's own jj commands find it as they left it), reads every workspace's @ in one `log -r
+    'working_copies()'` without a snapshot, and stops there when no commit moved. Otherwise it rebases the
+    preview's @ onto the new parents in place (`rebase -r preview@ -d …`, `--ignore-working-copy`, the
+    change kept), and when the preview's @ is a commit its files are not at (a worker's snapshot rebases
+    the preview's @, a descendant, in the same operation) runs `workspace update-stale` there, which
+    writes only the files that changed, so the dev server's hot reload picks them up. A file the preview's
+    directory had of its own (not ignored) is kept by jj in a divergent copy of the change, which is
+    abandoned, and the updater says so. It stops when the record no longer names it.
+  - **Conflicts** are not blocking: jj records them in the merge and writes their markers. The files are
+    read from the commit (`self.conflicted_files()`, what `jj resolve --list` lists, with repository
+    paths), each with the included workers whose changes ahead of the stack touch it.
+- **Picking**: a worker is in the merge when it has an active workspace and is running, queued or
+  blocked, or was taken in (`include WORKER`), unless it was taken out (`exclude WORKER`). The page's boxes
+  do the same through the hub.
+- `start --per-worker WORKER`: a dev server in that worker's own workspace (installed first when it has
+  no node_modules), base `/f/<fleet>/preview/<worker>/`, logging to `DIR/preview/<worker>.log`. No merge,
+  no updater: its files are the worker's.
+- `status`: the address, the dev server (pid, port, answering), the updater, each worker's workspace
+  (`[x]` merged at its commit and change, `[ ]` and why not), the conflicts, the updater's last error and
+  the dev server's last error (below); the same for each per-worker preview.
+- `stop [--per-worker WORKER]`: TERM, then KILL after 3 s, to each process group (the updater first); the
+  record keeps the ports with no pids. The workspace stays for the next start. **`fleet ws prune`** keeps
+  the preview's workspace while its dev server or its updater runs (`ws: kept preview: the fleet's preview
+  is running (...)`) or when its @ holds changes of its own; otherwise it forgets it, abandons its merge
+  commit, deletes the directory and the record.
+- **The record**, `DIR/preview.json`: `{fleet, workspace, path, repo, server {cmd, port, pid, base, path,
+  log, started}, updater, include[], exclude[], merged[] {id, workspace, commit, change}, stack, commit,
+  conflicts[] {path, workers[]}, error, updated, workers[] (per-worker servers)}`. It is not a key of
+  `state.json`: it has three writers (the coordinator's commands, the updater, the hub), and `state.json`
+  has one writer and no lock. Each change is made under an exclusive `flock` on `DIR/preview.lock` and
+  written whole through a rename. A pid counts as running when the process exists and is no zombie.
+- **The dev server's last error** (`status`, the page): in the last 400 lines of its log, colours
+  stripped, the burst of lines around the last one that reads as an error (from the first error line
+  after the last time-stamped line that was none, so Vite's "Internal server error" and its parse error
+  lead), without stack frames and box drawing, ten lines at most; none once the server logs a page reload
+  or an HMR update after it.
+- **The hub**: `/f/<fleet>/preview/…` goes to the combined preview's dev server and
+  `/f/<fleet>/preview/<worker>/…` to a per-worker one (a per-worker preview's name wins over a path of the
+  combined one); `/f/<fleet>/preview` redirects (301) to the slash. HTTP is passed with the path kept for
+  a server told its base (stripped, and its root redirects put back under the prefix, for one at its
+  root), `Host` set to the server's own `127.0.0.1:<port>` (Vite refuses a host it does not know, such as
+  the tailnet name), hop-by-hop headers and `Accept-Encoding` dropped. A WebSocket upgrade (Vite's HMR, on
+  the `vite-hmr` protocol, its token in the query) is piped to `ws://127.0.0.1:<port><path>` both ways,
+  the protocol echoed, messages queued until the dev server's end opens. A request that could change
+  something there (not GET, HEAD or OPTIONS) is the chat's writers' only (403 otherwise); a missing
+  preview is 404, a stopped server 502. `POST /f/<fleet>/preview-workers` `{worker, include}` takes a worker
+  in or out under the chat's post policy (403, 415, 413, 400 as for `POST /chat`) and answers `{include,
+  exclude}`. Peer hubs' previews are not passed through.
+- **Why a path, not a port per preview**: evidence from Vite 8.3.2 (create-vite 9.2.1) behind a Bun proxy
+  in headless Chromium: with `--base` every URL the page asks for (`@vite/client`, `@react-refresh`, the
+  sources, the pre-bundled deps) is under the base, and the HMR client opens its socket at the page's own
+  origin (`import.meta.url`: `wss` under https) and the base, so one hub port (and `tailscale serve`'s
+  https in front of it) carries every preview, with no Tailscale config per preview; the `Host` rewrite
+  answers Vite's `allowedHosts`. A port per preview through `tailscale serve` would need Vite told the
+  MagicDNS host (config or an undocumented environment variable), a serve port allocated and freed per
+  preview, and changes to tailscaled's persistent config; it stays the way for a server whose base is
+  set only in its config (Next's `basePath`), which this does not do yet. A page with hard-coded absolute
+  URLs (`/icons.svg`) misses the base either way.
+- **The page** (the view's `preview`, only when `DIR/preview.json` exists, so no trace changes): `{url
+  ("preview/", or null with only per-worker ones), address, running, up, port, log, updater, every,
+  workers[] {id, name, status, included, commit, change}, conflicts[], error, updated, per_worker[]
+  {worker, url, address, running, up, port, log}}`. The Fleet view's Preview block shows the link, a box
+  per worker's workspace (disabled for a viewer who may not write; put back when the hub refuses), the
+  conflicts with the workers' names, the build error and each per-worker preview; the Links view lists
+  the combined and per-worker links. The hub's view of a fleet is recomputed when `state.json` or
+  `preview.json` changes, so the stream carries the updater's news.
+
 ## Rules as commands (`fleet brief`, `fleet turn`)
 
 Rules the skills asked the model to remember, now kept by the CLI (stage 5; the inventory and each
@@ -873,6 +969,10 @@ recommendation attached.
 | `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / deleted (a shared fleet's `add` writes nothing) |
 | `fleet ws add --reuse` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; a new change in the workspace (`jj new`) |
 | `fleet ws split` | `DIR/state.json` (`events`, `updated`), `DIR/index.html`; the default workspace's `@` split in two |
+| `fleet preview start` / `stop` / `set` | `DIR/state.json` (`workspaces` with the preview's row on its first start, `preview` by `set`, `events`, `updated`), `DIR/index.html`; `DIR/preview.json` (under `DIR/preview.lock`); `DIR/preview/*.log`; the `<repo>-preview` workspace (made once); a node_modules install in a workspace that has none |
+| `fleet preview include` / `exclude`, the hub's `POST preview-workers` | `DIR/preview.json` |
+| `fleet preview`'s updater | `DIR/preview.json` when the merge changed; the preview workspace's @ (rebased) and its files (`update-stale`); jj's operation log (each worker snapshot that records an edit) |
+| `fleet ws prune --apply` of the preview | its directory deleted, its merge commit abandoned, `DIR/preview.json` removed |
 
 ## Oracle traces
 

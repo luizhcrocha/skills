@@ -28,12 +28,14 @@ import * as Option from "effect/Option";
 
 import { stampOf } from "../clock.ts";
 import { Refusal } from "../errors.ts";
-import { exists, isDir, readText, resolvePath, writeText } from "../files.ts";
+import { exists, isDir, readText, remove, resolvePath, writeText } from "../files.ts";
 import { workerActivity } from "../heartbeat.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { laneMatches, lanesMeet } from "../ledger/lanes.ts";
 import { decodeLedger } from "../ledger/model.ts";
+import { readRecord, recordPath, updateRecord } from "../preview/record.ts";
+import { isRunning } from "../preview/devserver.ts";
 import { validate } from "../ledger/validate.ts";
 import { cliLookups } from "../page/lookups.ts";
 import { pageHtml, readTemplate, writePage } from "../page/render.ts";
@@ -72,6 +74,8 @@ interface Recorded {
   readonly repo: string;
   readonly base: string;
   readonly row: JsonObject;
+  /** The fleet's combined preview (`fleet preview`), never a worker's. */
+  readonly preview: boolean;
 }
 
 function recorded(raw: JsonObject): Recorded[] {
@@ -83,7 +87,7 @@ function recorded(raw: JsonObject): Recorded[] {
 
     if (row === undefined || id === undefined || path === undefined || repo === undefined || row["status"] === "pruned") return [];
 
-    return [{ id, agent: asString(row["agent"]) ?? id, path, repo, base: asString(row["base"]) ?? "", row }];
+    return [{ id, agent: asString(row["agent"]) ?? id, path, repo, base: asString(row["base"]) ?? "", row, preview: row["kind"] === "preview" }];
   });
 }
 
@@ -110,7 +114,7 @@ function shared(raw: JsonObject): boolean {
 const VALUED = new Set(["-r", "--revision", "--agent", "--repo", "--reuse", "-m", "--message"]);
 
 /** The ledger in DIR as JSON, checked as every command checks it. */
-function load(root: string): JsonObject | Refusal {
+export function load(root: string): JsonObject | Refusal {
   const text = readText(join(root, "state.json"));
 
   if (text === undefined) return new Refusal({ speaker: "ws", reason: `no state.json in ${root}; run \`fleet state ${root} init\` first` });
@@ -121,7 +125,7 @@ function load(root: string): JsonObject | Refusal {
 }
 
 /** Write the ledger with `workspaces` (when given) and these events, stamped, and render the page. */
-function save(machine: Machine, root: string, raw: JsonObject, workspaces: readonly Json[] | undefined, events: readonly JsonObject[]): Refusal | undefined {
+export function save(machine: Machine, root: string, raw: JsonObject, workspaces: readonly Json[] | undefined, events: readonly JsonObject[]): Refusal | undefined {
   const stamp = stampOf(machine.now());
   const kept: JsonObject = workspaces === undefined ? raw : { ...raw, workspaces: [...workspaces] };
   const next: JsonObject = { ...kept, events: [...(asArray(raw["events"]) ?? []), ...events], updated: stamp };
@@ -140,8 +144,9 @@ function save(machine: Machine, root: string, raw: JsonObject, workspaces: reado
   return undefined;
 }
 
-function event(machine: Machine, raw: JsonObject, agent: string, kind: string, text: string): JsonObject {
-  return { at: stampOf(machine.now()), agent: agentRow(raw, agent) === undefined ? null : agent, kind, text };
+/** An event of the ledger, tied to `agent` when the ledger has that worker. */
+export function event(machine: Machine, raw: JsonObject, agent: string | null, kind: string, text: string): JsonObject {
+  return { at: stampOf(machine.now()), agent: agent === null || agentRow(raw, agent) === undefined ? null : agent, kind, text };
 }
 
 function described(c: Change): string {
@@ -244,7 +249,7 @@ function reusable(raw: JsonObject, worker: string): Recorded[] {
   return recorded(raw).filter((r) => {
     const status = statusOf(raw, r.agent);
 
-    return r.agent !== worker && (status === undefined || !LIVE.has(status)) && laneOf(agentRow(raw, r.agent)).some((x) => lane.some((y) => lanesMeet(x, y)));
+    return !r.preview && r.agent !== worker && (status === undefined || !LIVE.has(status)) && laneOf(agentRow(raw, r.agent)).some((x) => lane.some((y) => lanesMeet(x, y)));
   });
 }
 
@@ -257,6 +262,8 @@ function handOver(machine: Machine, root: string, raw: JsonObject, worker: strin
     const r = all.find((x) => x.id === target) ?? all.find((x) => x.agent === target);
 
     if (r === undefined) return yield* refuse(`no active workspace ${target}, by its name or its worker's: \`fleet ws ${root} list\` names them`);
+
+    if (r.preview) return yield* refuse(`workspace ${r.id} is the fleet's preview (\`fleet preview\`), never a worker's`);
 
     if (r.agent === worker) return yield* refuse(`workspace ${r.id} is already ${worker}'s`);
     const status = statusOf(raw, r.agent);
@@ -429,6 +436,11 @@ function list(machine: Machine, root: string, raw: JsonObject): Effect.Effect<nu
     out.out("workspaces, as each was last snapshotted:\n");
 
     for (const r of all) {
+      if (r.preview) {
+        out.out(previewLine(root, r));
+        continue;
+      }
+
       const row = agentRow(raw, r.agent);
       const status = row === undefined ? "no row" : (asString(row["status"]) ?? "?");
       const last = seen.get(r.agent);
@@ -457,6 +469,27 @@ function list(machine: Machine, root: string, raw: JsonObject): Effect.Effect<nu
   });
 }
 
+/** The preview's workspace in `list`: whether the preview runs there, and the commit its merge is at. */
+function previewLine(root: string, r: Recorded): string {
+  const live = previewLive(root);
+  const tip = changes(r.repo, `${literal(r.id)}@`)?.[0];
+  const at = tip === undefined ? "jj no longer knows this workspace" : `@ ${tip.short}${tip.conflict ? ", conflicted" : ""}, the merge of the workers' working copies`;
+
+  return `  ${r.id}  the fleet's preview, ${live ?? "stopped"}  ${r.path}${isDir(r.path) ? "" : " (gone)"}\n    ${at}\n`;
+}
+
+/** What of the preview still runs (its dev server, its updater), in words; undefined when nothing does. */
+export function previewLive(root: string): string | undefined {
+  const record = readRecord(root);
+
+  const parts = [
+    record?.server?.pid !== null && record?.server?.pid !== undefined && isRunning(record.server.pid) ? `dev server pid ${record.server.pid}` : undefined,
+    record?.updater !== null && record?.updater !== undefined && isRunning(record.updater) ? `updater pid ${record.updater}` : undefined,
+  ].filter((p) => p !== undefined);
+
+  return parts.length === 0 ? undefined : `running (${parts.join(", ")})`;
+}
+
 /** Whether a repository path is in a lane: the entry itself, under it, or matched by it as a glob (the
  * lane's own glob rule, the one overlap is read by). */
 export function inLane(path: string, lane: readonly string[]): boolean {
@@ -476,7 +509,7 @@ function outsideLane(repo: string, revset: string, lane: readonly string[]): str
 
 /** Whether the directory at `path` is a secondary workspace of the repo whose default workspace is `repo`:
  * its `.jj/repo` is a file that points at the repo's store. */
-function belongs(path: string, repo: string): boolean {
+export function belongs(path: string, repo: string): boolean {
   const pointer = readText(join(path, ".jj", "repo"));
 
   if (pointer === undefined || isDir(join(path, ".jj", "repo"))) return false;
@@ -499,8 +532,37 @@ function snapshot(path: string): string | undefined {
   return update.ok ? undefined : why(update);
 }
 
+/** Why the preview's workspace must stay, or undefined when it may go: never while its dev server or its
+ * updater runs, nor when its @ holds changes of its own (the merge itself is empty; an edit made there is
+ * nobody's work, but it is not deleted unseen). */
+function previewKept(root: string, r: Recorded): string | undefined {
+  const live = previewLive(root);
+
+  if (live !== undefined) return `the fleet's preview is ${live}: \`fleet preview ${root} stop\` first`;
+
+  if (!isDir(r.path)) return undefined;
+
+  if (!belongs(r.path, r.repo) || resolvePath(workspaceRoot(r.repo, r.id) ?? "") !== resolvePath(r.path)) return `${r.path} is not jj workspace ${r.id} of ${r.repo}; nothing there is touched`;
+  const tip = changes(r.repo, `${literal(r.id)}@`)?.[0];
+
+  if (tip === undefined) return "jj could not read the preview's @";
+
+  return tip.empty || tip.conflict ? undefined : `its @ (${tip.short}) holds changes of its own, beyond the merge: look at them (\`jj diff -r ${tip.short}\`) before it goes`;
+}
+
+/** After the preview's workspace is pruned, its record goes too, unless a per-worker preview still runs. */
+function forgetPreview(root: string): void {
+  const record = readRecord(root);
+
+  if (record === undefined) return;
+
+  if (record.workers.some((w) => w.pid !== null && isRunning(w.pid))) updateRecord(root, (now) => (now === undefined ? undefined : { ...now, path: "", server: null, merged: [], commit: null, conflicts: [] }));
+  else remove(recordPath(root));
+}
+
 /** Why `r` must stay, or undefined when it may go. */
-function keepBecause(raw: JsonObject, r: Recorded): string | undefined {
+function keepBecause(root: string, raw: JsonObject, r: Recorded): string | undefined {
+  if (r.preview) return previewKept(root, r);
   const row = agentRow(raw, r.agent);
   const status = asString(row?.["status"]);
 
@@ -540,7 +602,7 @@ function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly s
     let kept = 0;
 
     for (const r of recorded(raw)) {
-      const because = keepBecause(raw, r);
+      const because = keepBecause(root, raw, r);
 
       if (because === undefined) {
         going.push(r);
@@ -552,7 +614,7 @@ function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly s
     }
 
     if (!apply) {
-      for (const r of going) out.out(`would prune ${r.id}: forget the workspace and delete ${r.path}; its changes are in the stack\n`);
+      for (const r of going) out.out(`would prune ${r.id}: forget the workspace and delete ${r.path}; ${r.preview ? "the fleet's preview, and nothing runs there" : "its changes are in the stack"}\n`);
       out.out(going.length === 0 ? "nothing to prune\n" : `dry run, nothing deleted: \`fleet ws ${root} prune --apply\` does it\n`);
 
       return kept > 0 ? 1 : 0;
@@ -563,6 +625,9 @@ function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly s
     const gone = new Set<string>();
 
     for (const r of going) {
+      // The preview's merge commit goes with it: nothing else descends from it.
+      const merge = r.preview ? changes(r.repo, `${literal(r.id)}@`)?.[0] : undefined;
+
       if ((workspaceNames(r.repo) ?? []).includes(r.id)) {
         const forgot = jj(r.repo, ["workspace", "forget", r.id]);
 
@@ -573,9 +638,17 @@ function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly s
         }
       }
 
+      if (merge !== undefined) jj(r.repo, ["--ignore-working-copy", "abandon", merge.commit]);
+
       if (isDir(r.path)) rmSync(r.path, { recursive: true, force: true });
+
+      if (r.preview) forgetPreview(root);
       gone.add(r.id);
-      events.push(event(machine, raw, r.agent, "integrated", `Workspace ${r.id} pruned: its changes are in the stack; ${r.path} deleted.`));
+      events.push(
+        r.preview
+          ? event(machine, raw, null, "note", `Workspace ${r.id} pruned: the fleet's preview, stopped; ${r.path} deleted.`)
+          : event(machine, raw, r.agent, "integrated", `Workspace ${r.id} pruned: its changes are in the stack; ${r.path} deleted.`),
+      );
       out.out(`pruned ${r.id}: ${r.path} deleted\n`);
     }
 
