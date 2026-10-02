@@ -971,14 +971,24 @@ Each code-writing worker edits in its own workspace, so the user saw another wor
 coordinator integrated it. The preview (TypeScript only, approved 2026-10-01) serves every worker's edits
 not yet integrated, merged, in one live page, and optionally one worker's alone.
 
-- `fleet preview DIR start [--cmd C] [--port N] [--setup C] [--repo PATH]`: the combined preview. Refused
+- `fleet preview DIR start [--cmd C] [--port N] [--setup C] [--repo PATH] [--stack REVSET]`: the combined preview. Refused
   in a shared fleet (its one working copy already holds every worker's edits), for a fleet not served (the
   preview is reached through the hub), and while it already runs.
   - **Workspace**: `jj workspace add <repo>-preview --name preview` at the stack, made once and recorded in
     `workspaces[]` as `{id: "preview", kind: "preview", agent: null, ...}`: the fleet's, never a worker's
     (`fleet ws add --reuse preview` is refused; `list` shows it as the preview). Its @ is the merge: parents
-    `heads(<each included worker's @> | <stack>)`, the stack being the default workspace's @, or its parent
-    when that @ is empty and undescribed. One worker: that worker's @; none: the stack.
+    `heads(<each included worker's @> | <stack>)`. One worker: that worker's @; none: the stack.
+  - **The stack** (the merge's base): the one commit a revset names, `start --stack REVSET` for that start,
+    else the ledger's `preview.stack` (`fleet preview DIR set --stack REVSET`, kept beside `preview.cmd`;
+    `set --stack ''` or `set --no-stack` clears it); without one, the default workspace's @, or its parent
+    when that @ is empty and undescribed. The revset is resolved in the fleet's repo at every look, without
+    a snapshot, so a bookmark or `<workspace>@` (`devloop@`) is followed as it moves. One that names no
+    commit, several, or none jj resolves is refused: the look records why as the updater's error and
+    changes nothing else, so the last good merge stands. The revset is for a repo whose default workspace
+    is someone's own checkout: its @ holds the user's uncommitted work, which the coordinator never
+    touches and the workers' merge should not sit on (in custom-mcp-servers, 826 files on a conflicted old
+    change, which left `package.json` and `pnpm-lock.yaml` conflicted with "the stack"); the coordinator
+    keeps its integrated stack in a workspace of its own and names it, `set --stack devloop@`.
   - **Dev server**: the command is `--cmd`, else the ledger's `preview.cmd` (`fleet preview DIR set --cmd C
     [--setup C]`, kept by Python as it keeps any key), else `<package manager> run dev` when package.json has
     a `dev` script, else refused with the reason. `{port}` and `{base}` in it are filled in; a command that
@@ -998,7 +1008,7 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
     the worker's own jj commands find it as they left it), reads every workspace's @ in one `log -r
     'working_copies()'` without a snapshot, drops each worker merged until integrated (below) whose
     workspace is gone or whose @ has no change left to integrate (no commit of `(::<its @> ~ ::(<stack> |
-    trunk())) ~ empty()`: trunk() counts because a coordinator that lands by moving a bookmark leaves the
+    trunk())) ~ empty()`, the stack as given above: trunk() counts because a coordinator that lands by moving a bookmark leaves the
     default workspace's @ behind; asked once per commit, stack and trunk), and stops there when no commit
     moved. Otherwise it rebases the
     preview's @ onto the new parents in place (`rebase -r preview@ -d …`, `--ignore-working-copy`, the
@@ -1051,21 +1061,28 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
 - **The dev servers' environment**: every dev server the preview starts (combined, per-worker, root mode
   or not), its install and the updater inherit the environment `fleet preview DIR start` ran in,
   unchanged but for `PORT`, `BROWSER`, `NO_COLOR` and `FORCE_COLOR`. Dev secrets come that way only:
-  `secretspec run -- fleet preview DIR start ...`; nothing writes or copies a secret file. Nothing else
-  starts a dev server (the updater merges, the hub proxies), so a server that dies is started again by
-  `start`, under the same `secretspec run --`.
-- `status`: the address, the dev server (pid, port, answering), the updater, each worker's workspace
+  any loader that runs a command with secrets in its environment wraps `start`, e.g. `secretspec run --
+  fleet preview DIR start ...` or `op run --env-file=<file of op:// references> -- fleet preview DIR start
+  ...` (the file holds references only, never values); nothing writes or copies a secret file. secretspec's
+  1Password provider can fail to reach the desktop app (`connecting to desktop app … timed out`) where `op`
+  works: `op run --env-file` is then the fallback. Nothing else starts a dev server (the updater merges,
+  the hub proxies), so a server that dies is started again by `start`, under the same loader.
+- `status`: the address, the stack (`stack: devloop@ (<commit>)`, or `stack: the default workspace's @
+  (<commit>)`), the dev server (pid, port, answering), the updater, each worker's workspace
   (`[x]` merged at its commit and change, `[ ]` and why not: `running`, `taken in`, `taken out`, `done,
   merged`, `done, already in the stack`, `done, its workspace is gone`), the conflicts, the updater's last error and
   the dev server's last error (below); the same for each per-worker preview.
-- `stop [--per-worker WORKER]`: TERM, then KILL after 3 s, to each process group (the updater first); the
-  record keeps the ports with no pids. The workspace stays for the next start. **`fleet ws prune`** keeps
+- `stop [--per-worker WORKER | --all]`: TERM, then KILL after 3 s, to each process group (the updater
+  first): plain `stop` stops the combined preview's dev server and its updater and leaves each per-worker
+  preview running (it names those); `--per-worker WORKER` stops that one alone; `--all` stops the combined
+  preview and every per-worker one. The record keeps the ports with no pids. The workspace stays for the next start. **`fleet ws prune`** keeps
   the preview's workspace while its dev server or its updater runs (`ws: kept preview: the fleet's preview
   is running (...)`) or when its @ holds changes of its own; otherwise it forgets it, abandons its merge
   commit, deletes the directory and the record.
 - **The record**, `DIR/preview.json`: `{fleet, workspace, path, repo, server {cmd, port, pid, base, path,
   log, started, public}, updater, include[], exclude[], merged[] {id, workspace, commit, change}, stack,
-  commit, conflicts[] {path, workers[]}, error, updated, workers[] (per-worker servers), ports {combined,
+  stack_from (the revset the last merge's stack came from, null for the default rule), stack_given
+  (`start --stack`'s, for that start), commit, conflicts[] {path, workers[]}, error, updated, workers[] (per-worker servers), ports {combined,
   workers}}`. It is not a key of
   `state.json`: it has three writers (the coordinator's commands, the updater, the hub), and `state.json`
   has one writer and no lock. Each change is made under an exclusive `flock` on `DIR/preview.lock` and
