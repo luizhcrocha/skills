@@ -1289,9 +1289,12 @@ A result file has a header line (`{"results": NAME, "trace": 1}`), then one line
 
 `changed` holds every file under `$W` and `$REGISTRY` the step added or changed: `.json` parsed,
 `.jsonl` as a list of parsed lines (`{"raw": …}` for one that doesn't parse, `{"torn": true}` last
-when the file doesn't end in a newline), `index.html` as `{"sha256": …}` of its text with the
-session's paths as tokens (so the page is compared byte for byte), other text as text,
-binary as `{"sha256": …}`. `*.pid`, `*.tmp`, `server.log` and `__pycache__` are ignored. In every
+when the file doesn't end in a newline), `index.html` as what the fleet wrote into it:
+`{"written": "html", "document": true, "state": …}`, `document` for a whole document (a `--fragment`
+is `false`) and `state` the parsed payload of its `fleet-state` script (`fleets.view()`, with paths
+as tokens; `null` when it has none, `{"raw": …}` when it doesn't parse), other text as text,
+binary as `{"sha256": …}`. The template around the payload is not recorded: it is fleet/page's
+build, which `just test-page` checks, so a page change re-records no trace. `*.pid`, `*.tmp`, `server.log` and `__pycache__` are ignored. In every
 string, the session's paths read back as `$DIR`, `$W`, `$REGISTRY`, `$USERHOME`, `$TMP`, the fleet
 CLI's path (`<repo>/fleet/bin/fleet`, which both implementations print) as `$FLEET`, and the
 implementation's own directory as `$SKILL` (`--subst PATH=TOKEN`); a `pid` equal to the runner's
@@ -1391,9 +1394,11 @@ below, open-1 fixed in both; argparse's usage and error texts (exit 2) match too
    `emptied.jsonl`.
 8. **`chat say --decision X` is stored unchecked**: a number or an unknown id is kept as given,
    and the page, `wait` and `listening` match decisions by id.
-9. **Fixed: the page's payload wasn't in the oracle.** `index.html` is recorded by its hash now,
-   and the `render-*` traces render at every step, so `fleets.view()` (spent, links up or down,
-   the manager's coordinators and usage, the gate) is compared byte for byte. The TypeScript
+9. **Fixed: the page's payload wasn't in the oracle.** `index.html` is recorded by the state its
+   `fleet-state` script carries, and the `render-*` traces render at every step, so `fleets.view()`
+   (spent, links up or down, the manager's coordinators and usage, the gate) is compared value for
+   value (an escape such as U+2028 written raw or as `\u2028` reads the same, as it does in the
+   browser's `JSON.parse`). The TypeScript
    `state` renders the page itself (stage 3). Left out: a figure read from a file time (a worker's
    or a session's `active`, silent workers) and the machine's served ports, which no trace can
    pin; test/page.test.ts covers them. A float with no fraction (`61.0`) in a hand-written

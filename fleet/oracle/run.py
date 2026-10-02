@@ -30,6 +30,7 @@ import difflib
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -45,6 +46,7 @@ START = "2026-01-05T09:00:00+00:00"  # the clock of a step that names none, befo
 STEP_TIMEOUT_S = 20
 IGNORED = {"__pycache__", "server.log"}  # never part of the observable state
 IGNORED_SUFFIXES = (".pyc", ".tmp")
+PAGE_STATE = re.compile(r'<script id="fleet-state" type="application/json">(.*?)</script>', re.S)
 
 
 def python_impl() -> dict:
@@ -112,8 +114,8 @@ class Session:
     # -- observing ----------------------------------------------------------------------------
     def _read(self, path: Path, rel: str):
         data = path.read_bytes()
-        if rel.endswith("index.html"):  # the page is the template around fleets.view(), compared byte for byte
-            return {"sha256": hashlib.sha256(self.canon(data.decode("utf-8", "replace")).encode()).hexdigest()}
+        if rel.endswith("index.html"):
+            return self._page(data.decode("utf-8", "replace"))
         if rel.endswith(".jsonl"):
             rows = []
             for line in data.split(b"\n"):
@@ -135,6 +137,17 @@ class Session:
             return self.canon(data.decode("utf-8"))
         except UnicodeDecodeError:
             return {"sha256": hashlib.sha256(data).hexdigest()}
+
+    def _page(self, html: str) -> dict:
+        """A rendered page as what the fleet put in it: that it was written, whole document or fragment, and the
+        state it carries (fleets.view(), the fleet-state script). The template around it is fleet/page's build,
+        tested by test-page, so a page change re-records no trace."""
+        match = PAGE_STATE.search(html)
+        try:
+            state = self._canon_json(json.loads(match.group(1))) if match else None
+        except ValueError:
+            state = {"raw": self.canon(match.group(1))}
+        return {"written": "html", "document": html.lstrip().lower().startswith("<!doctype"), "state": state}
 
     def observe(self) -> dict:
         found = {}
