@@ -408,7 +408,10 @@ next append starts on a new line. Bytes that aren't UTF-8 are read with replacem
 
 A message: `{id, at, from, to[], text, re (int|null), parts[]}` plus `author` (the user's tailnet
 login, set only by the server), `decision`, `quote {text ≤2000, from ≤200}`, `side` (the id of the
-message that opened a side chat). `parts` split the text into plain parts and mentions
+message that opened a side chat), and, written by the hub only (its Delivery, in [The hub](#the-hub-fleet-hub)),
+`delivered [{fleet, id}]` (on the manager's message: the coordinators that have it in their own chat, and
+its id there) and `via {fleet, id}` (on that copy, `{fleet: "manager", id}`, and on a coordinator's answer
+mirrored onto the manager's page, `{fleet, id}` of the answer). `parts` split the text into plain parts and mentions
 `{text: "@a1", mention: "a1"}` that join back to the text exactly. `re` and `parts` default to
 null and one plain part when read.
 
@@ -437,13 +440,16 @@ its id.
 | `watch --as WHO [--after N \| --resume] [--all] [--once] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager |
 | `wait DECISION...` | waits for the user's answer to one of these open decisions | the answer's line, then `-> the user answered <ref>: record it first, ...` | 1 unknown decision |
 
-A printed line: `#<id> <from>( (<name or author>)) -> <to, each with its name>( [<ref> <decision>])( [side chat #N])( (quoting <from>: "<quote>"))`
+A printed line: `#<id> <from>( (<name or author>)) -> <to, each with its name>( [<ref> <decision>])( [side chat #N])( [delivered to <fleet> #<id>, ...])( [via <fleet> #<id>])( (quoting <from>: "<quote>"))`
 `: <text>( [re #N])`. Line breaks print as ` ⏎ `, a tab as a space, and other control characters
 are dropped, so a message is always one line.
 
 `watch`: `DIR/watch-WHO.pid` holds its pid while it runs (removed at exit if still its own),
 `watch-WHO.cursor` the last id printed (`--resume` starts after it), and `watch-WHO.left` is
-touched when it ends. A manager's watch prints `!` lines every `FLEET_CHECK_S`: a fleet that
+touched when it ends. With `--all`, a message from the user is left out for each recipient that has it in
+its own chat (`delivered`): a manager's watch does not print the user's message to coordinators the hub
+delivered it to, and prints, with its `[delivered to ...]` mark, one that also names the manager or a
+coordinator it was not delivered to. A manager's watch prints `!` lines every `FLEET_CHECK_S`: a fleet that
 doesn't read its chat while the user waits more than `FLEET_UNHEARD_S`, an answer a fleet has had
 that long without recording it, a running worker silent for 20 minutes. Each is told once
 (`watch-manager.told`). A coordinator's watch prints its own silent workers, and each message to
@@ -466,7 +472,8 @@ prints one line per event, fleet by fleet in registry order, its messages before
   `<fleet> <ref> held: <title>(: <first line of held, when it is text>)`. A decision opened for the
   manager is not news (the coordinator writes to the manager's session).
 
-Nothing else of a fleet is (no worker's message, no reply of its coordinator). A *first line* is the
+Nothing else of a fleet is (no worker's message, no reply of its coordinator, no message the hub delivered
+from the manager's page: `via` the manager). A *first line* is the
 text's first line that has text, one-lined as a message is, spaces trimmed, cut at 200 characters, with
 ` …` when the text goes on. Where each decision stands is `open:<asks>`, `held` or its status; a decision
 is news when that changes. The cursors are per fleet, by its directory (a renamed fleet keeps them), in
@@ -491,8 +498,8 @@ exits 0 (open-21, fixed).
 **Listening** (`listening(DIR)`, the page and the warnings): `on` when the host's watch pid is
 alive, or its `.left` is younger than 10 minutes, or the host sent a message in the last 10
 minutes. `seen` is the host's cursor (0 without one). `unread` counts the user's messages after
-`seen` that no one but the user has answered with `re` and that aren't tagged with a closed
-decision (by id). `since` is the oldest one's `at`.
+`seen` that no one but the user has answered with `re`, that aren't tagged with a closed
+decision (by id), and that some recipient has only here (not every one of them in `delivered`). `since` is the oldest one's `at`.
 
 ## fleets.py and the registry
 
@@ -667,6 +674,27 @@ itself. A manager made later appears the same way, on the same address.
   with no field of its own: the host (and a worker, by `brief.md`) runs that skill with those
   arguments, as if typed in its session, and answers with `--re`. serve_dashboard.py has no such
   route; its 404 leaves the composer without a list.
+- **Delivery to the coordinators** (TypeScript only: serve_dashboard.py stores the message and delivers
+  nothing, so the manager forwards it as before). A message the user posts on the manager's page (not an
+  answer to one of its decisions) whose recipients include live coordinators (`@<fleet>` resolves to
+  `to: ["<fleet>"]` among the registry's fleets) is written, under the manager's store lock, into each
+  one's own `DIR/chat.jsonl` through the chat store: `{id (its next), at, from: "user", to:
+  ["coordinator"], text, re, parts (one plain part), author?, quote?, side?, via: {fleet: "manager", id:
+  N}}`. Its `re` is the coordinator's own message when N answers one mirrored from it (or a copy it has),
+  else null; a side chat opened on the manager's page opens one there, a later message of it continues
+  that one (a new one when the fleet has none of it); else the copy inherits its parent's side. The
+  manager's message is stored with `delivered: [{fleet, id}]`, one row per copy (the link; a fleet whose
+  chat cannot be written is left out of it, and the manager's watch prints the message for it as before).
+  A fleet not served is no recipient: `@<gone>` stays text, the message goes to the manager (the page's To
+  line says so), and the manager forwards it. *The courier*: every 300 ms the hub reads what each live
+  coordinator's chat gained (from its start on a hub's first read) and mirrors each message from
+  `coordinator` whose `re` is a delivered copy onto the manager's page: `{from: <fleet>, to: ["user"], re:
+  N, text, parts (one plain part), quote?, side (N's, when it has one), via: {fleet, id}}`, at the
+  answer's own `at`. Under the manager's lock it writes nothing when a message with that `re` and `via`
+  (the fleet by its id or an alias) is there, so a re-read or a restarted hub never writes it twice. Why
+  the courier and not the write path: the coordinator answers with `fleet chat say`, which the CLI writes
+  without the hub, so only a reader sees it; the hub is the one process always running that already
+  reads every fleet's files, and nothing in the CLI writes another fleet's chat.
 - **Live updates**: each stream looks at `state.json` and `chat.jsonl` every 300 ms (as
   serve_dashboard.py did); the view of a fleet is computed once for every client, again when the
   file changes or after 2 s (spend, liveness, links). The page already used SSE and polls
@@ -1076,7 +1104,7 @@ recommendation attached.
 | `fleets.py gate take/free`, `name` | `REGISTRY/gate/gate.json`, `REGISTRY/<fleet>.json` |
 | `serve_dashboard.py` | `DIR/server.json`, `DIR/server.log`, `REGISTRY/<fleet>.json` |
 | `fleet serve` | `REGISTRY/<fleet>.json` (removed with `--stop`) |
-| `fleet hub` | `REGISTRY/hub/hub.json` while it runs; `DIR/chat.jsonl` on a post; on an allow-once to a permission, `<root>/.claude/settings.local.json` (and its folder) and `DIR/grants.jsonl` |
+| `fleet hub` | `REGISTRY/hub/hub.json` while it runs; `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, `<root>/.claude/settings.local.json` (and its folder) and `DIR/grants.jsonl` |
 | the plugin's hook (grant removal) | `<root>/.claude/settings.local.json`, `DIR/grants.jsonl` (`remove` lines) |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |
@@ -1142,7 +1170,8 @@ Stage 2 runs `run.py check` on each trace in `oracle/traces/` with
 or sets `FLEET_ORACLE_IMPL='{"state": "fleet state", "chat": "fleet chat", "fleets": "fleet fleets", "subst": {"<its dir>": "$SKILL"}}'`
 for `test_corpus.py` and `test_model.py`. The corpus: `ledger-lifecycle`, `decisions`, `hold`,
 `plan-and-grill`, `chat`, `manager` (written by hand from the tests), `manager-news` (the manager's
-`--fleets` watch and `fleets waiting`), `emptied` (open-7), `workspaces` (`set --workspaces`, the shared
+`--fleets` watch and `fleets waiting`), `delivered` (what the hub delivered: the marks, the manager's
+watch and news leaving it out), `emptied` (open-7), `workspaces` (`set --workspaces`, the shared
 fleet's refusal of lanes that meet, the isolated fleet's warning, `show`, validation, a render),
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each
 hand-written trace, the same steps with every state command rendering, plus `render-page` (a
