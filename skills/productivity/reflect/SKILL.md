@@ -57,7 +57,7 @@ cd ~/repos/luizhcrocha/skills; jj workspace add ../skills-reflect -r 'trunk()' -
 (A workspace named `reflect` already there → `reflect-<date>`.) Then, for each approved Accepted item, follow its Routing:
 
 - Trivial skill edit (a one-line bullet, a tightened sentence, a stale fact corrected): make it directly.
-- Substantive skill edit (a new section, a new table, more than ~10 lines), `tune description: <skill path>`, or `new skill: <kebab-name>`: write it under `tstack:writing-for-agents` (SKILL-MECHANICS.md for descriptions and invocation) and tuca-mode's Authoring a skill playbook. A new skill is registered the way the repo's CLAUDE.md says (plugin.json, the top-level and bucket READMEs).
+- Substantive skill edit (a new section, a new table, more than ~10 lines), `tune description: <skill path>`, or `new skill: <kebab-name>`: write it under `tstack:writing-for-agents` (SKILL-MECHANICS.md for descriptions and invocation) and tuca-mode's Authoring a skill playbook. A new skill is registered the way the repo's `AGENTS.md` or `CLAUDE.md` says (plugin.json, the top-level and bucket READMEs).
 - `memo <kind>`: a durable project fact, gotcha or decision that is not a skill edit becomes a memo note in the project it is about (`tstack:memo`).
 
 In the tstack workspace, run `just test` and `just validate`, describe the change in the repo's style (`jj log` shows it; `tstack:unslop` for the words) naming what each edit fixes, then `jj new`. Never push or move a bookmark: the change is for Luiz to review, and landing it is his call or a Land run he asks for.

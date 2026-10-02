@@ -48,7 +48,7 @@ Route each survivor to one home:
 | to how the mode works: autonomy, subagents, replies, non-negotiables | `tuca-mode/SKILL.md` |
 | to one kind of task | that playbook |
 | and code could check it (`mechanical: yes`) | a structure proposal, per `tstack:principles`' Encode Lessons in Structure: the strongest mechanism that fits (a hook, a lint, a `land-check` rule, a script flag), with where it would live; a lint rule goes through `tstack:lint-evolve`. The prose rule is dropped once the mechanism exists. |
-| to one repo only | that repo's `CLAUDE.md`, named as a proposal in the report |
+| to one repo only | that repo's `AGENTS.md` (its `CLAUDE.md` if it has no `AGENTS.md`; recommend `/migrate-to-agents-md` then), named as a proposal in the report |
 
 Done when every pattern is kept with a home, or dropped with its reason.
 
@@ -71,4 +71,4 @@ Describe each change in the repo's style (`jj log`), with an evidence section in
 
 Leave the workspaces in place for Luiz. No landing, no push, no bookmark move.
 
-**Reply:** per repo, the change id and workspace path; the rules added, sharpened and removed, each with its home and instance count; the structure proposals (mechanism, where it lives, the rule it replaces); rules proposed for a repo's own `CLAUDE.md` or a skill of their own; what was dropped as a one-off or contradicted; the sessions and turns read, and dropouts. A dotfiles change takes effect after Luiz's next home-manager switch.
+**Reply:** per repo, the change id and workspace path; the rules added, sharpened and removed, each with its home and instance count; the structure proposals (mechanism, where it lives, the rule it replaces); rules proposed for a repo's own `AGENTS.md` or a skill of their own; what was dropped as a one-off or contradicted; the sessions and turns read, and dropouts. A dotfiles change takes effect after Luiz's next home-manager switch.

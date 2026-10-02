@@ -5,6 +5,8 @@ description: Writing documents for agents. Use when creating or editing skills, 
 
 Reference for writing any document an agent consumes: a skill, an `AGENTS.md` / `CLAUDE.md`, a doc reached by a pointer. The packaging differs; the writing does not: the same levers make each one predictable, since the agent takes the same _process_ every run rather than producing the same output.
 
+A repo's own instructions go in `AGENTS.md`: Claude Code and the other agents all read it, and a project `CLAUDE.md` beside it hides it from Claude. To move an existing `CLAUDE.md` over, run `/migrate-to-agents-md`.
+
 When the document you're writing is a skill, read [`SKILL-MECHANICS.md`](SKILL-MECHANICS.md) for frontmatter, invocation choice, and router skills.
 
 ## Context pointers

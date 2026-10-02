@@ -84,11 +84,11 @@ Let them edit before writing.
 | :- | :- |
 | `AGENTS.md` only | `AGENTS.md`. Claude Code and the other agents all read it, so don't create a `CLAUDE.md`. |
 | `CLAUDE.md` that imports `@AGENTS.md` or is a symlink to it | `AGENTS.md` (the shared file) |
-| `CLAUDE.md` only | `CLAUDE.md` |
-| Both, and `CLAUDE.md` doesn't import `AGENTS.md` | `CLAUDE.md`, since that's the file Claude reads. Tell the user that Claude never sees their `AGENTS.md`, and offer to add `@AGENTS.md` at the top of `CLAUDE.md`. |
+| `CLAUDE.md` only | `CLAUDE.md`. Mention that other agents don't read it, and that `/migrate-to-agents-md` moves it to `AGENTS.md`. |
+| Both, and `CLAUDE.md` doesn't import `AGENTS.md` | `CLAUDE.md`, since that's the file Claude reads. Tell the user that Claude never sees their `AGENTS.md`, and recommend `/migrate-to-agents-md`, which merges the two files. |
 | Neither | Ask which file to create, and recommend `AGENTS.md`: Claude Code and the other coding agents all read it. |
 
-If a `CLAUDE.local.md` sits next to an `AGENTS.md` that `CLAUDE.md` doesn't import, warn the user that it stops Claude from reading `AGENTS.md` for them. The fixes are an `@AGENTS.md` import or setting **Project instructions** to `claude-md-and-agents-md` in `/config`.
+If a `CLAUDE.local.md` sits next to an `AGENTS.md` that `CLAUDE.md` doesn't import, warn the user that it stops Claude from reading `AGENTS.md` for them; `/migrate-to-agents-md` covers the fixes.
 
 Never create a `CLAUDE.md` beside an `AGENTS.md`, or the other way round: in the default mode, a new `CLAUDE.md` hides `AGENTS.md` from Claude.
 
