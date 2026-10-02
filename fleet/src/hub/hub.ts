@@ -9,6 +9,9 @@
  *   `POST /chat`, `POST /chat/preview`, `GET /skills` (what the session can be told to run, held 60 s),
  *   and the files under its DIR (`decisions/*` sandboxed), with the
  *   same status codes. `/f/<a>/f/<b>/…` is `/f/<b>/…` (a manager's page links its fleets relatively).
+ * - `/f/<fleet>/preview/…` and `/f/<fleet>/preview/<worker>/…` the fleet's preview dev servers, HTTP and
+ *   WebSocket (`preview-proxy.ts`); `POST /f/<fleet>/preview-workers` takes a worker in or out of the
+ *   combined preview, under the chat's write policy.
  * - `/f/<fleet>@<machine>/…` a fleet of a peer hub, passed through: this hub checks a post by its own
  *   rules first, then the peer checks this machine (its owner's login) by its rules.
  *
@@ -24,6 +27,9 @@ import { readBytes, resolvePath, strerror } from "../files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { answerRefusal } from "../ledger/answers.ts";
 import { pageHtml, readTemplate } from "../page/render.ts";
+import { pick, readLedger } from "../preview/updater.ts";
+import { readRecord, recordPath } from "../preview/record.ts";
+import { PreviewError } from "../errors.ts";
 import { summary, view, type Lookups } from "../page/view.ts";
 import type { Entry } from "../registry.ts";
 import { SpendReader } from "../transcripts.ts";
@@ -31,7 +37,8 @@ import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
 import { indexHtml } from "./index-page.ts";
 import { ProbeCache } from "./probes.ts";
-import { hello, postRefusal, viewerOf, type Viewer } from "./policy.ts";
+import { hello, postRefusal, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
+import { previewTarget, proxyHttp, proxySocket, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
 import { PLUGIN_ROOT, readSkills, repoOf } from "./skills.ts";
 import { readTailnet, whois, type Tailnet } from "./tailnet.ts";
@@ -329,16 +336,18 @@ export class Hub {
 
   /** The state of the fleet at `root` as its page is sent it, or undefined while it is missing or half written. */
   viewOf(root: string): Viewed | undefined {
-    const bytes = readBytes(join(root, "state.json"));
+    const state = readBytes(join(root, "state.json"));
 
-    if (bytes === undefined) return undefined;
+    if (state === undefined) return undefined;
+    // The preview's record changes the view too (the updater writes it): it is part of what is compared.
+    const bytes = Buffer.concat([state, readBytes(recordPath(root)) ?? Buffer.alloc(0)]);
     const held = this.views.get(root);
 
     if (held !== undefined && held.bytes.equals(bytes) && performance.now() - held.at < VIEW_TTL_MS) return held;
-    const state = Option.getOrUndefined(parseObject(bytes.toString("utf8")));
+    const parsed = Option.getOrUndefined(parseObject(state.toString("utf8")));
 
-    if (state === undefined) return undefined;
-    const shown = view(this.options.machine, this.lookups, state, root);
+    if (parsed === undefined) return undefined;
+    const shown = view(this.options.machine, this.lookups, parsed, root);
     const fresh: Viewed = { bytes, state: shown, json: dumps(shown, { ensureAscii: false }), at: performance.now() };
     this.views.set(root, fresh);
 
@@ -371,8 +380,9 @@ export class Hub {
 
   // -- requests --------------------------------------------------------------------------------
 
-  /** Answer one request from `ip`. `keepOpen` lifts the server's idle timeout for a stream. */
-  async fetch(req: Request, ip: string, keepOpen: () => void): Promise<Response> {
+  /** Answer one request from `ip`. `keepOpen` lifts the server's idle timeout for a stream; `upgrade` makes
+   * a preview's WebSocket (undefined is then the answer). */
+  async fetch(req: Request, ip: string, keepOpen: () => void, upgrade?: Upgrade): Promise<Response | undefined> {
     const host = (req.headers.get("Host") ?? "").toLowerCase();
 
     if (!this.hosts.has(host)) return jsonResponse(421, { error: "unknown host" }, { Connection: "close" });
@@ -413,7 +423,7 @@ export class Hub {
 
     if (entry === undefined) return jsonResponse(404, { error: `no fleet '${name}' is being served; the hub's index lists the ones that are` });
 
-    return this.fleetRoute(req, ip, entry, rest, url.searchParams, keepOpen);
+    return this.fleetRoute(req, ip, entry, rest, url, keepOpen, upgrade);
   }
 
   private index(req: Request): Response {
@@ -448,8 +458,15 @@ export class Hub {
     });
   }
 
-  private async fleetRoute(req: Request, ip: string, entry: Entry, rest: string, params: URLSearchParams, keepOpen: () => void): Promise<Response> {
+  private async fleetRoute(req: Request, ip: string, entry: Entry, rest: string, url: URL, keepOpen: () => void, upgrade: Upgrade | undefined): Promise<Response | undefined> {
     const root = entry.dir;
+    const params = url.searchParams;
+
+    if (rest === "/preview") return new Response(null, { status: 301, headers: { Location: `/f/${encodeURIComponent(entry.id)}/preview/${url.search}`, ...NO_STORE } });
+
+    if (rest.startsWith("/preview/")) return this.preview(req, ip, entry, rest.slice("/preview/".length), url.search, keepOpen, upgrade);
+
+    if (rest === "/preview-workers" && req.method === "POST") return this.previewWorkers(req, ip, root);
 
     if (req.method === "POST") return this.post(req, ip, root, rest);
 
@@ -473,6 +490,52 @@ export class Hub {
     }
 
     return this.file(req, root, rest === "/" ? "/index.html" : rest);
+  }
+
+  /** A preview path, passed to its dev server: a WebSocket (HMR) piped, anything else asked and answered. A
+   * request that could change something there (not GET, HEAD or OPTIONS) is the chat's writers' only. */
+  private async preview(req: Request, ip: string, entry: Entry, tail: string, search: string, keepOpen: () => void, upgrade: Upgrade | undefined): Promise<Response | undefined> {
+    const target = previewTarget(readRecord(entry.dir), entry.id, tail);
+
+    if (!("server" in target)) return jsonResponse(target[0], { error: target[1].replace("DIR", entry.dir) });
+
+    if ((req.headers.get("Upgrade") ?? "").toLowerCase() === "websocket") {
+      if (upgrade === undefined) return jsonResponse(400, { error: "WebSockets are not served here" });
+
+      return proxySocket(req, target, search, upgrade);
+    }
+
+    if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+      const denied = writerRefusal(this.owner, await this.viewer(req, ip));
+
+      if (denied !== undefined) return jsonResponse(403, { error: denied });
+    }
+
+    keepOpen();
+
+    return proxyHttp(req, target, search);
+  }
+
+  /** `POST /f/<fleet>/preview-workers` `{worker, include}`: a worker taken into the combined preview or out
+   * of it, from the page's checkboxes; checked as a chat post is. */
+  private async previewWorkers(req: Request, ip: string, root: string): Promise<Response> {
+    const viewer = await this.viewer(req, ip);
+    const refusal = postRefusal(this.owner, viewer, this.hosts, (name) => req.headers.get(name));
+
+    if (refusal !== undefined) return jsonResponse(refusal[0], { error: refusal[1] }, { Connection: "close" });
+    const raw = await req.text();
+
+    if (Buffer.byteLength(raw) > 16 * 1024) return jsonResponse(413, { error: "a choice is at most 16 KiB" });
+    const body = Option.getOrUndefined(parseObject(raw));
+    const worker = asString(body?.["worker"]);
+    const include = body?.["include"];
+
+    if (worker === undefined || (include !== true && include !== false)) return jsonResponse(400, { error: "send {worker, include: true|false}" });
+    const done = pick(root, readLedger(root), worker, include);
+
+    if (done instanceof PreviewError) return jsonResponse(400, { error: done.reason });
+
+    return jsonResponse(200, { include: [...done.include], exclude: [...done.exclude] });
   }
 
   /** What `GET /f/<fleet>/skills` answers: the skills the fleet's session can run, read again after 60 s. */

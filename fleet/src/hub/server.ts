@@ -12,6 +12,7 @@ import { makeDirs, readText, remove, writeAtomic } from "../files.ts";
 import { asNumber, asObject, asString, dumps, parseObject } from "../json.ts";
 import { alive } from "../registry.ts";
 import { Hub, type HubOptions } from "./hub.ts";
+import { previewSockets, type SocketData } from "./preview-proxy.ts";
 import { tailscale } from "./tailnet.ts";
 
 import * as Option from "effect/Option";
@@ -45,7 +46,7 @@ export interface Running {
   readonly stop: () => Promise<void>;
 }
 
-type Server = ReturnType<typeof Bun.serve>;
+type Server = Bun.Server<SocketData>;
 
 /** What the hub starts with: its options, and the https port `tailscale serve` exposes it on, if any. */
 export interface StartOptions extends HubOptions {
@@ -59,11 +60,18 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
   const port = options.port;
 
   const listen = (hostname: string): Server =>
-    Bun.serve({
+    Bun.serve<SocketData>({
       hostname,
       port,
       idleTimeout: 60,
-      fetch: (req, server) => hub.fetch(req, server.requestIP(req)?.address ?? "", () => server.timeout(req, 0)),
+      websocket: previewSockets,
+      fetch: (req, server) =>
+        hub.fetch(
+          req,
+          server.requestIP(req)?.address ?? "",
+          () => server.timeout(req, 0),
+          (data, headers) => server.upgrade(req, { data, headers }),
+        ),
       error: (cause) => new Response(dumps({ error: cause.message }), { status: 500, headers: { "Content-Type": "application/json" } }),
     });
 
