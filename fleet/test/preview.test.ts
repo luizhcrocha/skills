@@ -101,7 +101,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (existsSync(join(dir, "preview.json"))) preview("stop");
+  if (existsSync(join(dir, "preview.json"))) preview("stop", "--all");
 });
 
 describe("fleet preview start", () => {
@@ -276,6 +276,113 @@ describe("a done worker", () => {
   });
 });
 
+/** The commit `revset` names in the test repo, read without a snapshot. */
+const commitOf = (revset: string): string => jj(repo, "log", "--no-graph", "--ignore-working-copy", "-r", revset, "-T", "commit_id").trim();
+
+describe("an explicit stack", () => {
+  const devloop = (): string => ws("devloop");
+
+  /** The default workspace's @ holds the user's own uncommitted edit of c.txt, which a1's edit conflicts
+   * with; a `devloop` workspace holds a clean stack on the base (d.txt). */
+  beforeEach(() => {
+    writeFileSync(join(repo, "c.txt"), "luiz's own work\n");
+    jj(repo, "describe", "-m", "luiz's work in progress");
+    jj(repo, "workspace", "add", devloop(), "--name", "devloop", "-r", "@-");
+    writeFileSync(join(devloop(), "d.txt"), "integrated\n");
+    jj(devloop(), "describe", "-m", "the dev stack");
+    writeFileSync(join(ws("a1"), "c.txt"), "c by a1\n");
+  });
+
+  test("without one, the default workspace's @ is the stack and the merge conflicts with it", () => {
+    const ran = preview("start", "--cmd", STUB);
+    expect(ran.code).toBe(0);
+    expect(ran.stderr).toBe("preview: the merge has conflicts: c.txt (a1)\n");
+    expect(record().stack).toBe(commitOf("default@"));
+    expect(preview("status").stdout).toContain("  stack: the default workspace's @ (");
+  });
+
+  test("set --stack devloop@ merges the workers onto devloop's commit, clean, and follows it as it moves", async () => {
+    const set = preview("set", "--stack", "devloop@");
+    expect([set.code, set.stderr]).toEqual([0, ""]);
+    expect(set.stdout).toContain(`the combined preview's stack is devloop@ (now ${commitOf("devloop@").slice(0, 12)})`);
+    expect(asObject(readJson(join(dir, "state.json"))["preview"])).toEqual({ stack: "devloop@" });
+
+    const ran = preview("start", "--cmd", STUB);
+    expect([ran.code, ran.stderr]).toEqual([0, ""]);
+    const parents = jj(repo, "log", "--no-graph", "--ignore-working-copy", "-r", "preview@-", "-T", 'commit_id ++ "\\n"').split("\n").filter(Boolean).sort();
+    expect(parents).toEqual([commitOf("a1@"), commitOf("a2@"), commitOf("devloop@")].sort());
+    expect(record()).toMatchObject({ stack: commitOf("devloop@"), conflicts: [], error: null });
+    expect(read(join(ws("preview"), "c.txt"))).toBe("c by a1\n");
+    expect(read(join(ws("preview"), "d.txt"))).toBe("integrated\n");
+    expect(preview("status").stdout).toContain(`  stack: devloop@ (${commitOf("devloop@").slice(0, 12)})\n`);
+
+    // The coordinator integrates more into devloop: the merge follows.
+    writeFileSync(join(devloop(), "e.txt"), "more\n");
+    jj(devloop(), "util", "snapshot");
+    await until(() => read(join(ws("preview"), "e.txt")) === "more\n" && record().stack === commitOf("devloop@"));
+    expect(record().conflicts).toEqual([]);
+  });
+
+  test("a revset naming no commit, two, or none jj knows is refused in status, and the last good merge is kept", async () => {
+    expect(preview("set", "--stack", "devloop@").code).toBe(0);
+    expect(preview("start", "--cmd", STUB).code).toBe(0);
+    const good = record();
+    expect(good.merged.map((m) => m.id)).toEqual(["a1", "a2"]);
+
+    for (const [revset, reason] of [
+      ["none()", "the stack's revset none() names no commit"],
+      ["devloop@ | default@", "the stack's revset devloop@ | default@ names 2 commits, not one"],
+      ["nobody@", "the stack's revset nobody@ is not one jj resolves: "],
+    ] as const) {
+      expect(preview("set", "--stack", revset).code).toBe(0);
+      await until(() => record().error?.includes(reason) === true);
+      expect(record()).toMatchObject({ merged: good.merged, stack: good.stack, commit: good.commit, conflicts: [] });
+      expect(preview("status").stdout).toContain(`updater's last error: ${reason}`);
+    }
+
+    expect(read(join(ws("preview"), "d.txt"))).toBe("integrated\n");
+
+    // Cleared, the default rule is back, with its conflict.
+    const cleared = preview("set", "--stack", "");
+    expect([cleared.code, cleared.stdout]).toEqual([0, "the combined preview's stack is the default workspace's @ (or its parent when that @ is empty and undescribed)\n"]);
+    expect(asObject(readJson(join(dir, "state.json"))["preview"])).toEqual({});
+    await until(() => record().stack === commitOf("default@") && record().error === null);
+    await until(() => record().conflicts.length > 0);
+    expect(record().conflicts).toEqual([{ path: "c.txt", workers: ["a1"] }]);
+
+    expect(preview("set", "--stack", "devloop@").code).toBe(0);
+    expect(preview("set", "--no-stack").code).toBe(0);
+    expect(asObject(readJson(join(dir, "state.json"))["preview"])).toEqual({});
+    expect(preview("set", "--stack", "x", "--no-stack").code).not.toBe(0);
+  });
+
+  test("start --stack gives the base for that start alone, over the ledger's", () => {
+    expect(preview("set", "--stack", "default@").code).toBe(0);
+    const ran = preview("start", "--stack", "devloop@", "--cmd", STUB);
+    expect([ran.code, ran.stderr]).toEqual([0, ""]);
+    expect(record().stack).toBe(commitOf("devloop@"));
+    expect(preview("status").stdout).toContain("  stack: devloop@ (");
+    expect(preview("stop").code).toBe(0);
+    expect(preview("start", "--cmd", STUB).code).toBe(0);
+    expect(record().stack).toBe(commitOf("default@"));
+    expect(preview("start", "--per-worker", "a1", "--stack", "devloop@", "--cmd", STUB).code).not.toBe(0);
+  });
+
+  test("a done worker whose changes are in devloop@ counts as already in the stack", async () => {
+    state("agent", "a1", "--status", "done");
+    expect(preview("set", "--stack", "devloop@").code).toBe(0);
+    expect(preview("start", "--cmd", STUB).code).toBe(0);
+    expect(record().merged.map((m) => m.id)).toEqual(["a1", "a2"]);
+
+    // The coordinator integrates a1's work into devloop.
+    jj(devloop(), "new", "devloop@", "a1@", "-m", "integrate a1");
+    await until(() => record().merged.map((m) => m.id).join() === "a2");
+    expect(preview("status").stdout).toContain("[ ] a1 (done, already in the stack)");
+    expect(read(join(ws("preview"), "c.txt"))).toBe("c by a1\n");
+    expect(record().conflicts).toEqual([]);
+  });
+});
+
 describe("fleet preview stop, and prune", () => {
   test("stop stops the dev server and the updater and keeps the workspace for the next start", () => {
     expect(preview("start", "--cmd", STUB).code).toBe(0);
@@ -310,6 +417,26 @@ describe("fleet preview stop, and prune", () => {
     expect(jj(repo, "log", "--no-graph", "--ignore-working-copy", "-r", "merges()", "-T", "commit_id")).toBe("");
     expect(existsSync(join(dir, "preview.json"))).toBe(false);
     expect(workspaceRows().find((w) => w["id"] === "preview")?.["status"]).toBe("pruned");
+  });
+
+  test("plain stop leaves the per-worker previews running; stop --all stops them too", () => {
+    expect(preview("start", "--cmd", STUB).code).toBe(0);
+    expect(preview("start", "--per-worker", "a1", "--cmd", STUB).code).toBe(0);
+    const { server, updater } = record();
+    const own = record().workers.find((w) => w.worker === "a1")?.pid ?? undefined;
+
+    const out = preview("stop");
+    expect([out.code, out.stderr]).toEqual([0, ""]);
+    expect(out.stdout).toContain("a1's preview still runs (`stop --all` stops it too)");
+    expect(alive(server?.pid ?? undefined)).toBe(false);
+    expect(alive(updater ?? undefined)).toBe(false);
+    expect(alive(own)).toBe(true);
+    expect(record().workers.find((w) => w.worker === "a1")?.pid).toBe(own ?? 0);
+
+    expect(preview("stop", "--all", "--per-worker", "a1").code).not.toBe(0);
+    expect(preview("stop", "--all").code).toBe(0);
+    expect(alive(own)).toBe(false);
+    expect(record().workers.find((w) => w.worker === "a1")?.pid).toBeNull();
   });
 
   test("fleet ws hands no preview to a worker", () => {

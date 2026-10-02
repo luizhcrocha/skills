@@ -100,10 +100,18 @@ export function standing(c: Candidate, record: Choices): string {
   return isDir(c.path) ? `${status}, already in the stack` : `${status}, its workspace is gone`;
 }
 
+/** The revset the ledger's `preview.stack` names (`fleet preview DIR set --stack`), or null for the default rule. */
+export function ledgerStack(raw: JsonObject | undefined): string | null {
+  const revset = asString(asObject(raw?.["preview"])?.["stack"]);
+
+  return revset === undefined || revset.trim() === "" ? null : revset;
+}
+
 function sameMerge(a: PreviewRecord, b: PreviewRecord): boolean {
   return (
     a.commit === b.commit &&
     a.stack === b.stack &&
+    a.stackFrom === b.stackFrom &&
     a.error === b.error &&
     JSON.stringify(a.merged) === JSON.stringify(b.merged) &&
     JSON.stringify(a.conflicts) === JSON.stringify(b.conflicts)
@@ -111,17 +119,22 @@ function sameMerge(a: PreviewRecord, b: PreviewRecord): boolean {
 }
 
 /** One look at the fleet in DIR: the merge brought up to date and, when anything changed, recorded. The
- * record as it stands after; undefined when there is no preview. */
+ * stack is `start --stack`'s revset, else the ledger's, else the default rule. A look that fails records
+ * only why: the last good merge stands. The record as it stands after; undefined when there is no preview. */
 export function lookOnce(machine: Machine, root: string, memory: Memory): PreviewRecord | undefined {
   const record = readRecord(root);
 
   if (record === undefined) return undefined;
-  const picked = candidates(readLedger(root)).flatMap((c) => (record.exclude.includes(c.id) ? [] : [{ ...c, untilIntegrated: !always(c, record) }]));
-  const found = look(record.repo, record.workspace, record.path, picked, memory);
+  const ledger = readLedger(root);
+  const picked = candidates(ledger).flatMap((c) => (record.exclude.includes(c.id) ? [] : [{ ...c, untilIntegrated: !always(c, record) }]));
+  const found = look(record.repo, record.workspace, record.path, picked, memory, record.stackGiven ?? ledgerStack(ledger));
 
   return updateRecord(root, (now) => {
     if (now === undefined) return undefined;
-    const next: PreviewRecord = { ...now, merged: found.merged, stack: found.stack, commit: found.commit, conflicts: found.conflicts, error: found.error };
+
+    const next: PreviewRecord = found.failed
+      ? { ...now, error: found.error }
+      : { ...now, merged: found.merged, stack: found.stack, stackFrom: found.stackFrom, commit: found.commit, conflicts: found.conflicts, error: found.error };
 
     if (sameMerge(now, next)) return undefined;
 

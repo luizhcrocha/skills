@@ -1,6 +1,7 @@
 /**
  * The preview's record, `DIR/preview.json`: where the combined preview's workspace is, the dev servers
- * (the combined one and each per-worker one) with their pids and ports, the public port each root-mode
+ * (the combined one and each per-worker one) with their pids and ports, the stack's revset (as given to
+ * `start`, and as the last merge resolved it), the public port each root-mode
  * preview was given (`ports.ts`), the updater's pid, which workers the user took in or out, and what the
  * last merge held (each worker's commit, the conflicts and which
  * workers touch each file, the updater's last failure).
@@ -77,6 +78,10 @@ export interface PreviewRecord {
   /** What the last merge held. */
   readonly merged: readonly Merged[];
   readonly stack: string | null;
+  /** The revset the last merge's stack was resolved from, or null for the default workspace's @ rule. */
+  readonly stackFrom: string | null;
+  /** The revset `start --stack` gave, for that start alone (over the ledger's `preview.stack`), or null. */
+  readonly stackGiven: string | null;
   readonly commit: string | null;
   readonly conflicts: readonly Conflict[];
   /** Why the updater's last look failed, or null. */
@@ -187,6 +192,8 @@ export function parseRecord(text: string): PreviewRecord | undefined {
     exclude: strings(o["exclude"]),
     merged,
     stack: asString(o["stack"]) ?? null,
+    stackFrom: asString(o["stack_from"]) ?? null,
+    stackGiven: asString(o["stack_given"]) ?? null,
     commit: asString(o["commit"]) ?? null,
     conflicts,
     error: asString(o["error"]) ?? null,
@@ -220,6 +227,8 @@ export function recordJson(r: PreviewRecord): JsonObject {
     exclude: [...r.exclude],
     merged: r.merged.map((m) => ({ id: m.id, workspace: m.workspace, commit: m.commit, change: m.change })),
     stack: r.stack,
+    stack_from: r.stackFrom,
+    stack_given: r.stackGiven,
     commit: r.commit,
     conflicts: r.conflicts.map((c) => ({ path: c.path, workers: [...c.workers] })),
     error: r.error,

@@ -117,6 +117,8 @@ function writeRecord(record: Partial<PreviewRecord>): void {
     exclude: [],
     merged: [],
     stack: null,
+    stackFrom: null,
+    stackGiven: null,
     commit: null,
     conflicts: [],
     error: null,

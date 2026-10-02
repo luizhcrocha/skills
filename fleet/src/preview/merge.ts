@@ -11,8 +11,10 @@
  *    worker editing there sees no change. When its edits changed its commit, jj rebases the preview's @
  *    (a descendant) onto the new commit in the same operation.
  * 2. One read of every workspace's @ (`working_copies()`, without a snapshot) gives each worker's commit,
- *    the stack (the default workspace's @, or its parent when that @ is empty and undescribed) and the
- *    preview's @ with its parents. A worker merged until integrated is dropped when its workspace is gone
+ *    the stack and the preview's @ with its parents. The stack is the commit the fleet's revset names
+ *    (`fleet preview DIR set --stack`, or `start --stack`), resolved again at every look so a bookmark or
+ *    `<workspace>@` is followed as it moves, and refused unless it names exactly one commit; without one,
+ *    the default workspace's @, or its parent when that @ is empty and undescribed. A worker merged until integrated is dropped when its workspace is gone
  *    or no commit of `::<its @> ~ ::(<stack> | trunk())` changes a file: its work is in the stack, or
  *    landed on the trunk, where a coordinator that integrates by moving a bookmark puts it (asked once
  *    per commit, stack and trunk). When the commits are the ones of the last look, it stops here.
@@ -83,6 +85,20 @@ export function stackOf(main: Copy): string {
   return main.empty && !main.described && main.parents.length === 1 ? (main.parents[0] ?? main.commit) : main.commit;
 }
 
+/** The one commit `revset` names in the repo at `repo`, read without a snapshot; why not, when it names
+ * none, several, or jj cannot resolve it. */
+export function resolveStack(repo: string, revset: string): string | PreviewError {
+  const found = commits(repo, revset);
+
+  if (found instanceof PreviewError) return new PreviewError({ reason: `the stack's revset ${revset} is not one jj resolves: ${found.reason}` });
+
+  if (found.length === 0) return new PreviewError({ reason: `the stack's revset ${revset} names no commit` });
+
+  if (found.length > 1) return new PreviewError({ reason: `the stack's revset ${revset} names ${found.length} commits, not one` });
+
+  return found[0] ?? "";
+}
+
 /** A worker the merge takes, with its workspace. */
 export interface Pick {
   readonly id: string;
@@ -97,10 +113,14 @@ export interface Pick {
 export interface Look {
   readonly merged: readonly Merged[];
   readonly stack: string | null;
+  /** The revset the stack was resolved from, or null for the default workspace's @ rule. */
+  readonly stackFrom: string | null;
   readonly commit: string | null;
   readonly conflicts: readonly Conflict[];
   /** What went wrong, or null; a worker whose workspace could not be snapshotted is named and still merged as last recorded. */
   readonly error: string | null;
+  /** Whether the look stopped before it had a merge: the last good one stands. */
+  readonly failed: boolean;
 }
 
 /** What a look keeps for the next one, in memory. */
@@ -168,9 +188,10 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((x) => b.includes(x));
 }
 
-/** One look: snapshot the picked workers, rebuild the merge when a commit moved, write the files when the
- * preview's @ moved, and read the conflicts. `memory` is updated in place. */
-export function look(repo: string, previewName: string, previewPath: string, picked: readonly Pick[], memory: Memory): Look {
+/** One look: snapshot the picked workers, rebuild the merge on the stack (`stackRevset`'s one commit, or the
+ * default workspace's @ rule when null) when a commit moved, write the files when the preview's @ moved,
+ * and read the conflicts. `memory` is updated in place. */
+export function look(repo: string, previewName: string, previewPath: string, picked: readonly Pick[], memory: Memory, stackRevset: string | null): Look {
   const errors: string[] = [];
 
   for (const p of picked) {
@@ -180,17 +201,26 @@ export function look(repo: string, previewName: string, previewPath: string, pic
     if (!snap.ok) errors.push(`${p.id}'s workspace was not snapshotted: ${why(snap)}`);
   }
 
-  const failed = (reason: string): Look => ({ merged: [], stack: null, commit: null, conflicts: [], error: [...errors, reason].join("; ") });
+  const failed = (reason: string): Look => ({ merged: [], stack: null, stackFrom: stackRevset, commit: null, conflicts: [], error: [...errors, reason].join("; "), failed: true });
   let copies = readCopies(repo);
 
   if (copies instanceof PreviewError) return failed(`jj could not read the workspaces: ${copies.reason}`);
   const main = copies.get("default");
   let preview = copies.get(previewName);
 
-  if (main === undefined) return failed(`the repo at ${repo} has no default workspace`);
-
   if (preview === undefined) return failed(`jj no longer knows the preview's workspace ${previewName}`);
-  const stack = stackOf(main);
+  let stack: string;
+
+  if (stackRevset === null) {
+    if (main === undefined) return failed(`the repo at ${repo} has no default workspace`);
+    stack = stackOf(main);
+  } else {
+    const resolved = resolveStack(repo, stackRevset);
+
+    if (resolved instanceof PreviewError) return failed(resolved.reason);
+    stack = resolved;
+  }
+
   const trunk = picked.some((p) => p.untilIntegrated === true) ? commits(repo, "trunk()") : [];
   const landed = trunk instanceof PreviewError ? stack : (trunk[0] ?? stack);
 
@@ -252,5 +282,5 @@ export function look(repo: string, previewName: string, previewPath: string, pic
 
   const conflicts = preview.conflict ? conflictsOf(repo, preview.commit, stack, merged) : [];
 
-  return { merged, stack, commit: preview.commit, conflicts, error: errors.length === 0 ? null : errors.join("; ") };
+  return { merged, stack, stackFrom: stackRevset, commit: preview.commit, conflicts, error: errors.length === 0 ? null : errors.join("; "), failed: false };
 }
