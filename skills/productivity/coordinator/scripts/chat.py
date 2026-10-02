@@ -52,12 +52,35 @@ POLL_S = 0.3
 FLEETS_S = float(os.environ.get("FLEET_CHECK_S", 30))  # how often a manager's watch looks at the other fleets' chats
 READING_GRACE_S = 10 * 60  # a host whose watch ended, or who spoke, this recently still counts as reading
 QUOTE_MAX = 2000  # characters of a selected excerpt a message carries
+PLACE_MAX = 200  # characters of each field of a quote's place (`at`)
 UNHEARD_S = float(os.environ.get("FLEET_UNHEARD_S", 120))  # how long the user's message waits unread before the manager is told
 NUDGE_S = float(os.environ.get("FLEET_NUDGE_S", 10 * 60))  # how long a worker leaves a message unanswered before its coordinator forwards it
 
 
 class ChatError(Exception):
     """A refused append or an unknown participant; the CLI exits 1 with it, the server answers 400."""
+
+
+def _place(at) -> dict | None:
+    """Where a quote was taken, as the page that sent it can open it again: `hash` (its location hash),
+    `anchor` (an element id there) and `message` (a chat message's id), strings of at most PLACE_MAX
+    characters with no control characters. Other keys are dropped; None when there is none. Raises
+    ChatError for one that is not that shape."""
+    if at is None:
+        return None
+    ok = isinstance(at, dict) and isinstance(at.get("hash"), str) and at["hash"].startswith("#")
+    place = {}
+    for key in ("hash", "anchor", "message") if ok else ():
+        value = at.get(key)
+        if value is None or value == "":
+            continue
+        if not isinstance(value, str) or len(value) > PLACE_MAX or any(c < " " or c == "\x7f" for c in value):
+            ok = False
+        place[key] = value
+    if not ok or ("message" in place and not regex.fullmatch(r"[0-9]+", place["message"])):
+        raise ChatError("a quote's place is {hash, anchor?, message?}: strings, the hash starting with #, "
+                        "the message a message's id, each at most 200 characters")
+    return place
 
 
 def now() -> str:
@@ -247,7 +270,8 @@ def append(root, sender: str, text: str, re: int | None = None, author: str | No
     with the recipients and parts `address` resolves. Only the server passes allow_user=True, which lets
     `sender` be "user" and stores `author` on it. `decision` tags the message with the decision it is
     about (the user's answer to one, given on its page). `quote` is the excerpt the message is about,
-    {"text", "from"}, the text the user selected on the page and where. `side` puts it in a side chat:
+    {"text", "from", "at"?}, the text the user selected on the page, where (a label) and, in `at`, the
+    place on the page that opens it again (`_place`). `side` puts it in a side chat:
     "new" opens one (its id is the message's own), a number continues that one, and a reply to a
     message in a side chat stays in it. Raises ChatError as `address` does, for empty text or text that
     is not UTF-8, and for a quote or side that is not one."""
@@ -261,7 +285,10 @@ def append(root, sender: str, text: str, re: int | None = None, author: str | No
     if quote is not None:
         if not isinstance(quote, dict) or not isinstance(quote.get("text"), str) or not quote["text"].strip():
             raise ChatError("a quote is the selected text, with where it was")
+        place = _place(quote.get("at"))
         quote = {"text": quote["text"].strip()[:QUOTE_MAX], "from": str(quote.get("from") or "")[:200]}
+        if place is not None:
+            quote["at"] = place
     with open(_log_path(root), "a+b") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         f.seek(0)

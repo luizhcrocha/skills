@@ -460,6 +460,15 @@ class ChatRouteTest(ServerTest):
             self.assertIsInstance(body["error"], str)
         self.assertEqual(len(chat.read(self.root)), 1)
 
+    def test_post_keeps_a_quotes_place_and_refuses_a_malformed_one(self):
+        quote = {"text": "per line", "from": "Rounding", "at": {"hash": "#decision/d1", "anchor": "dv-info"}}
+        status, message = self.post({"text": "why?", "quote": quote})
+        self.assertEqual((status, message["quote"]), (201, quote))
+        status, body = self.post({"text": "why?", "quote": {**quote, "at": {"hash": "decision/d1"}}})
+        self.assertEqual(status, 400, body)
+        self.assertEqual(chat.read(self.root)[-1]["quote"], quote)
+        self.assertEqual(len(chat.read(self.root)), 1)
+
     def test_a_long_message_is_taken_and_one_over_256_kib_is_refused_with_what_to_do(self):
         status, message = self.post({"text": "y" * 78_000})
         self.assertEqual((status, len(message["text"])), (201, 78_000))
@@ -917,6 +926,20 @@ class QuoteAndSideTest(FleetDir):
         self.assertEqual(run_cli(self.root, "log").stdout, '#1 user -> coordinator (quoting Fleet: "14.1M tokens"): why this number?\n')
         with self.assertRaises(chat.ChatError):
             chat.append(self.root, "user", "x", allow_user=True, quote={"text": " "})
+
+    def test_a_quote_keeps_where_it_was_and_a_malformed_place_is_refused(self):
+        at = {"hash": "#decision/d1", "anchor": "dv-info", "extra": "dropped"}
+        m = chat.append(self.root, "user", "why?", allow_user=True, quote={"text": "per line", "from": "Rounding", "at": at})
+        self.assertEqual(m["quote"], {"text": "per line", "from": "Rounding", "at": {"hash": "#decision/d1", "anchor": "dv-info"}})
+        said = chat.append(self.root, "user", "and this?", allow_user=True, quote={"text": "halfway", "at": {"hash": "#plan", "message": "1"}})
+        self.assertEqual(said["quote"]["at"], {"hash": "#plan", "message": "1"})
+        self.assertEqual(chat.read(self.root)[0]["quote"]["at"], {"hash": "#decision/d1", "anchor": "dv-info"})
+        for bad in ["#plan", {"anchor": "x"}, {"hash": "plan"}, {"hash": 5}, {"hash": "#" + "x" * 200},
+                    {"hash": "#plan", "anchor": 3}, {"hash": "#plan", "message": 2}, {"hash": "#plan", "message": "two"},
+                    {"hash": "#plan\n"}]:
+            with self.assertRaises(chat.ChatError, msg=repr(bad)):
+                chat.append(self.root, "user", "x", allow_user=True, quote={"text": "t", "at": bad})
+        self.assertEqual(len(chat.read(self.root)), 2)
 
     def test_a_side_chat_is_opened_answered_and_kept_apart(self):
         opener = chat.append(self.root, "user", "what is l19?", allow_user=True, side="new", quote={"text": "l19", "from": "Plan"})

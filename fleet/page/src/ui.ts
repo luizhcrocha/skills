@@ -9,7 +9,7 @@ import { createEffect, createMemo, createSignal, flush } from "solid-js";
 
 import { createCarets } from "./carets.ts";
 import { decisionTrail } from "./chatlog.ts";
-import { Core, type Decision, type FindRow, type Json, type JsonRecord } from "./core.ts";
+import { Core, type Decision, type FindRow, type Json, type JsonRecord, type Quote, type QuoteAt } from "./core.ts";
 import type { Model } from "./model.ts";
 import { createNotify } from "./notify.ts";
 
@@ -29,12 +29,48 @@ interface PreviewBody {
 interface ChatBody {
   text: string;
   re?: number;
-  quote?: { text: string; from: string };
+  quote?: Quote;
   side?: number | "new";
 }
 
 /** Whether a parsed value is an object rather than null, a list or a scalar. */
 const isRecord = (v: Json | undefined): v is JsonRecord => v !== null && v !== undefined && Object(v) === v && !Array.isArray(v);
+
+/** Text as a quote is looked for on the page: its runs of white space one space, in lower case. */
+const plain = (text: string | null | undefined): string => String(text ?? "").replace(/\s+/gu, " ").trim().toLowerCase();
+
+/**
+ * The innermost element in `box` whose text holds the quoted `text` (or, when the excerpt spans more than one,
+ * the start of its first line); null when the page no longer has it.
+ */
+export function quotedIn(box: Element, text: string): Element | null {
+  for (const needle of [plain(text), plain(text.split("\n")[0]).slice(0, 60)]) {
+    if (needle.length < 2 || !plain(box.textContent).includes(needle)) continue;
+    let at: Element = box;
+
+    for (let inner: Element | undefined = box; inner; inner = [...at.children].find((c) => plain(c.textContent).includes(needle))) at = inner;
+
+    return at;
+  }
+
+  return null;
+}
+
+/** Mark `el` for a moment where it is scrolled to, as the finder marks what it found. */
+function markFound(el: Element): void {
+  el.scrollIntoView({ block: "center" });
+  el.classList.add("found");
+  setTimeout(() => el.classList.remove("found"), 1600);
+}
+
+/** In `doc`, the quoted text at place `at` (its anchor, else `box`), marked; the anchor itself when the text is gone. */
+function markQuoted(doc: Document, box: Element | null, at: QuoteAt, text: string): void {
+  const anchor = at.anchor ? doc.getElementById(at.anchor) : null;
+  const where = anchor ?? box;
+  const found = where ? (quotedIn(where, text) ?? anchor) : null;
+
+  if (found) markFound(found);
+}
 
 /** The elements the actions reach. */
 export interface Refs {
@@ -511,6 +547,77 @@ export function createUi(m: Model) {
     }
   }
 
+  /* ------------------------------------------------------------------ a quote's place */
+
+  /**
+   * Go back to where quote `q` was taken (`q.at`) and mark the quoted text: a chat message in the chat (its
+   * side chat opened); a place on this page by its address, the overlay chat closed on a phone; a fleet's
+   * decision framed on the manager's page inside its frame, once it has loaded; another page by loading it.
+   */
+  function goQuote(q: Quote): void {
+    const at = q.at;
+
+    if (!at) return;
+
+    if (at.page && at.page !== location.pathname) {
+      location.href = at.page + at.hash;
+
+      return;
+    }
+
+    if (at.message) {
+      const msg = m.messageById(Number(at.message));
+
+      if (!msg) return;
+
+      if (m.focus() !== msg.side) {
+        m.setFocus(msg.side);
+        m.setQuote(null);
+        m.setReply(null);
+      }
+
+      flush();
+      openChat();
+      const el = refs.chatLog?.querySelector(`[data-id="${CSS.escape(at.message)}"]`);
+
+      if (el) markFound(el);
+
+      return;
+    }
+
+    const overlay = !m.docked() && m.chatOpen();
+
+    if (location.hash !== at.hash) {
+      /* The overlay's own history entry becomes the place, so Back leaves it for where the chat was opened. */
+      if (overlay && pushed) {
+        pushed = false;
+        location.replace(at.hash);
+      } else location.hash = at.hash;
+      route();
+    } else if (overlay) closeChat();
+    flush();
+    const place = Core.viewOf(at.hash, m.managed());
+    const frame = place.decision && Core.parseFleetDecision(place.decision) ? refs.decision?.querySelector<HTMLIFrameElement>("#dv-embed") : null;
+
+    if (!frame) {
+      markQuoted(document, place.decision ? (refs.decision ?? null) : document.querySelector(`section.view[data-view="${place.view}"]`), at, q.text);
+
+      return;
+    }
+
+    /* The fleet's page in the frame is this page's origin: the quote is marked in it once it has loaded. */
+    const inFrame = (): void => {
+      const doc = frame.contentDocument;
+
+      if (doc) markQuoted(doc, doc.getElementById("decision"), at, q.text);
+    };
+
+    frame.scrollIntoView({ block: "start" });
+
+    if (frame.contentDocument?.readyState === "complete" && frame.contentDocument.getElementById("decision")) inFrame();
+    else frame.addEventListener("load", inFrame, { once: true });
+  }
+
   /* ------------------------------------------------------------------ the decision's page */
 
   const [seen, setSeen] = createSignal<{ readonly [id: string]: string }>(store.get<{ [id: string]: string }>("d-seen", {}));
@@ -578,7 +685,7 @@ export function createUi(m: Model) {
 
   /* ------------------------------------------------------------------ the selection toolbar */
 
-  const [picked, setPicked] = createSignal<{ text: string; from: string } | null>(null);
+  const [picked, setPicked] = createSignal<Quote | null>(null);
   const [toolAt, setToolAt] = createSignal<{ top: number; left: number } | null>(null);
 
   /* ------------------------------------------------------------------ notifications */
@@ -706,6 +813,7 @@ export function createUi(m: Model) {
     found,
     openFinder,
     go,
+    goQuote,
     seen,
     changedNote,
     answeringAgain,

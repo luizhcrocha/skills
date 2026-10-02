@@ -1,11 +1,11 @@
 /**
  * What a fleet's page in the manager's frame (`?embed=1`) tells the manager, posted to its own origin only:
  * its height, `{fleetEmbed: true, height}`, an answer sent there, `{fleetEmbed: true, answered}`, text
- * selected in it, `{fleetEmbed: true, select: {text, rect, from, touch}}` (`text` empty and `rect` null once
- * cleared), and what only the manager's page can do: open another of the fleet's decisions there,
+ * selected in it, `{fleetEmbed: true, select: {text, rect, from, touch, at?}}` (`at` the place on the fleet's
+ * page, as a quote keeps it; `text` empty and `rect` null once cleared), and what only the manager's page can do: open another of the fleet's decisions there,
  * `{fleetEmbed: true, open}`, and its finder, `{fleetEmbed: true, finder: true}`.
  */
-import type { Json, JsonRecord } from "./core.ts";
+import { Core, type Json, type JsonRecord, type QuoteAt } from "./core.ts";
 
 /** Where a selection sits in the frame's viewport: its first line's top, its last line's bottom, and across. */
 export type SelRect = { readonly top: number; readonly bottom: number; readonly left: number; readonly width: number };
@@ -14,7 +14,7 @@ export type SelRect = { readonly top: number; readonly bottom: number; readonly 
 export type EmbedMessage =
   | { readonly kind: "height"; readonly height: number }
   | { readonly kind: "answered"; readonly id: string }
-  | { readonly kind: "select"; readonly text: string; readonly rect: SelRect | null; readonly from: string; readonly touch: boolean }
+  | { readonly kind: "select"; readonly text: string; readonly rect: SelRect | null; readonly from: string; readonly touch: boolean; readonly at: QuoteAt | null }
   | { readonly kind: "open"; readonly id: string }
   | { readonly kind: "finder" };
 
@@ -43,7 +43,7 @@ function parseSelect(v: Json | undefined): EmbedMessage | null {
 
   if (!isString(text) || !isString(from) || (text && !rect)) return null;
 
-  return { kind: "select", text, rect: text ? rect : null, from, touch: v["touch"] === true };
+  return { kind: "select", text, rect: text ? rect : null, from, touch: v["touch"] === true, at: text ? Core.parseQuoteAt(v["at"]) : null };
 }
 
 /** What a decision's evidence frame posts of its selection (`{fleetSelect, text, rect}`), or null for any other message. */
@@ -81,9 +81,12 @@ export const postHeight = (): void => post({ fleetEmbed: true, height: Math.ceil
 
 export const postAnswered = (id: string): void => post({ fleetEmbed: true, answered: id });
 
-/** Text selected in the frame, where it sits, where on the page it is, and whether a touch made it; empty text once cleared. */
-export const postSelect = (text: string, rect: SelRect | null, from: string, touch: boolean): void =>
-  post({ fleetEmbed: true, select: { text, rect: text ? rect : null, from: text ? from : "", touch: text ? touch : false } });
+/** Text selected in the frame, where it sits, where on the page it is (as words and as a place), and whether a touch made it; empty text once cleared. */
+export function postSelect(text: string, rect: SelRect | null, from: string, touch: boolean, at: QuoteAt | null = null): void {
+  const select = { text, rect: text ? rect : null, from: text ? from : "", touch: text ? touch : false };
+
+  post({ fleetEmbed: true, select: text && at ? { ...select, at: { ...at } } : select });
+}
 
 /** Another of the fleet's decisions, to open on the manager's page. */
 export const postOpen = (id: string): void => post({ fleetEmbed: true, open: id });

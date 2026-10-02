@@ -370,8 +370,28 @@ export interface Message {
   readonly parts: readonly Part[];
   readonly decision: string;
   readonly author: string;
-  readonly quote: { readonly text: string; readonly from: string } | null;
+  readonly quote: Quote | null;
   readonly side: number | null;
+}
+
+/**
+ * Where a quote was taken, as the page that sent it opens it again: `hash`, the location hash of the place
+ * (`#decision/d1`, `#plan`, `#agent-a2`); `anchor`, an element's id there; `message`, a chat message's id
+ * when the text was selected in the chat; `page`, the path of another page the place is on (set by the
+ * hub on a fleet's copy of the manager's message).
+ */
+export interface QuoteAt {
+  readonly hash: string;
+  readonly anchor?: string;
+  readonly message?: string;
+  readonly page?: string;
+}
+
+/** The excerpt of the page a message is about: the text, where it was as words (`from`), and as a place (`at`). */
+export interface Quote {
+  readonly text: string;
+  readonly from: string;
+  readonly at?: QuoteAt;
 }
 
 /** A key as the composer sees it. */
@@ -1396,6 +1416,35 @@ const staleNow = (at: string | null | undefined, now: number): boolean => !isTex
 /** Whether the user's message `m` is still unread by the host: after the last one its watch printed. */
 const unreadBy = (hearing: Hearing | null, m: Pick<Message, "from" | "id">): boolean => hearing !== null && m.from === "user" && m.id > hearing.seen;
 
+/** The longest each field of a quote's place may be, as the server takes it. */
+const PLACE_MAX = 200;
+
+/**
+ * A quote's place as the server stores it, or null for anything else: strings of at most PLACE_MAX
+ * characters, the hash starting with "#", the message a message's id, the page a path on this host.
+ */
+function parseQuoteAt(value: Json | undefined): QuoteAt | null {
+  if (!isRow(value)) return null;
+  const { hash, anchor, message, page } = value;
+  const fits = (v: Json | undefined): boolean => v === undefined || v === null || (isText(v) && [...v].length <= PLACE_MAX);
+
+  if (!isText(hash) || !hash.startsWith("#") || ![hash, anchor, message, page].every(fits)) return null;
+
+  if (isText(message) && !/^[0-9]+$/u.test(message)) return null;
+
+  if (isText(page) && !/^\/(?![/\\])\S*$/u.test(page)) return null;
+
+  let at: QuoteAt = { hash };
+
+  if (isText(anchor) && anchor) at = { ...at, anchor };
+
+  if (isText(message)) at = { ...at, message };
+
+  if (isText(page)) at = { ...at, page };
+
+  return at;
+}
+
 /** A chat message as the server stores it, or null for anything else (an error body, a torn line). */
 function parseMessage(value: Json | undefined): Message | null {
   if (!isRow(value)) return null;
@@ -1419,7 +1468,10 @@ function parseMessage(value: Json | undefined): Message | null {
     : [];
 
   const quote = value["quote"];
-  const quoted = isRow(quote) && isText(quote["text"]) && quote["text"].trim() ? { text: quote["text"], from: isText(quote["from"]) ? quote["from"] : "" } : null;
+  const at = isRow(quote) ? parseQuoteAt(quote["at"]) : null;
+  const quoted: { text: string; from: string; at?: QuoteAt } | null = isRow(quote) && isText(quote["text"]) && quote["text"].trim() ? { text: quote["text"], from: isText(quote["from"]) ? quote["from"] : "" } : null;
+
+  if (quoted && at) quoted.at = at;
 
   return {
     id: Number(id),
@@ -1795,6 +1847,7 @@ export const Core = {
   tooBig,
   parseState,
   parseMessage,
+  parseQuoteAt,
   hearingOf,
   unreadBy,
   noticeOf,

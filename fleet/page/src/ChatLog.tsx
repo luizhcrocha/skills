@@ -1,7 +1,8 @@
 /**
  * The conversation, laid out as a messenger: the viewer's messages on the right in the accent's tint, the
  * fleet's on the left under the sender's name in its colour, runs of one sender under one name and time,
- * a separator per day, a reply quoting what it answers on one line (a tap goes there), side chats as links.
+ * a separator per day, a reply quoting what it answers on one line (a tap goes there), an excerpt of the page
+ * under a link back to where it was taken (`quote.at`), side chats as links.
  * Decision activity is left out unless the viewer turns it on, and then each is a one-line marker that
  * leads to the decision (`chatlog.ts` says what counts). Each row's node is made once, by its key, and only
  * its changed parts are touched, so focus, a selection and the scroll survive every update.
@@ -153,8 +154,19 @@ export function Turn(props: { readonly item: Item; readonly replyable: boolean; 
           <Show when={msg().quote}>
             {(q) => (
               <blockquote class="msg-quote">
-                <Show when={q().from}>
-                  <span class="from">From {q().from}</span>
+                <Show
+                  when={q().at}
+                  fallback={
+                    <Show when={q().from}>
+                      <span class="from">From {q().from}</span>
+                    </Show>
+                  }
+                >
+                  {(at) => (
+                    <a class="from" href={(at().page ?? "") + at().hash} data-quote={String(msg().id)} title="Go to where it was quoted">
+                      {q().from ? "From " + q().from : "Where it was quoted"}
+                    </a>
+                  )}
                 </Show>
                 {q().text}
               </blockquote>
@@ -264,6 +276,20 @@ export function Log(): JSX.Element {
           m.setQuote(null);
           m.setReply(null);
           ui.toBottom();
+
+          return;
+        }
+
+        const back = t?.closest<HTMLElement>("[data-quote]");
+
+        if (back) {
+          const q = m.messageById(Number(back.dataset["quote"]))?.quote;
+
+          /* A modified click opens the link the browser's way (a new tab, a window). */
+          if (q?.at && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+            e.preventDefault();
+            ui.goQuote(q);
+          }
 
           return;
         }

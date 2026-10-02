@@ -2,7 +2,8 @@
  * The selection toolbar in a real browser (the built template in headless Chromium, fed by the harness's
  * event stream): it never covers the selection, lets a right-click reach the browser untouched (the
  * browser's menu with Copy), copies exactly the selection, shows only once the selection rests, and closes
- * on Escape and on a scroll. Skipped when no Chromium is found (FLEET_CHROMIUM, or chromium on the PATH).
+ * on Escape and on a scroll; a quote sent from it leads back, from the chat, to where it was taken. Skipped
+ * when no Chromium is found (FLEET_CHROMIUM, or chromium on the PATH).
  */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -190,3 +191,59 @@ test.skipIf(!found)("on a phone the bar sits below the selection, clear of its h
   expect(await covers(page)).toBe(false);
   await page.close();
 });
+
+for (const width of [1280, 390]) {
+  test.skipIf(!found)(`at ${width} px, Reply on a decision's text, sent, leads back there from the chat: the label is a link that opens the decision and marks the text`, async () => {
+    const page = await open(width, "#decision/a8");
+    const phone = width < 500;
+
+    /* Select the decision's why, as a mouse or a finger leaves it, and Reply. */
+    await page.evaluate(async (touch: boolean) => {
+      const p = [...document.querySelectorAll("#dv-info p")].find((el) => el.textContent?.includes("stale weights"));
+      const range = document.createRange();
+
+      if (p) range.selectNodeContents(p);
+      const opts = { bubbles: true, pointerType: touch ? "touch" : "mouse", button: 0, isPrimary: true };
+      p?.dispatchEvent(new PointerEvent("pointerdown", opts));
+      getSelection()?.removeAllRanges();
+      getSelection()?.addRange(range);
+      p?.dispatchEvent(new PointerEvent("pointerup", opts));
+    }, phone);
+    await page.waitForFunction(() => document.querySelector<HTMLElement>("#seltool")?.hidden === false);
+    await page.click('#seltool [data-sel="reply"]');
+    await page.type("#say", "why now?");
+    await page.click("#send");
+    const sent = await page.waitForFunction(() => document.querySelector('#chat-log .msg-quote a.from[href="#decision/a8"]')?.closest("article")?.getAttribute("data-id"));
+    const id = String(await sent.jsonValue());
+    expect(harness.posted.at(-1)?.quote?.at).toEqual({ hash: "#decision/a8", anchor: "dv-info" });
+
+    /* Elsewhere on the page, the chat open, a click on the label goes back. */
+    await page.evaluate(() => {
+      location.hash = "#plan";
+    });
+    await page.waitForFunction(() => !document.querySelector<HTMLElement>("#decision")?.offsetParent);
+
+    if (phone) {
+      await page.click("#chat-toggle");
+      await page.waitForFunction(() => document.documentElement.classList.contains("chat-open"));
+    }
+
+    const link = `#chat-log article[data-id="${id}"] .msg-quote a.from`;
+    const label = await page.evaluate((sel: string) => document.querySelector(sel)?.getBoundingClientRect().height ?? 0, link);
+    expect(label).toBeGreaterThanOrEqual(phone ? 43.5 : 18);
+    await page.click(link);
+    await page.waitForFunction(() => location.hash === "#decision/a8" && document.querySelector("#dv-info .found") !== null);
+
+    const landed = await page.evaluate(() => {
+      const el = document.querySelector("#dv-info .found");
+      const r = el?.getBoundingClientRect();
+
+      return { text: el?.textContent ?? "", inView: r ? r.top >= 0 && r.bottom <= innerHeight : false, chatOpen: document.documentElement.classList.contains("chat-open") };
+    });
+
+    expect(landed.text).toContain("stale weights");
+    expect(landed.inView).toBe(true);
+    expect(landed.chatOpen).toBe(false);
+    await page.close();
+  });
+}

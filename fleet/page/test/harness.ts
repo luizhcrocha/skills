@@ -1,8 +1,9 @@
 /**
  * A stand-in for the hub's fleet routes, for the page's browser tests and screenshots: the page rendered
  * from a template and a fixture view (the real `pageHtml`), `GET events` (SSE `hello`, `state`, `chat`),
- * `POST chat`, `POST chat/preview`, `GET skills`, `GET state.json`, and two control routes a test drives:
- * `POST /_state` (a new view, sent to every stream) and `POST /_chat` (a message from the fleet).
+ * `POST chat` (keeping its `re`, `decision` and `quote`), `POST chat/preview`, `GET skills`, `GET state.json`,
+ * and two control routes a test drives: `POST /_state` (a new view, sent to every stream) and `POST /_chat`
+ * (a message from the fleet).
  */
 import type { Json } from "../src/core.ts";
 import type { Message, View } from "./fixtures.ts";
@@ -117,12 +118,14 @@ export function serveHarness(options: HarnessOptions): Harness {
 
       if (req.method === "POST" && path === "/chat") {
         // SAFETY: the page posts a JSON object with these fields.
-        const body = (await req.json()) as { text: string; re?: number; decision?: string };
+        const body = (await req.json()) as { text: string; re?: number; decision?: string; quote?: Message["quote"] };
         let m: Message = { id: messages.length + 1, at: new Date().toISOString(), from: "user", to: ["coordinator"], text: body.text };
 
         if (body.re !== undefined) m = { ...m, re: body.re };
 
         if (body.decision !== undefined) m = { ...m, decision: body.decision };
+
+        if (body.quote !== undefined) m = { ...m, quote: body.quote };
         messages.push(m);
         posted.push(m);
         broadcast(event("chat", m, m.id));

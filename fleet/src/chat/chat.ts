@@ -17,6 +17,41 @@ import { appendLocked, readChat, type Message, type Part } from "./store.ts";
 /** Characters of a selected excerpt a message carries. */
 export const QUOTE_MAX = 2000;
 
+/** Characters of each field of a quote's place (`at`). */
+export const PLACE_MAX = 200;
+
+const PLACE_REFUSED = "a quote's place is {hash, anchor?, message?}: strings, the hash starting with #, the message a message's id, each at most 200 characters";
+
+/**
+ * Where a quote was taken, as the page that sent it can open it again: `hash` (its location hash), `anchor`
+ * (an element id there) and `message` (a chat message's id), strings of at most PLACE_MAX characters with
+ * no control characters. Other keys are dropped; undefined when there is none.
+ */
+function placeOf(at: Json | undefined): JsonObject | undefined | ChatError {
+  if (at === undefined || at === null) return undefined;
+  const given = asObject(at);
+  const hash = asString(given?.["hash"]);
+
+  if (given === undefined || hash === undefined || !hash.startsWith("#")) return new ChatError({ reason: PLACE_REFUSED });
+  const fields: [string, string][] = [];
+
+  for (const key of ["hash", "anchor", "message"]) {
+    const value = given[key];
+
+    if (value === undefined || value === null || value === "") continue;
+    const text = asString(value);
+
+    // oxlint-disable-next-line no-control-regex -- control characters are what it refuses.
+    if (text === undefined || [...text].length > PLACE_MAX || /[\u0000-\u001f\u007f]/u.test(text)) return new ChatError({ reason: PLACE_REFUSED });
+    fields.push([key, text]);
+  }
+
+  const place: JsonObject = Object.fromEntries(fields);
+  const message = asString(place["message"]);
+
+  return message !== undefined && !/^[0-9]+$/u.test(message) ? new ChatError({ reason: PLACE_REFUSED }) : place;
+}
+
 /** A host whose watch ended, or who spoke, this recently still counts as reading. */
 export const READING_GRACE_S = 10 * 60;
 
@@ -219,7 +254,12 @@ export function append(machine: Machine, root: string, draft: Draft, at: string)
 
     if (text === undefined || text.trim() === "") return new ChatError({ reason: "a quote is the selected text, with where it was" });
     const from = draft.quote["from"];
+    const place = placeOf(draft.quote["at"]);
+
+    if (place instanceof ChatError) return place;
     quote = { text: [...text.trim()].slice(0, QUOTE_MAX).join(""), from: [...(truthy(from) ? (asString(from) ?? pyRepr(from)) : "")].slice(0, 200).join("") };
+
+    if (place !== undefined) quote = { ...quote, at: place };
   }
 
   const stored = appendLocked(root, (known, nextId) => {

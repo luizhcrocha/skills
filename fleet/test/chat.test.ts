@@ -558,6 +558,17 @@ describe("quotes and side chats", () => {
     expect(append(m, root, { sender: "user", text: "x", allowUser: true, quote: { text: " " } }, now())).toBeInstanceOf(ChatError);
   });
 
+  test("a quote keeps where it was, and a malformed place is refused", () => {
+    const sent = user("why?", { quote: { text: "per line", from: "Rounding", at: { hash: "#decision/d1", anchor: "dv-info", extra: "dropped" } } });
+    expect(sent.quote).toEqual({ text: "per line", from: "Rounding", at: { hash: "#decision/d1", anchor: "dv-info" } });
+    expect(user("and this?", { quote: { text: "halfway", at: { hash: "#plan", message: "1" } } }).stored["quote"]).toEqual({ text: "halfway", from: "", at: { hash: "#plan", message: "1" } });
+    expect(readChat(root)[0]?.quote).toEqual({ text: "per line", from: "Rounding", at: { hash: "#decision/d1", anchor: "dv-info" } });
+    const bad: Json[] = ["#plan", { anchor: "x" }, { hash: "plan" }, { hash: 5 }, { hash: "#" + "x".repeat(200) }, { hash: "#plan", anchor: 3 }, { hash: "#plan", message: 2 }, { hash: "#plan", message: "two" }, { hash: "#plan\n" }];
+
+    for (const at of bad) expect(append(m, root, { sender: "user", text: "x", allowUser: true, quote: { text: "t", at } }, now())).toBeInstanceOf(ChatError);
+    expect(readChat(root).length).toBe(2);
+  });
+
   test("a side chat is opened, answered and kept apart", () => {
     const opener = user("what is l19?", { side: "new", quote: { text: "l19", from: "Plan" } });
     expect(opener.side).toBe(opener.id);

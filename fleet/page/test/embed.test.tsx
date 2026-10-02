@@ -449,7 +449,7 @@ test("text selected in a fleet's frame shows the manager's toolbar over it, and 
   if (say) say.value += "why not per line?";
   page.ui.afterEdit();
   await page.ui.send();
-  expect(posted).toEqual([{ text: "@billing why not per line?", quote: { text: "per line or on the total", from: "Rounding rule for totals, in billing" } }]);
+  expect(posted).toEqual([{ text: "@billing why not per line?", quote: { text: "per line or on the total", from: "Rounding rule for totals, in billing", at: { hash: "#decision/billing/d1" } } }]);
 });
 
 test("Side chat on text selected in a fleet's frame opens a side chat addressed to that fleet's coordinator", () => {
@@ -492,7 +492,7 @@ test("embedded, the fleet's page tells the manager of text selected in it once i
   expect(selects()).toEqual([]);
   await new Promise((r) => setTimeout(r, 250));
   const rect = { top: expect.any(Number), bottom: expect.any(Number), left: expect.any(Number), width: expect.any(Number) };
-  expect(selects()).toEqual([{ fleetEmbed: true, select: { text: String(getSelection()), rect, from: "Rounding rule for totals", touch: false } }]);
+  expect(selects()).toEqual([{ fleetEmbed: true, select: { text: String(getSelection()), rect, from: "Rounding rule for totals", touch: false, at: { hash: "#decision/d1", anchor: "dv-info" } } }]);
   expect(String(getSelection())).toContain("Rounding rule for totals");
   getSelection()?.removeAllRanges();
   document.dispatchEvent(new Event("selectionchange"));
@@ -509,11 +509,12 @@ test("embedded, the fleet's page passes its evidence frame's selection on to the
   flush();
   const ev = placeAt(evidence.frame, 300, 16);
   arrive({ fleetSelect: true, text: "one-cent drift", rect: { top: 10, bottom: 28, left: 5, width: 90 }, touch: true }, ev.contentWindow);
-  expect(selects()).toEqual([{ fleetEmbed: true, select: { text: "one-cent drift", rect: { top: 310, bottom: 328, left: 21, width: 90 }, from: "the evidence of Rounding rule for totals", touch: true } }]);
+  const at = { hash: "#decision/d1", anchor: "dv-body" };
+  expect(selects()).toEqual([{ fleetEmbed: true, select: { text: "one-cent drift", rect: { top: 310, bottom: 328, left: 21, width: 90 }, from: "the evidence of Rounding rule for totals", touch: true, at } }]);
   arrive({ fleetSelect: true, text: "elsewhere", rect: { top: 1, bottom: 2, left: 3, width: 4 } }, window);
   arrive({ fleetSelect: true, text: "", rect: null }, ev.contentWindow);
   expect(selects()).toEqual([
-    { fleetEmbed: true, select: { text: "one-cent drift", rect: { top: 310, bottom: 328, left: 21, width: 90 }, from: "the evidence of Rounding rule for totals", touch: true } },
+    { fleetEmbed: true, select: { text: "one-cent drift", rect: { top: 310, bottom: 328, left: 21, width: 90 }, from: "the evidence of Rounding rule for totals", touch: true, at } },
     { fleetEmbed: true, select: { text: "", rect: null, from: "", touch: false } },
   ]);
 });

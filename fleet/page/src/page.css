@@ -626,6 +626,8 @@
   .re-line:hover { background: color-mix(in srgb, var(--text) 11%, transparent); }
   .msg-quote { margin: 2px 0 6px; padding: 4px 10px; border-left: 3px solid color-mix(in srgb, var(--text) 25%, transparent); color: var(--muted); font-size: var(--fs-s); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9.5em; overflow: auto; }
   .msg-quote .from { display: block; font-size: var(--fs-xs); font-weight: 600; }
+  .msg-quote a.from { display: flex; align-items: center; min-height: var(--tap); color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 2px; }
+  .msg-quote a.from:hover { color: var(--text); text-decoration-color: currentColor; }
   .reply-btn { flex: none; display: grid; place-items: center; width: var(--tap); height: var(--tap); padding: 0; border: 0; border-radius: 50%; background: none; color: var(--faint); cursor: pointer; }
   .reply-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .reply-btn:hover, .reply-btn:focus-visible { color: var(--accent); background: var(--card-2); }

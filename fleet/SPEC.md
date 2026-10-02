@@ -407,13 +407,22 @@ exclusive `flock`. A line that doesn't parse, or lacks `id` (int), `from` (str),
 next append starts on a new line. Bytes that aren't UTF-8 are read with replacement.
 
 A message: `{id, at, from, to[], text, re (int|null), parts[]}` plus `author` (the user's tailnet
-login, set only by the server), `decision`, `quote {text ≤2000, from ≤200}`, `side` (the id of the
+login, set only by the server), `decision`, `quote {text ≤2000, from ≤200, at?}`, `side` (the id of the
 message that opened a side chat), and, written by the hub only (its Delivery, in [The hub](#the-hub-fleet-hub)),
 `delivered [{fleet, id}]` (on the manager's message: the coordinators that have it in their own chat, and
 its id there) and `via {fleet, id}` (on that copy, `{fleet: "manager", id}`, and on a coordinator's answer
 mirrored onto the manager's page, `{fleet, id}` of the answer). `parts` split the text into plain parts and mentions
 `{text: "@a1", mention: "a1"}` that join back to the text exactly. `re` and `parts` default to
 null and one plain part when read.
+
+A quote's `at` is where its text was selected, as the page that sent it opens it again: `{hash,
+anchor?, message?}`, `hash` the location hash of the place (`#decision/d1`, `#decision/<fleet>/d1` on
+the manager's page, `#plan`, `#agent-a2`), `anchor` the id of the element there that holds the text
+(`dv-info`, `dv-body` for the evidence), `message` the id of the chat message it was selected in, as a
+string. Each is a string of at most 200 characters with no control characters, the hash starting with
+`#` and the message all digits; an empty or null field is left out, other keys are dropped, and any other
+`at` is refused (`a quote's place is {hash, anchor?, message?}: ...`). A quote without `at` is as before.
+The hub adds `page` on a coordinator's copy of the manager's message (Delivery, below).
 
 **Participants.** The host is `manager` in a manager's DIR, else `coordinator`. The roster is
 every `agents[]` row, whatever its status, and in a manager's DIR each coordinator being served,
@@ -717,7 +726,10 @@ itself. A manager made later appears the same way, on the same address.
   `to: ["<fleet>"]` among the registry's fleets) is written, under the manager's store lock, into each
   one's own `DIR/chat.jsonl` through the chat store: `{id (its next), at, from: "user", to:
   ["coordinator"], text, re, parts (one plain part), author?, quote?, side?, via: {fleet: "manager", id:
-  N}}`. Its `re` is the coordinator's own message when N answers one mirrored from it (or a copy it has),
+  N}}`. The copy's quote keeps its place on a page that can follow it: a place on one of that fleet's own
+  decisions (`at.hash` `#decision/<fleet>/<id>`, the fleet by its id or an alias) becomes `#decision/<id>`,
+  its own page's address; any other place keeps the manager's address and gains `page: "/f/<manager>/"`,
+  the manager's page, which the fleet's page links to. Its `re` is the coordinator's own message when N answers one mirrored from it (or a copy it has),
   else null; a side chat opened on the manager's page opens one there, a later message of it continues
   that one (a new one when the fleet has none of it); else the copy inherits its parent's side. The
   manager's message is stored with `delivered: [{fleet, id}]`, one row per copy (the link; a fleet whose

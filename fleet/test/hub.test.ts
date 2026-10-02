@@ -283,6 +283,15 @@ describe("a fleet's chat through the hub", () => {
     expect(sent.status).toBe(201);
   });
 
+  test("a quote's place is kept, and a malformed one refused", async () => {
+    const quote = { text: "per line", from: "Rounding", at: { hash: "#decision/d1", anchor: "dv-info" } };
+    const sent = await post({ text: "why?", quote });
+    expect([sent.status, sent.body["quote"]]).toEqual([201, quote]);
+    const bad = await post({ text: "why?", quote: { ...quote, at: { hash: "decision/d1" } } });
+    expect([bad.status, asString(bad.body["error"])?.includes("place")]).toEqual([400, true]);
+    expect(readChat(root).map((m) => m.quote)).toEqual([quote]);
+  });
+
   test("a store that cannot be written is a 500, not blamed on the body", async () => {
     mkdirSync(join(root, "chat.jsonl"));
     const sent = await post({ text: "hi" });
@@ -888,6 +897,19 @@ describe("the user's word to a coordinator on the manager's page", () => {
     say("coordinator", "both", { re: 3 });
     relay();
     expect(fields(readChat(manager).at(-1), "from", "re", "side", "text")).toEqual(["p", 2, 1, "both"]);
+  });
+
+  test("a quote's place goes across: the fleet's own decision as its own page's, anything else on the manager's page", async () => {
+    await toManager({ text: "@p why?", quote: { text: "per line", from: "Rounding, in p", at: { hash: "#decision/p/d1", anchor: "dv-info" } } });
+    await toManager({ text: "@p and this?", quote: { text: "halfway", from: "the chat", at: { hash: "#plan", message: "1" } } });
+    expect(readChat(root).map((m) => asObject(m.quote)?.["at"])).toEqual([
+      { hash: "#decision/d1", anchor: "dv-info" },
+      { hash: "#plan", message: "1", page: "/f/manager/" },
+    ]);
+    expect(readChat(manager).map((m) => asObject(m.quote)?.["at"])).toEqual([
+      { hash: "#decision/p/d1", anchor: "dv-info" },
+      { hash: "#plan", message: "1" },
+    ]);
   });
 
   test("a reply to a mirrored answer goes to the coordinator as a reply to its own message", async () => {

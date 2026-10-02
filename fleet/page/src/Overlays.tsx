@@ -7,7 +7,7 @@ import { For, Show, type JSX } from "@solidjs/web";
 
 import { ChatIcon, CloseIcon, listen, Pill, usePage, tf } from "./bits.tsx";
 import { copyText, selectAndCopy, type Copied } from "./clip.ts";
-import { Core, type Agent, type Coordinator, type Json } from "./core.ts";
+import { Core, type Agent, type Coordinator, type Json, type QuoteAt } from "./core.ts";
 import { evidence } from "./DecisionPage.tsx";
 import { parseEmbedMessage, parseEvidenceSelect, postSelect, type SelRect } from "./embed.ts";
 import { fmtDur, fmtInt, spentWords } from "./format.ts";
@@ -389,11 +389,69 @@ function whereOf(m: Model, node: Node | null): string {
   return view ? ({ decisions: "Decisions", plan: "the Plan", fleet: m.managed() ? "Fleets" : "the Fleet", links: "Links", log: "the Log" }[view.dataset["view"] ?? ""] ?? "") : "the page's head";
 }
 
+/** The location hash of what the page shows now: the address, or the view's when the address has none. */
+function hereHash(m: Model): string {
+  return location.hash.length > 1 ? location.hash : "#" + m.place().view;
+}
+
+/** The nearest element with an id around `el`, up to `box` and not `box` itself; "" when there is none. */
+function anchorIn(box: Element, el: Element): string {
+  for (let at: Element | null = el; at && at !== box; at = at.parentElement) if (at.id && !at.matches("input, textarea, select, button")) return at.id;
+
+  return "";
+}
+
+/**
+ * Where on the page `node` is, as a place a quote can be followed back to (`quote.at`): in the chat, the
+ * message; on a decision's page, its address and the part of it; in a view, the view's address (or the
+ * part's own, as a worker's row has) and the part.
+ */
+function placeOf(m: Model, node: Node | null): QuoteAt {
+  const el = node && (node instanceof Element ? node : node.parentElement);
+  const here = hereHash(m);
+
+  if (!el) return { hash: here };
+
+  if (el.closest("#chat-log")) {
+    const id = el.closest<HTMLElement>("article.msg")?.dataset["id"];
+
+    return id && /^[0-9]+$/u.test(id) ? { hash: here, message: id } : { hash: here };
+  }
+
+  const box = el.closest<HTMLElement>("#decision") ?? el.closest<HTMLElement>("section.view[data-view]");
+
+  if (!box) return { hash: here };
+  const viewing = m.viewing();
+  const hash = box.id === "decision" ? (viewing ? Core.decisionHref(viewing) : here) : "#" + String(box.dataset["view"]);
+  const anchor = anchorIn(box, el);
+
+  if (!anchor) return { hash };
+
+  return box.id !== "decision" && Core.viewOf("#" + anchor, m.managed()).anchor === anchor ? { hash: "#" + anchor, anchor } : { hash, anchor };
+}
+
+/** The place of a decision's evidence: its page, at the evidence. */
+function evidencePlace(m: Model): QuoteAt {
+  const viewing = m.viewing();
+
+  return { hash: viewing ? Core.decisionHref(viewing) : hereHash(m), anchor: "dv-body" };
+}
+
 /** `r`, a place in `frame`'s viewport, in the viewport of the page that holds the frame. */
 function within(frame: HTMLIFrameElement, r: SelRect | null): SelRect {
   const box = frame.getBoundingClientRect();
 
   return { top: box.top + (r?.top ?? 0), bottom: box.top + (r?.bottom ?? 0), left: box.left + (r?.left ?? 0), width: r?.width ?? 0 };
+}
+
+/**
+ * A place on the page of the fleet whose decision `shown` is framed on the manager's (`at` as the frame
+ * tells it), as the manager's own address: the decision `#decision/<fleet>/<id>`, the part of it kept.
+ */
+function fleetPlace(shown: { readonly fleet: string; readonly id: string }, at: QuoteAt | null): QuoteAt {
+  const hash = Core.decisionHref(shown.fleet + "/" + (Core.viewOf(at?.hash).decision ?? shown.id));
+
+  return at?.anchor ? { hash, anchor: at.anchor } : { hash };
 }
 
 /** How long the frame's selection rests before the manager is told of it, as the evidence frame's script waits. */
@@ -423,7 +481,7 @@ export function forwardSelections(): void {
     }
 
     const r = sel.getRangeAt(0).getBoundingClientRect();
-    postSelect(sel.toString(), { top: r.top, bottom: r.bottom, left: r.left, width: r.width }, whereOf(m, node), touch);
+    postSelect(sel.toString(), { top: r.top, bottom: r.bottom, left: r.left, width: r.width }, whereOf(m, node), touch, placeOf(m, node));
     told = true;
   };
 
@@ -440,7 +498,7 @@ export function forwardSelections(): void {
 
     if (!frame || !said) return;
     const d = m.decisionById(m.viewing());
-    postSelect(said.text, within(frame, said.rect), "the evidence" + (d ? " of " + d.title : ""), said.touch);
+    postSelect(said.text, within(frame, said.rect), "the evidence" + (d ? " of " + d.title : ""), said.touch, evidencePlace(m));
   });
   onCleanup(() => clearTimeout(settle));
 }
@@ -477,7 +535,7 @@ export function SelTool(): JSX.Element {
     ui.setToolAt(null);
   };
 
-  function show(text: string, from: string, box: SelBox): void {
+  function show(text: string, from: string, at: QuoteAt, box: SelBox): void {
     if (!text.trim() || !tool) {
       hide();
 
@@ -486,7 +544,7 @@ export function SelTool(): JSX.Element {
 
     raw = text;
     setCopied("");
-    ui.setPicked({ text: Core.excerptOf(text), from });
+    ui.setPicked({ text: Core.excerptOf(text), from, at });
     tool.hidden = false;
     ui.setToolAt(toolPlace(box, tool.offsetWidth, tool.offsetHeight, innerWidth, innerHeight, touch));
   }
@@ -500,7 +558,7 @@ export function SelTool(): JSX.Element {
     const el = node && (node instanceof Element ? node : node.parentElement);
 
     if (!el || el.closest("textarea, input, .composer, #seltool, .seltool") || !el.closest("#app, #decision, #chat-log")) return;
-    show(sel.toString(), whereOf(m, node), boxOf(sel.getRangeAt(0)));
+    show(sel.toString(), whereOf(m, node), placeOf(m, node), boxOf(sel.getRangeAt(0)));
   };
 
   const later = (): void => {
@@ -556,8 +614,8 @@ export function SelTool(): JSX.Element {
     if (e.key === "Escape" && (ui.picked() || framePicked)) hide();
   };
 
-  /* Text selected in `frame`, at `r` in its viewport, by a touch or not; empty once the frame's selection is cleared. */
-  const pickIn = (frame: HTMLIFrameElement, text: string, r: SelRect | null, from: string, fleet: string | null, byTouch: boolean): void => {
+  /* Text selected in `frame`, at `r` in its viewport and `at` on the page, by a touch or not; empty once the frame's selection is cleared. */
+  const pickIn = (frame: HTMLIFrameElement, text: string, r: SelRect | null, from: string, at: QuoteAt, fleet: string | null, byTouch: boolean): void => {
     if (!text) {
       if (framePicked) hide();
 
@@ -566,19 +624,20 @@ export function SelTool(): JSX.Element {
 
     touch = byTouch;
     const { top, bottom, left, width } = within(frame, r);
-    show(text, from, { first: { top, bottom }, last: { top, bottom }, left, width });
+    show(text, from, at, { first: { top, bottom }, last: { top, bottom }, left, width });
     framePicked = { fleet };
   };
 
   /* A selection inside the evidence frame, or a fleet's frame on the manager's page, arrives as a message. */
   const onMessage = (e: MessageEvent<Json>): void => {
     const fleetFrame = document.querySelector<HTMLIFrameElement>("#dv-embed");
-    const fleet = Core.parseFleetDecision(m.viewing())?.fleet;
+    const shown = Core.parseFleetDecision(m.viewing());
+    const fleet = shown?.fleet;
 
-    if (fleetFrame && fleet && e.source === fleetFrame.contentWindow) {
+    if (fleetFrame && shown && fleet && e.source === fleetFrame.contentWindow) {
       const said = parseEmbedMessage(e.data);
 
-      if (said?.kind === "select") pickIn(fleetFrame, said.text, said.rect, said.from ? said.from + ", in " + fleet : fleet, fleet, said.touch);
+      if (said?.kind === "select") pickIn(fleetFrame, said.text, said.rect, said.from ? said.from + ", in " + fleet : fleet, fleetPlace(shown, said.at), fleet, said.touch);
 
       return;
     }
@@ -588,7 +647,7 @@ export function SelTool(): JSX.Element {
 
     if (!frame || !said) return;
     const d = m.decisionById(m.viewing());
-    pickIn(frame, said.text, said.rect, "the evidence" + (d ? " of " + d.title : ""), null, said.touch);
+    pickIn(frame, said.text, said.rect, "the evidence" + (d ? " of " + d.title : ""), evidencePlace(m), null, said.touch);
   };
 
   const onScroll = (): void => {

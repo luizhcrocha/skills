@@ -6,7 +6,7 @@
  */
 import { createMemo, createSignal, createStore, flush, reconcile, type Accessor } from "solid-js";
 
-import { Core, type Agent, type Coordinator, type Decision, type Json, type JsonRecord, type Message, type Place, type Prefs, type Queue, type RosterRow, type Skill, type State } from "./core.ts";
+import { Core, type Agent, type Coordinator, type Decision, type Json, type JsonRecord, type Message, type Place, type Prefs, type Queue, type Quote, type RosterRow, type Skill, type State } from "./core.ts";
 import { agoAt } from "./format.ts";
 
 /** Someone the page can name: a worker, or on a manager's page a coordinator under its fleet's name. */
@@ -20,12 +20,6 @@ export interface Person {
 
 /** The chat's link to the server. */
 export type Conn = "off" | "connecting" | "live" | "reconnecting" | "unavailable";
-
-/** A quote the next message is about. */
-export interface Quote {
-  readonly text: string;
-  readonly from: string;
-}
 
 /** Whether a value is a JSON object. */
 const isRecord = (v: Json | undefined): v is JsonRecord => v !== null && v !== undefined && Object(v) === v && !Array.isArray(v);

@@ -4,7 +4,8 @@
  * - `deliveries`: a message the user writes on the manager's page to one or more live coordinators is
  *   written, as the hub stores it, into each one's own chat as the user's message to `coordinator`, with
  *   `via: {fleet: "manager", id}`; the manager's message records each copy in `delivered: [{fleet, id}]`
- *   (the link). A reply, a side chat and a quote go across in the coordinator's own numbering.
+ *   (the link). A reply, a side chat and a quote go across in the coordinator's own numbering, the quote's
+ *   place (`at`) as the fleet's page can follow it (`quoteIn`).
  * - `Courier`: each answer of a coordinator in its own chat to a delivered message (`re` its id) is
  *   mirrored onto the manager's page from `<fleet>`, as the answer to the original, with
  *   `via: {fleet, id}`. The mirror is checked against the manager's chat under its lock, so it is written
@@ -96,8 +97,34 @@ function sideIn(entry: Entry, known: readonly Message[], side: number): number |
   return "new";
 }
 
+/**
+ * The quote as `entry`'s copy carries it. Its place (`at`) is an address on the manager's page: one of
+ * `entry`'s own decisions shown there (`#decision/<fleet>/<id>`) becomes that decision's address on the
+ * fleet's own page; any other place keeps the manager's address and gains `page`, the manager's page's path,
+ * so the link on the fleet's page leads to it. Without the manager's path the place is dropped.
+ */
+function quoteIn(entry: Entry, quote: Json | undefined, managerPage: string | undefined): Json | undefined {
+  const q = asObject(quote);
+  const at = asObject(q?.["at"]);
+
+  if (q === undefined || at === undefined) return quote;
+  const { at: _place, ...rest } = q;
+  const own = /^#decision\/([^/]+)\/([^/]+)$/u.exec(asString(at["hash"]) ?? "");
+  let fleet: string | undefined;
+
+  try {
+    fleet = own?.[1] === undefined ? undefined : decodeURIComponent(own[1]);
+  } catch {
+    fleet = undefined;
+  }
+
+  if (own?.[2] !== undefined && names(entry, fleet)) return { ...rest, at: { ...at, hash: "#decision/" + own[2] } };
+
+  return managerPage === undefined ? rest : { ...rest, at: { ...at, page: managerPage } };
+}
+
 /** Write `message` into one coordinator's chat; its id there, or undefined when it could not be. */
-function deliverTo(entry: Entry, known: readonly Message[], message: Delivered): number | undefined {
+function deliverTo(entry: Entry, known: readonly Message[], message: Delivered, managerPage: string | undefined): number | undefined {
   const parent = message.re === null ? undefined : known.find((m) => m.id === message.re);
   const re = parent === undefined ? null : (copyIn(entry, parent) ?? null);
   const continued = asNumber(message.side);
@@ -123,7 +150,9 @@ function deliverTo(entry: Entry, known: readonly Message[], message: Delivered):
 
     if (message.author !== undefined) copy.author = message.author;
 
-    if (message.quote !== undefined) copy.quote = message.quote;
+    const quote = quoteIn(entry, message.quote, managerPage);
+
+    if (quote !== undefined) copy.quote = quote;
 
     if (own !== undefined) copy.side = own;
     copy.via = { fleet: "manager", id: message.id };
@@ -139,6 +168,8 @@ function deliverTo(entry: Entry, known: readonly Message[], message: Delivered):
  * is left out: the message waits for the manager there, as before. */
 export function deliveries(machine: Machine, managerRoot: string, known: readonly Message[], to: readonly string[], message: Delivered): Delivery[] {
   const out: Delivery[] = [];
+  const manager = machine.registry.find(managerRoot);
+  const managerPage = manager === undefined ? undefined : `/f/${encodeURIComponent(manager.id)}/`;
 
   for (const fleet of to) {
     const entry = coordinators(machine, managerRoot).find((e) => e.id === fleet);
@@ -147,7 +178,7 @@ export function deliveries(machine: Machine, managerRoot: string, known: readonl
     let id: number | undefined;
 
     try {
-      id = deliverTo(entry, known, message);
+      id = deliverTo(entry, known, message, managerPage);
     } catch {
       id = undefined;
     }

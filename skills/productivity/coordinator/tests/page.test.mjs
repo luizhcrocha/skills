@@ -439,6 +439,15 @@ test("parseMessage keeps a quote and a side chat", () => {
   assert.equal(Core.parseMessage({ id: 6, from: "user", to: [], text: "x", quote: { text: " " }, side: "5" }).quote, null);
 });
 
+test("parseMessage keeps where a quote was, and drops a place that is not one", () => {
+  const at = { hash: "#decision/d1", anchor: "dv-info" };
+  assert.deepEqual(Core.parseMessage({ id: 5, from: "user", to: [], text: "why?", quote: { text: "per line", from: "Rounding", at } }).quote, { text: "per line", from: "Rounding", at });
+  assert.deepEqual(Core.parseMessage({ id: 5, from: "user", to: [], text: "x", quote: { text: "t", from: "", at: { hash: "#plan", message: "3", page: "/f/manager/" } } }).quote.at, { hash: "#plan", message: "3", page: "/f/manager/" });
+  for (const bad of [{ hash: "plan" }, { hash: 5 }, "#plan", { hash: "#plan", message: 3 }, { hash: "#plan", page: "https://evil.example/" }]) {
+    assert.deepEqual(Core.parseMessage({ id: 5, from: "user", to: [], text: "x", quote: { text: "t", from: "F", at: bad } }).quote, { text: "t", from: "F" });
+  }
+});
+
 test("sidesOf: one per side chat, with its quote and how many messages it holds", () => {
   const ms = [{ id: 1, text: "main" }, { id: 2, side: 2, text: "what is l19?", quote: { text: "l19", from: "Plan" } },
     { id: 3, side: 2, text: "the watchdog fix" }, { id: 4, text: "main again" }, { id: 5, side: 5, text: "and this?", quote: null }];

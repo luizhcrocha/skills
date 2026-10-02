@@ -2,7 +2,7 @@
  * Real-shaped views of a coordinator's fleet and of a manager (what `view()` sends the page), and a
  * conversation, with every time relative to `now` so "5 min ago" reads the same on every run.
  */
-import type { JsonRecord } from "../src/core.ts";
+import type { JsonRecord, QuoteAt } from "../src/core.ts";
 
 /** A view as the page receives it: plain JSON. */
 export type View = JsonRecord;
@@ -25,7 +25,7 @@ export interface Message {
   readonly decision?: string;
   readonly author?: string;
   readonly parts?: readonly { readonly text: string; readonly mention?: string }[];
-  readonly quote?: { readonly text: string; readonly from: string };
+  readonly quote?: { readonly text: string; readonly from: string; readonly at?: QuoteAt };
   readonly side?: number;
 }
 
@@ -212,7 +212,7 @@ export function chatConversation(now: number): Message[] {
     { id: 3, at: before(now, 1157), from: "coordinator", to: ["user"], text: "invoice-gen keeps running overnight; its tests are green so far." },
     { id: 4, at: before(now, 168), from: "a2", to: ["user", "coordinator"], text: report },
     { id: 5, at: before(now, 167), from: "a2", to: ["user", "coordinator"], text: "Next: the Stripe adapter, once S1 is in." },
-    { id: 6, at: before(now, 150), from: "user", to: ["coordinator"], text: "Is that true for credit notes too?", author: "luiz@example.com", side: 6, quote: { text: "Stripe rounds on the total; matching it avoids one-cent drift.", from: "D1 Rounding rule for totals" } },
+    { id: 6, at: before(now, 150), from: "user", to: ["coordinator"], text: "Is that true for credit notes too?", author: "luiz@example.com", side: 6, quote: { text: "Stripe rounds on the total; matching it avoids one-cent drift.", from: "D1 Rounding rule for totals", at: { hash: "#decision/d1", anchor: "dv-info" } } },
     { id: 7, at: before(now, 149), from: "coordinator", to: ["user"], text: "Yes: a credit note is totalled the same way.", re: 6, side: 6 },
     { id: 8, at: before(now, 115), from: "user", to: ["coordinator"], text: "None of these: Re-run after the cost improvements work is done", author: "luiz@example.com", decision: "d18" },
     { id: 9, at: before(now, 114), from: "coordinator", to: ["user"], text: "Recorded D18: the load check waits for the cost work, and I re-run it the day that lands.", re: 8 },
