@@ -8,7 +8,7 @@
     gates plan PATH...                       the suites PATH... would run, and why; runs nothing
 
 A suite is a just recipe (`just --no-deps test-page`). The installs the suites share run once,
-first, one per directory (`_deps-lint` is lint/ts's bun install, which test-lint-ts, test-fleet-ts
+first, one per directory (`_deps-lint` is lint/ts's bun install, which test-lint-ts, test-fleet-ts-own
 and test-page would otherwise run at the same time in one node_modules), then the suites run
 concurrently, longest first. Each suite's output is printed whole when it ends, under its
 PASS/FAIL line and duration, and a summary closes the run. Exit 1 when any suite or install
@@ -28,18 +28,22 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_REVSET = "master@origin..@"
 
-# The suites, longest first (the order they start in), with the installs each needs.
+# The suites, longest first (the order they start in), with the installs each needs. A suite is the just
+# recipe that runs it: `just <suite>` reruns one alone. The TypeScript fleet's recipe is two here, its own
+# checks and the oracle against it, so they overlap instead of queueing.
+FLEET_TS = ("test-fleet-ts-own", "test-fleet-ts-oracle")
 SUITES = {
-    "test-fleet-ts": ("_deps-fleet", "_deps-lint"),
-    "test-page": ("_deps-page", "_deps-lint"),
     "test-scripts": (),
     "test-coordinator": (),
-    "test-lint-ts": ("_deps-lint",),
+    "test-fleet-ts-own": ("_deps-fleet", "_deps-lint"),
+    "test-fleet-ts-oracle": ("_deps-fleet",),
+    "test-page": ("_deps-page", "_deps-lint"),
     "test-fleet": (),
+    "test-lint-ts": ("_deps-lint",),
     "test-coordinator-page": (),  # page.test.mjs alone; test-coordinator runs it too
     "validate": (),
 }
-FULL = ("test-fleet-ts", "test-page", "test-scripts", "test-coordinator", "test-lint-ts", "test-fleet")  # `just test`
+FULL = tuple(s for s in SUITES if s not in ("test-coordinator-page", "validate"))  # `just test`
 EVERYTHING = FULL + ("validate",)
 
 # Path pattern -> suites, and why. The first pattern a path matches decides; `*` crosses `/`.
@@ -47,7 +51,7 @@ EVERYTHING = FULL + ("validate",)
 SCOPE = (
     ("skills/productivity/coordinator/assets/dashboard.html", ("test-page", "test-coordinator-page", "test-fleet"),
      "the built page: test-page checks it against a fresh build, page.test.mjs reads it, the oracle renders through it"),
-    ("skills/productivity/coordinator/assets/*", ("test-coordinator", "test-fleet", "test-fleet-ts"),
+    ("skills/productivity/coordinator/assets/*", ("test-coordinator", "test-fleet", *FLEET_TS),
      "the templates both fleets copy into a dashboard dir (brief.md, standing.md)"),
     ("skills/productivity/coordinator/scripts/*", ("test-coordinator", "test-fleet"),
      "the Python fleet: its tests, and the oracle that replays the traces on it"),
@@ -57,9 +61,9 @@ SCOPE = (
      "skill content: test-scripts checks skill links, sources tables and the skills' own scripts"),
     ("*.md", ("validate",), "prose no test reads"),
     ("fleet/page/*", ("test-page", "test-coordinator-page"), "the page's source"),
-    ("fleet/oracle/*", ("test-fleet", "test-fleet-ts"), "the oracle runs against both fleets"),
-    ("fleet/*", ("test-fleet-ts", "test-fleet"), "the TypeScript fleet, and the oracle against both"),
-    ("lint/*", ("test-lint-ts", "test-fleet-ts", "test-page", "test-scripts"),
+    ("fleet/oracle/*", ("test-fleet", *FLEET_TS[1:]), "the oracle runs against both fleets"),
+    ("fleet/*", (*FLEET_TS, "test-fleet"), "the TypeScript fleet, and the oracle against both"),
+    ("lint/*", ("test-lint-ts", "test-fleet-ts-own", "test-page", "test-scripts"),
      "the lint packs every TypeScript suite runs, and the registry test-scripts checks"),
     ("scripts/*", ("test-scripts",), "the repo scripts"),
     ("bin/*", ("test-scripts",), "the scripts' wrappers"),

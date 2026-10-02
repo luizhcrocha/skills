@@ -47,9 +47,15 @@ test-coordinator-page:
 test-fleet:
     python3 -m unittest discover -s fleet/oracle -p 'test_*.py'
 
-# The TypeScript fleet (fleet/): strict types, the lint/ts packs, its own tests (bun --parallel=4: four worker processes, a fresh global per file), then the oracle's golden traces and model test run against it
-test-fleet-ts: _deps-fleet _deps-lint
+# The TypeScript fleet (fleet/): its own checks, then the oracle against it
+test-fleet-ts: test-fleet-ts-own test-fleet-ts-oracle
+
+# The TypeScript fleet's own checks: strict types, the lint/ts packs, its tests (bun --parallel=4: four worker processes, a fresh global per file)
+test-fleet-ts-own: _deps-fleet _deps-lint
     cd fleet && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/oxlint -c .oxlintrc.json --deny-warnings src test && bun test --parallel=4
+
+# The oracle's golden traces and model test run against the TypeScript fleet
+test-fleet-ts-oracle: _deps-fleet
     FLEET_ORACLE_IMPL='{"state": "{{justfile_directory()}}/fleet/bin/fleet state", "chat": "{{justfile_directory()}}/fleet/bin/fleet chat", "fleets": "{{justfile_directory()}}/fleet/bin/fleet fleets", "subst": {"{{justfile_directory()}}/skills/productivity/coordinator": "$SKILL"}}' python3 -m unittest discover -s fleet/oracle -p 'test_*.py'
 
 # Build the dashboard page (fleet/page, Solid 2.0) into the coordinator's template, assets/dashboard.html; commit the result
