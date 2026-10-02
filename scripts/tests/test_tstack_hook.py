@@ -983,7 +983,7 @@ class PermissionDeniedTest(FleetCase):
             self.assertNotIn("--supersedes", opts)
 
     def test_a_call_no_exact_rule_can_hold_opens_an_action(self):
-        for command in ("git push --force \\\n  origin HEAD:main", "rm -rf build/*"):
+        for command in ("git push --force \\\n  origin HEAD:main", "rm -rf build/*", "printf 'a\\tb'", "echo a\rb"):
             self.calls.unlink(missing_ok=True)
             self.refuse(agent_id="ab12cd34", command=command)
             positionals, opts = self.only()
@@ -1058,13 +1058,17 @@ class GrantRemovalTest(FleetCase):
     def write_settings(self, value):
         self.settings.write_text(json.dumps(value))
 
-    def grant(self, decision="p-1a2b3c4d", rule=RULE, at="2026-01-05T09:00:00+00:00", file=None, op="grant"):
+    def grant(self, decision="p-1a2b3c4d", rule=RULE, at="2026-01-05T09:00:00+00:00", file=None, op="grant",
+              agent_id=None):
         with open(self.grants, "a") as f:
-            f.write(json.dumps({"op": op, "decision": decision, "ref": "P1", "rule": rule,
-                                "file": str(file or self.settings), "at": at, "by": "local", "reload": "live"}) + "\n")
+            f.write(json.dumps({"op": op, "decision": decision, "ref": "P1", "rule": rule, "agent_id": agent_id,
+                                "file": str(file or self.settings), "at": at, "by": "local", "reload": "live"},
+                               separators=(",", ":")) + "\n")
 
-    def run_tool(self, command, now="2026-01-05T09:05:00+00:00", event="PostToolUse", tool="Bash", env=None):
-        payload = self.payload(event, tool_name=tool, tool_input={"command": command})
+    def run_tool(self, command, now="2026-01-05T09:05:00+00:00", event="PostToolUse", tool="Bash", env=None,
+                 agent_id=None):
+        extra = {"agent_id": agent_id} if agent_id else {}
+        payload = self.payload(event, tool_name=tool, tool_input={"command": command}, **extra)
         r = self.hook(event, payload, env={"FLEET_NOW": now, "TZ": "UTC", **(env or {})})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("failed", self.log())
@@ -1107,12 +1111,59 @@ class GrantRemovalTest(FleetCase):
         self.assertEqual(self.allow(), ["Bash(ls)", "Bash(üñí)"])
         self.assertEqual(self.lines()[-1]["why"], "expired")
 
-    def test_fleet_grant_ttl_min_sets_the_age(self):
+    def test_the_age_is_thirty_minutes_whatever_the_environment_says(self):
         self.grant()
-        self.run_tool("ls", now="2026-01-05T09:04:00+00:00", env={"FLEET_GRANT_TTL_MIN": "5"})
-        self.assertIn(self.RULE, self.allow())
         self.run_tool("ls", now="2026-01-05T09:05:00+00:00", env={"FLEET_GRANT_TTL_MIN": "5"})
+        self.assertIn(self.RULE, self.allow())
+
+    def test_a_grant_is_used_only_by_the_caller_it_was_for(self):
+        self.grant(agent_id="ab12cd34")
+        self.run_tool("git push --force origin HEAD:main")
+        self.run_tool("git push --force origin HEAD:main", agent_id="ee55ee55")
+        self.assertIn(self.RULE, self.allow())
+        self.assertEqual(len(self.lines()), 1)
+        self.run_tool("git push --force origin HEAD:main", agent_id="ab12cd34")
         self.assertNotIn(self.RULE, self.allow())
+        self.assertEqual(self.lines()[-1]["why"], "used")
+
+    def test_a_main_thread_grant_is_not_used_by_a_subagent(self):
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main", agent_id="ab12cd34")
+        self.assertIn(self.RULE, self.allow())
+        self.run_tool("git push --force origin HEAD:main")
+        self.assertNotIn(self.RULE, self.allow())
+
+    def test_a_removal_is_one_compact_line(self):
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main")
+        last = self.grants.read_text().splitlines()[-1]
+        self.assertEqual(last, json.dumps(json.loads(last), separators=(",", ":"), ensure_ascii=False))
+
+    def lock(self, age_s=0.0):
+        lock = self.settings.parent / ".settings.local.json.lock"
+        lock.mkdir()
+        then = time.time() - age_s
+        os.utime(lock, (then, then))
+        return lock
+
+    def test_a_held_settings_lock_leaves_the_grant_open(self):
+        lock = self.lock()
+        self.grant()
+        payload = self.payload("PostToolUse", tool_name="Bash", tool_input={"command": "git push --force origin HEAD:main"})
+        started = time.monotonic()
+        self.assertSilent(self.hook("PostToolUse", payload, env={"FLEET_NOW": "2026-01-05T09:05:00+00:00"}))
+        self.assertGreaterEqual(time.monotonic() - started, 2)
+        self.assertIn("lock", self.log())
+        self.assertIn(self.RULE, self.allow())
+        self.assertEqual(len(self.lines()), 1)
+        self.assertTrue(lock.is_dir())
+
+    def test_a_stale_settings_lock_is_taken(self):
+        lock = self.lock(age_s=11)
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main")
+        self.assertNotIn(self.RULE, self.allow())
+        self.assertFalse(lock.exists())
 
     def test_a_removed_grant_is_not_taken_back_twice(self):
         self.grant()
@@ -1176,7 +1227,7 @@ class GrantRemovalTest(FleetCase):
         self.run_tool("ls")
         self.assertEqual(self.allow(), ["Bash(ls)", "Bash(üñí)"])
         text = self.grants.read_text()
-        self.assertIn('"fi\n{"op": "remove"', text)
+        self.assertIn('"fi\n{"op":"remove"', text)
         self.assertEqual(json.loads(text.splitlines()[-1])["why"], "expired")
 
     def test_through_fleet_dir_too(self):
