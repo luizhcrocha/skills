@@ -11,7 +11,7 @@ import type { Message } from "../chat/store.ts";
 import { parseInstant } from "../clock.ts";
 import { Refusal } from "../errors.ts";
 import { answeredAt } from "../health.ts";
-import { asArray, asObject, asString, type JsonObject } from "../json.ts";
+import { asArray, asNumber, asObject, asString, type JsonObject } from "../json.ts";
 import { readObject } from "../registry.ts";
 import { secondsNow, type Machine } from "../world.ts";
 import { copyLedger, decodeLedger, type Ledger } from "./model.ts";
@@ -205,6 +205,8 @@ export interface ActiveWorkspace {
   readonly id: string;
   readonly agent: string;
   readonly path: string;
+  /** The port its worker runs a dev server on (`fleet ws add` gives one), when it has one. */
+  readonly port: number | undefined;
 }
 
 /** The workspaces of a ledger that are still active, from its raw JSON (`workspaces` is `fleet ws`'s key). */
@@ -213,7 +215,7 @@ export function activeWorkspaces(raw: JsonObject | undefined): ActiveWorkspace[]
     const row = asObject(item);
     const id = asString(row?.["id"]);
 
-    return row === undefined || id === undefined || row["status"] === "pruned" ? [] : [{ id, agent: asString(row["agent"]) ?? id, path: asString(row["path"]) ?? "" }];
+    return row === undefined || id === undefined || row["status"] === "pruned" ? [] : [{ id, agent: asString(row["agent"]) ?? id, path: asString(row["path"]) ?? "", port: asNumber(row["port"]) }];
   });
 }
 

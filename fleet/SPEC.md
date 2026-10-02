@@ -567,6 +567,11 @@ itself. A manager made later appears the same way, on the same address.
   loopback port exits 1. `REGISTRY/hub/hub.json` holds `{pid, port, url, https, since}` while it
   runs. `--https PORT` also runs `tailscale serve --bg --https=PORT http://127.0.0.1:<port>` (and
   turns it off on exit): the page's browser alerts need a secure page.
+- **Dev-server ports**: `fleet ws add` records a `port` on each workspace it makes: the first one from
+  `FLEET_PORT_BASE` (5300) that no active workspace or preview of any fleet this machine serves holds; a
+  handed-over workspace keeps its port. `fleet brief` gives a worker with a lane a `Dev server:` line: the
+  fleet's per-worker preview when the combined preview's server runs, else its port (Vite
+  `--port N --strictPort`, else `PORT=N`), stopped before it reports.
 - **Fleets by name**: wherever a command takes a fleet's directory first (`state`, `chat`, `ws`,
   `preview`, `brief`, `turn`, `advisor`, `serve`, `spend`), a bare name (no `/`, not a directory here)
   is looked up among the fleets this machine serves: its id on the hub, an id it had before, or its

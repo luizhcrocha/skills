@@ -76,7 +76,7 @@ describe("fleet ws add", () => {
     expect(existsSync(join(path, "README"))).toBe(true);
     expect(jj(repo, "workspace", "list", "-T", 'name ++ "\\n"')).toBe("a1\ndefault\n");
     const baseChange = jj(repo, "log", "--no-graph", "-r", "@-", "-T", "change_id").trim();
-    expect(workspaces()).toEqual([{ id: "a1", agent: "a1", path, repo, base: baseChange, added: "2026-01-05T09:00:00+00:00", status: "active" }]);
+    expect(workspaces()).toEqual([{ id: "a1", agent: "a1", path, repo, base: baseChange, added: "2026-01-05T09:00:00+00:00", status: "active", port: 5300 }]);
     expect(jj(repo, "log", "--no-graph", "-r", "a1@-", "-T", "change_id").trim()).toBe(baseChange);
     const events = asArray(readJson(join(dir, "state.json"))["events"]) ?? [];
     expect(asObject(events.at(-1))?.["text"]).toContain(`Workspace a1 for a1 at ${path}`);
@@ -98,6 +98,19 @@ describe("fleet ws add", () => {
     expect(ws("add", "c", "--repo", plain).stderr).toContain("is not in a jj repo");
     expect(fleet(["ws", join(base, "nowhere"), "list"], env).stderr).toContain("no state.json in");
     expect(workspaces().length).toBe(1);
+  });
+});
+
+describe("a dev-server port per worker", () => {
+  test("each new workspace takes the next free port, from FLEET_PORT_BASE when it is set, and the brief names it", () => {
+    state("agent", "a1", "--task", "T", "--milestone", "m1", "--lane", "src/a/**");
+    expect(ws("add", "a1", "--repo", repo).stdout).toContain("its dev-server port is 5300");
+    expect(ws("add", "a2", "--repo", repo).stdout).toContain("its dev-server port is 5301");
+    expect(workspaces().map((w) => w["port"])).toEqual([5300, 5301]);
+    const brief = fleet(["brief", dir, "a1"], env).stdout;
+    expect(brief).toContain("Dev server: when you run one to check your work, run it on port 5300 and no other (Vite: `--port 5300 --strictPort`");
+    env = { ...env, FLEET_PORT_BASE: "6100" };
+    expect(ws("add", "a3", "--repo", repo).stdout).toContain("its dev-server port is 6100");
   });
 });
 

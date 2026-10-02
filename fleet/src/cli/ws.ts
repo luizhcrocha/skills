@@ -33,6 +33,7 @@ import { workerActivity } from "../heartbeat.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { laneMatches, lanesMeet } from "../ledger/lanes.ts";
+import { activeWorkspaces } from "../ledger/warnings.ts";
 import { decodeLedger } from "../ledger/model.ts";
 import { readRecord, recordPath, updateRecord } from "../preview/record.ts";
 import { isRunning } from "../preview/devserver.ts";
@@ -41,6 +42,7 @@ import { cliLookups } from "../page/lookups.ts";
 import { pageHtml, readTemplate, writePage } from "../page/render.ts";
 import { view } from "../page/view.ts";
 import { changes, jj, literal, unintegratedRevset, why, workspaceNames, workspaceRoot, type Change } from "../ws/jj.ts";
+import { readObject } from "../registry.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 
@@ -182,6 +184,35 @@ function add(machine: Machine, root: string, raw: JsonObject, argv: readonly str
   });
 }
 
+/** The first dev-server port from FLEET_PORT_BASE (5300) that no worker workspace or preview of any
+ * fleet this machine serves holds: each worker checks its UI on a port of its own, never the
+ * framework's default, so two workers' servers never meet. */
+export function freePort(machine: Machine, raw: JsonObject): number {
+  const used = new Set<number>();
+
+  const take = (ledger: JsonObject | undefined): void => {
+    for (const w of activeWorkspaces(ledger)) if (w.port !== undefined) used.add(w.port);
+  };
+
+  take(raw);
+
+  for (const e of machine.registry.live()) {
+    take(readObject(join(e.dir, "state.json")));
+    const preview = readRecord(e.dir);
+
+    if (preview?.server !== null && preview?.server !== undefined) used.add(preview.server.port);
+
+    for (const w of preview?.workers ?? []) used.add(w.port);
+  }
+
+  const base = Number(machine.env("FLEET_PORT_BASE") ?? "");
+  let port = Number.isInteger(base) && base > 1023 && base < 65000 ? base : 5300;
+
+  while (used.has(port)) port += 1;
+
+  return port;
+}
+
 function addFresh(
   machine: Machine,
   root: string,
@@ -214,7 +245,8 @@ function addFresh(
 
     if (!made.ok) return yield* refuse(why(made));
     const stamp = stampOf(machine.now());
-    const row: JsonObject = { id: name, agent, path, repo: main, base: from.change, added: stamp, status: "active" };
+    const port = freePort(machine, raw);
+    const row: JsonObject = { id: name, agent, path, repo: main, base: from.change, added: stamp, status: "active", port };
     const fault = save(machine, root, raw, [...(asArray(raw["workspaces"]) ?? []), row], [event(machine, raw, agent, "note", `Workspace ${name} for ${agent} at ${path}, on ${described(from)}.`)]);
 
     if (fault !== undefined) return yield* Effect.fail(fault);
@@ -227,7 +259,7 @@ function addFresh(
       );
     }
 
-    out.out(`workspace ${name} for ${agent} at ${path}, on ${described(from)}\n`);
+    out.out(`workspace ${name} for ${agent} at ${path}, on ${described(from)}; its dev-server port is ${String(port)}\n`);
     out.out(BRIEF_LINE(path));
 
     return 0;

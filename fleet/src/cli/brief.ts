@@ -20,6 +20,8 @@ import { asArray, asObject, asString, parseObject, type JsonObject } from "../js
 import { decodeLedger, type Agent, type Ledger } from "../ledger/model.ts";
 import { activeWorkspaces } from "../ledger/warnings.ts";
 import { readObject } from "../registry.ts";
+import { isRunning } from "../preview/devserver.ts";
+import { readRecord } from "../preview/record.ts";
 import { workspaceRoot } from "../ws/jj.ts";
 import { World } from "../world.ts";
 import { exitOf } from "./exit.ts";
@@ -129,6 +131,27 @@ interface Composed {
   readonly notes: string[];
 }
 
+/** Where a worker that edits code checks its UI: on the fleet's preview when one runs, else on a dev
+ * server of its own on the port its workspace was given, never the framework's default. */
+function devLine(root: string, a: Agent, port: number | undefined): string | undefined {
+  if (a.lane.length === 0) return undefined;
+  const preview = readRecord(root);
+
+  if (preview?.server?.pid !== null && preview?.server?.pid !== undefined && isRunning(preview.server.pid)) {
+    return (
+      `Dev server: the fleet runs a preview, so start none of your own. Check your change alone on your per-worker preview ` +
+      `(\`fleet preview ${root} start --per-worker ${a.id}\`, which prints its address), and the merged work at /f/${preview.fleet}/preview/ on the hub.`
+    );
+  }
+
+  if (port === undefined) return undefined;
+
+  return (
+    `Dev server: when you run one to check your work, run it on port ${String(port)} and no other ` +
+    `(Vite: \`--port ${String(port)} --strictPort\`; else PORT=${String(port)}), and stop it before you report.`
+  );
+}
+
 function compose(root: string, ledger: Ledger, raw: JsonObject, a: Agent): Composed {
   const brief: string[] = [`Read ${join(root, "brief.md")} first; your id is ${a.id}.`, "", `Task: ${a.task}`];
   const notes: string[] = [];
@@ -155,6 +178,9 @@ function compose(root: string, ledger: Ledger, raw: JsonObject, a: Agent): Compo
     notes.push(`brief: ${a.id} has a lane and no workspace: \`fleet ws ${root} add ${a.id}\` makes one for a worker that edits code, or \`--reuse\` hands it the idle one of its lane`);
   }
 
+  const dev = devLine(root, a, ws?.port);
+
+  if (dev !== undefined) brief.push(dev);
   const step = stepLine(ledger, a);
 
   if (step !== undefined) brief.push(step);
