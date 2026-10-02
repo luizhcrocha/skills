@@ -1,13 +1,13 @@
 /**
  * The views under the masthead, one at a time: Plan (roadmap, roadblocks, held for later), Fleet (a
- * manager's coordinators, the workers with their filters, tokens by worker), Links (pages, dev servers,
- * what else the machine serves) and Log.
+ * manager's coordinators, the live preview, the workers with their filters, tokens by worker), Links (the
+ * preview, pages, dev servers, what else the machine serves) and Log.
  */
 import { createEffect, createMemo, createSignal } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
 import { Pill, PillAs, RefTag, usePage, When, Who, tf } from "./bits.tsx";
-import { Core, type Agent, type Coordinator, type Decision, type Link } from "./core.ts";
+import { Core, type Agent, type Coordinator, type Decision, type Link, type Preview, type PreviewServer } from "./core.ts";
 import { clock, fmtDur, fmtInt, fmtShort, plural, spentWords } from "./format.ts";
 import { keyed } from "./model.ts";
 import { Rich } from "./Rich.tsx";
@@ -524,6 +524,150 @@ function Chart(props: { readonly rows: () => readonly Agent[] }): JSX.Element {
   );
 }
 
+/** A preview's dev server in words: up, starting, stopped. */
+function serverPill(s: PreviewServer): { readonly cls: string; readonly text: string } {
+  return s.running ? (s.up ? { cls: "running", text: "up" } : { cls: "open", text: "starting" }) : { cls: "stopped", text: "stopped" };
+}
+
+/**
+ * The live preview (`fleet preview`): its address, the workers its merge takes (a checkbox each, which
+ * takes a worker in or out through the hub, for whoever may write the chat), the files where workers'
+ * edits conflict and who made them, and the dev server's last build error.
+ */
+function PreviewPart(props: { readonly preview: Preview }): JSX.Element {
+  const { m } = usePage();
+  const p = (): Preview => props.preview;
+  const [problem, setProblem] = createSignal("");
+
+  /** Ask the hub to take `worker` in or out; the box goes back when the hub refuses. The state that follows
+   * (over the stream) says what the merge takes. */
+  async function choose(box: HTMLInputElement, worker: string, include: boolean): Promise<void> {
+    setProblem("");
+    let refused = "";
+
+    try {
+      const res = await fetch("preview-workers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ worker, include }) });
+
+      if (!res.ok) {
+        // SAFETY: the hub answers a refusal with {error}; anything else shows as its status.
+        const body = (await res.json().catch(() => ({}))) as { readonly error?: string };
+        refused = body.error ?? `the hub answered ${String(res.status)}`;
+      }
+    } catch {
+      refused = "the hub did not answer";
+    }
+
+    if (refused) {
+      box.checked = !include;
+      setProblem(refused);
+    }
+  }
+
+  return (
+    <div class="part" id="preview">
+      <h2>Preview</h2>
+      <div class="card preview-card">
+        <Show when={p().url}>
+          <div class="block">
+            <div class="block-head">
+              <a class="link-title" id="preview-link" href={p().url} target="_blank" rel="noopener">
+                Open the preview
+              </a>
+              <PillAs cls={serverPill(p()).cls} text={serverPill(p()).text} />
+              <Show when={!p().updater}>
+                <PillAs cls="warning" text="not updating" />
+              </Show>
+            </div>
+            <Show when={p().address}>
+              <p class="meta lane">{p().address}</p>
+            </Show>
+            <p class="meta">
+              Every worker's edits as they are now, merged on the stack and served live; looked at every {String(p().every)} s
+              {p().updated ? ", last changed " + m.ago(p().updated) : ""}.
+            </p>
+            <ul class="preview-workers" id="preview-workers">
+              <For each={p().workers} keyed={(w) => w.id} fallback={<li class="muted">No worker has a workspace yet: the preview shows the stack.</li>}>
+                {(w) => (
+                  <li>
+                    <label>
+                      <input
+                        type="checkbox"
+                        data-worker={w().id}
+                        checked={w().included}
+                        disabled={!m.chatWritable()}
+                        title={m.chatWritable() ? (w().included ? "Take out of the preview" : "Take into the preview") : m.write().reason || "Read-only here"}
+                        onChange={(e) => void choose(e.currentTarget, w().id, e.currentTarget.checked)}
+                      />
+                      <span>{w().name}</span>
+                    </label>
+                    <span class="muted"> {w().status || "no row"}</span>
+                    <Show when={w().included && w().change}>
+                      {" "}
+                      <code class="faint">{w().change}</code>
+                    </Show>
+                  </li>
+                )}
+              </For>
+            </ul>
+            <Show when={problem()}>
+              <p class="meta deaf-line">{problem()}</p>
+            </Show>
+          </div>
+        </Show>
+        <Show when={p().conflicts.length}>
+          <div class="block warning" id="preview-conflicts">
+            <div class="block-head">
+              <b>Conflicts</b>
+              <PillAs cls="warning" text={String(p().conflicts.length)} />
+            </div>
+            <ul class="preview-list">
+              <For each={p().conflicts} keyed={(c) => c.path}>
+                {(c) => (
+                  <li>
+                    <code>{c().path}</code> <span class="muted">{c().workers.length ? c().workers.map((id) => m.nameOf(id)).join(", ") : "the stack and a worker"}</span>
+                  </li>
+                )}
+              </For>
+            </ul>
+            <p class="meta">jj keeps the merge with conflict markers in these files, which may break the build. Take a worker out, or settle it between the workers.</p>
+          </div>
+        </Show>
+        <Show when={p().log}>
+          <div class="block critical" id="preview-log">
+            <div class="block-head">
+              <b>Build error</b>
+            </div>
+            <pre class="preview-pre">{p().log}</pre>
+          </div>
+        </Show>
+        <Show when={p().error}>
+          <div class="block serious" id="preview-error">
+            <p class="meta">The updater: {p().error}</p>
+          </div>
+        </Show>
+        <For each={p().own} keyed={(o) => o.worker}>
+          {(o) => (
+            <div class="block">
+              <div class="block-head">
+                <a class="link-title" href={o().url} target="_blank" rel="noopener">
+                  {m.nameOf(o().worker)} alone
+                </a>
+                <PillAs cls={serverPill(o()).cls} text={serverPill(o()).text} />
+              </div>
+              <Show when={o().address}>
+                <p class="meta lane">{o().address}</p>
+              </Show>
+              <Show when={o().log}>
+                <pre class="preview-pre">{o().log}</pre>
+              </Show>
+            </div>
+          )}
+        </For>
+      </div>
+    </div>
+  );
+}
+
 /** The workers the filters let through. */
 export function useVisibleAgents(): () => readonly Agent[] {
   const { m, ui } = usePage();
@@ -565,6 +709,7 @@ export function FleetView(props: { readonly rows: () => readonly Agent[] }): JSX
   return (
     <section class="view" id="fleet" data-view="fleet" aria-label="Fleet" hidden={m.place().view !== "fleet"}>
       <Coordinators />
+      <Show when={m.state.preview}>{(p) => <PreviewPart preview={p()} />}</Show>
       <Workers rows={props.rows} />
       <Chart rows={props.rows} />
     </section>
@@ -611,6 +756,40 @@ export function LinksView(): JSX.Element {
 
   return (
     <section class="view" id="links-view" data-view="links" aria-label="Links" hidden={m.place().view !== "links"}>
+      <Show when={m.state.preview}>
+        {(p) => (
+          <div class="part" id="preview-links">
+            <h2>Preview</h2>
+            <p class="muted part-note">The workers' edits before they are integrated, served live (the Fleet view says who is in it).</p>
+            <div class="card">
+              <Show when={p().url}>
+                <div class={"block link-row " + (p().up ? "" : "down")}>
+                  <div class="block-head">
+                    <a class="link-title" href={p().url} target="_blank" rel="noopener">
+                      Preview: every worker
+                    </a>
+                    <PillAs cls={serverPill(p()).cls} text={serverPill(p()).text} />
+                  </div>
+                  <p class="meta lane">{p().address || p().url}</p>
+                </div>
+              </Show>
+              <For each={p().own} keyed={(o) => o.worker}>
+                {(o) => (
+                  <div class={"block link-row " + (o().up ? "" : "down")}>
+                    <div class="block-head">
+                      <a class="link-title" href={o().url} target="_blank" rel="noopener">
+                        Preview: {m.nameOf(o().worker)} alone
+                      </a>
+                      <PillAs cls={serverPill(o()).cls} text={serverPill(o()).text} />
+                    </div>
+                    <p class="meta lane">{o().address || o().url}</p>
+                  </div>
+                )}
+              </For>
+            </div>
+          </div>
+        )}
+      </Show>
       <div class="part">
         <h2>Pages</h2>
         <p class="muted part-note">Pages made for one purpose: a review, a lab, a report.</p>

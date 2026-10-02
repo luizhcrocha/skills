@@ -259,6 +259,12 @@
   .block .detail { overflow-wrap: anywhere; }
   .block .needs { font-size: var(--fs-s); }
   .block-link { position: relative; z-index: 1; justify-self: start; display: inline-flex; align-items: center; min-height: var(--tap); font-weight: 600; }
+  .preview-workers, .preview-list { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; }
+  .preview-workers li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: var(--tap); }
+  .preview-workers label { display: inline-flex; align-items: center; gap: 8px; min-height: var(--tap); cursor: pointer; font-weight: 600; }
+  .preview-workers input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+  .preview-list code, .preview-workers code { font-family: var(--mono); font-size: 0.8125rem; overflow-wrap: anywhere; }
+  .preview-pre { margin: 4px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--card-2); font-family: var(--mono); font-size: 0.8125rem; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow: auto; }
 
   /* filters */
   .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }

@@ -198,6 +198,53 @@ export interface Found {
   readonly port: number;
 }
 
+/** A worker's workspace as the preview shows it: whether the merge takes it, at which commit. */
+export interface PreviewWorker {
+  readonly id: string;
+  readonly name: string;
+  readonly status: string;
+  readonly included: boolean;
+  readonly commit: string;
+  readonly change: string;
+}
+
+/** A file the preview's merge left conflicted, and the workers whose changes touch it. */
+export interface PreviewConflict {
+  readonly path: string;
+  readonly workers: readonly string[];
+}
+
+/** A dev server's state, as the page shows it. */
+export interface PreviewServer {
+  readonly running: boolean;
+  readonly up: boolean;
+  readonly port: number | null;
+  /** Its log's last error, while the server has not reloaded since. */
+  readonly log: string;
+}
+
+/** A dev server in one worker's own workspace. */
+export interface PreviewOwn extends PreviewServer {
+  readonly worker: string;
+  readonly url: string;
+  readonly address: string;
+}
+
+/** The fleet's live preview: every worker's in-progress edits merged and served (`fleet preview`). */
+export interface Preview extends PreviewServer {
+  /** Its path beside the page (`preview/`), or "" when only per-worker previews run. */
+  readonly url: string;
+  readonly address: string;
+  readonly updater: boolean;
+  readonly every: number;
+  readonly workers: readonly PreviewWorker[];
+  readonly conflicts: readonly PreviewConflict[];
+  /** Why the updater's last look failed, or "". */
+  readonly error: string;
+  readonly updated: string;
+  readonly own: readonly PreviewOwn[];
+}
+
 /** A row a fleet gives the manager's finder. */
 export interface IndexRow {
   readonly group: string;
@@ -280,6 +327,7 @@ export interface State {
   readonly found: readonly Found[];
   readonly kept: readonly Kept[];
   readonly events: readonly FleetEvent[];
+  readonly preview: Preview | null;
 }
 
 /** A part of a message: text, or a mention of a participant. */
@@ -986,6 +1034,40 @@ function answerText(item: Decision, form: AnswerForm): { text: string } | { erro
   return value ? { text: value } : { error: "Write your answer." };
 }
 
+/** The preview as the page shows it, or null when the fleet has none (the ledger's own `preview` entry, the
+ * dev command, is no preview: it has no workers). Paths beside the page only, never another origin. */
+function previewOf(v: Json | undefined): Preview | null {
+  if (!isRow(v) || !Array.isArray(v["workers"])) return null;
+  const text = (x: Json | undefined): string => (isText(x) ? x : "");
+  const beside = (x: Json | undefined): string => (isText(x) && /^preview\/(?:[^/?#]+\/)?$/u.test(x) ? x : "");
+
+  const server = (r: JsonRecord): PreviewServer => ({
+    running: r["running"] === true,
+    up: r["up"] === true,
+    port: Number.isFinite(r["port"]) ? Number(r["port"]) : null,
+    log: text(r["log"]),
+  });
+
+  return {
+    ...server(v),
+    url: beside(v["url"]),
+    address: text(v["address"]),
+    updater: v["updater"] === true,
+    every: Number.isFinite(v["every"]) ? Number(v["every"]) : 3,
+    workers: v["workers"].filter(isRow).flatMap((w) =>
+      isText(w["id"]) ? [{ id: w["id"], name: text(w["name"]) || w["id"], status: text(w["status"]), included: w["included"] === true, commit: text(w["commit"]), change: text(w["change"]) }] : [],
+    ),
+    conflicts: (Array.isArray(v["conflicts"]) ? v["conflicts"] : []).filter(isRow).flatMap((c) =>
+      isText(c["path"]) ? [{ path: c["path"], workers: Array.isArray(c["workers"]) ? c["workers"].filter(isText) : [] }] : [],
+    ),
+    error: text(v["error"]),
+    updated: text(v["updated"]),
+    own: (Array.isArray(v["per_worker"]) ? v["per_worker"] : []).filter(isRow).flatMap((w) =>
+      isText(w["worker"]) && beside(w["url"]) ? [{ ...server(w), worker: w["worker"], url: beside(w["url"]), address: text(w["address"]) }] : [],
+    ),
+  };
+}
+
 /**
  * The state as the page renders it, from whatever arrived (the embedded script, the stream, a poll): the
  * five texts have to be there, every list is present, and a row that is not a row is dropped. Null when it
@@ -1100,6 +1182,7 @@ function parseState(value: Json | undefined): State | null {
       .filter((f) => isText(f["url"]) && f["url"].startsWith('https://'))
       .map((f) => ({ url: f["url"], up: f["up"] === true, fleet: text(f["fleet"], ""), cwd: text(f["cwd"], ""), command: text(f["command"], ""), port: count(f["port"], 0) })),
     kept: withId(list(value["kept"])).map((k) => ({ ...k, text: text(k["text"], ""), at: text(k["at"], "") })),
+    preview: previewOf(value["preview"]),
     events: rows("events")
       .filter((e) => isText(e["text"]) && isText(e["kind"]))
       .map((e) => ({ ...e, at: text(e["at"], "") })),
