@@ -21,7 +21,7 @@ This is a prompt-driven skill, not a deterministic script. Explore, present what
 Look at the current repo to understand its starting state. Read whatever exists; don't assume:
 
 - `git remote -v` and `.git/config` — is this a GitHub repo? Which one?
-- `AGENTS.md` and `CLAUDE.md` at the repo root — does either exist? Is there already an `## Agent skills` section in either?
+- The instruction files at the repo root: `AGENTS.md`, `.claude/AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`. Which exist? Is `CLAUDE.md` a symlink to `AGENTS.md`, or does it import it with an `@AGENTS.md` line? Is there already an `## Agent skills` section in any of them?
 - `CONTEXT.md` and `CONTEXT-MAP.md` at the repo root
 - `docs/adr/` and any `src/*/docs/adr/` directories
 - `docs/agents/` — does this skill's prior output already exist?
@@ -71,20 +71,26 @@ Confirm the layout:
 
 Show the user a draft of:
 
-- The `## Agent skills` block to add to whichever of `CLAUDE.md` / `AGENTS.md` is being edited (see step 4 for selection rules)
+- The `## Agent skills` block, and the file it goes in (`AGENTS.md` or `CLAUDE.md`, chosen by the rules in step 4)
 - The contents of `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, `docs/agents/domain.md`
 
 Let them edit before writing.
 
 ### 4. Write
 
-**Pick the file to edit:**
+**Pick the file to edit.** Claude Code reads `AGENTS.md` by default, but only when no `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md` sits in the working directory or above it. When one does, it reads that file instead, unless the `CLAUDE.md` imports or symlinks `AGENTS.md` ([docs](https://code.claude.com/docs/en/memory#agents-md)). Put the block in a file that every agent working on the repo reads:
 
-- If `CLAUDE.md` exists, edit it.
-- Else if `AGENTS.md` exists, edit it.
-- If neither exists, ask the user which one to create — don't pick for them.
+| Repo state | Edit |
+| :- | :- |
+| `AGENTS.md` only | `AGENTS.md`. Claude Code and the other agents all read it, so don't create a `CLAUDE.md`. |
+| `CLAUDE.md` that imports `@AGENTS.md` or is a symlink to it | `AGENTS.md` (the shared file) |
+| `CLAUDE.md` only | `CLAUDE.md` |
+| Both, and `CLAUDE.md` doesn't import `AGENTS.md` | `CLAUDE.md`, since that's the file Claude reads. Tell the user that Claude never sees their `AGENTS.md`, and offer to add `@AGENTS.md` at the top of `CLAUDE.md`. |
+| Neither | Ask which file to create, and recommend `AGENTS.md`: Claude Code and the other coding agents all read it. |
 
-Never create `AGENTS.md` when `CLAUDE.md` already exists (or vice versa) — always edit the one that's already there.
+If a `CLAUDE.local.md` sits next to an `AGENTS.md` that `CLAUDE.md` doesn't import, warn the user that it stops Claude from reading `AGENTS.md` for them. The fixes are an `@AGENTS.md` import or setting **Project instructions** to `claude-md-and-agents-md` in `/config`.
+
+Never create a `CLAUDE.md` beside an `AGENTS.md`, or the other way round: in the default mode, a new `CLAUDE.md` hides `AGENTS.md` from Claude.
 
 If an `## Agent skills` block already exists in the chosen file, update its contents in-place rather than appending a duplicate. Don't overwrite user edits to the surrounding sections.
 
