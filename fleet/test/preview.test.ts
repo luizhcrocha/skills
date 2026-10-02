@@ -267,7 +267,8 @@ describe("a done worker", () => {
     // a2 starts a new change on what landed and edits: it is back until taken out.
     jj(ws("a2"), "new");
     writeFileSync(join(ws("a2"), "b.txt"), "footer by a2, again\n");
-    await until(() => read(join(ws("preview"), "b.txt")) === "footer by a2, again\n");
+    // The updater writes the files (`workspace update-stale`) before it records the merge: wait for both.
+    await until(() => read(join(ws("preview"), "b.txt")) === "footer by a2, again\n" && record().merged.length > 0);
     expect(record().merged.map((m) => m.id)).toEqual(["a2"]);
     expect(preview("exclude", "a2").code).toBe(0);
     await until(() => record().merged.length === 0 && read(join(ws("preview"), "b.txt")) === "base\n");
