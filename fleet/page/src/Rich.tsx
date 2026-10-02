@@ -160,7 +160,7 @@ export function Rich(props: { readonly text: string; readonly class?: string; re
   );
 }
 
-/** A `--manual`: in the format when it uses it, one `sh` block when it is a lone command, else as it always was. */
+/** A `--manual`: in the format when it uses it, one `nu` block when its every line is a command, else as it always was. */
 export function ManualText(props: { readonly text: string }): JSX.Element {
   const blocks = createMemo(() => manualBlocks(props.text));
 

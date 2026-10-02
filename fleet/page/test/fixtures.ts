@@ -237,6 +237,14 @@ export const MODAL_MANUAL = [
 /** An old `--manual`: one command, no fence, as DASHBOARD.md's example wrote it. */
 export const LEGACY_MANUAL = "cd servers/billing; secretspec set STRIPE_TEST_KEY";
 
+/** Fleet infra-coordinator's A22 (d66, 2026-10-02), as a coordinator wrote it: four nushell command lines, no fence. */
+export const A22_MANUAL = [
+  "op run --env-file=/home/luizrocha/.local/state/infra-coordinator/deploy.env -- sh -c 'psql \"$NEON_APP_URL\" -X -f /tmp/b168/ca1116-dryrun.sql'",
+  "op run --env-file=/home/luizrocha/.local/state/infra-coordinator/deploy.env -- sh -c 'psql \"$NEON_APP_URL\" -X -A -t -q -f /tmp/b168/ca1116-ids.sql' | save -f /tmp/b168/ca1116-ids.txt",
+  "open /tmp/b168/ca1116-ids.txt | lines | length",
+  "cd ~/repos/coelhorocha/custom-mcp-servers/servers/case-analysis; secretspec run -- sh -c 'for id in $(cat /tmp/b168/ca1116-ids.txt); do node tasks/reprocess.ts --prod --file \"$id\" || echo \"FAILED $id\"; done'",
+].join("\n");
+
 /**
  * The coordinator's view for the code blocks' tests and screenshots: an action with Luiz's Modal clean-up
  * in the format (A2), an action with an old one-command `--manual` (A3), one whose old `--manual` is a

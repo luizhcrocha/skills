@@ -313,8 +313,9 @@ workspaces[]? {id (the jj workspace's name), agent (its worker now), path, repo 
 blocks (a line of three or more backticks with an optional language tag, `nu`, `sh`, `ts`, `json`,
 `toml`, `nix`, `python`, `sql`, `rust`, `diff`, `yaml` and their aliases), shown highlighted with a
 copy button. Nothing else is markup and no HTML is rendered. Text with no backtick shows as it always
-did. A `manual` with no backtick that is one line and not a sentence (it does not end in `.`, `!`, `?`
-or `:`, and does not open with a capitalised word and a space) shows as one `sh` block. The CLIs store
+did. A `manual` with no backtick whose every non-empty line is a command, not a sentence (it does not
+end in `.`, `!`, `?` or `:`, and does not open with a capitalised word and a space), shows as one `nu`
+block; one with prose among its lines shows as it always did. The CLIs store
 the text as given; the format is the page's (`fleet/page/src/text.ts`).
 
 `workspaces` is a key neither state.py nor `fleet state` knows: both keep it as it is (Python

@@ -116,7 +116,7 @@ export function parseText(text: string): Block[] {
 }
 
 /**
- * Whether a legacy `--manual` (one with no fence) is a command rather than prose: one line, and not a
+ * Whether a line of a `--manual` with no fence is a command rather than prose: one line, and not a
  * sentence. A sentence ends with `.`, `!`, `?` or `:` (an ellipsis, `...`, is not an end), or opens with a capitalised word and a space
  * ("Restart the server"). Nothing else is guessed.
  */
@@ -131,9 +131,10 @@ export function isFormatted(text: string): boolean {
   return text.includes("`");
 }
 
-/** The blocks of a `--manual`: the format when it uses it; else one `sh` block when it is a command; else the text as it is. */
+/** The blocks of a `--manual`: the format when it uses it; else one `nu` block when every line is a command; else the text as it is. */
 export function manualBlocks(text: string): Block[] | null {
   if (isFormatted(text)) return parseText(text);
+  const lines = text.split("\n").filter((l) => l.trim() !== "");
 
-  return looksLikeCommand(text) ? [{ kind: "code", lang: "sh", text: text.trim() }] : null;
+  return lines.length > 0 && lines.every((l) => looksLikeCommand(l)) ? [{ kind: "code", lang: "nu", text: text.trim() }] : null;
 }

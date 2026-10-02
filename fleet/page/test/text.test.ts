@@ -7,7 +7,7 @@ import { expect, test } from "bun:test";
 
 import { tokensOf } from "../src/highlight.ts";
 import { looksLikeCommand, manualBlocks, parseText, spansOf } from "../src/text.ts";
-import { LEGACY_MANUAL, MODAL_MANUAL } from "./fixtures.ts";
+import { A22_MANUAL, LEGACY_MANUAL, MODAL_MANUAL } from "./fixtures.ts";
 
 test("paragraphs split on a blank line; a single line break stays in its paragraph", () => {
   expect(parseText("one\ntwo\n\n\nthree")).toEqual([
@@ -55,14 +55,20 @@ test("Luiz's Modal example: prose, the command alone in a nu block, prose with i
   ]);
 });
 
-test("an old --manual: one line and no sentence is one sh block; anything else stays as it was", () => {
-  expect(manualBlocks(LEGACY_MANUAL)).toEqual([{ kind: "code", lang: "sh", text: LEGACY_MANUAL }]);
-  expect(manualBlocks("  op item create --vault Employee ...  ")).toEqual([{ kind: "code", lang: "sh", text: "op item create --vault Employee ..." }]);
+test("an old --manual: one line and no sentence is one nu block; anything else stays as it was", () => {
+  expect(manualBlocks(LEGACY_MANUAL)).toEqual([{ kind: "code", lang: "nu", text: LEGACY_MANUAL }]);
+  expect(manualBlocks("  op item create --vault Employee ...  ")).toEqual([{ kind: "code", lang: "nu", text: "op item create --vault Employee ..." }]);
   expect(manualBlocks("Open the Stripe dashboard and roll the secret.")).toBeNull();
   expect(manualBlocks("Restart the server")).toBeNull();
-  expect(manualBlocks("cd x\nmake")).toBeNull();
   expect(manualBlocks("Then run this:")).toBeNull();
   expect(looksLikeCommand("")).toBe(false);
+});
+
+test("an unfenced --manual of command lines only (A22) is one nu block; prose among them keeps it as it was", () => {
+  expect(manualBlocks(A22_MANUAL)).toEqual([{ kind: "code", lang: "nu", text: A22_MANUAL }]);
+  expect(manualBlocks("\n  cd x\n\nmake  \n")).toEqual([{ kind: "code", lang: "nu", text: "cd x\n\nmake" }]);
+  expect(manualBlocks("Run these from the repo:\ncd x\nmake")).toBeNull();
+  expect(manualBlocks("cd x\nThen check the log.")).toBeNull();
 });
 
 test("text that looks like HTML stays text: the parser returns strings, never markup", () => {

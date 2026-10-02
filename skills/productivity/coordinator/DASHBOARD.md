@@ -66,7 +66,8 @@ decisions[]  what waits on the user, in the order they were opened
   secret     the key the code expects (kind secret)
   manual     the route by hand (kind secret and action): short prose, and each command in a fenced block
              tagged with its language (nu on Luiz's machines: he runs nushell), one command per block
-             where the steps are separate; the page highlights each block and gives it a copy button
+             where the steps are separate; the page highlights each block and gives it a copy button.
+             One with no fence shows as one nu block when its every line is a command, else as plain text
   body       boolean: decisions/<id>.html holds the evidence
   agent      the worker that waits on it, or null
   supersedes the closed decision this one replaces, or null

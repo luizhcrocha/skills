@@ -106,9 +106,9 @@ test("Luiz's Modal example: the prose in paragraphs, the command alone in a nu b
   expect(block?.querySelector("pre")?.classList.contains("wrap")).toBe(false);
 });
 
-test("an old one-command --manual is one sh block; an old sentence is shown as it always was", () => {
+test("an old one-command --manual is one nu block; an old sentence is shown as it always was", () => {
   open("a9");
-  expect(root.querySelector("#dv-answer figure.code")?.getAttribute("data-lang")).toBe("sh");
+  expect(root.querySelector("#dv-answer figure.code")?.getAttribute("data-lang")).toBe("nu");
   expect(root.querySelector("#dv-answer figure.code pre code")?.textContent).toBe(LEGACY_MANUAL);
 
   open("a10");
