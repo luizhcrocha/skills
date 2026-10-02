@@ -193,7 +193,11 @@ Checked in this order:
    - Otherwise needs kind, title, question, why, and what its kind shows: **decision** at least
      two options, `--recommend` among the option keys, and `--reason`; **secret** `--secret` and
      `--manual`; **action** `--manual`, and no options or `--recommend` (a yes or no on what the fleet would do is a decision); **input** nothing more. Kind **grill** is refused here
-     (it is opened with `grill`). An option is `KEY: label | consequence` with a key matching the
+     (it is opened with `grill`). A secret's or action's `--manual` with more than one non-empty line
+     and no ```` ``` ```` in it is refused, new or changed: ``--manual has N lines and no fence: put the
+     commands in a fenced block (a line ```nu, the commands, a line ```), any prose outside it``. One
+     bare line is taken as it is, and a manual already stored is not checked again when another
+     field changes. An option is `KEY: label | consequence` with a key matching the
      id pattern; keys are unique. **permission** (TypeScript only: see [Permission
      grants](#permission-grants)) takes the refused call instead of options.
    - The row: `kind, title, question, why, blocking, agent, options[], recommend, reason, secret,

@@ -746,7 +746,16 @@ function parseOptions(texts: readonly string[]): Effect.Effect<Choice[], Refusal
   return Effect.succeed(options);
 }
 
-function checkKind(d: Decision): Step$ {
+/** The number of non-empty lines of a `--manual` that has more than one and no fence; 0 when it is fine. */
+function unfencedLines(manual: string): number {
+  if (manual.includes("```")) return 0;
+  const lines = manual.split("\n").filter((l) => l.trim() !== "").length;
+
+  return lines > 1 ? lines : 0;
+}
+
+/** What `d`'s kind shows has to be there; `manualGiven`: the `--manual` is this command's, so its format is checked. */
+function checkKind(d: Decision, manualGiven: boolean): Step$ {
   if (d.kind === "grill" && d.questions === undefined) {
     return refuse('a grilling is asked with the grill command: `grill ID --title T --ask "TITLE | QUESTION | RECOMMENDATION | WHY"`');
   }
@@ -770,6 +779,12 @@ function checkKind(d: Decision): Step$ {
 
   if ((d.kind === "secret" || d.kind === "action") && !given(d.manual ?? undefined)) {
     return refuse(`${d.kind === "secret" ? "a secret" : "an action"} gives the manual route: give --manual with the steps or commands`);
+  }
+
+  const unfenced = (d.kind === "secret" || d.kind === "action") && manualGiven ? unfencedLines(d.manual ?? "") : 0;
+
+  if (unfenced > 0) {
+    return refuse(`--manual has ${unfenced} lines and no fence: put the commands in a fenced block (a line \`\`\`nu, the commands, a line \`\`\`), any prose outside it`);
   }
 
   if (d.kind === "action" && ((d.options ?? []).length > 0 || given(d.recommend ?? undefined))) {
@@ -1003,7 +1018,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       yield* setRefusal(run, fresh);
 
       if (!elsewhere) {
-        yield* checkKind(fresh);
+        yield* checkKind(fresh, true);
         yield* setBody(run, fresh);
         const forManager = fresh.asks === "manager";
         log(run, ledger, {
@@ -1080,7 +1095,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       }
 
       if (yield* setRefusal(run, row)) changed.push("refusal");
-      yield* checkKind(row);
+      yield* checkKind(row, args.str("manual") !== undefined);
       yield* setBody(run, row);
 
       if (changed.length > 0) {

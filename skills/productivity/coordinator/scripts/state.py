@@ -584,8 +584,16 @@ def parse_options(texts: list[str]) -> list[dict]:
     return options
 
 
-def check_kind(d: dict) -> None:
-    """What each kind's answer control shows has to be there."""
+def unfenced_lines(manual: str) -> int:
+    """The number of non-empty lines of a --manual that has more than one and no fence; 0 when it is fine."""
+    if "```" in manual:
+        return 0
+    lines = len([line for line in manual.split("\n") if line.strip()])
+    return lines if lines > 1 else 0
+
+
+def check_kind(d: dict, manual_given: bool) -> None:
+    """What each kind's answer control shows has to be there; manual_given: the --manual is this command's, so its format is checked."""
     if d["kind"] == "grill" and "questions" not in d:
         fail("a grilling is asked with the grill command: `grill ID --title T --ask \"TITLE | QUESTION | RECOMMENDATION | WHY\"`")
     if d["kind"] == "decision":
@@ -600,6 +608,10 @@ def check_kind(d: dict) -> None:
         fail("a secret names what the code expects: give --secret NAME (the key in secretspec.toml)")
     if d["kind"] in ("secret", "action") and not d["manual"]:
         fail(f"{'a secret' if d['kind'] == 'secret' else 'an action'} gives the manual route: give --manual with the steps or commands")
+    unfenced = unfenced_lines(d["manual"]) if d["kind"] in ("secret", "action") and manual_given else 0
+    if unfenced:
+        fail(f"--manual has {unfenced} lines and no fence: put the commands in a fenced block (a line ```nu, the commands, a line ```),"
+             " any prose outside it")
     if d["kind"] == "action" and (d["options"] or d["recommend"]):
         fail("an action is a step only the user takes, with no options to choose: a yes or no on what the fleet would do is a decision (--kind decision, with the options and --recommend)")
 
@@ -696,7 +708,7 @@ def cmd_decision(state, args):
              "asks": args.asks or "user", "opened": now(), "revised": None, "closed": None, "step": None, "milestone": None}
         place_of(state, d, args)
         if not made_elsewhere:
-            check_kind(d)
+            check_kind(d, True)
             set_body(Path(args.dir).resolve(), d, args)
             for_manager = d["asks"] == "manager"   # the manager looks first: the user is not called yet
             log(state, "asked", f"{'For the manager: ' if for_manager else ''}{d['title']}: {d['question']}", d["agent"],
@@ -736,7 +748,7 @@ def cmd_decision(state, args):
         if args.asks and args.asks != d.get("asks", "user"):
             d["asks"] = args.asks
             changed.append("asks")
-        check_kind(d)
+        check_kind(d, args.manual is not None)
         set_body(Path(args.dir).resolve(), d, args)
         if changed:
             d["revised"], d["change"] = now(), args.log or None
@@ -871,6 +883,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
         [--option "KEY: label | consequence"]... [--same-options] [--recommend R --reason WHY] [--secret NAME] [--manual TEXT]
         [--body FILE | --no-body] [--agent A] [--supersedes ID] [--log TEXT] [--asks {"|".join(decisions.ASKS)}]
         [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]
+        --manual: its commands in a fenced block (```nu), any prose outside it; one bare command line needs none
   event [--kind {"|".join(KINDS)}] [--agent A] [--important] TEXT   (a note is `event --kind note TEXT`)
   park [--agent A]... REASON     stop every live worker row (or those named) in one command
   keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace
@@ -963,7 +976,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--same-options", action="store_true", help="with a new --question: the options still answer it")
     s.add_argument("--recommend", help="the option's KEY, or the value you would give"); s.add_argument("--reason")
     s.add_argument("--secret", metavar="NAME", help="the name the code expects, as in secretspec.toml")
-    s.add_argument("--manual", help="the route the user can take by hand: steps or commands, shown verbatim")
+    s.add_argument("--manual", help="the route the user can take by hand: its commands in a fenced block (```nu), any prose outside it;"
+                   " one bare command line needs none")
     g = s.add_mutually_exclusive_group(); g.add_argument("--body", metavar="FILE", help="an HTML fragment with the evidence, copied to DIR/decisions/ID.html")
     g.add_argument("--no-body", action="store_true")
     s.add_argument("--agent", help="the worker that waits on it"); s.add_argument("--supersedes", metavar="ID")

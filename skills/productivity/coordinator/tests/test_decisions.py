@@ -93,6 +93,18 @@ class OpenTest(Fleet):
         self.ok("decision", "d2", "--kind", "secret", *base, "--secret", "NEO4J_PASSWORD", "--manual", "secretspec set NEO4J_PASSWORD")
         self.ok("decision", "d3", "--kind", "action", *base, "--manual", "tailscale up")
 
+    def test_a_manual_of_more_than_one_line_puts_its_commands_in_a_fence(self):
+        base = ["--title", "T", "--question", "q", "--why", "w"]
+        fix = ("state: --manual has 2 lines and no fence: put the commands in a fenced block (a line ```nu, the commands, a line ```),"
+               " any prose outside it\n")
+        self.assertEqual(self.refused("decision", "d1", "--kind", "action", *base, "--manual", "cd x\n\nmake"), fix)
+        self.assertEqual(self.refused("decision", "d1", "--kind", "secret", *base, "--secret", "K", "--manual", "From the repo:\nsecretspec set K"), fix)
+        self.assertEqual(self.state().get("decisions", []), [])
+        self.ok("decision", "d1", "--kind", "action", *base, "--manual", "From the repo:\n\n```nu\ncd x\nmake\n```")
+        self.ok("decision", "d2", "--kind", "action", *base, "--manual", "\n  tailscale up\n")
+        self.assertEqual(self.refused("decision", "d2", "--manual", "cd x\nmake"), fix)
+        self.assertEqual(self.item("d2")["manual"], "\n  tailscale up\n")
+
     def test_an_option_is_key_label_and_consequence(self):
         base = ["decision", "d1", "--kind", "decision", "--title", "T", "--question", "q", "--why", "w", "--recommend", "A", "--reason", "r"]
         self.assertIn("KEY: label | consequence", self.refused(*base, "--option", "A: no consequence", "--option", "B: y | c"))

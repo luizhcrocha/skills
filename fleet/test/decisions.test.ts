@@ -122,6 +122,18 @@ describe("open", () => {
     ok("decision", "d3", "--kind", "action", ...base, "--manual", "tailscale up");
   });
 
+  test("a --manual of more than one line puts its commands in a fence", () => {
+    const base = ["--title", "T", "--question", "q", "--why", "w"];
+    const fix = "--manual has 2 lines and no fence: put the commands in a fenced block (a line ```nu, the commands, a line ```), any prose outside it\n";
+    expect(refused("decision", "d1", "--kind", "action", ...base, "--manual", "cd x\n\nmake")).toBe(`state: ${fix}`);
+    expect(refused("decision", "d1", "--kind", "secret", ...base, "--secret", "K", "--manual", "From the repo:\nsecretspec set K")).toBe(`state: ${fix}`);
+    expect(rows("decisions")).toEqual([]);
+    ok("decision", "d1", "--kind", "action", ...base, "--manual", "From the repo:\n\n```nu\ncd x\nmake\n```");
+    ok("decision", "d2", "--kind", "action", ...base, "--manual", "\n  tailscale up\n");
+    expect(refused("decision", "d2", "--manual", "cd x\nmake")).toBe(`state: ${fix}`);
+    expect(item("d2")["manual"]).toBe("\n  tailscale up\n");
+  });
+
   test("an option is key, label and consequence", () => {
     const base = ["decision", "d1", "--kind", "decision", "--title", "T", "--question", "q", "--why", "w", "--recommend", "A", "--reason", "r"];
     expect(refused(...base, "--option", "A: no consequence", "--option", "B: y | c")).toContain("KEY: label | consequence");
