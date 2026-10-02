@@ -5,8 +5,9 @@
  *
  * Vite is told its base (`--base /f/<fleet>/preview/`), its port and its host, so every URL its page asks
  * for, the HMR socket included, is under the hub's path for it (evidence in the SPEC's Preview section).
- * A command that names neither `{port}` nor `{base}` and is not Vite runs as given, with `PORT` set, at its
- * own root: the hub then strips the prefix, which works for a server whose pages use relative URLs only.
+ * Vite+ (`vp dev`) is Vite. A command that names neither `{port}` nor `{base}` and is not Vite runs as given,
+ * with `PORT` set, at its own root: the hub then strips the prefix, which works for a server whose pages use
+ * relative URLs only.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
@@ -66,13 +67,20 @@ export function planCommand(dir: string, given: string | undefined, recorded: st
   return { template: `${packageManager(dir)} run dev`, from: "package.json" };
 }
 
-/** Whether a command runs Vite: it names it, or it runs a package.json script that does. */
+/** A Vite or Vite+ dev server started in a command: `vite` (bare, `dev` or `serve`), `vp dev`, `vite-plus dev`;
+ * not their build, preview or other subcommands, and not bare `vp`, which prints its help. */
+const VITE_DEV = /(?<![\w.-])(?:vite(?![\w.-])(?!\s+(?:build|preview|optimize)\b)|(?:vp|vite-plus)\s+dev\b)/;
+
+/** A command that runs one package.json script: `<pm> [run] <script>`, `vp run <script>` or `vpr <script>`. */
+const SCRIPT = /^\s*(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?|vp\s+run\s+|vpr\s+)([\w:.-]+)\s*$/;
+
+/** Whether a command starts a Vite (or Vite+) dev server: it runs one, or runs a package.json script that does. */
 function runsVite(dir: string, command: string): boolean {
-  if (/\bvite\b/.test(command)) return true;
-  const script = /^\s*(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([\w:.-]+)\s*$/.exec(command)?.[1];
+  if (VITE_DEV.test(command)) return true;
+  const script = SCRIPT.exec(command)?.[1];
   const body = script === undefined ? undefined : scripts(dir)?.[script];
 
-  return body !== undefined && /\bvite\b/.test(body) && !/\bvite\s+(?:build|preview)\b/.test(body);
+  return body !== undefined && VITE_DEV.test(body);
 }
 
 /** A dev command ready to run. */

@@ -334,6 +334,40 @@ describe("the dev server", () => {
     expect(fill(repo, "next dev -p {port}", 9, "/b/")).toEqual({ cmd: "next dev -p 9", base: "/" });
     expect(fill(repo, "python3 -m http.server", 9, "/b/")).toEqual({ cmd: "python3 -m http.server", base: "/" });
   });
+
+  test("a Vite+ dev server (`vp dev`, `vite-plus dev`, a script or `vp run` task that runs one) is told its port, host and base; its other commands are not", () => {
+    const told = (cmd: string): string => `${cmd} --port 9 --strictPort --host 127.0.0.1 --base /b/`;
+    const ledger = "env CASOS_DEV=prod pnpm --filter casos exec vp dev";
+    expect(fill(repo, ledger, 9, "/b/")).toEqual({ cmd: told(ledger), base: "/b/" });
+    expect(fill(repo, "vp dev", 9, "/b/")).toEqual({ cmd: told("vp dev"), base: "/b/" });
+    expect(fill(repo, "npx vite-plus dev", 9, "/b/")).toEqual({ cmd: told("npx vite-plus dev"), base: "/b/" });
+    expect(fill(repo, "vite", 9, "/b/")).toEqual({ cmd: told("vite"), base: "/b/" });
+
+    for (const other of ["vp build", "vp preview", "vp test", "vp check", "vp", "pnpm --filter casos exec vp build", "vite build", "vite preview", "cf-vite dev", "vp build --config vite.config.ts"]) {
+      expect(fill(repo, other, 9, "/b/")).toEqual({ cmd: other, base: "/" });
+    }
+
+    writeFileSync(join(repo, "package.json"), JSON.stringify({ scripts: { dev: "vp dev --open", build: "vp build", start: "node dev/start.ts" } }));
+    expect(fill(repo, "pnpm dev", 9, "/b/")).toEqual({ cmd: told("pnpm dev"), base: "/b/" });
+    expect(fill(repo, "vp run dev", 9, "/b/")).toEqual({ cmd: told("vp run dev"), base: "/b/" });
+    expect(fill(repo, "vpr dev", 9, "/b/")).toEqual({ cmd: told("vpr dev"), base: "/b/" });
+    expect(fill(repo, "pnpm build", 9, "/b/")).toEqual({ cmd: "pnpm build", base: "/" });
+    expect(fill(repo, "vpr start", 9, "/b/")).toEqual({ cmd: "vpr start", base: "/" });
+  });
+
+  test("start says so, with the log's last error, when the dev server dies before it answers", () => {
+    const dies = `${process.execPath} -e 'console.error("error when starting dev server:\\nError: Port 24116 is already in use"); process.exit(1)'`;
+    const ran = preview("start", "--cmd", dies);
+    expect(ran.code).toBe(1);
+    expect(ran.stdout).toContain("exited at start");
+    expect(ran.stdout).not.toContain("not answering yet");
+    expect(ran.stderr).toContain("preview: the dev server exited before it answered on port ");
+    expect(ran.stderr).toContain("Error: Port 24116 is already in use");
+
+    const worker = preview("start", "--per-worker", "a1", "--cmd", dies);
+    expect(worker.code).toBe(1);
+    expect(worker.stderr).toContain("Error: Port 24116 is already in use");
+  });
 });
 
 describe("the ledger", () => {

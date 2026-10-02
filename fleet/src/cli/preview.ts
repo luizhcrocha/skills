@@ -26,7 +26,7 @@ import * as Effect from "effect/Effect";
 
 import { stampOf } from "../clock.ts";
 import { PreviewError, Refusal } from "../errors.ts";
-import { exists, isDir, resolvePath } from "../files.ts";
+import { exists, isDir, readText, resolvePath } from "../files.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, type Json, type JsonObject } from "../json.ts";
 import { upAllSync } from "../page/probe.ts";
@@ -113,16 +113,37 @@ function served(machine: Machine, root: string): { readonly fleet: string; reado
   return entry === undefined ? undefined : { fleet: entry.id, url: entry.url };
 }
 
-/** Wait until something answers on `port` (at most `seconds`); whether it does. */
-function waitUp(port: number, seconds: number): boolean {
+/** How a dev server came up: it answers, it is still starting, or its process is gone. */
+type Came = "up" | "starting" | "exited";
+
+/** Wait until something answers on the server's port (at most `seconds`), or its process is gone. */
+function waitUp(server: DevServer, seconds: number): Came {
   const deadline = Date.now() + seconds * 1000;
 
   for (;;) {
-    if (upAllSync([`http://127.0.0.1:${port}/`])[0] === true) return true;
+    if (upAllSync([`http://127.0.0.1:${server.port}/`])[0] === true) return "up";
 
-    if (Date.now() >= deadline) return false;
+    if (!isRunning(server.pid)) return "exited";
+
+    if (Date.now() >= deadline) return "starting";
     Bun.sleepSync(250);
   }
+}
+
+/** What `start` says after the server's own line: nothing when it answers; else why not, from what this
+ * start appended to its log (from character `since`). */
+function cameLine(came: Came, server: DevServer, root: string, since: number): string | undefined {
+  if (came === "up") return undefined;
+
+  if (came === "starting") return `preview: nothing answers on port ${server.port} yet; \`fleet preview ${root} status\` shows the dev server's log\n`;
+  const log = (readText(server.log) ?? "").slice(since).slice(-65536);
+
+  return `preview: the dev server exited before it answered on port ${server.port}; ${server.log} ${lastError(log) === null ? "ends" : "says"}:\n${indent(lastError(log) ?? tail(log, 8))}\n`;
+}
+
+/** The state on the server's line in `start`'s output. */
+function cameNote(came: Came): string {
+  return came === "up" ? "" : came === "starting" ? ", not answering yet" : ", exited at start";
 }
 
 /** A dev server for `dir`: installed when it needs it, its command planned, filled and started. */
@@ -250,8 +271,10 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
     const first = lookOnce(machine, root, freshMemory());
     let server = first?.server ?? null;
 
+    const log = join(logDir(root), "combined.log");
+    const since = (readText(log) ?? "").length;
+
     if (!running(server)) {
-      const log = join(logDir(root), "combined.log");
       const started = launch(machine, path, `/f/${at.fleet}/preview/`, log, { cmd: given.get("--cmd"), port: given.get("--port"), setup: given.get("--setup") }, recordedCommand(raw));
 
       if (started instanceof PreviewError) return yield* refuse(started.reason);
@@ -274,7 +297,7 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
 
     const kept = server;
     const record = updateRecord(root, (now) => (now === undefined ? undefined : { ...now, server: kept, updater }));
-    const up = waitUp(kept.port, Number(machine.env("FLEET_PREVIEW_WAIT_S") ?? 30));
+    const came = waitUp(kept, Number(machine.env("FLEET_PREVIEW_WAIT_S") ?? 30));
     const workers = (record?.merged ?? []).map((m) => m.id);
     const address = `${at.url}preview/`;
     const fresh = readLedger(root) ?? raw;
@@ -283,14 +306,16 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
 
     if (fault !== undefined) return yield* Effect.fail(fault);
     out.out(`preview: ${address}\n`);
-    out.out(`  dev server: ${kept.cmd} (pid ${kept.pid}, port ${kept.port}${up ? "" : ", not answering yet"}), log ${kept.log}\n`);
+    out.out(`  dev server: ${kept.cmd} (pid ${kept.pid}, port ${kept.port}${cameNote(came)}), log ${kept.log}\n`);
     out.out(`  updater: pid ${updater}, every ${everyMs(machine) / 1000} s; merged: ${workers.length === 0 ? "the stack alone" : workers.join(", ")}\n`);
 
-    if (!up) out.err(`preview: nothing answers on port ${kept.port} yet; \`fleet preview ${root} status\` shows the dev server's log\n`);
+    const said = cameLine(came, kept, root, since);
+
+    if (said !== undefined) out.err(said);
 
     if ((record?.conflicts.length ?? 0) > 0) out.err(`preview: the merge has conflicts: ${conflictLine(record?.conflicts ?? [])}\n`);
 
-    return 0;
+    return came === "exited" ? 1 : 0;
   });
 }
 
@@ -320,6 +345,7 @@ function startPerWorker(machine: Machine, root: string, raw: JsonObject, worker:
 
     if (running(before)) return yield* refuse(`${cand.id}'s preview already runs at ${at.url}preview/${cand.id}/ (pid ${before.pid}); stop it first`);
     const log = join(logDir(root), `${cand.id}.log`);
+    const since = (readText(log) ?? "").length;
     const started = launch(machine, cand.path, `/f/${at.fleet}/preview/${cand.id}/`, log, { cmd: given.get("--cmd"), port: given.get("--port"), setup: given.get("--setup") }, recordedCommand(raw));
 
     if (started instanceof PreviewError) return yield* refuse(started.reason);
@@ -347,15 +373,18 @@ function startPerWorker(machine: Machine, root: string, raw: JsonObject, worker:
       return { ...base, workers: [...base.workers.filter((w) => w.worker !== cand.id), server] };
     });
 
-    const up = waitUp(server.port, Number(machine.env("FLEET_PREVIEW_WAIT_S") ?? 30));
+    const came = waitUp(server, Number(machine.env("FLEET_PREVIEW_WAIT_S") ?? 30));
     const address = `${at.url}preview/${cand.id}/`;
     const fault = save(machine, root, raw, undefined, [event(machine, raw, cand.id, "note", `Preview of ${cand.id}'s workspace alone at ${address}, dev server on port ${server.port}.`)]);
 
     if (fault !== undefined) return yield* Effect.fail(fault);
     out.out(`preview of ${cand.id}: ${address}\n`);
-    out.out(`  dev server: ${server.cmd} (pid ${server.pid}, port ${server.port}${up ? "" : ", not answering yet"}) in ${cand.path}, log ${server.log}\n`);
+    out.out(`  dev server: ${server.cmd} (pid ${server.pid}, port ${server.port}${cameNote(came)}) in ${cand.path}, log ${server.log}\n`);
+    const said = cameLine(came, server, root, since);
 
-    return 0;
+    if (said !== undefined) out.err(said);
+
+    return came === "exited" ? 1 : 0;
   });
 }
 

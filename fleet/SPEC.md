@@ -945,12 +945,16 @@ worker's in-progress edits, merged, in one live page, and optionally one worker'
   - **Dev server**: the command is `--cmd`, else the ledger's `preview.cmd` (`fleet preview DIR set --cmd C
     [--setup C]`, kept by Python as it keeps any key), else `<package manager> run dev` when package.json has
     a `dev` script, else refused with the reason. `{port}` and `{base}` in it are filled in; a command that
-    runs Vite (it names `vite`, or runs a script that does) gets `--port P --strictPort --host 127.0.0.1
-    --base /f/<fleet>/preview/` (after `--` for npm); anything else runs as given with `PORT` set, at its
+    starts a Vite or Vite+ dev server (`vite`, bare or `dev` or `serve`; `vp dev`; `vite-plus dev`; or a
+    package.json script run by `<pm> [run]`, `vp run` or `vpr` whose body does) gets `--port P --strictPort
+    --host 127.0.0.1 --base /f/<fleet>/preview/` (after `--` for npm); `vite build|preview|optimize`, `vp
+    build`, `vp preview`, bare `vp` (its help) and anything else run as given with `PORT` set, at their
     root. The port is `--port` or a free one. A workspace with package.json and no node_modules is installed
     first (`--setup`, else the lockfile's frozen install: `npm ci`, `pnpm|yarn|bun install
     --frozen-lockfile`), so the install changes no tracked file. It runs detached, as its own process
-    group, logging to `DIR/preview/combined.log`.
+    group, logging to `DIR/preview/combined.log`. `start` waits up to `FLEET_PREVIEW_WAIT_S` seconds (30)
+    for it to answer; when its process ends first, `start` exits 1 with the last error of what this start
+    appended to the log (`exited at start` on the server's line), else it says `not answering yet`.
   - **Updater**: `fleet preview DIR updater`, detached, logging to `DIR/preview/updater.log`. Every
     `FLEET_PREVIEW_S` seconds it snapshots each included worker's workspace from outside (`jj -R <path>
     util snapshot`: jj takes that workspace's working-copy lock, records its files and writes none of them;
