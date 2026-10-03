@@ -89,7 +89,8 @@ class RegisterTest(Machine):
         fleets.register(self.fleet("a", "gone"), "u", dead_pid())
         fleets.register(self.fleet("b", "here"), "u", os.getpid())
         self.assertEqual([f["id"] for f in fleets.live()], ["here"])
-        self.assertEqual(sorted(p.name for p in (self.base / "registry").iterdir()), ["here.json"])
+        self.assertEqual(sorted(p.name for p in (self.base / "registry").iterdir()), ["here.json", "names"])
+        self.assertEqual(len(list((self.base / "registry" / "names").iterdir())), 1, "its name is kept for its return")
 
     def test_unregister_forgets_the_fleet(self):
         root = self.fleet("a", "billing")
@@ -365,4 +366,99 @@ class NameTest(unittest.TestCase):
         self.assertEqual(fleets.aliases_after({}, "3.ui-coordinator", "ui-coordinator"), ["3.ui-coordinator"])
         self.assertEqual(fleets.aliases_after({"aliases": ["2.ui-coordinator"]}, "3.ui-coordinator", "ui-coordinator"),
                          ["2.ui-coordinator", "3.ui-coordinator"])
-        self.assertEqual(fleets.aliases_after({}, "billing", "invoices"), [])
+        self.assertEqual(fleets.aliases_after({}, "billing", "invoices"), ["billing"], "every rename keeps the old address")
+        self.assertEqual(fleets.aliases_after({"aliases": ["ui-coordinator"]}, "x", "ui-coordinator"), ["x"])
+
+
+class RespawnTest(Machine):
+    """A fleet served again by a restarted session (`claude respawn`: a new pid, the same session id) keeps its name."""
+
+    def setUp(self):
+        super().setUp()
+        self.config = self.base / "claude"
+        os.environ["CLAUDE_CONFIG_DIR"] = str(self.config)
+        self.addCleanup(os.environ.pop, "CLAUDE_CONFIG_DIR", None)
+
+    def session(self) -> subprocess.Popen:
+        proc = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(proc.kill)
+        return proc
+
+    @staticmethod
+    def end(proc: subprocess.Popen) -> None:
+        proc.kill()
+        proc.wait()
+
+    def title(self, project: str, sid: str, text: str) -> None:
+        d = self.config / "projects" / project / sid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "custom-title.json").write_text(json.dumps({"customTitle": text}))
+
+    def scratchpad(self, project: str, sid: str) -> Path:
+        root = self.base / "tmp" / project / sid / "scratchpad" / "coordinator"
+        root.mkdir(parents=True)
+        (root / "state.json").write_text(json.dumps({"project": "custom-mcp-servers"}))
+        return root
+
+    def test_the_entry_records_the_sessions_id(self):
+        self.assertEqual(fleets.register(self.fleet("a", "infra"), "u", os.getpid(), "5579180b")["session_id"], "5579180b")
+        self.assertEqual(fleets.register(self.scratchpad("-home-x-repo", "s1"), "u", os.getpid())["session_id"], "s1")
+        self.assertIsNone(fleets.register(self.fleet("b", "infra"), "u", os.getpid())["session_id"])
+
+    def test_its_dir_served_again_with_no_title_keeps_its_name_and_aliases(self):
+        root = self.fleet("a", "custom-mcp-servers")
+        first = self.session()
+        fleets.register(root, "u", first.pid, "5579180b")
+        fleets.name(root, "3.infra-coordinator")
+        fleets.name(root, "infra-coordinator (2)")
+        self.end(first)
+        self.assertEqual(fleets.live(), [])
+        again = fleets.register(root, "u2", os.getpid())
+        self.assertEqual((again["id"], again.get("aliases"), again["session"]),
+                         ("infra-coordinator-2", ["custom-mcp-servers", "infra-coordinator"], "infra-coordinator (2)"))
+
+    def test_a_new_pid_of_the_same_session_serving_another_dir_keeps_the_name(self):
+        a = self.fleet("a", "custom-mcp-servers")
+        first = self.session()
+        fleets.register(a, "u", first.pid, "5579180b")
+        fleets.name(a, "infra-coordinator (2)")
+        self.end(first)
+        fleets.live()
+        self.assertEqual(fleets.register(self.fleet("b", "custom-mcp-servers"), "u2", os.getpid(), "5579180b")["id"], "infra-coordinator-2")
+        self.assertEqual(fleets.register(self.fleet("c", "custom-mcp-servers"), "u3", os.getpid(), "another")["id"], "custom-mcp-servers")
+
+    def test_a_kept_name_another_fleet_took_meanwhile_is_not_taken_back(self):
+        a = self.fleet("a", "billing")
+        first = self.session()
+        fleets.register(a, "u", first.pid)
+        self.end(first)
+        fleets.live()
+        fleets.register(self.fleet("b", "billing"), "u", os.getpid())
+        self.assertEqual(fleets.register(a, "u2", os.getpid())["id"], "billing-2")
+
+    def test_no_title_never_renames_and_a_real_rename_keeps_the_old_name_as_an_alias(self):
+        root = self.scratchpad("-home-x-repo", "s1")
+        self.assertEqual(fleets.register(root, "u", os.getpid())["id"], "custom-mcp-servers")
+        self.title("-home-x-repo", "s1", "  ")
+        self.assertEqual([e["id"] for e in fleets.live()], ["custom-mcp-servers"])
+        self.title("-home-x-repo", "s1", "Infra Coordinator 2")
+        renamed = fleets.live()[0]
+        self.assertEqual((renamed["id"], renamed.get("aliases")), ("infra-coordinator-2", ["custom-mcp-servers"]))
+
+    def test_a_fleet_outside_any_scratchpad_follows_its_sessions_rename_by_the_sessions_id(self):
+        root = self.fleet("a", "custom-mcp-servers")
+        self.title("-home-x-repo", "5579180b", "Infra Coordinator")
+        self.assertEqual(fleets.register(root, "u", os.getpid(), "5579180b")["id"], "infra-coordinator")
+        self.title("-home-x-repo", "5579180b", "infra-coordinator (2)")
+        renamed = fleets.live()[0]
+        self.assertEqual((renamed["id"], renamed["session"], renamed.get("aliases")),
+                         ("infra-coordinator-2", "infra-coordinator (2)", ["infra-coordinator"]))
+
+    def test_a_brand_new_dir_with_no_title_still_gets_its_projects_slug(self):
+        a = self.fleet("a", "infra")
+        first = self.session()
+        fleets.register(a, "u", first.pid, "s-old")
+        fleets.name(a, "infra-coordinator")
+        self.end(first)
+        fleets.live()
+        self.assertEqual(fleets.register(self.fleet("b", "custom-mcp-servers"), "u", os.getpid(), "s-new")["id"], "custom-mcp-servers")

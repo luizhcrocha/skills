@@ -1,7 +1,9 @@
 /**
  * The registry of the fleets served on this machine (Python's `fleets.py`): `REGISTRY/<fleet>.json` per
  * fleet, `REGISTRY/gate/gate.json` for the one gate slot. Every read (`live`) forgets a fleet whose
- * server died or whose entry is malformed, and renames one whose session got a title (open-25).
+ * server died or whose entry is malformed, and renames one whose session got a title (open-25). A
+ * forgotten fleet's last entry stays in `REGISTRY/names/<fleet>.json` until its dir is served again,
+ * so a restarted session (`claude respawn`: a new pid, the same session id) gets its name back.
  * Entries are written atomically, in Python's format (indent 2, ASCII escapes).
  */
 import { join } from "node:path";
@@ -76,13 +78,18 @@ export function dropsNumber(from: string, to: string): boolean {
   return from !== to && /^[0-9]+\./.test(from) && unnumbered(from) === to;
 }
 
-/** The aliases an entry keeps once its id goes from `from` to `to`: `from` joins them when `to` is `from` without its session's number. */
+/** The aliases an entry keeps once its id goes from `from` to `to`: every rename keeps `from`, so its address still answers. */
 export function aliasesAfter(raw: JsonObject, from: string, to: string): string[] {
   const kept = aliasesOf(raw).filter((a) => a !== to);
 
-  if (dropsNumber(from, to) && !kept.includes(from)) kept.push(from);
+  if (from !== "" && from !== to && !kept.includes(from)) kept.push(from);
 
   return kept;
+}
+
+/** The session whose scratchpad holds `root` (`…/<project>/<session>/scratchpad/<name>`), or undefined. */
+export function scratchpadSession(root: string, config: string): string | undefined {
+  return transcriptOf(root, config)?.split("/").at(-1)?.replace(/\.jsonl$/, "");
 }
 
 /** `raw` with `aliases` set to `aliases`, or without the key when there are none. */
@@ -178,15 +185,54 @@ export class Registry {
     return listDir(this.place.home).filter((name) => name.endsWith(".json") && !isDir(join(this.place.home, name)));
   }
 
-  /** The title of the session whose scratchpad holds `root` (its /rename), or undefined. */
-  titleOf(root: string): string | undefined {
+  /** The title (its /rename) of the session whose scratchpad holds `root`, else of session `sessionId`, or undefined. */
+  titleOf(root: string, sessionId?: string | null): string | undefined {
     const transcript = transcriptOf(root, this.place.config);
+    const folder = transcript !== undefined ? transcript.replace(/\.jsonl$/, "") : this.sessionFolder(sessionId);
 
-    if (transcript === undefined) return undefined;
-    const value = readObject(join(transcript.replace(/\.jsonl$/, ""), "custom-title.json"));
+    if (folder === undefined) return undefined;
+    const value = readObject(join(folder, "custom-title.json"));
     const title = asString(value?.["customTitle"])?.trim();
 
     return title === undefined || title === "" ? undefined : title;
+  }
+
+  /** The folder beside session `sessionId`'s transcript, in whichever project holds it, or undefined. */
+  private sessionFolder(sessionId: string | null | undefined): string | undefined {
+    if (sessionId === undefined || sessionId === null || !/^[A-Za-z0-9_-]+$/.test(sessionId)) return undefined;
+    const projects = join(this.place.config, "projects");
+
+    return listDir(projects)
+      .map((project) => join(projects, project, sessionId))
+      .find((folder) => isDir(folder));
+  }
+
+  private namesDir(): string {
+    return join(this.place.home, "names");
+  }
+
+  /** Keep a forgotten fleet's entry, by its name and in place of any kept before for its dir, so its dir or its session served again gets its name back. */
+  private keepName(raw: JsonObject): void {
+    const dir = asString(raw["dir"]);
+    const id = asString(raw["id"]);
+
+    if (dir === undefined || id === undefined || id === "" || id.includes("/")) return;
+
+    for (const old of this.keptNames()) if (old.raw["dir"] === dir) remove(old.path);
+    makeDirs(this.namesDir());
+    writeAtomic(join(this.namesDir(), `${id}.json`), `${dumps(raw, { indent: 2 })}\n`);
+  }
+
+  /** The kept entries of fleets no longer served, with their files. */
+  private keptNames(): { readonly path: string; readonly raw: JsonObject }[] {
+    return listDir(this.namesDir())
+      .filter((name) => name.endsWith(".json"))
+      .flatMap((name) => {
+        const path = join(this.namesDir(), name);
+        const raw = readObject(path);
+
+        return raw === undefined || asString(raw["id"]) === undefined ? [] : [{ path, raw }];
+      });
   }
 
   private write(raw: JsonObject, changes: Readonly<Record<string, Json>>, aliases: readonly string[]): Entry {
@@ -216,12 +262,14 @@ export class Registry {
       const raw = readObject(path);
       const entry = raw === undefined ? undefined : entryOf(raw);
 
-      if (entry === undefined) remove(path);
-      else entries.push(entry);
+      if (entry === undefined) {
+        if (raw !== undefined) this.keepName(raw);
+        remove(path);
+      } else entries.push(entry);
     }
 
     entries.forEach((entry, i) => {
-      const title = this.titleOf(entry.dir);
+      const title = this.titleOf(entry.dir, asString(entry.raw["session_id"]));
 
       if (title === undefined || title === entry.session) return;
       let next = entry.role === "manager" ? entry.id : fleetName(title);
@@ -248,8 +296,13 @@ export class Registry {
     return this.live().find((e) => e.role === "manager");
   }
 
-  /** Record that `root` is served at `url` by `pid`; a fleet that registers again keeps its name and session. */
-  register(root: string, url: string, pid: number, stamp: string): Entry {
+  /**
+   * Record that `root` is served at `url` by `pid`, for session `sessionId` (else the session whose scratchpad
+   * holds it). A fleet that registers again keeps its name, aliases and session: from its own entry, else from
+   * the kept entry of its dir, else from the kept entry of its session (a respawned session serving another dir).
+   * A brand-new fleet is named after its session's title, else its project.
+   */
+  register(root: string, url: string, pid: number, stamp: string, sessionId?: string): Entry {
     const dir = resolvePath(root);
     const state = readObject(join(dir, "state.json"));
 
@@ -259,43 +312,59 @@ export class Registry {
 
     const role = roleOf(state);
     const others = this.live().filter((e) => e.dir !== dir);
-    const title = this.titleOf(dir);
-    const kept = isKept;
-    const knownId = asString(known?.["id"]);
-    const knownSession = asString(known?.["session"]);
-    const free = (id: string): boolean => id !== "" && !kept(id) && !others.some((e) => e.id === id);
+    const taken = (id: string): boolean => id === "" || others.some((e) => e.id === id);
+    const kept = this.keptNames();
+    const keptOfDir = kept.find((k) => k.raw["dir"] === dir);
+    const session = sessionId ?? scratchpadSession(dir, this.place.config) ?? asString((known ?? keptOfDir?.raw)?.["session_id"]);
+    const keptOfSession = session === undefined ? undefined : kept.find((k) => k.raw["session_id"] === session && !taken(asString(k.raw["id"]) ?? ""));
+    const prior = known ?? (keptOfDir !== undefined && !taken(asString(keptOfDir.raw["id"]) ?? "") ? keptOfDir.raw : keptOfSession?.raw);
+    const title = this.titleOf(dir, session);
+    const priorId = asString(prior?.["id"]);
+    const priorSession = asString(prior?.["session"]);
+    const free = (id: string): boolean => !taken(id) && !isKept(id);
     let name: string;
 
     if (title !== undefined && role !== "manager" && free(fleetName(title))) {
       name = fleetName(title);
-    } else if (knownId !== undefined) {
+    } else if (priorId !== undefined) {
       // An entry named before session numbers were dropped (`3.ui-coordinator`) drops its number now.
-      const unnumberedId = knownSession === undefined || role === "manager" ? knownId : fleetName(knownSession);
-      name = dropsNumber(knownId, unnumberedId) && free(unnumberedId) ? unnumberedId : knownId;
+      const unnumberedId = priorSession === undefined || role === "manager" ? priorId : fleetName(priorSession);
+      name = dropsNumber(priorId, unnumberedId) && free(unnumberedId) ? unnumberedId : priorId;
     } else {
       const project = asString(state?.["project"]);
       let base = role === "manager" ? "manager" : slug(project !== undefined && project !== "" ? project : (dir.split("/").at(-2) ?? ""));
 
       if (base === "") base = "fleet";
 
-      if (role !== "manager" && kept(base)) base += "-fleet";
-      const taken = new Set(others.map((e) => e.id));
+      if (role !== "manager" && isKept(base)) base += "-fleet";
       name = base;
 
-      for (let n = 2; taken.has(name); n += 1) name = `${base}-${n}`;
+      for (let n = 2; taken(name); n += 1) name = `${base}-${n}`;
     }
 
+    const knownId = asString(known?.["id"]);
+
     if (knownId !== undefined && knownId !== name) remove(this.path(knownId));
-    const session = title ?? (known === undefined ? null : (asString(known["session"]) ?? null));
+
+    for (const used of [keptOfDir, prior === keptOfSession?.raw ? keptOfSession : undefined]) if (used !== undefined) remove(used.path);
 
     return this.write(
       {},
-      { id: name, role, dir, url, pid, session, since: known === undefined ? stamp : (asString(known["since"]) ?? stamp) },
-      known === undefined || knownId === undefined ? [] : aliasesAfter(known, knownId, name),
+      {
+        id: name,
+        role,
+        dir,
+        url,
+        pid,
+        session: title ?? priorSession ?? null,
+        session_id: session ?? null,
+        since: known === undefined ? stamp : (asString(known["since"]) ?? stamp),
+      },
+      prior === undefined || priorId === undefined ? [] : aliasesAfter(prior, priorId, name),
     );
   }
 
-  /** Forget the fleet served from `root`. */
+  /** Forget the fleet served from `root` (`fleet serve --stop`): a stop is on purpose, so its name is not kept. */
   unregister(root: string): void {
     const dir = resolvePath(root);
 

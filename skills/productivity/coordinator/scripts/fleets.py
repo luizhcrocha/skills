@@ -19,7 +19,9 @@
                                 manager's page and chat, and SendMessage all use from then on
 
 serve_dashboard.py registers a fleet when it starts serving DIR and forgets it on --stop; a fleet
-whose server died is forgotten the next time anyone looks. A fleet is known by one name: its
+whose server died is forgotten the next time anyone looks, its last entry kept under names/ until its
+DIR, or its session (`claude respawn`: a new pid, the same session id), is served again and takes the
+name back. A fleet is known by one name: its
 project's (`acme-billing`) until `name` gives it its session's, which the manager's chat mentions it by. The registry is
 $FLEET_HOME, or fleet-board under $XDG_STATE_HOME (~/.local/state).
 """
@@ -68,11 +70,32 @@ def role_of(state: dict | None) -> str:
     return "manager" if (state or {}).get("role") == "manager" else "coordinator"
 
 
-def title_of(root) -> str | None:
-    """The title the session whose scratchpad holds DIR goes by (its /rename), or None when it has none."""
+def scratchpad_session(root) -> str | None:
+    """The session whose scratchpad holds DIR (`…/<project>/<session>/scratchpad/<name>`), or None."""
     import spend
     transcript = spend.transcript_of(root)
-    value = _read(transcript.with_suffix("") / "custom-title.json") if transcript else None
+    return transcript.stem if transcript else None
+
+
+def _session_folder(session_id) -> Path | None:
+    """The folder beside session SESSION_ID's transcript, in whichever project holds it, or None."""
+    if not isinstance(session_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
+        return None
+    projects = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+    try:
+        found = sorted(p / session_id for p in projects.iterdir())
+    except OSError:
+        return None
+    return next((f for f in found if f.is_dir()), None)
+
+
+def title_of(root, session_id=None) -> str | None:
+    """The title (its /rename) the session whose scratchpad holds DIR goes by, else session SESSION_ID's,
+    or None when it has none."""
+    import spend
+    transcript = spend.transcript_of(root)
+    folder = transcript.with_suffix("") if transcript else _session_folder(session_id)
+    value = _read(folder / "custom-title.json") if folder else None
     title = (value or {}).get("customTitle")
     return title.strip() if isinstance(title, str) and title.strip() else None
 
@@ -86,9 +109,11 @@ def live() -> list[dict]:
         if entry and _alive(entry.get("pid")) and isinstance(entry.get("dir"), str) and isinstance(entry.get("id"), str):
             entries.append(entry)
         else:
+            if entry:
+                _keep_name(entry)
             path.unlink(missing_ok=True)
     for i, entry in enumerate(entries):
-        title = title_of(entry["dir"])
+        title = title_of(entry["dir"], entry.get("session_id"))
         if not title or title == entry.get("session"):
             continue
         new = entry["id"] if entry["role"] == "manager" else fleet_name(title)
@@ -114,37 +139,77 @@ def _write(entry: dict) -> dict:
     return entry
 
 
-def register(root, url: str, pid: int) -> dict:
-    """Record that DIR is served at `url` by process `pid`, and return the entry. A fleet that
-    registers again keeps its name and its session."""
+def _names() -> Path:
+    return home() / "names"
+
+
+def _keep_name(entry: dict) -> None:
+    """Keep a forgotten fleet's entry, by its name and in place of any kept before for its DIR, so its DIR
+    or its session served again gets its name back."""
+    if not isinstance(entry.get("dir"), str) or not isinstance(entry.get("id"), str) or not entry["id"] or "/" in entry["id"]:
+        return
+    for old, kept in _kept_names():
+        if kept.get("dir") == entry["dir"]:
+            old.unlink(missing_ok=True)
+    _names().mkdir(parents=True, exist_ok=True)
+    path = _names() / f"{entry['id']}.json"
+    scratch = path.with_suffix(".tmp")
+    scratch.write_text(json.dumps(entry, indent=2) + "\n", encoding="utf-8")
+    scratch.replace(path)
+
+
+def _kept_names() -> list[tuple[Path, dict]]:
+    found = []
+    for path in sorted(_names().glob("*.json")):
+        entry = _read(path)
+        if entry and isinstance(entry.get("id"), str):
+            found.append((path, entry))
+    return found
+
+
+def register(root, url: str, pid: int, session_id: str | None = None) -> dict:
+    """Record that DIR is served at `url` by process `pid` for session SESSION_ID (else the session whose
+    scratchpad holds DIR), and return the entry. A fleet that registers again keeps its name, aliases and
+    session: from its own entry, else from its DIR's kept entry, else from its session's (a respawned session
+    serving another DIR). A brand-new fleet is named after its session's title, else its project."""
     root = Path(root).resolve()
     state = _read(root / "state.json")
     # The fleet's own entry is read before the dead are forgotten: on a restart its server is the dead one.
     known = next((e for e in map(_read, sorted(home().glob("*.json"))) if e and e.get("dir") == str(root) and e.get("id")), None)
     role, others = role_of(state), [e for e in live() if e["dir"] != str(root)]
-    title = title_of(root)
-    free = lambda n: bool(n) and n not in KEPT and n not in {e["id"] for e in others}  # noqa: E731
+    taken = lambda n: not n or n in {e["id"] for e in others}  # noqa: E731
+    kept = _kept_names()
+    of_dir = next(((p, e) for p, e in kept if e.get("dir") == str(root)), None)
+    session = session_id or scratchpad_session(root) or (known or (of_dir[1] if of_dir else {})).get("session_id") or None
+    of_session = next(((p, e) for p, e in kept if session and e.get("session_id") == session and not taken(e["id"])), None)
+    prior = known or (of_dir[1] if of_dir and not taken(of_dir[1]["id"]) else (of_session[1] if of_session else None))
+    title = title_of(root, session)
+    free = lambda n: not taken(n) and n not in KEPT  # noqa: E731
     if title and role != "manager" and free(fleet_name(title)):
         name = fleet_name(title)
-    elif known:
+    elif prior:
         # An entry named before session numbers were dropped (`3.ui-coordinator`) drops its number now.
-        session = known.get("session")
-        unnumbered_id = fleet_name(session) if isinstance(session, str) and role != "manager" else known["id"]
-        name = unnumbered_id if drops_number(known["id"], unnumbered_id) and free(unnumbered_id) else known["id"]
+        prior_session = prior.get("session")
+        unnumbered_id = fleet_name(prior_session) if isinstance(prior_session, str) and role != "manager" else prior["id"]
+        name = unnumbered_id if drops_number(prior["id"], unnumbered_id) and free(unnumbered_id) else prior["id"]
     else:
         base = "manager" if role == "manager" else slug(str((state or {}).get("project") or root.parent.name)) or "fleet"
         if role != "manager" and base in KEPT:
             base += "-fleet"
-        taken, name, n = {e["id"] for e in others}, base, 1
-        while name in taken:
+        name, n = base, 1
+        while taken(name):
             n += 1
             name = f"{base}-{n}"
     if known and known["id"] != name:
         (home() / f"{known['id']}.json").unlink(missing_ok=True)
+    for used in (of_dir, of_session if of_session and prior is of_session[1] else None):
+        if used:
+            used[0].unlink(missing_ok=True)
     return _write(_with_aliases({"id": name, "role": role, "dir": str(root), "url": url, "pid": pid,
-                                 "session": title or (known.get("session") if known else None),
+                                 "session": title or (prior.get("session") if prior else None),
+                                 "session_id": session,
                                  "since": known["since"] if known else clock.stamp()},
-                                aliases_after(known, known["id"], name) if known else []))
+                                aliases_after(prior, prior["id"], name) if prior else []))
 
 
 def unregister(root) -> None:
@@ -175,11 +240,11 @@ def drops_number(old: str, new: str) -> bool:
 
 
 def aliases_after(entry: dict, old: str, new: str) -> list:
-    """The aliases an entry keeps once its id goes from `old` to `new`: `old` joins them when `new` is
-    `old` without its session's number. The hub sends an alias's address on to the fleet's."""
+    """The aliases an entry keeps once its id goes from `old` to `new`: every rename keeps `old`, so its
+    address still answers. The hub sends an alias's address on to the fleet's."""
     given = entry.get("aliases")
     kept = [a for a in given if isinstance(a, str) and a != new] if isinstance(given, list) else []
-    if drops_number(old, new) and old not in kept:
+    if old and old != new and old not in kept:
         kept.append(old)
     return kept
 

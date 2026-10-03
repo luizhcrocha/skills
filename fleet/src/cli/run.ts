@@ -68,7 +68,7 @@ export function withFleetDir(argv: readonly string[], machine: Machine): string[
 /** The served fleets a name fits: the one whose id, old id or session's name it is; else those whose id or
  * session starts with it; else those containing it (any case). */
 export function fleetsNamed(live: readonly Entry[], name: string): Entry[] {
-  const exact = live.find((e) => e.id === name || e.aliases.includes(name) || e.session === name);
+  const exact = live.find((e) => e.id === name) ?? live.find((e) => e.aliases.includes(name) || e.session === name);
 
   if (exact !== undefined) return [exact];
   const said = name.toLowerCase();

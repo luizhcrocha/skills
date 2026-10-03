@@ -304,6 +304,13 @@ describe("a fleet's chat through the hub", () => {
     const moved = await request("GET", "/f/p?x=1");
     expect([moved.status, moved.headers.get("Location")]).toEqual([301, "/f/p/?x=1"]);
   });
+
+  test("a fleet renamed with `fleets name` is still found at its old address", async () => {
+    expect(fleet(["fleets", "name", root, "infra-coordinator-2"], env).code).toBe(0);
+    const old = await request("GET", "/f/p/?x=1");
+    expect([old.status, old.headers.get("Location")]).toEqual([301, "/f/infra-coordinator-2/?x=1"]);
+    expect((await request("GET", "/f/infra-coordinator-2/")).status).toBe(200);
+  });
 });
 
 describe("the page and the files", () => {

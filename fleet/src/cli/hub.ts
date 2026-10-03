@@ -7,7 +7,8 @@
  *   starts it on the new code.
  * - `fleet serve DIR [--stop] [--pid PID]`: put DIR's fleet in the registry, so the hub serves it at
  *   `/f/<fleet>/`, and print its address (`--stop` takes it out). The entry lives while PID does: by
- *   default the Claude Code session that runs the command (the nearest `claude` among its parents).
+ *   default the Claude Code session that runs the command (the nearest `claude` among its parents). It
+ *   records that session's id (`$CLAUDE_CODE_SESSION_ID`), by which a respawned session keeps the name.
  * - `fleet render STATE OUT [--fragment]`: render a page from a state file (Python's render_dashboard.py).
  * - `fleet usage capture [-- COMMAND...] | show`, `fleet spend DIR`, `fleet served`: Python's usage.py,
  *   spend.py and served.py.
@@ -162,8 +163,11 @@ function serve(machine: Machine, argv: readonly string[]): Effect.Effect<number,
     const port = portText === undefined ? undefined : portOf(portText, machine);
     const base = hubUrl(machine, port);
     const stamp = stampOf(machine.now());
-    const first = registry.register(root, base, pid, stamp);
-    const entry = registry.register(root, `${base}f/${encodeURIComponent(first.id)}/`, pid, stamp);
+    // Claude Code gives every command it runs its session's id; it survives `claude respawn`, the pid does not.
+    const given = machine.env("CLAUDE_CODE_SESSION_ID");
+    const session = given === undefined || given === "" ? undefined : given;
+    const first = registry.register(root, base, pid, stamp, session);
+    const entry = registry.register(root, `${base}f/${encodeURIComponent(first.id)}/`, pid, stamp, session);
     out.out(`${entry.url}\n`);
     const boss = registry.manager();
 

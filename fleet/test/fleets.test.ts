@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
+import { fleetsNamed } from "../src/cli/run.ts";
 import type { Registry } from "../src/registry.ts";
 import { baseEnv, fleet, machine, now, readJson, tmp, type Environment, type Ran } from "./support.ts";
 
@@ -116,7 +117,8 @@ describe("register", () => {
     register(makeFleet("a", "gone"), "u", deadPid());
     register(makeFleet("b", "here"), "u");
     expect(registry.live().map((e) => e.id)).toEqual(["here"]);
-    expect(readdirSync(join(base, "registry")).sort()).toEqual(["here.json"]);
+    expect(readdirSync(join(base, "registry")).sort()).toEqual(["here.json", "names"]);
+    expect(readdirSync(join(base, "registry", "names")).length).toBe(1);
   });
 
   test("unregister forgets the fleet", () => {
@@ -371,5 +373,120 @@ describe("the gate", () => {
     expect(cli("gate", "free", "ui").code).toBe(1);
     expect(cli("gate", "free", "infra").code).toBe(0);
     expect(cli("gate", "take", "ui", "browser tests").code).toBe(0);
+  });
+});
+
+describe("a fleet served again by a restarted session", () => {
+  let config: string;
+  let scratch: string;
+
+  beforeEach(() => {
+    config = tmp("claude-");
+    scratch = tmp("tmp-");
+    env = baseEnv(tmp("fleet-home-"), { CLAUDE_CONFIG_DIR: config });
+    registry = machine(env).registry;
+  });
+
+  /** A process that lives until `end()`: the session a fleet lives as long as. */
+  function session() {
+    const proc = Bun.spawn(["sleep", "60"]);
+
+    return {
+      pid: proc.pid,
+      end: async (): Promise<void> => {
+        proc.kill();
+        await proc.exited;
+      },
+    };
+  }
+
+  function title(project: string, sid: string, text: string): void {
+    const d = join(config, "projects", project, sid);
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "custom-title.json"), JSON.stringify({ customTitle: text }));
+  }
+
+  function scratchpad(project: string, sid: string): string {
+    const root = join(scratch, project, sid, "scratchpad", "coordinator");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "state.json"), JSON.stringify({ project: "custom-mcp-servers" }));
+
+    return root;
+  }
+
+  test("the entry records the session's id: the one given, else the scratchpad's", () => {
+    expect(registry.register(makeFleet("a", "infra"), "u", process.pid, now(), "5579180b").raw["session_id"]).toBe("5579180b");
+    expect(registry.register(scratchpad("-home-x-repo", "s1"), "u", process.pid, now()).raw["session_id"]).toBe("s1");
+    expect(registry.register(makeFleet("b", "infra"), "u", process.pid, now()).raw["session_id"]).toBeNull();
+  });
+
+  test("fleet serve records the session it runs in", () => {
+    const root = makeFleet("a", "infra");
+    expect(fleet(["serve", root, "--pid", String(process.pid)], { ...env, CLAUDE_CODE_SESSION_ID: "5579180b", TAILSCALE: join(base, "none") }).code).toBe(0);
+    expect(registry.find(root)?.raw["session_id"]).toBe("5579180b");
+  });
+
+  test("its dir served again from a new pid, with no title, keeps its name and aliases", async () => {
+    const root = makeFleet("a", "custom-mcp-servers");
+    const first = session();
+    registry.register(root, "u", first.pid, now(), "5579180b");
+    registry.name(root, "3.infra-coordinator");
+    registry.name(root, "infra-coordinator (2)");
+    await first.end();
+    expect(registry.live()).toEqual([]);
+    const again = registry.register(root, "u2", process.pid, now());
+    expect([again.id, again.aliases, again.session]).toEqual(["infra-coordinator-2", ["custom-mcp-servers", "infra-coordinator"], "infra-coordinator (2)"]);
+  });
+
+  test("a new pid of the same session, serving another dir, keeps the name", async () => {
+    const a = makeFleet("a", "custom-mcp-servers");
+    const first = session();
+    registry.register(a, "u", first.pid, now(), "5579180b");
+    registry.name(a, "infra-coordinator (2)");
+    await first.end();
+    registry.live();
+    const moved = registry.register(makeFleet("b", "custom-mcp-servers"), "u2", process.pid, now(), "5579180b");
+    expect(moved.id).toBe("infra-coordinator-2");
+    expect(registry.register(makeFleet("c", "custom-mcp-servers"), "u3", process.pid, now(), "another").id).toBe("custom-mcp-servers");
+  });
+
+  test("a kept name another fleet took meanwhile is not taken back", async () => {
+    const a = makeFleet("a", "billing");
+    const first = session();
+    registry.register(a, "u", first.pid, now());
+    await first.end();
+    registry.live();
+    registry.register(makeFleet("b", "billing"), "u", process.pid, now());
+    expect(registry.register(a, "u2", process.pid, now()).id).toBe("billing-2");
+  });
+
+  test("a missing or empty title never renames; a real /rename does, and the old name stays an alias", () => {
+    const root = scratchpad("-home-x-repo", "s1");
+    expect(registry.register(root, "u", process.pid, now()).id).toBe("custom-mcp-servers");
+    title("-home-x-repo", "s1", "  ");
+    expect(registry.live().map((e) => e.id)).toEqual(["custom-mcp-servers"]);
+    title("-home-x-repo", "s1", "Infra Coordinator 2");
+    const renamed = registry.live()[0];
+    expect([renamed?.id, renamed?.aliases]).toEqual(["infra-coordinator-2", ["custom-mcp-servers"]]);
+    expect(fleetsNamed(registry.live(), "custom-mcp-servers").map((e) => e.id)).toEqual(["infra-coordinator-2"]);
+  });
+
+  test("a fleet outside any scratchpad follows its session's /rename, found by the session's id", () => {
+    const root = makeFleet("a", "custom-mcp-servers");
+    title("-home-x-repo", "5579180b", "Infra Coordinator");
+    expect(registry.register(root, "u", process.pid, now(), "5579180b").id).toBe("infra-coordinator");
+    title("-home-x-repo", "5579180b", "infra-coordinator (2)");
+    const renamed = registry.live()[0];
+    expect([renamed?.id, renamed?.session, renamed?.aliases]).toEqual(["infra-coordinator-2", "infra-coordinator (2)", ["infra-coordinator"]]);
+  });
+
+  test("a brand-new dir with no title still gets its project's slug", async () => {
+    const a = makeFleet("a", "infra");
+    const first = session();
+    registry.register(a, "u", first.pid, now(), "s-old");
+    registry.name(a, "infra-coordinator");
+    await first.end();
+    registry.live();
+    expect(registry.register(makeFleet("b", "custom-mcp-servers"), "u", process.pid, now(), "s-new").id).toBe("custom-mcp-servers");
   });
 });

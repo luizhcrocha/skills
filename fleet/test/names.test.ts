@@ -17,13 +17,14 @@ describe("a fleet's name from its session's", () => {
     expect(fleetName("3.UI Coordinator")).toBe("ui-coordinator");
   });
 
-  test("the old id becomes an alias only when the new one is it without its number", () => {
+  test("the old id becomes an alias on every rename, so its address keeps working", () => {
     expect(dropsNumber("3.ui-coordinator", "ui-coordinator")).toBe(true);
     expect(dropsNumber("ui-coordinator", "billing")).toBe(false);
     expect(aliasesAfter({}, "3.ui-coordinator", "ui-coordinator")).toEqual(["3.ui-coordinator"]);
     expect(aliasesAfter({ aliases: ["2.ui-coordinator"] }, "3.ui-coordinator", "ui-coordinator")).toEqual(["2.ui-coordinator", "3.ui-coordinator"]);
-    expect(aliasesAfter({ aliases: ["ui-coordinator"] }, "x", "ui-coordinator")).toEqual([]);
-    expect(aliasesAfter({}, "billing", "invoices")).toEqual([]);
+    expect(aliasesAfter({ aliases: ["ui-coordinator"] }, "x", "ui-coordinator")).toEqual(["x"]);
+    expect(aliasesAfter({}, "billing", "invoices")).toEqual(["billing"]);
+    expect(aliasesAfter({ aliases: ["billing"] }, "billing", "billing")).toEqual([]);
   });
 });
 

@@ -513,14 +513,26 @@ decision (by id), and that some recipient has only here (not every one of them i
 ## fleets.py and the registry
 
 `REGISTRY/<fleet>.json`, one per fleet being served:
-`{id, role (coordinator|manager), dir, url, pid, session, since}`, written atomically (a `.tmp`
-then a rename). `REGISTRY/gate/gate.json` is `{fleet, what, since}`. `REGISTRY/usage/reading.json`
+`{id, role (coordinator|manager), dir, url, pid, session, session_id, since, aliases?}`, written atomically (a `.tmp`
+then a rename). `session` is the session's title; `session_id` its Claude Code session id, which survives
+`claude respawn` where the pid does not: `fleet serve` takes it from `$CLAUDE_CODE_SESSION_ID` (Claude Code
+sets it for every command a session runs), else from DIR's scratchpad path (`…/<project>/<session>/scratchpad/<name>`),
+else the fleet's last entry's; null when none says. `aliases` are the fleet's earlier ids: every rename
+(a title, `name`, a dropped session number) keeps the old id there, and the hub answers `/f/<alias>/` with
+a 301 to the fleet's address. `REGISTRY/gate/gate.json` is `{fleet, what, since}`. `REGISTRY/usage/reading.json`
 holds the plan usage per account, `{"accounts": {KEY: {email, seen, five_hour?, seven_day?}}}` (see usage.py). Every read of the registry (`live()`) deletes the entry of a fleet whose
-pid is dead or whose record is malformed. It also renames a fleet whose session got a custom title
-(`<transcript>/custom-title.json`) to the title's slug, unless that is taken or reserved. Names:
-the manager is `manager`; a coordinator is the slug of its session title, else of its project
+pid is dead or whose record is malformed; a dead one's entry is kept as `REGISTRY/names/<fleet>.json` (one
+per dir: a newer one for the same dir replaces it), so the fleet gets its name back when it is served again.
+`fleet serve --stop` keeps nothing. It also renames a fleet whose session got a custom title
+(`custom-title.json` beside the transcript: DIR's scratchpad's session, else the entry's `session_id`, looked
+up in every project under `$CLAUDE_CONFIG_DIR/projects/`) to the title's slug, unless that is taken or
+reserved; a missing or blank title renames nothing. Names, on `register`: the manager is `manager`; a
+coordinator is the slug of its session title when that is free; else the name of its prior entry: its own
+entry, else the kept entry of its dir, else the kept entry of its session id (a respawned session serving
+another dir), each only while no live fleet holds that name, with that entry's aliases and session
+(dropping a session number as before); else, for a brand-new dir, the slug of its project
 (`[^A-Za-z0-9_.-]+` → `-`, trimmed, lower-cased), `-fleet` added to a reserved name, `-2`, `-3`
-to a taken one. `user`, `coordinator` and `manager` are reserved.
+to a taken one. A kept entry it uses is removed. `user`, `coordinator` and `manager` are reserved.
 
 A fleet's **summary** (`summary(entry)`: each of the manager's page's `coordinators[]`, and `/api/fleets`
 without `index`) is `{id, url, session, dir, name, project, goal, status, now, updated, workers, tokens,
