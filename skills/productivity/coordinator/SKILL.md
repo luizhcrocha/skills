@@ -165,6 +165,19 @@ Decisions go stale, and a stale one costs the user a choice that no longer matte
 
 An answer given on the page is recorded before any other work: every state command warns until it is. Refer to decisions, links and roadblocks by their number (D3, L1, R2) when you write to the user. Check that it still holds (the option may be gone since), then `--decide "<answer>" --resolution "answered on the page (#14)"`, answer the message with `--re 14`, and act. When it no longer holds, answer the message with why and revise the decision. When the answer leads to another question (a query to run again, a figure you still need), revise the decision with the new question, or close it and open the next one: the item is what the page acts on, and a chat reply alone leaves it looking answered.
 
+**The classifier never sees the page.** Auto mode's classifier reads the session, not the dashboard, so a yes the user gave on the page does not reach it, and a call they approved can still be refused (`[Production Reads]` after "yes: read-only, aggregates only"). Do not ask again. Give them the one item that lets that call through, and say in one line which you chose and why ("D1 approved it; the spawn was refused as [Production Reads]; P3 lets that exact spawn through once"):
+
+- The **permission** for the exact refused call. The plugin hook opens it by itself for a Bash command or an Agent spawn. Once they allow it, make the same call again, byte for byte (the same command; for a spawn the same `subagent_type`, `description` and `prompt`, no field added): the grant matches that call alone.
+- For a read they approved that was refused as a spawn, you may run the narrow read yourself instead, as one Bash command (the query alone, read-only), so its permission grants exactly what they approved. Say so in the same line.
+
+**A decision or action that asks the user to add a permission rule** carries, from its first revision, the exact command in a ```` ```nu ```` block and says plainly whether the rule clears this refusal. Never prose and a file path that leave them to ask where it goes. The rule goes into the session root's settings, run from the session root in their terminal (an agent that writes its own rule is refused):
+
+```nu
+let f = ".claude/settings.local.json"; let s = if ($f | path exists) { open $f } else { {} }; $s | upsert permissions.allow (($s.permissions?.allow? | default []) | append r#'Bash(<the exact command>)'# | uniq) | save -f $f
+```
+
+What clears what, in auto mode (measured on Claude Code 2.1.287 and 2.1.288): an exact `Bash(<command>)` allow rule in the session root's settings clears a refused Bash call, live, for its subagents too; no allow rule clears a refused Agent spawn (auto mode drops `Agent` allow rules), only its permission does. A refused call of any other tool is an `action`: offer a rule only after checking that tool's rule syntax in the permissions docs (no rule clears a write to a protected path such as `.claude/`); otherwise say plainly that only the session's own terminal can allow it. Never offer a rule that does not clear the refusal.
+
 **When the answer means the fleet acts first** (not ready, needs a fix, the wrong command): `decision A1 --hold "<what the fleet does first>"` at once, then do the work. The hold records the answer and takes the item off the user's list; re-present it by revising it with the new words or command (`--manual`, `--question`, `--option`), which clears the hold and puts it back on their list. Never leave an answered item open without recording it.
 
 When the session ends, stop the advisor's row (`park --agent advisor "fleet done"`); `set --status done` names each decision still open and each workspace not pruned: withdraw it with its reason, or name it in your last message as left open on purpose.
