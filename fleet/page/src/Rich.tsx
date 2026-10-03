@@ -2,7 +2,9 @@
  * Free text in the page's text format (`text.ts`): paragraphs, inline code, and code blocks with their
  * language, highlighting, a wrap switch and a copy button. Everything is rendered as text nodes and spans,
  * never as HTML. Blocks are keyed by their content, so a state update that leaves the text as it was, or
- * changes another block, keeps each block's node, its wrap switch and its "Copied".
+ * changes another block, keeps each block's node, its wrap switch and its "Copied". Inside a block the parts
+ * are drawn by place (keyed={false}), the callback run once per place, so what a part is drawn as (code,
+ * words, a mention) is read reactively, never decided once by a ternary.
  */
 import { createMemo, createSignal, onCleanup } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
@@ -99,11 +101,11 @@ function Words(props: { readonly text: string; readonly parts: readonly Part[]; 
 
   return (
     <For each={pieces()} keyed={false}>
-      {(p) => {
-        const v = p();
-
-        return v.part && props.mention ? props.mention(v.part) : v.text;
-      }}
+      {(p) => (
+        <Show when={props.mention && p().part} fallback={p().text}>
+          {(part) => <>{props.mention?.(part())}</>}
+        </Show>
+      )}
     </For>
   );
 }
@@ -128,7 +130,11 @@ function Blocks(props: { readonly blocks: readonly Block[]; readonly parts: read
         ) : (
           <p>
             <For each={b.spans} keyed={false}>
-              {(s) => (s().kind === "code" ? <code class="ic">{unmark(s().text, props.parts)}</code> : <Words text={s().text} parts={props.parts} mention={props.mention} />)}
+              {(s) => (
+                <Show when={s().kind === "code"} fallback={<Words text={s().text} parts={props.parts} mention={props.mention} />}>
+                  <code class="ic">{unmark(s().text, props.parts)}</code>
+                </Show>
+              )}
             </For>
           </p>
         );
