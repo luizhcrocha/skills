@@ -1,0 +1,9 @@
+/* PROTOTYPE additions to the real page.css (inlined above this): only what the ground itself needs. */
+.chat-body { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.msg code.ic, .dv-question code.ic, .dv-block code.ic { font-family: var(--mono); font-size: 0.86em; padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--text) 8%, transparent); }
+.about-line { text-decoration: none; }
+.proto-flash { animation: proto-flash 1400ms ease-out; }
+@keyframes proto-flash { 0%, 30% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); } 100% { box-shadow: 0 0 0 3px transparent; } }
+@media (prefers-reduced-motion: reduce) { .proto-flash { animation-duration: 1ms; outline: 2px solid var(--accent); } }
+.btn:active, .send:active, .icon-btn:active, .seg button:active, .switch:active { transform: scale(0.97); }
+.ask { cursor: pointer; }

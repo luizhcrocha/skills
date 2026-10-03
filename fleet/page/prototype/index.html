@@ -1,0 +1,40 @@
+<!doctype html>
+<!-- PROTOTYPE, throwaway: the index of fleet/page/prototype. Three UI questions about the fleet page, one
+     prototype each, three variants each (?v=1..3). Not production code; nothing here talks to the hub. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet page prototypes</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..700&display=swap">
+<style>
+  :root { --bg: #eff3ee; --card: #fbfcfa; --text: #16211c; --muted: #55635b; --line: #d2dbd3; --accent: #0e6b55; --you: #9a5200; color-scheme: light; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0e1411; --card: #151c18; --text: #e9efea; --muted: #9eaba3; --line: #29352e; --accent: #56c7a6; --you: #f0a440; color-scheme: dark; } }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: "Archivo", system-ui, sans-serif; line-height: 1.5; }
+  main { box-sizing: border-box; max-width: 760px; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 22px; }
+  h1 { margin: 0; font-size: 2rem; font-stretch: 80%; line-height: 1.1; }
+  .note { margin: 0; color: var(--muted); }
+  .note b { color: var(--you); }
+  ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+  li { padding: 16px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); display: grid; gap: 6px; }
+  h2 { margin: 0; font-size: 1.25rem; font-stretch: 84%; }
+  h2 a { color: var(--accent); text-decoration: none; }
+  h2 a:hover { text-decoration: underline; }
+  p { margin: 0; }
+  .vs { display: flex; flex-wrap: wrap; gap: 6px; font-size: 0.875rem; }
+  .vs a { padding: 2px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); text-decoration: none; font-weight: 600; font-stretch: 84%; }
+  .vs a:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Fleet page prototypes</h1>
+  <p class="note"><b>Throwaway.</b> Each page reproduces the dashboard (masthead, views, the chat docked at 920px and up) with this machine's fleets, in memory only. Switch variants with the dark pill at the bottom, the keys 1 to 3, or <code>?v=</code>; <code>?theme=dark</code> or <code>light</code> forces a theme.</p>
+  <ul>
+    <li><h2><a href="side-chats.html">Side chats</a></h2><p>How do you see every side chat, find the one from minutes ago, archive and unarchive, and come back to the main thread where you left it?</p><p class="vs"><a href="side-chats.html?v=1">1 Tabs</a><a href="side-chats.html?v=2">2 Inbox</a><a href="side-chats.html?v=3">3 Split</a></p></li>
+    <li><h2><a href="ask-in-chat.html">Ask in chat</a></h2><p>From a decision's page, how does asking about it feel the same as Reply and Side chat on selected text: a chip with a link back, main thread or side chat, @mentions and /skills?</p><p class="vs"><a href="ask-in-chat.html?v=1">1 Dock</a><a href="ask-in-chat.html?v=2">2 Inline</a><a href="ask-in-chat.html?v=3">3 Margin</a></p></li>
+    <li><h2><a href="finder.html">Cmd+K finder</a></h2><p>Recents first, kinds as sections with Tab-cycled tabs and one-letter prefixes, folded word-start highlights, a key legend, a Mod+Enter second action, rows that never move: which shape?</p><p class="vs"><a href="finder.html?v=1">1 Palette</a><a href="finder.html?v=2">2 Preview</a><a href="finder.html?v=3">3 Board</a></p></li>
+  </ul>
+</main>
+</body>
+</html>

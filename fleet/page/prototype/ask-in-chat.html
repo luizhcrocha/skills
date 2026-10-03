@@ -1,0 +1,1768 @@
+<!doctype html>
+<!--
+  PROTOTYPE, throwaway: fleet/page/prototype/ask-in-chat.html. Not production code; nothing here is wired to the hub.
+  Question: Asking about a decision, action or grill from its page should feel the same as Reply / Side chat on selected text: a chip naming the item with a link back, main thread or side chat, @mentions and /skills. How do the entry point and the composer look and behave?
+  3 variants (Dock, Inline, Margin), switched with ?v=1..3, keys 1-3 and the arrows; ?theme=dark|light forces a theme.
+  Built by `bun _src/build.ts` from _src/ (ground.js, ask-in-chat.js) and the real fleet/page/src/page.css.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ask in chat, prototype</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231e1b4b'/%3E%3Ccircle cx='32' cy='33' r='10' fill='%23eef2ff'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  /* The fleet's ledger: pale ruled paper, green-black ink, and colour only where it says a state.
+     Amber waits on the viewer, red is blocked, blue is running, green is done. One family of type,
+     set narrow for names, figures and tabs so a phone line holds more, and at its normal width for
+     reading. The monospace is for paths and commands. */
+  :root {
+    --bg: #eff3ee;
+    --card: #fbfcfa;
+    --card-2: #e5ebe4;
+    --text: #16211c;
+    --muted: #55635b;
+    --faint: #8a968e;
+    --line: #d2dbd3;
+    --accent: #0e6b55;
+    --accent-soft: #d8ebe2;
+    --on-accent: #ffffff;
+    --you: #9a5200;
+    --you-soft: #f6e7cf;
+    --run: #1f5fbf;
+    --run-soft: #dce7f8;
+    --good: #2c7a39;
+    --warning: #9a5200;
+    --serious: #b94f1a;
+    --critical: #b93125;
+    --critical-soft: #f7dedb;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+    --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948;
+    --sans: "Archivo", "Helvetica Neue", Arial, system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --narrow: 84%;
+    --fs-xs: 0.8125rem;
+    --fs-s: 0.875rem;
+    /* The smallest target a finger gets; the desktop's mouse targets stay compact. */
+    --tap: 32px;
+    --dock-h: 0px;
+    --top-h: 56px;
+    --gutter: max(16px, calc((100% - 1088px) / 2));
+    --chat-w: clamp(360px, 30vw, 440px);
+    --shadow: 0 12px 32px rgb(22 33 28 / 0.16);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0e1411; --card: #151c18; --card-2: #1e2823; --text: #e9efea;
+      --muted: #9eaba3; --faint: #67746c; --line: #29352e;
+      --accent: #56c7a6; --accent-soft: #16352c; --on-accent: #08130f;
+      --you: #f0a440; --you-soft: #382910; --run: #7fb0f7; --run-soft: #172a45;
+      --good: #6cc878; --warning: #f0a440; --serious: #f08a55; --critical: #f2766a; --critical-soft: #3b1a17;
+      --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+      --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+      --shadow: 0 12px 32px rgb(0 0 0 / 0.5);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0e1411; --card: #151c18; --card-2: #1e2823; --text: #e9efea;
+    --muted: #9eaba3; --faint: #67746c; --line: #29352e;
+    --accent: #56c7a6; --accent-soft: #16352c; --on-accent: #08130f;
+    --you: #f0a440; --you-soft: #382910; --run: #7fb0f7; --run-soft: #172a45;
+    --good: #6cc878; --warning: #f0a440; --serious: #f08a55; --critical: #f2766a; --critical-soft: #3b1a17;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --shadow: 0 12px 32px rgb(0 0 0 / 0.5);
+  }
+  @media (max-width: 759.98px) {
+    :root { --fs-xs: 0.875rem; --fs-s: 0.875rem; --dock-h: 62px; --top-h: 100px; }
+  }
+  @media (max-width: 759.98px), (pointer: coarse) {
+    :root { --tap: 44px; }
+  }
+
+  [hidden] { display: none !important; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; scroll-padding-top: calc(var(--top-h) + 60px); }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 0.9375rem; line-height: 1.5; margin: 0; overflow-x: clip; }
+  @media (max-width: 759.98px) { body { font-size: 1rem; } }
+  h1, h2, h3, h4 { margin: 0; font-weight: 700; font-stretch: var(--narrow); text-wrap: balance; }
+  h2 { font-size: 1.0625rem; }
+  p { margin: 0; }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  button, select, input, textarea { font: inherit; color: inherit; }
+  button { -webkit-tap-highlight-color: transparent; }
+  .num { font-stretch: var(--narrow); font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .faint { color: var(--faint); }
+  .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  svg.i { width: 22px; height: 22px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* A worker's name, wherever it appears: one tap opens the worker. */
+  .who { display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); min-width: var(--tap); padding: 0 4px; margin: 0 -4px; background: none; border: 0; border-radius: 5px; cursor: pointer; font-weight: 600; font-stretch: var(--narrow); text-align: left; color: inherit; }
+  .who:hover { background: var(--card-2); }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; flex: none; background: var(--c, var(--faint)); }
+
+  /* A state, said in a word. */
+  .pill { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 4px; font-size: var(--fs-xs); font-weight: 600; font-stretch: var(--narrow); line-height: 1.5; background: var(--card-2); color: var(--muted); white-space: nowrap; }
+  .pill.running, .pill.current { background: var(--run-soft); color: var(--run); }
+  .pill.done, .pill.decided { background: color-mix(in srgb, var(--good) 15%, var(--card)); color: var(--good); }
+  .pill.blocked, .pill.failed, .pill.critical, .pill.blocking { background: var(--critical-soft); color: var(--critical); }
+  .pill.held { background: var(--run-soft); color: var(--run); }
+  .pill.open, .pill.answered, .pill.new, .pill.changed, .pill.warning { background: var(--you-soft); color: var(--you); }
+  .pill.serious { background: color-mix(in srgb, var(--serious) 15%, var(--card)); color: var(--serious); }
+  .pill.recommended { background: var(--accent-soft); color: var(--accent); }
+
+  /* the page: a masthead that stays, one view at a time under it */
+  .shell { min-height: 100dvh; }
+  .main { min-width: 0; container: main / inline-size; }
+  .masthead { position: sticky; top: 0; z-index: 30; background: var(--bg); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top, 0px); }
+  .top { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; align-items: center; gap: 10px; min-height: var(--top-h); padding-inline: var(--gutter); box-sizing: border-box; }
+  .top-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .top h1 { font-size: 1.1875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mark { width: 30px; height: 30px; flex: none; border-radius: 7px; overflow: hidden; }
+  .mark svg { display: block; width: 100%; height: 100%; }
+  /* A phone has no room for the name beside the switcher: the name, the status, search and the bell
+     take the first row, the switcher (and the way up to the manager) the second. */
+  @media (max-width: 759.98px) {
+    .top { grid-template-columns: minmax(0, 1fr) auto auto; grid-auto-rows: 44px; row-gap: 4px; column-gap: 6px; padding-block: 4px; }
+    .top-name { grid-column: 1; grid-row: 1; }
+    #find-open { grid-column: 2; grid-row: 1; }
+    #bell { grid-column: 3; grid-row: 1; }
+    .top .switch { grid-column: 1 / -1; grid-row: 2; display: flex; min-width: 0; }
+    .top:has(#top-manager:not([hidden])) .switch { grid-column: 1 / 3; }
+    #top-manager { grid-column: 3 / -1; grid-row: 2; justify-self: end; }
+    .top .switch select { flex: 1; max-width: none; min-width: 0; }
+  }
+
+  .tabs { display: flex; gap: 2px; align-items: stretch; padding-inline: calc(var(--gutter) - 12px); margin-bottom: -1px; }
+  .tabs a, .tabs button { position: relative; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border: 0; background: none; color: var(--muted); text-decoration: none; font-weight: 600; font-stretch: var(--narrow); cursor: pointer; }
+  .tabs svg.i { width: 18px; height: 18px; }
+  .tabs a:hover, .tabs button:hover { color: var(--text); }
+  .tabs [aria-current="true"], .tabs [aria-expanded="true"] { color: var(--text); }
+  .tabs [aria-current="true"]::after, .tabs [aria-expanded="true"]::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 3px; border-radius: 3px 3px 0 0; background: var(--text); }
+  .tabs .to-chat { margin-left: auto; }
+  /* A narrow column (the page beside the docked chat at its narrowest) packs the tabs closer, so all six fit. */
+  @container main (max-width: 640px) {
+    .tabs a, .tabs button { gap: 6px; padding: 0 8px; }
+    .tabs [aria-current="true"]::after, .tabs [aria-expanded="true"]::after { left: 8px; right: 8px; }
+  }
+  .badge { min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 10px; background: var(--you); color: var(--bg); font-size: 0.75rem; font-weight: 700; font-variant-numeric: tabular-nums; display: grid; place-items: center; line-height: 1; }
+  .badge.alert { background: var(--critical); }
+  @media (max-width: 759.98px) {
+    .tabs { position: fixed; inset: auto 0 0 0; z-index: 35; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0; margin: 0; padding: 0 max(4px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(4px, env(safe-area-inset-left, 0px)); background: var(--card); border-top: 1px solid var(--line); }
+    .tabs a, .tabs button { flex-direction: column; justify-content: center; gap: 3px; min-height: var(--dock-h); padding: 0; font-size: 0.8125rem; font-stretch: 78%; }
+    .tabs svg.i { width: 24px; height: 24px; }
+    .tabs [aria-current="true"], .tabs [aria-expanded="true"] { color: var(--accent); }
+    .tabs [aria-current="true"]::after, .tabs [aria-expanded="true"]::after { top: 0; bottom: auto; left: 24%; right: 24%; border-radius: 0 0 3px 3px; background: var(--accent); }
+    .tabs .to-chat { margin-left: 0; }
+    .tabs .badge { position: absolute; top: 5px; left: calc(50% + 5px); }
+  }
+
+  .wrap { box-sizing: border-box; width: 100%; max-width: 1120px; margin: 0 auto; padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); padding-block: 22px calc(40px + var(--dock-h) + env(safe-area-inset-bottom, 0px)); display: grid; gap: 24px; min-width: 0; }
+  .view { display: grid; gap: 26px; align-content: start; min-width: 0; }
+  .part { display: grid; gap: 10px; align-content: start; min-width: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+  .cols { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 24px; }
+  @container main (max-width: 820px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+  .empty { padding: 16px; color: var(--muted); }
+
+  /* the lead: what waits on the viewer, as a sentence */
+  .lead { display: grid; gap: 12px; }
+  .lead-line { font-size: clamp(1.875rem, 1.3rem + 3vw, 2.75rem); line-height: 1.04; font-stretch: 76%; letter-spacing: -0.01em; max-width: 20ch; }
+  .lead-detail { font-size: 1.0625rem; font-weight: 600; font-stretch: var(--narrow); margin-top: -6px; color: var(--muted); }
+  .lead.blocking .lead-detail { color: var(--critical); }
+  .lead.clear .lead-line { color: var(--muted); }
+  .goal { max-width: 68ch; }
+  .now.stale { color: var(--muted); border-left-color: var(--line); }
+  .now-wrong { margin: 6px 0 0 15px; padding: 4px 10px; border-left: 3px solid var(--critical); font-size: var(--fs-s); color: var(--text); background: color-mix(in srgb, var(--critical) 8%, transparent); }
+  .glance { list-style: none; margin: 6px 0 0 15px; padding: 0; font-size: var(--fs-s); color: var(--muted); max-width: 90ch; }
+  .glance li { margin: 2px 0; }
+  .glance b { color: var(--text); font-weight: 600; margin-right: 4px; }
+  .latest { margin: 6px 0 0 15px; font-size: var(--fs-s); color: var(--text); }
+  .latest ul { margin: 2px 0 0; padding-left: 16px; }
+  .latest time { color: var(--muted); font-size: var(--fs-xs); margin-right: 4px; }
+  .now .said { color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
+  .now { max-width: 72ch; padding: 1px 0 1px 12px; border-left: 3px solid var(--run); }
+  .now b { font-stretch: var(--narrow); margin-right: 4px; }
+  .lead .meta { color: var(--muted); font-size: var(--fs-s); }
+
+  /* the fleet's totals: one ruled band of figures */
+  .totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 0 12px; margin: 0; padding: 0; border-block: 1px solid var(--line); }
+  .totals div { display: grid; padding: 10px 0; min-width: 0; }
+  .totals dt { order: 2; font-size: var(--fs-xs); color: var(--muted); font-stretch: var(--narrow); }
+  .totals dd { margin: 0; font-size: 1.5rem; font-weight: 600; font-stretch: 80%; font-variant-numeric: tabular-nums; line-height: 1.15; white-space: nowrap; }
+  .totals .alert dd { color: var(--critical); }
+  @media (max-width: 759.98px) { .totals { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+  /* decisions: what waits on the user, each row a link to its page */
+  .ask { display: grid; gap: 3px; padding: 13px 14px 13px 13px; border-left: 4px solid var(--line); color: inherit; text-decoration: none; }
+  .ask:first-child { border-top-left-radius: 9px; }
+  .ask:last-child { border-bottom-left-radius: 9px; }
+  .ask + .ask { border-top: 1px solid var(--line); }
+  .ask:hover { background: color-mix(in srgb, var(--card-2) 55%, transparent); }
+  .ask.open { border-left-color: var(--you); }
+  .ask.held { border-left-color: var(--run); }
+  .seg { display: inline-flex; margin: 0 0 10px; padding: 3px; gap: 2px; border: 1px solid var(--line); border-radius: 10px; background: var(--card-2); max-width: 100%; overflow-x: auto; }
+  .seg button { min-height: var(--tap); padding: 0 12px; border: 0; border-radius: 7px; background: none; color: var(--muted); font: inherit; font-size: var(--fs-s); font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .seg button[aria-pressed="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 14%, transparent); }
+  .seg .n { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 500; }
+  .ask.open.blocking { border-left-color: var(--critical); }
+  .ask.closed { color: var(--muted); }
+  .ask-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+  .ask-head b { font-weight: 700; font-stretch: var(--narrow); font-size: 1.0625rem; overflow-wrap: anywhere; margin-right: 2px; }
+  .ask.closed .ask-head b { font-weight: 600; }
+  .ask .detail { overflow-wrap: anywhere; }
+  .ask .meta { font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
+
+  /* the plan's usage: one meter per window */
+  .usage { display: grid; gap: 14px; padding: 14px; }
+  .usage-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; }
+  .usage-row b { font-stretch: var(--narrow); }
+  .usage-row .figure { font-weight: 600; font-stretch: var(--narrow); font-variant-numeric: tabular-nums; }
+  .usage-row.warning .figure { color: var(--warning); }
+  .usage-row.critical .figure { color: var(--critical); }
+  .meter { grid-column: 1 / -1; height: 8px; border-radius: 4px; background: var(--card-2); overflow: hidden; }
+  .meter span { display: block; height: 100%; min-width: 2px; border-radius: 4px; background: var(--accent); }
+  .usage-row.warning .meter span { background: var(--warning); }
+  .usage-row.critical .meter span { background: var(--critical); }
+  .usage-row .meta, .usage-note { grid-column: 1 / -1; font-size: var(--fs-s); color: var(--muted); }
+  .usage-account { font-weight: 600; font-stretch: var(--narrow); overflow-wrap: anywhere; }
+  .usage-other { font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
+
+  /* a manager's fleets: one strip per coordinator */
+  .strip { display: grid; gap: 3px; padding: 12px 14px 12px 13px; border-left: 4px solid var(--c, var(--line)); }
+  .strip:first-child { border-top-left-radius: 9px; }
+  .strip:last-child { border-bottom-left-radius: 9px; }
+  .strip + .strip { border-top: 1px solid var(--line); }
+  .strip-head { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; }
+  .strip-head .who { font-size: 1.0625rem; font-weight: 700; }
+  .strip .detail { overflow-wrap: anywhere; }
+  .strip .meta { font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
+  .strip .block-link { z-index: auto; }
+  .up { display: inline-flex; align-items: center; gap: 4px; min-height: var(--tap); padding: 0 8px; border-radius: 6px; color: var(--muted); font-weight: 600; font-stretch: var(--narrow); font-size: var(--fs-s); text-decoration: none; white-space: nowrap; }
+  .up:hover { color: var(--text); background: var(--card-2); }
+  .up svg.i { width: 16px; height: 16px; }
+
+  /* roadmap */
+  .milestone { padding: 12px 14px; display: grid; gap: 8px; }
+  .milestone + .milestone { border-top: 1px solid var(--line); }
+  .milestone-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .milestone-head h3 { font-size: 1rem; }
+  .steps { list-style: none; margin: 0 -8px; padding: 0; display: grid; gap: 2px; }
+  .step { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; min-height: var(--tap); box-sizing: border-box; padding: 5px 8px; border-radius: 6px; border: 0; background: none; text-align: left; }
+  button.step { cursor: pointer; }
+  button.step:hover { background: var(--card-2); }
+  .step.current { background: var(--run-soft); }
+  .step .dot { width: 10px; height: 10px; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--faint); justify-self: center; }
+  .step.done .dot { background: var(--good); border-color: var(--good); }
+  .step.current .dot { background: var(--run); border-color: var(--run); }
+  .step.blocked .dot { background: var(--critical); border-color: var(--critical); }
+  .step.done .title { color: var(--muted); }
+  .step .by { font-size: var(--fs-s); font-weight: 600; font-stretch: var(--narrow); color: var(--muted); overflow-wrap: anywhere; }
+
+  /* roadblocks */
+  .block { position: relative; padding: 12px 14px 12px 13px; display: grid; gap: 3px; border-left: 4px solid var(--line); }
+  .block:first-child { border-top-left-radius: 9px; }
+  .block:last-child { border-bottom-left-radius: 9px; }
+  .block + .block { border-top: 1px solid var(--line); }
+  .block.critical { border-left-color: var(--critical); }
+  .block.serious { border-left-color: var(--serious); }
+  .block.warning { border-left-color: var(--warning); }
+  .block.resolved { border-left-color: var(--good); color: var(--muted); }
+  .block-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+  .block-head b, .block-title { font-weight: 700; font-stretch: var(--narrow); font-size: 1.0625rem; }
+  .block-title { display: inline-flex; align-items: center; min-height: var(--tap); padding: 0; border: 0; background: none; text-align: left; cursor: pointer; }
+  /* The whole roadblock answers a tap on its title: the button's area stretches over the card. */
+  .block-title::after { content: ""; position: absolute; inset: 0; }
+  .block:has(.block-title):hover { background: color-mix(in srgb, var(--card-2) 55%, transparent); }
+  .block .detail { overflow-wrap: anywhere; }
+  .block .needs { font-size: var(--fs-s); }
+  .block-link { position: relative; z-index: 1; justify-self: start; display: inline-flex; align-items: center; min-height: var(--tap); font-weight: 600; }
+  .preview-workers, .preview-list { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; }
+  .preview-workers li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: var(--tap); }
+  .preview-workers label { display: inline-flex; align-items: center; gap: 8px; min-height: var(--tap); cursor: pointer; font-weight: 600; }
+  .preview-workers input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+  .preview-list code, .preview-workers code { font-family: var(--mono); font-size: 0.8125rem; overflow-wrap: anywhere; }
+  .preview-pre { margin: 4px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--card-2); font-family: var(--mono); font-size: 0.8125rem; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow: auto; }
+
+  /* filters */
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .filters label { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-s); color: var(--muted); }
+  .filters select, .filters input[type="search"] { background: var(--card); border: 1px solid var(--line); border-radius: 7px; padding: 5px 9px; font-size: var(--fs-s); min-height: var(--tap); box-sizing: border-box; }
+  .filters input[type="search"] { min-width: 14ch; }
+  .filters select { max-width: 24ch; }
+  .f-more { display: contents; }
+  .f-toggle { display: none; }
+  .filters .reset { background: none; border: none; color: var(--accent); cursor: pointer; padding: 4px 6px; font-size: var(--fs-s); font-weight: 600; min-height: var(--tap); }
+  .count { font-size: var(--fs-s); color: var(--muted); margin-left: auto; }
+  @media (max-width: 759.98px) {
+    .filters { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+    .filters input[type="search"] { width: 100%; font-size: 16px; }
+    .f-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); cursor: pointer; font-weight: 600; font-stretch: var(--narrow); }
+    .f-toggle[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+    .f-on { min-width: 20px; height: 20px; border-radius: 10px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; font-size: 0.75rem; font-weight: 700; padding: 0 5px; }
+    .f-more { display: none; grid-column: 1 / -1; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+    .filters.open .f-more { display: grid; }
+    .f-more label { display: grid; gap: 4px; min-width: 0; }
+    .f-more select { width: 100%; min-width: 0; font-size: 16px; min-height: 44px; }
+    .f-more .reset { grid-column: 1 / -1; justify-self: start; min-height: 44px; padding: 0 12px; margin-left: -12px; }
+    .count { grid-column: 1 / -1; margin-left: 0; }
+  }
+
+  /* workers: a table where there is room, a strip per worker where there is not */
+  .fleet-card { container: fleet / inline-size; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 0.9rem; }
+  th { text-align: left; font-size: var(--fs-xs); color: var(--muted); font-weight: 600; font-stretch: var(--narrow); padding: 10px 10px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr.row:last-child td, tr.detail:last-child td { border-bottom: none; }
+  td.right, th.right { text-align: right; white-space: nowrap; }
+  .agent-name { white-space: nowrap; }
+  .task { max-width: 34ch; }
+  .lane { font-family: var(--mono); font-size: 0.8125rem; color: var(--muted); overflow-wrap: anywhere; }
+  td.lane { min-width: 20ch; }
+  td.c-upd { white-space: nowrap; }
+  .lane code { display: block; font-family: inherit; }
+  .expand { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 2px 9px; cursor: pointer; font-size: var(--fs-xs); font-weight: 600; font-stretch: var(--narrow); color: var(--muted); white-space: nowrap; min-height: var(--tap); }
+  .expand[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+  tr.detail td { background: var(--card-2); padding: 12px 14px 14px 32px; }
+  .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .detail-grid h4, .sheet h3 { margin: 0 0 3px; font-size: var(--fs-s); color: var(--muted); }
+  .detail-grid p { white-space: pre-wrap; max-width: 62ch; overflow-wrap: anywhere; }
+  @media (max-width: 759.98px) { .detail-grid { grid-template-columns: 1fr; } }
+  td[data-label]::before { display: none; }
+  @container fleet (max-width: 719.98px) {
+    table, tbody { display: block; min-width: 0; font-size: inherit; }
+    thead { display: none; }
+    tr.row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+    tr.row:last-child { border-bottom: none; }
+    tr.row:has(+ tr.detail) { border-bottom: none; }
+    tr.row td { display: block; padding: 0; border: 0; min-width: 0; text-align: left; white-space: normal; }
+    .c-name { order: 1; flex: 1 1 auto; } .c-status { order: 2; }
+    .c-task { order: 3; flex: 1 0 100%; max-width: none; }
+    .c-skill { order: 4; } .c-model { order: 5; } .c-tokens { order: 6; } .c-time { order: 7; }
+    .c-skill, .c-model, .c-tokens, .c-time { font-size: var(--fs-s); font-stretch: var(--narrow); color: var(--muted); }
+    td[data-label]::before { display: inline; content: attr(data-label) " "; color: var(--faint); }
+    td.c-lane { order: 8; flex: 1 0 100%; min-width: 0; } .c-lane:has(.faint) { display: none !important; }
+    .c-upd { order: 9; flex: 1 1 auto; font-size: var(--fs-s); } .c-act { order: 10; }
+    .agent-name { white-space: normal; overflow-wrap: anywhere; font-size: 1.0625rem; font-weight: 700; }
+    tr.detail { display: block; border-bottom: 1px solid var(--line); }
+    tr.detail:last-child { border-bottom: none; }
+    tr.detail td { display: block; padding: 12px 14px 14px; border: 0; }
+    .detail-grid { grid-template-columns: 1fr; }
+  }
+
+  /* token chart: one bar per worker, drawn in HTML so its text stays at reading size on a phone */
+  .chart-card { padding: 14px; position: relative; container: chart / inline-size; }
+  .chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; align-items: baseline; margin-bottom: 10px; font-size: var(--fs-s); }
+  .bars { list-style: none; margin: 0; padding: 0; display: grid; }
+  .bar-row, .bar-axis { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 1fr) 11ch; gap: 0 10px; align-items: center; }
+  .bar-row { min-height: 32px; border-radius: 5px; }
+  .bar-row .who { justify-self: end; max-width: 100%; overflow: hidden; }
+  .bar-row .who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .track { position: relative; height: 100%; min-height: 28px; background-image: repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 25%); background-size: calc(100% - 1px) 100%; background-repeat: no-repeat; border-right: 1px solid var(--line); }
+  .bar { position: absolute; left: 0; top: 50%; height: 16px; transform: translateY(-50%); border-radius: 3px; background: var(--c); min-width: 2px; }
+  .bar-row:hover .bar, .bar-row:focus-within .bar { opacity: 0.8; }
+  .bar-val { font-stretch: var(--narrow); font-variant-numeric: tabular-nums; font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; }
+  .bar-axis .ticks { position: relative; height: 22px; }
+  .bar-axis .ticks span { position: absolute; top: 4px; transform: translateX(-50%); font-stretch: var(--narrow); font-variant-numeric: tabular-nums; font-size: var(--fs-xs); color: var(--muted); }
+  .bar-axis .ticks span:first-child { transform: none; }
+  .bar-axis .ticks span:last-child { transform: translateX(-100%); }
+  @container chart (max-width: 520px) {
+    .bar-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "who val" "track track"; padding-bottom: 6px; }
+    .bar-row .who { grid-area: who; justify-self: start; }
+    .bar-row .track { grid-area: track; min-height: 18px; }
+    .bar-row .bar { height: 12px; }
+    .bar-row .bar-val { grid-area: val; }
+    .bar-axis { grid-template-columns: minmax(0, 1fr); }
+    .bar-axis > :not(.ticks) { display: none; }
+  }
+  .tip { position: absolute; pointer-events: none; background: var(--text); color: var(--bg); padding: 6px 9px; border-radius: 6px; font-size: var(--fs-s); white-space: nowrap; transform: translate(-50%, calc(-100% - 8px)); z-index: 2; }
+  .tip .num { color: inherit; }
+
+  /* the log: a time, what happened, who, and the words */
+  .log { list-style: none; margin: 0; padding: 0; }
+  .log li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+  .log li:last-child { border-bottom: none; }
+  .log time { font-stretch: var(--narrow); font-variant-numeric: tabular-nums; font-size: var(--fs-xs); color: var(--muted); padding-top: 3px; white-space: nowrap; }
+  .log .log-meta { display: inline; }
+  .log .by { font-weight: 600; font-stretch: var(--narrow); margin-right: 6px; color: var(--muted); }
+  .log .who { min-height: 0; vertical-align: baseline; margin-right: 2px; color: var(--muted); }
+  .kind { display: inline-block; font-size: var(--fs-xs); font-weight: 700; font-stretch: var(--narrow); color: var(--muted); margin-right: 8px; }
+  .kind::first-letter { text-transform: uppercase; }
+  .kind.blocked { color: var(--critical); }
+  .kind.asked { color: var(--you); }
+  .kind.resolved, .kind.integrated { color: var(--good); }
+  .kind.decision, .kind.message { color: var(--accent); }
+  @media (max-width: 759.98px) {
+    .log li { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 10px 14px; }
+    .log time { padding: 0; }
+    .log .log-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0 4px; min-height: 30px; }
+  }
+
+  .foot { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; color: var(--muted); font-size: var(--fs-s); }
+  .error { padding: 16px; margin: 16px; border: 1px solid var(--critical); border-radius: 10px; color: var(--critical); }
+  @media (prefers-reduced-motion: no-preference) { .step, .expand, .who, .ask, .tabs a, .tabs button { transition: background-color 150ms ease, color 150ms ease; } }
+
+  /* notifications */
+  .bell { position: relative; width: 44px; height: 44px; margin-right: -8px; border-radius: 8px; border: 0; background: none; color: var(--text); cursor: pointer; display: grid; place-items: center; }
+  .bell:hover, .bell[aria-expanded="true"] { background: var(--card-2); }
+  .bell svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .bell .badge { position: absolute; top: 2px; right: 0; background: var(--critical); }
+  .bell.muted::after { content: ""; position: absolute; width: 26px; height: 2px; background: var(--muted); transform: rotate(-45deg); }
+  .panel { position: absolute; top: calc(env(safe-area-inset-top, 0px) + var(--top-h) - 2px); right: max(12px, calc(var(--gutter) - 8px)); z-index: 40; width: min(400px, calc(100% - 24px)); max-height: min(70dvh, 600px); display: grid; grid-template-rows: auto auto 1fr; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .panel-head h2 { font-size: 1rem; }
+  .panel-head .actions { display: flex; gap: 4px; }
+  .panel-head button { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; font-size: var(--fs-xs); font-weight: 600; font-stretch: var(--narrow); color: var(--muted); cursor: pointer; min-height: var(--tap); }
+  /* The settings sit behind the gear; folded, one muted line says them and opens them. */
+  .panel-head button.gear { display: grid; place-items: center; width: var(--tap); padding: 0; }
+  .panel-head .gear svg.i { width: 18px; height: 18px; }
+  .panel-head .gear[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+  .panel-summary { display: block; width: 100%; padding: 6px 12px; border: 0; border-bottom: 1px solid var(--line); background: var(--card-2); color: var(--muted); font-size: var(--fs-xs); font-stretch: var(--narrow); text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .panel-summary:hover { color: var(--text); }
+  .panel-prefs { display: grid; gap: 4px; padding: 6px 12px 8px; border-bottom: 1px solid var(--line); background: var(--card-2); font-size: var(--fs-xs); color: var(--muted); }
+  .pref { display: grid; grid-template-columns: 6.5em minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+  .pref-name { font-weight: 600; font-stretch: var(--narrow); }
+  .pref .seg { margin: 0; justify-self: start; }
+  .seg.small { padding: 2px; border-radius: 8px; }
+  .seg.small button { min-height: calc(var(--tap) - 6px); padding: 0 9px; border-radius: 6px; font-size: var(--fs-xs); }
+  .seg button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .pref .icon-btn.test { width: var(--tap); height: var(--tap); }
+  .pref .icon-btn.test svg.i { width: 18px; height: 18px; }
+  .panel-prefs .blocked { color: var(--warning); }
+  .notifs { list-style: none; margin: 0; padding: 0; overflow-y: auto; overscroll-behavior: contain; }
+  .notifs li { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: var(--fs-s); align-items: start; overflow-wrap: anywhere; }
+  .notifs li:last-child { border-bottom: none; }
+  .notifs .dot { width: 6px; height: 6px; border-radius: 50%; background: transparent; margin-top: 8px; }
+  .notifs li.unread .dot { background: var(--accent); }
+  .notifs li.important .dot { background: var(--critical); }
+  .notifs li.important.read .dot { background: color-mix(in srgb, var(--critical) 40%, transparent); }
+  .notifs .meta, .toast .meta { font-size: var(--fs-xs); color: var(--muted); font-stretch: var(--narrow); }
+  .notifs time { font-size: var(--fs-xs); color: var(--muted); font-stretch: var(--narrow); font-variant-numeric: tabular-nums; white-space: nowrap; margin-top: 2px; }
+  .notifs .empty { display: block; padding: 18px 12px; }
+  @media (max-width: 759.98px) {
+    .panel { right: 8px; left: 8px; width: auto; max-height: calc(100dvh - var(--top-h) - var(--dock-h) - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px) - 16px); }
+    .pref { grid-template-columns: 5.5em minmax(0, 1fr) auto; gap: 6px; }
+    .panel-head button { padding: 0 12px; }
+  }
+  .toasts { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); z-index: 32; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); }
+  .toast { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px 12px 10px 11px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--accent); box-shadow: var(--shadow); font-size: var(--fs-s); overflow-wrap: anywhere; }
+  .toast.opens { cursor: pointer; }
+  .toast.important { border-left-color: var(--critical); }
+  .toast.important .kind { color: var(--critical); }
+  .toast .text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+  .toast .more { margin-top: 2px; font-size: var(--fs-xs); font-weight: 700; font-stretch: var(--narrow); color: var(--muted); }
+  .toast button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.2rem; line-height: 1; padding: 0 2px; align-self: start; min-width: var(--tap); min-height: var(--tap); margin: -8px -8px -8px 0; }
+  /* On a phone the toasts come in under the masthead, clear of the thumb and of what it is about to press. */
+  @media (max-width: 759.98px) {
+    .toasts { top: calc(env(safe-area-inset-top, 0px) + var(--top-h) + 8px); bottom: auto; left: 8px; right: 8px; width: auto; }
+    .toast .text { -webkit-line-clamp: 2; line-clamp: 2; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .toast { animation: toast-in 180ms ease-out; }
+    @keyframes toast-in { from { transform: translateY(-6px); opacity: 0; } to { transform: none; opacity: 1; } }
+  }
+
+  /* the worker sheet: a worker's detail, opened from its name anywhere on the page */
+  dialog.sheet { border: 1px solid var(--line); border-radius: 14px; padding: 0; background: var(--card); color: var(--text); width: min(600px, calc(100vw - 32px)); max-height: min(85dvh, 760px); box-shadow: var(--shadow); overflow: hidden; }
+  dialog.sheet::backdrop { background: rgb(10 16 13 / 0.5); }
+  .sheet-in { display: grid; gap: 14px; padding: 16px 18px 18px; max-height: inherit; overflow-y: auto; overscroll-behavior: contain; box-sizing: border-box; }
+  .sheet-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 10px; align-items: center; }
+  .sheet-head .swatch { width: 14px; height: 14px; border-radius: 3px; }
+  .sheet-head h2 { font-size: 1.375rem; overflow-wrap: anywhere; }
+  .icon-btn { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 8px; border: 0; background: none; color: var(--muted); cursor: pointer; flex: none; }
+  .icon-btn:hover { background: var(--card-2); color: var(--text); }
+  .refused dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 10px 0 0; }
+  .refused dt { font-size: var(--fs-xs); color: var(--muted); font-stretch: var(--narrow); }
+  .refused dd { margin: 0; overflow-wrap: anywhere; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px 14px; margin: 0; padding: 10px 0; border-block: 1px solid var(--line); }
+  .facts div { min-width: 0; }
+  .facts dt { font-size: var(--fs-xs); color: var(--muted); font-stretch: var(--narrow); }
+  .facts dd { margin: 0; font-weight: 600; font-stretch: var(--narrow); overflow-wrap: anywhere; }
+  .sheet p { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 65ch; }
+  .sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-weight: 600; font-stretch: var(--narrow); }
+  .btn:hover { border-color: var(--faint); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
+  .btn.danger { border-color: var(--critical); color: var(--critical); }
+  .btn.danger:hover { background: var(--critical-soft); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  @media (max-width: 759.98px) {
+    dialog.sheet { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 16px 16px 0 0; border-bottom: 0; max-height: 88dvh; }
+    .sheet-in { padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
+    .sheet-actions .btn { flex: 1; justify-content: center; }
+  }
+  @media (prefers-reduced-motion: no-preference) and (max-width: 759.98px) {
+    dialog.sheet[open] { animation: rise 200ms ease-out; }
+  }
+  @keyframes rise { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+  /* the decision's page: what the user needs to decide, and the control to answer */
+  .dv { max-width: 820px; gap: 20px; }
+  .dv:focus { outline: none; }
+  .dv-back { justify-self: start; display: inline-flex; align-items: center; gap: 4px; min-height: var(--tap); margin: -6px 0 -10px -6px; padding: 0 8px 0 2px; border-radius: 6px; color: var(--muted); text-decoration: none; font-weight: 600; font-stretch: var(--narrow); }
+  .dv-back:hover { color: var(--text); background: var(--card-2); }
+  .dv-back svg.i { width: 20px; height: 20px; }
+  .dv-info, .dv-answer { display: grid; gap: 18px; min-width: 0; }
+  .dv-head { display: grid; gap: 8px; }
+  .dv-head h1 { font-size: 1rem; color: var(--muted); }
+  .dv-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .dv-meta { color: var(--muted); font-size: var(--fs-s); overflow-wrap: anywhere; }
+  .dv-meta .who { min-height: 0; vertical-align: baseline; }
+  .dv-question { font-size: clamp(1.5rem, 1.2rem + 1.6vw, 2rem); font-weight: 700; font-stretch: 80%; line-height: 1.12; letter-spacing: -0.005em; max-width: 26ch; text-wrap: balance; overflow-wrap: anywhere; }
+  .dv-block { display: grid; gap: 3px; min-width: 0; }
+  .dv-block h3, .note h3, .dv-form legend, .dv-body h2 { font-size: var(--fs-s); color: var(--muted); }
+  .dv-block p, .note p { max-width: 68ch; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .note { display: grid; gap: 3px; padding: 12px 14px 12px 13px; border-radius: 10px; background: var(--card-2); border-left: 4px solid var(--faint); min-width: 0; }
+  .note.changed { border-left-color: var(--you); background: var(--you-soft); }
+  .note.decided { border-left-color: var(--good); }
+  .note.pending { border-left-color: var(--accent); background: var(--accent-soft); }
+  .note.held, .note.recording { border-left-color: var(--accent); }
+  .note .by { font-weight: 600; font-stretch: var(--narrow); color: var(--muted); }
+  .options { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .option { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; align-items: start; padding: 13px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  label.option { cursor: pointer; }
+  label.option:hover { border-color: var(--faint); }
+  .option:has(input:checked), .option.chosen { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+  .option input { accent-color: var(--accent); width: 20px; height: 20px; margin: 2px 0 0; }
+  .option .key { font-weight: 700; font-stretch: var(--narrow); color: var(--muted); min-width: 20px; }
+  .option .label { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-weight: 700; font-stretch: var(--narrow); font-size: 1.0625rem; overflow-wrap: anywhere; }
+  .option .consequence { grid-column: 2; color: var(--muted); overflow-wrap: anywhere; }
+  .dv-form { display: grid; gap: 14px; min-width: 0; }
+  .dv-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 8px; }
+  .dv-form legend { padding: 0; margin-bottom: 8px; font-weight: 700; font-stretch: var(--narrow); }
+  .field { display: grid; gap: 4px; font-size: var(--fs-s); font-weight: 600; font-stretch: var(--narrow); color: var(--muted); }
+  .field textarea, .field input { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font-size: 16px; font-weight: 400; font-stretch: 100%; line-height: 1.45; }
+  .field textarea { field-sizing: content; min-block-size: calc(2lh + 22px); max-block-size: 40dvh; resize: vertical; }
+  .field input { font-family: var(--mono); font-size: 15px; }
+  .field textarea:focus-visible, .field input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
+  .manual { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--card-2); font-family: var(--mono); font-size: 0.8125rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .dv code { font-family: var(--mono); font-size: 0.88em; padding: 1px 5px; border-radius: 4px; background: var(--card-2); }
+
+  /* Free text in the page's format (src/text.ts): paragraphs, inline code, and code blocks. A block is
+     its language, a wrap switch and a copy button over the code, which scrolls sideways inside the block
+     (never the page) unless wrapped. The colours are the page's own tokens, so both themes follow. */
+  .rich { display: grid; gap: 0.6em; min-width: 0; }
+  .rich > p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .rich code.ic { font-family: var(--mono); font-size: 0.86em; padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--text) 8%, transparent); overflow-wrap: anywhere; }
+  .code { margin: 0; min-width: 0; max-width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--card-2); overflow: hidden; font-size: 1rem; font-weight: 400; font-stretch: 100%; line-height: 1.5; letter-spacing: 0; text-wrap: initial; }
+  .code-head { display: flex; align-items: center; gap: 2px; padding-left: 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--text) 4%, var(--card-2)); }
+  .code-lang { flex: 1; min-width: 0; font-family: var(--mono); font-size: 0.75rem; color: var(--muted); }
+  .code-head button { min-width: var(--tap); min-height: var(--tap); padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--muted); font-family: var(--sans); font-size: var(--fs-xs); font-weight: 600; font-stretch: var(--narrow); cursor: pointer; }
+  .code-head button:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+  .code-head .code-copy { color: var(--accent); }
+  .code-head .code-wrap[aria-pressed="true"] { color: var(--text); background: color-mix(in srgb, var(--text) 10%, transparent); }
+  .code-pre { margin: 0; padding: 10px 12px; overflow-x: auto; overscroll-behavior-x: contain; font-family: var(--mono); font-size: 0.8125rem; line-height: 1.55; white-space: pre; tab-size: 4; color: var(--text); }
+  .code-pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .code-pre:focus-visible { outline-offset: -2px; }
+  .code-pre code { font: inherit; padding: 0; background: none; }
+  .t-comment { color: var(--muted); font-style: italic; }
+  .t-command, .t-heading { color: var(--text); font-weight: 600; }
+  .t-keyword, .t-selector { color: var(--s7); }
+  .t-attr, .t-meta { color: var(--you); }
+  .t-variable, .t-function { color: var(--run); }
+  .t-property, .t-tag { color: var(--critical); }
+  .t-string, .t-inserted { color: var(--good); }
+  .t-number, .t-literal { color: var(--serious); }
+  .t-type { color: var(--accent); }
+  .t-operator { color: var(--muted); }
+  .t-deleted { color: var(--critical); }
+  .t-link { color: var(--accent); text-decoration: underline; }
+  .msg .code { margin: 2px 0; background: color-mix(in srgb, var(--card) 70%, transparent); }
+  .dv-body { display: grid; gap: 8px; }
+  .dv-body iframe { display: block; width: 100%; height: 160px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  .dv-body iframe.fixed { height: 70dvh; }
+  .dv-queue { display: grid; gap: 10px; }
+  .dv-queue-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .dv-queue .btn[aria-disabled] { color: var(--faint); cursor: default; }
+  .dv-queue-row .switch { margin-left: auto; }
+  .dv-fleet { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: -10px; }
+  .dv-embed { display: block; width: 100%; height: 70dvh; border: 0; background: transparent; }
+  html.embed .dv { max-width: none; padding: 2px 2px 8px; }
+  /* On a phone the way to answer stays under the thumb while the page scrolls above it. */
+  @media (max-width: 759.98px) {
+    .dv .sheet-actions .btn { flex: 1; justify-content: center; }
+    .dv-form > .sheet-actions:first-of-type { position: sticky; bottom: calc(var(--dock-h) + env(safe-area-inset-bottom, 0px)); z-index: 2; margin: 0 -16px; padding: 10px 16px; background: color-mix(in srgb, var(--bg) 94%, transparent); border-top: 1px solid var(--line); }
+  }
+
+  /* chat: docked beside the page on a wide screen, a full-height view over it elsewhere */
+  .chat { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--card); color: var(--text); }
+  .chat-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 16px; border-bottom: 1px solid var(--line); flex: none; min-height: var(--top-h); box-sizing: border-box; }
+  .chat-head h2 { font-size: 1.1875rem; }
+  .you { font-size: var(--fs-xs); color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+  .chat-head h2:focus { outline: none; }
+  .chat-head h2:focus-visible { outline: 2px solid var(--accent); }
+  .conn { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--muted); margin-right: auto; }
+  .conn::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .conn[data-conn="live"]::before { background: var(--good); }
+  .conn[data-conn="reconnecting"]::before, .conn[data-conn="connecting"]::before { background: var(--warning); }
+  .chat-note { margin: 14px 16px 0; padding: 12px 14px; border-radius: 10px; background: var(--card-2); color: var(--muted); font-size: var(--fs-s); }
+  /* The switch for decision activity, on a row of its own under the chat's head (it lines up with the tabs). */
+  .chat-tools { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 44px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--line); flex: none; box-sizing: border-box; }
+  .hidden-note { margin-right: auto; min-width: 0; font-size: var(--fs-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .switch { display: inline-flex; align-items: center; gap: 8px; min-height: var(--tap); padding: 0 8px; border: 0; border-radius: 8px; background: none; color: var(--muted); font: inherit; font-size: var(--fs-s); font-weight: 600; font-stretch: var(--narrow); white-space: nowrap; cursor: pointer; }
+  .switch:hover { color: var(--text); background: var(--card-2); }
+  .switch-track { position: relative; width: 30px; height: 18px; border-radius: 9px; background: var(--line); flex: none; }
+  .switch-track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--card); box-shadow: 0 1px 2px rgb(0 0 0 / 0.25); }
+  .switch[aria-checked="true"] { color: var(--text); }
+  .switch[aria-checked="true"] .switch-track { background: var(--accent); }
+  .switch[aria-checked="true"] .switch-track::after { left: 14px; background: var(--on-accent); }
+  /* The conversation, a messenger's: the viewer on the right in the accent's tint, the fleet on the left
+     under each sender's name and colour; a run of one sender is one name and time, its bubbles stacked. */
+  .chat-log { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; list-style: none; margin: 0; padding: 6px 12px 10px; display: flex; flex-direction: column; gap: 3px; }
+  .day { align-self: center; margin: 14px 0 4px; padding: 2px 12px; border-radius: 999px; background: var(--card-2); color: var(--muted); font-size: var(--fs-xs); font-weight: 600; font-stretch: var(--narrow); }
+  .turn { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+  .turn.from-user { align-items: flex-end; }
+  .turn.head { margin-top: 10px; }
+  .turn-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-height: 28px; padding: 0 6px; font-size: var(--fs-xs); }
+  .turn-head .who { margin-block: calc((28px - var(--tap)) / 2); }
+  .turn-head .name { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-stretch: var(--narrow); }
+  .from-fleet .turn-head .name::before { content: ""; width: 10px; height: 10px; border-radius: 2px; background: var(--c, var(--faint)); }
+  .turn-head .who, .turn-head .name { color: color-mix(in srgb, var(--c, var(--text)) 55%, var(--text)); font-size: var(--fs-s); }
+  .turn-head time { color: var(--muted); font-stretch: var(--narrow); font-variant-numeric: tabular-nums; }
+  .turn-row { display: flex; align-items: center; gap: 2px; width: 100%; min-width: 0; }
+  .from-user .turn-row { justify-content: flex-end; }
+  .msg { position: relative; max-width: 80%; min-width: 0; box-sizing: border-box; padding: 7px 12px 8px; border-radius: 18px; background: var(--card-2); overflow-wrap: anywhere; }
+  .from-user .msg { background: color-mix(in srgb, var(--accent) 24%, var(--card)); }
+  .from-fleet:not(.head) .msg { border-top-left-radius: 6px; }
+  .from-fleet:not(.tail) .msg { border-bottom-left-radius: 6px; }
+  .from-user:not(.head) .msg { border-top-right-radius: 6px; }
+  .from-user:not(.tail) .msg { border-bottom-right-radius: 6px; }
+  .msg.can-reply { cursor: pointer; }
+  .msg.replying, .found { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .msg-text { margin: 0; white-space: pre-wrap; }
+  .msg-text.rich { gap: 0.45em; }
+  /* What a reply answers, on one line in the answered sender's colour; a tap shows it. */
+  .re-line { display: grid; justify-items: start; width: 100%; min-width: 0; min-height: var(--tap); box-sizing: border-box; margin: 1px 0 6px; padding: 3px 10px 4px; border: 0; border-left: 3px solid var(--c, var(--faint)); border-radius: 6px; background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--muted); font: inherit; font-size: var(--fs-xs); line-height: 1.35; text-align: left; cursor: pointer; }
+  .re-line b { font-weight: 700; font-stretch: var(--narrow); color: color-mix(in srgb, var(--c, var(--text)) 55%, var(--text)); }
+  .re-line span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .re-line:hover { background: color-mix(in srgb, var(--text) 11%, transparent); }
+  .msg-quote { margin: 2px 0 6px; padding: 4px 10px; border-left: 3px solid color-mix(in srgb, var(--text) 25%, transparent); color: var(--muted); font-size: var(--fs-s); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9.5em; overflow: auto; }
+  .msg-quote .from { display: block; font-size: var(--fs-xs); font-weight: 600; }
+  .msg-quote a.from { display: flex; align-items: center; min-height: var(--tap); color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 2px; }
+  .msg-quote a.from:hover { color: var(--text); text-decoration-color: currentColor; }
+  .reply-btn { flex: none; display: grid; place-items: center; width: var(--tap); height: var(--tap); padding: 0; border: 0; border-radius: 50%; background: none; color: var(--faint); cursor: pointer; }
+  .reply-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .reply-btn:hover, .reply-btn:focus-visible { color: var(--accent); background: var(--card-2); }
+  /* With a mouse the button shows on hover; on a touch screen, once per run (a tap on any bubble replies to it). */
+  @media (hover: hover) and (pointer: fine) {
+    .reply-btn { opacity: 0; }
+    .turn:hover .reply-btn, .reply-btn:focus-visible, .msg.replying + .reply-btn { opacity: 1; }
+  }
+  @media (hover: none), (pointer: coarse) {
+    .turn:not(.tail) .reply-btn { visibility: hidden; }
+  }
+  .wait { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 2px 6px; margin: 2px 6px 0; font-size: var(--fs-xs); color: var(--muted); }
+  .wait.done { color: var(--faint); }
+  .wait.unread { color: var(--you); font-weight: 600; }
+  .wait .who { font-size: var(--fs-xs); padding: 0 8px; margin: 0; border-radius: 6px; background: var(--card); border: 1px solid var(--line); }
+  .wait .chip { display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); padding: 0 8px; border-radius: 6px; background: var(--card); border: 1px solid var(--line); font-weight: 600; font-stretch: var(--narrow); }
+  /* Decision activity, when shown: one line each, leading to the decision. */
+  .dmark { margin: 6px 0 0; min-width: 0; }
+  .dmark a { display: flex; align-items: center; gap: 8px; min-height: var(--tap); padding: 0 10px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: var(--fs-xs); text-decoration: none; }
+  .dmark a:hover { background: var(--card-2); }
+  .dmark svg { width: 12px; height: 12px; flex: none; fill: var(--you); }
+  .dmark-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dmark-who { font-weight: 600; color: var(--text); }
+  .dmark .ref { color: var(--you); }
+  .dmark time { flex: none; font-variant-numeric: tabular-nums; }
+  .side-link { align-self: center; width: min(100%, 30rem); margin: 10px 0 0; }
+  .side-link button { display: grid; gap: 1px; width: 100%; min-height: var(--tap); padding: 7px 12px 8px; border: 1px dashed var(--line); border-radius: 12px; background: var(--bg); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+  .side-link button:hover { border-color: var(--faint); }
+  .side-kicker { color: var(--muted); font-size: var(--fs-xs); font-weight: 600; font-stretch: var(--narrow); }
+  .side-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* A decision's thread on its page: the same bubbles, on a card of their own. */
+  .thread-list { list-style: none; margin: 4px 0 0; padding: 4px 10px 10px; display: flex; flex-direction: column; gap: 3px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+  .chat-empty { margin: auto 0; text-align: center; color: var(--muted); font-size: var(--fs-s); padding: 24px 8px; }
+  .mention { display: inline; padding: 0 6px; border-radius: 4px; font-size: 0.94em; font-weight: 600; font-stretch: var(--narrow); white-space: nowrap; background: color-mix(in srgb, var(--c, var(--accent)) 18%, var(--card)); color: var(--text); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+  .deaf { margin: 0 0 8px; padding: 10px 12px; border-radius: 10px; background: var(--you-soft); color: var(--text); font-size: var(--fs-s); }
+  .composer { position: relative; flex: none; padding: 8px 12px max(12px, env(safe-area-inset-bottom, 0px)); background: var(--card); }
+  .chat-error { margin: 0 4px 8px; padding: 9px 12px; border-radius: 8px; background: var(--critical-soft); color: var(--critical); font-size: var(--fs-s); }
+  .dv .chat-error { margin: 0; }
+  /* The composer: one rounded surface holding the reply chip, the field (one line to eight, then it
+     scrolls) and the round send button at its bottom right. The focus ring is the surface's. */
+  .box { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "chip chip" "text send"; align-items: end; row-gap: 6px; column-gap: 6px; padding: 6px 6px 6px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--bg); cursor: text; }
+  .box:has(.reply[hidden]) { row-gap: 0; }
+  .box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
+  .box textarea { grid-area: text; display: block; width: 100%; min-width: 0; margin: 0; padding: 7px 0; border: 0; background: none; font-size: 16px; line-height: 1.45; field-sizing: content; min-block-size: calc(1lh + 14px); max-block-size: calc(8lh + 14px); overflow-y: auto; resize: none; box-sizing: border-box; outline: none; }
+  .box textarea::placeholder { color: var(--faint); opacity: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .box textarea:focus-visible { outline: none; }
+  .box textarea:disabled { cursor: not-allowed; }
+  .send { grid-area: send; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: var(--on-accent); cursor: pointer; }
+  .send svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .send:disabled { background: var(--line); color: var(--muted); cursor: default; }
+  @media (max-width: 759.98px), (pointer: coarse) { .send { width: 44px; height: 44px; } .box { border-radius: 26px; padding-left: 16px; } }
+  .reply { grid-area: chip; display: flex; align-items: center; gap: 4px; justify-self: start; max-width: 100%; min-width: 0; box-sizing: border-box; padding: 0 0 0 10px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: var(--fs-xs); margin-top: 2px; }
+  .reply-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .reply .icon-btn { width: var(--tap); height: var(--tap); color: inherit; font-size: 1rem; }
+  .deaf-line { color: var(--you); font-weight: 600; }
+  td.silent { color: var(--critical); font-weight: 600; }
+  .dchip { display: inline-block; margin: 0 2px; padding: 0 6px; border-radius: 5px; font-family: var(--mono, "JetBrains Mono", monospace); font-size: 0.78em; font-weight: 700; text-decoration: none; background: var(--card-2); color: var(--muted); vertical-align: 1px; }
+  .dchip.open { background: var(--you-soft); color: var(--you); }
+  .dchip.held { background: var(--run-soft); color: var(--run); }
+  .dv-origin a { color: inherit; }
+  .steps li.with-chips { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .steps li.with-chips .step-chips { grid-column: 2; grid-row: 1; padding-right: 4px; }
+  .steps li.with-chips > .step { grid-column: 1; grid-row: 1; }
+  .stuck { margin: 0 0 16px; padding: 12px 14px; border-radius: 10px; border-left: 4px solid var(--critical); background: color-mix(in srgb, var(--critical) 9%, var(--card)); }
+  .stuck h3 { margin: 0 0 4px; font-size: var(--fs-s); color: var(--critical); }
+  .stuck ul { margin: 0; padding-left: 18px; }
+  .stuck li { margin: 2px 0; }
+  .switch select { max-width: 42vw; min-height: var(--tap); padding: 0 28px 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font: inherit; font-size: var(--fs-s); font-weight: 600; text-overflow: ellipsis; }
+  dialog.finder { width: min(680px, calc(100vw - 32px)); margin-top: 10vh; }
+  .finder-in { display: flex; flex-direction: column; max-height: min(75dvh, 640px); }
+  #find-q { flex: none; margin: 0; padding: 14px 16px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--text); font: inherit; font-size: 1.0625rem; outline: none; }
+  .find-list { list-style: none; margin: 0; padding: 4px 0 8px; overflow: auto; }
+  .find-group { padding: 10px 16px 4px; font-size: var(--fs-xs); font-weight: 700; color: var(--muted); }
+  .find-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 8px 16px; cursor: pointer; border-left: 3px solid transparent; }
+  .find-row[aria-selected="true"] { background: var(--accent-soft); border-left-color: var(--accent); }
+  .find-row .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .find-row .s { grid-column: 1; color: var(--muted); font-size: var(--fs-s); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .find-row .h { grid-row: 1; grid-column: 2; color: var(--muted); font-size: var(--fs-xs); }
+  .find-empty { padding: 16px; color: var(--muted); }
+  .find-foot { flex: none; margin: 0; padding: 8px 16px; border-top: 1px solid var(--line); font-size: var(--fs-xs); }
+  .find-foot kbd { font: inherit; font-size: 0.9em; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; margin: 0 2px; }
+  @media (max-width: 759.98px) { dialog.finder { margin: 0; width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; } .finder-in { max-height: 100dvh; height: 100%; } .find-foot { display: none; } }
+  .ref { font-family: var(--mono, "JetBrains Mono", monospace); font-size: 0.82em; font-weight: 700; color: var(--muted); letter-spacing: 0; }
+  .seltool { position: fixed; z-index: 60; display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--text); box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 30%, transparent); }
+  .seltool button { min-height: var(--tap); padding: 0 12px; border: 0; border-radius: 7px; background: none; color: var(--bg); font: inherit; font-weight: 600; font-size: var(--fs-s); cursor: pointer; }
+  .seltool button:hover, .seltool button:focus-visible { background: color-mix(in srgb, var(--bg) 18%, transparent); }
+  .quote-chip .reply-text { white-space: pre-wrap; max-height: 4.5em; overflow: auto; }
+  .side-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--card-2); flex: none; }
+  .side-title { font-weight: 700; }
+  .link-title { font-weight: 700; color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+  .link-title:hover { text-decoration: underline; }
+  .link-row.down .link-title { color: var(--muted); }
+  .part-note { margin: -4px 0 8px; font-size: var(--fs-s); }
+  .gq { margin: 0 0 14px calc(var(--depth, 0) * 18px); padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--you); border-radius: 10px; background: var(--card); min-width: 0; }
+  .gq legend, .gq-title { font-weight: 700; padding: 0 4px; margin: 0; }
+  .gq-id { font-variant-numeric: tabular-nums; color: var(--you); }
+  .gq-of { font-weight: 500; color: var(--muted); font-size: var(--fs-xs); }
+  .gq-body { white-space: pre-wrap; margin: 6px 0 10px; }
+  .gq textarea { width: 100%; box-sizing: border-box; margin: 4px 0 6px; font: inherit; font-size: 16px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
+  .gq.sent { border-left-color: var(--run); }
+  .gq-sent { color: var(--muted); font-size: var(--fs-s); }
+  .gq-rec { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px; background: var(--card-2); }
+  .gq-rec p { margin: 0; white-space: pre-wrap; }
+  .gq-why { margin-top: 4px !important; font-size: var(--fs-s); }
+  .gq-done ul { margin: 8px 0 0; padding-left: 18px; }
+  .gq-done li.dropped { color: var(--muted); }
+  .btn.small { min-height: var(--tap); padding: 0 10px; font-size: var(--fs-xs); }
+  .readonly { margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--card-2); color: var(--muted); font-size: var(--fs-s); overflow-wrap: anywhere; }
+  .chat:has(#mentions:not([hidden])) .chat-empty { visibility: hidden; }
+  .to { margin: 6px 6px 0; font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; }
+  .mentions { position: absolute; left: 8px; right: 8px; bottom: calc(100% - 4px); z-index: 3; list-style: none; margin: 0; padding: 4px; max-height: min(320px, calc(var(--vv-h, 100dvh) * 0.45)); overflow-y: auto; overscroll-behavior: contain; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+  .mentions li { display: grid; grid-template-columns: 10px minmax(0, 1fr); grid-template-areas: "sw main" ". task"; gap: 0 10px; align-items: center; min-height: 48px; box-sizing: border-box; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+  .mentions li[aria-selected="true"] { background: var(--accent-soft); }
+  .mentions .swatch { grid-area: sw; }
+  .mentions .m-main { grid-area: main; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-width: 0; }
+  .mentions .m-name { font-weight: 700; font-stretch: var(--narrow); }
+  .mentions .m-task { grid-area: task; font-size: var(--fs-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The skills a "/" lists: the name, its argument hint, and what it does. */
+  .mentions .slash { grid-area: sw; font-family: var(--mono); font-weight: 700; color: var(--accent); justify-self: center; }
+  .mentions.skills .m-name { font-family: var(--mono); font-size: 0.9em; font-stretch: 100%; }
+  .mentions.skills .m-task { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+  /* A field on the page that writes to the session opens its list of skills under itself. */
+  .caret-wrap { position: relative; }
+  .mentions.under { top: calc(100% + 2px); bottom: auto; left: 0; right: 0; z-index: 30; font-weight: 400; font-stretch: 100%; color: var(--text); scroll-margin-bottom: 12px; }
+  .chat:not(.available) .reply-btn { display: none; }
+
+  @media (min-width: 920px) {
+    .shell { display: grid; grid-template-columns: minmax(0, 1fr) var(--chat-w); }
+    .shell.chat-collapsed { grid-template-columns: minmax(0, 1fr); }
+    .chat { position: sticky; top: 0; height: 100dvh; border-left: 1px solid var(--line); }
+    .shell.chat-collapsed .chat { display: none; }
+    :root:has(.shell:not(.chat-collapsed)) .toasts { right: calc(var(--chat-w) + 16px); }
+  }
+  /* Below the docked width the chat is a sheet over the page, and looks it: a scrim dims the page behind
+     it (inert while the sheet is open), and a click on it closes the sheet. */
+  .chat-scrim { display: none; }
+  @media (max-width: 919.98px) {
+    .chat { position: fixed; z-index: 45; top: var(--vv-top, 0px); right: 0; height: var(--vv-h, 100dvh); width: min(440px, 100%); box-shadow: var(--shadow); border-left: 1px solid var(--line); }
+    .chat:not(.open) { display: none; }
+    .chat-head { padding-top: max(6px, env(safe-area-inset-top, 0px)); }
+    .chat-scrim { display: block; position: fixed; inset: 0; z-index: 44; background: rgb(10 16 13 / 0.5); }
+  }
+  @media (max-width: 759.98px) {
+    .chat-scrim { display: none; }
+    .chat { width: 100%; border-left: 0; }
+    .chat-head { min-height: 56px; }
+    html.chat-open, html.chat-open body { overflow: hidden; overscroll-behavior: none; }
+  }
+  @media (prefers-reduced-motion: no-preference) and (max-width: 919.98px) {
+    .chat.open { animation: rise 200ms ease-out; }
+    .chat-scrim { animation: fade-in 200ms ease-out; }
+    @keyframes fade-in { from { opacity: 0; } }
+  }
+
+/* PROTOTYPE additions to the real page.css (inlined above this): only what the ground itself needs. */
+.chat-body { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.msg code.ic, .dv-question code.ic, .dv-block code.ic { font-family: var(--mono); font-size: 0.86em; padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--text) 8%, transparent); }
+.about-line { text-decoration: none; }
+.proto-flash { animation: proto-flash 1400ms ease-out; }
+@keyframes proto-flash { 0%, 30% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); } 100% { box-shadow: 0 0 0 3px transparent; } }
+@media (prefers-reduced-motion: reduce) { .proto-flash { animation-duration: 1ms; outline: 2px solid var(--accent); } }
+.btn:active, .send:active, .icon-btn:active, .seg button:active, .switch:active { transform: scale(0.97); }
+.ask { cursor: pointer; }
+
+/* PROTOTYPE: ask in chat. */
+.ak-chip { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-width: 0; padding: 4px 0; }
+.ak-q { color: var(--text); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.ak-about { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; font-weight: 600; }
+.ak-about .ref { color: var(--you); }
+.ak-about svg.i { width: 13px; height: 13px; flex: none; }
+.ak-link { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); text-underline-offset: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ak-link:hover { text-decoration-color: currentColor; }
+.reply.chips { padding-right: 0; }
+.ak-x { width: var(--tap) !important; height: var(--tap) !important; color: inherit; }
+.ak-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; margin: 0 2px 8px; }
+.ak-onpage .ak-row { margin: 8px 2px 0; }
+.ak-dest { margin: 0; }
+.ak-dest button { display: inline-flex; align-items: center; gap: 6px; }
+.ak-dest svg.i { width: 15px; height: 15px; }
+.ak-hint { font-size: var(--fs-xs); color: var(--muted); }
+.ak-hint kbd { font: inherit; font-size: 0.9em; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; }
+.ak-sidectx { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; padding: 4px 12px 4px 16px; border-bottom: 1px solid var(--line); background: var(--card-2); font-size: var(--fs-s); flex: none; }
+.ak-sidectx[hidden] { display: none; }
+.sc-kick { color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
+.side-head .btn svg.i { width: 16px; height: 16px; }
+.dv-pills { align-items: center; }
+.ak-ask { margin-left: auto; }
+.btn svg.i { width: 18px; height: 18px; }
+.ak-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--muted); }
+.ak-pickb { min-height: 28px; padding: 0 8px; border: 1px dashed var(--line); border-radius: 6px; background: none; font-family: var(--mono); font-size: 0.75rem; font-weight: 700; color: var(--muted); cursor: pointer; }
+.ak-pickb:hover { color: var(--text); border-color: var(--faint); }
+
+/* 2. On the page */
+.ak-onpage { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.ak-h { font-size: var(--fs-s); color: var(--muted); }
+.ak-onpage .composer { padding: 0; background: none; }
+.ak-onpage .box { background: var(--bg); }
+.ak-thread { display: grid; gap: 4px; margin-top: 6px; }
+.ak-th { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: var(--fs-xs); font-weight: 700; color: var(--muted); }
+.ak-open { min-height: var(--tap); padding: 0 8px; border: 0; border-radius: 6px; background: none; color: var(--accent); font-weight: 600; font-size: var(--fs-xs); cursor: pointer; }
+.ak-open:hover { background: var(--card-2); }
+.ak-here:empty { display: none; }
+
+/* 3. Margin */
+.ak-m { position: relative; border-radius: 10px; margin-inline: -10px; padding: 6px 10px; transition: background-color 150ms ease-out; }
+.ak-m.asking { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.ak-mside { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ak-mbtn { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--muted); font-size: var(--fs-xs); font-weight: 600; font-stretch: var(--narrow); cursor: pointer; }
+.ak-mbtn svg.i { width: 14px; height: 14px; }
+.ak-mbtn:hover, .ak-m.asking .ak-mbtn { color: var(--accent); border-color: var(--accent); }
+@media (hover: hover) and (pointer: fine) and (min-width: 760px) {
+  .ak-m { padding-right: 84px; }
+  .ak-mside { position: absolute; top: 8px; right: 8px; flex-direction: column; align-items: flex-end; }
+  .ak-mbtn { opacity: 0; transition: opacity 120ms ease-out; }
+  .ak-m:hover .ak-mbtn, .ak-mbtn:focus-visible, .ak-m.asking .ak-mbtn { opacity: 1; }
+  .ak-m:hover { background: color-mix(in srgb, var(--card-2) 55%, transparent); }
+}
+@media (max-width: 759.98px), (hover: none) { .ak-mside { margin-top: 4px; } .ak-mbtn { min-height: var(--tap); } .ak-mbtn span { display: none; } }
+.ak-mark { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 8px; border: 0; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: var(--fs-xs); font-weight: 600; cursor: pointer; white-space: nowrap; }
+.ak-mark svg.i { width: 14px; height: 14px; }
+.ak-marks:empty { display: none; }
+.ak-pop { margin: 4px -10px 6px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); box-shadow: var(--shadow); transform-origin: top right; }
+@media (prefers-reduced-motion: no-preference) { .ak-pop { animation: ak-pop 180ms cubic-bezier(0.23, 1, 0.32, 1); } }
+@keyframes ak-pop { from { opacity: 0; transform: scale(0.97) translateY(-4px); } }
+.ak-pop .composer { padding: 0; background: none; }
+.ak-pop .box { grid-template-areas: "chip chip" "text text"; padding-right: 14px; }
+.ak-popact { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.ak-popact .ak-hint { margin-right: auto; }
+.ak-popact .btn svg.i { width: 16px; height: 16px; }
+@media (max-width: 759.98px) { .ak-popact .ak-hint { display: none; } .ak-popact .btn { flex: 1; justify-content: center; min-height: 44px; } }
+.dv .options > .ak-m { margin-inline: -10px; }
+
+.proto-picker {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(10, 10, 10, 0.82);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  backdrop-filter: blur(12px) saturate(1.4);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.08) inset,
+    0 8px 24px rgba(0, 0, 0, 0.24),
+    0 2px 6px rgba(0, 0, 0, 0.12);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  line-height: 1;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.proto-picker-highlight {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  will-change: transform;
+}
+
+/* The slide is enabled only after first paint (data-ready), so load doesn't animate. */
+.proto-picker[data-ready] .proto-picker-highlight {
+  transition:
+    transform 250ms cubic-bezier(0.23, 1, 0.32, 1),
+    width 250ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .proto-picker[data-ready] .proto-picker-highlight { transition: none; }
+}
+
+.proto-picker-item {
+  position: relative; /* sits above the highlight */
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font: inherit;
+  cursor: pointer;
+  transition: color 150ms ease-out;
+}
+
+.proto-picker-item:hover {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.proto-picker-item:active {
+  transform: scale(0.97);
+}
+
+.proto-picker-item:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.4);
+  outline-offset: 2px;
+}
+
+.proto-picker-item[data-active] {
+  color: #fff;
+}
+
+.proto-picker-divider {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.proto-picker-replay {
+  padding: 0 10px;
+  font-size: 14px;
+}
+
+.proto-picker[data-position="top"] {
+  bottom: auto;
+  top: 24px;
+}
+
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<nav class="proto-picker" aria-label="Prototype variants">
+  <span class="proto-picker-highlight" aria-hidden="true"></span>
+  <button class="proto-picker-item" data-active aria-current="true">Dock</button>
+  <button class="proto-picker-item">Inline</button>
+  <button class="proto-picker-item">Margin</button>
+  <span class="proto-picker-divider" aria-hidden="true"></span>
+  <button class="proto-picker-item proto-picker-replay" aria-label="Replay animation (R)">↻</button>
+</nav>
+<script>
+/* PROTOTYPE ground, shared by every prototype in fleet/page/prototype (inlined into each HTML by build.ts).
+   It reproduces the dashboard around the piece under test: the masthead with its tabs, the views, the chat
+   docked at 920px and up (a sheet over the page below), the composer with @people and /skills. Content is
+   this machine's fleets, held in memory; nothing persists and nothing is sent anywhere. */
+(() => {
+  const qs = new URLSearchParams(location.search);
+  const theme = qs.get("theme");
+  if (theme === "dark" || theme === "light") document.documentElement.dataset.theme = theme;
+
+  const NOW = new Date("2026-10-03T16:40:00");
+  const at = (minAgo) => new Date(NOW.getTime() - minAgo * 60000);
+  const clock = (d) => d.toTimeString().slice(0, 5);
+  const ago = (min) => (min < 1 ? "just now" : min < 60 ? `${Math.round(min)} min ago` : min < 60 * 24 ? `${Math.round(min / 60)} h ago` : min < 60 * 48 ? "yesterday" : `${Math.round(min / 1440)} days ago`);
+  const short = (min) => (min < 1 ? "now" : min < 60 ? `${Math.round(min)}m` : min < 60 * 24 ? `${Math.round(min / 60)}h` : min < 60 * 48 ? "1d" : `${Math.round(min / 1440)}d`);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const fold = (s) => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const line = (s, n = 90) => { const t = String(s).replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
+
+  /* ---------- the fleets ---------- */
+  const PEOPLE = {
+    user: { name: "Luiz", c: "var(--accent)" },
+    manager: { name: "manager", c: "var(--s6)", role: "manager" },
+    "infra-coordinator": { name: "infra-coordinator", c: "var(--s1)", role: "coordinator", task: "CA1116 pipeline: cuts, classifier, media", status: "running" },
+    "ui-coordinator": { name: "ui-coordinator", c: "var(--s7)", role: "coordinator", task: "Fleet page: chat, finder, decision pages", status: "running" },
+    b155: { name: "b155", c: "var(--s3)", fleet: "infra-coordinator", task: "Skip fresh cuts in the classifier pass (waits on D44)", status: "blocked", model: "Opus", skill: "tdd" },
+    b196: { name: "b196", c: "var(--s2)", fleet: "ui-coordinator", task: "Side chat list in the chat panel", status: "running", model: "Opus", skill: "prototype" },
+    a113: { name: "a113", c: "var(--s4)", fleet: "infra-coordinator", task: "CA1116 media reprocess, dry run before A22", status: "running", model: "Sonnet", skill: "research" },
+    b201: { name: "b201", c: "var(--s5)", fleet: "ui-coordinator", task: "Finder: recents first and kind tabs", status: "done", model: "Opus", skill: "architect" },
+    a117: { name: "a117", c: "var(--s8)", fleet: "infra-coordinator", task: "Rotate the Box uploader's token", status: "done", model: "Sonnet", skill: "wizard" },
+  };
+  const WORKERS = ["b155", "b196", "a113", "b201", "a117"];
+  const COORDS = ["infra-coordinator", "ui-coordinator"];
+
+  const SKILLS = [
+    ["grilling", "<topic>", "Grill the user relentlessly about a plan, decision, or idea."],
+    ["recall", "<question>", "Answer from the record what we know or did before."],
+    ["why", "<code or choice>", "Find why code is the way it is, from every record, as a cited answer."],
+    ["explain", "<change>", "Explain a piece of work plainly: what, how, why."],
+    ["interrogate", "<change>", "Three fresh reviewers try to break a change; the lead gives a verdict."],
+    ["review", "[since]", "Review changes since a fixed point on two axes, Standards and Spec."],
+    ["research", "<question>", "Investigate a question against primary sources and save the findings."],
+    ["blast-radius", "<change>", "Find what a change could break beyond the diff."],
+    ["prototype", "<question>", "Build a throwaway prototype to answer a design question."],
+  ];
+
+  const DECISIONS = [
+    {
+      id: "d44", ref: "D44", kind: "decision", fleet: "infra-coordinator", agent: "b155", status: "open", blocking: true, opened: 26,
+      title: "Stop re-classifying pieces that were just cut",
+      question: "Should the classifier pass skip pieces that were cut in the last 24 hours, instead of classifying them again on every pass?",
+      why: "b155's patch waits on it. Today every pass re-classifies all 212 pieces of CA1116 cut at 14:02: about 40 minutes of the classifier per pass, and not one label changed in the last three passes.",
+      recommend: "A",
+      reason: "A is one guard in the pass's query, and the labels a cut gives are the classifier's own from minutes before. B buys little over A and costs half a day.",
+      options: [
+        { id: "A", label: "Skip pieces cut in the last 24 hours", consequence: "Fresh cuts keep the label the cut gave them until tomorrow's pass." },
+        { id: "B", label: "Re-classify only when a cut changes", consequence: "Needs a hash of each piece's bounds; b155 estimates half a day more." },
+        { id: "C", label: "Keep re-classifying everything", consequence: "No change: the 40 minutes stay on every pass." },
+      ],
+    },
+    {
+      id: "a22", ref: "A22", kind: "action", fleet: "infra-coordinator", agent: "a113", status: "open", blocking: false, opened: 61,
+      title: "Run CA1116's owed media reprocess",
+      question: "Run the media reprocess CA1116 is owed: 38 recordings were transcribed before the speaker fix (D39). It needs your 1Password approval, so it runs from your terminal: `casos reprocess CA1116 --media --since 2026-09-12`.",
+      why: "a113's dry run lists the 38 recordings and finds nothing else owed. The hearing clips of 12/09 still name the judge as \"Speaker 2\" until this runs.",
+      options: [],
+    },
+    {
+      id: "g4", ref: "G4", kind: "grill", fleet: "ui-coordinator", agent: "b196", status: "open", blocking: false, opened: 140,
+      title: "The tree as the alpha's: two calls",
+      question: "Two calls on the case tree before b196 ports it from the alpha.",
+      why: "q1 decides the tree's endpoint; q2 decides where b196 keeps the selection.",
+      grill: [
+        { id: "q1", text: "Does the tree load one level per call, as the alpha does, or the whole case at once?" },
+        { id: "q2", text: "When the tree reloads, does the selection stay on the node's id or on its path?" },
+      ],
+      options: [],
+    },
+    {
+      id: "d45", ref: "D45", kind: "decision", fleet: "ui-coordinator", agent: "b201", status: "open", blocking: false, opened: 190,
+      title: "Fold the Links tab into Plan",
+      question: "Links holds four rows on most fleets. Fold it into Plan as a section, and drop the tab?",
+      options: [
+        { id: "A", label: "Fold Links into Plan", consequence: "Five tabs on a phone's dock instead of six." },
+        { id: "B", label: "Keep the Links tab", consequence: "No change." },
+      ],
+    },
+    { id: "d43", ref: "D43", kind: "decision", fleet: "ui-coordinator", status: "decided", opened: 1500, title: "Keep the docked chat at 920px and up", answer: "A: dock at 920px", question: "Where does the chat stop docking beside the page?", options: [] },
+    { id: "a21", ref: "A21", kind: "action", fleet: "infra-coordinator", status: "decided", opened: 1700, title: "Rotate the Box uploader's token", answer: "Done", question: "Rotate the token the uploader uses for Box.", options: [] },
+    { id: "d42", ref: "D42", kind: "decision", fleet: "ui-coordinator", status: "decided", opened: 2900, title: "Side chats keep their own unread count", answer: "A: their own count", question: "Does a side chat count toward the chat's unread badge?", options: [] },
+  ];
+
+  /* The main thread, oldest first; `min` is minutes before now. */
+  const MAIN = [
+    [1490, "user", "Bom dia. O que ficou pendente de ontem no CA1116?"],
+    [1488, "infra-coordinator", "Two things: the cut of the hearing PDFs (b155 is on it) and the media reprocess a113 is checking with a dry run. Nothing blocks yet."],
+    [1460, "ui-coordinator", "b196 started the side chat list. G4 comes to you once it has the two questions written."],
+    [1300, "user", "Ok. Prioriza o corte; a mídia pode esperar o dry run."],
+    [1298, "infra-coordinator", "Done: b155 first, a113 keeps the dry run going at low priority."],
+    [220, "user", "Status rápido?"],
+    [218, "infra-coordinator", "b155 cut 212 pieces of CA1116 at 14:02. The classifier pass after the cut took 41 minutes."],
+    [217, "infra-coordinator", "That pass re-classified every piece, including the 212 just cut. Not one label changed."],
+    [205, "ui-coordinator", "b201 finished the finder's recents. Two choices left for you on G4, and D45 on the Links tab."],
+    [190, "ui-coordinator", "D45 is up: fold Links into Plan? Four rows on most fleets."],
+    [150, "user", "@b196 a lista de side chats vai ter busca?"],
+    [148, "b196", "Yes: by the quoted text and the first message. Archived ones are searched too, under their own heading."],
+    [140, "ui-coordinator", "G4 is up: the tree as the alpha's, two calls."],
+    [95, "a113", "Dry run done: 38 recordings transcribed before the speaker fix (D39). Nothing else owed. A22 is up for the real run."],
+    [61, "infra-coordinator", "A22 is up: run CA1116's owed media reprocess. It needs your 1Password approval, so it runs from your terminal."],
+    [40, "user", "Por que o classificador roda de novo sobre peças recém-cortadas?"],
+    [38, "infra-coordinator", "Because the pass selects by case, not by piece age. Every pass takes every piece. D44 asks whether to skip the fresh ones."],
+    [26, "infra-coordinator", "D44 is up, blocking: stop re-classifying pieces that were just cut. b155 waits on it."],
+    [24, "b155", "The guard for A is ready on my side: `where cut_at < now() - interval '24 hours'`. I'll push the moment D44 is answered."],
+    [12, "user", "Vou olhar o D44 agora."],
+    [9, "infra-coordinator", "Thanks. While you look: the next pass starts at 17:00, so an answer before then saves one 40-minute run."],
+    [4, "ui-coordinator", "b196 pushed the side chat list behind a flag; it shows on the ui fleet's page only."],
+    [2, "b155", "Tests for the guard pass: 212 fresh pieces skipped, 1,804 older ones classified."],
+  ];
+
+  /* Side chats: started from a quote (in the chat or on a decision page), most recent activity first. */
+  const SIDES = [
+    { id: 1, title: "every pass re-classifies all 212 pieces", from: { kind: "chat", msg: 8, label: "infra-coordinator in the chat" }, archived: false, unread: 1,
+      msgs: [[30, "user", "Quanto custa isso por dia, em horas de classificador?"], [29, "infra-coordinator", "Six passes a day at about 40 minutes: four hours, all on pieces whose labels don't change."], [8, "user", "E se o corte mudar depois?"], [7, "infra-coordinator", "Then the piece's bounds change, and option B would catch it. A waits for the next day's pass."], [3, "b155", "Today no cut was redone within a day. Over the last month: twice."]] },
+    { id: 2, title: "Option B: Re-classify only when a cut changes", from: { kind: "decision", ref: "D44", label: "D44, option B" }, archived: false, unread: 0,
+      msgs: [[22, "user", "Por que meio dia a mais para o B?"], [21, "b155", "The hash needs the bounds stored per piece; today only the page range is. A migration plus a backfill over 2,016 pieces."], [18, "user", "Ok, faz sentido."]] },
+    { id: 3, title: "38 recordings were transcribed before the speaker fix", from: { kind: "decision", ref: "A22", label: "A22" }, archived: false, unread: 0,
+      msgs: [[58, "user", "Esses 38 incluem a audiência de 12/09?"], [57, "a113", "Yes, all six clips of the 12/09 hearing. They name the judge as \"Speaker 2\"."], [53, "user", "Então roda hoje ainda."], [52, "a113", "Ready when you approve; the command is on A22."]] },
+    { id: 4, title: "does the selection stay on the node's id or on its path?", from: { kind: "decision", ref: "G4", label: "G4, q2" }, archived: false, unread: 2,
+      msgs: [[135, "user", "No alpha, o que acontece quando o nó some?"], [133, "b196", "The alpha keeps the path and falls back to the parent. With ids, a moved node keeps its selection; a deleted one falls back the same way."], [128, "user", "E se o nó for renomeado?"], [127, "b196", "Ids survive a rename; paths don't."], [125, "ui-coordinator", "That argues for ids. I'll put it in q2's recommendation."], [120, "b196", "Recommendation written on G4 q2."]] },
+    { id: 5, title: "por que o b196 está usando o mesmo store?", from: { kind: "chat", msg: 2, label: "you in the chat" }, archived: true, unread: 0,
+      msgs: [[1450, "user", "por que o b196 está usando o mesmo store que o chat principal?"], [1448, "ui-coordinator", "So a side chat's messages come in on the same stream; the list only filters by side."], [1440, "user", "Ok."]] },
+    { id: 6, title: "Rotate the Box uploader's token", from: { kind: "decision", ref: "A21", label: "A21" }, archived: true, unread: 0,
+      msgs: [[1690, "user", "Precisa reiniciar o uploader depois?"], [1688, "a117", "No: it reads the token per upload."]] },
+    { id: 7, title: "the dock at 919px leaves the page 480px wide", from: { kind: "decision", ref: "D43", label: "D43" }, archived: true, unread: 0,
+      msgs: [[2880, "user", "480px is enough for the decisions list?"], [2878, "ui-coordinator", "Yes: the list's rows wrap at 420px."], [2870, "user", "Then 920."]] },
+  ];
+  SIDES.forEach((s) => (s.last = Math.min(...s.msgs.map((m) => m[0]))));
+
+  const PLAN = [
+    { title: "CA1116 pipeline", steps: [["P1", "Cut the hearing PDFs into pieces", "done", "b155"], ["P2", "Skip fresh cuts in the classifier pass", "blocked", "b155"], ["P3", "Reprocess media transcribed before D39", "current", "a113"], ["P4", "Rotate the Box uploader's token", "done", "a117"]] },
+    { title: "Fleet page", steps: [["P5", "Finder: recents first, kind tabs", "done", "b201"], ["P6", "Side chat list in the chat panel", "current", "b196"], ["P7", "The case tree, ported from the alpha", "todo", "b196"]] },
+  ];
+  const LINKS = [
+    ["L1", "infra-coordinator's page", "https://cr-sede-pc.dusky-tritone.ts.net:7443/f/infra-coordinator", true],
+    ["L2", "ui-coordinator's page", "https://cr-sede-pc.dusky-tritone.ts.net:7443/f/ui-coordinator", true],
+    ["L3", "Side chat list (b196's dev server)", "http://127.0.0.1:7541/", true],
+    ["L4", "Casos, CA1116", "https://casos.coelhorocha.com/c/CA1116", true],
+  ];
+  const LOG = [
+    [2, "message", "b155", "Tests for the guard pass: 212 fresh pieces skipped."],
+    [4, "integrated", "b196", "Side chat list behind a flag (ui fleet only)."],
+    [26, "asked", "infra-coordinator", "D44 Stop re-classifying pieces that were just cut (blocking)."],
+    [61, "asked", "infra-coordinator", "A22 Run CA1116's owed media reprocess."],
+    [95, "resolved", "a113", "Dry run: 38 recordings owed, nothing else."],
+    [140, "asked", "ui-coordinator", "G4 The tree as the alpha's: two calls."],
+    [190, "asked", "ui-coordinator", "D45 Fold the Links tab into Plan."],
+    [205, "integrated", "b201", "Finder recents and kind tabs."],
+    [218, "resolved", "b155", "Cut 212 pieces of CA1116."],
+    [300, "blocked", "b155", "Classifier pass re-classifies fresh cuts; asked the coordinator."],
+    [1700, "decision", "a117", "A21 Rotate the Box uploader's token: done."],
+  ];
+
+  let nextId = 1000;
+  const mkMsg = ([min, from, text], extra = {}) => ({ id: extra.id ?? nextId++, min, from, text, ...extra });
+  const STATE = {
+    main: MAIN.map((m, i) => mkMsg(m, { id: i + 1 })),
+    sides: SIDES.map((s) => ({ ...s, msgs: s.msgs.map((m) => mkMsg(m, { side: s.id })) })),
+  };
+
+  /* ---------- icons ---------- */
+  const I = {
+    mark: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#1e1b4b"/><path d="M32 33L15 19M32 33l17-14M32 33v18" stroke="#a5b4fc" stroke-width="4" stroke-linecap="round"/><circle cx="15" cy="19" r="7" fill="#818cf8"/><circle cx="49" cy="19" r="7" fill="#818cf8"/><circle cx="32" cy="51" r="7" fill="#818cf8"/><circle cx="32" cy="33" r="10" fill="#eef2ff"/></svg>`,
+    search: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>`,
+    bell: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17V11a6 6 0 0 1 12 0v6l1.5 2h-15z"/><path d="M10 21h4"/></svg>`,
+    chat: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 0 1-12.4 7.5L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z"/></svg>`,
+    close: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>`,
+    closeS: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width:16px;height:16px"><path d="M6 6l12 12M18 6 6 18"/></svg>`,
+    send: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>`,
+    reply: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>`,
+    back: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>`,
+    up: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg>`,
+    archive: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="4" rx="1"/><path d="M5 8.5v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-10M10 12.5h4"/></svg>`,
+    unarchive: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="4" rx="1"/><path d="M5 8.5v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-10M12 17v-5M9.5 14.5 12 12l2.5 2.5"/></svg>`,
+    side: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9l-4 3v-3H4z"/><path d="M17 9h3v8h-1v3l-3-3h-4"/></svg>`,
+    tabs: {
+      decisions: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg>`,
+      plan: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4h12l-2.5 4L17 12H5"/></svg>`,
+      fleet: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12.5" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="20.5" r="1.8"/><path d="m9.8 10.5-3.3-3M14.2 10.5l3.3-3M12 15.5v3.2"/></svg>`,
+      links: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"/></svg>`,
+      log: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>`,
+    },
+  };
+
+  /* ---------- small renderers ---------- */
+  const who = (id) => { const p = PEOPLE[id] || { name: id }; return `<button type="button" class="who" data-who="${esc(id)}" style="--c:${p.c || "var(--faint)"}"><span class="swatch"></span>${esc(p.name)}</button>`; };
+  const pill = (cls, text) => `<span class="pill ${cls}">${esc(text)}</span>`;
+  const inline = (text) => esc(text).replace(/`([^`]+)`/g, '<code class="ic">$1</code>').replace(/@([a-z0-9-]+)/g, (m, id) => PEOPLE[id] ? `<span class="mention" style="--c:${PEOPLE[id].c}">@${id}</span>` : m).replace(/(^|\s)\/([a-z-]+)/g, (m, sp, s) => SKILLS.some(([k]) => k === s) ? `${sp}<span class="mention">/${s}</span>` : m);
+  const kindWord = { decision: "Decision", action: "Action", grill: "Grilling" };
+  const decisionById = (id) => DECISIONS.find((d) => d.id === id || d.ref === id);
+  const sideById = (id) => STATE.sides.find((s) => s.id === id);
+
+  /** A run of messages as the real chat draws it: name and time at the head of a run, bubbles stacked. */
+  function renderLog(msgs, opts = {}) {
+    let out = "";
+    let lastDay = null;
+    msgs.forEach((m, i) => {
+      const day = m.min >= 60 * 16.67 ? "Yesterday" : "Today";
+      if (day !== lastDay && !opts.noDays) { out += `<li class="day">${day}</li>`; lastDay = day; }
+      const prev = msgs[i - 1], next = msgs[i + 1];
+      const sameAsPrev = prev && prev.from === m.from && (opts.noDays || (prev.min >= 1000) === (m.min >= 1000)) && prev.min - m.min < 30 && !m.about && !m.quote;
+      const sameAsNext = next && next.from === m.from && next.min >= 0 && m.min - next.min < 30 && !next.about && !next.quote;
+      const mine = m.from === "user";
+      const p = PEOPLE[m.from] || { name: m.from };
+      const cls = `turn ${mine ? "from-user" : "from-fleet"}${sameAsPrev ? "" : " head"}${sameAsNext ? "" : " tail"}`;
+      const head = sameAsPrev ? "" : `<div class="turn-head">${mine ? `<span class="name">You</span>` : `<span class="name">${esc(p.name)}</span>`}<time>${clock(at(m.min))}</time></div>`;
+      const about = m.about ? `<a class="re-line about-line" href="#" data-open-decision="${esc(m.about.id)}" style="--c:var(--you)"><b>${esc(m.about.ref)}</b><span>${esc(m.about.title)}${m.about.part ? " · " + esc(m.about.part) : ""}</span></a>` : "";
+      const quote = m.quote ? `<blockquote class="msg-quote"><span class="from">${esc(m.quote.from)}</span>${esc(line(m.quote.text, 160))}</blockquote>` : "";
+      out += `<li class="${cls}" data-msg="${m.id}" style="--c:${p.c || "var(--faint)"}">${head}<div class="turn-row"><div class="msg">${about}${quote}<p class="msg-text">${inline(m.text)}</p></div>${mine ? "" : `<button type="button" class="reply-btn" aria-label="Reply" title="Reply">${I.reply}</button>`}</div></li>`;
+      if (opts.after) out += opts.after(m) || "";
+    });
+    return out;
+  }
+
+  /* ---------- the composer: chip row, field, send; @people and /skills under the caret ---------- */
+  function composer(opts = {}) {
+    return `<div class="composer ${opts.cls || ""}">
+      <ul class="mentions" role="listbox" hidden></ul>
+      ${opts.above || ""}
+      <div class="box">
+        <div class="reply chips" ${opts.chip ? "" : "hidden"}>${opts.chip || ""}</div>
+        <label class="vh">Message</label>
+        <textarea rows="1" placeholder="${esc(opts.placeholder || "Message the fleet, or type @ or /")}" autocomplete="off" spellcheck="true"></textarea>
+        <button type="button" class="send" aria-label="Send" title="Send" disabled>${I.send}</button>
+      </div>
+      ${opts.below || ""}
+    </div>`;
+  }
+
+  /** Wires a composer: the caret list, Enter to send (Shift+Enter a new line), the send button. */
+  function wireComposer(root, { onSend, signal, under = false, people = true }) {
+    const ta = root.querySelector("textarea");
+    const send = root.querySelector(".send");
+    const list = root.querySelector(".mentions");
+    if (under) list.classList.add("under");
+    let items = [], at = 0, tok = null;
+    const close = () => { list.hidden = true; items = []; tok = null; };
+    const token = () => {
+      const v = ta.value.slice(0, ta.selectionStart);
+      const m = /(^|\s)([@/])([\w-]*)$/.exec(v);
+      if (!m || (m[2] === "@" && !people)) return null;
+      return { kind: m[2], q: m[3].toLowerCase(), start: v.length - m[3].length - 1 };
+    };
+    const draw = () => {
+      tok = token();
+      if (!tok) return close();
+      if (tok.kind === "@") items = ["manager", ...COORDS, ...WORKERS].filter((id) => id.startsWith(tok.q) || fold(PEOPLE[id].task || "").includes(tok.q)).map((id) => ({ id, html: `<span class="swatch" style="--c:${PEOPLE[id].c}"></span><span class="m-main"><span class="m-name">${esc(id)}</span>${PEOPLE[id].status ? pill(PEOPLE[id].status, PEOPLE[id].status) : ""}</span><span class="m-task">${esc(PEOPLE[id].task || "the fleets' manager")}</span>` }));
+      else items = SKILLS.filter(([k]) => k.includes(tok.q)).map(([k, arg, d]) => ({ id: k, html: `<span class="slash">/</span><span class="m-main"><span class="m-name">${k}</span><span class="faint">${esc(arg)}</span></span><span class="m-task">${esc(d)}</span>` }));
+      list.classList.toggle("skills", tok.kind === "/");
+      if (!items.length) return close();
+      at = Math.min(at, items.length - 1);
+      list.innerHTML = items.map((it, i) => `<li role="option" data-i="${i}" aria-selected="${i === at}">${it.html}</li>`).join("");
+      list.hidden = false;
+      list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+    };
+    const pick = (i) => {
+      const it = items[i];
+      if (!it || !tok) return;
+      const before = ta.value.slice(0, tok.start), after = ta.value.slice(ta.selectionStart);
+      const ins = tok.kind + it.id + " ";
+      ta.value = before + ins + after;
+      ta.selectionStart = ta.selectionEnd = before.length + ins.length;
+      close(); sync(); ta.focus();
+    };
+    const sync = () => { send.disabled = !ta.value.trim(); };
+    const doSend = (e) => {
+      const text = ta.value.trim();
+      if (!text) return;
+      onSend(text, e || {});
+      ta.value = ""; sync(); close();
+    };
+    ta.addEventListener("input", () => { at = 0; sync(); draw(); }, { signal });
+    ta.addEventListener("click", draw, { signal });
+    ta.addEventListener("blur", () => setTimeout(close, 120), { signal });
+    ta.addEventListener("keydown", (e) => {
+      if (!list.hidden && items.length) {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); at = (at + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length; draw(); return; }
+        if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pick(at); return; }
+        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); return; }
+      }
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); doSend(e); }
+    }, { signal });
+    list.addEventListener("pointerdown", (e) => { e.preventDefault(); const li = e.target.closest("li"); if (li) pick(Number(li.dataset.i)); }, { signal });
+    send.addEventListener("click", () => doSend(), { signal });
+    return { ta, focus: () => ta.focus(), set: (v) => { ta.value = v; sync(); } };
+  }
+
+  /* ---------- the views ---------- */
+  function decisionsView() {
+    const open = DECISIONS.filter((d) => d.status === "open");
+    const row = (d) => `<a class="ask ${d.status === "open" ? "open" : "closed"}${d.blocking ? " blocking" : ""}" href="#" data-open-decision="${d.id}">
+      <span class="ask-head"><b><span class="ref">${d.ref}</span> ${esc(d.title)}</b>${d.status === "open" ? pill(d.blocking ? "blocking" : "open", d.blocking ? "blocking" : "open") : pill("decided", d.kind === "action" ? "done" : "decided")}${pill("", kindWord[d.kind])}</span>
+      <span class="detail">${esc(line(d.question, 150))}</span>
+      <span class="meta">${esc(d.fleet)}${d.agent ? ", for " + d.agent : ""}, ${ago(d.opened)}</span></a>`;
+    return `<section class="view">
+      <div class="lead blocking"><h2 class="lead-line">4 wait on you: 2 decisions, an action and a grilling.</h2><p class="lead-detail">D44 blocks b155.</p>
+      <p class="goal">Get CA1116's hearing through the pipeline this week, and the side chat list into the fleet page.</p>
+      <p class="now"><b>Now</b>b155 waits on D44; a113 waits on A22; b196 builds the side chat list. <span class="said">said 4 min ago</span></p></div>
+      <dl class="totals"><div><dt>Workers</dt><dd class="num">5</dd></div><div><dt>Running</dt><dd class="num">2</dd></div><div class="alert"><dt>Blocked</dt><dd class="num">1</dd></div><div><dt>Done today</dt><dd class="num">2</dd></div><div><dt>Tokens</dt><dd class="num">4.1M</dd></div></dl>
+      <div class="part"><h2>On you</h2><div class="card">${open.map(row).join("")}</div></div>
+      <div class="part"><h2>Closed</h2><div class="card">${DECISIONS.filter((d) => d.status !== "open").map(row).join("")}</div></div>
+    </section>`;
+  }
+  function planView() {
+    return `<section class="view"><div class="part"><h2>Plan</h2><div class="card">${PLAN.map((ms) => `<div class="milestone"><div class="milestone-head"><h3>${esc(ms.title)}</h3><span class="muted num">${ms.steps.filter((s) => s[2] === "done").length}/${ms.steps.length}</span></div><ul class="steps">${ms.steps.map(([id, t, st, by]) => `<li><button type="button" class="step ${st}" data-step="${id}" data-who="${by}"><span class="dot"></span><span class="title"><span class="ref">${id}</span> ${esc(t)}</span><span class="by">${by}</span></button></li>`).join("")}</ul></div>`).join("")}</div></div></section>`;
+  }
+  function fleetView() {
+    return `<section class="view"><div class="part"><h2>Fleets</h2><div class="card">${COORDS.map((c) => `<div class="strip" style="--c:${PEOPLE[c].c}"><div class="strip-head">${who(c)}${pill(PEOPLE[c].status, PEOPLE[c].status)}</div><p class="detail">${esc(PEOPLE[c].task)}</p><p class="meta">${WORKERS.filter((w) => PEOPLE[w].fleet === c).map((w) => `${w} ${PEOPLE[w].status}`).join(" · ")}</p></div>`).join("")}</div></div>
+      <div class="part"><h2>Workers</h2><div class="card">${WORKERS.map((w) => `<div class="strip" data-worker="${w}" style="--c:${PEOPLE[w].c}"><div class="strip-head">${who(w)}${pill(PEOPLE[w].status, PEOPLE[w].status)}<span class="muted" style="font-size:var(--fs-s)">${PEOPLE[w].fleet} · ${PEOPLE[w].model} · /${PEOPLE[w].skill}</span></div><p class="detail">${esc(PEOPLE[w].task)}</p></div>`).join("")}</div></div></section>`;
+  }
+  function linksView() {
+    return `<section class="view"><div class="part"><h2>Links</h2><div class="card">${LINKS.map(([ref, t, url]) => `<div class="strip link-row" data-link="${ref}"><div class="strip-head"><span class="ref">${ref}</span> <a class="link-title" href="#" data-fake-url="${esc(url)}">${esc(t)}</a></div><p class="meta"><code>${esc(url)}</code></p></div>`).join("")}</div></div></section>`;
+  }
+  function logView() {
+    return `<section class="view"><div class="part"><h2>Log</h2><div class="card"><ul class="log">${LOG.map(([min, kind, by, text], i) => `<li data-log="${i}"><time>${clock(at(min))}</time><span><span class="log-meta"><span class="kind ${kind}">${kind}</span><span class="by">${by}</span></span>${esc(text)}</span></li>`).join("")}</ul></div></div></section>`;
+  }
+
+  /** A decision's page, as DecisionPage.tsx draws it; `o` lets a prototype add its entry points. */
+  function decisionView(d, o = {}) {
+    const wrap = o.block || ((key, html) => html);
+    const opts = d.options.length ? `<fieldset class="dv-options"><legend>Your answer</legend><ul class="options">${d.options.map((op) => wrap("option:" + op.id, `<li><label class="option"><input type="radio" name="opt" value="${op.id}"${op.id === d.recommend ? " checked" : ""}><span class="label"><span class="key">${op.id}</span>${esc(op.label)}${op.id === d.recommend ? pill("recommended", "recommended") : ""}</span><span class="consequence">${esc(op.consequence)}</span></label></li>`)).join("")}</ul></fieldset>` : "";
+    const grill = d.grill ? d.grill.map((q) => wrap("q:" + q.id, `<fieldset class="gq"><legend class="gq-title"><span class="gq-id">${q.id}</span> <span class="gq-of">of ${d.grill.length}</span></legend><p class="gq-body">${esc(q.text)}</p><textarea rows="2" placeholder="Your answer to ${q.id}"></textarea><button type="button" class="btn small" data-proto-toast="Answer to ${d.ref} ${q.id} sent to ${d.fleet}">Send ${q.id}</button></fieldset>`)).join("") : "";
+    const thread = STATE.main.filter((m) => m.about?.id === d.id || (m.text.includes(d.ref) && m.from !== "user"));
+    return `<section class="view dv" data-decision="${d.id}">
+      <a class="dv-back" href="#" data-view="decisions">${I.back}Decisions</a>
+      <div class="dv-info">
+        <header class="dv-head">
+          <div class="dv-pills">${d.status === "open" ? pill(d.blocking ? "blocking" : "open", d.blocking ? "Open, blocking" : "Open") : pill("decided", "Decided")}${pill("plain", kindWord[d.kind])}${o.headExtra || ""}</div>
+          <h1><span class="ref">${d.ref}</span> ${esc(d.title)}</h1>
+          <p class="dv-meta dv-origin">From ${who(d.fleet)}${d.agent ? `, for ${who(d.agent)}` : ""}</p>
+          <p class="dv-meta">Asked ${ago(d.opened)}</p>
+        </header>
+        ${wrap("question", `<div class="rich dv-question"><p>${inline(d.question)}</p></div>`)}
+        ${d.why ? wrap("why", `<div class="dv-block"><h3>${d.blocking ? "What it blocks" : "Meanwhile"}</h3><div class="rich"><p>${inline(d.why)}</p></div></div>`) : ""}
+        ${d.recommend ? wrap("recommended", `<div class="dv-block"><h3>Recommended</h3><p><b>${d.recommend}: ${esc(d.options.find((x) => x.id === d.recommend)?.label)}</b></p><div class="rich"><p>${inline(d.reason || "")}</p></div></div>`) : ""}
+      </div>
+      ${o.afterInfo || ""}
+      <form class="dv-form" onsubmit="return false">
+        ${opts}${grill}
+        ${d.kind !== "grill" ? `<label class="field">A note with the answer (optional)<textarea rows="2"></textarea></label>` : ""}
+        <div class="sheet-actions">${d.kind === "grill" ? "" : `<button type="button" class="btn primary" data-proto-toast="Answer to ${d.ref} sent to ${d.fleet}">${d.kind === "action" ? "Mark done" : "Send answer"}</button>`}${o.actions || ""}</div>
+      </form>
+      ${o.afterForm || ""}
+      ${thread.length ? `<div class="dv-block"><h3>In the chat</h3><ol class="thread-list">${renderLog(thread, { noDays: true })}</ol></div>` : ""}
+    </section>`;
+  }
+
+  /* ---------- the shell ---------- */
+  function shell({ chatHead = "", chatBody = "", view }) {
+    const badgeOn = DECISIONS.filter((d) => d.status === "open").length;
+    return `<div class="shell" id="shell">
+      <div class="main" id="app">
+        <div class="masthead" id="masthead">
+          <header class="top">
+            <div class="top-name"><a class="mark" href="#" aria-label="Home: every fleet" title="Home: every fleet">${I.mark}</a><h1>manager</h1><span>${pill("running", "running")}</span></div>
+            <label class="switch" id="switch"><span class="vh">Go to</span><select aria-label="Go to the manager or a fleet"><option selected>Manager</option><option>infra-coordinator</option><option>ui-coordinator</option></select></label>
+            <a class="up" hidden></a>
+            <button class="bell" id="find-open" type="button" aria-label="Search (Ctrl+K)" title="Search (Ctrl+K)">${I.search}</button>
+            <button class="bell" id="bell" type="button" aria-label="Notifications" title="Notifications">${I.bell}<span class="badge">3</span></button>
+          </header>
+          <nav class="tabs" id="dock" aria-label="Views">
+            <a href="#" data-view="decisions">${I.tabs.decisions}<span class="lbl">Decisions</span><span class="badge alert">${badgeOn}</span></a>
+            <a href="#" data-view="plan">${I.tabs.plan}<span class="lbl">Plan</span><span class="badge alert">1</span></a>
+            <a href="#" data-view="fleet">${I.tabs.fleet}<span class="lbl">Fleets</span></a>
+            <a href="#" data-view="links">${I.tabs.links}<span class="lbl">Links</span></a>
+            <a href="#" data-view="log">${I.tabs.log}<span class="lbl">Log</span></a>
+            <button type="button" class="to-chat" id="chat-toggle" aria-controls="chat">${I.chat}<span class="lbl">Chat</span><span class="badge" id="chat-badge" hidden></span></button>
+          </nav>
+        </div>
+        <main class="wrap" id="view">${view}</main>
+      </div>
+      <div class="chat-scrim" id="chat-scrim" hidden></div>
+      <aside class="chat available" id="chat" aria-labelledby="chat-title">
+        ${chatHead || defaultChatHead()}
+        <div class="chat-body" id="chat-body">${chatBody}</div>
+      </aside>
+      <div class="toasts" id="toasts" aria-live="polite"></div>
+    </div>`;
+  }
+  function defaultChatHead(extra = "") {
+    return `<header class="chat-head"><h2 id="chat-title" tabindex="-1">Chat</h2><span class="you">as Luiz</span><span class="conn" data-conn="live" role="status">Live</span>${extra}<button type="button" class="icon-btn" id="chat-close" aria-label="Hide chat" title="Hide chat">${I.close}</button></header>
+      <div class="chat-tools"><button type="button" class="switch" id="chat-decisions" role="switch" aria-checked="true"><span class="switch-track" aria-hidden="true"></span>Decision activity</button></div>`;
+  }
+
+  /** Mounts the shell and wires what every prototype shares. Returns the page's handle. */
+  function mountShell(stage, cfg, signal) {
+    const ui = { view: cfg.view || "decisions", decision: cfg.decision || null };
+    const render = () => (ui.decision ? decisionView(decisionById(ui.decision), cfg.decisionOpts ? cfg.decisionOpts(decisionById(ui.decision)) : {}) : { decisions: decisionsView, plan: planView, fleet: fleetView, links: linksView, log: logView }[ui.view]());
+    stage.innerHTML = shell({ chatHead: cfg.chatHead, chatBody: cfg.chatBody || "", view: render() });
+    const $ = (s) => stage.querySelector(s);
+    const shellEl = $("#shell"), chat = $("#chat"), scrim = $("#chat-scrim"), toggle = $("#chat-toggle");
+    const docked = () => matchMedia("(min-width: 920px)").matches;
+    let open = cfg.chatOpen ?? docked();
+    const syncChat = () => {
+      shellEl.classList.toggle("chat-collapsed", docked() && !open);
+      chat.classList.toggle("open", !docked() && open);
+      scrim.hidden = docked() || !open;
+      toggle.setAttribute("aria-expanded", String(open));
+      document.documentElement.classList.toggle("chat-open", !docked() && open);
+    };
+    ui.openChat = () => { open = true; syncChat(); requestAnimationFrame(() => chat.querySelectorAll(".chat-log").forEach((l) => { if (l.scrollTop === 0 && !l.dataset.seen) { l.dataset.seen = "1"; l.scrollTop = l.scrollHeight; } })); };
+    ui.closeChat = () => { open = false; syncChat(); };
+    ui.isOpen = () => open;
+    const syncTabs = () => stage.querySelectorAll(".tabs [data-view]").forEach((a) => a.setAttribute("aria-current", String(!ui.decision && a.dataset.view === ui.view)));
+    ui.show = (view, decision = null) => {
+      ui.view = view; ui.decision = decision;
+      $("#view").innerHTML = render();
+      syncTabs();
+      if (!ui.keepScroll) scrollTo({ top: 0 });
+      cfg.onView?.(ui);
+    };
+    ui.refresh = () => { $("#view").innerHTML = render(); cfg.onView?.(ui); };
+    ui.toast = (text, kind = "message") => {
+      const box = $("#toasts");
+      box.innerHTML = `<div class="toast"><div><div class="meta"><span class="kind">${esc(kind)}</span> prototype</div><div class="text">${esc(text)}</div></div><button type="button" aria-label="Dismiss">×</button></div>`;
+      clearTimeout(ui._tt); ui._tt = setTimeout(() => (box.innerHTML = ""), 3200);
+    };
+    ui.flash = (el) => { if (!el) return; el.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); el.classList.remove("proto-flash"); void el.offsetWidth; el.classList.add("proto-flash"); };
+    syncChat(); syncTabs();
+    addEventListener("resize", syncChat, { signal });
+    toggle.addEventListener("click", () => (open ? ui.closeChat() : ui.openChat()), { signal });
+    scrim.addEventListener("click", () => ui.closeChat(), { signal });
+    stage.addEventListener("click", (e) => {
+      const t = e.target instanceof Element ? e.target : null;
+      if (!t) return;
+      if (t.closest("#chat-close")) { ui.closeChat(); return; }
+      const v = t.closest("[data-view]");
+      if (v && !t.closest(".proto-own")) { e.preventDefault(); ui.show(v.dataset.view); return; }
+      const d = t.closest("[data-open-decision]");
+      if (d && !t.closest(".proto-own")) { e.preventDefault(); ui.show("decisions", d.dataset.openDecision); if (!docked()) ui.closeChat(); return; }
+      const tst = t.closest("[data-proto-toast]");
+      if (tst) { ui.toast(tst.dataset.protoToast); return; }
+      const sw = t.closest("#chat-decisions");
+      if (sw) { sw.setAttribute("aria-checked", String(sw.getAttribute("aria-checked") !== "true")); return; }
+      const u = t.closest("[data-fake-url]");
+      if (u) { e.preventDefault(); ui.toast("Would open " + u.dataset.fakeUrl + " in a new tab"); return; }
+      if (t.closest(".mark")) { e.preventDefault(); ui.show("decisions"); return; }
+      if (t.closest("#bell")) { ui.toast("D44 is up, blocking. A22 is up. b196 pushed the side chat list.", "notifications"); return; }
+      if (t.closest(".toast button")) { $("#toasts").innerHTML = ""; return; }
+      const w = t.closest(".who");
+      if (w) { ui.show("fleet"); ui.flash(stage.querySelector(`[data-worker="${w.dataset.who}"]`)); return; }
+      const step = t.closest("[data-step]");
+      if (step) { ui.toast(`${step.dataset.step} is ${step.dataset.who}'s`); return; }
+    }, { signal });
+    stage.querySelector("#switch select").addEventListener("change", (e) => { ui.toast(`Would go to ${e.target.value}'s page`); e.target.value = "Manager"; }, { signal });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && open && !docked() && !e.defaultPrevented && !e.target.closest?.("dialog")) ui.closeChat();
+    }, { signal });
+    cfg.onView?.(ui);
+    return ui;
+  }
+
+  window.P = { NOW, at, clock, ago, short, esc, fold, line, PEOPLE, WORKERS, COORDS, SKILLS, DECISIONS, PLAN, LINKS, LOG, STATE, I, who, pill, inline, kindWord, decisionById, sideById, renderLog, composer, wireComposer, decisionView, shell, defaultChatHead, mountShell, mkMsg };
+})();
+
+</script>
+<script>
+/* PROTOTYPE: ask in chat. Question: asking about a decision, action or grill from its page should feel the
+   same as Reply / Side chat on selected text (a chip naming the item with a link back, main thread or side
+   chat, @mentions and /skills). How do the entry point and the composer look and behave from a decision page?
+   Three variants: Dock (the page hands the question to the chat's one composer), Inline (the composer
+   lives on the decision's page), Margin (ask about one block: a question, an option, a grill's q). */
+(() => {
+  const { esc, line, I, renderLog, composer, wireComposer, mountShell, mkMsg, decisionById } = P;
+
+  const ANSWERS = {
+    d44: [["b155", "With A the guard is one line; tomorrow's pass picks the fresh pieces up. B needs the bounds stored per piece first."], ["infra-coordinator", "Se quiser, eu peço ao b155 os números da última semana antes de você decidir."]],
+    a22: [["a113", "38 recordings, about 3h10 of audio. The reprocess takes about 25 minutes; nothing else waits on it."]],
+    g4: [["b196", "In the alpha a reload keeps the path; with ids a renamed node keeps its selection too. I'd go with ids."]],
+    d45: [["ui-coordinator", "Links is 4 rows on both fleets; Plan has room for them as a last section."]],
+  };
+  const ctxLabel = (c) => c.part ? `${c.d.ref} · ${c.part}` : `${c.d.ref} ${c.d.title}`;
+  /** The chip that names what the question is about, with its way back to it. */
+  const chip = (c, removable = true) => `<span class="ak-chip">${c.quote ? `<span class="ak-q">“${esc(line(c.quote, 70))}”</span>` : ""}<span class="ak-about"><span class="ref">${esc(c.d.ref)}</span><a href="#" class="ak-link" data-open-decision="${c.d.id}" title="Open ${esc(c.d.ref)}">${esc(line(c.part || c.d.title, 48))}</a>${I.up}</span></span>${removable ? `<button type="button" class="icon-btn ak-x" aria-label="Remove what it is about" title="Remove">${I.closeS}</button>` : ""}`;
+  const dest = (name, value) => `<div class="seg small ak-dest" role="radiogroup" aria-label="Where it goes"><button type="button" role="radio" aria-pressed="${value === "main"}" aria-checked="${value === "main"}" data-dest="main">${I.chat}Main chat</button><button type="button" role="radio" aria-pressed="${value === "side"}" aria-checked="${value === "side"}" data-dest="side">${I.side}Side chat</button></div>`;
+
+  /** The chat as the real page has it (main thread, side chats behind "Back to the chat"), plus what a page posts. */
+  function chatCtl(stage, ui, signal, opts = {}) {
+    const st = structuredClone(P.STATE);
+    st.sides.forEach((s) => (s.mine = false));
+    let focus = null;
+    const body = stage.querySelector("#chat-body");
+    body.innerHTML = `<div class="side-head" hidden><button type="button" class="btn small" data-side-back>${I.back}Back to the chat</button><span class="side-title">Side chat</span></div><div class="ak-sidectx" hidden></div><ol class="chat-log"></ol>${composer({ above: opts.above || "" })}`;
+    const $ = (s) => body.querySelector(s);
+    const draw = (end = true) => {
+      const s = st.sides.find((x) => x.id === focus);
+      $(".side-head").hidden = !s;
+      $(".ak-sidectx").hidden = !s;
+      if (s) $(".ak-sidectx").innerHTML = `<span class="sc-kick">Side chat on</span> ${s.about ? chip({ d: s.about.d, part: s.about.part, quote: s.about.quote }, false) : `<q>${esc(line(s.title, 90))}</q>`}`;
+      $(".chat-log").innerHTML = s ? renderLog(s.msgs, { noDays: true }) : renderLog(st.main, { after: (m) => st.sides.filter((x) => x.mine && x.anchor === m.id).map((x) => `<li class="side-link"><button type="button" data-side="${x.id}"><span class="side-kicker">Side chat · ${x.msgs.length} message${x.msgs.length === 1 ? "" : "s"} · about ${esc(x.about.d.ref)}</span><span class="side-text">${esc(line(x.title, 120))}</span></button></li>`).join("") });
+      $(".composer textarea").placeholder = s ? "Ask in this side chat, or type @ or /" : "Message the fleet, or type @ or /";
+      if (end) $(".chat-log").scrollTop = $(".chat-log").scrollHeight;
+      opts.onDraw?.();
+    };
+    const answer = (d, side) => {
+      const list = ANSWERS[d.id] || [[d.fleet, "Noted."]];
+      list.forEach(([from, text], i) => setTimeout(() => { (side ? side.msgs : st.main).push(mkMsg([0, from, text], side ? { side: side.id } : {})); draw(); opts.onAnswer?.(d, side); }, 900 + i * 900));
+    };
+    const ctl = {
+      st,
+      focus: () => focus,
+      show(id) { focus = id; draw(); },
+      /** Posts a question about `c` to the main thread or a new side chat; the chat follows it. */
+      post(text, c, where) {
+        const about = c ? { id: c.d.id, ref: c.d.ref, title: c.d.title, part: c.part } : null;
+        const quote = c?.quote ? { from: `${c.d.ref} on its page`, text: c.quote } : null;
+        if (where === "side" && c) {
+          const s = { id: Math.max(...st.sides.map((x) => x.id)) + 1, title: c.quote || c.part || c.d.title, about: c, mine: true, anchor: st.main[st.main.length - 1].id, archived: false, unread: 0, msgs: [] };
+          s.msgs.push(mkMsg([0, "user", text], { side: s.id }));
+          st.sides.push(s);
+          focus = s.id;
+          draw(); answer(c.d, s);
+          return s;
+        }
+        if (where === "side" && focus !== null) { const s = st.sides.find((x) => x.id === focus); s.msgs.push(mkMsg([0, "user", text], { side: s.id })); draw(); answer(s.about?.d || decisionById("d44"), s); return s; }
+        st.main.push(mkMsg([0, "user", text], { about, quote }));
+        focus = null; draw(); if (c) answer(c.d, null); else setTimeout(() => { st.main.push(mkMsg([0, "infra-coordinator", "Noted."])); draw(); }, 900);
+        return null;
+      },
+      thread(d) { return { main: st.main.filter((m) => m.about?.id === d.id || (m.from !== "user" && st.main[st.main.indexOf(m) - 1]?.about?.id === d.id)), sides: st.sides.filter((s) => s.mine && s.about.d.id === d.id) }; },
+    };
+    body.addEventListener("click", (e) => {
+      if (e.target.closest("[data-side-back]")) { focus = null; draw(); return; }
+      const sl = e.target.closest("[data-side]"); if (sl) { focus = Number(sl.dataset.side); draw(); }
+    }, { signal });
+    draw();
+    return ctl;
+  }
+
+  /** The bar a text selection on the decision's page offers, as the real page's: Copy, Reply, Side chat. */
+  function pageSelTool(stage, signal, onPick) {
+    const tool = document.createElement("div");
+    tool.className = "seltool"; tool.hidden = true; tool.setAttribute("role", "toolbar");
+    tool.innerHTML = `<button type="button" data-sel="copy">Copy</button><button type="button" data-sel="main">Reply</button><button type="button" data-sel="side">Side chat</button>`;
+    stage.appendChild(tool);
+    let picked = null;
+    document.addEventListener("selectionchange", () => {
+      const sel = getSelection();
+      const text = sel && !sel.isCollapsed ? sel.toString().trim() : "";
+      const node = sel?.anchorNode?.parentElement;
+      const page = node?.closest?.(".dv");
+      if (!text || !page || node.closest("textarea, .ak-pop, .ak-onpage")) { tool.hidden = true; picked = null; return; }
+      const blk = node.closest("[data-blk]");
+      picked = { text, part: blk?.dataset.part || null };
+      const r = sel.getRangeAt(0).getBoundingClientRect();
+      tool.hidden = false;
+      tool.style.top = Math.max(8, r.top - 50) + "px";
+      tool.style.left = Math.min(innerWidth - 240, Math.max(8, r.left + r.width / 2 - 110)) + "px";
+    }, { signal });
+    tool.addEventListener("pointerdown", (e) => e.preventDefault(), { signal });
+    tool.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-sel]");
+      if (!b || !picked) return;
+      if (b.dataset.sel === "copy") { navigator.clipboard?.writeText(picked.text).catch(() => {}); return; }
+      const p = picked; tool.hidden = true; getSelection().removeAllRanges(); onPick(p, b.dataset.sel);
+    }, { signal });
+  }
+  const PARTS = (d) => ({ question: "The question", why: d.blocking ? "What it blocks" : "Meanwhile", recommended: "Recommended" });
+  const partName = (d, key) => key.startsWith("option:") ? (() => { const o = d.options.find((x) => x.id === key.slice(7)); return `Option ${o.id}: ${o.label}`; })() : key.startsWith("q:") ? `${key.slice(2)}: ${d.grill.find((q) => q.id === key.slice(2)).text}` : PARTS(d)[key];
+  const tagBlocks = (d) => (key, html) => `<div class="ak-blk" data-blk="${key}" data-part="${esc(partName(d, key))}">${html}</div>`;
+  const pickDecision = `<div class="ak-pick proto-own">Try it on <button type="button" data-ak-d="d44" class="ak-pickb">D44</button><button type="button" data-ak-d="a22" class="ak-pickb">A22</button><button type="button" data-ak-d="g4" class="ak-pickb">G4</button></div>`;
+
+  /* ---------- 1. Dock: the page hands the question to the chat's one composer ---------- */
+  function Dock(stage, signal) {
+    let ctx = null, where = "main", cw = null, ctl;
+    const ui = mountShell(stage, {
+      view: "decisions", decision: "d44",
+      decisionOpts: (d) => ({ block: tagBlocks(d), headExtra: `<button type="button" class="btn small ak-ask" data-ask>${I.chat}Ask in chat</button>`, actions: `<button type="button" class="btn" data-ask>${I.chat}Ask in chat</button>`, afterInfo: pickDecision }),
+    }, signal);
+    ctl = chatCtl(stage, ui, signal, { above: `<div class="ak-row" hidden>${dest("dock", "main")}<span class="ak-hint">Enter sends · Shift+Enter a new line</span></div>` });
+    const comp = stage.querySelector("#chat-body .composer");
+    const setCtx = (c, w = where) => {
+      ctx = c; where = w;
+      const chips = comp.querySelector(".chips");
+      chips.hidden = !c; chips.innerHTML = c ? chip(c) : "";
+      comp.querySelector(".ak-row").hidden = !c;
+      comp.querySelectorAll("[data-dest]").forEach((b) => { b.setAttribute("aria-pressed", String(b.dataset.dest === where)); b.setAttribute("aria-checked", String(b.dataset.dest === where)); });
+      comp.querySelector("textarea").placeholder = c ? (where === "side" ? `Start a side chat about ${c.d.ref}, or type @ or /` : `Ask about ${c.d.ref} in the chat, or type @ or /`) : "Message the fleet, or type @ or /";
+    };
+    cw = wireComposer(comp, { signal, onSend: (text) => {
+      if (ctx) { ctl.post(text, ctx, where); setCtx(null, "main"); }
+      else ctl.post(text, null, ctl.focus() !== null ? "side" : "main");
+    } });
+    const ask = (c, w) => { setCtx(c, w); ui.openChat(); requestAnimationFrame(() => cw.focus()); };
+    stage.addEventListener("click", (e) => {
+      const t = e.target;
+      if (t.closest("[data-ask]")) { ask({ d: decisionById(ui.decision) }, where); return; }
+      const dd = t.closest("[data-ak-d]"); if (dd) { ui.keepScroll = true; ui.show("decisions", dd.dataset.akD); ui.keepScroll = false; return; }
+      if (t.closest(".ak-x")) { setCtx(null); cw.focus(); return; }
+      const ds = t.closest("[data-dest]"); if (ds && ctx) { setCtx(ctx, ds.dataset.dest); cw.focus(); }
+    }, { signal });
+    pageSelTool(stage, signal, (p, w) => ask({ d: decisionById(ui.decision), part: p.part, quote: p.text }, w));
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && ctx && document.activeElement === comp.querySelector("textarea") && stage.querySelector("#chat-body .mentions").hidden) { e.preventDefault(); setCtx(null); } }, { capture: true, signal });
+  }
+
+  /* ---------- 2. On the page: the composer lives under the decision, its answers with it ---------- */
+  function OnPage(stage, signal) {
+    let where = "main", ctl, quote = null, pageAbort = null;
+    const onPageBox = (d) => `<section class="ak-onpage" aria-label="Ask about ${esc(d.ref)}">
+        <h3 class="ak-h">Ask about ${esc(d.ref)}</h3>
+        ${composer({ cls: "ak-pcomp", chip: chip({ d }, false), placeholder: `A question for ${d.fleet} or @${d.agent || "a worker"}, or type /`, below: `<div class="ak-row">${dest("page", where)}<span class="ak-hint">Answers show here and in the chat</span></div>` })}
+        <div class="ak-here"></div></section>`;
+    const ui = mountShell(stage, {
+      view: "decisions", decision: "d44",
+      decisionOpts: (d) => ({ block: tagBlocks(d), afterInfo: pickDecision + onPageBox(d), actions: `<button type="button" class="btn" data-ask-jump>${I.chat}Ask about ${esc(d.ref)}</button>` }),
+      onView: (u) => wirePage(u),
+    }, signal);
+    function drawHere() {
+      const box = stage.querySelector(".ak-here");
+      if (!box || !ctl) return;
+      const d = decisionById(ui.decision);
+      const t = ctl.thread(d);
+      box.innerHTML = (t.main.length ? `<div class="ak-thread"><div class="ak-th"><span>In the main chat</span><button type="button" class="ak-open" data-open-main>Open in chat</button></div><ol class="thread-list">${renderLog(t.main, { noDays: true })}</ol></div>` : "")
+        + t.sides.map((s) => `<div class="ak-thread"><div class="ak-th"><span>Side chat · ${esc(line(s.title, 50))}</span><button type="button" class="ak-open" data-open-side="${s.id}">Open in chat</button></div><ol class="thread-list">${renderLog(s.msgs, { noDays: true })}</ol></div>`).join("");
+    }
+    function wirePage(u) {
+      pageAbort?.abort(); pageAbort = new AbortController();
+      const comp = stage.querySelector(".ak-pcomp");
+      if (!comp) return;
+      const d = decisionById(u.decision);
+      const sync = () => {
+        comp.querySelectorAll("[data-dest]").forEach((b) => { b.setAttribute("aria-pressed", String(b.dataset.dest === where)); b.setAttribute("aria-checked", String(b.dataset.dest === where)); });
+        comp.querySelector(".chips").innerHTML = chip({ d, quote: quote?.text, part: quote?.part }, !!quote);
+      };
+      sync();
+      const cw = wireComposer(comp, { signal: AbortSignal.any([signal, pageAbort.signal]), under: true, onSend: (text) => { ctl.post(text, { d, quote: quote?.text, part: quote?.part }, where); quote = null; sync(); drawHere(); } });
+      comp.addEventListener("click", (e) => {
+        const ds = e.target.closest("[data-dest]"); if (ds) { where = ds.dataset.dest; sync(); cw.focus(); }
+        if (e.target.closest(".ak-x")) { quote = null; sync(); cw.focus(); }
+      }, { signal: pageAbort.signal });
+      u._focusAsk = (q, w) => { quote = q; if (w) where = w; sync(); comp.scrollIntoView({ block: "center", behavior: "smooth" }); cw.focus(); };
+      drawHere();
+    }
+    ctl = chatCtl(stage, ui, signal, { onDraw: drawHere, onAnswer: drawHere });
+    wirePage(ui);
+    const chatComp = stage.querySelector("#chat-body .composer");
+    wireComposer(chatComp, { signal, onSend: (text) => ctl.post(text, null, ctl.focus() !== null ? "side" : "main") });
+    stage.addEventListener("click", (e) => {
+      const t = e.target;
+      const dd = t.closest("[data-ak-d]"); if (dd) { ui.keepScroll = true; ui.show("decisions", dd.dataset.akD); ui.keepScroll = false; return; }
+      if (t.closest("[data-ask-jump]")) { ui._focusAsk?.(null); return; }
+      if (t.closest("[data-open-main]")) { ctl.show(null); ui.openChat(); return; }
+      const os = t.closest("[data-open-side]"); if (os) { ctl.show(Number(os.dataset.openSide)); ui.openChat(); }
+    }, { signal });
+    pageSelTool(stage, signal, (p, w) => ui._focusAsk?.(p, w));
+  }
+
+  /* ---------- 3. Margin: every block of the page has its own Ask, a small composer under it ---------- */
+  function Margin(stage, signal) {
+    let ctl, pop = null, popAbort = null;
+    const marks = {}; // block key -> side id or "main"
+    const ui = mountShell(stage, {
+      view: "decisions", decision: "d44",
+      decisionOpts: (d) => ({ afterInfo: pickDecision, block: (key, html) => `<div class="ak-blk ak-m" data-blk="${key}" data-part="${esc(partName(d, key))}">${html}<div class="ak-mside"><button type="button" class="ak-mbtn" data-mask="${key}" aria-label="Ask about ${esc(partName(d, key))}" title="Ask about this">${I.chat}<span>Ask</span></button><span class="ak-marks" data-marks="${key}"></span></div></div>` }),
+      onView: (u) => { closePop(); drawMarks(u); },
+    }, signal);
+    ctl = chatCtl(stage, ui, signal, { onAnswer: () => drawMarks(ui) });
+    wireComposer(stage.querySelector("#chat-body .composer"), { signal, onSend: (text) => ctl.post(text, null, ctl.focus() !== null ? "side" : "main") });
+    function drawMarks(u = ui) {
+      const d = decisionById(u.decision);
+      stage.querySelectorAll("[data-marks]").forEach((el) => {
+        const m = marks[d.id + ":" + el.dataset.marks];
+        if (!m) { el.innerHTML = ""; return; }
+        const s = m === "main" ? null : ctl.st.sides.find((x) => x.id === m);
+        el.innerHTML = `<button type="button" class="ak-mark" data-goto="${m}">${s ? I.side : I.chat}${s ? `Side chat · ${s.msgs.length}` : "In the chat"}</button>`;
+      });
+    }
+    function closePop() { popAbort?.abort(); pop?.remove(); pop = null; stage.querySelectorAll(".ak-blk.asking").forEach((b) => b.classList.remove("asking")); }
+    function openPop(blk, quote = null, preset = null) {
+      closePop();
+      const d = decisionById(ui.decision);
+      const key = blk.dataset.blk, part = blk.dataset.part;
+      const c = { d, part, quote };
+      blk.classList.add("asking");
+      pop = document.createElement("div");
+      pop.className = "ak-pop";
+      pop.innerHTML = composer({ cls: "ak-popcomp", chip: chip(c, false), placeholder: `About ${part.split(":")[0]}… type @ or /`, below: `<div class="ak-popact"><span class="ak-hint"><kbd>↵</kbd> side chat · <kbd>${navigator.platform.includes("Mac") ? "⌘" : "Ctrl"}</kbd>+<kbd>↵</kbd> main chat · <kbd>Esc</kbd></span><button type="button" class="btn small" data-pop-main>${I.chat}Main chat</button><button type="button" class="btn small primary" data-pop-side>${I.side}Side chat</button></div>` });
+      blk.after(pop);
+      popAbort = new AbortController();
+      const sig = AbortSignal.any([signal, popAbort.signal]);
+      const comp = pop.querySelector(".composer");
+      comp.querySelector(".send").hidden = true;
+      const go = (where) => {
+        const text = comp.querySelector("textarea").value.trim();
+        if (!text) { comp.querySelector("textarea").focus(); return; }
+        const s = ctl.post(text, c, where);
+        marks[d.id + ":" + key] = s ? s.id : "main";
+        closePop(); drawMarks(); ui.openChat();
+      };
+      const cw = wireComposer(comp, { signal: sig, under: true, onSend: (_t, e) => go(e.metaKey || e.ctrlKey ? "main" : "side") });
+      pop.addEventListener("click", (e) => { if (e.target.closest("[data-pop-main]")) go("main"); if (e.target.closest("[data-pop-side]")) go("side"); }, { signal: sig });
+      pop.addEventListener("keydown", (e) => { if (e.key === "Escape" && comp.querySelector(".mentions").hidden) { e.preventDefault(); closePop(); blk.querySelector(".ak-mbtn")?.focus(); } }, { signal: sig });
+      if (preset) cw.set(preset);
+      cw.focus();
+    }
+    stage.addEventListener("click", (e) => {
+      const t = e.target;
+      const dd = t.closest("[data-ak-d]"); if (dd) { ui.keepScroll = true; ui.show("decisions", dd.dataset.akD); ui.keepScroll = false; return; }
+      const mb = t.closest("[data-mask]"); if (mb) { const blk = mb.closest(".ak-blk"); blk.classList.contains("asking") ? closePop() : openPop(blk); return; }
+      const g = t.closest("[data-goto]"); if (g) { ctl.show(g.dataset.goto === "main" ? null : Number(g.dataset.goto)); ui.openChat(); }
+    }, { signal });
+    pageSelTool(stage, signal, (p) => { const blk = stage.querySelector(`.ak-blk[data-part="${CSS.escape(p.part || "The question")}"]`) || stage.querySelector(".ak-blk"); openPop(blk, p.text); });
+  }
+
+  window.variants = [Dock, OnPage, Margin];
+})();
+
+</script>
+<script>
+// The picker's reference wiring (PICKER.md), with one adaptation for this ground: a variant is a function
+// that mounts into the stage (and gets an AbortSignal to drop its listeners when it is swapped out).
+const stage = document.getElementById('stage');
+const picker = document.querySelector('.proto-picker');
+const highlight = picker.querySelector('.proto-picker-highlight');
+const items = [...picker.querySelectorAll('.proto-picker-item:not(.proto-picker-replay)')];
+const replay = picker.querySelector('.proto-picker-replay');
+let current = 0;
+let mounted = null;
+
+// A phone's dock and composer sit bottom-center: there the picker goes to the top (PICKER.md's one allowed change).
+if (matchMedia('(max-width: 759.98px)').matches && window.PICKER_TOP_ON_PHONE !== false) picker.dataset.position = 'top';
+
+function moveHighlight() {
+  const el = items[current];
+  highlight.style.width = el.offsetWidth + 'px';
+  highlight.style.transform = `translateX(${el.offsetLeft}px)`;
+}
+
+function mount(i) {
+  mounted?.abort();
+  stage.innerHTML = '';
+  // Clear first, render next frame, so entrance animations re-run.
+  requestAnimationFrame(() => { mounted = new AbortController(); variants[i](stage, mounted.signal); });
+}
+
+function setActive(i) {
+  if (i < 0 || i >= variants.length) return;
+  current = i;
+  items.forEach((el, j) => {
+    el.toggleAttribute('data-active', j === i);
+    if (j === i) el.setAttribute('aria-current', 'true');
+    else el.removeAttribute('aria-current');
+  });
+  moveHighlight();
+  const url = new URL(location);
+  url.searchParams.set('v', i + 1);
+  history.replaceState(null, '', url);
+  mount(i);
+}
+
+items.forEach((el, i) => el.addEventListener('click', () => setActive(i)));
+replay?.addEventListener('click', () => mount(current));
+window.addEventListener('resize', moveHighlight);
+
+document.addEventListener('keydown', (e) => {
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const num = parseInt(e.key, 10);
+  if (num >= 1 && num <= variants.length) setActive(num - 1);
+  else if (e.key === 'ArrowRight') setActive((current + 1) % variants.length);
+  else if (e.key === 'ArrowLeft') setActive((current - 1 + variants.length) % variants.length);
+  else if (e.key === 'r' || e.key === 'R') mount(current);
+});
+
+setActive((parseInt(new URLSearchParams(location.search).get('v'), 10) || 1) - 1);
+// Enable the slide only after first paint, so load doesn't animate.
+requestAnimationFrame(() => requestAnimationFrame(() => picker.setAttribute('data-ready', '')));
+
+</script>
+</body>
+</html>

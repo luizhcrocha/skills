@@ -1,0 +1,5 @@
+[
+  { "file": "side-chats.html", "title": "Side chats, prototype", "question": "How should the user navigate side chats: see all of them, find one used minutes ago, archive and unarchive, and come back to the main thread where they left it (not at the top)?", "variants": ["Tabs", "Inbox", "Split"] },
+  { "file": "ask-in-chat.html", "title": "Ask in chat, prototype", "question": "Asking about a decision, action or grill from its page should feel the same as Reply / Side chat on selected text: a chip naming the item with a link back, main thread or side chat, @mentions and /skills. How do the entry point and the composer look and behave?", "variants": ["Dock", "Inline", "Margin"] },
+  { "file": "finder.html", "title": "Finder, prototype", "question": "Cmd+K: recents first, kinds as sections (5 rows and more) with Tab-cycled kind tabs and one-character prefixes, folded word-start matching with highlights, a key legend, a Mod+Enter second action, rows that never move. What shape?", "variants": ["Palette", "Preview", "Board"] }
+]
