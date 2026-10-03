@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import { atOrAfter, parseInstant } from "../clock.ts";
 import { ChatError } from "../errors.ts";
 import { readText, remove, resolvePath, writeText } from "../files.ts";
-import { answeredAt, silentWorkers } from "../health.ts";
+import { answeredAt, answeredGrill, silentWorkers } from "../health.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger, type Decision, type Ledger } from "../ledger/model.ts";
@@ -221,12 +221,38 @@ function nudgeLines(machine: Machine, root: string, told: Map<string, Json>, nud
   return lines;
 }
 
-/** For a coordinator's watch: its own silent workers, and the messages its workers left unanswered for
- * FLEET_NUDGE_S (ten minutes), each told once across watches. */
+/** The `!` lines for the grillings of `root` with every question answered and still open, whatever the
+ * chat said since: the fleet records each before other work. Each told once per round (its last change),
+ * so a watch armed again is not woken by it at once; `fleet state` says it at every command until then. */
+function answeredGrillings(root: string, told: Map<string, Json>): string[] {
+  const lines: string[] = [];
+
+  for (const d of numberedLedger(root)?.decisions ?? []) {
+    const mark = `grill:${d.id}:${d.revised !== undefined && d.revised !== null && d.revised !== "" ? d.revised : d.opened}`;
+
+    if (!answeredGrill(d) || (told.has(mark) && told.get(mark) !== false)) continue;
+    told.set(mark, true);
+    const ref = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
+    lines.push(
+      `! ${ref} (${oneLine(d.title)}): every question is answered and the grilling is still open. Record it now: ` +
+        `\`fleet state <dir> decision ${ref} --decide "..." --resolution "grilling finished"\`, or withdraw it with its reason.`,
+    );
+  }
+
+  return lines;
+}
+
+/** For a coordinator's watch: its own silent workers, the messages its workers left unanswered for
+ * FLEET_NUDGE_S (ten minutes), and its grillings answered and not recorded, each told once across watches. */
 export function ownSilent(machine: Machine, root: string): string[] {
   const toldPath = join(root, "watch-coordinator.told");
   const told = readTold(toldPath);
-  const lines = [...silentLines(machine, root, undefined, told), ...nudgeLines(machine, root, told, seconds(machine.env, "FLEET_NUDGE_S", NUDGE_S))];
+
+  const lines = [
+    ...silentLines(machine, root, undefined, told),
+    ...nudgeLines(machine, root, told, seconds(machine.env, "FLEET_NUDGE_S", NUDGE_S)),
+    ...answeredGrillings(root, told),
+  ];
 
   if (lines.length > 0) writeTold(toldPath, told);
 

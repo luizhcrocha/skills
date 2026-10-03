@@ -30,7 +30,7 @@ export function StatePill(props: { readonly d: Decision; readonly pending: Retur
         if (Core.isHeld(d)) return <PillAs cls="held" text="with the fleet" />;
         const g = grill();
 
-        if (g) return g.toAnswer ? <PillAs cls="open" text={`${g.toAnswer} to answer`} /> : <PillAs cls="held" text={g.waiting ? "answers sent" : "all answered"} />;
+        if (g) return g.toAnswer ? <PillAs cls="open" text={`${g.toAnswer} to answer`} /> : <PillAs cls="held" text={g.answered ? "answered, waiting to be recorded" : "answers sent"} />;
 
         if (pending) {
           return (

@@ -113,6 +113,67 @@ describe("an answer on the page is recorded before other work", () => {
   });
 });
 
+describe("a grilling with every question answered is recorded before other work", () => {
+  const NAG = "state: every question of G1 (Search) is answered and the grilling is still open; record it before any other work: ";
+
+  function coordinatorSays(id: number, at: string, text: string, re: number | null): void {
+    const line = JSON.stringify({ id, at, from: "coordinator", to: ["user"], text, re, decision: "g1" });
+    writeFileSync(join(root, "chat.jsonl"), `${line}\n`, { flag: "a" });
+  }
+
+  /** G1 with both questions answered on the page and recorded, the last answer replied to with a recap, then amendments. */
+  function answered(): void {
+    ok("grill", "g1", "--title", "Search", "--ask", "Seam | one or many? | one | less code", "--ask", "Tier | local first? | yes | it is faster");
+    userSays(1, "2026-01-05T09:05:00+00:00", "Q1: one\nQ2: yes", "g1");
+    ok("grill", "g1", "--answer", "Q1: one", "--answer", "Q2: yes");
+    coordinatorSays(2, "2026-01-05T09:06:00+00:00", "That empties the tree. Say 'confirm' and I start.", 1);
+    coordinatorSays(3, "2026-01-05T09:07:00+00:00", "The advisor's amendments, before you confirm: ...", null);
+  }
+
+  test("every command says so, whatever the chat said after the last answer, until it is decided", () => {
+    answered();
+    const warned = ok("event", "something else").stderr;
+    expect(warned).toContain(NAG);
+    expect(warned).toContain('decision G1 --decide "..." --resolution "grilling finished"');
+    expect(warned).not.toContain("the user answered G1");
+    expect(ok("decision", "G1", "--decide", "one seam, local first", "--resolution", "grilling finished").stderr).not.toContain("every question of G1");
+    expect(ok("event", "later").stderr).not.toContain("every question of G1");
+  });
+
+  test("withdrawing it stops the warning too, and one with a question left is not warned about", () => {
+    answered();
+    ok("decision", "G1", "--withdraw", "moot");
+    expect(ok("event", "x").stderr).not.toContain("every question of");
+    ok("grill", "g2", "--title", "Dates", "--ask", "a | b | c | d", "--ask", "e | f | g | h");
+    ok("grill", "g2", "--answer", "Q1: b");
+    expect(ok("event", "y").stderr).not.toContain("every question of");
+  });
+
+  test("`show` reads it as answered and waiting to be recorded, then decided", () => {
+    answered();
+    expect(ok("show").stdout).toContain("  G1 decision g1 OPEN, answered, waiting to be recorded [grill] Search\n");
+    ok("decision", "G1", "--decide", "one seam", "--resolution", "grilling finished");
+    expect(ok("show").stdout).toContain("  G1 decision g1 decided [grill] Search: one seam\n");
+  });
+
+  test("the coordinator's watch names it once, and a watch after that stays quiet", async () => {
+    answered();
+    const watchEnv = { ...env, FLEET_NOW: "2026-01-05T09:10:00+00:00", FLEET_CHECK_S: "0.2" };
+    const first = start(["chat", root, "watch", "--as", "coordinator", "--resume", "--once"], watchEnv);
+    procs.push(first.proc);
+    expect(await first.lines.next()).toBe(
+      "! G1 (Search): every question is answered and the grilling is still open. Record it now: " +
+        '`fleet state <dir> decision G1 --decide "..." --resolution "grilling finished"`, or withdraw it with its reason.\n',
+    );
+    expect(await first.proc.exited).toBe(0);
+    const again = start(["chat", root, "watch", "--as", "coordinator", "--resume", "--once"], watchEnv);
+    procs.push(again.proc);
+    await Bun.sleep(1500);
+    expect(again.proc.exitCode).toBeNull();
+    again.proc.kill();
+  }, 20_000);
+});
+
 describe("a fleet set done says what it leaves open", () => {
   test("open decisions are named on `set --status done`", () => {
     ok("decision", "d1", ...CHOICE);

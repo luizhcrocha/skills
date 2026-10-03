@@ -289,7 +289,9 @@ def stale_rows(state: dict) -> str | None:
 
 def unrecorded(root, state: dict) -> list[str]:
     """What to say for each answer the user gave on the page that the ledger has not recorded: the page
-    shows it as sent and the fleet has not acted on it, so it is recorded before any other work."""
+    shows it as sent and the fleet has not acted on it, so it is recorded before any other work. A grilling
+    with every question answered is said so until it is decided or withdrawn, whatever the chat said after
+    the last answer (a reply to it, a recap, amendments)."""
     if not state or not state.get("decisions"):
         return []
     import copy
@@ -298,6 +300,10 @@ def unrecorded(root, state: dict) -> list[str]:
     said = chat.read(root)
     lines = []
     for d in numbered["decisions"]:
+        if decisions.answered_grill(d):
+            lines.append(f"state: every question of {d['ref']} ({d['title']}) is answered and the grilling is still open; record it before any other "
+                         f"work: `fleet state <dir> decision {d['ref']} --decide \"...\" --resolution \"grilling finished\"`, or --withdraw \"why\".")
+            continue
         at = d.get("status") == "open" and decisions.answered_at(d, said)
         if not at:
             continue
@@ -915,6 +921,8 @@ def cmd_show(state, args):
             status += ", with the manager"
         if d["status"] == "open" and d.get("held"):
             status += f", held by the fleet ({d['held']})"
+        if decisions.answered_grill(d):
+            status += ", answered, waiting to be recorded"
         outcome = d.get("answer") or d.get("resolution")
         print(f"  {d.get('ref', '')} decision {d['id']} {status} [{d['kind']}] {d['title']}" + (f": {outcome}" if outcome else ""))
     for link in state.get("links", []):

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { Message } from "../chat/store.ts";
 import { parseInstant } from "../clock.ts";
 import { Refusal } from "../errors.ts";
-import { answeredAt } from "../health.ts";
+import { answeredAt, answeredGrill } from "../health.ts";
 import { asArray, asNumber, asObject, asString, type JsonObject } from "../json.ts";
 import { readObject } from "../registry.ts";
 import { secondsNow, type Machine } from "../world.ts";
@@ -104,7 +104,9 @@ export function closedNamed(machine: Machine, ledger: Ledger, text: string): str
 }
 
 /** For each answer the user gave on the page that the ledger has not recorded: the page shows it as sent
- * and the fleet has not acted on it, so it is recorded before any other work. */
+ * and the fleet has not acted on it, so it is recorded before any other work. A grilling with every
+ * question answered is said so until it is decided or withdrawn, whatever the chat said after the last
+ * answer (a reply to it, a recap, amendments). */
 export function unrecorded(ledger: Ledger, said: readonly Message[]): string[] {
   const numbered = copyLedger(ledger);
   number(numbered);
@@ -112,6 +114,15 @@ export function unrecorded(ledger: Ledger, said: readonly Message[]): string[] {
 
   for (const d of numbered.decisions ?? []) {
     if (d.status !== "open") continue;
+
+    if (answeredGrill(d)) {
+      lines.push(
+        `state: every question of ${d.ref ?? d.id} (${d.title ?? "None"}) is answered and the grilling is still open; record it before any other ` +
+          `work: \`fleet state <dir> decision ${d.ref ?? d.id} --decide "..." --resolution "grilling finished"\`, or --withdraw "why".`,
+      );
+      continue;
+    }
+
     const at = answeredAt({ id: d.id, opened: d.opened, revised: d.revised ?? null, held: d.held ?? null, held_at: d.held_at ?? null }, said);
 
     if (at === undefined) continue;

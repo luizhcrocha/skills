@@ -186,7 +186,7 @@ The commands and the schema are in [DASHBOARD.md](DASHBOARD.md#decisions).
 
 ## Grillings and links
 
-A **grilling** (the `grilling` or `grill-me` skill, or any round of questions to settle a design) runs on the page, never as chat messages: `fleet state <dir> grill <id>` with one `--ask` per question. The `grilling` skill's "On a fleet dashboard" says how rounds, follow-ups, answers, and the end are recorded.
+A **grilling** (the `grilling` or `grill-me` skill, or any round of questions to settle a design) runs on the page, never as chat messages: `fleet state <dir> grill <id>` with one `--ask` per question. The `grilling` skill's "On a fleet dashboard" says how rounds, follow-ups, answers, and the end are recorded. A confirmation after the last answer (a recap, the advisor's amendments) is one more question of the grilling (`grill <id> --ask`), answerable on the page, never a chat message asking for "confirm". Once every question is answered, record the grilling at once (`grill <id> --done "what was agreed"`, or `decision <id> --withdraw "why"`): until then it waits on you, not on the user, and `fleet state` says so at every command.
 
 A **link** names a place the user opens: `fleet state <dir> link <id> --url <address> --title "<what it is>" --kind dev|page`. Record every dev server and every page a worker builds for the user (a review, a lab, a report), from the worker's report; `--decision` ties a page to the decision it serves, so the decision's page opens it; `--drop "why"` when it stops. The Links view lists them, up or down, and what the machine serves that no link names.
 

@@ -880,6 +880,26 @@ class ChatNudgeTest(FleetCase):
         self.say(3, "2026-01-05T08:40:00+00:00", "go", decision="x7")  # held after it: the fleet works on it
         self.assertEqual(self.tool("2026-01-05T08:50:00+00:00"), "")
 
+    def test_a_grilling_answered_and_not_recorded_whatever_the_chat_said_after(self):
+        question = lambda n, status: {"id": f"q{n}", "title": "T", "status": status, "asked": "2026-01-05T08:00:00+00:00"}
+        grilling = {"id": "g6", "ref": "G6", "kind": "grill", "title": "Search", "status": "open",
+                    "opened": "2026-01-05T08:00:00+00:00", "questions": [question(1, "answered"), question(2, "answered")]}
+        self.ledger(decisions=[grilling])
+        self.say(1, "2026-01-05T08:10:00+00:00", "Q2: ok", decision="g6")
+        self.say(2, "2026-01-05T08:10:30+00:00", "That empties the tree. Say 'confirm'.", frm="coordinator", to=("user",), re=1, decision="g6")
+        self.say(3, "2026-01-05T08:11:00+00:00", "The advisor's amendments.", frm="coordinator", to=("user",), decision="g6")
+        (self.fleet / "watch-coordinator.cursor").write_text("3")
+        self.assertEqual(self.tool("2026-01-05T08:12:00+00:00"), "")
+        self.assertEqual(self.tool("2026-01-05T08:14:00+00:00"),
+                         "Fleet: G6 (Search): every question is answered and the grilling is still open, not recorded for 4 min. "
+                         f'Record it now (`{self.fleet_cli} state {self.fleet} decision G6 --decide "..." --resolution "grilling finished"`).')
+        self.assertEqual(self.tool("2026-01-05T08:20:00+00:00"), "")  # told once
+        # A reply to an answer that leaves a question open hands nothing back: nothing is due.
+        self.ledger(decisions=[{**grilling, "id": "g7", "ref": "G7", "questions": [question(1, "answered"), question(2, "open")]}])
+        self.say(4, "2026-01-05T08:30:00+00:00", "Q1: ok", decision="g7")
+        self.say(5, "2026-01-05T08:30:30+00:00", "Recorded.", frm="coordinator", to=("user",), re=4, decision="g7")
+        self.assertEqual(self.tool("2026-01-05T08:40:00+00:00"), "")
+
     def test_at_most_three_lines_and_the_count(self):
         for n in range(1, 6):
             self.say(n, "2026-01-05T08:00:00+00:00", f"message {n}")

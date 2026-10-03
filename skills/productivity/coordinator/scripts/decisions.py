@@ -77,6 +77,16 @@ def answered_at(d: dict, said: list[dict]) -> str | None:
     return answers[-1]["at"] if answers else None
 
 
+def answered_grill(d: dict) -> bool:
+    """Whether `d` is a grilling still open with no question left open: every question is answered (or
+    dropped) and the fleet has yet to record it (`--decide` or `--withdraw`). Read from the ledger's question
+    statuses, whatever the chat said since; `show`, the state warnings and the coordinator's watch say it
+    from this. TypeScript's `answeredGrill` (fleet/src/health.ts)."""
+    questions = d.get("questions") if isinstance(d.get("questions"), list) else []
+    return d.get("kind") == "grill" and d.get("status") == "open" and not any(
+        isinstance(q, dict) and q.get("status") == "open" for q in questions)
+
+
 def closed_because(item: dict) -> str:
     """Why an item takes no more answers or edits, in words for the user."""
     return f"{item['title']} is already {item['status']}: {item.get('resolution') or 'no reason recorded'}"

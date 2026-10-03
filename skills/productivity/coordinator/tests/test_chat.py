@@ -390,6 +390,33 @@ class NudgeTest(FleetDir):
         self.assertTrue(self.watch_at(30)[1].quiet(1.5))
 
 
+class AnsweredGrillingTest(FleetDir):
+    """A grilling with every question answered and still open is named on the coordinator's watch, once."""
+
+    def test_named_once_whatever_the_chat_said_after(self):
+        state = json.loads((self.root / "state.json").read_text())
+        q = lambda i: {"id": f"q{i}", "title": "T", "body": "B", "recommend": "R", "reason": "W", "of": None, "status": "answered",
+                       "answer": "a", "asked": "2026-01-05T09:00:00+00:00"}
+        state["decisions"] = [{"id": "g1", "kind": "grill", "title": "Search", "question": "Every question is answered", "why": "", "status": "open",
+                               "opened": "2026-01-05T09:00:00+00:00", "page": True, "options": [], "questions": [q(1), q(2)]}]
+        (self.root / "state.json").write_text(json.dumps(state))
+        chat.append(self.root, "user", "Q1: a\nQ2: a", allow_user=True)
+        chat.append(self.root, "coordinator", "Say 'confirm'.", re=1)
+        env = {**os.environ, "FLEET_NOW": "2026-01-05T09:10:00+00:00", "FLEET_CHECK_S": "0.2"}
+
+        def watch() -> tuple[subprocess.Popen, Lines]:
+            proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "coordinator", "--resume", "--once"],
+                                    stdout=subprocess.PIPE, text=True, encoding="utf-8", env=env)
+            self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdout.close()))
+            return proc, Lines(proc.stdout)
+
+        proc, lines = watch()
+        self.assertEqual(lines.next(), "! G1 (Search): every question is answered and the grilling is still open. Record it now: "
+                                       '`fleet state <dir> decision G1 --decide "..." --resolution "grilling finished"`, or withdraw it with its reason.\n')
+        self.assertEqual(proc.wait(timeout=5), 0)
+        self.assertTrue(watch()[1].quiet(1.5))
+
+
 class ServerTest(FleetDir):
     policy: str | None = None
     hosts: list[str] = []  # "{port}" is replaced by the worker's port

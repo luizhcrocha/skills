@@ -537,15 +537,37 @@ def _nudges(root, told: dict) -> list[str]:
     return lines
 
 
+def _answered_grillings(root, told: dict) -> list[str]:
+    """The `!` lines for the grillings of DIR with every question answered and still open, whatever the chat
+    said since: the fleet records each before other work. Each told once per round (its last change), so a
+    watch armed again is not woken by it at once; `fleet state` says it at every command until then."""
+    import copy
+    import decisions
+    state = copy.deepcopy(_state(root))
+    decisions.number(state)
+    lines = []
+    for d in state.get("decisions", []):
+        if not isinstance(d, dict):
+            continue
+        mark = f"grill:{d.get('id')}:{d.get('revised') or d.get('opened')}"
+        if not decisions.answered_grill(d) or told.get(mark):
+            continue
+        told[mark] = True
+        ref = d.get("ref") or d.get("id")
+        lines.append(f"! {ref} ({_one_line(d.get('title'))}): every question is answered and the grilling is still open. Record it now: "
+                     f"`fleet state <dir> decision {ref} --decide \"...\" --resolution \"grilling finished\"`, or withdraw it with its reason.")
+    return lines
+
+
 def _own_silent(root) -> list[str]:
-    """For a coordinator's watch: its own silent workers, and the messages its workers left unanswered for
-    NUDGE_S, each told once across watches (kept in DIR)."""
+    """For a coordinator's watch: its own silent workers, the messages its workers left unanswered for
+    NUDGE_S, and its grillings answered and not recorded, each told once across watches (kept in DIR)."""
     told_path = Path(root) / "watch-coordinator.told"
     try:
         told = json.loads(told_path.read_text())
     except (OSError, ValueError):
         told = {}
-    lines = _silent(root, None, told) + _nudges(root, told)
+    lines = _silent(root, None, told) + _nudges(root, told) + _answered_grillings(root, told)
     if lines:
         told_path.write_text(json.dumps(told))
     return lines

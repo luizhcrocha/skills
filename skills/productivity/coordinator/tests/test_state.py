@@ -482,6 +482,34 @@ class StageFiveRulesTest(Fleet):
         self.ok("decision", "I1", "--decide", "eu", "--resolution", "answered on the page (#1)")
         self.assertNotIn("the user answered", self.run_cli("event", "y").stderr)
 
+    def answered_grilling(self) -> None:
+        """G1 with both questions answered on the page and recorded, the last answer replied to with a recap, then amendments."""
+        self.ok("grill", "g1", "--title", "Search", "--ask", "Seam | one or many? | one | less code", "--ask", "Tier | local first? | yes | it is faster")
+        said = [{"id": 1, "at": "2999-01-01T00:00:00+00:00", "from": "user", "to": ["coordinator"], "text": "Q1: one\nQ2: yes", "re": None, "decision": "g1"},
+                {"id": 2, "at": "2999-01-01T00:01:00+00:00", "from": "coordinator", "to": ["user"], "text": "Say 'confirm'.", "re": 1, "decision": "g1"},
+                {"id": 3, "at": "2999-01-01T00:02:00+00:00", "from": "coordinator", "to": ["user"], "text": "Amendments.", "re": None, "decision": "g1"}]
+        self.ok("grill", "g1", "--answer", "Q1: one", "--answer", "Q2: yes")
+        (self.root / "chat.jsonl").write_text("".join(json.dumps(m) + "\n" for m in said))
+
+    def test_a_grilling_with_every_question_answered_is_recorded_before_other_work(self):
+        self.answered_grilling()
+        warned = self.run_cli("event", "x").stderr
+        self.assertIn("state: every question of G1 (Search) is answered and the grilling is still open; record it before any other work: ", warned)
+        self.assertIn('decision G1 --decide "..." --resolution "grilling finished"', warned)
+        self.assertNotIn("the user answered G1", warned)
+        self.assertIn("  G1 decision g1 OPEN, answered, waiting to be recorded [grill] Search\n", self.ok("show"))
+        self.ok("decision", "G1", "--decide", "one seam", "--resolution", "grilling finished")
+        self.assertNotIn("every question of", self.run_cli("event", "y").stderr)
+        self.assertIn("  G1 decision g1 decided [grill] Search: one seam\n", self.ok("show"))
+
+    def test_a_grilling_withdrawn_or_with_a_question_left_is_not_warned_about(self):
+        self.answered_grilling()
+        self.ok("decision", "G1", "--withdraw", "moot")
+        self.assertNotIn("every question of", self.run_cli("event", "x").stderr)
+        self.ok("grill", "g2", "--title", "Dates", "--ask", "a | b | c | d", "--ask", "e | f | g | h")
+        self.ok("grill", "g2", "--answer", "Q1: b")
+        self.assertNotIn("every question of", self.run_cli("event", "y").stderr)
+
     def test_done_with_open_decisions_names_them(self):
         self.ok("decision", "d1", "--kind", "input", "--title", "Region", "--question", "Which?", "--why", "w")
         self.assertIn("the fleet is done with I1 still open", self.run_cli("set", "--status", "done").stderr)

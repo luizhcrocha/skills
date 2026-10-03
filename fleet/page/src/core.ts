@@ -46,11 +46,13 @@ export interface Weight {
   readonly forYou: boolean;
 }
 
-/** The questions of a grilling in their threads, with how many wait on the viewer and on the fleet. */
+/** The questions of a grilling in their threads, with how many wait on the viewer and on the fleet, and
+ * whether every question is answered while it is still open: the fleet has yet to record it. */
 export interface Grilling {
   readonly questions: GrillEntry[];
   readonly toAnswer: number;
   readonly waiting: number;
+  readonly answered: boolean;
 }
 
 /** What the page spent, in four figures. */
@@ -965,7 +967,7 @@ export interface GrillEntry {
  * A grilling as its page shows it: the questions in reading order (a follow-up right under what it
  * follows), each with the answer the viewer sent and the fleet has not recorded yet (the latest "Q3: ..."
  * line of theirs about this grilling since the question was asked, and whether the fleet replied to it),
- * and how many still wait on the viewer.
+ * how many still wait on the viewer, and whether every question is answered and the fleet has yet to record it.
  */
 function grillState(given: Decision, messages: Iterable<Message> | null | undefined): Grilling {
   const { item, chat } = asItsFleet(given, messages);
@@ -1003,7 +1005,14 @@ function grillState(given: Decision, messages: Iterable<Message> | null | undefi
   qs.filter((q) => !q.of || !qs.some((p) => p.id === q.of)).forEach((q) => place(q, 0));
   const toAnswer = ordered.filter((e) => e.q.status === "open" && (!e.sent || e.sent.replied)).length;
 
-  return { questions: ordered, toAnswer, waiting: ordered.filter((e) => e.q.status === "open" && e.sent && !e.sent.replied).length };
+  return {
+    questions: ordered,
+    toAnswer,
+    waiting: ordered.filter((e) => e.q.status === "open" && e.sent && !e.sent.replied).length,
+    // The ledger's rule (`answeredGrill`, fleet/src/health.ts): open, no question left open. A fleet's grilling
+    // on the manager's page carries its open questions only, so none there reads the same.
+    answered: item.status === "open" && !ordered.some((e) => e.q.status === "open"),
+  };
 }
 
 /** The message a grilling's form sends: one "Q3: answer" line per question the viewer answered now. */

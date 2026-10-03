@@ -569,6 +569,12 @@ function Grill(props: { readonly d: Decision }): JSX.Element {
           </For>
         </div>
       </Show>
+      <Show when={g().answered}>
+        <div class="note recording" role="status">
+          <h3>Every question is answered</h3>
+          <p>The {m.host()} has yet to record it; the fleet acts on it once it is recorded.</p>
+        </div>
+      </Show>
       <Show when={settled().length}>
         <details class="dv-block gq-done">
           <summary>Settled ({settled().length})</summary>

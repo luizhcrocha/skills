@@ -254,6 +254,13 @@ Checked in this order:
   `revised`, and new questions or revisions clear a hold. The first round prints the `wait` line.
 - `--done SUMMARY` needs no open question (`Q2, Q3 still open: answer them, drop them, or ask
   what is left`) and closes it decided with resolution `grilling finished`.
+- **Answered, waiting to be recorded**: an open grilling with no question left open (every one
+  answered or dropped). One rule (`answeredGrill`, fleet/src/health.ts; `decisions.answered_grill`),
+  read from the questions' statuses whatever the chat said since: `show` reads `OPEN, answered,
+  waiting to be recorded`, every state command warns ([warning 4](#warnings)), the coordinator's
+  watch and the mid-turn nudge say it, and the page (`grillState`'s `answered`, by the same rule)
+  lists it under Waiting with the pill `answered, waiting to be recorded` and a note on its page,
+  until `--done`, `--decide` or `--withdraw` closes it.
 
 **event** `[--agent A] [--kind spawned|reported|blocked|resolved|asked|decision|note|integrated] [--important] TEXT`:
 logs one event (kind note by default). `--agent` must be a worker row (a manager's: any name).
@@ -370,7 +377,11 @@ After the handler succeeds, before validation, on stderr, in this order (not for
    before any other work: \`fleet state <dir> decision D3 --decide "..." --resolution "answered on the
    page (#14)"\`, then answer #14 with --re.`), one line per open decision of the ledger the command
    leaves whose answer the user gave on the page after it was opened or last revised (instants), and
-   after `held_at` when it is held, with no reply from anyone but the user. Not for `init`.
+   after `held_at` when it is held, with no reply from anyone but the user. Not for `init`. A
+   grilling answered and waiting to be recorded (see `grill`) gets its own line instead, whatever
+   the chat said after its last answer (a reply, a recap, amendments): `state: every question of G6
+   (<title>) is answered and the grilling is still open; record it before any other work: \`fleet
+   state <dir> decision G6 --decide "..." --resolution "grilling finished"\`, or --withdraw "why".`
 5. **Decisions left open** (`state: the fleet is done with D1, A2 still open: withdraw each with its
    reason (\`decision ID --withdraw "why"\`), or name it in your last message as left open on
    purpose.`) on the `set --status done` that finds them open.
@@ -465,7 +476,10 @@ that long without recording it, a running worker silent for 20 minutes. Each is 
 one of its workers that the worker has not answered (no message of its own with that `re`) for
 `FLEET_NUDGE_S`: `! worker a1 (notes-impl) has not answered #12 from user for 10 min: "<text, 120
 chars>". Forward it (SendMessage a1).` (L1: workers read their inbox at checkpoints; only a message
-left this long is forwarded). Each told once (`watch-coordinator.told`). `--once` exits after the first batch it prints.
+left this long is forwarded), and each grilling answered and waiting to be recorded: `! G6 (<title>):
+every question is answered and the grilling is still open. Record it now: \`fleet state <dir> decision
+G6 --decide "..." --resolution "grilling finished"\`, or withdraw it with its reason.` (once per round:
+the mark is its `revised`, else `opened`). Each told once (`watch-coordinator.told`). `--once` exits after the first batch it prints.
 
 **The other fleets' news** (`watch --as manager --fleets`, M20): the manager's watch also reads every
 served fleet's `chat.jsonl` and `state.json` (the manager's own DIR and any `manager` entry left out) and
@@ -988,6 +1002,11 @@ hook: a broken `chat.jsonl` or ledger is skipped, an error is logged.
     read or not: `Fleet: #82 from the user answers A7 (<title>), not recorded for 12 min: "<text>". Record
     it now (`<fleet> state DIR decision A7 --decide "..." --resolution "answered on the page (#82)"`),
     then answer #82 with --re.`
+  - an answer to a grilling that is then answered and waiting to be recorded, even when the fleet
+    replied to it (a reply to an answer to a decision keeps it pending; otherwise it is dropped when
+    due): `Fleet: G6 (<title>): every question is answered and the grilling is still open, not
+    recorded for 4 min. Record it now (\`<fleet> state DIR decision G6 --decide "..." --resolution
+    "grilling finished"\`).`
   Each message is told once. No process, no ledger read until something is due. Measured on a chat of
   2,000 lines: 0.96 ms median in process for a first look with an item due, 0.20 ms for the usual look
   from a kept offset.

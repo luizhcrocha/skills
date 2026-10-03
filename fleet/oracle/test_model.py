@@ -501,7 +501,9 @@ class Model:
                 found["now"] = f"(said {int(age // 60)} min ago)" if age is not None else "(never stamped)"
         elif any(self.closed_ref(m) for m in REF.findall(c["now"])):
             found["names"] = "the Now line names"
-        if any(d["status"] == "open" and self.answered(k) for k, d in self.decisions.items()):
+        if any(self.answered_grill(d) for d in self.decisions.values()):
+            found["grill"] = "state: every question of"
+        if any(d["status"] == "open" and not self.answered_grill(d) and self.answered(k) for k, d in self.decisions.items()):
             found["answer"] = "state: the user answered"
         if c["cmd"] == "set" and c.get("status") == "done" and any(d["status"] == "open" for d in self.decisions.values()):
             found["open"] = "state: the fleet is done with"
@@ -510,6 +512,11 @@ class Model:
         if c["cmd"] == "agent" and self.mode != "shared" and self.starts_lane(c) and self.lane_hits(c["id"]):
             found["lanes"] = f"state: {c['id']}'s lane overlaps"
         return found
+
+    @staticmethod
+    def answered_grill(d: dict) -> bool:
+        """A grilling still open with no question left open: answered, waiting to be recorded."""
+        return d["kind"] == "grill" and d["status"] == "open" and "open" not in d.get("questions", [])
 
     def answered(self, did: str) -> bool:
         """The user answered decision `did` on the page after it last changed, and after the fleet held it, and

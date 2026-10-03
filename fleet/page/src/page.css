@@ -504,7 +504,7 @@
   .note.changed { border-left-color: var(--you); background: var(--you-soft); }
   .note.decided { border-left-color: var(--good); }
   .note.pending { border-left-color: var(--accent); background: var(--accent-soft); }
-  .note.held { border-left-color: var(--accent); }
+  .note.held, .note.recording { border-left-color: var(--accent); }
   .note .by { font-weight: 600; font-stretch: var(--narrow); color: var(--muted); }
   .options { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
   .option { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; align-items: start; padding: 13px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }

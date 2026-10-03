@@ -1,12 +1,13 @@
 /**
  * What a fleet looks like from outside its own session: the user's answers its coordinator has not
- * recorded, the workers the ledger says run but whose transcripts are silent. Read by `fleet fleets`
- * and by a manager's or coordinator's chat watch.
+ * recorded, the grillings answered and not recorded, the workers the ledger says run but whose
+ * transcripts are silent. Read by `fleet fleets` and by a manager's or coordinator's chat watch.
  */
 import { atOrAfter, stampOf } from "./clock.ts";
 import type { Message } from "./chat/store.ts";
 import { asArray, asObject, asString, pyRepr, truthy, type JsonObject } from "./json.ts";
 import { workerActivity } from "./heartbeat.ts";
+import type { Decision } from "./ledger/model.ts";
 import { secondsNow, type Machine } from "./world.ts";
 
 /** A running worker that has made no tool call (by its heartbeat) or written nothing (by its transcript,
@@ -20,6 +21,15 @@ export function isoOf(seconds: number): string {
 
 function str(value: JsonObject[string] | undefined): string {
   return asString(value) ?? (value === undefined || value === null ? "" : pyRepr(value));
+}
+
+/** Whether `d` is a grilling still open with no question left open: every question is answered (or
+ * dropped) and the fleet has yet to record it (`--decide` or `--withdraw`). Read from the ledger's
+ * question statuses, whatever the chat said since; `show`, the state warnings and the coordinator's
+ * watch say it from this, and the page's `grillState` by the same rule. Python's
+ * `decisions.answered_grill`. */
+export function answeredGrill(d: Pick<Decision, "kind" | "status" | "questions">): boolean {
+  return d.kind === "grill" && d.status === "open" && !(d.questions ?? []).some((q) => q.status === "open");
 }
 
 /** When the user's answer to the open decision `d`, given after it last changed and not replied to,

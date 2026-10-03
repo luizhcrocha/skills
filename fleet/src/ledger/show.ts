@@ -1,6 +1,7 @@
 /**
  * `show`: the ledger as text, then the command cheat sheet. It writes nothing (open-10).
  */
+import { answeredGrill } from "../health.ts";
 import { pyRepr } from "../json.ts";
 import { EVENT_KINDS, MODELS, NEEDS, SEVERITIES, SKILLS } from "./commands.ts";
 import type { Ledger } from "./model.ts";
@@ -83,6 +84,8 @@ export function showLines(ledger: Ledger): string[] {
     if (d.status === "open" && d.asks === "manager") status += ", with the manager";
 
     if (d.status === "open" && d.held !== undefined && d.held !== null && d.held !== "") status += `, held by the fleet (${d.held})`;
+
+    if (answeredGrill(d)) status += ", answered, waiting to be recorded";
     const answer = d.answer ?? "";
     const outcome = answer !== "" ? answer : (d.resolution ?? "");
     lines.push(`  ${d.ref ?? ""} decision ${d.id} ${status} [${d.kind}] ${d.title ?? "None"}${outcome === "" ? "" : `: ${outcome}`}`);
