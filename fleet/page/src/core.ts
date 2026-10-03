@@ -1075,7 +1075,7 @@ export interface Queue {
 
 /**
  * The decisions that wait on the viewer in the order of the "Waits on you" list, and the ones before and
- * after `id`. A decision still open keeps its place in that order once answered. One decided since, or gone
+ * after `id`, going round to the first after the last. A decision still open keeps its place in that order once answered. One decided since, or gone
  * from the state (a fleet's lists only its open ones), is placed by `waited`, the queue as it was while it
  * waited; else the next is the queue's first.
  */
@@ -1088,7 +1088,9 @@ function queueOf(decisions: readonly Decision[] | null | undefined, messages: It
   const order = (listed || !waited.includes(shown) ? rows.map((r) => r.item.id) : waited).filter((x) => x === shown || ids.includes(x));
   const here = order.indexOf(shown);
 
-  return { ids, at: ids.indexOf(shown) + 1, prev: here > 0 ? (order[here - 1] ?? null) : null, next: (here < 0 ? ids[0] : order[here + 1]) ?? null };
+  const round = order.find((x) => x !== shown && ids.includes(x)) ?? null;
+
+  return { ids, at: ids.indexOf(shown) + 1, prev: here > 0 ? (order[here - 1] ?? null) : null, next: (here < 0 ? ids[0] : (order[here + 1] ?? round)) ?? null };
 }
 
 /**

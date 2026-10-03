@@ -34,14 +34,14 @@ test("the queue is what waits on the user, in the order of the Waits on you list
 test("a decision in the queue: its place and the ones on either side", () => {
   expect(Core.queueOf(DECISIONS, [], "infra/d4")).toEqual({ ids: WAITED, at: 2, prev: "billing/d1", next: "d1" });
   expect(Core.queueOf(DECISIONS, [], "billing/d1")).toMatchObject({ at: 1, prev: null, next: "infra/d4" });
-  expect(Core.queueOf(DECISIONS, [], "d1")).toMatchObject({ at: 3, prev: "infra/d4", next: null });
+  expect(Core.queueOf(DECISIONS, [], "d1")).toMatchObject({ at: 3, prev: "infra/d4", next: "billing/d1" });
 });
 
 test("an answered decision still open keeps its place in the order: the next is the one after it", () => {
   const answered = DECISIONS.map((d) => (d.id === "infra/d4" ? { ...d, answered: "2026-09-28T10:50:00Z" } : d));
   expect(Core.queueOf(answered, [], "infra/d4")).toEqual({ ids: ["billing/d1", "d1"], at: 0, prev: "billing/d1", next: "d1" });
   const sent: Message = { id: 1, at: "2026-09-28T10:51:00Z", from: "user", to: ["coordinator"], text: "a", re: null, parts: [], decision: "d1", author: "", quote: null, side: null };
-  expect(Core.queueOf(DECISIONS, [sent], "d1")).toMatchObject({ ids: ["billing/d1", "infra/d4"], at: 0, prev: "infra/d4", next: null });
+  expect(Core.queueOf(DECISIONS, [sent], "d1")).toMatchObject({ ids: ["billing/d1", "infra/d4"], at: 0, prev: "infra/d4", next: "billing/d1" });
 });
 
 test("a decision decided since: its neighbours are the ones around where it waited", () => {
@@ -54,7 +54,7 @@ test("a decision decided since: its neighbours are the ones around where it wait
 test("a fleet's decision gone from the manager's state: its neighbours are the ones around where it waited", () => {
   const gone = DECISIONS.filter((d) => d.id !== "infra/d4");
   expect(Core.queueOf(gone, [], "infra/d4", WAITED)).toEqual({ ids: ["billing/d1", "d1"], at: 0, prev: "billing/d1", next: "d1" });
-  expect(Core.queueOf(gone.filter((d) => d.id !== "d1"), [], "infra/d4", WAITED)).toMatchObject({ prev: "billing/d1", next: null });
+  expect(Core.queueOf(gone.filter((d) => d.id !== "d1"), [], "infra/d4", WAITED)).toMatchObject({ prev: "billing/d1", next: "billing/d1" });
 });
 
 test("a decision that does not wait and never waited here, or none, starts the queue at its first", () => {
@@ -123,4 +123,9 @@ test("parseEmbedMessage: another decision of the fleet to open, or the finder; a
 
   for (const data of [{ fleetEmbed: true, open: "" }, { fleetEmbed: true, open: 4 }, { fleetEmbed: true, open: "d4/x" }, { fleetEmbed: true, finder: "yes" }, { fleetEmbed: false, open: "d4" }])
     expect(parseEmbedMessage(data)).toBeNull();
+});
+
+test("after the last, Next goes round to the first that still waits; with nothing else waiting there is none", () => {
+  expect(Core.queueOf(DECISIONS, [], "d1").next).toBe("billing/d1");
+  expect(Core.queueOf(DECISIONS.filter((d) => d.id === "d1"), [], "d1")).toMatchObject({ at: 1, prev: null, next: null });
 });
