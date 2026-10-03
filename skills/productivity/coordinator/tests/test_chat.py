@@ -39,11 +39,11 @@ def run_cli(root: Path, *args: str) -> subprocess.CompletedProcess:
 class FleetDir(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        # Cleanups run last-in first-out, and all after tearDown: registered first, the temp dir goes last,
+        # after every watch or server a test started has been killed and waited for.
+        self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
         write_state(self.root, [{"id": "a1", "name": "notes-impl"}, {"id": "a2", "status": "done"}])
-
-    def tearDown(self):
-        self._tmp.cleanup()
 
 
 def shared_cases():

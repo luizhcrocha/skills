@@ -14,10 +14,17 @@ concurrently, longest first. Each suite's output is printed whole when it ends, 
 PASS/FAIL line and duration, and a summary closes the run. Exit 1 when any suite or install
 failed. Every suite already works in throwaway temp dirs and ephemeral ports, so they share
 nothing else. Stdlib only.
+
+A suite that outlives its wall-clock limit is killed, process group and all, and reported as FAIL
+with "timed out after Ns" and the last lines of its output, so a hung worker fails the gate instead
+of holding it. `bun test` has no such limit of its own: its --timeout (default 5000 ms) is per test,
+and a hung --parallel worker process is outside any test. The limit is LIMITS[suite], about three times the
+suite's normal time, or one number for every suite: `--timeout SECONDS` or $GATES_TIMEOUT.
 """
 import argparse
 import fnmatch
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -43,6 +50,23 @@ SUITES = {
     "test-coordinator-page": (),  # page.test.mjs alone; test-coordinator runs it too
     "validate": (),
 }
+# Wall-clock limit per suite in seconds: about 3x its normal time, under the parallel gate's load.
+DEFAULT_LIMIT = 900
+LIMITS = {
+    "test-scripts": 600,
+    "test-coordinator": 300,
+    "test-fleet-ts-own": 600,
+    "test-fleet-ts-oracle": 600,
+    "test-page": 900,
+    "test-fleet": 600,
+    "test-lint-ts": 600,
+    "test-coordinator-page": 300,
+    "validate": 300,
+    "_deps-fleet": 600,
+    "_deps-lint": 600,
+    "_deps-page": 600,
+}
+TAIL_LINES = 25
 FULL = tuple(s for s in SUITES if s not in ("test-coordinator-page", "validate"))  # `just test`
 EVERYTHING = FULL + ("validate",)
 
@@ -97,30 +121,71 @@ def changed_paths(revset: str) -> list[str]:
 
 # -- running -------------------------------------------------------------------------------------
 _print_lock = threading.Lock()
+TIMED_OUT = 124  # timeout(1)'s exit code
 
 
-def _run(recipe: str) -> tuple[str, int, float, str]:
+def _kill_group(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def run_limited(argv: list[str], limit: float, cwd: Path | None = None) -> tuple[int, bool, float, str]:
+    """Run argv in its own process group; on `limit` seconds kill the whole group.
+
+    Returns (exit code, timed out, seconds, output). The output is read as it comes, so what a hung
+    suite printed before it hung survives the kill.
+    """
     start = time.monotonic()
-    done = subprocess.run(["just", "--no-deps", recipe], cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          stdin=subprocess.DEVNULL)
-    return recipe, done.returncode, time.monotonic() - start, done.stdout.decode("utf-8", "replace")
+    proc = subprocess.Popen(argv, cwd=cwd or REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            stdin=subprocess.DEVNULL, start_new_session=True)
+    chunks: list[bytes] = []
+    reader = threading.Thread(target=lambda: [chunks.append(c) for c in iter(lambda: proc.stdout.read1(65536), b"")],
+                              daemon=True)
+    reader.start()
+    timed_out = False
+    try:
+        proc.wait(timeout=limit)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+    _kill_group(proc)  # also reaps what the suite left behind when it exited on its own
+    proc.wait()
+    reader.join(5)
+    proc.stdout.close()
+    return proc.returncode, timed_out, time.monotonic() - start, b"".join(chunks).decode("utf-8", "replace")
+
+
+def _limit(recipe: str, override: float | None) -> float:
+    return override if override is not None else LIMITS.get(recipe, DEFAULT_LIMIT)
+
+
+def _run(recipe: str, override: float | None = None) -> tuple[str, int, float, str]:
+    limit = _limit(recipe, override)
+    code, timed_out, secs, out = run_limited(["just", "--no-deps", recipe], limit)
+    if timed_out:
+        lines = out.splitlines()[-TAIL_LINES:]
+        out = (f"gates: {recipe} timed out after {limit:g}s; its process group was killed. "
+               f"Last {len(lines)} line(s) of its output:\n" + "\n".join(lines) + "\n")
+        code = TIMED_OUT
+    return recipe, code, secs, out
 
 
 def _report(recipe: str, code: int, secs: float, out: str) -> None:
-    verdict = "PASS" if code == 0 else f"FAIL (exit {code})"
+    verdict = "PASS" if code == 0 else f"FAIL (timed out after {secs:.0f}s)" if code == TIMED_OUT else f"FAIL (exit {code})"
     with _print_lock:
         print(f"\n===== {recipe}: {verdict} in {secs:.1f}s =====", flush=True)
         sys.stdout.write(out if out.endswith("\n") or not out else out + "\n")
         print(f"===== end {recipe}: {verdict} =====", flush=True)
 
 
-def run(suites: list[str], jobs: int) -> int:
+def run(suites: list[str], jobs: int, timeout: float | None = None) -> int:
     t0 = time.monotonic()
     results: dict[str, tuple[int, float]] = {}
     deps = list(dict.fromkeys(d for s in suites for d in SUITES[s]))
     if deps:
         with ThreadPoolExecutor(len(deps)) as pool:
-            for recipe, code, secs, out in pool.map(_run, deps):
+            for recipe, code, secs, out in pool.map(lambda d: _run(d, timeout), deps):
                 if code != 0:
                     _report(recipe, code, secs, out)
                 results[recipe] = (code, secs)
@@ -129,14 +194,15 @@ def run(suites: list[str], jobs: int) -> int:
         return 1
     print(f"gates: running {', '.join(suites)} ({min(jobs, len(suites))} at a time)", flush=True)
     with ThreadPoolExecutor(max(1, jobs)) as pool:
-        for fut in as_completed([pool.submit(_run, s) for s in suites]):
+        for fut in as_completed([pool.submit(_run, s, timeout) for s in suites]):
             recipe, code, secs, out = fut.result()
             _report(recipe, code, secs, out)
             results[recipe] = (code, secs)
     print(f"\n===== summary ({time.monotonic() - t0:.1f}s wall) =====")
     for recipe in [*deps, *suites]:
         code, secs = results[recipe]
-        print(f"  {'PASS' if code == 0 else 'FAIL'}  {recipe:<22} {secs:6.1f}s")
+        verdict = "PASS" if code == 0 else "FAIL"
+        print(f"  {verdict}  {recipe:<22} {secs:6.1f}s")
     return 1 if any(code for code, _ in results.values()) else 0
 
 
@@ -154,12 +220,14 @@ def main(argv: list[str]) -> int:
     c.add_argument("--dry-run", action="store_true", help="print the choice and run nothing")
     for s in (a, c):
         s.add_argument("--jobs", type=int, default=default_jobs())
+        s.add_argument("--timeout", type=float, default=float(os.environ["GATES_TIMEOUT"]) if "GATES_TIMEOUT" in os.environ else None,
+                       metavar="SECONDS", help="wall-clock limit for every suite and install (default: LIMITS per suite; $GATES_TIMEOUT)")
     pl = sub.add_parser("plan")
     pl.add_argument("paths", nargs="+")
     args = p.parse_args(argv)
 
     if args.cmd == "all":
-        return run(list(FULL), args.jobs)
+        return run(list(FULL), args.jobs, args.timeout)
     paths = changed_paths(args.revset) if args.cmd == "changed" else args.paths
     if not paths:
         print(f"gates: nothing changed in {args.revset}; nothing to run")
@@ -174,7 +242,7 @@ def main(argv: list[str]) -> int:
             print(f"    … and {len(why) - 5} more")
     if args.cmd == "plan" or args.dry_run:
         return 0
-    return run(list(chosen), args.jobs)
+    return run(list(chosen), args.jobs, args.timeout)
 
 
 if __name__ == "__main__":
