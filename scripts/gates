@@ -156,8 +156,9 @@ def run_limited(argv: list[str], limit: float, cwd: Path | None = None) -> tuple
     suite printed before it hung survives the kill.
     """
     start = time.monotonic()
+    # A suite runs this checkout's fleet, never the newest tstack elsewhere on the machine.
     proc = subprocess.Popen(argv, cwd=cwd or REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            stdin=subprocess.DEVNULL, start_new_session=True)
+                            stdin=subprocess.DEVNULL, start_new_session=True, env={**os.environ, "FLEET_NO_FORWARD": "1"})
     chunks: list[bytes] = []
     reader = threading.Thread(target=lambda: [chunks.append(c) for c in iter(lambda: proc.stdout.read1(65536), b"")],
                               daemon=True)

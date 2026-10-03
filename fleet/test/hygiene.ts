@@ -23,7 +23,9 @@ const parent = mkdtempSync(join(outer, "fleet-test-run-"));
 
 writeFileSync(join(parent, "run.pid"), String(process.pid));
 
-Object.assign(process.env, { [MARK]: parent, TMPDIR: parent });
+// A `fleet` a test spawns forwards to the newest tstack on the machine unless told not to; the run
+// tests this copy's code.
+Object.assign(process.env, { [MARK]: parent, TMPDIR: parent, FLEET_NO_FORWARD: "1" });
 
 /** Pids of this run's processes still alive (not this one): marked in their environment, or running in or on the run's directory. */
 function survivors(owned: string = parent): number[] {
