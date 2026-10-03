@@ -1039,6 +1039,36 @@ function parseFleetDecision(id: string | null | undefined): { fleet: string; id:
   return id && at > 0 ? { fleet: id.slice(0, at), id: id.slice(at + 1) } : null;
 }
 
+/** An item a question is about as a whole: its id as this page addresses it ("d1", "<fleet>/d1"), its ref, title and question. */
+export interface ItemRef {
+  readonly id: string;
+  readonly ref?: string | undefined;
+  readonly title: string;
+  readonly question: string;
+}
+
+/**
+ * The quote a question about a whole item carries (Ask in the chat, Change my answer): its question as the
+ * text, its ref and title as where it is from (in `fleet`, on the manager's page), its page as the place.
+ * Not `decision`: a message that carries one is an answer.
+ */
+function itemQuote(d: ItemRef, fleet: string | null = null): Quote {
+  const name = [d.ref ?? "", d.title].filter(Boolean).join(" ");
+
+  return { text: excerptOf(d.question) || excerptOf(d.title) || d.title, from: fleet ? `${name}, in ${fleet}` : name, at: { hash: decisionHref(d.id), anchor: "dv-info" } };
+}
+
+/** The decision whose page a quote was taken on, as the page addresses it; null for any other place. */
+function quoteDecision(q: Quote | null | undefined): string | null {
+  const id = /^#decision\/(.+)$/u.exec(q?.at?.hash ?? "")?.[1];
+
+  try {
+    return id ? id.split("/").map(decodeURIComponent).join("/") : null;
+  } catch {
+    return null;
+  }
+}
+
 /** What waits on the viewer, in order, and where one decision stands in it. */
 export interface Queue {
   readonly ids: readonly string[];
@@ -1831,6 +1861,8 @@ export const Core = {
   decisionRoute,
   decisionHref,
   parseFleetDecision,
+  itemQuote,
+  quoteDecision,
   queueOf,
   pendingAnswer,
   awaiting,

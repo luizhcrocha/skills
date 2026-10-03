@@ -13,7 +13,6 @@ import { For, Match, Show, Switch, type JSX } from "@solidjs/web";
 import { listen, PillAs, RefTag, tf, usePage, Who } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
 import { Core, type Decision, type GrillEntry, type JsonRecord, type Queue } from "./core.ts";
-import { decisionThread } from "./chatlog.ts";
 import { DecisionThread } from "./DecisionThread.tsx";
 import { FRAME_MAX_PX, parseEmbedMessage, postAnswered } from "./embed.ts";
 import { clock } from "./format.ts";
@@ -196,140 +195,24 @@ function SlashField(props: { readonly id: string; readonly children: (caret: (el
   );
 }
 
-/** "Ask in the chat": inside the manager's page, which shows no chat of this fleet's, written on the decision's page. */
+/**
+ * "Ask in the chat" and "Side chat" on the item: the composer with the item quoted, in the main chat or a new
+ * side chat, as the selection toolbar's Reply and Side chat; inside the manager's frame, the manager's.
+ */
 function Discuss(): JSX.Element {
   const { m, ui } = usePage();
 
   return (
     <Show when={!m.embed || m.chatWritable()}>
-      <button type="button" class="btn" data-discuss onClick={() => (m.embed ? ui.askAbout(m.decisionById(m.viewing())) : ui.openChat())}>
+      <button type="button" class="btn" data-discuss onClick={() => ui.askAbout(m.decisionById(m.viewing()), false)}>
         Ask in the chat
       </button>
+      <Show when={m.chatWritable()}>
+        <button type="button" class="btn" data-discuss-side onClick={() => ui.askAbout(m.decisionById(m.viewing()), true)}>
+          Side chat
+        </button>
+      </Show>
     </Show>
-  );
-}
-
-/**
- * Inside the manager's frame, which has no chat: a message about the decision, written on its page and sent
- * to this fleet's chat as the composer sends it (to the coordinator), as a reply to the decision's thread when
- * it has one, so the thread above shows it and the answer.
- */
-function AskHere(props: { readonly d: Decision }): JSX.Element {
-  const { m, ui } = usePage();
-  const [error, setError] = createSignal("");
-  const [sent, setSent] = createSignal(false);
-  const [sending, setSending] = createSignal(false);
-  const asking = createMemo(() => (ui.askHere()?.id === props.d.id ? ui.askHere() : null));
-  let box: HTMLTextAreaElement | undefined;
-
-  createEffect(asking, (a) => {
-    if (!a || !box) return;
-    setSent(false);
-    setError("");
-    box.value = a.text;
-    box.focus();
-    box.setSelectionRange(a.text.length, a.text.length);
-    /* The frame is sized to its content and only the manager's page scrolls: the box is brought into view
-       there again once the manager has grown the frame to hold it (the frame's window resizes). */
-    const el = box;
-    el.scrollIntoView({ block: "center" });
-    addEventListener(
-      "resize",
-      () => {
-        if (document.activeElement === el) el.scrollIntoView({ block: "center" });
-      },
-      { once: true },
-    );
-  });
-
-  async function send(): Promise<void> {
-    const text = box?.value.trim() ?? "";
-
-    if (!text || sending()) return;
-    const thread = decisionThread(m.messages(), props.d.id, ui.askedAbout(props.d.id)).map((it) => it.message);
-    /* A reply to the viewer's own message or the host's is addressed to the host, as a plain message is. */
-    const re = thread.filter((x) => x.from === "user" || x.from === m.host()).at(-1)?.id;
-
-    const json = JSON.stringify(re === undefined ? { text } : { text, re });
-    const over = Core.tooBig(json, m.maxBytes());
-
-    if (over) {
-      setError(over);
-
-      return;
-    }
-
-    setSending(true);
-    setError("");
-
-    try {
-      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: json });
-      let body: ServerError | null = null;
-
-      try {
-        body = await res.json();
-      } catch {
-        body = null;
-      }
-
-      if (res.status !== 201) {
-        setError(body?.error || `The server refused the message (${res.status}). It is kept here.`);
-
-        return;
-      }
-
-      ui.addMessage(body, true);
-      const id = Number(body?.["id"]);
-
-      if (re === undefined && Number.isInteger(id)) ui.setAskedHere([...ui.askedHere(), { decision: props.d.id, id }]);
-      ui.setAskHere(null);
-      setSent(true);
-    } catch {
-      setError("Could not reach the dashboard's server. Your message is kept here; send it again when the server is back.");
-    } finally {
-      setSending(false);
-    }
-  }
-
-  return (
-    <>
-      <Show when={asking()}>
-        <div class="dv-ask" id="dv-ask">
-          <label class="field">
-            To the {m.host()}
-            <textarea
-              rows="3"
-              autocomplete="off"
-              ref={(el) => (box = el)}
-              onKeyDown={(e) => {
-                const action = Core.keyOf(e, m.coarse(), false);
-
-                if (action === "send") {
-                  e.preventDefault();
-                  void send();
-                } else if (action === "blur") box?.blur();
-              }}
-            />
-          </label>
-          <p class="chat-error" role="alert" hidden={!error()}>
-            {error()}
-          </p>
-          <div class="sheet-actions">
-            <button type="button" class="btn primary" data-ask-send disabled={sending()} onClick={() => void send()}>
-              Send
-            </button>
-            <button type="button" class="btn" onClick={() => ui.setAskHere(null)}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      </Show>
-      <Show when={sent() && !asking()}>
-        <p class="dv-meta" id="dv-ask-sent" role="status">
-          Sent to the {m.host()}. Its reply shows above, in the chat.
-        </p>
-      </Show>
-    </>
   );
 }
 
@@ -1123,6 +1006,8 @@ function FleetFrame(props: { readonly fleet: string; readonly id: string }): JSX
     if (said?.kind === "open") location.hash = Core.decisionHref(props.fleet + "/" + said.id);
 
     if (said?.kind === "finder") ui.openFinder();
+
+    if (said?.kind === "ask") ui.askAbout({ ...said.item, id: props.fleet + "/" + said.item.id }, said.side, said.text);
   });
 
   return (
@@ -1195,7 +1080,6 @@ function OwnDecision(props: { readonly d: Decision | undefined }): JSX.Element {
         <Show when={d()?.id} keyed>
           {(id) => <AnswerFor id={id} />}
         </Show>
-        <Show when={m.embed ? d() : undefined}>{(found) => <AskHere d={found()} />}</Show>
       </div>
     </>
   );

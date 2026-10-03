@@ -174,17 +174,25 @@ export function chatRows(all: readonly Message[], focus: number | "new" | null, 
 }
 
 /**
- * Decision `id`'s thread: the viewer's answers and notes on it, the messages `also` names, and every reply
- * to them, in order, as the chat would show them.
+ * Decision `id`'s thread: the viewer's answers and notes on it, what was asked about it (a message quoting its
+ * page, and the side chat such a message opens), and every reply to them, in order, as the chat would show them.
  */
-export function decisionThread(all: readonly Message[], id: string, also: readonly number[] = []): Item[] {
+export function decisionThread(all: readonly Message[], id: string): Item[] {
   const sorted = [...all].sort((a, b) => a.id - b.id);
   const trail = decisionTrail(sorted);
   const item = itemsOf(sorted);
-  const named = new Set(also);
+  const asked = new Set<number>();
+  const sides = new Set<number>();
 
-  for (const m of sorted) if (m.re != null && named.has(m.re)) named.add(m.id);
-  const items = sorted.flatMap((m) => (trail.get(m.id) === id || named.has(m.id) ? [item(m)] : []));
+  for (const m of sorted) {
+    const about = Core.quoteDecision(m.quote) === id;
+
+    if (about && m.side === m.id) sides.add(m.id);
+
+    if (about || (m.re != null && asked.has(m.re)) || (m.side != null && sides.has(m.side))) asked.add(m.id);
+  }
+
+  const items = sorted.flatMap((m) => (trail.get(m.id) === id || asked.has(m.id) ? [item(m)] : []));
 
   group(items);
   quote(items, new Set(items.map((it) => it.message.id)));

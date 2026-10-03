@@ -4,7 +4,7 @@
  * tells the manager its height and an answer sent; the manager steps to the previous and next, and once one
  * is answered goes on to the next (or, with that turned off, says what comes next); text selected in the frame
  * shows the manager's selection toolbar over it, and its Reply writes to that fleet's coordinator; what would
- * open the fleet's chat (Change my answer, Ask in the chat) writes in the frame itself. Run in happy-dom.
+ * open the fleet's chat (Change my answer, Ask in the chat) asks the manager's composer (`ask.test.tsx`). Run in happy-dom.
  */
 import { afterEach, expect, test } from "bun:test";
 import { flush } from "solid-js";
@@ -552,109 +552,27 @@ function decidedD1(): View {
   return { ...view, decisions: decisions.map((d) => (d["id"] === "d1" ? { ...d, status: "decided", answer: "b: Round the total", resolution: "Answered on the page.", closed: before(5) } : d)) };
 }
 
-const asking = (): HTMLTextAreaElement | null => root.querySelector<HTMLTextAreaElement>("#dv-ask textarea");
-
 const threadIds = (): string[] => [...root.querySelectorAll("#dv-thread article.msg")].map((a) => a.getAttribute("data-id") ?? "");
 
-test("embedded, Change my answer writes to the fleet's coordinator in the frame, and its reply shows in the thread", async () => {
+test("embedded, Change my answer asks the manager's composer about the decision, and the copy delivered here and its reply show in the thread", () => {
   open("/f/billing/?embed=1#decision/d1", decidedD1());
   page.ui.route();
   page.ui.addMessage({ id: 20, at: before(10), from: "user", to: ["coordinator"], text: "b: Round the total", decision: "d1" }, false);
   page.ui.addMessage({ id: 21, at: before(6), from: "coordinator", to: ["user"], text: "Recorded.", re: 20 }, false);
   flush();
-  expect(asking()).toBeNull();
   root.querySelector<HTMLButtonElement>("#dv-answer [data-change]")?.click();
   flush();
-  const say = asking();
-  const text = 'About "Rounding rule for totals": I want to change my answer. ';
-  expect(say?.value).toBe(text);
-  expect(document.activeElement).toBe(say);
-  expect([say?.selectionStart, say?.selectionEnd]).toEqual([text.length, text.length]);
-
-  if (say) say.value += "Per line after all.";
-  root.querySelector<HTMLButtonElement>("#dv-ask [data-ask-send]")?.click();
-  await settle();
-  expect(posted).toEqual([{ text: text + "Per line after all.", re: 21 }]);
-  expect(asking()).toBeNull();
-  expect(root.querySelector("#dv-ask-sent")?.textContent).toBe("Sent to the coordinator. Its reply shows above, in the chat.");
-  expect(threadIds()).toEqual(["20", "21", "99"]);
-  page.ui.addMessage({ id: 100, at: new Date(NOW).toISOString(), from: "coordinator", to: ["user"], text: "Reopened as D1.", re: 99 }, true);
-  flush();
-  expect(threadIds()).toEqual(["20", "21", "99", "100"]);
-  expect(toParent.filter((d) => d !== null && Object(d) === d && "answered" in Object(d))).toEqual([]);
-});
-
-test("embedded, Ask in the chat writes in the frame too, and a decision with no thread yet shows the message and its reply", async () => {
-  open("/f/billing/?embed=1#decision/d1", coordinatorView(NOW));
-  page.ui.route();
-  flush();
-  root.querySelector<HTMLButtonElement>("#dv-answer button[data-discuss]")?.click();
-  flush();
-  expect(asking()?.value).toBe('About "Rounding rule for totals": ');
-
-  if (asking()) (asking() ?? { value: "" }).value += "what does Stripe do?";
-  root.querySelector<HTMLButtonElement>("#dv-ask [data-ask-send]")?.click();
-  await settle();
-  expect(posted).toEqual([{ text: 'About "Rounding rule for totals": what does Stripe do?' }]);
-  expect(threadIds()).toEqual(["99"]);
-  page.ui.addMessage({ id: 100, at: new Date(NOW).toISOString(), from: "coordinator", to: ["user"], text: "It rounds the total.", re: 99 }, true);
-  flush();
-  expect(threadIds()).toEqual(["99", "100"]);
-});
-
-test("embedded, a message the server refuses stays in the frame's composer with the reason", async () => {
-  open("/f/billing/?embed=1#decision/d1", decidedD1());
-  page.ui.route();
-  flush();
-  root.querySelector<HTMLButtonElement>("#dv-answer [data-change]")?.click();
-  flush();
-  const ok = globalThis.fetch;
-  // SAFETY: the page calls only `fetch` itself; the stub refuses every message.
-  globalThis.fetch = (async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ error: "the chat is closed" }), { status: 403 })) as typeof fetch;
-  root.querySelector<HTMLButtonElement>("#dv-ask [data-ask-send]")?.click();
-  await settle();
-  globalThis.fetch = ok;
-  expect(asking()?.value).toBe('About "Rounding rule for totals": I want to change my answer. ');
-  expect(root.querySelector("#dv-ask [role=alert]")?.textContent).toBe("the chat is closed");
-  expect(root.querySelector("#dv-ask-sent")).toBeNull();
-});
-
-test("embedded, a message over the limit stays in the frame's composer, unsent, with how big it is", async () => {
-  open("/f/billing/?embed=1#decision/d1", decidedD1());
-  page.m.setMaxBytes(256 * 1024);
-  page.ui.route();
-  flush();
-  root.querySelector<HTMLButtonElement>("#dv-answer [data-change]")?.click();
-  flush();
-  const long = "x".repeat(299_000);
-  const box = asking();
-
-  if (box) box.value = long;
-  root.querySelector<HTMLButtonElement>("#dv-ask [data-ask-send]")?.click();
-  await settle();
+  expect(toParent).toContainEqual({ fleetEmbed: true, ask: { id: "d1", ref: "D1", title: "Rounding rule for totals", question: "How should invoice totals round: per line or on the total?", side: false, text: "I want to change my answer. " } });
+  expect(root.querySelector("#dv-ask")).toBeNull();
   expect(posted).toEqual([]);
-  expect(asking()?.value).toBe(long);
-  expect(root.querySelector("#dv-ask [role=alert]")?.textContent).toBe(
-    "This message is 293 KiB; the most a message can be is 256 KiB. Shorten it, or put the long part in a file and give its path.",
-  );
-});
 
-test("embedded, a 413 from the server shows its words in the frame's composer and keeps the message", async () => {
-  open("/f/billing/?embed=1#decision/d1", coordinatorView(NOW));
-  page.ui.route();
+  /* The hub delivers the manager's message here quoting this decision's page; the coordinator answers it. */
+  const quote = { text: "How should invoice totals round: per line or on the total?", from: "D1 Rounding rule for totals, in billing", at: { hash: "#decision/d1", anchor: "dv-info" } };
+  page.ui.addMessage({ id: 22, at: new Date(NOW).toISOString(), from: "user", to: ["coordinator"], text: "I want to change my answer. Per line after all.", quote }, true);
+  page.ui.addMessage({ id: 23, at: new Date(NOW).toISOString(), from: "coordinator", to: ["user"], text: "Reopened as D1.", re: 22 }, true);
   flush();
-  root.querySelector<HTMLButtonElement>("#dv-answer [data-discuss]")?.click();
-  flush();
-  const ok = globalThis.fetch;
-  const said = "This message is 293 KiB; the most a message can be is 256 KiB. Shorten it, or put the long part in a file and give its path.";
-  // SAFETY: the page calls only `fetch` itself; the stub refuses every message as too big.
-  globalThis.fetch = (async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ error: said }), { status: 413 })) as typeof fetch;
-  root.querySelector<HTMLButtonElement>("#dv-ask [data-ask-send]")?.click();
-  await settle();
-  globalThis.fetch = ok;
-  expect(asking()?.value).toBe('About "Rounding rule for totals": ');
-  expect(root.querySelector("#dv-ask [role=alert]")?.textContent).toBe(said);
-  expect(root.querySelector("#dv-ask-sent")).toBeNull();
+  expect(threadIds()).toEqual(["20", "21", "22", "23"]);
+  expect(toParent.filter((d) => d !== null && Object(d) === d && "answered" in Object(d))).toEqual([]);
 });
 
 test("embedded, another decision's link asks the manager to open it, and Ctrl+K opens the manager's finder", () => {

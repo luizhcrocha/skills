@@ -3,9 +3,11 @@
  * its height, `{fleetEmbed: true, height}`, an answer sent there, `{fleetEmbed: true, answered}`, text
  * selected in it, `{fleetEmbed: true, select: {text, rect, from, touch, at?}}` (`at` the place on the fleet's
  * page, as a quote keeps it; `text` empty and `rect` null once cleared), and what only the manager's page can do: open another of the fleet's decisions there,
- * `{fleetEmbed: true, open}`, and its finder, `{fleetEmbed: true, finder: true}`.
+ * `{fleetEmbed: true, open}`, its finder, `{fleetEmbed: true, finder: true}`, and its composer about the
+ * decision shown, `{fleetEmbed: true, ask: {id, ref, title, question, side, text}}` (Ask in the chat, Side
+ * chat, Change my answer: `side` a new side chat, `text` the first words).
  */
-import { Core, type Json, type JsonRecord, type QuoteAt } from "./core.ts";
+import { Core, type ItemRef, type Json, type JsonRecord, type QuoteAt } from "./core.ts";
 
 /** Where a selection sits in the frame's viewport: its first line's top, its last line's bottom, and across. */
 export type SelRect = { readonly top: number; readonly bottom: number; readonly left: number; readonly width: number };
@@ -16,7 +18,8 @@ export type EmbedMessage =
   | { readonly kind: "answered"; readonly id: string }
   | { readonly kind: "select"; readonly text: string; readonly rect: SelRect | null; readonly from: string; readonly touch: boolean; readonly at: QuoteAt | null }
   | { readonly kind: "open"; readonly id: string }
-  | { readonly kind: "finder" };
+  | { readonly kind: "finder" }
+  | { readonly kind: "ask"; readonly item: ItemRef; readonly side: boolean; readonly text: string };
 
 /** The tallest a frame is made, whatever height it reports. */
 export const FRAME_MAX_PX = 20_000;
@@ -54,6 +57,16 @@ export function parseEvidenceSelect(data: Json | undefined): { readonly text: st
   return { text: isString(text) ? text : "", rect: parseSelRect(data["rect"]), touch: data["touch"] === true };
 }
 
+/** An ask about the decision shown, as posted; null for anything else. */
+function parseAsk(v: Json | undefined): EmbedMessage | null {
+  if (!isRecord(v)) return null;
+  const { id, ref, title, question, text } = v;
+
+  if (!isString(id) || !/^[A-Za-z0-9_.-]+$/u.test(id) || !isString(title) || !isString(question)) return null;
+
+  return { kind: "ask", item: isString(ref) && ref ? { id, ref, title, question } : { id, title, question }, side: v["side"] === true, text: isString(text) ? text : "" };
+}
+
 /** A message as the frame posts it, or null for anything else (the evidence frame's, another page's). */
 export function parseEmbedMessage(data: Json | undefined): EmbedMessage | null {
   if (!isRecord(data) || data["fleetEmbed"] !== true) return null;
@@ -69,6 +82,8 @@ export function parseEmbedMessage(data: Json | undefined): EmbedMessage | null {
   }
 
   if ("finder" in data) return data["finder"] === true ? { kind: "finder" } : null;
+
+  if ("ask" in data) return parseAsk(data["ask"]);
 
   if (height === Number(height) && Number(height) > 0) return { kind: "height", height: Number(height) };
 
@@ -93,3 +108,6 @@ export const postOpen = (id: string): void => post({ fleetEmbed: true, open: id 
 
 /** The manager's finder, asked for from inside the frame. */
 export const postFinder = (): void => post({ fleetEmbed: true, finder: true });
+
+/** The manager's composer, asked for about `item` from inside the frame: in a new side chat with `side`, starting with `text`. */
+export const postAsk = (item: ItemRef, side: boolean, text: string): void => post({ fleetEmbed: true, ask: { id: item.id, ref: item.ref ?? "", title: item.title, question: item.question, side, text } });

@@ -5,7 +5,7 @@
  * the text would reach.
  */
 import { createEffect, createMemo, createSignal, untrack } from "solid-js";
-import type { JSX } from "@solidjs/web";
+import { Show, type JSX } from "@solidjs/web";
 
 import { CloseIcon, usePage, tf } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
@@ -67,15 +67,39 @@ function Composer(): JSX.Element {
         onPointerDown={(e) => {
           const say = ui.refs.say;
 
-          if (!say || e.target === say || say.disabled || (e.target instanceof Element && e.target.closest("button"))) return;
+          if (!say || e.target === say || say.disabled || (e.target instanceof Element && e.target.closest("button, a"))) return;
           e.preventDefault();
           say.focus();
         }}
       >
         <div class="reply quote-chip" id="quote" hidden={!m.quote()}>
-          <span class="reply-text" id="quote-text">
-            {m.quote() ? `${m.focus() === "new" ? "Side chat on" : "Quoting"}${m.quote()?.from ? " " + String(m.quote()?.from) : ""}: ${String(m.quote()?.text).replace(/\s+/gu, " ").slice(0, 160)}` : ""}
-          </span>
+          <Show when={m.quote()}>
+            {(q) => (
+              <span class="reply-text" id="quote-text">
+                {m.focus() === "new" ? "Side chat on" : "Quoting"}
+                <Show when={q().from}>
+                  {" "}
+                  <Show when={q().at} fallback={q().from}>
+                    {(at) => (
+                      <a
+                        class="quote-from"
+                        href={(at().page ?? "") + at().hash}
+                        title="Go to where it was quoted"
+                        onClick={(e) => {
+                          if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+                          e.preventDefault();
+                          ui.goQuote(q());
+                        }}
+                      >
+                        {q().from}
+                      </a>
+                    )}
+                  </Show>
+                </Show>
+                {": " + q().text.replace(/\s+/gu, " ").slice(0, 160)}
+              </span>
+            )}
+          </Show>
           <button
             type="button"
             class="icon-btn"

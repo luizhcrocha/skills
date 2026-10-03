@@ -158,9 +158,10 @@ test("a decision's page holds its thread: the answer on the viewer's side, the a
     "fleet Recorded D18: the load check waits for the cost work, and I re-run it the day that lands.",
   ]);
   expect(thread?.querySelector(".reply-btn")).toBeNull();
-  expect(decisionThread(page.m.messages(), "d1")).toEqual([]);
+  /* D1's thread is the side chat opened on a quote of its page. */
+  expect(decisionThread(page.m.messages(), "d1").map((it) => it.message.id)).toEqual([6, 7]);
 
-  location.hash = "#decision/d1";
+  location.hash = "#decision/g1";
   page.ui.route();
   flush();
   expect(root.querySelector("#dv-thread")).toBeNull();

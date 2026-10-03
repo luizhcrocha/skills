@@ -746,6 +746,8 @@
   .seltool button { min-height: var(--tap); padding: 0 12px; border: 0; border-radius: 7px; background: none; color: var(--bg); font: inherit; font-weight: 600; font-size: var(--fs-s); cursor: pointer; }
   .seltool button:hover, .seltool button:focus-visible { background: color-mix(in srgb, var(--bg) 18%, transparent); }
   .quote-chip .reply-text { white-space: pre-wrap; max-height: 4.5em; overflow: auto; }
+  .quote-from { color: inherit; font-weight: 600; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); text-underline-offset: 2px; }
+  @media (hover: hover) and (pointer: fine) { .quote-from:hover { text-decoration-color: currentColor; } }
   .side-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--card-2); flex: none; }
   .side-title { font-weight: 700; }
   .link-title { font-weight: 700; color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }

@@ -9,7 +9,8 @@ import { createEffect, createMemo, createSignal, flush, untrack } from "solid-js
 
 import { createCarets } from "./carets.ts";
 import { decisionTrail } from "./chatlog.ts";
-import { Core, type Decision, type FindRow, type Json, type JsonRecord, type Lookup, type Quote, type QuoteAt } from "./core.ts";
+import { Core, type Decision, type FindRow, type ItemRef, type Json, type JsonRecord, type Lookup, type Quote, type QuoteAt } from "./core.ts";
+import { postAsk } from "./embed.ts";
 import { arrange, cycleTab, itemsOf, readPrefix, tabsOf, type Item, type Section } from "./find.ts";
 import type { Model } from "./model.ts";
 import { createNotify } from "./notify.ts";
@@ -427,39 +428,49 @@ export function createUi(m: Model) {
     say.setSelectionRange(say.value.length, say.value.length);
   }
 
-  /* ------------------------------------------------------------------ writing from the manager's frame */
+  /* ------------------------------------------------------------------ asking about an item */
 
-  /** Inside the manager's frame, which has no chat: the decision a message is being written about on its page, and the words it starts with. */
-  const [askHere, setAskHere] = createSignal<{ readonly id: string; readonly text: string } | null>(null);
-  /** The messages sent from the frame about a decision with no thread to reply in: its thread shows them, and the replies to them. */
-  const [askedHere, setAskedHere] = createSignal<readonly { readonly decision: string; readonly id: number }[]>([]);
+  /**
+   * "Ask in the chat" (`side` false) and "Side chat" (`side` true) on a decision, an action or a grilling:
+   * the composer with the item quoted, as Reply and Side chat do with selected text, starting with `lead`.
+   * A fleet's item on the manager's page ("<fleet>/<id>") writes to that fleet's coordinator; inside the
+   * manager's frame, which has no chat, the manager is asked to do it.
+   */
+  function askAbout(d: ItemRef | undefined, side: boolean, lead = ""): void {
+    if (!d) return;
 
-  /** The messages sent from the frame about decision `id` with no thread to reply in. */
-  const askedAbout = (id: string): number[] => askedHere().flatMap((a) => (a.decision === id ? [a.id] : []));
-
-  /** "Ask in the chat" inside the manager's frame: a message about `d`, written on its page. */
-  function askAbout(d: Decision | undefined): void {
-    if (d && m.chatWritable()) setAskHere({ id: d.id, text: `About "${d.title}": ` });
-  }
-
-  /** "Change my answer": the chat, with a first line about the decision; inside the manager's frame, written on the decision's page. */
-  function changeAnswer(d: Decision | undefined): void {
     if (m.embed) {
-      if (d && m.chatWritable()) setAskHere({ id: d.id, text: `About "${d.title}": I want to change my answer. ` });
+      postAsk(d, side, lead);
 
       return;
     }
 
-    openChat();
+    if (!m.chatWritable()) {
+      openChat();
+
+      return;
+    }
+
+    const fleet = Core.parseFleetDecision(d.id)?.fleet ?? null;
+    m.setQuote(Core.itemQuote(d, fleet));
+    m.setReply(null);
+    m.setFocus(side ? "new" : null);
+    flush();
+
+    if (fleet) writeTo(fleet);
+    else openChat();
     const say = refs.say;
 
-    if (!d || !m.chatWritable() || !say) return;
+    if (!say) return;
 
-    if (!say.value.trim()) say.value = `About "${d.title}": I want to change my answer. `;
+    if (lead && !say.value.includes(lead)) say.value = (say.value.trim() ? say.value.replace(/\s*$/u, " ") : "") + lead;
     afterEdit();
     say.focus();
     say.setSelectionRange(say.value.length, say.value.length);
   }
+
+  /** "Change my answer": the item's ask, starting with the words. */
+  const changeAnswer = (d: Decision | undefined): void => askAbout(d, false, "I want to change my answer. ");
 
   /* ------------------------------------------------------------------ the worker sheet */
 
@@ -954,11 +965,6 @@ export function createUi(m: Model) {
     writeTo,
     changeAnswer,
     askAbout,
-    askHere,
-    setAskHere,
-    askedHere,
-    setAskedHere,
-    askedAbout,
     sheetFor,
     openWorker,
     finderOpen,
