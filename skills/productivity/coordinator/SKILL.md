@@ -117,7 +117,7 @@ Record `--task-id <agentId>` once the worker is spawned: its tokens and duration
 
 **A running row is not proof of work.** Your chat watch prints `! worker b50 ... has written nothing since 16:30` after twenty minutes without a tool call (the page and `fleets show` mark it too): ask it where it stands (`SendMessage`), or park it with the reason. A refusal reported by a worker (`blocked: ...`) becomes a roadblock at once, with the action the user can take.
 
-**Said once, on the page.** What you answer the user on the page is written there only. The turn that answered ends, in your session, with one line naming where: "Answered #42 on the page." The user reads the page, from any device; the same words in the session are paid twice, written and then read on every later turn.
+**Said once, on the page.** What you answer the user on the page is written there only. The turn that answered ends, in your session, with one line naming where: "Answered #42 on the page." The user reads the page, from any device; the same words in the session are paid twice, written and then read on every later turn. The plugin's Stop hook enforces it: a turn that said on the page and ends with more than two lines or 200 characters goes on once, to end with that line.
 
 Workers report back with results, questions, or blocks. Handle each in the same turn it arrives:
 

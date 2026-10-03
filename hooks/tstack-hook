@@ -525,6 +525,123 @@ def fleet_listen_guard(hook):
     return Block("\n".join(lines))
 
 
+SAID_ONCE = ("You answered on the page ({where}). Said once: end this turn with one line naming where, e.g. "
+             "'Answered {first} on the page.' Do not repeat the answer here.")
+SAID_ONCE_CHARS = 200  # "Answered #42 on the page." and a short note of what comes next fit; an answer does not
+SAID_ONCE_LINES = 2
+SAID_ONCE_TAIL = 256 * 1024  # the turn is read from the transcript's end, the window doubled until it holds it
+SAID_ONCE_MAX = 8 * 1024 * 1024  # a turn longer than this is let stop: never read a whole long transcript
+_POSTED = re.compile(r"^#(\d+) \S.* -> ", re.M)
+
+
+def _is_prompt(entry):
+    """Whether a transcript entry starts a turn: a user entry carrying text, not only tool results."""
+    if entry.get("type") != "user" or entry.get("isSidechain"):
+        return False
+    content = (entry.get("message") or {}).get("content")
+    if isinstance(content, str):
+        return True
+    return isinstance(content, list) and any(isinstance(b, dict) and b.get("type") == "text" for b in content)
+
+
+def _current_turn(path):
+    """(key, entries) of the transcript from the last prompt on, or None when no prompt is found in the
+    last SAID_ONCE_MAX bytes. The key (the prompt's uuid, else its byte offset) names the turn."""
+    size = os.path.getsize(path)
+    window = SAID_ONCE_TAIL
+    while True:
+        start = max(0, size - window)
+        with open(path, "rb") as f:
+            f.seek(start)
+            chunk = f.read(size - start)
+        if start > 0:  # the first line is cut: skip it
+            cut = chunk.find(b"\n") + 1
+            chunk, start = chunk[cut:], start + cut
+        entries, at = [], start
+        for line in chunk.splitlines(keepends=True):
+            offset, at = at, at + len(line)
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(entry, dict):
+                entries.append((offset, entry))
+        prompts = [i for i, (_, e) in enumerate(entries) if _is_prompt(e)]
+        if prompts:
+            offset, prompt = entries[prompts[-1]]
+            return str(prompt.get("uuid") or offset), [e for _, e in entries[prompts[-1]:]]
+        if start == 0 or window >= SAID_ONCE_MAX:
+            return None
+        window *= 2
+
+
+def _is_say(command):
+    """Whether a shell command runs `fleet chat DIR say` (the CLI by any path, or a variable naming it)."""
+    import shlex
+    try:
+        words = _tokens(shlex.split(command))
+    except ValueError:
+        return False
+    return any(words[i] == "chat" and words[i + 2] == "say" and "fleet" in os.path.basename(words[i - 1]).lower()
+               for i in range(1, len(words) - 2))
+
+
+def _blocks(entry, kind):
+    content = (entry.get("message") or {}).get("content")
+    return [b for b in content if isinstance(b, dict) and b.get("type") == kind] if isinstance(content, list) else []
+
+
+def _result_text(block):
+    content = block.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(str(b.get("text") or "") for b in content if isinstance(b, dict))
+    return ""
+
+
+def fleet_said_once(hook):
+    """Stop: a coordinator or manager that answered the user on the page this turn (a `fleet chat DIR say`
+    whose output shows the message written) ends the turn with one line naming where, not the answer
+    again. A final text over SAID_ONCE_LINES lines or SAID_ONCE_CHARS characters is blocked, once per
+    turn: never on a stop that follows a stop hook's block (stop_hook_active), nor twice for one prompt."""
+    if fleet_worker(hook) or hook.input.get("stop_hook_active"):
+        return None
+    if not any(read_ledger(d) is not None for d in fleet_dirs(hook)):
+        return None
+    path = hook.input.get("transcript_path")
+    if not isinstance(path, str) or not os.path.isfile(path):
+        return None
+    turn = _current_turn(path)
+    if turn is None:
+        return None
+    key, entries = turn
+    state = hook.load_state("said-once") if hook.session_id else {}
+    if state.get("turn") == key:
+        return None
+    says = [b.get("id") for e in entries if e.get("type") == "assistant" for b in _blocks(e, "tool_use")
+            if b.get("name") == "Bash" and _is_say(str((b.get("input") or {}).get("command") or ""))]
+    posted = []
+    for e in entries:
+        for b in _blocks(e, "tool_result"):
+            if b.get("tool_use_id") in says and not b.get("is_error"):
+                posted += [f"#{n}" for n in _POSTED.findall(_result_text(b))]
+    if not posted:
+        return None
+    final = hook.input.get("last_assistant_message")
+    if final is None:
+        texts = [b for e in entries if e.get("type") == "assistant" for b in _blocks(e, "text")]
+        final = str(texts[-1].get("text") or "") if texts else ""
+    if not isinstance(final, str):
+        return None
+    final = final.strip()
+    if len(final) <= SAID_ONCE_CHARS and len([x for x in final.splitlines() if x.strip()]) <= SAID_ONCE_LINES:
+        return None
+    if hook.session_id:
+        hook.save_state("said-once", {"turn": key})
+    return Block(SAID_ONCE.format(where=", ".join(dict.fromkeys(posted)), first=posted[-1]))
+
+
 NUDGE_EVERY_S = 60
 NUDGE_TAIL = 64 * 1024  # a session's first look reads this much of the chat's end, not all of it
 NUDGE_SHOWN = 3
@@ -905,7 +1022,7 @@ def _close_due_grants_exclusively(hook, path, used, caller, now):
 
 HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_heartbeat],
-    "Stop": [memo_nudge, fleet_listen_guard, fleet_heartbeat],
+    "Stop": [memo_nudge, fleet_listen_guard, fleet_said_once, fleet_heartbeat],
     "PreCompact": [memo_precompact],
     "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_chat_nudge],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep],

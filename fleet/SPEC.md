@@ -948,6 +948,20 @@ hook: a broken `chat.jsonl` or ledger is skipped, an error is logged.
   2,000 lines: 0.96 ms median in process for a first look with an item due, 0.20 ms for the usual look
   from a kept offset.
 
+A third Stop handler of the same dispatcher holds the host to "Said once, on the page" (coordinator
+SKILL.md, Respond; manager SKILL.md, Said once):
+
+- **Said once** (`fleet_said_once`, Stop). When the session hosts a fleet (the same membership and worker
+  exclusion as above) and the current turn (the transcript from its last user entry carrying text, read
+  from the end: 256 KiB, doubled up to 8 MiB, else the turn is let stop) ran a Bash `fleet chat DIR say`
+  whose result shows the message written (`#N ... -> ...`, not an error), and the turn's final text
+  (`last_assistant_message`, else the turn's last assistant text block) is over 2 non-empty lines or 200
+  characters, the hook returns `{"decision": "block", "reason": "You answered on the page (#N). Said
+  once: end this turn with one line naming where, e.g. 'Answered #N on the page.' Do not repeat the
+  answer here."}`. Once per turn: never on a stop that follows a stop hook's block (`stop_hook_active`),
+  nor twice for one prompt (the session's `said-once` state keeps the turn's key, the prompt's uuid).
+  Anything it cannot read lets the turn stop.
+
 ## Workspaces (`fleet ws`)
 
 A worker that edits code works in a jj workspace; the coordinator's own (`default`) is the stack. A new
@@ -1287,7 +1301,7 @@ recommendation attached.
 | the plugin's hook (grant removal) | `<root>/.claude/settings.local.json`, `DIR/grants.jsonl` (`remove` lines) |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |
-| the plugin's hook (`fleet_listen_guard`, `fleet_chat_nudge`) | nothing in DIR; the session's `fleet-guard` and `fleet-nudge` state in the plugin's data folder |
+| the plugin's hook (`fleet_listen_guard`, `fleet_chat_nudge`, `fleet_said_once`) | nothing in DIR; the session's `fleet-guard`, `fleet-nudge` and `said-once` state in the plugin's data folder |
 | `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / deleted (a shared fleet's `add` writes nothing) |
 | `fleet ws add --reuse` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; a new change in the workspace (`jj new`) |
 | `fleet ws split` | `DIR/state.json` (`events`, `updated`), `DIR/index.html`; the default workspace's `@` split in two |

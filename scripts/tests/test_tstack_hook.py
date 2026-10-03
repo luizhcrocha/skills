@@ -688,6 +688,132 @@ class StopGuardTest(FleetCase):
         self.assertNotIn("failed", self.log())
 
 
+class SaidOnceTest(FleetCase):
+    """fleet_said_once: a host that answered the user on the page ends the turn with one line naming where."""
+
+    LONG = ("The deploy is green on staging. I checked the three routes you named, the billing export now "
+            "rounds to cents, and the retry queue drained in four minutes. Next I land the migration behind "
+            "the flag and ask you before it reaches production.")
+
+    def setUp(self):
+        super().setUp()
+        self.watch()  # a live chat watch: the listen guard stays silent, only this rule speaks
+        self.calls = 0
+
+    def bash(self, command, result, is_error=False):
+        """A Bash call and its result, as the transcript records them."""
+        self.calls += 1
+        tid = f"toolu_{self.calls:02d}"
+        self.transcribe(
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": command}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": tid, "content": result, "is_error": is_error}]}})
+
+    def say_on_page(self, n=42, re=41, fleet=None, role="coordinator"):
+        fleet = fleet or self.fleet_cli
+        self.bash(f'{fleet} chat {self.fleet} say --as {role} --re {re} "{self.LONG}"',
+                  f"#{n} {role} -> user [re #{re}]: {self.LONG}\n")
+
+    def reply(self, text):
+        self.transcribe({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": text}]}})
+
+    def stop(self, last=None, env=None, **extra):
+        payload = self.payload("Stop", **{"stop_hook_active": False, **extra})
+        if last is not None:
+            payload["last_assistant_message"] = last
+        return self.hook("Stop", payload, env=env)
+
+    def blocked(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)
+        self.assertEqual(out["decision"], "block")
+        return out["reason"]
+
+    def test_blocks_a_long_reply_after_answering_on_the_page(self):
+        self.transcribe(said("#41 from the user: how is the deploy?"))
+        self.say_on_page()
+        self.reply(self.LONG)
+        reason = self.blocked(self.stop(last=self.LONG))
+        self.assertTrue(reason.startswith("You answered on the page (#42)."), reason)
+        self.assertIn("'Answered #42 on the page.'", reason)
+        self.assertIn("Do not repeat the answer here.", reason)
+
+    def test_the_manager_too_and_through_a_shell_line(self):
+        self.ledger(role="manager")
+        self.watch(role="manager")
+        self.transcribe(said("go"))
+        self.bash(f"cd /tmp && fleet chat {self.fleet} say --as manager 'short' && echo ok",
+                  f"#7 manager -> user: short\nok\n")
+        self.assertIn("(#7)", self.blocked(self.stop(last=self.LONG)))
+
+    def test_reads_the_final_text_from_the_transcript_without_last_assistant_message(self):
+        self.transcribe(said("go"))
+        self.say_on_page()
+        self.reply(self.LONG)
+        self.blocked(self.stop())
+
+    def test_a_one_line_reply_stops(self):
+        self.transcribe(said("go"))
+        self.say_on_page()
+        self.reply("Answered #42 on the page.")
+        self.assertSilent(self.stop(last="Answered #42 on the page."))
+        self.assertSilent(self.stop(last="Answered #42 on the page.\nWaiting on a2's report."))
+
+    def test_a_turn_that_did_not_say_stops(self):
+        self.transcribe(said("go"))
+        self.bash(f"{self.fleet_cli} chat {self.fleet} inbox --as coordinator", "#41 user -> coordinator: hi\n")
+        self.bash("echo fleet chat say", "fleet chat say\n")
+        self.assertSilent(self.stop(last=self.LONG))
+
+    def test_a_say_in_an_earlier_turn_does_not_count(self):
+        self.transcribe(said("first"))
+        self.say_on_page()
+        self.reply("Answered #42 on the page.")
+        self.transcribe(said("now explain it here"))
+        self.reply(self.LONG)
+        self.assertSilent(self.stop(last=self.LONG))
+
+    def test_a_say_that_failed_does_not_count(self):
+        self.transcribe(said("go"))
+        self.bash(f'{self.fleet_cli} chat {self.fleet} say --as coordinator --re 99 "x"',
+                  "fleet chat: unknown message #99", is_error=True)
+        self.assertSilent(self.stop(last=self.LONG))
+
+    def test_a_worker_stops(self):
+        self.transcribe(said("go"))
+        self.say_on_page()
+        self.assertSilent(self.stop(last=self.LONG, agent_id="a1"))
+        self.assertSilent(self.stop(last=self.LONG, env={"FLEET_WORKER": "a1", "FLEET_DIR": str(self.fleet)}))
+        self.assertSilent(self.stop(last=self.LONG, env={"TSTACK_ROLE": "worker"}))
+
+    def test_a_session_that_hosts_no_fleet_stops(self):
+        self.transcribe(said("go"))
+        self.say_on_page()
+        self.assertSilent(self.hook("Stop", {**self.base("Stop"), "last_assistant_message": self.LONG}))
+
+    def test_never_blocks_twice(self):
+        self.transcribe(said("go"))
+        self.say_on_page()
+        self.assertSilent(self.stop(last=self.LONG, stop_hook_active=True))
+        self.blocked(self.stop(last=self.LONG))
+        self.assertSilent(self.stop(last=self.LONG))  # the same turn, even without stop_hook_active
+        self.transcribe(said("next"))
+        self.say_on_page(n=43, re=42)
+        self.assertIn("(#43)", self.blocked(self.stop(last=self.LONG)))  # a new turn is held to it again
+
+    def test_a_malformed_transcript_fails_open(self):
+        self.transcript.write_bytes(os.urandom(2048) + b'\n{"type":"user" broken\n[1]\n"tool_use"\n'
+                                    + b'{"type":"assistant","message":{"content":[{"type":"tool_use",'
+                                    + b'"name":"Bash","input":{"command":"fleet chat x say"}}]}}\n')
+        self.assertSilent(self.stop(last=self.LONG))
+        for path in (str(self.tmp / "missing.jsonl"), str(self.tmp), 42, None):
+            self.assertSilent(self.stop(last=self.LONG, transcript_path=path))
+        self.assertSilent(self.stop(last=["not", "text"]))
+        self.assertNotIn("failed", self.log())
+
+
 class ChatNudgeTest(FleetCase):
     """fleet_chat_nudge: a session busy mid-turn is told of the user's messages its chat left waiting."""
 
