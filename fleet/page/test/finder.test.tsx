@@ -358,3 +358,20 @@ test("the pane's buttons do the row's two actions: Open here, New tab as Ctrl/âŒ
   expect(location.hash).toBe("#decision/d1");
   expect(page.ui.refs.finder?.open).toBe(false);
 });
+
+test("a key that ends an IME composition is the composition's: Enter commits the word and opens nothing, the arrows and Tab move nothing", () => {
+  finder();
+  type("D1");
+  const at = active();
+  key("Enter", { isComposing: true });
+  expect(page.ui.refs.finder?.open).toBe(true);
+  expect(location.hash).not.toBe("#decision/d1");
+  key("ArrowDown", { isComposing: true });
+  expect(active()).toBe(at);
+  key("Tab", { isComposing: true });
+  expect(tab()).toBe("All");
+  key("Escape", { isComposing: true });
+  expect(field().value).toBe("D1");
+  key("Enter");
+  expect(location.hash).toBe("#decision/d1");
+});

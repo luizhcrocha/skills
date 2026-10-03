@@ -16,11 +16,19 @@ import type { Model } from "./model.ts";
 import { recordOf, type RowRecord } from "./record.ts";
 import { BriefAndReport } from "./Views.tsx";
 
-/** A finder row's title, the letters the query matched marked. */
+/**
+ * A finder row's title, the letters the query matched marked. A part's place is reused as the words change
+ * (keyed={false}), and the callback runs once per place, so whether it is marked is read reactively too:
+ * a ternary there would keep the first query's marks on the next one's letters.
+ */
 function Marked(props: { readonly title: string; readonly query: string }): JSX.Element {
   return (
     <For each={highlight(props.title, rangesIn(props.title, props.query))} keyed={false}>
-      {(part) => (part().hit ? <mark>{part().text}</mark> : <>{part().text}</>)}
+      {(part) => (
+        <Show when={part().hit} fallback={part().text}>
+          <mark>{part().text}</mark>
+        </Show>
+      )}
     </For>
   );
 }
@@ -270,6 +278,8 @@ export function Finder(): JSX.Element {
             ref={(el) => (ui.refs.findQ = el)}
             onInput={(e) => ui.findTyped(e.currentTarget.value)}
             onKeyDown={(e) => {
+              /* A key that ends or steers an IME composition (Enter commits the word) is the composition's. */
+              if (e.isComposing) return;
               const mod = e.ctrlKey || e.metaKey;
 
               if (e.key === "ArrowDown" || e.key === "ArrowUp") ui.moveFound(e.key === "ArrowDown" ? 1 : -1);

@@ -160,3 +160,38 @@ for (const [width, scheme] of [
     await page.close();
   });
 }
+
+test.skipIf(!found)("typed key by key after another query, each row marks the part of its own title the words matched, the highlight moved or not", async () => {
+  const page = await opened(1280, "light");
+
+  /** Each row drawn: its title, and the texts of its marks. */
+  const marked = (): Promise<{ title: string; marks: string[] }[]> =>
+    page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>("#find-list .find-row:not(.find-hint) .tt")].map((tt) => ({
+        title: tt.textContent ?? "",
+        marks: [...tt.querySelectorAll("mark")].map((m) => m.textContent ?? ""),
+      })),
+    );
+
+  /** What each row's marks should be: where the one word sits in its title, case and accents aside (the titles here are plain). */
+  const expected = (rows: readonly { title: string }[], word: string): { title: string; marks: string[] }[] =>
+    rows.map(({ title }) => {
+      const at = title.toLowerCase().indexOf(word);
+
+      return { title, marks: at === -1 ? [] : [title.slice(at, at + word.length)] };
+    });
+
+  await page.keyboard.type("in");
+  await page.keyboard.press("Escape");
+
+  for (const ch of "stripe") await page.keyboard.type(ch);
+  const typed = await marked();
+  expect(typed.length).toBeGreaterThan(3);
+  expect(typed).toEqual(expected(typed, "stripe"));
+
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  const moved = await marked();
+  expect(moved).toEqual(expected(moved, "stripe"));
+  await page.close();
+});
