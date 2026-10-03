@@ -104,7 +104,48 @@ const sections = (): [string, string[]][] =>
 
 const heads = (): string[] => sections().map(([h]) => h);
 
-const tab = (): string => root.querySelector<HTMLElement>('#find-tabs [role=tab][aria-selected="true"]')?.textContent ?? "";
+const tab = (): string => root.querySelector<HTMLElement>('#find-tabs [role=tab][aria-selected="true"] .rl')?.textContent ?? "";
+
+/** The rail as drawn: each kind's name and count. */
+const rail = (): string[] => [...root.querySelectorAll<HTMLElement>("#find-tabs [role=tab]")].map((t) => (t.querySelector(".rl")?.textContent ?? "") + " " + (t.querySelector(".rn")?.textContent ?? ""));
+
+/** The record pane as the eye reads it: its kind, title, pills, lead line, options, facts, the thread's lines (the found one starred), its buttons. */
+interface PaneSeen {
+  readonly kind: string;
+  readonly title: string;
+  readonly pills: string[];
+  readonly lead: string;
+  readonly options: string[];
+  readonly facts: string[];
+  readonly thread: string[];
+  readonly buttons: string[];
+}
+
+function pane(): PaneSeen {
+  const pv = root.querySelector<HTMLElement>("#find-pv");
+  const all = (sel: string): HTMLElement[] => [...(pv?.querySelectorAll<HTMLElement>(sel) ?? [])];
+  const text = (el: Element | null | undefined): string => (el?.textContent ?? "").replace(/\s+/gu, " ").trim();
+
+  return {
+    kind: text(pv?.querySelector(".find-pv-k")),
+    title: text(pv?.querySelector(".find-pv-t")),
+    pills: all(".find-pv-pills .pill").map(text),
+    lead: text(pv?.querySelector(".find-pv-lead")),
+    options: all(".find-pv-opts li").map(text),
+    facts: all(".find-pv-facts > div").map((d) => text(d.querySelector("dt")) + ": " + text(d.querySelector("dd"))),
+    thread: all(".find-pv-thread li").map((l) => (l.classList.contains("hit") ? "* " : "") + text(l.querySelector(".x"))),
+    buttons: all(".find-pv-act button").map((b) => b.dataset["act"] ?? ""),
+  };
+}
+
+/** A button of the record pane, clicked. */
+function act(which: "open" | "second"): void {
+  const b = root.querySelector<HTMLButtonElement>(`#find-pv [data-act="${which}"]`);
+
+  if (!b) throw new Error("no " + which + " button");
+  b.click();
+  flush();
+}
 
 const active = (): string => root.querySelector<HTMLElement>('#find-list [role=option][aria-selected="true"]')?.querySelector(".tt")?.textContent ?? "";
 
@@ -245,4 +286,75 @@ test("rows drawn stay put while the fleet's state streams in; the next keystroke
   expect(active()).toBe(at);
   type("new message");
   expect(sections()).toEqual([["Chat", ["A new message on top."]]]);
+});
+
+test("the record pane shows the highlighted row's record, per kind", () => {
+  finder();
+  type("d:rounding");
+  expect(pane()).toMatchObject({ kind: "Decision", title: "D1 Rounding rule for totals", pills: ["open", "blocking"], lead: "How should invoice totals round: per line or on the total?", options: ["a Round each line", "b Round the total recommended"], buttons: ["open", "second"] });
+  expect(pane().facts).toContain("For: you");
+
+  type("w:invoice-gen");
+  expect(pane()).toMatchObject({ kind: "Worker", title: "a2 invoice-gen", pills: ["running"], lead: "Generate invoices from the ledger and post them to Stripe" });
+  expect(pane().facts).toContain("Lane: src/invoices/, test/invoices/");
+
+  type("c:keep the totals");
+  expect(pane().thread).toEqual(["Two workers on milestone 2. The rounding rule (D1) is yours.", "* @invoice-gen keep the totals in cents", "Will do: every amount is an integer of cents now."]);
+  expect(pane().buttons).toEqual(["open"]);
+
+  type("p:adapter");
+  expect(pane()).toMatchObject({ kind: "Plan step", pills: ["blocked"] });
+  expect(pane().facts).toContain("Milestone: Generate and post");
+
+  type("l:api dev");
+  expect(pane().facts).toEqual(expect.arrayContaining(["Address: http://127.0.0.1:5173/", "Answers: no"]));
+});
+
+test("the record pane follows the highlight, and a kind to narrow to or a \"show more\" says what Enter does", () => {
+  finder();
+  expect(pane()).toMatchObject({ kind: "Narrow to", title: "Decisions" });
+  key("ArrowDown");
+  expect(pane().title).toBe("Roadblocks");
+  type("e");
+  const first = active();
+  expect(pane().title).toContain(first);
+  key("ArrowDown");
+  expect(active()).not.toBe(first);
+  expect(pane().title).toContain(active());
+
+  const more = [...root.querySelectorAll<HTMLElement>("#find-list [role=option]")].findIndex((o) => o.dataset["key"] === "more:plan");
+  page.ui.setFoundAt(more);
+  flush();
+  expect(pane()).toMatchObject({ title: "1 more", buttons: ["open"] });
+  act("open");
+  expect(sections().find(([h]) => h === "Plan")?.[1]).toHaveLength(6);
+});
+
+test("the rail: All and each kind with its count, the words' hits; a click narrows; Tab and a prefix still select", () => {
+  finder();
+  expect(rail()).toEqual(["All 32", "Decisions 5", "Roadblocks 2", "Workers 6", "Plan 6", "Chat 5", "Links 2", "Log 6"]);
+  type("stripe");
+  expect(rail().slice(0, 4)).toEqual(["All 9", "Decisions 1", "Roadblocks 1", "Workers 3"]);
+  root.querySelectorAll<HTMLElement>("#find-tabs [role=tab]")[3]?.click();
+  flush();
+  expect(tab()).toBe("Workers");
+  expect(heads()).toEqual(["Workers"]);
+  expect(document.activeElement).toBe(field());
+  key("Tab");
+  expect(tab()).toBe("Plan");
+  type("d:");
+  expect(tab()).toBe("Decisions");
+});
+
+test("the pane's buttons do the row's two actions: Open here, New tab as Ctrl/⌘+Enter does", () => {
+  finder();
+  type("D1");
+  act("second");
+  expect(opened).toEqual(["/f/billing/#decision/d1"]);
+  expect(location.hash).not.toBe("#decision/d1");
+  finder();
+  type("D1");
+  act("open");
+  expect(location.hash).toBe("#decision/d1");
+  expect(page.ui.refs.finder?.open).toBe(false);
 });

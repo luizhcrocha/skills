@@ -6,7 +6,7 @@
 import { expect, test } from "bun:test";
 
 import { Core, type FindRow, type Go } from "../src/core.ts";
-import { arrange, cycleTab, fold, GROUPS, highlight, rank, readPrefix, tabsOf, type Section } from "../src/find.ts";
+import { arrange, countsOf, cycleTab, fold, GROUPS, highlight, rank, readPrefix, tabsOf, type Section } from "../src/find.ts";
 import type { Recent } from "../src/recents.ts";
 
 /** A row of `group`, titled `title`. */
@@ -206,4 +206,9 @@ test("the tabs: All, then each kind the page holds; Tab and Shift+Tab go round",
   expect(cycleTab(tabs, "chat", 1)).toBe("");
   expect(cycleTab(tabs, "", -1)).toBe("chat");
   expect(cycleTab(tabs, "links", 1)).toBe("decisions");
+});
+
+test("the rail's counts: the rows of each kind the words find, whatever the tab; All the sum", () => {
+  expect([...countsOf(ROWS, "")]).toEqual([["", 10], ["decisions", 2], ["workers", 1], ["plan", 6], ["chat", 1]]);
+  expect([...countsOf(ROWS, "step")]).toEqual([["", 7], ["decisions", 0], ["workers", 0], ["plan", 6], ["chat", 1]]);
 });

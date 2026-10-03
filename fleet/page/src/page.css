@@ -698,19 +698,22 @@
   .stuck ul { margin: 0; padding-left: 18px; }
   .stuck li { margin: 2px 0; }
   .switch select { max-width: 42vw; min-height: var(--tap); padding: 0 28px 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font: inherit; font-size: var(--fs-s); font-weight: 600; text-overflow: ellipsis; }
-  dialog.finder { width: min(680px, calc(100vw - 32px)); margin-top: 10vh; }
-  .finder-in { display: flex; flex-direction: column; max-height: min(75dvh, 640px); }
-  .find-bar { flex: none; display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+  /* The finder in three panes under its field: the kinds as a rail, the list, the highlighted item's record. A fixed height, so nothing moves as the list or the record changes. */
+  dialog.finder { width: min(1040px, calc(100vw - 32px)); margin-top: 8vh; }
+  .finder-in { display: grid; grid-template-columns: clamp(132px, 16%, 168px) minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; grid-template-areas: "bar bar bar" "rail list pv" "foot foot foot"; height: min(78dvh, 640px); }
+  .find-bar { grid-area: bar; display: flex; align-items: center; border-bottom: 1px solid var(--line); }
   #find-q { flex: 1; min-width: 0; margin: 0; padding: 14px 16px; border: 0; background: none; color: var(--text); font: inherit; font-size: 1.0625rem; outline: none; }
   #find-q::-webkit-search-cancel-button { display: none; }
   .find-x { display: none; }
-  /* The kinds, as the page's segmented control; Tab cycles them from the field, so they take no focus of their own. */
-  .find-tabs { flex: none; display: flex; gap: 2px; margin: 8px 12px 2px; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--card-2); overflow-x: auto; scrollbar-width: none; align-self: flex-start; max-width: calc(100% - 24px); box-sizing: border-box; }
+  /* The kinds, with how many rows the words find in each; Tab cycles them from the field, so they take no focus of their own. */
+  .find-tabs { grid-area: rail; display: flex; flex-direction: column; gap: 1px; padding: 8px 6px; border-right: 1px solid var(--line); background: var(--card-2); overflow: hidden auto; overscroll-behavior: contain; scrollbar-width: none; }
   .find-tabs::-webkit-scrollbar { display: none; }
-  .find-tabs button { flex: none; min-height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: var(--muted); font: inherit; font-size: var(--fs-s); font-weight: 600; font-stretch: var(--narrow); cursor: pointer; white-space: nowrap; transition: transform 120ms ease-out; }
+  .find-tabs button { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 32px; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: var(--muted); font: inherit; font-size: var(--fs-s); font-weight: 600; font-stretch: var(--narrow); text-align: left; cursor: pointer; white-space: nowrap; transition: transform 120ms ease-out; }
   .find-tabs button:active { transform: scale(0.97); }
   .find-tabs button[aria-selected="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 14%, transparent); }
-  .find-list { margin: 0; padding: 4px 0 8px; overflow: auto; overscroll-behavior: contain; }
+  .find-tabs .rn { font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--faint); }
+  .find-tabs button[aria-selected="true"] .rn { color: var(--muted); }
+  .find-list { grid-area: list; margin: 0; padding: 4px 0 8px; overflow: auto; overscroll-behavior: contain; }
   .find-group { position: sticky; top: 0; z-index: 1; padding: 10px 16px 4px; background: var(--card); font-size: var(--fs-xs); font-weight: 700; color: var(--muted); }
   .find-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: baseline; padding: 8px 16px 8px 13px; cursor: pointer; border-left: 3px solid transparent; }
   .find-row[aria-selected="true"], .find-more[aria-selected="true"] { background: var(--accent-soft); border-left-color: var(--accent); }
@@ -721,11 +724,34 @@
   .find-row .h { grid-row: 1; grid-column: 2; display: inline-flex; align-items: baseline; gap: 6px; color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
   .find-row .h .pill { line-height: 1.35; }
   .find-hint .n { font-variant-numeric: tabular-nums; }
-  .find-hint kbd, .find-foot kbd { font: inherit; font-size: 0.9em; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; margin: 0 1px; background: var(--card); }
+  .find-hint kbd, .find-foot kbd, .find-pv-act kbd { font: inherit; font-size: 0.9em; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; margin: 0 1px; background: var(--card); }
   .find-hint kbd { font-family: var(--mono); }
   .find-more { padding: 6px 16px 6px 13px; border-left: 3px solid transparent; color: var(--accent); font-size: var(--fs-s); font-weight: 600; cursor: pointer; }
   .find-empty { padding: 16px; color: var(--muted); }
-  .finder .find-foot { flex: none; display: grid; gap: 6px; max-width: none; margin: 0; padding: 8px 16px; border-top: 1px solid var(--line); font-size: var(--fs-xs); white-space: normal; }
+  /* The record: its words scroll, its two actions stay pinned at its foot. */
+  .find-pv { grid-area: pv; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; border-left: 1px solid var(--line); }
+  .find-pv-peek { display: none; }
+  .find-pv-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; align-content: start; gap: 10px; padding: 16px 18px 12px; }
+  .find-pv-k { font-size: var(--fs-xs); font-weight: 700; color: var(--muted); }
+  .finder .find-pv-t { margin: -4px 0 0; font-size: 1.125rem; line-height: 1.3; color: var(--text); overflow-wrap: anywhere; }
+  .find-pv-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .finder .find-pv-lead { margin: 0; max-width: none; font-weight: 600; white-space: normal; }
+  .find-pv-opts { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+  .find-pv-opts li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+  .find-pv-opts b { font-family: var(--mono); font-size: 0.85em; color: var(--muted); }
+  .find-pv-thread { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+  .find-pv-thread li { display: grid; gap: 2px; padding-left: 10px; border-left: 2px solid var(--line); color: var(--muted); overflow-wrap: anywhere; }
+  .find-pv-thread li.hit { border-left-color: var(--accent); color: var(--text); }
+  .find-pv-thread .w { font-size: var(--fs-xs); font-weight: 700; font-stretch: var(--narrow); }
+  .find-pv-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; padding-top: 10px; border-top: 1px solid var(--line); font-size: var(--fs-s); }
+  .find-pv-facts div { display: contents; }
+  .find-pv-facts dt { color: var(--muted); font-stretch: var(--narrow); }
+  .find-pv-facts dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .find-pv-act { display: flex; flex-wrap: wrap; gap: 8px; min-height: 61px; padding: 12px 18px; border-top: 1px solid var(--line); box-sizing: border-box; }
+  .find-pv-act .btn { min-height: 36px; padding: 0 12px; font-size: var(--fs-s); transition: transform 120ms ease-out; }
+  .find-pv-act .btn:active { transform: scale(0.97); }
+  .find-pv-act .btn.primary kbd { border-color: currentColor; background: none; color: inherit; opacity: 0.75; }
+  .finder .find-foot { grid-area: foot; display: grid; gap: 6px; max-width: none; margin: 0; padding: 8px 16px; border-top: 1px solid var(--line); font-size: var(--fs-xs); white-space: normal; }
   .find-keys, .find-prefixes { display: flex; flex-wrap: wrap; gap: 4px 14px; }
   .find-keys > span, .find-prefixes > span { white-space: nowrap; }
   .find-prefixes kbd { font-family: var(--mono); }
@@ -733,12 +759,31 @@
     .find-row:hover:not([aria-selected="true"]), .find-more:hover:not([aria-selected="true"]) { background: var(--card-2); }
     .find-tabs button:hover:not([aria-selected="true"]) { color: var(--text); }
   }
+  /*
+   * A phone: the whole screen; the rail a row of tabs under the field; the record folded to one line under the
+   * list (a tap there opens it over the list's foot), since a tap on a row opens it and the keyboard takes the
+   * lower half: a record always open would leave the list a few rows.
+   */
   @media (max-width: 759.98px) {
     dialog.finder { margin: 0; width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; border: 0; border-radius: 0; }
-    .finder-in { max-height: 100dvh; height: 100%; }
+    .finder-in { height: 100%; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; grid-template-areas: "bar" "rail" "list" "pv"; }
     #find-q { font-size: 16px; }
     .find-x { display: grid; }
+    .find-tabs { flex-direction: row; gap: 2px; padding: 6px 8px; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; overflow-y: hidden; }
+    .find-tabs button { gap: 6px; }
     .find-row { padding-block: 10px; }
+    .find-pv { grid-template-rows: auto; border-left: 0; border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom, 0px); background: var(--card-2); }
+    .find-pv[data-open="true"] { grid-template-rows: auto minmax(0, 1fr) auto; max-height: 62dvh; }
+    .find-pv:not([data-open="true"]) > .find-pv-body, .find-pv:not([data-open="true"]) > .find-pv-act, .find-pv[data-empty="true"] { display: none; }
+    .find-pv-peek { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 48px; padding: 0 16px; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+    .find-pv-peek .k { flex: none; font-size: var(--fs-xs); font-weight: 700; color: var(--muted); }
+    .find-pv-peek .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+    .find-pv-peek .chev { flex: none; width: 8px; height: 8px; margin: 0 2px 0 6px; border-top: 2px solid var(--muted); border-right: 2px solid var(--muted); transform: translateY(2px) rotate(-45deg); transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1); }
+    .find-pv-peek[aria-expanded="true"] .chev { transform: translateY(-2px) rotate(135deg); }
+    .find-pv-body { padding: 4px 16px 10px; }
+    .find-pv-body > .find-pv-k, .finder .find-pv-body > .find-pv-t { display: none; }
+    .find-pv-act { min-height: 0; padding: 10px 16px; }
+    .find-pv-act .btn { flex: 1; justify-content: center; min-height: 44px; }
     .finder .find-foot { display: none; }
   }
   .ref { font-family: var(--mono, "JetBrains Mono", monospace); font-size: 0.82em; font-weight: 700; color: var(--muted); letter-spacing: 0; }

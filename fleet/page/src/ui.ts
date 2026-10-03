@@ -11,7 +11,7 @@ import { createCarets } from "./carets.ts";
 import { decisionTrail, sideSummaries } from "./chatlog.ts";
 import { Core, type Decision, type FindRow, type ItemRef, type Json, type JsonRecord, type Lookup, type Quote, type QuoteAt } from "./core.ts";
 import { postAsk } from "./embed.ts";
-import { arrange, cycleTab, itemsOf, readPrefix, tabsOf, type Item, type Section } from "./find.ts";
+import { arrange, countsOf, cycleTab, itemsOf, readPrefix, tabsOf, type Item, type Section } from "./find.ts";
 import type { Model } from "./model.ts";
 import { createNotify } from "./notify.ts";
 import { createRecents } from "./recents.ts";
@@ -92,10 +92,11 @@ export interface Refs {
   mentions?: HTMLUListElement;
 }
 
-/** The finder's list as laid out: its sections, and the kinds it can narrow to. */
+/** The finder's list as laid out: its sections, the kinds it can narrow to, and how many rows of each the words find. */
 interface Layout {
   readonly sections: readonly Section[];
   readonly tabs: readonly string[];
+  readonly counts: ReadonlyMap<string, number>;
 }
 
 /** The viewer's controls. */
@@ -649,7 +650,7 @@ export function createUi(m: Model) {
    * says what the state says now (liveRows). The next keystroke takes the new rows.
    */
   const layout = createMemo((): Layout => {
-    if (!finderOpen()) return { sections: [], tabs: [""] };
+    if (!finderOpen()) return { sections: [], tabs: [""], counts: new Map() };
     const query = findQuery();
     const tab = findTab();
     const more = findMore();
@@ -659,12 +660,13 @@ export function createUi(m: Model) {
       const rows = Core.findRows(m.state, m.messages());
       const at = m.place();
 
-      return { sections: arrange({ rows, recents: list, query, tab, more, here: at.decision ? "d:" + at.decision : "v:" + at.view }), tabs: tabsOf(rows) };
+      return { sections: arrange({ rows, recents: list, query, tab, more, here: at.decision ? "d:" + at.decision : "v:" + at.view }), tabs: tabsOf(rows), counts: countsOf(rows, query) };
     });
   });
 
   const findSections = (): readonly Section[] => layout().sections;
   const findTabs = (): readonly string[] => layout().tabs;
+  const findCounts = (): ReadonlyMap<string, number> => layout().counts;
   const findItems = createMemo((): Item[] => itemsOf(layout().sections));
 
   /** The highlighted item's place in the list: held by its key, so it stays on its row; the first when that row is gone. */
@@ -674,6 +676,9 @@ export function createUi(m: Model) {
 
     return i === -1 ? 0 : i;
   };
+
+  /** The highlighted item, what the record pane shows. */
+  const foundItem = (): Item | undefined => findItems()[foundAt()];
 
   const setFoundAt = (i: number): void => {
     setActiveKey(findItems()[i]?.key ?? null);
@@ -1092,10 +1097,12 @@ export function createUi(m: Model) {
     setFindTab,
     cycleFindTab,
     findTabs,
+    findCounts,
     findSections,
     findItems,
     liveRows,
     foundAt,
+    foundItem,
     setFoundAt,
     moveFound,
     findEscape,

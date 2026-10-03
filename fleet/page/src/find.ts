@@ -221,6 +221,16 @@ export function tabsOf(rows: readonly FindRow[]): string[] {
   return ["", ...GROUPS.flatMap((g) => (held.has(g.key) ? [g.key] : []))];
 }
 
+/** The rail's counts: for All ("") and each kind the rows hold, in tabsOf's order, how many rows `query` finds, whatever the tab. */
+export function countsOf(rows: readonly FindRow[], query: string): ReadonlyMap<string, number> {
+  const per = new Map<string, number>();
+
+  for (const h of rank(rows, query)) per.set(h.row.group, (per.get(h.row.group) ?? 0) + 1);
+  const kinds = tabsOf(rows).slice(1);
+
+  return new Map([["", kinds.reduce((n, k) => n + (per.get(k) ?? 0), 0)], ...kinds.map((k): [string, number] => [k, per.get(k) ?? 0])]);
+}
+
 /** The tab `by` steps from `tab`, round the ends; from a tab not shown, the first after All. */
 export function cycleTab(tabs: readonly string[], tab: string, by: 1 | -1): string {
   const at = Math.max(0, tabs.indexOf(tab));

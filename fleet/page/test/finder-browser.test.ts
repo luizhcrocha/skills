@@ -1,9 +1,11 @@
 /**
- * The finder in a real browser (headless Chromium), at 1280 and at a phone's 390 in the dark scheme: Ctrl+K
+ * The finder in a real browser (headless Chromium), at 1280 and at a phone's 390, light and dark: Ctrl+K
  * opens it with the places opened last on top; real keys narrow it ("d:" selects a tab, Tab cycles) with the
- * focus kept in the field; nothing scrolls sideways but the row of tabs; on a phone it fills the screen with a
- * close button and no key legend. FLEET_SHOTS=DIR keeps a screenshot of each. Skipped when no Chromium is
- * found (FLEET_CHROMIUM, or chromium on the PATH).
+ * focus kept in the field; nothing scrolls sideways but the phone's row of tabs. At 1280 the kinds are a rail
+ * beside the list and the highlighted item's record beside it, its buttons held in place as the highlight
+ * moves; on a phone it fills the screen with a close button and no key legend, the record folded under the
+ * list and a tap away. FLEET_SHOTS=DIR keeps a screenshot of each. Skipped when no Chromium is found
+ * (FLEET_CHROMIUM, or chromium on the PATH).
  */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -72,7 +74,7 @@ async function shot(page: Page, name: string): Promise<void> {
 }
 
 /** What the finder shows, as the eye reads it. */
-function look(page: Page): Promise<{ heads: string[]; tab: string; focus: boolean; sideways: boolean; tabsScroll: boolean; legend: boolean; close: boolean; full: boolean }> {
+function look(page: Page): Promise<{ heads: string[]; tab: string; focus: boolean; sideways: boolean; tabsScroll: boolean; rail: boolean; legend: boolean; close: boolean; full: boolean; record: boolean; peek: boolean; title: string; actTop: number; box: string }> {
   return page.evaluate(() => {
     const dialog = document.querySelector<HTMLDialogElement>("#finder");
     const shown = (el: Element | null): boolean => !!el && el.getClientRects().length > 0;
@@ -81,10 +83,16 @@ function look(page: Page): Promise<{ heads: string[]; tab: string; focus: boolea
 
     return {
       heads: [...document.querySelectorAll("#find-list .find-group")].map((h) => h.textContent ?? ""),
-      tab: document.querySelector('#find-tabs [aria-selected="true"]')?.textContent ?? "",
+      tab: document.querySelector('#find-tabs [aria-selected="true"] .rl')?.textContent ?? "",
       focus: document.activeElement?.id === "find-q",
-      sideways: [...(dialog?.querySelectorAll<HTMLElement>(".finder-in, .find-list") ?? [])].some((el) => el.scrollWidth > el.clientWidth + 1) || document.documentElement.scrollWidth > innerWidth,
+      sideways: [...(dialog?.querySelectorAll<HTMLElement>(".finder-in, .find-list, .find-pv-body, .find-pv-act") ?? [])].some((el) => el.scrollWidth > el.clientWidth + 1) || document.documentElement.scrollWidth > innerWidth || (!!tabs && getComputedStyle(tabs).flexDirection === "column" && tabs.scrollWidth > tabs.clientWidth + 1),
       tabsScroll: !!tabs && getComputedStyle(tabs).overflowX === "auto",
+      rail: !!tabs && getComputedStyle(tabs).flexDirection === "column",
+      record: shown(document.querySelector(".find-pv-body")) && shown(document.querySelector('.find-pv-act [data-act="open"]')),
+      peek: shown(document.querySelector(".find-pv-peek")),
+      title: document.querySelector(".find-pv-t")?.textContent ?? "",
+      actTop: Math.round(document.querySelector(".find-pv-act")?.getBoundingClientRect().top ?? -1),
+      box: box ? [box.x, box.y, box.width, box.height].map(Math.round).join(",") : "",
       legend: shown(document.querySelector(".find-foot")),
       close: shown(document.querySelector(".find-x")),
       full: !!box && Math.round(box.width) === innerWidth && Math.round(box.height) === innerHeight,
@@ -95,13 +103,14 @@ function look(page: Page): Promise<{ heads: string[]; tab: string; focus: boolea
 for (const [width, scheme] of [
   [1280, "light"],
   [1280, "dark"],
+  [390, "light"],
   [390, "dark"],
 ] as const) {
   test.skipIf(!found)(`at ${String(width)}, ${scheme}: the recents first, keys that narrow it, nothing sideways`, async () => {
     const page = await opened(width, scheme);
     const phone = width < 760;
 
-    expect(await look(page)).toMatchObject({ heads: ["Recent", "Narrow to"], tab: "All", focus: true, sideways: false, tabsScroll: true, legend: !phone, close: phone, full: phone });
+    expect(await look(page)).toMatchObject({ heads: ["Recent", "Narrow to"], tab: "All", focus: true, sideways: false, tabsScroll: phone, rail: !phone, legend: !phone, close: phone, full: phone, record: !phone, peek: phone });
 
     await shot(page, `finder-${String(width)}-${scheme}-empty.png`);
     await page.keyboard.type("d:");
@@ -115,6 +124,36 @@ for (const [width, scheme] of [
     expect(await look(page)).toMatchObject({ tab: "All", focus: true, sideways: false });
 
     await shot(page, `finder-${String(width)}-${scheme}-query.png`);
+
+    /* The record follows the highlight; on a wide screen its buttons and the sheet hold still. */
+    await page.keyboard.press("Escape");
+    await page.keyboard.type("stripe");
+    const first = await look(page);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    const moved = await look(page);
+    expect(moved.title).not.toBe(first.title);
+    expect(moved.sideways).toBe(false);
+
+    if (!phone) expect([moved.actTop, moved.box]).toEqual([first.actTop, first.box]);
+    else {
+      /* On a phone the record is a tap away, its buttons on the screen. */
+      await page.click(".find-pv-peek");
+      const open = await look(page);
+      expect(open).toMatchObject({ record: true, sideways: false, focus: false });
+
+      const inView = await page.evaluate(() => {
+        const r = document.querySelector('.find-pv-act [data-act="open"]')?.getBoundingClientRect();
+
+        return !!r && r.bottom <= innerHeight && r.right <= innerWidth && r.left >= 0;
+      });
+
+      expect(inView).toBe(true);
+      await shot(page, `finder-${String(width)}-${scheme}-record.png`);
+      await page.focus("#find-q");
+    }
+
+    if (!phone) await shot(page, `finder-${String(width)}-${scheme}-record.png`);
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => document.querySelector<HTMLDialogElement>("#finder")?.open === false);

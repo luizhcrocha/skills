@@ -11,8 +11,9 @@ import { Core, type Agent, type Coordinator, type FindRow, type Json, type Quote
 import { evidence } from "./DecisionPage.tsx";
 import { parseEmbedMessage, parseEvidenceSelect, postSelect, type SelRect } from "./embed.ts";
 import { GROUPS, groupOf, highlight, rangesIn, type Item } from "./find.ts";
-import { fmtDur, fmtInt, spentWords } from "./format.ts";
+import { fmtDur, fmtInt, plural, spentWords } from "./format.ts";
 import type { Model } from "./model.ts";
+import { recordOf, type RowRecord } from "./record.ts";
 import { BriefAndReport } from "./Views.tsx";
 
 /** A finder row's title, the letters the query matched marked. */
@@ -82,11 +83,136 @@ function FindItem(props: { readonly item: Item; readonly at: number }): JSX.Elem
   );
 }
 
+/** What the record pane shows of an item: a row's record, or what Enter does on a kind or a "show more"; `open`, Enter's words. */
+type Pane = RowRecord & { readonly open: string };
+
+const EMPTY: Pane = { kind: "", ref: "", title: "", pills: [], lead: "", options: [], facts: [], thread: [], second: null, open: "Open" };
+
+/**
+ * The highlighted item's record, beside the list: it follows the highlight, reads the state as it is now, and
+ * does the item's two actions (Enter, Ctrl/⌘+Enter) as buttons, pinned at its foot so they never move. On a
+ * phone it folds to one line under the list, the record a tap away.
+ */
+function FindRecord(): JSX.Element {
+  const { ui, m } = usePage();
+  const [unfolded, setUnfolded] = createSignal(false);
+
+  createEffect(ui.finderOpen, (open) => {
+    if (open) setUnfolded(false);
+  });
+
+  const pane = createMemo((): Pane => {
+    const it = ui.foundItem();
+
+    if (!it) return EMPTY;
+
+    if (it.kind === "row") return { ...recordOf(ui.liveRows().get(it.row.key) ?? it.row, m.state, m.messages()), open: "Open" };
+
+    if (it.kind === "hint") {
+      const g = groupOf(it.group);
+
+      return { ...EMPTY, kind: "Narrow to", title: it.heading, lead: `${plural(it.n, g.one)}. Type ${it.prefix}: or press Tab to keep only them.`, open: "Narrow" };
+    }
+
+    return { ...EMPTY, kind: it.section === "recents" ? "Recent" : groupOf(it.section).heading, title: `${String(it.n)} more`, lead: "Enter draws them under the rows shown; nothing above moves.", open: "Show them" };
+  });
+
+  return (
+    <aside class="find-pv" id="find-pv" aria-label="Preview" data-open={tf(unfolded())} data-empty={tf(!pane().kind)}>
+      <button type="button" class="find-pv-peek" aria-expanded={tf(unfolded())} aria-controls="find-pv-body" onClick={() => setUnfolded(!unfolded())}>
+        <span class="k">{pane().kind}</span>
+        <span class="t">{pane().title}</span>
+        <span class="chev" aria-hidden="true" />
+      </button>
+      <div class="find-pv-body" id="find-pv-body">
+        <Show when={pane().kind}>
+          <div class="find-pv-k">{pane().kind}</div>
+          <h3 class="find-pv-t">
+            <Show when={pane().ref}>
+              <span class="ref">{pane().ref}</span>{" "}
+            </Show>
+            {pane().title}
+          </h3>
+          <Show when={pane().pills.length}>
+            <div class="find-pv-pills">
+              <For each={pane().pills} keyed={false}>
+                {(p) => <span class={"pill " + p().tone}>{p().text}</span>}
+              </For>
+            </div>
+          </Show>
+          <Show when={pane().lead}>
+            <p class="find-pv-lead">{pane().lead}</p>
+          </Show>
+          <Show when={pane().options.length}>
+            <ul class="find-pv-opts">
+              <For each={pane().options} keyed={false}>
+                {(o) => (
+                  <li>
+                    <b>{o().id}</b> {o().label}
+                    <Show when={o().recommended}>
+                      {" "}
+                      <span class="pill recommended">recommended</span>
+                    </Show>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+          <Show when={pane().thread.length}>
+            <ol class="find-pv-thread">
+              <For each={pane().thread} keyed={false}>
+                {(l) => (
+                  <li class={l().hit ? "hit" : ""}>
+                    <span class="w">{l().who}</span>
+                    <span class="x">{l().text}</span>
+                  </li>
+                )}
+              </For>
+            </ol>
+          </Show>
+          <Show when={pane().facts.length}>
+            <dl class="find-pv-facts">
+              <For each={pane().facts} keyed={false}>
+                {(f) => (
+                  <div>
+                    <dt>{f().label}</dt>
+                    <dd>{f().value}</dd>
+                  </div>
+                )}
+              </For>
+            </dl>
+          </Show>
+        </Show>
+      </div>
+      <div class="find-pv-act">
+        <Show when={pane().kind}>
+          <button type="button" class="btn primary" data-act="open" onClick={() => ui.choose(ui.foundItem(), false)}>
+            {pane().open} <kbd>↵</kbd>
+          </button>
+          <Show when={pane().second}>
+            {(second) => (
+              <button type="button" class="btn" data-act="second" onClick={() => ui.choose(ui.foundItem(), true)}>
+                {second()}{" "}
+                <kbd>
+                  {MOD}
+                  {"+↵"}
+                </kbd>
+              </button>
+            )}
+          </Show>
+        </Show>
+      </div>
+    </aside>
+  );
+}
+
 /**
  * One box to find anything the page holds and go there. The combobox pattern: the focus stays in the field,
  * the highlighted row is `aria-activedescendant`. Up and Down go round, Enter opens, Ctrl/⌘+Enter opens in a
  * new tab, Tab and Shift+Tab cycle the kinds, a prefix ("d:") selects one, Backspace in an empty field drops
- * it, Escape clears and then closes. On a phone it is a full-height sheet with a close button and no legend.
+ * it, Escape clears and then closes. Three panes under the field: the kinds as a rail with their counts, the
+ * list, and the highlighted item's record with its two actions as buttons. On a phone it is a full-height
+ * sheet with a close button and no legend, the rail a row of tabs, the record folded under the list.
  */
 export function Finder(): JSX.Element {
   const { ui } = usePage();
@@ -173,7 +299,8 @@ export function Finder(): JSX.Element {
                   ui.refs.findQ?.focus();
                 }}
               >
-                {t() ? groupOf(t()).heading : "All"}
+                <span class="rl">{t() ? groupOf(t()).heading : "All"}</span>
+                <span class="rn">{fmtInt(ui.findCounts().get(t()) ?? 0)}</span>
               </button>
             )}
           </For>
@@ -187,6 +314,14 @@ export function Finder(): JSX.Element {
             const el = e.target instanceof Element ? e.target.closest<HTMLElement>("[role=option]") : null;
 
             if (el) ui.choose(ui.findItems()[Number(el.dataset["i"])], e.ctrlKey || e.metaKey);
+          }}
+          onPointerMove={(e) => {
+            /* A mouse that moves highlights what it is over; one at rest while the list scrolls under it does not. */
+            if (e.pointerType !== "mouse" || (!e.movementX && !e.movementY)) return;
+            const el = e.target instanceof Element ? e.target.closest<HTMLElement>("[role=option]") : null;
+            const at = el ? Number(el.dataset["i"]) : -1;
+
+            if (at >= 0 && at !== ui.foundAt()) ui.setFoundAt(at);
           }}
         >
           <For each={ui.findSections()} keyed={false} fallback={<div class="find-empty">{ui.findQuery().trim() ? "Nothing matches." : "Nothing here yet."}</div>}>
@@ -202,6 +337,7 @@ export function Finder(): JSX.Element {
             )}
           </For>
         </div>
+        <FindRecord />
         <p class="find-foot muted">
           <span class="find-keys">
             <span>
