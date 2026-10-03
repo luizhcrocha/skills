@@ -266,16 +266,15 @@ export function Log(): JSX.Element {
     <ol
       class="chat-log"
       id="chat-log"
+      hidden={ui.sideList()}
       ref={(el) => (ui.refs.chatLog = el)}
+      onScroll={() => ui.keepPlace()}
       onClick={(e) => {
         const t = e.target instanceof Element ? e.target : null;
         const side = t?.closest<HTMLElement>("[data-side]");
 
         if (side) {
-          m.setFocus(Number(side.dataset["side"]));
-          m.setQuote(null);
-          m.setReply(null);
-          ui.toBottom();
+          ui.openSide(Number(side.dataset["side"]));
 
           return;
         }

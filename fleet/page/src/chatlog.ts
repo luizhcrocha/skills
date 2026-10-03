@@ -206,3 +206,47 @@ export function unreadInChat(all: readonly Message[], read: number, decisions: b
 
   return all.filter((m) => m.from !== "user" && m.id > read && !trail?.has(m.id)).length;
 }
+
+/** A side chat as its list shows it. */
+export interface SideSummary {
+  readonly id: number;
+  /** The first line of what opened it, or where its quote is from. */
+  readonly title: string;
+  /** Where its quote is from, as words. */
+  readonly from: string;
+  /** The decision whose page its quote was taken on, as the page addresses it; null for any other place. */
+  readonly decision: string | null;
+  /** Its last message's id and time. */
+  readonly last: number;
+  readonly lastAt: string;
+  readonly count: number;
+  /** The fleet's messages in it after `readOf(id)`. */
+  readonly unread: number;
+  /** Every word in it and its quote, in lower case, for a search. */
+  readonly words: string;
+}
+
+/** The side chats among `all`, newest activity first; `readOf` is the last message read in each. */
+export function sideSummaries(all: readonly Message[], readOf: (side: number) => number): SideSummary[] {
+  const byId = new Map(all.map((m) => [m.id, m]));
+
+  return Core.sidesOf(all)
+    .map((s): SideSummary => {
+      const inSide = all.filter((m) => m.side === s.id);
+      const from = s.quote?.from ?? "";
+      const first = (s.first.trim().split("\n")[0] ?? "").trim();
+
+      return {
+        id: s.id,
+        title: first || from || "Side chat",
+        from,
+        decision: Core.quoteDecision(s.quote),
+        last: s.last,
+        lastAt: byId.get(s.last)?.at ?? "",
+        count: s.count,
+        unread: inSide.filter((m) => m.from !== "user" && m.id > readOf(s.id)).length,
+        words: [from, s.quote?.text ?? "", ...inSide.map((m) => m.text)].join("\n").toLowerCase(),
+      };
+    })
+    .sort((a, b) => b.last - a.last);
+}

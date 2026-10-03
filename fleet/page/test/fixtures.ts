@@ -229,6 +229,21 @@ export function chatConversation(now: number): Message[] {
   ];
 }
 
+/**
+ * `chatConversation` with two more side chats, for the side chat list: one on the Plan half an hour ago (an
+ * answer not read), one on D18 five minutes ago (two answers not read); the one on D1 is from earlier today.
+ */
+export function sideChats(now: number): Message[] {
+  return [
+    ...chatConversation(now),
+    { id: 20, at: before(now, 30), from: "user", to: ["coordinator"], text: "Why is S1 still open?", author: "luiz@example.com", side: 20, quote: { text: "S1 Restricted Stripe key", from: "the Plan", at: { hash: "#plan" } } },
+    { id: 21, at: before(now, 29), from: "coordinator", to: ["user"], text: "It waits on the key from finance; I asked again this morning.", re: 20, side: 20 },
+    { id: 22, at: before(now, 5), from: "user", to: ["coordinator"], text: "Can we run it on 1k rows instead?", author: "luiz@example.com", side: 22, quote: { text: "Run the 10k-row load check now, or after the cost work?", from: "D18 Load check on the full ledger", at: { hash: "#decision/d18", anchor: "dv-info" } } },
+    { id: 23, at: before(now, 4), from: "a2", to: ["user"], text: "1k rows runs in 0.2 s; it says little about memory.", re: 22, side: 22 },
+    { id: 24, at: before(now, 3), from: "coordinator", to: ["user"], text: "I would wait for the 10k run.", re: 22, side: 22 },
+  ];
+}
+
 /** Luiz's Modal clean-up (2026-10-01), as `--manual` is written now: prose, then the command in a `nu` block. */
 export const MODAL_MANUAL = [
   "From the repo's devenv shell (modal is on its PATH), in nushell:",

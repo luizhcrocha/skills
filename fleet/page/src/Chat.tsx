@@ -11,6 +11,7 @@ import { CloseIcon, usePage, tf } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
 import { Log, useSender } from "./ChatLog.tsx";
 import { decisionTrail } from "./chatlog.ts";
+import { SideList, useAbout } from "./SideList.tsx";
 import type { Message } from "./core.ts";
 
 /** The composer. */
@@ -52,7 +53,7 @@ function Composer(): JSX.Element {
   );
 
   return (
-    <div class="composer" id="composer">
+    <div class="composer" id="composer" hidden={ui.sideList()}>
       <CaretList caret={ui.composer} ref={(el) => (ui.refs.mentions = el)} />
       <p class="chat-error" id="chat-error" role="alert" hidden={!ui.error() || readOnly()}>
         {ui.error()}
@@ -199,6 +200,16 @@ export function Chat(): JSX.Element {
   });
 
   /** How many messages of the conversation shown are decision activity: left out, or shown as markers. */
+  /** The side chat shown, and the answers unread in the others and in it. */
+  const here = createMemo(() => {
+    const f = m.focus();
+
+    return f === null || f === "new" ? undefined : ui.sides().find((x) => x.id === f);
+  });
+
+  const sideUnread = createMemo(() => ui.sides().reduce((n, x) => n + (ui.isArchived(x) ? 0 : x.unread), 0));
+  const about = useAbout();
+
   const activity = createMemo(() => {
     const trail = decisionTrail(m.messages());
     const focus = m.focus();
@@ -259,26 +270,50 @@ export function Chat(): JSX.Element {
         <span class="hidden-note" id="chat-decisions-note" hidden={m.decisionActivity() || !activity()}>
           {activity()} decision message{activity() === 1 ? "" : "s"} hidden
         </span>
+        <button
+          type="button"
+          class="btn small side-list-btn"
+          id="side-list-btn"
+          hidden={!ui.sides().length}
+          aria-pressed={tf(ui.sideList())}
+          aria-label={"Side chats" + (sideUnread() ? `, ${sideUnread()} unread` : "")}
+          onClick={() => {
+            const f = m.focus();
+
+            if (ui.sideList()) ui.openSide(f === "new" ? null : f);
+            else ui.openSideList();
+          }}
+        >
+          Side chats
+          <Show when={sideUnread()}>
+            <span class="count">{sideUnread()}</span>
+          </Show>
+        </button>
         <button type="button" class="switch" id="chat-decisions" role="switch" aria-checked={tf(m.decisionActivity())} onClick={() => m.setDecisionActivity(!m.decisionActivity())}>
           <span class="switch-track" aria-hidden="true" />
           Decision activity
         </button>
       </div>
-      <div class="side-head" id="side-head" hidden={m.focus() == null}>
-        <button
-          type="button"
-          class="btn small"
-          id="side-back"
-          onClick={() => {
-            m.setFocus(null);
-            m.setQuote(null);
-            ui.toBottom();
-          }}
-        >
+      <div class="side-head" id="side-head" hidden={m.focus() == null || ui.sideList()}>
+        <button type="button" class="btn small" id="side-back" onClick={() => ui.openSide(null)}>
           Back to the chat
         </button>
-        <span class="side-title">Side chat</span>
+        <span class="side-name">
+          <span class="side-title">Side chat</span>
+          <Show when={here()}>{(s) => <span class="side-about">{about(s()).label}</span>}</Show>
+        </span>
+        <Show when={here()}>
+          {(s) => (
+            <button type="button" class="btn small" id="side-archive" aria-pressed={tf(ui.isArchived(s()))} onClick={() => ui.setArchive(s().id, !ui.isArchived(s()))}>
+              {ui.isArchived(s()) ? "Unarchive" : "Archive"}
+            </button>
+          )}
+        </Show>
+        <button type="button" class="btn small" id="side-all" onClick={() => ui.openSideList()}>
+          All side chats
+        </button>
       </div>
+      <SideList />
       <p class="chat-note" id="chat-note" hidden={m.conn() !== "unavailable"}>
         Chat is unavailable here. It runs on the dashboard's own server, at the address the coordinator gave you; this copy shows the fleet only.
       </p>

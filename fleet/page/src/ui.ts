@@ -8,7 +8,7 @@
 import { createEffect, createMemo, createSignal, flush, untrack } from "solid-js";
 
 import { createCarets } from "./carets.ts";
-import { decisionTrail } from "./chatlog.ts";
+import { decisionTrail, sideSummaries } from "./chatlog.ts";
 import { Core, type Decision, type FindRow, type ItemRef, type Json, type JsonRecord, type Lookup, type Quote, type QuoteAt } from "./core.ts";
 import { postAsk } from "./embed.ts";
 import { arrange, cycleTab, itemsOf, readPrefix, tabsOf, type Item, type Section } from "./find.ts";
@@ -223,6 +223,115 @@ export function createUi(m: Model) {
       if (inView && top > m.read()) m.setRead(top);
     },
   );
+
+  /* ------------------------------------------------------------------ the side chats */
+
+  /** The list of side chats shown in the chat's place. */
+  const [sideList, setSideList] = createSignal(false);
+  /** The last message read in each side chat; one with none, up to what the main chat was read to when this began. */
+  const [sideRead, setSideRead] = createSignal<{ readonly [side: string]: number }>(store.get<{ [side: string]: number }>("side-read", {}));
+
+  const sideBase = ((): number => {
+    const given = Number(store.get("side-read-base", -1));
+
+    if (Number.isInteger(given) && given >= 0) return given;
+    store.set("side-read-base", m.read());
+
+    return m.read();
+  })();
+
+  /** The side chats archived, each with its last message's id then: something said after brings it back. */
+  const [archived, setArchived] = createSignal<{ readonly [side: string]: number }>(store.get<{ [side: string]: number }>("side-archived", {}));
+
+  const sideReadOf = (side: number): number => sideRead()[String(side)] ?? sideBase;
+
+  const sides = createMemo(() => sideSummaries(m.messages(), sideReadOf));
+
+  const isArchived = (s: { readonly id: number; readonly last: number }): boolean => {
+    const at = archived()[String(s.id)];
+
+    return at !== undefined && s.last <= at;
+  };
+
+  function setArchive(side: number, on: boolean): void {
+    const next = { ...archived() };
+    const s = sides().find((x) => x.id === side);
+
+    if (on && s) next[String(side)] = s.last;
+    else delete next[String(side)];
+    setArchived(next);
+    store.set("side-archived", next);
+  }
+
+  /* A side chat in view is read up to its newest message from the fleet. */
+  createEffect(
+    () => {
+      const f = m.focus();
+
+      if (f === null || f === "new" || sideList() || !m.chatInView()) return null;
+
+      return { side: f, top: Math.max(0, ...m.messages().filter((x) => x.side === f && x.from !== "user").map((x) => x.id)) };
+    },
+    (now) => {
+      if (!now || now.top <= sideReadOf(now.side)) return;
+      const next = { ...sideRead(), [String(now.side)]: now.top };
+      setSideRead(next);
+      store.set("side-read", next);
+    },
+  );
+
+  /* Whatever starts a message (a reply, a quote, a side chat) or changes the conversation shows the chat, not the list. */
+  createEffect(
+    () => [m.focus(), m.quote(), m.reply()] as const,
+    () => {
+      if (sideList()) setSideList(false);
+    },
+    { defer: true },
+  );
+
+  /** Where the chat was scrolled to in each conversation ("main", or a side chat's id): its offset, or at its end. */
+  const places = new Map<string, { readonly top: number; readonly end: boolean }>();
+
+  /** Keep where the conversation shown is scrolled to, to come back to it. */
+  function keepPlace(): void {
+    const log = refs.chatLog;
+
+    if (!log || sideList() || log.hidden) return;
+    places.set(String(m.focus() ?? "main"), { top: log.scrollTop, end: nearBottom() });
+  }
+
+  /* Coming back to a conversation, the chat is where it was left: its end when it was there, or when it is new. */
+  createEffect(
+    () => (sideList() ? null : String(m.focus() ?? "main")),
+    (key) => {
+      const log = refs.chatLog;
+
+      if (key === null || !log) return;
+      const p = places.get(key);
+
+      if (!p || p.end) toBottom();
+      else log.scrollTop = p.top;
+    },
+    { defer: true },
+  );
+
+  /** Show the main chat (null) or side chat `side`, where it was left. */
+  function openSide(side: number | null): void {
+    keepPlace();
+    setSideList(false);
+    m.setFocus(side);
+    m.setQuote(null);
+    m.setReply(null);
+    flush();
+  }
+
+  /** Show the list of side chats in the chat's place. */
+  function openSideList(): void {
+    keepPlace();
+    closeList();
+    setSideList(true);
+    flush();
+  }
 
   /* ------------------------------------------------------------------ the composer */
 
@@ -943,6 +1052,14 @@ export function createUi(m: Model) {
     closeChat,
     nearBottom,
     toBottom,
+    sideList,
+    setSideList,
+    sides,
+    isArchived,
+    setArchive,
+    keepPlace,
+    openSide,
+    openSideList,
     addMessage,
     carets,
     composer,
