@@ -473,6 +473,8 @@
   .btn:hover { border-color: var(--faint); }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .btn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
+  .btn.danger { border-color: var(--critical); color: var(--critical); }
+  .btn.danger:hover { background: var(--critical-soft); }
   .btn:disabled { opacity: 0.45; cursor: not-allowed; }
   @media (max-width: 759.98px) {
     dialog.sheet { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 16px 16px 0 0; border-bottom: 0; max-height: 88dvh; }

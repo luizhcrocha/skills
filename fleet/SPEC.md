@@ -229,11 +229,21 @@ Checked in this order:
    longer held by the fleet`. A held decision counts as recorded: every answer given until
    `held_at` is the fleet's ([warning 4](#warnings), `chat wait`, `fleets`, the page's Stuck).
    `show` reads `OPEN, held by the fleet (<reason>)`.
-6. `--decide ANSWER --resolution HOW` closes it decided: logs `decision`
+6. **A failed action**: the page answers an action the user ran and that failed with
+   `Failed: <what happened>`. The open action's latest answer from the user since it was opened or
+   last revised, when it begins `Failed:`, makes it failed, whatever replies or hold came after
+   (`failedAnswer`, `decisions.failed_answer`). While it is failed, `--decide` is refused, checked
+   after the revision in 5 (`<title> failed for the user (#N: <first words>) and is not done: revise it
+   with a fix and re-present it (--manual, --question), or --withdraw "why"`); a revision (the fix,
+   re-presented) or `--withdraw` settles it, and a later answer that does not begin `Failed:` makes it an
+   ordinary answer again. The first words are the note's first line, cut at 60 characters with `…`.
+   `show` adds `, failed for the user (#N: <first words>)` to its status. Only the chat says it: the
+   ledger holds no copy.
+7. `--decide ANSWER --resolution HOW` closes it decided: logs `decision`
    (`<title>: <answer> (<resolution>)`). `--withdraw REASON` closes it withdrawn: logs `resolved`
    (`<title> withdrawn: <reason>`). Either sets `closed` = now, removes a hold, and resolves every
    open roadblock waiting on it (each logging its own `resolved`, and unblocking its worker).
-7. Validation: ids unique; no id equal to another decision's number; `supersedes` and
+8. Validation: ids unique; no id equal to another decision's number; `supersedes` and
    roadblocks' `decision` name existing ids; defaults are filled (`asks` user, `blocking` false,
    `page` true, `body` false, the optional fields null, a grilling's `questions` []). `held` and
    `held_at` are present only on a held decision, both strings (`decision X is held without its
@@ -382,6 +392,11 @@ After the handler succeeds, before validation, on stderr, in this order (not for
    the chat said after its last answer (a reply, a recap, amendments): `state: every question of G6
    (<title>) is answered and the grilling is still open; record it before any other work: \`fleet
    state <dir> decision G6 --decide "..." --resolution "grilling finished"\`, or --withdraw "why".`
+   A failed action (see `decision` 6) gets its own line instead, until it is revised, withdrawn, or
+   held after the failed answer, a reply notwithstanding: `state: the user ran A1 (<title>) and it
+   failed, #14 at 09:12: <first words>. It is not done: fix what failed and re-present it (\`fleet
+   state <dir> decision A1 --manual "..." --log "what changed"\`), or \`--withdraw "why"\`; never
+   --decide it. Answer #14 with --re.`
 5. **Decisions left open** (`state: the fleet is done with D1, A2 still open: withdraw each with its
    reason (\`decision ID --withdraw "why"\`), or name it in your last message as left open on
    purpose.`) on the `set --status done` that finds them open.
@@ -458,7 +473,7 @@ its id.
 | `inbox --as WHO` | the messages open for WHO (`user` allowed) | one line each, oldest first | 1 unknown WHO |
 | `log [--after N]` | every message with id > N | one line each | 0 |
 | `watch --as WHO [--after N \| --resume] [--all] [--once] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager |
-| `wait DECISION...` | waits for the user's answer to one of these open decisions | the answer's line, then `-> the user answered <ref>: record it first, ...` | 1 unknown decision |
+| `wait DECISION...` | waits for the user's answer to one of these open decisions | the answer's line, then `-> the user answered <ref>: record it first, ...`; for an action answered `Failed: ...`, `-> the user's step <ref> failed, and it is not done: fix it and re-present it, ...`, or --withdraw "why"; never --decide` | 1 unknown decision |
 
 A printed line: `#<id> <from>( (<name or author>)) -> <to, each with its name>( [<ref> <decision>])( [side chat #N])( [delivered to <fleet> #<id>, ...])( [via <fleet> #<id>])( (quoting <from>: "<quote>"))`
 `: <text>( [re #N])`. Line breaks print as ` ⏎ `, a tab as a space, and other control characters

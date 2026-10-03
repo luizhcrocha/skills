@@ -389,7 +389,8 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
             choice: text("choice"),
             note: text("note"),
             value: text("value"),
-            done: d.kind === "action" || (e.submitter instanceof HTMLButtonElement && e.submitter.name === "done"),
+            done: e.submitter instanceof HTMLButtonElement ? e.submitter.name === "done" : d.kind === "action",
+            failed: e.submitter instanceof HTMLButtonElement && e.submitter.name === "failed",
           });
 
     if ("error" in out) {
@@ -721,10 +722,13 @@ function Form(props: { readonly d: Decision }): JSX.Element {
       <Match when={kind() === "action"}>
         <AnswerForm d={props.d}>
           <Manual d={props.d} title="What to do" />
-          {note("Note, if something went differently")}
+          {note("Note: what went differently, or, if it failed, what happened (paste the error)")}
           <div class="sheet-actions">
             <button type="submit" name="done" value="1" class="btn primary">
               Done
+            </button>
+            <button type="submit" name="failed" value="1" class="btn danger">
+              Failed
             </button>
             <Discuss />
           </div>

@@ -269,6 +269,20 @@ test("answerText: an input is its text, a secret a reference or done by hand, an
   assert.deepEqual(Core.answerText(item("d1", { kind: "action" }), { done: true, note: "ran on the NAS too" }), { text: "Done.\nran on the NAS too" });
 });
 
+test("answerText and failedAnswer: an action that failed is Failed: with what happened, which it needs", () => {
+  const action = item("d1", { kind: "action", status: "open", opened: "2026-09-29T15:00:00Z" });
+  assert.deepEqual(Core.answerText(action, { failed: true, note: " just: recipe `cut` not found \n" }), { text: "Failed: just: recipe `cut` not found" });
+  assert.equal(Core.answerText(action, { failed: true, note: "  " }).error, "Say what happened: what you ran and what it said.");
+  const said = (text, at = "2026-09-29T15:10:00Z", id = 80) => ({ id, from: "user", decision: "d1", at, text });
+  assert.equal(Core.failedAnswer(action, [said("Failed: no such recipe\nfull log")]).id, 80);
+  assert.equal(Core.failureWords(said("Failed: no such recipe\nfull log")), "no such recipe");
+  assert.equal(Core.failureWords(said("Failed: " + "x".repeat(80))), "x".repeat(60) + "…");
+  assert.equal(Core.failedAnswer(action, [said("Failed: x"), said("Done.", "2026-09-29T15:11:00Z", 81)]), null);
+  assert.equal(Core.failedAnswer({ ...action, revised: "2026-09-29T15:20:00Z" }, [said("Failed: x")]), null);
+  assert.equal(Core.failedAnswer({ ...action, kind: "input" }, [said("Failed: x")]), null);
+  assert.equal(Core.failedAnswer({ ...action, status: "withdrawn" }, [said("Failed: x")]), null);
+});
+
 test("parseState: a state the page can render, with every list present, or null", () => {
   const parsed = Core.parseState({ project: "p", goal: "g", status: "running", now: "n", started: "2026-09-28T10:00:00Z", agents: [{ id: "a1", name: "x", status: "done", task: "t" }] });
   assert.deepEqual([parsed.roadmap, parsed.roadblocks, parsed.decisions, parsed.events], [[], [], [], []]);

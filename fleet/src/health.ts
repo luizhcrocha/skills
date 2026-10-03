@@ -32,6 +32,29 @@ export function answeredGrill(d: Pick<Decision, "kind" | "status" | "questions">
   return d.kind === "grill" && d.status === "open" && !(d.questions ?? []).some((q) => q.status === "open");
 }
 
+/** How the page's answer to an action the user ran and that failed begins: `Failed: <what happened>`. */
+export const FAILED = "Failed:";
+
+/** The user's latest answer to the open action `d`, given since it last changed, when it says the step
+ * failed (`Failed: ...`); undefined otherwise. Neither a reply nor a hold settles it: the step is not done
+ * until the fleet revises it (the fix, re-presented) or withdraws it. Python's `decisions.failed_answer`,
+ * the page's `failedAnswer`. */
+export function failedAnswer(d: Pick<Decision, "id" | "kind" | "status" | "opened" | "revised">, said: readonly Message[]): Message | undefined {
+  if (d.kind !== "action" || d.status !== "open") return undefined;
+  const since = d.revised !== undefined && d.revised !== null && d.revised !== "" ? d.revised : d.opened;
+  const last = said.filter((m) => m.from === "user" && m.decision === d.id && atOrAfter(str(m.at), since)).at(-1);
+
+  return last?.text.startsWith(FAILED) === true ? last : undefined;
+}
+
+/** The first words of a failed answer: its note's first line, cut at 60 characters. */
+export function failureWords(m: Pick<Message, "text">): string {
+  const line = (m.text.slice(FAILED.length).trim().split("\n")[0] ?? "").trim();
+  const chars = [...line];
+
+  return chars.length > 60 ? chars.slice(0, 60).join("") + "…" : line;
+}
+
 /** When the user's answer to the open decision `d`, given after it last changed and not replied to,
  * was sent (stamps compared as instants, open-13); undefined when there is none. A held decision
  * (`held`, the fleet works on it first) has recorded every answer given until `held_at`. */

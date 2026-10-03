@@ -77,6 +77,26 @@ def answered_at(d: dict, said: list[dict]) -> str | None:
     return answers[-1]["at"] if answers else None
 
 
+FAILED = "Failed:"  # how the page's answer to an action the user ran and that failed begins: "Failed: <what happened>"
+
+
+def failed_answer(d: dict, said: list[dict]) -> dict | None:
+    """The user's latest answer to the open action `d`, given since it last changed, when it says the step
+    failed ("Failed: ..."); None otherwise. Neither a reply nor a hold settles it: the step is not done until
+    the fleet revises it (the fix, re-presented) or withdraws it. TypeScript's `failedAnswer` (fleet/src/health.ts)."""
+    if d.get("kind") != "action" or d.get("status") != "open":
+        return None
+    since = d.get("revised") or d.get("opened") or ""
+    answers = [m for m in said if m.get("decision") == d.get("id") and m["from"] == "user" and clock.at_or_after(m["at"], since)]
+    return answers[-1] if answers and str(answers[-1].get("text", "")).startswith(FAILED) else None
+
+
+def failure_words(m: dict) -> str:
+    """The first words of a failed answer: its note's first line, cut at 60 characters."""
+    line = m["text"][len(FAILED):].strip().split("\n")[0].strip()
+    return line[:60] + "…" if len(line) > 60 else line
+
+
 def answered_grill(d: dict) -> bool:
     """Whether `d` is a grilling still open with no question left open: every question is answered (or
     dropped) and the fleet has yet to record it (`--decide` or `--withdraw`). Read from the ledger's question

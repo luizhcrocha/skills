@@ -605,6 +605,15 @@ describe("wait", () => {
     expect(cli("wait", "d-x").stdout).toContain("[A1 d-x]: Done.");
   });
 
+  test("a failed answer says to fix and re-present the step, never to decide it", () => {
+    decide();
+    user("Failed: no such recipe", { decision: "d-x" });
+    const out = cli("wait", "d-x").stdout;
+    expect(out).toContain("[A1 d-x]: Failed: no such recipe");
+    expect(out).toContain(`-> the user's step A1 failed, and it is not done: fix it and re-present it, \`fleet state ${root} decision A1 --manual ...\`, or --withdraw "why"; never --decide`);
+    expect(out).not.toContain("record it first");
+  });
+
   test("an answer the fleet holds is not news", async () => {
     writeDecisions([
       { id: "d-x", ref: "A1", kind: "action", title: "Do it", question: "q", status: "open", opened: "2026-01-01T00:00:00+00:00", held: "fix the code first", held_at: "2999-01-01T00:00:00+00:00" },

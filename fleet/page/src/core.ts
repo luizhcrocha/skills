@@ -1119,12 +1119,37 @@ function pendingAnswer(item: Decision | null | undefined, messages: Iterable<Mes
   return found && { answer: found, replies: list.filter((m) => m.re === found.id && m.from !== "user") };
 }
 
+/** How the answer to an action the viewer ran and that failed begins: `Failed: <what happened>`. */
+const FAILED = "Failed:";
+
+/**
+ * The viewer's answer that says open action `item` failed: their latest answer since it last changed, when it
+ * begins `Failed:`. Null otherwise. Neither a reply nor a hold settles it; a revision (the fix, re-presented)
+ * or a withdrawal does. The fleet's `failedAnswer` (fleet/src/health.ts) by the same rule.
+ */
+function failedAnswer(item: Decision | null | undefined, messages: Iterable<Message> | null | undefined): Message | null {
+  if (!item || item.kind !== "action") return null;
+  const p = pendingAnswer(item, messages);
+
+  return p && p.answer.text.startsWith(FAILED) ? p.answer : null;
+}
+
+/** The first words of a failed answer: its note's first line, cut at 60 characters. */
+function failureWords(m: Pick<Message, "text">): string {
+  const line = (m.text.slice(FAILED.length).trim().split("\n")[0] ?? "").trim();
+  const chars = [...line];
+
+  return chars.length > 60 ? chars.slice(0, 60).join("") + "…" : line;
+}
+
 /** What the decision's form gave. */
 export interface AnswerForm {
   readonly choice?: string;
   readonly note?: string;
   readonly value?: string;
   readonly done?: boolean;
+  /** An action the viewer ran and that failed: the note says what happened. */
+  readonly failed?: boolean;
 }
 
 /** Why `body`, the JSON a composer would post, is too big to send under the server's limit `max` (from the
@@ -1157,6 +1182,8 @@ function answerText(item: Decision, form: AnswerForm): Posted | { error: string 
 
     return item.kind === "permission" && item.refusal ? { ...posted, rule: item.refusal.rule } : posted;
   }
+
+  if (form.failed && item.kind === "action") return note ? { text: FAILED + " " + note } : { error: "Say what happened: what you ran and what it said." };
 
   if (form.done) return withNote(item.kind === "secret" ? "Set by hand." : "Done.");
 
@@ -1857,6 +1884,8 @@ export const Core = {
   sidesOf,
   excerptOf,
   answerText,
+  failedAnswer,
+  failureWords,
   tooBig,
   parseState,
   parseMessage,

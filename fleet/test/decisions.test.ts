@@ -477,6 +477,83 @@ describe("hold", () => {
   });
 });
 
+/** The user ran an action's commands and they failed: the page posts "Failed: <what happened>". The step is
+ * not done: the fleet fixes it and re-presents it, or withdraws it; it is never recorded as decided. */
+describe("a failed action", () => {
+  const FAILED = "Failed: just: recipe `cut` not found\nerror: Justfile does not contain recipe `cut`.";
+
+  const NAG = "state: the user ran A1 (Run the role cut) and it failed, #1 at 00:00: just: recipe `cut` not found. It is not done: ";
+
+  const say = (...lines: { id: number; at: string; from: string; text: string; re?: number; decision?: string }[]): void => {
+    writeFileSync(join(root, "chat.jsonl"), lines.map((m) => `${JSON.stringify({ to: m.from === "user" ? ["coordinator"] : ["user"], re: null, ...m })}\n`).join(""));
+  };
+
+  const failed = { id: 1, at: "2999-01-01T00:00:00+00:00", from: "user", text: FAILED, decision: "a1" };
+
+  const later = (...args: string[]): Ran => fleet(["state", root, ...args, "--no-render"], { ...env, FLEET_NOW: "2999-01-01T00:05:00+00:00" });
+
+  test("every command says it failed and how to go on, never to decide it", () => {
+    ok("decision", ...ACTION);
+    say(failed);
+    const warned = run("event", "x").stderr;
+    expect(warned).toContain(NAG);
+    expect(warned).toContain('decision A1 --manual "..." --log "what changed"');
+    expect(warned).toContain('--withdraw "why"');
+    expect(warned).toContain("never --decide it");
+    expect(warned).not.toContain("the user answered A1");
+  });
+
+  test("show names it failed, with the user's first words", () => {
+    ok("decision", ...ACTION);
+    say(failed);
+    expect(fleet(["state", root, "show"], env).stdout).toContain("  A1 decision a1 OPEN, failed for the user (#1: just: recipe `cut` not found) [action] Run the role cut\n");
+  });
+
+  test("--decide is refused while it stands failed; --withdraw closes it", () => {
+    ok("decision", ...ACTION);
+    say(failed);
+    const said = refused("decision", "A1", "--decide", "ran it", "--resolution", "answered on the page (#1)");
+    expect(said).toContain("Run the role cut failed for the user (#1: just: recipe `cut` not found) and is not done");
+    expect(said).toContain('--withdraw "why"');
+    expect(item("a1")["status"]).toBe("open");
+    ok("decision", "A1", "--withdraw", "the role cut moved to CI");
+    expect(item("a1")["status"]).toBe("withdrawn");
+    expect(run("event", "y").stderr).not.toContain("and it failed");
+  });
+
+  test("a reply does not settle it; a hold does until the next answer", () => {
+    ok("decision", ...ACTION);
+    say(failed, { id: 2, at: "2999-01-01T00:00:30+00:00", from: "coordinator", text: "looking", re: 1, decision: "a1" });
+    expect(run("event", "x").stderr).toContain(NAG);
+    expect(later("decision", "A1", "--hold", "fixing the recipe").code).toBe(0);
+    expect(run("event", "y").stderr).not.toContain("and it failed");
+    expect(fleet(["state", root, "show"], env).stdout).toContain("OPEN, held by the fleet (fixing the recipe), failed for the user (#1: just: recipe `cut` not found) [action]");
+    expect(refused("decision", "A1", "--decide", "ran it", "--resolution", "x")).toContain("is not done");
+  });
+
+  test("a revision re-presents it, and its next answer is an ordinary one", () => {
+    ok("decision", ...ACTION);
+    say(failed);
+    expect(later("decision", "A1", "--manual", "just cut-roles", "--log", "the recipe is cut-roles").code).toBe(0);
+    expect(run("event", "x").stderr).not.toContain("and it failed");
+    expect(fleet(["state", root, "show"], env).stdout).toContain("  A1 decision a1 OPEN [action] Run the role cut\n");
+    say(failed, { id: 2, at: "2999-01-01T00:06:00+00:00", from: "user", text: "Done.", decision: "a1" });
+    expect(run("event", "y").stderr).toContain("state: the user answered A1 (Run the role cut) as #2 at 00:06");
+    ok("decision", "A1", "--decide", "ran it", "--resolution", "answered on the page (#2)");
+  });
+
+  test("Done after Failed is an ordinary answer; Failed on another kind is too", () => {
+    ok("decision", ...ACTION);
+    say(failed, { id: 2, at: "2999-01-01T00:01:00+00:00", from: "user", text: "Done.\nit worked on the second try", decision: "a1" });
+    expect(run("event", "x").stderr).toContain("the user answered A1");
+    ok("decision", ...SCHEMA);
+    say({ ...failed, decision: "d1", text: "Failed: neither" });
+    const warned = run("event", "y").stderr;
+    expect(warned).toContain("the user answered D1");
+    expect(warned).not.toContain("and it failed");
+  });
+});
+
 describe("answers", () => {
   test("an open item takes an answer", () => {
     ok("decision", ...SCHEMA);

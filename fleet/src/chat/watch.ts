@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import { atOrAfter, parseInstant } from "../clock.ts";
 import { ChatError } from "../errors.ts";
 import { readText, remove, resolvePath, writeText } from "../files.ts";
-import { answeredAt, answeredGrill, silentWorkers } from "../health.ts";
+import { answeredAt, answeredGrill, FAILED, silentWorkers } from "../health.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger, type Decision, type Ledger } from "../ledger/model.ts";
@@ -396,7 +396,7 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
   return Effect.gen(function* () {
     const out = yield* Out;
     const ledger = numberedLedger(root);
-    const wanted = new Map<string, { readonly label: string; readonly since: string; readonly held: string | undefined }>();
+    const wanted = new Map<string, { readonly label: string; readonly kind: string; readonly since: string; readonly held: string | undefined }>();
 
     for (const key of keys) {
       const d = ledger === undefined ? undefined : findDecision(ledger, key);
@@ -411,7 +411,7 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
       }
 
       const revised = d.revised ?? "";
-      wanted.set(d.id, { label, since: revised !== "" ? revised : d.opened, held: d.held !== undefined && d.held !== null && d.held !== "" ? (d.held_at ?? "") : undefined });
+      wanted.set(d.id, { label, kind: d.kind, since: revised !== "" ? revised : d.opened, held: d.held !== undefined && d.held !== null && d.held !== "" ? (d.held_at ?? "") : undefined });
     }
 
     let tail: Tail | undefined;
@@ -433,7 +433,11 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
         if (first && messages.some((r) => r.re === m.id && r.from !== "user")) continue;
 
         for (const line of renderLines(machine, root, [m])) out.out(`${line}\n`);
-        out.out(`-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide ...\`\n`);
+        out.out(
+          d.kind === "action" && m.text.startsWith(FAILED)
+            ? `-> the user's step ${d.label} failed, and it is not done: fix it and re-present it, \`fleet state ${root} decision ${d.label} --manual ...\`, or --withdraw "why"; never --decide\n`
+            : `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide ...\`\n`,
+        );
 
         return;
       }

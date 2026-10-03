@@ -1006,6 +1006,15 @@ class WaitTest(FleetDir):
         chat.append(self.root, "user", "Done.", allow_user=True, decision="d-x")
         self.assertIn("[A1 d-x]: Done.", run_cli(self.root, "wait", "d-x").stdout)
 
+    def test_a_failed_answer_says_to_fix_and_re_present_the_step_never_to_decide_it(self):
+        self.decide()
+        chat.append(self.root, "user", "Failed: no such recipe", allow_user=True, decision="d-x")
+        out = run_cli(self.root, "wait", "d-x").stdout
+        self.assertIn("[A1 d-x]: Failed: no such recipe", out)
+        self.assertIn(f"-> the user's step A1 failed, and it is not done: fix it and re-present it, "
+                      f"`fleet state {self.root} decision A1 --manual ...`, or --withdraw \"why\"; never --decide", out)
+        self.assertNotIn("record it first", out)
+
     def test_an_answer_the_fleet_holds_is_not_news(self):
         self.decide()
         state = json.loads((self.root / "state.json").read_text())

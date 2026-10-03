@@ -391,6 +391,83 @@ class HoldTest(Fleet):
             self.assertIn(word, self.refused("set", "--now", "x"))
 
 
+class FailedTest(Fleet):
+    """The user ran an action's commands and they failed: the page posts "Failed: <what happened>". The step is
+    not done: the fleet fixes it and re-presents it, or withdraws it; it is never recorded as decided."""
+
+    FAILED = "Failed: just: recipe `cut` not found\nerror: Justfile does not contain recipe `cut`."
+    NAG = "state: the user ran A1 (Run the role cut) and it failed, #1 at 00:00: just: recipe `cut` not found. It is not done: "
+
+    def say(self, *lines: dict) -> None:
+        rows = [{"to": ["coordinator"] if m["from"] == "user" else ["user"], "re": None, **m} for m in lines]
+        (self.root / "chat.jsonl").write_text("".join(json.dumps(m) + "\n" for m in rows))
+
+    def failed(self, **change) -> dict:
+        return {"id": 1, "at": "2999-01-01T00:00:00+00:00", "from": "user", "text": self.FAILED, "decision": "a1", **change}
+
+    def later(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, STATE, str(self.root), *args, "--no-render"], capture_output=True, text=True, timeout=20,
+                              env={**os.environ, "FLEET_NOW": "2999-01-01T00:05:00+00:00"})
+
+    def show(self) -> str:
+        return subprocess.run([sys.executable, STATE, str(self.root), "show"], capture_output=True, text=True).stdout
+
+    def test_every_command_says_it_failed_and_how_to_go_on_never_to_decide_it(self):
+        self.ok("decision", *ACTION)
+        self.say(self.failed())
+        warned = self.run_cli("event", "x").stderr
+        self.assertIn(self.NAG, warned)
+        self.assertIn('decision A1 --manual "..." --log "what changed"', warned)
+        self.assertIn('--withdraw "why"', warned)
+        self.assertIn("never --decide it", warned)
+        self.assertNotIn("the user answered A1", warned)
+
+    def test_show_names_it_failed_with_the_users_first_words(self):
+        self.ok("decision", *ACTION)
+        self.say(self.failed())
+        self.assertIn("  A1 decision a1 OPEN, failed for the user (#1: just: recipe `cut` not found) [action] Run the role cut\n", self.show())
+
+    def test_decide_is_refused_while_it_stands_failed_and_withdraw_closes_it(self):
+        self.ok("decision", *ACTION)
+        self.say(self.failed())
+        said = self.refused("decision", "A1", "--decide", "ran it", "--resolution", "answered on the page (#1)")
+        self.assertIn("Run the role cut failed for the user (#1: just: recipe `cut` not found) and is not done", said)
+        self.assertIn('--withdraw "why"', said)
+        self.assertEqual(self.item("a1")["status"], "open")
+        self.ok("decision", "A1", "--withdraw", "the role cut moved to CI")
+        self.assertEqual(self.item("a1")["status"], "withdrawn")
+        self.assertNotIn("and it failed", self.run_cli("event", "y").stderr)
+
+    def test_a_reply_does_not_settle_it_a_hold_does_until_the_next_answer(self):
+        self.ok("decision", *ACTION)
+        self.say(self.failed(), {"id": 2, "at": "2999-01-01T00:00:30+00:00", "from": "coordinator", "text": "looking", "re": 1, "decision": "a1"})
+        self.assertIn(self.NAG, self.run_cli("event", "x").stderr)
+        self.assertEqual(self.later("decision", "A1", "--hold", "fixing the recipe").returncode, 0)
+        self.assertNotIn("and it failed", self.run_cli("event", "y").stderr)
+        self.assertIn("OPEN, held by the fleet (fixing the recipe), failed for the user (#1: just: recipe `cut` not found) [action]", self.show())
+        self.assertIn("is not done", self.refused("decision", "A1", "--decide", "ran it", "--resolution", "x"))
+
+    def test_a_revision_re_presents_it_and_its_next_answer_is_an_ordinary_one(self):
+        self.ok("decision", *ACTION)
+        self.say(self.failed())
+        self.assertEqual(self.later("decision", "A1", "--manual", "just cut-roles", "--log", "the recipe is cut-roles").returncode, 0)
+        self.assertNotIn("and it failed", self.run_cli("event", "x").stderr)
+        self.assertIn("  A1 decision a1 OPEN [action] Run the role cut\n", self.show())
+        self.say(self.failed(), {"id": 2, "at": "2999-01-01T00:06:00+00:00", "from": "user", "text": "Done.", "decision": "a1"})
+        self.assertIn("state: the user answered A1 (Run the role cut) as #2 at 00:06", self.run_cli("event", "y").stderr)
+        self.ok("decision", "A1", "--decide", "ran it", "--resolution", "answered on the page (#2)")
+
+    def test_done_after_failed_is_an_ordinary_answer_and_failed_on_another_kind_is_too(self):
+        self.ok("decision", *ACTION)
+        self.say(self.failed(), {"id": 2, "at": "2999-01-01T00:01:00+00:00", "from": "user", "text": "Done.\nit worked on the second try", "decision": "a1"})
+        self.assertIn("the user answered A1", self.run_cli("event", "x").stderr)
+        self.ok("decision", *SCHEMA)
+        self.say(self.failed(decision="d1", text="Failed: neither"))
+        warned = self.run_cli("event", "y").stderr
+        self.assertIn("the user answered D1", warned)
+        self.assertNotIn("and it failed", warned)
+
+
 class AnswerTest(Fleet):
     def refusal(self, id_: str, text: str):
         return decisions.answer_refusal(self.root, id_, text)

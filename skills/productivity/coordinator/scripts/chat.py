@@ -843,7 +843,12 @@ def cmd_wait(root, args) -> None:
                 if first and any(r.get("re") == m["id"] and r["from"] != "user" for r in messages):
                     continue  # answered already, and replied to: not news
                 _show(root, [m])
-                print(f"-> the user answered {d.get('ref') or d['id']}: record it first, `fleet state {root} decision {d.get('ref') or d['id']} --decide ...`", flush=True)
+                label = d.get("ref") or d["id"]
+                if d.get("kind") == "action" and str(m.get("text", "")).startswith("Failed:"):
+                    print(f"-> the user's step {label} failed, and it is not done: fix it and re-present it, "
+                          f"`fleet state {root} decision {label} --manual ...`, or --withdraw \"why\"; never --decide", flush=True)
+                else:
+                    print(f"-> the user answered {label}: record it first, `fleet state {root} decision {label} --decide ...`", flush=True)
                 return
         if first:
             tail = Tail(root, max((m["id"] for m in messages), default=0))

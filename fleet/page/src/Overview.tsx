@@ -26,6 +26,9 @@ export function StatePill(props: { readonly d: Decision; readonly pending: Retur
         const pending = props.pending;
 
         if (d.status !== "open") return <Pill s={d.status} />;
+        const failed = d.kind === "action" && pending && Core.failedAnswer(d, [pending.answer]);
+
+        if (failed) return <PillAs cls="blocking" text={"failed: " + Core.failureWords(failed)} />;
 
         if (Core.isHeld(d)) return <PillAs cls="held" text="with the fleet" />;
         const g = grill();

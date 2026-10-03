@@ -180,6 +180,8 @@ What clears what, in auto mode (measured on Claude Code 2.1.287 and 2.1.288): an
 
 **When the answer means the fleet acts first** (not ready, needs a fix, the wrong command): `decision A1 --hold "<what the fleet does first>"` at once, then do the work. The hold records the answer and takes the item off the user's list; re-present it by revising it with the new words or command (`--manual`, `--question`, `--option`), which clears the hold and puts it back on their list. Never leave an answered item open without recording it.
 
+**When an action comes back `Failed: <what happened>`**, the step did not work. Read the note (it often holds the error), fix what can be fixed (a better command, a missing step, a different route; `--hold "<the fix>"` while it takes a while), then revise the action with the fix (`--manual`, `--question`, `--log "what changed"`) to re-present it, or `--withdraw "<why>"` when it no longer needs doing. Answer the message with `--re`. Never record it as done: the CLI refuses `--decide` while it stands failed, and the page shows it as failed until you revise or withdraw it.
+
 When the session ends, stop the advisor's row (`park --agent advisor "fleet done"`); `set --status done` names each decision still open and each workspace not pruned: withdraw it with its reason, or name it in your last message as left open on purpose.
 
 The commands and the schema are in [DASHBOARD.md](DASHBOARD.md#decisions).

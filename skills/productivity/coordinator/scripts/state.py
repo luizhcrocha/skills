@@ -304,6 +304,15 @@ def unrecorded(root, state: dict) -> list[str]:
             lines.append(f"state: every question of {d['ref']} ({d['title']}) is answered and the grilling is still open; record it before any other "
                          f"work: `fleet state <dir> decision {d['ref']} --decide \"...\" --resolution \"grilling finished\"`, or --withdraw \"why\".")
             continue
+        failed = decisions.failed_answer(d, said)
+        if failed:
+            # held since it failed: the fleet says it works on the fix
+            if not (d.get("held") and d.get("held_at") and clock.at_or_after(d["held_at"], failed["at"])):
+                lines.append(f"state: the user ran {d['ref']} ({d['title']}) and it failed, #{failed['id']} at {str(failed['at'])[11:16]}: "
+                             f"{decisions.failure_words(failed)}. It is not done: fix what failed and re-present it "
+                             f"(`fleet state <dir> decision {d['ref']} --manual \"...\" --log \"what changed\"`), or `--withdraw \"why\"`; "
+                             f"never --decide it. Answer #{failed['id']} with --re.")
+            continue
         at = d.get("status") == "open" and decisions.answered_at(d, said)
         if not at:
             continue
@@ -768,6 +777,10 @@ def cmd_decision(state, args):
         elif args.unhold:
             unheld(d)
             log(state, "note", f"{d['title']} no longer held by the fleet", d["agent"], decision=d["id"])
+    failed = decisions.failed_answer(d, chat.read(Path(args.dir).resolve())) if args.decide is not None else None
+    if failed:
+        fail(f"{d['title']} failed for the user (#{failed['id']}: {decisions.failure_words(failed)}) and is not done: "
+             "revise it with a fix and re-present it (--manual, --question), or --withdraw \"why\"")
     if args.decide is not None:
         close(state, d, "decided", args.decide, args.resolution)
     elif args.withdraw is not None:
@@ -915,6 +928,7 @@ def cmd_show(state, args):
         print(f"  agent {a['id']:<16} {a['status']:<8} {a['skill']:<15} {a['model']:<6} {a['tokens']:>8} tok  lane={','.join(a['lane']) or '-'}{rounds}")
     for r in state["roadblocks"]:
         print(f"  {r.get('ref', '')} roadblock {r['id']} {'resolved' if r['resolved'] else 'OPEN'} [{r['severity']}, needs {r['needs']}] {r['title']}")
+    said = chat.read(Path(args.dir).resolve())  # the chat tells an action the user answered as failed
     for d in state.get("decisions", []):
         status = ("OPEN, blocking" if d.get("blocking") else "OPEN") if d["status"] == "open" else d["status"]
         if d["status"] == "open" and d.get("asks") == "manager":
@@ -923,6 +937,9 @@ def cmd_show(state, args):
             status += f", held by the fleet ({d['held']})"
         if decisions.answered_grill(d):
             status += ", answered, waiting to be recorded"
+        failed = decisions.failed_answer(d, said)
+        if failed:
+            status += f", failed for the user (#{failed['id']}: {decisions.failure_words(failed)})"
         outcome = d.get("answer") or d.get("resolution")
         print(f"  {d.get('ref', '')} decision {d['id']} {status} [{d['kind']}] {d['title']}" + (f": {outcome}" if outcome else ""))
     for link in state.get("links", []):

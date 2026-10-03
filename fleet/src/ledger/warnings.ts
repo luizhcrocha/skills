@@ -8,9 +8,9 @@
 import { join } from "node:path";
 
 import type { Message } from "../chat/store.ts";
-import { parseInstant } from "../clock.ts";
+import { atOrAfter, parseInstant } from "../clock.ts";
 import { Refusal } from "../errors.ts";
-import { answeredAt, answeredGrill } from "../health.ts";
+import { answeredAt, answeredGrill, failedAnswer, failureWords } from "../health.ts";
 import { asArray, asNumber, asObject, asString, type JsonObject } from "../json.ts";
 import { readObject } from "../registry.ts";
 import { secondsNow, type Machine } from "../world.ts";
@@ -120,6 +120,24 @@ export function unrecorded(ledger: Ledger, said: readonly Message[]): string[] {
         `state: every question of ${d.ref ?? d.id} (${d.title ?? "None"}) is answered and the grilling is still open; record it before any other ` +
           `work: \`fleet state <dir> decision ${d.ref ?? d.id} --decide "..." --resolution "grilling finished"\`, or --withdraw "why".`,
       );
+      continue;
+    }
+
+    const failed = failedAnswer(d, said);
+
+    if (failed !== undefined) {
+      const ref = d.ref ?? d.id;
+      const heldSince = d.held !== undefined && d.held !== null && d.held !== "" && d.held_at !== undefined && d.held_at !== null && atOrAfter(d.held_at, String(failed.at));
+
+      // Held since it failed: the fleet says it works on the fix.
+      if (!heldSince) {
+        lines.push(
+          `state: the user ran ${ref} (${d.title ?? "None"}) and it failed, #${failed.id} at ${String(failed.at).slice(11, 16)}: ${failureWords(failed)}. ` +
+            `It is not done: fix what failed and re-present it (\`fleet state <dir> decision ${ref} --manual "..." --log "what changed"\`), ` +
+            `or \`--withdraw "why"\`; never --decide it. Answer #${failed.id} with --re.`,
+        );
+      }
+
       continue;
     }
 

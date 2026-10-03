@@ -8,11 +8,13 @@ import { join } from "node:path";
 
 import * as Effect from "effect/Effect";
 
+import { readChat } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
 import type { Args } from "../cli/args.ts";
 import { stateRefusal, type Refusal } from "../errors.ts";
 import { pyStr } from "../json.ts";
 import { FLEET_BIN, isDir, makeDirs, readOrWhy, remove, resolvePath, writeBytes } from "../files.ts";
+import { failedAnswer, failureWords } from "../health.ts";
 import { placeRoot, registeredSession } from "../hub/grants.ts";
 import { pidOfEntry } from "../registry.ts";
 import { workerFigures } from "../transcripts.ts";
@@ -1154,6 +1156,15 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         unheld(row);
         log(run, ledger, { kind: "note", text: `${row.title ?? "None"} no longer held by the fleet`, agent: row.agent ?? null, decision: row.id });
       }
+    }
+
+    const failed = decide === undefined ? undefined : failedAnswer(d, readChat(run.root));
+
+    if (failed !== undefined) {
+      return yield* refuse(
+        `${d.title ?? "None"} failed for the user (#${failed.id}: ${failureWords(failed)}) and is not done: ` +
+          'revise it with a fix and re-present it (--manual, --question), or --withdraw "why"',
+      );
     }
 
     if (decide !== undefined) close(run, ledger, d, { status: "decided", answer: decide, resolution: resolution ?? "" });

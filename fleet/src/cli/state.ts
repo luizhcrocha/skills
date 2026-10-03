@@ -325,7 +325,7 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<nu
     };
 
     if (cmd === "show") {
-      if (ledger !== undefined) for (const line of showLines(ledger)) out.out(`${line}\n`);
+      if (ledger !== undefined) for (const line of showLines(ledger, readChat(root))) out.out(`${line}\n`);
 
       return 0;
     }
