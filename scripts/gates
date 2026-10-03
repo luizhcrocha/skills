@@ -124,7 +124,25 @@ _print_lock = threading.Lock()
 TIMED_OUT = 124  # timeout(1)'s exit code
 
 
-def _kill_group(proc: subprocess.Popen) -> None:
+TERM_GRACE = 10.0  # seconds a timed-out group has to clean up after SIGTERM before SIGKILL
+
+
+def _kill_group(proc: subprocess.Popen, grace: float = 0.0) -> None:
+    """SIGTERM the group and wait up to `grace` s for it to empty (zombies of an unreaped leader count as gone),
+    then SIGKILL what is left."""
+    if grace > 0:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            proc.poll()
+            try:
+                os.killpg(proc.pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.05)
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -132,7 +150,7 @@ def _kill_group(proc: subprocess.Popen) -> None:
 
 
 def run_limited(argv: list[str], limit: float, cwd: Path | None = None) -> tuple[int, bool, float, str]:
-    """Run argv in its own process group; on `limit` seconds kill the whole group.
+    """Run argv in its own process group; on `limit` seconds stop the whole group: SIGTERM, then SIGKILL after TERM_GRACE seconds.
 
     Returns (exit code, timed out, seconds, output). The output is read as it comes, so what a hung
     suite printed before it hung survives the kill.
@@ -149,7 +167,7 @@ def run_limited(argv: list[str], limit: float, cwd: Path | None = None) -> tuple
         proc.wait(timeout=limit)
     except subprocess.TimeoutExpired:
         timed_out = True
-    _kill_group(proc)  # also reaps what the suite left behind when it exited on its own
+    _kill_group(proc, TERM_GRACE if timed_out else 0.0)  # also reaps what the suite left behind when it exited on its own
     proc.wait()
     reader.join(5)
     proc.stdout.close()

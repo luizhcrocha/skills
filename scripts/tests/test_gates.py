@@ -111,6 +111,29 @@ class TimeLimit(unittest.TestCase):
                 time.sleep(0.05)
             self.assertFalse(_alive(child), "the suite's background child is gone with its group")
 
+    def test_a_timed_out_suite_gets_sigterm_first_and_cleans_up(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "cleaned"
+            script = Path(tmp) / "suite.sh"
+            script.write_text(f"#!/bin/sh\ntrap 'sleep 0.5; echo done > {marker}; exit 0' TERM\necho started\nwhile :; do sleep 0.1; done\n")
+            script.chmod(0o755)
+            code, timed_out, secs, _ = gates.run_limited([str(script)], 1, cwd=Path(tmp))
+            self.assertTrue(timed_out)
+            self.assertEqual(marker.read_text().strip(), "done", "its TERM handler ran to the end before any SIGKILL")
+            self.assertLess(secs, 9)
+
+    def test_a_suite_that_ignores_sigterm_is_killed_after_the_grace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "suite.sh"
+            script.write_text("#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 0.1; done\n")
+            script.chmod(0o755)
+            with mock.patch.object(gates, "TERM_GRACE", 1.0):
+                started = time.monotonic()
+                code, timed_out, secs, _ = gates.run_limited([str(script)], 1, cwd=Path(tmp))
+            self.assertTrue(timed_out)
+            self.assertGreaterEqual(secs, 1.9)
+            self.assertLess(time.monotonic() - started, 6)
+
     def test_a_suite_inside_its_limit_keeps_its_exit_code(self):
         code, timed_out, _, out = gates.run_limited(["sh", "-c", "echo ok; exit 3"], 30)
         self.assertEqual((code, timed_out, out), (3, False, "ok\n"))

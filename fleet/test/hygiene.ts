@@ -6,7 +6,7 @@
  * SIGINT, what is still alive is stopped (SIGTERM, then SIGKILL after a short wait) and the parent is
  * removed. A leak that the tests themselves should have cleaned up fails the run.
  */
-import { existsSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,12 +17,16 @@ const MARK = "FLEET_TEST_RUN";
 const GRACE_MS = 500;
 
 // Always its own: a parallel worker inherits the coordinator's environment, and must not stop its siblings' processes.
-const parent = mkdtempSync(join(realpathSync(tmpdir()), "fleet-test-run-"));
+const outer = realpathSync(tmpdir());
+
+const parent = mkdtempSync(join(outer, "fleet-test-run-"));
+
+writeFileSync(join(parent, "run.pid"), String(process.pid));
 
 Object.assign(process.env, { [MARK]: parent, TMPDIR: parent });
 
 /** Pids of this run's processes still alive (not this one): marked in their environment, or running in or on the run's directory. */
-function survivors(): number[] {
+function survivors(owned: string = parent): number[] {
   const found: number[] = [];
 
   for (const name of readdirSync("/proc")) {
@@ -39,7 +43,7 @@ function survivors(): number[] {
       const cmd = readFileSync(`/proc/${pid}/cmdline`, "latin1");
       const cwd = readlinkSync(`/proc/${pid}/cwd`);
 
-      if (env.includes(`${MARK}=${parent}`) || cmd.includes(parent) || cwd.startsWith(parent)) found.push(pid);
+      if (env.includes(`${MARK}=${owned}`) || cmd.includes(owned) || cwd.startsWith(owned)) found.push(pid);
     } catch {
       // gone, or not ours to read
     }
@@ -71,20 +75,64 @@ function signal(pids: readonly number[], sig: NodeJS.Signals): void {
 }
 
 /** Stop what is left, synchronously (the exit and signal paths cannot wait on a promise). */
-function stopAll(): number[] {
-  const left = survivors();
+function stopAll(owned: string = parent): number[] {
+  const left = survivors(owned);
 
   if (left.length === 0) return left;
 
   signal(left, "SIGTERM");
   const until = Date.now() + GRACE_MS;
 
-  while (survivors().length > 0 && Date.now() < until) Bun.sleepSync(20);
+  while (survivors(owned).length > 0 && Date.now() < until) Bun.sleepSync(20);
 
-  signal(survivors(), "SIGKILL");
+  signal(survivors(owned), "SIGKILL");
 
   return left;
 }
+
+/** Whether the run that made `dir` is over: its bun pid is dead or is not a bun (a recycled pid); a dir with no pid file yet is given a minute. */
+function runIsGone(dir: string): boolean {
+  let pid: number;
+
+  try {
+    pid = Number(readFileSync(join(dir, "run.pid"), "utf8"));
+  } catch {
+    return Date.now() - statSync(dir).mtimeMs > 60_000;
+  }
+
+  try {
+    const state = /^State:\s+(\S)/m.exec(readFileSync(`/proc/${pid}/status`, "utf8"))?.[1];
+
+    return state === "Z" || readFileSync(`/proc/${pid}/comm`, "utf8").trim() !== "bun";
+  } catch {
+    return true;
+  }
+}
+
+/** Earlier runs' parents in tmp whose run is gone (killed past any handler): their processes stopped, the dirs removed. */
+export function reapEarlierRuns(): string[] {
+  const reaped: string[] = [];
+
+  for (const name of readdirSync(outer)) {
+    const dir = join(outer, name);
+
+    if (!name.startsWith("fleet-test-run-") || dir === parent) continue;
+
+    try {
+      if (!runIsGone(dir)) continue;
+
+      stopAll(dir);
+      rmSync(dir, { recursive: true, force: true });
+      reaped.push(dir);
+    } catch {
+      // not ours to remove
+    }
+  }
+
+  return reaped;
+}
+
+reapEarlierRuns();
 
 let finished = false;
 
