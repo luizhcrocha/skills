@@ -23,6 +23,14 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook\" PreToolUse", "timeout": 5 }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "hooks": [

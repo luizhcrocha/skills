@@ -790,6 +790,10 @@ SETTINGS_LOCK_WAIT_S = 2.0
 SETTINGS_LOCK_STALE_S = 10.0
 RULE_UNSAFE_CHARS = "\n\r*\\"
 SETTINGS_LOCK_SHARED_WITH_HUB = ".settings.local.json.lock"
+# Auto mode drops Agent allow rules from the settings, so the hub writes an Agent grant here instead and
+# fleet_agent_grant lets the exact spawn through; permission.ts's grantFileOf names the same file.
+AGENT_GRANTS = "tstack-grants.json"
+GRANT_FILES = ("settings.local.json", AGENT_GRANTS)
 
 Refused = namedtuple("Refused", "tool call manual_unless_grantable agent_id reason root")
 
@@ -825,6 +829,11 @@ def _fenced(lang, text):
     return f"{fence}{lang}\n{text}\n{fence}"
 
 
+def _agent_call(tool_input):
+    """An Agent call as a grant names it: its input as compact JSON, keys sorted."""
+    return json.dumps(tool_input, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
 def _option(flag, value):
     """One option's argv words; a value the CLI's parser would read as a flag is joined to it."""
     value = str(value)
@@ -847,6 +856,9 @@ def fleet_permission_denied(hook):
         call = command
         grantable = not any(c in RULE_UNSAFE_CHARS for c in command)
         manual = None if grantable else f"Run it yourself, in the project ({root}):\n\n{_fenced('nu', command)}"
+    elif tool == "Agent" and tool_input:
+        call = _agent_call(tool_input)
+        manual = None
     else:
         call = f"{tool}\n{json.dumps(tool_input, sort_keys=True)}"
         shown = json.dumps(tool_input, indent=2, ensure_ascii=False)
@@ -868,6 +880,9 @@ def _open_refusal(hook, d, r):
     grantable = r.manual_unless_grantable is None
     who = worker or (f"subagent {r.agent_id}" if r.agent_id else fleet_role(ledger))
     shown = r.call if r.tool == "Bash" else r.tool
+    if r.tool == "Agent" and grantable:
+        spawn = json.loads(r.call)
+        shown = f'{spawn.get("subagent_type") or "general-purpose"}: {spawn.get("description") or spawn.get("prompt")}'
     argv = [cli, "state", d, "decision", _permission_id(ledger, r.agent_id, r.call),
             *_option("--kind", "permission" if grantable else "action"),
             *_option("--title", f"{who}: {r.tool} refused, {_one_line(shown, 70)}"),
@@ -876,7 +891,7 @@ def _open_refusal(hook, d, r):
             *_option("--why", f"Auto mode's classifier refused it ({r.reason}), and only you can let it through."),
             "--blocking"]
     if grantable:
-        argv += [*_option("--tool", "Bash"), *_option("--call", r.call), *_option("--cause", r.reason),
+        argv += [*_option("--tool", r.tool), *_option("--call", r.call), *_option("--cause", r.reason),
                  *_option("--root", r.root)]
         if r.agent_id:
             argv += _option("--agent-id", r.agent_id)
@@ -891,11 +906,12 @@ def _open_refusal(hook, d, r):
 
 
 def _grant_file(value):
-    """A grant's settings file, when it is one the hook may rewrite: an absolute <root>/.claude/settings.local.json."""
+    """A grant's file, when it is one the hook may rewrite: an absolute <root>/.claude/settings.local.json, or
+    <root>/.claude/tstack-grants.json for an Agent grant."""
     if not isinstance(value, str) or not os.path.isabs(value):
         return None
     path = Path(value)
-    return value if path.name == "settings.local.json" and path.parent.name == ".claude" else None
+    return value if path.name in GRANT_FILES and path.parent.name == ".claude" else None
 
 
 def _due_grants(raw, used, caller, now):
@@ -985,6 +1001,8 @@ def fleet_grant_sweep(hook):
     tool_input = hook.input.get("tool_input") if isinstance(hook.input.get("tool_input"), dict) else {}
     command = tool_input.get("command") if hook.input.get("tool_name") == "Bash" else None
     used = f"Bash({command})" if isinstance(command, str) else None
+    if hook.input.get("tool_name") == "Agent" and tool_input:
+        used = f"Agent({_agent_call(tool_input)})"
     caller = hook.input.get("agent_id") if isinstance(hook.input.get("agent_id"), str) and hook.input.get("agent_id") else None
     now = fleet_now(hook.env)
     for d in dirs:
@@ -1020,10 +1038,37 @@ def _close_due_grants_exclusively(hook, path, used, caller, now):
             lead = b""
 
 
+def fleet_agent_grant(hook):
+    """PreToolUse (Agent): auto mode drops Agent allow rules from the settings, and a PreToolUse allow is
+    what clears a classifier refusal of a spawn (measured). A spawn whose exact rule the hub granted in the
+    session root's .claude/tstack-grants.json is allowed; the sweep takes the rule back once it ran or
+    expired. Needs no fleet: the file holds only what the hub granted."""
+    if hook.input.get("tool_name") != "Agent" or not isinstance(hook.input.get("tool_input"), dict):
+        return None
+    tool_input = hook.input["tool_input"]
+    if not tool_input:
+        return None
+    project = hook.env.get("CLAUDE_PROJECT_DIR")
+    root = project if project and os.path.isabs(project) else hook.cwd
+    if not isinstance(root, str) or not os.path.isabs(root):
+        return None
+    try:
+        with open(os.path.join(root, ".claude", AGENT_GRANTS), encoding="utf-8") as f:
+            granted = json.load(f)
+    except (OSError, ValueError):
+        return None
+    permissions = granted.get("permissions") if isinstance(granted, dict) else None
+    allow = permissions.get("allow") if isinstance(permissions, dict) else None
+    if not isinstance(allow, list) or f"Agent({_agent_call(tool_input)})" not in allow:
+        return None
+    return "tstack: the user allowed this exact Agent call once, on the fleet page (a permission grant)."
+
+
 HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_heartbeat],
     "Stop": [memo_nudge, fleet_listen_guard, fleet_said_once, fleet_heartbeat],
     "PreCompact": [memo_precompact],
+    "PreToolUse": [fleet_agent_grant],
     "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_chat_nudge],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep],
     "PermissionDenied": [fleet_permission_denied],
@@ -1036,7 +1081,14 @@ def _context(event, text):
     return json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}})
 
 
+def _allow(event, text):
+    """PreToolUse's one handler speaks only to allow a granted call."""
+    return json.dumps({"hookSpecificOutput": {"hookEventName": event, "permissionDecision": "allow",
+                                              "permissionDecisionReason": text}})
+
+
 EMIT = {
+    "PreToolUse": _allow,
     "SessionStart": _context,
     "Stop": _context,
     "PreCompact": lambda event, text: text,

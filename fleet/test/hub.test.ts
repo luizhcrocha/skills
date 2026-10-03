@@ -1086,6 +1086,33 @@ describe("a permission's answer grants the call once", () => {
     expect(readdirSync(join(session, ".claude"))).toEqual(["settings.local.json"]);
   });
 
+  test("an Agent call's grant goes to the hook's grants file, live, and the settings stay untouched", async () => {
+    const spawn = JSON.stringify({ description: "prod count", prompt: "SELECT 1;\nreport", subagent_type: "general-purpose" });
+    const rule = `Agent(${spawn})`;
+    const file = join(session, ".claude", "tstack-grants.json");
+    withRows(permission({ refusal: { tool: "Agent", call: spawn, rule, cause: "[Production Reads]", root: session, agent_id: null } }));
+    await start();
+    expect((await post({ ...allow, rule })).status).toBe(201);
+    expect(readFileSync(file, "utf8")).toBe(`${JSON.stringify({ permissions: { allow: [rule] } }, null, 2)}\n`);
+    expect(existsSync(settings)).toBe(false);
+    const [grant] = grants();
+    expect([grant?.["rule"], grant?.["file"], grant?.["agent_id"], grant?.["reload"]]).toEqual([rule, file, null, "live"]);
+  });
+
+  test("an Agent call that is no JSON object, or whose rule is not its exact one, is not granted", async () => {
+    for (const [call, rule] of [
+      ["spawn a worker", "Agent(spawn a worker)"],
+      [JSON.stringify({ prompt: "p" }), "Agent(general-purpose)"],
+    ] as const) {
+      withRows(permission({ refusal: { tool: "Agent", call, rule, cause: "c", root: session, agent_id: null } }));
+      await start();
+      const got = await post({ ...allow, rule });
+      expect([got.status, existsSync(join(session, ".claude", "tstack-grants.json"))]).toEqual([409, false]);
+      await running?.stop();
+      running = undefined;
+    }
+  });
+
   test("a main thread's grant names no agent", async () => {
     withRows(permission({ refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "c", root: session, agent_id: null } }));
     await start();

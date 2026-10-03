@@ -1,7 +1,8 @@
 /**
  * Permission grants (SPEC.md "Permission grants"): when the user answers a permission with allow-once, the
  * hub, not an agent (Claude Code's classifier refuses an agent that writes its own allow rule), adds the
- * row's exact rule to the session's `.claude/settings.local.json` and records the grant in
+ * row's exact rule to the session's `.claude/settings.local.json` (a Bash call) or `.claude/tstack-grants.json`
+ * (an Agent call, which the plugin's PreToolUse hook lets through) and records the grant in
  * `DIR/grants.jsonl`, before the answer is stored. The plugin's hook removes the rule once the call has
  * run. The ledger is writable by every agent and the hub is not, so the row is trusted only as far as it
  * names a session of this fleet, or a worker's workspace of its work (granted at that session's root), and a
@@ -19,7 +20,7 @@ import { asArray, asObject, asString, type Json, type JsonObject } from "../json
 import { readBeats } from "../heartbeat.ts";
 import { parseLedger, type Decision } from "../ledger/model.ts";
 import { findDecision } from "../ledger/numbers.ts";
-import { ALLOW_ONCE, PERMISSION_TOOL, ruleOf, settingsOf, whyNoRule } from "../ledger/permission.ts";
+import { ALLOW_ONCE, grantFileOf, PERMISSION_TOOLS, ruleOf, whyNoRule } from "../ledger/permission.ts";
 import { cwdOf } from "../procs.ts";
 import { alive } from "../registry.ts";
 import { jj } from "../ws/jj.ts";
@@ -70,6 +71,7 @@ interface Asked {
   readonly id: string;
   readonly ref: string;
   readonly rule: string;
+  readonly tool: string;
   /** The session root the rule goes into. */
   readonly root: string;
   /** The worker's workspace the row named, when the grant goes to its session's root instead. */
@@ -246,12 +248,13 @@ function askedOf(dir: string, d: Decision, registered: () => Registered | undefi
 
   if (d.status !== "open") return new Ungranted("the permission is no longer open");
 
-  if (r.tool !== PERMISSION_TOOL) return new Ungranted(`a grant is for ${PERMISSION_TOOL} alone, and this permission is for ${r.tool}`);
-  const why = whyNoRule(r.call);
+  if (!PERMISSION_TOOLS.includes(r.tool)) return new Ungranted(`a grant is for ${PERMISSION_TOOLS.join(" or ")} alone, and this permission is for ${r.tool}`);
+  const why = whyNoRule(r.tool, r.call);
 
   if (why !== undefined) return new Ungranted(`no grant: ${why}`);
+  const exact = ruleOf(r.tool, r.call);
 
-  if (r.rule !== ruleOf(r.call)) return new Ungranted(`the permission's rule ${r.rule} is not the exact rule for its call, ${ruleOf(r.call)}`);
+  if (r.rule !== exact) return new Ungranted(`the permission's rule ${r.rule} is not the exact rule for its call, ${exact}`);
 
   if (!isAbsolute(r.root)) return new Ungranted(`the permission's root ${r.root} is not an absolute path`);
   const at = resolvePath(r.root);
@@ -262,7 +265,7 @@ function askedOf(dir: string, d: Decision, registered: () => Registered | undefi
 
   if (refused !== undefined) return new Ungranted(refused);
   const agentNote = r.agent_id === null ? [NO_AGENT_NOTE] : [];
-  const base = { id: d.id, ref: d.ref ?? "", rule: r.rule, agentId: r.agent_id };
+  const base = { id: d.id, ref: d.ref ?? "", rule: r.rule, tool: r.tool, agentId: r.agent_id };
 
   if (placed.kind !== "workspace") return { ...base, root: r.root, workspace: undefined, notes: agentNote };
   const who = d.agent ?? "the worker";
@@ -382,8 +385,9 @@ export async function grantAnswer(answered: Answered): Promise<GrantAnswer> {
     };
   }
 
-  const file = settingsOf(asked.root);
-  const reload = isDir(dirname(file)) ? "live" : "restart";
+  const file = grantFileOf(asked.tool, asked.root);
+  // The hook reads the Agent grants file at each spawn; Claude Code watches only a settings folder that existed at start.
+  const reload = asked.tool === "Agent" || isDir(dirname(file)) ? "live" : "restart";
 
   try {
     mkdirSync(dirname(file), { recursive: true });

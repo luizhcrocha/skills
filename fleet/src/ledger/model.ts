@@ -96,15 +96,15 @@ export interface Question {
 
 /** The tool call the harness refused, which the user may let through once (a decision of kind `permission`). */
 export interface RefusedCall {
-  /** `Bash`: the first cut handles Bash alone. */
+  /** `Bash` or `Agent`. */
   tool: string;
-  /** The command, byte for byte as the harness saw it. */
+  /** The command, byte for byte as the harness saw it; for Agent, its tool input as compact JSON, keys sorted. */
   call: string;
-  /** `Bash(<call>)`: the exact allow rule the hub adds. */
+  /** `<tool>(<call>)`: the exact rule the hub adds (permission.ts `grantFileOf` says where). */
   rule: string;
   /** The classifier's reason, e.g. `[Git Destructive]`. */
   cause: string;
-  /** The session's project directory: the grant goes into `<root>/.claude/settings.local.json`. */
+  /** The session's project directory: the grant goes into `<root>/.claude/`. */
   root: string;
   /** The harness's id of the refused caller; null on the session's main thread. */
   agent_id: string | null;

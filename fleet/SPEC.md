@@ -793,18 +793,37 @@ that writes its own allow rule), adds a one-time allow rule to the session's set
 removes the rule once the call has run, or at the first tool call of the session after 30 minutes (one
 constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
 
+- **What the hook records** (`fleet_permission_denied`, on `PermissionDenied`, which auto mode fires with
+  `tool_name`, `tool_input`, `reason` and, in a subagent, `agent_id`): a Bash command an exact rule can
+  hold, and an Agent spawn with any input, open a `permission`; a Bash command no exact rule can hold
+  opens an `action` whose `--manual` is the command in a `nu` block; a refused call of any other tool
+  opens an `action` whose `--manual` is its input as JSON, to make by hand. What a grant can clear,
+  measured in auto mode on Claude Code 2.1.287 and 2.1.288 (a headless `claude -p --permission-mode auto`
+  in a throwaway project, the spawn refused as `[Production Reads]`): an exact `Bash(<call>)` allow rule
+  in the session root's `.claude/settings.local.json` clears a refused Bash call, live, for the session's
+  subagents too; an `Agent(<type>)` allow rule there does not clear a refused spawn (auto mode drops
+  `Agent` allow rules, as its docs say), and a `PreToolUse` hook's `allow` does, on the main thread as
+  for subagents. So a Bash grant is an allow rule and an Agent grant is a hook's allow (below). No rule
+  can name one spawn: `Agent(<type>)` matches every spawn of that type.
+
 - **An exact rule**: `Bash(<call>)`, for a call that holds none of newline (`\n`, `\r`), `*` (a rule
   reads it as a wildcard) and `\` (Claude Code's rule parser reads an escape, so the rule would not match
-  the call). This one set is `whyNoRule` in `src/ledger/permission.ts` and `NO_RULE` in the hook; the CLI
+  the call). This one set is `whyNoRule` in `src/ledger/permission.ts` and `RULE_UNSAFE_CHARS` in the hook; the CLI
   refuses a permission for any other call, the hook opens an action with `--manual` for it, and the hub
-  grants none.
+  grants none. For an Agent spawn the call is its `tool_input` as compact JSON with sorted keys
+  (`json.dumps(..., sort_keys=True, ensure_ascii=False, separators=(",", ":"))`, the hook's `_agent_call`),
+  and the rule `Agent(<call>)`, which only the plugin's hook matches; the CLI and the hub refuse an Agent
+  call that is no JSON object.
 - **Opening** (`fleet state DIR decision ID --kind permission --title T --question Q --why W --tool
-  Bash --call CALL --cause CAUSE --root ROOT [--agent-id AID] [--agent WORKER] [--blocking]`): the row
-  gets `refusal: {tool, call, rule, cause, root, agent_id}` with `rule` = `Bash(CALL)` and `agent_id`
+  Bash|Agent --call CALL --cause CAUSE --root ROOT [--agent-id AID] [--agent WORKER] [--blocking]`): the row
+  gets `refusal: {tool, call, rule, cause, root, agent_id}` with `rule` = `TOOL(CALL)` and `agent_id`
   null without `--agent-id`, and the two options the CLI sets: `allow-once: Allow this call once |
   the hub adds <rule> to <root>/.claude/settings.local.json; the plugin hook removes it once the call
-  has run, or at the first tool call of the session after 30 minutes` and `deny: Deny | the worker stays
-  stopped; your note goes to it`. Refused: a tool other than Bash, a CALL no exact rule can hold (above),
+  has run, or at the first tool call of the session after 30 minutes` (for Agent: `the hub adds <rule> to
+  <root>/.claude/tstack-grants.json, where the plugin's PreToolUse hook lets this exact Agent call through
+  (auto mode ignores Agent allow rules in the settings); the plugin hook removes it ...`) and `deny: Deny |
+  the worker stays stopped; your note goes to it`. Refused: a tool other than Bash and Agent, a CALL no
+  exact rule can hold (above),
   a relative ROOT, `--option`, `--recommend`, a
   permission without `--tool --call --cause --root`, and those flags on any other kind. ROOT is the
   session root: a ROOT that is a worker's workspace of this fleet's work (as the hub tells it, under
@@ -817,12 +836,13 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   refusal re-presents it and clears a hold); `--decide`, `--withdraw` and `--hold` work as for any
   decision. `permission` is accepted by `--kind` but left out of its listed choices, and the five
   flags out of the usage (as argparse's `help=SUPPRESS`), so every usage text stays the twin's.
-- **Answering**: the page's form shows the call as an `sh` block, its cause, the rule and the file it
+- **Answering**: the page's form shows the call as an `sh` block (an Agent call as its input, indented
+  JSON), its cause, the rule (for Agent, that the plugin's PreToolUse hook lets it through) and the file it
   goes into, the two options and a note; the answer is `allow-once: Allow this call once` or `deny:
   Deny`, the note on the next line, and the POST body carries `rule`, the rule the page showed.
 - **Granting** (`src/hub/grants.ts`, before `POST /chat` stores an answer that starts with
   `allow-once` to a permission): the row must be open, its `refusal` a Bash call an exact rule can hold
-  whose `rule` is `Bash(<call>)`, the POST's `rule` that same rule (absent or different refuses: a row
+  whose `rule` is `Bash(<call>)`, or an Agent call that is a JSON object whose `rule` is `Agent(<call>)`, the POST's `rule` that same rule (absent or different refuses: a row
   revised since the page rendered it needs a fresh look), and its `root` absolute, a directory, and a
   session root of this fleet (the ledger is writable by agents, the hub is not): the `project` or `cwd` of
   a heartbeat in `DIR/heartbeats/`, or else the working directory, read by the hub from the OS (`procs.ts`
@@ -858,7 +878,9 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   `{}`; one that does not parse refuses) gets the rule added to `permissions.allow`, every other key and entry kept, written
   through a temp file in its folder and a rename, two-space JSON with a final newline. A missing
   `.claude` is made, and the grant says `reload: restart` (Claude Code watches only a settings folder
-  that existed when the session started), else `live`. Then one line is appended to `DIR/grants.jsonl`:
+  that existed when the session started), else `live`. An Agent grant goes the same way into
+  `<root>/.claude/tstack-grants.json` instead, same shape (`permissions.allow`), and is always `live`:
+  Claude Code never reads that file, the hook reads it at each spawn. Then one line is appended to `DIR/grants.jsonl`:
   `{"op":"grant",decision,ref,rule,agent_id,file,at,by,reload[,workspace]}`, `agent_id` the row's `refusal.agent_id`
   (null: the session's main thread), `by` being `tailnet:<login>` for a
   tailnet peer that is not this machine (`tailscale whois`), else `local` (loopback, whatever header it
@@ -866,11 +888,17 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   someone's own: the hub writes nothing and appends no grant line, so the hook never removes it, and the
   answer is stored as usual. A failed check answers
   409 with the reason and stores nothing. A `deny` is stored as any answer.
+- **Letting a spawn through** (the plugin's hook, `fleet_agent_grant`, PreToolUse with matcher `Agent`):
+  a spawn whose `Agent(<call>)` is in `permissions.allow` of `<$CLAUDE_PROJECT_DIR, else the input's
+  cwd>/.claude/tstack-grants.json` gets `permissionDecision: allow`; anything else, an absent or broken
+  file included, gets no output. It needs no fleet DIR, and it allows that input for any caller, as a
+  settings rule does; the sweep below ends the grant.
 - **Removal** (the plugin's hook, PostToolUse and PostToolUseFailure): a grant is `used` when the call
-  that just ran is its rule's call and the hook's `agent_id` (absent on the main thread) is the grant's;
+  that just ran is its rule's call (for Agent, the spawn's input as the rule names it) and the hook's `agent_id` (absent on the main thread) is the grant's;
   it is `expired` 30 minutes after its `at`. The hook takes the rule out under the settings lock, then
   appends a `remove` line, `{"op":"remove",decision,rule,file,at,why}` (`why`: `used` or `expired`), which
-  ends the grant with the same `decision` and `rule`. Two hooks sweeping at once are kept apart by a
+  ends the grant with the same `decision` and `rule`. The hook rewrites only an absolute
+  `<root>/.claude/settings.local.json` or `<root>/.claude/tstack-grants.json`. Two hooks sweeping at once are kept apart by a
   `flock` on `grants.jsonl`, so a grant is closed once.
 - **The settings lock**: hub and hook both make the directory `<dir of the file>/.settings.local.json.lock`
   (an atomic `mkdir`, which Bun and Python both have; Bun has no `flock`) around the read-modify-write of
@@ -878,6 +906,10 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   lock still held after 2 s refuses the grant (409) or leaves the removal for the next tool call.
 - **Lines**: every `grants.jsonl` line is compact JSON, one object, on both sides.
 - **What it defends**: an allow rule that lets through only the call the user saw, for its caller, once.
+  The Agent grants file sits in `.claude`, a protected path whose writes by an agent auto mode routes to
+  the classifier, as it does a write of `settings.local.json`; an agent told to write its own grant
+  there was refused as `[Self-Modification]` (measured once, Claude Code 2.1.288). With that file in
+  place, the real hook let the refused spawn through on its retry.
   Not more: a local process can POST allow-once to the hub (stamped `local`, by decision), and heartbeats
   and the ledger are writable by agents, as is the registry (`fleet serve DIR --pid PID`), so the root
   check and the row make a forged grant flagrant, not impossible; the registry names a process, and the

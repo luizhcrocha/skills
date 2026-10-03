@@ -25,6 +25,15 @@ const TOKENS = ["bg", "card", "card-2", "text", "muted", "faint", "line", "accen
 const esc = (s: string): string => s.replace(/[&<>"']/gu, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
 
 /** The evidence's document: the fragment with the page's base styles and theme, reporting its height and selection (and whether a touch made it). */
+/** A refused Agent call's input, as the hook gave it (compact JSON), indented to read; as given when it is not JSON. */
+function spawnInput(call: string): string {
+  try {
+    return JSON.stringify(JSON.parse(call), null, 2);
+  } catch {
+    return call;
+  }
+}
+
 function frameDoc(html: string): string {
   const cs = getComputedStyle(document.documentElement);
   const vars = TOKENS.map((t) => `--${t}:${cs.getPropertyValue("--" + t).trim()}`).join(";");
@@ -639,17 +648,29 @@ function Form(props: { readonly d: Decision }): JSX.Element {
             {(r) => (
               <div class="dv-block refused">
                 <h3>The call auto mode refused</h3>
-                <CodeBlock lang="sh" text={r().call} />
+                <Show when={r().tool === "Agent"} fallback={<CodeBlock lang="sh" text={r().call} />}>
+                  <CodeBlock lang="json" text={spawnInput(r().call)} />
+                </Show>
                 <dl>
                   <dt>Refused because</dt>
                   <dd>{r().cause}</dd>
-                  <dt>Rule</dt>
-                  <dd>
-                    <code>{r().rule}</code>
-                  </dd>
+                  <Show
+                    when={r().tool === "Agent"}
+                    fallback={
+                      <>
+                        <dt>Rule</dt>
+                        <dd>
+                          <code>{r().rule}</code>
+                        </dd>
+                      </>
+                    }
+                  >
+                    <dt>Let through by</dt>
+                    <dd>the plugin's PreToolUse hook (auto mode ignores Agent allow rules in the settings)</dd>
+                  </Show>
                   <dt>Goes into</dt>
                   <dd>
-                    <code>{r().root.replace(/\/+$/u, "") + "/.claude/settings.local.json"}</code>
+                    <code>{r().root.replace(/\/+$/u, "") + (r().tool === "Agent" ? "/.claude/tstack-grants.json" : "/.claude/settings.local.json")}</code>
                   </dd>
                 </dl>
               </div>

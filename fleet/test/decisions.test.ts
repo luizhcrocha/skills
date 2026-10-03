@@ -577,6 +577,21 @@ describe("permission", () => {
     ]);
   });
 
+  test("a refused Agent call opens a permission whose grant goes to the hook's grants file, not the settings", () => {
+    const spawn = JSON.stringify({ description: "prod count", prompt: "SELECT 1;\nreport", subagent_type: "general-purpose" });
+    const args = refusal("p1");
+    args[args.indexOf("--tool") + 1] = "Agent";
+    args[args.indexOf("--call") + 1] = spawn;
+    ok(...args);
+    const d = item("p1");
+    expect(asObject(d["refusal"] ?? null)?.["rule"]).toBe(`Agent(${spawn})`);
+    expect(asObject(asArray(d["options"])?.[0] ?? null)?.["consequence"]).toBe(
+      `the hub adds Agent(${spawn}) to /work/repo/.claude/tstack-grants.json, where the plugin's PreToolUse hook lets this exact Agent call through (auto mode ignores Agent allow rules in the settings); the plugin hook removes it once the call has run, or at the first tool call of the session after 30 minutes`,
+    );
+    args[args.indexOf("--call") + 1] = "spawn a worker";
+    expect(refused(...args.map((a) => (a === "p1" ? "p2" : a)))).toContain("JSON object");
+  });
+
   test("a value that starts with a dash is given as --flag=value", () => {
     const args = refusal("p1").filter((a, i, all) => a !== "--call" && all[i - 1] !== "--call" && a !== "--cause" && all[i - 1] !== "--cause");
     ok(...args, "--call=-x is not a command but a value", "--cause=-[Odd]");
@@ -602,7 +617,7 @@ describe("permission", () => {
     expect(refused(...with_("--call", "rm -rf build/*"))).toContain("*");
     expect(refused(...with_("--call", "printf 'a\\tb'"))).toContain("backslash");
     expect(refused(...with_("--root", "work/repo"))).toContain("absolute");
-    expect(refused(...with_("--tool", "Edit"))).toContain("Bash");
+    expect(refused(...with_("--tool", "Edit"))).toContain("Bash and Agent");
     expect(refused(...refusal("p1", "--option", "a: x | y"))).toContain("--option");
     expect(refused(...refusal("p1", "--recommend", "allow-once", "--reason", "r"))).toContain("--recommend");
     expect(refused("decision", "p1", "--kind", "permission", "--title", "T", "--question", "q", "--why", "w")).toContain("--call");

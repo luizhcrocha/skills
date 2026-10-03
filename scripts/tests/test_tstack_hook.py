@@ -1131,6 +1131,27 @@ class PermissionDeniedTest(FleetCase):
         body = opts["--manual"].split(fence + "json\n", 1)[1].rsplit("\n" + fence, 1)[0]
         self.assertEqual(json.loads(body), written)
 
+    SPAWN = {"subagent_type": "general-purpose", "description": "prod client count",
+             "prompt": "Run psql against prod: SELECT count(*) FROM clients;\nreport the number"}
+
+    def test_an_agent_spawn_refusal_opens_a_permission_for_its_exact_input(self):
+        self.refuse(tool="Agent", tool_input=self.SPAWN)
+        positionals, opts = self.only()
+        call = json.dumps(self.SPAWN, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        self.assertEqual(positionals[3], self.expected_id("main", call))
+        self.assertEqual(opts["--kind"], "permission")
+        self.assertEqual((opts["--tool"], opts["--call"], opts["--cause"], opts["--root"]),
+                         ("Agent", call, "[Git Destructive]", str(self.project)))
+        self.assertIn("general-purpose: prod client count", opts["--title"])
+        self.assertNotIn("--agent-id", opts)
+        self.assertNotIn("--manual", opts)
+
+    def test_an_agent_call_with_no_input_opens_an_action(self):
+        self.refuse(tool="Agent", tool_input={})
+        _, opts = self.only()
+        self.assertEqual(opts["--kind"], "action")
+        self.assertNotIn("--tool", opts)
+
     def test_a_value_that_looks_like_a_flag_stays_a_value(self):
         self.refuse(agent_id="ab12cd34", command="-rf")
         argv = json.loads(self.calls.read_text())
@@ -1258,6 +1279,23 @@ class GrantRemovalTest(FleetCase):
         self.assertIn(self.RULE, self.allow())
         self.run_tool("git push --force origin HEAD:main")
         self.assertNotIn(self.RULE, self.allow())
+
+    def test_an_agent_grant_is_taken_back_from_the_grants_file_once_the_spawn_ran(self):
+        spawn = {"subagent_type": "Explore", "description": "d", "prompt": "count rows"}
+        rule = "Agent(" + json.dumps(spawn, sort_keys=True, ensure_ascii=False, separators=(",", ":")) + ")"
+        grants_file = self.settings.parent / "tstack-grants.json"
+        grants_file.write_text(json.dumps({"permissions": {"allow": [rule]}}))
+        self.grant(rule=rule, file=grants_file)
+        other = {**spawn, "prompt": "count rows!"}
+        for tool_input in (other, {"command": "count rows"}):
+            payload = self.payload("PostToolUse", tool_name="Agent", tool_input=tool_input)
+            self.assertSilent(self.hook("PostToolUse", payload, env={"FLEET_NOW": "2026-01-05T09:05:00+00:00"}))
+        self.assertEqual(json.loads(grants_file.read_text())["permissions"]["allow"], [rule])
+        payload = self.payload("PostToolUse", tool_name="Agent", tool_input=dict(reversed(list(spawn.items()))))
+        self.assertSilent(self.hook("PostToolUse", payload, env={"FLEET_NOW": "2026-01-05T09:05:00+00:00"}))
+        self.assertEqual(json.loads(grants_file.read_text())["permissions"]["allow"], [])
+        self.assertEqual((self.lines()[-1]["why"], self.lines()[-1]["file"]), ("used", str(grants_file)))
+        self.assertIn(self.RULE, self.allow())
 
     def test_a_removal_is_one_compact_line(self):
         self.grant()
@@ -1388,6 +1426,59 @@ class GrantRemovalTest(FleetCase):
         self.assertIn(self.RULE, self.allow())
 
 
+class AgentGrantTest(HookCase):
+    """fleet_agent_grant (PreToolUse, Agent): auto mode ignores Agent allow rules, so a granted spawn is let
+    through by the hook, from <root>/.claude/tstack-grants.json, for its exact input alone."""
+
+    SPAWN = {"subagent_type": "general-purpose", "description": "prod client count", "prompt": "SELECT 1;\nreport"}
+
+    def setUp(self):
+        super().setUp()
+        self.project = self.tmp / "project"
+        self.file = self.project / ".claude" / "tstack-grants.json"
+        self.file.parent.mkdir(parents=True)
+        self.env["CLAUDE_PROJECT_DIR"] = str(self.project)
+
+    @staticmethod
+    def rule(spawn):
+        return "Agent(" + json.dumps(spawn, sort_keys=True, ensure_ascii=False, separators=(",", ":")) + ")"
+
+    def spawn(self, tool_input=None, tool="Agent", **extra):
+        payload = {**self.base("PreToolUse"), "tool_name": tool,
+                   "tool_input": self.SPAWN if tool_input is None else tool_input, **extra}
+        r = self.hook("PreToolUse", payload)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_the_granted_spawn_is_allowed(self):
+        self.file.write_text(json.dumps({"permissions": {"allow": ["Agent(x)", self.rule(self.SPAWN)]}}))
+        out = json.loads(self.spawn(dict(reversed(list(self.SPAWN.items())))))
+        decision = out["hookSpecificOutput"]
+        self.assertEqual((decision["hookEventName"], decision["permissionDecision"]), ("PreToolUse", "allow"))
+        self.assertIn("once", decision["permissionDecisionReason"])
+        self.assertIn(self.rule(self.SPAWN), json.loads(self.file.read_text())["permissions"]["allow"])  # the sweep takes it back
+
+    def test_a_subagents_spawn_is_allowed_from_the_session_root_too(self):
+        self.file.write_text(json.dumps({"permissions": {"allow": [self.rule(self.SPAWN)]}}))
+        self.assertIn('"allow"', self.spawn(agent_id="ab12cd34", cwd=str(self.tmp)))
+
+    def test_anything_else_says_nothing(self):
+        self.file.write_text(json.dumps({"permissions": {"allow": [self.rule(self.SPAWN)]}}))
+        self.assertEqual(self.spawn({**self.SPAWN, "prompt": "SELECT 2;"}), "")
+        self.assertEqual(self.spawn({**self.SPAWN, "model": "opus"}), "")
+        self.assertEqual(self.spawn({"command": "x"}, tool="Bash"), "")
+        settings = self.file.parent / "settings.local.json"
+        settings.write_text(json.dumps({"permissions": {"allow": [self.rule(self.SPAWN)]}}))
+        self.file.unlink()
+        self.assertEqual(self.spawn(), "")  # a rule in the settings is Claude Code's, not the hook's
+
+    def test_a_broken_or_odd_file_says_nothing(self):
+        for text in ("{not json", "[]", '{"permissions": []}', '{"permissions": {"allow": "x"}}'):
+            self.file.write_text(text)
+            self.assertEqual(self.spawn(), "")
+        self.assertEqual(self.spawn(["x"]), "")
+
+
 class HooksJsonTest(unittest.TestCase):
     def test_every_registered_event_is_dispatched(self):
         config = json.loads(HOOKS_JSON.read_text())
@@ -1407,6 +1498,7 @@ class HooksJsonTest(unittest.TestCase):
         self.assertEqual(config["hooks"]["SessionStart"][0]["matcher"], "startup|resume|clear|compact")
         for event in (*HEARTBEAT_ONLY, "PostToolUse"):
             self.assertNotIn("matcher", config["hooks"][event][0])  # every tool
+        self.assertEqual(config["hooks"]["PreToolUse"][0]["matcher"], "Agent")  # a grant's spawn alone
         self.assertTrue(os.access(HOOK, os.X_OK))
         self.assertTrue(os.access(MEMO, os.X_OK))
         self.assertEqual((ROOT / "bin" / "memo").resolve(), MEMO.resolve())

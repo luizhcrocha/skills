@@ -81,9 +81,14 @@ beforeEach(() => {
 
     return new Response("{}", { status: 404 });
   }) as typeof fetch;
+  show(PERMISSION);
+});
+
+/** Render the page with `item` as its one decision, open on it. */
+function show(item: View): void {
   root = document.createElement("div");
   document.body.append(root);
-  const state = Core.parseState({ ...coordinatorView(NOW), decisions: [PERMISSION], roadblocks: [] });
+  const state = Core.parseState({ ...coordinatorView(NOW), decisions: [item], roadblocks: [] });
 
   if (!state) throw new Error("the fixture is not a state");
   dispose = render(() => <App state={state} live={false} expose={(p) => (page = p)} />, root);
@@ -92,7 +97,7 @@ beforeEach(() => {
   location.hash = "#decision/p-1a2b3c4d";
   page.ui.route();
   flush();
-});
+}
 
 afterEach(() => {
   dispose();
@@ -120,6 +125,21 @@ test("the refused call shows as code, with its cause, the rule and the file it g
   expect(facts).toEqual(["Refused because", "[Git Destructive]", "Rule", RULE, "Goes into", FILE]);
   expect([...root.querySelectorAll('#dv-answer input[name="choice"]')].map((i) => i.getAttribute("value"))).toEqual(["allow-once", "deny"]);
   expect(root.querySelector('#dv-answer textarea[name="note"]')).not.toBeNull();
+});
+
+test("a refused Agent call shows its input as JSON, and the grants file the hook reads, not the settings", async () => {
+  const spawn = { description: "prod count", prompt: "SELECT 1;\nreport", subagent_type: "general-purpose" };
+  const call = JSON.stringify(spawn);
+  const rule = `Agent(${call})`;
+  dispose();
+  root.remove();
+  show({ ...PERMISSION, refusal: { tool: "Agent", call, rule, cause: "[Production Reads]", root: "/home/me/repos/billing", agent_id: null } });
+  const shown = root.querySelector("#dv-answer .refused figure.code");
+  expect([shown?.getAttribute("data-lang"), shown?.querySelector("code")?.textContent]).toEqual(["json", JSON.stringify(spawn, null, 2)]);
+  const facts = [...root.querySelectorAll("#dv-answer .refused dl > *")].map((e) => e.textContent);
+  expect(facts).toEqual(["Refused because", "[Production Reads]", "Let through by", "the plugin's PreToolUse hook (auto mode ignores Agent allow rules in the settings)", "Goes into", "/home/me/repos/billing/.claude/tstack-grants.json"]);
+  await send("allow-once");
+  expect(posted).toEqual([{ text: "allow-once: Allow this call once", decision: "p-1a2b3c4d", rule }]);
 });
 
 test("an answer is the option as it reads, with the note after it; none picked asks for one", async () => {
