@@ -192,7 +192,7 @@ test("the Chat tab counts unread decision activity only while the chat shows it"
 });
 
 test("the finder leads to a decision's page for activity the chat leaves out", () => {
-  page.ui.go({ group: "Chat", ref: "#9", title: "", sub: "", hint: "", go: { kind: "message", id: 9, side: null } }, false);
+  page.ui.go({ key: "c:9", pill: "", group: "Chat", ref: "#9", title: "", sub: "", hint: "", go: { kind: "message", id: 9, side: null } }, false);
   flush();
   expect(location.hash).toBe("#decision/d18");
 });

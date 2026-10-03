@@ -518,21 +518,6 @@ test("awaiting: an answer sent stops the wait at once; a reply does not hand it 
   assert.equal(Core.awaiting({ ...d, status: "decided" }, []), false);
 });
 
-test("findRank: a number first, words everywhere, a prefix keeps one group", () => {
-  const state = { decisions: [{ id: "d-cuts", ref: "D3", title: "Two more passes", question: "Run both now?", status: "open" },
-      { id: "d-key", ref: "A1", title: "Rotate the key", question: "q", status: "decided", answer: "done" }],
-    links: [{ ref: "L1", title: "Lab review", url: "https://b.ts.net:47843/", kind: "page", up: true }],
-    roadmap: [{ id: "m1", title: "Deploy", steps: [{ id: "l19", title: "Watchdog counts per file", status: "current" }] }],
-    agents: [{ id: "b41", name: "audio-research", task: "Audio intelligence", status: "done" }], events: [{ kind: "note", text: "passes ran" }] };
-  const rows = Core.findRows(state, [{ id: 9, from: "user", text: "run both passes", author: "luiz" }]);
-  assert.equal(Core.findRank(rows, "D3")[0].title, "Two more passes");
-  assert.deepEqual(Core.findRank(rows, "passes").map((r) => r.group), ["decisions", "chat", "log"]);
-  assert.deepEqual(Core.findRank(rows, "l review").map((r) => r.ref), ["L1"]);
-  assert.deepEqual(Core.findRank(rows, "w").map((r) => r.ref), ["b41"]);
-  assert.equal(Core.findRank(rows, "watchdog file")[0].ref, "l19");
-  assert.equal(Core.findRank(rows, "nothing like this").length, 0);
-});
-
 test("unreadNotice: opening a decision reads what came about it until then; a click reads one", () => {
   const e = { at: "2026-09-29T10:00:00Z", decision: "d1", kind: "asked" };
   const seen = (x) => ({ lastSeen: "", chatRead: 0, readOf: {}, readKeys: new Set(), ...x });

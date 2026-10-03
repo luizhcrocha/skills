@@ -3,29 +3,116 @@
  * opened from its name anywhere), and the toolbar a text selection offers (Copy, Reply, Side chat).
  */
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
-import { For, Show, type JSX } from "@solidjs/web";
+import { For, Match, Show, Switch, type JSX } from "@solidjs/web";
 
 import { ChatIcon, CloseIcon, listen, Pill, usePage, tf } from "./bits.tsx";
 import { copyText, selectAndCopy, type Copied } from "./clip.ts";
-import { Core, type Agent, type Coordinator, type Json, type QuoteAt } from "./core.ts";
+import { Core, type Agent, type Coordinator, type FindRow, type Json, type QuoteAt } from "./core.ts";
 import { evidence } from "./DecisionPage.tsx";
 import { parseEmbedMessage, parseEvidenceSelect, postSelect, type SelRect } from "./embed.ts";
+import { GROUPS, groupOf, highlight, rangesIn, type Item } from "./find.ts";
 import { fmtDur, fmtInt, spentWords } from "./format.ts";
 import type { Model } from "./model.ts";
 import { BriefAndReport } from "./Views.tsx";
 
-/** One box to find anything the page holds and go there. */
+/** A finder row's title, the letters the query matched marked. */
+function Marked(props: { readonly title: string; readonly query: string }): JSX.Element {
+  return (
+    <For each={highlight(props.title, rangesIn(props.title, props.query))} keyed={false}>
+      {(part) => (part().hit ? <mark>{part().text}</mark> : <>{part().text}</>)}
+    </For>
+  );
+}
+
+/** One line of the finder's list: a row, a "show more", a kind to narrow to. */
+function FindItem(props: { readonly item: Item; readonly at: number }): JSX.Element {
+  const { ui } = usePage();
+  const selected = (): "true" | "false" => tf(ui.foundAt() === props.at);
+
+  return (
+    <Switch>
+      <Match when={props.item.kind === "row" ? props.item : null}>
+        {(it) => {
+          const row = (): FindRow => ui.liveRows().get(it().row.key) ?? it().row;
+          const pill = (): string => (it().recent ? row().pill || groupOf(row().group).one : row().pill);
+
+          return (
+            <div class="find-row" role="option" id={"find-" + String(props.at)} data-i={String(props.at)} data-key={it().key} aria-selected={selected()}>
+              <span class="t">
+                <Show when={row().ref}>
+                  <span class="ref">{row().ref}</span>{" "}
+                </Show>
+                <span class="tt">
+                  <Marked title={row().title} query={ui.findQuery()} />
+                </span>
+              </span>
+              <span class="h">
+                <Show when={pill()}>
+                  <span class="pill">{pill()}</span>
+                </Show>
+                {row().hint}
+              </span>
+              <Show when={row().sub}>
+                <span class="s">{row().sub}</span>
+              </Show>
+            </div>
+          );
+        }}
+      </Match>
+      <Match when={props.item.kind === "more" ? props.item : null}>
+        {(it) => (
+          <div class="find-more" role="option" id={"find-" + String(props.at)} data-i={String(props.at)} data-key={it().key} aria-selected={selected()}>
+            Show {it().n} more
+          </div>
+        )}
+      </Match>
+      <Match when={props.item.kind === "hint" ? props.item : null}>
+        {(it) => (
+          <div class="find-row find-hint" role="option" id={"find-" + String(props.at)} data-i={String(props.at)} data-key={it().key} aria-selected={selected()}>
+            <span class="t">
+              <span class="tt">{it().heading}</span>
+            </span>
+            <span class="h">
+              <span class="n">{it().n}</span> <kbd>{it().prefix + ":"}</kbd>
+            </span>
+          </div>
+        )}
+      </Match>
+    </Switch>
+  );
+}
+
+/**
+ * One box to find anything the page holds and go there. The combobox pattern: the focus stays in the field,
+ * the highlighted row is `aria-activedescendant`. Up and Down go round, Enter opens, Ctrl/⌘+Enter opens in a
+ * new tab, Tab and Shift+Tab cycle the kinds, a prefix ("d:") selects one, Backspace in an empty field drops
+ * it, Escape clears and then closes. On a phone it is a full-height sheet with a close button and no legend.
+ */
 export function Finder(): JSX.Element {
   const { ui } = usePage();
-  const groupTitle = (g: string): string => Core.FIND_GROUPS.find(([k]) => k === g)?.[1] ?? g;
 
-  /* The highlighted row stays in view. */
+  /** Each section's first item's place in the list. */
+  const firstOf = (): number[] => {
+    let n = 0;
+
+    return ui.findSections().map((s) => {
+      const at = n;
+      n += s.items.length;
+
+      return at;
+    });
+  };
+
+  /* The highlighted row stays in view, and the tab selected in its row of tabs (a phone's is narrower than the kinds). */
   createEffect(
-    () => [ui.foundAt(), ui.found().length] as const,
+    () => [ui.foundAt(), ui.findItems().length] as const,
     ([at]) => {
       document.getElementById("find-" + String(at))?.scrollIntoView({ block: "nearest" });
     },
   );
+  createEffect(ui.findTab, () => {
+    document.querySelector('#find-tabs [aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
 
   return (
     <dialog
@@ -39,79 +126,119 @@ export function Finder(): JSX.Element {
       onClose={() => ui.setFinderOpen(false)}
     >
       <div class="finder-in">
-        <label class="vh" for="find-q">
-          Search
-        </label>
-        <input
-          id="find-q"
-          type="search"
-          placeholder="Search: D3, a title, a worker… (d, l, p, w, c narrow it)"
-          autocomplete="off"
-          spellcheck={false}
-          role="combobox"
-          aria-controls="find-list"
-          aria-expanded="true"
-          aria-activedescendant={"find-" + String(ui.foundAt())}
-          ref={(el) => (ui.refs.findQ = el)}
-          onInput={(e) => {
-            ui.setFoundAt(0);
-            ui.setFindQuery(e.currentTarget.value);
-          }}
-          onKeyDown={(e) => {
-            const found = ui.found();
-            const r = found[ui.foundAt()];
+        <div class="find-bar">
+          <label class="vh" for="find-q">
+            Search
+          </label>
+          <input
+            id="find-q"
+            type="search"
+            placeholder="Search decisions, workers, the plan, the chat…"
+            autocomplete="off"
+            spellcheck={false}
+            role="combobox"
+            aria-controls="find-list"
+            aria-expanded="true"
+            aria-autocomplete="list"
+            aria-activedescendant={ui.findItems().length ? "find-" + String(ui.foundAt()) : undefined}
+            ref={(el) => (ui.refs.findQ = el)}
+            onInput={(e) => ui.findTyped(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              const mod = e.ctrlKey || e.metaKey;
 
-            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              if (e.key === "ArrowDown" || e.key === "ArrowUp") ui.moveFound(e.key === "ArrowDown" ? 1 : -1);
+              else if (e.key === "Enter") ui.choose(ui.findItems()[ui.foundAt()], mod);
+              else if (e.key === "Tab" && !e.altKey && !mod) ui.cycleFindTab(e.shiftKey ? -1 : 1);
+              else if (e.key === "Escape") ui.findEscape();
+              else if (e.key === "Backspace" && e.currentTarget.value === "" && ui.findTab()) ui.setFindTab("");
+              else return;
               e.preventDefault();
-              ui.setFoundAt((ui.foundAt() + (e.key === "ArrowDown" ? 1 : -1) + found.length) % Math.max(1, found.length));
-            } else if (e.key === "Enter" && r) {
-              e.preventDefault();
-              ui.go(r, e.ctrlKey || e.metaKey);
-            }
-          }}
-        />
-        <ul
+            }}
+          />
+          <button type="button" class="icon-btn find-x" aria-label="Close" title="Close" onClick={() => ui.refs.finder?.close()}>
+            <CloseIcon />
+          </button>
+        </div>
+        <div class="find-tabs" id="find-tabs" role="tablist" aria-label="Narrow to">
+          <For each={ui.findTabs()} keyed={false}>
+            {(t) => (
+              <button
+                type="button"
+                role="tab"
+                tabindex="-1"
+                aria-selected={tf(ui.findTab() === t())}
+                aria-controls="find-list"
+                onClick={() => {
+                  ui.setFindTab(t());
+                  ui.refs.findQ?.focus();
+                }}
+              >
+                {t() ? groupOf(t()).heading : "All"}
+              </button>
+            )}
+          </For>
+        </div>
+        <div
           class="find-list"
           id="find-list"
           role="listbox"
           aria-label="Results"
           onClick={(e) => {
-            const row = e.target instanceof Element ? e.target.closest<HTMLElement>(".find-row") : null;
-            const r = row ? ui.found()[Number(row.dataset["i"])] : undefined;
+            const el = e.target instanceof Element ? e.target.closest<HTMLElement>("[role=option]") : null;
 
-            if (r) ui.go(r, e.ctrlKey || e.metaKey);
+            if (el) ui.choose(ui.findItems()[Number(el.dataset["i"])], e.ctrlKey || e.metaKey);
           }}
         >
-          <For each={ui.found()} keyed={false} fallback={<li class="find-empty">{ui.findQuery().trim() ? "Nothing matches." : "Nothing here yet."}</li>}>
-            {(r, i) => (
-              <>
-                <Show when={i === 0 || ui.found()[i - 1]?.group !== r().group}>
-                  <li class="find-group" role="presentation">
-                    {groupTitle(r().group)}
-                  </li>
-                </Show>
-                <li class="find-row" role="option" id={"find-" + String(i)} data-i={String(i)} aria-selected={tf(i === ui.foundAt())}>
-                  <span class="t">
-                    <Show when={r().ref}>
-                      <span class="ref">{r().ref}</span>{" "}
-                    </Show>
-                    {r().title}
-                  </span>
-                  <span class="h">{r().hint}</span>
-                  <span class="s">{r().sub}</span>
-                </li>
-              </>
+          <For each={ui.findSections()} keyed={false} fallback={<div class="find-empty">{ui.findQuery().trim() ? "Nothing matches." : "Nothing here yet."}</div>}>
+            {(section, s) => (
+              <div role="group" aria-labelledby={"find-h-" + section().id}>
+                <div class="find-group" id={"find-h-" + section().id} role="presentation">
+                  <span class="gh">{section().heading}</span>
+                </div>
+                <For each={section().items} keyed={false}>
+                  {(item, i) => <FindItem item={item()} at={(firstOf()[s] ?? 0) + i} />}
+                </For>
+              </div>
             )}
           </For>
-        </ul>
+        </div>
         <p class="find-foot muted">
-          <kbd>↑</kbd>
-          <kbd>↓</kbd> move <kbd>↵</kbd> open <kbd>Ctrl</kbd>+<kbd>↵</kbd> new tab <kbd>Esc</kbd> close
+          <span class="find-keys">
+            <span>
+              <kbd>↑</kbd>
+              <kbd>↓</kbd> move
+            </span>
+            <span>
+              <kbd>↵</kbd> open
+            </span>
+            <span>
+              <kbd>{MOD}</kbd>
+              <kbd>↵</kbd> new tab
+            </span>
+            <span>
+              <kbd>Tab</kbd> next kind
+            </span>
+            <span>
+              <kbd>Esc</kbd> clear, then close
+            </span>
+          </span>
+          <span class="find-prefixes">
+            <For each={GROUPS.filter((g) => ui.findTabs().includes(g.key))} keyed={false}>
+              {(g) => (
+                <span>
+                  <kbd>{g().prefix + ":"}</kbd> {g().heading.toLowerCase()}
+                </span>
+              )}
+            </For>
+          </span>
         </p>
       </div>
     </dialog>
   );
 }
+
+/** The modifier key of the platform: ⌘ on a Mac, else Ctrl. */
+const MOD = /Mac|iPhone|iPad/u.test(globalThis.navigator?.platform ?? "") ? "⌘" : "Ctrl";
 
 /** A fact of the sheet. */
 function Fact(props: { readonly k: string; readonly children: JSX.Element }): JSX.Element {

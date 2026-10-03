@@ -300,7 +300,7 @@ test("on the manager's page the Stuck box and the finder open a fleet's decision
   const d1: View = { id: "d1", ref: "D1", kind: "decision", title: "Rounding rule for totals", question: "Per line or on the total?", why: "", blocking: true, asks: "user", opened: before(40), revised: null, answered: before(10) };
   open("/f/manager/", withFleet(managerView(NOW), "billing", [d1]));
   expect([...root.querySelectorAll<HTMLAnchorElement>("#lead .stuck a")].map((a) => a.getAttribute("href"))).toContain("#decision/billing/d1");
-  page.ui.go({ group: "decisions", ref: "D1", title: "Rounding rule for totals", sub: "", hint: "billing, open", go: { kind: "decision", id: "billing/d1" } }, false);
+  page.ui.go({ key: "d:billing/d1", pill: "", group: "decisions", ref: "D1", title: "Rounding rule for totals", sub: "", hint: "billing, open", go: { kind: "decision", id: "billing/d1" } }, false);
   page.ui.route();
   flush();
   expect(location.hash).toBe("#decision/billing/d1");

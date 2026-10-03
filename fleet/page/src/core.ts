@@ -465,11 +465,15 @@ export type Go =
 
 /** A finder row. */
 export interface FindRow {
+  /** The row's place, one per row and the same on every state: what the recents and the highlight hold. */
+  readonly key: string;
   readonly group: string;
   readonly ref: string;
   readonly title: string;
   readonly sub: string;
   readonly hint: string;
+  /** What kind of item a decision row is ("action", "grilling"), said as a pill; "" for the other rows. */
+  readonly pill: string;
   readonly go: Go;
 }
 
@@ -777,22 +781,11 @@ function excerptOf(text: string | null | undefined): string {
   return t.length < 2 ? "" : t.slice(0, QUOTE_MAX);
 }
 
-/** The finder's groups, in the order it shows them, with their headings. */
-const FIND_GROUPS: readonly (readonly [string, string])[] = [
-  ["decisions", "Decisions and actions"],
-  ["links", "Links"],
-  ["coordinators", "Coordinators"],
-  ["roadblocks", "Roadblocks"],
-  ["plan", "Plan"],
-  ["workers", "Workers"],
-  ["chat", "Chat"],
-  ["log", "Log"],
-];
-
-/** The one-letter prefixes that narrow the finder to a group. */
-const FIND_PREFIX: Lookup = { d: "decisions", l: "links", r: "roadblocks", p: "plan", w: "workers", c: "chat", f: "coordinators" };
-
-/** The finder's (Ctrl/⌘K) rows: everything the page holds that one would look up, each with where it leads. */
+/**
+ * The finder's (Ctrl/⌘K) rows: everything the page holds that one would look up, each with where it leads
+ * and a key for its place: `d:<id>` a decision (`d:<fleet>/<id>` another fleet's), `w:<id>` a worker, `c:<id>`
+ * a chat message, `u:<url>` a link or a fleet, and the rows that lead to a view by their own id.
+ */
 function findRows(state: Partial<State>, messages: Iterable<Message> | null | undefined): FindRow[] {
   const rows: FindRow[] = [];
 
@@ -803,11 +796,13 @@ function findRows(state: Partial<State>, messages: Iterable<Message> | null | un
 
   for (const d of state.decisions ?? []) {
     rows.push({
+      key: "d:" + d.id,
       group: "decisions",
       ref: d.ref || "",
       title: one(d.title),
       sub: one(d.status === "open" ? d.question : d.answer || d.resolution || d.status),
       hint: d.status === "open" ? "open" : d.status,
+      pill: kindWord(d.kind),
       go: { kind: "decision", id: d.id },
     });
   }
@@ -817,77 +812,48 @@ function findRows(state: Partial<State>, messages: Iterable<Message> | null | un
       if (!x || !isText(x["title"]) || !isText(x["group"])) continue;
       const hint = x["hint"];
       const decision = x["group"] === "decisions" && isText(x["hash"]) ? decisionRoute(x["hash"]) : null;
+      const url = c.url ? c.url + String(x["hash"] || "") : "";
       rows.push({
+        key: decision ? "d:" + c.id + "/" + decision : "x:" + c.id + ":" + x["group"] + ":" + String(x["ref"] || x["title"]),
         group: x["group"],
         ref: String(x["ref"] || ""),
         title: one(x["title"]),
         sub: one(x["sub"]),
         hint: c.id + (hint ? ", " + String(hint) : ""),
-        go: decision ? { kind: "decision", id: c.id + "/" + decision } : { kind: "url", url: c.url ? c.url + String(x["hash"] || "") : "" },
+        pill: "",
+        go: decision ? { kind: "decision", id: c.id + "/" + decision } : { kind: "url", url },
       });
     }
   }
 
-  for (const l of state.links ?? []) rows.push({ group: "links", ref: l.ref || "", title: one(l.title), sub: one(l.url), hint: (l.kind === "page" ? "page" : "dev") + (l.up ? "" : ", down"), go: { kind: "url", url: l.url } });
+  for (const l of state.links ?? []) rows.push({ key: "u:" + l.url, group: "links", ref: l.ref || "", title: one(l.title), sub: one(l.url), hint: (l.kind === "page" ? "page" : "dev") + (l.up ? "" : ", down"), pill: "", go: { kind: "url", url: l.url } });
 
-  for (const c of state.coordinators ?? []) rows.push({ group: "coordinators", ref: "", title: c.id, sub: one(c.now), hint: c.status, go: { kind: "url", url: c.url } });
+  for (const c of state.coordinators ?? []) rows.push({ key: "f:" + c.id, group: "coordinators", ref: "", title: c.id, sub: one(c.now), hint: c.status, pill: "", go: { kind: "url", url: c.url } });
 
-  for (const r of state.roadblocks ?? []) rows.push({ group: "roadblocks", ref: r.ref || "", title: one(r.title), sub: one(r.detail), hint: r.resolved ? "resolved" : "open", go: { kind: "view", hash: "#roadblocks" } });
+  for (const r of state.roadblocks ?? []) rows.push({ key: "r:" + (r.id || r.ref || r.title), group: "roadblocks", ref: r.ref || "", title: one(r.title), sub: one(r.detail), hint: r.resolved ? "resolved" : "open", pill: "", go: { kind: "view", hash: "#roadblocks" } });
 
-  for (const m of state.roadmap ?? []) for (const st of m.steps || []) rows.push({ group: "plan", ref: st.id, title: one(st.title), sub: one(m.title), hint: st.status || "", go: { kind: "view", hash: "#plan" } });
+  for (const m of state.roadmap ?? []) for (const st of m.steps || []) rows.push({ key: "p:" + m.id + "/" + st.id, group: "plan", ref: st.id, title: one(st.title), sub: one(m.title), hint: st.status || "", pill: "", go: { kind: "view", hash: "#plan" } });
 
-  for (const a of state.agents ?? []) rows.push({ group: "workers", ref: a.id, title: one(a.name), sub: one(a.task), hint: a.status || "", go: { kind: "worker", id: a.id } });
+  for (const a of state.agents ?? []) rows.push({ key: "w:" + a.id, group: "workers", ref: a.id, title: one(a.name), sub: one(a.task), hint: a.status || "", pill: "", go: { kind: "worker", id: a.id } });
 
   for (const m of [...(messages ?? [])].sort((a, b) => b.id - a.id)) {
     rows.push({
+      key: "c:" + String(m.id),
       group: "chat",
       ref: "#" + String(m.id),
       title: one(m.text).slice(0, 140),
       sub: one(m.from === "user" ? m.author || "you" : m.from),
       hint: m.side ? "side chat" : "",
+      pill: "",
       go: { kind: "message", id: m.id, side: m.side },
     });
   }
 
-  for (const e of [...(state.events ?? [])].slice(-300).reverse()) rows.push({ group: "log", ref: "", title: one(e.text).slice(0, 140), sub: one(e.kind + (e.agent ? ", " + e.agent : "")), hint: "", go: { kind: "view", hash: "#log" } });
-
-  return rows;
-}
-
-/**
- * The rows a query finds, best first: "d fix" looks in decisions only, "D3" finds that number first, and
- * every word must appear in the title, the second line or the number.
- */
-function findRank(rows: readonly FindRow[], query: string | null | undefined): FindRow[] {
-  let q = String(query ?? "").trim();
-  let only: string | null = null;
-  const pre = /^([a-z])\s+(.*)$/iu.exec(q);
-  const narrowed = pre ? FIND_PREFIX[(pre[1] ?? "").toLowerCase()] : undefined;
-
-  if (pre && narrowed) {
-    only = narrowed;
-    q = pre[2] ?? "";
-  } else if (pre === null && FIND_PREFIX[q.toLowerCase()] && q.length === 1) {
-    only = FIND_PREFIX[q.toLowerCase()] ?? null;
-    q = "";
+  for (const e of [...(state.events ?? [])].slice(-300).reverse()) {
+    rows.push({ key: "g:" + e.at + " " + e.kind + " " + e.text.slice(0, 60), group: "log", ref: "", title: one(e.text).slice(0, 140), sub: one(e.kind + (e.agent ? ", " + e.agent : "")), hint: "", pill: "", go: { kind: "view", hash: "#log" } });
   }
 
-  const words = q.toLowerCase().split(/\s+/u).filter(Boolean);
-  const scored: { r: FindRow; exact: boolean; group: number; score: number; i: number }[] = [];
-
-  rows.forEach((r, i) => {
-    if (only && r.group !== only) return;
-    const ref = r.ref.toLowerCase();
-    const title = r.title.toLowerCase();
-    const hay = ref + " " + title + " " + r.sub.toLowerCase();
-
-    if (!words.every((w) => hay.includes(w))) return;
-    const exact = words.length > 0 && ref === q.toLowerCase();
-    const score = !words.length ? 0 : (title.startsWith(words[0] ?? "") ? 20 : 0) + words.filter((w) => title.includes(w)).length * 5;
-    scored.push({ r, exact, group: FIND_GROUPS.findIndex(([key]) => key === r.group), score, i });
-  });
-
-  return scored.sort((a, b) => Number(b.exact) - Number(a.exact) || a.group - b.group || b.score - a.score || a.i - b.i).map((x) => x.r);
+  return rows;
 }
 
 /** How many messages to the user arrived after the last one read. */
@@ -1876,9 +1842,6 @@ export const Core = {
   stuckOf,
   silentWorker,
   findRows,
-  findRank,
-  FIND_GROUPS,
-  FIND_PREFIX,
   grillState,
   grillAnswerText,
   sidesOf,

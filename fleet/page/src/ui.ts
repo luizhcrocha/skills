@@ -5,13 +5,15 @@
  * worker sheet, the finder, the notifications panel, the selection toolbar.
  * The state of these lives here, in signals no update of the fleet's state touches.
  */
-import { createEffect, createMemo, createSignal, flush } from "solid-js";
+import { createEffect, createMemo, createSignal, flush, untrack } from "solid-js";
 
 import { createCarets } from "./carets.ts";
 import { decisionTrail } from "./chatlog.ts";
-import { Core, type Decision, type FindRow, type Json, type JsonRecord, type Quote, type QuoteAt } from "./core.ts";
+import { Core, type Decision, type FindRow, type Json, type JsonRecord, type Lookup, type Quote, type QuoteAt } from "./core.ts";
+import { arrange, cycleTab, itemsOf, readPrefix, tabsOf, type Item, type Section } from "./find.ts";
 import type { Model } from "./model.ts";
 import { createNotify } from "./notify.ts";
+import { createRecents } from "./recents.ts";
 
 /** The timer and sequence number of the recipients preview. */
 interface PreviewTimer {
@@ -87,6 +89,12 @@ export interface Refs {
   bell?: HTMLButtonElement;
   seltool?: HTMLElement;
   mentions?: HTMLUListElement;
+}
+
+/** The finder's list as laid out: its sections, and the kinds it can narrow to. */
+interface Layout {
+  readonly sections: readonly Section[];
+  readonly tabs: readonly string[];
 }
 
 /** The viewer's controls. */
@@ -458,7 +466,10 @@ export function createUi(m: Model) {
   const [sheetFor, setSheetFor] = createSignal<string | null>(null);
 
   function openWorker(id: string): void {
-    if (!m.person(id)) return;
+    const who = m.person(id);
+
+    if (!who) return;
+    visit("w:" + id, () => ({ key: "w:" + id, group: "workers", ref: id, title: who.name || id, sub: "", hint: "", pill: "", go: { kind: "worker", id } }));
     setSheetFor(id);
     flush();
 
@@ -473,23 +484,148 @@ export function createUi(m: Model) {
 
   /* ------------------------------------------------------------------ the finder */
 
+  /* The places opened last, for the finder; the manager's frame records none of its own. */
+  const recents = createRecents(store);
+  /** The view the finder just went to: its row is the place recorded, not the view as well. */
+  let quietHash: string | null = null;
+
+  /** The finder's row of the place `key`, as the page holds it now. */
+  const rowOf = (key: string): FindRow | undefined => Core.findRows(m.state, m.messages()).find((r) => r.key === key);
+
+  /** Records a visit to `row`, or to the row of `key` the page holds, else to `fallback`. */
+  function visit(key: string, fallback?: () => FindRow | null): void {
+    if (m.embed) return;
+    const row = rowOf(key) ?? fallback?.();
+
+    if (row) recents.visit(row);
+  }
+
+  const VIEW_TITLES: Lookup = { decisions: "Decisions", plan: "Plan", links: "Links", log: "Log" };
+
+  /** A view as a recent place. */
+  const viewRow = (view: string): FindRow => ({
+    key: "v:" + view,
+    group: "views",
+    ref: "",
+    title: VIEW_TITLES[view] ?? (m.managed() ? "Fleets" : "Fleet"),
+    sub: "",
+    hint: "",
+    pill: "",
+    go: { kind: "view", hash: "#" + view },
+  });
+
   const [findQuery, setFindQuery] = createSignal("");
-  const [foundAt, setFoundAt] = createSignal(0);
+  const [findTab, setFindTabSignal] = createSignal("");
+  const [findMore, setFindMore] = createSignal<ReadonlySet<string>>(new Set());
+  const [activeKey, setActiveKey] = createSignal<string | null>(null);
   const [finderOpen, setFinderOpen] = createSignal(false);
 
-  const found = createMemo((): FindRow[] => {
-    if (!finderOpen()) return [];
-    const q = findQuery();
-    const rows = Core.findRank(Core.findRows(m.state, m.messages()), q);
-    const perGroup = new Map<string, number>();
+  /** The rows as they are now, while the finder is open: what a row drawn says. */
+  const liveRows = createMemo((): ReadonlyMap<string, FindRow> => (finderOpen() ? new Map(Core.findRows(m.state, m.messages()).map((r) => [r.key, r])) : new Map()));
 
-    return rows.filter((r) => {
-      const n = perGroup.get(r.group) ?? 0;
-      perGroup.set(r.group, n + 1);
+  /*
+   * The list is laid out again on what the viewer does (opening, typing, a tab, a "show more"), never on an
+   * update of the fleet's state: a row drawn stays where it is under the eye while the state streams in, and
+   * says what the state says now (liveRows). The next keystroke takes the new rows.
+   */
+  const layout = createMemo((): Layout => {
+    if (!finderOpen()) return { sections: [], tabs: [""] };
+    const query = findQuery();
+    const tab = findTab();
+    const more = findMore();
+    const list = recents.list();
 
-      return q.trim() ? n < 12 : n < 5;
+    return untrack(() => {
+      const rows = Core.findRows(m.state, m.messages());
+      const at = m.place();
+
+      return { sections: arrange({ rows, recents: list, query, tab, more, here: at.decision ? "d:" + at.decision : "v:" + at.view }), tabs: tabsOf(rows) };
     });
   });
+
+  const findSections = (): readonly Section[] => layout().sections;
+  const findTabs = (): readonly string[] => layout().tabs;
+  const findItems = createMemo((): Item[] => itemsOf(layout().sections));
+
+  /** The highlighted item's place in the list: held by its key, so it stays on its row; the first when that row is gone. */
+  const foundAt = (): number => {
+    const key = activeKey();
+    const i = key === null ? -1 : findItems().findIndex((it) => it.key === key);
+
+    return i === -1 ? 0 : i;
+  };
+
+  const setFoundAt = (i: number): void => {
+    setActiveKey(findItems()[i]?.key ?? null);
+  };
+
+  /** A new list: the highlight on its first item. */
+  const relaid = (): void => {
+    setActiveKey(null);
+    flush();
+  };
+
+  function setFindTab(tab: string): void {
+    setFindTabSignal(tab);
+    setFindMore(new Set<string>());
+    relaid();
+  }
+
+  /** What the field holds, typed: a prefix ("d:") selects its tab and leaves the field. */
+  function findTyped(raw: string): void {
+    const asked = readPrefix(raw);
+
+    if (asked.group !== null) {
+      setFindTabSignal(asked.group);
+
+      if (refs.findQ) refs.findQ.value = asked.words;
+    }
+
+    setFindQuery(asked.group !== null ? asked.words : raw);
+    setFindMore(new Set<string>());
+    relaid();
+  }
+
+  /** The highlight `by` items on, round the ends. */
+  function moveFound(by: 1 | -1): void {
+    const n = findItems().length;
+
+    if (n) setFoundAt((foundAt() + by + n) % n);
+    flush();
+  }
+
+  /** The tab `by` steps on, round the ends. */
+  const cycleFindTab = (by: 1 | -1): void => setFindTab(cycleTab(findTabs(), findTab(), by));
+
+  /** Escape: the words and the tab cleared first, then the finder closed. */
+  function findEscape(): void {
+    if (findQuery() || findTab()) {
+      if (refs.findQ) refs.findQ.value = "";
+      setFindQuery("");
+      setFindTab("");
+
+      return;
+    }
+
+    refs.finder?.close();
+  }
+
+  /** An item taken: a row opened (`second`, in a new tab), a "show more" drawn, a kind narrowed to. */
+  function choose(item: Item | undefined, second: boolean): void {
+    if (!item) return;
+
+    if (item.kind === "row") go(liveRows().get(item.row.key) ?? item.row, second);
+    else if (item.kind === "hint") setFindTab(item.group);
+    else {
+      const at = foundAt();
+      setFindMore(new Set([...findMore(), item.section]));
+      flush();
+      setFoundAt(at);
+      flush();
+    }
+
+    refs.findQ?.focus();
+  }
 
   function openFinder(): void {
     const finder = refs.finder;
@@ -503,27 +639,42 @@ export function createUi(m: Model) {
     }
 
     if (refs.findQ) refs.findQ.value = "";
+    recents.reload();
     setFindQuery("");
-    setFoundAt(0);
+    setFindTabSignal("");
+    setFindMore(new Set<string>());
+    setActiveKey(null);
     setFinderOpen(true);
     flush();
     finder.showModal();
     refs.findQ?.focus();
   }
 
+  /** Open `href` of this page in a new tab. */
+  const elsewhere = (href: string): void => void window.open(href, "_blank", "noopener");
+
+  /** Where the finder's row `r` leads; `newTab` (Ctrl/⌘+Enter) opens it in a new tab, a fleet's decision on that fleet's own page. */
   function go(r: FindRow, newTab: boolean): void {
     refs.finder?.close();
     const g = r.go;
+    visit(r.key, () => r);
 
-    if (g.kind === "decision") location.hash = Core.decisionHref(g.id);
+    if (newTab && g.kind === "decision") {
+      const theirs = Core.parseFleetDecision(g.id);
+      elsewhere(theirs ? m.fleetPage(theirs.fleet) + Core.decisionHref(theirs.id) : location.pathname + Core.decisionHref(g.id));
+    } else if (newTab && g.kind === "worker") elsewhere(location.pathname + "#agent-" + g.id);
+    else if (newTab && g.kind === "view") elsewhere(location.pathname + g.hash);
+    else if (g.kind === "decision") location.hash = Core.decisionHref(g.id);
     else if (g.kind === "url" && g.url) {
       if (newTab || /^https?:/u.test(g.url)) window.open(g.url, "_blank", "noopener");
       else location.href = g.url;
     } else if (g.kind === "worker") {
       location.hash = "#fleet";
       openWorker(g.id);
-    } else if (g.kind === "view") location.hash = g.hash;
-    else if (g.kind === "message") {
+    } else if (g.kind === "view") {
+      quietHash = g.hash;
+      location.hash = g.hash;
+    } else if (g.kind === "message") {
       /* Decision activity the chat leaves out is read on its decision's page. */
       const about = decisionTrail(m.messages()).get(g.id);
 
@@ -569,6 +720,7 @@ export function createUi(m: Model) {
       const msg = m.messageById(Number(at.message));
 
       if (!msg) return;
+      visit("c:" + String(msg.id));
 
       if (m.focus() !== msg.side) {
         m.setFocus(msg.side);
@@ -728,6 +880,11 @@ export function createUi(m: Model) {
     if (panelOpen()) setPanelOpen(false);
 
     if (id) notify.about(id);
+
+    /* A decision's page is a place opened, landed on or not; a view only once the viewer moves to it. */
+    if (id) visit("d:" + id, () => ({ key: "d:" + id, group: "decisions", ref: "", title: m.decisionById(id)?.title ?? id, sub: "", hint: "", pill: "", go: { kind: "decision", id } }));
+    else if (shown && shown !== place && quietHash !== location.hash) visit("v:" + at.view, () => viewRow(at.view));
+    quietHash = null;
     flush();
     const target = at.anchor ? document.getElementById(at.anchor) : null;
 
@@ -807,10 +964,20 @@ export function createUi(m: Model) {
     finderOpen,
     setFinderOpen,
     findQuery,
-    setFindQuery,
+    findTyped,
+    findTab,
+    setFindTab,
+    cycleFindTab,
+    findTabs,
+    findSections,
+    findItems,
+    liveRows,
     foundAt,
     setFoundAt,
-    found,
+    moveFound,
+    findEscape,
+    choose,
+    recents,
     openFinder,
     go,
     goQuote,
