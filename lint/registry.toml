@@ -825,3 +825,37 @@ history = [
   { date = "2026-09-30", status = "warn", note = "seeded from lang-nix's gates: statix only as advice" },
 ]
 runs = []
+
+[[rule]]
+id = "ts/tstack/no-once-per-position-read"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "warn"
+summary = "Solid 2: a <For keyed={false}> item accessor read at the top of its callback (a ternary's test, const v = item()), read once per position and stale when the position shows another item"
+where = "lint/ts/tstack/rules/no-once-per-position-read.ts"
+created = "2026-10-03"
+last_hit = ""
+evidence = [
+  "repo:luizhcrocha/skills fleet/page/src/Overlays.tsx Marked before kolqnopw (part().hit ? <mark> : text; the finder's match marks landed on the wrong letters as the user typed)",
+  "repo:luizhcrocha/skills fleet/page/src/Rich.tsx:131 before kyptnlyl (s().kind === \"code\" ? <code> : <Words>)",
+  "repo:luizhcrocha/skills fleet/page/src/Rich.tsx:101 Words before kyptnlyl (const v = p(); return v.part && props.mention ? props.mention(v.part) : v.text)",
+  "skill:solid-js CHEATSHEET.md (2.0.0-rc.13: flow-component callback bodies are not tracking scopes; reading an item accessor at the top of a <For> callback freezes it)",
+]
+history = [
+  { date = "2026-10-03", status = "proposed", note = "proposed by lint-evolve" },
+  { date = "2026-10-03", status = "trial", note = "trial across the TS repos" },
+  { date = "2026-10-03", status = "warn", note = "trial clean: 10 TS repos, 0 hits, 0 false positives; the 3 incidents hit on their pre-fix files" },
+]
+runs = [
+  { repo = "/home/luizrocha/repos/coelhorocha/chimr", date = "2026-10-03", hits = 0, false_positives = 0, note = "144 of 146 files; worker/src/client/00-base.js and 97-keys.js are concatenated script fragments Oxlint cannot parse alone; no Solid" },
+  { repo = "/home/luizrocha/repos/coelhorocha/custom-mcp-servers", date = "2026-10-03", hits = 0, false_positives = 0, note = "1747 files; apps/casos (Solid 2) has 30 <For> sites, all keyed by identity, none keyed={false}" },
+  { repo = "/home/luizrocha/repos/coelhorocha/durable-automations", date = "2026-10-03", hits = 0, false_positives = 0, note = "no Solid <For keyed={false}>" },
+  { repo = "/home/luizrocha/repos/coelhorocha/email-automations", date = "2026-10-03", hits = 0, false_positives = 0, note = "no Solid <For keyed={false}>" },
+  { repo = "/home/luizrocha/repos/coelhorocha/infra-monorepo", date = "2026-10-03", hits = 0, false_positives = 0, note = "no Solid <For keyed={false}>" },
+  { repo = "/home/luizrocha/repos/coelhorocha/process-contract", date = "2026-10-03", hits = 0, false_positives = 0, note = "no Solid <For keyed={false}>" },
+  { repo = "/home/luizrocha/repos/coelhorocha/slack-bot", date = "2026-10-03", hits = 0, false_positives = 0, note = "no Solid <For keyed={false}>" },
+  { repo = "/home/luizrocha/repos/coelhorocha/slopjus", date = "2026-10-03", hits = 0, false_positives = 0, note = "no Solid <For keyed={false}>" },
+  { repo = "/home/luizrocha/repos/luizhcrocha/picasso", date = "2026-10-03", hits = 0, false_positives = 0, note = "no Solid <For keyed={false}>" },
+  { repo = "/home/luizrocha/repos/luizhcrocha/skills", date = "2026-10-03", hits = 0, false_positives = 0, note = "run on the lint-solid-once workspace at trunk (kyptnlyl): 19 keyed={false} sites in fleet/page, all read reactively since kolqnopw/kyptnlyl; the pre-fix Overlays.tsx and Rich.tsx give the 3 incident hits" },
+]
