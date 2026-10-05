@@ -7,7 +7,8 @@ const error = { messageId: "oncePerPosition" };
 
 // The invalid cases are the three incidents in luizhcrocha/skills fleet/page (Solid 2 rc): the finder's
 // Marked (before kolqnopw, the match marks landed on the wrong letters as the user typed), and Rich.tsx's
-// Words and inline spans (before kyptnlyl). The valid cases are their fixes and the near misses.
+// Words and inline spans (before kyptnlyl). The widening covers the same freeze in <For>'s index accessor
+// and <Show>/<Match>'s narrowed value. The valid cases are the fixes and the near misses.
 tester.run("tstack/no-once-per-position-read", noOncePerPositionReadRule, {
   valid: [
     // The fixes.
@@ -42,7 +43,16 @@ tester.run("tstack/no-once-per-position-read", noOncePerPositionReadRule, {
     // Keyed lists hand the callback the item itself; a non-For callback is not a position.
     `<For each={rows()}>{(row) => (row.hit ? <mark>{row.text}</mark> : row.text)}</For>`,
     `<For each={rows()} keyed={(r) => r.id}>{(row) => <b>{row().text}</b>}</For>`,
-    `<Show when={user()}>{(u) => (u().admin ? <Admin /> : <Guest />)}</Show>`,
+    // The index of a keyed list, read in JSX, a handler or an attribute.
+    `<For each={rows()}>{(row, i) => <li data-i={i()} onClick={() => pick(i())}>{i() + 1}. {row.text}</li>}</For>`,
+    `<For each={rows()} keyed={(r) => r.id}>{(row, i) => <Row row={row()} index={i()} />}</For>`,
+    // A non-keyed list's index is a number, a keyed list's item a value.
+    `<For each={rows()} keyed={false}>{(row, i) => (i === 0 ? <First /> : <Row row={row()} />)}</For>`,
+    // <Show>/<Match>'s value read in JSX or an attribute; a keyed <Show> hands over the value itself.
+    `<Show when={user()}>{(u) => <Greeting name={u().name}>{u().admin ? <Admin /> : <Guest />}</Greeting>}</Show>`,
+    `<Show when={user()} keyed>{(u) => (u.admin ? <Admin /> : <Guest />)}</Show>`,
+    `<Switch><Match when={user()}>{(u) => <Profile name={u().name} />}</Match></Switch>`,
+    `<Switch><Match when={user()} keyed={true}>{(u) => (u.admin ? <Admin /> : <Guest />)}</Match></Switch>`,
     `items.map((item) => (item().hit ? <mark /> : <span />));`,
     // Another function's call, or a call with arguments, is not the accessor.
     `<For each={rows()} keyed={false}>{(row) => (flag() ? <A row={row()} /> : <B />)}</For>`,
@@ -72,5 +82,12 @@ tester.run("tstack/no-once-per-position-read", noOncePerPositionReadRule, {
     },
     { code: `<For each={rows()} keyed={false}>{(row) => row().done && <Done />}</For>`, errors: [error] },
     { code: `<For each={rows()} keyed={false}>{function (row) { return row().text; }}</For>`, errors: [error] },
+    // The index accessor of a list keyed by identity or by a key function: the row's first place.
+    { code: `<For each={rows()}>{(row, i) => (i() === 0 ? <First row={row} /> : <Row row={row} />)}</For>`, errors: [error] },
+    { code: `<For each={rows()} keyed={(r) => r.id}>{(row, i) => { const n = i(); return <Row row={row()} n={n} />; }}</For>`, errors: [error] },
+    // <Show>/<Match>'s narrowed value: the callback is not rerun when `when` moves from one truthy value to another.
+    { code: `<Show when={user()}>{(u) => (u().admin ? <Admin /> : <Guest />)}</Show>`, errors: [error] },
+    { code: `<Show when={user()} keyed={false}>{(u) => { const name = u().name; return <b>{name}</b>; }}</Show>`, errors: [error] },
+    { code: `<Switch><Match when={user()}>{(u) => u().admin && <Admin />}</Match></Switch>`, errors: [error] },
   ],
 });
