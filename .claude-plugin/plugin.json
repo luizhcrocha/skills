@@ -16,6 +16,7 @@
     "./skills/engineering/lang-py",
     "./skills/engineering/lang-go",
     "./skills/engineering/lang-nix",
+    "./skills/engineering/lang-nu",
     "./skills/engineering/lang-rust",
     "./skills/engineering/lang-ts",
     "./skills/engineering/lang-zig",
