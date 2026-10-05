@@ -8,13 +8,13 @@ paths: ["**/*.nu", "**/*.nuon"]
 
 ## Version target
 
-Nushell 0.116.1 is the latest release; Luiz's machines run 0.115.1 (the dotfiles take `nushell` from nixpkgs-unstable, `pkgs/default.nix`). Checked 2026-10-05 ([sources](references/sources.md)). Every rule below was run on 0.115.1. A rule that holds only from 0.116 says so and cites the release note. Write code that runs on both until the machines move; moving them is a dotfiles change under `lang-nix`'s latest-release rule.
+Nushell 0.116.1 is the latest release, and Luiz's machines run it since 2026-10-05: the dotfiles build it from upstream in `pkgs/default.nix` until nixpkgs-unstable carries it, then go back to unstable's. Checked 2026-10-05 ([sources](references/sources.md)). Every rule below was run on 0.115.1 and again on 0.116.1. A rule that changed in 0.116 says so and cites the release note.
 
 Nushell is pre-1.0 and breaks something in most minor releases. A form you remember from training data may be gone: check it with `help <command>` or `nu -n -c '<form>'` before you write it, and read the [Book](https://www.nushell.sh/book/) for the concept.
 
 ## Commands for Luiz
 
-Nushell is Luiz's login shell on Linux and the Mac, so every command handed to him is nushell. Anything run through `$SHELL` (ssh `Match exec`, hooks, `ssh host '…'`) is parsed by nushell too: wrap sh code as `/bin/sh -c '...'`. The bash forms fail like this on 0.115.1:
+Nushell is Luiz's login shell on Linux and the Mac, so every command handed to him is nushell. Anything run through `$SHELL` (ssh `Match exec`, hooks, `ssh host '…'`) is parsed by nushell too: wrap sh code as `/bin/sh -c '...'`. The bash forms fail like this (0.115.1 and 0.116.1):
 
 | bash | in nushell | write |
 |---|---|---|
@@ -30,7 +30,7 @@ Nushell is Luiz's login shell on Linux and the Mac, so every command handed to h
 
 ## Non-negotiables
 
-- **Every external failure is handled where it happens.** A failing external stops a script at a statement (pipefail is on by default since [0.111.0](https://www.nushell.sh/blog/2026-02-28-nushell_v0_111_0.html)), but not everywhere: on 0.115.1, `let x = (^cmd | lines)` and `for l in (^cmd | lines)` carry on with an empty list when `cmd` exits non-zero. Capture an external's output through `complete` and check `exit_code`:
+- **Every external failure is handled where it happens.** A failing external stops a script at a statement (pipefail is on by default since [0.111.0](https://www.nushell.sh/blog/2026-02-28-nushell_v0_111_0.html)), but not everywhere: on 0.115.1 and 0.116.1, `let x = (^cmd | lines)` and `for l in (^cmd | lines)` carry on with an empty list when `cmd` exits non-zero. Capture an external's output through `complete` and check `exit_code`:
 
   ```nu
   let r = (^git rev-parse HEAD | complete)
@@ -64,7 +64,7 @@ Nushell is Luiz's login shell on Linux and the Mac, so every command handed to h
 | job | tool | how |
 |---|---|---|
 | parse | `nu-check` (built in) | `nu -n -c 'nu-check --debug file.nu'` exits 1 on a parse error; plain `nu-check` prints `false` and exits 0, so it is no gate. `--as-module` for a module file |
-| diagnostics | `nu --ide-check` | `nu --ide-check 100 file.nu` prints JSON diagnostics; exits 0 even with errors on 0.115.1, so read the output |
+| diagnostics | `nu --ide-check` | `nu --ide-check 100 file.nu` prints JSON diagnostics; exits 0 even with errors (0.115.1 and 0.116.1), so read the output |
 | LSP | `nu --lsp` | built into `nu` |
 | format | nufmt | pre-1.0, no release; advisory only, never a gate |
 | lint | nu-lint | third party, 1.5.0, built against nu 0.116; advisory only |
@@ -86,9 +86,9 @@ Not usable yet: `use std/testing *` gives the `@test`, `@before-each` and relate
 
 ## Gotchas
 
-- On 0.115.1 a `;` in a list literal silently drops what follows: `[1;2]` is `[1]`. 0.116.0 makes it a parse error ([notes](https://www.nushell.sh/blog/2026-09-26-nushell_v0_116_0.html)). Separate items with spaces, commas or newlines.
-- Nested `try … finally`, and `finally` with `return`, `break` or `continue`, run in the right order only from 0.116.0 (same notes). On 0.115.1 keep `finally` to one level.
-- 0.116.0 changed every custom completer's signature (named `token`, `place`, `buffer` inputs). A completer in the dotfiles breaks on the upgrade.
+- A `;` in a list literal is a parse error since 0.116.0; 0.115.1 silently dropped what follows, `[1;2]` was `[1]` ([notes](https://www.nushell.sh/blog/2026-09-26-nushell_v0_116_0.html)). Separate items with spaces, commas or newlines.
+- Nested `try … finally`, and `finally` with `return`, `break` or `continue`, run in the right order only from 0.116.0 (same notes); code that may still meet 0.115.1 keeps `finally` to one level.
+- 0.116.0 binds a custom completer's inputs by parameter name (`token`, `place`, `buffer`). A completer written `{|spans|}` still runs for one migration cycle; write new ones with `place`. The dotfiles rewrite carapace's completer to `{|place|}` (`modules/init-cache.nu`); fzf's `autoload/_fzf_integration.nu` still wraps it as `{|spans|}`.
 - `job spawn` starts a child of the shell that dies with it; the dotfiles' `spawn-detached` (`modules/proc.nu`) is how a process outlives the shell.
 - `$ans`, `$in`, `$nu`, `$env` are reserved names; `def def` and other keyword names are parse errors.
 - A bare word in command position runs an external of that name; quote strings in scripts.
