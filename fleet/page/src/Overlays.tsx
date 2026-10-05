@@ -649,29 +649,46 @@ export function toolPlace(box: SelBox, w: number, h: number, vw: number, vh: num
 
 /**
  * Where the bar goes on a touch screen. Not by the selection: the phone's own menu hugs the selection and
- * is drawn over the page, so a bar there sits under it. Docked at the bottom of what is on screen (the
- * visual viewport `view`, so pinch-zoom and the keyboard move it along), centred, over the safe area and
- * the page's bottom bars, drawn at the screen's scale. At the top of the screen instead when the bottom
- * meets the selection or the menu's place and the top does not; at the bottom when neither is clear.
+ * is drawn over the page, so a bar there sits under it. Always docked at the bottom of what is on screen
+ * (the visual viewport `view`, so pinch-zoom and the keyboard move it along), where a thumb reaches it,
+ * centred, over the safe area and the page's bottom bars, drawn at the screen's scale. When it would meet
+ * the selection, the page moves instead (`clearScroll`).
  */
-export function toolDock(box: SelBox, w: number, h: number, view: Visual): ToolAt {
+export function toolDock(w: number, h: number, view: Visual): ToolAt {
   const scale = 1 / view.scale;
-  const [bw, bh, gap] = [w * scale, h * scale, GAP * scale];
   const screen = view.top + view.height - view.safeBottom * scale;
-  const bottom = Math.min(screen, view.floor) - gap - bh;
-  const top = view.top + view.safeTop * scale + gap;
-  const meets = (at: number, from: number, to: number): boolean => at < to && from < at + bh;
-  /* Where the menu can be: above the first line, below the last past the handles. */
-  const near = (at: number): boolean => meets(at, box.first.top - MENU * scale, box.last.bottom + (HANDLES + MENU) * scale);
-  /* Where it is: above when it fits under the screen's top, else below (over the page's bars: the OS knows none), else the middle. */
-  const menuAbove = box.first.top - MENU * scale >= view.top + view.safeTop * scale;
-  const menuBelow = box.last.bottom + (HANDLES + MENU) * scale <= screen;
-  const middle = view.top + view.height / 2;
-  const [from, to] = menuAbove ? [box.first.top - MENU * scale, box.first.top] : menuBelow ? [box.last.bottom, box.last.bottom + (HANDLES + MENU) * scale] : [middle - (MENU * scale) / 2, middle + (MENU * scale) / 2];
-  const onMenu = (at: number): boolean => meets(at, from, to);
-  const at = !near(bottom) ? bottom : !near(top) ? top : !onMenu(bottom) ? bottom : !onMenu(top) ? top : bottom;
 
-  return { top: at, left: view.left + Math.max(gap, (view.width - bw) / 2), scale };
+  return { top: Math.min(screen, view.floor) - (GAP + h) * scale, left: view.left + Math.max(GAP * scale, (view.width - w * scale) / 2), scale };
+}
+
+/**
+ * How far to scroll the page so the selection at `box` sits clear over the bar docked at `bar` (its top):
+ * none when nothing meets it; else the least that puts the selection's end 8 px over the bar, or, when the
+ * phone's menu then has no room above the selection and goes below it, the menu's place and the handles
+ * too. A selection taller than the room left keeps its end clear, where the handle and the menu are, and
+ * its start goes off the top.
+ */
+export function clearScroll(box: SelBox, bar: number, view: Visual): number {
+  const scale = 1 / view.scale;
+  const limit = bar - GAP * scale;
+  const below = (HANDLES + MENU) * scale;
+  const menuAbove = (d: number): boolean => box.first.top - d - MENU * scale >= view.top + view.safeTop * scale;
+
+  if (box.last.bottom <= limit && (menuAbove(0) || box.last.bottom + below <= limit)) return 0;
+  const end = Math.max(0, box.last.bottom - limit);
+
+  return menuAbove(end) ? end : Math.max(0, box.last.bottom + below - limit);
+}
+
+/** The element that scrolls `el` on the page: its nearest scrolling ancestor, else the document. */
+function scrollerOf(el: Element | null): Element {
+  for (let at = el?.parentElement ?? null; at; at = at.parentElement) {
+    const y = getComputedStyle(at).overflowY;
+
+    if ((y === "auto" || y === "scroll") && at.scrollHeight > at.clientHeight) return at;
+  }
+
+  return document.scrollingElement ?? document.documentElement;
 }
 
 /** The box of a range: its first line, its last line, and around it all. */
@@ -845,8 +862,14 @@ export function SelTool(): JSX.Element {
   let pressed = false;
   /* Whether a touch made the selection: the last press's pointer, before any press the device's. */
   let touch = matchMedia("(hover: none) and (pointer: coarse)").matches;
-  /* Where the shown selection is, for placing the bar again as the screen moves. */
+  /* Where the shown selection is, for placing the bar again as the screen moves, and what scrolls it. */
   let box: SelBox | null = null;
+  let holder: Element | null = null;
+  /* The scroller the bar moved to clear the selection, while it moves: its scroll is the page's own, not the user's. */
+  let moving: Element | null = null;
+  let movedTimer: ReturnType<typeof setTimeout> | undefined;
+  /* The scroller given room at its end to scroll that far. */
+  let roomed: HTMLElement | null = null;
   const [scale, setScale] = createSignal(1);
   /* The text exactly as selected, for Copy; `picked` holds the excerpt a quote takes. */
   let raw = "";
@@ -857,6 +880,10 @@ export function SelTool(): JSX.Element {
     clearTimeout(settle);
     framePicked = null;
     box = null;
+    holder = null;
+    roomed?.classList.remove("seltool-room");
+    roomed?.style.removeProperty("--seltool-room");
+    roomed = null;
     raw = "";
     setCopied("");
     ui.setPicked(null);
@@ -878,14 +905,49 @@ export function SelTool(): JSX.Element {
     return { ...view, floor: Math.min(Infinity, ...floors), safeTop: parseFloat(style.scrollMarginTop) || 0, safeBottom: parseFloat(style.scrollMarginBottom) || 0 };
   };
 
-  const place = (): void => {
-    if (!tool || !box) return;
-    const at = touch ? toolDock(box, tool.offsetWidth, tool.offsetHeight, visual(tool)) : toolPlace(box, tool.offsetWidth, tool.offsetHeight, innerWidth, innerHeight);
+  /* The bar placed for the selection; where its top went, in the layout viewport. */
+  const place = (): number | null => {
+    if (!tool || !box) return null;
+    const at = touch ? toolDock(tool.offsetWidth, tool.offsetHeight, visual(tool)) : toolPlace(box, tool.offsetWidth, tool.offsetHeight, innerWidth, innerHeight);
     setScale(at.scale ?? 1);
     ui.setToolAt({ top: at.top, left: at.left });
+
+    return at.top;
   };
 
-  function show(text: string, from: string, at: QuoteAt, where: SelBox): void {
+  /* Docked on a touch screen, the selection's scroller moves it clear over the bar, given room at its end when it has too little. */
+  const clear = (bar: number | null): void => {
+    if (!tool || !box || !touch || bar === null) return;
+    const d = clearScroll(box, bar, visual(tool));
+
+    if (d <= 0) return;
+    const el = scrollerOf(holder);
+    const room = d - (el.scrollHeight - el.clientHeight - el.scrollTop);
+
+    const end = el === document.scrollingElement ? document.body : el;
+
+    if (room > 0 && end instanceof HTMLElement) {
+      roomed = end;
+      roomed.classList.add("seltool-room");
+      roomed.style.setProperty("--seltool-room", String(Math.ceil(room)) + "px");
+    }
+
+    /* Its scroll ends at `scrollend`, or (where there is none) a second on. */
+    moving = el;
+    clearTimeout(movedTimer);
+    movedTimer = setTimeout(() => (moving = null), 1000);
+    (el === document.scrollingElement ? document : el).addEventListener(
+      "scrollend",
+      () => {
+        clearTimeout(movedTimer);
+        moving = null;
+      },
+      { once: true },
+    );
+    el.scrollBy({ top: d, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+  };
+
+  function show(text: string, from: string, at: QuoteAt, where: SelBox, inside: Element | null): void {
     if (!text.trim() || !tool) {
       hide();
 
@@ -897,9 +959,10 @@ export function SelTool(): JSX.Element {
     ui.setPicked({ text: Core.excerptOf(text), from, at });
     tool.hidden = false;
     box = where;
+    holder = inside;
     /* Measured with its buttons in: Reply and Side chat show with the picked text. */
     flush();
-    place();
+    clear(place());
   }
 
   /* The page's own selection, once it rests. */
@@ -911,7 +974,8 @@ export function SelTool(): JSX.Element {
     const el = node && (node instanceof Element ? node : node.parentElement);
 
     if (!el || el.closest("textarea, input, .composer, #seltool, .seltool") || !el.closest("#app, #decision, #chat-log")) return;
-    show(sel.toString(), whereOf(m, node), placeOf(m, node), boxOf(sel.getRangeAt(0)));
+    const range = sel.getRangeAt(0);
+    show(sel.toString(), whereOf(m, node), placeOf(m, node), boxOf(range), range.endContainer instanceof Element ? range.endContainer : range.endContainer.parentElement);
   };
 
   const later = (): void => {
@@ -977,7 +1041,7 @@ export function SelTool(): JSX.Element {
 
     touch = byTouch;
     const { top, bottom, left, width } = within(frame, r);
-    show(text, from, at, { first: { top, bottom }, last: { top, bottom }, left, width });
+    show(text, from, at, { first: { top, bottom }, last: { top, bottom }, left, width }, frame);
     framePicked = { fleet };
   };
 
@@ -1006,12 +1070,13 @@ export function SelTool(): JSX.Element {
   /*
    * With a mouse a scroll closes the bar, placed by the selection. Docked on a touch screen it stays and
    * is placed again: the phone scrolls while the handles are dragged, pans a zoomed page, and keeps the
-   * selection and its own menu through a scroll.
+   * selection and its own menu through a scroll. The page's own scroll (`clear`, `moving`) is no user's:
+   * it never closes the bar, and it never scrolls again.
    */
   const onScroll = (): void => {
     if (!ui.picked()) return;
 
-    if (!touch) {
+    if (!touch && !moving) {
       hide();
 
       return;
@@ -1041,6 +1106,7 @@ export function SelTool(): JSX.Element {
   onCleanup(() => {
     globalThis.visualViewport?.removeEventListener("resize", onView);
     globalThis.visualViewport?.removeEventListener("scroll", onView);
+    clearTimeout(movedTimer);
     clearTimeout(settle);
     clearTimeout(copiedTimer);
     document.removeEventListener("selectionchange", onSelection);

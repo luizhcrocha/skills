@@ -229,7 +229,27 @@ test.skipIf(!found)("on a phone the bar docks at the bottom of the screen, centr
   await page.close();
 });
 
-test.skipIf(!found)("on a phone, a selection down by the tab bar puts the bar at the top of the screen", async () => {
+/** Wait until the page has scrolled the selection's end to 8 px or more over the bar; how far above it the end sits. */
+const scrolledClear = async (page: Page): Promise<number> => {
+  await page.waitForFunction(
+    () => {
+      const bar = document.querySelector("#seltool")?.getBoundingClientRect();
+      const end = getSelection()?.rangeCount ? [...(getSelection()?.getRangeAt(0).getClientRects() ?? [])].at(-1) : undefined;
+
+      return bar && end ? end.bottom <= bar.top - 7.5 : false;
+    },
+    { timeout: 3000 },
+  );
+
+  return page.evaluate(() => {
+    const bar = document.querySelector("#seltool")?.getBoundingClientRect();
+    const end = [...(getSelection()?.getRangeAt(0).getClientRects() ?? [])].at(-1);
+
+    return (bar?.top ?? 0) - (end?.bottom ?? 0);
+  });
+};
+
+test.skipIf(!found)("on a phone, a selection down by the tab bar scrolls the page up over the bar; the bar stays docked at the bottom", async () => {
   const page = await open(390, "#decision/a8");
   await page.evaluate(() => {
     const p = document.querySelector<HTMLElement>("#dv-answer .manual-rich > p");
@@ -238,12 +258,33 @@ test.skipIf(!found)("on a phone, a selection down by the tab bar puts the bar at
     /* The paragraph moved down to end 30 px over the tab bar. */
     if (p && r) p.style.marginTop = String(innerHeight - 62 - 30 - r.bottom) + "px";
   });
+  const before = await page.evaluate(() => scrollY);
   await touchSelect(page, "#dv-answer .manual-rich > p");
+  const clear = await scrolledClear(page);
   const got = await docked(page);
 
   expect(got.hidden).toBe(false);
-  expect(got.bar.top).toBeCloseTo(8, 0);
+  expect(got.bar.bottom).toBeCloseTo(got.floor - 8, 0);
+  expect(clear).toBeLessThan(12);
+  expect(await page.evaluate(() => scrollY)).toBeGreaterThan(before);
   expect(await covers(page)).toBe(false);
+  await page.close();
+});
+
+test.skipIf(!found)("on a phone with the chat open, the last message selected scrolls the chat log up over the bar, the bar at the bottom over the composer", async () => {
+  const page = await open(390, "");
+  await page.tap("#chat-toggle");
+  await page.waitForFunction(() => document.documentElement.classList.contains("chat-open"));
+  const text = await touchSelect(page, '#chat-log article[data-id="7"] .msg-text');
+  await scrolledClear(page);
+  const got = await docked(page);
+  const composer = await page.evaluate(() => document.querySelector(".chat .composer")?.getBoundingClientRect().top ?? 0);
+
+  expect(text).toContain("not bold");
+  expect(got.hidden).toBe(false);
+  expect(got.bar.bottom).toBeCloseTo(composer - 8, 0);
+  expect(await covers(page)).toBe(false);
+  expect(await page.evaluate(() => String(getSelection()))).toBe(text);
   await page.close();
 });
 

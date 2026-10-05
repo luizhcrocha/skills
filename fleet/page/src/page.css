@@ -789,6 +789,8 @@
   .ref { font-family: var(--mono, "JetBrains Mono", monospace); font-size: 0.82em; font-weight: 700; color: var(--muted); letter-spacing: 0; }
   /* The scroll margins carry the safe area to the script that docks the bar on a touch screen. */
   .seltool { position: fixed; z-index: 60; transform-origin: 0 0; scroll-margin: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px); display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--text); box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 30%, transparent); }
+  /* Room at the end of the scroller that clears a selection over the docked bar, when it ends too soon. */
+  .seltool-room::after { content: ""; display: block; flex: none; height: var(--seltool-room, 0px); }
   .seltool button { min-height: var(--tap); padding: 0 12px; border: 0; border-radius: 7px; background: none; color: var(--bg); font: inherit; font-weight: 600; font-size: var(--fs-s); cursor: pointer; }
   .seltool button:hover, .seltool button:focus-visible { background: color-mix(in srgb, var(--bg) 18%, transparent); }
   .quote-chip .reply-text { white-space: pre-wrap; max-height: 4.5em; overflow: auto; }
