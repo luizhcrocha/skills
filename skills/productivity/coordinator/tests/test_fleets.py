@@ -349,6 +349,52 @@ class GateTest(unittest.TestCase):
         self.assertEqual(self.cli("gate", "free", "infra").returncode, 0)
         self.assertEqual(self.cli("gate", "take", "ui", "browser tests").returncode, 0)
 
+    def at(self, stamp, *args):
+        env = {**os.environ, "FLEET_NOW": stamp, "TZ": "UTC"}
+        return subprocess.run([sys.executable, str(SCRIPTS / "fleets.py"), *args], capture_output=True, text=True, timeout=20, env=env)
+
+    @staticmethod
+    def token(took):
+        return took.stdout.rsplit("gate free ", 1)[-1].rstrip("`\n")
+
+    def test_a_take_while_held_refuses_by_the_holding_fleet_too(self):
+        self.assertEqual(self.at("2026-10-05T12:00:00+00:00", "gate", "take", "infra", "worker A: just test").returncode, 0)
+        again = self.at("2026-10-05T12:01:00+00:00", "gate", "take", "infra", "worker B: just test")
+        self.assertEqual(again.returncode, 1)
+        self.assertEqual(again.stderr, "fleets: held by infra since 2026-10-05T12:00:00+00:00, until 2026-10-05T13:00:00+00:00: worker A: just test; take it when `fleet fleets gate` says free\n")
+
+    def test_a_release_frees_only_the_hold_its_token_names(self):
+        first = self.at("2026-10-05T12:00:00+00:00", "gate", "take", "infra", "worker A: just test")
+        self.assertRegex(first.stdout, r"^infra holds the gate: worker A: just test\ntoken [0-9a-f]{8}, until 2026-10-05T13:00:00\+00:00: free it with `fleet fleets gate free [0-9a-f]{8}`\n$")
+        a = self.token(first)
+        self.assertEqual(self.at("2026-10-05T12:05:00+00:00", "gate", "free", a).stdout, "free\n")
+        b = self.token(self.at("2026-10-05T12:06:00+00:00", "gate", "take", "infra", "worker B: just test"))
+        self.assertNotEqual(a, b)
+        late = self.at("2026-10-05T12:07:00+00:00", "gate", "free", a)
+        self.assertEqual((late.returncode, late.stderr), (1, f"fleets: held by infra, not {a}\n"))
+        self.assertEqual(self.at("2026-10-05T12:08:00+00:00", "gate", "free", b).returncode, 0)
+
+    def test_a_session_that_serves_no_fleet_takes_it_as_itself(self):
+        took = self.at("2026-10-05T12:00:00+00:00", "gate", "take", "--as", "gate-slot-worker", "just test-changed")
+        self.assertEqual(took.returncode, 0)
+        self.assertEqual(self.at("2026-10-05T12:01:00+00:00", "gate").stdout,
+                         "held by gate-slot-worker (no fleet) since 2026-10-05T12:00:00+00:00, until 2026-10-05T13:00:00+00:00: just test-changed\n")
+        self.assertEqual(self.at("2026-10-05T12:02:00+00:00", "gate", "free", self.token(took)).stdout, "free\n")
+
+    def test_a_hold_lapses_at_its_until(self):
+        self.assertEqual(self.at("2026-10-05T12:00:00+00:00", "gate", "take", "--as", "w1", "suite", "--for", "10").returncode, 0)
+        self.assertIn("held by w1", self.at("2026-10-05T12:09:59+00:00", "gate").stdout)
+        self.assertEqual(self.at("2026-10-05T12:10:00+00:00", "gate").stdout, "free\n")
+
+    def test_two_takes_at_once_one_wins(self):
+        for n in range(5):
+            procs = [subprocess.Popen([sys.executable, str(SCRIPTS / "fleets.py"), "gate", "take", "--as", f"{who}-{n}", "race"],
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for who in ("a", "b")]
+            outs = [(p.wait(timeout=20), p.stdout.read()) for p in procs]
+            won = [out for code, out in outs if code == 0]
+            self.assertEqual(len(won), 1)
+            self.assertEqual(self.cli("gate", "free", self.token(subprocess.CompletedProcess([], 0, won[0], ""))).returncode, 0)
+
 
 class NameTest(unittest.TestCase):
     """A fleet's name drops the number Claude Code puts before a restarted session's name."""

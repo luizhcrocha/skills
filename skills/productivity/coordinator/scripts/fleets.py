@@ -10,9 +10,11 @@
     fleets.py manager           how to reach the manager; exits 1 when there is none
     fleets.py decision FLEET ID what a fleet asks, in full: the question, why, the options, the
                                 recommendation, where its evidence and its page are
-    fleets.py gate [take FLEET WHAT | free FLEET]
+    fleets.py gate [take FLEET|--as NAME WHAT [--for MINUTES] [--wait SECONDS] | free TOKEN]
                                 the machine's one gate slot: a heavy check (a test suite, a build)
-                                runs only while its fleet holds it
+                                runs only while its fleet, or a session --as itself, holds it; a take
+                                while held refuses, the holder's own included, or with --wait waits;
+                                it prints the token that frees it, and lapses after --for (60) minutes
     fleets.py procs             the background processes each fleet's session started, with their age
     fleets.py whose FROM TO     the files a landing moves, by owning fleet (the manager's DIR/owners)
     fleets.py name DIR SESSION  give the fleet its one name: the session's, which the registry, the
@@ -25,11 +27,14 @@ name back. A fleet is known by one name: its
 project's (`acme-billing`) until `name` gives it its session's, which the manager's chat mentions it by. The registry is
 $FLEET_HOME, or fleet-board under $XDG_STATE_HOME (~/.local/state).
 """
+import fcntl
+import hashlib
 import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -519,37 +524,136 @@ def _gate_path() -> Path:
     return home() / "gate" / "gate.json"  # a directory of its own: live() treats every *.json here as a fleet
 
 
+HOLD_MINUTES = 60  # how long a hold lasts when --for does not say: a dead holder frees the slot after this
+GATE_USAGE = "usage: fleet fleets gate | gate take FLEET|--as NAME WHAT [--for MINUTES] [--wait SECONDS] | gate free TOKEN"
+
+
+class _GateLock:
+    """The gate's lock, REGISTRY/gate/gate.lock (the TypeScript fleet's too): a take, a release and a
+    lapsed hold's removal never interleave."""
+
+    def __enter__(self):
+        _gate_path().parent.mkdir(parents=True, exist_ok=True)
+        self.file = open(_gate_path().parent / "gate.lock", "a+")
+        fcntl.flock(self.file, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        self.file.close()
+
+
+def _live_hold(now: datetime) -> dict | None:
+    """The hold in gate.json, or None when there is none or it has lapsed: at its until, or (a fleet's)
+    when the fleet is no longer served."""
+    held = _read(_gate_path())
+    if not held:
+        return None
+    try:
+        until = datetime.fromisoformat(held["until"]) if held.get("until") else None
+    except (TypeError, ValueError):
+        until = None
+    if until is not None and now >= (until if until.tzinfo else until.replace(tzinfo=timezone.utc)):
+        return None
+    if held.get("kind") != "session" and not any(e["id"] == held.get("fleet") for e in live()):
+        return None
+    return held
+
+
 def gate() -> dict | None:
     """Who holds the machine's gate slot (the one heavy check at a time: a test suite under load, a
-    build), or None. A hold whose fleet is no longer served is forgotten."""
-    held = _read(_gate_path())
-    if held and any(e["id"] == held.get("fleet") for e in live()):
+    build), or None. A hold lapses at its until, and a fleet's when the fleet is no longer served; a
+    lapsed hold is removed."""
+    held = _live_hold(clock.now())
+    if held is not None or not _gate_path().exists():
         return held
-    _gate_path().unlink(missing_ok=True)
-    return None
+    with _GateLock():
+        held = _live_hold(clock.now())
+        if held is None:
+            _gate_path().unlink(missing_ok=True)
+        return held
+
+
+def _held_text(held: dict) -> str:
+    who = f"{held['fleet']} (no fleet)" if held.get("kind") == "session" else held["fleet"]
+    until = f", until {held['until']}" if held.get("until") else ""
+    return f"held by {who} since {held['since']}{until}: {held['what']}"
+
+
+def _take(name: str, kind: str, what: str, minutes: int) -> tuple[dict | None, dict | None]:
+    """(the hold made, None), or (None, the hold in the way): a take while held refuses, its own holder's too."""
+    with _GateLock():
+        now = clock.now()
+        held = _live_hold(now)
+        if held is not None:
+            return None, held
+        since = now.astimezone().isoformat(timespec="seconds")
+        took = {"fleet": name, "kind": kind, "what": what, "since": since,
+                "until": (now + timedelta(minutes=minutes)).astimezone().isoformat(timespec="seconds"),
+                "token": hashlib.sha256(f"{name}\n{what}\n{since}".encode()).hexdigest()[:8]}
+        scratch = _gate_path().with_suffix(".tmp")
+        scratch.write_text(json.dumps(took))
+        os.replace(scratch, _gate_path())
+        return took, None
+
+
+def _take_args(argv: list[str]) -> tuple[str, str, str, int, int] | None:
+    """gate take's arguments, FLEET WHAT or --as NAME WHAT, then --for MINUTES, --wait SECONDS:
+    (name, kind, what, minutes, wait), or None."""
+    words, as_, minutes, wait = [], None, HOLD_MINUTES, 0
+    i = 0
+    while i < len(argv):
+        if argv[i] in ("--as", "--for", "--wait"):
+            if i + 1 >= len(argv):
+                return None
+            value = argv[i + 1]
+            if argv[i] == "--as":
+                as_ = value.strip()
+            elif argv[i] == "--for":
+                minutes = int(value) if re.fullmatch(r"[0-9]+", value) else 0
+            else:
+                wait = int(value) if re.fullmatch(r"[0-9]+", value) else -1
+            i += 2
+        else:
+            words.append(argv[i])
+            i += 1
+    if minutes <= 0 or wait < 0 or as_ == "":
+        return None
+    if as_ is not None:
+        return (as_, "session", words[0], minutes, wait) if len(words) == 1 else None
+    return (words[0], "fleet", words[1], minutes, wait) if len(words) == 2 else None
 
 
 def cmd_gate(argv: list[str]) -> None:
-    """gate | gate take FLEET WHAT | gate free FLEET"""
-    held = gate()
+    """gate | gate take FLEET|--as NAME WHAT [--for MINUTES] [--wait SECONDS] | gate free TOKEN"""
     if not argv:
-        print(f"held by {held['fleet']} since {held['since']}: {held['what']}" if held else "free")
+        held = gate()
+        print(_held_text(held) if held else "free")
         return
-    if argv[0] == "take" and len(argv) == 3:
-        if held and held["fleet"] != argv[1]:
-            fail(f"held by {held['fleet']} since {held['since']}: {held['what']}; take it when `fleet fleets gate` says free")
-        if not any(e["id"] == argv[1] for e in live()):
-            fail(f"no fleet '{argv[1]}' is being served")
-        _gate_path().parent.mkdir(parents=True, exist_ok=True)
-        _gate_path().write_text(json.dumps({"fleet": argv[1], "what": argv[2], "since": clock.stamp()}))
-        print(f"{argv[1]} holds the gate: {argv[2]}")
+    if argv[0] == "take":
+        args = _take_args(argv[1:])
+        if args is None:
+            fail(GATE_USAGE)
+        name, kind, what, minutes, wait = args
+        if kind == "fleet" and not any(e["id"] == name for e in live()):
+            fail(f"no fleet '{name}' is being served")
+        deadline = time.monotonic() + wait
+        took, held = _take(name, kind, what, minutes)
+        while took is None and time.monotonic() < deadline:
+            time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+            took, held = _take(name, kind, what, minutes)
+        if took is None:
+            fail(f"{_held_text(held)}; take it when `fleet fleets gate` says free")
+        print(f"{name} holds the gate: {what}")
+        print(f"token {took['token']}, until {took['until']}: free it with `fleet fleets gate free {took['token']}`")
     elif argv[0] == "free" and len(argv) == 2:
-        if held and held["fleet"] != argv[1]:
-            fail(f"held by {held['fleet']}, not {argv[1]}")
-        _gate_path().unlink(missing_ok=True)
+        with _GateLock():
+            held = _live_hold(clock.now())
+            if held and argv[1] not in (held.get("token"), held.get("fleet")):
+                fail(f"held by {held['fleet']}, not {argv[1]}")
+            _gate_path().unlink(missing_ok=True)
         print("free")
     else:
-        fail("usage: fleet fleets gate | gate take FLEET WHAT | gate free FLEET")
+        fail(GATE_USAGE)
 
 
 def processes(root) -> list[dict]:
@@ -676,7 +780,7 @@ def main(argv: list[str]) -> None:
             fail(entry)
         print(f"this fleet is {entry['id']}, the session {entry['session']}: use that one name everywhere")
     else:
-        fail("usage: fleet fleets list | waiting | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET WHAT | free FLEET] | procs | whose FROM TO")
+        fail("usage: fleet fleets list | waiting | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET|--as NAME WHAT | free TOKEN] | procs | whose FROM TO")
 
 
 if __name__ == "__main__":

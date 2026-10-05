@@ -10,7 +10,6 @@ import * as Effect from "effect/Effect";
 import { listening, oneLine } from "../chat/chat.ts";
 import { firstLine } from "../chat/news.ts";
 import { readChat } from "../chat/store.ts";
-import { stampOf } from "../clock.ts";
 import { Refusal } from "../errors.ts";
 import { exists, readText } from "../files.ts";
 import { answeredAt, silentWorkers } from "../health.ts";
@@ -19,13 +18,13 @@ import { asArray, asNumber, asObject, asString, pyRepr, truthy, type Json, type 
 import { decodeLedger } from "../ledger/model.ts";
 import { find, number } from "../ledger/numbers.ts";
 import { processes } from "../procs.ts";
-import { stateOf } from "../registry.ts";
+import { stateOf, type GateHolder } from "../registry.ts";
 import { activeAt, spentBy } from "../transcripts.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 
 const USAGE =
-  "usage: fleet fleets list | waiting | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET WHAT | free FLEET] | procs | whose FROM TO";
+  "usage: fleet fleets list | waiting | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET|--as NAME WHAT | free TOKEN] | procs | whose FROM TO";
 
 function fail(reason: string): Effect.Effect<never, Refusal> {
   return Effect.fail(new Refusal({ speaker: "fleets", reason }));
@@ -293,35 +292,91 @@ function decision(machine: Machine, fleet: string, id: string): Effect.Effect<vo
 }
 
 function heldText(held: JsonObject): string {
-  return `held by ${str(held["fleet"])} since ${str(held["since"])}: ${str(held["what"])}`;
+  const who = held["kind"] === "session" ? `${str(held["fleet"])} (no fleet)` : str(held["fleet"]);
+  const until = truthy(held["until"]) ? `, until ${str(held["until"])}` : "";
+
+  return `held by ${who} since ${str(held["since"])}${until}: ${str(held["what"])}`;
+}
+
+const GATE_USAGE = "usage: fleet fleets gate | gate take FLEET|--as NAME WHAT [--for MINUTES] [--wait SECONDS] | gate free TOKEN";
+
+/** How long a hold lasts when `--for` does not say: a dead holder frees the slot after this. */
+const HOLD_MINUTES = 60;
+
+interface Take {
+  readonly holder: GateHolder;
+  readonly what: string;
+  readonly minutes: number;
+  readonly waitS: number;
+}
+
+/** `gate take`'s arguments: `FLEET WHAT` or `--as NAME WHAT`, then `--for MINUTES` and `--wait SECONDS`. */
+function takeArgs(argv: readonly string[]): Take | undefined {
+  const words: string[] = [];
+  let as: string | undefined;
+  let minutes = HOLD_MINUTES;
+  let waitS = 0;
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const word = argv[i] ?? "";
+    const value = argv[i + 1];
+
+    if (word === "--as" || word === "--for" || word === "--wait") {
+      if (value === undefined) return undefined;
+      i += 1;
+
+      if (word === "--as") as = value.trim();
+      else if (word === "--for") minutes = /^[0-9]+$/.test(value) ? Number(value) : 0;
+      else waitS = /^[0-9]+$/.test(value) ? Number(value) : -1;
+    } else {
+      words.push(word);
+    }
+  }
+
+  if (minutes <= 0 || waitS < 0 || as === "") return undefined;
+
+  if (as !== undefined) return words.length === 1 ? { holder: { name: as, kind: "session" }, what: words[0] ?? "", minutes, waitS } : undefined;
+
+  return words.length === 2 ? { holder: { name: words[0] ?? "", kind: "fleet" }, what: words[1] ?? "", minutes, waitS } : undefined;
 }
 
 function gate(machine: Machine, argv: readonly string[]): Effect.Effect<void, Refusal, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
     const registry = machine.registry;
-    const held = registry.gate();
+    const [what, key] = argv;
 
     if (argv.length === 0) {
+      const held = registry.gate(machine.now());
       out.out(`${held === undefined ? "free" : heldText(held)}\n`);
+    } else if (what === "take") {
+      const take = takeArgs(argv.slice(1));
 
-      return;
-    }
+      if (take === undefined) return yield* fail(GATE_USAGE);
 
-    const [what, fleet = "", reason = ""] = argv;
+      if (take.holder.kind === "fleet" && !registry.live().some((e) => e.id === take.holder.name)) {
+        return yield* fail(`no fleet '${take.holder.name}' is being served`);
+      }
 
-    if (what === "take" && argv.length === 3) {
-      if (held !== undefined && held["fleet"] !== fleet) return yield* fail(`${heldText(held)}; take it when \`fleet fleets gate\` says free`);
+      const deadline = Date.now() + take.waitS * 1000;
+      let result = registry.takeGate(take.holder, take.what, machine.now(), take.minutes);
 
-      if (!registry.live().some((e) => e.id === fleet)) return yield* fail(`no fleet '${fleet}' is being served`);
-      registry.takeGate(fleet, reason, stampOf(machine.now()));
-      out.out(`${fleet} holds the gate: ${reason}\n`);
-    } else if (what === "free" && argv.length === 2) {
-      if (held !== undefined && held["fleet"] !== fleet) return yield* fail(`held by ${str(held["fleet"])}, not ${fleet}`);
-      registry.freeGate();
+      while ("held" in result && Date.now() < deadline) {
+        Bun.sleepSync(Math.min(1000, Math.max(0, deadline - Date.now())));
+        result = registry.takeGate(take.holder, take.what, machine.now(), take.minutes);
+      }
+
+      if ("held" in result) return yield* fail(`${heldText(result.held)}; take it when \`fleet fleets gate\` says free`);
+      const token = str(result.took["token"]);
+      out.out(`${take.holder.name} holds the gate: ${take.what}\n`);
+      out.out(`token ${token}, until ${str(result.took["until"])}: free it with \`fleet fleets gate free ${token}\`\n`);
+    } else if (what === "free" && key !== undefined && argv.length === 2) {
+      const result = registry.freeGate(key, machine.now());
+
+      if ("held" in result) return yield* fail(`held by ${str(result.held["fleet"])}, not ${key}`);
       out.out("free\n");
     } else {
-      return yield* fail("usage: fleet fleets gate | gate take FLEET WHAT | gate free FLEET");
+      return yield* fail(GATE_USAGE);
     }
   });
 }

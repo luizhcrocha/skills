@@ -23,6 +23,15 @@
 {"cli": "fleets", "argv": ["gate", "free", "manager"]}
 {"cli": "fleets", "argv": ["gate", "free", "acme-billing"]}
 {"cli": "fleets", "argv": ["gate", "take", "nobody", "x"]}
+{"cli": "fleets", "argv": ["gate", "take", "acme-billing", "worker A: the full suite"]}
+{"cli": "fleets", "argv": ["gate", "take", "acme-billing", "worker B: the full suite"]}
+{"cli": "fleets", "argv": ["gate", "take", "--as", "gate-slot-worker", "just test-changed"]}
+{"cli": "fleets", "argv": ["gate", "free", "00000000"]}
+{"cli": "fleets", "argv": ["gate", "free", "7c5064d3"]}
+{"cli": "fleets", "argv": ["gate", "take", "--as", "gate-slot-worker", "just test-changed", "--for", "5"]}
+{"cli": "fleets", "argv": ["gate"]}
+{"cli": "fleets", "argv": ["gate"], "clock": "2026-01-05T09:25:00+00:00"}
+{"cli": "fleets", "argv": ["gate", "take", "--as", "", "x"]}
 {"cli": "fleets", "argv": ["name", "$DIR", "Acme Billing (usage)"]}
 {"cli": "fleets", "argv": ["name", "$DIR", "coordinator"]}
 {"cli": "fleets", "argv": ["name", "$W/elsewhere", "x"]}

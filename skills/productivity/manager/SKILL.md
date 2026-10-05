@@ -92,7 +92,7 @@ A fleet's name is its session's: the registry reads it from the session's title,
 
 ## The machine
 
-- **One heavy check at a time.** `fleet fleets gate` says who holds the gate slot; a fleet takes it before a test suite or a build that loads the machine, and frees it after. Your page shows the holder. Settle a dispute over it as you settle a turn.
+- **One heavy check at a time.** `fleet fleets gate` says who holds the gate slot. Before a test suite or a build that loads the machine, a coordinator or worker takes the slot with `fleet fleets gate take <fleet> "what" --wait 1800` (`--as <its name>` when it serves no fleet) and frees it after with the token the take printed (`fleet fleets gate free <token>`). Checking that the slot is free does not reserve it. A take refuses while the slot is held, even from the holding fleet, and a hold lapses after 60 minutes (`--for MINUTES`). Your page shows the holder. Settle a dispute over it as you settle a turn.
 - **What each session left running.** `fleet fleets procs` lists, per fleet, the background processes its session started, with their age. One that outlived its purpose is its session's to stop: tell it.
 - **Where the user goes.** Your Links view lists every fleet's pages and dev servers, and every port the machine serves that no link names, with the fleet that started it. One left unnamed goes back to that fleet to record (`link`) or to stop.
 - **Whose files a landing moves.** `fleet fleets whose FROM TO`, in the repository, sorts the files by owning fleet from `<dir>/owners` (one `FLEET GLOB` per line, first match wins; keep it with the owners in `standing.md`).

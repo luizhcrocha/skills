@@ -1,17 +1,21 @@
 /**
  * The registry of the fleets served on this machine (Python's `fleets.py`): `REGISTRY/<fleet>.json` per
- * fleet, `REGISTRY/gate/gate.json` for the one gate slot. Every read (`live`) forgets a fleet whose
+ * fleet, `REGISTRY/gate/gate.json` for the one gate slot (taken and freed under `gate.lock`). Every read (`live`) forgets a fleet whose
  * server died or whose entry is malformed, and renames one whose session got a title (open-25). A
  * forgotten fleet's last entry stays in `REGISTRY/names/<fleet>.json` until its dir is served again,
  * so a restarted session (`claude respawn`: a new pid, the same session id) gets its name back.
  * Entries are written atomically, in Python's format (indent 2, ASCII escapes).
  */
+import { createHash } from "node:crypto";
+import { closeSync, openSync } from "node:fs";
 import { join } from "node:path";
 
 import * as Option from "effect/Option";
 
-import { isDir, listDir, makeDirs, readText, remove, resolvePath, writeAtomic, writeText } from "./files.ts";
+import { stampOf, parseInstant } from "./clock.ts";
+import { exists, isDir, listDir, makeDirs, readText, remove, resolvePath, writeAtomic } from "./files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject } from "./json.ts";
+import { withExclusiveLock } from "./lock.ts";
 import { transcriptOf } from "./transcripts.ts";
 
 /** The names the chat keeps for itself. */
@@ -399,26 +403,92 @@ export class Registry {
     return join(this.place.home, "gate", "gate.json");
   }
 
-  /** Who holds the gate slot, or undefined; a hold by a fleet no longer served is forgotten. */
-  gate(): JsonObject | undefined {
+  /** Run `body` under the gate's lock (`REGISTRY/gate/gate.lock`, the one Python's `fcntl.flock` takes),
+   * so a take, a release and a lapsed hold's removal never interleave. */
+  private underGateLock<T>(body: () => T): T {
+    makeDirs(join(this.place.home, "gate"));
+    const fd = openSync(join(this.place.home, "gate", "gate.lock"), "a+");
+
+    try {
+      return withExclusiveLock(fd, body);
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  /** The hold in gate.json, or undefined when there is none or it has lapsed at `now`. */
+  private liveHold(now: Date): JsonObject | undefined {
     const held = readObject(this.gatePath());
 
-    if (held !== undefined && this.live().some((e) => e.id === held["fleet"])) return held;
-    remove(this.gatePath());
+    if (held === undefined) return undefined;
+    const until = parseInstant(asString(held["until"]) ?? "");
 
-    return undefined;
+    if (until !== undefined && now.getTime() >= until) return undefined;
+
+    if (held["kind"] !== "session" && !this.live().some((e) => e.id === held["fleet"])) return undefined;
+
+    return held;
   }
 
-  /** `fleet` takes the gate for `what`. */
-  takeGate(fleet: string, what: string, stamp: string): void {
-    makeDirs(join(this.place.home, "gate"));
-    writeText(this.gatePath(), dumps({ fleet, what, since: stamp }));
+  /** Who holds the gate slot at `now`, or undefined. A hold lapses at its `until`, and a fleet's hold
+   * when the fleet is no longer served; a lapsed hold is removed. */
+  gate(now: Date): JsonObject | undefined {
+    const held = this.liveHold(now);
+
+    if (held !== undefined || !exists(this.gatePath())) return held;
+
+    return this.underGateLock(() => {
+      const again = this.liveHold(now);
+
+      if (again === undefined) remove(this.gatePath());
+
+      return again;
+    });
   }
 
-  /** The gate is free again. */
-  freeGate(): void {
-    remove(this.gatePath());
+  /** `holder` takes the gate for `what` until `minutes` after `now`, unless someone holds it, itself
+   * included: the hold it made, or the one in its way. */
+  takeGate(holder: GateHolder, what: string, now: Date, minutes: number): { readonly took: JsonObject } | { readonly held: JsonObject } {
+    return this.underGateLock(() => {
+      const held = this.liveHold(now);
+
+      if (held !== undefined) return { held };
+      const since = stampOf(now);
+      const token = createHash("sha256").update(`${holder.name}\n${what}\n${since}`).digest("hex").slice(0, 8);
+
+      const took: JsonObject = {
+        fleet: holder.name,
+        kind: holder.kind,
+        what,
+        since,
+        until: stampOf(new Date(now.getTime() + minutes * 60_000)),
+        token,
+      };
+
+      writeAtomic(this.gatePath(), dumps(took));
+
+      return { took };
+    });
   }
+
+  /** Free the hold `key` names, by its token or (as before tokens) its holder's name; a hold someone
+   * else took stays. */
+  freeGate(key: string, now: Date): { readonly freed: true } | { readonly held: JsonObject } {
+    return this.underGateLock(() => {
+      const held = this.liveHold(now);
+
+      if (held !== undefined && held["token"] !== key && held["fleet"] !== key) return { held };
+      remove(this.gatePath());
+
+      return { freed: true };
+    });
+  }
+}
+
+/** Who takes the gate: a served fleet, or a session or worker by the name it gives (`--as`). */
+export interface GateHolder {
+  readonly name: string;
+  readonly kind: "fleet" | "session";
 }
 
 /** The state.json of `entry`'s fleet, or undefined. */

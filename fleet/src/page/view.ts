@@ -347,7 +347,7 @@ export function view(machine: Machine, lookups: Lookups, given: JsonObject, root
       ...state,
       coordinators: others.map((e) => summary(machine, lookups, e)),
       usage: readUsage(registry.place.home) ?? null,
-      gate: registry.gate() ?? null,
+      gate: registry.gate(machine.now()) ?? null,
       links,
       found: foundJson(unlisted(lookups.discovered(), links)),
     };

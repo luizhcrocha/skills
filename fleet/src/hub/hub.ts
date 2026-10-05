@@ -405,7 +405,7 @@ export class Hub {
     return {
       machines: [{ name: here, here: true, fleets: local }, ...peers],
       usage: readUsage(registry.place.home) ?? null,
-      gate: registry.gate() ?? null,
+      gate: registry.gate(this.options.machine.now()) ?? null,
       found: this.served.latest().map((x) => ({ ...x })),
     };
   }

@@ -548,7 +548,11 @@ then a rename). `session` is the session's title; `session_id` its Claude Code s
 sets it for every command a session runs), else from DIR's scratchpad path (`…/<project>/<session>/scratchpad/<name>`),
 else the fleet's last entry's; null when none says. `aliases` are the fleet's earlier ids: every rename
 (a title, `name`, a dropped session number) keeps the old id there, and the hub answers `/f/<alias>/` with
-a 301 to the fleet's address. `REGISTRY/gate/gate.json` is `{fleet, what, since}`. `REGISTRY/usage/reading.json`
+a 301 to the fleet's address. `REGISTRY/gate/gate.json` is `{fleet, kind, what, since, until, token}`: `fleet` the holder's name (a
+served fleet, or with `kind: "session"` the name a session or worker gave with `--as`), `until` when the hold
+lapses, `token` the one `gate free` takes (the first 8 hex digits of the SHA-256 of `fleet\nwhat\nsince`). A
+file without `kind` or `until` (written before them) is a fleet's hold that lapses only with its fleet.
+Every take, release and removal of a lapsed hold runs under an exclusive `flock` of `REGISTRY/gate/gate.lock`. `REGISTRY/usage/reading.json`
 holds the plan usage per account, `{"accounts": {KEY: {email, seen, five_hour?, seven_day?}}}` (see usage.py). Every read of the registry (`live()`) deletes the entry of a fleet whose
 pid is dead or whose record is malformed; a dead one's entry is kept as `REGISTRY/names/<fleet>.json` (one
 per dir: a newer one for the same dir replaces it), so the fleet gets its name back when it is served again.
@@ -582,9 +586,9 @@ the inputs that page has; `held` and `held_at` are there only on a held decision
 | `show FLEET` | now (with when it was said), chat, live workers with their last report (and `silent since HH:MM: check it before saying it runs` under a silent one), open decisions (and `held by the fleet since HH:MM: <reason>`, and an answer not recorded), open roadblocks, the last 8 events | 1 unknown fleet |
 | `manager` | `manager  session …  <url>  <dir>` and where `standing.md` is | 1 when none |
 | `decision FLEET ID` | the decision in full; the page as `<url>#decision/<id>` | 1 unknown fleet or decision |
-| `gate` | `free` or `held by <fleet> since <stamp>: <what>` (a hold by a fleet no longer served is forgotten) | 0 |
-| `gate take FLEET WHAT` | `<fleet> holds the gate: <what>` | 1 held by another, or FLEET not served |
-| `gate free FLEET` | `free` | 1 held by another |
+| `gate` | `free` or `held by <holder>[ (no fleet)] since <stamp>[, until <stamp>]: <what>` (a hold lapses at its `until`, and a fleet's when the fleet is no longer served; a lapsed hold is removed) | 0 |
+| `gate take FLEET\|--as NAME WHAT [--for MINUTES] [--wait SECONDS]` | `<holder> holds the gate: <what>`, then a line with the token and the `until`, naming the `gate free <token>` that frees it; `--for` (default 60) sets when the hold lapses, `--wait` retries each second until the slot is free | 1 held (by anyone, the same fleet included; the refusal names the holder, its label, since and until), FLEET not served, or a bad argument |
+| `gate free TOKEN` | `free`; the holder's name in place of the token frees it too, as before tokens | 1 held by another |
 | `name DIR SESSION` | `this fleet is <id>, the session <session>: use that one name everywhere`; renames the entry | 1 not served, reserved, or taken |
 | `procs` | background processes each fleet's session started (by `/proc`, real time) | 0 |
 | `whose FROM TO` | the files `jj diff --from FROM --to TO` moves, by owning fleet, from the manager's `DIR/owners` (`FLEET GLOB` per line, first match wins) | 1 no owners file, jj failed |
@@ -1372,7 +1376,7 @@ recommendation attached.
 | `chat say` | `DIR/chat.jsonl` (created on first message) |
 | `chat watch` | `DIR/watch-WHO.pid`, `.cursor`, `.left`, `watch-coordinator.told`, `watch-manager.told`, and with `--fleets` `watch-manager.fleets.json` |
 | any reader of the registry (`fleets.py`, a manager's `chat.py`/`state.py`, the render) | deletes dead `REGISTRY/*.json`, renames entries after a session title |
-| `fleets.py gate take/free`, `name` | `REGISTRY/gate/gate.json`, `REGISTRY/<fleet>.json` |
+| `fleets.py gate take/free`, `name` | `REGISTRY/gate/gate.json` (under `REGISTRY/gate/gate.lock`), `REGISTRY/<fleet>.json` |
 | `serve_dashboard.py` | `DIR/server.json`, `DIR/server.log`, `REGISTRY/<fleet>.json` |
 | `fleet serve` | `REGISTRY/<fleet>.json` (removed with `--stop`) |
 | `fleet hub` | `REGISTRY/hub/hub.json` while it runs; `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, `<root>/.claude/settings.local.json` (and its folder) and `DIR/grants.jsonl` |

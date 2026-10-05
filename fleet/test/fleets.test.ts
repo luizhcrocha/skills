@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
 import { fleetsNamed } from "../src/cli/run.ts";
 import type { Registry } from "../src/registry.ts";
-import { baseEnv, fleet, machine, now, readJson, tmp, type Environment, type Ran } from "./support.ts";
+import { baseEnv, fleet, FLEET, machine, now, readJson, tmp, type Environment, type Ran } from "./support.ts";
 
 let base: string;
 
@@ -373,6 +373,91 @@ describe("the gate", () => {
     expect(cli("gate", "free", "ui").code).toBe(1);
     expect(cli("gate", "free", "infra").code).toBe(0);
     expect(cli("gate", "take", "ui", "browser tests").code).toBe(0);
+  });
+
+  /** `fleet fleets ARGS` at the instant `at`. */
+  function cliAt(at: string, ...args: string[]): Ran {
+    return fleet(["fleets", ...args], { ...env, FLEET_NOW: at, TZ: "UTC" });
+  }
+
+  /** The token a take printed. */
+  function tokenOf(took: Ran): string {
+    return /fleet fleets gate free (\S+)`/.exec(took.stdout)?.[1] ?? "";
+  }
+
+  test("a take while the slot is held refuses, by the fleet that holds it too", () => {
+    expect(cliAt("2026-10-05T12:00:00+00:00", "gate", "take", "infra", "worker A: just test").code).toBe(0);
+    const again = cliAt("2026-10-05T12:01:00+00:00", "gate", "take", "infra", "worker B: just test");
+    expect(again.code).toBe(1);
+    expect(again.stderr).toBe(
+      "fleets: held by infra since 2026-10-05T12:00:00+00:00, until 2026-10-05T13:00:00+00:00: worker A: just test; take it when `fleet fleets gate` says free\n",
+    );
+    expect(cliAt("2026-10-05T12:01:00+00:00", "gate").stdout).toBe("held by infra since 2026-10-05T12:00:00+00:00, until 2026-10-05T13:00:00+00:00: worker A: just test\n");
+  });
+
+  test("a take prints the token that frees it, and a release frees only the hold it names", () => {
+    const first = cliAt("2026-10-05T12:00:00+00:00", "gate", "take", "infra", "worker A: just test");
+    expect(first.stdout).toMatch(/^infra holds the gate: worker A: just test\ntoken [0-9a-f]{8}, until 2026-10-05T13:00:00\+00:00: free it with `fleet fleets gate free [0-9a-f]{8}`\n$/);
+    const a = tokenOf(first);
+    expect(cliAt("2026-10-05T12:05:00+00:00", "gate", "free", a).stdout).toBe("free\n");
+    const b = tokenOf(cliAt("2026-10-05T12:06:00+00:00", "gate", "take", "infra", "worker B: just test"));
+    expect(b).not.toBe(a);
+    const late = cliAt("2026-10-05T12:07:00+00:00", "gate", "free", a);
+    expect(late.code).toBe(1);
+    expect(late.stderr).toBe(`fleets: held by infra, not ${a}\n`);
+    expect(cliAt("2026-10-05T12:07:00+00:00", "gate").stdout).toContain("worker B: just test");
+    expect(cliAt("2026-10-05T12:08:00+00:00", "gate", "free", b).code).toBe(0);
+  });
+
+  test("a session that serves no fleet takes the slot under its own name", () => {
+    const took = cliAt("2026-10-05T12:00:00+00:00", "gate", "take", "--as", "gate-slot-worker", "just test-changed");
+    expect(took.code).toBe(0);
+    expect(took.stdout.split("\n")[0]).toBe("gate-slot-worker holds the gate: just test-changed");
+    expect(cliAt("2026-10-05T12:01:00+00:00", "gate").stdout).toBe(
+      "held by gate-slot-worker (no fleet) since 2026-10-05T12:00:00+00:00, until 2026-10-05T13:00:00+00:00: just test-changed\n",
+    );
+    expect(cliAt("2026-10-05T12:01:00+00:00", "gate", "take", "ui", "browser tests").stderr).toContain("held by gate-slot-worker (no fleet)");
+    expect(cliAt("2026-10-05T12:02:00+00:00", "gate", "free", tokenOf(took)).stdout).toBe("free\n");
+  });
+
+  test("a hold lapses at its until, so a dead holder does not lock the slot", () => {
+    expect(cliAt("2026-10-05T12:00:00+00:00", "gate", "take", "--as", "w1", "suite", "--for", "10").code).toBe(0);
+    expect(cliAt("2026-10-05T12:09:59+00:00", "gate").stdout).toContain("held by w1");
+    expect(cliAt("2026-10-05T12:10:00+00:00", "gate").stdout).toBe("free\n");
+    expect(cliAt("2026-10-05T12:10:00+00:00", "gate", "take", "ui", "browser tests").code).toBe(0);
+  });
+
+  test("the old release by the holder's name still frees its hold", () => {
+    expect(cli("gate", "take", "infra", "suite").code).toBe(0);
+    expect(cli("gate", "free", "infra").stdout).toBe("free\n");
+  });
+
+  test("two takes at once: exactly one wins", async () => {
+    for (let round = 0; round < 10; round += 1) {
+      const takers = ["infra", "ui"].map((holder) =>
+        Bun.spawn([FLEET, "fleets", "gate", "take", "--as", `${holder}-${round}`, "race"], { env, stdout: "pipe", stderr: "pipe" }),
+      );
+
+      const codes = await Promise.all(takers.map(async (p) => p.exited));
+      expect(codes.filter((c) => c === 0).length).toBe(1);
+      const winner = takers[codes.indexOf(0)];
+      const said = winner === undefined ? "" : await new Response(winner.stdout).text();
+      expect(said.split(" ")[0]).toBe(String(readJson(join(base, "registry", "gate", "gate.json"))["fleet"]));
+      expect(cli("gate", "free", tokenOf({ code: 0, stdout: said, stderr: "" })).code).toBe(0);
+    }
+  });
+
+  test("--wait takes the slot as soon as it is free", async () => {
+    const held = tokenOf(cli("gate", "take", "infra", "suite"));
+    const waiter = Bun.spawn([FLEET, "fleets", "gate", "take", "--as", "w2", "next suite", "--wait", "20"], { env, stdout: "pipe", stderr: "pipe" });
+    Bun.sleepSync(1500);
+    expect(cli("gate").stdout).toContain("held by infra");
+    expect(cli("gate", "free", held).code).toBe(0);
+    expect(await waiter.exited).toBe(0);
+    expect(cli("gate").stdout).toContain("held by w2 (no fleet)");
+    const timedOut = cli("gate", "take", "ui", "browser tests", "--wait", "1");
+    expect(timedOut.code).toBe(1);
+    expect(timedOut.stderr).toContain("held by w2 (no fleet)");
   });
 });
 

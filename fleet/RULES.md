@@ -89,7 +89,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | D2 | D, publish | Serve once per session; `--stop` when it ends | mech | registry | warn | later: a `set --status done` reminder reads the registry, whose stderr the Python oracle would have to match |
 | D3 | D | `--no-render` for a run of commands, the last one renders | judg (perf) | | | prose |
 | D4 | D | Park live rows of a paused or done fleet | mech | statuses | warn | code (stage 2) |
-| D5 | D | Take the gate before a heavy check, free it after | mech (held) | gate.json | refuse | code (`gate take` refuses while held) |
+| D5 | D | Take the gate before a heavy check, free it after | mech (held) | gate.json | refuse | code (`gate take` refuses while held, by its own holder too; `free` takes the take's token; a hold lapses at `until`) |
 | D6 | D, chat | Arm the watch after serving; re-arm after each wake | mech | watch pid, cursor | warn | code (the `chat:` warning on every state command) |
 | D7 | D, usage | settings.json is the user's: give the line, change it on their word | judg | | | prose |
 | B1 | B | Standards (deep modules, CONTEXT.md terms, ADRs, lang-ts) | judg | | | prose |
