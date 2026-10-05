@@ -163,32 +163,122 @@ test.skipIf(!found)("Escape and a scroll close the bar", async () => {
   await page.close();
 });
 
-test.skipIf(!found)("on a phone the bar sits below the selection, clear of its handles, inside the viewport", async () => {
-  const page = await open(390, "#decision/a8");
-
-  const got = await page.evaluate(async () => {
-    const p = document.querySelector("#dv-answer .manual-rich > p");
+/** Select `selector`'s text as a finger leaves it (a touch press, the selection, the release); the selection's text. */
+const touchSelect = (page: Page, selector: string): Promise<string> =>
+  page.evaluate(async (sel: string) => {
+    const el = document.querySelector(sel);
     const range = document.createRange();
 
-    if (p?.firstChild) range.selectNodeContents(p);
+    if (el) range.selectNodeContents(el);
     const opts = { bubbles: true, pointerType: "touch", button: 0, isPrimary: true };
-    p?.dispatchEvent(new PointerEvent("pointerdown", opts));
+    el?.dispatchEvent(new PointerEvent("pointerdown", opts));
     getSelection()?.removeAllRanges();
     getSelection()?.addRange(range);
-    p?.dispatchEvent(new PointerEvent("pointerup", opts));
+    el?.dispatchEvent(new PointerEvent("pointerup", opts));
     await new Promise((r) => setTimeout(r, 400));
-    const bar = document.querySelector<HTMLElement>("#seltool");
-    const b = bar?.getBoundingClientRect();
-    const last = [...range.getClientRects()].at(-1);
 
-    return { hidden: bar?.hidden, below: b && last ? b.top - last.bottom : -1, left: b?.left ?? -1, right: b?.right ?? 999 };
+    return String(getSelection());
+  }, selector);
+
+/** The bar's box, the visual viewport's, and the tops of the page's bars at the bottom (the tab bar, the composer). */
+const docked = (page: Page): Promise<{ hidden: boolean; bar: { top: number; bottom: number; left: number; right: number }; vv: { top: number; bottom: number; left: number; right: number }; floor: number }> =>
+  page.evaluate(() => {
+    const el = document.querySelector<HTMLElement>("#seltool");
+    const b = el?.getBoundingClientRect() ?? new DOMRect();
+    const vv = visualViewport;
+
+    const floors = [...document.querySelectorAll(".tabs, .chat .composer")].flatMap((x) => {
+      const r = x.getBoundingClientRect();
+
+      return r.height > 0 && r.top > innerHeight / 2 ? [r.top] : [];
+    });
+
+    return {
+      hidden: el?.hidden !== false,
+      bar: { top: b.top, bottom: b.bottom, left: b.left, right: b.right },
+      vv: vv ? { top: vv.offsetTop, bottom: vv.offsetTop + vv.height, left: vv.offsetLeft, right: vv.offsetLeft + vv.width } : { top: 0, bottom: innerHeight, left: 0, right: innerWidth },
+      floor: Math.min(innerHeight, ...floors),
+    };
   });
 
+test.skipIf(!found)("on a phone the bar docks at the bottom of the screen, centred, over the tab bar, off the selection; Copy works and a scroll keeps it", async () => {
+  const page = await open(390, "#decision/a8");
+  const text = await touchSelect(page, "#dv-answer .manual-rich > p");
+  const got = await docked(page);
+
   expect(got.hidden).toBe(false);
-  expect(got.below).toBeGreaterThanOrEqual(24);
-  expect(got.left).toBeGreaterThanOrEqual(0);
-  expect(got.right).toBeLessThanOrEqual(390);
+  expect(got.floor).toBeLessThan(844);
+  expect(got.bar.bottom).toBeCloseTo(got.floor - 8, 0);
+  expect((got.bar.left + got.bar.right) / 2).toBeCloseTo(195, 0);
   expect(await covers(page)).toBe(false);
+  expect(await page.evaluate(() => [...document.querySelectorAll("#seltool button")].map((b) => b.textContent))).toEqual(["Copy", "Reply", "Side chat"]);
+
+  await page.tap('#seltool [data-sel="copy"]');
+  await page.waitForFunction(() => document.querySelector('#seltool [data-sel="copy"]')?.textContent === "Copied");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(text);
+
+  /* A scroll, as the phone makes one while the handles move: docked, the bar stays where it was. */
+  await page.evaluate(async () => {
+    document.body.style.paddingBottom = "2000px";
+    window.scrollBy(0, 40);
+    await new Promise((r) => setTimeout(r, 100));
+  });
+  const after = await docked(page);
+  expect(after.hidden).toBe(false);
+  expect(after.bar.bottom).toBeCloseTo(got.bar.bottom, 0);
+  await page.close();
+});
+
+test.skipIf(!found)("on a phone, a selection down by the tab bar puts the bar at the top of the screen", async () => {
+  const page = await open(390, "#decision/a8");
+  await page.evaluate(() => {
+    const p = document.querySelector<HTMLElement>("#dv-answer .manual-rich > p");
+    const r = p?.getBoundingClientRect();
+
+    /* The paragraph moved down to end 30 px over the tab bar. */
+    if (p && r) p.style.marginTop = String(innerHeight - 62 - 30 - r.bottom) + "px";
+  });
+  await touchSelect(page, "#dv-answer .manual-rich > p");
+  const got = await docked(page);
+
+  expect(got.hidden).toBe(false);
+  expect(got.bar.top).toBeCloseTo(8, 0);
+  expect(await covers(page)).toBe(false);
+  await page.close();
+});
+
+test.skipIf(!found)("on a phone pinch-zoomed, the bar docks inside what is on screen, at the screen's scale", async () => {
+  const page = await open(390, "#decision/a8");
+  const cdp = await page.createCDPSession();
+  await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 2 });
+  await page.waitForFunction(() => visualViewport?.scale === 2);
+  await touchSelect(page, "#dv-answer .manual-rich > p");
+  const got = await docked(page);
+
+  expect(got.hidden).toBe(false);
+  expect(got.bar.top).toBeGreaterThanOrEqual(got.vv.top);
+  expect(got.bar.bottom).toBeLessThanOrEqual(got.vv.bottom);
+  expect(got.bar.left).toBeGreaterThanOrEqual(got.vv.left);
+  expect(got.bar.right).toBeLessThanOrEqual(got.vv.right);
+  /* Drawn at half size: on screen, as tall as unzoomed. */
+  expect(got.bar.bottom - got.bar.top).toBeLessThan(30);
+  await page.close();
+});
+
+test.skipIf(!found)("on a phone with the chat open, text selected in a message docks the bar over the composer, not on it", async () => {
+  const page = await open(390, "");
+  await page.click("#chat-toggle");
+  await page.waitForFunction(() => document.documentElement.classList.contains("chat-open"));
+  await touchSelect(page, '#chat-log article[data-id="4"] .msg-text p');
+  const got = await docked(page);
+  const composer = await page.evaluate(() => document.querySelector(".chat .composer")?.getBoundingClientRect().top ?? 0);
+
+  expect(got.hidden).toBe(false);
+  expect(composer).toBeGreaterThan(400);
+  expect(got.bar.bottom).toBeLessThanOrEqual(composer);
+  expect(await covers(page)).toBe(false);
+  await page.tap('#seltool [data-sel="reply"]');
+  await page.waitForFunction(() => document.querySelector("#seltool")?.hasAttribute("hidden") && document.querySelector<HTMLElement>("#quote")?.hidden === false);
   await page.close();
 });
 

@@ -519,12 +519,13 @@ test("embedded, the fleet's page passes its evidence frame's selection on to the
   ]);
 });
 
-test("a touch selection in a fleet's frame puts the toolbar below it, clear of the handles", () => {
+test("a touch selection in a fleet's frame docks the toolbar at the bottom of the screen, out of the phone's menu by the selection", () => {
   open("/f/manager/", managerView(NOW));
   go("#decision/billing/d1");
   const f = placeAt(frame(), 200, 30);
   arrive({ fleetEmbed: true, select: { ...SELECTED, touch: true } }, f.contentWindow);
-  expect([tool()?.style.top, tool()?.style.left]).toEqual(["348px", "100px"]);
+  /* happy-dom's screen is 1280 by 900 and lays nothing out: the bar, 0 by 0, 8 px over the bottom, centred. */
+  expect([tool()?.style.top, tool()?.style.left]).toEqual(["892px", "640px"]);
 });
 
 test("embedded, a pointer of touch marks the selection told to the manager as a touch one", async () => {

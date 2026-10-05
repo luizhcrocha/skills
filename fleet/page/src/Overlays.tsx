@@ -2,7 +2,7 @@
  * What opens over the page: the finder (Ctrl/⌘K), the worker sheet (a worker's or a coordinator's detail,
  * opened from its name anywhere), and the toolbar a text selection offers (Copy, Reply, Side chat).
  */
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { createEffect, createMemo, createSignal, flush, onCleanup } from "solid-js";
 import { For, Match, Show, Switch, type JSX } from "@solidjs/web";
 
 import { ChatIcon, CloseIcon, listen, Pill, usePage, tf } from "./bits.tsx";
@@ -591,8 +591,15 @@ export function WorkerSheet(): JSX.Element {
 /** How long a selection must rest, after the pointer or key that made it is released, before the bar shows. */
 const SETTLE_MS = 250;
 
-/** The room the bar keeps from the selection, and on a touch screen the extra room the selection's handles take. */
+/** The room the bar keeps from the selection and from the screen's edges. */
 const GAP = 8;
+
+/**
+ * The phone's own selection menu (the iOS edit menu, Android's floating text toolbar): its height with
+ * its margin, and the room the selection's handles take under the last line. The OS draws it over the
+ * page, above the selection when it fits, else below past the handles.
+ */
+const MENU = 60;
 
 const HANDLES = 30;
 
@@ -604,26 +611,67 @@ interface SelBox {
   readonly width: number;
 }
 
-/** Where the bar sits, in the viewport. */
+/** Where the bar sits, in the layout viewport, and the scale it is drawn at. */
 interface ToolAt {
   readonly top: number;
   readonly left: number;
+  readonly scale?: number;
 }
 
 /**
- * Where the bar of height `h` and width `w` goes for a selection at `box`, in a viewport `vw` by `vh`:
- * never over the selection. With a mouse, above its first line, or below its last when there is no room
- * above; on a touch screen below its last line, clear of the handles and of the menu the phone shows above
- * it, or above when there is no room below. Always inside the viewport's width.
+ * The visual viewport in the layout viewport's px (`visualViewport`), the top of the page's own bars at
+ * the bottom of the screen (`floor`: the tab bar, the open chat's composer; Infinity when none), and the
+ * screen's safe-area insets, in screen px.
  */
-export function toolPlace(box: SelBox, w: number, h: number, vw: number, vh: number, touch: boolean): ToolAt {
+export interface Visual {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+  readonly scale: number;
+  readonly floor: number;
+  readonly safeTop: number;
+  readonly safeBottom: number;
+}
+
+/**
+ * Where the bar of height `h` and width `w` goes with a mouse, for a selection at `box` in a viewport `vw`
+ * by `vh`: above its first line, or below its last when there is no room above. Never over the selection,
+ * always inside the viewport's width.
+ */
+export function toolPlace(box: SelBox, w: number, h: number, vw: number, vh: number): ToolAt {
   const above = box.first.top - GAP - h;
-  const below = box.last.bottom + (touch ? HANDLES : GAP);
-  const fitsAbove = above >= GAP;
-  const fitsBelow = below + h <= vh - GAP;
-  const top = touch ? (fitsBelow || !fitsAbove ? below : above) : fitsAbove || !fitsBelow ? above : below;
+  const below = box.last.bottom + GAP;
+  const top = above >= GAP || below + h > vh - GAP ? above : below;
 
   return { top: Math.min(Math.max(GAP, top), vh - h - GAP), left: Math.min(Math.max(GAP, box.left + box.width / 2 - w / 2), Math.max(GAP, vw - w - GAP)) };
+}
+
+/**
+ * Where the bar goes on a touch screen. Not by the selection: the phone's own menu hugs the selection and
+ * is drawn over the page, so a bar there sits under it. Docked at the bottom of what is on screen (the
+ * visual viewport `view`, so pinch-zoom and the keyboard move it along), centred, over the safe area and
+ * the page's bottom bars, drawn at the screen's scale. At the top of the screen instead when the bottom
+ * meets the selection or the menu's place and the top does not; at the bottom when neither is clear.
+ */
+export function toolDock(box: SelBox, w: number, h: number, view: Visual): ToolAt {
+  const scale = 1 / view.scale;
+  const [bw, bh, gap] = [w * scale, h * scale, GAP * scale];
+  const screen = view.top + view.height - view.safeBottom * scale;
+  const bottom = Math.min(screen, view.floor) - gap - bh;
+  const top = view.top + view.safeTop * scale + gap;
+  const meets = (at: number, from: number, to: number): boolean => at < to && from < at + bh;
+  /* Where the menu can be: above the first line, below the last past the handles. */
+  const near = (at: number): boolean => meets(at, box.first.top - MENU * scale, box.last.bottom + (HANDLES + MENU) * scale);
+  /* Where it is: above when it fits under the screen's top, else below (over the page's bars: the OS knows none), else the middle. */
+  const menuAbove = box.first.top - MENU * scale >= view.top + view.safeTop * scale;
+  const menuBelow = box.last.bottom + (HANDLES + MENU) * scale <= screen;
+  const middle = view.top + view.height / 2;
+  const [from, to] = menuAbove ? [box.first.top - MENU * scale, box.first.top] : menuBelow ? [box.last.bottom, box.last.bottom + (HANDLES + MENU) * scale] : [middle - (MENU * scale) / 2, middle + (MENU * scale) / 2];
+  const onMenu = (at: number): boolean => meets(at, from, to);
+  const at = !near(bottom) ? bottom : !near(top) ? top : !onMenu(bottom) ? bottom : !onMenu(top) ? top : bottom;
+
+  return { top: at, left: view.left + Math.max(gap, (view.width - bw) / 2), scale };
 }
 
 /** The box of a range: its first line, its last line, and around it all. */
@@ -779,10 +827,12 @@ export function forwardSelections(): void {
 /**
  * Text selected anywhere on the page (or in a decision's evidence) offers Copy, and where the chat can be
  * written Reply (the text on the composer as a quote) and Side chat (a conversation of its own about it).
- * The bar never covers the selection and leaves the browser's own handling alone: it listens to no
- * `contextmenu` or `copy`, and prevents nothing in the text, so a right-click opens the browser's menu
- * with Copy. It shows once the selection rests (the pointer or key released, then SETTLE_MS), never during
- * a drag, and closes on a right-click, Escape, a scroll, or a press anywhere else. On a manager's page,
+ * With a mouse the bar sits by the selection, never over it; on a touch screen it docks at the bottom of
+ * the screen (`toolDock`), out of the way of the phone's own selection menu. It leaves the browser's own
+ * handling alone: it listens to no `contextmenu` or `copy`, and prevents nothing in the text, so a
+ * right-click opens the browser's menu with Copy. It shows once the selection rests (the pointer or key
+ * released, then SETTLE_MS), never during a drag, and closes on a right-click, Escape, a press anywhere
+ * else, and with a mouse a scroll (docked, it follows the screen instead). On a manager's page,
  * text selected in a fleet's decision (its page in a frame) shows the bar too, and its Reply and Side chat
  * write to that fleet's coordinator.
  */
@@ -793,7 +843,11 @@ export function SelTool(): JSX.Element {
   let framePicked: { readonly fleet: string | null } | null = null;
   let settle: ReturnType<typeof setTimeout> | undefined;
   let pressed = false;
-  let touch = false;
+  /* Whether a touch made the selection: the last press's pointer, before any press the device's. */
+  let touch = matchMedia("(hover: none) and (pointer: coarse)").matches;
+  /* Where the shown selection is, for placing the bar again as the screen moves. */
+  let box: SelBox | null = null;
+  const [scale, setScale] = createSignal(1);
   /* The text exactly as selected, for Copy; `picked` holds the excerpt a quote takes. */
   let raw = "";
   const [copied, setCopied] = createSignal<Copied | "">("");
@@ -802,13 +856,36 @@ export function SelTool(): JSX.Element {
   const hide = (): void => {
     clearTimeout(settle);
     framePicked = null;
+    box = null;
     raw = "";
     setCopied("");
     ui.setPicked(null);
     ui.setToolAt(null);
   };
 
-  function show(text: string, from: string, at: QuoteAt, box: SelBox): void {
+  /* The screen as the docked bar needs it: the visual viewport, the page's bars at its bottom, the safe area (the bar's scroll margins). */
+  const visual = (bar: HTMLElement): Visual => {
+    const vv = globalThis.visualViewport;
+    const view = vv ? { left: vv.offsetLeft, top: vv.offsetTop, width: vv.width, height: vv.height, scale: vv.scale } : { left: 0, top: 0, width: innerWidth, height: innerHeight, scale: 1 };
+    const style = getComputedStyle(bar);
+
+    const floors = [...document.querySelectorAll(".tabs, .chat .composer")].flatMap((el) => {
+      const r = el.getBoundingClientRect();
+
+      return r.height > 0 && r.top > view.top + view.height / 2 ? [r.top] : [];
+    });
+
+    return { ...view, floor: Math.min(Infinity, ...floors), safeTop: parseFloat(style.scrollMarginTop) || 0, safeBottom: parseFloat(style.scrollMarginBottom) || 0 };
+  };
+
+  const place = (): void => {
+    if (!tool || !box) return;
+    const at = touch ? toolDock(box, tool.offsetWidth, tool.offsetHeight, visual(tool)) : toolPlace(box, tool.offsetWidth, tool.offsetHeight, innerWidth, innerHeight);
+    setScale(at.scale ?? 1);
+    ui.setToolAt({ top: at.top, left: at.left });
+  };
+
+  function show(text: string, from: string, at: QuoteAt, where: SelBox): void {
     if (!text.trim() || !tool) {
       hide();
 
@@ -819,7 +896,10 @@ export function SelTool(): JSX.Element {
     setCopied("");
     ui.setPicked({ text: Core.excerptOf(text), from, at });
     tool.hidden = false;
-    ui.setToolAt(toolPlace(box, tool.offsetWidth, tool.offsetHeight, innerWidth, innerHeight, touch));
+    box = where;
+    /* Measured with its buttons in: Reply and Side chat show with the picked text. */
+    flush();
+    place();
   }
 
   /* The page's own selection, once it rests. */
@@ -923,8 +1003,29 @@ export function SelTool(): JSX.Element {
     pickIn(frame, said.text, said.rect, "the evidence" + (d ? " of " + d.title : ""), evidencePlace(m), null, said.touch);
   };
 
+  /*
+   * With a mouse a scroll closes the bar, placed by the selection. Docked on a touch screen it stays and
+   * is placed again: the phone scrolls while the handles are dragged, pans a zoomed page, and keeps the
+   * selection and its own menu through a scroll.
+   */
   const onScroll = (): void => {
-    if (ui.picked()) hide();
+    if (!ui.picked()) return;
+
+    if (!touch) {
+      hide();
+
+      return;
+    }
+
+    const sel = getSelection();
+
+    if (!framePicked && sel && !sel.isCollapsed && sel.rangeCount) box = boxOf(sel.getRangeAt(0));
+    place();
+  };
+
+  /* The visual viewport moved (pinch-zoom, the keyboard, the browser's toolbar): the docked bar follows. */
+  const onView = (): void => {
+    if (ui.picked() && touch) place();
   };
 
   document.addEventListener("selectionchange", onSelection);
@@ -935,7 +1036,11 @@ export function SelTool(): JSX.Element {
   document.addEventListener("keydown", onKey);
   addEventListener("message", onMessage);
   addEventListener("scroll", onScroll, { passive: true, capture: true });
+  globalThis.visualViewport?.addEventListener("resize", onView);
+  globalThis.visualViewport?.addEventListener("scroll", onView);
   onCleanup(() => {
+    globalThis.visualViewport?.removeEventListener("resize", onView);
+    globalThis.visualViewport?.removeEventListener("scroll", onView);
     clearTimeout(settle);
     clearTimeout(copiedTimer);
     document.removeEventListener("selectionchange", onSelection);
@@ -967,7 +1072,7 @@ export function SelTool(): JSX.Element {
       role="toolbar"
       aria-label="Selected text"
       hidden={!ui.picked()}
-      style={ui.toolAt() ? `top:${ui.toolAt()?.top ?? 0}px;left:${ui.toolAt()?.left ?? 0}px` : undefined}
+      style={ui.toolAt() ? `top:${ui.toolAt()?.top ?? 0}px;left:${ui.toolAt()?.left ?? 0}px` + (scale() === 1 ? "" : `;transform:scale(${scale()})`) : undefined}
       ref={(el) => (tool = el)}
       /* A press on the bar keeps the selection (a press on the text is the browser's). */
       onPointerDown={(e) => e.preventDefault()}
