@@ -114,6 +114,8 @@ function Body(props: { readonly live: boolean }): JSX.Element {
       const stick = ui.nearBottom();
       document.documentElement.style.setProperty("--vv-h", String(Math.round(vv.height)) + "px");
       document.documentElement.style.setProperty("--vv-top", String(Math.round(vv.offsetTop)) + "px");
+      /* iOS keeps the layout viewport under the keyboard; a gap taller than any browser bar is the keyboard. */
+      document.documentElement.classList.toggle("keyboard", document.documentElement.clientHeight - vv.height * vv.scale > 150);
 
       if (stick) ui.toBottom();
     };

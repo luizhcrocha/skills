@@ -896,6 +896,17 @@
     .chat { width: 100%; border-left: 0; }
     .chat-head { min-height: 56px; }
     html.chat-open, html.chat-open body { overflow: hidden; overscroll-behavior: none; }
+    /* iOS draws its bars over the strip between the visual viewport and the keyboard, translucent: the sheet
+       paints on under its bottom so the page never shows there. */
+    .chat::after { content: ""; position: absolute; top: 100%; left: 0; right: 0; height: 100lvh; background: var(--card); }
+    html.chat-open .tabs { visibility: hidden; }
+    .box { grid-template-rows: auto minmax(0, 1fr); max-block-size: calc(var(--vv-h, 100dvh) * 0.4); box-sizing: border-box; }
+    .box textarea { max-block-size: min(100%, calc(8lh + 14px)); }
+    /* With the keyboard up the header is one row: where the draft goes, and the way back. */
+    html.keyboard .chat-tools, html.keyboard .chat:has(#side-head:not([hidden])) .chat-head, html.keyboard #side-archive, html.keyboard #side-all { display: none; }
+    html.keyboard .side-head { flex-wrap: nowrap; padding-top: max(8px, env(safe-area-inset-top, 0px)); }
+    html.keyboard .side-name { order: 0; flex: 1 1 0; }
+    html.keyboard .side-title { white-space: nowrap; }
   }
   @media (prefers-reduced-motion: no-preference) and (max-width: 919.98px) {
     .chat.open { animation: rise 200ms ease-out; }
