@@ -40,8 +40,12 @@ function Roadmap(): JSX.Element {
           {(ms) => (
             <div class="milestone">
               <div class="milestone-head">
-                <h3>{ms().title}</h3>
-                <DecisionChips list={m.state.decisions.filter((d) => d.milestone === ms().id && !d.step)} />
+                <div class="ms-name">
+                  <h3>{ms().title}</h3>
+                  <span>
+                    <DecisionChips list={m.state.decisions.filter((d) => d.milestone === ms().id && !d.step)} />
+                  </span>
+                </div>
                 <span class="num faint">
                   {ms().steps.filter((s) => s.status === "done").length}/{ms().steps.length}
                 </span>
