@@ -55,6 +55,8 @@ The chat between the user (on the dashboard) and the fleet, stored in DIR/chat.j
     inbox --as WHO                                the messages open for WHO, oldest first
     watch --as WHO [--after N | --resume] [--all] [--once] [--fleets [--batch SECONDS]]
                                                   what is open for WHO, then each new message as it lands;
+                                                  --once exits with the first lines, waking the session
+                                                  that armed it; without --once, only on a terminal;
                                                   --fleets (the manager's) also what the user does on every
                                                   other fleet's page, its first line waiting --batch (120 s)
                                                   for more under --once
@@ -134,6 +136,7 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<vo
         once: args.flag("once"),
         fleets: args.flag("fleets"),
         batch: args.int("batch") ?? 120,
+        terminal: process.stdout.isTTY === true,
       });
     } else {
       yield* wait(machine, root, args.list("decision") ?? []);

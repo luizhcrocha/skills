@@ -40,7 +40,7 @@ Run this on every task the user hands you, and again on every report a worker se
 
 ### 1. Intake
 
-Understand the task before splitting it. Read enough to name the milestones and their steps; delegate any deeper reading. If the user's ask is ambiguous in a way that changes the split, ask one question. Then record the roadmap with the state CLI, start the server, and arm the chat watch (see [DASHBOARD.md](DASHBOARD.md)), so the user has the link, sees the plan, and can write to the fleet before any worker starts.
+Understand the task before splitting it. Read enough to name the milestones and their steps; delegate any deeper reading. If the user's ask is ambiguous in a way that changes the split, ask one question. Then record the roadmap with the state CLI, start the server, and arm the chat watch as a background command, `fleet chat <dashboard-dir> watch --as coordinator --all --resume --once` (see [DASHBOARD.md](DASHBOARD.md)), so the user has the link, sees the plan, and can write to the fleet before any worker starts.
 
 ### 2. Route
 

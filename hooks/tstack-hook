@@ -406,7 +406,8 @@ def _tokens(args, depth=0):
 
 
 def _is_watch(args, cwd, d, role):
-    """Whether this command line runs `fleet chat D watch --as ROLE` for the fleet at d."""
+    """Whether this command line runs `fleet chat D watch --as ROLE --once` for the fleet at d. A watch
+    without --once never exits, so as a background command it never wakes the session: not armed."""
     words = _tokens(args)
     for i in range(len(words) - 2):
         if words[i] != "chat" or words[i + 2] != "watch":
@@ -414,7 +415,7 @@ def _is_watch(args, cwd, d, role):
         rest = words[i + 3:]
         as_role = any((w == "--as" and j + 1 < len(rest) and rest[j + 1].lower() == role)
                       or w.lower() == f"--as={role}" for j, w in enumerate(rest))
-        if not as_role:
+        if not as_role or "--once" not in rest:
             continue
         given = os.path.expanduser(words[i + 1])
         if not os.path.isabs(given):

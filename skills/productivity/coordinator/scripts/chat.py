@@ -6,11 +6,14 @@
     chat.py DIR inbox --as WHO                   the messages open for WHO, oldest first
     chat.py DIR watch --as WHO [--after N | --resume] [--all] [--once] [--fleets [--batch SECONDS]]
                                                  every message open for WHO with id > N, then each
-                                                 new one as it lands; never exits on its own. --all
-                                                 also streams every message from the user. --resume
-                                                 takes N from the last line a watch as WHO printed;
-                                                 --once exits after the first lines it prints.
-                                                 While it runs, DIR/watch-WHO.pid says so: the page
+                                                 new one as it lands. --all also streams every
+                                                 message from the user. --once exits after the first
+                                                 lines it prints, which wakes the session that armed
+                                                 it as a background command; --resume takes N from
+                                                 the last line a --once watch as WHO exited with.
+                                                 Without --once it never exits, so it runs only on a
+                                                 terminal, for a person, and marks nothing read.
+                                                 While a --once watch runs, DIR/watch-WHO.pid says so: the page
                                                  shows whether the host reads the chat, and a
                                                  manager's watch also prints a `!` line for each
                                                  fleet where the user's messages wait unread, and a
@@ -409,7 +412,7 @@ def cmd_inbox(root, args) -> None:
 
 
 def _cursor(root, who: str) -> Path:
-    """Where a watch as `who` keeps the id of the last message it printed."""
+    """The id of the last message a `--once` watch as `who` exited with: handed to the session it woke."""
     return Path(root) / f"watch-{who}.cursor"
 
 
@@ -419,13 +422,13 @@ def _left(root, who: str) -> Path:
 
 
 def _pulse(root, who: str) -> Path:
-    """Where a running watch as `who` keeps its process id, so the page and the manager can tell it listens."""
+    """Where a running `--once` watch as `who` keeps its process id, so the page and the manager can tell it listens."""
     return Path(root) / f"watch-{who}.pid"
 
 
 def listening(root) -> dict:
     """Whether the host of DIR reads its chat now, and how far it has read: {"on", "seen", "unread",
-    "since"}. `on` is a live watch; `seen` the last message a watch printed; `unread` the messages from
+    "since"}. `on` is a live --once watch; `seen` the last message one exited with; `unread` the messages from
     the user after it, `since` when the oldest of them was sent."""
     who = host(root)
     try:
@@ -609,7 +612,7 @@ def _fleets_unheard(me: str) -> list[str]:
             pass
         lines.append(f"! {e['id']} does not read its chat: {heard['unread']} message(s) from the user since "
                      f"#{heard['seen']}, the oldest at {heard['since'][11:16]}. SendMessage its session "
-                     f"({e.get('session') or e['id']}) to arm its watch; `fleet chat {e['dir']} log --after {heard['seen']}` shows them." + gone)
+                     f"({e.get('session') or e['id']}) to arm its watch as a background command, `fleet chat {e['dir']} watch --as coordinator --all --resume --once`; `fleet chat {e['dir']} log --after {heard['seen']}` shows them." + gone)
     if lines:
         told_path.write_text(json.dumps(told))
     return lines
@@ -742,12 +745,19 @@ def cmd_watch(root, args) -> None:
     who = _participant(_agents(root), args.who, allow_user=False)
     if args.fleets and who != "manager":
         raise ChatError("--fleets is the manager's: only a watch `--as manager` follows the other fleets' pages")
-    cursor = _cursor(root, who)
+    if not args.once:
+        if not sys.stdout.isatty():
+            raise ChatError(f"a watch without --once needs a terminal: in a background command it never exits, so nothing "
+                            f"wakes the session. Arm `fleet chat {root} watch --as {who} --all --resume --once` instead.")
+        _watch(root, args, who)  # a person reads it: it marks nothing read
+        return
     pulse = _pulse(root, who)
     pulse.write_text(str(os.getpid()))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
-        _watch(root, args, who, cursor)
+        last = _watch(root, args, who)
+        if last is not None:
+            _cursor(root, who).write_text(str(last))
     finally:
         try:
             if pulse.read_text() == str(os.getpid()):
@@ -761,18 +771,22 @@ def cmd_watch(root, args) -> None:
             pass
 
 
-def _watch(root, args, who: str, cursor: Path) -> None:
+def _watch(root, args, who: str) -> int | None:
+    """Print what is open, then what lands; with --once, return the id of the last message printed when it
+    exits (None for none)."""
     after = args.after
     if args.resume:
         try:
-            after = max(after, int(cursor.read_text()))
+            after = max(after, int(_cursor(root, who).read_text()))
         except (OSError, ValueError):
             pass
+    last = None
 
     def show(messages: list[dict]) -> None:
+        nonlocal last
         _show(root, messages)
         if messages:
-            cursor.write_text(str(messages[-1]["id"]))
+            last = messages[-1]["id"]
 
     tail = Tail(root)
     messages = tail.read()
@@ -788,7 +802,7 @@ def _watch(root, args, who: str, cursor: Path) -> None:
         told = news.read() if news else []
         for line in told:
             print(line, flush=True)
-        if news:
+        if news and args.once:
             news.save()
         return told
 
@@ -796,11 +810,11 @@ def _watch(root, args, who: str, cursor: Path) -> None:
     # tells all that lands in it before it exits, so one wake covers a burst of the user's actions.
     window = time.monotonic() + args.batch if tell() else None
     if args.once and first:
-        return
+        return last
     checked = 0.0
     while True:
         if args.once and window is not None and time.monotonic() >= window:
-            return
+            return last
         time.sleep(POLL_S)
         new = [m for m in tail.read() if who in m["to"] or (args.all and m["from"] == "user" and _waits_here(m))]
         show(new)
@@ -813,7 +827,7 @@ def _watch(root, args, who: str, cursor: Path) -> None:
             for line in lines:
                 print(line, flush=True)
         if args.once and (new or lines):
-            return
+            return last
 
 
 def cmd_wait(root, args) -> None:
@@ -886,8 +900,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("wait"); s.add_argument("decision", nargs="+", help="decision ids or numbers (A6) to wait on")
     s = sub.add_parser("watch"); s.add_argument("--as", dest="who", required=True)
     s.add_argument("--after", type=int, default=0); s.add_argument("--all", action="store_true")
-    s.add_argument("--resume", action="store_true", help="start after the last message a watch as WHO printed")
-    s.add_argument("--once", action="store_true", help="exit after the first batch it prints: a background task that wakes its session only when there is news")
+    s.add_argument("--resume", action="store_true", help="start after the last message a --once watch as WHO exited with")
+    s.add_argument("--once", action="store_true", help="exit after the first batch it prints: a background task that wakes its session only when there is news; without it, the watch runs only on a terminal")
     s.add_argument("--fleets", action="store_true", help="a manager's: also what the user does on every other fleet's page")
     s.add_argument("--batch", type=int, default=120, metavar="SECONDS",
                    help="with --fleets --once: how long the first news of the other fleets waits for more before the watch exits")

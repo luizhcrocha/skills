@@ -14,7 +14,7 @@ import { readChat, type Message, type Part } from "../src/chat/store.ts";
 import { ChatError } from "../src/errors.ts";
 import { asArray, asObject, asString, parseJson, type Json, type JsonObject } from "../src/json.ts";
 import type { Machine } from "../src/world.ts";
-import { baseEnv, fleet, machine, now, readJson, sleep, start, tmp, type Lines, type Environment, type Ran } from "./support.ts";
+import { baseEnv, FLEET, fleet, machine, now, readJson, sleep, start, startTty, tmp, type Lines, type Environment, type Ran } from "./support.ts";
 
 interface AgentRow {
   readonly id: string;
@@ -64,8 +64,9 @@ function user(text: string, more: Omit<Draft, "sender" | "text" | "allowUser"> =
   return send("user", text, { ...more, allowUser: true });
 }
 
+/** A watch run on a terminal, as a person runs one without --once. */
 function watching(...args: string[]): Lines {
-  const { proc, lines } = start(["chat", root, ...args], env);
+  const { proc, lines } = startTty(["chat", root, ...args], env);
   procs.push(proc);
 
   return lines;
@@ -394,19 +395,19 @@ describe("watch", () => {
     expect(await watching("watch", "--as", "a1", "--after", "1").next()).toBe("#2 user -> a1 (notes-impl): @a1 newer\n");
   });
 
-  test("watch --resume starts after the last line a watch printed", async () => {
+  test("watch --resume starts after the last line a --once watch exited with", async () => {
     user("@a1 one");
     user("@a1 two");
-    const { proc, lines: first } = start(["chat", root, "watch", "--as", "a1", "--resume"], env);
-    procs.push(proc);
-    expect([await first.next(), await first.next()]).toEqual(["#1 user -> a1 (notes-impl): @a1 one\n", "#2 user -> a1 (notes-impl): @a1 two\n"]);
+    const once = (): Ran => fleet(["chat", root, "watch", "--as", "a1", "--resume", "--once"], env);
+    expect(once().stdout).toBe("#1 user -> a1 (notes-impl): @a1 one\n#2 user -> a1 (notes-impl): @a1 two\n");
+    const terminal = watching("watch", "--as", "a1", "--resume");
+    expect(await terminal.quiet()).toBe(true);
     user("@a1 three");
-    expect(await first.next()).toBe("#3 user -> a1 (notes-impl): @a1 three\n");
-    proc.kill(); // else, still watching when #4 lands, it prints it and its cursor takes #4 before the next watch reads it
-    await proc.exited;
-    user("@a1 while no watch ran");
+    expect(await terminal.next()).toBe("#3 user -> a1 (notes-impl): @a1 three\n");
+    expect(once().stdout).toBe("#3 user -> a1 (notes-impl): @a1 three\n");
+    user("@a1 four");
     const again = watching("watch", "--as", "a1", "--resume");
-    expect(await again.next()).toBe("#4 user -> a1 (notes-impl): @a1 while no watch ran\n");
+    expect(await again.next()).toBe("#4 user -> a1 (notes-impl): @a1 four\n");
     expect(await again.quiet()).toBe(true);
   });
 
@@ -518,20 +519,18 @@ describe("a manager's chat", () => {
 });
 
 describe("listening", () => {
-  test("a running watch listens and marks what it read", async () => {
+  test("a running --once watch listens and marks what it exited with", async () => {
     expect(listening(m, root)).toEqual({ on: false, seen: 0, unread: 0, since: null });
-    const sent = user("status?");
-    expect(listening(m, root).unread).toBe(1);
-    const { proc, lines } = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume"], env);
+    const { proc, lines } = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], env);
     procs.push(proc);
-    expect(await lines.next()).toBe("#1 user -> coordinator: status?\n");
 
-    // The watch writes its cursor right after the line it printed: give it that moment under load.
-    for (let tries = 0; tries < 40 && listening(m, root).seen !== 1; tries += 1) await sleep(50);
+    for (let tries = 0; tries < 40 && !existsSync(join(root, "watch-coordinator.pid")); tries += 1) await sleep(50);
+    const sent = user("status?");
+    expect(listening(m, root).on).toBe(true);
+    expect(await proc.exited).toBe(0);
+    expect(await lines.rest()).toBe("#1 user -> coordinator: status?\n");
     expect(listening(m, root)).toEqual({ on: true, seen: 1, unread: 0, since: null });
     expect(deafWarning(m, root)).toBeUndefined();
-    proc.kill("SIGTERM");
-    await proc.exited;
     expect(existsSync(join(root, "watch-coordinator.pid"))).toBe(false);
     user("still there?");
     const heard = listening(m, root);
@@ -539,6 +538,39 @@ describe("listening", () => {
     const old = Date.now() / 1000 - READING_GRACE_S - 5;
     utimesSync(join(root, "watch-coordinator.left"), old, old);
     expect(listening(m, root).on).toBe(false);
+  });
+
+  test("a watch without --once in a background command is refused, and marks nothing read", async () => {
+    user("status?");
+    const proc = Bun.spawn([FLEET, "chat", root, "watch", "--as", "coordinator", "--all", "--resume"], { env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    procs.push(proc);
+    const ended = await Promise.race([proc.exited, sleep(3000).then(() => "still running")]);
+    user("are you there?");
+    await sleep(500);
+    expect(ended).toBe(1);
+    expect(await new Response(proc.stdout).text()).toBe("");
+    expect(await new Response(proc.stderr).text()).toBe(
+      `chat: a watch without --once needs a terminal: in a background command it never exits, so nothing wakes the session. ` +
+        `Arm \`fleet chat ${root} watch --as coordinator --all --resume --once\` instead.\n`,
+    );
+    expect(listening(m, root)).toEqual({ on: false, seen: 0, unread: 2, since: readChat(root)[0]?.at ?? null });
+  });
+
+  test("a watch in a terminal prints but marks nothing read; a --once watch marks what it exited with", async () => {
+    user("status?");
+    const { proc, lines } = startTty(["chat", root, "watch", "--as", "coordinator", "--all", "--resume"], env);
+    procs.push(proc);
+    expect(await lines.next()).toBe("#1 user -> coordinator: status?\n");
+    await sleep(500);
+    expect(listening(m, root)).toEqual({ on: false, seen: 0, unread: 1, since: readChat(root)[0]?.at ?? null });
+    proc.kill("SIGTERM");
+    await proc.exited;
+    expect(existsSync(join(root, "watch-coordinator.left"))).toBe(false);
+    const once = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], env);
+    procs.push(once.proc);
+    expect(await once.proc.exited).toBe(0);
+    expect(await once.lines.rest()).toBe("#1 user -> coordinator: status?\n");
+    expect(listening(m, root)).toEqual({ on: true, seen: 1, unread: 0, since: null });
   });
 
   test("every state command tells a deaf coordinator what waits", () => {
@@ -638,13 +670,12 @@ describe("the manager relays the unheard", () => {
     const sent = append(m, billing.dir, { sender: "user", text: "are you there?", allowUser: true }, now());
     expect(sent).not.toBeInstanceOf(ChatError);
     const quick = { ...env, FLEET_CHECK_S: "0.2", FLEET_UNHEARD_S: "0" };
-    const { proc, lines } = start(["chat", root, "watch", "--as", "manager", "--all"], quick);
+    const { proc, lines } = start(["chat", root, "watch", "--as", "manager", "--all", "--once"], quick);
     procs.push(proc);
     const line = await lines.next();
     expect(line.startsWith("! billing does not read its chat: 1 message(s) from the user since #0")).toBe(true);
     expect(line).toContain("SendMessage its session (billing)");
-    proc.kill();
-    await proc.exited;
+    expect(await proc.exited).toBe(0);
     const again = start(["chat", root, "watch", "--as", "manager", "--all", "--resume", "--once"], quick);
     procs.push(again.proc);
     await sleep(1500);

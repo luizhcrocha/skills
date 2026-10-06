@@ -593,11 +593,11 @@ class FleetCase(HookCase):
     def payload(self, event, **extra):
         return {**self.base(event), "scratchpad_dir": str(self.pad), **extra}
 
-    def watch(self, fleet=None, role="coordinator", pid_file=True):
-        """A process whose command line is a chat watch's (`... chat DIR watch --as ROLE ...`)."""
+    def watch(self, fleet=None, role="coordinator", pid_file=True, once=True):
+        """A process whose command line is a chat watch's (`... chat DIR watch --as ROLE ... --once`)."""
         fleet = fleet or self.fleet
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "chat", str(fleet), "watch",
-                                 "--as", role, "--all", "--resume", "--once"])
+                                 "--as", role, "--all", "--resume", *(["--once"] if once else [])])
         self.addCleanup(lambda: (proc.kill(), proc.wait()))
         if pid_file:
             (self.fleet / f"watch-{role}.pid").write_text(str(proc.pid))
@@ -640,6 +640,10 @@ class StopGuardTest(FleetCase):
     def test_a_watch_not_yet_in_its_pid_file_counts(self):
         self.watch(pid_file=False)
         self.assertSilent(self.stop())
+
+    def test_a_watch_without_once_does_not_count(self):
+        self.watch(once=False)  # it never exits, so it never wakes the session
+        self.assertIn("--resume --once`", self.blocked(self.stop()))
 
     def test_a_dead_reused_or_foreign_pid_does_not_count(self):
         pid_file = self.fleet / "watch-coordinator.pid"

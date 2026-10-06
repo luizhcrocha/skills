@@ -54,6 +54,8 @@ export interface WatchRequest {
   readonly fleets: boolean;
   /** With `fleets` and `once`: how long the first news of the other fleets waits for more. */
   readonly batch: number;
+  /** Whether stdout is a terminal: a watch without `once` runs only there. */
+  readonly terminal: boolean;
 }
 
 function seconds(env: (name: string) => string | undefined, name: string, fallback: number): number {
@@ -181,7 +183,7 @@ export function fleetsUnheard(machine: Machine, me: string): string[] {
     lines.push(
       `! ${e.id} does not read its chat: ${heard.unread} message(s) from the user since ` +
         `#${heard.seen}, the oldest at ${since.slice(11, 16)}. SendMessage its session ` +
-        `(${e.session ?? e.id}) to arm its watch; \`fleet chat ${e.dir} log --after ${heard.seen}\` shows them.${gone}`,
+        `(${e.session ?? e.id}) to arm its watch as a background command, \`fleet chat ${e.dir} watch --as coordinator --all --resume --once\`; \`fleet chat ${e.dir} log --after ${heard.seen}\` shows them.${gone}`,
     );
   }
 
@@ -269,10 +271,11 @@ function touch(path: string, at: number): void {
 }
 
 /** `watch`: what is open for WHO (with `--all`, every open message from the user too) with id > N, then
- * each new message to WHO as it lands. DIR/watch-WHO.pid holds the pid while it runs. */
+ * each new message to WHO as it lands. A `--once` watch holds its pid in DIR/watch-WHO.pid while it runs,
+ * and on exiting moves the cursor to the last message it printed: what it handed to the session it wakes
+ * is what was read. Without `--once` it never exits, so it runs only on a terminal and marks nothing read. */
 export function watch(machine: Machine, root: string, request: WatchRequest): Effect.Effect<void, ChatError, Out> {
   return Effect.gen(function* () {
-    const out = yield* Out;
     const roster = rosterOf(machine, root);
     const who = participant(roster, request.who, false);
 
@@ -282,7 +285,22 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
       return yield* Effect.fail(new ChatError({ reason: "--fleets is the manager's: only a watch `--as manager` follows the other fleets' pages" }));
     }
 
-    const cursor = cursorPath(root, who);
+    if (!request.once) {
+      if (!request.terminal) {
+        return yield* Effect.fail(
+          new ChatError({
+            reason:
+              `a watch without --once needs a terminal: in a background command it never exits, so nothing wakes the session. ` +
+              `Arm \`fleet chat ${root} watch --as ${who} --all --resume --once\` instead.`,
+          }),
+        );
+      }
+
+      yield* follow(machine, root, who, request);
+
+      return;
+    }
+
     const pulse = pulsePath(root, who);
     const pid = String(process.pid);
     writeText(pulse, pid);
@@ -300,67 +318,11 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
     process.on("SIGTERM", onSignal);
     process.on("SIGINT", onSignal);
 
-    const show = (messages: readonly Message[]): void => {
-      for (const line of renderLines(machine, root, messages)) out.out(`${line}\n`);
-      const last = messages.at(-1);
-
-      if (last !== undefined) writeText(cursor, String(last.id));
-    };
-
     yield* Effect.ensuring(
       Effect.gen(function* () {
-        let after = request.after;
+        const last = yield* follow(machine, root, who, request);
 
-        if (request.resume) after = Math.max(after, intOf(readText(cursor)) ?? after);
-        const tail = new Tail(root);
-        const messages = tail.read();
-        const wanted = new Set(openAmong(messages, who).map((m) => m.id));
-
-        if (request.all) {
-          for (const r of new Set([hostOf(root), ...rosterOf(machine, root).members.map((m) => m.id)])) {
-            for (const m of openAmong(messages, r)) if (m.from === "user" && !handedOver(m).has(r)) wanted.add(m.id);
-          }
-        }
-
-        const first = messages.filter((m) => m.id > after && wanted.has(m.id));
-        show(first);
-        const news = request.fleets ? new FleetNews(machine, resolvePath(root), request.resume) : undefined;
-
-        const tell = (): boolean => {
-          const told = news?.read() ?? [];
-
-          for (const line of told) out.out(`${line}\n`);
-          news?.save();
-
-          return told.length > 0;
-        };
-
-        // The other fleets' news comes in batches: the first opens a window of --batch seconds, and the
-        // watch tells all that lands in it before it exits, so one wake covers a burst of the user's actions.
-        let window = tell() ? performance.now() / 1000 + request.batch : undefined;
-
-        if (request.once && first.length > 0) return;
-        const checkS = seconds(machine.env, "FLEET_CHECK_S", 30);
-        let checked = -Infinity;
-
-        for (;;) {
-          if (request.once && window !== undefined && performance.now() / 1000 >= window) return;
-          yield* Effect.sleep(POLL_MS);
-          const fresh = tail.read().filter((m) => m.to.includes(who) || (request.all && m.from === "user" && waitsHere(m)));
-          show(fresh);
-
-          if (tell() && window === undefined) window = performance.now() / 1000 + request.batch;
-          let lines: string[] = [];
-
-          if ((who === "manager" || who === "coordinator") && performance.now() / 1000 - checked >= checkS) {
-            checked = performance.now() / 1000;
-            lines = who === "manager" ? fleetsUnheard(machine, resolvePath(root)) : ownSilent(machine, root);
-
-            for (const line of lines) out.out(`${line}\n`);
-          }
-
-          if (request.once && (fresh.length > 0 || lines.length > 0)) return;
-        }
+        if (last !== undefined) writeText(cursorPath(root, who), String(last));
       }),
       Effect.sync(() => {
         process.off("SIGTERM", onSignal);
@@ -368,6 +330,73 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
         end();
       }),
     );
+  });
+}
+
+/** What `watch` prints; the id of the last message it printed when it exits (`--once`). */
+function follow(machine: Machine, root: string, who: string, request: WatchRequest): Effect.Effect<number | undefined, never, Out> {
+  return Effect.gen(function* () {
+    const out = yield* Out;
+    let last: number | undefined;
+
+    const show = (messages: readonly Message[]): void => {
+      for (const line of renderLines(machine, root, messages)) out.out(`${line}\n`);
+      last = messages.at(-1)?.id ?? last;
+    };
+
+    let after = request.after;
+
+    if (request.resume) after = Math.max(after, intOf(readText(cursorPath(root, who))) ?? after);
+    const tail = new Tail(root);
+    const messages = tail.read();
+    const wanted = new Set(openAmong(messages, who).map((m) => m.id));
+
+    if (request.all) {
+      for (const r of new Set([hostOf(root), ...rosterOf(machine, root).members.map((m) => m.id)])) {
+        for (const m of openAmong(messages, r)) if (m.from === "user" && !handedOver(m).has(r)) wanted.add(m.id);
+      }
+    }
+
+    const first = messages.filter((m) => m.id > after && wanted.has(m.id));
+    show(first);
+    const news = request.fleets ? new FleetNews(machine, resolvePath(root), request.resume) : undefined;
+
+    const tell = (): boolean => {
+      const told = news?.read() ?? [];
+
+      for (const line of told) out.out(`${line}\n`);
+
+      if (request.once) news?.save();
+
+      return told.length > 0;
+    };
+
+    // The other fleets' news comes in batches: the first opens a window of --batch seconds, and the watch
+    // tells all that lands in it before it exits, so one wake covers a burst of the user's actions.
+    let window = tell() ? performance.now() / 1000 + request.batch : undefined;
+
+    if (request.once && first.length > 0) return last;
+    const checkS = seconds(machine.env, "FLEET_CHECK_S", 30);
+    let checked = -Infinity;
+
+    for (;;) {
+      if (request.once && window !== undefined && performance.now() / 1000 >= window) return last;
+      yield* Effect.sleep(POLL_MS);
+      const fresh = tail.read().filter((m) => m.to.includes(who) || (request.all && m.from === "user" && waitsHere(m)));
+      show(fresh);
+
+      if (tell() && window === undefined) window = performance.now() / 1000 + request.batch;
+      let lines: string[] = [];
+
+      if ((who === "manager" || who === "coordinator") && performance.now() / 1000 - checked >= checkS) {
+        checked = performance.now() / 1000;
+        lines = who === "manager" ? fleetsUnheard(machine, resolvePath(root)) : ownSilent(machine, root);
+
+        for (const line of lines) out.out(`${line}\n`);
+      }
+
+      if (request.once && (fresh.length > 0 || lines.length > 0)) return last;
+    }
   });
 }
 

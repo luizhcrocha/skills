@@ -2,6 +2,7 @@
 import http.client
 import json
 import os
+import pty
 import queue
 import socket
 import subprocess
@@ -286,7 +287,14 @@ class Lines:
 
     def __init__(self, stream):
         self.queue = queue.Queue()
-        threading.Thread(target=lambda: [self.queue.put(line) for line in stream], daemon=True).start()
+        threading.Thread(target=self._pump, args=(stream,), daemon=True).start()
+
+    def _pump(self, stream):
+        try:
+            for line in stream:
+                self.queue.put(line.replace("\r", ""))  # a terminal turns each "\n" into "\r\n"
+        except OSError:  # a terminal whose process ended
+            pass
 
     def next(self, timeout: float = 5) -> str:
         return self.queue.get(timeout=timeout)
@@ -299,14 +307,20 @@ class Lines:
             return True
 
 
+def tty_watch(test: unittest.TestCase, root: Path, *args: str) -> tuple[subprocess.Popen, Lines]:
+    """`chat.py ROOT watch ARGS` on a terminal, as a person runs it."""
+    main, side = pty.openpty()
+    proc = subprocess.Popen([sys.executable, CHAT, str(root), "watch", *args], stdout=side, stdin=subprocess.DEVNULL)
+    os.close(side)
+    stream = os.fdopen(main, "r", encoding="utf-8")
+    test.addCleanup(lambda: (proc.kill(), proc.wait(), stream.close()))
+    return proc, Lines(stream)
+
+
 class WatchTest(FleetDir):
     def watch(self, *args: str) -> Lines:
-        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", *args],
-                                stdout=subprocess.PIPE, text=True, encoding="utf-8")
-        self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdout.close()))
-        lines = Lines(proc.stdout)
-        lines.proc = proc
-        return lines
+        """A watch run on a terminal, as a person runs one without --once."""
+        return tty_watch(self, self.root, *args)[1]
 
     def test_watch_prints_open_messages_then_each_new_one_as_a_flushed_line(self):
         chat.append(self.root, "user", "@a1 first", allow_user=True)
@@ -324,18 +338,19 @@ class WatchTest(FleetDir):
         chat.append(self.root, "user", "@a1 newer", allow_user=True)
         self.assertEqual(self.watch("--as", "a1", "--after", "1").next(), "#2 user -> a1 (notes-impl): @a1 newer\n")
 
-    def test_watch_resume_starts_after_the_last_line_a_watch_printed(self):
+    def test_watch_resume_starts_after_the_last_line_a_once_watch_exited_with(self):
         chat.append(self.root, "user", "@a1 one", allow_user=True)
         chat.append(self.root, "user", "@a1 two", allow_user=True)
-        first = self.watch("--as", "a1", "--resume")
-        self.assertEqual([first.next(), first.next()], ["#1 user -> a1 (notes-impl): @a1 one\n", "#2 user -> a1 (notes-impl): @a1 two\n"])
+        once = lambda: run_cli(self.root, "watch", "--as", "a1", "--resume", "--once").stdout  # noqa: E731
+        self.assertEqual(once(), "#1 user -> a1 (notes-impl): @a1 one\n#2 user -> a1 (notes-impl): @a1 two\n")
+        terminal = self.watch("--as", "a1", "--resume")
+        self.assertTrue(terminal.quiet())
         chat.append(self.root, "user", "@a1 three", allow_user=True)
-        self.assertEqual(first.next(), "#3 user -> a1 (notes-impl): @a1 three\n")
-        first.proc.kill()  # else, still watching when #4 lands, it prints it and its cursor takes #4 before the next watch reads it
-        first.proc.wait()
-        chat.append(self.root, "user", "@a1 while no watch ran", allow_user=True)
+        self.assertEqual(terminal.next(), "#3 user -> a1 (notes-impl): @a1 three\n")
+        self.assertEqual(once(), "#3 user -> a1 (notes-impl): @a1 three\n")
+        chat.append(self.root, "user", "@a1 four", allow_user=True)
         again = self.watch("--as", "a1", "--resume")
-        self.assertEqual(again.next(), "#4 user -> a1 (notes-impl): @a1 while no watch ran\n")
+        self.assertEqual(again.next(), "#4 user -> a1 (notes-impl): @a1 four\n")
         self.assertTrue(again.quiet())
 
     def test_each_watcher_resumes_from_its_own_place(self):
@@ -906,29 +921,27 @@ class ManagerChatTest(FleetDir):
 
     def test_the_managers_watch_streams_what_the_user_writes_to_a_coordinator(self):
         chat.append(self.root, "user", "@infra is the deploy gate green?", allow_user=True)
-        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "manager", "--all"],
-                                stdout=subprocess.PIPE, text=True, encoding="utf-8")
-        self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdout.close()))
-        self.assertEqual(Lines(proc.stdout).next(), "#1 user -> infra: @infra is the deploy gate green?\n")
+        lines = tty_watch(self, self.root, "--as", "manager", "--all")[1]
+        self.assertEqual(lines.next(), "#1 user -> infra: @infra is the deploy gate green?\n")
 
 
 class ListeningTest(FleetDir):
-    """Whether the host reads its chat: a watch says so while it runs, and what it printed is what was read."""
+    """Whether the host reads its chat: a --once watch says so while it runs, and what it exited with is what was read."""
 
-    def test_a_running_watch_listens_and_marks_what_it_read(self):
+    def test_a_running_once_watch_listens_and_marks_what_it_exited_with(self):
         self.assertEqual(chat.listening(self.root), {"on": False, "seen": 0, "unread": 0, "since": None})
-        sent = chat.append(self.root, "user", "status?", allow_user=True)
-        self.assertEqual(chat.listening(self.root)["unread"], 1)
-        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "coordinator", "--all", "--resume"],
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "coordinator", "--all", "--resume", "--once"],
                                 stdout=subprocess.PIPE, text=True, encoding="utf-8")
-        self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdout.close()))
-        self.assertEqual(Lines(proc.stdout).next(), "#1 user -> coordinator: status?\n")
-        deadline = time.monotonic() + 5  # the watch prints a line, then moves its cursor past it
-        while chat.listening(self.root)["seen"] != 1 and time.monotonic() < deadline:
+        self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
+        deadline = time.monotonic() + 5
+        while not (self.root / "watch-coordinator.pid").exists() and time.monotonic() < deadline:
             time.sleep(0.05)
+        sent = chat.append(self.root, "user", "status?", allow_user=True)
+        self.assertTrue(chat.listening(self.root)["on"])
+        self.assertEqual(proc.wait(timeout=5), 0)
+        self.assertEqual(proc.stdout.read(), "#1 user -> coordinator: status?\n")
         self.assertEqual(chat.listening(self.root), {"on": True, "seen": 1, "unread": 0, "since": None})
         self.assertIsNone(chat.deaf_warning(self.root))
-        proc.terminate(); proc.wait()
         self.assertFalse((self.root / "watch-coordinator.pid").exists(), "a watch that ends says so")
         chat.append(self.root, "user", "still there?", allow_user=True)
         heard = chat.listening(self.root)
@@ -936,6 +949,36 @@ class ListeningTest(FleetDir):
         old = time.time() - chat.READING_GRACE_S - 5
         os.utime(self.root / "watch-coordinator.left", (old, old))
         self.assertFalse(chat.listening(self.root)["on"], "ten minutes on, it does not")
+
+    def test_a_watch_without_once_in_a_background_command_is_refused_and_marks_nothing_read(self):
+        first = chat.append(self.root, "user", "status?", allow_user=True)
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "coordinator", "--all", "--resume"],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
+        self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdout.close(), proc.stderr.close()))
+        try:
+            code = proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            code = "still running"
+        chat.append(self.root, "user", "are you there?", allow_user=True)
+        time.sleep(0.5)
+        self.assertEqual(code, 1)
+        self.assertEqual(proc.stdout.read(), "")
+        self.assertEqual(proc.stderr.read(),
+                         "chat: a watch without --once needs a terminal: in a background command it never exits, so nothing "
+                         f"wakes the session. Arm `fleet chat {self.root} watch --as coordinator --all --resume --once` instead.\n")
+        self.assertEqual(chat.listening(self.root), {"on": False, "seen": 0, "unread": 2, "since": first["at"]})
+
+    def test_a_watch_in_a_terminal_prints_but_marks_nothing_read_a_once_watch_marks_what_it_exited_with(self):
+        first = chat.append(self.root, "user", "status?", allow_user=True)
+        proc, lines = tty_watch(self, self.root, "--as", "coordinator", "--all", "--resume")
+        self.assertEqual(lines.next(), "#1 user -> coordinator: status?\n")
+        time.sleep(0.5)
+        self.assertEqual(chat.listening(self.root), {"on": False, "seen": 0, "unread": 1, "since": first["at"]})
+        proc.terminate(); proc.wait()
+        self.assertFalse((self.root / "watch-coordinator.left").exists())
+        once = run_cli(self.root, "watch", "--as", "coordinator", "--all", "--resume", "--once")
+        self.assertEqual((once.returncode, once.stdout), (0, "#1 user -> coordinator: status?\n"))
+        self.assertEqual(chat.listening(self.root), {"on": True, "seen": 1, "unread": 0, "since": None})
 
     def test_every_state_command_tells_a_deaf_coordinator_what_waits(self):
         chat.append(self.root, "user", "status?", allow_user=True)
@@ -1061,13 +1104,11 @@ class ManagerRelaysTheUnheardTest(FleetDir):
         fleet = next(e for e in chat.fleets.live() if e["id"] == "billing")
         chat.append(fleet["dir"], "user", "are you there?", allow_user=True)
         env = {**os.environ, "FLEET_CHECK_S": "0.2", "FLEET_UNHEARD_S": "0"}
-        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "manager", "--all"],
-                                stdout=subprocess.PIPE, text=True, encoding="utf-8", env=env)
-        self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdout.close()))
-        line = Lines(proc.stdout).next()
+        first = subprocess.run([sys.executable, CHAT, str(self.root), "watch", "--as", "manager", "--all", "--once"],
+                               capture_output=True, text=True, encoding="utf-8", env=env, timeout=20)
+        line = first.stdout
         self.assertTrue(line.startswith("! billing does not read its chat: 1 message(s) from the user since #0"), line)
         self.assertIn("SendMessage its session (billing)", line)
-        proc.kill(); proc.wait()
         again = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "manager", "--all", "--resume", "--once"],
                                  stdout=subprocess.PIPE, text=True, encoding="utf-8", env=env)
         self.addCleanup(lambda: (again.poll() is None and again.kill(), again.wait(), again.stdout.close()))

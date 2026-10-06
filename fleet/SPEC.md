@@ -491,16 +491,22 @@ its id.
 | `say --as WHO [--re N] [--decision D] TEXT` | appends | the stored line | 1 refused |
 | `inbox --as WHO` | the messages open for WHO (`user` allowed) | one line each, oldest first | 1 unknown WHO |
 | `log [--after N]` | every message with id > N | one line each | 0 |
-| `watch --as WHO [--after N \| --resume] [--all] [--once] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager |
+| `watch --as WHO [--after N \| --resume] [--all] [--once] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager; 1 without `--once` when stdout is not a terminal |
 | `wait DECISION...` | waits for the user's answer to one of these open decisions | the answer's line, then `-> the user answered <ref>: record it first, ...`; for an action answered `Failed: ...`, `-> the user's step <ref> failed, and it is not done: fix it and re-present it, ...`, or --withdraw "why"; never --decide` | 1 unknown decision |
 
 A printed line: `#<id> <from>( (<name or author>)) -> <to, each with its name>( [<ref> <decision>])( [side chat #N])( [delivered to <fleet> #<id>, ...])( [via <fleet> #<id>])( (quoting <from>: "<quote>"))`
 `: <text>( [re #N])`. Line breaks print as ` ⏎ `, a tab as a space, and other control characters
 are dropped, so a message is always one line.
 
-`watch`: `DIR/watch-WHO.pid` holds its pid while it runs (removed at exit if still its own),
-`watch-WHO.cursor` the last id printed (`--resume` starts after it), and `watch-WHO.left` is
-touched when it ends. With `--all`, a message from the user is left out for each recipient that has it in
+`watch`: a `--once` watch holds its pid in `DIR/watch-WHO.pid` while it runs (removed at exit if still
+its own), writes `watch-WHO.cursor`, the id of the last message it printed, only when it exits on its own
+(`--resume` starts after it; a watch stopped by a signal leaves it), and touches `watch-WHO.left` when it
+ends. What a `--once` watch exited with was handed to the session it woke: that is what "read" means.
+Without `--once` the watch never exits, so in a background command it would read the chat and wake no
+one: it is refused unless stdout is a terminal (`chat: a watch without --once needs a terminal: in a
+background command it never exits, so nothing wakes the session. Arm \`fleet chat DIR watch --as WHO
+--all --resume --once\` instead.`, exit 1, after the `--fleets` check), and on a terminal, a person
+reading it, it writes none of the three files. With `--all`, a message from the user is left out for each recipient that has it in
 its own chat (`delivered`): a manager's watch does not print the user's message to coordinators the hub
 delivered it to, and prints, with its `[delivered to ...]` mark, one that also names the manager or a
 coordinator it was not delivered to. A manager's watch prints `!` lines every `FLEET_CHECK_S`: a fleet that
@@ -552,7 +558,7 @@ not replied to by the fleet prints at once. Otherwise it waits for the next such
 decision closed meanwhile (withdrawn, or decided in the session) prints as a closed one does and
 exits 0 (open-21, fixed).
 
-**Listening** (`listening(DIR)`, the page and the warnings): `on` when the host's watch pid is
+**Listening** (`listening(DIR)`, the page and the warnings): `on` when the host's `--once` watch pid is
 alive, or its `.left` is younger than 10 minutes, or the host sent a message in the last 10
 minutes. `seen` is the host's cursor (0 without one). `unread` counts the user's messages after
 `seen` that no one but the user has answered with `re`, that aren't tagged with a closed
@@ -1038,9 +1044,10 @@ hook: a broken `chat.jsonl` or ledger is skipped, an error is logged.
   the user's messages and answers go unheard. Arm it as a background command (`run_in_background:
   true`, `timeout: 3300000`): `<plugin>/fleet/bin/fleet chat DIR watch --as ROLE --all --resume --once`.`
   The manager's adds when `--fleets` goes on. A watch is alive when `DIR/watch-ROLE.pid` holds a live pid
-  whose command line (`/proc/PID/cmdline`, `ps -p` on the Mac) is `... chat DIR watch --as ROLE`, DIR
+  whose command line (`/proc/PID/cmdline`, `ps -p` on the Mac) is `... chat DIR watch --as ROLE ... --once`, DIR
   resolved against the process's cwd; failing that, any process with that command line (a watch armed
-  this instant, before Bun wrote its pid file). Never twice in a row: not on a stop that already follows
+  this instant, before Bun wrote its pid file). A watch without `--once` is not armed: it never exits, so
+  it never wakes the session. Never twice in a row: not on a stop that already follows
   a stop hook's block (`stop_hook_active`), nor within 15 s of its last block (the session's
   `fleet-guard` state). Headless runs are guarded too.
 - **The mid-turn nudge** (`fleet_chat_nudge`, PostToolUse). At most once a minute per session (on the

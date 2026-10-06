@@ -440,7 +440,7 @@ export function renderLines(machine: Machine, root: string, messages: readonly M
   });
 }
 
-/** Where a watch as `who` keeps the id of the last message it printed. */
+/** The id of the last message a `--once` watch as `who` exited with: handed to the session it woke. */
 export function cursorPath(root: string, who: string): string {
   return join(root, `watch-${who}.cursor`);
 }
@@ -450,7 +450,7 @@ export function leftPath(root: string, who: string): string {
   return join(root, `watch-${who}.left`);
 }
 
-/** Where a running watch as `who` keeps its process id. */
+/** Where a running `--once` watch as `who` keeps its process id. */
 export function pulsePath(root: string, who: string): string {
   return join(root, `watch-${who}.pid`);
 }
@@ -470,8 +470,8 @@ export interface Listening {
   readonly since: Json | null;
 }
 
-/** Whether the host of DIR reads its chat: a live watch, a watch that ended or a message it sent in the
- * last ten minutes; the last message a watch printed; the user's messages after it that still wait. */
+/** Whether the host of DIR reads its chat: a live `--once` watch, a watch that ended or a message it sent in
+ * the last ten minutes; the last message a `--once` watch exited with; the user's messages after it that still wait. */
 export function listening(machine: Machine, root: string): Listening {
   const who = hostOf(root);
   const now = secondsNow(machine);

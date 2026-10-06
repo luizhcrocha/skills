@@ -194,6 +194,33 @@ export function start(args: readonly string[], env: Readonly<Environment>): Star
   return { proc, lines: new Lines(proc.stdout) };
 }
 
+/** A `fleet` process started on a terminal, and its output as lines. */
+export interface StartedTty {
+  readonly proc: Bun.Subprocess;
+  readonly lines: Lines;
+}
+
+/** Start `fleet ARGS` in the background on a terminal, as a person runs it; its output as lines. */
+export function startTty(args: readonly string[], env: Readonly<Environment>): StartedTty {
+  let feed: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const stream = new ReadableStream<Uint8Array>({ start: (controller) => void (feed = controller) });
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  // The terminal turns each "\n" into "\r\n".
+  const proc = Bun.spawn([FLEET, ...args], { env, terminal: { data: (_terminal, data) => feed?.enqueue(encoder.encode(decoder.decode(data, { stream: true }).replaceAll("\r", ""))) } });
+  void proc.exited.then(() => {
+    setTimeout(() => {
+      try {
+        feed?.close();
+      } catch {
+        // closed already
+      }
+    }, 100);
+  });
+
+  return { proc, lines: new Lines(stream) };
+}
+
 /** Sleep `ms`. */
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
