@@ -13,7 +13,8 @@
  *   to its id while the entry lives.
  * - `/f/<fleet>/preview/…` and `/f/<fleet>/preview/<worker>/…` the fleet's preview dev servers, HTTP and
  *   WebSocket (`preview-proxy.ts`); `POST /f/<fleet>/preview-workers` takes a worker in or out of the
- *   combined preview, under the chat's write policy.
+ *   combined preview, under the chat's write policy; `POST /f/<fleet>/name` names a worker or the fleet from
+ *   the page, under the same policy.
  * - `/f/<fleet>@<machine>/…` a fleet of a peer hub, passed through: this hub checks a post by its own
  *   rules first, then the peer checks this machine (its owner's login) by its rules.
  *
@@ -32,6 +33,7 @@ import { ChatError } from "../errors.ts";
 import { readBytes, resolvePath, strerror } from "../files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { answerRefusal } from "../ledger/answers.ts";
+import { renameAgent } from "../ledger/rename.ts";
 import { pageHtml, readTemplate } from "../page/render.ts";
 import { pick, readLedger } from "../preview/updater.ts";
 import { isRunning } from "../preview/devserver.ts";
@@ -379,7 +381,10 @@ export class Hub {
     const parsed = Option.getOrUndefined(parseObject(state.toString("utf8")));
 
     if (parsed === undefined) return undefined;
-    const shown = view(this.options.machine, this.lookups, parsed, root);
+    const me = this.options.machine.registry.find(root);
+    // What the fleet is called, for the page's rename; the hub's alone, so the oracle's view has no such key.
+    const named = me === undefined ? {} : { named: { id: me.id, session: me.session } };
+    const shown = { ...view(this.options.machine, this.lookups, parsed, root), ...named };
     const fresh: Viewed = { bytes, state: shown, json: dumps(shown, { ensureAscii: false }), at: performance.now() };
     this.views.set(root, fresh);
 
@@ -504,6 +509,8 @@ export class Hub {
     if (rest.startsWith("/preview/")) return this.preview(req, ip, entry, rest.slice("/preview/".length), url.search, keepOpen, upgrade);
 
     if (rest === "/preview-workers" && req.method === "POST") return this.previewWorkers(req, ip, root);
+
+    if (rest === "/name" && req.method === "POST") return this.rename(req, ip, root);
 
     if (req.method === "POST") return this.post(req, ip, root, rest);
 
@@ -633,6 +640,36 @@ export class Hub {
     if (done instanceof PreviewError) return jsonResponse(400, { error: done.reason });
 
     return jsonResponse(200, { include: [...done.include], exclude: [...done.exclude] });
+  }
+
+  /** `POST /f/<fleet>/name` `{agent, name}` names worker `agent`, `{name}` the fleet, from the page; an empty
+   * name gives it back to the name its session gives. Checked as a chat post is. */
+  private async rename(req: Request, ip: string, root: string): Promise<Response> {
+    const viewer = await this.viewer(req, ip);
+    const refusal = postRefusal(this.owner, viewer, this.hosts, (name) => req.headers.get(name));
+
+    if (refusal !== undefined) return jsonResponse(refusal[0], { error: refusal[1] }, { Connection: "close" });
+    const raw = await req.text();
+
+    if (Buffer.byteLength(raw) > MAX_POST_BYTES) return jsonResponse(413, { error: `a name is at most ${MAX_POST_BYTES / 1024} KiB` });
+    const body = Option.getOrUndefined(parseObject(raw));
+    const name = asString(body?.["name"]);
+    const given = body?.["agent"];
+    const agent = asString(given);
+
+    if (name === undefined || (given !== undefined && agent === undefined)) return jsonResponse(400, { error: "send {name} for the fleet, {agent, name} for a worker" });
+
+    if (agent !== undefined) {
+      const renamed = renameAgent(this.options.machine, root, agent, name);
+
+      return "why" in renamed ? jsonResponse(400, { error: renamed.why }) : jsonResponse(200, { agent, ...renamed });
+    }
+
+    const entry = this.options.machine.registry.rename(root, name);
+
+    if ("why" in entry) return jsonResponse(400, { error: entry.why });
+
+    return jsonResponse(200, { id: entry.id, session: entry.session, path: `/f/${encodeURIComponent(entry.id)}/` });
   }
 
   /** What `GET /f/<fleet>/skills` answers: the skills the fleet's session can run, read again after 60 s. */

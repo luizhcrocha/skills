@@ -11,6 +11,8 @@
 {"cli": "state", "argv": ["$DIR", "decision", "d1", "--why", "too late", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "agent", "a1", "--status", "done", "--tokens", "1200", "--duration-ms", "60000", "--report", "migration runs", "--step", "s1", "--log", "verified", "--no-render"], "clock": "2026-01-05T09:50:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "agent", "a2", "--task", "the writer", "--milestone", "m1", "--step", "s2", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a2", "--name", "writer", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a2", "--name", "", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "set", "--status", "paused", "--no-render"], "clock": "2026-01-05T10:20:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "park", "Luiz paused the fleet", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "keep", "ws-a2", "a2's workspace holds the half-done writer", "--no-render"]}

@@ -56,6 +56,9 @@ export interface Agent {
   report?: string;
   task_id?: string;
   measured?: string | number;
+  /** Who gave `name`: the user (on the page), the coordinator (`agent --name`) or the worker's session
+   * (its meta.json); absent while the name is the id. A session never overwrites the other two. */
+  name_by?: string;
 }
 
 /** Something a worker or the fleet waits on. */
@@ -487,6 +490,7 @@ export const AGENT_KEYS = [
   "report",
   "task_id",
   "measured",
+  "name_by",
 ] as const;
 
 function readMeasured(f: Fields, object: JsonObject): string | number | undefined {
@@ -526,6 +530,7 @@ function readAgent(object: JsonObject): Fields | Agent {
     report: f.optStr("report"),
     task_id: f.optStr("task_id"),
     measured: readMeasured(f, object),
+    name_by: f.optStr("name_by"),
   });
 
   return f.done(row, AGENT_KEYS);

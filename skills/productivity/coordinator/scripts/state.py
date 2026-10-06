@@ -497,6 +497,8 @@ def cmd_agent(state, args):
         }
         if args.task_id:
             a["task_id"] = args.task_id
+        if args.name:
+            a["name_by"] = "coordinator"
         state["agents"].append(a)
         log(state, "spawned", args.log or f"Spawned on {a['model']} following {a['skill']}.", a["id"])
         if args.step:
@@ -509,7 +511,12 @@ def cmd_agent(state, args):
     if args.task_id:
         a["task_id"] = args.task_id
         a.pop("measured", None)
-    for key in ("name", "task", "skill", "model", "status", "milestone", "brief", "report"):
+    if args.name:
+        a["name"], a["name_by"] = args.name, "coordinator"
+    elif args.name is not None:  # an empty name gives the row back to its id and its session's name
+        a["name"] = a["id"]
+        a.pop("name_by", None)
+    for key in ("task", "skill", "model", "status", "milestone", "brief", "report"):
         if getattr(args, key) is not None:
             a[key] = getattr(args, key)
     if args.lane is not None:

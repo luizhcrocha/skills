@@ -131,11 +131,12 @@ renames it. Milestones are never removed.
 - `--milestone`, when given, must be known: `unknown milestone 'M' (the roadmap has: m1, m2)`.
 - New: needs `--milestone` and `--task`. Defaults: name = id, skill none, model opus, status
   running, lane [], tokens 0, duration_ms 0, rounds 1, brief "", report "", `started` = `updated`
-  = now; `task_id` when given. Logs `spawned` (`--log`, else `Spawned on <model> following <skill>.`).
+  = now; `task_id` when given; `name_by: "coordinator"` (after `task_id`) when `--name` is given. Logs `spawned` (`--log`, else `Spawned on <model> following <skill>.`).
   `--step S` marks S current with this agent (unknown S refused). Prints
   `recorded ID (NAME); its brief opens with: Read DIR/brief.md first; your id is ID.`
-- Known: status `done` → `running` adds a round. `--task-id` sets it and forgets `measured`. The
-  fields given are set; `--tokens` or `--duration-ms` set `measured: "by hand"`, after which the
+- Known: status `done` → `running` adds a round. `--task-id` sets it and forgets `measured`.
+  `--name N` sets the name and `name_by: "coordinator"`; `--name ""` puts the id back and drops
+  `name_by`, so the worker's session names it again (below). The other fields given are set; `--tokens` or `--duration-ms` set `measured: "by hand"`, after which the
   transcript no longer overrides them. `updated` = now. `--step S` sets S's agent to this worker
   and its status to follow the worker (running → current, done → done, blocked → blocked; other
   statuses leave the step's status alone, open-25). `--log` logs an event whose kind follows the
@@ -162,6 +163,23 @@ renames it. Milestones are never removed.
   `duration_ms` (first to last timestamp) and `measured` (the transcript's mtime) from
   `subagents/agent-<task_id>.jsonl`, while it is live and once more after (*pinned by test_state
   MeasuredTest; out of the oracle, which has no transcripts*).
+- **Names.** A worker is called, first found of: the name the user gave on the page (`name_by:
+  "user"`, the hub's `POST /f/<fleet>/name`); the coordinator's `--name` (`"coordinator"`); what its
+  session calls it (`"session"`): its subagent's `subagents/agent-<task_id>.meta.json`, `name` (the Agent
+  tool's) else `description`, beside the transcript of DIR's scratchpad's session, else of the fleet's
+  registered `session_id` (a fleet served outside a scratchpad, a respawned session); its id (`name_by`
+  absent). The name is resolved when it is written, not
+  by the page: on every write (after measuring) each row with a `task_id` that nobody named (`name_by`
+  absent with the name its id, or `"session"`) takes its session's name, unless a mention could not
+  tell it apart (a chat participant's, or another worker's id or name, case-insensitively: then it
+  keeps its name). A row from before `name_by` whose name is not its id counts as the coordinator's.
+  Nothing automatic replaces a user's or a coordinator's name (*TypeScript only, out of the oracle,
+  which has no subagent files; pinned by fleet/test/naming.test.ts*).
+- **The lock.** `fleet state` reads, changes and writes `state.json` (and renders) under an exclusive
+  `flock` of `DIR/state.json` itself, which the hub's rename takes too, so neither loses the other's
+  change; `init`, with no ledger yet, takes none. `state.json` is written in place, so the lock
+  outlives each write and no lock file joins DIR (*TypeScript only; Python's state.py takes none*).
+  `fleet ws` and `fleet preview` write the ledger without it.
 
 **roadblock** `ID [--title T --detail D --severity warning|serious|critical --needs user|coordinator|worker] [--agent A] [--decision D] [--resolved | --open] [--important]`
 - `--agent`, when given, must be known (`unknown agent 'A'`, checked first; a manager's ledger takes
@@ -309,7 +327,8 @@ project, goal, status (running|paused|blocked|done), now, now_at, started, updat
 roadmap[]     {id, title, steps[]: {id, title, status (done|current|pending|blocked), agent|null}}
 agents[]      {id, name, task, skill, model, status (queued|running|blocked|done|failed|stopped),
                lane[], milestone, tokens, duration_ms, rounds, started, updated, brief, report,
-               task_id?, measured? ("by hand" | the transcript's mtime)}
+               task_id?, measured? ("by hand" | the transcript's mtime),
+               name_by? ("user" | "coordinator" | "session"; absent: the name is the id)}
                in spawn order: the page colours by position, so rows are appended, never reordered
 roadblocks[]  {id, title, detail, agent|null, severity, needs, decision|null, since, resolved, ref}
 decisions[]   {id, ref, kind, title, question, why, blocking, agent, options[]: {id, label, consequence},
@@ -559,7 +578,18 @@ per dir: a newer one for the same dir replaces it), so the fleet gets its name b
 `fleet serve --stop` keeps nothing. It also renames a fleet whose session got a custom title
 (`custom-title.json` beside the transcript: DIR's scratchpad's session, else the entry's `session_id`, looked
 up in every project under `$CLAUDE_CONFIG_DIR/projects/`) to the title's slug, unless that is taken or
-reserved; a missing or blank title renames nothing. Names, on `register`: the manager is `manager`; a
+reserved; a missing or blank title renames nothing. In TypeScript the session's name is, first found of
+(*out of the oracle, whose fixtures have none of the first, third or fourth; pinned by
+fleet/test/naming.test.ts*): the name given on the fleet's page (`REGISTRY/overrides/<the first 16 hex
+digits of the SHA-256 of DIR>.json`, `{dir, name}`, written by the hub's `POST /f/<fleet>/name` and removed
+by an empty name or `fleet serve --stop`); the custom title; the `name` of Claude Code's live record of the
+entry's pid, `$CLAUDE_CONFIG_DIR/sessions/<pid>.json`, while its `sessionId` is the entry's `session_id`
+(a derived name, `nameSource: "derived"`, included); the transcript's last `{"type": "ai-title",
+"aiTitle"}`. The first three but a derived name are given names and rename the fleet whenever they
+change; a derived name and the AI title name only a fleet with no `session` yet, so they never undo a
+`name` or an earlier title. A page name renames only the fleet: a Claude Code session's own title
+cannot be changed from outside. An empty one sets `session` to null, and the next read names the fleet
+after its session again (it keeps its id when nothing does). Names, on `register`: the manager is `manager`; a
 coordinator is the slug of its session title when that is free; else the name of its prior entry: its own
 entry, else the kept entry of its dir, else the kept entry of its session id (a respawned session serving
 another dir), each only while no live fleet holds that name, with that entry's aliases and session
@@ -726,7 +756,12 @@ itself. A manager made later appears the same way, on the same address.
   unknown decision or a secret's value; 409 an answer to a closed decision, or an allow-once a
   [permission](#permission-grants) cannot grant; 500 store failure),
   `POST /chat/preview`, `GET /skills` (below), the preview (`/preview/…`, HTTP and WebSocket, and `POST
-  /preview-workers`; see [The preview](#the-preview-fleet-preview)), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
+  /preview-workers`; see [The preview](#the-preview-fleet-preview)), `POST /name` (TypeScript only; under
+  `POST /chat`'s write policy: 403, 415, 413): `{agent, name}` names worker `agent` (200 `{agent, name,
+  name_by?}`, 400 an unknown worker or a name a mention could not tell apart, as [Names](#statepy-the-ledger-cli) words
+  it), `{name}` names the fleet before every other name (200 `{id, session, path}`, the fleet's address
+  after; 400 reserved or taken); an empty name gives either back to its session's; the page's state then
+  carries `named: {id, session}`, the hub's alone), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
   sandbox CSP; dot files and paths out of DIR 404). `/f/<fleet>` redirects (301) to `/f/<fleet>/`;
   `/f/<a>/f/<b>/…` is `/f/<b>/…`, so the manager's page, whose coordinators' links are relative,
   works under `/f/manager/`. 421 on a `Host` the hub doesn't answer to (loopback, `localhost`, the
@@ -1240,7 +1275,7 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   (`start --stack`'s, for that start), commit, conflicts[] {path, workers[]}, error, updated, workers[] (per-worker servers), ports {combined,
   workers}}`. It is not a key of
   `state.json`: it has three writers (the coordinator's commands, the updater, the hub), and `state.json`
-  has one writer and no lock. Each change is made under an exclusive `flock` on `DIR/preview.lock` and
+  is locked only by `fleet state` and the hub's rename. Each change is made under an exclusive `flock` on `DIR/preview.lock` and
   written whole through a rename. A pid counts as running when the process exists and is no zombie.
 - **The dev server's last error** (`status`, the page): in the last 400 lines of its log, colours
   stripped, the burst of lines around the last one that reads as an error (from the first error line
@@ -1361,8 +1396,8 @@ recommendation attached.
   <the error>"`, spawns again with `model: "opus"`, and says so in its next message.
 - **Each answer is recorded on the chat**, not the ledger: `fleet chat DIR say --as advisor "<asker>
   asked: <question> | <verdict> | <reason> | <confidence>"`. The page shows both; the chat is the store
-  a participant other than the coordinator may append to (under its lock, while `state.json` has one
-  writer and no lock), the message reaches the user, who can overrule it with a reply, and it
+  a participant other than the coordinator may append to (under its lock, while `state.json` is the
+  coordinator's, the page's renames aside), the message reaches the user, who can overrule it with a reply, and it
   survives a restart: the new advisor reads `chat log` for its earlier rulings. The asker is named
   without `@`, so the record is not opened in the asker's inbox.
 
@@ -1379,7 +1414,7 @@ recommendation attached.
 | `fleets.py gate take/free`, `name` | `REGISTRY/gate/gate.json` (under `REGISTRY/gate/gate.lock`), `REGISTRY/<fleet>.json` |
 | `serve_dashboard.py` | `DIR/server.json`, `DIR/server.log`, `REGISTRY/<fleet>.json` |
 | `fleet serve` | `REGISTRY/<fleet>.json` (removed with `--stop`) |
-| `fleet hub` | `REGISTRY/hub/hub.json` while it runs; `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, `<root>/.claude/settings.local.json` (and its folder) and `DIR/grants.jsonl` |
+| `fleet hub` | `REGISTRY/hub/hub.json` while it runs; `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, `<root>/.claude/settings.local.json` (and its folder) and `DIR/grants.jsonl`; on a page rename, `DIR/state.json` (a worker's `name`, `name_by`, `updated`, under the ledger's lock) or `REGISTRY/overrides/<hash>.json` and `REGISTRY/<fleet>.json` |
 | the plugin's hook (grant removal) | `<root>/.claude/settings.local.json`, `DIR/grants.jsonl` (`remove` lines) |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |

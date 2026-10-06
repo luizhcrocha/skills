@@ -8,7 +8,7 @@
  *
  * It is a file of its own, not a key of `state.json`, because it has three writers: the coordinator's
  * `fleet preview` commands, the updater (every few seconds) and the hub (the page's include and exclude).
- * `state.json` has one writer and no lock; this file is changed only under an exclusive `flock` on
+ * `state.json` is locked only by `fleet state` and the hub's rename; this file is changed only under an exclusive `flock` on
  * `DIR/preview.lock`, and written whole through a rename, so a reader never sees half of it and no writer
  * loses another's change. The ledger records the preview's workspace (`workspaces[]`, `kind: "preview"`)
  * and its dev command (`preview.cmd`), both written by `fleet preview` alone.

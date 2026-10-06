@@ -32,6 +32,7 @@ roadmap[]    ordered milestones
 agents[]     one row per worker, in spawn order (its position picks its chart colour, so append, never reorder)
   id         short stable id, also used in steps/roadblocks/events
   name       what the user calls it ("auth-impl")
+  name_by    who named it: user (on the page), coordinator (`--name`), session (its Agent call); absent while the name is the id
   task       one sentence
   skill      implement | diagnosing-bugs | prototype | research | tdd | none
   model      opus | sonnet | haiku | fable (haiku is outside the policy: recorded with a warning, the user's to approve)
@@ -120,6 +121,7 @@ events[]     activity log, oldest first
 | Milestone checks pass | `step s2 --status done` for any step not already done, `event --kind integrated "checks green"`, `set --now "..."` |
 | The user must see something now | open a decision for it: the page chimes and keeps a toast only for what asks the user something still open. Everything else is the fleet's record, which the user sees only when their page is set to notify about everything |
 | A worker is spawned | `agent a1 --task ... --milestone m1 --task-id <agentId>`: with the id the Agent tool returned, its tokens and duration are read from its own transcript on every command, so a finished worker's figures need no copying |
+| A worker's name | Leave `--name` out: with `--task-id` the row takes what its session calls it (the Agent call's `name`, else its `description`) and follows it. `--name N` is yours and nothing automatic replaces it (`--name ""` gives it back to the session); a name the user gives on the page outranks both. The fleet takes its session's name (a /rename, else Claude Code's own, derived or not), unless the user names it on the page |
 | Something must outlive a compaction and has no row (a queued ask, a hunk outside any lane, a workspace and what it holds, where a worker stands) | `keep ID "text"`; `keep ID --drop "why"` when it is settled. `show` prints them, and the Plan view lists them as held for later |
 | A round of questions to settle a design (a grilling) | `grill g1 --title T --ask "TITLE \| QUESTION \| RECOMMENDATION \| WHY"`, one `--ask` per question, the reason required; `--of Q2` for follow-ups; `--answer "Q3: ..."`, `--drop "Q4: why"`, `--revise "Q3: T \| Q \| R \| W"`, `--reason "Q3: why"` as answers come; `--done "what was agreed"` as soon as none is open (until then the page shows it in Waiting as answered, waiting to be recorded, and `fleet state` warns at every command). The page asks each question with its recommendation, and one send carries every answer |
 | Where a decision or a grilling came from | `--step S` (its milestone follows), `--milestone M`, `--agent A` on `decision` or `grill`; a closed one takes `--step`/`--milestone` too. The decision's page says "From <milestone>, step <step>, for <worker>", and the Plan shows the chips |

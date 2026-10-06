@@ -87,6 +87,21 @@ function rows(text: string): JsonObject[] {
   });
 }
 
+/** The name a session gave worker `taskId`: its subagent's meta.json `name` (the Agent tool's), else its
+ * `description`, in the first of the session `folders` that has it; undefined without one. */
+export function workerTitle(folders: readonly string[], taskId: string): string | undefined {
+  const text = folders.map((folder) => readText(join(folder, "subagents", `agent-${taskId}.meta.json`))).find((t) => t !== undefined);
+  const meta = text === undefined ? undefined : asObject(Option.getOrUndefined(parseJson(text)));
+
+  for (const key of ["name", "description"]) {
+    const value = asString(meta?.[key])?.trim();
+
+    if (value !== undefined && value !== "") return value;
+  }
+
+  return undefined;
+}
+
 /** What a worker has used, from its own transcript. */
 export interface WorkerFigures {
   readonly tokens: number;
@@ -211,6 +226,48 @@ export class SpendReader {
     this.held.set(path, held);
 
     return held.spent;
+  }
+}
+
+/** Reads the last AI title (`{"type": "ai-title", "aiTitle": …}`) of transcripts, each from where the last
+ * read stopped, so the registry, read every second by the hub, reads a growing transcript once. */
+export class AiTitles {
+  private readonly held = new Map<string, { offset: number; inode: bigint; title: string | undefined }>();
+
+  /** The last AI title in the transcript at `path`, or undefined when it has none. */
+  latest(path: string): string | undefined {
+    let stat: { readonly size: bigint; readonly ino: bigint };
+
+    try {
+      stat = statSync(path, { bigint: true });
+    } catch {
+      this.held.delete(path);
+
+      return undefined;
+    }
+
+    const size = Number(stat.size);
+    let held = this.held.get(path);
+
+    if (held === undefined || size < held.offset || stat.ino !== held.inode) held = { offset: 0, inode: stat.ino, title: undefined };
+
+    if (size > held.offset) {
+      const chunk = readRange(path, held.offset, size);
+      const whole = chunk.subarray(0, chunk.lastIndexOf(0x0a) + 1);
+      held.offset += whole.length;
+
+      for (const line of whole.toString("utf8").split("\n")) {
+        if (!line.includes('"ai-title"')) continue;
+        const record = asObject(Option.getOrUndefined(parseJson(line)));
+        const title = record?.["type"] === "ai-title" ? asString(record["aiTitle"])?.trim() : undefined;
+
+        if (title !== undefined && title !== "") held.title = title;
+      }
+    }
+
+    this.held.set(path, held);
+
+    return held.title;
   }
 }
 

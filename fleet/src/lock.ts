@@ -16,8 +16,8 @@ function open() {
 
 let libc: ReturnType<typeof open> | undefined;
 
-/** Run `body` while holding an exclusive lock on the open file `fd`; the lock is released after. */
-export function withExclusiveLock<T>(fd: number, body: () => T): T {
+/** Take an exclusive lock on the open file `fd`, waiting for it; the function returned releases it. */
+export function holdExclusiveLock(fd: number): () => void {
   libc ??= open();
   const { flock } = libc.symbols;
 
@@ -25,9 +25,18 @@ export function withExclusiveLock<T>(fd: number, body: () => T): T {
     // EINTR: try again
   }
 
+  return () => {
+    flock(fd, LOCK_UN);
+  };
+}
+
+/** Run `body` while holding an exclusive lock on the open file `fd`; the lock is released after. */
+export function withExclusiveLock<T>(fd: number, body: () => T): T {
+  const release = holdExclusiveLock(fd);
+
   try {
     return body();
   } finally {
-    flock(fd, LOCK_UN);
+    release();
   }
 }

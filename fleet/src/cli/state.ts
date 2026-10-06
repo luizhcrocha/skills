@@ -21,12 +21,13 @@ import * as commands from "../ledger/commands.ts";
 import { ledgerText, parseLedger, type Ledger } from "../ledger/model.ts";
 import { nextStepId, number } from "../ledger/numbers.ts";
 import { showLines } from "../ledger/show.ts";
+import { lockLedger } from "../ledger/store.ts";
 import { AGENT_STATUSES, ASKS, SHARED_KINDS, STATUSES, STEP_STATUSES, validate, WORKSPACE_MODES } from "../ledger/validate.ts";
 import { readChat } from "../chat/store.ts";
 import { activeWorkspaces, leftOpen, offPolicy, overlapping, staleNow, staleRows, unpruned, unrecorded } from "../ledger/warnings.ts";
 import { readObject } from "../registry.ts";
 import { World, type Machine } from "../world.ts";
-import { opt, parseCommand, usageWidth, type CommandSpec } from "./args.ts";
+import { opt, parseCommand, usageWidth, type Args, type CommandSpec } from "./args.ts";
 import { exitOf, printUsage } from "./exit.ts";
 
 const ID = [{ dest: "id" }] as const;
@@ -257,10 +258,17 @@ function loadLedger(path: string): Ledger | Refusal | undefined {
   return Option.getOrElse(parseLedger(text), () => stateRefusal(`${path} is not a JSON object`));
 }
 
+/** A parsed command and the DIR whose ledger it is for. */
+interface LedgerRequest {
+  readonly root: string;
+  readonly spec: CommandSpec;
+  readonly args: Args;
+  readonly noRender: boolean;
+  readonly quiet: boolean;
+}
+
 function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<number, Refusal | UsageError | "help", Out> {
   return Effect.gen(function* () {
-    const out = yield* Out;
-
     if (argv[1] === "note") return yield* Effect.fail(stateRefusal("there is no `note` command: a note is `event --kind note TEXT`"));
     const noRender = argv.includes("--no-render");
     const quiet = argv.includes("-q");
@@ -269,9 +277,25 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<nu
 
     if (parsed === "help" || parsed instanceof UsageError) return yield* Effect.fail(parsed);
     const { spec, dir, args } = parsed;
-    const cmd = spec.name;
     const root = resolvePath(dir);
     makeDirs(root);
+
+    // The ledger is read, changed and written under its lock: the hub's rename writes it too.
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => lockLedger(root)),
+      () => ledgerCommand(machine, { root, spec, args, noRender, quiet }),
+      (release) => Effect.sync(() => release?.()),
+    );
+  });
+}
+
+/** One parsed command against DIR's ledger: read it, run the handler, warn, then measure, name, number,
+ * check, write and render. */
+function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<number, Refusal, Out> {
+  return Effect.gen(function* () {
+    const out = yield* Out;
+    const { root, spec, args, noRender, quiet } = request;
+    const cmd = spec.name;
     const path = join(root, "state.json");
     const loaded = loadLedger(path);
 
@@ -332,6 +356,7 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<nu
 
     if (result === undefined) return 0;
     commands.measure(machine, root, result);
+    commands.nameFromSessions(machine, root, result);
     number(result);
     result.updated = stampOf(machine.now());
     const fault = validate(result);

@@ -58,6 +58,18 @@ function controlled(name: string): boolean {
   return false;
 }
 
+/** Why worker `id` cannot be called `name` in `ledger` (a control character, a chat participant's name,
+ * another worker's id or name), or undefined when it can; worded as {@link validate} words it. */
+export function nameRefusal(ledger: Ledger, id: string, name: string): string | undefined {
+  if (controlled(name)) return `agent ${id} name has a control character`;
+  const label = name.toLowerCase();
+
+  if (RESERVED.has(label)) return `agent ${id} cannot be called '${label}': that name is a chat participant`;
+  const other = ledger.agents.find((a) => a.id !== id && (a.id.toLowerCase() === label || a.name.toLowerCase() === label));
+
+  return other === undefined ? undefined : `agent ${id} is called '${label}', which is also agent ${other.id}; a mention could not tell them apart`;
+}
+
 /** The first fault in `ledger`, or undefined when it holds (the defaults are then filled). */
 export function validate(ledger: Ledger): Refusal | undefined {
   if (!has(STATUSES, ledger.status)) return invalid(`status '${ledger.status}' not in ${list(STATUSES)}`);

@@ -3,7 +3,8 @@
  * fleet, `REGISTRY/gate/gate.json` for the one gate slot (taken and freed under `gate.lock`). Every read (`live`) forgets a fleet whose
  * server died or whose entry is malformed, and renames one whose session got a title (open-25). A
  * forgotten fleet's last entry stays in `REGISTRY/names/<fleet>.json` until its dir is served again,
- * so a restarted session (`claude respawn`: a new pid, the same session id) gets its name back.
+ * so a restarted session (`claude respawn`: a new pid, the same session id) gets its name back. A name
+ * given on the page is kept in `REGISTRY/overrides/`, by dir, and comes before every other.
  * Entries are written atomically, in Python's format (indent 2, ASCII escapes).
  */
 import { createHash } from "node:crypto";
@@ -16,7 +17,7 @@ import { stampOf, parseInstant } from "./clock.ts";
 import { exists, isDir, listDir, makeDirs, readText, remove, resolvePath, writeAtomic } from "./files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject } from "./json.ts";
 import { withExclusiveLock } from "./lock.ts";
-import { transcriptOf } from "./transcripts.ts";
+import { AiTitles, transcriptOf } from "./transcripts.ts";
 
 /** The names the chat keeps for itself. */
 export const KEPT_NAMES = ["coordinator", "manager", "user"] as const;
@@ -165,6 +166,13 @@ function entryOf(raw: JsonObject): Entry | undefined {
   };
 }
 
+/** `value` as a string without its outer spaces, or undefined when it is not one or is blank. */
+function trimmed(value: Json | undefined): string | undefined {
+  const text = asString(value)?.trim();
+
+  return text === undefined || text === "" ? undefined : text;
+}
+
 function aliasesOf(raw: JsonObject): string[] {
   return (asArray(raw["aliases"]) ?? []).flatMap((a) => {
     const alias = asString(a);
@@ -173,9 +181,18 @@ function aliasesOf(raw: JsonObject): string[] {
   });
 }
 
+/** What a fleet's session is called, and whether someone gave the name (the page, a /rename, the user
+ * naming the live session) or Claude Code made it (a derived name, the AI title), which names only a fleet
+ * that has no name yet. */
+export interface SessionTitle {
+  readonly title: string;
+  readonly given: boolean;
+}
+
 /** The registry of this machine's fleets. */
 export class Registry {
   readonly place: RegistryPlace;
+  private readonly aiTitles = new AiTitles();
 
   constructor(place: RegistryPlace) {
     this.place = place;
@@ -189,16 +206,51 @@ export class Registry {
     return listDir(this.place.home).filter((name) => name.endsWith(".json") && !isDir(join(this.place.home, name)));
   }
 
-  /** The title (its /rename) of the session whose scratchpad holds `root`, else of session `sessionId`, or undefined. */
-  titleOf(root: string, sessionId?: string | null): string | undefined {
+  /**
+   * What the fleet served from `root` is called, first found of: the name given on its page; its session's
+   * /rename (`custom-title.json`: the session whose scratchpad holds `root`, else session `sessionId`); the
+   * name in Claude Code's live record of process `pid` (`sessions/<pid>.json`) while it is session
+   * `sessionId`, a derived one included; the transcript's last AI title. Undefined when none says.
+   */
+  titleOf(root: string, sessionId?: string | null, pid?: number): SessionTitle | undefined {
+    const override = this.overrideOf(root);
+
+    if (override !== undefined) return { title: override, given: true };
     const transcript = transcriptOf(root, this.place.config);
     const folder = transcript !== undefined ? transcript.replace(/\.jsonl$/, "") : this.sessionFolder(sessionId);
+    const custom = folder === undefined ? undefined : trimmed(readObject(join(folder, "custom-title.json"))?.["customTitle"]);
 
-    if (folder === undefined) return undefined;
-    const value = readObject(join(folder, "custom-title.json"));
-    const title = asString(value?.["customTitle"])?.trim();
+    if (custom !== undefined) return { title: custom, given: true };
+    const record = pid === undefined ? undefined : readObject(join(this.place.config, "sessions", `${pid}.json`));
+    const named = trimmed(record?.["name"]);
+    const sameSession = sessionId === undefined || sessionId === null || record?.["sessionId"] === sessionId;
 
-    return title === undefined || title === "" ? undefined : title;
+    if (named !== undefined && sameSession) return { title: named, given: record?.["nameSource"] !== "derived" };
+    const ai = folder === undefined ? undefined : this.aiTitles.latest(`${folder}.jsonl`);
+
+    return ai === undefined ? undefined : { title: ai, given: false };
+  }
+
+  private overridePath(root: string): string {
+    return join(this.place.home, "overrides", `${createHash("sha256").update(resolvePath(root)).digest("hex").slice(0, 16)}.json`);
+  }
+
+  /** The name given on the page of the fleet served from `root`, or undefined. */
+  private overrideOf(root: string): string | undefined {
+    const kept = readObject(this.overridePath(root));
+
+    return kept?.["dir"] === resolvePath(root) ? trimmed(kept["name"]) : undefined;
+  }
+
+  /** The folders beside the transcripts of the sessions the fleet served from `root` belongs to: its
+   * scratchpad's session's, then its entry's session id's (a fleet served elsewhere, or a respawned
+   * session); those that exist. */
+  sessionFolders(root: string): string[] {
+    const transcript = transcriptOf(root, this.place.config);
+    const scratch = transcript?.replace(/\.jsonl$/, "");
+    const registered = this.sessionFolder(asString(this.find(root)?.raw["session_id"]));
+
+    return [...new Set([scratch, registered])].filter((f): f is string => f !== undefined && isDir(f));
   }
 
   /** The folder beside session `sessionId`'s transcript, in whichever project holds it, or undefined. */
@@ -273,9 +325,10 @@ export class Registry {
     }
 
     entries.forEach((entry, i) => {
-      const title = this.titleOf(entry.dir, asString(entry.raw["session_id"]));
+      const found = this.titleOf(entry.dir, asString(entry.raw["session_id"]), pidOfEntry(entry));
 
-      if (title === undefined || title === entry.session) return;
+      if (found === undefined || found.title === entry.session || (!found.given && entry.session !== null)) return;
+      const title = found.title;
       let next = entry.role === "manager" ? entry.id : fleetName(title);
       const kept = isKept(next) && entry.role !== "manager";
 
@@ -322,9 +375,10 @@ export class Registry {
     const session = sessionId ?? scratchpadSession(dir, this.place.config) ?? asString((known ?? keptOfDir?.raw)?.["session_id"]);
     const keptOfSession = session === undefined ? undefined : kept.find((k) => k.raw["session_id"] === session && !taken(asString(k.raw["id"]) ?? ""));
     const prior = known ?? (keptOfDir !== undefined && !taken(asString(keptOfDir.raw["id"]) ?? "") ? keptOfDir.raw : keptOfSession?.raw);
-    const title = this.titleOf(dir, session);
     const priorId = asString(prior?.["id"]);
     const priorSession = asString(prior?.["session"]);
+    const found = this.titleOf(dir, session, pid);
+    const title = found !== undefined && (found.given || priorSession === undefined) ? found.title : undefined;
     const free = (id: string): boolean => !taken(id) && !isKept(id);
     let name: string;
 
@@ -371,6 +425,7 @@ export class Registry {
   /** Forget the fleet served from `root` (`fleet serve --stop`): a stop is on purpose, so its name is not kept. */
   unregister(root: string): void {
     const dir = resolvePath(root);
+    remove(this.overridePath(dir));
 
     for (const name of this.entryFiles()) {
       const path = join(this.place.home, name);
@@ -397,6 +452,40 @@ export class Registry {
     if (next !== entry.id) remove(this.path(entry.id));
 
     return this.write(entry.raw, { id: next, session }, aliasesAfter(entry.raw, entry.id, next));
+  }
+
+  /**
+   * Name the fleet served from `root` `name` (trimmed) from its page, before every other name: the entry,
+   * or why not. An empty name forgets the page's, and the fleet takes the name its session gives again.
+   * A Claude Code session's own title cannot be changed from outside, so only the fleet is renamed.
+   */
+  rename(root: string, name: string): Entry | { readonly why: string } {
+    const entry = this.find(root);
+
+    if (entry === undefined) return { why: `${root} is not being served; serve it with \`fleet serve\` first` };
+    const wanted = name.trim();
+    const path = this.overridePath(entry.dir);
+
+    if (wanted === "") {
+      remove(path);
+      const cleared = this.write(entry.raw, { session: null }, entry.aliases);
+
+      return this.live().find((e) => e.dir === entry.dir) ?? cleared;
+    }
+
+    const next = entry.role === "manager" ? entry.id : fleetName(wanted);
+
+    if (next === "" || (isKept(next) && entry.role !== "manager")) {
+      return { why: `'${wanted}' cannot name a fleet; the chat keeps ['coordinator', 'manager', 'user'] for itself` };
+    }
+
+    if (this.live().some((e) => e.id === next && e.dir !== entry.dir)) return { why: `another fleet is already called '${next}'; pick another name` };
+    makeDirs(join(this.place.home, "overrides"));
+    writeAtomic(path, `${dumps({ dir: entry.dir, name: wanted }, { indent: 2 })}\n`);
+
+    if (next !== entry.id) remove(this.path(entry.id));
+
+    return this.write(entry.raw, { id: next, session: wanted }, aliasesAfter(entry.raw, entry.id, next));
   }
 
   private gatePath(): string {

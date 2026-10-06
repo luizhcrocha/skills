@@ -773,6 +773,52 @@ describe("who may write", () => {
   });
 });
 
+describe("names given on the page", () => {
+  const row = (id: string): JsonObject => asObject((asArray(JSON.parse(readFileSync(join(root, "state.json"), "utf8"))["agents"]) ?? []).find((a) => asObject(a)?.["id"] === id)) ?? {};
+
+  test("a worker renamed from the page is the user's, and an empty name gives it back", async () => {
+    await start();
+    const named = await post({ agent: "a2", name: " Writer " }, {}, "/f/p/name");
+    expect([named.status, named.body]).toEqual([200, { agent: "a2", name: "Writer", name_by: "user" }]);
+    expect([row("a2")["name"], row("a2")["name_by"]]).toEqual(["Writer", "user"]);
+    const taken = await post({ agent: "a2", name: "Notes-Impl" }, {}, "/f/p/name");
+    expect([taken.status, String(taken.body["error"])]).toEqual([400, expect.stringContaining("a mention could not tell them apart")]);
+    expect((await post({ agent: "zz", name: "x" }, {}, "/f/p/name")).body).toEqual({ error: "no worker 'zz'" });
+    expect((await post({ agent: 2, name: "x" }, {}, "/f/p/name")).status).toBe(400);
+    const cleared = await post({ agent: "a2", name: "" }, {}, "/f/p/name");
+    expect([cleared.status, cleared.body]).toEqual([200, { agent: "a2", name: "a2" }]);
+    expect([row("a2")["name"], row("a2")["name_by"]]).toEqual(["a2", undefined]);
+  });
+
+  test("only who may write the chat renames, and a refusal changes nothing", async () => {
+    const fake = join(base, "tailscale");
+    writeFileSync(fake, FAKE_TAILSCALE);
+    chmodSync(fake, 0o755);
+    await start({ tailscale: fake });
+    const before = readFileSync(join(root, "state.json"), "utf8");
+    const eve = await post({ agent: "a2", name: "Writer" }, { "Tailscale-User-Login": "eve@example.com" }, "/f/p/name");
+    expect([eve.status, eve.body]).toEqual([403, { error: `only ${OWNER} can write here` }]);
+    expect((await post({ name: "Checkout" }, { "Tailscale-User-Login": "eve@example.com" }, "/f/p/name")).status).toBe(403);
+    expect((await post({ agent: "a2", name: "Writer" }, { Origin: "http://evil.example" }, "/f/p/name")).status).toBe(403);
+    expect((await request("POST", "/f/p/name", JSON.stringify({ agent: "a2", name: "Writer" }))).status).toBe(415);
+    expect(readFileSync(join(root, "state.json"), "utf8")).toBe(before);
+    expect(machine(env).registry.live().map((e) => e.id)).toEqual(["p"]);
+  });
+
+  test("the fleet renamed from the page moves to its new address, and its page says what it is called", async () => {
+    await start();
+    const named = await post({ name: "Checkout" }, {}, "/f/p/name");
+    expect([named.status, named.body]).toEqual([200, { id: "checkout", session: "Checkout", path: "/f/checkout/" }]);
+    const moved = await request("GET", "/f/p/");
+    expect([moved.status, moved.headers.get("Location")]).toEqual([301, "/f/checkout/"]);
+    const page = await (await fetch(`http://127.0.0.1:${port}/f/checkout/`)).text();
+    expect(page).toContain('"named": {"id": "checkout", "session": "Checkout"}');
+    expect((await post({ name: "user" }, {}, "/f/checkout/name")).status).toBe(400);
+    const cleared = await post({ name: "" }, {}, "/f/checkout/name");
+    expect([cleared.status, cleared.body]).toEqual([200, { id: "checkout", session: null, path: "/f/checkout/" }]);
+  });
+});
+
 describe("the index and the manager", () => {
   test("the index lists every fleet of the registry, and its stream follows them", async () => {
     await start();

@@ -17,12 +17,12 @@ import { FLEET_BIN, isDir, makeDirs, readOrWhy, remove, resolvePath, writeBytes 
 import { failedAnswer, failureWords } from "../health.ts";
 import { placeRoot, registeredSession } from "../hub/grants.ts";
 import { pidOfEntry } from "../registry.ts";
-import { workerFigures } from "../transcripts.ts";
+import { workerFigures, workerTitle } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
 import { dropKey, REFUSAL_KEYS, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, milestoneOfStep, nextStepId } from "./numbers.ts";
 import { makeRefusedCall, permissionOptions } from "./permission.ts";
-import { ID, KINDS } from "./validate.ts";
+import { ID, KINDS, nameRefusal } from "./validate.ts";
 import { closedNamed, isLive, sharedOverlap, UNFINISHED } from "./warnings.ts";
 
 /** One run of one ledger command. */
@@ -205,6 +205,27 @@ export function measure(machine: Machine, root: string, ledger: Ledger): void {
     a.tokens = got.tokens;
     a.duration_ms = got.duration_ms;
     a.measured = got.at;
+  }
+}
+
+/** Whether worker `a`'s name was given by someone (the user, the coordinator, or before `name_by` was
+ * recorded, any name but the id), so no session name replaces it. */
+function namedBySomeone(a: Agent): boolean {
+  return a.name_by === "user" || a.name_by === "coordinator" || (a.name_by === undefined && a.name !== a.id);
+}
+
+/** Name each worker row that names its task id and nobody named after what its session calls it (its
+ * meta.json), on every write; a name a mention could not tell apart from another is passed over. */
+export function nameFromSessions(machine: Machine, root: string, ledger: Ledger): void {
+  const unnamed = ledger.agents.filter((a) => given(a.task_id) && !namedBySomeone(a));
+  const folders = unnamed.length === 0 ? [] : machine.registry.sessionFolders(root);
+
+  for (const a of unnamed) {
+    const title = workerTitle(folders, a.task_id ?? "");
+
+    if (title === undefined || title === a.name || nameRefusal(ledger, a.id, title) !== undefined) continue;
+    a.name = title;
+    a.name_by = "session";
   }
 }
 
@@ -500,6 +521,8 @@ export function agent(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
       const taskId = args.str("task_id");
 
       if (given(taskId)) fresh.task_id = taskId;
+
+      if (given(args.str("name"))) fresh.name_by = "coordinator";
       ledger.agents.push(fresh);
       log(run, ledger, {
         kind: "spawned",
@@ -530,7 +553,15 @@ export function agent(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
 
     const name = args.str("name");
 
-    if (name !== undefined) a.name = name;
+    if (given(name)) {
+      a.name = name;
+      a.name_by = "coordinator";
+    } else if (name !== undefined) {
+      a.name = a.id;
+      delete a.name_by;
+      dropKey(a, "name_by");
+    }
+
     const task = args.str("task");
 
     if (task !== undefined) a.task = task;
