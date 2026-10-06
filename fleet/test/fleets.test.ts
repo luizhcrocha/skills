@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
+import { tokenCount } from "../src/cli/fleets.ts";
 import { fleetsNamed } from "../src/cli/run.ts";
 import type { Registry } from "../src/registry.ts";
 import { baseEnv, fleet, FLEET, machine, now, readJson, tmp, type Environment, type Ran } from "./support.ts";
@@ -159,15 +160,80 @@ describe("the manager", () => {
     registry.name(a, "billing-coordinator");
     register(makeFleet("m", "everything", { role: "manager" }), "https://box.ts.net:9/");
     const out = cli("list").stdout;
-    expect(out).toContain(`billing-coordinator  coordinator  session billing-coordinator  running  https://box.ts.net:1/  ${a}`);
-    expect(out).toContain("    now: now of billing");
-    expect(out).toContain("    lanes in flight: src/billing/**");
-    expect(out).toContain("    D1 d1 [decision, for the user, blocks work] Schema");
-    expect(out).toContain("    I1 d2 [input, for the manager] Rate");
+    expect(out).toContain(`billing-coordinator  (coordinator, running)\n  session  billing-coordinator\n  page     https://box.ts.net:1/\n  ledger   ${a}\n`);
+    expect(out).toContain("  now      now of billing\n");
+    expect(out).toContain("    a1  running  -  x  lanes: src/billing/**\n");
+    expect(out).toContain("    D1  d1  decision  for the user     Schema  blocks work\n");
+    expect(out).toContain("    I1  d2  input     for the manager  Rate\n");
     expect(out).not.toContain("Old");
     const shown = cli("show", "billing-coordinator").stdout;
     expect(shown).toContain("    a1 (x) running since");
     expect(shown).toContain("    roadblock r1 [needs user] T");
+  });
+
+  test("list shows a fleet's identity, then its live agents, its links and what waits, each section apart", () => {
+    const lanes = ["src/billing/**", "src/invoices/**,src/ledger/**", "docs/billing.md"];
+
+    const a = makeFleet("a", "billing", {
+      roadmap: [{ id: "m1", title: "M", steps: [] }],
+      agents: [
+        { id: "a1", name: "writer", task: "t", model: "opus", status: "running", lane: lanes, milestone: "m1", tokens: 1_234_567 },
+        { id: "b12", name: "b12", task: "Wire the invoices to the ledger and run the migration twice", model: "sonnet", status: "blocked", lane: [], milestone: "m1", tokens: 0 },
+        { id: "a3", name: "finished", task: "t", model: "opus", status: "done", lane: ["src/done/**"], milestone: "m1", tokens: 9 },
+        { id: "q4", name: "advisor", task: "t", model: "fable", status: "queued", lane: [], milestone: "m1" },
+      ],
+      links: [
+        { id: "dev", url: "https://box.ts.net:5173/", title: "Billing dev server", kind: "dev", decision: null, agent: null, note: null, since: "x" },
+        { id: "old", url: "https://box.ts.net:5300/", title: "Old review", kind: "page", decision: null, agent: null, note: null, since: "x" },
+      ],
+      decisions: [
+        { id: "d1", kind: "decision", title: "Schema", question: "q", status: "open", blocking: true, opened: "2026-09-28T10:30:00+00:00" },
+        { id: "d2", kind: "input", title: "Rate", question: "q", status: "open", asks: "manager", opened: "2026-09-28T10:40:00+00:00", held: "after the cost work", held_at: "2026-09-28T10:50:00+00:00" },
+        { id: "d3", kind: "input", title: "Closed one", question: "q", status: "decided", opened: "x" },
+      ],
+    });
+
+    const dropped = fleet(["state", a, "link", "old", "--drop", "the review is done", "--no-render"], env);
+    expect(dropped.code).toBe(0);
+    register(a, "https://box.ts.net:1/");
+    registry.name(a, "billing-coordinator");
+
+    expect(cli("list").stdout).toBe(
+      [
+        "billing-coordinator  (coordinator, running)",
+        "  session  billing-coordinator",
+        "  page     https://box.ts.net:1/",
+        `  ledger   ${a}`,
+        "  now      now of billing",
+        "  chat     not read now",
+        "",
+        "  agents   1 running, 1 blocked, 1 queued",
+        "    a1   running  opus    writer                                            lanes: src/billing/** +3",
+        "    b12  blocked  sonnet  Wire the invoices to the ledger and run the mig…",
+        "    q4   queued   fable   advisor",
+        "  links    1",
+        "    L1  dev  https://box.ts.net:5173/  Billing dev server",
+        "  waiting  2",
+        "    D1  d1  decision  for the user     Schema  blocks work",
+        "    I1  d2  input     for the manager  Rate  held by the fleet: after the cost work",
+        "",
+      ].join("\n"),
+    );
+
+    const shown = cli("show", "billing-coordinator").stdout;
+
+    for (const lane of ["src/billing/**", "src/invoices/**", "src/ledger/**", "docs/billing.md"]) expect(shown).toContain(`    lane ${lane}  a1\n`);
+    expect(shown).not.toContain("src/done/**");
+  });
+
+  test("list puts one blank line between fleets and shows no empty section", () => {
+    register(makeFleet("a", "billing"), "u1");
+    register(makeFleet("b", "infra"), "u2");
+    const out = cli("list").stdout;
+    expect(out).toContain("  chat     not read now\n\ninfra  (coordinator, running)\n");
+    expect(out).not.toContain("agents");
+    expect(out).not.toContain("links");
+    expect(out).not.toContain("waiting");
   });
 
   test("a fleet whose state cannot be read is shown as such", () => {
@@ -175,7 +241,25 @@ describe("the manager", () => {
     register(a, "u");
     writeFileSync(join(a, "state.json"), "{half");
     register(makeFleet("m", "everything", { role: "manager" }), "u9");
-    expect(cli("list").stdout).toContain("billing  coordinator  session (not named yet)  unknown  u");
+    expect(cli("list").stdout).toContain("billing  (coordinator, unknown)\n  session  (not named yet)\n  page     u\n");
+  });
+});
+
+describe("token counts", () => {
+  test("are three figures and a unit, rounded half up, moving up a unit when the figures run out", () => {
+    const cases: [number, string][] = [
+      [0, "0"],
+      [999, "999"],
+      [1000, "1.00k"],
+      [12_250, "12.3k"],
+      [471_173, "471k"],
+      [999_950, "1.00M"],
+      [3_954_399, "3.95M"],
+      [246_709_089, "247M"],
+      [3_055_406_540, "3.06B"],
+    ];
+
+    expect(cases.map(([n]) => tokenCount(n))).toEqual(cases.map(([, text]) => text));
   });
 });
 
@@ -185,11 +269,11 @@ describe("the CLI", () => {
     register(a, "https://box.ts.net:1/");
     expect(cli("name", a, "billing-coordinator").code).toBe(0);
     const out = cli("list").stdout;
-    expect(out).toContain("billing-coordinator  coordinator  session billing-coordinator  running");
-    expect(out).toContain("https://box.ts.net:1/");
-    expect(out).toContain(a);
-    expect(out).toContain("now of billing");
-    expect(out).toContain("d1 [input, for the manager] Rate");
+    expect(out).toContain("billing-coordinator  (coordinator, running)\n  session  billing-coordinator\n");
+    expect(out).toContain("  page     https://box.ts.net:1/\n");
+    expect(out).toContain(`  ledger   ${a}\n`);
+    expect(out).toContain("  now      now of billing\n");
+    expect(out).toContain("    I1  d1  input  for the manager  Rate\n");
   });
 
   test("list says when there is none", () => {
@@ -272,7 +356,7 @@ describe("the CLI", () => {
         { id: "rerun", kind: "action", title: "Re-run CA1014", question: "q", status: "open", opened: at },
         { id: "upload", kind: "action", title: "Small test upload", question: "q", status: "open", asks: "manager", opened: at },
         { id: "key", kind: "secret", title: "Neon key", question: "q", status: "open", blocking: true, opened: at, revised: "2026-09-28T10:20:00+00:00" },
-        { id: "later", kind: "decision", title: "Held", question: "q", status: "open", opened: at, held: "after the cost work" },
+        { id: "later", kind: "decision", title: "Held", question: "q", status: "open", opened: at, held: "after the cost work", held_at: "2026-09-28T10:50:00+00:00" },
         { id: "old", kind: "input", title: "Old", question: "q", status: "decided", opened: at },
       ],
     });

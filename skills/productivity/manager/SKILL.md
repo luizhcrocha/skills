@@ -31,7 +31,7 @@ Your value is the hop you save the user. A question you settle from what another
 
 The manager runs on the plugin's fleet CLI, `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet`, written `fleet` below; it is not on PATH, so run it by that path (when the variable shows unexpanded, the plugin's root is three directories above this skill's). Read the coordinator skill's `DASHBOARD.md` (`${CLAUDE_PLUGIN_ROOT}/skills/productivity/coordinator/DASHBOARD.md`): the state CLI, the chat, and the decisions work for you as they do for a coordinator. Below, `<dir>` is `<scratchpad>/manager`.
 
-1. `fleet fleets list` names the fleets being served: each one's name, session, address, directory, what it is doing, its lanes in flight, and its open decisions.
+1. `fleet fleets list` names the fleets being served: each one's name, session, page, ledger directory and what it is doing, then its queued, running and blocked agents (each with its first lane), its links, and its open decisions. `fleet fleets show <fleet>` lists every lane in flight in that fleet, one `lane <glob>  <agents>` line each.
 2. `fleet state <dir> init --role manager --project "<this machine, or the programme>" --goal "<what the fleets are landing together>"`: the ledger starts with the landing queue, milestone `landings`.
 3. `fleet serve <dir>` puts the manager on the machine's hub (the `fleet-hub` service), and give the user the hub's address (the printed one without its `f/manager/`): it is the one address for everything, since every fleet's page is served under it at `f/<fleet>/`, the index lists them all (and the fleets of the user's other machines that run a hub), and every page's header has a switcher. When it says no hub runs, ask the user to start it (`systemctl --user start fleet-hub`), or on a machine without the service run `fleet hub` as a background command of this session meanwhile (a hub already serving is left alone, and the service takes the port back when it starts). The page shows every coordinator with the way to its page, and one list of what waits on the user across all of them.
 4. `ListAgents` names this session. Record it, so coordinators can write to you: `fleet fleets name <dir> <session>`.
@@ -39,7 +39,7 @@ The manager runs on the plugin's fleet CLI, `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fle
 6. Write to each coordinator (`SendMessage` to its session) that a manager is present: your session, your page, the path of `standing.md`, and that decisions, questions for other fleets, and landings now come to you. Ask each for what it owns, what it has in flight, and what it is waiting on.
 7. Fill `standing.md` from their answers and from what the user tells you.
 
-Setup is done when every fleet in `fleet fleets list` has answered, and `standing.md` names an owner for every lane in flight.
+Setup is done when every fleet in `fleet fleets list` has answered, and `standing.md` names an owner for every lane in flight (each fleet's `lane` lines in `fleet fleets show <fleet>`).
 
 **Resumed** (a restart, `claude -r`, a new plugin version): the ledger survives, the hub entry does not, since it lives only as long as the session that served it. Run steps 3 to 5 again before anything else (`fleet serve <dir>`, `fleet fleets name`, the watch), and ask each coordinator that was serving to do the same.
 
@@ -75,7 +75,7 @@ When the matter needs rounds (a review of a diff, a diagnosis with measurements)
 A coordinator asks for the turn before anything that goes out or moves history others build on: what, which files, from which workspace, which checks are green.
 
 1. Queue it: `step l4 --milestone landings --title "<fleet>: <what> (<files>)" --agent <fleet>`. The queue reads in the order of the turns: place a landing with `--before` or `--after` another, give it new words with `--title` when what it lands changes, and take out one queued in error with `--remove "why"`.
-2. Check it against `standing.md` (what a landing needs, who owns the files) and against the lanes in flight of the other fleets. A landing that touches another fleet's files goes to that fleet as a diff first.
+2. Check it against `standing.md` (what a landing needs, who owns the files) and against the lanes in flight of the other fleets (`fleet fleets show <fleet>`). A landing that touches another fleet's files goes to that fleet as a diff first.
 3. Get the user's word when it is needed. A push or a deploy the user has approved first-hand, for this landing or as a standing rule in `standing.md`, goes ahead. Any other becomes a decision on your page (`--kind action` or `decision`, `--blocking`). An action's `--manual` is short prose plus every command in a fenced block with its language, never in the prose, ```` ```nu ```` on Luiz's machines since he runs nushell, commands that run in one go in one block, a new block only where Luiz acts between steps (reads output, decides, approves in 1Password).
 4. Give the turn: `step l4 --status current` (refused while another landing has it: close that one, `--status done`, or give it back, `--status pending`), and tell the coordinator. Its `fleet turn` and `land-check` pass from then on; it lands from its own workspace and reports the commit and the files that moved.
 5. Close it: `step l4 --status done`, `event --kind integrated --agent <fleet> "l4 landed as <commit>: <files>"`, the deploy in `standing.md`, and a notice to every fleet whose lanes touch what moved: the commit, the files, what to rebase.
@@ -137,7 +137,7 @@ Every message between sessions is paid for twice: the sender writes it, the rece
 - **What the page computes is not written.** Under your Now line the page lists the running workers, the current steps and the next ones; the fleets' pages do the same. Your Now line says what they cannot: whose turn it is, what waits on whom, a rule the user just set.
 - **Your own answers too.** What you answer the user on your page (the chat, a side chat) is written there only. The turn that answered ends, in your session, with one line naming where: "Answered #42 on the page." The user reads the page from any device. The plugin's Stop hook enforces it: a turn that said on the page and ends with more than two lines or 200 characters goes on once, to end with that line.
 
-- **Answer from the ledger first.** `fleet fleets show <fleet>` prints what a fleet is doing: its now-line and when it was said, the workers running with their task and last report, its latest events, its open decisions and roadblocks, and whether it reads its chat. A question about what a fleet is doing is answered from that, and the coordinator is not asked.
+- **Answer from the ledger first.** `fleet fleets show <fleet>` prints what a fleet is doing: its now-line and when it was said, the workers running with their task and last report, every lane in flight with the workers that hold it, its latest events, its open decisions and roadblocks, and whether it reads its chat. A question about what a fleet is doing is answered from that, and the coordinator is not asked.
 - **The hub delivers the user's word to a coordinator; you do not forward it.** A message the user writes on your page to a coordinator (`@<fleet>`, or Reply and Side chat on a fleet's decision) goes into that fleet's own chat too, and the coordinator's answer there comes back onto your page as the reply to it. Your watch leaves it out. One that also names you prints with `[delivered to <fleet> #N]`: act on your part only. One naming a coordinator without that mark (its fleet was not served, or its chat could not be written) is yours to forward, as below.
 - **When only the coordinator knows**, forward the user's question with its number and the page it was asked on: "#14 on the manager's page: <text>. Answer there: `fleet chat <dir> say --as <fleet> --re 14 \"...\"`". The coordinator answers the user there, once. You do not repeat, summarise, or acknowledge its answer; the user has read it.
 - **A question of yours** goes to the coordinator by `SendMessage` and comes back the same way. What you then tell the user is what they need from it, not the exchange.
@@ -161,7 +161,7 @@ Your page also shows how full the plan's 5-hour and 7-day windows are, and `flee
 
 Every message is also a reason to look again at what you hold:
 
-- `fleet fleets list`: a fleet that is new, one that is gone, a decision that waits on you, lanes that now overlap.
+- `fleet fleets list`: a fleet that is new, one that is gone, a decision that waits on you; `fleet fleets show <fleet>`: lanes that now overlap.
 - The decisions on your page: one that another fleet's landing answered or made moot is the coordinator's to close; tell it.
 - `standing.md`: an owner that changed, a deploy that went out.
 

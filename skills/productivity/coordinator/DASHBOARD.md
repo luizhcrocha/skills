@@ -138,7 +138,8 @@ events[]     activity log, oldest first
 
 | Command | What it does |
 | :-- | :-- |
-| `list` | every fleet being served: its name, role, session, status, address, directory, what it is doing, its lanes in flight, its open decisions |
+| `list` | every fleet being served: its name, role, status, session, page, directory and what it is doing, then its queued, running and blocked agents (each with its first lane and `+N`), its links, its open decisions and what it spent |
+| `show FLEET` | what one fleet is doing, from its ledger: its now-line, live workers and their last reports, every lane in flight (`lane <glob>  <agents>`, one per line), open decisions and roadblocks, the latest events |
 | `manager` | how to reach the manager (its session, its page, `standing.md`); exits 1 when there is none |
 | `decision FLEET ID` | what a fleet asks, in full, with where its evidence and its page are |
 | `name DIR SESSION` | gives the fleet its one name, the session's (`ListAgents` gives it): the registry, the manager's page and chat, and `SendMessage` all use it. Run it again after the session is renamed, and call the fleet by that name in what you write |

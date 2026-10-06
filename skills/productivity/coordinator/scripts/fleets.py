@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """The fleets being served on this machine: how a manager finds the coordinators, and they it.
 
-    fleets.py list              every live fleet: its name, role, session, status, address, directory,
-                                what it is doing, and the decisions open in it
+    fleets.py list              every live fleet: its name, role, status, session, address, directory
+                                and what it is doing, then its live agents, its links, the decisions
+                                open in it and what it spent
     fleets.py waiting           what waits on the user, from every fleet's ledger: each open decision
                                 for the user, since when, and an answer sent but not recorded yet
     fleets.py show FLEET        what one fleet is doing, from its ledger: now-line, live workers and
-                                their last report, open decisions and roadblocks, latest events
+                                their last report, every lane in flight, open decisions and
+                                roadblocks, latest events
     fleets.py manager           how to reach the manager; exits 1 when there is none
     fleets.py decision FLEET ID what a fleet asks, in full: the question, why, the options, the
                                 recommendation, where its evidence and its page are
@@ -34,6 +36,7 @@ import os
 import re
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -423,30 +426,167 @@ def _unlisted(found: list[dict], links: list[dict]) -> list[dict]:
     return [x for x in found if x["port"] not in ports]
 
 
+def token_count(n: int) -> str:
+    """A token count in three figures and a unit (`471k`, `3.95M`), rounded half up in integers so the
+    TypeScript fleet prints the same."""
+    if n < 1000:
+        return str(n)
+    units = ((10**3, "k"), (10**6, "M"), (10**9, "B"))
+    u = max(i for i, (size, _) in enumerate(units) if size <= n)
+    places = 2
+    while True:
+        size = units[u][0]
+        q = (2 * n * 10**places + size) // (2 * size)
+        if q < 1000:
+            break
+        if places > 0:
+            places -= 1
+        elif u < len(units) - 1:
+            u, places = u + 1, 2
+        else:
+            break
+    digits = str(q)
+    return (digits if places == 0 else f"{digits[:-places]}.{digits[-places:]}") + units[u][1]
+
+
+LIVE = ("running", "blocked", "queued")
+LABEL_WIDTH = 48
+
+
+def lanes_of(agent: dict) -> list[str]:
+    """A worker's lanes, each glob once: a lane given as `a/**,b/**` is two."""
+    globs = (g.strip() for lane in agent.get("lane") or [] for g in str(lane).split(","))
+    return list(dict.fromkeys(g for g in globs if g))
+
+
+@dataclass(frozen=True, slots=True)
+class AgentLine:
+    id: str
+    status: str
+    model: str
+    label: str
+    lanes: list[str]
+    silent_since: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LinkLine:
+    ref: str
+    kind: str
+    url: str
+    title: str
+
+
+@dataclass(frozen=True, slots=True)
+class WaitingLine:
+    ref: str
+    id: str
+    kind: str
+    asks: str
+    title: str
+    blocking: bool
+    answered_at: str | None
+    held: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class FleetView:
+    """One fleet as `fleets list` prints it: who it is, then its live agents, its links, what waits in it, what it spent."""
+    id: str
+    role: str
+    status: str
+    session: str | None
+    active: str | None
+    url: str
+    dir: str
+    now: str
+    chat: dict
+    agents: list[AgentLine]
+    links: list[LinkLine]
+    waiting: list[WaitingLine]
+    spent: tuple[int, int, int] | None  # workers, written, read
+
+
+def _label(agent: dict) -> str:
+    import chat
+    named = bool(agent.get("name")) and str(agent["name"]) != str(agent.get("id"))
+    text = chat._one_line(agent["name"] if named else agent.get("task"))
+    return text[:LABEL_WIDTH - 1] + "\u2026" if len(text) > LABEL_WIDTH else text
+
+
+def fleet_view(entry: dict) -> FleetView:
+    import chat
+    s = summary(entry)
+    state = _read(Path(entry["dir"]) / "state.json") or {}
+    rows = lambda key: [r for r in state.get(key, []) if isinstance(r, dict)]  # noqa: E731
+    silent = {w["id"]: w["active"][11:16] for w in s["silent"]}
+    return FleetView(
+        id=s["id"], role=entry["role"], status=s["status"], session=s["session"], active=s["active"], url=s["url"], dir=s["dir"],
+        now=chat._one_line(s["now"]) if s["now"] else "", chat=s["chat"],
+        agents=[AgentLine(id=str(a.get("id")), status=str(a["status"]), model=str(a["model"]) if a.get("model") else "-",
+                          label=_label(a), lanes=lanes_of(a), silent_since=silent.get(str(a.get("id"))))
+                for a in rows("agents") if a.get("status") in LIVE],
+        links=[LinkLine(ref=str(link.get("ref") or link.get("id")), kind=str(link.get("kind") or "dev"), url=link["url"],
+                        title=chat._one_line(link.get("title")))
+               for link in rows("links") if isinstance(link.get("url"), str)],
+        waiting=[WaitingLine(ref=str(d.get("ref") or ""), id=d["id"], kind=str(d["kind"]), asks="manager" if d["asks"] == "manager" else "user",
+                             title=chat._one_line(d["title"]), blocking=d["blocking"], answered_at=d.get("answered"),
+                             held=str(d["held"]) if d.get("held") else None)
+                 for d in s["decisions"]],
+        spent=(s["tokens"], s["spent"]["output"], s["spent"]["input"]) if s["spent"] else None,
+    )
+
+
+def _columns(table: list[list[str]]) -> list[str]:
+    """`table` as columns two spaces apart, the last column unpadded."""
+    widths = [max((len(row[i]) for row in table), default=0) for i in range(max((len(row) for row in table), default=0))]
+    return [("    " + "  ".join(cell if i == len(row) - 1 else cell.ljust(widths[i]) for i, cell in enumerate(row))).rstrip()
+            for row in table]
+
+
+def _agent_lines(agents: list[AgentLine]) -> list[str]:
+    counts = [f"{n} {status}" for status in LIVE if (n := sum(1 for a in agents if a.status == status))]
+    tails = ["  ".join(([f"lanes: {a.lanes[0]}" + (f" +{len(a.lanes) - 1}" if len(a.lanes) > 1 else "")] if a.lanes else [])
+                       + ([f"SILENT since {a.silent_since}"] if a.silent_since is not None else []))
+             for a in agents]
+    return [f"  agents   {', '.join(counts)}", *_columns([[a.id, a.status, a.model, a.label, tail] for a, tail in zip(agents, tails)])]
+
+
+def _waiting_lines(waiting: list[WaitingLine]) -> list[str]:
+    table = [[d.ref, d.id, d.kind, f"for the {d.asks}",
+              "  ".join([d.title] + (["blocks work"] if d.blocking else [])
+                        + ([f"ANSWERED at {d.answered_at[11:16]}, not recorded"] if d.answered_at else [])
+                        + ([f"held by the fleet: {d.held}"] if d.held is not None else []))]
+             for d in waiting]
+    return [f"  waiting  {len(waiting)}", *_columns(table)]
+
+
+def render(v: FleetView) -> list[str]:
+    identity = [
+        f"{v.id}  ({v.role}, {v.status})",
+        f"  session  {v.session or '(not named yet)'}" + (f", last active {v.active[:16].replace('T', ' ')}" if v.active else ""),
+        f"  page     {v.url}",
+        f"  ledger   {v.dir}",
+        *([f"  now      {v.now}"] if v.now else []),
+        *([] if v.chat["on"] else [f"  chat     not read now"
+                                   + (f"; {v.chat['unread']} message(s) from the user wait since #{v.chat['seen']}" if v.chat["unread"] else "")]),
+    ]
+    sections = [
+        *(_agent_lines(v.agents) if v.agents else []),
+        *([f"  links    {len(v.links)}", *_columns([[link.ref, link.kind, link.url, link.title] for link in v.links])] if v.links else []),
+        *(_waiting_lines(v.waiting) if v.waiting else []),
+        *([f"  tokens   workers {token_count(v.spent[0])}; {v.role} {token_count(v.spent[1])} written, {token_count(v.spent[2])} read"]
+          if v.spent else []),
+    ]
+    return [*identity, "", *sections] if sections else identity
+
+
 def cmd_list() -> None:
     entries = live()
     if not entries:
         print("no fleet is being served on this machine")
-    for e in entries:
-        s = summary(e)
-        print(f"{s['id']}  {e['role']}  session {s['session'] or '(not named yet)'}  {s['status']}  {s['url']}  {s['dir']}")
-        if s["now"]:
-            print(f"    now: {s['now']}")
-        if s["lanes"]:
-            print(f"    lanes in flight: {', '.join(s['lanes'])}")
-        if s["active"]:
-            print(f"    session last active {s['active']}")
-        for w in s["silent"]:
-            print(f"    worker {w['id']} ({w['name']}) silent since {w['active'][11:16]}")
-        if not s["chat"]["on"]:
-            print(f"    chat: not read now" + (f"; {s['chat']['unread']} message(s) from the user wait since #{s['chat']['seen']}" if s["chat"]["unread"] else ""))
-        if s["spent"]:
-            print(f"    tokens: its workers {s['tokens']:,}; the {e['role']} itself {s['spent']['output']:,} written, {s['spent']['input']:,} read")
-        for d in s["decisions"]:
-            marks = ", ".join(filter(None, [d["kind"], "for the manager" if d["asks"] == "manager" else "for the user", "blocks work" if d["blocking"] else ""]))
-            print(f"    {d.get('ref') or ''} {d['id']} [{marks}] {d['title']}".replace("     ", "    ")
-                  + (f"  ANSWERED at {d['answered'][11:16]}, not recorded" if d.get("answered") else "")
-                  + (f"  held by the fleet: {d['held']}" if d.get("held") else ""))
+        return
+    print("\n\n".join("\n".join(render(fleet_view(e))) for e in entries))
 
 
 def cmd_waiting() -> None:
@@ -503,6 +643,13 @@ def cmd_show(fleet: str) -> None:
                 print(f"        silent since {silent[a['id']]['active'][11:16]}: check it before saying it runs")
             if a.get("report"):
                 print(f"        last report: {str(a['report'])[:300]}")
+    owners: dict[str, list[str]] = {}
+    for a in rows("agents"):
+        if a.get("status") in LIVE:
+            for lane in lanes_of(a):
+                owners.setdefault(lane, []).append(str(a.get("id")))
+    for lane in sorted(owners):
+        print(f"    lane {lane}  {', '.join(owners[lane])}")
     said = chat.read(entry["dir"])
     for d in rows("decisions"):
         if d.get("status") == "open":

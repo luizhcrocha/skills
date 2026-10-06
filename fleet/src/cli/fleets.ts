@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import * as Effect from "effect/Effect";
 
-import { listening, oneLine } from "../chat/chat.ts";
+import { listening, oneLine, type Listening } from "../chat/chat.ts";
 import { firstLine } from "../chat/news.ts";
 import { readChat } from "../chat/store.ts";
 import { Refusal } from "../errors.ts";
@@ -18,7 +18,7 @@ import { asArray, asNumber, asObject, asString, pyRepr, truthy, type Json, type 
 import { decodeLedger } from "../ledger/model.ts";
 import { find, number } from "../ledger/numbers.ts";
 import { processes } from "../procs.ts";
-import { stateOf, type GateHolder } from "../registry.ts";
+import { stateOf, type Entry, type GateHolder } from "../registry.ts";
 import { activeAt, spentBy } from "../transcripts.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
@@ -56,82 +56,232 @@ function numbered(state: JsonObject): JsonObject {
   };
 }
 
-function commas(n: number): string {
-  const [whole = "0", frac] = String(Math.abs(n)).split(".");
-  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+/** A token count in three figures and a unit (`471k`, `3.95M`), rounded half up in integers so Python's mirror prints the same. */
+export function tokenCount(n: number): string {
+  const units: readonly (readonly [number, string])[] = [
+    [1e3, "k"],
+    [1e6, "M"],
+    [1e9, "B"],
+  ];
 
-  return `${n < 0 ? "-" : ""}${grouped}${frac === undefined ? "" : `.${frac}`}`;
+  if (n < 1000) return String(n);
+  let u = units.findLastIndex(([size]) => size <= n);
+  let places = 2;
+  let q = 0;
+
+  for (;;) {
+    const [size] = units[u] ?? [1e3];
+    q = Math.floor((2 * n * 10 ** places + size) / (2 * size));
+
+    if (q < 1000) break;
+
+    if (places > 0) places -= 1;
+    else if (u < units.length - 1) [u, places] = [u + 1, 2];
+    else break;
+  }
+
+  const digits = String(q);
+  const figures = places === 0 ? digits : `${digits.slice(0, -places)}.${digits.slice(-places)}`;
+
+  return `${figures}${units[u]?.[1] ?? ""}`;
+}
+
+const LIVE = ["running", "blocked", "queued"] as const;
+
+const LABEL_WIDTH = 48;
+
+/** A worker's lanes, each glob once: a lane given as `a/**,b/**` is two. */
+function lanesOf(agent: JsonObject): string[] {
+  const globs = (asArray(agent["lane"]) ?? []).flatMap((l) => str(l).split(",")).map((g) => g.trim());
+
+  return [...new Set(globs.filter((g) => g !== ""))];
+}
+
+function isLive(agent: JsonObject): boolean {
+  return LIVE.some((s) => agent["status"] === s);
+}
+
+interface AgentLine {
+  readonly id: string;
+  readonly status: string;
+  readonly model: string;
+  readonly label: string;
+  readonly lanes: readonly string[];
+  readonly silentSince: string | undefined;
+}
+
+interface LinkLine {
+  readonly ref: string;
+  readonly kind: string;
+  readonly url: string;
+  readonly title: string;
+}
+
+interface WaitingLine {
+  readonly ref: string;
+  readonly id: string;
+  readonly kind: string;
+  readonly asks: "user" | "manager";
+  readonly title: string;
+  readonly blocking: boolean;
+  readonly answeredAt: string | undefined;
+  readonly held: string | undefined;
+}
+
+/** One fleet as `fleets list` prints it: who it is, then its live agents, its links, what waits in it, what it spent. */
+interface FleetView {
+  readonly id: string;
+  readonly role: string;
+  readonly status: string;
+  readonly session: string | null;
+  readonly active: string | undefined;
+  readonly url: string;
+  readonly dir: string;
+  readonly now: string;
+  readonly chat: Listening;
+  readonly agents: readonly AgentLine[];
+  readonly links: readonly LinkLine[];
+  readonly waiting: readonly WaitingLine[];
+  readonly spent: { readonly workers: number; readonly written: number; readonly read: number } | undefined;
+}
+
+function labelOf(agent: JsonObject): string {
+  const named = truthy(agent["name"]) && str(agent["name"]) !== str(agent["id"]);
+  const text = oneLine(named ? agent["name"] : agent["task"]);
+
+  return [...text].length > LABEL_WIDTH ? `${[...text].slice(0, LABEL_WIDTH - 1).join("")}\u2026` : text;
+}
+
+function fleetView(machine: Machine, e: Entry): FleetView {
+  const raw = stateOf(e);
+  const state = raw === undefined ? {} : numbered(raw);
+  const agents = rows(state, "agents");
+  const silent = new Map(silentWorkers(machine, e.dir, state).map((w) => [w.id, w.active.slice(11, 16)]));
+  const said = readChat(e.dir);
+  const spent = spentBy(e.dir, machine.config);
+
+  return {
+    id: e.id,
+    role: e.role,
+    status: raw !== undefined && truthy(raw["status"]) ? str(raw["status"]) : "unknown",
+    session: e.session,
+    active: activeAt(e.dir, machine.config),
+    url: e.url,
+    dir: e.dir,
+    now: truthy(state["now"]) ? oneLine(state["now"]) : "",
+    chat: listening(machine, e.dir),
+    agents: agents.filter(isLive).map((a) => ({
+      id: str(a["id"]),
+      status: str(a["status"]),
+      model: truthy(a["model"]) ? str(a["model"]) : "-",
+      label: labelOf(a),
+      lanes: lanesOf(a),
+      silentSince: silent.get(str(a["id"])),
+    })),
+    links: rows(state, "links")
+      .filter((l) => asString(l["url"]) !== undefined)
+      .map((l) => ({
+        ref: truthy(l["ref"]) ? str(l["ref"]) : str(l["id"]),
+        kind: truthy(l["kind"]) ? str(l["kind"]) : "dev",
+        url: str(l["url"]),
+        title: oneLine(l["title"]),
+      })),
+    waiting: rows(state, "decisions")
+      .filter((d) => d["status"] === "open" && asString(d["id"]) !== undefined)
+      .map((d) => ({
+        ref: truthy(d["ref"]) ? str(d["ref"]) : "",
+        id: str(d["id"]),
+        kind: d["kind"] === undefined ? "decision" : str(d["kind"]),
+        asks: d["asks"] === "manager" ? "manager" : "user",
+        title: oneLine(d["title"]),
+        blocking: d["blocking"] === true,
+        answeredAt: answeredAt(d, said),
+        held: truthy(d["held"]) ? str(d["held"]) : undefined,
+      })),
+    spent:
+      spent === undefined
+        ? undefined
+        : { workers: agents.reduce((sum, a) => sum + Math.trunc(asNumber(a["tokens"]) ?? 0), 0), written: spent.output, read: spent.input },
+  };
+}
+
+/** `text` padded with spaces to `width` characters, counted as Python counts them. */
+function pad(text: string, width: number): string {
+  return text + " ".repeat(Math.max(0, width - [...text].length));
+}
+
+/** `table` as columns two spaces apart, the last column unpadded. */
+function columns(table: readonly (readonly string[])[]): string[] {
+  const widths: number[] = [];
+
+  for (const row of table) row.forEach((cell, i) => (widths[i] = Math.max(widths[i] ?? 0, [...cell].length)));
+
+  return table.map((row) => `    ${row.map((cell, i) => (i === row.length - 1 ? cell : pad(cell, widths[i] ?? 0))).join("  ")}`.trimEnd());
+}
+
+function agentLines(agents: readonly AgentLine[]): string[] {
+  const counts = LIVE.flatMap((s) => {
+    const n = agents.filter((a) => a.status === s).length;
+
+    return n === 0 ? [] : [`${n} ${s}`];
+  });
+
+  const tails = agents.map((a) => {
+    const [first, ...more] = a.lanes;
+    const lanes = first === undefined ? [] : [`lanes: ${first}${more.length > 0 ? ` +${more.length}` : ""}`];
+
+    return [...lanes, ...(a.silentSince === undefined ? [] : [`SILENT since ${a.silentSince}`])].join("  ");
+  });
+
+  return [`  agents   ${counts.join(", ")}`, ...columns(agents.map((a, i) => [a.id, a.status, a.model, a.label, tails[i] ?? ""]))];
+}
+
+function waitingLines(waiting: readonly WaitingLine[]): string[] {
+  const table = waiting.map((d) => {
+    const marks = [
+      d.title,
+      ...(d.blocking ? ["blocks work"] : []),
+      ...(d.answeredAt === undefined ? [] : [`ANSWERED at ${d.answeredAt.slice(11, 16)}, not recorded`]),
+      ...(d.held === undefined ? [] : [`held by the fleet: ${d.held}`]),
+    ];
+
+    return [d.ref, d.id, d.kind, `for the ${d.asks}`, marks.join("  ")];
+  });
+
+  return [`  waiting  ${waiting.length}`, ...columns(table)];
+}
+
+function render(v: FleetView): string[] {
+  const identity = [
+    `${v.id}  (${v.role}, ${v.status})`,
+    `  session  ${v.session ?? "(not named yet)"}${v.active === undefined ? "" : `, last active ${v.active.slice(0, 16).replace("T", " ")}`}`,
+    `  page     ${v.url}`,
+    `  ledger   ${v.dir}`,
+    ...(v.now === "" ? [] : [`  now      ${v.now}`]),
+    ...(v.chat.on ? [] : [`  chat     not read now${v.chat.unread > 0 ? `; ${v.chat.unread} message(s) from the user wait since #${v.chat.seen}` : ""}`]),
+  ];
+
+  const sections = [
+    ...(v.agents.length === 0 ? [] : agentLines(v.agents)),
+    ...(v.links.length === 0 ? [] : [`  links    ${v.links.length}`, ...columns(v.links.map((l) => [l.ref, l.kind, l.url, l.title]))]),
+    ...(v.waiting.length === 0 ? [] : waitingLines(v.waiting)),
+    ...(v.spent === undefined
+      ? []
+      : [`  tokens   workers ${tokenCount(v.spent.workers)}; ${v.role} ${tokenCount(v.spent.written)} written, ${tokenCount(v.spent.read)} read`]),
+  ];
+
+  return sections.length === 0 ? identity : [...identity, "", ...sections];
 }
 
 function list(machine: Machine): Effect.Effect<void, never, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
-    const say = (line: string): void => out.out(`${line}\n`);
     const entries = machine.registry.live();
 
-    if (entries.length === 0) say("no fleet is being served on this machine");
+    if (entries.length === 0) out.out("no fleet is being served on this machine\n");
+    const blocks = entries.map((e) => render(fleetView(machine, e)).join("\n"));
 
-    for (const e of entries) {
-      const raw = stateOf(e);
-      const state = raw === undefined ? {} : numbered(raw);
-      const status = raw !== undefined && truthy(raw["status"]) ? str(raw["status"]) : "unknown";
-      say(`${e.id}  ${e.role}  session ${e.session ?? "(not named yet)"}  ${status}  ${e.url}  ${e.dir}`);
-      const now = truthy(state["now"]) ? str(state["now"]) : "";
-
-      if (now !== "") say(`    now: ${now}`);
-      const agents = rows(state, "agents");
-
-      const lanes = [
-        ...new Set(
-          agents
-            .filter((a) => a["status"] === "running" || a["status"] === "blocked" || a["status"] === "queued")
-            .flatMap((a) => (asArray(a["lane"]) ?? []).map((l) => str(l))),
-        ),
-      ].sort();
-
-      if (lanes.length > 0) say(`    lanes in flight: ${lanes.join(", ")}`);
-      const active = activeAt(e.dir, machine.config);
-
-      if (active !== undefined) say(`    session last active ${active}`);
-
-      for (const w of silentWorkers(machine, e.dir, state)) say(`    worker ${w.id} (${w.name}) silent since ${w.active.slice(11, 16)}`);
-      const heard = listening(machine, e.dir);
-
-      if (!heard.on) {
-        say(
-          "    chat: not read now" +
-            (heard.unread > 0 ? `; ${heard.unread} message(s) from the user wait since #${heard.seen}` : ""),
-        );
-      }
-
-      const spent = spentBy(e.dir, machine.config);
-
-      if (spent !== undefined) {
-        const tokens = agents.reduce((sum, a) => sum + Math.trunc(asNumber(a["tokens"]) ?? 0), 0);
-        say(
-          `    tokens: its workers ${commas(tokens)}; the ${e.role} itself ${commas(spent.output)} written, ${commas(spent.input)} read`,
-        );
-      }
-
-      const said = readChat(e.dir);
-
-      for (const d of rows(state, "decisions")) {
-        if (d["status"] !== "open" || asString(d["id"]) === undefined) continue;
-        const kind = d["kind"] === undefined ? "decision" : str(d["kind"]);
-
-        const marks = [kind, d["asks"] === "manager" ? "for the manager" : "for the user", d["blocking"] === true ? "blocks work" : ""]
-          .filter((m) => m !== "")
-          .join(", ");
-
-        const ref = truthy(d["ref"]) ? str(d["ref"]) : "";
-        const answered = answeredAt(d, said);
-        say(
-          `    ${ref} ${str(d["id"])} [${marks}] ${str(d["title"])}`.replaceAll("     ", "    ") +
-            (answered === undefined ? "" : `  ANSWERED at ${answered.slice(11, 16)}, not recorded`) +
-            (truthy(d["held"]) ? `  held by the fleet: ${str(d["held"])}` : ""),
-        );
-      }
-    }
+    if (blocks.length > 0) out.out(`${blocks.join("\n\n")}\n`);
   });
 }
 
@@ -205,6 +355,14 @@ function show(machine: Machine, fleet: string): Effect.Effect<void, Refusal, Out
 
       if (truthy(a["report"])) say(`        last report: ${[...str(a["report"])].slice(0, 300).join("")}`);
     }
+
+    const owners = new Map<string, string[]>();
+
+    for (const a of rows(state, "agents").filter(isLive)) {
+      for (const lane of lanesOf(a)) owners.set(lane, [...(owners.get(lane) ?? []), str(a["id"])]);
+    }
+
+    for (const lane of [...owners.keys()].sort()) say(`    lane ${lane}  ${(owners.get(lane) ?? []).join(", ")}`);
 
     const said = readChat(entry.dir);
 

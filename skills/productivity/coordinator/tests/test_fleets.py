@@ -210,11 +210,70 @@ class CliTest(Machine):
         fleets.register(a, "https://box.ts.net:1/", os.getpid())
         self.assertEqual(self.cli("name", str(a), "billing-coordinator").returncode, 0)
         out = self.cli("list").stdout
-        self.assertIn("billing-coordinator  coordinator  session billing-coordinator  running", out)
-        self.assertIn("https://box.ts.net:1/", out)
-        self.assertIn(str(a), out)
-        self.assertIn("now of billing", out)
-        self.assertIn("d1 [input, for the manager] Rate", out)
+        self.assertIn("billing-coordinator  (coordinator, running)\n  session  billing-coordinator\n", out)
+        self.assertIn("  page     https://box.ts.net:1/\n", out)
+        self.assertIn(f"  ledger   {a}\n", out)
+        self.assertIn("  now      now of billing\n", out)
+        self.assertIn("    I1  d1  input  for the manager  Rate\n", out)
+
+    def test_list_shows_identity_then_live_agents_links_and_what_waits_each_section_apart(self):
+        lanes = ["src/billing/**", "src/invoices/**,src/ledger/**", "docs/billing.md"]
+        a = self.fleet("a", "billing", roadmap=[{"id": "m1", "title": "M", "steps": []}], agents=[
+            {"id": "a1", "name": "writer", "task": "t", "model": "opus", "status": "running", "lane": lanes, "milestone": "m1", "tokens": 1_234_567},
+            {"id": "b12", "name": "b12", "task": "Wire the invoices to the ledger and run the migration twice", "model": "sonnet",
+             "status": "blocked", "lane": [], "milestone": "m1", "tokens": 0},
+            {"id": "a3", "name": "finished", "task": "t", "model": "opus", "status": "done", "lane": ["src/done/**"], "milestone": "m1", "tokens": 9},
+            {"id": "q4", "name": "advisor", "task": "t", "model": "fable", "status": "queued", "lane": [], "milestone": "m1"},
+        ], links=[
+            {"id": "dev", "url": "https://box.ts.net:5173/", "title": "Billing dev server", "kind": "dev", "decision": None, "agent": None, "note": None, "since": "x"},
+            {"id": "old", "url": "https://box.ts.net:5300/", "title": "Old review", "kind": "page", "decision": None, "agent": None, "note": None, "since": "x"},
+        ], decisions=[
+            {"id": "d1", "kind": "decision", "title": "Schema", "question": "q", "status": "open", "blocking": True, "opened": "2026-09-28T10:30:00+00:00"},
+            {"id": "d2", "kind": "input", "title": "Rate", "question": "q", "status": "open", "asks": "manager", "opened": "2026-09-28T10:40:00+00:00",
+             "held": "after the cost work", "held_at": "2026-09-28T10:50:00+00:00"},
+            {"id": "d3", "kind": "input", "title": "Closed one", "question": "q", "status": "decided", "opened": "x"},
+        ])
+        dropped = subprocess.run([sys.executable, str(SCRIPTS / "state.py"), str(a), "link", "old", "--drop", "the review is done", "--no-render"],
+                                 capture_output=True, text=True, timeout=20)
+        self.assertEqual(dropped.returncode, 0, dropped.stderr)
+        fleets.register(a, "https://box.ts.net:1/", os.getpid())
+        fleets.name(a, "billing-coordinator")
+        self.assertEqual(self.cli("list").stdout, "\n".join([
+            "billing-coordinator  (coordinator, running)",
+            "  session  billing-coordinator",
+            "  page     https://box.ts.net:1/",
+            f"  ledger   {a}",
+            "  now      now of billing",
+            "  chat     not read now",
+            "",
+            "  agents   1 running, 1 blocked, 1 queued",
+            "    a1   running  opus    writer                                            lanes: src/billing/** +3",
+            "    b12  blocked  sonnet  Wire the invoices to the ledger and run the mig\u2026",
+            "    q4   queued   fable   advisor",
+            "  links    1",
+            "    L1  dev  https://box.ts.net:5173/  Billing dev server",
+            "  waiting  2",
+            "    D1  d1  decision  for the user     Schema  blocks work",
+            "    I1  d2  input     for the manager  Rate  held by the fleet: after the cost work",
+            "",
+        ]))
+        shown = self.cli("show", "billing-coordinator").stdout
+        for lane in ["src/billing/**", "src/invoices/**", "src/ledger/**", "docs/billing.md"]:
+            self.assertIn(f"    lane {lane}  a1\n", shown)
+        self.assertNotIn("src/done/**", shown)
+
+    def test_list_puts_one_blank_line_between_fleets_and_shows_no_empty_section(self):
+        fleets.register(self.fleet("a", "billing"), "u1", os.getpid())
+        fleets.register(self.fleet("b", "infra"), "u2", os.getpid())
+        out = self.cli("list").stdout
+        self.assertIn("  chat     not read now\n\ninfra  (coordinator, running)\n", out)
+        for word in ("agents", "links", "waiting"):
+            self.assertNotIn(word, out)
+
+    def test_token_counts_are_three_figures_and_a_unit_rounded_half_up(self):
+        cases = [(0, "0"), (999, "999"), (1000, "1.00k"), (12_250, "12.3k"), (471_173, "471k"), (999_950, "1.00M"),
+                 (3_954_399, "3.95M"), (246_709_089, "247M"), (3_055_406_540, "3.06B")]
+        self.assertEqual([fleets.token_count(n) for n, _ in cases], [text for _, text in cases])
 
     def test_list_says_when_there_is_none(self):
         self.assertEqual(self.cli("list").stdout, "no fleet is being served on this machine\n")
