@@ -25,7 +25,7 @@ Ask it of every message from Luiz, the task given with this invocation included:
 ## Non-negotiables
 
 - **Data shape first.** Before any code, name the data shape and choose its structure per Model the Domain.
-- **Observe before asking.** Before asking Luiz a "which approach", "how should I" or "what should this do" question, classify it. When running something could answer it (behaviour, timing, output, layout, perf), sketch it through the Prototype playbook and let the result decide. A read-only Investigation answers from its evidence instead. Ask (`AskUserQuestion`) only for a product or preference call no experiment can settle.
+- **Observe before asking.** Before asking Luiz a "which approach", "how should I" or "what should this do" question, classify it. When running something could answer it (behaviour, timing, output, layout, perf), sketch it through the Prototype playbook and let the result decide. A read-only Investigation answers from its evidence instead. Ask only for a product or preference call no experiment can settle: as a decision on the fleet's page (`fleet state <dir> decision`) once the session serves a fleet, else with `AskUserQuestion`.
 - **Land at the end.** Every playbook that changes code ends with the Land playbook. A pull request only when Luiz asks for one.
 - **Any prose surface → `tstack:unslop`.** Your reply is a prose surface; so are docs, commit and PR messages, READMEs, skill text and memo notes. Docs people read also follow `tstack:technical-writing`.
 - **Commit messages** follow the repo's style (form) and unslop (words) as `jj log` shows it; the worktree-janitor writes them when it shapes the stack.
