@@ -10,6 +10,7 @@ import { ChatIcon, Mark, Pill, usePage, When, tf } from "./bits.tsx";
 import { unreadInChat } from "./chatlog.ts";
 import { Core, type NoticePrefs } from "./core.ts";
 import { faviconOf } from "./mark.ts";
+import { Rename } from "./Rename.tsx";
 
 /** The switcher: the manager and every fleet, this page's own selected. */
 function Switcher(): JSX.Element {
@@ -282,6 +283,15 @@ export function Masthead(): JSX.Element {
           <span id="top-status">
             <Pill s={m.state.status} />
           </span>
+          <Show when={m.underHub && m.state.named}>
+            {(named) => (
+              <Rename name={named().session ?? named().id} what="this fleet" id="top-fleet" denied={m.chatWritable() ? "" : m.write().reason || "Read-only here"} save={(name) => m.rename(name)}>
+                <span class="fleet-name" id="top-fleet" title="This fleet's name">
+                  {named().session ?? named().id}
+                </span>
+              </Rename>
+            )}
+          </Show>
         </div>
         <Switcher />
         <a class="up" id="top-manager" hidden={!m.state.manager} href={m.state.manager ? (m.managerPage() ?? undefined) : undefined}>

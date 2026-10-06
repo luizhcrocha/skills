@@ -1,11 +1,12 @@
 /**
  * A stand-in for the hub's fleet routes, for the page's browser tests and screenshots: the page rendered
  * from a template and a fixture view (the real `pageHtml`), `GET events` (SSE `hello`, `state`, `chat`),
- * `POST chat` (keeping its `re`, `decision`, `quote` and `side`), `POST chat/preview`, `GET skills`, `GET state.json`,
+ * `POST chat` (keeping its `re`, `decision`, `quote` and `side`), `POST chat/preview`, `POST name` (a worker's or the
+ * fleet's name, applied to the view as the hub's ledger and registry would, a worker's name another has refused), `GET skills`, `GET state.json`,
  * and two control routes a test drives: `POST /_state` (a new view, sent to every stream) and `POST /_chat`
  * (a message from the fleet).
  */
-import type { Json } from "../src/core.ts";
+import type { Json, JsonRecord } from "../src/core.ts";
 import type { Message, View } from "./fixtures.ts";
 
 /** A skill as the hub lists it. */
@@ -50,6 +51,8 @@ export interface HarnessOptions {
 export interface Harness {
   readonly url: string;
   readonly posted: Message[];
+  /** The bodies `POST name` was sent, in order. */
+  readonly renames: JsonRecord[];
   setView(view: View): void;
   say(message: Message): void;
   stop(): void;
@@ -69,6 +72,7 @@ export function serveHarness(options: HarnessOptions): Harness {
   let view = options.view;
   const messages: Message[] = [...options.messages];
   const posted: Message[] = [];
+  const renames: JsonRecord[] = [];
   const streams = new Set<(text: string) => void>();
   const encoder = new TextEncoder();
 
@@ -136,6 +140,29 @@ export function serveHarness(options: HarnessOptions): Harness {
         return json(201, m);
       }
 
+      if (req.method === "POST" && path === "/name") {
+        // SAFETY: the page posts {name} or {agent, name}.
+        const body = (await req.json()) as { readonly agent?: string; readonly name: string };
+        renames.push(body.agent === undefined ? { name: body.name } : { agent: body.agent, name: body.name });
+        const name = body.name.trim();
+
+        if (body.agent === undefined) {
+          view = { ...view, named: { id: name.toLowerCase(), session: name === "" ? null : name } };
+          broadcast(event("state", view));
+
+          return json(200, { id: name.toLowerCase(), session: name, path: new URL(req.url).pathname.replace(/name$/u, "") });
+        }
+
+        const agents = Array.isArray(view["agents"]) ? view["agents"].filter((a): a is JsonRecord => a !== null && Object(a) === a && !Array.isArray(a)) : [];
+        const other = agents.find((a) => a["id"] !== body.agent && String(a["name"]).toLowerCase() === name.toLowerCase());
+
+        if (other !== undefined) return json(400, { error: `agent ${body.agent} is called '${name.toLowerCase()}', which is also agent ${String(other["id"])}; a mention could not tell them apart` });
+        view = { ...view, agents: agents.map((a) => (a["id"] === body.agent ? { ...a, name: name === "" ? body.agent : name, name_by: "user" } : a)) };
+        broadcast(event("state", view));
+
+        return json(200, { agent: body.agent, name, name_by: "user" });
+      }
+
       if (req.method === "POST" && path === "/_state") {
         // SAFETY: the test posts a view.
         view = (await req.json()) as View;
@@ -160,6 +187,7 @@ export function serveHarness(options: HarnessOptions): Harness {
   return {
     url: `http://127.0.0.1:${server.port}/f/billing/`,
     posted,
+    renames,
     setView(next) {
       view = next;
       broadcast(event("state", view));

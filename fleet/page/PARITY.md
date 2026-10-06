@@ -26,6 +26,7 @@ How a row was checked:
 | Feature | Checked |
 |---|---|
 | Fleet mark, project name, status pill | shot |
+| **new (2026-10-06)** On the hub, the fleet's name (its session's, or the one given here) beside the status, with a pencil that turns it into a field: Enter names the fleet through the hub (`POST name`, under the chat's write policy) and the page moves to the fleet's new address; an empty name gives it back to its session's; Escape cancels; a refusal stays under the field; read-only viewers see the pencil disabled with the reason. For Luiz: "the user can change it on the control plane too" | cdp `rename-browser.test.ts` "the fleet's name turns into a field, and Enter names the fleet" |
 | Switcher: Manager and every fleet, this page's own fleet always listed and selected; a change navigates | shot; dom "the switcher keeps its selection"; cdp |
 | **changed (1.0.3)** "↑ Manager" and the switcher's Manager entry open the manager's own page: `/f/<manager>/` on the hub, `STATE.manager.url` off it, `/` (or its own `/f/<id>/`) on the manager's page | read (`managerPage` in `model.ts`, from 1.0.3's) ; shot (link shown) |
 | Search button and Ctrl/⌘K open the finder | read; shot |
@@ -87,6 +88,7 @@ How a row was checked:
 | Roadblocks: sorted, severity, a title with a worker opens it, Decide link; held for later | shot |
 | A manager's coordinators: strip per fleet, facts, session last active, not reading its chat, lanes, Open its page; the gate line | shot (manager) |
 | Worker filters: search, status, milestone, skill, model; count of active ones; clear; a toggle on a phone; remembered | dom "a worker filter's choice" |
+| **new (2026-10-06)** A worker's sheet, on the hub: the name with the same pencil and field (`POST name {agent, name}`); the name is the user's after, and neither the coordinator's `--name` nor the worker's session replaces it; an empty one gives it back to the session's (its Agent call's name or description), else the id. Escape keeps the sheet open | cdp `rename-browser.test.ts` "a worker's name in its sheet turns into a field: a refusal stays, Escape keeps the name and the sheet, Enter renames" |
 | Worker table (a strip per worker in a narrow card): name opens it, task, skill, model (policy warning), status, lane, tokens, time, seen/active (silent in red), Brief and report expanded and remembered | dom "a state that changes one worker", "an expanded brief"; shot |
 | Tokens by worker chart with axis and hover tooltip | shot |
 | Links: pages, dev servers, what the machine serves, up/down, fleet, "For" decision | shot |

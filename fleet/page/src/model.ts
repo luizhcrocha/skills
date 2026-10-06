@@ -279,6 +279,24 @@ export function createModel(initial: State) {
     return skillsAsked;
   }
 
+  /** Name worker `agent`, or without one this fleet, from the page through the hub: "" once it is named,
+   * else why not. A fleet that takes a new name moves to its new address. */
+  async function rename(name: string, agent?: string): Promise<string> {
+    try {
+      const res = await fetch("name", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(agent === undefined ? { name } : { agent, name }) });
+      // SAFETY: the hub answers a refusal with {error} and a fleet's name with {path}; anything else shows as its status.
+      const body = (await res.json().catch(() => ({}))) as { readonly error?: string; readonly path?: string };
+
+      if (!res.ok) return body.error ?? `the hub answered ${String(res.status)}`;
+
+      if (body.path !== undefined && underHub && !location.pathname.startsWith(body.path)) location.replace(body.path + location.hash);
+
+      return "";
+    } catch {
+      return "the hub did not answer";
+    }
+  }
+
   return {
     prefs,
     underHub,
@@ -365,6 +383,7 @@ export function createModel(initial: State) {
     setDraft,
     skills,
     loadSkills,
+    rename,
     /** Whether the skills were read in the last minute. */
     skillsFresh: () => skillsLoadedAt > 0 && Date.now() - skillsLoadedAt < 60_000,
   };

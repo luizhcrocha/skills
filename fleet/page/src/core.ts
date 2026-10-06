@@ -162,6 +162,8 @@ export interface Agent {
   readonly updated?: string;
   readonly active?: string;
   readonly beat?: { readonly tool?: string; readonly event?: string };
+  /** Who gave the name: "user" (on this page), "coordinator", "session" (its subagent's); absent while it is the id. */
+  readonly name_by?: string;
 }
 
 /** A step of the roadmap. */
@@ -338,6 +340,8 @@ export interface State {
   readonly manager: { readonly id: string; readonly url: string; readonly session: string } | null;
   readonly fleet?: string;
   readonly fleets?: readonly string[];
+  /** What the hub serves this fleet as: its id and its session's name; null off the hub. */
+  readonly named: { readonly id: string; readonly session: string | null } | null;
   readonly coordinators: readonly Coordinator[];
   /** The account whose session captured last: its email (`account`, null when not recorded), `seen`, its windows, and `others`, the same for each other account. */
   readonly usage: JsonRecord | null;
@@ -1279,6 +1283,7 @@ function parseState(value: Json | undefined): State | null {
   const lane = (v: Json | undefined): string[] => (Array.isArray(v) ? v.map(String) : []);
   const rows = (key: string): JsonRecord[] => lists[key] ?? [];
   const gate = value["gate"];
+  const named = value["named"];
 
   const shown = {
     ...value,
@@ -1289,6 +1294,7 @@ function parseState(value: Json | undefined): State | null {
     started: text(value["started"], ""),
     role: value["role"] === "manager" ? "manager" : "coordinator",
     manager: above && { id: text(above["id"], "manager"), url: above["url"], session: text(above["session"], "") },
+    named: isRow(named) && isText(named["id"]) ? { id: named["id"], session: isText(named["session"]) ? named["session"] : null } : null,
     coordinators: withId(list(value["coordinators"])).map((c) => ({
       ...c,
       name: text(c["name"], c["id"]),

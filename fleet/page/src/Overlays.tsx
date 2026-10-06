@@ -14,6 +14,7 @@ import { GROUPS, groupOf, highlight, rangesIn, type Item } from "./find.ts";
 import { fmtDur, fmtInt, plural, spentWords } from "./format.ts";
 import type { Model } from "./model.ts";
 import { recordOf, type RowRecord } from "./record.ts";
+import { Rename } from "./Rename.tsx";
 import { BriefAndReport } from "./Views.tsx";
 
 /**
@@ -415,7 +416,11 @@ function AgentSheet(props: { readonly a: Agent }): JSX.Element {
     <>
       <div class="sheet-head" style={`--c:${m.colorOf(a().id)}`}>
         <span class="swatch" />
-        <h2 id="worker-name">{a().name}</h2>
+        <Show when={m.underHub} fallback={<h2 id="worker-name">{a().name}</h2>}>
+          <Rename name={a().name} what={a().name} id="worker" denied={m.chatWritable() ? "" : m.write().reason || "Read-only here"} save={(name) => m.rename(name, a().id)}>
+            <h2 id="worker-name">{a().name}</h2>
+          </Rename>
+        </Show>
         <Pill s={a().status} />
         <CloseX />
       </div>
