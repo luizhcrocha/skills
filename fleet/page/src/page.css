@@ -423,6 +423,7 @@
   .seg.small { padding: 2px; border-radius: 8px; }
   .seg.small button { min-height: calc(var(--tap) - 6px); padding: 0 9px; border-radius: 6px; font-size: var(--fs-xs); }
   .seg button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .seg.scopes { display: flex; flex-wrap: wrap; width: fit-content; overflow: visible; }
   .pref .icon-btn.test { width: var(--tap); height: var(--tap); }
   .pref .icon-btn.test svg.i { width: 18px; height: 18px; }
   .panel-prefs .blocked { color: var(--warning); }

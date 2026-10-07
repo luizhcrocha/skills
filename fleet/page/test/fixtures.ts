@@ -2,7 +2,7 @@
  * Real-shaped views of a coordinator's fleet and of a manager (what `view()` sends the page), and a
  * conversation, with every time relative to `now` so "5 min ago" reads the same on every run.
  */
-import type { JsonRecord, QuoteAt } from "../src/core.ts";
+import type { Json, JsonRecord, QuoteAt } from "../src/core.ts";
 
 /** A view as the page receives it: plain JSON. */
 export type View = JsonRecord;
@@ -157,6 +157,32 @@ export function managerView(now: number): View {
     gate: { fleet: "infra", what: "nix flake check", since: before(now, 8) },
     spent: { output: 40_000, input: 900_000, cached: 800_000, answers: 51 },
     chat: { on: true, seen: 2, unread: 0, since: "" },
+  };
+}
+
+/** Rows of a list in a view that are objects. */
+const views = (v: Json | undefined): View[] => (Array.isArray(v) ? v.filter((x): x is View => x !== null && Object(x) === x && !Array.isArray(x)) : []);
+
+/**
+ * The manager's view with open decisions in three fleets (billing 1, infra 2, site 1) and its own that
+ * names no agent, for the quick filter by agent; `closed` leaves some out ("<fleet>/<id>").
+ */
+export function managerScopesView(now: number, closed: readonly string[] = []): View {
+  const view = managerView(now);
+  const ask = (id: string, title: string, minutes: number, extra: View = {}): View => ({ id, ref: id.toUpperCase(), kind: "decision", title, question: title + "?", blocking: false, asks: "user", opened: before(now, minutes), ...extra });
+
+  const more = new Map([
+    ["infra", [ask("d4", "Pin the nix channel", 30, { question: "Pin nixpkgs to the last green channel, or follow unstable?" }), ask("d5", "Drop the old runner", 20, { question: "The x86 runner is idle: drop it now or after the release?" })]],
+    ["site", [ask("d2", "Hero copy", 15, { blocking: true, question: "Which of the two hero lines goes live on launch day?" })]],
+  ]);
+
+  return {
+    ...view,
+    coordinators: views(view["coordinators"]).map((c) => {
+      const id = String(c["id"]);
+
+      return { ...c, decisions: [...views(c["decisions"]), ...(more.get(id) ?? [])].filter((d) => !closed.includes(id + "/" + String(d["id"]))) };
+    }),
   };
 }
 

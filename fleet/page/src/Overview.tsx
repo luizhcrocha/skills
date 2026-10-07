@@ -3,13 +3,14 @@
  * the goal, the Now line and the glance under it), the decisions in three lists, the fleet's totals, and on
  * a manager's page the plan's usage.
  */
-import { createMemo } from "solid-js";
+import { createMemo, createSignal, flush } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
 import { Pill, PillAs, RefTag, usePage, When, Who, tf } from "./bits.tsx";
-import { Core, type Decision, type Lookup, type Message } from "./core.ts";
+import { Core, type Decision, type Json, type Lookup, type Message } from "./core.ts";
 import { dayTime, fmtDur, fmtInt, fmtShort, spentWords } from "./format.ts";
 import { keyed } from "./model.ts";
+import { ALL, held, narrow, scopes, type Scope } from "./scope.ts";
 
 /** What each kind of decision asks for. */
 export const KIND_WORDS: Lookup = { decision: "a choice", input: "your input", secret: "a secret", action: "something to do", grill: "a grilling", permission: "a permission" };
@@ -228,10 +229,84 @@ function Lead(): JSX.Element {
   );
 }
 
+/**
+ * On a manager's page, a chip per agent with an open decision: one pressed at a time narrows the lists and
+ * their counts. Kept per browser; a scope with nothing open left is all again, and stays so if it returns.
+ */
+function useScope() {
+  const { m } = usePage();
+  const list = createMemo(() => (m.managed() ? scopes(m.everyDecision()) : []));
+  const [chosen, setChosen] = createSignal<Json>(m.prefs.get<Json>("d-scope", ALL));
+  const scope = createMemo(() => held(list(), chosen()));
+  const [cursor, setCursor] = createSignal<string | null>(null);
+  let bar: HTMLDivElement | undefined;
+
+  const choose = (key: string): void => {
+    setChosen(key);
+    m.prefs.set("d-scope", key);
+  };
+
+  const settle = (): void => {
+    if (chosen() !== scope()) choose(scope());
+  };
+
+  settle();
+  m.onState(settle);
+
+  const keys = (): string[] => [ALL, ...list().map((s) => s.key)];
+  const tabStop = (): string => (keys().includes(cursor() ?? "\0") ? (cursor() ?? ALL) : scope());
+  const label = (s: Scope): string => (s.agent === null ? "no agent" : s.fleet ? s.agent : m.nameOf(s.agent));
+
+  const onKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === "Escape" && scope() !== ALL) {
+      e.preventDefault();
+      choose(ALL);
+
+      return;
+    }
+
+    const all = keys();
+    const at = all.indexOf(tabStop());
+    const to = { ArrowRight: at + 1, ArrowDown: at + 1, ArrowLeft: at - 1, ArrowUp: at - 1, Home: 0, End: all.length - 1 }[e.key];
+
+    if (to === undefined) return;
+    e.preventDefault();
+    const i = (to + all.length) % all.length;
+    setCursor(all[i] ?? ALL);
+    flush();
+    bar?.querySelectorAll("button")[i]?.focus();
+  };
+
+  const chip = (key: string, name: string, count: number): JSX.Element => (
+    <button type="button" tabindex={tabStop() === key ? 0 : -1} aria-pressed={tf(scope() === key)} onFocus={() => setCursor(key)} onClick={() => choose(scope() === key ? ALL : key)}>
+      {name} <span class="n">{String(count)}</span>
+    </button>
+  );
+
+  return {
+    scope,
+    bar: () => (
+      <Show when={list().length}>
+        <div class="seg small scopes" id="decision-scope" role="toolbar" aria-label="Decisions for" ref={(el) => (bar = el)} onKeyDown={onKeyDown}>
+          {chip(
+            ALL,
+            "All",
+            list().reduce((n, s) => n + s.count, 0),
+          )}
+          <For each={list()} keyed={(s) => s.key}>
+            {(s) => chip(s().key, label(s()), s().count)}
+          </For>
+        </div>
+      </Show>
+    ),
+  };
+}
+
 /** The decisions, in three lists: each row a link to its page. */
 function DecisionList(): JSX.Element {
   const { m, ui } = usePage();
-  const all = createMemo(() => Core.decisionRows(m.everyDecision(), ui.seen()).map((r) => ({ ...r, bucket: Core.bucketOf(r.item, m.messages()) })));
+  const { scope, bar } = useScope();
+  const all = createMemo(() => Core.decisionRows(narrow(m.everyDecision(), scope()), ui.seen()).map((r) => ({ ...r, bucket: Core.bucketOf(r.item, m.messages()) })));
   const rows = createMemo(() => all().filter((r) => r.bucket === ui.bucket()));
   const empty = (): string => ({ active: "Nothing waits on you.", waiting: "Nothing is waiting on the fleet.", done: "Nothing decided yet." })[ui.bucket()] ?? "";
 
@@ -249,6 +324,7 @@ function DecisionList(): JSX.Element {
           )}
         </For>
       </div>
+      {bar()}
       <div class="card" id="decision-list">
         <For each={rows()} keyed={(r) => r.item.id} fallback={<p class="empty">{empty()}</p>}>
           {(r) => {
