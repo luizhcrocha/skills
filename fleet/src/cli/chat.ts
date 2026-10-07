@@ -2,7 +2,7 @@
  * `fleet chat DIR COMMAND …` (Python's `chat.py`): say, inbox, log, watch, wait. Every message prints as
  * exactly one line.
  */
-import { readFileSync } from "node:fs";
+import { fstatSync, readFileSync, statSync } from "node:fs";
 
 import * as Effect from "effect/Effect";
 
@@ -91,6 +91,18 @@ function argIsUtf8(text: string): boolean {
   }
 }
 
+/** Whether stdout is /dev/null (`>/dev/null`): the same device and inode. */
+function stdoutIsDevNull(): boolean {
+  try {
+    const out = fstatSync(1);
+    const sink = statSync("/dev/null");
+
+    return out.dev === sink.dev && out.ino === sink.ino;
+  } catch {
+    return false;
+  }
+}
+
 function lines(machine: Machine, root: string, messages: Parameters<typeof renderLines>[2]): Effect.Effect<void, never, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
@@ -137,6 +149,7 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<vo
         fleets: args.flag("fleets"),
         batch: args.int("batch") ?? 120,
         terminal: process.stdout.isTTY === true,
+        devnull: stdoutIsDevNull(),
       });
     } else {
       yield* wait(machine, root, args.list("decision") ?? []);

@@ -975,6 +975,20 @@ class ListeningTest(FleetDir):
                          f"wakes the session. Arm `fleet chat {self.root} watch --as coordinator --all --resume --once` instead.\n")
         self.assertEqual(chat.listening(self.root), {"on": False, "seen": 0, "unread": 2, "since": first["at"]})
 
+    def test_a_watch_whose_output_goes_to_dev_null_is_refused_and_marks_nothing_read(self):
+        first = chat.append(self.root, "user", "status?", allow_user=True)
+        for once in (["--once"], []):
+            out = subprocess.run([sys.executable, CHAT, str(self.root), "watch", "--as", "coordinator", "--all", "--resume", *once],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=5)
+            self.assertEqual(out.returncode, 1)
+            self.assertEqual(out.stderr,
+                             "chat: a watch whose output goes to /dev/null wakes nobody, yet it would mark what it reads as read. "
+                             f"Run `fleet chat {self.root} watch --as coordinator --all --resume --once` as a background command of the session "
+                             "(run_in_background: true), never with `& disown` or its output redirected to /dev/null.\n")
+        for name in ("cursor", "pid", "left"):
+            self.assertFalse((self.root / f"watch-coordinator.{name}").exists(), name)
+        self.assertEqual(chat.listening(self.root), {"on": False, "seen": 0, "unread": 1, "since": first["at"]})
+
     def test_a_watch_in_a_terminal_prints_but_marks_nothing_read_a_once_watch_marks_what_it_exited_with(self):
         first = chat.append(self.root, "user", "status?", allow_user=True)
         proc, lines = tty_watch(self, self.root, "--as", "coordinator", "--all", "--resume")

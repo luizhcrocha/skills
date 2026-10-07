@@ -2,7 +2,7 @@
  * The chat seam (ported from the coordinator's tests/test_chat.py, all but the dashboard server's
  * routes, which are stage 3's): the chat module, its CLI, the watch and the wait.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -560,6 +560,28 @@ describe("listening", () => {
         `Arm \`fleet chat ${root} watch --as coordinator --all --resume --once\` instead.\n`,
     );
     expect(listening(m, root)).toEqual({ on: false, seen: 0, unread: 2, since: readChat(root)[0]?.at ?? null });
+  });
+
+  test("a watch whose output goes to /dev/null is refused, and marks nothing read", async () => {
+    user("status?");
+    const devnull = openSync("/dev/null", "w");
+
+    for (const once of [["--once"], []]) {
+      const proc = Bun.spawn([FLEET, "chat", root, "watch", "--as", "coordinator", "--all", "--resume", ...once], { env, stdout: devnull, stderr: "pipe", stdin: "ignore" });
+      procs.push(proc);
+      const ended = await Promise.race([proc.exited, sleep(3000).then(() => "still running")]);
+      expect(ended).toBe(1);
+      expect(await new Response(proc.stderr).text()).toBe(
+        `chat: a watch whose output goes to /dev/null wakes nobody, yet it would mark what it reads as read. ` +
+          `Run \`fleet chat ${root} watch --as coordinator --all --resume --once\` as a background command of the session ` +
+          `(run_in_background: true), never with \`& disown\` or its output redirected to /dev/null.\n`,
+      );
+    }
+
+    closeSync(devnull);
+
+    for (const file of ["cursor", "pid", "left"]) expect(existsSync(join(root, `watch-coordinator.${file}`))).toBe(false);
+    expect(listening(m, root)).toEqual({ on: false, seen: 0, unread: 1, since: readChat(root)[0]?.at ?? null });
   });
 
   test("a watch in a terminal prints but marks nothing read; a --once watch marks what it exited with", async () => {

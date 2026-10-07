@@ -744,10 +744,23 @@ class FleetNews:
             self.saved = text
 
 
+def _stdout_is_devnull() -> bool:
+    """Whether stdout is /dev/null (`>/dev/null`): the same device and inode."""
+    try:
+        out, sink = os.fstat(1), os.stat(os.devnull)
+    except OSError:
+        return False
+    return (out.st_dev, out.st_ino) == (sink.st_dev, sink.st_ino)
+
+
 def cmd_watch(root, args) -> None:
     who = _participant(_agents(root), args.who, allow_user=False)
     if args.fleets and who != "manager":
         raise ChatError("--fleets is the manager's: only a watch `--as manager` follows the other fleets' pages")
+    if _stdout_is_devnull():
+        raise ChatError("a watch whose output goes to /dev/null wakes nobody, yet it would mark what it reads as read. "
+                        f"Run `fleet chat {root} watch --as {who} --all --resume --once{' --fleets' if args.fleets else ''}` as a background command of the session "
+                        "(run_in_background: true), never with `& disown` or its output redirected to /dev/null.")
     if not args.once:
         if not sys.stdout.isatty():
             raise ChatError(f"a watch without --once needs a terminal: in a background command it never exits, so nothing "

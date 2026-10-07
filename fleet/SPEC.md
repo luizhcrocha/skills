@@ -493,7 +493,7 @@ its id.
 | `say --as WHO [--re N] [--decision D] TEXT` | appends | the stored line | 1 refused |
 | `inbox --as WHO` | the messages open for WHO (`user` allowed) | one line each, oldest first | 1 unknown WHO |
 | `log [--after N]` | every message with id > N | one line each | 0 |
-| `watch --as WHO [--after N \| --resume] [--all] [--once] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager; 1 without `--once` when stdout is not a terminal |
+| `watch --as WHO [--after N \| --resume] [--all] [--once] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager; 1 stdout is /dev/null; 1 without `--once` when stdout is not a terminal |
 | `wait DECISION...` | waits for the user's answer to one of these open decisions | the answer's line, then `-> the user answered <ref>: record it first, ...`; for an action answered `Failed: ...`, `-> the user's step <ref> failed, and it is not done: fix it and re-present it, ...`, or --withdraw "why"; never --decide` | 1 unknown decision |
 
 A printed line: `#<id> <from>( (<name or author>)) -> <to, each with its name>( [<ref> <decision>])( [side chat #N])( [delivered to <fleet> #<id>, ...])( [via <fleet> #<id>])( [from <origin>])( (quoting <from>: "<quote>"))`
@@ -508,7 +508,13 @@ Without `--once` the watch never exits, so in a background command it would read
 one: it is refused unless stdout is a terminal (`chat: a watch without --once needs a terminal: in a
 background command it never exits, so nothing wakes the session. Arm \`fleet chat DIR watch --as WHO
 --all --resume --once\` instead.`, exit 1, after the `--fleets` check), and on a terminal, a person
-reading it, it writes none of the three files. With `--all`, a message from the user is left out for each recipient that has it in
+reading it, it writes none of the three files. Any watch whose stdout is /dev/null (fstat(1) has the
+device and inode of /dev/null: `>/dev/null 2>&1 & disown`) is refused first, after the `--fleets` check
+and before it writes anything: what it prints wakes no one, yet it would move the cursor, so the user's
+message would count as read (`chat: a watch whose output goes to /dev/null wakes nobody, yet it would mark
+what it reads as read. Run \`fleet chat DIR watch --as WHO --all --resume --once( --fleets)\` as a
+background command of the session (run_in_background: true), never with \`& disown\` or its output
+redirected to /dev/null.`, exit 1). With `--all`, a message from the user is left out for each recipient that has it in
 its own chat (`delivered`): a manager's watch does not print the user's message to coordinators the hub
 delivered it to, and prints, with its `[delivered to ...]` mark, one that also names the manager or a
 coordinator it was not delivered to. A manager's watch prints `!` lines every `FLEET_CHECK_S`: a fleet that

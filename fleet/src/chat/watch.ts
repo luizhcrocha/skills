@@ -56,6 +56,8 @@ export interface WatchRequest {
   readonly batch: number;
   /** Whether stdout is a terminal: a watch without `once` runs only there. */
   readonly terminal: boolean;
+  /** Whether stdout is /dev/null: what the watch prints wakes nobody there, so it does not run. */
+  readonly devnull: boolean;
 }
 
 function seconds(env: (name: string) => string | undefined, name: string, fallback: number): number {
@@ -283,6 +285,17 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
 
     if (request.fleets && who !== "manager") {
       return yield* Effect.fail(new ChatError({ reason: "--fleets is the manager's: only a watch `--as manager` follows the other fleets' pages" }));
+    }
+
+    if (request.devnull) {
+      return yield* Effect.fail(
+        new ChatError({
+          reason:
+            `a watch whose output goes to /dev/null wakes nobody, yet it would mark what it reads as read. ` +
+            `Run \`fleet chat ${root} watch --as ${who} --all --resume --once${request.fleets ? " --fleets" : ""}\` as a background command of the session ` +
+            `(run_in_background: true), never with \`& disown\` or its output redirected to /dev/null.`,
+        }),
+      );
     }
 
     if (!request.once) {
