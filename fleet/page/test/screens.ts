@@ -2,21 +2,22 @@
  * Screenshots of the page from the fixtures, in headless Chromium: a manager's page and a coordinator's,
  * at 390×900 and 1280×900, light and dark, for comparing two templates by eye.
  *
- *     bun test/screens.ts TEMPLATE OUT_DIR [--chromium PATH] [--extra | --chat]
+ *     bun test/screens.ts TEMPLATE OUT_DIR [--chromium PATH] [--extra | --chat | --code | --scopes]
  *
  * `--extra` adds the open notifications panel, the chat overlay on a phone and a decision's page.
  * `--chat` shoots only the chat, on the conversation of `chatConversation` (the overlay on a phone, the
  * docked panel at 1280), at its end and scrolled to its start, with decision activity left out and shown,
  * and D18's page with its thread. `--code` shoots code blocks and the selection toolbar on `codeView`:
  * A2 (Luiz's Modal clean-up, prose and a nu block), A3 (an old one-command `--manual`), a chat message
- * with a block, and a selection with its toolbar, in a decision's text and in the chat.
+ * with a block, and a selection with its toolbar, in a decision's text and in the chat. `--scopes` shoots
+ * the manager's decision lists on `managerScopesView`, every agent's and then infra's alone.
  */
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import puppeteer, { type Page } from "puppeteer-core";
 
-import { chatConversation, chatView, codeChat, codeView, coordinatorChat, coordinatorView, managerChat, managerView } from "./fixtures.ts";
+import { chatConversation, chatView, codeChat, codeView, coordinatorChat, coordinatorView, managerChat, managerScopesView, managerView } from "./fixtures.ts";
 import { serveHarness } from "./harness.ts";
 
 const [templatePath, out] = process.argv.slice(2);
@@ -172,6 +173,44 @@ async function shootCode(): Promise<void> {
 
 if (process.argv.includes("--code")) {
   await shootCode();
+  await browser.close();
+  console.log(`screenshots in ${out}`);
+  process.exit(0);
+}
+
+/** The manager's quick filter by agent: the decision lists for every agent, then infra's chip pressed. */
+async function shootScopes(): Promise<void> {
+  const harness = serveHarness({ template, view: managerScopesView(now), messages: managerChat(now), skills });
+
+  for (const [w, h] of [
+    [390, 900],
+    [1280, 900],
+  ] as const) {
+    for (const theme of ["light", "dark"] as const) {
+      const page = await browser.newPage();
+      await page.setViewport({ width: w, height: h, deviceScaleFactor: w < 500 ? 2 : 1, isMobile: w < 500, hasTouch: w < 500 });
+      await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: theme }, { name: "prefers-reduced-motion", value: "reduce" }]);
+      await page.evaluateOnNewDocument((t: number) => {
+        Date.now = () => t;
+        localStorage.clear();
+      }, now);
+      await page.goto(harness.url, { waitUntil: "networkidle2" });
+      await page.waitForSelector("#decision-scope");
+      await page.evaluate(() => document.querySelector("#decision-seg")?.scrollIntoView({ block: "start" }));
+      await shoot(page, `scopes-${w}-${theme}-all`);
+      const infra = await page.$$("#decision-scope button");
+      await infra[2]?.click();
+      await page.evaluate(() => document.querySelector("#decision-seg")?.scrollIntoView({ block: "start" }));
+      await shoot(page, `scopes-${w}-${theme}-infra`);
+      await page.close();
+    }
+  }
+
+  harness.stop();
+}
+
+if (process.argv.includes("--scopes")) {
+  await shootScopes();
   await browser.close();
   console.log(`screenshots in ${out}`);
   process.exit(0);
