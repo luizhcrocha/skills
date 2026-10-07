@@ -5,6 +5,9 @@
  * carries FLEET_TEST_RUN in its environment. When the run ends, fails, or is stopped by SIGTERM or
  * SIGINT, what is still alive is stopped (SIGTERM, then SIGKILL after a short wait) and the parent is
  * removed. A leak that the tests themselves should have cleaned up fails the run.
+ *
+ * The run sheds the Claude Code session it may be started from: every `CLAUDE*` variable is removed,
+ * so `fleet serve` does not name a fixture fleet after that session. A test that needs one sets it.
  */
 import { existsSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,6 +29,8 @@ writeFileSync(join(parent, "run.pid"), String(process.pid));
 // A `fleet` a test spawns forwards to the newest tstack on the machine unless told not to; the run
 // tests this copy's code.
 Object.assign(process.env, { [MARK]: parent, TMPDIR: parent, FLEET_NO_FORWARD: "1" });
+
+for (const name of Object.keys(process.env)) if (name.startsWith("CLAUDE")) delete process.env[name];
 
 /** Pids of this run's processes still alive (not this one): marked in their environment, or running in or on the run's directory. */
 function survivors(owned: string = parent): number[] {

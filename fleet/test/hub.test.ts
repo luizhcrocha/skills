@@ -1213,6 +1213,24 @@ describe("fleet serve", () => {
   });
 });
 
+describe("a test run started from a Claude Code session", () => {
+  test("does not name a fixture fleet after that session", () => {
+    const session = "5579180b-test-session";
+    const folder = join(base, "claude-config", "projects", "p", session);
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "custom-title.json"), JSON.stringify({ customTitle: "the running session" }));
+
+    const nested = Bun.spawnSync(["bun", "test", "test/hub.test.ts", "-t", "^fleet serve puts a fleet in the registry"], {
+      cwd: join(import.meta.dir, ".."),
+      env: { ...process.env, CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: session, CLAUDE_CONFIG_DIR: join(base, "claude-config") },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect([nested.exitCode, nested.stderr.toString()]).toEqual([0, expect.stringContaining(" 1 pass")]);
+  }, 60_000);
+});
+
 describe("a permission's answer grants the call once", () => {
   const CALL = "git push --force origin HEAD:main";
   const RULE = `Bash(${CALL})`;
