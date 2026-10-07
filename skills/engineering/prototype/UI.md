@@ -6,6 +6,8 @@ Each variant must be a direction you could defend shipping on its own. Three tin
 
 If the question is about logic/state rather than what something looks like, this is the wrong branch. Use [LOGIC.md](LOGIC.md).
 
+A prototype that lives over several review rounds, with a reviewer marking the live page, runs each round by [ROUNDS.md](ROUNDS.md): load it before the first round.
+
 ## When this is the right shape
 
 - "What should this page look like?"
@@ -108,7 +110,7 @@ Then present the set as a table and stop, because the choice is the user's:
 
 Don't pre-pick a favorite. If asked, answer from the product's personality and how often the piece is used. If two variants converged while you built them, cut one and say so.
 
-Surface the URL (and the `?v=` keys). The user will flip through whenever they get to it. The interesting feedback is usually **"I want the header from B with the sidebar from C"**, which is the actual design they want. For another round, keep the harness and diverge around the direction they leaned towards.
+Surface the URL (and the `?v=` keys). The user will flip through whenever they get to it. The interesting feedback is usually **"I want the header from B with the sidebar from C"**, which is the actual design they want. For another round, keep the harness and diverge around the direction they leaned towards. When the reviewer keeps reviewing on the live page, switch to [ROUNDS.md](ROUNDS.md).
 
 ### 6. Capture the answer and clean up
 
