@@ -61,6 +61,9 @@ type Building<T> = { -readonly [K in keyof T]: T[K] };
 /** How often a stream looks at its files. */
 export const POLL_MS = 300;
 
+/** How often the index's streams are sent the fleets. */
+export const INDEX_MS = 1000;
+
 /** How often a stream pings an idle client. */
 export const PING_MS = 15_000;
 
@@ -217,6 +220,8 @@ export class Hub {
   private readonly logins = new Map<string, { readonly login: string | undefined; readonly at: number }>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private courierTimer: ReturnType<typeof setInterval> | undefined;
+  private readonly indexWatchers = new Set<(json: string) => void>();
+  private indexTimer: ReturnType<typeof setInterval> | undefined;
   private readonly courier = new Courier();
   private readonly lookups: Lookups;
 
@@ -270,6 +275,9 @@ export class Hub {
     if (this.timer !== undefined) clearInterval(this.timer);
 
     if (this.courierTimer !== undefined) clearInterval(this.courierTimer);
+
+    if (this.indexTimer !== undefined) clearInterval(this.indexTimer);
+    this.indexTimer = undefined;
   }
 
   /** Mirror onto the manager's page what the coordinators answered in their own chats to the messages the
@@ -474,14 +482,25 @@ export class Hub {
     return new Response(indexHtml(this.indexPayload()), { headers: { "Content-Type": "text/html; charset=utf-8", ...NO_STORE } });
   }
 
+  /** The index as its streams are sent it. */
+  private indexJson(): string {
+    return dumps(this.indexPayload(), { ensureAscii: false });
+  }
+
+  /** Every second, build the index once and hand it to each open index stream: a page each, and the
+   * build reads every fleet's files, so N streams must not cost N builds. Runs while a stream is open. */
+  private indexTick(): void {
+    const json = this.indexJson();
+
+    for (const watcher of this.indexWatchers) watcher(json);
+  }
+
   private indexEvents(req: Request): Response {
     return sseResponse(req.signal, (send) => {
       let last = "";
       let pinged = performance.now();
 
-      const tick = (): void => {
-        const json = dumps(this.indexPayload(), { ensureAscii: false });
-
+      const watcher = (json: string): void => {
         if (json !== last) {
           send(sseEvent("fleets", json));
           last = json;
@@ -493,10 +512,18 @@ export class Hub {
         }
       };
 
-      tick();
-      const timer = setInterval(tick, 1000);
+      watcher(this.indexJson());
+      this.indexWatchers.add(watcher);
+      this.indexTimer ??= setInterval(() => this.indexTick(), INDEX_MS);
 
-      return () => clearInterval(timer);
+      return () => {
+        this.indexWatchers.delete(watcher);
+
+        if (this.indexWatchers.size === 0 && this.indexTimer !== undefined) {
+          clearInterval(this.indexTimer);
+          this.indexTimer = undefined;
+        }
+      };
     });
   }
 

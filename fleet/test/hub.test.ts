@@ -842,6 +842,31 @@ describe("the index and the manager", () => {
     expect((asArray(api.body["fleets"]) ?? []).length).toBe(2);
   });
 
+  test("several open index pages cost one build of the fleets per second, not one each", async () => {
+    await start();
+    const hub = running?.hub;
+
+    if (hub === undefined) throw new Error("no hub");
+    const build = hub.indexPayload.bind(hub);
+    let builds = 0;
+
+    hub.indexPayload = () => {
+      builds += 1;
+
+      return build();
+    };
+
+    const streams = await Promise.all([1, 2, 3, 4, 5].map(() => Stream.open("/events")));
+    await Promise.all(streams.map((s) => s.nextOf("fleets")));
+    builds = 0;
+    await Bun.sleep(2500);
+
+    for (const s of streams) s.close();
+    // 2 or 3 ticks in 2.5 s; a build per stream per tick would be 10 to 15
+    expect(builds).toBeGreaterThanOrEqual(2);
+    expect(builds).toBeLessThanOrEqual(3);
+  });
+
   test("the manager's stream holds every coordinator and follows what they do; its links to them resolve", async () => {
     const manager = join(base, "m", "manager");
     mkdirSync(manager, { recursive: true });

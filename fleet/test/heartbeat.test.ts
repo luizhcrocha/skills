@@ -2,7 +2,7 @@
  * Heartbeats as the hub and the page read them: which worker a heartbeat file is, when each worker was
  * last seen (its heartbeat first, its transcript without one), and the silent-worker rule on top.
  */
-import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, renameSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -12,6 +12,7 @@ import { readBeats, workerActivity, workerOf, type Beat } from "../src/heartbeat
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
 import { cliLookups } from "../src/page/lookups.ts";
 import { view } from "../src/page/view.ts";
+import { workerNamedIn } from "../src/transcripts.ts";
 import { machineOf, type Machine } from "../src/world.ts";
 import { baseEnv, fleet, tmp } from "./support.ts";
 
@@ -129,6 +130,35 @@ describe("last seen", () => {
     expect(seen.get("a1")?.by).toBe("heartbeat");
     expect(seen.get("a1")?.at).toBe(Date.parse("2026-01-05T09:30:00Z") / 1000);
     expect(seen.get("a2")).toEqual({ at: (NOW - 60_000) / 1000, by: "transcript", tool: null, event: null });
+  });
+
+  test("a subagent's transcript is read for its worker once, however many heartbeats name it", () => {
+    for (let n = 0; n < 50; n += 1) beat(`${SESSION}.x9-${n}`, { agent: "x9", transcript: join(config, "projects", "-proj", `${SESSION}.jsonl`) });
+
+    const read: string[] = [];
+
+    const seen = workerActivity(dir, config, ledger(), (path) => {
+      read.push(path);
+
+      return "a2";
+    });
+
+    expect(seen.get("a2")?.by).toBe("heartbeat");
+    expect(read).toEqual([join(config, "projects", "-proj", SESSION, "subagents", "agent-x9.jsonl")]);
+  });
+
+  test("a transcript's brief is read from its head, and again once the file is replaced", () => {
+    const folder = join(config, "projects", "-proj", SESSION, "subagents");
+    mkdirSync(folder, { recursive: true });
+    const path = join(folder, "agent-y1.jsonl");
+    const first = (worker: string): string => `${JSON.stringify({ message: { content: `your id is ${worker}.` } })}\n`;
+    writeFileSync(path, first("a1") + "x".repeat(200_000));
+    expect(workerNamedIn(path)).toBe("a1");
+    appendFileSync(path, first("a3"));
+    expect(workerNamedIn(path)).toBe("a1");
+    renameSync(path, `${path}.old`);
+    writeFileSync(path, first("a2"));
+    expect(workerNamedIn(path)).toBe("a2");
   });
 
   test("silence is twenty minutes without a tool call", () => {

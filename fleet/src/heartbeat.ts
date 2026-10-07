@@ -99,36 +99,62 @@ function agentTranscriptOf(beat: Beat): string | undefined {
   return join(dirname(beat.transcript), basename(beat.transcript, ".jsonl"), "subagents", `agent-${beat.agent}.jsonl`);
 }
 
+/** What {@link workerOf} looks a beat up in: the ledger's workers and live workspaces, read once per ledger
+ * rather than once per beat (a fleet keeps a heartbeat file per subagent, hundreds of them). */
+export interface Roster {
+  readonly ids: ReadonlySet<string>;
+  /** Each `task_id` to the id of the first row that holds it. */
+  readonly byTask: ReadonlyMap<string, string | undefined>;
+  readonly workspaces: readonly { readonly id: string | undefined; readonly path: string | undefined; readonly agent: string | undefined }[];
+}
+
+/** The {@link Roster} of ledger `state`. */
+export function rosterOf(state: JsonObject): Roster {
+  const agents = rowsOf(state, "agents");
+  const ids = new Set(agents.flatMap((a) => (asString(a["id"]) === undefined ? [] : [asString(a["id"]) ?? ""])));
+  const byTask = new Map<string, string | undefined>();
+
+  for (const a of agents) {
+    const task = asString(a["task_id"]);
+
+    if (task !== undefined && !byTask.has(task)) byTask.set(task, asString(a["id"]));
+  }
+
+  const workspaces = rowsOf(state, "workspaces")
+    .filter((w) => w["status"] !== "pruned")
+    .map((w) => ({ id: asString(w["id"]), path: asString(w["path"]), agent: asString(w["agent"]) }));
+
+  return { ids, byTask, workspaces };
+}
+
 /** Which worker of the ledger beat, in this order: `$FLEET_WORKER`; the subagent whose `task_id` the
  * row holds; the subagent whose transcript's first line gives it its id; the jj workspace `fleet ws
  * add` made for it (by name, or by the cwd or the tool's path inside it); a workspace named after the
  * worker. Undefined when none says. */
 export function workerOf(beat: Beat, state: JsonObject, named: (path: string) => string | undefined = workerNamedIn): string | undefined {
-  const agents = rowsOf(state, "agents");
-  const ids = new Set(agents.flatMap((a) => (asString(a["id"]) === undefined ? [] : [asString(a["id"]) ?? ""])));
-  const known = (id: string | null | undefined): string | undefined => (id !== null && id !== undefined && ids.has(id) ? id : undefined);
+  return workerIn(beat, rosterOf(state), named);
+}
+
+/** {@link workerOf} against a ledger's {@link Roster}, read once for many beats. */
+export function workerIn(beat: Beat, roster: Roster, named: (path: string) => string | undefined = workerNamedIn): string | undefined {
+  const known = (id: string | null | undefined): string | undefined => (id !== null && id !== undefined && roster.ids.has(id) ? id : undefined);
 
   const byWorker = known(beat.worker);
 
   if (byWorker !== undefined) return byWorker;
 
   if (beat.agent !== null) {
-    const byTask = agents.find((a) => asString(a["task_id"]) === beat.agent);
-
-    if (byTask !== undefined) return known(asString(byTask["id"]));
+    if (roster.byTask.has(beat.agent)) return known(roster.byTask.get(beat.agent));
     const transcript = agentTranscriptOf(beat);
     const byBrief = transcript === undefined ? undefined : known(named(transcript));
 
     if (byBrief !== undefined) return byBrief;
   }
 
-  for (const w of rowsOf(state, "workspaces")) {
-    if (w["status"] === "pruned") continue;
-    const id = asString(w["id"]);
-    const path = asString(w["path"]);
-    const mine = (id !== undefined && beat.workspace === id) || (path !== undefined && (inside(beat.cwd, path) || inside(beat.path, path)));
+  for (const w of roster.workspaces) {
+    const mine = (w.id !== undefined && beat.workspace === w.id) || (w.path !== undefined && (inside(beat.cwd, w.path) || inside(beat.path, w.path)));
 
-    if (mine) return known(asString(w["agent"]) ?? id);
+    if (mine) return known(w.agent ?? w.id);
   }
 
   return beat.agent === null ? known(beat.workspace) : undefined;
@@ -145,11 +171,19 @@ export interface Seen {
 }
 
 /** Each worker's last sign of life in DIR: its newest heartbeat, else its transcript's time. */
-export function workerActivity(root: string, config: string, state: JsonObject): Map<string, Seen> {
+export function workerActivity(root: string, config: string, state: JsonObject, named: (path: string) => string | undefined = workerNamedIn): Map<string, Seen> {
   const seen = new Map<string, Seen>();
+  const roster = rosterOf(state);
+  const names = new Map<string, string | undefined>();
+
+  const once = (path: string): string | undefined => {
+    if (!names.has(path)) names.set(path, named(path));
+
+    return names.get(path);
+  };
 
   for (const beat of readBeats(root)) {
-    const id = workerOf(beat, state);
+    const id = workerIn(beat, roster, once);
     const held = id === undefined ? undefined : seen.get(id);
 
     if (id !== undefined && (held === undefined || beat.at > held.at)) seen.set(id, { at: beat.at, by: "heartbeat", tool: beat.tool, event: beat.event });

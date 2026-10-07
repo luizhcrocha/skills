@@ -8,7 +8,7 @@ import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
 
 import { stampOf } from "./clock.ts";
-import { isDir, listDir, mtimeOf, readBytes, readText, resolvePath } from "./files.ts";
+import { isDir, listDir, mtimeOf, readText, resolvePath } from "./files.ts";
 import { asNumber, asObject, asString, parseJson, truthy, type JsonObject } from "./json.ts";
 import * as Option from "effect/Option";
 
@@ -39,12 +39,42 @@ export function activeAt(root: string, config: string): string | undefined {
 
 const WHO = /(?:your id is|You are) ([A-Za-z][A-Za-z0-9_.-]*?)[,.\s"]/;
 
-/** The worker id a subagent's transcript was given on its first line (its brief's `your id is X`), or
- * undefined. */
-export function workerNamedIn(path: string): string | undefined {
-  const head = readBytes(path)?.subarray(0, 20000).toString("utf8");
+/** How much of a transcript's start is read for its first line. */
+const HEAD_BYTES = 20000;
 
-  return head === undefined ? undefined : WHO.exec(head.split("\n")[0] ?? "")?.[1];
+/** The worker ids already read, by transcript path: a transcript only grows, so once its first line is
+ * whole (or the head read is full) it names the same worker until the file is replaced (another inode). */
+const namedHeads = new Map<string, { readonly inode: bigint; readonly id: string | undefined }>();
+
+/** The worker id a subagent's transcript was given on its first line (its brief's `your id is X`), or
+ * undefined. Reads only the transcript's first {@link HEAD_BYTES} bytes, and an unchanged file not again. */
+export function workerNamedIn(path: string): string | undefined {
+  let inode: bigint;
+
+  try {
+    inode = statSync(path, { bigint: true }).ino;
+  } catch {
+    namedHeads.delete(path);
+
+    return undefined;
+  }
+
+  const held = namedHeads.get(path);
+
+  if (held !== undefined && held.inode === inode) return held.id;
+  let head: Buffer;
+
+  try {
+    head = readHead(path, HEAD_BYTES);
+  } catch {
+    return undefined;
+  }
+
+  const id = WHO.exec(head.toString("utf8").split("\n")[0] ?? "")?.[1];
+
+  if (head.includes(0x0a) || head.length >= HEAD_BYTES) namedHeads.set(path, { inode, id });
+
+  return id;
 }
 
 function subagents(root: string, config: string): string | undefined {
@@ -268,6 +298,18 @@ export class AiTitles {
     this.held.set(path, held);
 
     return held.title;
+  }
+}
+
+/** The first `most` bytes of `path`, fewer when it is shorter. */
+function readHead(path: string, most: number): Buffer {
+  const chunk = Buffer.alloc(most);
+  const fd = openSync(path, "r");
+
+  try {
+    return chunk.subarray(0, readSync(fd, chunk, 0, most, 0));
+  } finally {
+    closeSync(fd);
   }
 }
 
