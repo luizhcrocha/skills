@@ -200,6 +200,18 @@ class CliTest(FleetDir):
         self.assertEqual(said.stdout, "#3 a1 (notes-impl) -> user: about half [re #1]\n")
         self.assertEqual(run_cli(self.root, "inbox", "--as", "a1").stdout, "")
 
+    def test_a_hosts_say_with_no_re_names_what_is_open_from_the_user_and_still_sends(self):
+        first = chat.append(self.root, "user", "status?", allow_user=True)
+        chat.append(self.root, "user", "@a1 how far?", allow_user=True)
+        third = chat.append(self.root, "user", "and the deploy?", allow_user=True)
+        said = run_cli(self.root, "say", "--as", "coordinator", "all fine")
+        self.assertEqual((said.returncode, said.stdout), (0, "#4 coordinator -> user: all fine\n"))
+        self.assertEqual(said.stderr, f"chat: open from the user: #{first['id']} {first['at'][11:16]}, "
+                                      f"#{third['id']} {third['at'][11:16]} — add `--re N` if this answers one\n")
+        self.assertEqual(chat.read(self.root)[-1]["text"], "all fine")
+        self.assertEqual(run_cli(self.root, "say", "--as", "coordinator", "--re", "1", "fine").stderr, "")
+        self.assertEqual(run_cli(self.root, "say", "--as", "a1", "on it").stderr, "")
+
     def test_log_prints_the_whole_conversation_after_an_id(self):
         chat.append(self.root, "user", "one", allow_user=True)
         chat.append(self.root, "coordinator", "@a2 two")

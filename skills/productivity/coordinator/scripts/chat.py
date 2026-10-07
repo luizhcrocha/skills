@@ -406,8 +406,40 @@ def _show(root, messages: list[dict]) -> None:
         print(line, flush=True)
 
 
+def _closed_decisions(root) -> set:
+    state = _state(root)
+    return {d.get("id") for d in state.get("decisions", []) if isinstance(d, dict) and d.get("status") != "open"}
+
+
+def open_from_user(root, messages: list[dict] | None = None) -> list[dict]:
+    """The user's messages to the host of DIR that the host has not answered with `--re`, leaving out an
+    answer to a decision since closed: it was recorded in the ledger. Oldest first."""
+    closed = _closed_decisions(root)
+    return [m for m in _open_among(read(root) if messages is None else messages, host(root))
+            if m["from"] == "user" and not (m.get("decision") and m["decision"] in closed)]
+
+
+OPEN_SHOWN = 5  # messages a host's `say` without `--re` names, at most
+
+
+def no_re_warning(root, sent: dict) -> str | None:
+    """What the host is told when it writes with no `--re` while the user's messages to it are open: the
+    reply would leave them looking unanswered. None otherwise."""
+    if sent["from"] != host(root) or sent["re"] is not None:
+        return None
+    still = open_from_user(root)
+    if not still:
+        return None
+    shown = ", ".join(f"#{m['id']} {str(m['at'])[11:16]}" for m in still[-OPEN_SHOWN:])
+    earlier = f" (and {len(still) - OPEN_SHOWN} earlier)" if len(still) > OPEN_SHOWN else ""
+    return f"chat: open from the user: {shown}{earlier} — add `--re N` if this answers one"
+
+
 def cmd_say(root, args) -> None:
-    _show(root, [append(root, args.who, args.text, args.re, decision=args.decision)])
+    sent = append(root, args.who, args.text, args.re, decision=args.decision)
+    _show(root, [sent])
+    if warning := no_re_warning(root, sent):
+        print(warning, file=sys.stderr, flush=True)
 
 
 def cmd_inbox(root, args) -> None:
@@ -536,8 +568,7 @@ def listening(root) -> dict:
         seen = 0
     messages = read(root)
     answered = {m["re"] for m in messages if m["from"] != "user" and m["re"] is not None}
-    state = _state(root)
-    closed = {d.get("id") for d in state.get("decisions", []) if isinstance(d, dict) and d.get("status") != "open"}
+    closed = _closed_decisions(root)
     # Unread is what still waits: a message someone answered, or an answer to a decision since closed, does not.
     # So does one the hub delivered to every coordinator it names: each reads it in its own chat.
     unread = [m for m in messages if m["id"] > seen and m["from"] == "user" and m["id"] not in answered

@@ -471,6 +471,43 @@ export function intOf(text: string | undefined): number | undefined {
   return trimmed !== undefined && /^[+-]?\d+$/.test(trimmed) ? Number(trimmed) : undefined;
 }
 
+/** The ids (as pyRepr) of DIR's decisions that are no longer open. */
+function closedDecisions(root: string): Set<string> {
+  const closed = new Set<string>();
+
+  for (const row of asArray(stateOfDir(root)["decisions"]) ?? []) {
+    const d = asObject(row);
+
+    if (d !== undefined && d["status"] !== "open") closed.add(pyRepr(d["id"]));
+  }
+
+  return closed;
+}
+
+/** The user's messages to the host of DIR that the host has not answered with `--re`, leaving out an answer
+ * to a decision since closed: it was recorded in the ledger. Oldest first. */
+export function openFromUser(root: string, messages: readonly Message[] = readChat(root)): Message[] {
+  const closed = closedDecisions(root);
+
+  return openAmong(messages, hostOf(root)).filter((m) => m.from === "user" && !(truthy(m.decision) && closed.has(pyRepr(m.decision))));
+}
+
+/** Messages a host's `say` without `--re` names, at most. */
+const OPEN_SHOWN = 5;
+
+/** What the host is told when it writes with no `--re` while the user's messages to it are open: the reply
+ * would leave them looking unanswered. Undefined otherwise. */
+export function noReWarning(root: string, sent: Message): string | undefined {
+  if (sent.from !== hostOf(root) || sent.re !== null) return undefined;
+  const open = openFromUser(root);
+
+  if (open.length === 0) return undefined;
+  const shown = open.slice(-OPEN_SHOWN).map((m) => `#${m.id} ${pyText(m.at).slice(11, 16)}`);
+  const earlier = open.length > OPEN_SHOWN ? ` (and ${open.length - OPEN_SHOWN} earlier)` : "";
+
+  return `chat: open from the user: ${shown.join(", ")}${earlier} — add \`--re N\` if this answers one`;
+}
+
 /** Whether the host of DIR reads its chat now, and how far it has read. */
 export interface Listening {
   readonly on: boolean;
@@ -501,13 +538,7 @@ export function listening(machine: Machine, root: string): Listening {
 
   const seen = intOf(readText(cursorPath(root, who))) ?? 0;
   const answered = new Set(messages.flatMap((m) => (m.from !== "user" && m.re !== null ? [pyRepr(m.re)] : [])));
-  const closed = new Set<string>();
-
-  for (const row of asArray(stateOfDir(root)["decisions"]) ?? []) {
-    const d = asObject(row);
-
-    if (d !== undefined && d["status"] !== "open") closed.add(pyRepr(d["id"]));
-  }
+  const closed = closedDecisions(root);
 
   const unread = messages.filter(
     (m) =>

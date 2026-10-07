@@ -6,7 +6,7 @@ import { fstatSync, readFileSync, statSync } from "node:fs";
 
 import * as Effect from "effect/Effect";
 
-import { append, openFor, renderLines, type Draft } from "../chat/chat.ts";
+import { append, noReWarning, openFor, renderLines, type Draft } from "../chat/chat.ts";
 import { readChat } from "../chat/store.ts";
 import { wait, watch } from "../chat/watch.ts";
 import { stampOf } from "../clock.ts";
@@ -132,6 +132,9 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<vo
 
       if (sent instanceof ChatError) return yield* Effect.fail(sent);
       yield* lines(machine, root, [sent]);
+      const warning = noReWarning(root, sent);
+
+      if (warning !== undefined) (yield* Out).err(`${warning}\n`);
     } else if (cmd === "inbox") {
       const open = openFor(machine, root, who);
 

@@ -291,6 +291,19 @@ describe("cli", () => {
     expect(cli("inbox", "--as", "a1").stdout).toBe("");
   });
 
+  test("a host's say with no --re names what is open from the user, and still sends", () => {
+    const first = user("status?");
+    user("@a1 how far?");
+    const third = user("and the deploy?");
+    const at = (msg: Message): string => String(msg.at).slice(11, 16);
+    const said = cli("say", "--as", "coordinator", "all fine");
+    expect([said.code, said.stdout]).toEqual([0, "#4 coordinator -> user: all fine\n"]);
+    expect(said.stderr).toBe(`chat: open from the user: #${first.id} ${at(first)}, #${third.id} ${at(third)} — add \`--re N\` if this answers one\n`);
+    expect(readChat(root).at(-1)?.text).toBe("all fine");
+    expect(cli("say", "--as", "coordinator", "--re", "1", "fine").stderr).toBe("");
+    expect(cli("say", "--as", "a1", "on it").stderr).toBe("");
+  });
+
   test("log prints the whole conversation after an id", () => {
     user("one");
     send("coordinator", "@a2 two");
