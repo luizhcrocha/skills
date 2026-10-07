@@ -47,5 +47,14 @@ class CorpusTest(unittest.TestCase):
         self.assertFalse(found, "\n\n".join(found))
 
 
+class HermeticTest(unittest.TestCase):
+    def test_a_link_on_a_listening_port_reads_up_whatever_the_host_listens_on(self):
+        steps = [{"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"]},
+                 {"cli": "state", "argv": ["$DIR", "link", "review", "--url", f"https://box.ts.net:{run.LISTENING[0]}/", "--title", "T", "--kind", "page"]}]
+        got = run.replay(steps, *impl())
+        self.assertEqual(got[2]["exit"], 0, got[2])
+        self.assertEqual([link["up"] for link in got[2]["changed"]["$DIR/index.html"]["state"]["links"]], [True])
+
+
 if __name__ == "__main__":
     unittest.main()

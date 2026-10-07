@@ -18,7 +18,9 @@ ledger from an older version). Every step runs in one throwaway tree: $W (the wo
 exit code, stdout and stderr, and every file of $W and $REGISTRY that the step added, changed or
 removed, with paths canonicalised back to those tokens. The clock is pinned, so timestamps need no
 masking; the runner's own pid, which a fixture writes as $PID for a registry entry that must read
-as alive, reads back as $PID.
+as alive, reads back as $PID. A link's `up` probes this machine, so while a replay runs the runner
+itself listens on 127.0.0.1 at each port of LISTENING: a link on one of those reads as up, whatever
+else the host listens on.
 
 An implementation is a command prefix per CLI. The default is the Python oracle,
 skills/productivity/coordinator/scripts/*.py; stage 2's binary is given as
@@ -33,9 +35,11 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -46,6 +50,7 @@ START = "2026-01-05T09:00:00+00:00"  # the clock of a step that names none, befo
 STEP_TIMEOUT_S = 20
 IGNORED = {"__pycache__", "server.log"}  # never part of the observable state
 IGNORED_SUFFIXES = (".pyc", ".tmp")
+LISTENING = (47843,)  # the ports a trace's links name as up (https://box.ts.net:47843/); the probe asks 127.0.0.1
 PAGE_STATE = re.compile(r'<script id="fleet-state" type="application/json">(.*?)</script>', re.S)
 
 
@@ -56,6 +61,31 @@ def python_impl() -> dict:
 
 def python_subst() -> dict:
     return {str(SKILL): "$SKILL"}
+
+
+def _listen(port: int) -> socket.socket | None:
+    """A socket listening on 127.0.0.1:`port`, shared (SO_REUSEPORT) with the replays running beside this
+    one; None when something else already listens there, which the probe reads as up just the same."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    try:
+        sock.bind(("127.0.0.1", port))
+        sock.listen(64)
+        threading.Thread(target=_drain, args=(sock,), daemon=True).start()
+        return sock
+    except OSError:
+        sock.close()
+    with socket.create_connection(("127.0.0.1", port), timeout=1):
+        return None
+
+
+def _drain(sock: socket.socket) -> None:
+    """Accept and drop every probe's connection, so the backlog never fills, until `sock` is closed."""
+    while True:
+        try:
+            sock.accept()[0].close()
+        except OSError:
+            return
 
 
 class Session:
@@ -76,8 +106,15 @@ class Session:
                  str(self.registry): "$REGISTRY", str(self.home): "$USERHOME", str(base): "$TMP"}
         self.subst = sorted(pairs.items(), key=lambda kv: -len(kv[0]))
         self.view: dict[str, object] = {}
+        self._listeners = [listener for port in LISTENING if (listener := _listen(port)) is not None]
 
     def close(self) -> None:
+        for listener in self._listeners:
+            try:
+                listener.shutdown(socket.SHUT_RDWR)  # wakes its _drain's accept
+            except OSError:
+                pass
+            listener.close()
         self._tmp.cleanup()
 
     def __enter__(self):

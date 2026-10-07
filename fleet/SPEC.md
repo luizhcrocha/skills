@@ -1500,6 +1500,8 @@ a header, then one step per line.
   `$REGISTRY` (`FLEET_HOME`), `$PID` the runner's own pid (a registry entry that reads as alive).
 - Environment of every step: `TZ=UTC`, `LANG=C.UTF-8`, a throwaway `HOME`, `CLAUDE_CONFIG_DIR`
   and `XDG_STATE_HOME`, `FLEET_DISCOVER=0`, `FLEET_HOME=$REGISTRY`.
+- While a replay runs, the runner listens on 127.0.0.1:47843 itself (`LISTENING` in run.py), so a
+  link there reads as up on any machine; a link on any other port probes the host as it is.
 
 A result file has a header line (`{"results": NAME, "trace": 1}`), then one line per step:
 
