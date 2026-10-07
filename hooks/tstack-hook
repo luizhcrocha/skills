@@ -386,6 +386,34 @@ def fleet_role(ledger):
     return "manager" if isinstance(ledger, dict) and ledger.get("role") == "manager" else "coordinator"
 
 
+def fleet_registry(env):
+    """The hub's registry directory (fleets.py home()): $FLEET_HOME, else fleet-board under $XDG_STATE_HOME."""
+    if env.get("FLEET_HOME"):
+        return Path(env["FLEET_HOME"])
+    return Path(env.get("XDG_STATE_HOME") or Path(env.get("HOME", "/tmp")) / ".local" / "state") / "fleet-board"
+
+
+def served_by_session(hook, d):
+    """Whether this machine's registry has an entry for the fleet at d whose session_id is this session's
+    (`fleet serve` records it). A state.json the session merely holds, a ledger copied to read, is not one."""
+    if not hook.session_id:
+        return False
+    real = os.path.realpath(d)
+    try:
+        entries = list(fleet_registry(hook.env).glob("*.json"))
+    except OSError:
+        return False
+    for path in entries:
+        try:
+            entry = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(entry, dict) and entry.get("session_id") == hook.session_id \
+                and isinstance(entry.get("dir"), str) and os.path.realpath(entry["dir"]) == real:
+            return True
+    return False
+
+
 def fleet_cli():
     return f"{ROOT}/fleet/bin/fleet"
 
@@ -499,11 +527,14 @@ GUARD_AGAIN_S = 15
 def fleet_listen_guard(hook):
     """Stop: a coordinator or manager does not end a turn deaf. When a fleet it hosts (running or blocked;
     a paused or done one is left alone) has no live chat watch as its role, the turn goes on with the
-    command that arms it. Never twice in a row: not when this stop already follows a stop hook's block
+    command that arms it. It hosts the fleet $FLEET_DIR names, or one of its scratchpad's that the
+    registry says this session serves. Never twice in a row: not when this stop already follows a stop hook's block
     (stop_hook_active), nor within GUARD_AGAIN_S of the last block."""
     if fleet_worker(hook) or hook.input.get("stop_hook_active"):
         return None
     dirs = fleet_dirs(hook)
+    if not hook.env.get("FLEET_DIR"):
+        dirs = [d for d in dirs if served_by_session(hook, d)]
     if not dirs:
         return None
     state = hook.load_state("fleet-guard") if hook.session_id else {}

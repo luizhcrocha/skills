@@ -1081,7 +1081,10 @@ folders holding a `state.json`); the role is the ledger's (`role: "manager"`, el
 (a subagent's `agent_id`, `FLEET_WORKER`, `TSTACK_ROLE=worker`) is out of both. Neither ever fails the
 hook: a broken `chat.jsonl` or ledger is skipped, an error is logged.
 
-- **The Stop guard** (`fleet_listen_guard`, Stop). When a fleet the session hosts is running or blocked
+- **The Stop guard** (`fleet_listen_guard`, Stop). The session hosts `$FLEET_DIR`, else only those of
+  its scratchpad's folders that the hub's registry (`$FLEET_HOME`, else `fleet-board` under
+  `$XDG_STATE_HOME`) has an entry for with this session's `session_id`: a ledger copied into the
+  scratchpad to read is not a fleet it hosts. When a fleet the session hosts is running or blocked
   (not paused, not done) and no chat watch as its role is alive, the hook returns
   `{"decision": "block", "reason": ...}`, so the turn goes on with: `Your chat watch isn't running, so
   the user's messages and answers go unheard. Arm it as a background command (`run_in_background:

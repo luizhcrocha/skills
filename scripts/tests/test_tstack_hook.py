@@ -579,6 +579,16 @@ class FleetCase(HookCase):
         self.fleet.mkdir(parents=True)
         self.ledger()
         self.fleet_cli = f"{ROOT}/fleet/bin/fleet"
+        self.registry = self.tmp / "registry"
+        self.registry.mkdir()
+        self.env["FLEET_HOME"] = str(self.registry)
+        self.register(self.fleet)
+
+    def register(self, fleet, session="sess-1", id="p"):
+        """The hub's registry entry `fleet serve` writes for FLEET, served by SESSION."""
+        (self.registry / f"{id}.json").write_text(json.dumps({
+            "id": id, "role": "coordinator", "dir": str(fleet), "url": f"http://127.0.0.1:7420/f/{id}/",
+            "pid": os.getpid(), "session": None, "session_id": session, "since": "2026-01-05T08:00:00+00:00"}))
 
     def ledger(self, **fields):
         state = {"project": "p", "goal": "g", "status": "running", "now": "n", "started": "2026-01-05T08:00:00+00:00",
@@ -662,6 +672,19 @@ class StopGuardTest(FleetCase):
         self.fresh()
         pid_file.write_text(str(self.watch(role="manager", pid_file=False).pid))  # the wrong role
         self.blocked(self.stop())
+
+    def test_only_a_fleet_registered_as_this_sessions_is_guarded(self):
+        self.watch()
+        copy = self.pad / "infra"
+        copy.mkdir()
+        shutil.copy(self.fleet / "state.json", copy / "state.json")  # another fleet's ledger, copied to read
+        self.assertSilent(self.stop())
+        self.register(copy, session="sess-other", id="infra")  # served, but by another session
+        self.assertSilent(self.stop())
+        self.register(copy, id="infra")
+        reason = self.blocked(self.stop())
+        self.assertIn(f"chat {copy} watch --as coordinator", reason)
+        self.assertNotIn(f"chat {self.fleet} watch", reason)
 
     def test_passes_with_stop_hook_active(self):
         self.assertSilent(self.hook("Stop", self.payload("Stop", stop_hook_active=True)))
