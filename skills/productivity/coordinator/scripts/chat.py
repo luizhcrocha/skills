@@ -364,7 +364,8 @@ def _from_manager(m: dict) -> bool:
 
 def _marks(m: dict) -> str:
     """` [delivered to infra #7]` on a message the hub delivered, ` [via manager #12]` on its copy and on an
-    answer mirrored back."""
+    answer mirrored back, ` [from https://host:7501]` on one the user posted from a page of another origin
+    (the hub's `origin`)."""
     out = ""
     rows = [r for r in m.get("delivered") or [] if isinstance(r, dict) and r.get("fleet") is not None] \
         if isinstance(m.get("delivered"), list) else []
@@ -372,6 +373,8 @@ def _marks(m: dict) -> str:
         out += " [delivered to " + ", ".join(f"{_one_line(r['fleet'])} #{_one_line(r.get('id'))}" for r in rows) + "]"
     if isinstance(m.get("via"), dict) and m["via"].get("fleet") is not None:
         out += f" [via {_one_line(m['via']['fleet'])} #{_one_line(m['via'].get('id'))}]"
+    if isinstance(m.get("origin"), str) and m["origin"]:
+        out += f" [from {_one_line(m['origin'])}]"
     return out
 
 

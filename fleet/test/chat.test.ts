@@ -316,6 +316,12 @@ describe("only the server speaks as the user", () => {
     user("@a1 hi", { author: "luiz@github" });
     expect(cli("log").stdout).toBe("#1 user (luiz@github) -> a1 (notes-impl): @a1 hi\n");
   });
+
+  test("a user message posted from a prototype page keeps the page's origin and prints it", () => {
+    const sent = user("@a1 hi", { author: "luiz@github", origin: "https://box.tail.ts.net:7501" });
+    expect(sent.stored["origin"]).toBe("https://box.tail.ts.net:7501");
+    expect(cli("log").stdout).toBe("#1 user (luiz@github) -> a1 (notes-impl) [from https://box.tail.ts.net:7501]: @a1 hi\n");
+  });
 });
 
 describe("one message, one line", () => {

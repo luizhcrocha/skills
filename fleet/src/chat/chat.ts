@@ -220,6 +220,7 @@ interface StoredMessage {
   decision?: string;
   quote?: JsonObject;
   side?: Json;
+  origin?: string;
 }
 
 /** A message to append. */
@@ -233,6 +234,8 @@ export interface Draft {
   readonly quote?: JsonObject;
   /** "new" opens a side chat; a number continues one. */
   readonly side?: number | "new";
+  /** The page of another origin the user posted from (the hub's config allows it), as its `Origin`. */
+  readonly origin?: string;
   /** Called under the store's lock with the message about to be stored and what the store holds: the
    * fields it returns are stored with it (the hub's delivery to the coordinators, `delivered`). */
   readonly alongside?: (message: JsonObject, known: readonly Message[]) => JsonObject | undefined;
@@ -291,6 +294,8 @@ export function append(machine: Machine, root: string, draft: Draft, at: string)
     if (quote !== undefined) message.quote = quote;
 
     if (side !== undefined && truthy(side)) message.side = side;
+
+    if (draft.origin !== undefined && draft.origin !== "" && resolved.from === "user") message.origin = draft.origin;
     const built: JsonObject = { ...message };
 
     return { ...built, ...draft.alongside?.(built, known) };
@@ -377,7 +382,7 @@ export function fromManager(m: Message): boolean {
 }
 
 /** ` [delivered to infra #7]` on a message the hub delivered, ` [via manager #12]` on its copy and on an
- * answer mirrored back. */
+ * answer mirrored back, ` [from https://host:7501]` on one the user posted from a page of another origin. */
 function marks(m: Message): string {
   let out = "";
 
@@ -392,6 +397,9 @@ function marks(m: Message): string {
   const via = asObject(m.stored["via"]);
 
   if (via !== undefined && via["fleet"] !== undefined && via["fleet"] !== null) out += ` [via ${oneLine(via["fleet"])} #${oneLine(via["id"] ?? null)}]`;
+  const origin = asString(m.stored["origin"]);
+
+  if (origin !== undefined && origin !== "") out += ` [from ${oneLine(origin)}]`;
 
   return out;
 }

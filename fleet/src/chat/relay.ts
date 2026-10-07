@@ -33,6 +33,7 @@ export interface Delivered {
   readonly side: Json | undefined;
   readonly author: string | undefined;
   readonly quote: Json | undefined;
+  readonly origin: string | undefined;
 }
 
 /** A message as delivery and the courier store it, built in the store's key order (`via` last). */
@@ -47,6 +48,7 @@ interface Copy {
   author?: string;
   quote?: Json;
   side?: Json;
+  origin?: string;
   via?: { fleet: string; id: number };
 }
 
@@ -155,6 +157,8 @@ function deliverTo(entry: Entry, known: readonly Message[], message: Delivered, 
     if (quote !== undefined) copy.quote = quote;
 
     if (own !== undefined) copy.side = own;
+
+    if (message.origin !== undefined) copy.origin = message.origin;
     copy.via = { fleet: "manager", id: message.id };
 
     return { ...copy };

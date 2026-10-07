@@ -455,8 +455,10 @@ A message: `{id, at, from, to[], text, re (int|null), parts[]}` plus `author` (t
 login, set only by the server), `decision`, `quote {text ≤2000, from ≤200, at?}`, `side` (the id of the
 message that opened a side chat), and, written by the hub only (its Delivery, in [The hub](#the-hub-fleet-hub)),
 `delivered [{fleet, id}]` (on the manager's message: the coordinators that have it in their own chat, and
-its id there) and `via {fleet, id}` (on that copy, `{fleet: "manager", id}`, and on a coordinator's answer
-mirrored onto the manager's page, `{fleet, id}` of the answer). `parts` split the text into plain parts and mentions
+its id there), `via {fleet, id}` (on that copy, `{fleet: "manager", id}`, and on a coordinator's answer
+mirrored onto the manager's page, `{fleet, id}` of the answer) and `origin` (the `Origin` of a prototype
+page the user posted from, one the hub's config allows: [Posting from a prototype page](#posting-from-a-prototype-page);
+kept on a coordinator's copy). `parts` split the text into plain parts and mentions
 `{text: "@a1", mention: "a1"}` that join back to the text exactly. `re` and `parts` default to
 null and one plain part when read.
 
@@ -494,7 +496,7 @@ its id.
 | `watch --as WHO [--after N \| --resume] [--all] [--once] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager; 1 without `--once` when stdout is not a terminal |
 | `wait DECISION...` | waits for the user's answer to one of these open decisions | the answer's line, then `-> the user answered <ref>: record it first, ...`; for an action answered `Failed: ...`, `-> the user's step <ref> failed, and it is not done: fix it and re-present it, ...`, or --withdraw "why"; never --decide` | 1 unknown decision |
 
-A printed line: `#<id> <from>( (<name or author>)) -> <to, each with its name>( [<ref> <decision>])( [side chat #N])( [delivered to <fleet> #<id>, ...])( [via <fleet> #<id>])( (quoting <from>: "<quote>"))`
+A printed line: `#<id> <from>( (<name or author>)) -> <to, each with its name>( [<ref> <decision>])( [side chat #N])( [delivered to <fleet> #<id>, ...])( [via <fleet> #<id>])( [from <origin>])( (quoting <from>: "<quote>"))`
 `: <text>( [re #N])`. Line breaks print as ` ⏎ `, a tab as a space, and other control characters
 are dropped, so a message is always one line.
 
@@ -760,7 +762,8 @@ itself. A manager made later appears the same way, on the same address.
   `state` on connect and on change, `chat` with `id:`, pings; `Last-Event-ID` or `after`), `POST
   /chat` (201; 403 policy or cross-origin `Origin`; 415; 413 over 256 KiB; 400 bad body, `ChatError`,
   unknown decision or a secret's value; 409 an answer to a closed decision, or an allow-once a
-  [permission](#permission-grants) cannot grant; 500 store failure),
+  [permission](#permission-grants) cannot grant; 500 store failure; `OPTIONS /chat` and a post from an
+  origin the hub's config allows: [Posting from a prototype page](#posting-from-a-prototype-page)),
   `POST /chat/preview`, `GET /skills` (below), the preview (`/preview/…`, HTTP and WebSocket, and `POST
   /preview-workers`; see [The preview](#the-preview-fleet-preview)), `POST /name` (TypeScript only; under
   `POST /chat`'s write policy: 403, 415, 413): `{agent, name}` names worker `agent` (200 `{agent, name,
@@ -857,6 +860,46 @@ itself. A manager made later appears the same way, on the same address.
   a client's own `Tailscale-*` headers: the preview sets them from what it verified (see [The
   preview](#the-preview-fleet-preview)), and a fleet's page on a peer hub is asked with `Accept`,
   `Content-Type` and `Last-Event-ID` only.
+
+### Posting from a prototype page
+
+TypeScript only (serve_dashboard.py and a peer hub's `/f/<fleet>@<machine>/chat` stay same-origin). A
+prototype page served on another port of this machine (`https://<this machine>:7501/`, a root-mode
+preview's public port) is another origin of the same site, and may post the user's message to a fleet's
+chat when the hub's config lists its origin (Luiz, 2026-10-07: "as requested" by ui-coordinator and
+teses-positionings).
+
+- **The list**: `REGISTRY/hub/config.json`, `{"chat_origins": ["https://<host>:<port>", ...]}`, edited
+  by hand and read at each request (no restart). An entry counts only as the exact origin a browser
+  sends: `http` or `https`, the host in lower case, the port unless it is the scheme's default, no path,
+  no trailing slash, no user, no `*`; any other entry is ignored, and so is a file that is not such a JSON
+  object. No file, or an empty list, is the behaviour before it: every cross-origin post refused. Why a
+  file in the registry and not an env var on `fleet-hub.service`: the service and its environment are built by
+  the dotfiles' `modules/dev/fleet-hub.nix` (`bun src/main.ts hub --https 7443`), so a variable would need
+  a dotfiles change, a rebuild and a restart per origin, where the registry already holds the hub's other
+  files and the file is read live.
+- **Preflight**: `OPTIONS /f/<fleet>/chat` with a listed `Origin` answers 204 with
+  `Access-Control-Allow-Origin` (that origin, never `*`), `Access-Control-Allow-Credentials: true`,
+  `Access-Control-Allow-Methods: POST`, `Access-Control-Allow-Headers: content-type`,
+  `Access-Control-Max-Age: 600` and `Vary: Origin`; any other origin a 403 without CORS headers. Every
+  other route's `OPTIONS` is as before (405).
+- **The post**: `POST /f/<fleet>/chat` with a listed `Origin` passes the same checks as the page's own
+  post (the writer is the owner's tailnet login or this machine, JSON, 256 KiB), and every answer to it,
+  the 4xx included, carries `Access-Control-Allow-Origin`, `-Allow-Credentials: true` and `Vary: Origin`.
+  The message is the user's as if typed on the fleet's page (`author`, `@mentions`, `/skill` commands,
+  `re`, `quote`, `side`), stored with `origin: "<Origin>"` and printed `[from <origin>]`. A body with a
+  `decision` or `rule` (answering a decision, granting a permission) is refused 403 (`a decision is
+  answered on the fleet's own page, not from another origin`): the request was for messages, and an
+  answer or a grant stays on the fleet's own page. `POST /chat/preview`, `/name`, `/preview-workers` and
+  a peer's fleet stay same-origin.
+- **Identity**: the hub uses no cookie. The https address is `tailscale serve`, which passes the request
+  to loopback with `Tailscale-User-Login` set to the browser's tailnet login, so a cross-origin fetch
+  from a page on the same tailnet is identified exactly as the fleet's own page is; `credentials:
+  "include"` is what the browser needs to accept the answer, not what identifies the user.
+- **CSRF**: the `Origin` check is the protection. A post whose `Origin` is neither the hub's own nor
+  listed is refused 403 as before, `Origin: null` included; one with no `Origin` that a browser marks
+  cross-site or same-site (`Sec-Fetch-Site`) is refused too. A post with neither header (`fleet tell`,
+  curl on this machine) is as before.
 
 ## Permission grants
 
@@ -1421,7 +1464,7 @@ recommendation attached.
 | `fleets.py gate take/free`, `name` | `REGISTRY/gate/gate.json` (under `REGISTRY/gate/gate.lock`), `REGISTRY/<fleet>.json` |
 | `serve_dashboard.py` | `DIR/server.json`, `DIR/server.log`, `REGISTRY/<fleet>.json` |
 | `fleet serve` | `REGISTRY/<fleet>.json` (removed with `--stop`) |
-| `fleet hub` | `REGISTRY/hub/hub.json` while it runs; `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, `<root>/.claude/settings.local.json` (and its folder) and `DIR/grants.jsonl`; on a page rename, `DIR/state.json` (a worker's `name`, `name_by`, `updated`, under the ledger's lock) or `REGISTRY/overrides/<hash>.json` and `REGISTRY/<fleet>.json` |
+| `fleet hub` | `REGISTRY/hub/hub.json` while it runs (it reads `REGISTRY/hub/config.json`, written by hand); `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, `<root>/.claude/settings.local.json` (and its folder) and `DIR/grants.jsonl`; on a page rename, `DIR/state.json` (a worker's `name`, `name_by`, `updated`, under the ledger's lock) or `REGISTRY/overrides/<hash>.json` and `REGISTRY/<fleet>.json` |
 | the plugin's hook (grant removal) | `<root>/.claude/settings.local.json`, `DIR/grants.jsonl` (`remove` lines) |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |

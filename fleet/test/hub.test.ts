@@ -15,7 +15,7 @@ import { readChat } from "../src/chat/store.ts";
 import { ChatError } from "../src/errors.ts";
 import { grantAnswer, registeredSession } from "../src/hub/grants.ts";
 import { collapse } from "../src/hub/hub.ts";
-import { grantor, hello, postRefusal, viewerOf, writerRefusal } from "../src/hub/policy.ts";
+import { chatOriginsPath, grantor, hello, parseChatOrigins, postRefusal, viewerOf, writerRefusal } from "../src/hub/policy.ts";
 import { lsofListenersOf } from "../src/hub/served.ts";
 import { startHub, type Running } from "../src/hub/server.ts";
 import { frontmatter } from "../src/hub/skills.ts";
@@ -619,6 +619,141 @@ describe("hosts and origins", () => {
     for (const origin of [`ftp://127.0.0.1:${port}`, `http://localhost:${port + 1}`, "null"]) {
       expect((await post({ text: "hi" }, { Origin: origin })).status).toBe(403);
     }
+  });
+});
+
+describe("a prototype page posting from an origin the hub's config allows", () => {
+  const PAGE = "https://box.tail.ts.net:7501";
+  const OTHER = "https://box.tail.ts.net:7502";
+
+  const allow = (origins: readonly string[]): void => {
+    mkdirSync(join(home, "hub"), { recursive: true });
+    writeFileSync(chatOriginsPath(home), JSON.stringify({ chat_origins: origins }));
+  };
+
+  const cors = (answer: Answer): readonly (string | null)[] => [answer.headers.get("Access-Control-Allow-Origin"), answer.headers.get("Access-Control-Allow-Credentials")];
+
+  beforeEach(async () => {
+    const decisions = [{ id: "d1", kind: "decision", title: "Invoice schema", question: "q", status: "open", resolution: null, opened: "2026-01-01T00:00:00+00:00" }];
+    writeState(root, [{ id: "a1", name: "notes-impl" }], { decisions });
+    allow([PAGE, "https://box.tail.ts.net:7504"]);
+    await start();
+  });
+
+  test("the preflight from an allowed origin is a 204 naming that origin, with credentials, POST and content-type", async () => {
+    const got = await request("OPTIONS", "/f/p/chat", undefined, { Origin: PAGE, "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type" });
+    expect(got.status).toBe(204);
+    expect(cors(got)).toEqual([PAGE, "true"]);
+    expect([got.headers.get("Access-Control-Allow-Methods"), got.headers.get("Access-Control-Allow-Headers"), got.headers.get("Access-Control-Max-Age")]).toEqual(["POST", "content-type", "600"]);
+    expect(got.headers.get("Vary")).toContain("Origin");
+  });
+
+  test("the preflight from any other origin, or to another route, carries no CORS headers", async () => {
+    for (const [path, origin] of [["/f/p/chat", OTHER], ["/f/p/chat", "null"], ["/f/p/chat", "http://box.tail.ts.net:7501"], ["/f/p/name", PAGE], ["/f/p/chat/preview", PAGE], ["/f/p/preview-workers", PAGE]] as const) {
+      const got = await request("OPTIONS", path, undefined, { Origin: origin, "Access-Control-Request-Method": "POST" });
+      expect([path, origin, got.status >= 400, ...cors(got)]).toEqual([path, origin, true, null, null]);
+    }
+  });
+
+  test("a post from an allowed origin is the user's message, as typed, with the origin it came from, and the stream carries it", async () => {
+    const stream = await Stream.open("/f/p/events");
+    const sent = await post({ text: "/tstack:tdd fix the parser" }, { Origin: PAGE, "Sec-Fetch-Site": "same-site" });
+    expect([sent.status, sent.body["from"], sent.body["to"], sent.body["text"], sent.body["origin"]]).toEqual([201, "user", ["coordinator"], "/tstack:tdd fix the parser", PAGE]);
+    expect(cors(sent)).toEqual([PAGE, "true"]);
+    expect(sent.headers.get("Vary")).toContain("Origin");
+    expect(readChat(root).map((m) => m.stored)).toEqual([sent.body]);
+    expect(data(await stream.nextOf("chat"))).toEqual(sent.body);
+    stream.close();
+  });
+
+  test("a reply, a quote and a side chat go through too", async () => {
+    const first = await post({ text: "first", side: "new" }, { Origin: PAGE });
+    const quote = { text: "per line", from: "Rounding" };
+    const next = await post({ text: "and this", re: first.body["id"] ?? null, quote, side: first.body["side"] ?? null }, { Origin: PAGE });
+    expect([next.status, next.body["re"], next.body["quote"], next.body["side"], next.body["origin"]]).toEqual([201, 1, quote, 1, PAGE]);
+  });
+
+  test("an origin the config does not list is refused, and nothing is stored", async () => {
+    for (const origin of [OTHER, "https://box.tail.ts.net:7501/", "https://evil.example", "http://box.tail.ts.net:7501"]) {
+      const got = await post({ text: "hi" }, { Origin: origin });
+      expect([origin, got.status, ...cors(got)]).toEqual([origin, 403, null, null]);
+    }
+
+    expect(readChat(root)).toEqual([]);
+  });
+
+  test("a cross-site post with no Origin, or a null one, is refused", async () => {
+    for (const headers of [{ "Sec-Fetch-Site": "same-site" }, { "Sec-Fetch-Site": "cross-site" }, { Origin: "null" }, { Origin: "null", "Sec-Fetch-Site": "cross-site" }]) {
+      const got = await post({ text: "hi" }, headers);
+      expect([headers, got.status, ...cors(got)]).toEqual([headers, 403, null, null]);
+    }
+
+    expect(readChat(root)).toEqual([]);
+  });
+
+  test("an answer to a decision, or a grant's rule, is the fleet's own page's: refused from another origin, with the CORS headers", async () => {
+    for (const payload of [{ text: "B: keep both", decision: "d1" }, { text: "Allow once", rule: "Bash(ls)" }]) {
+      const got = await post(payload, { Origin: PAGE });
+      expect([got.status, asString(got.body["error"])?.includes("own page"), ...cors(got)]).toEqual([403, true, PAGE, "true"]);
+    }
+
+    expect(readChat(root)).toEqual([]);
+    expect((await post({ text: "B: keep both", decision: "d1" })).status).toBe(201);
+  });
+
+  test("the hub's refusals reach the page with the CORS headers: a bad body, too big, not JSON", async () => {
+    const cases: (readonly [number, Answer])[] = [
+      [400, await post({ text: "  " }, { Origin: PAGE })],
+      [413, await post({ text: "x".repeat(300_000) }, { Origin: PAGE })],
+      [415, await request("POST", "/f/p/chat", '{"text": "hi"}', { "Content-Type": "text/plain", Origin: PAGE })],
+    ];
+
+    for (const [status, got] of cases) expect([got.status, ...cors(got)]).toEqual([status, PAGE, "true"]);
+  });
+
+  test("every other post stays same-origin", async () => {
+    expect((await post({ agent: "a1", name: "Writer" }, { Origin: PAGE }, "/f/p/name")).status).toBe(403);
+    expect((await post({ text: "hi" }, { Origin: PAGE }, "/f/p/chat/preview")).status).toBe(403);
+    expect((await post({ worker: "a1", include: true }, { Origin: PAGE }, "/f/p/preview-workers")).status).toBe(403);
+  });
+
+  test("the same-origin post is as before: no CORS headers and no origin on the message", async () => {
+    const sent = await post({ text: "hi" }, { Origin: `http://127.0.0.1:${port}` });
+    expect([sent.status, sent.body["origin"], ...cors(sent)]).toEqual([201, undefined, null, null]);
+    const bare = await post({ text: "from a terminal" });
+    expect([bare.status, bare.body["origin"]]).toEqual([201, undefined]);
+  });
+
+  test("the list is read on each request: emptied, the origin is refused as before", async () => {
+    allow([]);
+    expect((await post({ text: "hi" }, { Origin: PAGE })).status).toBe(403);
+    rmSync(chatOriginsPath(home));
+    expect((await post({ text: "hi" }, { Origin: PAGE })).status).toBe(403);
+    allow([PAGE]);
+    expect((await post({ text: "hi" }, { Origin: PAGE })).status).toBe(201);
+  });
+
+  test("the config keeps exact http(s) origins only: no wildcard, path, default port, user or other scheme", () => {
+    const text = JSON.stringify({
+      chat_origins: [PAGE, "https://*.tail.ts.net", "https://box.tail.ts.net:7504/", "https://box.tail.ts.net:443", "https://u@box.tail.ts.net:7505", "ftp://box.tail.ts.net:21", "null", "*", 7, "HTTPS://Box.tail.ts.net:7512"],
+    });
+
+    expect([...parseChatOrigins(text)]).toEqual([PAGE]);
+    expect([...parseChatOrigins("not json")]).toEqual([]);
+    expect([...parseChatOrigins(undefined)]).toEqual([]);
+    expect([...parseChatOrigins(JSON.stringify({ chat_origins: "https://box.tail.ts.net:7501" }))]).toEqual([]);
+  });
+
+  test("as the signed-in user: the owner's login is the author; anyone else is refused, with the CORS headers", async () => {
+    await running?.stop();
+    const fake = join(base, "tailscale");
+    writeFileSync(fake, FAKE_TAILSCALE);
+    chmodSync(fake, 0o755);
+    await start({ tailscale: fake });
+    const me = await post({ text: "hi" }, { Origin: PAGE, "Tailscale-User-Login": OWNER });
+    expect([me.status, me.body["author"], me.body["origin"]]).toEqual([201, OWNER, PAGE]);
+    const eve = await post({ text: "hi" }, { Origin: PAGE, "Tailscale-User-Login": "eve@example.com" });
+    expect([eve.status, eve.body, ...cors(eve)]).toEqual([403, { error: `only ${OWNER} can write here` }, PAGE, "true"]);
   });
 });
 

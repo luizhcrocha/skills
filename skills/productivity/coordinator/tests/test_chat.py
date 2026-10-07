@@ -224,6 +224,13 @@ class OnlyTheServerSpeaksAsTheUserTest(FleetDir):
         chat.append(self.root, "user", "@a1 hi", author="luiz@github", allow_user=True)
         self.assertEqual(run_cli(self.root, "log").stdout, "#1 user (luiz@github) -> a1 (notes-impl): @a1 hi\n")
 
+    def test_a_message_from_a_prototype_page_prints_its_origin(self):
+        line = {"id": 1, "at": "2026-01-01T00:00:00+00:00", "from": "user", "to": ["a1"], "text": "@a1 hi", "re": None,
+                "author": "luiz@github", "origin": "https://box.tail.ts.net:7501"}
+        (self.root / "chat.jsonl").write_text(json.dumps(line) + "\n")
+        self.assertEqual(run_cli(self.root, "log").stdout,
+                         "#1 user (luiz@github) -> a1 (notes-impl) [from https://box.tail.ts.net:7501]: @a1 hi\n")
+
 
 class OneMessageOneLineTest(FleetDir):
     SEPARATORS = ["\n", "\r\n", "\r", "\u2028", "\u2029", "\u0085", "\v", "\f", "\x1c", "\x1d", "\x1e"]

@@ -8,6 +8,11 @@
  * who `tailscale whois` says owns the machine it comes from. Only the login that owns this machine may
  * write; anyone else on the tailnet reads.
  */
+import { join } from "node:path";
+
+import * as Option from "effect/Option";
+
+import { asArray, asString, parseObject } from "../json.ts";
 import { isLoopback, isTailnetIp } from "./tailnet.ts";
 
 /** Most bytes a posted message may have: the session's chat watch prints each message into an agent's
@@ -77,12 +82,53 @@ export function hello(
   return denied === undefined ? { write: true, ...you, max_bytes: MAX_POST_BYTES } : { write: false, reason: denied, ...you, max_bytes: MAX_POST_BYTES };
 }
 
-/** Why a post is refused before its body is read, as [status, error], or undefined. */
+/** The hub's config, a file a person edits: `{"chat_origins": ["https://<host>:<port>", ...]}`, the pages
+ * that may post to a fleet's chat from another origin. Read on each request, so an edit needs no restart. */
+export function chatOriginsPath(home: string): string {
+  return join(home, "hub", "config.json");
+}
+
+/** The origins the hub's config allows to post to a chat: each entry an exact `http(s)://host[:port]`, as a
+ * browser sends it in `Origin` (lower case, no default port, no path); any other entry, and a file that is
+ * not such a JSON object, allows nothing. */
+export function parseChatOrigins(text: string | undefined): ReadonlySet<string> {
+  const config = text === undefined ? undefined : Option.getOrUndefined(parseObject(text));
+  const allowed = new Set<string>();
+
+  for (const entry of asArray(config?.["chat_origins"]) ?? []) {
+    const origin = asString(entry);
+
+    if (origin === undefined || !/^https?:\/\/[^/?#@*\s]+$/.test(origin) || !URL.canParse(origin)) continue;
+
+    if (new URL(origin).origin === origin) allowed.add(origin);
+  }
+
+  return allowed;
+}
+
+/** Whether `origin` is this hub's own: http or https on a `host:port` it answers to. */
+function sameOrigin(origin: string, hosts: ReadonlySet<string>): boolean {
+  const m = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]*)/.exec(origin);
+
+  return m !== null && (m[1] === "http" || m[1] === "https") && hosts.has((m[2] ?? "").toLowerCase());
+}
+
+/** The page a post comes from when it is not the hub's own but one `allowed` lists (the CORS origin to
+ * answer it with), else undefined. */
+export function allowedOrigin(hosts: ReadonlySet<string>, allowed: ReadonlySet<string>, header: (name: string) => string | null): string | undefined {
+  const origin = header("Origin");
+
+  return origin !== null && allowed.has(origin) && !sameOrigin(origin, hosts) ? origin : undefined;
+}
+
+/** Why a post is refused before its body is read, as [status, error], or undefined. `allowed` are the other
+ * origins it may come from (a chat post's, from the hub's config); none for every other post. */
 export function postRefusal(
   owner: string | undefined,
   viewer: Viewer,
   hosts: ReadonlySet<string>,
   header: (name: string) => string | null,
+  allowed: ReadonlySet<string> = new Set(),
 ): readonly [number, string] | undefined {
   const denied = writerRefusal(owner, viewer);
 
@@ -91,11 +137,12 @@ export function postRefusal(
   if ((header("Content-Type") ?? "").split(";")[0]?.trim().toLowerCase() !== "application/json") return [415, "send the message as application/json"];
   const origin = header("Origin");
 
-  if (origin !== null) {
-    const m = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]*)/.exec(origin);
+  if (origin !== null && !sameOrigin(origin, hosts) && !allowed.has(origin)) return [403, "cross-origin post refused"];
 
-    if (m === null || (m[1] !== "http" && m[1] !== "https") || !hosts.has((m[2] ?? "").toLowerCase())) return [403, "cross-origin post refused"];
-  }
+  // A browser names the page of every cross-site post; one that says it is cross-site and names none is refused.
+  const site = (header("Sec-Fetch-Site") ?? "").toLowerCase();
+
+  if (origin === null && (site === "cross-site" || site === "same-site")) return [403, "cross-origin post refused"];
 
   const length = header("Content-Length") ?? "0";
 

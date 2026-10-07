@@ -25,7 +25,7 @@ Every page of the prototype shows a round card, bottom left. Build it once and k
 - It publishes its height as a CSS variable on the root element, and the page's bottom-anchored elements offset by it, so nothing sits under the card.
 - Labels are in the page's language. Casos uses "Rodada N" and "Começar a próxima rodada".
 
-The start button copies the request (the next round's text) to the clipboard and opens the fleet page so the reviewer pastes it into the chat. With `post: true` it sends the request straight to the fleet page's chat endpoint, which works only if the hub accepts a cross-origin chat POST; keep `post: false` until it does, and fall back to copy-and-open when the POST fails.
+The start button copies the request (the next round's text) to the clipboard and opens the fleet page so the reviewer pastes it into the chat. With `post: true` it sends the request straight to the fleet page's chat endpoint, which the hub accepts only from an origin listed in its config (the coordinator skill's DASHBOARD.md, "Posting from a prototype page", has the call and the list); keep `post: false` until the page's origin is listed, and fall back to copy-and-open when the POST fails.
 
 Reference implementations in coelhorocha/custom-mcp-servers, on prototype changes rather than master (find them with `jj log -r 'files(glob:"**/RoundHint.tsx")'`): `apps/casos/src/prototypes/mapa/RoundHint.tsx` (Solid, on the project's kit) and the plain-JS `servers/case-analysis/tasks/lab-teoria/page/round-hint.js` (no dependencies, its own CSS).
 

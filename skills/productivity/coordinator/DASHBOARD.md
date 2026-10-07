@@ -207,6 +207,25 @@ A running `--once` watch keeps its process id in `DIR/watch-coordinator.pid`, an
 
 **Who may write.** Text typed on the page lands in agents' contexts, so the server names the sender. The hub lets only the tailnet login that owns this machine post (it asks Tailscale who each request comes from; this machine itself may post too), and the message records it as `author`, printed in every line from the user (`#12 user (luiz@github) -> a1 (auth-impl): ...`). Only the server writes as the user: `say --as user` is refused. Agents name themselves with `--as`, so a line from an agent is that agent's word and carries no authority of the user's. A message in the chat is the user speaking: it carries the authority of the same words typed in the session, and the same limits, so a destructive or outward-facing step asked for in the chat is confirmed before it runs.
 
+**Posting from a prototype page.** A page served on another port of this machine (a prototype at `https://<machine>:7501/`) can post the user's message into a fleet's chat when its exact origin is listed in the hub's config, `<registry>/hub/config.json` (the registry is `$FLEET_HOME`, else `$XDG_STATE_HOME/fleet-board`, else `~/.local/state/fleet-board`), which Luiz edits by hand and the hub reads at each request:
+
+```json
+{"chat_origins": ["https://cr-sede-pc.dusky-tritone.ts.net:7501", "https://cr-sede-pc.dusky-tritone.ts.net:7504"]}
+```
+
+Each entry is the origin as the browser sends it: scheme, lower-case host and port, no path, no trailing slash, no wildcard. The page calls:
+
+```js
+const res = await fetch("https://cr-sede-pc.dusky-tritone.ts.net:7443/f/<fleet>/chat", {
+  method: "POST",
+  credentials: "include",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ text }),
+});
+```
+
+A 201 means the message is in the fleet's chat as the user's, exactly as if typed on the fleet's page (`@mentions` and `/skill` commands included), with `origin` set to the page's origin and printed `[from <origin>]`; it wakes the coordinator's watch. The body may also carry `re`, `quote` and `side` as the page's own composer does. Answering a decision (`decision`, `rule`) is refused from another origin (403): that stays on the fleet's page. Any other answer is an error the page can read (`{error}`, with the CORS headers): 403 not the owner's login or an origin not listed, 400 a bad body, 413 too big. A page whose post fails falls back to copying the text and opening the fleet's page. The hub's SPEC has the details (`fleet/SPEC.md`, Posting from a prototype page).
+
 ## What the page shows
 
 The page is built for a phone first, one view at a time: Decisions, Plan, Fleet, Log, and the chat. A bar of labelled tabs sits under the thumb, each worker is a strip, and the chat is a full-height view that stays above the keyboard. On a wide screen the tabs are a row under the masthead, the fleet is a table, and the chat docks at the side. Each view has an address (`#decisions`, `#plan`, `#fleet`, `#log`, `#decision/<id>`), so a link you give the user opens where you mean.

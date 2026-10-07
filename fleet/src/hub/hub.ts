@@ -30,7 +30,7 @@ import { Courier, deliveries } from "../chat/relay.ts";
 import { readChat, Tail } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
 import { ChatError } from "../errors.ts";
-import { readBytes, resolvePath, strerror } from "../files.ts";
+import { readBytes, readText, resolvePath, strerror } from "../files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { answerRefusal } from "../ledger/answers.ts";
 import { renameAgent } from "../ledger/rename.ts";
@@ -47,7 +47,7 @@ import type { Machine } from "../world.ts";
 import { indexHtml } from "./index-page.ts";
 import { ProbeCache } from "./probes.ts";
 import { grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
-import { grantor, hello, MAX_POST_BYTES, postRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
+import { allowedOrigin, chatOriginsPath, grantor, hello, MAX_POST_BYTES, parseChatOrigins, postRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
 import { previewTarget, proxiedIdentity, proxyHttp, proxySocket, type Target, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
 import { PLUGIN_ROOT, readSkills, repoOf } from "./skills.ts";
@@ -123,6 +123,14 @@ interface Viewed {
 }
 
 const NO_STORE = { "Cache-Control": "no-store" } as const;
+
+/** How long a browser may keep a chat preflight's answer, in seconds. */
+const PREFLIGHT_MAX_AGE = 600;
+
+/** The CORS headers on every answer to a chat post from `origin`, a page the hub's config allows. */
+function corsHeaders(origin: string) {
+  return { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", Vary: "Origin" };
+}
 
 /** A JSON response. */
 export function jsonResponse(status: number, body: JsonOut, headers: Readonly<Record<string, string>> = {}): Response {
@@ -539,6 +547,8 @@ export class Hub {
 
     if (rest === "/name" && req.method === "POST") return this.rename(req, ip, root);
 
+    if (rest === "/chat" && req.method === "OPTIONS") return this.preflight(req);
+
     if (req.method === "POST") return this.post(req, ip, root, rest);
 
     if (req.method !== "GET" && req.method !== "HEAD") return jsonResponse(405, { error: "not allowed" });
@@ -785,10 +795,46 @@ export class Hub {
     });
   }
 
+  /** The pages the hub's config lets post to a chat from another origin, read now. */
+  private chatOrigins(): ReadonlySet<string> {
+    return parseChatOrigins(readText(chatOriginsPath(this.options.machine.registry.place.home)));
+  }
+
+  /** `OPTIONS /f/<fleet>/chat`: a browser asking whether a page of another origin may post here. One the
+   * hub's config lists is told it may, with its cookies; any other is told nothing. */
+  private preflight(req: Request): Response {
+    const origin = allowedOrigin(this.hosts, this.chatOrigins(), (name) => req.headers.get(name));
+
+    if (origin === undefined) return jsonResponse(403, { error: "cross-origin post refused" });
+
+    return new Response(null, {
+      status: 204,
+      headers: {
+        ...corsHeaders(origin),
+        "Access-Control-Allow-Methods": "POST",
+        "Access-Control-Allow-Headers": "content-type",
+        "Access-Control-Max-Age": String(PREFLIGHT_MAX_AGE),
+        ...NO_STORE,
+      },
+    });
+  }
+
   private async post(req: Request, ip: string, root: string, rest: string): Promise<Response> {
     if (rest !== "/chat" && rest !== "/chat/preview") return jsonResponse(404, { error: "not found" });
+    const header = (name: string): string | null => req.headers.get(name);
+    // Only the chat's own post opens to the pages the config lists; its preview stays the page's.
+    const allowed = rest === "/chat" ? this.chatOrigins() : new Set<string>();
+    const origin = allowedOrigin(this.hosts, allowed, header);
+    const answer = await this.postFrom(req, ip, root, rest, allowed, origin);
+
+    if (origin !== undefined) for (const [name, value] of Object.entries(corsHeaders(origin))) answer.headers.set(name, value);
+
+    return answer;
+  }
+
+  private async postFrom(req: Request, ip: string, root: string, rest: string, allowed: ReadonlySet<string>, origin: string | undefined): Promise<Response> {
     const viewer = await this.viewer(req, ip);
-    const refusal = postRefusal(this.owner, viewer, this.hosts, (name) => req.headers.get(name));
+    const refusal = postRefusal(this.owner, viewer, this.hosts, (name) => req.headers.get(name), allowed);
 
     if (refusal !== undefined) return jsonResponse(refusal[0], { error: refusal[1] }, { Connection: "close" });
     const raw = await req.text();
@@ -798,10 +844,15 @@ export class Hub {
 
     if (body === undefined) return jsonResponse(400, { error: "the body is not a JSON object" });
 
-    return this.chatPost(root, rest, body, viewer);
+    // A page of another origin sends messages; answering a decision or granting a permission is the fleet's own page's.
+    if (origin !== undefined && ((body["decision"] ?? null) !== null || (body["rule"] ?? null) !== null)) {
+      return jsonResponse(403, { error: "a decision is answered on the fleet's own page, not from another origin" });
+    }
+
+    return this.chatPost(root, rest, body, viewer, origin);
   }
 
-  private async chatPost(root: string, rest: string, body: JsonObject, viewer: Viewer): Promise<Response> {
+  private async chatPost(root: string, rest: string, body: JsonObject, viewer: Viewer, origin: string | undefined): Promise<Response> {
     const machine = this.options.machine;
     const text = asString(body["text"]);
     const reGiven = body["re"];
@@ -882,6 +933,8 @@ export class Hub {
 
       if (side !== undefined) draft.side = side;
 
+      if (origin !== undefined) draft.origin = origin;
+
       // On the manager's page, a message to live coordinators goes into their own chats too (an answer to
       // one of the manager's decisions stays the manager's).
       if (decision === undefined && hostOf(root) === "manager") {
@@ -894,6 +947,7 @@ export class Hub {
             side: stored["side"],
             author: asString(stored["author"]),
             quote: stored["quote"],
+            origin: asString(stored["origin"]),
           });
 
           return delivered.length === 0 ? undefined : { delivered: delivered.map((d) => ({ fleet: d.fleet, id: d.id })) };
