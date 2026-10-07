@@ -429,17 +429,96 @@ def _pulse(root, who: str) -> Path:
     return Path(root) / f"watch-{who}.pid"
 
 
-def listening(root) -> dict:
-    """Whether the host of DIR reads its chat now, and how far it has read: {"on", "seen", "unread",
-    "since"}. `on` is a live --once watch; `seen` the last message one exited with; `unread` the messages from
-    the user after it, `since` when the oldest of them was sent."""
-    who = host(root)
+def _process(pid: int, watches: bool = False) -> tuple[list[str], str] | None:
+    """(argv, cwd) of a running process from /proc on Linux, else `ps` (no cwd); None when it does not run,
+    or (`watches`) when its arguments have no `watch`, whose cwd is then not read."""
+    if os.path.isdir("/proc/self"):
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                argv = [a for a in f.read().decode("utf-8", "replace").split("\0") if a]
+        except OSError:
+            return None
+        if not argv or (watches and "watch" not in argv):
+            return None
+        try:
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except OSError:  # another user's process: its command line still names an absolute DIR
+            cwd = ""
+        return argv, cwd
+    import subprocess
+    try:
+        out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=2).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (out.split(), "") if out else None
+
+
+def _processes():
+    """(pid, (argv, cwd)) of every running process but this one."""
+    me = os.getpid()
+    if os.path.isdir("/proc/self"):
+        for name in os.listdir("/proc"):
+            if name.isdigit() and int(name) != me and (found := _process(int(name), watches=True)):
+                yield int(name), found
+        return
+    import subprocess
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=,command="], capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return
+    for line in out.splitlines():
+        head, *argv = line.split()
+        if head.isdigit() and int(head) != me and argv:
+            yield int(head), (argv, "")
+
+
+def _is_watch_of(proc: tuple[list[str], str], root: str, who: str) -> bool:
+    """Whether the process runs `fleet chat DIR watch --as WHO --once` (or `chat.py DIR watch ...`) for root."""
+    argv, cwd = proc
+    role = who.lower()
+    for i in range(1, len(argv) - 1):
+        program = argv[i - 1]
+        if argv[i + 1] != "watch" or (program != "chat" and os.path.basename(program) != "chat.py"):
+            continue
+        given = argv[i]
+        if not os.path.isabs(given) and not cwd:
+            continue
+        if os.path.realpath(os.path.join(cwd, given)) != root:
+            continue
+        rest = argv[i + 2:]
+        as_who = any((w == "--as" and j + 1 < len(rest) and rest[j + 1].lower() == role) or w.lower() == f"--as={role}"
+                     for j, w in enumerate(rest))
+        if as_who and "--once" in rest:
+            return True
+    return False
+
+
+def _is_watch(pid: int, root, who: str) -> bool:
+    """Whether pid runs a --once watch as `who` for the chat in root: its command line, so a reused pid does not count."""
+    proc = _process(pid)
+    return proc is not None and _is_watch_of(proc, os.path.realpath(root), who)
+
+
+def _live_watch(root, who: str) -> int | None:
+    """The pid of a running --once watch as `who` for root: the one its pid file names, else one found among
+    the running processes (its pid file removed by another watch's exit, or not written yet)."""
     try:
         pid = int(_pulse(root, who).read_text())
-        os.kill(pid, 0)
-        on = True
     except (OSError, ValueError):
-        on = False
+        pid = 0
+    if pid > 0 and _is_watch(pid, root, who):
+        return pid
+    d = os.path.realpath(root)
+    return next((p for p, proc in _processes() if _is_watch_of(proc, d, who)), None)
+
+
+def listening(root) -> dict:
+    """Whether the host of DIR reads its chat now, and how far it has read: {"on", "seen", "unread",
+    "since"}. `on` is a live --once watch (the one its pid file names, else one found among the running
+    processes); `seen` the last message one exited with; `unread` the messages from
+    the user after it, `since` when the oldest of them was sent."""
+    who = host(root)
+    on = _live_watch(root, who) is not None
     if not on:  # between a `--once` watch that woke it and the next, a host is still reading: allow for the gap
         try:
             on = clock.time() - _left(root, who).stat().st_mtime < READING_GRACE_S
@@ -768,6 +847,13 @@ def cmd_watch(root, args) -> None:
         _watch(root, args, who)  # a person reads it: it marks nothing read
         return
     pulse = _pulse(root, who)
+    try:
+        held = int(pulse.read_text())
+    except (OSError, ValueError):
+        held = 0
+    if held > 0 and held != os.getpid() and _is_watch(held, root, who):
+        raise ChatError(f"a watch as {who} already runs for {root} (pid {held}), and its lines wake the session that armed it. "
+                        f"Leave it running; if that session is gone, `kill {held}` and arm the watch again.")
     pulse.write_text(str(os.getpid()))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:

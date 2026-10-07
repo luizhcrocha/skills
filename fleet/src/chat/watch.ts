@@ -38,6 +38,7 @@ import {
   waitsHere,
 } from "./chat.ts";
 import { FleetNews } from "./news.ts";
+import { isWatch } from "./watchers.ts";
 import { readChat, Tail, type Message } from "./store.ts";
 import * as Option from "effect/Option";
 
@@ -315,6 +316,18 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
     }
 
     const pulse = pulsePath(root, who);
+    const held = intOf(readText(pulse));
+
+    if (held !== undefined && held > 0 && held !== process.pid && isWatch(held, root, who)) {
+      return yield* Effect.fail(
+        new ChatError({
+          reason:
+            `a watch as ${who} already runs for ${root} (pid ${held}), and its lines wake the session that armed it. ` +
+            `Leave it running; if that session is gone, \`kill ${held}\` and arm the watch again.`,
+        }),
+      );
+    }
+
     const pid = String(process.pid);
     writeText(pulse, pid);
 

@@ -493,7 +493,7 @@ its id.
 | `say --as WHO [--re N] [--decision D] TEXT` | appends | the stored line | 1 refused |
 | `inbox --as WHO` | the messages open for WHO (`user` allowed) | one line each, oldest first | 1 unknown WHO |
 | `log [--after N]` | every message with id > N | one line each | 0 |
-| `watch --as WHO [--after N \| --resume] [--all] [--once] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager; 1 stdout is /dev/null; 1 without `--once` when stdout is not a terminal |
+| `watch --as WHO [--after N \| --resume] [--all] [--once] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager; 1 stdout is /dev/null; 1 `--once` while another watch as WHO runs for DIR; 1 without `--once` when stdout is not a terminal |
 | `wait DECISION...` | waits for the user's answer to one of these open decisions | the answer's line, then `-> the user answered <ref>: record it first, ...`; for an action answered `Failed: ...`, `-> the user's step <ref> failed, and it is not done: fix it and re-present it, ...`, or --withdraw "why"; never --decide` | 1 unknown decision |
 
 A printed line: `#<id> <from>( (<name or author>)) -> <to, each with its name>( [<ref> <decision>])( [side chat #N])( [delivered to <fleet> #<id>, ...])( [via <fleet> #<id>])( [from <origin>])( (quoting <from>: "<quote>"))`
@@ -514,7 +514,13 @@ and before it writes anything: what it prints wakes no one, yet it would move th
 message would count as read (`chat: a watch whose output goes to /dev/null wakes nobody, yet it would mark
 what it reads as read. Run \`fleet chat DIR watch --as WHO --all --resume --once( --fleets)\` as a
 background command of the session (run_in_background: true), never with \`& disown\` or its output
-redirected to /dev/null.`, exit 1). With `--all`, a message from the user is left out for each recipient that has it in
+redirected to /dev/null.`, exit 1). One `--once` watch per chat and role: while `watch-WHO.pid` names a
+live process that is a `--once` watch as WHO for DIR, a new one is refused before it writes anything
+(`chat: a watch as WHO already runs for DIR (pid P), and its lines wake the session that armed it. Leave
+it running; if that session is gone, \`kill P\` and arm the watch again.`, exit 1). A process is such a
+watch by its command line (`/proc/<pid>/cmdline` and `cwd` on Linux, `ps` elsewhere): an argument `chat`
+(or a path ending in `chat.py`), then DIR (resolved against the process's cwd), then `watch`, and after
+them `--as WHO` (any case) and `--once`. So a pid reused by another program counts as no watch. With `--all`, a message from the user is left out for each recipient that has it in
 its own chat (`delivered`): a manager's watch does not print the user's message to coordinators the hub
 delivered it to, and prints, with its `[delivered to ...]` mark, one that also names the manager or a
 coordinator it was not delivered to. A manager's watch prints `!` lines every `FLEET_CHECK_S`: a fleet that
@@ -566,8 +572,10 @@ not replied to by the fleet prints at once. Otherwise it waits for the next such
 decision closed meanwhile (withdrawn, or decided in the session) prints as a closed one does and
 exits 0 (open-21, fixed).
 
-**Listening** (`listening(DIR)`, the page and the warnings): `on` when the host's `--once` watch pid is
-alive, or its `.left` is younger than 10 minutes, or the host sent a message in the last 10
+**Listening** (`listening(DIR)`, the page and the warnings): `on` when a `--once` watch as the host runs
+for DIR (the process its pid file names, told by its command line as above; else any such process found
+among the running ones, so a watch whose pid file another watch's exit removed, or one that has not
+written it yet, still counts), or its `.left` is younger than 10 minutes, or the host sent a message in the last 10
 minutes. `seen` is the host's cursor (0 without one). `unread` counts the user's messages after
 `seen` that no one but the user has answered with `re`, that aren't tagged with a closed
 decision (by id), and that some recipient has only here (not every one of them in `delivered`). `since` is the oldest one's `at`.

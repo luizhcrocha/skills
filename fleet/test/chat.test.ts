@@ -2,7 +2,7 @@
  * The chat seam (ported from the coordinator's tests/test_chat.py, all but the dashboard server's
  * routes, which are stage 3's): the chat module, its CLI, the watch and the wait.
  */
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -599,6 +599,50 @@ describe("listening", () => {
     expect(await once.proc.exited).toBe(0);
     expect(await once.lines.rest()).toBe("#1 user -> coordinator: status?\n");
     expect(listening(m, root)).toEqual({ on: true, seen: 1, unread: 0, since: null });
+  });
+
+  /** A --once watch as the coordinator, once its pid file is written. */
+  async function armed(): Promise<{ readonly proc: Bun.Subprocess; readonly pid: string }> {
+    const { proc } = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], env);
+    procs.push(proc);
+
+    for (let tries = 0; tries < 60 && !existsSync(join(root, "watch-coordinator.pid")); tries += 1) await sleep(50);
+
+    return { proc, pid: readFileSync(join(root, "watch-coordinator.pid"), "utf8") };
+  }
+
+  test("a second watch for the same chat and role is refused while the first runs", async () => {
+    const first = await armed();
+    expect(first.pid).toBe(String(first.proc.pid));
+    const second = Bun.spawn([FLEET, "chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], { env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    procs.push(second);
+    const ended = await Promise.race([second.exited, sleep(3000).then(() => "still running")]);
+    expect(ended).toBe(1);
+    expect(await new Response(second.stderr).text()).toBe(
+      `chat: a watch as coordinator already runs for ${root} (pid ${first.pid}), and its lines wake the session that armed it. ` +
+        `Leave it running; if that session is gone, \`kill ${first.pid}\` and arm the watch again.\n`,
+    );
+    expect(readFileSync(join(root, "watch-coordinator.pid"), "utf8")).toBe(first.pid);
+    expect(first.proc.exitCode).toBeNull();
+    const sent = user("status?");
+    expect(await first.proc.exited).toBe(0);
+    expect(listening(m, root).seen).toBe(sent.id);
+  });
+
+  test("a pid file naming a live process that is no watch does not stop a watch", () => {
+    writeFileSync(join(root, "watch-coordinator.pid"), String(process.pid));
+    user("status?");
+    const once = cli("watch", "--as", "coordinator", "--all", "--resume", "--once");
+    expect([once.code, once.stdout]).toEqual([0, "#1 user -> coordinator: status?\n"]);
+  });
+
+  test("a running watch is heard when its pid file is gone", async () => {
+    const { proc } = await armed();
+    rmSync(join(root, "watch-coordinator.pid"));
+    expect(listening(m, root).on).toBe(true);
+    proc.kill("SIGKILL");
+    await proc.exited;
+    expect(listening(m, root).on).toBe(false);
   });
 
   test("every state command tells a deaf coordinator what waits", () => {

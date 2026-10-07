@@ -8,11 +8,12 @@ import { join } from "node:path";
 
 import { parseInstant } from "../clock.ts";
 import { ChatError } from "../errors.ts";
-import { alive, readObject, roleOf } from "../registry.ts";
+import { readObject, roleOf } from "../registry.ts";
 import { mtimeOf, readText, resolvePath } from "../files.ts";
 import { asArray, asNumber, asObject, asString, pyRepr, truthy, type Json, type JsonObject } from "../json.ts";
 import { secondsNow, type Machine } from "../world.ts";
 import { appendLocked, readChat, type Message, type Part } from "./store.ts";
+import { liveWatch } from "./watchers.ts";
 
 /** Characters of a selected excerpt a message carries. */
 export const QUOTE_MAX = 2000;
@@ -478,12 +479,13 @@ export interface Listening {
   readonly since: Json | null;
 }
 
-/** Whether the host of DIR reads its chat: a live `--once` watch, a watch that ended or a message it sent in
- * the last ten minutes; the last message a `--once` watch exited with; the user's messages after it that still wait. */
+/** Whether the host of DIR reads its chat: a live `--once` watch (the one its pid file names, else one found
+ * among the running processes), a watch that ended or a message it sent in the last ten minutes; the last
+ * message a `--once` watch exited with; the user's messages after it that still wait. */
 export function listening(machine: Machine, root: string): Listening {
   const who = hostOf(root);
   const now = secondsNow(machine);
-  let on = alive(intOf(readText(pulsePath(root, who))));
+  let on = liveWatch(root, who, intOf(readText(pulsePath(root, who)))) !== undefined;
   const messages = readChat(root);
 
   if (!on) {

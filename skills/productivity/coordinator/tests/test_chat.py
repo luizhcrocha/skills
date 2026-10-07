@@ -1001,6 +1001,45 @@ class ListeningTest(FleetDir):
         self.assertEqual((once.returncode, once.stdout), (0, "#1 user -> coordinator: status?\n"))
         self.assertEqual(chat.listening(self.root), {"on": True, "seen": 1, "unread": 0, "since": None})
 
+    def armed(self) -> tuple[subprocess.Popen, str]:
+        """A --once watch as the coordinator, once its pid file is written."""
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "coordinator", "--all", "--resume", "--once"],
+                                stdout=subprocess.PIPE, text=True, encoding="utf-8")
+        self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
+        deadline = time.monotonic() + 5
+        while not (self.root / "watch-coordinator.pid").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return proc, (self.root / "watch-coordinator.pid").read_text()
+
+    def test_a_second_watch_for_the_same_chat_and_role_is_refused_while_the_first_runs(self):
+        first, pid = self.armed()
+        self.assertEqual(pid, str(first.pid))
+        second = subprocess.run([sys.executable, CHAT, str(self.root), "watch", "--as", "coordinator", "--all", "--resume", "--once"],
+                                capture_output=True, text=True, encoding="utf-8", timeout=5)
+        self.assertEqual(second.returncode, 1)
+        self.assertEqual(second.stderr,
+                         f"chat: a watch as coordinator already runs for {self.root} (pid {pid}), and its lines wake the session that armed it. "
+                         f"Leave it running; if that session is gone, `kill {pid}` and arm the watch again.\n")
+        self.assertEqual((self.root / "watch-coordinator.pid").read_text(), pid)
+        self.assertIsNone(first.poll())
+        sent = chat.append(self.root, "user", "status?", allow_user=True)
+        self.assertEqual(first.wait(timeout=10), 0)
+        self.assertEqual(chat.listening(self.root)["seen"], sent["id"])
+
+    def test_a_pid_file_naming_a_live_process_that_is_no_watch_does_not_stop_a_watch(self):
+        (self.root / "watch-coordinator.pid").write_text(str(os.getpid()))
+        chat.append(self.root, "user", "status?", allow_user=True)
+        once = run_cli(self.root, "watch", "--as", "coordinator", "--all", "--resume", "--once")
+        self.assertEqual((once.returncode, once.stdout), (0, "#1 user -> coordinator: status?\n"))
+
+    def test_a_running_watch_is_heard_when_its_pid_file_is_gone(self):
+        proc, _ = self.armed()
+        (self.root / "watch-coordinator.pid").unlink()
+        self.assertTrue(chat.listening(self.root)["on"])
+        proc.kill()
+        proc.wait()
+        self.assertFalse(chat.listening(self.root)["on"])
+
     def test_every_state_command_tells_a_deaf_coordinator_what_waits(self):
         chat.append(self.root, "user", "status?", allow_user=True)
         out = subprocess.run([sys.executable, str(SCRIPTS / "state.py"), str(self.root), "event", "x", "--no-render"],
