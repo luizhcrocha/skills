@@ -42,6 +42,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `FLEET_DISCOVER=0` | served.py | skip discovering the machine's served ports (tests) |
 | `FLEET_CHECK_S` | chat.py | how often a manager's or coordinator's watch looks at the fleets (default 30 s) |
 | `FLEET_UNHEARD_S` | chat.py | how long the user's message waits unread before a manager's watch tells (default 120 s) |
+| `FLEET_UNANSWERED_S` | chat.py | how long the user's message to a fleet's host goes without a reply (`--re`) before a manager's watch tells, read or not (default 600 s) |
 | `FLEET_NUDGE_S` | chat.py | how long a message to a worker waits unanswered before the coordinator's watch tells (default 600 s, L1) |
 | `TAILSCALE` | serve_dashboard.py, `fleet hub`, `fleet serve`, `fleet served` | the tailscale binary |
 | `FLEET_HUB_PORT` | `fleet hub`, `fleet serve` | the hub's port (default 7420); `--port` wins |
@@ -524,7 +525,14 @@ them `--as WHO` (any case) and `--once`. So a pid reused by another program coun
 its own chat (`delivered`): a manager's watch does not print the user's message to coordinators the hub
 delivered it to, and prints, with its `[delivered to ...]` mark, one that also names the manager or a
 coordinator it was not delivered to. A manager's watch prints `!` lines every `FLEET_CHECK_S`: a fleet that
-doesn't read its chat while the user waits more than `FLEET_UNHEARD_S`, an answer a fleet has had
+doesn't read its chat while the user waits more than `FLEET_UNHEARD_S`; else, a fleet whose host has
+left the user's messages to it unanswered (open for the host, no message but the user's with that `re`,
+not an answer to a decision since closed) for `FLEET_UNANSWERED_S`, whatever the cursor says, since a
+watch that wrote the cursor may have woken no one (`! <fleet> has not answered the user for more than 10
+min: #93 at 14:42 "<text, 120 chars>", .... SendMessage its session (<session>) to answer it with \`fleet
+chat DIR say --as <host> --re N ...\`, and to arm its watch as a background command, \`fleet chat DIR watch
+--as <host> --all --resume --once\`; \`fleet chat DIR log --after <first - 1>\` shows them.`, each message
+told once as `unanswered:<fleet>:<id>`); an answer a fleet has had
 that long without recording it, a running worker silent for 20 minutes. Each is told once
 (`watch-manager.told`). A coordinator's watch prints its own silent workers, and each message to
 one of its workers that the worker has not answered (no message of its own with that `re`) for

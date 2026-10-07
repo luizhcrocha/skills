@@ -29,6 +29,7 @@ import {
   listening,
   oneLine,
   openAmong,
+  openFromUser,
   participant,
   pulsePath,
   pyText,
@@ -153,12 +154,50 @@ function unrecorded(machine: Machine, entry: { readonly id: string; readonly dir
   return lines;
 }
 
-/** For a manager's watch: the fleets that do not read their chat while the user waits, the answers
- * they have not recorded, their silent workers; each told once (kept in the manager's DIR). */
+/** How long the user's message to a fleet's host may go without a reply (`--re`) before the manager is told. */
+export const UNANSWERED_S = 10 * 60;
+
+/** The `!` line for the user's messages to the host of fleet `entry` that it has not answered (no message but
+ * the user's with that `re`, and no closed decision it answered) for `unansweredS`, read or not: a watch that
+ * moved the cursor and woke no one leaves them unread nowhere. Each message told once. */
+function unanswered(machine: Machine, entry: { readonly id: string; readonly dir: string; readonly session: string | null }, told: Map<string, Json>, unansweredS: number): string[] {
+  const said = readChat(entry.dir);
+  const replied = new Set(said.flatMap((m) => (m.from !== "user" && m.re !== null ? [pyRepr(m.re)] : [])));
+
+  const late = openFromUser(entry.dir, said).filter((m) => {
+    const at = parseInstant(pyText(m.at));
+    const mark = `unanswered:${entry.id}:${m.id}`;
+
+    return (
+      !replied.has(String(m.id)) &&
+      waitsHere(m) &&
+      at !== undefined &&
+      secondsNow(machine) - at / 1000 >= unansweredS &&
+      !(told.has(mark) && told.get(mark) !== false)
+    );
+  });
+
+  if (late.length === 0) return [];
+
+  for (const m of late) told.set(`unanswered:${entry.id}:${m.id}`, true);
+  const host = hostOf(entry.dir);
+  const shown = late.map((m) => `#${m.id} at ${pyText(m.at).slice(11, 16)} "${[...oneLine(m.text)].slice(0, 120).join("")}"`).join(", ");
+
+  return [
+    `! ${entry.id} has not answered the user for more than ${Math.floor(unansweredS / 60)} min: ${shown}. SendMessage its session ` +
+      `(${entry.session ?? entry.id}) to answer it with \`fleet chat ${entry.dir} say --as ${host} --re N ...\`, and to arm its watch as a background command, ` +
+      `\`fleet chat ${entry.dir} watch --as ${host} --all --resume --once\`; \`fleet chat ${entry.dir} log --after ${(late[0]?.id ?? 1) - 1}\` shows them.`,
+  ];
+}
+
+/** For a manager's watch: the fleets that do not read their chat while the user waits, or leave the user's
+ * messages unanswered, the answers they have not recorded, their silent workers; each told once (kept in the
+ * manager's DIR). */
 export function fleetsUnheard(machine: Machine, me: string): string[] {
   const toldPath = join(me, "watch-manager.told");
   const told = readTold(toldPath);
   const unheardS = seconds(machine.env, "FLEET_UNHEARD_S", 120);
+  const unansweredS = seconds(machine.env, "FLEET_UNANSWERED_S", UNANSWERED_S);
   const lines: string[] = [];
 
   for (const e of machine.registry.live()) {
@@ -168,12 +207,14 @@ export function fleetsUnheard(machine: Machine, me: string): string[] {
     const heard = listening(machine, e.dir);
     const since = heard.since === null ? "None" : pyText(heard.since);
     const mark = `${heard.seen}:${heard.unread}:${since}`;
-
-    if (heard.on || heard.unread === 0 || told.get(e.id) === mark) continue;
     const at = heard.since === null ? undefined : parseInstant(pyText(heard.since));
     const waited = at === undefined ? unheardS : secondsNow(machine) - at / 1000;
 
-    if (waited < unheardS) continue;
+    if (heard.on || heard.unread === 0 || told.get(e.id) === mark || waited < unheardS) {
+      lines.push(...unanswered(machine, e, told, unansweredS));
+      continue;
+    }
+
     told.set(e.id, mark);
     const active = activeAt(e.dir, machine.config);
     const activeAtS = active === undefined ? undefined : parseInstant(active);

@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -1188,6 +1189,53 @@ class ManagerRelaysTheUnheardTest(FleetDir):
         self.assertIsNone(again.poll(), "what was told once is not told again by the next watch")
         chat.append(fleet["dir"], "coordinator", "here", 1)
         self.assertEqual(chat.listening(fleet["dir"])["unread"], 0, "an answered message no longer waits")
+
+
+class ManagerRelaysTheUnansweredTest(FleetDir):
+    def setUp(self):
+        super().setUp()
+        os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
+        as_manager(self.root, ("billing", "billing"))
+        self.billing = next(e for e in chat.fleets.live() if e["id"] == "billing")
+        self.env = {**os.environ, "FLEET_CHECK_S": "0.2", "FLEET_UNANSWERED_S": "600"}
+
+    def old(self) -> str:
+        return datetime.fromtimestamp(time.time() - 20 * 60).astimezone().isoformat(timespec="seconds")
+
+    def manager_watch(self, *more: str) -> subprocess.Popen:
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "manager", "--all", "--once", *more],
+                                stdout=subprocess.PIPE, text=True, encoding="utf-8", env=self.env)
+        self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
+        return proc
+
+    def test_the_managers_watch_names_a_fleet_that_read_the_users_message_and_has_not_answered_it(self):
+        d = self.billing["dir"]
+        sent = chat.append(d, "user", "are you there?", allow_user=True)
+        lines = (Path(d) / "chat.jsonl").read_text().replace(sent["at"], self.old())
+        (Path(d) / "chat.jsonl").write_text(lines)
+        at = chat.read(d)[0]["at"]
+        (Path(d) / "watch-coordinator.cursor").write_text(str(sent["id"]))
+        self.assertEqual(chat.listening(d)["unread"], 0)
+        proc = self.manager_watch()
+        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertEqual(proc.stdout.read(),
+                         f"! billing has not answered the user for more than 10 min: #{sent['id']} at {at[11:16]} \"are you there?\". "
+                         f"SendMessage its session (billing) to answer it with `fleet chat {d} say --as coordinator --re N ...`, and to arm its watch "
+                         f"as a background command, `fleet chat {d} watch --as coordinator --all --resume --once`; `fleet chat {d} log --after {sent['id'] - 1}` shows them.\n")
+        again = self.manager_watch("--resume")
+        time.sleep(1.5)
+        self.assertIsNone(again.poll(), "what was told once is not told again by the next watch")
+
+    def test_a_message_answered_with_re_or_younger_than_fleet_unanswered_s_is_not_named(self):
+        d = self.billing["dir"]
+        first = chat.append(d, "user", "old", allow_user=True)
+        (Path(d) / "chat.jsonl").write_text((Path(d) / "chat.jsonl").read_text().replace(first["at"], self.old()))
+        chat.append(d, "coordinator", "here", first["id"])
+        chat.append(d, "user", "fresh", allow_user=True)
+        (Path(d) / "watch-coordinator.cursor").write_text("3")
+        proc = self.manager_watch()
+        time.sleep(1.5)
+        self.assertIsNone(proc.poll())
 
 
 class ManagerHearsTheFleetsTest(FleetDir):

@@ -57,6 +57,7 @@ READING_GRACE_S = 10 * 60  # a host whose watch ended, or who spoke, this recent
 QUOTE_MAX = 2000  # characters of a selected excerpt a message carries
 PLACE_MAX = 200  # characters of each field of a quote's place (`at`)
 UNHEARD_S = float(os.environ.get("FLEET_UNHEARD_S", 120))  # how long the user's message waits unread before the manager is told
+UNANSWERED_S = float(os.environ.get("FLEET_UNANSWERED_S", 10 * 60))  # how long the user's message to a host goes without a reply before the manager is told
 NUDGE_S = float(os.environ.get("FLEET_NUDGE_S", 10 * 60))  # how long a worker leaves a message unanswered before its coordinator forwards it
 
 
@@ -689,9 +690,35 @@ def _own_silent(root) -> list[str]:
     return lines
 
 
+def _unanswered(e: dict, told: dict) -> list[str]:
+    """The `!` line for the user's messages to the host of fleet `e` that it has not answered (no message but the
+    user's with that `re`, and no closed decision it answered) for UNANSWERED_S, read or not: a watch that moved
+    the cursor and woke no one leaves them unread nowhere. Each message told once."""
+    said = read(e["dir"])
+    replied = {m["re"] for m in said if m["from"] != "user" and m["re"] is not None}
+    late = []
+    for m in open_from_user(e["dir"], said):
+        mark = f"unanswered:{e['id']}:{m['id']}"
+        try:
+            waited = clock.time() - datetime.fromisoformat(str(m.get("at"))).timestamp()
+        except ValueError:
+            continue
+        if m["id"] not in replied and _waits_here(m) and waited >= UNANSWERED_S and not told.get(mark):
+            late.append(m)
+    if not late:
+        return []
+    for m in late:
+        told[f"unanswered:{e['id']}:{m['id']}"] = True
+    who, d = host(e["dir"]), e["dir"]
+    shown = ", ".join(f"#{m['id']} at {str(m['at'])[11:16]} \"{_one_line(m['text'])[:120]}\"" for m in late)
+    return [f"! {e['id']} has not answered the user for more than {int(UNANSWERED_S // 60)} min: {shown}. SendMessage its session "
+            f"({e.get('session') or e['id']}) to answer it with `fleet chat {d} say --as {who} --re N ...`, and to arm its watch as a background command, "
+            f"`fleet chat {d} watch --as {who} --all --resume --once`; `fleet chat {d} log --after {late[0]['id'] - 1}` shows them."]
+
+
 def _fleets_unheard(me: str) -> list[str]:
     """For a manager's watch: one line per fleet whose coordinator does not read its chat while the user's
-    messages wait there more than UNHEARD_S. Each set of waiting messages is told once, across watches:
+    messages wait there more than UNHEARD_S, or else leaves them unanswered more than UNANSWERED_S. Each set of waiting messages is told once, across watches:
     what was told is kept in the manager's DIR."""
     told_path = Path(me) / "watch-manager.told"
     try:
@@ -706,13 +733,12 @@ def _fleets_unheard(me: str) -> list[str]:
         lines += _silent(e["dir"], e["id"], told)
         heard = listening(e["dir"])
         mark = f"{heard['seen']}:{heard['unread']}:{heard['since']}"
-        if heard["on"] or not heard["unread"] or told.get(e["id"]) == mark:
-            continue
         try:
             waited = clock.time() - datetime.fromisoformat(heard["since"]).timestamp()
         except (TypeError, ValueError):
             waited = UNHEARD_S
-        if waited < UNHEARD_S:
+        if heard["on"] or not heard["unread"] or told.get(e["id"]) == mark or waited < UNHEARD_S:
+            lines += _unanswered(e, told)
             continue
         told[e["id"]] = mark
         import spend

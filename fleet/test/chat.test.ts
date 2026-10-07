@@ -11,6 +11,7 @@ import * as Option from "effect/Option";
 import { address, append, deafWarning, listening, openFor, READING_GRACE_S, type Draft } from "../src/chat/chat.ts";
 import { FleetNews, firstLine } from "../src/chat/news.ts";
 import { readChat, type Message, type Part } from "../src/chat/store.ts";
+import { stampOf } from "../src/clock.ts";
 import { ChatError } from "../src/errors.ts";
 import { asArray, asObject, asString, parseJson, type Json, type JsonObject } from "../src/json.ts";
 import type { Machine } from "../src/world.ts";
@@ -768,6 +769,52 @@ describe("the manager relays the unheard", () => {
     const answered = append(m, billing.dir, { sender: "coordinator", text: "here", re: 1 }, now());
     expect(answered).not.toBeInstanceOf(ChatError);
     expect(listening(m, billing.dir).unread).toBe(0);
+  });
+});
+
+describe("the manager relays the unanswered", () => {
+  test("the manager's watch names a fleet that read the user's message and has not answered it", async () => {
+    asManager(["billing", "billing"]);
+    const billing = m.registry.live().find((e) => e.id === "billing");
+
+    if (billing === undefined) throw new Error("billing is not served");
+    const old = stampOf(new Date(Date.now() - 20 * 60 * 1000));
+    const sent = append(m, billing.dir, { sender: "user", text: "are you there?", allowUser: true }, old);
+
+    if (sent instanceof ChatError) throw new Error(sent.reason);
+    writeFileSync(join(billing.dir, "watch-coordinator.cursor"), String(sent.id));
+    expect(listening(m, billing.dir).unread).toBe(0);
+    const quick = { ...env, FLEET_CHECK_S: "0.2", FLEET_UNANSWERED_S: "600" };
+    const { proc, lines } = start(["chat", root, "watch", "--as", "manager", "--all", "--once"], quick);
+    procs.push(proc);
+    const line = await lines.next();
+    expect(line).toBe(
+      `! billing has not answered the user for more than 10 min: #${sent.id} at ${old.slice(11, 16)} "are you there?". ` +
+        `SendMessage its session (billing) to answer it with \`fleet chat ${billing.dir} say --as coordinator --re N ...\`, and to arm its watch ` +
+        `as a background command, \`fleet chat ${billing.dir} watch --as coordinator --all --resume --once\`; \`fleet chat ${billing.dir} log --after ${sent.id - 1}\` shows them.\n`,
+    );
+    expect(await proc.exited).toBe(0);
+    const again = start(["chat", root, "watch", "--as", "manager", "--all", "--resume", "--once"], quick);
+    procs.push(again.proc);
+    await sleep(1500);
+    expect(again.proc.exitCode).toBeNull();
+  });
+
+  test("a message answered with --re, or younger than FLEET_UNANSWERED_S, is not named", async () => {
+    asManager(["billing", "billing"]);
+    const billing = m.registry.live().find((e) => e.id === "billing");
+
+    if (billing === undefined) throw new Error("billing is not served");
+    const answered = append(m, billing.dir, { sender: "user", text: "old", allowUser: true }, stampOf(new Date(Date.now() - 20 * 60 * 1000)));
+
+    if (answered instanceof ChatError) throw new Error(answered.reason);
+    append(m, billing.dir, { sender: "coordinator", text: "here", re: answered.id }, now());
+    append(m, billing.dir, { sender: "user", text: "fresh", allowUser: true }, now());
+    writeFileSync(join(billing.dir, "watch-coordinator.cursor"), "3");
+    const { proc } = start(["chat", root, "watch", "--as", "manager", "--all", "--once"], { ...env, FLEET_CHECK_S: "0.2", FLEET_UNANSWERED_S: "600" });
+    procs.push(proc);
+    await sleep(1500);
+    expect(proc.exitCode).toBeNull();
   });
 });
 
