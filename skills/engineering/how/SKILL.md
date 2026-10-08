@@ -20,15 +20,15 @@ When in doubt, take the simple path.
 
 ## 2. Simple: one pass
 
-Spawn one `Explore` agent on the default Sonnet (`model: "sonnet"`), in the background, with the brief in [references/explainer-prompt.md](references/explainer-prompt.md) minus its explorer-findings section: it explores and explains in one pass. Go to step 5.
+Spawn one `Explore` agent playing the Researcher role ([MODELS.md](../../productivity/coordinator/MODELS.md)), in the background, with the brief in [references/explainer-prompt.md](references/explainer-prompt.md) minus its explorer-findings section: it explores and explains in one pass. Go to step 5.
 
 ## 3. Complex: explore
 
-Split the question into 2 to 4 exploration angles, each a distinct slice of the subsystem (the entry points, the data model, the boundary with X, the failure paths). Spawn all explorers in one message: `Explore` agents on the default Sonnet (`model: "sonnet"`), in the background, each with [references/explorer-prompt.md](references/explorer-prompt.md) and its angle filled in.
+Split the question into 2 to 4 exploration angles, each a distinct slice of the subsystem (the entry points, the data model, the boundary with X, the failure paths). Spawn all explorers in one message: `Explore` agents playing the Researcher role, in the background, each with [references/explorer-prompt.md](references/explorer-prompt.md) and its angle filled in.
 
 ## 4. Complex: explain
 
-When every explorer has returned, spawn one explainer with [references/explainer-prompt.md](references/explainer-prompt.md) and all findings filled in. Default Sonnet. Use the default Opus (`model: "opus"`) when the findings contradict each other, leave gaps the explainer must close by reading code, or the question asks for a judgement about the design ("is this the right layer").
+When every explorer has returned, spawn one explainer, a Composer, with [references/explainer-prompt.md](references/explainer-prompt.md) and all findings filled in. It moves up as MODELS.md says when the findings contradict each other. The same move applies when the findings leave gaps it must close by reading code, or when the question asks for a judgement about the design ("is this the right layer").
 
 ## 5. Present
 

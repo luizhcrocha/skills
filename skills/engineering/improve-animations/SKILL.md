@@ -52,7 +52,7 @@ Audit against the eight categories in [AUDIT.md](AUDIT.md):
 7. Cohesion & tokens
 8. Missed opportunities
 
-For anything beyond a small repo, fan out read-only Sonnet subagents (`model: "sonnet"`) — one per category (or per app area for large monorepos). They read and report; the vetting in Phase 3 is yours. Each subagent prompt must include: the absolute path to AUDIT.md and its section heading, the recon facts (stack, motion libraries, token conventions, frequency map), an instruction to return findings only (file:line + evidence, no fixes), and Hard Rule 4 verbatim.
+For anything beyond a small repo, fan out read-only subagents playing the Researcher role ([MODELS.md](../../productivity/coordinator/MODELS.md)), one per category (or per app area for large monorepos). They read and report; the vetting in Phase 3 is yours. Each subagent prompt must include: the absolute path to AUDIT.md and its section heading, the recon facts (stack, motion libraries, token conventions, frequency map), an instruction to return findings only (file:line + evidence, no fixes), and Hard Rule 4 verbatim.
 
 Depth follows effort level (default `standard`):
 
@@ -93,7 +93,7 @@ Finish by creating or updating `plans/README.md`: recommended execution order, d
 | `quick` / `deep` | Adjust audit effort (see table); composes with a focus |
 | a category focus (`performance`, `accessibility`, `easing`…) | Recon + audit that category only |
 | `plan <description>` | Skip the audit; recon just enough to specify, then write a single plan for the described improvement |
-| `execute <plan>` | Dispatch an Opus executor subagent to implement the plan in its own jj workspace (`jj workspace add`; a git worktree outside jj), then review its diff with the `review-animations` bar and render a verdict |
+| `execute <plan>` | Dispatch an executor subagent playing the Implementer role to implement the plan in its own jj workspace (`jj workspace add`; a git worktree outside jj), then review its diff with the `review-animations` bar and render a verdict |
 | `reconcile` | Re-check `plans/` against the current code: mark done plans DONE, refresh stale file:line references, retire fixed findings |
 
 ## Tone

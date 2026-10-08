@@ -9,7 +9,7 @@ Core discipline: one change, one measurement, keep or revert. Never stack untest
 3. Open the decision log with `tstack:show-me-your-work`, one row per attempt: the hypothesis and change as the decision, before → after with the delta and the gate as the result, kept or abandoned. Read it before each attempt.
 4. Ground each hypothesis in the step-1 map, so it names a mechanism ("defer X off the boot path because it blocks first paint"), not "try memoizing something".
 5. Loop, one hypothesis per iteration:
-   - Hand the change to an Opus subagent with a tight scope, in its own jj workspace; review the diff rather than typing it (Guard the Context Window). Several independent hypotheses → parallel subagents, one workspace each (Separate Before Serializing Shared State).
+   - Hand the change to an Implementer subagent ([MODELS.md](../../../productivity/coordinator/MODELS.md)) with a tight scope, in its own jj workspace; review the diff rather than typing it (Guard the Context Window). Several independent hypotheses → parallel subagents, one workspace each (Separate Before Serializing Shared State).
    - Measure before and after with the frozen harness; run the gate.
    - Keep only when the metric moves past noise and the gate stays green; otherwise `jj abandon` the change. A tweak that "might help" is not kept.
    - One described jj change per accepted win. Log the row either way.

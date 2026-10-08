@@ -24,7 +24,7 @@ Scope is the skills Luiz names, checked whatever their dates, else every languag
 
 ## 2. Check
 
-One research agent per remaining skill, all spawned in one message: `general-purpose`, `model: "sonnet"`, `run_in_background: true`. Each brief carries the skill's path, its rows as JSON, and this, verbatim:
+One research agent per remaining skill, all spawned in one message: `general-purpose` agents playing the Researcher role ([MODELS.md](../../productivity/coordinator/MODELS.md)), `run_in_background: true`. Each brief carries the skill's path, its rows as JSON, and this, verbatim:
 
 > For each row, find the latest stable release of the item after "version targeted", from official sources only: the registry API or the project's release notes, never a blog or memory. Look the version up first, one call per row:
 > npm `https://registry.npmjs.org/<pkg>/latest`; crates.io `https://crates.io/api/v1/crates/<crate>` (send a User-Agent); PyPI `https://pypi.org/pypi/<pkg>/json`; NuGet `https://api.nuget.org/v3-flatcontainer/<id lowercased>/index.json`; Go modules `https://proxy.golang.org/<module>/@latest` (Go itself: `https://go.dev/dl/?mode=json`); GitHub `gh api repos/<owner>/<repo>/releases/latest` (authenticated; the anonymous `api.github.com` limit of 60 calls an hour runs out mid-check, so use `git ls-remote --tags` where `gh` is missing; tags or the last commit when a project has no releases); anything else, the row's URL.

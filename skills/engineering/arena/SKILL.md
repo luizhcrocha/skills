@@ -24,13 +24,13 @@ Done when the artifact, the rubric, N constraints and N output paths are written
 
 ## 2. Fan out
 
-Spawn all N runners in one message: fresh agents, `model: "opus"`, `run_in_background: true`. Each brief carries the task, pointers to the shared grounding (files, not pasted content), its one constraint, its output path, and an order to produce the artifact and a short rationale naming the alternatives it considered and what it rejected. Tell each runner it is one of several: build the best candidate its constraint allows, and skip hedging toward a safe middle, since the differences between candidates are the signal.
+Spawn all N runners in one message: fresh agents playing the Implementer role ([MODELS.md](../../productivity/coordinator/MODELS.md)), `run_in_background: true`. Each brief carries the task, pointers to the shared grounding (files, not pasted content), its one constraint, its output path, and an order to produce the artifact and a short rationale naming the alternatives it considered and what it rejected. Tell each runner it is one of several: build the best candidate its constraint allows, and skip hedging toward a safe middle, since the differences between candidates are the signal.
 
 A runner that produces nothing drops out: continue with N-1 and note the dropout. Done when every runner has returned or dropped out.
 
 ## 3. Cross-judge
 
-Once every candidate is written, spawn one judge: a fresh agent that ran nothing in this arena, on the default Fable (`model: "fable"`), read-only, in the background (if Fable is unavailable (usage or session limit, credits, a model error), rerun that agent on Opus (`model: "opus"`) and say so in the reply). It gets the rubric and the candidates by neutral labels (A, B, C), without the constraint each ran under, scores each criterion per candidate, and recommends a base with its reason. It runs while you read in step 4.
+Once every candidate is written, spawn one judge: a fresh agent that ran nothing in this arena, playing the Decider role, read-only, in the background (if the Decider's model is unavailable, take its fallback from MODELS.md and say so in the reply). It gets the rubric and the candidates by neutral labels (A, B, C), without the constraint each ran under, scores each criterion per candidate, and recommends a base with its reason. It runs while you read in step 4.
 
 ## 4. Pick a base
 

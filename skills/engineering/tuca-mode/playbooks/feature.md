@@ -9,9 +9,9 @@
    - **Independent workstreams.** Disjoint files, services or layers parallelize. Shared writes serialize.
    - **Shared mutable state.** Split the target first (Separate Before Serializing Shared State); serialize only for a real invariant.
    - **Smallest safe decomposition.** If one worker is best, say why.
-4. Delegate the code to an Opus subagent in its own jj workspace with a specific scope: file paths, the named data shape and its structure (a state machine over scattered booleans, a table over branching, a typed model over repeated shape assumptions), the seam, and a checkable done criterion. Test-first at the agreed seams with `tstack:tdd`. Surgical edits; comments per [Comments](../SKILL.md#comments); a shared-primitive change reaches every consumer, each verified.
+4. Delegate the code to an Implementer subagent ([MODELS.md](../../../productivity/coordinator/MODELS.md)) in its own jj workspace with a specific scope: file paths, the named data shape and its structure (a state machine over scattered booleans, a table over branching, a typed model over repeated shape assumptions), the seam, and a checkable done criterion. Test-first at the agreed seams with `tstack:tdd`. Surgical edits; comments per [Comments](../SKILL.md#comments); a shared-primitive change reaches every consumer, each verified.
 5. Verify on the matching surface: run it, drive it (claude-in-chrome for a UI), read the real output. The project's `verify-<app>` skill is the recipe when it exists: drive every entry point its feature map lists for what changed, and fix the map through `tstack:maintain-verification-skill` when it drifted. None, and the surface will be driven again → `tstack:create-verification-skill` first. "Inconclusive" or the wrong surface is not a pass; flag it.
-6. Review: `tstack:review` against the spec, then `/simplify` (Claude Code built-in) over the diff. A contested design → `tstack:interrogate` (three Opus reviewers try to break it; you act on its verdict).
+6. Review: `tstack:review` against the spec, then `/simplify` (Claude Code built-in) over the diff. A contested design → `tstack:interrogate` (three Reviewers try to break it; you act on its verdict).
 7. Shape the history into small ordered changes, each landable and verified before the next (Sequence Work into Verifiable Units).
 8. Run the Land playbook.
 

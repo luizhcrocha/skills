@@ -7,7 +7,7 @@ description: "Turn a repeated lesson into a native lint rule, tested on the real
 
 A lesson that repeats becomes a rule in the language's own linter, vendored into each repo so its checks and CI enforce it (docs/tstack-plan.md, D12; `tstack:principles`, Encode Lessons in Structure). The packs, the registry and the vendoring are laid out in the tstack checkout's [lint/README.md](../../../lint/README.md); `lint-registry` and `lint-vendor` are on the Bash PATH through the plugin's `bin/` (else `scripts/` in the checkout).
 
-Roles ([MODELS.md](../../productivity/coordinator/MODELS.md)): evidence legwork and trials go to `general-purpose` Readers; an Implementer writes the rule (you, or one `general-purpose` agent in that role when this session does not run the Implementer's model).
+Roles ([MODELS.md](../../productivity/coordinator/MODELS.md)): evidence legwork and trials go to `general-purpose` Researchers; an Implementer writes the rule (you, or one `general-purpose` agent in that role when this session does not run the Implementer's model).
 
 Open a todo list with the six steps.
 
@@ -49,7 +49,7 @@ Done when the suite passes on the incident (a native lint: the linter reports it
 
 ## 4. Trial
 
-`lint-registry set-status <id> trial --note "trial across <n> repos"`, then run the rule, alone, over every repo of Luiz's that uses the language, read-only: [references/trials.md](references/trials.md) lists the repos and the command per linter. Fan out one Sonnet agent per few repos; each returns, per repo, the hits with path and line and its verdict on each (a true hit is the lesson recurring, a false positive is not, quoted with why).
+`lint-registry set-status <id> trial --note "trial across <n> repos"`, then run the rule, alone, over every repo of Luiz's that uses the language, read-only: [references/trials.md](references/trials.md) lists the repos and the command per linter. Fan out one Reader per few repos; each returns, per repo, the hits with path and line and its verdict on each (a true hit is the lesson recurring, a false positive is not, quoted with why).
 
 Record each repo: `lint-registry record <id> --repo <path> --hits <n> --false-positives <n> --note "<what the hits were>"`. Done when every repo using the language has a run recorded.
 

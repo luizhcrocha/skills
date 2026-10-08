@@ -66,7 +66,7 @@ Drop the noise before mining: the current session (excluded above), headless ses
 
 Every remaining session is mined by a subagent; the transcripts stay with them and only findings come back. One or two small sessions: read their digests yourself instead.
 
-Split the sessions into batches of about 1 MB of transcript each (one larger session is a batch of its own) and spawn one miner per batch, all in one message: `general-purpose` agents on the default Sonnet (`model: "sonnet"`), in the background. Each brief carries the session paths, the topic (or "all work"), the window, and these instructions:
+Split the sessions into batches of about 1 MB of transcript each (one larger session is a batch of its own) and spawn one miner per batch, all in one message: `tstack:reader` agents in the Reader role ([MODELS.md](../coordinator/MODELS.md)), in the background. Each brief carries the session paths, the topic (or "all work"), the window, and these instructions:
 
 - Read a session through `python3 ${CLAUDE_SKILL_DIR}/scripts/sessions.py digest <path>`: user prompts, assistant text, one line per tool call, errors, compaction and away summaries. Open the raw JSONL only for a region the digest points at (grep it for the topic or an id); a subagent's work is under `<session-id>/subagents/`.
 - Read the end of a session first, then scan back for the decision points.
@@ -77,7 +77,7 @@ Done when every listed session is mined or dropped with its reason.
 
 ### 4. Sweep the shared record, only when useful
 
-When the topic names a feature, file, subsystem or bug and the question is about its state (what was tried, what still breaks), run a narrow `why` sweep in parallel with the miners. Read `${CLAUDE_PLUGIN_ROOT}/skills/engineering/why/SKILL.md` for source discovery and its playbooks, and spawn its investigators (Sonnet, one per category) only for the categories that hold state: issue tracker, chat, errors and observability. Turn their question from "why was it built this way" to "what is the current state, what was tried and did not hold, what are users still reporting". Null results are findings; an unavailable source is named, never waited on. Skip this step for pure activity recall ("what did I do this week") and when the transcripts and live state already answer.
+When the topic names a feature, file, subsystem or bug and the question is about its state (what was tried, what still breaks), run a narrow `why` sweep in parallel with the miners. Read `${CLAUDE_PLUGIN_ROOT}/skills/engineering/why/SKILL.md` for source discovery and its playbooks, and spawn its investigators (Researchers, one per category) only for the categories that hold state: issue tracker, chat, errors and observability. Turn their question from "why was it built this way" to "what is the current state, what was tried and did not hold, what are users still reporting". Null results are findings; an unavailable source is named, never waited on. Skip this step for pure activity recall ("what did I do this week") and when the transcripts and live state already answer.
 
 ### 5. Check the live state
 

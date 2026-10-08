@@ -27,7 +27,7 @@ Write one clear paragraph, and list the spec sources you found as paths or links
 
 ## Step 3, Spawn reviewers
 
-All three in one message: `general-purpose` agents on Opus (`model: "opus"`), in the background (in the foreground in a `claude -p` run, which can exit before a background reviewer returns). Each writes nothing in the repo.
+All three in one message: `general-purpose` agents playing the Reviewer role ([MODELS.md](../../productivity/coordinator/MODELS.md)), in the background (in the foreground in a `claude -p` run, which can exit before a background reviewer returns). Each writes nothing in the repo.
 
 | Reviewer | Lens |
 |----------|------|
@@ -58,7 +58,7 @@ As results come back, build a unified picture:
 
 ## Step 5, Lead judgment
 
-You are the lead reviewer, a pragmatic senior engineer, not a neutral aggregator. The verdict is a decisive single role: when this session is not on Fable, hand this step to one `general-purpose` agent on the default Fable (`model: "fable"`) with the intent, the diff command, the three reviews and the synthesis from step 4, and present its verdict after checking the findings it leans on. If Fable is unavailable (usage or session limit, credits, a model error), rerun that agent on Opus (`model: "opus"`) and say so in the reply. Read [references/lead-judgment.md](references/lead-judgment.md) for the full framework; where it says "model", read "reviewer". Check the findings you lean on against the code: trace the call site, run the repro.
+You are the lead reviewer, a pragmatic senior engineer, not a neutral aggregator. The verdict is a decisive single role: when this session is not on Fable, hand this step to one `general-purpose` agent playing the Decider role with the intent, the diff command, the three reviews and the synthesis from step 4, and present its verdict after checking the findings it leans on. If the Decider's model is unavailable, take its fallback from MODELS.md and say so in the reply. Read [references/lead-judgment.md](references/lead-judgment.md) for the full framework; where it says "model", read "reviewer". Check the findings you lean on against the code: trace the call site, run the repro.
 
 Categorize every finding using these buckets:
 
@@ -77,9 +77,9 @@ Write the verdict through `tstack:unslop`, in this structure:
 > [The stated intent paragraph from Step 2]
 
 ### Reviewers
-- Reviewer A (correctness and security): Opus, [N findings]
-- Reviewer B (maintainability): Opus, [N findings]
-- Reviewer C (intent): Opus, [N findings]
+- Reviewer A (correctness and security): [N findings]
+- Reviewer B (maintainability): [N findings]
+- Reviewer C (intent): [N findings]
 
 ### Act On
 [Findings that should be addressed. For each: description, which reviewers raised it, why it matters.]

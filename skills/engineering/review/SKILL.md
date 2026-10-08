@@ -68,7 +68,7 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 
 ### 4. Spawn both sub-agents in parallel
 
-Both in one message: `general-purpose` agents on Opus (`model: "opus"`), in the background. Each reads the code itself through the diff command and writes nothing.
+Both in one message: `general-purpose` agents playing the Reviewer role ([MODELS.md](../../productivity/coordinator/MODELS.md)), in the background. Each reads the code itself through the diff command and writes nothing.
 
 **Standards sub-agent prompt** should include:
 

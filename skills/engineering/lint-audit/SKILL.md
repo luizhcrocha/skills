@@ -7,7 +7,7 @@ description: "Audit tstack's lint rules against their registry and trials; propo
 
 The other half of the loop `tstack:lint-evolve` starts (docs/tstack-plan.md, D12): rules earn `error` by firing without false positives, rules that never fire leave, and a rule that keeps firing points at a skill that should teach better. The registry is `lint/registry.toml` in the tstack checkout; [lint/README.md](../../../lint/README.md) lays out the packs. `lint-registry` and `lint-vendor` are on the Bash PATH through the plugin's `bin/`.
 
-Roles ([MODELS.md](../../productivity/coordinator/MODELS.md)): trials and repo legwork go to `general-purpose` Readers; the judgement calls in step 3 are yours.
+Roles ([MODELS.md](../../productivity/coordinator/MODELS.md)): trials and repo legwork go to `general-purpose` Researchers; the judgement calls in step 3 are yours.
 
 Open a todo list with the six steps.
 
@@ -17,7 +17,7 @@ Work in a tstack workspace of its own: `cd ~/repos/luizhcrocha/skills; jj worksp
 
 ## 2. Measure
 
-Trial every unmeasured rule in trial, warn or error, and every rule whose last run is older than 30 days, per [../lint-evolve/references/trials.md](../lint-evolve/references/trials.md): one Sonnet agent per language, read-only in Luiz's repos, each hit judged true or false positive. Record each run with `lint-registry record`. Done when every active rule has a run inside the last 30 days in each repo that uses its language, or a recorded reason it could not run.
+Trial every unmeasured rule in trial, warn or error, and every rule whose last run is older than 30 days, per [../lint-evolve/references/trials.md](../lint-evolve/references/trials.md): one Reader per language, read-only in Luiz's repos, each hit judged true or false positive. Record each run with `lint-registry record`. Done when every active rule has a run inside the last 30 days in each repo that uses its language, or a recorded reason it could not run.
 
 ## 3. Decide
 

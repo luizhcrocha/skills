@@ -1,6 +1,6 @@
 ---
 name: reflect
-description: Mine this session's transcript for durable learnings through three Opus reviewers and a synthesizer, then land the approved skill edits as a jj change in the tstack repo and the rest as memo notes.
+description: Mine this session's transcript for durable learnings through three reviewers and a synthesizer, then land the approved skill edits as a jj change in the tstack repo and the rest as memo notes.
 disable-model-invocation: true
 ---
 
@@ -26,7 +26,7 @@ Check the first record that carries a `sessionId` matches `${CLAUDE_SESSION_ID}`
 
 ## 2. Spawn three reviewers in parallel
 
-One message, three Agent calls: `general-purpose` agents on Opus (`model: "opus"`), in the background. They keep the session's MCP tools, which they need for context lookups (tickets, chat threads, traces the transcript references); their prompts tell them to write nothing.
+One message, three Agent calls: `general-purpose` agents playing the Reviewer role, in the background. They keep the session's MCP tools, which they need for context lookups (tickets, chat threads, traces the transcript references); their prompts tell them to write nothing.
 
 | Lens | Prompt template |
 |---|---|

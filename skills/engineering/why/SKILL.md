@@ -49,7 +49,7 @@ Source control, the repo's docs and agent memory always have a source. A server 
 
 The sweep runs on every question, however small, recent or well documented the target looks: you gather the anchor, the investigators gather the evidence, and the answer comes from the synthesizer. Cost is paid on purpose here: a finding the record holds in a place you did not expect is the point.
 
-One investigator per category that has a source, all spawned in one message: `general-purpose` agents on the default Sonnet (`model: "sonnet"`), in the background. One investigator owns one category; never ask one to cover two. Subagents inherit the session's MCP tools, so the MCP-backed categories work from a subagent; the brief tells them to write nothing.
+One investigator per category that has a source, all spawned in one message: `general-purpose` agents playing the Researcher role ([MODELS.md](../../productivity/coordinator/MODELS.md)), in the background. One investigator owns one category; never ask one to cover two. Subagents inherit the session's MCP tools, so the MCP-backed categories work from a subagent; the brief tells them to write nothing.
 
 Each gets:
 
@@ -62,7 +62,7 @@ A category is skipped only with a written reason that goes in Sources Consulted:
 
 ## 5. Synthesize
 
-When every investigator has returned, spawn one synthesizer: `general-purpose` on the default Fable (`model: "fable"`; if Fable is unavailable (usage or session limit, credits, a model error), rerun that agent on Opus (`model: "opus"`) and say so in the reply), with [references/synthesizer-prompt.md](references/synthesizer-prompt.md) filled in: all findings (null results included), the skipped categories with their reasons, the code anchor, the question, and [references/epistemics.md](references/epistemics.md). It spot-checks citations and writes nothing.
+When every investigator has returned, spawn one synthesizer: `general-purpose` playing the Decider role (if its model is unavailable, take the fallback from MODELS.md and say so in the reply), with [references/synthesizer-prompt.md](references/synthesizer-prompt.md) filled in: all findings (null results included), the skipped categories with their reasons, the code anchor, the question, and [references/epistemics.md](references/epistemics.md). It spot-checks citations and writes nothing.
 
 ## 6. Present
 

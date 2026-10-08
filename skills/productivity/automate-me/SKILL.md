@@ -25,7 +25,7 @@ Write the turns to the scratchpad (`human-turns ... > <scratchpad>/automate-me/t
 
 ## 3. Fan out the readers
 
-One reader per batch, all spawned in one message: `general-purpose`, `model: "sonnet"`, `run_in_background: true`. Each brief carries its batch file's path and this, verbatim:
+One reader per batch, all spawned in one message: `tstack:reader` agents in the Reader role ([MODELS.md](../coordinator/MODELS.md)), `run_in_background: true`. Each brief carries its batch file's path and this, verbatim:
 
 > Read every turn in the batch file. Each turn is Luiz's own words; `prev` is the reply he answered. Find what recurs in how he works: corrections (he undoes or redirects something the agent did), rejected defaults (a tool, command, format or habit he turns down), preferences (length, tone, format, language, shell), repeated instructions (he says the same thing again in a new session), verification posture (what "done" means to him), delegation (models, subagents, parallelism), and process (jj, landing, pushes, reviews). For a single turn you cannot read without more context, open that session's transcript (`~/.claude/projects/*/<session>.jsonl`) and read around it; nothing else.
 >

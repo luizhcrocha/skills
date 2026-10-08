@@ -53,6 +53,7 @@ Ask them the maximum number of parallel agents to run and to confirm that they w
 Each worker gets a fresh context window — it knows nothing you know. In every spawn prompt include:
 
 - The task and its **exact file ownership** ("you may only edit X, Y").
+- Its **role**, from [MODELS.md](../coordinator/MODELS.md). A worker that writes code is an Implementer. A batch of mechanical reads or reductions, with no edits, goes to Readers. Pass the role's model and effort on each Agent call; a workflow or a team names the role of each stage the same way.
 - The **standards block** below, verbatim.
 - How to report back (what "done" looks like).
 - If more optimal, considering the tasks:
@@ -76,4 +77,4 @@ Collect results, resolve anything left at the seams, run the project's checks (t
 
 - Subagents inherit your tool allowlist; pre-approve the commands workers need to avoid mid-run permission prompts.
 - Workflows: trigger with the word `workflow` in the prompt (or `/effort ultracode` to let Claude decide); watch with `/workflows`; save a good run with `s`.
-- Cost scales with agent count — parallel runs trade tokens for wall-clock time. Use a smaller model for stages that don't need the strongest one.
+- Cost scales with agent count — parallel runs trade tokens for wall-clock time. Give stages that only read the Reader role.

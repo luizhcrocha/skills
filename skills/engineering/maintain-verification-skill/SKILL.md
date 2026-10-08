@@ -25,7 +25,7 @@ Only the verification skill's own directory (its SKILL.md, `features/`, and the 
 
 1. **Index hygiene.** Read the feature map README and glob its sibling files. Fix missing, extra, duplicate or dead entries. Lightweight; no generated inventory.
 
-2. **Source wave.** One read-only subagent per feature file, all spawned in one message: `model: "sonnet"`, `run_in_background: true`. Each explains "how does this user-facing feature work?" from source (`tstack:how`'s explorer brief fits), flags likely doc drift with `file:line` citations, and returns one concise live-verification recipe. Readers never drive the app and never edit files. Return shape: feature summary / source entry points / likely drift or none / one recipe.
+2. **Source wave.** One read-only subagent per feature file, all spawned in one message, each playing the Researcher role ([MODELS.md](../../productivity/coordinator/MODELS.md)), `run_in_background: true`. Each explains "how does this user-facing feature work?" from source (`tstack:how`'s explorer brief fits), flags likely doc drift with `file:line` citations, and returns one concise live-verification recipe. Readers never drive the app and never edit files. Return shape: feature summary / source entry points / likely drift or none / one recipe.
 
 3. **Reconcile.** Every feature file has a returned summary. Merge overlapping recipes into as few app states as practical. Spot-check cited drift; skip re-proving clean claims. Sweep recent churn for user-facing surfaces missing from the map (`jj log -r 'latest(::@ ~ root(), 50)' --stat` over the app's routes, commands and menus); require a concrete source path before calling one missing.
 

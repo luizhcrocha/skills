@@ -15,7 +15,7 @@
 1. **Frame.** Name the variant under test and the behaviour that counts as success. Write 3 to 6 concrete grader criteria, kept out of anything the candidate sees.
 2. **Set up the cases.** `claude plugin eval init --bare <name>` for a blank case, or `init` for the interview. Plant the context an organic task would have: a small project skeleton, the files a user would have.
 3. **Author one organic prompt** per case: what Luiz would type.
-4. **Run it.** `claude plugin eval <plugin path> --runs <n> --case <glob>`; Sonnet candidates by default (`--model sonnet`), Opus when the behaviour under test is judgement. The default ablation gives the no-plugin baseline. Set `--max-cost-usd` for a large suite.
+4. **Run it.** `claude plugin eval <plugin path> --runs <n> --case <glob>`; `--model` is the model of the session the skill will run in (test runs take the target's pair, [MODELS.md](../../../productivity/coordinator/MODELS.md)); the plugin eval has no effort flag, so the report names the effort the runs used. The default ablation gives the no-plugin baseline. Set `--max-cost-usd` for a large suite.
 5. **Verify the chain from transcripts, not self-report.** Read what each run actually opened and ran (the JSON result, `--json`, and the run transcripts); grade chain-following from the files read and the shape of the output.
 6. **Read every output yourself**, end to end, and compare with the graders' verdicts. Disagreement means a biased grader or an ambiguous criterion; fix it and rerun that case.
 

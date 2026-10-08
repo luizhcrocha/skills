@@ -7,8 +7,8 @@ This reads the pairs from its table, then checks two things against them:
 - every `model: "<x>"` in skills/ and agents/ markdown, which must read `model: "<x>", effort: "<y>"`.
 
 Spawn sentences that still name a model without an effort are counted per file in BARE_ALLOWED.
-The roles rollout's lane B adds the effort (or replaces the model with a role name) and lowers the
-count; a file over its count fails with file:line, and a file under it fails until the count is lowered.
+It is empty: a spawn names its role instead. A file over its count fails with file:line, and a file
+under it fails until the count is lowered.
 """
 
 import re
@@ -20,23 +20,8 @@ MODELS = ROOT / "skills" / "productivity" / "coordinator" / "MODELS.md"
 PAIR = re.compile(r"\b(Fable|Opus|Sonnet|Haiku) (low|medium|high|xhigh|max)\b")
 SPAWN = re.compile(r'model: "([a-z]+)"(?:,\s*effort: "([a-z]+)")?')
 
-# file -> bare `model: "<x>"` mentions left for lane B. Empty when every spawn sentence names its effort.
-BARE_ALLOWED = {
-    "skills/engineering/arena/SKILL.md": 3,
-    "skills/engineering/how/SKILL.md": 3,
-    "skills/engineering/improve-animations/SKILL.md": 1,
-    "skills/engineering/interrogate/SKILL.md": 3,
-    "skills/engineering/lang-refresh/SKILL.md": 1,
-    "skills/engineering/maintain-verification-skill/SKILL.md": 1,
-    "skills/engineering/review/SKILL.md": 1,
-    "skills/engineering/why/SKILL.md": 3,
-    "skills/productivity/automate-me/SKILL.md": 1,
-    "skills/productivity/coordinator/SKILL.md": 2,
-    "skills/productivity/coordinator/assets/brief.md": 1,
-    "skills/productivity/recall/SKILL.md": 1,
-    "skills/productivity/reflect/SKILL.md": 1,
-    "skills/productivity/show-me-your-work/SKILL.md": 2,
-}
+# file -> bare `model: "<x>"` mentions allowed. Every other spawn sentence names a role.
+BARE_ALLOWED: dict[str, int] = {}
 
 
 def table_rows():
@@ -120,7 +105,7 @@ class NamedPairs(unittest.TestCase):
                     bad.append(f'{rel(md)}:{n}: model: "{model}", effort: "{effort}" is not in MODELS.md\'s table')
         self.assertEqual(bad, [], "\n".join(bad))
 
-    def test_a_model_without_an_effort_is_only_where_lane_b_has_not_been(self):
+    def test_a_model_without_an_effort_is_only_where_allowed(self):
         found: dict[str, list[int]] = {}
         for md in markdown_files():
             for n, model, effort in spawns(md):
