@@ -525,13 +525,17 @@ class StageFiveRulesTest(Fleet):
         said = self.run_cli("agent", "a3", "--task", "t", "--milestone", "m1", "--lane", "src/**").stderr
         self.assertIn("state: a3's lane overlaps a1's (running: src/**); a2's (running: src/**).", said)
 
-    def test_a_model_outside_the_policy_is_recorded_with_a_warning(self):  # L3
+    def test_haiku_is_in_the_policy_and_a_model_outside_it_is_warned_about(self):  # L3
         said = self.run_cli("agent", "a1", "--task", "t", "--milestone", "m1", "--model", "haiku")
         self.assertEqual(said.returncode, 0)
-        self.assertIn("state: a1 is recorded on haiku, outside the model policy (opus, sonnet, fable): spawning it on haiku "
-                      "needs the user's OK.", said.stderr)
-        self.assertEqual(self.state()["agents"][0]["model"], "haiku")
-        self.assertNotIn("model policy", self.run_cli("agent", "a1", "--model", "fable").stderr)
+        self.assertNotIn("policy", said.stderr)
+        self.assertEqual((self.state()["agents"][0]["model"], self.state()["agents"][0]["effort"]), ("haiku", "high"))
+        self.assertIn("on haiku at medium effort, outside the effort policy", self.run_cli("agent", "a1", "--effort", "medium").stderr)
+        state = self.state()
+        state["agents"][0]["model"] = "gpt"  # a hand-written row: --model takes none outside the table
+        (self.root / "state.json").write_text(json.dumps(state))
+        self.assertIn("state: a1 is recorded on gpt, outside the model policy (opus, sonnet, fable, haiku): spawning it on gpt "
+                      "needs the user's OK.", self.run_cli("agent", "a1", "--effort", "high").stderr)
 
     def test_a_new_worker_takes_its_kinds_model_and_effort(self):
         for aid, skill in [("i1", "implement"), ("t1", "tdd"), ("p1", "prototype"), ("d1", "diagnosing-bugs"), ("r1", "research"), ("n1", "none")]:
@@ -545,19 +549,20 @@ class StageFiveRulesTest(Fleet):
     def test_a_model_given_alone_keeps_its_kinds_effort_when_the_pair_is_in_the_policy(self):
         self.ok("agent", "a1", "--task", "t", "--milestone", "m1", "--skill", "research", "--model", "opus")
         self.ok("agent", "a2", "--task", "t", "--milestone", "m1", "--skill", "research", "--model", "fable")
-        self.ok("agent", "a3", "--task", "t", "--milestone", "m1", "--effort", "xhigh", "--model", "fable")
+        self.ok("agent", "a3", "--task", "t", "--milestone", "m1", "--skill", "research", "--model", "haiku")
         self.ok("agent", "a4", "--task", "t", "--milestone", "m1", "--skill", "research", "--effort", "low")
         got = [(a["model"], a["effort"]) for a in self.state()["agents"]]
-        self.assertEqual(got, [("opus", "medium"), ("fable", "high"), ("fable", "xhigh"), ("sonnet", "low")])
+        self.assertEqual(got, [("opus", "medium"), ("fable", "high"), ("haiku", "high"), ("sonnet", "low")])
 
     def test_an_effort_outside_the_policy_is_recorded_with_a_warning(self):
         said = self.run_cli("agent", "a1", "--task", "t", "--milestone", "m1", "--effort", "low")
         self.assertEqual(said.returncode, 0)
         self.assertIn("state: a1 is recorded on opus at low effort, outside the effort policy (opus medium, high; sonnet low, "
-                      "medium, high; fable high, xhigh): spawning it so needs the user's OK.", said.stderr)
+                      "medium, high; fable high; haiku low, high): spawning it so needs the user's OK.", said.stderr)
         self.assertEqual(self.state()["agents"][0]["effort"], "low")
         self.assertNotIn("policy", self.run_cli("agent", "a1", "--model", "sonnet").stderr)
         self.assertIn("at max effort", self.run_cli("agent", "a1", "--effort", "max", "--model", "fable").stderr)
+        self.assertIn("on fable at xhigh effort", self.run_cli("agent", "a1", "--effort", "xhigh").stderr)
         self.assertIn("at xhigh effort", self.run_cli("agent", "a1", "--model", "opus", "--effort", "xhigh").stderr)
         self.assertNotIn("policy", self.run_cli("agent", "a1", "--status", "done").stderr)
 

@@ -20,9 +20,9 @@ interface RoleTable {
 
 /** The role table (see the module comment). */
 export const ROLES: RoleTable = {
-  pairs: { opus: ["medium", "high"], sonnet: ["low", "medium", "high"], fable: ["high", "xhigh"] },
+  pairs: { opus: ["medium", "high"], sonnet: ["low", "medium", "high"], fable: ["high"], haiku: ["low", "high"] },
   kinds: { research: ["sonnet", "medium"], advisor: ["fable", "high"], "": ["opus", "high"] },
-  alone: { opus: "high", sonnet: "medium", fable: "high" },
+  alone: { opus: "high", sonnet: "medium", fable: "high", haiku: "high" },
 };
 
 /** The worker models the policy approves; any other is the user's to approve, case by case (L3). */

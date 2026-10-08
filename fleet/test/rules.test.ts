@@ -206,13 +206,20 @@ describe("lanes", () => {
 });
 
 describe("models outside the policy (L3)", () => {
-  test("haiku is recorded, with a warning that it is the user's to approve", () => {
+  test("haiku is in the policy; a model outside it, as a hand-written row has, is recorded with a warning", () => {
     const ran = ok("agent", "a1", "--task", "T", "--milestone", "m1", "--model", "haiku");
-    expect(ran.stderr).toContain("state: a1 is recorded on haiku, outside the model policy (opus, sonnet, fable): spawning it on haiku needs the user's OK.");
-    expect(rows("agents")[0]?.["model"]).toBe("haiku");
-    expect(ok("agent", "a1", "--model", "sonnet").stderr).not.toContain("model policy");
-    expect(ok("agent", "a1", "--model", "haiku").stderr).toContain("outside the model policy");
+    expect(ran.stderr).not.toContain("policy");
+    expect(rows("agents")[0]).toMatchObject({ model: "haiku", effort: "high" });
+    expect(ok("agent", "a1", "--effort", "medium").stderr).toContain("on haiku at medium effort, outside the effort policy");
+    expect(ok("agent", "a1", "--model", "sonnet").stderr).not.toContain("policy");
     expect(ok("agent", "a2", "--task", "T", "--milestone", "m1").stderr).not.toContain("model policy");
+
+    const ledger = readJson(join(root, "state.json"));
+
+    writeFileSync(join(root, "state.json"), JSON.stringify({ ...ledger, agents: rows("agents").map((a) => (a["id"] === "a1" ? { ...a, model: "gpt" } : a)) }));
+    expect(ok("agent", "a1", "--effort", "high").stderr).toContain(
+      "state: a1 is recorded on gpt, outside the model policy (opus, sonnet, fable, haiku): spawning it on gpt needs the user's OK.",
+    );
   });
 });
 
@@ -230,20 +237,21 @@ describe("thinking effort and the role table", () => {
   test("a model given alone keeps its kind's effort when the pair is in the policy, else takes its own", () => {
     ok("agent", "a1", "--task", "T", "--milestone", "m1", "--skill", "research", "--model", "opus");
     ok("agent", "a2", "--task", "T", "--milestone", "m1", "--skill", "research", "--model", "fable");
-    ok("agent", "a3", "--task", "T", "--milestone", "m1", "--effort", "xhigh", "--model", "fable");
+    ok("agent", "a3", "--task", "T", "--milestone", "m1", "--skill", "research", "--model", "haiku");
     ok("agent", "a4", "--task", "T", "--milestone", "m1", "--skill", "research", "--effort", "low");
-    expect(rows("agents").map((a) => `${String(a["model"])} ${String(a["effort"])}`)).toEqual(["opus medium", "fable high", "fable xhigh", "sonnet low"]);
+    expect(rows("agents").map((a) => `${String(a["model"])} ${String(a["effort"])}`)).toEqual(["opus medium", "fable high", "haiku high", "sonnet low"]);
   });
 
   test("a pair outside the table is recorded, with a warning that it is the user's to approve", () => {
     const ran = ok("agent", "a1", "--task", "T", "--milestone", "m1", "--effort", "low");
     expect(ran.stderr).toContain(
-      "state: a1 is recorded on opus at low effort, outside the effort policy (opus medium, high; sonnet low, medium, high; fable high, xhigh): spawning it so needs the user's OK.",
+      "state: a1 is recorded on opus at low effort, outside the effort policy (opus medium, high; sonnet low, medium, high; fable high; haiku low, high): spawning it so needs the user's OK.",
     );
     expect(rows("agents")[0]?.["effort"]).toBe("low");
     expect(ok("agent", "a1", "--model", "sonnet").stderr).not.toContain("policy");
     expect(ok("agent", "a1", "--effort", "max", "--model", "fable").stderr).toContain("at max effort");
     expect(ok("agent", "a1", "--model", "opus", "--effort", "xhigh").stderr).toContain("at xhigh effort");
+    expect(ok("agent", "a1", "--model", "fable").stderr).toContain("on fable at xhigh effort");
     expect(ok("agent", "a1", "--status", "done").stderr).not.toContain("policy");
   });
 

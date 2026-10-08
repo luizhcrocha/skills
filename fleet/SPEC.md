@@ -151,10 +151,10 @@ renames it. Milestones are never removed.
   shared\`), where two workers on the same files overwrite each other: record it \`--status queued\` until
   that worker is done, or give the task to that worker.` Checked last, after the step and the log; a
   blocked worker counts, since its edits are still in the copy. An isolated fleet warns instead.
-- A model outside the policy (Opus, Sonnet, Fable; `haiku` is the one `--model` takes) is recorded
-  and warned about, see [Warnings](#warnings) (L3). The page marks it on the worker's row. So is a
-  (model, effort) pair outside the role table, on an `agent` command that gives `--model` or `--effort`;
-  the page shows the effort beside the model and marks only a model outside the policy.
+- A (model, effort) pair outside the role table is recorded and warned about, see [Warnings](#warnings)
+  (L3), on an `agent` command that gives `--model` or `--effort`. Every model `--model` takes is in the
+  table (haiku since 2026-10-08); a model outside it, which only a hand-written row can have, is warned
+  about by name. The page shows the effort beside the model and marks a model outside the table.
 - A worker left done whose report or log reads as unfinished (refused, parked, not met, unmet,
   couldn't, could not, failed to, gave up, incomplete, unfinished, blocked on, waiting on, skipped,
   not done) is warned about on stderr when the command set `--status done` or `--report`. It's
@@ -326,15 +326,15 @@ the values its flags take.
 `ROLES` in state.py and `fleet/src/ledger/roles.ts`, the one place each stack holds these values (the
 oracle's model reads state.py's), so a new table is one edit in each and re-recorded traces:
 
-| | sonnet | opus | fable |
-| :-- | :-- | :-- | :-- |
-| pairs the policy approves | low, medium, high | medium, high | high, xhigh (to escalate) |
-| a new worker's, by skill | research: medium | any other skill: high | `fleet advisor`'s row: high |
-| a model given alone takes | medium | high | high |
+| | haiku | sonnet | opus | fable |
+| :-- | :-- | :-- | :-- | :-- |
+| pairs the policy approves | low, high | low, medium, high | medium, high | high |
+| a new worker's, by skill | | research: medium | any other skill: high | `fleet advisor`'s row: high |
+| a model given alone takes | high | medium | high | high |
 
-`max` is in no pair. A new row given neither `--model` nor `--effort` takes its kind's pair; given an
+`xhigh` and `max` are in no pair: both warn on every model. A new row given neither `--model` nor `--effort` takes its kind's pair; given an
 effort only, its kind's model; given a model only, its kind's effort when that pair is approved, else the
-model's own (`alone`; haiku has none and keeps the kind's). A known row changes only the fields given: a
+model's own (`alone`). A known row changes only the fields given: a
 new `--model` leaves the effort as it was. A row recorded before efforts has no `effort` key; nothing
 fills it (validation fills `model`, not `effort`), `show` prints `-`, `fleet brief` names no effort, and
 the policy judges it by its model alone. The ledger has no marker for a monitor or watcher row, so no
@@ -452,10 +452,10 @@ After the handler succeeds, before validation, on stderr, in this order (not for
    `src/a/b.ts` don't meet; `src/**` and `src/a/b.ts` do, and so do `src/x.ts` and `src/*.ts`.
    Decided on the product of the two globs' automata (`lanes.py`, `fleet/src/ledger/lanes.ts`). In a
    fleet whose workers share one working copy the same meeting is refused instead (`agent`, above).
-7. **A model outside the policy** (`state: a1 is recorded on haiku, outside the model policy (opus,
-   sonnet, fable): spawning it on haiku needs the user's OK.`), else **a pair outside the role table**
-   (`state: a1 is recorded on opus at low effort, outside the effort policy (opus medium, high; sonnet
-   low, medium, high; fable high, xhigh): spawning it so needs the user's OK.`), on an `agent` command
+7. **A pair outside the role table** (`state: a1 is recorded on opus at low effort, outside the effort
+   policy (opus medium, high; sonnet low, medium, high; fable high; haiku low, high): spawning it so needs
+   the user's OK.`), or, on a hand-written row, **a model outside it** (`state: a1 is recorded on gpt,
+   outside the model policy (opus, sonnet, fable, haiku): spawning it on gpt needs the user's OK.`), on an `agent` command
    that gives `--model` or `--effort`, judged on the row as the command leaves it (L3). A row with no
    effort is judged by its model alone.
 8. *TypeScript only* (Python's ledger has no `workspaces`, and no trace does): **a done worker's

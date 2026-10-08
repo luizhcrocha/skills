@@ -368,9 +368,9 @@ function Workers(props: { readonly rows: () => readonly Agent[] }): JSX.Element 
                         <td class="c-model" data-label="Model">
                           {model()}
                           <Show when={a().effort}>{(effort) => <span class="faint"> {effort()}</span>}</Show>
-                          <Show when={!["opus", "sonnet", "fable"].includes(model())}>
+                          <Show when={!["opus", "sonnet", "fable", "haiku"].includes(model())}>
                             {" "}
-                            <span class="pill warning" title="Outside the model policy (Opus, Sonnet, Fable): yours to approve">
+                            <span class="pill warning" title="Outside the model policy (Opus, Sonnet, Fable, Haiku): yours to approve">
                               needs your OK
                             </span>
                           </Show>

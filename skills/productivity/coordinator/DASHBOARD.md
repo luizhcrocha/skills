@@ -35,11 +35,11 @@ agents[]     one row per worker, in spawn order (its position picks its chart co
   name_by    who named it: user (on the page), coordinator (`--name`), session (its Agent call); absent while the name is the id
   task       one sentence
   skill      implement | diagnosing-bugs | prototype | research | tdd | none
-  model      opus | sonnet | haiku | fable (haiku is outside the policy: recorded with a warning, the user's to approve)
+  model      opus | sonnet | haiku | fable
   effort     low | medium | high | xhigh | max: the thinking effort it is spawned at (`fleet brief` prints it beside
              the model). Without --model or --effort a new row takes its skill's pair: research sonnet medium, any
-             other opus high. A pair outside the role table (sonnet low-high, opus medium-high, fable high or
-             xhigh to escalate; max on none) is recorded with a warning, the user's to approve. Absent on a row
+             other opus high. A pair outside the role table (haiku low or high, sonnet low-high, opus
+             medium-high, fable high; xhigh and max on none) is recorded with a warning, the user's to approve. Absent on a row
              recorded before efforts were: unset, and the brief then names no effort
   status     queued | running | blocked | done | failed | stopped
   lane[]     files or globs the worker may edit

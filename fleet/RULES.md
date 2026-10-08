@@ -28,7 +28,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | C8 | C, route | Resolve each skill's path once; `implement` is read with the Read tool, the others called with the Skill tool | mech | the skill's SKILL.md frontmatter | print | **stage 5**: `fleet brief` |
 | C9 | C, model | Pick the model by where the difficulty is; Fable for decisive single roles | judg | | | prose |
 | C10 | C, model | Record the model on the row (`--model`) | mech | row | print | **stage 5**: `fleet brief` names the model to spawn on; since, the effort too (`--effort`, defaults by skill from the role table, SPEC.md) |
-| C11 | C, model | Any model other than the three approved is the user's to approve | mech | `--model` | warn, page | **Luiz** (L3, decided): `agent --model haiku` (any model outside the three) is recorded with a warning that it is the user's to approve (both); the page marks the row |
+| C11 | C, model | Any model or (model, effort) pair outside the role table is the user's to approve | mech | `--model`, `--effort` | warn, page | **Luiz** (L3, decided; haiku joined the table 2026-10-08): `agent` that leaves a row on a pair outside the table (fable xhigh, any max, opus low, haiku medium) records it with a warning that it is the user's to approve (both); the page marks a model outside the table |
 | C12 | C, model | A new default model: move every agent, say who moved | judg | | | prose |
 | C13 | C, brief | The brief opens with the line `agent` printed and carries task, done criterion, skill and path, lane, workspace | mech | row, `workspaces[]` | print | **stage 5**: `fleet brief` composes it |
 | C14 | C, brief | A checkable completion criterion | mech (present) / judg (checkable) | row's `brief` | warn | **stage 5**: `fleet brief` warns when none is recorded |
@@ -172,7 +172,9 @@ choice follows the question.
 - **L3. Haiku.** `--model` accepts `haiku`; the coordinator's SKILL.md approves only Opus, Sonnet and
   Fable. *Decided: accepted with a warning.* `agent --model` outside the three records it and prints
   `state: a1 is recorded on haiku, outside the model policy (opus, sonnet, fable): spawning it on haiku
-  needs the user's OK.` (both); the page marks the row "needs your OK".
+  needs the user's OK.` (both); the page marks the row "needs your OK". *Revised 2026-10-08:* haiku is in
+  the role table (low or high), so `--model haiku` no longer warns; a pair outside the table does (SPEC.md,
+  The role table).
 - **L4. Decisions with a manager present.** A warning on `decision --asks user` while a manager is
   served would catch the forgotten flag, and fire on every credential. *Decided: no warning; prose.*
 - **L5. Untied decisions.** A warning on a decision opened with neither `--step`, `--milestone` nor
