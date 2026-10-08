@@ -6,6 +6,7 @@ import { answeredGrill, failedAnswer, failureWords } from "../health.ts";
 import { pyRepr } from "../json.ts";
 import { EVENT_KINDS, MODELS, NEEDS, SEVERITIES, SKILLS } from "./commands.ts";
 import type { Ledger } from "./model.ts";
+import { EFFORTS } from "./roles.ts";
 import { AGENT_STATUSES, ASKS, SHARED_KINDS, STATUSES, STEP_STATUSES, WORKSPACE_MODES } from "./validate.ts";
 
 /** The command cheat sheet `show` ends with: each command with the values its flags take. */
@@ -16,7 +17,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
   step ID --milestone M --title T [--status ${STEP_STATUSES.join("|")}] [--agent A]
         [--before STEP | --after STEP] [--remove REASON]
   agent ID --task T --milestone M [--name N] [--skill ${SKILLS.join("|")}] [--model ${MODELS.join("|")}]
-        [--lane PATH...] [--step S] [--brief B] [--status ${AGENT_STATUSES.join("|")}]
+        [--effort ${EFFORTS.join("|")}] [--lane PATH...] [--step S] [--brief B] [--status ${AGENT_STATUSES.join("|")}]
         [--task-id ID | --tokens N --duration-ms N] [--report R] [--log TEXT] [--important]
   roadblock ID --title T --detail D --severity ${SEVERITIES.join("|")} --needs ${NEEDS.join("|")} [--agent A]
         [--decision D] [--resolved | --open]
@@ -68,7 +69,7 @@ export function showLines(ledger: Ledger, said: readonly Message[] = []): string
     const rounds = (a.rounds ?? 1) > 1 ? `  round ${pyRepr(a.rounds ?? 1)}` : "";
     const lane = a.lane.join(",");
     lines.push(
-      `  agent ${width(a.id, 16)} ${width(a.status, 8)} ${width(a.skill ?? "none", 15)} ${width(a.model ?? "opus", 6)} ` +
+      `  agent ${width(a.id, 16)} ${width(a.status, 8)} ${width(a.skill ?? "none", 15)} ${width(a.model ?? "opus", 6)} ${width(a.effort === undefined || a.effort === "" ? "-" : a.effort, 6)} ` +
         `${right(pyRepr(a.tokens ?? 0), 8)} tok  lane=${lane === "" ? "-" : lane}${rounds}`,
     );
   }

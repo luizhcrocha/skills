@@ -86,6 +86,7 @@ describe("show", () => {
       "--status blocked|done|failed|queued|running|stopped",
       "--skill implement|diagnosing-bugs|prototype|research|tdd|none",
       "--model opus|sonnet|haiku|fable",
+      "--effort low|medium|high|xhigh|max",
       "--kind decision|input|secret|action",
     ]) {
       expect(out).toContain(word);

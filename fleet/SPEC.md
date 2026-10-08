@@ -128,9 +128,10 @@ renames it. Milestones are never removed.
   of `landings` is current is refused: `l1 (<title>) has the turn: one landing at a time. Close it
   (\`step l1 --status done\`) or give it back (\`step l1 --status pending\`) first`.
 
-**agent** `ID [--task T --milestone M] [--skill implement|diagnosing-bugs|prototype|research|tdd|none] [--model opus|sonnet|haiku|fable] [--lane PATH...] [--status queued|running|blocked|done|failed|stopped] [--tokens N] [--duration-ms N] [--task-id ID] [--report R] [--brief B] [--name N] [--step S] [--log TEXT] [--important]`
+**agent** `ID [--task T --milestone M] [--skill implement|diagnosing-bugs|prototype|research|tdd|none] [--model opus|sonnet|haiku|fable] [--effort low|medium|high|xhigh|max] [--lane PATH...] [--status queued|running|blocked|done|failed|stopped] [--tokens N] [--duration-ms N] [--task-id ID] [--report R] [--brief B] [--name N] [--step S] [--log TEXT] [--important]`
 - `--milestone`, when given, must be known: `unknown milestone 'M' (the roadmap has: m1, m2)`.
-- New: needs `--milestone` and `--task`. Defaults: name = id, skill none, model opus, status
+- New: needs `--milestone` and `--task`. Defaults: name = id, skill none, model and effort by the
+  [role table](#the-role-table) (research: sonnet medium; any other skill: opus high), status
   running, lane [], tokens 0, duration_ms 0, rounds 1, brief "", report "", `started` = `updated`
   = now; `task_id` when given; `name_by: "coordinator"` (after `task_id`) when `--name` is given. Logs `spawned` (`--log`, else `Spawned on <model> following <skill>.`).
   `--step S` marks S current with this agent (unknown S refused). Prints
@@ -151,7 +152,9 @@ renames it. Milestones are never removed.
   that worker is done, or give the task to that worker.` Checked last, after the step and the log; a
   blocked worker counts, since its edits are still in the copy. An isolated fleet warns instead.
 - A model outside the policy (Opus, Sonnet, Fable; `haiku` is the one `--model` takes) is recorded
-  and warned about, see [Warnings](#warnings) (L3). The page marks it on the worker's row.
+  and warned about, see [Warnings](#warnings) (L3). The page marks it on the worker's row. So is a
+  (model, effort) pair outside the role table, on an `agent` command that gives `--model` or `--effort`;
+  the page shows the effort beside the model and marks only a model outside the policy.
 - A worker left done whose report or log reads as unfinished (refused, parked, not met, unmet,
   couldn't, could not, failed to, gave up, incomplete, unfinished, blocked on, waiting on, skipped,
   not done) is warned about on stderr when the command set `--status done` or `--report`. It's
@@ -313,10 +316,29 @@ known. New: needs url and title, kind defaults to dev, `since` = now, logs `Page
 **show**: prints the ledger and the command cheat sheet; writes nothing. Pinned lines:
 `<project> [<status>(, manager)(, shared working copy)] <now>`; per milestone `  <id> <title> (<done>/<steps>)` and
 per step `    <id:<6> <status:<8> <title>( @agent)`; per worker
-`  agent <id:<16> <status:<8> <skill:<15> <model:<6> <tokens:>8> tok  lane=<a,b or ->( round N)`;
+`  agent <id:<16> <status:<8> <skill:<15> <model:<6> <effort or -:<6> <tokens:>8> tok  lane=<a,b or ->( round N)`;
 per roadblock, decision, link and kept note a line with its number; then
 `  <N> events, updated <updated>` and the cheat sheet. The cheat sheet lists each command with
 the values its flags take.
+
+### The role table
+
+`ROLES` in state.py and `fleet/src/ledger/roles.ts`, the one place each stack holds these values (the
+oracle's model reads state.py's), so a new table is one edit in each and re-recorded traces:
+
+| | sonnet | opus | fable |
+| :-- | :-- | :-- | :-- |
+| pairs the policy approves | low, medium, high | medium, high | high, xhigh (to escalate) |
+| a new worker's, by skill | research: medium | any other skill: high | `fleet advisor`'s row: high |
+| a model given alone takes | medium | high | high |
+
+`max` is in no pair. A new row given neither `--model` nor `--effort` takes its kind's pair; given an
+effort only, its kind's model; given a model only, its kind's effort when that pair is approved, else the
+model's own (`alone`; haiku has none and keeps the kind's). A known row changes only the fields given: a
+new `--model` leaves the effort as it was. A row recorded before efforts has no `effort` key; nothing
+fills it (validation fills `model`, not `effort`), `show` prints `-`, `fleet brief` names no effort, and
+the policy judges it by its model alone. The ledger has no marker for a monitor or watcher row, so no
+kind gives one (sonnet low is approved when given).
 
 ## The ledger: state.json
 
@@ -326,7 +348,8 @@ Every list is in the order the user reads it. Stamps are `clock.stamp()`.
 role          "manager" in a manager's ledger, absent in a coordinator's
 project, goal, status (running|paused|blocked|done), now, now_at, started, updated
 roadmap[]     {id, title, steps[]: {id, title, status (done|current|pending|blocked), agent|null}}
-agents[]      {id, name, task, skill, model, status (queued|running|blocked|done|failed|stopped),
+agents[]      {id, name, task, skill, model, effort? (low|medium|high|xhigh|max; absent on older rows),
+               status (queued|running|blocked|done|failed|stopped),
                lane[], milestone, tokens, duration_ms, rounds, started, updated, brief, report,
                task_id?, measured? ("by hand" | the transcript's mtime),
                name_by? ("user" | "coordinator" | "session"; absent: the name is the id)}
@@ -430,8 +453,11 @@ After the handler succeeds, before validation, on stderr, in this order (not for
    Decided on the product of the two globs' automata (`lanes.py`, `fleet/src/ledger/lanes.ts`). In a
    fleet whose workers share one working copy the same meeting is refused instead (`agent`, above).
 7. **A model outside the policy** (`state: a1 is recorded on haiku, outside the model policy (opus,
-   sonnet, fable): spawning it on haiku needs the user's OK.`) on an `agent` command that gives such
-   a `--model` (L3).
+   sonnet, fable): spawning it on haiku needs the user's OK.`), else **a pair outside the role table**
+   (`state: a1 is recorded on opus at low effort, outside the effort policy (opus medium, high; sonnet
+   low, medium, high; fable high, xhigh): spawning it so needs the user's OK.`), on an `agent` command
+   that gives `--model` or `--effort`, judged on the row as the command leaves it (L3). A row with no
+   effort is judged by its model alone.
 8. *TypeScript only* (Python's ledger has no `workspaces`, and no trace does): **a done worker's
    workspace not pruned** (`state: a1's workspace a1 still there though its worker is done: bring its
    changes into the stack, then prune it (\`fleet ws <dir> prune\`, a dry run, then --apply), or hand it
@@ -1426,7 +1452,8 @@ rule's disposition are in [RULES.md](RULES.md)). Beside the refusals and warning
   and describes nothing (no `jj new`, `jj edit`, `jj rebase`, `jj describe`, nor `split`, `squash`,
   `commit`, `abandon`, `restore`), and that the coordinator splits the copy by lane paths into one
   described change per worker. On stderr, for the coordinator: a missing completion criterion, a lane
-  with no workspace (isolated only), and the model to spawn it on with the `--task-id` to record after. A worker
+  with no workspace (isolated only), and the model and effort to spawn it on (`model: "opus", effort:
+  "high"`; the model alone for a row with no effort) with the `--task-id` to record after. A worker
   with no row is refused: it is recorded first. Matched by id, then by name.
 - `fleet turn [DIR]` says whether the fleet holds the landing turn: the manager's `landings` step whose
   agent is the fleet's registry name is current. Exit 0 when it does, when no manager is served (the
@@ -1449,7 +1476,8 @@ recommendation attached.
 `fleet state`, so the coordinator, the ledger's one writer, runs it):
 
 - **The row.** The worker row `advisor`: task `Answers the fleet's judgement questions before they
-  reach the user`, skill none, no lane, model fable (or the row's, or `--model`), status **queued**. New:
+  reach the user`, skill none, no lane, model fable (or the row's, or `--model`) at the role table's
+  effort for it (high, on fable and on opus), passed as `--effort` on every run, status **queued**. New:
   in the milestone of the current step, else the first; logs `Advisor started on <model>.` (or
   `--log`). Known: model, status, `--task-id` and `--log` as given. An empty roadmap is refused, and so
   is a model other than fable or opus (`advisor: the advisor runs on fable, or on opus when Fable is
@@ -1460,9 +1488,9 @@ recommendation attached.
 - **Why a row.** It puts `advisor` on the chat roster (`say --as advisor`, `@advisor`), and its model
   and tokens on the page (`--task-id` measures them from its transcript).
 - **Output.** Without `--task-id`: the advisor's prompt on stdout (its DIR, the CLI's path, where the
-  ledger, the brief and the chat are, the line that records an answer, its model), and on stderr how to
-  spawn it (`subagent_type "tstack:advisor"`, `model`, in the background) and how to restart it on Opus.
-  With `--task-id`: `advisor recorded on <model> as <ID>`, and on stderr the line for "This fleet" in
+  ledger, the brief and the chat are, the line that records an answer, its model and effort), and on stderr how to
+  spawn it (`subagent_type "tstack:advisor"`, `model`, `effort`, in the background) and how to restart it on Opus.
+  With `--task-id`: `advisor recorded on <model> at <effort> effort as <ID>`, and on stderr the line for "This fleet" in
   `brief.md` that tells workers to `SendMessage <ID>` before asking the user.
 - **Fable unavailable.** Claude Code has no fallback for a subagent's model on limits, credits or
   access (`--fallback-model` covers the main loop's overload only). The Agent call's `model` overrides
@@ -1574,7 +1602,8 @@ new implementation once it's the reference. Either way, review the diff.
 
 `oracle/test_model.py` drives 25 random sequences of 60 steps (a fresh seed each run;
 `FLEET_MODEL_SEED`, `FLEET_MODEL_SEQS`, `FLEET_MODEL_STEPS`) through state.py and chat.py, with a
-model: milestones and their step order, workers (status, milestone, rounds, name, tokens, lane), the
+model: milestones and their step order, workers (status, milestone, rounds, name, tokens, lane, model,
+effort, the last two by the role table read from state.py), the
 fleet's `workspace_mode` (two sequences in five start shared),
 decisions (kind, status, number, place, options, recommendation, hold), roadblocks, kept notes, links,
 the event count, and the chat's messages. The clock moves 0-25 minutes per step. Checked after
@@ -1586,7 +1615,8 @@ every step:
 - stderr is exactly the warnings the model expects: the stale Now line with its age in minutes,
   live rows in a paused or done fleet, a chat nobody reads (computed on the ledger before the
   command), a Now line naming a closed decision, an answer on the page not recorded, decisions left
-  open by `set --status done`, lanes that meet in an isolated fleet (a refusal in a shared one); on a
+  open by `set --status done`, lanes that meet in an isolated fleet (a refusal in a shared one), a model
+  or a (model, effort) pair outside the role table; on a
   validation refusal, those plus the reason, and nothing on stdout;
 - `show`'s first line, milestone lines, worker lines, decision lines and event count, against
   `state.json`;

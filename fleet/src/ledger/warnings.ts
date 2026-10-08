@@ -219,16 +219,6 @@ export function sharedOverlap(ledger: Ledger, id: string): string | undefined {
   );
 }
 
-/** The worker models the policy approves; any other is the user's to approve, case by case (L3). */
-export const POLICY_MODELS: readonly string[] = ["opus", "sonnet", "fable"];
-
-/** When `agent` records worker `id` on a model outside the policy: accepted, and the user's to approve. */
-export function offPolicy(id: string, model: string | undefined): string | undefined {
-  if (model === undefined || model === "" || POLICY_MODELS.includes(model)) return undefined;
-
-  return `state: ${id} is recorded on ${model}, outside the model policy (${POLICY_MODELS.join(", ")}): spawning it on ${model} needs the user's OK.`;
-}
-
 /** A workspace `fleet ws add` recorded and `prune` has not removed. */
 export interface ActiveWorkspace {
   readonly id: string;

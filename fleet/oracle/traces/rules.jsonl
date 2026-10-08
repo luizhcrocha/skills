@@ -1,4 +1,4 @@
-{"trace": 1, "name": "rules", "about": "The rules Luiz decided on 2026-10-01 that both implementations keep: a model outside the policy is recorded with a warning (L3), lanes meet only when some path matches both globs (L7), and a roadblock changed to need the user names its decision (L8). Rendered once, at the end."}
+{"trace": 1, "name": "rules", "about": "The rules Luiz decided on 2026-10-01 that both implementations keep: a model outside the policy is recorded with a warning (L3), and so is a (model, effort) pair outside the role table, a new worker taking its kind's model and effort, lanes meet only when some path matches both globs (L7), and a roadblock changed to need the user names its decision (L8). Rendered once, at the end."}
 {"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "M", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "agent", "a1", "--task", "T", "--milestone", "m1", "--model", "haiku", "--lane", "src/*.ts", "--no-render"]}
@@ -8,6 +8,12 @@
 {"cli": "state", "argv": ["$DIR", "agent", "a3", "--status", "queued", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "agent", "a4", "--task", "T", "--milestone", "m1", "--lane", "src/[!a]*.ts", "docs/a.md", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "agent", "a5", "--task", "T", "--milestone", "m1", "--lane", "src/y/z/w.ts", "--model", "haiku", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a6", "--task", "T", "--milestone", "m1", "--skill", "research", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a6", "--effort", "low", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a7", "--task", "T", "--milestone", "m1", "--skill", "research", "--model", "fable", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a7", "--effort", "xhigh", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a8", "--task", "T", "--milestone", "m1", "--effort", "low", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "agent", "a8", "--model", "fable", "--effort", "max", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "roadblock", "r1", "--title", "T", "--detail", "D", "--severity", "warning", "--needs", "coordinator", "--agent", "a2", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "roadblock", "r1", "--needs", "user", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "d1", "--kind", "input", "--title", "Region", "--question", "Which?", "--why", "w", "--no-render"]}

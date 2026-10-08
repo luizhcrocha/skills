@@ -216,6 +216,58 @@ describe("models outside the policy (L3)", () => {
   });
 });
 
+describe("thinking effort and the role table", () => {
+  test("a new worker takes its kind's model and effort", () => {
+    const kinds = [["i1", "implement"], ["t1", "tdd"], ["p1", "prototype"], ["d1", "diagnosing-bugs"], ["r1", "research"], ["n1", "none"]];
+
+    for (const [id, skill] of kinds) expect(ok("agent", id ?? "", "--task", "T", "--milestone", "m1", "--skill", skill ?? "").stderr).not.toContain("policy");
+    expect(Object.fromEntries(rows("agents").map((a) => [a["id"], `${String(a["model"])} ${String(a["effort"])}`]))).toEqual({
+      i1: "opus high", t1: "opus high", p1: "opus high", d1: "opus high", r1: "sonnet medium", n1: "opus high",
+    });
+    expect(Object.keys(rows("agents")[0] ?? {}).slice(0, 6)).toEqual(["id", "name", "task", "skill", "model", "effort"]);
+  });
+
+  test("a model given alone keeps its kind's effort when the pair is in the policy, else takes its own", () => {
+    ok("agent", "a1", "--task", "T", "--milestone", "m1", "--skill", "research", "--model", "opus");
+    ok("agent", "a2", "--task", "T", "--milestone", "m1", "--skill", "research", "--model", "fable");
+    ok("agent", "a3", "--task", "T", "--milestone", "m1", "--effort", "xhigh", "--model", "fable");
+    ok("agent", "a4", "--task", "T", "--milestone", "m1", "--skill", "research", "--effort", "low");
+    expect(rows("agents").map((a) => `${String(a["model"])} ${String(a["effort"])}`)).toEqual(["opus medium", "fable high", "fable xhigh", "sonnet low"]);
+  });
+
+  test("a pair outside the table is recorded, with a warning that it is the user's to approve", () => {
+    const ran = ok("agent", "a1", "--task", "T", "--milestone", "m1", "--effort", "low");
+    expect(ran.stderr).toContain(
+      "state: a1 is recorded on opus at low effort, outside the effort policy (opus medium, high; sonnet low, medium, high; fable high, xhigh): spawning it so needs the user's OK.",
+    );
+    expect(rows("agents")[0]?.["effort"]).toBe("low");
+    expect(ok("agent", "a1", "--model", "sonnet").stderr).not.toContain("policy");
+    expect(ok("agent", "a1", "--effort", "max", "--model", "fable").stderr).toContain("at max effort");
+    expect(ok("agent", "a1", "--model", "opus", "--effort", "xhigh").stderr).toContain("at xhigh effort");
+    expect(ok("agent", "a1", "--status", "done").stderr).not.toContain("policy");
+  });
+
+  test("a row from before efforts reads as unset: show prints -, the brief names no effort", () => {
+    ok("agent", "a1", "--task", "T", "--milestone", "m1");
+
+    const ledger = readJson(join(root, "state.json"));
+
+    const agents = (asArray(ledger["agents"]) ?? []).map((a) => {
+      const { effort: _effort, ...rest } = asObject(a) ?? {};
+
+      return rest;
+    });
+
+    writeFileSync(join(root, "state.json"), JSON.stringify({ ...ledger, agents }));
+    expect(ok("show").stdout).toContain("  agent a1               running  none            opus   -             0 tok");
+    expect(fleet(["brief", root, "a1"], env).stderr).toContain('spawn a1 on model: "opus" (run_in_background)');
+    expect(ok("agent", "a1", "--model", "sonnet").stderr).not.toContain("policy");
+    expect(rows("agents")[0]).not.toHaveProperty("effort");
+    ok("agent", "a1", "--effort", "medium");
+    expect(Object.keys(rows("agents")[0] ?? {}).at(-1)).toBe("effort");
+  });
+});
+
 describe("a roadblock changed to need the user (L8)", () => {
   test("names its decision, as a new one does", () => {
     ok("roadblock", "r1", "--title", "T", "--detail", "D", "--severity", "warning", "--needs", "coordinator");
@@ -345,7 +397,7 @@ describe("fleet brief", () => {
     expect(lines).toContain("Lane: src/a.ts. You edit these; everything else is read-only.");
     expect(lines).toContain("Step: s1 (the schema), in milestone m1 (M).");
     expect(ran.stderr).toContain(`brief: a1 has a lane and no workspace: \`fleet ws ${root} add a1\``);
-    expect(ran.stderr).toContain('spawn a1 on model: "sonnet"');
+    expect(ran.stderr).toContain('spawn a1 on model: "sonnet", effort: "high" (run_in_background)');
     const missing = fleet(["brief", root, "a9"], env);
     expect(missing.code).toBe(1);
     expect(missing.stderr).toContain("brief: no worker 'a9'");

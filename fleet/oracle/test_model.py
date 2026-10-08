@@ -4,8 +4,9 @@ A dumb in-memory model of the ledger (milestones and their steps, workers, decis
 kept notes, links, the event count, the chat's messages) is driven by random command sequences
 together with the real state and chat CLIs, through the oracle runner (run.py). After every step
 the test checks the exit code the model predicts, that a refused command wrote nothing, that the
-ledger's shape matches the model, the warnings the model expects on stderr (a stale Now line, live
-rows in a paused fleet, a chat nobody reads, a Now line naming a closed decision, lanes that meet), the
+ledger's shape matches the model (a worker's model and effort among it), the warnings the model expects on stderr (a stale Now line, live
+rows in a paused fleet, a chat nobody reads, a Now line naming a closed decision, lanes that meet, a
+model or an effort outside the role table), the
 refusal of lanes that meet in a fleet sharing one working copy (`set --workspaces shared`), `show` against
 state.json, `inbox` against the model's open messages, and invariants that need no model: events
 and chat only grow, numbers once given stay, a closed decision never changes.
@@ -36,6 +37,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run  # noqa: E402
 
+# The role table's values are read from the oracle, so a new table is one edit; the rules over it are the model's own.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "skills" / "productivity" / "coordinator" / "scripts"))
+from state import ROLES  # noqa: E402
+
 LIVE = {"running", "queued", "blocked"}
 STALE_S = 30 * 60
 GRACE_S = 10 * 60
@@ -50,7 +55,9 @@ NAMES = ["impl", "coordinator", "a2"]           # "coordinator" is the chat's; "
 DECISIONS = ["d1", "d2", "d3", "D1", "D2", "I1"]  # capitals are numbers when a row has them
 ROADBLOCKS = ["r1", "r2", "R1"]
 MODELS = ["opus", "sonnet", "haiku", "fable"]
-POLICY_MODELS = ("opus", "sonnet", "fable")  # L3: any other is accepted with a warning
+POLICY_MODELS = tuple(ROLES["pairs"])  # L3: any other model is accepted with a warning
+EFFORTS = ["low", "medium", "high", "xhigh", "max"]  # any pair outside ROLES["pairs"] is accepted with a warning
+SKILLS = ["implement", "research", "none"]
 KEPT = ["k1", "k2"]
 LINKS = ["l1", "l2", "L1"]
 # Lane entries, and which pairs meet (L7: some path matches both). A plain path covers what is under it; `*` stays
@@ -185,8 +192,17 @@ class Model:
         if a is None:
             if "milestone" not in c or "task" not in c:
                 raise Refused("new agent needs --task --milestone")
+            kind_model, kind_effort = ROLES["kinds"].get(c.get("skill", "none"), ROLES["kinds"][""])
+            model = c.get("model", kind_model)
+            if "effort" in c:
+                effort = c["effort"]
+            elif "model" not in c or kind_effort in ROLES["pairs"].get(model, []):
+                effort = kind_effort
+            else:  # a model given alone whose kind's effort is outside its pairs takes its own
+                effort = ROLES["alone"].get(model, kind_effort)
             self.agents[aid] = {"name": c.get("name") or aid, "status": c.get("status") or "running",
-                                "milestone": c["milestone"], "rounds": 1, "tokens": 0, "lane": list(c.get("lane", []))}
+                                "milestone": c["milestone"], "rounds": 1, "tokens": 0, "lane": list(c.get("lane", [])),
+                                "model": model, "effort": effort}
             self.log()
             if c.get("step"):
                 self.set_step(c["step"], "current", aid)
@@ -195,7 +211,7 @@ class Model:
             return
         if a["status"] == "done" and c.get("status") == "running":
             a["rounds"] += 1
-        for key in ("name", "status", "milestone", "tokens"):
+        for key in ("name", "status", "milestone", "tokens", "model", "effort"):
             if key in c:
                 a[key] = c[key]
         if "lane" in c:
@@ -507,8 +523,12 @@ class Model:
             found["answer"] = "state: the user answered"
         if c["cmd"] == "set" and c.get("status") == "done" and any(d["status"] == "open" for d in self.decisions.values()):
             found["open"] = "state: the fleet is done with"
-        if c["cmd"] == "agent" and c.get("model") not in (None, *POLICY_MODELS):
-            found["model"] = "outside the model policy"
+        if c["cmd"] == "agent" and ("model" in c or "effort" in c):
+            a = self.agents[c["id"]]
+            if a["model"] not in POLICY_MODELS:
+                found["model"] = "outside the model policy"
+            elif a["effort"] not in ROLES["pairs"][a["model"]]:
+                found["model"] = f"on {a['model']} at {a['effort']} effort, outside the effort policy"
         if c["cmd"] == "agent" and self.mode != "shared" and self.starts_lane(c) and self.lane_hits(c["id"]):
             found["lanes"] = f"state: {c['id']}'s lane overlaps"
         return found
@@ -615,7 +635,8 @@ class Model:
         return {
             "status": self.status, "now": self.now, "workspace_mode": self.mode,
             "roadmap": [[mid, [[s, self.steps[s]["status"], self.steps[s]["agent"]] for s in steps]] for mid, steps in self.milestones.items()],
-            "agents": [[k, a["status"], a["milestone"], a["rounds"], a["name"], a["tokens"], a["lane"]] for k, a in self.agents.items()],
+            "agents": [[k, a["status"], a["milestone"], a["rounds"], a["name"], a["tokens"], a["lane"], a["model"], a["effort"]]
+                       for k, a in self.agents.items()],
             "decisions": [[k, d["kind"], d["status"], d["ref"], d["step"], d["milestone"], d["agent"], d.get("held")] for k, d in self.decisions.items()],
             "roadblocks": [[k, r["resolved"], r["ref"], r["agent"], r["decision"]] for k, r in self.roadblocks.items()],
             "kept": None if self.kept is None else [[k, v] for k, v in self.kept.items()],
@@ -628,7 +649,8 @@ def shape_of(state: dict) -> dict:
     return {
         "status": state["status"], "now": state["now"], "workspace_mode": state.get("workspace_mode"),
         "roadmap": [[m["id"], [[s["id"], s["status"], s["agent"]] for s in m["steps"]]] for m in state["roadmap"]],
-        "agents": [[a["id"], a["status"], a["milestone"], a["rounds"], a["name"], a["tokens"], a["lane"]] for a in state["agents"]],
+        "agents": [[a["id"], a["status"], a["milestone"], a["rounds"], a["name"], a["tokens"], a["lane"], a["model"], a.get("effort")]
+                   for a in state["agents"]],
         "decisions": [[d["id"], d["kind"], d["status"], d["ref"], d["step"], d["milestone"], d["agent"], d.get("held")] for d in state["decisions"]],
         "roadblocks": [[r["id"], r["resolved"], r["ref"], r["agent"], r["decision"]] for r in state["roadblocks"]],
         "kept": None if "kept" not in state else [[k["id"], k["text"]] for k in state["kept"]],
@@ -683,7 +705,11 @@ def gen(rng: random.Random, m: Model) -> dict:
         c = {"cmd": "agent", "id": aid}
         if maybe(0.15):
             c["model"] = pick(MODELS)
+        if maybe(0.15):
+            c["effort"] = pick(EFFORTS)
         if aid not in m.agents:
+            if maybe(0.3):
+                c["skill"] = pick(SKILLS)
             c.update(task="T", milestone=pick(list(m.milestones) or MILESTONES) if maybe(0.9) else "m9")
             if maybe(0.1):
                 del c["task"]
@@ -842,7 +868,7 @@ def to_step(c: dict, clock: str, render: bool, next_id: int) -> dict:
     elif cmd not in ("show", "note", "set"):
         argv += [c["id"]]
     flags = {"status", "now", "title", "milestone", "agent", "before", "after", "remove", "task", "name", "step", "log",
-             "tokens", "model", "detail", "severity", "needs", "decision", "kind", "question", "why", "recommend", "reason",
+             "tokens", "model", "effort", "skill", "detail", "severity", "needs", "decision", "kind", "question", "why", "recommend", "reason",
              "secret", "manual", "supersedes", "decide", "resolution", "withdraw", "url", "done", "log", "hold", "workspaces"}
     if cmd not in ("event", "park", "keep"):
         for key, value in c.items():
@@ -952,7 +978,8 @@ def check_step(c: dict, step: dict, expected: tuple[int, dict], got: dict, befor
             done = sum(s["status"] == "done" for s in x["steps"])
             need(f"  {x['id']} {x['title']} ({done}/{len(x['steps'])})" in out, f"show leaves out milestone {x['id']}")
         for a in new["agents"]:
-            need(any(line.startswith(f"  agent {a['id']:<16} {a['status']:<8}") for line in out), f"show leaves out agent {a['id']}")
+            row = f"  agent {a['id']:<16} {a['status']:<8} {a['skill']:<15} {a['model']:<6} {a.get('effort') or '-':<6} "
+            need(any(line.startswith(row) for line in out), f"show leaves out agent {a['id']}, or its model and effort")
         for d in new["decisions"]:
             need(any(f"{d['ref']} decision {d['id']} " in line for line in out), f"show leaves out decision {d['id']}")
         need(f"  {len(new['events'])} events, updated {new['updated']}" in out, "show's event count")

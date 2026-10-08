@@ -44,6 +44,8 @@ export interface Agent {
   task: string;
   skill?: string;
   model?: string;
+  /** The thinking effort to spawn it at; absent on a row recorded before efforts were. */
+  effort?: string;
   status: string;
   lane: string[];
   milestone: string;
@@ -478,6 +480,7 @@ export const AGENT_KEYS = [
   "task",
   "skill",
   "model",
+  "effort",
   "status",
   "lane",
   "milestone",
@@ -521,6 +524,7 @@ function readAgent(object: JsonObject): Fields | Agent {
   present(row, {
     skill: f.optStr("skill"),
     model: f.optStr("model"),
+    effort: f.optStr("effort"),
     tokens: f.optNumber("tokens"),
     duration_ms: f.optNumber("duration_ms"),
     rounds: f.optNumber("rounds"),

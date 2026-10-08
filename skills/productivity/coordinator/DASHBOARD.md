@@ -36,6 +36,11 @@ agents[]     one row per worker, in spawn order (its position picks its chart co
   task       one sentence
   skill      implement | diagnosing-bugs | prototype | research | tdd | none
   model      opus | sonnet | haiku | fable (haiku is outside the policy: recorded with a warning, the user's to approve)
+  effort     low | medium | high | xhigh | max: the thinking effort it is spawned at (`fleet brief` prints it beside
+             the model). Without --model or --effort a new row takes its skill's pair: research sonnet medium, any
+             other opus high. A pair outside the role table (sonnet low-high, opus medium-high, fable high or
+             xhigh to escalate; max on none) is recorded with a warning, the user's to approve. Absent on a row
+             recorded before efforts were: unset, and the brief then names no effort
   status     queued | running | blocked | done | failed | stopped
   lane[]     files or globs the worker may edit
   milestone  milestone id
@@ -98,7 +103,7 @@ events[]     activity log, oldest first
 | :-- | :-- |
 | A manager's intake | `init --role manager --project P --goal G`, then `milestone landings --title "Landings and deploys"` |
 | Intake done | `init --project P --goal G`, then `milestone m1 --title T` and `step s1 --milestone m1 --title T` per step, then `event --kind decision "why the split"` for anything non-obvious |
-| Worker about to be spawned | `agent a1 --task T --skill tdd --milestone m1 --lane src/x.ts test/x.test.ts --step s1 --brief "done when ..."` (model defaults to opus; logs the spawn, marks the step current, prints the line its brief opens with) |
+| Worker about to be spawned | `agent a1 --task T --skill tdd --milestone m1 --lane src/x.ts test/x.test.ts --step s1 --brief "done when ..."` (model and effort default by skill: research sonnet medium, any other opus high; `--model M --effort E` to choose; logs the spawn, marks the step current, prints the line its brief opens with) |
 | Its brief | `fleet brief <dir> a1` prints the part the row holds (opening line, task, criterion, skill and how to load it, lane, workspace and its rules of history, step, chat id); you add the context below it |
 | Its workspace | the lane's idle one: `fleet ws <dir> add a1 --reuse a0` (hands it over once a0 is done or stopped, records who held it); a fresh one only for parallel work that could meet, a risky experiment or a comparison: `fleet ws <dir> add a1 [-r BASE]` |
 | The workers share one working copy (an expensive setup, disjoint lanes) | `set --workspaces shared` (`isolated` is the default): `fleet ws add` makes nothing, `agent` refuses a running lane that meets a live one, and each finished worker is integrated by `fleet ws <dir> split a1 -m "<description>"` |
@@ -237,7 +242,7 @@ The page is built for a phone first, one view at a time: Decisions, Plan, Fleet,
 - Plan: the roadmap with the current step marked; steps link to their worker.
 - Worker sheet: a worker's name anywhere on the page (a step, a roadblock, the fleet, the chart, the activity log, the chat) opens its task, lane, round, brief, and report, with a button that starts a message to it.
 - Plan, too: the roadblocks, open first, with who is needed and a link to the decision when it is the user.
-- Fleet: the workers with filters (status, milestone, skill, model, free text) and expandable brief and report, and the token chart: one bar per worker, coloured by spawn order, with its share of the total.
+- Fleet: the workers with filters (status, milestone, skill, model, free text; the model cell shows the effort beside it) and expandable brief and report, and the token chart: one bar per worker, coloured by spawn order, with its share of the total.
 - Log: the activity, newest first, filtered together with the table.
 - On a manager's page, under the totals: the plan's usage of the account whose session worked last, named, one meter per window, with when it resets and how old the reading is; below, a line for each other account still inside a window.
 - On a manager's page: Decisions lists the manager's own and, from every fleet, the ones that wait on the user. A fleet's opens on the manager's own page at `#decision/<fleet>/<id>`, as that fleet's decision page in a frame (`/f/<fleet>/?embed=1#decision/<id>`: the decision alone, answered into that fleet's chat). Every decision's page there steps to the previous and next of what waits on the user, in the list's order, and once one is answered goes on to the next, focused, saying which was answered (Previous goes back to it); with nothing next, or with the switch "Go to the next once answered" turned off (it is on until the user turns it off, and the browser keeps the choice), it stays and says which comes next. The Fleet tab reads Fleets and lists the coordinators: what each is doing, its workers by status, what waits in it, its lanes in flight, and the way to its page. A coordinator's name opens its sheet, with a button that starts a message to it.

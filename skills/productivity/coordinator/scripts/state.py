@@ -6,7 +6,7 @@
     state.py DIR milestone ID --title T
     state.py DIR step ID [--milestone M --title T] [--status S] [--agent A]
                          [--before STEP | --after STEP] [--remove REASON]
-    state.py DIR agent ID [--task T --skill S --model M --lane L... --milestone M]
+    state.py DIR agent ID [--task T --skill S --model M --effort E --lane L... --milestone M]
                           [--status S] [--tokens N] [--duration-ms N] [--report R]
                           [--brief B] [--name N] [--step STEP] [--log TEXT] [--important]
                           [--task-id ID]   (tokens and duration then come from the worker's transcript)
@@ -66,7 +66,33 @@ WORKSPACE_MODES = sorted(render_dashboard.WORKSPACE_MODES)
 FLEET = Path(__file__).resolve().parents[4] / "fleet" / "bin" / "fleet"
 SKILLS = ["implement", "diagnosing-bugs", "prototype", "research", "tdd", "none"]
 MODELS = ["opus", "sonnet", "haiku", "fable"]
-POLICY_MODELS = ["opus", "sonnet", "fable"]  # any other model is the user's to approve, case by case (L3)
+EFFORTS = ["low", "medium", "high", "xhigh", "max"]
+# The role table, the one place its values live (fleet/src/ledger/roles.ts is its TypeScript twin, and the
+# oracle's model reads this one): `pairs`, the efforts the policy approves on each model, in the order the
+# warnings name them (any other model, or any other pair, is the user's to approve, case by case: L3);
+# `kinds`, a new worker's model and effort by its skill when --model or --effort is not given ("" is any
+# other skill; `advisor` is the TypeScript `fleet advisor`'s row, whose skill is none); `alone`, the effort a model given without --effort takes when its kind's is not among its pairs.
+ROLES = {
+    "pairs": {"opus": ["medium", "high"], "sonnet": ["low", "medium", "high"], "fable": ["high", "xhigh"]},
+    "kinds": {"research": ["sonnet", "medium"], "advisor": ["fable", "high"], "": ["opus", "high"]},
+    "alone": {"opus": "high", "sonnet": "medium", "fable": "high"},
+}
+POLICY_MODELS = list(ROLES["pairs"])
+
+
+def defaults(skill: str, model: str | None, effort: str | None) -> tuple[str, str]:
+    """A new worker's model and effort: the ones given, else its kind's; a model given without an effort takes
+    its kind's effort when the pair is in the policy, else the model's own (`alone`), else its kind's still."""
+    kind_model, kind_effort = ROLES["kinds"].get(skill, ROLES["kinds"][""])
+    if effort:
+        return model or kind_model, effort
+    if not model:
+        return kind_model, kind_effort
+    if kind_effort in ROLES["pairs"].get(model, []):
+        return model, kind_effort
+    return model, ROLES["alone"].get(model, kind_effort)
+
+
 SEVERITIES = ["warning", "serious", "critical"]
 NEEDS = ["user", "coordinator", "worker"]
 KINDS = ["spawned", "reported", "blocked", "resolved", "asked", "decision", "note", "integrated"]
@@ -381,12 +407,22 @@ def shared_overlap(state: dict, a: dict, args) -> None:
 
 
 def off_policy(state: dict, args) -> str | None:
-    """What to say when `agent` records a worker on a model outside the policy: accepted, and the user's
-    to approve before it is spawned on it."""
-    if args.cmd != "agent" or not state or not args.model or args.model in POLICY_MODELS:
+    """What to say when `agent` gives a model or an effort that leaves the worker outside the policy: accepted,
+    and the user's to approve before it is spawned on it."""
+    if args.cmd != "agent" or not state or not (args.model or args.effort):
         return None
-    return (f"state: {args.id} is recorded on {args.model}, outside the model policy ({', '.join(POLICY_MODELS)}): "
-            f"spawning it on {args.model} needs the user's OK.")
+    a = find(state["agents"], args.id)
+    if a is None:
+        return None
+    model, effort = a.get("model") or "opus", a.get("effort")
+    if model not in POLICY_MODELS:
+        return (f"state: {args.id} is recorded on {model}, outside the model policy ({', '.join(POLICY_MODELS)}): "
+                f"spawning it on {model} needs the user's OK.")
+    if not effort or effort in ROLES["pairs"][model]:
+        return None
+    pairs = "; ".join(f"{m} {', '.join(e)}" for m, e in ROLES["pairs"].items())
+    return (f"state: {args.id} is recorded on {model} at {effort} effort, outside the effort policy ({pairs}): "
+            f"spawning it so needs the user's OK.")
 
 
 def cmd_milestone(state, args):
@@ -488,9 +524,10 @@ def cmd_agent(state, args):
         if args.milestone is None:
             fail(f"new agent needs --milestone, one of {', '.join(m['id'] for m in state['roadmap']) or '(none yet: add one with `milestone`)'}")
         require(args, ["task", "milestone"], "agent")
+        model, effort = defaults(args.skill or "none", args.model, args.effort)
         a = {
             "id": args.id, "name": args.name or args.id, "task": args.task,
-            "skill": args.skill or "none", "model": args.model or "opus",
+            "skill": args.skill or "none", "model": model, "effort": effort,
             "status": args.status or "running", "lane": args.lane or [],
             "milestone": args.milestone, "tokens": 0, "duration_ms": 0, "rounds": 1,
             "started": now(), "updated": now(), "brief": args.brief or "", "report": "",
@@ -516,7 +553,7 @@ def cmd_agent(state, args):
     elif args.name is not None:  # an empty name gives the row back to its id and its session's name
         a["name"] = a["id"]
         a.pop("name_by", None)
-    for key in ("task", "skill", "model", "status", "milestone", "brief", "report"):
+    for key in ("task", "skill", "model", "effort", "status", "milestone", "brief", "report"):
         if getattr(args, key) is not None:
             a[key] = getattr(args, key)
     if args.lane is not None:
@@ -901,7 +938,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
   step ID --milestone M --title T [--status {"|".join(STEP_STATUSES)}] [--agent A]
         [--before STEP | --after STEP] [--remove REASON]
   agent ID --task T --milestone M [--name N] [--skill {"|".join(SKILLS)}] [--model {"|".join(MODELS)}]
-        [--lane PATH...] [--step S] [--brief B] [--status {"|".join(AGENT_STATUSES)}]
+        [--effort {"|".join(EFFORTS)}] [--lane PATH...] [--step S] [--brief B] [--status {"|".join(AGENT_STATUSES)}]
         [--task-id ID | --tokens N --duration-ms N] [--report R] [--log TEXT] [--important]
   roadblock ID --title T --detail D --severity {"|".join(SEVERITIES)} --needs {"|".join(NEEDS)} [--agent A]
         [--decision D] [--resolved | --open]
@@ -932,7 +969,7 @@ def cmd_show(state, args):
             print(f"    {s['id']:<6} {s['status']:<8} {s['title']}" + (f"  @{s['agent']}" if s.get("agent") else ""))
     for a in state["agents"]:
         rounds = f"  round {a['rounds']}" if a.get("rounds", 1) > 1 else ""
-        print(f"  agent {a['id']:<16} {a['status']:<8} {a['skill']:<15} {a['model']:<6} {a['tokens']:>8} tok  lane={','.join(a['lane']) or '-'}{rounds}")
+        print(f"  agent {a['id']:<16} {a['status']:<8} {a['skill']:<15} {a['model']:<6} {a.get('effort') or '-':<6} {a['tokens']:>8} tok  lane={','.join(a['lane']) or '-'}{rounds}")
     for r in state["roadblocks"]:
         print(f"  {r.get('ref', '')} roadblock {r['id']} {'resolved' if r['resolved'] else 'OPEN'} [{r['severity']}, needs {r['needs']}] {r['title']}")
     said = chat.read(Path(args.dir).resolve())  # the chat tells an action the user answered as failed
@@ -987,6 +1024,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--remove", metavar="REASON", help="take out a step recorded in error; the log keeps the reason")
     s = sub.add_parser("agent"); s.add_argument("id")
     s.add_argument("--task"); s.add_argument("--skill", choices=SKILLS); s.add_argument("--model", choices=MODELS)
+    s.add_argument("--effort", choices=EFFORTS, help="the thinking effort to spawn it at; with --model, defaults by its skill")
     s.add_argument("--lane", nargs="*", help="files or globs the worker may edit"); s.add_argument("--milestone")
     s.add_argument("--status", choices=AGENT_STATUSES); s.add_argument("--tokens", type=int); s.add_argument("--duration-ms", type=int)
     s.add_argument("--task-id", help="the id the Agent tool gave the worker: its tokens and duration are then read from its own transcript")

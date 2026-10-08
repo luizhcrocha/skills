@@ -2,7 +2,7 @@
  * `fleet advisor DIR [--model fable|opus] [--task-id ID] [--log TEXT]`: the fleet's advisor (the plugin's
  * `advisor` agent) recorded as the worker row `advisor`, and the prompt to spawn it with. The row puts the
  * advisor on the chat roster, so it records each answer with `fleet chat DIR say --as advisor`, and on the
- * page with its model and tokens. It stays `queued` while it waits for questions: a running row idle for
+ * page with its model, effort and tokens (the role table's: fable high, opus high on the fallback). It stays `queued` while it waits for questions: a running row idle for
  * twenty minutes would read as a silent worker. It takes the milestone of the current step, else the
  * first. Run again to record the agentId once spawned, or a restart on Opus when Fable is unavailable.
  */
@@ -14,6 +14,7 @@ import { Refusal } from "../errors.ts";
 import { FLEET_BIN, resolvePath } from "../files.ts";
 import { Out, recordingOut } from "../io.ts";
 import { decodeLedger, type Ledger } from "../ledger/model.ts";
+import { roleDefaults } from "../ledger/roles.ts";
 import { readObject } from "../registry.ts";
 import { World } from "../world.ts";
 import { exitOf } from "../cli/exit.ts";
@@ -67,12 +68,12 @@ function milestoneOf(ledger: Ledger): string | undefined {
   return (ledger.roadmap.find((m) => m.steps.some((s) => s.status === "current")) ?? ledger.roadmap[0])?.id;
 }
 
-function prompt(root: string, model: string): string[] {
+function prompt(root: string, model: string, effort: string): string[] {
   return [
     `You are the advisor of the fleet in ${root}; your id on its chat is ${ADVISOR}.`,
     `Fleet CLI: ${FLEET_BIN}. Ledger: \`${FLEET_BIN} state ${root} show\`, decisions in full in ${join(root, "state.json")}; standards and this fleet's facts: ${join(root, "brief.md")}; the chat and your past answers: \`${FLEET_BIN} chat ${root} log\`.`,
     `Record each answer: \`${FLEET_BIN} chat ${root} say --as ${ADVISOR} "<asker> asked: <question> | <verdict> | <reason> | <confidence>"\`.`,
-    `You run on ${model}. Wait for questions: answer each one asked through SendMessage as your agent definition says.`,
+    `You run on ${model} at ${effort} effort. Wait for questions: answer each one asked through SendMessage as your agent definition says.`,
   ];
 }
 
@@ -90,8 +91,9 @@ function run(argv: readonly string[]): Effect.Effect<number, Refusal, Out | Worl
 
     if (ledger instanceof Refusal) return yield* Effect.fail(ledger);
     const known = ledger.agents.find((a) => a.id === ADVISOR);
-    const model = options.model ?? (known === undefined ? "fable" : (known.model ?? "fable"));
-    const args = ["agent", ADVISOR, "--model", model, "--status", "queued", "--skill", "none"];
+    const { model: fresh } = roleDefaults(ADVISOR, undefined, undefined);
+    const { model, effort } = roleDefaults(ADVISOR, options.model ?? known?.model ?? fresh, undefined);
+    const args = ["agent", ADVISOR, "--model", model, "--effort", effort, "--status", "queued", "--skill", "none"];
 
     if (known === undefined) {
       const milestone = milestoneOf(ledger);
@@ -109,14 +111,14 @@ function run(argv: readonly string[]): Effect.Effect<number, Refusal, Out | Worl
     if (code !== 0) return code;
 
     if (options.taskId === undefined) {
-      for (const line of prompt(root, model)) out.out(`${line}\n`);
+      for (const line of prompt(root, model, effort)) out.out(`${line}\n`);
       out.err(
-        `advisor: spawn it with the Agent tool (subagent_type "tstack:advisor", model: "${model}", run_in_background, the lines above as its prompt), ` +
+        `advisor: spawn it with the Agent tool (subagent_type "tstack:advisor", model: "${model}", effort: "${effort}", run_in_background, the lines above as its prompt), ` +
           `then \`fleet advisor ${root} --task-id <its agentId>\`. A spawn that fails on the model (unavailable, limits, credits) ` +
           `is spawned again on opus: \`fleet advisor ${root} --model opus --log "Fable unavailable: <the error>"\`.\n`,
       );
     } else {
-      out.out(`${ADVISOR} recorded on ${model} as ${options.taskId}\n`);
+      out.out(`${ADVISOR} recorded on ${model} at ${effort} effort as ${options.taskId}\n`);
       out.err(
         `advisor: add under "This fleet" in ${join(root, "brief.md")}: ` +
           `"The advisor: before you ask the user, SendMessage ${options.taskId} your question, your id and what you checked."\n`,

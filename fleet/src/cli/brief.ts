@@ -187,7 +187,7 @@ function compose(root: string, ledger: Ledger, raw: JsonObject, a: Agent): Compo
   brief.push(`Chat: you are ${a.id} on the fleet's chat; brief.md says when to read your inbox and how to answer.`);
   notes.push(
     `brief: add the context only you have (decisions from the session, CONTEXT.md terms, ADRs, the user's constraints), ` +
-      `spawn ${a.id} on model: "${a.model ?? "opus"}" (run_in_background), then \`fleet state ${root} agent ${a.id} --task-id <its agentId>\`.`,
+      `spawn ${a.id} on model: "${a.model ?? "opus"}"${a.effort === undefined || a.effort === "" ? "" : `, effort: "${a.effort}"`} (run_in_background), then \`fleet state ${root} agent ${a.id} --task-id <its agentId>\`.`,
   );
 
   return { brief, notes };

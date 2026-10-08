@@ -47,7 +47,7 @@ class ShowTest(Fleet):
         for word in ["decision ID", "roadblock ID", "--severity warning|serious|critical", "--needs user|coordinator|worker",
                      "--kind spawned|reported|blocked|resolved|asked|decision|note|integrated",
                      "--status blocked|done|failed|queued|running|stopped", "--skill implement|diagnosing-bugs|prototype|research|tdd|none",
-                     "--model opus|sonnet|haiku|fable", "--kind decision|input|secret|action"]:
+                     "--model opus|sonnet|haiku|fable", "--effort low|medium|high|xhigh|max", "--kind decision|input|secret|action"]:
             self.assertIn(word, out)
 
     def test_show_lists_the_milestones_by_id(self):
@@ -532,6 +532,45 @@ class StageFiveRulesTest(Fleet):
                       "needs the user's OK.", said.stderr)
         self.assertEqual(self.state()["agents"][0]["model"], "haiku")
         self.assertNotIn("model policy", self.run_cli("agent", "a1", "--model", "fable").stderr)
+
+    def test_a_new_worker_takes_its_kinds_model_and_effort(self):
+        for aid, skill in [("i1", "implement"), ("t1", "tdd"), ("p1", "prototype"), ("d1", "diagnosing-bugs"), ("r1", "research"), ("n1", "none")]:
+            said = self.run_cli("agent", aid, "--task", "t", "--milestone", "m1", "--skill", skill)
+            self.assertNotIn("policy", said.stderr)
+        got = {a["id"]: (a["model"], a["effort"]) for a in self.state()["agents"]}
+        self.assertEqual(got, {"i1": ("opus", "high"), "t1": ("opus", "high"), "p1": ("opus", "high"), "d1": ("opus", "high"),
+                               "r1": ("sonnet", "medium"), "n1": ("opus", "high")})
+        self.assertEqual(list(self.state()["agents"][0])[:6], ["id", "name", "task", "skill", "model", "effort"])
+
+    def test_a_model_given_alone_keeps_its_kinds_effort_when_the_pair_is_in_the_policy(self):
+        self.ok("agent", "a1", "--task", "t", "--milestone", "m1", "--skill", "research", "--model", "opus")
+        self.ok("agent", "a2", "--task", "t", "--milestone", "m1", "--skill", "research", "--model", "fable")
+        self.ok("agent", "a3", "--task", "t", "--milestone", "m1", "--effort", "xhigh", "--model", "fable")
+        self.ok("agent", "a4", "--task", "t", "--milestone", "m1", "--skill", "research", "--effort", "low")
+        got = [(a["model"], a["effort"]) for a in self.state()["agents"]]
+        self.assertEqual(got, [("opus", "medium"), ("fable", "high"), ("fable", "xhigh"), ("sonnet", "low")])
+
+    def test_an_effort_outside_the_policy_is_recorded_with_a_warning(self):
+        said = self.run_cli("agent", "a1", "--task", "t", "--milestone", "m1", "--effort", "low")
+        self.assertEqual(said.returncode, 0)
+        self.assertIn("state: a1 is recorded on opus at low effort, outside the effort policy (opus medium, high; sonnet low, "
+                      "medium, high; fable high, xhigh): spawning it so needs the user's OK.", said.stderr)
+        self.assertEqual(self.state()["agents"][0]["effort"], "low")
+        self.assertNotIn("policy", self.run_cli("agent", "a1", "--model", "sonnet").stderr)
+        self.assertIn("at max effort", self.run_cli("agent", "a1", "--effort", "max", "--model", "fable").stderr)
+        self.assertIn("at xhigh effort", self.run_cli("agent", "a1", "--model", "opus", "--effort", "xhigh").stderr)
+        self.assertNotIn("policy", self.run_cli("agent", "a1", "--status", "done").stderr)
+
+    def test_a_row_from_before_effort_reads_as_unset(self):
+        self.ok("agent", "a1", "--task", "t", "--milestone", "m1")
+        state = self.state()
+        del state["agents"][0]["effort"]
+        (self.root / "state.json").write_text(json.dumps(state))
+        self.assertIn("  agent a1               running  none            opus   -             0 tok", self.ok("show"))
+        self.assertNotIn("policy", self.run_cli("agent", "a1", "--model", "sonnet").stderr)
+        self.assertNotIn("effort", self.state()["agents"][0])
+        self.ok("agent", "a1", "--effort", "medium")
+        self.assertEqual(list(self.state()["agents"][0])[-1], "effort")
 
     def test_a_roadblock_changed_to_need_the_user_names_its_decision(self):  # L8
         self.ok("roadblock", "r1", "--title", "T", "--detail", "D", "--severity", "warning", "--needs", "coordinator")

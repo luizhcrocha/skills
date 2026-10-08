@@ -27,7 +27,7 @@ here, prose cut to one line), **code** (already code before; prose kept short or
 | C7 | C, route | Name the skill by the kind of work | judg | | | prose |
 | C8 | C, route | Resolve each skill's path once; `implement` is read with the Read tool, the others called with the Skill tool | mech | the skill's SKILL.md frontmatter | print | **stage 5**: `fleet brief` |
 | C9 | C, model | Pick the model by where the difficulty is; Fable for decisive single roles | judg | | | prose |
-| C10 | C, model | Record the model on the row (`--model`) | mech | row | print | **stage 5**: `fleet brief` names the model to spawn on |
+| C10 | C, model | Record the model on the row (`--model`) | mech | row | print | **stage 5**: `fleet brief` names the model to spawn on; since, the effort too (`--effort`, defaults by skill from the role table, SPEC.md) |
 | C11 | C, model | Any model other than the three approved is the user's to approve | mech | `--model` | warn, page | **Luiz** (L3, decided): `agent --model haiku` (any model outside the three) is recorded with a warning that it is the user's to approve (both); the page marks the row |
 | C12 | C, model | A new default model: move every agent, say who moved | judg | | | prose |
 | C13 | C, brief | The brief opens with the line `agent` printed and carries task, done criterion, skill and path, lane, workspace | mech | row, `workspaces[]` | print | **stage 5**: `fleet brief` composes it |

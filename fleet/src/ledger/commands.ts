@@ -22,6 +22,7 @@ import type { Machine } from "../world.ts";
 import { dropKey, REFUSAL_KEYS, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, milestoneOfStep, nextStepId } from "./numbers.ts";
 import { makeRefusedCall, permissionOptions } from "./permission.ts";
+import { roleDefaults } from "./roles.ts";
 import { ID, KINDS, nameRefusal } from "./validate.ts";
 import { closedNamed, isLive, sharedOverlap, UNFINISHED } from "./warnings.ts";
 
@@ -499,13 +500,14 @@ export function agent(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
 
       yield* require(run, ["task", "milestone"], "agent");
       const now = stamp(run);
+      const skillOf = given(args.str("skill")) ? (args.str("skill") ?? "none") : "none";
 
       const fresh: Agent = {
         id,
         name: given(args.str("name")) ? (args.str("name") ?? id) : id,
         task: args.str("task") ?? "",
-        skill: given(args.str("skill")) ? (args.str("skill") ?? "none") : "none",
-        model: given(args.str("model")) ? (args.str("model") ?? "opus") : "opus",
+        skill: skillOf,
+        ...roleDefaults(skillOf, args.str("model"), args.str("effort")),
         status: given(args.str("status")) ? (args.str("status") ?? "running") : "running",
         lane: [...(args.list("lane") ?? [])],
         milestone: milestoneId,
@@ -571,6 +573,9 @@ export function agent(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
     const model = args.str("model");
 
     if (model !== undefined) a.model = model;
+    const effort = args.str("effort");
+
+    if (effort !== undefined) a.effort = effort;
 
     if (status !== undefined) a.status = status;
 

@@ -24,7 +24,8 @@ import { showLines } from "../ledger/show.ts";
 import { lockLedger } from "../ledger/store.ts";
 import { AGENT_STATUSES, ASKS, SHARED_KINDS, STATUSES, STEP_STATUSES, validate, WORKSPACE_MODES } from "../ledger/validate.ts";
 import { readChat } from "../chat/store.ts";
-import { activeWorkspaces, leftOpen, offPolicy, overlapping, staleNow, staleRows, unpruned, unrecorded } from "../ledger/warnings.ts";
+import { EFFORTS, offPolicy } from "../ledger/roles.ts";
+import { activeWorkspaces, leftOpen, overlapping, staleNow, staleRows, unpruned, unrecorded } from "../ledger/warnings.ts";
 import { readObject } from "../registry.ts";
 import { World, type Machine } from "../world.ts";
 import { opt, parseCommand, usageWidth, type Args, type CommandSpec } from "./args.ts";
@@ -71,6 +72,7 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
       opt.value("--task"),
       opt.value("--skill", { choices: commands.SKILLS }),
       opt.value("--model", { choices: commands.MODELS }),
+      opt.value("--effort", { choices: EFFORTS }),
       opt.star("--lane"),
       opt.value("--milestone"),
       opt.value("--status", { choices: AGENT_STATUSES }),
@@ -211,6 +213,14 @@ const HANDLERS = new Map<string, Handler>(Object.entries({
 
 /** DIR/brief.md from assets/brief.md with this fleet's paths, and a manager's DIR/standing.md, each
  * unless it is there: what was added to them stays. */
+/** The off-policy warning for an `agent` command that gave worker `id` a model or an effort, on its row as it now is. */
+function gaveRole(ledger: Ledger, id: string, model: string | undefined, effort: string | undefined): string | undefined {
+  if ((model === undefined || model === "") && (effort === undefined || effort === "")) return undefined;
+  const row = ledger.agents.find((a) => a.id === id);
+
+  return row === undefined ? undefined : offPolicy(id, row.model ?? "opus", row.effort);
+}
+
 function ensureBrief(root: string, ledger: Ledger): void {
   const brief = join(root, "brief.md");
 
@@ -338,7 +348,7 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
       ...(seen === undefined || cmd === "init" ? [] : unrecorded(seen, readChat(root))),
       seen === undefined ? undefined : leftOpen(seen, settingDone),
       seen === undefined || !running ? undefined : overlapping(seen, args.str("id") ?? ""),
-      seen === undefined || cmd !== "agent" ? undefined : offPolicy(args.str("id") ?? "", args.str("model")),
+      seen === undefined || cmd !== "agent" ? undefined : gaveRole(seen, args.str("id") ?? "", args.str("model"), args.str("effort")),
       ...(seen === undefined ? [] : unpruned(seen, activeWorkspaces(readObject(path)), settingDone)),
     ];
 

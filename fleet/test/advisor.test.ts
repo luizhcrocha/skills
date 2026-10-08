@@ -50,10 +50,11 @@ describe("starting the advisor", () => {
     const ran = advisor();
 
     expect(ran.code, ran.stderr).toBe(0);
-    expect(row()).toMatchObject({ id: "advisor", model: "fable", status: "queued", skill: "none", milestone: "m2", lane: [] });
+    expect(row()).toMatchObject({ id: "advisor", model: "fable", effort: "high", status: "queued", skill: "none", milestone: "m2", lane: [] });
     expect(ran.stdout).toContain(`You are the advisor of the fleet in ${root}; your id on its chat is advisor.`);
     expect(ran.stdout).toContain(`say --as advisor "<asker> asked: <question> | <verdict> | <reason> | <confidence>"`);
-    expect(ran.stderr).toContain('subagent_type "tstack:advisor", model: "fable"');
+    expect(ran.stderr).toContain('subagent_type "tstack:advisor", model: "fable", effort: "high", run_in_background');
+    expect(ran.stdout).toContain("You run on fable at high effort.");
     expect(events()).toContain("Advisor started on fable.");
   });
 
@@ -85,7 +86,7 @@ describe("once spawned", () => {
 
     expect(ran.code, ran.stderr).toBe(0);
     expect(row()?.["task_id"]).toBe("a0123456789abcdef");
-    expect(ran.stdout).toBe("advisor recorded on fable as a0123456789abcdef\n");
+    expect(ran.stdout).toBe("advisor recorded on fable at high effort as a0123456789abcdef\n");
     expect(ran.stderr).toContain("SendMessage a0123456789abcdef your question");
   });
 
@@ -100,8 +101,10 @@ describe("once spawned", () => {
     const ran = advisor("--model", "opus", "--log", "Fable unavailable: model not available");
 
     expect(ran.code, ran.stderr).toBe(0);
-    expect(row()).toMatchObject({ model: "opus", status: "queued" });
-    expect(ran.stdout).toContain("You run on opus.");
+    expect(row()).toMatchObject({ model: "opus", effort: "high", status: "queued" });
+    expect(ran.stdout).toContain("You run on opus at high effort.");
+    expect(ran.stderr).toContain('model: "opus", effort: "high"');
+    expect(ran.stderr).not.toContain("policy");
     expect(events()).toContain("Fable unavailable: model not available");
   });
 
