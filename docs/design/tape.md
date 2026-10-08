@@ -72,7 +72,10 @@ $XDG_DATA_HOME/tstack/tape/<owner>__<repo>/      mode 0700
   slug, and merges every workspace of the project into one sequence. A turn
   whose prompt ran in another project's `cwd` is skipped. Subagent
   transcripts and headless (`claude -p`) sessions are left out.
-- **Per project only.** No search or view crosses projects.
+- **Every project, one store each.** A repo with no origin is keyed by its
+  path, as memo's key is; a session outside any repo gets no store. No
+  search or view crosses projects. `index.db` beside the stores caches which
+  project each transcript belongs to.
 - **Multi-machine.** Each machine summarizes its own transcripts. A session
   on the Mac does not see the Linux box's tape. memo already carries what
   must travel. Trees are never synced (settled, section 8).
@@ -82,7 +85,7 @@ after `cleanupPeriodDays` (default 30, sourced: Claude Code settings docs).
 The oldest record on this machine is from 2026-09-08 (measured), so the
 default is in force. After cleanup, nodes and digests survive but
 `zoom --raw` fails. Recommendation: raise `cleanupPeriodDays` in the
-dotfiles, to 3650 (open for Luiz). The cost:
+dotfiles, to 3650 (done, Luiz, 2026-10-08). The cost:
 3.8 GB of transcripts for 30 days, 3.0 GB of it custom-mcp-servers
 (measured), so about 45 GB a year at this pace (inferred).
 
@@ -186,7 +189,7 @@ first thing a catch-up asks.
 | `tstack:reader` fan-out | no, except a one-off backfill test | Results return through a parent session's context, which then writes the nodes. |
 | A per-tool-use hook | no | memo principle 3. |
 | **`claude -p` on Haiku, batched by a short-lived builder** | **yes** | Runs on the plan's OAuth login, needs no API key, and is the Reader pair. |
-| Direct API with a key | later, Luiz's call | Exact cache control and per-call cost, but billed outside the plan (section 8, billing). |
+| Direct API with a key | later, Luiz's call | Exact cache control and per-call cost, but billed outside the plan; not chosen (section 8). |
 
 **Model:** the Reader role, Haiku high, fallback Sonnet medium
 ([MODELS.md](../../skills/productivity/coordinator/MODELS.md)). Not
@@ -277,7 +280,7 @@ CLI (`scripts/tape`, one Python file, standard library only, like memo):
 | `tape zoom <i>` | the turn's stored digest |
 | `tape zoom <i> --raw` | the turn's records from the transcript, while it exists |
 | `tape search <words>` | FTS5 over leaves (Phase 1a), over nodes later |
-| `tape build [--project KEY]` | ingest, idempotent; refuses a project off the allowlist |
+| `tape build [--project KEY]` | ingest every project, or one; idempotent; refuses an excluded project |
 | `tape status` | turns, open turns, skipped transcripts, store size, last build |
 
 The wake block tells the agent: a tape line is evidence of what happened,
@@ -356,7 +359,7 @@ most 3 zooms per hit and fewer tokens per hit than (ii); at most 1 invented
 fact in 30 nodes; the backfill moves the weekly meter by less than 10%.
 
 **Phase 2: kept current.** The `SessionStart` builder of section 4, the
-daily cap, `recall` uses tape. Projects from the allowlist.
+daily cap, `recall` uses tape. Every project not excluded.
 
 **Phase 3: wake.** tape view after memo's wake, 8-16 KB, opt-in per
 project; two weeks with and without, judged by how often sessions zoom and
@@ -372,15 +375,21 @@ sessions with no note becomes a suggestion in `tape status`, never a note).
 - No `SessionStart` injection until the Phase 2 numbers are in.
 - Trees are per machine and never synced.
 - The name stays `tape`.
-- **Projects:** an opt-in allowlist in `$XDG_CONFIG_HOME/tstack/tape.toml`,
-  starting with `coelhorocha/skills` and `luizhcrocha/skills`. A client repo
-  joins only after Luiz has read 30 of its nodes. Fleet worker and subagent
-  sessions stay out.
+- Fleet worker, subagent and headless sessions stay out.
 
-**Open for Luiz:**
+**Settled (Luiz, 2026-10-08):**
 
-1. **Retention.** Raise `cleanupPeriodDays` to 3650 (about 45 GB a year), or
-   accept that `zoom --raw` stops at 30 days? Digests survive either way.
-2. **The allowlist** beyond the two starting repos.
-3. **Billing.** `claude -p` on the plan allowance (recommended for Phase 1b),
-   or an API key billed apart, which buys exact caching and cost?
+- **Every project.** Luiz chose all his projects over the advisor's
+  two-repo allowlist, client repos included by his call. Each gets its own
+  store. `$XDG_CONFIG_HOME/tstack/tape.toml` holds `projects = "all"` (a list
+  of keys still works, to record only those) and `exclude = [...]` for a
+  project never to record.
+- **Billing.** Phase 1b's calls run on Luiz's Claude plan through
+  `claude -p`, behind the daily cap. Each call records `total_cost_usd` from
+  `--output-format json`, the number for a later switch to an API key.
+
+- **Retention.** `cleanupPeriodDays` is 3650 in the dotfiles (pushed
+  8641dc08), so transcripts stay about ten years and `zoom --raw` keeps
+  working.
+
+No question is open for Luiz.

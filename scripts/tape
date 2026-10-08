@@ -3,7 +3,7 @@
 
 Design: docs/design/tape.md. One file, standard library only (Python >= 3.11).
 
-    tape build [--project KEY]     ingest this project's Claude Code transcripts (allowlisted projects only)
+    tape build [--project KEY]     ingest every project's Claude Code transcripts, or one project's
     tape view [--bytes N]          the newest leaves within N bytes (default 8192), and how many are older
     tape zoom I [--raw]            one turn: its stored digest, or with --raw its records from the transcript
     tape search WORDS...           full-text search over this project's leaves
@@ -20,8 +20,11 @@ project their first `cwd` resolves to, by memo's project key (owner/repo from or
 jj workspace), never by the folder's slug. A turn whose prompt ran in another project is skipped;
 subagent transcripts and headless (`claude -p`) sessions are left out.
 
-Store: $XDG_DATA_HOME/tstack/tape/<owner>__<repo>/tape.db (mode 0700); the allowlist:
-$XDG_CONFIG_HOME/tstack/tape.toml, `projects = [...]`, written with the starting two when absent.
+Every project gets its own store, $XDG_DATA_HOME/tstack/tape/<owner>__<repo>/tape.db (mode 0700); a
+repo with no origin is keyed by its path, as memo does, and a session outside any repo gets none.
+Nothing reads across stores. Which projects: $XDG_CONFIG_HOME/tstack/tape.toml, `projects = "all"`
+(written when absent) or a list of keys, and `exclude = [...]`. The transcript -> project map is
+cached in $XDG_DATA_HOME/tstack/tape/index.db.
 """
 
 import json
@@ -43,7 +46,12 @@ VIEW_BYTES = 8 * 1024
 EDITED_MAX = 120
 HEAD_SCAN = 200  # lines read to find a new transcript's cwd
 SCHEMA = 1
-DEFAULT_ALLOWLIST = ("coelhorocha/skills", "luizhcrocha/skills")
+SEED_CONFIG = """# What tape records. docs/design/tape.md, section 8 (Luiz, 2026-10-08: every project).
+# projects = "all", or a list of keys ("owner/repo") to record only those.
+projects = "all"
+# Keys never recorded, even under projects = "all".
+exclude = []
+"""
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 DROPPED_KINDS = ("COMPACTED", "AWAY SUMMARY")  # they restate turns tape already has
 
@@ -215,29 +223,35 @@ class Segment:
         self.session = self.session or record.get("sessionId")
 
 
-def read_segments(path, offset):
-    """(segments from offset, end of the last whole line). A partial last line is left for later."""
-    with open(path, "rb") as fh:
-        fh.seek(offset)
-        data = fh.read()
-    cut = data.rfind(b"\n") + 1
-    segs, cur, pos = [], None, offset
-    for raw in data[:cut].split(b"\n")[:-1]:
-        start, pos = pos, pos + len(raw) + 1
-        try:
-            record = json.loads(raw)
-        except ValueError:
-            continue
-        if not isinstance(record, dict) or record.get("isSidechain"):
-            continue
-        if is_prompt(record):
-            cur = Segment(start, record)
-            segs.append(cur)
-        elif cur is None:
-            cur = Segment(start, None)
-            segs.append(cur)
-        cur.add(record, raw.decode(errors="replace"), pos)
-    return segs, offset + cut
+class Segments:
+    """The segments of a transcript from offset, one at a time, each with whether it is the last;
+    a partial last line is left for later. After the iteration, end is the end of the last whole line."""
+
+    def __init__(self, path, offset):
+        self.path, self.offset, self.end = path, offset, offset
+
+    def __iter__(self):
+        cur, pos = None, self.offset
+        with open(self.path, "rb") as fh:
+            fh.seek(pos)
+            for raw in fh:
+                if not raw.endswith(b"\n"):
+                    break
+                start, pos = pos, pos + len(raw)
+                self.end = pos
+                try:
+                    record = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(record, dict) or record.get("isSidechain"):
+                    continue
+                if is_prompt(record) or cur is None:
+                    if cur is not None:
+                        yield cur, False
+                    cur = Segment(start, record if is_prompt(record) else None)
+                cur.add(record, raw[:-1].decode(errors="replace"), pos)
+        if cur is not None:
+            yield cur, True
 
 
 def head_of(path):
@@ -286,25 +300,97 @@ def store_dir(env, key):
     return data_home(env) / "tstack" / "tape" / key.replace("/", "__")
 
 
-def allowlist(env):
+def norm_key(key):
+    """A key as memo writes it: owner/repo lower case; a path key as it is."""
+    key = key.strip()
+    return key if key.startswith("/") else key.lower()
+
+
+class Config:
+    def __init__(self, projects="all", exclude=(), path=None):
+        self.projects = projects if projects == "all" else {norm_key(k) for k in projects}
+        self.exclude = {norm_key(k) for k in exclude}
+        self.path = path
+
+    def allows(self, key):
+        return key not in self.exclude and (self.projects == "all" or key in self.projects)
+
+    def why_not(self, key):
+        if key in self.exclude:
+            return f"tape: {key} is excluded in {self.path}, so nothing is recorded for it"
+        return f"tape: {key} is not in `projects` in {self.path}, so nothing is recorded for it"
+
+
+def load_config(env):
     import tomllib
     path = config_path(env)
     if not path.exists():
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("# Projects tape records (owner/repo). docs/design/tape.md, section 8:\n"
-                            "# a client repo joins only after Luiz has read 30 of its nodes.\n"
-                            "projects = [" + ", ".join(f'"{k}"' for k in DEFAULT_ALLOWLIST) + "]\n")
+            path.write_text(SEED_CONFIG)
         except OSError:
-            return set(DEFAULT_ALLOWLIST)
+            return Config(path=path)
     try:
         data = tomllib.loads(path.read_text())
     except (OSError, tomllib.TOMLDecodeError) as e:
-        raise TapeError(f"tape: cannot read the allowlist {path}: {e}") from None
-    projects = data.get("projects", [])
-    if not isinstance(projects, list) or not all(isinstance(p, str) for p in projects):
-        raise TapeError(f"tape: `projects` in {path} must be a list of owner/repo strings")
-    return {p.strip().lower() for p in projects}
+        raise TapeError(f"tape: cannot read {path}: {e}") from None
+    projects, exclude = data.get("projects", "all"), data.get("exclude", [])
+    if projects != "all" and not (isinstance(projects, list) and all(isinstance(k, str) for k in projects)):
+        raise TapeError(f'tape: `projects` in {path} must be "all" or a list of keys like "owner/repo"')
+    if not (isinstance(exclude, list) and all(isinstance(k, str) for k in exclude)):
+        raise TapeError(f"tape: `exclude` in {path} must be a list of keys like \"owner/repo\"")
+    return Config(projects, exclude, path)
+
+
+def index_path(env):
+    return data_home(env) / "tstack" / "tape" / "index.db"
+
+
+def classify(env):
+    """({key: [(path, kind)]}, transcripts scanned) for every top-level transcript with a cwd yet.
+    The key is "" for a cwd outside any repo. A transcript's first cwd never changes, so the answer
+    is cached in index.db and its head is read once."""
+    base = sessions.projects_dir(env)
+    path = index_path(env)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.parent.chmod(0o700)
+    con = sqlite3.connect(path, timeout=10, isolation_level=None)
+    try:
+        con.execute("pragma journal_mode=wal")
+        con.execute("create table if not exists transcripts (path text primary key, key text, kind text, cwd text)")
+        known = {r[0]: (r[1], r[2]) for r in con.execute("select path, key, kind from transcripts")}
+        out, scanned = {}, 0
+        con.execute("begin immediate")
+        for f in sorted(base.glob("*/*.jsonl")):
+            scanned += 1
+            p = str(f)
+            if p in known:
+                key, kind = known[p]
+            else:
+                cwd, entry = head_of(f)
+                if cwd is None:
+                    continue  # no cwd yet: classified on a later build
+                key = key_of(cwd)
+                kind = "headless" if (entry or "").startswith("sdk") else (entry or "cli")
+                con.execute("insert or replace into transcripts values (?, ?, ?, ?)", (p, key, kind, cwd))
+            out.setdefault(key, []).append((f, kind))
+        con.execute("commit")
+        return out, scanned
+    finally:
+        con.close()
+
+
+def transcript_counts(env, key):
+    """(transcripts of this project, headless ones) from the index."""
+    try:
+        con = sqlite3.connect(index_path(env))
+        try:
+            return con.execute("select count(*), coalesce(sum(kind = 'headless'), 0) from transcripts"
+                               " where key = ?", (key,)).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return (0, 0)
 
 
 def open_db(path):
@@ -335,31 +421,44 @@ def has_fts(con):
 
 class Ctx:
     def __init__(self, env, cwd, project=None, now=None):
-        self.env, self.cwd = env, cwd
+        self.env, self.cwd, self.project = env, cwd, project
         self.now = time.time() if now is None else now
-        if project:
-            self.key = project.strip().lower()
-        else:
-            store = memo.resolve_project(cwd)
-            if store is None:
-                raise TapeError(f"tape: {cwd} is in no jj or git repo; pass --project OWNER/REPO")
-            self.key = store.scope.removeprefix("project:")
-        self.dir = store_dir(env, self.key)
-        self.db_path = self.dir / "tape.db"
+        self._key = None
+
+    @property
+    def key(self):
+        if self._key is None:
+            if self.project:
+                self._key = norm_key(self.project)
+            else:
+                store = memo.resolve_project(self.cwd)
+                if store is None:
+                    raise TapeError(f"tape: {self.cwd} is in no jj or git repo; pass --project OWNER/REPO")
+                self._key = store.scope.removeprefix("project:")
+        return self._key
+
+    @property
+    def dir(self):
+        return store_dir(self.env, self.key)
 
     def db(self, create=False):
-        if not self.db_path.exists():
-            if not create:
-                return None
-            self.dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-            self.dir.chmod(0o700)
-        return open_db(self.db_path)
+        return project_db(self.env, self.key, create)
 
     def must_db(self):
         con = self.db()
         if con is None:
             raise TapeError(f"tape: no tape for {self.key} yet; run `tape build`")
         return con
+
+
+def project_db(env, key, create=False):
+    d = store_dir(env, key)
+    if not (d / "tape.db").exists():
+        if not create:
+            return None
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        d.chmod(0o700)
+    return open_db(d / "tape.db")
 
 
 # --- build ------------------------------------------------------------------------
@@ -381,10 +480,10 @@ def finished(seg, is_last, mtime, now):
 
 def ingest_file(path, offset, key, mtime, now):
     """(turns, new offset, open turn's last timestamp or None, turns skipped as another project's)."""
-    segs, end = read_segments(path, offset)
-    turns, foreign, open_end = [], 0, None
-    for n, seg in enumerate(segs):
-        if not finished(seg, n == len(segs) - 1, mtime, now):
+    segs = Segments(path, offset)
+    turns, foreign, open_end, end = [], 0, None, None
+    for seg, last in segs:
+        if not finished(seg, last, mtime, now):
             end, open_end = seg.start, seg.last_ts or ""
             break
         lines = turn_digest(seg.lines)
@@ -402,63 +501,44 @@ def ingest_file(path, offset, key, mtime, now):
             "bytes": seg.end - seg.start, "digest_bytes": nbytes("\n".join(lines)), "digest": clip_digest(lines),
             "leaf": make_leaf(session, seg.first_ts, lines, cwd or ""),
         })
-    return turns, end, open_end, foreign
+    return turns, segs.end if end is None else end, open_end, foreign
 
 
-def build(ctx, out):
+def build_project(env, key, transcripts, now):
+    """Ingest one project's transcripts into its store: a dict of counts, or None when another
+    build of the project holds its lock."""
     import fcntl
-    allowed = allowlist(ctx.env)
-    if ctx.key not in allowed:
-        raise TapeError(f"tape: {ctx.key} is not on the allowlist, so nothing is recorded for it. Add it to "
-                        f"`projects` in {config_path(ctx.env)} (a client repo only after Luiz has read 30 of "
-                        "its nodes).", EXIT_REFUSED)
     started = time.monotonic()
-    con = ctx.db(create=True)
-    lock = open(ctx.dir / "lock", "a")
+    con = project_db(env, key, create=True)
+    lock = open(store_dir(env, key) / "lock", "a")
     try:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            print(f"tape: a build of {ctx.key} is already running; it picks up the new turns", file=out)
-            return 0
-        known = {r[0]: r[1:] for r in con.execute(
-            "select path, key, kind, offset, size, mtime_ns, open_end from files")}
-        base = sessions.projects_dir(ctx.env)
-        scanned = read = 0
-        con.execute("begin immediate")
+            return None
+        known = {r[0]: r[1:] for r in con.execute("select path, offset, size, mtime_ns, open_end from files")}
+        read = 0
         new_turns, updates = [], []
-        for path in sorted(base.glob("*/*.jsonl")):
-            scanned += 1
+        con.execute("begin immediate")
+        for path, kind in transcripts:
+            if kind == "headless":
+                continue
             p = str(path)
             try:
                 st = path.stat()
             except OSError:
                 continue
-            row = known.get(p)
-            fkey, kind, offset, size, mtime_ns, open_end = row if row else (None, None, 0, None, None, None)
-            if fkey is not None and fkey != ctx.key:
-                continue
-            if fkey is None:
-                cwd, entry = head_of(path)
-                if cwd is None:
-                    continue  # no cwd yet: classified on a later build
-                fkey = key_of(cwd)
-                kind = "headless" if (entry or "").startswith("sdk") else (entry or "cli")
-                con.execute("insert or replace into files (path, key, kind, cwd, offset, size, mtime_ns)"
-                            " values (?, ?, ?, ?, 0, ?, ?)", (p, fkey, kind, cwd, st.st_size, st.st_mtime_ns))
-                if fkey != ctx.key:
-                    continue
-                offset, size, mtime_ns, open_end = 0, None, None, None
-            if kind == "headless":
-                continue
+            if p not in known:
+                con.execute("insert into files (path, key, kind, offset) values (?, ?, ?, 0)", (p, key, kind))
+            offset, size, mtime_ns, open_end = known.get(p, (0, None, None, None))
             unchanged = size == st.st_size and mtime_ns == st.st_mtime_ns
-            due = open_end is not None and ctx.now - (_ts_epoch(open_end) or st.st_mtime) >= FINISH_AFTER
+            due = open_end is not None and now - (_ts_epoch(open_end) or st.st_mtime) >= FINISH_AFTER
             if unchanged and not due:
                 continue
             if st.st_size < offset:  # rewritten shorter: read it again; a turn already kept is not kept twice
                 offset = 0
             try:
-                turns, end, oe, foreign = ingest_file(path, offset, ctx.key, st.st_mtime, ctx.now)
+                turns, end, oe, foreign = ingest_file(path, offset, key, st.st_mtime, now)
             except OSError:
                 continue  # removed since the scan: Claude Code's cleanup
             read += 1
@@ -481,20 +561,53 @@ def build(ctx, out):
         for end, size, mtime_ns, oe, foreign, p in updates:
             con.execute("update files set offset = ?, size = ?, mtime_ns = ?, open_end = ?,"
                         " foreign_turns = foreign_turns + ? where path = ?", (end, size, mtime_ns, oe, foreign, p))
-        took = time.monotonic() - started
-        con.execute("insert or replace into meta (k, v) values ('last_build', ?)", (json.dumps(
-            {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ctx.now)), "seconds": round(took, 2),
-             "added": added, "scanned": scanned, "read": read}),))
+        took = round(time.monotonic() - started, 2)
+        result = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), "seconds": took, "added": added,
+                  "read": read}
+        con.execute("insert or replace into meta (k, v) values ('last_build', ?)", (json.dumps(result),))
         con.execute("commit")
-        total = con.execute("select count(*) from turns").fetchone()[0]
-        opened = con.execute("select count(*) from files where key = ? and open_end is not null",
-                             (ctx.key,)).fetchone()[0]
-        print(f"tape: {ctx.key}: +{added} turns ({total} in all, {opened} still open); "
-              f"{scanned} transcripts scanned, {read} read; {took:.1f} s", file=out)
-        return 0
+        result["total"] = con.execute("select count(*) from turns").fetchone()[0]
+        result["open"] = con.execute("select count(*) from files where open_end is not null").fetchone()[0]
+        return result
     finally:
         lock.close()
         con.close()
+
+
+def _built(key, r):
+    if r is None:
+        return f"{key}: a build is already running; it picks up the new turns"
+    return (f"{key}: +{r['added']} turns ({r['total']} in all, {r['open']} still open); "
+            f"{r['read']} transcripts read; {r['seconds']:.1f} s")
+
+
+def build(env, now, out, key=None):
+    """Every project the config allows, or only key. Exit 3 when key is not allowed."""
+    cfg = load_config(env)
+    if key is not None and not cfg.allows(key):
+        raise TapeError(cfg.why_not(key) + ".", EXIT_REFUSED)
+    started = time.monotonic()
+    by_key, scanned = classify(env)
+    if key is not None:
+        print("tape: " + _built(key, build_project(env, key, by_key.get(key, []), now)), file=out)
+        return 0
+    loose = by_key.pop("", [])
+    outside = sum(1 for _, kind in loose if kind != "headless")
+    built = excluded = added = 0
+    for k in sorted(by_key):
+        if not any(kind != "headless" for _, kind in by_key[k]):
+            continue
+        if not cfg.allows(k):
+            excluded += 1
+            continue
+        r = build_project(env, k, by_key[k], now)
+        built += 1
+        added += r["added"] if r else 0
+        print(_built(k, r), file=out)
+    print(f"tape: {built} projects, +{added} turns, {time.monotonic() - started:.1f} s; {scanned} transcripts "
+          f"scanned, {outside} interactive ones outside any repo (no store), {excluded} projects excluded by {cfg.path}",
+          file=out)
+    return 0
 
 
 # --- reading ------------------------------------------------------------------------
@@ -569,7 +682,8 @@ def raw_turn(t):
 # --- commands --------------------------------------------------------------------------
 
 def cmd_build(ctx, a, out):
-    return build(ctx, out)
+    one = a.project or a.sub_project or a.cwd or a.sub_cwd
+    return build(ctx.env, ctx.now, out, ctx.key if one else None)
 
 
 def cmd_view(ctx, a, out):
@@ -614,9 +728,9 @@ def _size(path):
 
 
 def cmd_status(ctx, a, out):
-    allowed = ctx.key in allowlist(ctx.env)
-    print(f"tape: {ctx.key} " + ("(allowlisted)" if allowed else f"(not on the allowlist: {config_path(ctx.env)})"),
-          file=out)
+    cfg = load_config(ctx.env)
+    allowed = cfg.allows(ctx.key)
+    print(f"tape: {ctx.key}" if allowed else cfg.why_not(ctx.key), file=out)
     con = ctx.db()
     if con is None:
         print("no store yet" + ("; run `tape build`" if allowed else ""), file=out)
@@ -625,8 +739,8 @@ def cmd_status(ctx, a, out):
         n, first, last, sess, clipped, big = con.execute(
             "select count(*), min(at), max(end), count(distinct session), coalesce(sum(digest_bytes > ?), 0),"
             " coalesce(sum(bytes > ?), 0) from turns", (DIGEST_MAX, DIGEST_MAX)).fetchone()
-        files = con.execute("select count(*), coalesce(sum(kind = 'headless'), 0), coalesce(sum(open_end is not null), 0),"
-                            " coalesce(sum(foreign_turns), 0) from files where key = ?", (ctx.key,)).fetchone()
+        opened, foreign = con.execute("select coalesce(sum(open_end is not null), 0), coalesce(sum(foreign_turns), 0)"
+                                      " from files").fetchone()
         paths = [r[0] for r in con.execute("select distinct file from turns")]
         meta = con.execute("select v from meta where k = 'last_build'").fetchone()
     finally:
@@ -636,13 +750,13 @@ def cmd_status(ctx, a, out):
     print(f"turns {n} from {sess} sessions, {(first or '?')[:10]} .. {(last or '?')[:10]}; "
           f"{clipped} with a digest over {DIGEST_MAX // 1024} KB (clipped), {big} over {DIGEST_MAX // 1024} KB in the "
           "transcript", file=out)
-    print(f"transcripts {files[0]} of this project: {files[1]} headless (left out), {files[2]} with an open turn "
+    listed, headless = transcript_counts(ctx.env, ctx.key)
+    print(f"transcripts {listed} of this project: {headless} headless (left out), {opened} with an open turn "
           f"(waiting for a later prompt or 24 h), {gone} gone (zoom --raw fails, the digest stays); "
-          f"{files[3]} turns skipped as run in another project", file=out)
+          f"{foreign} turns skipped as run in another project", file=out)
     if meta:
         m = json.loads(meta[0])
-        print(f"last build {m['at']}: +{m['added']} turns in {m['seconds']} s, "
-              f"{m['scanned']} transcripts scanned, {m['read']} read", file=out)
+        print(f"last build {m['at']}: +{m['added']} turns in {m['seconds']} s, {m['read']} transcripts read", file=out)
 
 
 def build_parser():
@@ -659,7 +773,7 @@ def build_parser():
         s.add_argument("--cwd", dest="sub_cwd", help="resolve the project from this directory")
         return s
 
-    add("build", cmd_build, "ingest this project's finished turns (allowlisted projects only)")
+    add("build", cmd_build, "ingest every project's finished turns, or with --project or --cwd one project's")
     s = add("view", cmd_view, "the newest leaves within a byte budget")
     s.add_argument("--bytes", type=int, default=VIEW_BYTES, help=f"the budget (default {VIEW_BYTES})")
     s = add("zoom", cmd_zoom, "one turn: its digest, or --raw its transcript records")

@@ -117,11 +117,13 @@ class TapeCase(unittest.TestCase):
             "PATH": os.environ.get("PATH", ""),
         }
         (self.tmp / "config" / "tstack").mkdir(parents=True)
-        (self.tmp / "config" / "tstack" / "tape.toml").write_text('projects = ["acme/widget"]\n')
+        self.config = self.tmp / "config" / "tstack" / "tape.toml"
+        self.config.write_text('projects = "all"\n')
         self.repo = git_repo(self.tmp / "repos" / "widget", "git@github.com:Acme/Widget.git")
         self.other = git_repo(self.tmp / "repos" / "other", "git@github.com:Acme/Other.git")
         self.projects = self.tmp / "claude" / "projects"
         self.store = self.tmp / "data" / "tstack" / "tape" / "acme__widget"
+        self.other_store = self.tmp / "data" / "tstack" / "tape" / "acme__other"
         tape._keys.clear()
         tape.memo._scope_cache.clear()
 
@@ -247,10 +249,13 @@ class IsolationTest(TapeCase):
                [sub.prompt("subagent work"), sub.reply("ok")])
         h = Writer("headless", self.repo, entrypoint="sdk-cli")
         append(self.transcript(self.repo, "headless"), [h.prompt("headless work"), h.reply("ok")])
-        self.ok("build")
+        out = self.ok("build")
+        self.assertIn("tape: 2 projects", out)
         self.assertEqual(self.prompts(), ["widget work"])
+        self.assertEqual(sorted(self.prompts(self.other_store)), ["client secret work", "misfiled client work"])
         status = self.ok("status")
         self.assertIn("1 headless (left out)", status)
+        self.assertEqual(sorted(p.name for p in self.store.parent.iterdir()), ["acme__other", "acme__widget", "index.db"])
 
     def test_a_turn_run_in_another_project_is_skipped(self):
         w = Writer("s1", self.repo)
@@ -260,6 +265,7 @@ class IsolationTest(TapeCase):
         self.ok("build")
         self.assertEqual(self.prompts(), ["widget work", "back home"])
         self.assertIn("1 turns skipped as run in another project", self.ok("status"))
+        self.assertEqual(self.rows(self.other_store), [], "the other project's store gets no turn of this file")
 
     def test_a_subdirectory_is_the_same_project(self):
         deep = self.repo / "a" / "b"
@@ -269,22 +275,68 @@ class IsolationTest(TapeCase):
         self.ok("build")
         self.assertEqual(self.prompts(), ["from below"])
 
-    def test_a_project_off_the_allowlist_is_refused(self):
-        o = Writer("theirs", self.other)
+    def write_both(self):
+        w, o = Writer("mine", self.repo), Writer("theirs", self.other)
+        append(self.transcript(self.repo, "mine"), [w.prompt("widget work"), w.reply("ok")])
         append(self.transcript(self.other, "theirs"), [o.prompt("client work"), o.reply("ok")])
-        code, _, err = self.run_tape("build", cwd=self.other)
-        self.assertEqual(code, tape.EXIT_REFUSED)
-        self.assertIn("acme/other is not on the allowlist", err)
-        self.assertFalse((self.tmp / "data" / "tstack" / "tape" / "acme__other").exists())
+
+    def test_an_excluded_project_is_never_recorded(self):
+        self.write_both()
+        self.config.write_text('projects = "all"\nexclude = ["Acme/Other"]\n')
+        out = self.ok("build")
+        self.assertIn("tape: 1 projects", out)
+        self.assertIn("1 projects excluded", out)
+        self.assertFalse(self.other_store.exists())
         code, _, err = self.run_tape("--project", "acme/other", "build")
         self.assertEqual(code, tape.EXIT_REFUSED)
-
-    def test_the_allowlist_is_seeded_when_absent(self):
-        (self.tmp / "config" / "tstack" / "tape.toml").unlink()
-        code, _, err = self.run_tape("build")
+        self.assertIn("acme/other is excluded", err)
+        code, _, err = self.run_tape("build", "--cwd", self.other)
         self.assertEqual(code, tape.EXIT_REFUSED)
-        self.assertIn('"coelhorocha/skills", "luizhcrocha/skills"',
-                      (self.tmp / "config" / "tstack" / "tape.toml").read_text())
+        self.assertFalse(self.other_store.exists())
+
+    def test_a_list_of_projects_still_works(self):
+        self.write_both()
+        self.config.write_text('projects = ["acme/widget"]\n')
+        self.ok("build")
+        self.assertEqual(self.prompts(), ["widget work"])
+        self.assertFalse(self.other_store.exists())
+        code, _, err = self.run_tape("--project", "acme/other", "build")
+        self.assertEqual(code, tape.EXIT_REFUSED)
+        self.assertIn("acme/other is not in `projects`", err)
+
+    def test_build_with_a_project_builds_only_that_one(self):
+        self.write_both()
+        self.assertIn("tape: acme/other: +1 turns", self.ok("build", "--cwd", self.other))
+        self.assertFalse(self.store.exists())
+        self.ok("--project", "acme/widget", "build")
+        self.assertEqual(self.prompts(), ["widget work"])
+
+    def test_the_config_is_seeded_with_every_project(self):
+        self.write_both()
+        self.config.unlink()
+        self.ok("build")
+        self.assertIn('projects = "all"', self.config.read_text())
+        self.assertIn("exclude = []", self.config.read_text())
+        self.assertEqual(self.prompts(self.other_store), ["client work"])
+
+    def test_a_session_outside_any_repo_gets_no_store(self):
+        loose = self.tmp / "loose"
+        loose.mkdir()
+        w = Writer("loose", loose)
+        append(self.transcript(loose, "loose"), [w.prompt("no repo here"), w.reply("ok")])
+        out = self.ok("build")
+        self.assertIn("tape: 0 projects", out)
+        self.assertIn("1 interactive ones outside any repo (no store)", out)
+        self.assertEqual([p.name for p in self.store.parent.iterdir()], ["index.db"])
+
+    def test_a_repo_with_no_origin_is_keyed_by_its_path(self):
+        bare = self.tmp / "repos" / "bare"
+        bare.mkdir()
+        sh(bare, "git", "init", "-q")
+        w = Writer("bare", bare)
+        append(self.transcript(bare, "bare"), [w.prompt("local only"), w.reply("ok")])
+        self.ok("build")
+        self.assertEqual(self.prompts(tape.store_dir(self.env, str(bare))), ["local only"])
 
     @unittest.skipUnless(HAVE_JJ, "jj is not installed")
     def test_every_jj_workspace_is_one_project(self):
@@ -294,7 +346,6 @@ class IsolationTest(TapeCase):
         sh(repo, "jj", "git", "remote", "add", "origin", "https://github.com/acme/gadget")
         lane = self.tmp / "repos" / "gadget-lane"
         sh(repo, "jj", "workspace", "add", str(lane))
-        (self.tmp / "config" / "tstack" / "tape.toml").write_text('projects = ["acme/gadget"]\n')
         a, b = Writer("main", repo), Writer("lane", lane, t=T0 + timedelta(hours=1))
         append(self.transcript(repo, "main"), [a.prompt("in main"), a.reply("ok")])
         append(self.transcript(lane, "lane"), [b.prompt("in the lane"), b.reply("ok")])
