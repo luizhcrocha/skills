@@ -12,7 +12,7 @@
    - **Redundancy.** The wait hangs on one slow instance: hedge or replicate, only when the trace shows the wait dominates and there is headroom.
    - **Lazy evaluation.** Cost lands on results never used or not needed yet: defer to first use.
    - **Scheduling.** The work must happen, but not while someone waits: move it to idle time, a warmup, a precompute. Measure the interactive path.
-3. Plan the fix from the trace. Crossing a function boundary → design it first with `tstack:codebase-design`. Delegate the change to an Opus subagent in its own jj workspace; review the diff; capture a post-fix measurement with the same harness. One attempt verified before the next (Sequence Work into Verifiable Units).
+3. Plan the fix from the trace. Crossing a function boundary → design it first with `tstack:codebase-design`. Delegate the change to an Opus subagent in its own jj workspace; review the diff; capture a post-fix measurement with the same harness. One attempt verified before the next (Sequence Work into Verifiable Units). A fix that does not move the measurement, or a round of hypotheses all falsified, escalates once under `tstack:diagnosing-bugs`' gate (Phase 3, "Escalate once").
 4. Compare the artifacts, not impressions: parse both (JSON to sqlite, a diff) and state the delta. "Inconclusive" or the wrong surface is not a pass; flag it.
 5. Put the measurement (before → after, with its unit and command) in the change description.
 6. Run the Land playbook.

@@ -15,7 +15,7 @@ Core discipline: one change, one measurement, keep or revert. Never stack untest
    - One described jj change per accepted win. Log the row either way.
    A run Luiz leaves unattended borrows the wake mechanism of Autonomous run, not its stop rule.
 6. Push past the first plateau: on several rejects in a row, pivot category, combine near-misses, re-read the source, try something more radical. Correctness and simplicity outrank the number: revert a win that breaks behaviour, keep a simplification that holds the number (Laziness Protocol).
-7. Stop when the predicate holds, or when the remaining ideas are marginal. Never relax the predicate; do not quit while cheap untried hypotheses remain. Stuck → surface it.
+7. Stop when the predicate holds, or when the remaining ideas are marginal. Never relax the predicate; do not quit while cheap untried hypotheses remain. Stuck (a round of grounded hypotheses all rejected on the frozen harness) → escalate once under `tstack:diagnosing-bugs`' gate (Phase 3, "Escalate once"), with the decision log as the falsified round; still stuck → surface it.
 8. Run the Land playbook with the accepted changes stacked in the order they were won.
 
 **Reply:** the metric and target, baseline to final with the percent delta, iterations (kept and reverted), each accepted win on one line, the decision-log path, and the next idea you would try.

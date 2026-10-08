@@ -89,7 +89,14 @@ Do not proceed until you have reproduced **and** minimised.
 
 Generate **3–5 ranked hypotheses** before testing any of them. Single-hypothesis generation anchors on the first plausible idea.
 
-**Escalate once.** When a full round of hypotheses has been falsified, or an Opus attempt at the fix failed, hand the feedback loop, the minimised repro and every falsified hypothesis with its evidence to one agent on the default Fable (`model: "fable"`) for the next ranking. If Fable is unavailable (usage or session limit, credits, a model error), rerun that agent on Opus (`model: "opus"`) and say so in the reply.
+**Escalate once, behind an evidence gate.** Escalate when (a) every hypothesis of a round is falsified with the minimised repro in hand, or (b) the fix did not turn the loop green. A round falsified on an unminimised repro goes back to building the loop (Phases 1 and 2), not up. Spawn one fresh `general-purpose` agent in the Escalation role ([MODELS.md](../../productivity/coordinator/MODELS.md); its fallback when the model is unavailable, said in the reply), in the background, once per diagnosis. It writes no code; it may run the loop and read-only probes. Its brief carries:
+
+- the loop command, and how red and green read;
+- the minimised repro, and what was cut;
+- each falsified hypothesis as prediction, probe and observation;
+- the fix tried, and what the loop said.
+
+It answers two questions, in order: (1) which probe would split the surviving causes; (2) the next 3-5 ranked falsifiable hypotheses, each with its probe. "The evidence cannot tell these apart; run probe X" is a valid first answer.
 
 Each hypothesis must be **falsifiable**: state the prediction it makes.
 
