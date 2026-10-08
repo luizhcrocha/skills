@@ -168,6 +168,16 @@ test("a typed chat draft, its caret and focus survive a state update", () => {
   expect(localStorage.getItem("fleet:/f/billing/chat-draft")).toBe(JSON.stringify("half a thought about the rounding"));
 });
 
+test("a worker's model shows its effort beside it; a row from before efforts, the model alone", () => {
+  const model = (id: string): string => root.querySelector(`#agent-${id} .c-model`)?.textContent ?? "";
+
+  expect(model("a1")).toBe("sonnet medium");
+  expect(model("a2")).toBe("opus high");
+  expect(model("a3")).toBe("opus");
+  stateEvent(changed("a3", (a) => ({ ...a, effort: "high" })));
+  expect(model("a3")).toBe("opus high");
+});
+
 test("a worker filter's choice and an open notifications panel survive a state update", () => {
   const status = root.querySelector<HTMLSelectElement>("#f-status");
 

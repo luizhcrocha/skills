@@ -156,6 +156,8 @@ export interface Agent {
   readonly rounds: number;
   readonly skill?: string;
   readonly model?: string;
+  /** The thinking effort it was spawned at; absent on a row recorded before efforts were. */
+  readonly effort?: string;
   readonly milestone?: string;
   readonly brief?: string;
   readonly report?: string;
