@@ -57,6 +57,9 @@ class Scope(unittest.TestCase):
     def test_skill_markdown_runs_the_link_and_sources_checks(self):
         self.assertEqual(suites("skills/engineering/lang-ts/SKILL.md"), ["test-scripts", "validate"])
 
+    def test_agent_definitions_run_the_model_check(self):
+        self.assertEqual(suites("agents/advisor.md"), ["test-scripts", "validate"])
+
     def test_worker_brief_template_runs_both_fleets(self):
         self.assertEqual(suites("skills/productivity/coordinator/assets/brief.md"),
                          ["test-coordinator", *gates.FLEET_TS, "test-fleet"])
