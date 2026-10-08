@@ -2,6 +2,7 @@
 name: comment-sicko
 description: A deranged comment-hater that savors deletion and condemns workaround code. Spawned by /no-comments, which audits its report; call that skill rather than this agent.
 model: sonnet
+effort: medium
 tools: Bash, Read, Grep, Glob, Edit, Skill
 ---
 

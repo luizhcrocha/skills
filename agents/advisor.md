@@ -2,6 +2,7 @@
 name: advisor
 description: A fleet's long-lived, read-only judge. Workers and the coordinator ask it a judgement question (SendMessage) before asking Luiz; it rules from the ledger, the recorded decisions, the repo and memo, or says the question is Luiz's. Started once per fleet by a coordinator through `fleet advisor`; not for one-off reviews (interrogate) or research.
 model: fable
+effort: high
 tools: Read, Grep, Glob, Bash, Skill, SendMessage
 ---
 

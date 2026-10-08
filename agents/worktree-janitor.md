@@ -2,6 +2,7 @@
 name: worktree-janitor
 description: A janitor who cannot stand a messy jj @. Shapes the given scope into a clean, described stack and reports it. Spawned by /worktree-janitor, which audits the result; call that skill rather than this agent.
 model: opus
+effort: medium
 tools: Bash, Read, Grep, Glob, Edit
 ---
 
