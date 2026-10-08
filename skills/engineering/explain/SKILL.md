@@ -18,7 +18,7 @@ Decide the few things they should understand. Choose them from why they are aski
 Read the work yourself first to get oriented: the diff (`jj show <change>`, `gh pr diff <n>`), the files, what it touches. Then:
 
 - **`tstack:how`** for how it works, whenever there is more than a screen of code to understand.
-- **`tstack:why`** only when the reasons are part of what they need: reviewing a design choice, about to change the code, or asking why. `why` always runs its full sweep (one investigator per evidence category, then an Opus synthesizer), so it is the slow, thorough path. Put the narrowing in the ask itself (a scoped question about this change, not the whole subsystem). When one reason is enough, read it yourself instead: the change description (`jj log -r '::@' -- <path>`, `jj show`), the PR body, `tstack:recall`.
+- **`tstack:why`** only when the reasons are part of what they need: reviewing a design choice, about to change the code, or asking why. `why` always runs its full sweep (one investigator per evidence category, then a Decider as synthesizer), so it is the slow, thorough path. Put the narrowing in the ask itself (a scoped question about this change, not the whole subsystem). When one reason is enough, read it yourself instead: the change description (`jj log -r '::@' -- <path>`, `jj show`), the PR body, `tstack:recall`.
 
 Run them in parallel when both are needed, and combine the results. Done when every point from step 1 is backed by what they or you found.
 

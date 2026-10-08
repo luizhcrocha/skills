@@ -38,7 +38,7 @@ Pass each template verbatim, substituting the transcript path or digest where ma
 
 ## 3. Synthesize
 
-When all three have returned, one Agent call: `general-purpose` on Opus (`model: "opus"`), with [references/synthesizer.md](references/synthesizer.md) verbatim and each reviewer's full output inlined where marked. It spot-verifies citations and returns a structured Accepted / Rejected / Backlog list.
+When all three have returned, one Agent call: a `general-purpose` Decider ([MODELS.md](../coordinator/MODELS.md); on its fallback when its model is unavailable, said in the reply), with [references/synthesizer.md](references/synthesizer.md) verbatim and each reviewer's full output inlined where marked. It spot-verifies citations and returns a structured Accepted / Rejected / Backlog list.
 
 ## 4. Structural enforcement check
 
