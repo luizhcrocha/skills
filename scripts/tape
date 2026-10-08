@@ -1,0 +1,694 @@
+#!/usr/bin/env python3
+"""tape: every session of a project, turn by turn, beside memo. Phase 1a: no model calls.
+
+Design: docs/design/tape.md. One file, standard library only (Python >= 3.11).
+
+    tape build [--project KEY]     ingest this project's Claude Code transcripts (allowlisted projects only)
+    tape view [--bytes N]          the newest leaves within N bytes (default 8192), and how many are older
+    tape zoom I [--raw]            one turn: its stored digest, or with --raw its records from the transcript
+    tape search WORDS...           full-text search over this project's leaves
+    tape status                    what the store holds
+
+A turn runs from a typed prompt to the next one. It is finished, and ingested, when a later prompt
+arrives in its transcript or 24 h have passed since its last record (a resumed session appends to
+the same file). Each finished turn keeps its digest (recall's `sessions.py digest`, clipped to
+32 KB) and a leaf of at most 512 bytes built from it: session, date, the prompt's head, files
+edited, errors, the final reply's head.
+
+Transcripts are found under $CLAUDE_CONFIG_DIR/projects (else ~/.claude/projects) and belong to the
+project their first `cwd` resolves to, by memo's project key (owner/repo from origin, through every
+jj workspace), never by the folder's slug. A turn whose prompt ran in another project is skipped;
+subagent transcripts and headless (`claude -p`) sessions are left out.
+
+Store: $XDG_DATA_HOME/tstack/tape/<owner>__<repo>/tape.db (mode 0700); the allowlist:
+$XDG_CONFIG_HOME/tstack/tape.toml, `projects = [...]`, written with the starting two when absent.
+"""
+
+import json
+import os
+import re
+import socket
+import sqlite3
+import sys
+import time
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
+from pathlib import Path
+
+LEAF_MAX = 512
+DIGEST_MAX = 32 * 1024
+DIGEST_WIDTH = 8000  # sessions.py's width: replies and errors to 8000 characters, prompts to 16000
+FINISH_AFTER = 24 * 3600
+VIEW_BYTES = 8 * 1024
+EDITED_MAX = 120
+HEAD_SCAN = 200  # lines read to find a new transcript's cwd
+SCHEMA = 1
+DEFAULT_ALLOWLIST = ("coelhorocha/skills", "luizhcrocha/skills")
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+DROPPED_KINDS = ("COMPACTED", "AWAY SUMMARY")  # they restate turns tape already has
+
+EXIT_INVALID = 2
+EXIT_REFUSED = 3
+
+HERE = Path(__file__).resolve().parent
+
+
+def _load(name, path):
+    sys.dont_write_bytecode = True
+    loader = SourceFileLoader(name, str(path))
+    module = module_from_spec(spec_from_loader(name, loader))
+    loader.exec_module(module)
+    return module
+
+
+memo = _load("tape_memo", HERE / "memo")
+sessions = _load("tape_sessions", HERE.parent / "skills" / "productivity" / "recall" / "scripts" / "sessions.py")
+
+
+class TapeError(Exception):
+    def __init__(self, message, code=EXIT_INVALID):
+        super().__init__(message)
+        self.code = code
+
+
+# --- text -------------------------------------------------------------------
+
+def clip_bytes(text, limit):
+    """text cut to at most limit UTF-8 bytes, ending in an ellipsis when cut."""
+    raw = text.encode()
+    if len(raw) <= limit:
+        return text
+    if limit < 3:
+        return ""
+    return raw[: limit - 3].decode(errors="ignore") + "…"
+
+
+def nbytes(text):
+    return len(text.encode())
+
+
+_LINE = re.compile(r"^(?P<ts>\d{4}-\d\d-\d\d \d\d:\d\d)?\s*"
+                   r"(?P<kind>USER|ASSISTANT|TOOL|ERROR|AGENT DONE|COMPACTED|AWAY SUMMARY):? ?(?P<text>.*)$", re.S)
+
+
+def parse_line(line):
+    """(kind, text) of one sessions.py digest line, or (None, line)."""
+    m = _LINE.match(line)
+    return (m["kind"], m["text"]) if m else (None, line)
+
+
+def turn_digest(lines):
+    """The digest lines of one turn's records, without the kinds tape drops."""
+    out = []
+    for line in sessions._digest(lines, DIGEST_WIDTH):
+        if parse_line(line)[0] not in DROPPED_KINDS:
+            out.append(line)
+    return out
+
+
+def clip_digest(lines, limit=DIGEST_MAX):
+    """The digest as text of at most limit bytes: the prompt first, then the head and the tail."""
+    text = "\n".join(lines)
+    if nbytes(text) <= limit:
+        return text
+    first, rest = (lines[0], lines[1:]) if lines and parse_line(lines[0])[0] == "USER" else ("", lines)
+    first = clip_bytes(first, limit // 2)
+    room = limit - nbytes(first) - 80
+    head, tail = [], []
+    head_room, tail_room = room // 3, room - room // 3
+    i, j = 0, len(rest) - 1
+    while i <= j and nbytes(rest[i]) + 1 <= head_room:
+        head.append(rest[i])
+        head_room -= nbytes(rest[i]) + 1
+        i += 1
+    while j >= i and nbytes(rest[j]) + 1 <= tail_room:
+        tail.append(rest[j])
+        tail_room -= nbytes(rest[j]) + 1
+        j -= 1
+    marker = f"… {j - i + 1} lines clipped; tape zoom --raw has them …"
+    parts = ([first] if first else []) + head + [marker] + tail[::-1]
+    return clip_bytes("\n".join(parts), limit)
+
+
+def _relative(path, root):
+    """A path under root relative to it, else its last two parts: a leaf has no room for scratch paths."""
+    if root and path.startswith(root.rstrip("/") + "/"):
+        return path[len(root.rstrip("/")) + 1:]
+    parts = Path(path).parts
+    return "…/" + "/".join(parts[-2:]) if len(parts) > 3 else path
+
+
+def make_leaf(session, at, lines, root=""):
+    """At most LEAF_MAX bytes: session, date, prompt head, files edited, error count, final reply head."""
+    prompt, reply, edited, errors = None, "", [], 0
+    for line in lines:
+        kind, text = parse_line(line)
+        if kind == "USER" and prompt is None:
+            prompt = text
+        elif kind == "ASSISTANT" and text.strip():
+            reply = text
+        elif kind == "ERROR":
+            errors += 1
+        elif kind == "TOOL":
+            name, _, detail = text.partition(": ")
+            path = _relative(detail.strip(), root)
+            if name in EDIT_TOOLS and path and path not in edited:
+                edited.append(path)
+    when = (at or "")[:16].replace("T", " ") or "?"
+    head = f"{(session or '?')[:8]} {when} U: "
+    files, shown = "", 0
+    for path in edited:
+        candidate = (files + ", " if files else "") + path
+        rest = len(edited) - shown - 1
+        if nbytes(candidate) + (nbytes(f" +{rest}") if rest else 0) > EDITED_MAX:
+            break
+        files, shown = candidate, shown + 1
+    if edited and not shown:
+        files, shown = clip_bytes(edited[0], EDITED_MAX - 8), 1
+    if shown < len(edited):
+        files += f" +{len(edited) - shown}"
+    tail = (f" | edited {files}" if files else "") + (f" | {errors} errors" if errors else "")
+    sep = " | A: " if reply else ""
+    prompt = prompt if prompt is not None else "(no prompt)"
+    room = LEAF_MAX - nbytes(head) - nbytes(tail) - nbytes(sep)
+    p, r = nbytes(prompt), nbytes(reply)
+    if p + r > room:
+        half = room // 2
+        if p <= half:
+            r = room - p
+        elif r <= half:
+            p = room - r
+        else:
+            p, r = room - half, half
+    return clip_bytes(head + clip_bytes(prompt, p) + tail + sep + clip_bytes(reply, r), LEAF_MAX)
+
+
+# --- transcripts --------------------------------------------------------------
+
+def is_prompt(record):
+    """A prompt Luiz typed (or queued, or a slash command), which starts a turn."""
+    p = sessions._prompt(record)
+    if p is None or p.startswith("<task-notification>"):
+        return False
+    origin = record.get("origin")
+    return not isinstance(origin, dict) or origin.get("kind") in (None, "human")
+
+
+class Segment:
+    """Records of one transcript from a prompt (or from where reading started) to the next prompt."""
+
+    def __init__(self, start, prompt):
+        self.start, self.end, self.prompt = start, start, prompt
+        self.lines, self.first_ts, self.last_ts = [], None, None
+        self.uuids, self.cwd, self.session = [], None, None
+
+    def add(self, record, line, end):
+        self.lines.append(line)
+        self.end = end
+        ts = record.get("timestamp")
+        if ts:
+            self.first_ts = self.first_ts or ts
+            self.last_ts = ts
+        if record.get("uuid"):
+            self.uuids.append(record["uuid"])
+        self.cwd = self.cwd or record.get("cwd")
+        self.session = self.session or record.get("sessionId")
+
+
+def read_segments(path, offset):
+    """(segments from offset, end of the last whole line). A partial last line is left for later."""
+    with open(path, "rb") as fh:
+        fh.seek(offset)
+        data = fh.read()
+    cut = data.rfind(b"\n") + 1
+    segs, cur, pos = [], None, offset
+    for raw in data[:cut].split(b"\n")[:-1]:
+        start, pos = pos, pos + len(raw) + 1
+        try:
+            record = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(record, dict) or record.get("isSidechain"):
+            continue
+        if is_prompt(record):
+            cur = Segment(start, record)
+            segs.append(cur)
+        elif cur is None:
+            cur = Segment(start, None)
+            segs.append(cur)
+        cur.add(record, raw.decode(errors="replace"), pos)
+    return segs, offset + cut
+
+
+def head_of(path):
+    """(first cwd, entrypoint) of a transcript, from its first lines; cwd None when none yet."""
+    cwd = entry = None
+    try:
+        with open(path, errors="replace") as fh:
+            for n, line in enumerate(fh):
+                if n >= HEAD_SCAN or (cwd and entry):
+                    break
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and not r.get("isSidechain"):
+                    cwd = cwd or r.get("cwd")
+                    entry = entry or r.get("entrypoint")
+    except OSError:
+        pass
+    return cwd, entry
+
+
+_keys = {}
+
+
+def key_of(cwd):
+    """memo's project key of a directory ("owner/repo", else the main repo path), or "" outside any repo."""
+    if cwd not in _keys:
+        store = memo.resolve_project(cwd)
+        _keys[cwd] = store.scope.removeprefix("project:") if store else ""
+    return _keys[cwd]
+
+
+# --- the store ------------------------------------------------------------------
+
+def data_home(env):
+    return Path(env.get("XDG_DATA_HOME") or Path(env.get("HOME", str(Path.home()))) / ".local" / "share")
+
+
+def config_path(env):
+    base = env.get("XDG_CONFIG_HOME") or Path(env.get("HOME", str(Path.home()))) / ".config"
+    return Path(base) / "tstack" / "tape.toml"
+
+
+def store_dir(env, key):
+    return data_home(env) / "tstack" / "tape" / key.replace("/", "__")
+
+
+def allowlist(env):
+    import tomllib
+    path = config_path(env)
+    if not path.exists():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("# Projects tape records (owner/repo). docs/design/tape.md, section 8:\n"
+                            "# a client repo joins only after Luiz has read 30 of its nodes.\n"
+                            "projects = [" + ", ".join(f'"{k}"' for k in DEFAULT_ALLOWLIST) + "]\n")
+        except OSError:
+            return set(DEFAULT_ALLOWLIST)
+    try:
+        data = tomllib.loads(path.read_text())
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        raise TapeError(f"tape: cannot read the allowlist {path}: {e}") from None
+    projects = data.get("projects", [])
+    if not isinstance(projects, list) or not all(isinstance(p, str) for p in projects):
+        raise TapeError(f"tape: `projects` in {path} must be a list of owner/repo strings")
+    return {p.strip().lower() for p in projects}
+
+
+def open_db(path):
+    con = sqlite3.connect(path, timeout=10, isolation_level=None)
+    con.execute("pragma journal_mode=wal")
+    if con.execute("pragma user_version").fetchone()[0] != SCHEMA:
+        con.execute("begin immediate")
+        if con.execute("pragma user_version").fetchone()[0] != SCHEMA:
+            con.execute("create table if not exists files (path text primary key, key text, kind text,"
+                        " cwd text, offset int not null default 0, size int, mtime_ns int, open_end text,"
+                        " foreign_turns int not null default 0)")
+            con.execute("create table if not exists turns (i integer primary key, session text, file text,"
+                        " start_off int, end_off int, from_uuid text unique, to_uuid text, at text, end text,"
+                        " bytes int, digest_bytes int, digest text, leaf text)")
+            con.execute("create table if not exists meta (k text primary key, v text)")
+            try:
+                con.execute("create virtual table if not exists fts using fts5(leaf)")
+            except sqlite3.OperationalError:
+                pass  # no FTS5 in this sqlite: search scans the leaves
+            con.execute(f"pragma user_version = {SCHEMA}")
+        con.execute("commit")
+    return con
+
+
+def has_fts(con):
+    return con.execute("select 1 from sqlite_master where name = 'fts'").fetchone() is not None
+
+
+class Ctx:
+    def __init__(self, env, cwd, project=None, now=None):
+        self.env, self.cwd = env, cwd
+        self.now = time.time() if now is None else now
+        if project:
+            self.key = project.strip().lower()
+        else:
+            store = memo.resolve_project(cwd)
+            if store is None:
+                raise TapeError(f"tape: {cwd} is in no jj or git repo; pass --project OWNER/REPO")
+            self.key = store.scope.removeprefix("project:")
+        self.dir = store_dir(env, self.key)
+        self.db_path = self.dir / "tape.db"
+
+    def db(self, create=False):
+        if not self.db_path.exists():
+            if not create:
+                return None
+            self.dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.dir.chmod(0o700)
+        return open_db(self.db_path)
+
+    def must_db(self):
+        con = self.db()
+        if con is None:
+            raise TapeError(f"tape: no tape for {self.key} yet; run `tape build`")
+        return con
+
+
+# --- build ------------------------------------------------------------------------
+
+def _ts_epoch(ts):
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, ValueError):
+        return None
+
+
+def finished(seg, is_last, mtime, now):
+    if not is_last:
+        return True
+    last = _ts_epoch(seg.last_ts) if seg.last_ts else None
+    return now - (last if last is not None else mtime) >= FINISH_AFTER
+
+
+def ingest_file(path, offset, key, mtime, now):
+    """(turns, new offset, open turn's last timestamp or None, turns skipped as another project's)."""
+    segs, end = read_segments(path, offset)
+    turns, foreign, open_end = [], 0, None
+    for n, seg in enumerate(segs):
+        if not finished(seg, n == len(segs) - 1, mtime, now):
+            end, open_end = seg.start, seg.last_ts or ""
+            break
+        lines = turn_digest(seg.lines)
+        if not any(parse_line(ln)[0] in ("USER", "ASSISTANT", "TOOL", "ERROR", "AGENT DONE") for ln in lines):
+            continue
+        cwd = (seg.prompt or {}).get("cwd") or seg.cwd
+        if cwd and key_of(cwd) != key:
+            foreign += 1
+            continue
+        session = (seg.prompt or {}).get("sessionId") or seg.session or Path(path).stem
+        turns.append({
+            "session": session, "file": str(path), "start_off": seg.start, "end_off": seg.end,
+            "from_uuid": seg.uuids[0] if seg.uuids else f"{path}:{seg.start}",
+            "to_uuid": seg.uuids[-1] if seg.uuids else "", "at": seg.first_ts or "", "end": seg.last_ts or "",
+            "bytes": seg.end - seg.start, "digest_bytes": nbytes("\n".join(lines)), "digest": clip_digest(lines),
+            "leaf": make_leaf(session, seg.first_ts, lines, cwd or ""),
+        })
+    return turns, end, open_end, foreign
+
+
+def build(ctx, out):
+    import fcntl
+    allowed = allowlist(ctx.env)
+    if ctx.key not in allowed:
+        raise TapeError(f"tape: {ctx.key} is not on the allowlist, so nothing is recorded for it. Add it to "
+                        f"`projects` in {config_path(ctx.env)} (a client repo only after Luiz has read 30 of "
+                        "its nodes).", EXIT_REFUSED)
+    started = time.monotonic()
+    con = ctx.db(create=True)
+    lock = open(ctx.dir / "lock", "a")
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f"tape: a build of {ctx.key} is already running; it picks up the new turns", file=out)
+            return 0
+        known = {r[0]: r[1:] for r in con.execute(
+            "select path, key, kind, offset, size, mtime_ns, open_end from files")}
+        base = sessions.projects_dir(ctx.env)
+        scanned = read = 0
+        con.execute("begin immediate")
+        new_turns, updates = [], []
+        for path in sorted(base.glob("*/*.jsonl")):
+            scanned += 1
+            p = str(path)
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            row = known.get(p)
+            fkey, kind, offset, size, mtime_ns, open_end = row if row else (None, None, 0, None, None, None)
+            if fkey is not None and fkey != ctx.key:
+                continue
+            if fkey is None:
+                cwd, entry = head_of(path)
+                if cwd is None:
+                    continue  # no cwd yet: classified on a later build
+                fkey = key_of(cwd)
+                kind = "headless" if (entry or "").startswith("sdk") else (entry or "cli")
+                con.execute("insert or replace into files (path, key, kind, cwd, offset, size, mtime_ns)"
+                            " values (?, ?, ?, ?, 0, ?, ?)", (p, fkey, kind, cwd, st.st_size, st.st_mtime_ns))
+                if fkey != ctx.key:
+                    continue
+                offset, size, mtime_ns, open_end = 0, None, None, None
+            if kind == "headless":
+                continue
+            unchanged = size == st.st_size and mtime_ns == st.st_mtime_ns
+            due = open_end is not None and ctx.now - (_ts_epoch(open_end) or st.st_mtime) >= FINISH_AFTER
+            if unchanged and not due:
+                continue
+            if st.st_size < offset:  # rewritten shorter: read it again; a turn already kept is not kept twice
+                offset = 0
+            try:
+                turns, end, oe, foreign = ingest_file(path, offset, ctx.key, st.st_mtime, ctx.now)
+            except OSError:
+                continue  # removed since the scan: Claude Code's cleanup
+            read += 1
+            new_turns += turns
+            updates.append((end, st.st_size, st.st_mtime_ns, oe, foreign, p))
+        new_turns.sort(key=lambda t: (t["end"], t["session"], t["from_uuid"]))
+        added = 0
+        fts = has_fts(con)
+        nxt = con.execute("select coalesce(max(i), -1) + 1 from turns").fetchone()[0]
+        for t in new_turns:
+            cur = con.execute(
+                "insert or ignore into turns (i, session, file, start_off, end_off, from_uuid, to_uuid, at, end,"
+                " bytes, digest_bytes, digest, leaf) values (:i, :session, :file, :start_off, :end_off, :from_uuid,"
+                " :to_uuid, :at, :end, :bytes, :digest_bytes, :digest, :leaf)", {"i": nxt, **t})
+            if cur.rowcount:
+                if fts:
+                    con.execute("insert into fts (rowid, leaf) values (?, ?)", (nxt, t["leaf"]))
+                nxt += 1
+                added += 1
+        for end, size, mtime_ns, oe, foreign, p in updates:
+            con.execute("update files set offset = ?, size = ?, mtime_ns = ?, open_end = ?,"
+                        " foreign_turns = foreign_turns + ? where path = ?", (end, size, mtime_ns, oe, foreign, p))
+        took = time.monotonic() - started
+        con.execute("insert or replace into meta (k, v) values ('last_build', ?)", (json.dumps(
+            {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ctx.now)), "seconds": round(took, 2),
+             "added": added, "scanned": scanned, "read": read}),))
+        con.execute("commit")
+        total = con.execute("select count(*) from turns").fetchone()[0]
+        opened = con.execute("select count(*) from files where key = ? and open_end is not null",
+                             (ctx.key,)).fetchone()[0]
+        print(f"tape: {ctx.key}: +{added} turns ({total} in all, {opened} still open); "
+              f"{scanned} transcripts scanned, {read} read; {took:.1f} s", file=out)
+        return 0
+    finally:
+        lock.close()
+        con.close()
+
+
+# --- reading ------------------------------------------------------------------------
+
+def view_text(con, key, budget=VIEW_BYTES):
+    total = con.execute("select count(*) from turns").fetchone()[0]
+    head = f'<tape project="{key}" machine="{socket.gethostname().split(".")[0]}" turns="{total}">'
+    foot = "</tape>"
+    if not total:
+        return "\n".join([head, "(no turns yet: tape build)", foot])
+    room = budget - nbytes(head) - nbytes(foot) - 2 - nbytes(f"({total} older turns: tape search WORDS, tape zoom I)") - 1
+    shown = []
+    for i, leaf in con.execute("select i, leaf from turns order by i desc"):
+        line = f"{i} {leaf}"
+        if nbytes(line) + 1 > room:
+            break
+        shown.append(line)
+        room -= nbytes(line) + 1
+    older = total - len(shown)
+    lines = [head] + ([f"({older} older turns: tape search WORDS, tape zoom I)"] if older else [])
+    return "\n".join(lines + shown[::-1] + [foot])
+
+
+def search(con, words, limit=20):
+    query = " ".join(words).strip()
+    if not query:
+        raise TapeError("tape: search what? `tape search WORDS...`")
+    if has_fts(con):
+        match = " ".join('"' + w.replace('"', '""') + '"' for w in query.split())
+        try:
+            return con.execute("select turns.i, turns.leaf from fts join turns on turns.i = fts.rowid"
+                               " where fts match ? order by rank limit ?", (match, limit)).fetchall()
+        except sqlite3.OperationalError:
+            pass
+    terms = [w.lower() for w in query.split()]
+    rows = con.execute("select i, leaf from turns order by i desc").fetchall()
+    return [r for r in rows if all(t in r[1].lower() for t in terms)][:limit]
+
+
+def _turn(con, key, ident):
+    m = re.fullmatch(r"\s*(\d+)(\+1)?\s*", ident)
+    if not m:
+        raise TapeError(f"tape: {ident!r} is not a turn id (a number, as `tape view` shows it)")
+    row = con.execute("select i, session, file, start_off, end_off, from_uuid, to_uuid, at, end, bytes, digest,"
+                      " leaf from turns where i = ?", (int(m[1]),)).fetchone()
+    if row is None:
+        n = con.execute("select count(*) from turns").fetchone()[0]
+        raise TapeError(f"tape: no turn {m[1]} in {key} (turns 0..{n - 1})" if n else f"tape: no turns in {key} yet")
+    return dict(zip(("i", "session", "file", "start_off", "end_off", "from_uuid", "to_uuid", "at", "end",
+                     "bytes", "digest", "leaf"), row))
+
+
+def raw_turn(t):
+    path = Path(t["file"])
+    if not path.exists():
+        raise TapeError(f"tape: the transcript of turn {t['i']} is gone ({path}): Claude Code removes them "
+                        f"after cleanupPeriodDays. `tape zoom {t['i']}` shows the digest tape kept.", 1)
+    with open(path, "rb") as fh:
+        fh.seek(t["start_off"])
+        data = fh.read(t["end_off"] - t["start_off"])
+    first = data.split(b"\n", 1)[0]
+    try:
+        uuid = json.loads(first).get("uuid")
+    except (ValueError, AttributeError):
+        uuid = None
+    if ":" not in t["from_uuid"] and uuid != t["from_uuid"]:
+        raise TapeError(f"tape: {path} changed since turn {t['i']} was read; `tape zoom {t['i']}` shows the "
+                        "digest tape kept.", 1)
+    return data.decode(errors="replace").rstrip("\n")
+
+
+# --- commands --------------------------------------------------------------------------
+
+def cmd_build(ctx, a, out):
+    return build(ctx, out)
+
+
+def cmd_view(ctx, a, out):
+    con = ctx.must_db()
+    try:
+        print(view_text(con, ctx.key, a.bytes), file=out)
+    finally:
+        con.close()
+
+
+def cmd_search(ctx, a, out):
+    con = ctx.must_db()
+    try:
+        hits = search(con, a.words, a.limit)
+    finally:
+        con.close()
+    if not hits:
+        print(f"tape: nothing on {' '.join(a.words)!r} in {ctx.key}", file=out)
+        return 1
+    for i, leaf in hits:
+        print(f"{i} {leaf}", file=out)
+
+
+def cmd_zoom(ctx, a, out):
+    con = ctx.must_db()
+    try:
+        t = _turn(con, ctx.key, a.id)
+    finally:
+        con.close()
+    if a.raw:
+        print(raw_turn(t), file=out)
+        return
+    print(f"{t['i']} {t['leaf']}", file=out)
+    print(f"session {t['session']}  {t['at']} .. {t['end']}  {t['bytes']} bytes", file=out)
+    print(f"file {t['file']} [{t['start_off']}, {t['end_off']})  `tape zoom {t['i']} --raw` while it exists", file=out)
+    print("---", file=out)
+    print(t["digest"], file=out)
+
+
+def _size(path):
+    return sum(f.stat().st_size for f in path.iterdir() if f.is_file()) if path.is_dir() else 0
+
+
+def cmd_status(ctx, a, out):
+    allowed = ctx.key in allowlist(ctx.env)
+    print(f"tape: {ctx.key} " + ("(allowlisted)" if allowed else f"(not on the allowlist: {config_path(ctx.env)})"),
+          file=out)
+    con = ctx.db()
+    if con is None:
+        print("no store yet" + ("; run `tape build`" if allowed else ""), file=out)
+        return
+    try:
+        n, first, last, sess, clipped, big = con.execute(
+            "select count(*), min(at), max(end), count(distinct session), coalesce(sum(digest_bytes > ?), 0),"
+            " coalesce(sum(bytes > ?), 0) from turns", (DIGEST_MAX, DIGEST_MAX)).fetchone()
+        files = con.execute("select count(*), coalesce(sum(kind = 'headless'), 0), coalesce(sum(open_end is not null), 0),"
+                            " coalesce(sum(foreign_turns), 0) from files where key = ?", (ctx.key,)).fetchone()
+        paths = [r[0] for r in con.execute("select distinct file from turns")]
+        meta = con.execute("select v from meta where k = 'last_build'").fetchone()
+    finally:
+        con.close()
+    gone = sum(1 for p in paths if not Path(p).exists())
+    print(f"store {ctx.dir} ({_size(ctx.dir) // 1024} KB)", file=out)
+    print(f"turns {n} from {sess} sessions, {(first or '?')[:10]} .. {(last or '?')[:10]}; "
+          f"{clipped} with a digest over {DIGEST_MAX // 1024} KB (clipped), {big} over {DIGEST_MAX // 1024} KB in the "
+          "transcript", file=out)
+    print(f"transcripts {files[0]} of this project: {files[1]} headless (left out), {files[2]} with an open turn "
+          f"(waiting for a later prompt or 24 h), {gone} gone (zoom --raw fails, the digest stays); "
+          f"{files[3]} turns skipped as run in another project", file=out)
+    if meta:
+        m = json.loads(meta[0])
+        print(f"last build {m['at']}: +{m['added']} turns in {m['seconds']} s, "
+              f"{m['scanned']} transcripts scanned, {m['read']} read", file=out)
+
+
+def build_parser():
+    import argparse
+    p = argparse.ArgumentParser(prog="tape", description="Every session of a project, turn by turn (Phase 1a).")
+    p.add_argument("--project", help="OWNER/REPO instead of the project of the current directory")
+    p.add_argument("--cwd", help="resolve the project from this directory instead of the current one")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def add(name, fn, help_):
+        s = sub.add_parser(name, help=help_)
+        s.set_defaults(fn=fn)
+        s.add_argument("--project", dest="sub_project", help="OWNER/REPO (also accepted before the subcommand)")
+        s.add_argument("--cwd", dest="sub_cwd", help="resolve the project from this directory")
+        return s
+
+    add("build", cmd_build, "ingest this project's finished turns (allowlisted projects only)")
+    s = add("view", cmd_view, "the newest leaves within a byte budget")
+    s.add_argument("--bytes", type=int, default=VIEW_BYTES, help=f"the budget (default {VIEW_BYTES})")
+    s = add("zoom", cmd_zoom, "one turn: its digest, or --raw its transcript records")
+    s.add_argument("id")
+    s.add_argument("--raw", action="store_true", help="the records from the transcript, while it exists")
+    s = add("search", cmd_search, "full-text search over this project's leaves")
+    s.add_argument("words", nargs="+")
+    s.add_argument("--limit", type=int, default=20)
+    add("status", cmd_status, "what the store holds")
+    return p
+
+
+def main(argv=None, env=None, cwd=None, out=None, now=None):
+    env = os.environ if env is None else env
+    out = sys.stdout if out is None else out
+    try:
+        a = build_parser().parse_args(argv)
+    except SystemExit as e:
+        return e.code if isinstance(e.code, int) else EXIT_INVALID
+    try:
+        ctx = Ctx(env, getattr(a, "sub_cwd", None) or a.cwd or cwd or os.getcwd(),
+                  getattr(a, "sub_project", None) or a.project, now)
+        return a.fn(ctx, a, out) or 0
+    except TapeError as e:
+        print(e, file=sys.stderr)
+        return e.code
+    except BrokenPipeError:
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
