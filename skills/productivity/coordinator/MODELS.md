@@ -4,9 +4,9 @@ Every agent tstack spawns plays one of the roles below. The role fixes its model
 
 | Role | For | Model, effort | Fallback | Moves up to |
 | :-- | :-- | :-- | :-- | :-- |
-| Watcher | Waits on runs, metrics or a log and reports a change. May live for hours. | Sonnet low | Opus low | |
-| Reader | Reads a lot, writes nothing, returns a short result: logs, traces, transcripts, workspaces, lint trials, source checks. | Sonnet medium | Opus medium | |
-| Researcher | Docs, web and code exploration, one angle per agent, often fanned out. | Sonnet medium | Opus medium | Opus medium, when sources contradict or a trade-off must be weighed |
+| Watcher | Waits on runs, metrics or a log and reports a change. May live for hours. | Haiku low | Sonnet low | Sonnet low, when the watch must act, not only report |
+| Reader | Reads a lot, writes nothing, returns a short result with no judgement call: logs, traces, transcripts, workspaces. Spawned as `tstack:reader` (`agents/reader.md`, read-only tools). | Haiku high | Sonnet medium | Researcher, when the reading must judge what it finds |
+| Researcher | Docs, web and code exploration, one angle per agent, often fanned out; reading that judges what it finds (lint trials, lang-refresh, the verification source wave). | Sonnet medium | Opus medium | Opus medium, when sources contradict or a trade-off must be weighed |
 | Composer | Writes one answer from other agents' findings, with no judgement call expected. | Sonnet high | Opus medium | Opus medium, when the findings contradict |
 | Implementer | Writes code in its own workspace. | Opus high | Sonnet high | |
 | Reviewer | One lens on a diff or a session, two or three in parallel; a second opinion. | Opus high | Sonnet high | |
@@ -17,8 +17,8 @@ Every agent tstack spawns plays one of the roles below. The role fixes its model
 
 ## Why each pair
 
-- **Watcher.** The judgement is "did X happen", and nobody waits on a watcher's first token (inferred). Prefer a background Bash loop whenever the watch is a command: it spends no model tokens. Haiku 5.5 candidate (Watcher: low; Reader: high) pending the side-by-side check.
-- **Reader.** A spawn without an effort already runs at Sonnet medium in Claude Code (measured, 2026-10-08), so naming it changes nothing. Medium scores 5 points over low for about 1.3 times the tokens, and low may skip a search or stop early (sourced: Artificial Analysis index by effort; Anthropic's effort guidance). Haiku 5.5 candidate (Watcher: low; Reader: high) pending the side-by-side check. Lint trials, lang-refresh and the verification source wave judge what they read (a true or false positive, a stale row, doc drift). They are Readers at this pair and are not Haiku candidates.
+- **Watcher.** The judgement is "did X happen", and nobody waits on a watcher's first token, so Haiku's 10 s at low costs nothing (sourced: Artificial Analysis; inferred). Its output costs a twentieth of Sonnet's per token (sourced: Anthropic's Haiku 5.5 page). Prefer a background Bash loop whenever the watch is a command: it spends no model tokens.
+- **Reader.** Anthropic launched Haiku 5.5 for subagent work, summaries and lookups under a bigger lead (sourced: its launch page). Haiku high scores 38 against Sonnet medium's 41 on the Artificial Analysis index, at about a sixth of the cost of an index run (sourced). In a side-by-side on a 1.1 MB transcript and a 260 KB service log (2026-10-08), Haiku high found everything Sonnet medium found and more, with exact counts where Sonnet's were off, at 2 to 3 times the wall time and about 1.5 times the tokens (measured, one run each). It also wrote a scratch file against a "write nothing" brief, so Readers spawn as `tstack:reader`, which has no Write or Edit tool (measured). Reading that judges what it finds (a true or false positive, a stale row, doc drift) is a Researcher's job: Haiku trails Sonnet by 31 points on Terminal-Bench 4.0 (sourced: launch page).
 - **Researcher.** Research runs long tool loops, and breadth comes from more agents, not from each one thinking longer (inferred). Same numbers as the Reader (sourced: Artificial Analysis).
 - **Composer.** Sonnet high scores 47 against Opus low's 42 at half the price per token (sourced: Artificial Analysis).
 - **Implementer and Reviewer.** High is 3 points over medium for about 1.4 times the tokens (sourced: Artificial Analysis). A wrong decision costs a rework round, and a review miss ships (inferred). Not xhigh: 2 more points for about twice the tokens and 132 s to the first token on each turn (sourced: Artificial Analysis). A spawn without an effort runs Opus at medium (measured, 2026-10-08), so naming the pair is what raises these two.
@@ -31,7 +31,7 @@ Every agent tstack spawns plays one of the roles below. The role fixes its model
 - **Pick by the task's shape, not the budget.** Does it write code? Does its call decide what follows? Does it only read and reduce? Does anyone wait on it? A task that mixes reading and judgement takes the judgement role.
 - **Effort is fixed for an agent's life.** Changing it drops the message cache. A worker resumed with SendMessage keeps its level.
 - **Never max.** Sonnet scored lower at max than at xhigh on FrontierCode because it over-delegated, and every model's first token takes 5 to 12 minutes at max (sourced: Artificial Analysis).
-- **Never Fable for fan-out.** Runners, reviewers, explorers and workers run on Opus or Sonnet (Luiz's policy). Fable costs 2.5 times Opus per token, and N copies multiply that.
+- **Never Fable for fan-out.** Runners, reviewers, explorers and workers run on Opus, Sonnet or Haiku (Luiz's policy). Fable costs 2.5 times Opus per token, and N copies multiply that.
 - **Fallback by availability.** On a usage limit, missing credits or a model error, take the role's fallback and say so in the reply. A role never moves to a cheaper model silently. Judgement work done on the fallback gets its output read closer.
 - **Test runs take the target's pair.** A run that tests a skill uses the model and effort of the session the skill will really run in, named on the command line: `claude -p --model <model> --effort <level>`. `claude plugin eval` takes `--model` and has no effort flag (Claude Code 2.1.294), so its report names the effort the runs used.
 - **Any other model is a proposal** Luiz approves first.
