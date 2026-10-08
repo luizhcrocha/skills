@@ -736,13 +736,15 @@ class Ctx:
         raise MemoError(f"memo: no note or summary {token} here (ids are per store; `memo export` lists them)")
 
 
-def clean_text(text):
+def clean_text(text, summary=False):
     text = " ".join(text.split())
     if not text:
         raise MemoError("memo: the text is empty")
     if len(text) > MAX_CHARS:
-        raise MemoError(f"memo: {len(text)} characters; a memory is one line of at most {MAX_CHARS}. "
-                        "Say the decision and the reason, drop the story.")
+        advice = ("a summary is one line: keep the decisions and their why, shorten the rest" if summary
+                  else "a memory is one line: say the decision and the reason, drop the story")
+        raise MemoError(f"memo: {len(text)} characters, {len(text) - MAX_CHARS} over the {MAX_CHARS} limit; "
+                        f"{advice}.")
     for pat in SECRET_PATTERNS:
         if pat.search(text):
             raise MemoError("memo: this looks like a secret. Notes are committed and readable by everyone "
@@ -841,7 +843,7 @@ def cmd_summarize(ctx, a, out):
     *tokens, text = a.args
     if len(tokens) < 2:
         raise MemoError('memo: usage: memo summarize <id> <id>... "<one line>" (at least two ids)')
-    text = clean_text(text)
+    text = clean_text(text, summary=True)
     found = [ctx.find(t) for t in tokens]
     store, view = found[0][0], found[0][1]
     if any(s != store for s, _, _ in found):

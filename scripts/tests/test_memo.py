@@ -224,6 +224,13 @@ class NoteTest(MemoCase):
         self.assertEqual(self.run_memo("note", "story", "x")[0], 2, "an unknown kind is a usage error")
         self.assertEqual(self.files(), [])
 
+    def test_a_long_line_is_refused_with_how_far_over_it_is(self):
+        code, _, err = self.run_memo("note", "fact", "y" * 312)
+        self.assertEqual(code, 2)
+        self.assertIn("312 characters, 32 over the 280 limit", err)
+        self.assertIn("a memory is one line", err)
+        self.assertEqual(self.run_memo("note", "fact", "y" * 280)[0], 0, "exactly at the limit is accepted")
+
     def test_a_worker_cannot_write_and_does_not_wake(self):
         ident = self.note("fact", "from the coordinator")
         worker = {"TSTACK_ROLE": "worker"}
@@ -393,6 +400,8 @@ class SummarizeTest(MemoCase):
             self.assertEqual(code, 2, args)
             self.assertIn(why, err)
         self.assertEqual(len(self.files("summaries")), 1)
+        code, _, err = self.run_memo("summarize", ids[2], ids[3], "x" * 300)
+        self.assertIn("300 characters, 20 over the 280 limit; a summary is one line", err)
 
     def test_summaries_form_a_tree(self):
         ids, _ = self.fill(8, env={})
@@ -605,7 +614,7 @@ class ImportTest(MemoCase):
         code, out, err = self.run_memo("import", path)
         self.assertEqual(code, 2)
         for line, why in [(4, "is not YYYY-MM-DD"), (5, "kind 'story'"), (5, "pin 'maybe'"), (6, "a tab inside"),
-                          (7, "characters"), (8, "secret"), (9, "sources obs 1"), (10, "same date and text as line 3"),
+                          (7, "281 characters, 1 over the 280 limit"), (8, "secret"), (9, "sources obs 1"), (10, "same date and text as line 3"),
                           (11, "empty")]:
             self.assertRegex(err, rf"line {line}: .*{re.escape(why)}")
         self.assertIn("8 bad line(s)", err)
