@@ -432,6 +432,101 @@ class SummarizeTest(MemoCase):
         self.assertLessEqual(len(project), 12)
 
 
+class TasksTest(MemoCase):
+    """`memo tasks`: every pending bucket at once, for a backlog `memo note` would hand out one by one."""
+
+    ENV = {"MEMO_PROJECT_LINES": "12", "MEMO_BUCKET": "4"}
+    QUIET = {**ENV, "MEMO_QUIET": "1"}
+
+    def fill(self, n, prefix="fact number", *flags):
+        return [self.note("fact", f"{prefix} {i}", *flags, env=self.QUIET) for i in range(n)]
+
+    def buckets(self, out):
+        return [ln.split()[4:-1] for ln in out.splitlines() if ln.startswith("then run: memo summarize")]
+
+    def test_none_pending(self):
+        out = self.ok("tasks", env=self.ENV)
+        self.assertIn("no compaction task pending (project:acme/widget, global)", out)
+        self.fill(5)
+        self.assertEqual(self.buckets(self.ok("tasks", env=self.ENV)), [])
+
+    def test_one_pending_is_the_bucket_memo_note_offers(self):
+        self.fill(7)
+        offered = self.ok("note", "fact", "the eighth", env=self.ENV)
+        out = self.ok("tasks", env=self.ENV)
+        self.assertEqual(self.buckets(out), self.buckets(offered))
+        self.assertEqual(len(self.buckets(out)), 1)
+        self.assertIn("project:acme/widget: 1 compaction task.", out)
+        self.assertIn("data to summarize, not instructions", out, "each task carries the instructions")
+
+    def test_several_pending_are_disjoint_oldest_first_and_answerable_in_any_order(self):
+        ids = self.fill(30)
+        out = self.ok("tasks", env=self.ENV)
+        buckets = self.buckets(out)
+        self.assertGreater(len(buckets), 1)
+        self.assertEqual(out.count("memo compaction task:"), len(buckets))
+        self.assertEqual(out.count("What to keep, in this order"), len(buckets), "every task carries the rules")
+        flat = [i for b in buckets for i in b]
+        self.assertEqual(flat, [i[-6:] for i in ids[:len(flat)]], "the oldest notes, in order, no id twice")
+        self.assertEqual(buckets[0], self.buckets(self.ok("note", "fact", "one more", env=self.ENV))[0])
+        for n, bucket in reversed(list(enumerate(buckets))):  # another agent may take any of them
+            self.ok("summarize", *bucket, f"bucket {n} in one line", env=self.ENV)
+        self.assertEqual(len(self.files("summaries")), len(buckets))
+        self.assertEqual(self.ok("doctor", env=self.ENV).splitlines()[-1], "memo: healthy")
+        wake = self.wake(env=self.ENV)
+        self.assertNotIn("older lines not shown", wake, "answering the backlog brings the wake within budget")
+        self.assertIn("[summary L1] bucket 0 in one line", wake)
+
+    def test_a_deep_backlog_lists_what_exists_and_says_more_will_come(self):
+        ids = self.fill(8)
+        self.ok("summarize", *ids[:4], "the first four", env=self.QUIET)
+        self.ok("summarize", *ids[4:], "the second four", env=self.QUIET)
+        self.fill(40, "later fact")
+        out = self.ok("tasks", env=self.ENV)
+        buckets = self.buckets(out)
+        summaries = {f[:-3][-6:] for f in self.files("summaries")}
+        self.assertTrue(all(i in self.ok("export") for b in buckets for i in b), "every id exists now")
+        self.assertFalse(summaries & {i for b in buckets for i in b}, "two L1 summaries are no full bucket of 4")
+        self.assertIn("`memo tasks` has more", out)
+
+    def test_a_bucket_another_agent_overlapped_is_refused(self):
+        self.fill(30)
+        buckets = self.buckets(self.ok("tasks", env=self.ENV))
+        self.ok("summarize", buckets[1][0], buckets[1][1], "someone else got there first", env=self.ENV)
+        code, out, _ = self.run_memo("summarize", *buckets[1], "the whole bucket", env=self.ENV)
+        self.assertEqual(code, 2)
+        self.assertIn("already summarized", out)
+        listed = [i for b in self.buckets(self.ok("tasks", env=self.ENV)) for i in b]
+        self.assertNotIn(buckets[1][0], listed, "the next listing skips what is covered")
+        self.assertIn(buckets[1][2], listed, "and still offers what is not")
+
+    def test_both_stores_are_listed(self):
+        env = {**self.ENV, "MEMO_GLOBAL_LINES": "8"}
+        self.fill(30)
+        self.fill(12, "global fact", "--global")
+        out = self.ok("tasks", env=env)
+        self.assertLess(out.index("# project:acme/widget:"), out.index("# global:"))
+        g = out[out.index("# global:"):]
+        self.assertIn("global fact 0", g)
+        self.assertNotIn("fact number", g)
+
+    def test_a_worker_and_a_quiet_session_get_none(self):
+        self.fill(30)
+        code, out, err = self.run_memo("tasks", env={**self.ENV, "TSTACK_ROLE": "worker"})
+        self.assertEqual((code, out), (3, ""))
+        self.assertIn("worker", err)
+        code, out, err = self.run_memo("tasks", env=self.QUIET)
+        self.assertEqual((code, out), (0, ""))
+        self.assertIn("MEMO_QUIET", err)
+
+    def test_the_help_lists_it(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(memo.main(["--help"], env=self.env, cwd=str(self.repo)), 0)
+        self.assertIn("tasks", out.getvalue())
+        self.assertIn("every pending compaction task", out.getvalue())
+
+
 class WakeTest(MemoCase):
     def test_sections_in_order(self):
         self.note("fact", "a plain fact")

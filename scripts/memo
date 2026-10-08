@@ -649,21 +649,43 @@ def render(view, budget, flat=False, title="Global"):
     return out
 
 
-def compaction_task(view, budget, bucket, flat):
-    """The oldest items, at the lowest level that has a full bucket, once the spine nears its room."""
+def compaction_tasks(view, budget, bucket, flat):
+    """(buckets, more): every bucket memo would hand out, in order, if each were answered as it came;
+    the first is the one `memo note` offers. A bucket is the oldest items at the lowest level that has
+    a full one, while the spine nears its room. Only buckets of items that exist now: when the next
+    one would need a summary nobody has written yet, the list stops there and more is True. The
+    buckets share no item."""
     r = room(view, budget, flat)
     if r < 2:
-        return None
+        return [], False
     size = min(bucket, max(2, r // 2))
-    if len(view.spine) <= max(r - size, r // 2):
-        return None
-    levels = sorted({i.level for i in view.spine})
-    for level in levels:
-        at_level = [i for i in view.spine if i.level == level]
-        verbatim = r // 4 if level == 0 else 0  # the newest notes stay verbatim
-        if len(at_level) - verbatim >= size:
-            return at_level[:size]
-    return None
+    # (sort key, level, item); None stands for a summary answering an earlier bucket.
+    spine = [((view.span(i)[1], not i.is_summary, i.id), i.level, i) for i in view.spine]
+    tasks = []
+    while len(spine) > max(r - size, r // 2):
+        chosen = None
+        for level in sorted({lv for _, lv, _ in spine}):
+            at_level = [e for e in spine if e[1] == level]
+            verbatim = r // 4 if level == 0 else 0  # the newest notes stay verbatim
+            if len(at_level) - verbatim >= size:
+                chosen = at_level[:size]
+                break
+        if chosen is None:
+            break
+        if any(e[2] is None for e in chosen):
+            return tasks, True
+        tasks.append([e[2] for e in chosen])
+        taken = {e[2].id for e in chosen}
+        newest = max(e[0][0] for e in chosen)
+        spine = sorted([e for e in spine if e[2] is None or e[2].id not in taken]
+                       + [((newest, False, ""), chosen[0][1] + 1, None)], key=lambda e: e[0])
+    return tasks, False
+
+
+def compaction_task(view, budget, bucket, flat):
+    """The one bucket `memo note` offers, or None."""
+    tasks, _ = compaction_tasks(view, budget, bucket, flat)
+    return tasks[0] if tasks else None
 
 
 TASK_RULES = (
@@ -794,6 +816,38 @@ def offer_task(ctx, store, out):
     task = compaction_task(view, ctx.budget(store), ctx.cfg.bucket, store.scope == "global")
     if task:
         print(task_text(view, task), file=out)
+
+
+def cmd_tasks(ctx, a, out):
+    """Every pending compaction bucket of every store here, for a backlog `memo note` would hand out
+    one at a time (after `memo import`, which hands out none)."""
+    if ctx.role == "worker":
+        raise MemoError("memo: a fleet worker (TSTACK_ROLE=worker) gets no compaction tasks; "
+                        "its coordinator's sessions answer them.", EXIT_ROLE)
+    if ctx.quiet:
+        print("memo: MEMO_QUIET is set, so no compaction tasks here.", file=sys.stderr)
+        return 0
+    pending = []
+    for store in ctx.stores():
+        view = ctx.view(store)
+        tasks, more = compaction_tasks(view, ctx.budget(store), ctx.cfg.bucket, store.scope == "global")
+        if tasks:
+            pending.append((store, view, tasks, more))
+    if not pending:
+        print(f"memo: no compaction task pending ({', '.join(s.scope for s in ctx.stores())}).", file=out)
+        return 0
+    for n, (store, view, tasks, more) in enumerate(pending):
+        if n:
+            print(file=out)
+        print(f"# {store.scope}: {len(tasks)} compaction task{'s' if len(tasks) > 1 else ''}. No two share an id:"
+              " answer them in any order, or hand one to each agent; each is its own `memo summarize`.", file=out)
+        for task in tasks:
+            print(file=out)
+            print(task_text(view, task), file=out)
+        if more:
+            print(f"\nOnce these are answered, `memo tasks` has more for {store.scope}: the new summaries make "
+                  "the next level due.", file=out)
+    return 0
 
 
 def cmd_note(ctx, a, out):
@@ -1079,8 +1133,9 @@ def cmd_import(ctx, a, out):
     if len(after.spine) > target:
         needed = -(-(len(after.spine) - target) // (size - 1))
         print(f"the store {'would need' if a.dry_run else 'needs'} about {needed} summaries of {size} items: "
-              f"{len(after.spine)} lines of notes for {r} lines of room. Agents write them as `memo note` hands out "
-              "compaction tasks; until then the wake shows the newest notes and a count.", file=out)
+              f"{len(after.spine)} lines of notes for {r} lines of room. `memo tasks` lists them to answer now; "
+              "otherwise `memo note` hands them out one at a time, and until then the wake shows the newest "
+              "notes and a count.", file=out)
     return 0
 
 
@@ -1158,6 +1213,7 @@ def build_parser():
     s.add_argument("--global", dest="glob", action="store_true", help="user and machine memory, not the project's")
     s = add("summarize", cmd_summarize, "answer a compaction task: one line covering the listed ids")
     s.add_argument("args", nargs="+", metavar="ID... TEXT")
+    add("tasks", cmd_tasks, "every pending compaction task, not just the one `memo note` offers")
     s = add("recall", cmd_recall, "full-text search over notes and summaries")
     s.add_argument("query", nargs="+")
     s.add_argument("--limit", type=int, default=20)

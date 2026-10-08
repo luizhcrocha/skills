@@ -94,6 +94,10 @@ OptMem's way, with no extra model call:
   first, or a merge brought one in), `memo summarize` refuses and memo offers
   the next bucket; two summaries that overlap after a merge are both kept and
   wake uses the one covering more.
+- `memo tasks` lists every pending bucket at once (the ones `memo note` would
+  hand out in turn, made of items that exist now), for a backlog such as the
+  one `memo import` leaves; no two share an id, so several agents can take one
+  each.
 - Fleet workers (`TSTACK_ROLE=worker`) never get compaction tasks; neither does
   a session with the hint suppressed (`MEMO_QUIET=1`).
 - Summaries form a tree (16 notes, 16 summaries, …); wake shows recent notes
@@ -163,8 +167,9 @@ It returns a short cited answer and never injects raw dumps.
 ## CLI
 
 `memo wake | note | recall <query> | zoom <id> | open | pin <id> | supersede <id>
-| export | reindex | doctor`, one Python file with the standard library only
-(`sqlite3`, `tomllib`), shipped in the plugin at `scripts/memo`.
+| summarize <ids> <line> | tasks | import <file> | export | reindex | doctor`,
+one Python file with the standard library only (`sqlite3`, `tomllib`), shipped
+in the plugin at `scripts/memo`.
 
 ## Tests
 
