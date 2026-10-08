@@ -24,7 +24,7 @@ Open a todo list with the four phases before launching anything: Frame, Fan out,
    - `rank all`: every arm reports; rank them by a metric named now.
    - `best-of`: N runs of one brief, the best by a metric named now (also a flakiness probe: the spread is a finding).
 3. Set N from the user, or derive it from the shape. N is the total number of workers.
-4. Pick each worker's model by its job. Coverage, exploration, checks, measurement and other legwork: `model: "sonnet"`. A race whose arms write code, or a worker whose job is judgement (debugging, design): `model: "opus"`. A race of models names each arm's model up front; a model other than these is a proposal Luiz approves first.
+4. Pick each worker's role by its job ([MODELS.md](../../productivity/coordinator/MODELS.md) gives each role's model and effort). Coverage, checks and measurement: Readers. Exploration: Researchers. A race whose arms write code, or a worker whose job is judgement (debugging, design): Implementers. Fan-out never runs on Fable. A race of models names each arm's model and effort up front; a model outside MODELS.md is a proposal Luiz approves first.
 5. Give each worker its own place to write. A worker that writes code gets its own jj workspace from the same base: `jj workspace add ../<repo>-swarm-<n> -r <base> --name swarm-<n>`. Other outputs go to `<scratchpad>/swarm-<slug>/<n>/`. When workers verify or measure commits, each brief names the exact change ids and commit ids; a measurement brief also names the method (sample count, what one sample is, order). The worker records both in its result.
 
 Done when the predicate, the shape, the rule (for a race), N, each worker's model and each output place are written down.

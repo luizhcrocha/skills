@@ -7,7 +7,7 @@ description: "Audit tstack's lint rules against their registry and trials; propo
 
 The other half of the loop `tstack:lint-evolve` starts (docs/tstack-plan.md, D12): rules earn `error` by firing without false positives, rules that never fire leave, and a rule that keeps firing points at a skill that should teach better. The registry is `lint/registry.toml` in the tstack checkout; [lint/README.md](../../../lint/README.md) lays out the packs. `lint-registry` and `lint-vendor` are on the Bash PATH through the plugin's `bin/`.
 
-Models: trials and repo legwork go to Sonnet agents (`general-purpose`, `model: "sonnet"`); the judgement calls in step 3 are yours.
+Roles ([MODELS.md](../../productivity/coordinator/MODELS.md)): trials and repo legwork go to `general-purpose` Readers; the judgement calls in step 3 are yours.
 
 Open a todo list with the six steps.
 

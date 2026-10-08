@@ -97,9 +97,9 @@ A fleet's name is its session's: the registry reads it from the session's title,
 - **Where the user goes.** Your Links view lists every fleet's pages and dev servers, and every port the machine serves that no link names, with the fleet that started it. One left unnamed goes back to that fleet to record (`link`) or to stop.
 - **Whose files a landing moves.** `fleet fleets whose FROM TO`, in the repository, sorts the files by owning fleet from `<dir>/owners` (one `FLEET GLOB` per line, first match wins; keep it with the owners in `standing.md`).
 
-A fleet's advisor runs on Fable, restarted on Opus when Fable is unavailable (its row's model says which). When one fleet reports Fable unavailable, tell the others: their next advisor spawn goes straight to Opus.
+A fleet's advisor plays the Advisor role ([MODELS.md](../coordinator/MODELS.md)) and is restarted on the role's fallback when its model is unavailable (its row's model says which). When one fleet reports Fable unavailable, tell the others: their next advisor spawn goes straight to the fallback.
 
-A monitor agent you spawn (app metrics, runs, executions, reporting back to you) runs on the default Sonnet (`model: "sonnet"`), as the coordinator's model table says. When a new default model comes out, the fleets move their agents to it (the coordinator's SKILL.md, "A new default model"); yours too.
+A monitor agent you spawn (app metrics, runs, executions, reporting back to you) is a Watcher ([MODELS.md](../coordinator/MODELS.md)); when the watch is a command, a background Bash loop does it without a model. When a new default model comes out, the fleets move their agents to it (the coordinator's SKILL.md, "A new default model"); yours too.
 
 ## The user steps away
 

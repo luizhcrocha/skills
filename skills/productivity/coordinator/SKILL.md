@@ -62,22 +62,15 @@ Record the skill on the worker (`agent --skill`); `fleet brief` resolves its pat
 
 ### 3. Pick the model
 
-Three models are approved and need no discussion: the default Fable for decisive single roles, the default Opus and the default Sonnet, whichever versions those are today (`model: "opus"` and `model: "sonnet"` on the Agent tool pick them). Pick by where the task's difficulty lies:
+Pick the worker's role from [MODELS.md](MODELS.md) by the task's shape; the role fixes the model, the effort and the fallback. An implementation or debugging worker is an Implementer, a research worker a Researcher, and a monitor (app metrics, runs, executions, reporting back) a Watcher, whoever spawns it: you, a worker or the manager. Research a worker needs for its own task is a Researcher too.
 
-| The task is | Model |
-| :-- | :-- |
-| **Judgement**: implementation, debugging, prototypes, design, review, anything where a wrong decision costs a rework | the default Opus (`model: "opus"`) |
-| **Decisive single role**: one agent whose call decides what follows (the fleet's advisor, a skill's judge or synthesizer, the hardest task) | the default Fable (`model: "fable"`); if Fable is unavailable (limits, credits, a model error), the default Opus, recorded on the worker and said in your next message |
-| **Legwork**: research and reading, docs or API facts, scans and log reads, mechanical sweeps (a rename, a format pass), running checks and reporting the output | the default Sonnet (`model: "sonnet"`), whoever spawns it: research a worker needs for its own task runs on Sonnet too, unless the question itself needs judgement (contradicting sources, a trade-off to weigh) |
-| **Watching**: a monitor agent that watches app metrics, runs, or executions and reports back | the default Sonnet (`model: "sonnet"`), whoever spawns it: you, a worker, or the manager |
+**What delegating saves.** A worker costs its brief, everything it reads, and your reading of its report, so hand a Reader what is read-heavy and comes back short: aggregating many reports into a table, reading logs, drafting a summary from files. A sentence you can write from what you already know stays yours: the handoff would cost more than the sentence. And the page computes what the ledger holds (the workers running, the current steps, what comes next, what waits on the user), so none of that needs writing.
 
-**What delegating saves.** A worker costs its brief, everything it reads, and your reading of its report, so hand the default Sonnet what is read-heavy and comes back short: aggregating many reports into a table, reading logs, drafting a summary from files. A sentence you can write from what you already know stays yours: the handoff would cost more than the sentence. And the page computes what the ledger holds (the workers running, the current steps, what comes next, what waits on the user), so none of that needs writing.
+When a Reader's or Researcher's report shows the task held more judgement than the brief expected (it guessed at a decision, or its findings contradict each other), continue the work on a worker in the judgement role with the report pasted into the brief.
 
-A task that mixes the two goes to Opus. When a Sonnet worker's report shows the task held more judgement than the brief expected (it guessed at a decision, or its findings contradict each other), continue the work on an Opus worker with the report pasted into the brief.
+Record the model in the ledger (`--model <model>`; the state CLI assumes Opus, and warns on any model outside Fable, Opus and Sonnet). Any other model is a proposal, and the user approves it before you spawn: say which model, for which task, and why. If the user is not around to answer, spawn on the role's model and note the proposal in the dashboard's activity log instead of waiting.
 
-Record the model in the ledger (`--model sonnet`; the state CLI assumes Opus, and warns on any model outside the three). Any other model is a proposal, and the user approves it before you spawn: say which model, for which task, and why. If the user is not around to answer, spawn on the approved model that fits and note the proposal in the dashboard's activity log instead of waiting.
-
-When the approved model for a task is unavailable (its limit is reached), spawn on the other approved one, record it on the worker, and say so in your next message. Judgement work done on Sonnet gets its report read closer.
+When a role's model is unavailable (a limit, credits, a model error), spawn on the role's fallback, record it on the worker, and say so in your next message.
 
 **The advisor.** When workers start needing judgement (a design choice inside the brief, how to read a recorded decision), start one advisor for the fleet: `fleet advisor <dashboard-dir>` records its row and prints its prompt; spawn `tstack:advisor` with it (`model: "fable"`, in the background), then `fleet advisor <dashboard-dir> --task-id <agentId>` and add the line it prints under "This fleet" in brief.md. A spawn that fails on the model (unavailable, limits, credits) is restarted on Opus: `fleet advisor <dashboard-dir> --model opus --log "Fable unavailable: <the error>"`, spawn again with `model: "opus"`, and say so in your next message. Ask it yourself before you open a decision; a decision it called the user's carries its recommendation.
 

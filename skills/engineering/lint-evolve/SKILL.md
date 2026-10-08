@@ -7,7 +7,7 @@ description: "Turn a repeated lesson into a native lint rule, tested on the real
 
 A lesson that repeats becomes a rule in the language's own linter, vendored into each repo so its checks and CI enforce it (docs/tstack-plan.md, D12; `tstack:principles`, Encode Lessons in Structure). The packs, the registry and the vendoring are laid out in the tstack checkout's [lint/README.md](../../../lint/README.md); `lint-registry` and `lint-vendor` are on the Bash PATH through the plugin's `bin/` (else `scripts/` in the checkout).
 
-Models: evidence legwork and trials go to Sonnet agents (`general-purpose`, `model: "sonnet"`); the rule is written on Opus (you, or one `general-purpose` agent with `model: "opus"` when this session is not on Opus).
+Roles ([MODELS.md](../../productivity/coordinator/MODELS.md)): evidence legwork and trials go to `general-purpose` Readers; an Implementer writes the rule (you, or one `general-purpose` agent in that role when this session does not run the Implementer's model).
 
 Open a todo list with the six steps.
 
