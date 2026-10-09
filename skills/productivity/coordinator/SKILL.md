@@ -157,7 +157,14 @@ A decision carries the bare minimum to decide, written for a person who reads it
   10. **How to undo**: what reverses each step, and what cannot be reversed.
   11. **What happens after you answer**: the next step, and when the user hears again.
 
-  Show, don't tell (`/tstack:show-me`), where it fits: a small inline SVG for a flow, a before/after table, a table for numbers to compare. Never decoration.
+  **Show-me triggers** (`/tstack:show-me`): the body carries a picture when the question has one of these shapes, and none otherwise:
+  - parts that talk to each other (where data lives, a pipeline, an architecture choice): a small inline SVG of the parts and the arrows between them, what changes highlighted;
+  - three or more numbers to weigh (costs, scores, counts): a table, one row per option;
+  - a change in behaviour: a before/after table;
+  - content to judge (classifying documents, picking pages): real examples, with images and captions;
+  - none of these: plain words, no visual. Never decoration.
+
+  The CLI warns, for a choice or a grilling whose question, why or body names parts (database, graph, Neo4j, Postgres, pipeline, store, "lives in", queue) or carries three or more amounts, when the body has no `<svg>`, `<table>` or `<img>`.
 - A **revision** says what changed in one line (`--log "the cap is US$5 now, was US$10"`): the page's history shows it. Never paste the whole plan again in the question or the log; the CLI warns when the question, options or manual change with no `--log`. When the question itself changes, or a recorded decision proves wrong, supersede it (`--supersedes`, after closing the old one) rather than stacking a second ask on it: the old one leaves the open list, and each page links to the other.
 
 A **secret** is asked for as a pointer to it. The decision names the key the code expects (`--secret`, as in `secretspec.toml`), the user answers with a 1Password reference (`op://vault/item/field`) or the item's name, and `--manual` gives the route by hand, in the user's shell syntax. Resolve the reference where the code reads it (`op read`, `secretspec check`) and report whether it resolved; the value stays out of the chat, the ledger, and your messages.

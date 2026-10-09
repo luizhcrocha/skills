@@ -295,6 +295,14 @@ describe("readable", () => {
     expect(refused("grill", "g1", "--title", "")).toContain("a grilling keeps a title");
   });
 
+  test("parts or numbers with no picture are told they need one", () => {
+    const base = ["--kind", "decision", "--title", "T", "--option", "A: yes | go", "--option", "B: no | stop", "--recommend", "A", "--reason", "r", "--why", "w"];
+    expect(run("decision", "d1", ...base, "--question", "Should the terms move to the graph database?").stderr).toContain("d1 looks like it needs a visual (graph, database)");
+    const picture = join(root, "picture.html");
+    writeFileSync(picture, "<svg viewBox='0 0 1 1'></svg>");
+    expect(run("decision", "d2", ...base, "--question", "Should the terms move to the graph database?", "--body", picture).stderr).not.toContain("needs a visual");
+  });
+
   test("a grilling question takes options and recommends one by id", () => {
     ok("grill", "g1", "--title", "T", "--ask", "t | Where? | a | One store keeps it simple.", "--option", "Q1 a: Postgres | one place to undo", "--option", "Q1 b: Neo4j | quicker to query");
     const questions = (asArray(item("g1")["questions"]) ?? []).map((q) => asObject(q) ?? {});

@@ -14,7 +14,7 @@ import { stampOf } from "../clock.ts";
 import type { Args } from "../cli/args.ts";
 import { stateRefusal, type Refusal } from "../errors.ts";
 import { pyStr } from "../json.ts";
-import { FLEET_BIN, isDir, makeDirs, readOrWhy, remove, resolvePath, writeBytes } from "../files.ts";
+import { FLEET_BIN, isDir, makeDirs, readOrWhy, readText, remove, resolvePath, writeBytes } from "../files.ts";
 import { failedAnswer, failureWords } from "../health.ts";
 import { placeRoot, registeredSession } from "../hub/grants.ts";
 import { pidOfEntry } from "../registry.ts";
@@ -964,8 +964,38 @@ function nuRefusal(manual: string): string | undefined {
   return undefined;
 }
 
+/* What reads as needing a picture (coordinator SKILL.md, Decisions, the show-me triggers): parts that talk to each
+ * other, or three or more amounts to weigh; a body with an <svg>, a <table> or an <img> has one. */
+const ARCHITECTURE_RE = /\b(database|graph|neo4j|postgres|pipeline|store|lives in|queue)s?\b/giu;
+
+const AMOUNT_RE = /(?:US\$|R\$|\$|€)\s?\d[\d.,]*|\d+(?:[.,]\d+)?\s?%/gu;
+
+const VISUAL_RE = /<(?:svg|table|img)\b/iu;
+
+/** The body `d` carries, as written to DIR/decisions/ID.html; "" when it has none. */
+function bodyText(root: string, d: Decision): string {
+  return d.body === true ? (readText(join(root, "decisions", `${d.id}.html`)) ?? "") : "";
+}
+
+/** The show-me warning for `what` when its words name parts that talk to each other or carry three or more amounts
+ * to compare, and its body has no picture. */
+function visualWarning(what: string, texts: readonly string[], body: string): string | undefined {
+  if (VISUAL_RE.test(body)) return undefined;
+  const text = [...texts, body.replace(/<[^>]*>/gu, " ")].join("\n");
+  const words = [...new Set([...text.matchAll(ARCHITECTURE_RE)].map((m) => (m[1] ?? "").toLowerCase()))];
+  const amounts = [...text.matchAll(AMOUNT_RE)].length;
+  const said = [...(words.length > 0 ? [words.join(", ")] : []), ...(amounts >= 3 ? [`${String(amounts)} amounts to compare`] : [])];
+
+  if (said.length === 0) return undefined;
+
+  return (
+    `state: ${what} looks like it needs a visual (${said.join("; ")}): see coordinator SKILL.md #decisions ` +
+    "(show-me triggers): a small inline SVG of the parts, a table of the numbers, in --body."
+  );
+}
+
 /** What the CLI says, without refusing, about a decision hard to read; `fields`: the fields this command wrote. */
-function readabilityWarnings(d: Decision, fields: ReadonlySet<string>): string[] {
+function readabilityWarnings(d: Decision, fields: ReadonlySet<string>, root?: string): string[] {
   if (d.kind === "permission" || d.kind === "grill") return [];
   const out: string[] = [];
   const q = d.question ?? "";
@@ -1007,6 +1037,12 @@ function readabilityWarnings(d: Decision, fields: ReadonlySet<string>): string[]
     if (found.length > 0) out.push(`state: ${d.id}'s manual has bash in a nu block (${found.join(", ")}): Luiz's shell is nushell (\`;\` or \`and\`, \`$env.X = ...\`, \`(...)\`, \`o+e>|\`).`);
   }
 
+  if (root !== undefined && d.kind === "decision" && ["question", "why", "body"].some((k) => fields.has(k))) {
+    const visual = visualWarning(d.id, [d.question ?? "", d.why ?? ""], bodyText(root, d));
+
+    if (visual !== undefined) out.push(visual);
+  }
+
   return out;
 }
 
@@ -1028,7 +1064,7 @@ function movedFields(changed: readonly string[], before: ReadonlyMap<string, str
 
 /** The fields of the decision a command wrote, for its warnings. */
 function writtenFields(args: Args): Set<string> {
-  const out = new Set(["question", "why", "manual", "title", "reason"].filter((k) => args.str(k) !== undefined));
+  const out = new Set(["question", "why", "manual", "title", "reason", "body"].filter((k) => args.str(k) !== undefined));
 
   if ((args.list("option") ?? []).length > 0) out.add("option");
 
@@ -1294,7 +1330,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         yield* checkKind(fresh, true);
         yield* setBody(run, fresh);
 
-        for (const warning of readabilityWarnings(fresh, writtenFields(args))) run.warn(warning);
+        for (const warning of readabilityWarnings(fresh, writtenFields(args), run.root)) run.warn(warning);
         const forManager = fresh.asks === "manager";
         log(run, ledger, {
           kind: "asked",
@@ -1377,7 +1413,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       yield* checkKind(row, args.str("manual") !== undefined);
       yield* setBody(run, row);
 
-      for (const warning of readabilityWarnings(row, writtenFields(args))) run.warn(warning);
+      for (const warning of readabilityWarnings(row, writtenFields(args), run.root)) run.warn(warning);
 
       if (["question", "option", "manual"].some((k) => changed.includes(k)) && !given(args.str("log")) && decide === undefined && withdraw === undefined) {
         run.warn(`state: ${row.id} was asked again with new words and no --log: say what changed in one line (--log "..."); the page's history shows it, and the user should not have to compare two versions.`);
@@ -1738,6 +1774,12 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
 
     for (const q of qs) {
       for (const warning of grillWarnings(row, q, askedNow.has(q.id), reasoned.has(q.id), askedNow.has(q.id) || givenOptions.has(q.id))) run.warn(warning);
+    }
+
+    if (askedNow.size > 0 || args.str("why") !== undefined || given(args.str("body"))) {
+      const visual = visualWarning(row.id, [row.why ?? "", ...qs.flatMap((q) => (askedNow.has(q.id) ? [q.body ?? ""] : []))], bodyText(run.root, row));
+
+      if (visual !== undefined) run.warn(visual);
     }
 
     if (added.length > 0 && created) {

@@ -245,6 +245,15 @@ class ReadableTest(Fleet):
         self.assertEqual(self.state()["events"][-1]["text"], "Where the legal terms live: the why changed")
         self.assertIn("a grilling keeps a title", self.refused("grill", "g1", "--title", ""))
 
+    def test_parts_or_numbers_with_no_picture_are_told_they_need_one(self):
+        base = ["--kind", "decision", "--title", "T", "--option", "A: yes | go", "--option", "B: no | stop", "--recommend", "A", "--reason", "r", "--why", "w"]
+        r = self.run_cli("decision", "d1", *base, "--question", "Should the terms move to the graph database?")
+        self.assertIn("d1 looks like it needs a visual (graph, database)", r.stderr)
+        picture = self.root / "picture.html"
+        picture.write_text("<svg viewBox='0 0 1 1'></svg>")
+        r = self.run_cli("decision", "d2", *base, "--question", "Should the terms move to the graph database?", "--body", str(picture))
+        self.assertNotIn("needs a visual", r.stderr)
+
     def test_a_grilling_question_takes_options_and_recommends_one_by_id(self):
         self.ok("grill", "g1", "--title", "T", "--ask", "t | Where? | a | One store keeps it simple.",
                 "--option", "Q1 a: Postgres | one place to undo", "--option", "Q1 b: Neo4j | quicker to query")

@@ -769,7 +769,39 @@ def check_nu(manual: str) -> None:
                  "write it so it runs in Luiz's shell, or tag the block with the language it is in")
 
 
-def readability_warnings(d: dict, given: set) -> list[str]:
+# What reads as needing a picture (coordinator SKILL.md, Decisions, the show-me triggers): parts that talk to each
+# other, or three or more amounts to weigh; a body with an <svg>, a <table> or an <img> has one.
+ARCHITECTURE_RE = re.compile(r"\b(database|graph|neo4j|postgres|pipeline|store|lives in|queue)s?\b", re.I)
+AMOUNT_RE = re.compile(r"(?:US\$|R\$|\$|€)\s?\d[\d.,]*|\d+(?:[.,]\d+)?\s?%")
+VISUAL_RE = re.compile(r"<(?:svg|table|img)\b", re.I)
+
+
+def body_text(root: Path, d: dict) -> str:
+    """The body `d` carries, as written to DIR/decisions/ID.html; "" when it has none."""
+    if not d.get("body"):
+        return ""
+    try:
+        return (root / "decisions" / f"{d['id']}.html").read_text(errors="replace")
+    except OSError:
+        return ""
+
+
+def visual_warning(what: str, texts: list[str], body: str) -> str | None:
+    """The show-me warning for `what` when its words name parts that talk to each other or carry three or more
+    amounts to compare, and its body has no picture."""
+    if VISUAL_RE.search(body):
+        return None
+    text = "\n".join([*texts, re.sub(r"<[^>]*>", " ", body)])
+    words = list(dict.fromkeys(m.group(1).lower() for m in ARCHITECTURE_RE.finditer(text)))
+    amounts = len(AMOUNT_RE.findall(text))
+    said = ([", ".join(words)] if words else []) + ([f"{amounts} amounts to compare"] if amounts >= 3 else [])
+    if not said:
+        return None
+    return (f"state: {what} looks like it needs a visual ({'; '.join(said)}): see coordinator SKILL.md #decisions "
+            "(show-me triggers): a small inline SVG of the parts, a table of the numbers, in --body.")
+
+
+def readability_warnings(d: dict, given: set, root: Path | None = None) -> list[str]:
     """What the CLI says, without refusing, about a decision hard to read; `given`: the fields this command wrote."""
     if d["kind"] in ("permission", "grill"):
         return []
@@ -800,6 +832,10 @@ def readability_warnings(d: dict, given: set) -> list[str]:
         if found:
             out.append(f"state: {d['id']}'s manual has bash in a nu block ({', '.join(found)}): Luiz's shell is nushell "
                        "(`;` or `and`, `$env.X = ...`, `(...)`, `o+e>|`).")
+    if d["kind"] == "decision" and given & {"question", "why", "body"} and root is not None:
+        visual = visual_warning(d["id"], [d.get("question") or "", d.get("why") or ""], body_text(root, d))
+        if visual:
+            out.append(visual)
     return out
 
 
@@ -899,7 +935,8 @@ def cmd_decision(state, args):
         if not made_elsewhere:
             check_kind(d, True)
             set_body(Path(args.dir).resolve(), d, args)
-            for warning in readability_warnings(d, {k for k in ("question", "why", "manual", "title", "reason") if getattr(args, k) is not None} | ({"option"} if args.option else set())):
+            for warning in readability_warnings(d, {k for k in ("question", "why", "manual", "title", "reason", "body") if getattr(args, k) is not None} | ({"option"} if args.option else set()),
+                                                   Path(args.dir).resolve()):
                 sys.stderr.write(warning + "\n")
             for_manager = d["asks"] == "manager"   # the manager looks first: the user is not called yet
             log(state, "asked", f"{'For the manager: ' if for_manager else ''}{d['title']}: {d['question']}", d["agent"],
@@ -944,7 +981,8 @@ def cmd_decision(state, args):
             changed.append("asks")
         check_kind(d, args.manual is not None)
         set_body(Path(args.dir).resolve(), d, args)
-        for warning in readability_warnings(d, {k for k in ("question", "why", "manual", "title", "reason") if getattr(args, k) is not None} | ({"option"} if args.option else set())):
+        for warning in readability_warnings(d, {k for k in ("question", "why", "manual", "title", "reason", "body") if getattr(args, k) is not None} | ({"option"} if args.option else set()),
+                                                   Path(args.dir).resolve()):
             sys.stderr.write(warning + "\n")
         if any(k in changed for k in ("question", "option", "manual")) and not args.log and args.decide is None and args.withdraw is None:
             sys.stderr.write(f"state: {d['id']} was asked again with new words and no --log: say what changed in one line "
@@ -1141,6 +1179,11 @@ def cmd_grill(state, args):
     for q in qs:
         for warning in grill_warnings(d, q, q["id"] in asked_now, q["id"] in reasoned, q["id"] in asked_now or q["id"] in given_options):
             sys.stderr.write(warning + "\n")
+    if asked_now or args.why is not None or args.body:
+        visual = visual_warning(d["id"], [d.get("why") or "", *(q.get("body") or "" for q in qs if q["id"] in asked_now)],
+                                body_text(Path(args.dir).resolve(), d))
+        if visual:
+            sys.stderr.write(visual + "\n")
     if new and created:
         print(f"asked {d['id']}. Arm its answers' wake now, as a background command (run_in_background): "
               f"`{FLEET} chat {Path(args.dir).resolve()} wait {d['id']}`; arm it again after each round.")

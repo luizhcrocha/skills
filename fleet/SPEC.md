@@ -264,7 +264,13 @@ Checked in this order:
    then the reason, of those given); `state: <id>'s why is N characters: ...` (over 200); `state:
    <id>'s consequences over 160 characters: A (212), ... ` (`--option`); `state: <id>'s manual has
    bash in a nu block (&&, export X=, $(...), 2>&1): ...` (`--manual`, the patterns found in its nu
-   blocks, in that order); then, on a known one, `state: <id> was asked again with new words and
+   blocks, in that order); for a choice (kind decision) whose question, why or body this command gave,
+   `state: <id> looks like it needs a visual (graph, database; 3 amounts to compare): see coordinator
+   SKILL.md #decisions (show-me triggers): a small inline SVG of the parts, a table of the numbers, in
+   --body.` when its question, why and body text (tags taken out) name database, graph, neo4j,
+   postgres, pipeline, store, lives in or queue (whole words, any case, a plural too; each once,
+   lower-cased, in the order found) or carry three or more amounts (`US$7`, `R$ 3`, `$5`, `€2`, `12%`),
+   and its body has no `<svg`, `<table` or `<img`; then, on a known one, `state: <id> was asked again with new words and
    no --log: ...` when `--question`, `--option` or `--manual` was given with no `--log`,
    `--decide` or `--withdraw`.
    **A nu block that does not parse**: a secret's or action's `--manual` given in this command,
@@ -347,7 +353,9 @@ Checked in this order:
   options (asked, revised or given options in this command) the consequences over 160 characters
   (`state: <id>'s Q<n> consequences over 160 characters: b (162). Say each in one line; the detail goes
   in --body.`) and more than four (`state: <id>'s Q<n> has 5 options: give 2 to 4; a choice the user
-  makes on its own is a question of its own.`).
+  makes on its own is a question of its own.`). Then, when questions were asked or revised or `--why`
+  or `--body` given, the show-me warning as for a decision, on the grilling's why, the QUESTION parts
+  asked or revised in this command, and its body.
 - New questions, revisions, options, reasons, a body, or a moved title or why log `asked`
   (`<title>: N new question(s)` / `a question revised` / `options given` / `reasons added`, else what
   of the grilling moved, `the title changed, the why changed, the context changed` as applies;
@@ -1670,6 +1678,7 @@ fleet's refusal of lanes that meet, the isolated fleet's warning, `show`, valida
 `--option`, its recommendation by id, a grilling's `--body`, the reason's warnings),
 `why-limit` (a why over 400 refused, over 200 warned, a worker's id and the internal names warned),
 `grill-revise` (an open grilling's title, why and context revised with `--log`),
+`show-me-triggers` (the warning that a decision or grilling needs a picture),
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each
 hand-written trace, the same steps with every state command rendering, plus `render-page` (a
 session's scratchpad with its transcript, links, markup and U+2028 in the text, unread chat, a
