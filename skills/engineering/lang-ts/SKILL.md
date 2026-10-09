@@ -49,6 +49,7 @@ When local code breaks one of these, keep compatibility at the seam and improve 
 - Vite+ owns the loop: `vp check` (Oxfmt, type-aware Oxlint with `typeCheck: true`, so it also type-checks) and `vp test`. Config lives in `vite.config.ts` (`lint`, `fmt`, `test` blocks).
 - The tsconfig baseline is `strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `noImplicitReturns`, `noFallthroughCasesInSwitch`, `noImplicitOverride`, `noPropertyAccessFromIndexSignature`, `verbatimModuleSyntax`, `isolatedModules`, `erasableSyntaxOnly`, `moduleResolution: "bundler"`, `noEmit`.
 - Custom lint rules are an Oxlint JS plugin at `error`: tstack's `lint/ts` pack (the anti-slop fork plus tstack's own rules), vendored with `lint-vendor add ts`; a lesson that repeats becomes a rule there through `tstack:lint-evolve`. Detail in `references/typescript-contracts.md`.
+- A `vp dev`, `vite`, `wrangler dev` or watch-mode `vp test` you start for a check, you stop when the check is done. Run tests once (`vp test run`), not in watch mode. In a repo that several agents test at once, cap the test pool (`test.maxWorkers` in `vite.config.ts`): each Vitest worker takes 0.5 to 1 GB, and concurrent runs multiply it.
 - Every tool is on its latest release: check with `npm view <package> version` (and GitHub releases for notes), and install that, never the version a template or nixpkgs carries. Under Vite+, the bundled Vitest, Oxlint and Oxfmt move with `vite-plus`.
 
 ## Testing ladder
