@@ -787,6 +787,39 @@ function AskPartView(props: { readonly part: AskPart }): JSX.Element {
   );
 }
 
+/** A why longer than this, in characters, folds behind More. */
+export const WHY_FOLD = 300;
+
+/** A why that says what the fleet does until the answer: "Meanwhile ...", "Nothing runs until you answer". */
+const MEANWHILE = /^\s*(?:meanwhile|in the meantime|until (?:you|then|this|it)|while (?:we|you|it|the fleet)?\s*waits?|nothing\b[^.]{0,80}?\buntil\b|the fleet (?:runs|proceeds|goes on|keeps))/iu;
+
+/** What a why is, as its heading: what it blocks, what the fleet does meanwhile, or why the user is asked. */
+export function whyHeading(text: string, blocking: boolean): string {
+  if (blocking) return "What it blocks";
+
+  return MEANWHILE.test(text) ? "Meanwhile" : "Why this needs you";
+}
+
+/** The why, in reading type; one over WHY_FOLD characters shows its start and folds the rest behind More. */
+function Why(props: { readonly text: string; readonly blocking: boolean }): JSX.Element {
+  const [open, setOpen] = createSignal(false);
+  const long = (): boolean => [...props.text].length > WHY_FOLD;
+
+  return (
+    <div class={"dv-why" + (props.blocking ? " blocking" : "") + (long() && !open() ? " folded" : "")}>
+      <h3>{whyHeading(props.text, props.blocking)}</h3>
+      <div class="dv-why-text">
+        <Rich text={props.text} />
+      </div>
+      <Show when={long()}>
+        <button type="button" class="btn small dv-why-more" aria-expanded={tf(open())} onClick={() => setOpen(!open())}>
+          {open() ? "Less" : "More"}
+        </button>
+      </Show>
+    </div>
+  );
+}
+
 /** The decision's facts. */
 function Info(props: { readonly d: Decision }): JSX.Element {
   const { m, ui } = usePage();
@@ -888,12 +921,7 @@ function Info(props: { readonly d: Decision }): JSX.Element {
           </div>
         </Show>
       </section>
-      <Show when={d().why}>
-        <div class={"dv-why" + (d().blocking ? " blocking" : "")}>
-          <h3>{d().blocking ? "What it blocks" : "Meanwhile"}</h3>
-          <Rich text={d().why ?? ""} />
-        </div>
-      </Show>
+      <Show when={d().why}>{(why) => <Why text={why()} blocking={d().blocking} />}</Show>
     </>
   );
 }

@@ -11,6 +11,7 @@ import { render } from "@solidjs/web";
 
 import { App } from "../src/App.tsx";
 import { askParts } from "../src/ask.ts";
+import { whyHeading } from "../src/DecisionPage.tsx";
 import { Core, type Decision, type FleetEvent, type Json, type Message as CoreMessage } from "../src/core.ts";
 import { historyOf } from "../src/history.ts";
 import type { Model } from "../src/model.ts";
@@ -170,4 +171,26 @@ test("the history: the latest moment shows, the earlier fold, a long one opens t
   const asked = [...(history?.querySelectorAll(".dv-h-more li") ?? [])].at(-1);
   expect(asked?.querySelector(".dv-h-what")?.textContent).toBe("Asked");
   expect(asked?.querySelector("details .dv-h-full")?.textContent).toContain("Four settings:");
+});
+
+describe("the why", () => {
+  test("its heading says what it is: what it blocks, what the fleet does meanwhile, or why the user is asked", () => {
+    expect(whyHeading("Nothing runs until you answer.", false)).toBe("Meanwhile");
+    expect(whyHeading("Meanwhile the fleet reads the next case.", false)).toBe("Meanwhile");
+    expect(whyHeading("Nothing about where terms are saved changes until you answer.", false)).toBe("Meanwhile");
+    expect(whyHeading("The fixes change every answer the case chat gives, so your rule applies.", false)).toBe("Why this needs you");
+    expect(whyHeading("Nothing runs until you answer.", true)).toBe("What it blocks");
+  });
+
+  test("a long one folds behind More, in body text", () => {
+    page.m.takeState(JSON.stringify({ ...coordinatorView(NOW), decisions: [{ ...D40, why: "The fixes change every turn. " + "x".repeat(320) }], roadblocks: [], events: EVENTS }));
+    flush();
+    const why = root.querySelector("#dv-info .dv-why");
+    expect(why?.querySelector("h3")?.textContent).toBe("Why this needs you");
+    expect(why?.classList.contains("folded")).toBe(true);
+    why?.querySelector<HTMLButtonElement>(".dv-why-more")?.click();
+    flush();
+    expect(why?.classList.contains("folded")).toBe(false);
+    expect(why?.querySelector(".dv-why-more")?.textContent).toBe("Less");
+  });
 });

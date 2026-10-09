@@ -512,7 +512,10 @@
   .dv-ask-more { display: grid; gap: 10px; max-width: 68ch; font-size: 1.0625rem; line-height: 1.55; padding-left: 14px; border-left: 3px solid var(--line); }
   .dv-ask-more ol { margin: 0; padding-left: 1.4em; display: grid; gap: 6px; }
   .dv-ask-more li::marker { color: var(--muted); font-weight: 700; }
-  .dv-why { display: grid; gap: 2px; min-width: 0; max-width: 68ch; color: var(--muted); }
+  .dv-why { display: grid; gap: 4px; min-width: 0; max-width: 68ch; color: var(--text); }
+  .dv-why-text { min-width: 0; }
+  .dv-why.folded .dv-why-text { max-height: 4.6em; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent); mask-image: linear-gradient(to bottom, #000 55%, transparent); }
+  .dv-why-more { justify-self: start; }
   .dv-why h3 { font-size: var(--fs-s); color: var(--muted); }
   .dv-why.blocking h3 { color: var(--critical); }
   .dv-rec { display: grid; gap: 4px; min-width: 0; padding: 12px 14px 12px 13px; border-radius: 10px; background: var(--accent-soft); border-left: 4px solid var(--accent); }
