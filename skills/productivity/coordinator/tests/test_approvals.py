@@ -1,0 +1,146 @@
+"""Standing approvals, notices, the advisor's view and reviewed events, through the state CLI: the user's
+answer on the page is the only source of an approval, an act under one is recorded closed and told to the
+fleets, and a choice that reaches the user without the advisor's view is warned."""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+STATE = str(SCRIPTS / "state.py")
+
+CHOICE = ["--kind", "decision", "--title", "Landing without asking", "--why", "most landings are routine",
+          "--question", "May the fleet land a stack that passed the full gate and a review, and tell you after?",
+          "--option", "A: yes | it lands and you read a notice", "--option", "B: no | every landing asks",
+          "--recommend", "A", "--reason", "the gate and the review already judge it"]
+NOTICE = ["--kind", "notice", "--under", "A1", "--title", "Landed the parser",
+          "--question", "Pushed the parser stack to master.", "--undo", "jj revert the stack and push"]
+
+
+class Fleet(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name) / "c"
+        self.home = Path(tmp.name) / "registry"
+        self.env = {**os.environ, "FLEET_HOME": str(self.home), "FLEET_DISCOVER": "0"}
+        self.ok("init", "--project", "acme billing", "--goal", "g")
+        self.ok("milestone", "m1", "--title", "M")
+
+    def run_cli(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, STATE, str(self.root), *args, "--no-render"],
+                              capture_output=True, text=True, timeout=20, env=self.env)
+
+    def ok(self, *args: str) -> subprocess.CompletedProcess:
+        result = self.run_cli(*args)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def refused(self, *args: str) -> str:
+        result = self.run_cli(*args)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
+        return result.stderr
+
+    def state(self) -> dict:
+        return json.loads((self.root / "state.json").read_text())
+
+    def answer(self, decision: str, n: int = 1) -> None:
+        with open(self.root / "chat.jsonl", "a") as f:
+            f.write(json.dumps({"id": n, "at": "2026-01-05T09:10:00+00:00", "from": "user", "author": "luiz@github",
+                                "to": ["coordinator"], "text": "A: yes", "re": None, "decision": decision}) + "\n")
+
+    def approved(self) -> None:
+        self.ok("decision", "d1", *CHOICE)
+        self.answer("d1")
+        self.ok("decision", "d1", "--decide", "A", "--resolution", "answered on the page (#1)")
+        self.ok("approval", "add", "A1", "--rule", "land a stack that passed the full gate and a review", "--by", "luiz", "--ref", "D1")
+
+
+class ApprovalTest(Fleet):
+    def test_an_approval_comes_only_from_the_users_answer_on_the_page(self):
+        self.ok("decision", "d1", *CHOICE)
+        self.assertIn("is open", self.refused("approval", "add", "A1", "--rule", "r", "--by", "luiz", "--ref", "d1"))
+        self.ok("decision", "d1", "--decide", "A", "--resolution", "said in the session")
+        self.assertIn("no answer from the user", self.refused("approval", "add", "A1", "--rule", "r", "--by", "luiz", "--ref", "d1"))
+        self.ok("decision", "d2", "--title", "T", "--question", "Q?", "--decide", "yes", "--resolution", "said in the session")
+        self.assertIn("not asked of the user on the page", self.refused("approval", "add", "A2", "--rule", "r", "--by", "luiz", "--ref", "d2"))
+        self.ok("decision", "d3", *CHOICE, "--asks", "manager")
+        self.answer("d3")
+        self.ok("decision", "d3", "--decide", "A", "--resolution", "answered by the manager")
+        self.assertIn("not asked of the user", self.refused("approval", "add", "A3", "--rule", "r", "--by", "luiz", "--ref", "d3"))
+        self.assertNotIn("approvals", self.state())
+
+    def test_an_approval_keeps_where_it_came_from(self):
+        self.approved()
+        a = self.state()["approvals"][0]
+        self.assertEqual({k: a[k] for k in ("id", "by", "ref", "message", "author", "status")},
+                         {"id": "A1", "by": "luiz", "ref": "d1", "message": 1, "author": "luiz@github", "status": "active"})
+        self.assertIn("already recorded", self.refused("approval", "add", "A1", "--rule", "r", "--by", "luiz", "--ref", "d1"))
+        self.assertIn("approval A1 active [0 notices]", self.ok("approval", "list").stdout)
+
+    def test_a_revoked_approval_takes_no_more_notices(self):
+        self.approved()
+        self.assertIn("--reason", self.refused("approval", "revoke", "A1"))
+        self.ok("approval", "revoke", "A1", "--reason", "revoked on the page (#3)")
+        self.assertEqual(self.state()["approvals"][0]["status"], "revoked")
+        self.assertIn("was revoked", self.refused("decision", "n1", *NOTICE))
+        self.assertIn("already revoked", self.refused("approval", "revoke", "A1", "--reason", "again"))
+
+
+class NoticeTest(Fleet):
+    def test_a_notice_closes_at_once_and_tells_the_fleets(self):
+        self.approved()
+        out = self.ok("decision", "n1", *NOTICE).stdout
+        self.assertIn("news #1 tells the fleets", out)
+        n = next(d for d in self.state()["decisions"] if d["id"] == "n1")
+        self.assertEqual((n["kind"], n["status"], n["under"], n["answer"], n["resolution"], n["closed"] == n["opened"]),
+                         ("notice", "decided", "A1", "done", "under A1", True))
+        self.assertEqual(n["ref"], "N1")
+        item = json.loads((self.home / "news" / "news.jsonl").read_text().splitlines()[0])
+        self.assertEqual((item["from"], item["to"], item["kind"]), ("acme-billing", ["all"], "fyi"))
+        self.assertIn("Undo: jj revert the stack and push", item["text"])
+        self.assertFalse(self.state()["events"][-1].get("important"))
+
+    def test_a_notice_names_an_active_approval_and_asks_nothing(self):
+        self.approved()
+        self.assertIn("unknown approval 'A9'", self.refused("decision", "n1", *NOTICE[:2], "--under", "A9", *NOTICE[4:]))
+        self.assertIn("--undo", self.refused("decision", "n1", *NOTICE[:-2]))
+        self.assertIn("leave out --option, --recommend", self.refused("decision", "n1", *NOTICE, "--option", "A: a | b", "--recommend", "A"))
+        self.assertIn("give --kind notice", self.refused("decision", "n1", *NOTICE[2:]))
+        self.assertFalse((self.home / "news" / "news.jsonl").exists())
+
+
+class AdvisedTest(Fleet):
+    def input(self, id_: str, *more: str) -> subprocess.CompletedProcess:
+        return self.ok("decision", id_, "--kind", "input", "--title", "T", "--question", "Which port?", "--why", "w", *more)
+
+    def test_the_third_choice_of_a_day_with_no_advisor_is_warned(self):
+        self.assertNotIn("--advised", self.input("d1").stderr)
+        self.assertNotIn("--advised", self.input("d2").stderr)
+        self.assertIn("d3 is choice 3 this fleet asks the user today, and no advisor runs", self.input("d3").stderr)
+        self.assertNotIn("--advised", self.input("d4", "--advised", "none:it is a port, nothing to judge").stderr)
+
+    def test_a_fleet_with_an_advisor_is_told_to_ask_it(self):
+        self.ok("agent", "advisor", "--task", "t", "--milestone", "m1", "--model", "fable", "--status", "queued")
+        self.assertIn("d1 asks the user with no --advised", self.input("d1").stderr)
+        self.input("d2", "--advised", "Port 7420: the hub's")
+        self.assertEqual(next(d for d in self.state()["decisions"] if d["id"] == "d2")["advised"], "Port 7420: the hub's")
+        self.assertIn("--advised is the advisor's view", self.refused("decision", "d5", "--kind", "input", "--title", "T",
+                                                                       "--question", "q", "--why", "w", "--advised", "none: "))
+
+
+class ReviewedTest(Fleet):
+    def test_a_reviewed_event_carries_its_findings_and_changes(self):
+        self.ok("event", "--kind", "reviewed", "--findings", "2", "--changes", "kxyzabcd, lmnopqrs", "reviewed with tstack:review")
+        e = self.state()["events"][-1]
+        self.assertEqual((e["kind"], e["findings"], e["changes"]), ("reviewed", 2, ["kxyzabcd", "lmnopqrs"]))
+        self.assertIn("--findings N", self.refused("event", "--kind", "reviewed", "r"))
+        self.assertIn("go with --kind reviewed", self.refused("event", "--findings", "1", "a note"))
+
+
+if __name__ == "__main__":
+    unittest.main()

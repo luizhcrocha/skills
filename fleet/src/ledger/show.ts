@@ -4,7 +4,7 @@
 import type { Message } from "../chat/store.ts";
 import { answeredGrill, failedAnswer, failureWords } from "../health.ts";
 import { pyRepr } from "../json.ts";
-import { EVENT_KINDS, MODELS, NEEDS, SEVERITIES, SKILLS } from "./commands.ts";
+import { approvalLine, EVENT_KINDS, MODELS, NEEDS, SEVERITIES, SKILLS } from "./commands.ts";
 import type { Ledger } from "./model.ts";
 import { EFFORTS } from "./roles.ts";
 import { AGENT_STATUSES, ASKS, SHARED_KINDS, STATUSES, STEP_STATUSES, WORKSPACE_MODES } from "./validate.ts";
@@ -24,10 +24,13 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
   decision ID --kind ${SHARED_KINDS.join("|")} --title T --question Q --why W [--blocking | --not-blocking]
         [--option "KEY: label | consequence"]... [--same-options] [--recommend R --reason WHY] [--secret NAME] [--manual TEXT]
         [--body FILE | --no-body] [--agent A] [--supersedes ID] [--log TEXT] [--asks ${ASKS.join("|")}]
-        [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]
+        [--advised "the advisor's view" | --advised none:WHY] [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]
         --manual: its commands in a fenced block (\`\`\`nu), any prose outside it; one bare command line needs none
         --question: the ask alone, up to 400 characters; a plan, settings or numbers go in --body (SKILL.md, Decisions)
+  decision ID --kind notice --under APPROVAL --title T --question "what was done" --undo "how to undo it"   closed at once
+  approval add ID --rule R --by WHO --ref DECISION | approval list | approval revoke ID --reason R   standing approvals
   event [--kind ${EVENT_KINDS.join("|")}] [--agent A] [--important] TEXT   (a note is \`event --kind note TEXT\`)
+        --kind reviewed --findings N --changes C,...   a review of those jj changes, before landing
   park [--agent A]... REASON     stop every live worker row (or those named) in one command
   keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace
   link ID --url U --title T [--kind dev|page] [--decision D] [--note N] | --drop R   a dev server or a purpose-built page
@@ -100,6 +103,8 @@ export function showLines(ledger: Ledger, said: readonly Message[] = []): string
   }
 
   for (const l of ledger.links ?? []) lines.push(`  ${l.ref ?? ""} link ${l.id} [${l.kind}] ${l.title ?? "None"}: ${l.url ?? "None"}`);
+
+  for (const a of ledger.approvals ?? []) lines.push(approvalLine(ledger, a));
 
   for (const k of ledger.kept ?? []) lines.push(`  kept ${k.id}: ${k.text}`);
   lines.push(`  ${ledger.events.length} events, updated ${ledger.updated ?? ""}`);

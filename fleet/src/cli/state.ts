@@ -128,6 +128,9 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
       opt.value("--milestone"),
       opt.value("--log"),
       opt.value("--asks", { choices: ASKS }),
+      opt.value("--advised", { metavar: "VIEW" }),
+      opt.value("--under", { metavar: "APPROVAL" }),
+      opt.value("--undo", { metavar: "HOW" }),
       opt.value("--decide", { metavar: "ANSWER" }),
       opt.value("--withdraw", { metavar: "REASON" }),
       opt.value("--hold", { metavar: "REASON" }),
@@ -148,7 +151,18 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
   {
     name: "event",
     positionals: [{ dest: "text" }],
-    options: [opt.value("--agent"), opt.value("--kind", { choices: commands.EVENT_KINDS }), opt.flag("--important")],
+    options: [
+      opt.value("--agent"),
+      opt.value("--kind", { choices: commands.EVENT_KINDS }),
+      opt.flag("--important"),
+      opt.value("--findings", { int: true }),
+      opt.value("--changes", { metavar: "C,..." }),
+    ],
+  },
+  {
+    name: "approval",
+    positionals: [{ dest: "action" }, { dest: "id", nargs: "?" }],
+    options: [opt.value("--rule"), opt.value("--by"), opt.value("--ref", { metavar: "DECISION" }), opt.value("--reason")],
   },
   {
     name: "grill",
@@ -215,6 +229,7 @@ const HANDLERS = new Map<string, Handler>(Object.entries({
   park: commands.park,
   keep: commands.keep,
   link: commands.link,
+  approval: commands.approval,
 }));
 
 /** DIR/brief.md from assets/brief.md with this fleet's paths, and a manager's DIR/standing.md, each
@@ -322,6 +337,7 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
 
     // What the command says waits until the ledger it gives back is checked: a refused write says nothing (open-2).
     const said: string[] = [];
+    const later: (() => string | undefined)[] = [];
 
     const run: commands.Run = {
       machine,
@@ -330,14 +346,16 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
       args,
       say: (line) => said.push(`${line}\n`),
       warn: (line) => out.err(`${line}\n`),
+      after: (task) => later.push(task),
     };
 
     const nextStep = cmd === "step" && args.str("id") === "next" && ledger !== undefined ? nextStepId(ledger, args.str("milestone") ?? "") : undefined;
     let result: Ledger | undefined;
+    const listing = cmd === "approval" && args.str("action") === "list";
 
     if (cmd === "init") {
       result = yield* commands.init(loaded !== undefined, run);
-    } else if (ledger !== undefined && cmd !== "show") {
+    } else if (ledger !== undefined && cmd !== "show" && !listing) {
       const handler = HANDLERS.get(cmd);
 
       if (handler !== undefined) result = yield* handler(ledger, run);
@@ -371,6 +389,12 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
       return 0;
     }
 
+    if (listing) {
+      if (ledger !== undefined) for (const line of commands.approvalLines(ledger)) out.out(`${line}\n`);
+
+      return 0;
+    }
+
     if (result === undefined) return 0;
     commands.measure(machine, root, result);
     commands.nameFromSessions(machine, root, result);
@@ -380,8 +404,15 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
 
     if (fault !== undefined) return yield* Effect.fail(fault);
     writeText(path, ledgerText(result));
-    ensureBrief(root, result);
     flush();
+
+    for (const task of later) {
+      const line = task();
+
+      if (line !== undefined) out.out(`${line}\n`);
+    }
+
+    ensureBrief(root, result);
 
     if (noRender) {
       const id = spec.positionals.some((p) => p.dest === "id") ? (nextStep ?? args.str("id") ?? "") : "";

@@ -16,9 +16,11 @@
                              [--option "KEY: label | consequence"]... [--same-options]
                              [--recommend R --reason WHY]
                              [--secret NAME] [--manual TEXT] [--body FILE | --no-body]
-                             [--agent A] [--supersedes ID] [--log TEXT] [--asks user|manager]
+                             [--agent A] [--supersedes ID] [--log TEXT] [--asks user|manager] [--advised VIEW]
                              [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]
-    state.py DIR event [--agent A] [--kind K] [--important] TEXT
+    state.py DIR decision ID --kind notice --under APPROVAL --title T --question WHAT-WAS-DONE --undo HOW
+    state.py DIR approval add ID --rule R --by WHO --ref DECISION | approval list | approval revoke ID --reason R
+    state.py DIR event [--agent A] [--kind K] [--important] [--findings N --changes C,...] TEXT
     state.py DIR park [--agent A]... REASON
     state.py DIR keep ID [TEXT | --drop REASON]
     state.py DIR link ID --url U --title T [--kind dev|page] [--decision D] [--agent A] [--note N] | --drop REASON
@@ -99,7 +101,11 @@ def defaults(skill: str, model: str | None, effort: str | None) -> tuple[str, st
 
 SEVERITIES = ["warning", "serious", "critical"]
 NEEDS = ["user", "coordinator", "worker"]
-KINDS = ["spawned", "reported", "blocked", "resolved", "asked", "decision", "note", "integrated"]
+KINDS = ["spawned", "reported", "blocked", "resolved", "asked", "decision", "note", "integrated", "reviewed"]
+CHANGE_ID = re.compile(r"[A-Za-z0-9]+")
+ADVISOR_AFTER = 3  # choices asked of the user in a day after which a fleet with no advisor starts one
+APPROVAL_ACTIONS = ["add", "list", "revoke"]
+AFTER: list = []  # what a command does once its ledger is written (a notice's news item): never for a refused one
 
 
 def now() -> str:
@@ -832,7 +838,7 @@ def visual_warning(what: str, texts: list[str], body: str) -> str | None:
 
 def readability_warnings(d: dict, given: set, root: Path | None = None, workers: set | None = None) -> list[str]:
     """What the CLI says, without refusing, about a decision hard to read; `given`: the fields this command wrote."""
-    if d["kind"] in ("permission", "grill"):
+    if d["kind"] in ("permission", "grill", "notice"):
         return []
     out = []
     q = d.get("question") or ""
@@ -905,7 +911,7 @@ def close(state, d: dict, status: str, answer: str | None, resolution: str) -> N
             resolve(state, r)
 
 
-FIELDS = ("kind", "title", "question", "why", "recommend", "reason", "secret", "manual", "agent", "step", "milestone")
+FIELDS = ("kind", "title", "question", "why", "recommend", "reason", "secret", "manual", "agent", "step", "milestone", "advised")
 
 
 def place_of(state: dict, d: dict, args) -> None:
@@ -927,6 +933,88 @@ def place_of(state: dict, d: dict, args) -> None:
         d["milestone"] = (a or {}).get("milestone")
 
 
+def check_advised(advised: str | None) -> None:
+    """--advised is the advisor's view in one line, or none:<why no advisor was asked>."""
+    if advised is None:
+        return
+    view = advised.strip()
+    if not view or (view.lower().startswith("none:") and not view[5:].strip()):
+        fail("--advised is the advisor's view in one line, or none:<why no advisor was asked>")
+
+
+def unadvised(state: dict, d: dict, root: Path) -> str | None:
+    """The warning for a choice put to the user with no advisor's view: the fleet has an advisor that was not
+    asked, or has asked the user ADVISOR_AFTER choices today and runs none."""
+    if d["kind"] not in ("decision", "input") or d.get("asks", "user") != "user" or d["status"] != "open" or d.get("advised"):
+        return None
+    if any(a["id"] == "advisor" and a["status"] in LIVE for a in state["agents"]):
+        return (f"state: {d['id']} asks the user with no --advised: ask the fleet's advisor first (SendMessage), then give "
+                "its view in one line (--advised \"...\"), or --advised none:<why not>; the page shows it under the recommendation.")
+    today = now()[:10]
+    rows = state.get("decisions", [])
+    asked = [x for x in rows + ([] if d in rows else [d]) if x["kind"] in decisions.CHOICE_KINDS and x.get("asks", "user") == "user"
+             and x.get("page", True) and str(x.get("opened") or "")[:10] == today]
+    if len(asked) < ADVISOR_AFTER:
+        return None
+    return (f"state: {d['id']} is choice {len(asked)} this fleet asks the user today, and no advisor runs: start one "
+            f"(`{FLEET} advisor {root}`) and ask it first, then give its view (--advised \"...\"), or --advised none:<why not>.")
+
+
+def news_sender(root: Path, state: dict) -> str:
+    """The name this fleet posts news under: the registry's, else its project's, in a name's letters."""
+    return news.fleet_of(root) or re.sub(r"[^A-Za-z0-9_.-]+", "-", state["project"]).strip("-") or "fleet"
+
+
+def post_notice(root: Path, state: dict, d: dict, a: dict) -> None:
+    """The fleets' news of an act done under a standing approval, posted once the ledger holds it."""
+    sender = news_sender(root, state)
+    text = f"{sender} did under standing approval {a['id']} ({a['rule']}): {d['title']}. {d['question']} Undo: {d['undo']}"
+    text = text if len(text) <= news.TEXT_MAX else text[:news.TEXT_MAX - 1] + "…"
+    item = news.post(sender, "all", "fyi", False, text)
+    print(f"news #{item['id']} tells the fleets (fyi).")
+
+
+def cmd_notice(state, args, d) -> dict:
+    """`decision ID --kind notice --under A`: an act done under a standing approval, recorded closed at once."""
+    if d is not None:
+        fail(f"{d['id']} is already a {d['kind']}: a notice is recorded once, under a new id "
+             "(`decision ID --kind notice --under APPROVAL --title T --question \"what was done\" --undo \"how to undo it\"`)")
+    if args.kind != "notice":
+        fail("--under and --undo record a notice: give --kind notice")
+    if not decisions.ID.fullmatch(args.id):
+        fail(f"decision id {args.id!r} should be letters, digits, '_', '.', or '-'")
+    extra = [f"--{k.replace('_', '-')}" for k in ("option", "recommend", "reason", "secret", "manual", "supersedes", "decide",
+                                                   "withdraw", "hold", "advised") if getattr(args, k)]
+    if extra or args.asks == "manager" or args.blocking:
+        extra += ["--asks manager"] if args.asks == "manager" else []
+        extra += ["--blocking"] if args.blocking else []
+        fail(f"a notice reports what was done under a standing approval and asks nothing: leave out {', '.join(extra)}")
+    require(args, ["title", "question", "under", "undo"], "notice")
+    a = find(state.get("approvals", []), args.under)
+    if a is None:
+        fail(f"unknown approval '{args.under}': `approval list` shows the standing approvals; an act no approval covers is asked (a decision)")
+    if a["status"] != "active":
+        fail(f"approval {a['id']} was revoked {a.get('revoked')}: {a.get('revoked_why')}. What it covered asks the user again: open a decision")
+    if not args.undo.strip():
+        fail("--undo says how to undo what was done; an act that cannot be undone is not routine: ask the user (a decision)")
+    check_question(args.question, "notice")
+    check_why(args.why, "notice")
+    stamp = now()
+    d = {"id": args.id, "kind": "notice", "title": args.title, "question": args.question, "why": args.why,
+         "blocking": False, "agent": args.agent or None, "options": [], "recommend": None, "reason": None, "secret": None,
+         "manual": None, "body": False, "page": True, "supersedes": None, "status": "decided", "answer": "done",
+         "resolution": f"under {a['id']}", "change": None, "asks": "user", "opened": stamp, "revised": None, "closed": stamp,
+         "step": None, "milestone": None, "under": a["id"], "undo": args.undo}
+    place_of(state, d, args)
+    set_body(Path(args.dir).resolve(), d, args)
+    state["decisions"].append(d)
+    log(state, "decision", f"Done under {a['id']} ({a['rule']}): {d['title']}: {d['question']}", d["agent"], decision=d["id"])
+    print(f"recorded {d['id']}, done under {a['id']} and closed: the page lists it under Done under your approvals, with its undo.")
+    root = Path(args.dir).resolve()
+    AFTER.append(lambda: post_notice(root, state, d, a))
+    return state
+
+
 def cmd_decision(state, args):
     rows = state.setdefault("decisions", [])
     d = decisions.find(state, args.id)
@@ -944,6 +1032,9 @@ def cmd_decision(state, args):
             place_of(state, d, args)
             return state
         fail(f"{decisions.closed_because(d)}. A closed decision stays as it is; open a new one with --supersedes {d['id']}")
+    if args.kind == "notice" or args.under is not None or args.undo is not None:
+        return cmd_notice(state, args, d)
+    check_advised(args.advised)
     if d is None:
         if not decisions.ID.fullmatch(args.id):
             fail(f"decision id {args.id!r} should be letters, digits, '_', '.', or '-'")
@@ -963,7 +1054,8 @@ def cmd_decision(state, args):
              "options": parse_options(args.option or []), "recommend": args.recommend, "reason": args.reason,
              "secret": args.secret, "manual": args.manual, "body": False, "page": not made_elsewhere,
              "supersedes": args.supersedes, "status": "open", "answer": None, "resolution": None, "change": None,
-             "asks": args.asks or "user", "opened": now(), "revised": None, "closed": None, "step": None, "milestone": None}
+             "asks": args.asks or "user", "opened": now(), "revised": None, "closed": None, "step": None, "milestone": None,
+             **({"advised": args.advised} if args.advised is not None else {})}
         place_of(state, d, args)
         if not made_elsewhere:
             check_kind(d, True)
@@ -971,6 +1063,9 @@ def cmd_decision(state, args):
             for warning in readability_warnings(d, {k for k in ("question", "why", "manual", "title", "reason", "body") if getattr(args, k) is not None} | ({"option"} if args.option else set()),
                                                    Path(args.dir).resolve(), workers_of(state)):
                 sys.stderr.write(warning + "\n")
+            advice = unadvised(state, d, Path(args.dir).resolve())
+            if advice:
+                sys.stderr.write(advice + "\n")
             for_manager = d["asks"] == "manager"   # the manager looks first: the user is not called yet
             log(state, "asked", f"{'For the manager: ' if for_manager else ''}{d['title']}: {d['question']}", d["agent"],
                 d["blocking"] and not for_manager, d["id"])
@@ -1017,6 +1112,9 @@ def cmd_decision(state, args):
         for warning in readability_warnings(d, {k for k in ("question", "why", "manual", "title", "reason", "body") if getattr(args, k) is not None} | ({"option"} if args.option else set()),
                                                    Path(args.dir).resolve(), workers_of(state)):
             sys.stderr.write(warning + "\n")
+        advice = unadvised(state, d, Path(args.dir).resolve()) if passed_on else None
+        if advice:
+            sys.stderr.write(advice + "\n")
         if any(k in changed for k in ("question", "option", "manual")) and not args.log and args.decide is None and args.withdraw is None:
             sys.stderr.write(f"state: {d['id']} was asked again with new words and no --log: say what changed in one line "
                              "(--log \"...\"); the page's history shows it, and the user should not have to compare two versions.\n")
@@ -1245,7 +1343,84 @@ def cmd_grill(state, args):
 def cmd_event(state, args):
     if args.agent and not known(state, args.agent):
         fail(f"unknown agent '{args.agent}'")
+    changes = [c for c in re.split(r"[\s,]+", args.changes or "") if c]
+    if args.kind == "reviewed":
+        if args.findings is None or not changes:
+            fail("a reviewed event says what the review found and of which changes: --findings N (0 when it found nothing) "
+                 "and --changes \"<change id>,...\" (jj's change ids of the stack it read; land-check looks them up)")
+        if args.findings < 0:
+            fail("--findings counts what the review found: 0 or more")
+        bad = [c for c in changes if not CHANGE_ID.fullmatch(c)]
+        if bad:
+            fail(f"--changes names jj change ids (letters and digits), not {', '.join(bad)}")
+    elif args.findings is not None or args.changes is not None:
+        fail("--findings and --changes go with --kind reviewed")
     log(state, args.kind or "note", args.text, args.agent, args.important)
+    if args.kind == "reviewed":
+        state["events"][-1].update(findings=args.findings, changes=changes)
+    return state
+
+
+def approval_line(state: dict, a: dict) -> str:
+    """One standing approval as `approval list` and `show` print it."""
+    d = decisions.find(state, a["ref"]) or {}
+    done = sum(1 for x in state.get("decisions", []) if x.get("kind") == "notice" and x.get("under") == a["id"])
+    status = "active" if a["status"] == "active" else f"revoked {a.get('revoked')}: {a.get('revoked_why')}"
+    return (f"  approval {a['id']} {status} [{done} notice{'s' if done != 1 else ''}] {a['rule']} "
+            f"(from {d.get('ref') or a['ref']} #{a.get('message')}, by {a['by']}, {a['added']})")
+
+
+def cmd_approval(state, args):
+    rows = state.get("approvals", [])
+    if args.action not in APPROVAL_ACTIONS:
+        fail(f"approval {args.action!r} is not one of {', '.join(APPROVAL_ACTIONS)}")
+    if args.action == "list":
+        if not rows:
+            print("no standing approvals: `approval add ID --rule R --by WHO --ref DECISION` records one from a decision the user answered on the page")
+        for a in rows:
+            print(approval_line(state, a))
+        return None
+    if not args.id:
+        fail(f"approval {args.action} names the approval: `approval {args.action} ID ...`")
+    a = find(rows, args.id)
+    if args.action == "revoke":
+        if a is None:
+            fail(f"unknown approval '{args.id}'")
+        if a["status"] == "revoked":
+            fail(f"approval {a['id']} is already revoked ({a.get('revoked')}): {a.get('revoked_why')}")
+        if not (args.reason or "").strip():
+            fail("--reason says why, or where the user said it (\"revoked on the page (#21)\")")
+        a.update(status="revoked", revoked=now(), revoked_why=args.reason)
+        log(state, "decision", f"Standing approval {a['id']} revoked: {args.reason}", decision=a["ref"])
+        print(f"revoked approval {a['id']}: what it covered asks the user again.")
+        return state
+    if a is not None:
+        fail(f"approval {a['id']} is already recorded ({a['status']}): revoke it, or record the new rule under a new id")
+    if not decisions.ID.fullmatch(args.id):
+        fail(f"approval id {args.id!r} should be letters, digits, '_', '.', or '-'")
+    require(args, ["rule", "by", "ref"], "approval")
+    if not args.rule.strip() or not args.by.strip():
+        fail("--rule says what the approval covers, in the user's words, and --by who gave it")
+    d = decisions.find(state, args.ref)
+    if d is None:
+        fail(f"unknown decision '{args.ref}'")
+    name = f"{d.get('ref') or d['id']} ({d['title']})"
+    if d["status"] != "decided":
+        fail(f"{name} is {d['status']}: a standing approval comes from a decision the user decided")
+    if d["kind"] not in decisions.CHOICE_KINDS or d.get("asks", "user") != "user" or not d.get("page", True):
+        fail(f"{name} was not asked of the user on the page: only the user's own answer there gives a standing approval; "
+             "ask them with a decision that names the rule")
+    answers = [m for m in chat.read(Path(args.dir).resolve()) if m.get("decision") == d["id"] and m.get("from") == "user"]
+    if not answers:
+        fail(f"{name} has no answer from the user in the chat: only the user's own answer on the page gives a standing approval")
+    m = answers[-1]
+    row = {"id": args.id, "rule": args.rule, "by": args.by, "ref": d["id"], "message": m["id"],
+           **({"author": m["author"]} if isinstance(m.get("author"), str) and m["author"] else {}),
+           "added": now(), "status": "active"}
+    state.setdefault("approvals", []).append(row)
+    log(state, "decision", f"Standing approval {args.id} from {d.get('ref') or d['id']} (#{m['id']}): {args.rule}", decision=d["id"])
+    print(f"recorded approval {args.id}. An act it covers is recorded, not asked: `decision ID --kind notice --under {args.id} "
+          "--title T --question \"what was done\" --undo \"how to undo it\"`")
     return state
 
 
@@ -1263,10 +1438,13 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
   decision ID --kind {"|".join(decisions.KINDS)} --title T --question Q --why W [--blocking | --not-blocking]
         [--option "KEY: label | consequence"]... [--same-options] [--recommend R --reason WHY] [--secret NAME] [--manual TEXT]
         [--body FILE | --no-body] [--agent A] [--supersedes ID] [--log TEXT] [--asks {"|".join(decisions.ASKS)}]
-        [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]
+        [--advised "the advisor's view" | --advised none:WHY] [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]
         --manual: its commands in a fenced block (```nu), any prose outside it; one bare command line needs none
         --question: the ask alone, up to 400 characters; a plan, settings or numbers go in --body (SKILL.md, Decisions)
+  decision ID --kind notice --under APPROVAL --title T --question "what was done" --undo "how to undo it"   closed at once
+  approval add ID --rule R --by WHO --ref DECISION | approval list | approval revoke ID --reason R   standing approvals
   event [--kind {"|".join(KINDS)}] [--agent A] [--important] TEXT   (a note is `event --kind note TEXT`)
+        --kind reviewed --findings N --changes C,...   a review of those jj changes, before landing
   park [--agent A]... REASON     stop every live worker row (or those named) in one command
   keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace
   link ID --url U --title T [--kind dev|page] [--decision D] [--note N] | --drop R   a dev server or a purpose-built page
@@ -1309,6 +1487,8 @@ def cmd_show(state, args):
         print(f"  {d.get('ref', '')} decision {d['id']} {status} [{d['kind']}] {d['title']}" + (f": {outcome}" if outcome else ""))
     for link in state.get("links", []):
         print(f"  {link.get('ref', '')} link {link['id']} [{link['kind']}] {link['title']}: {link['url']}")
+    for a in state.get("approvals", []):
+        print(approval_line(state, a))
     for k in state.get("kept", []):
         print(f"  kept {k['id']}: {k['text']}")
     print(f"  {len(state['events'])} events, updated {state['updated']}")
@@ -1376,12 +1556,22 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--milestone", help="the milestone it came from, when no one step")
     s.add_argument("--log", help="what changed, shown to the user on the page")
     s.add_argument("--asks", choices=decisions.ASKS, help="who looks at it first: the user, or the manager when there is one")
+    s.add_argument("--advised", metavar="VIEW", help="the advisor's view in one line, or none:<why no advisor was asked>")
+    s.add_argument("--under", metavar="APPROVAL", help="--kind notice: the standing approval the act was done under")
+    s.add_argument("--undo", metavar="HOW", help="--kind notice: how to undo what was done")
     g = s.add_mutually_exclusive_group(); g.add_argument("--decide", metavar="ANSWER"); g.add_argument("--withdraw", metavar="REASON")
     g.add_argument("--hold", metavar="REASON", help="the user answered and the fleet works on it first: off the user's list until revised")
     g.add_argument("--unhold", action="store_true", help="take back a --hold")
     s.add_argument("--resolution", metavar="HOW", help="with --decide: how the answer came")
     s = sub.add_parser("event"); s.add_argument("text"); s.add_argument("--agent"); s.add_argument("--kind", choices=KINDS)
     s.add_argument("--important", action="store_true", help="the user should see this now: toast, sound, badge")
+    s.add_argument("--findings", type=int, help="--kind reviewed: how many findings the review made")
+    s.add_argument("--changes", metavar="C,...", help="--kind reviewed: the jj change ids it reviewed")
+    s = sub.add_parser("approval"); s.add_argument("action", help="add, list or revoke"); s.add_argument("id", nargs="?")
+    s.add_argument("--rule", help="add: what the approval covers, in the user's words")
+    s.add_argument("--by", help="add: who gave it")
+    s.add_argument("--ref", metavar="DECISION", help="add: the decided decision where the user gave it")
+    s.add_argument("--reason", help="revoke: why, or where the user said it")
     s = sub.add_parser("grill"); s.add_argument("id"); s.add_argument("--title"); s.add_argument("--why")
     s.add_argument("--ask", action="append", metavar='"TITLE | QUESTION | RECOMMENDATION | WHY"', help="a question of this round (repeatable)")
     s.add_argument("--reason", action="append", metavar='"Q3: WHY"', help="the reason for a question's recommendation, given afterwards")
@@ -1440,6 +1630,8 @@ def main(argv: list[str]) -> None:
     render_dashboard.validate(result)
     path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
     sys.stdout.write(said.getvalue())
+    for task in AFTER:
+        task()
     ensure_brief(root, result)
     if args.no_render:
         print(f"state.json updated ({args.cmd} {getattr(args, 'id', '')})".rstrip())

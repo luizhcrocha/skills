@@ -14,7 +14,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import clock  # noqa: E402
 
-KINDS = ["decision", "input", "secret", "action", "grill"]
+KINDS = ["decision", "input", "secret", "action", "grill", "notice"]
+CHOICE_KINDS = ("decision", "input", "grill")  # what asks the user to choose or give: what a standing approval may come from
+APPROVAL_STATUSES = ["active", "revoked"]
 QUESTION_STATUSES = ["open", "answered", "dropped"]
 STATUSES = ["open", "decided", "withdrawn"]
 ASKS = ["user", "manager"]
@@ -27,7 +29,7 @@ NOT_A_VALUE = ("that reads as the secret's value; give an op://vault/item/field 
                "1Password item, never the value")
 
 
-PREFIX = {"decision": "D", "action": "A", "input": "I", "secret": "S", "grill": "G"}
+PREFIX = {"decision": "D", "action": "A", "input": "I", "secret": "S", "grill": "G", "notice": "N"}
 ROW_PREFIX = {"links": "L", "roadblocks": "R"}
 
 
@@ -52,7 +54,7 @@ def _next(rows: list, prefix: str, row: dict) -> str:
 
 def number(state: dict) -> None:
     """Give each decision, link and roadblock without one its number: a letter for its kind (D a
-    decision, A an action, I an input, S a secret, G a grilling, L a link, R a roadblock) and the next
+    decision, A an action, I an input, S a secret, G a grilling, N a notice, L a link, R a roadblock) and the next
     free number for that letter, in the order they were opened, skipping a number that another row of
     the same list has as its id. A number, once given, stays."""
     rows = [d for d in state.get("decisions", []) if isinstance(d, dict)]
@@ -210,3 +212,32 @@ def validate(state: dict, fail) -> None:
     for r in state.get("roadblocks", []):
         if r.get("decision") and r["decision"] not in ids:
             fail(f"roadblock {r.get('id', '?')} points at unknown decision '{r['decision']}'")
+    validate_approvals(state, ids, fail)
+
+
+def validate_approvals(state: dict, ids: set, fail) -> None:
+    """Check approvals[] (the standing approvals the user gave once) and the notices done under them."""
+    if "approvals" not in state:
+        approvals = set()
+    else:
+        rows = state["approvals"]
+        if not isinstance(rows, list):
+            fail("'approvals' should be list")
+        approvals = set()
+        for a in rows:
+            if not isinstance(a, dict) or not all(isinstance(a.get(k), str) and a[k] for k in ("id", "rule", "by", "ref", "added", "status")):
+                fail(f"approval {a.get('id', '?') if isinstance(a, dict) else '?'} needs id, rule, by, ref, added and status")
+            if not ID.fullmatch(a["id"]):
+                fail(f"approval id {a['id']!r} should be letters, digits, '_', '.', or '-'")
+            if a["id"] in approvals:
+                fail(f"duplicate approval id '{a['id']}'")
+            if a["status"] not in APPROVAL_STATUSES:
+                fail(f"approval {a['id']} status '{a['status']}' not in {APPROVAL_STATUSES}")
+            if a["ref"] not in ids:
+                fail(f"approval {a['id']} comes from unknown decision '{a['ref']}'")
+            approvals.add(a["id"])
+    for d in state.get("decisions", []):
+        if d["kind"] == "notice" and (not isinstance(d.get("under"), str) or d["under"] not in approvals):
+            fail(f"notice {d['id']} is done under unknown approval '{d.get('under')}'")
+        if d["kind"] == "notice" and not (isinstance(d.get("undo"), str) and d["undo"].strip()):
+            fail(f"notice {d['id']} says no way to undo it (undo)")

@@ -18,7 +18,13 @@ export const AGENT_STATUSES = ["blocked", "done", "failed", "queued", "running",
 export const STEP_STATUSES = ["blocked", "current", "done", "pending"] as const;
 
 /** The kinds of decision the Python twin has too: the ones `show` and the CLI's choices name. */
-export const SHARED_KINDS = ["decision", "input", "secret", "action", "grill"] as const;
+export const SHARED_KINDS = ["decision", "input", "secret", "action", "grill", "notice"] as const;
+
+/** What asks the user to choose or give: what a standing approval may come from, and what counts toward the advisor rule. */
+export const CHOICE_KINDS = ["decision", "input", "grill"] as const;
+
+/** A standing approval's statuses. */
+export const APPROVAL_STATUSES = ["active", "revoked"] as const;
 
 /** The kinds of decision; `permission` is TypeScript's alone (SPEC.md, Permission grants). */
 export const KINDS = [...SHARED_KINDS, "permission"] as const;
@@ -204,6 +210,36 @@ function validateDecisions(ledger: Ledger): Refusal | undefined {
     if (r.decision !== undefined && r.decision !== null && r.decision !== "" && !ids.has(r.decision)) {
       return invalid(`roadblock ${r.id} points at unknown decision '${r.decision}'`);
     }
+  }
+
+  return validateApprovals(ledger, ids);
+}
+
+/** approvals[] (the standing approvals the user gave once) and the notices done under them. */
+function validateApprovals(ledger: Ledger, decisions: ReadonlySet<string>): Refusal | undefined {
+  const approvals = new Set<string>();
+
+  for (const a of ledger.approvals ?? []) {
+    if ([a.id, a.rule, a.by, a.ref, a.added, a.status].some((v) => v === "")) {
+      return invalid(`approval ${a.id === "" ? "?" : a.id} needs id, rule, by, ref, added and status`);
+    }
+
+    if (!ID.test(a.id)) return invalid(`approval id ${pyStr(a.id)} should be letters, digits, '_', '.', or '-'`);
+
+    if (approvals.has(a.id)) return invalid(`duplicate approval id '${a.id}'`);
+
+    if (!has(APPROVAL_STATUSES, a.status)) return invalid(`approval ${a.id} status '${a.status}' not in ${list(APPROVAL_STATUSES)}`);
+
+    if (!decisions.has(a.ref)) return invalid(`approval ${a.id} comes from unknown decision '${a.ref}'`);
+    approvals.add(a.id);
+  }
+
+  for (const d of ledger.decisions ?? []) {
+    if (d.kind !== "notice") continue;
+
+    if (d.under === undefined || !approvals.has(d.under)) return invalid(`notice ${d.id} is done under unknown approval '${d.under ?? "None"}'`);
+
+    if (d.undo === undefined || d.undo.trim() === "") return invalid(`notice ${d.id} says no way to undo it (undo)`);
   }
 
   return undefined;

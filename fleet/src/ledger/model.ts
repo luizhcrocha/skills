@@ -154,6 +154,12 @@ export interface Decision {
   held_at?: string | null;
   /** The refused call a permission lets through. */
   refusal?: RefusedCall | null;
+  /** The fleet's advisor's view in one line, or `none:<why no advisor was asked>`. */
+  advised?: string | null;
+  /** A notice's standing approval: the act was done under it. */
+  under?: string;
+  /** A notice's way to undo what was done. */
+  undo?: string;
 }
 
 /** One entry of the append-only event log. */
@@ -164,6 +170,27 @@ export interface LedgerEvent {
   text: string;
   important?: boolean;
   decision?: string | null;
+  /** A `reviewed` event's count of findings. */
+  findings?: number;
+  /** A `reviewed` event's jj change ids. */
+  changes?: string[];
+}
+
+/** A standing approval: a kind of routine act the user approved once, so the fleet records it (a notice)
+ * instead of asking. Added only from a decision the user answered on the page. */
+export interface Approval {
+  id: string;
+  rule: string;
+  by: string;
+  /** The decision where the user gave it. */
+  ref: string;
+  /** The chat message that carried the user's answer. */
+  message?: number;
+  author?: string;
+  added: string;
+  status: string;
+  revoked?: string;
+  revoked_why?: string;
 }
 
 /** A dev server or a purpose-built page the user opens. */
@@ -205,6 +232,7 @@ export interface Ledger {
   events: LedgerEvent[];
   links?: Link[];
   kept?: Kept[];
+  approvals?: Approval[];
   /** How the fleet's workers share the repository: `shared` (one working copy) or `isolated` (a jj workspace
    * each, the default when absent). `set --workspaces` writes it. */
   workspace_mode?: string;
@@ -217,7 +245,7 @@ interface Origin {
 }
 
 /** Any row of the ledger, the ledger included. */
-export type Row = Step | Milestone | Agent | Roadblock | Choice | Question | RefusedCall | Decision | LedgerEvent | Link | Kept | Ledger;
+export type Row = Step | Milestone | Agent | Roadblock | Choice | Question | RefusedCall | Decision | LedgerEvent | Link | Kept | Approval | Ledger;
 
 const origins = new WeakMap<Row, Origin>();
 
@@ -670,6 +698,9 @@ export const DECISION_KEYS = [
   "held",
   "held_at",
   "refusal",
+  "advised",
+  "under",
+  "undo",
 ] as const;
 
 export const REFUSAL_KEYS = ["tool", "call", "rule", "cause", "root", "agent_id"] as const;
@@ -722,12 +753,15 @@ function readDecision(object: JsonObject): Fields | Decision {
     held: f.nullStr("held"),
     held_at: f.nullStr("held_at"),
     refusal: f.row("refusal", readRefusal(id)),
+    advised: f.nullStr("advised"),
+    under: f.optStr("under"),
+    undo: f.optStr("undo"),
   });
 
   return f.done(row, DECISION_KEYS);
 }
 
-const EVENT_KEYS = ["at", "agent", "kind", "text", "important", "decision"] as const;
+const EVENT_KEYS = ["at", "agent", "kind", "text", "important", "decision", "findings", "changes"] as const;
 
 function readEvent(object: JsonObject): Fields | LedgerEvent {
   const f = new Fields(object, "event");
@@ -739,7 +773,13 @@ function readEvent(object: JsonObject): Fields | LedgerEvent {
     text: f.str("text", missing("text")),
   };
 
-  present(row, { agent: f.nullStr("agent"), important: f.optBool("important"), decision: f.nullStr("decision") });
+  present(row, {
+    agent: f.nullStr("agent"),
+    important: f.optBool("important"),
+    decision: f.nullStr("decision"),
+    findings: f.optNumber("findings"),
+    changes: object["changes"] === undefined ? undefined : f.strList("changes"),
+  });
 
   return f.done(row, EVENT_KEYS);
 }
@@ -769,6 +809,26 @@ function readKept(object: JsonObject): Fields | Kept {
   return f.done({ id: f.str("id"), text: f.str("text"), at: f.str("at") }, KEPT_KEYS);
 }
 
+const APPROVAL_KEYS = ["id", "rule", "by", "ref", "message", "author", "added", "status", "revoked", "revoked_why"] as const;
+
+function readApproval(object: JsonObject): Fields | Approval {
+  const f = new Fields(object, `approval ${asString(object["id"]) ?? "?"}`);
+  const needs = `approval ${asString(object["id"]) ?? "?"} needs id, rule, by, ref, added and status`;
+
+  const row: Approval = {
+    id: f.str("id", needs),
+    rule: f.str("rule", needs),
+    by: f.str("by", needs),
+    ref: f.str("ref", needs),
+    added: f.str("added", needs),
+    status: f.str("status", needs),
+  };
+
+  present(row, { message: f.optNumber("message"), author: f.optStr("author"), revoked: f.optStr("revoked"), revoked_why: f.optStr("revoked_why") });
+
+  return f.done(row, APPROVAL_KEYS);
+}
+
 /** The keys of a ledger, in the order a new one has them. */
 export const LEDGER_KEYS = [
   "role",
@@ -787,6 +847,7 @@ export const LEDGER_KEYS = [
   "links",
   "kept",
   "workspace_mode",
+  "approvals",
 ] as const;
 
 const REQUIRED: ReadonlyArray<readonly [string, "str" | "list"]> = [
@@ -834,6 +895,7 @@ export function decodeLedger(object: JsonObject): Ledger | Refusal {
     links: f.rows("links", readLink),
     kept: f.rows("kept", readKept),
     workspace_mode: f.optStr("workspace_mode"),
+    approvals: f.rows("approvals", readApproval),
   });
   const done = f.done(row, LEDGER_KEYS);
 
@@ -903,9 +965,10 @@ export function encodeLedger(ledger: Ledger): Encoded {
       agents: ledger.agents.map((a) => encodeRow(a, { ...a, lane: [...a.lane] })),
       roadblocks: ledger.roadblocks.map((r) => encodeRow(r, { ...r })),
       decisions: ledger.decisions?.map(encodeDecision),
-      events: ledger.events.map((e) => encodeRow(e, { ...e })),
+      events: ledger.events.map((e) => encodeRow(e, { ...e, changes: e.changes === undefined ? undefined : [...e.changes] })),
       links: ledger.links?.map((l) => encodeRow(l, { ...l })),
       kept: ledger.kept?.map((k) => encodeRow(k, { ...k })),
+      approvals: ledger.approvals?.map((a) => encodeRow(a, { ...a })),
     },
   );
 }

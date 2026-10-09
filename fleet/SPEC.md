@@ -202,7 +202,7 @@ renames it. Milestones are never removed.
   (`<title> resolved.`), and its worker, when blocked, goes back to running. This happens again on
   a resolved roadblock (open-4). `--open` sets `resolved` false, with no event and no re-blocking.
 
-**decision** `ID [--kind decision|input|secret|action --title T --question Q --why W] [--blocking | --not-blocking] [--option "KEY: label | consequence"]... [--same-options] [--recommend R --reason WHY] [--secret NAME] [--manual TEXT] [--body FILE | --no-body] [--agent A] [--supersedes ID] [--step S] [--milestone M] [--log TEXT] [--asks user|manager] [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]`
+**decision** `ID [--kind decision|input|secret|action|notice --title T --question Q --why W] [--blocking | --not-blocking] [--option "KEY: label | consequence"]... [--same-options] [--recommend R --reason WHY] [--secret NAME] [--manual TEXT] [--body FILE | --no-body] [--agent A] [--supersedes ID] [--step S] [--milestone M] [--log TEXT] [--asks user|manager] [--advised VIEW] [--under APPROVAL --undo HOW] [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]`
 
 Checked in this order:
 1. `--decide` without `--resolution`: refused.
@@ -210,6 +210,27 @@ Checked in this order:
 3. A closed decision (decided or withdrawn) refuses every change (`<title> is already <status>:
    <resolution>. A closed decision stays as it is; open a new one with --supersedes ID`) except
    `--step` and/or `--milestone` alone, which set where it came from.
+3a. **A notice** (`--kind notice`, `--under` or `--undo` given): an act done under a standing approval
+   (see **approval**), recorded closed at once. Checked in this order: a known id is refused (`<id> is
+   already a <kind>: a notice is recorded once, under a new id (...)`; a closed one was refused in 3);
+   `--under`/`--undo` without `--kind notice` (`--under and --undo record a notice: give --kind notice`);
+   the id pattern; any of `--option`, `--recommend`, `--reason`, `--secret`, `--manual`, `--supersedes`,
+   `--decide`, `--withdraw`, `--hold`, `--advised`, `--asks manager`, `--blocking` given (`a notice reports
+   what was done under a standing approval and asks nothing: leave out --option, ...`, in that order); then
+   `new notice needs --title --question --under --undo` for those missing; an unknown approval (`unknown
+   approval 'A9': \`approval list\` shows ...`) or a revoked one (`approval A1 was revoked <when>: <why>.
+   What it covered asks the user again: open a decision`); a blank `--undo`; the question's and the why's
+   lengths as in 4. The row is a decision's with `kind` notice, `status` decided, `answer` "done",
+   `resolution` "under <approval>", `closed` = `opened`, `asks` user, `page` true, no options, plus `under`
+   (the approval's id) and `undo`; `--why`, `--agent`, `--step`, `--milestone` and `--body` as for a
+   decision. Logs `decision` (`Done under A1 (<rule>): <title>: <question>`, not important, tagged), prints
+   `recorded <id>, done under A1 and closed: ...`, and once `state.json` is written posts a news item
+   (`<fleet> did under standing approval A1 (<rule>): <title>. <question> Undo: <undo>`, cut to 1000
+   characters with `…`; kind fyi, to all, not kept) from the fleet's registry name, else its project's
+   name with every run of characters outside `[A-Za-z0-9_.-]` made one `-` (`fleet` when none is left),
+   and prints `news #N tells the fleets (fyi).` No readability warning applies.
+   Otherwise, **`--advised`** given (new or known) must not be blank, nor `none:` with nothing after it:
+   `--advised is the advisor's view in one line, or none:<why no advisor was asked>`.
 4. New: the id must match `[A-Za-z0-9_.-]+`. `--supersedes` must name a closed decision (an open
    one: `<title> is still open; change it instead of superseding it`) and is stored as its id.
    - **The question's length** (new, and on a known one whenever `--question` is given; the
@@ -238,10 +259,19 @@ Checked in this order:
      grants](#permission-grants)) takes the refused call instead of options.
    - The row: `kind, title, question, why, blocking, agent, options[], recommend, reason, secret,
      manual, body, page, supersedes, status: open, answer, resolution, change, asks (default
-     user), opened, revised, closed, step, milestone`. `--step S` sets step and its milestone;
+     user), opened, revised, closed, step, milestone`, and `advised` when given. `--step S` sets step and its milestone;
      `--milestone M` sets the milestone; a worker without either gives its own milestone.
    - `--body FILE` copies FILE to `DIR/decisions/<id>.html` and sets `body` (an unreadable FILE
      is refused).
+   - **The advisor's view** (after the readability warnings below): a decision or input that asks the
+     user, open, with no `advised`, is warned: when the ledger has a live (running, queued, blocked) row
+     `advisor`, `state: <id> asks the user with no --advised: ask the fleet's advisor first (SendMessage),
+     then give its view in one line (--advised "..."), or --advised none:<why not>; the page shows it under
+     the recommendation.`; else when it is choice N >= 3 of the day (decisions, inputs and grillings with
+     asks user and page true whose `opened` has today's date, the first ten characters of the stamp, this
+     one counted), `state: <id> is choice N this fleet asks the user today, and no advisor runs: start one
+     (\`FLEET advisor DIR\`) and ask it first, then give its view (--advised "..."), or --advised none:<why
+     not>.` The same on a known one that `--asks user` passes on from the manager.
    - Logs `asked` (`<title>: <question>`, prefixed `For the manager: ` when asks is manager),
      important when blocking and not for the manager, tagged with the decision. Prints
      `asked <id>. Arm its answer's wake now, as a background command (run_in_background):
@@ -383,8 +413,34 @@ Checked in this order:
   lists it under Waiting with the pill `answered, waiting to be recorded` and a note on its page,
   until `--done`, `--decide` or `--withdraw` closes it.
 
-**event** `[--agent A] [--kind spawned|reported|blocked|resolved|asked|decision|note|integrated] [--important] TEXT`:
-logs one event (kind note by default). `--agent` must be a worker row (a manager's: any name).
+**event** `[--agent A] [--kind spawned|reported|blocked|resolved|asked|decision|note|integrated|reviewed] [--important] [--findings N --changes C,...] TEXT`:
+logs one event (kind note by default). `--agent` must be a worker row (a manager's: any name). Kind
+**reviewed** (a review of a stack before it lands; `land-check` reads it) needs `--findings` (an int, 0 or
+more) and `--changes` (jj change ids, letters and digits, split on commas and whitespace), stored on the
+event as `findings` and `changes` after `text`; refused without them (`a reviewed event says what the
+review found and of which changes: ...`), with a negative count, or a change id with another character. On
+any other kind, `--findings` or `--changes` is refused (`--findings and --changes go with --kind reviewed`).
+
+**approval** `ACTION [ID] [--rule R --by WHO --ref DECISION] [--reason R]`: the standing approvals,
+`approvals[]` (created on the first). ACTION outside add, list, revoke is refused (`approval 'x' is not one
+of add, list, revoke`). `list` prints one line per approval (as `show` does, below; `no standing approvals:
+...` when none) and writes nothing. `add` and `revoke` need ID (`approval add names the approval: ...`).
+- `add`: a known ID is refused (`approval A1 is already recorded (<status>): ...`); then the id pattern;
+  `new approval needs --rule --by --ref`; a blank rule or by; DECISION (an id or a number) must be known,
+  `decided` (`D1 (<title>) is open: a standing approval comes from a decision the user decided`), of kind
+  decision, input or grill, asks user and page true (`... was not asked of the user on the page: ...`), and
+  have a message in the chat from the user tagged with it (`... has no answer from the user in the chat:
+  ...`). The row: `{id, rule, by, ref (the decision's id), message (the latest such message's id), author
+  (its author, when it has one), added, status: "active"}`. Logs `decision` (`Standing approval A1 from D1
+  (#14): <rule>`, tagged with the decision) and prints how to record a notice under it.
+- `revoke`: an unknown ID, a revoked one (`approval A1 is already revoked (<when>): <why>`) and a blank
+  `--reason` are refused. Sets `status` revoked, `revoked` = now, `revoked_why`; logs `decision`
+  (`Standing approval A1 revoked: <reason>`, tagged with its decision).
+- Validation: `approvals`, when present, is a list of objects with non-empty strings `id, rule, by, ref,
+  added, status` (`approval X needs id, rule, by, ref, added and status`), ids matching the pattern and
+  unique, `status` active or revoked, `ref` naming a decision; a notice's `under` names an approval
+  (`notice X is done under unknown approval 'A9'`) and its `undo` is not blank. Checked after the
+  roadblocks' decisions.
 
 **park** `[--agent A]... REASON`: every live row (running, queued, blocked), or only the named
 ones, becomes stopped with `updated` = now; each current step of a stopped worker goes back to
@@ -406,7 +462,9 @@ known. New: needs url and title, kind defaults to dev, `since` = now, logs `Page
 `<project> [<status>(, manager)(, shared working copy)] <now>`; per milestone `  <id> <title> (<done>/<steps>)` and
 per step `    <id:<6> <status:<8> <title>( @agent)`; per worker
 `  agent <id:<16> <status:<8> <skill:<15> <model:<6> <effort or -:<6> <tokens:>8> tok  lane=<a,b or ->( round N)`;
-per roadblock, decision, link and kept note a line with its number; then
+per roadblock, decision, link, approval (`  approval <id> <active | revoked <when>: <why>> [N notice(s)] <rule>
+(from <the decision's number> #<message>, by <by>, <added>)`) and kept note a line, with its number where
+it has one; then
 `  <N> events, updated <updated>` and the cheat sheet. The cheat sheet lists each command with
 the values its flags take.
 
@@ -451,8 +509,11 @@ decisions[]   {id, ref, kind, title, question, why, blocking, agent, options[]: 
                (open|answered|dropped), answer, asked, answered?, dropped?,
                options[]?: {id, label, consequence}}),
                held?, held_at? (the fleet works on the answer first; removed when re-presented or closed),
-               refusal? (permission, TypeScript only: {tool, call, rule, cause, root, agent_id})}
-events[]      {at, agent|null, kind, text, important?: true, decision?}   append-only
+               refusal? (permission, TypeScript only: {tool, call, rule, cause, root, agent_id}),
+               advised? (the advisor's view, or none:<why>), under?, undo? (a notice's)}
+approvals[]?  {id, rule, by, ref (a decision id), message?, author?, added, status (active|revoked),
+               revoked?, revoked_why?}
+events[]      {at, agent|null, kind, text, important?: true, decision?, findings?, changes?}   append-only
 links[]?      {id, ref, url, title, kind (dev|page), decision, agent, note, since}
 kept[]?       {id, text, at}
 workspace_mode? "isolated" | "shared"   `set --workspaces`; absent reads as isolated
@@ -487,7 +548,7 @@ older ledger comes out complete after one command.
 ## Numbers (refs)
 
 On every write, each decision, link and roadblock without a `ref` is given one: a letter for its
-kind (decision **D**, action **A**, input **I**, secret **S**, grill **G**, permission **P**
+kind (decision **D**, action **A**, input **I**, secret **S**, grill **G**, notice **N**, permission **P**
 (TypeScript only), link **L**, roadblock **R**), and 1 + the highest number of that letter already given, skipping a number that another row of
 the same list has as its id (open-1). Decisions are numbered in
 `opened` order (as instants, open-13; a stamp that does not parse sorts after, as text), links and
@@ -1673,7 +1734,7 @@ recommendation attached.
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |
 | the plugin's hook (`fleet_listen_guard`, `fleet_chat_nudge`, `fleet_said_once`, `fleet_news`) | nothing in DIR; the session's `fleet-guard`, `fleet-nudge`, `said-once` and `fleet-news` state in the plugin's data folder |
-| `news post` | `REGISTRY/news/news.jsonl` (under its `flock`) |
+| `news post`, and a `state decision --kind notice` once its ledger is written | `REGISTRY/news/news.jsonl` (under its `flock`) |
 | `news read` | `REGISTRY/news/read/<fleet>` when the cursor moves |
 | `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / deleted (a shared fleet's `add` writes nothing) |
 | `fleet ws add --reuse` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; a new change in the workspace (`jj new`) |
@@ -1751,7 +1812,8 @@ fleet's refusal of lanes that meet, the isolated fleet's warning, `show`, valida
 `news` (`fleet news`: numbering, cursors per reader, the refusals and usage errors, and the unread line on
 a state command and on a chat watch's wake),
 `show-me-triggers` (the warning that a decision or grilling needs a picture), `past-decision` (a past answer
-referred to with no number),
+referred to with no number), `approvals` (standing approvals, notices and their news, `--advised` and the
+advisor warnings, `reviewed` events),
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each
 hand-written trace, the same steps with every state command rendering, plus `render-page` (a
 session's scratchpad with its transcript, links, markup and U+2028 in the text, unread chat, a
@@ -1777,7 +1839,7 @@ every step:
   live rows in a paused or done fleet, a chat nobody reads (computed on the ledger before the
   command), a Now line naming a closed decision, an answer on the page not recorded, decisions left
   open by `set --status done`, lanes that meet in an isolated fleet (a refusal in a shared one), a model
-  or a (model, effort) pair outside the role table; on a
+  or a (model, effort) pair outside the role table, a third choice of the day asked with no advisor's view; on a
   validation refusal, those plus the reason, and nothing on stdout;
 - `show`'s first line, milestone lines, worker lines, decision lines and event count, against
   `state.json`;

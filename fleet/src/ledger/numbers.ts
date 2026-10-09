@@ -13,6 +13,7 @@ export const PREFIX = new Map([
   ["input", "I"],
   ["secret", "S"],
   ["grill", "G"],
+  ["notice", "N"],
   ["permission", "P"],
 ]);
 

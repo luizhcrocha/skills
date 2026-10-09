@@ -12,19 +12,20 @@ import * as Effect from "effect/Effect";
 import { readChat } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
 import type { Args } from "../cli/args.ts";
-import { stateRefusal, type Refusal } from "../errors.ts";
-import { pyStr } from "../json.ts";
+import { Refusal, stateRefusal } from "../errors.ts";
+import { asString, pyStr } from "../json.ts";
 import { FLEET_BIN, isDir, makeDirs, readOrWhy, readText, remove, resolvePath, writeBytes } from "../files.ts";
+import { fleetOf, post as postNews, TEXT_MAX } from "../news/news.ts";
 import { failedAnswer, failureWords } from "../health.ts";
 import { placeRoot, registeredSession } from "../hub/grants.ts";
 import { pidOfEntry } from "../registry.ts";
 import { workerFigures, workerTitle } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
-import { dropKey, REFUSAL_KEYS, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
+import { dropKey, REFUSAL_KEYS, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, milestoneOfStep, nextStepId } from "./numbers.ts";
 import { makeRefusedCall, permissionOptions } from "./permission.ts";
 import { roleDefaults } from "./roles.ts";
-import { ID, KINDS, nameRefusal } from "./validate.ts";
+import { CHOICE_KINDS, ID, KINDS, nameRefusal } from "./validate.ts";
 import { closedNamed, isLive, sharedOverlap, UNFINISHED } from "./warnings.ts";
 
 /** One run of one ledger command. */
@@ -38,6 +39,8 @@ export interface Run {
   readonly say: (line: string) => void;
   /** Print a line on stderr. */
   readonly warn: (line: string) => void;
+  /** Do `task` once the ledger is written (a notice's news item), printing the line it gives back: never for a refused command. */
+  readonly after: (task: () => string | undefined) => void;
 }
 
 type Step$ = Effect.Effect<void, Refusal>;
@@ -67,7 +70,16 @@ export const SEVERITIES = ["warning", "serious", "critical"] as const;
 export const NEEDS = ["user", "coordinator", "worker"] as const;
 
 /** The kinds of event. */
-export const EVENT_KINDS = ["spawned", "reported", "blocked", "resolved", "asked", "decision", "note", "integrated"] as const;
+export const EVENT_KINDS = ["spawned", "reported", "blocked", "resolved", "asked", "decision", "note", "integrated", "reviewed"] as const;
+
+/** A jj change id, as a `reviewed` event names one. */
+const CHANGE_ID = /^[A-Za-z0-9]+$/u;
+
+/** The choices asked of the user in a day after which a fleet with no advisor starts one. */
+const ADVISOR_AFTER = 3;
+
+/** What `approval` does. */
+const APPROVAL_ACTIONS = ["add", "list", "revoke"] as const;
 
 /** The kinds of link. */
 export const LINK_KINDS = ["dev", "page"] as const;
@@ -1028,7 +1040,7 @@ function visualWarning(what: string, texts: readonly string[], body: string): st
 
 /** What the CLI says, without refusing, about a decision hard to read; `fields`: the fields this command wrote. */
 function readabilityWarnings(d: Decision, fields: ReadonlySet<string>, root?: string, workers: ReadonlySet<string> = new Set()): string[] {
-  if (d.kind === "permission" || d.kind === "grill") return [];
+  if (d.kind === "permission" || d.kind === "grill" || d.kind === "notice") return [];
   const out: string[] = [];
   const q = d.question ?? "";
 
@@ -1231,7 +1243,7 @@ function close(run: Run, ledger: Ledger, d: Decision, outcome: { readonly status
   }
 }
 
-const FIELDS = ["kind", "title", "question", "why", "recommend", "reason", "secret", "manual", "agent", "step", "milestone"] as const;
+const FIELDS = ["kind", "title", "question", "why", "recommend", "reason", "secret", "manual", "agent", "step", "milestone", "advised"] as const;
 
 function placeOf(ledger: Ledger, d: Decision, run: Run): Step$ {
   const stepId = run.args.str("step");
@@ -1264,6 +1276,150 @@ function placeOf(ledger: Ledger, d: Decision, run: Run): Step$ {
 
 function waitHint(run: Run, id: string): string {
   return `\`${FLEET_BIN} chat ${run.root} wait ${id}\``;
+}
+
+/** --advised is the advisor's view in one line, or none:<why no advisor was asked>. */
+function checkAdvised(advised: string | undefined): Step$ {
+  if (advised === undefined) return Effect.void;
+  const view = advised.trim();
+
+  return view === "" || (view.toLowerCase().startsWith("none:") && view.slice(5).trim() === "")
+    ? refuse("--advised is the advisor's view in one line, or none:<why no advisor was asked>")
+    : Effect.void;
+}
+
+/** The warning for a choice put to the user with no advisor's view: the fleet has an advisor that was not asked,
+ * or has asked the user ADVISOR_AFTER choices today and runs none. */
+function unadvised(run: Run, ledger: Ledger, d: Decision): string | undefined {
+  if ((d.kind !== "decision" && d.kind !== "input") || (d.asks ?? "user") !== "user" || d.status !== "open" || given(d.advised ?? undefined)) return undefined;
+
+  if (ledger.agents.some((a) => a.id === "advisor" && isLive(a.status))) {
+    return (
+      `state: ${d.id} asks the user with no --advised: ask the fleet's advisor first (SendMessage), then give ` +
+      `its view in one line (--advised "..."), or --advised none:<why not>; the page shows it under the recommendation.`
+    );
+  }
+
+  const today = stamp(run).slice(0, 10);
+  const rows = ledger.decisions ?? [];
+
+  const asked = [...rows, ...(rows.includes(d) ? [] : [d])].filter(
+    (x) => CHOICE_KINDS.some((k) => k === x.kind) && (x.asks ?? "user") === "user" && x.page !== false && x.opened.slice(0, 10) === today,
+  );
+
+  if (asked.length < ADVISOR_AFTER) return undefined;
+
+  return (
+    `state: ${d.id} is choice ${asked.length} this fleet asks the user today, and no advisor runs: start one ` +
+    `(\`${FLEET_BIN} advisor ${run.root}\`) and ask it first, then give its view (--advised "..."), or --advised none:<why not>.`
+  );
+}
+
+/** The name this fleet posts news under: the registry's, else its project's, in a name's letters. */
+function newsSender(run: Run, ledger: Ledger): string {
+  const registered = fleetOf(run.machine, run.root);
+
+  if (registered !== undefined) return registered;
+  const slug = ledger.project.replace(/[^A-Za-z0-9_.-]+/gu, "-").replace(/^-+|-+$/gu, "");
+
+  return slug === "" ? "fleet" : slug;
+}
+
+/** The fleets' news of an act done under a standing approval, posted once the ledger holds it. */
+function postNotice(run: Run, ledger: Ledger, d: Decision, a: Approval): string | undefined {
+  const sender = newsSender(run, ledger);
+  const full = `${sender} did under standing approval ${a.id} (${a.rule}): ${d.title ?? "None"}. ${d.question ?? "None"} Undo: ${d.undo ?? ""}`;
+  const text = [...full].length <= TEXT_MAX ? full : `${[...full].slice(0, TEXT_MAX - 1).join("")}…`;
+  const item = postNews(run.machine, { from: sender, to: "all", kind: "fyi", keep: false, text });
+
+  return item instanceof Refusal ? undefined : `news #${item.id} tells the fleets (fyi).`;
+}
+
+/** `decision ID --kind notice --under A`: an act done under a standing approval, recorded closed at once. */
+function notice(ledger: Ledger, run: Run, known: Decision | undefined): Effect.Effect<Ledger, Refusal> {
+  return Effect.gen(function* () {
+    const args = run.args;
+    const id = args.str("id") ?? "";
+
+    if (known !== undefined) {
+      return yield* refuse(
+        `${known.id} is already a ${known.kind}: a notice is recorded once, under a new id ` +
+          '(`decision ID --kind notice --under APPROVAL --title T --question "what was done" --undo "how to undo it"`)',
+      );
+    }
+
+    if (args.str("kind") !== "notice") return yield* refuse("--under and --undo record a notice: give --kind notice");
+
+    if (!ID.test(id)) return yield* refuse(`decision id ${pyStr(id)} should be letters, digits, '_', '.', or '-'`);
+
+    const extra = (["option", "recommend", "reason", "secret", "manual", "supersedes", "decide", "withdraw", "hold", "advised"] as const).flatMap((k) =>
+      (k === "option" ? (args.list("option") ?? []).length > 0 : given(args.str(k))) ? [`--${k}`] : [],
+    );
+
+    if (args.str("asks") === "manager") extra.push("--asks manager");
+
+    if (args.flag("blocking")) extra.push("--blocking");
+
+    if (extra.length > 0) return yield* refuse(`a notice reports what was done under a standing approval and asks nothing: leave out ${extra.join(", ")}`);
+    yield* require(run, ["title", "question", "under", "undo"], "notice");
+    const under = args.str("under") ?? "";
+    const a = find(ledger.approvals, under);
+
+    if (a === undefined) {
+      return yield* refuse(`unknown approval '${under}': \`approval list\` shows the standing approvals; an act no approval covers is asked (a decision)`);
+    }
+
+    if (a.status !== "active") {
+      return yield* refuse(`approval ${a.id} was revoked ${a.revoked ?? "None"}: ${a.revoked_why ?? "None"}. What it covered asks the user again: open a decision`);
+    }
+
+    const undo = args.str("undo") ?? "";
+
+    if (undo.trim() === "") return yield* refuse("--undo says how to undo what was done; an act that cannot be undone is not routine: ask the user (a decision)");
+    yield* checkQuestion(args.str("question"), "notice");
+    yield* checkWhy(args.str("why"), "notice");
+    const at = stamp(run);
+    const agent = args.str("agent");
+
+    const d: Decision = {
+      id,
+      kind: "notice",
+      title: args.str("title") ?? "",
+      question: args.str("question") ?? "",
+      why: args.str("why") ?? null,
+      blocking: false,
+      agent: given(agent) ? agent : null,
+      options: [],
+      recommend: null,
+      reason: null,
+      secret: null,
+      manual: null,
+      body: false,
+      page: true,
+      supersedes: null,
+      status: "decided",
+      answer: "done",
+      resolution: `under ${a.id}`,
+      change: null,
+      asks: "user",
+      opened: at,
+      revised: null,
+      closed: at,
+      step: null,
+      milestone: null,
+      under: a.id,
+      undo,
+    };
+
+    yield* placeOf(ledger, d, run);
+    yield* setBody(run, d);
+    (ledger.decisions ??= []).push(d);
+    log(run, ledger, { kind: "decision", text: `Done under ${a.id} (${a.rule}): ${d.title ?? "None"}: ${d.question ?? "None"}`, agent: d.agent ?? null, decision: d.id });
+    run.say(`recorded ${d.id}, done under ${a.id} and closed: the page lists it under Done under your approvals, with its undo.`);
+    run.after(() => postNotice(run, ledger, d, a));
+
+    return ledger;
+  });
 }
 
 /** `decision`: open, revise, place, decide or withdraw a decision; one decided elsewhere is recorded closed. */
@@ -1311,6 +1467,9 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
       return yield* refuse(`${closedBecause(d)}. A closed decision stays as it is; open a new one with --supersedes ${d.id}`);
     }
+
+    if (args.str("kind") === "notice" || args.str("under") !== undefined || args.str("undo") !== undefined) return yield* notice(ledger, run, d);
+    yield* checkAdvised(args.str("advised"));
 
     let supersedes = args.str("supersedes");
 
@@ -1360,6 +1519,10 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         milestone: null,
       };
 
+      const advised = args.str("advised");
+
+      if (advised !== undefined) fresh.advised = advised;
+
       yield* placeOf(ledger, fresh, run);
 
       yield* setRefusal(run, fresh);
@@ -1369,6 +1532,9 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         yield* setBody(run, fresh);
 
         for (const warning of readabilityWarnings(fresh, writtenFields(args), run.root, workersOf(ledger))) run.warn(warning);
+        const advice = unadvised(run, ledger, fresh);
+
+        if (advice !== undefined) run.warn(advice);
         const forManager = fresh.asks === "manager";
         log(run, ledger, {
           kind: "asked",
@@ -1452,6 +1618,9 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       yield* setBody(run, row);
 
       for (const warning of readabilityWarnings(row, writtenFields(args), run.root, workersOf(ledger))) run.warn(warning);
+      const advice = passedOn ? unadvised(run, ledger, row) : undefined;
+
+      if (advice !== undefined) run.warn(advice);
 
       if (["question", "option", "manual"].some((k) => changed.includes(k)) && !given(args.str("log")) && decide === undefined && withdraw === undefined) {
         run.warn(`state: ${row.id} was asked again with new words and no --log: say what changed in one line (--log "..."); the page's history shows it, and the user should not have to compare two versions.`);
@@ -1876,6 +2045,26 @@ export function event(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
 
   if (given(agent) && !known(ledger, agent)) return refuse(`unknown agent '${agent}'`);
   const kind = run.args.str("kind");
+  const findings = run.args.int("findings");
+  const changesText = run.args.str("changes");
+  const changes = (changesText ?? "").split(/[\s,]+/u).filter((c) => c !== "");
+
+  if (kind === "reviewed") {
+    if (findings === undefined || changes.length === 0) {
+      return refuse(
+        'a reviewed event says what the review found and of which changes: --findings N (0 when it found nothing) ' +
+          'and --changes "<change id>,..." (jj\'s change ids of the stack it read; land-check looks them up)',
+      );
+    }
+
+    if (findings < 0) return refuse("--findings counts what the review found: 0 or more");
+    const bad = changes.filter((c) => !CHANGE_ID.test(c));
+
+    if (bad.length > 0) return refuse(`--changes names jj change ids (letters and digits), not ${bad.join(", ")}`);
+  } else if (findings !== undefined || changesText !== undefined) {
+    return refuse("--findings and --changes go with --kind reviewed");
+  }
+
   log(run, ledger, {
     kind: given(kind) ? kind : "note",
     text: run.args.str("text") ?? "",
@@ -1883,7 +2072,111 @@ export function event(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
     important: run.args.flag("important"),
   });
 
+  const last = ledger.events.at(-1);
+
+  if (kind === "reviewed" && last !== undefined) {
+    last.findings = findings ?? 0;
+    last.changes = changes;
+  }
+
   return Effect.succeed(ledger);
+}
+
+/** One standing approval as `approval list` and `show` print it. */
+export function approvalLine(ledger: Ledger, a: Approval): string {
+  const d = findDecision(ledger, a.ref);
+  const done = (ledger.decisions ?? []).filter((x) => x.kind === "notice" && x.under === a.id).length;
+  const status = a.status === "active" ? "active" : `revoked ${a.revoked ?? "None"}: ${a.revoked_why ?? "None"}`;
+  const from = d?.ref !== undefined && d.ref !== "" ? d.ref : a.ref;
+
+  return `  approval ${a.id} ${status} [${done} notice${done === 1 ? "" : "s"}] ${a.rule} (from ${from} #${a.message === undefined ? "None" : String(a.message)}, by ${a.by}, ${a.added})`;
+}
+
+/** The lines `approval list` prints. */
+export function approvalLines(ledger: Ledger): string[] {
+  const rows = ledger.approvals ?? [];
+
+  return rows.length === 0
+    ? ["no standing approvals: `approval add ID --rule R --by WHO --ref DECISION` records one from a decision the user answered on the page"]
+    : rows.map((a) => approvalLine(ledger, a));
+}
+
+/** Why `approval ACTION` is refused before it reads the ledger, if it is. */
+export function approvalAction(action: string): Refusal | undefined {
+  return APPROVAL_ACTIONS.some((x) => x === action) ? undefined : stateRefusal(`approval ${pyStr(action)} is not one of ${APPROVAL_ACTIONS.join(", ")}`);
+}
+
+/** `approval add|revoke`: a standing approval recorded from a decision the user answered on the page, or revoked. */
+export function approval(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
+  return Effect.gen(function* () {
+    const args = run.args;
+    const action = args.str("action") ?? "";
+    const refused = approvalAction(action);
+
+    if (refused !== undefined) return yield* Effect.fail(refused);
+    const id = args.str("id");
+
+    if (!given(id)) return yield* refuse(`approval ${action} names the approval: \`approval ${action} ID ...\``);
+    const rows = (ledger.approvals ??= []);
+    const a = find(rows, id);
+
+    if (action === "revoke") {
+      if (a === undefined) return yield* refuse(`unknown approval '${id}'`);
+
+      if (a.status === "revoked") return yield* refuse(`approval ${a.id} is already revoked (${a.revoked ?? "None"}): ${a.revoked_why ?? "None"}`);
+      const reason = args.str("reason") ?? "";
+
+      if (reason.trim() === "") return yield* refuse('--reason says why, or where the user said it ("revoked on the page (#21)")');
+      a.status = "revoked";
+      a.revoked = stamp(run);
+      a.revoked_why = reason;
+      log(run, ledger, { kind: "decision", text: `Standing approval ${a.id} revoked: ${reason}`, decision: a.ref });
+      run.say(`revoked approval ${a.id}: what it covered asks the user again.`);
+
+      return ledger;
+    }
+
+    if (a !== undefined) return yield* refuse(`approval ${a.id} is already recorded (${a.status}): revoke it, or record the new rule under a new id`);
+
+    if (!ID.test(id)) return yield* refuse(`approval id ${pyStr(id)} should be letters, digits, '_', '.', or '-'`);
+    yield* require(run, ["rule", "by", "ref"], "approval");
+    const rule = args.str("rule") ?? "";
+    const by = args.str("by") ?? "";
+
+    if (rule.trim() === "" || by.trim() === "") return yield* refuse("--rule says what the approval covers, in the user's words, and --by who gave it");
+    const ref = args.str("ref") ?? "";
+    const d = findDecision(ledger, ref);
+
+    if (d === undefined) return yield* refuse(`unknown decision '${ref}'`);
+    const name = `${d.ref !== undefined && d.ref !== "" ? d.ref : d.id} (${d.title ?? "None"})`;
+
+    if (d.status !== "decided") return yield* refuse(`${name} is ${d.status}: a standing approval comes from a decision the user decided`);
+
+    if (!CHOICE_KINDS.some((k) => k === d.kind) || (d.asks ?? "user") !== "user" || d.page === false) {
+      return yield* refuse(
+        `${name} was not asked of the user on the page: only the user's own answer there gives a standing approval; ` +
+          "ask them with a decision that names the rule",
+      );
+    }
+
+    const answers = readChat(run.root).filter((m) => m.decision === d.id && m.from === "user");
+    const m = answers.at(-1);
+
+    if (m === undefined) return yield* refuse(`${name} has no answer from the user in the chat: only the user's own answer on the page gives a standing approval`);
+
+    const row: Approval = { id, rule, by, ref: d.id, message: m.id, added: stamp(run), status: "active" };
+    const author = asString(m.author);
+
+    if (author !== undefined && author !== "") row.author = author;
+    rows.push(row);
+    log(run, ledger, { kind: "decision", text: `Standing approval ${id} from ${d.ref !== undefined && d.ref !== "" ? d.ref : d.id} (#${m.id}): ${rule}`, decision: d.id });
+    run.say(
+      `recorded approval ${id}. An act it covers is recorded, not asked: \`decision ID --kind notice --under ${id} ` +
+        '--title T --question "what was done" --undo "how to undo it"`',
+    );
+
+    return ledger;
+  });
 }
 
 /** The kinds a decision may be opened as with `decision` (a grilling is opened with `grill`). */

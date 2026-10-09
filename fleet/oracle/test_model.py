@@ -43,6 +43,7 @@ from state import ROLES  # noqa: E402
 
 LIVE = {"running", "queued", "blocked"}
 STALE_S = 30 * 60
+ADVISOR_AFTER = 3  # choices asked of the user in a day after which a fleet with no advisor is told to start one
 GRACE_S = 10 * 60
 PREFIX = {"decision": "D", "action": "A", "input": "I", "secret": "S", "grill": "G"}
 REF = re.compile(r"\b([DAISGLR]\d+)\b")
@@ -307,6 +308,13 @@ class Model:
         if d.get("agent") and not d.get("milestone"):
             d["milestone"] = (self.agents.get(d["agent"]) or {}).get("milestone")
 
+    def asked_today(self, new: dict) -> int:
+        """The choices (decisions, inputs, grillings) asked of the user on the page today, `new` among them."""
+        day = lambda t: int(t // 86400)  # noqa: E731  (the clock is POSIX seconds, and the oracle runs in UTC)
+        rows = [d for d in self.decisions.values() if d is not new] + [new]
+        return sum(1 for d in rows if d["kind"] in ("decision", "input", "grill") and d.get("page", True)
+                   and day(d.get("opened", d["since"])) == day(self.clock))
+
     def close(self, did: str, status: str, answer) -> None:
         self.decisions[did].update(status=status, answer=answer)
         self.decisions[did].pop("held", None)  # closing ends a hold
@@ -349,7 +357,9 @@ class Model:
             if not elsewhere:
                 self.check_kind(d)
                 self.log()
-            d["since"] = self.clock
+            d["since"], d["opened"], d["page"] = self.clock, self.clock, not elsewhere
+            if not elsewhere and d["kind"] in ("decision", "input") and self.asked_today(d) >= ADVISOR_AFTER:
+                self.unadvised = did  # warned: a third choice in a day with no advisor's view, and no advisor running
             self.decisions[did] = d
         else:
             if c.get("supersedes"):
@@ -399,7 +409,8 @@ class Model:
                 raise Refused("a new grilling needs --title and --ask")
             did = c["id"]
             d = {"kind": "grill", "status": "open", "answer": None, "step": None, "milestone": None, "options": [],
-                 "agent": None, "questions": [], "title": c["title"], "question": "", "since": self.clock}
+                 "agent": None, "questions": [], "title": c["title"], "question": "", "since": self.clock,
+                 "opened": self.clock, "page": True}
             self.decisions[did] = d
         qs = d["questions"]
         for q in c.get("answer", []):
@@ -528,6 +539,8 @@ class Model:
             found["open"] = "state: the fleet is done with"
         if c["cmd"] == "decision" and getattr(self, "reworded", None):
             found["reworded"] = f"state: {self.reworded} was asked again with new words and no --log"
+        if c["cmd"] == "decision" and getattr(self, "unadvised", None):
+            found["unadvised"] = f"state: {self.unadvised} is choice"
         if c["cmd"] == "agent" and ("model" in c or "effort" in c):
             a = self.agents[c["id"]]
             if a["model"] not in POLICY_MODELS:
@@ -626,6 +639,7 @@ class Model:
             return 0, {}
         said = m.warnings(c, self)
         m.__dict__.pop("reworded", None)
+        m.__dict__.pop("unadvised", None)
         if c["cmd"] == "show":
             return 0, said
         m.number()
