@@ -356,13 +356,15 @@ export function createUi(m: Model) {
 
   const closeList = (): void => composer.close();
 
-  /** A message from the stream or a send: the conversation stays at its end when it was there. */
-  function addMessage(data: Json, live: boolean): void {
+  /** Messages from the stream or a send, added at once: the conversation stays at its end when it was there. */
+  function addMessages(received: readonly { readonly data: Json; readonly live: boolean }[]): void {
     const stick = nearBottom();
-    m.addMessage(data, live);
+    m.addMessages(received);
 
     if (stick) toBottom();
   }
+
+  const addMessage = (data: Json, live: boolean): void => addMessages([{ data, live }]);
 
   /** The composer's list under the caret: skills after a "/" that starts a word, people after an "@". */
   const updateList = (): void => composer.update();
@@ -1069,6 +1071,7 @@ export function createUi(m: Model) {
     openSide,
     openSideList,
     addMessage,
+    addMessages,
     carets,
     composer,
     list: composer.list,

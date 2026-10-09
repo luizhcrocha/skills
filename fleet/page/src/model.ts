@@ -253,20 +253,34 @@ export function createModel(initial: State) {
   const chatInView = (): boolean => !embed && visible() && (docked() ? !chatCollapsed() : chatOpen());
   const messageListeners: ((m: Message, live: boolean) => void)[] = [];
 
-  /** A message from the stream or from a send, kept once by its id. `live` marks one that arrived after the first replay. */
-  function addMessage(received: Json, live: boolean): void {
-    const m = Core.parseMessage(received);
+  /**
+   * Messages from the stream or from a send, each kept once by its id, added in one write: what reads the
+   * conversation is computed once for the lot, not once a message (a replay brings the whole chat at once).
+   * `live` marks one that arrived after the first replay.
+   */
+  function addMessages(received: readonly { readonly data: Json; readonly live: boolean }[]): void {
+    const added: Message[] = [];
 
-    if (!m || messageIds.has(m.id)) return;
-    messageIds.add(m.id);
-    lastId = Math.max(lastId, m.id);
+    for (const { data, live } of received) {
+      const m = Core.parseMessage(data);
 
-    for (const fn of messageListeners) fn(m, live);
+      if (!m || messageIds.has(m.id)) continue;
+      messageIds.add(m.id);
+      lastId = Math.max(lastId, m.id);
+
+      for (const fn of messageListeners) fn(m, live);
+      added.push(m);
+    }
+
+    if (!added.length) return;
     setChat((d) => {
-      d.list.push(m);
+      d.list.push(...added);
     });
     flush();
   }
+
+  /** A message from the stream or from a send, kept once by its id. `live` marks one that arrived after the first replay. */
+  const addMessage = (received: Json, live: boolean): void => addMessages([{ data: received, live }]);
 
   /* ------------------------------------------------------------------ the view */
 
@@ -354,6 +368,7 @@ export function createModel(initial: State) {
     messageById,
     lastId: () => lastId,
     addMessage,
+    addMessages,
     onMessage: (fn: (m: Message, live: boolean) => void) => messageListeners.push(fn),
     conn,
     setConn: (c: Conn) => setConnSignal(c),

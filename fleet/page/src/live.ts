@@ -51,6 +51,16 @@ export function goLive(m: Model, ui: Ui): void {
     live.poller = undefined;
   };
 
+  let arrived: { data: Json; live: boolean }[] = [];
+  let draining: ReturnType<typeof setTimeout> | undefined;
+
+  const drain = (): void => {
+    draining = undefined;
+    const batch = arrived;
+    arrived = [];
+    ui.addMessages(batch);
+  };
+
   function connect(): void {
     live.lastAttempt = Date.now();
 
@@ -96,10 +106,14 @@ export function goLive(m: Model, ui: Ui): void {
     es.addEventListener("chat", (ev) => {
       try {
         // SAFETY: parsed JSON; parseMessage checks it.
-        ui.addMessage(JSON.parse(ev.data) as Json, Date.now() > live.replayUntil);
+        arrived.push({ data: JSON.parse(ev.data) as Json, live: Date.now() > live.replayUntil });
       } catch {
         // a malformed line is skipped
       }
+
+      /* The replay brings every message of the chat in one go: they are added together once the events
+         already received have been read, so the page is computed once for them, not once a message. */
+      draining ??= setTimeout(drain, 0);
     });
     es.addEventListener("state", (ev) => m.takeState(ev.data));
     es.onerror = () => {
