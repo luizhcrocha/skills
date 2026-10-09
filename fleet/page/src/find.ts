@@ -29,11 +29,12 @@ export interface Group {
 }
 
 /**
- * The kinds in the order the finder draws them: what waits on the viewer first (decisions, a fleet, a
- * roadblock), then who does the work, the plan, what was said, the links, and the log last.
+ * The kinds in the order the finder draws them: what waits on the viewer first (decisions, the standing
+ * approvals that let the fleet go on without asking, a fleet, a roadblock), then who does the work, the plan, what was said, the links, and the log last.
  */
 export const GROUPS: readonly Group[] = [
   { key: "decisions", heading: "Decisions", prefix: "d", one: "decision", weight: 6 },
+  { key: "approvals", heading: "Approvals", prefix: "a", one: "approval", weight: 5 },
   { key: "coordinators", heading: "Fleets", prefix: "f", one: "fleet", weight: 5 },
   { key: "roadblocks", heading: "Roadblocks", prefix: "r", one: "roadblock", weight: 4 },
   { key: "workers", heading: "Workers", prefix: "w", one: "worker", weight: 5 },

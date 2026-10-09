@@ -144,6 +144,34 @@ export interface Decision {
   readonly held_at?: string | null;
   /** A permission's refused call. */
   readonly refusal?: RefusedCall | null;
+  /** A notice's standing approval: the id of the approval it was done under ("A1"). */
+  readonly under?: string;
+  /** A notice's way back: how to undo what was done, in the page's text format. */
+  readonly undo?: string;
+  /** The fleet's advisor's view in one line, or "none:<reason>" when no advisor was asked. */
+  readonly advised?: string;
+}
+
+/**
+ * A standing approval: a rule the user gave once (in decision `ref`, chat message `message`), so the fleet
+ * does the routine acts it covers without asking, and records each as a notice.
+ */
+export interface Approval {
+  readonly id: string;
+  readonly rule: string;
+  readonly by: string;
+  /** The id of the decision the user gave it in. */
+  readonly ref: string;
+  /** The chat message that gave it; null when not recorded. */
+  readonly message: number | null;
+  /** The hub's login that gave it; "" when not recorded. */
+  readonly author: string;
+  readonly added: string;
+  readonly status: "active" | "revoked";
+  /** When it was revoked; "" while active. */
+  readonly revoked: string;
+  /** Why it was revoked; "" when not said. */
+  readonly revoked_why: string;
 }
 
 /** A worker. */
@@ -356,6 +384,8 @@ export interface State {
   readonly agents: readonly Agent[];
   readonly roadblocks: readonly Roadblock[];
   readonly decisions: readonly Decision[];
+  /** The standing approvals, active and revoked, in the ledger's order. */
+  readonly approvals: readonly Approval[];
   readonly links: readonly Link[];
   readonly found: readonly Found[];
   readonly kept: readonly Kept[];
@@ -808,10 +838,23 @@ function findRows(state: Partial<State>, messages: Iterable<Message> | null | un
       group: "decisions",
       ref: d.ref || "",
       title: one(d.title),
-      sub: one(d.status === "open" ? d.question : d.answer || d.resolution || d.status),
-      hint: d.status === "open" ? "open" : d.status,
+      sub: one(d.status === "open" || isNotice(d) ? d.question : d.answer || d.resolution || d.status),
+      hint: isNotice(d) ? "done under " + String(d.under ?? "an approval") : d.status === "open" ? "open" : d.status,
       pill: kindWord(d.kind),
       go: { kind: "decision", id: d.id },
+    });
+  }
+
+  for (const a of state.approvals ?? []) {
+    rows.push({
+      key: "a:" + a.id,
+      group: "approvals",
+      ref: a.id,
+      title: one(a.rule),
+      sub: one(a.status === "revoked" ? "revoked" + (a.revoked_why ? ": " + a.revoked_why : "") : "standing approval, by " + a.by),
+      hint: a.status,
+      pill: "",
+      go: { kind: "view", hash: "#approval-" + a.id },
     });
   }
 
@@ -916,11 +959,11 @@ const stamp = (iso: string | null | undefined | boolean): number => {
  * first in each, then the ones the manager looks at first, then the closed ones, newest first. `seen` maps
  * an id to the revision the viewer last opened; an open item never opened is marked "new", one revised
  * since is "changed". A row with a `fleet` is another fleet's, whose own page knows whether it was seen, and
- * carries no mark here.
+ * carries no mark here. A notice is in none of the lists: it asked nothing (`noticesOf`).
  */
 function decisionRows(decisions: readonly Decision[] | null | undefined, seen: { readonly [id: string]: string | undefined } | null | undefined): { item: Decision; mark: string }[] {
   const rank = (d: Decision): number => (d.status !== "open" ? 3 : d.asks === "manager" ? 2 : d.blocking ? 0 : 1);
-  const rows = [...(decisions ?? [])].sort((a, b) => rank(a) - rank(b) || (rank(a) === 3 ? stamp(b.closed) - stamp(a.closed) : stamp(a.opened) - stamp(b.opened)));
+  const rows = (decisions ?? []).filter((d) => !isNotice(d)).sort((a, b) => rank(a) - rank(b) || (rank(a) === 3 ? stamp(b.closed) - stamp(a.closed) : stamp(a.opened) - stamp(b.opened)));
 
   return rows.map((d) => {
     const last = seen?.[d.id];
@@ -1351,6 +1394,20 @@ function parseState(value: Json | undefined): State | null {
     })),
     roadblocks: withId(rows("roadblocks")).map((r) => ({ ...r, title: text(r["title"], r["id"]), resolved: r["resolved"] === true })),
     decisions: withId(rows("decisions")).map(decision),
+    approvals: withId(list(value["approvals"])).map(
+      (a): Approval => ({
+        id: text(a["id"], ""),
+        rule: text(a["rule"], ""),
+        by: text(a["by"], ""),
+        ref: text(a["ref"], ""),
+        message: Number.isInteger(a["message"]) ? Number(a["message"]) : null,
+        author: text(a["author"], ""),
+        added: text(a["added"], ""),
+        status: a["status"] === "revoked" ? "revoked" : "active",
+        revoked: text(a["revoked"], ""),
+        revoked_why: text(a["revoked_why"], ""),
+      }),
+    ),
     links: withId(list(value["links"]))
       .filter((l) => isText(l["url"]) && /^https?:\/\//u.test(l["url"]))
       .map((l) => ({
@@ -1553,7 +1610,7 @@ function parseMessage(value: Json | undefined): Message | null {
 /** The page's views, in the dock's order. */
 const VIEWS: readonly string[] = ["decisions", "plan", "fleet", "links", "log"];
 
-const MOVED: Lookup = { roadmap: "plan", roadblocks: "plan", tokens: "fleet", activity: "log" };
+const MOVED: Lookup = { roadmap: "plan", roadblocks: "plan", tokens: "fleet", activity: "log", notices: "decisions", approvals: "decisions" };
 
 /** Where a hash leads. */
 export interface Place {
@@ -1579,8 +1636,21 @@ function viewOf(hash: string | null | undefined, fleets = false): Place {
 
   if (/^agent-[A-Za-z0-9_.-]+$/u.test(name)) return { view: "fleet", decision: null, anchor: name };
 
+  if (/^approval-[A-Za-z0-9_.-]+$/u.test(name)) return { view: "decisions", decision: null, anchor: name };
+
   return { view: "decisions", decision: null, anchor: null };
 }
+
+/** Whether a decision row is a notice: something the fleet did under a standing approval, closed as it was recorded. */
+const isNotice = (d: Pick<Decision, "kind"> | null | undefined): boolean => d?.kind === "notice";
+
+/** The notices among `decisions`, newest first (by when they closed, else opened). */
+function noticesOf(decisions: readonly Decision[] | null | undefined): Decision[] {
+  return (decisions ?? []).filter(isNotice).sort((a, b) => stamp(b.closed || b.opened) - stamp(a.closed || a.opened));
+}
+
+/** The chat message that asks the coordinator to revoke standing approval `a`. */
+const revokeText = (a: Pick<Approval, "id" | "rule">): string => `Revoke standing approval ${a.id} ("${a.rule}"): routine acts under it go back to asking me.`;
 
 /** Whether the fleet holds the item: it has the viewer's answer and works on it before it comes back. */
 const isHeld = (d: Pick<Decision, "status" | "held"> | null | undefined): boolean => Boolean(d && d.status === "open" && isText(d.held) && d.held);
@@ -1590,9 +1660,10 @@ const isHeld = (d: Pick<Decision, "status" | "held"> | null | undefined): boolea
  * not answered since it was last asked. An answer sent counts at once, before the fleet records it; a fleet's
  * reply to it does not hand it back (the chat shows the reply), a revision after it does (the item asks
  * anew). A grilling waits while questions are left; a fleet's decision on the manager's page says so itself.
+ * A notice never waits: it records what was done under a standing approval.
  */
 function awaiting(d: Decision | null | undefined, messages: Iterable<Message> | null | undefined): boolean {
-  if (!d || d.status !== "open" || d.asks === "manager" || isHeld(d)) return false;
+  if (!d || d.status !== "open" || d.asks === "manager" || isHeld(d) || isNotice(d)) return false;
 
   // A fleet's row from a summary without its chat: what the summary says was answered.
   if (!d.said && d.answered) return false;
@@ -1657,7 +1728,7 @@ function stuckOf(
   const list = [...(messages ?? [])];
 
   for (const d of own.decisions ?? []) {
-    if (d.status !== "open" || d.kind === "grill") continue;
+    if (d.status !== "open" || d.kind === "grill" || isNotice(d)) continue;
     const p = pendingAnswer(d, list);
 
     // A hold records the answers given until then; one given after it is news again. A reply in the chat
@@ -1697,6 +1768,7 @@ const KIND_NAMES: readonly (readonly [string, string, string])[] = [
   ["secret", "secret", "secrets"],
   ["grill", "grilling", "grillings"],
   ["permission", "permission", "permissions"],
+  ["notice", "notice", "notices"],
 ];
 
 /** An item's kind as one word ("action", "grilling"); one the page does not know reads as a decision. */
@@ -1894,6 +1966,9 @@ export const Core = {
   pendingAnswer,
   awaiting,
   isHeld,
+  isNotice,
+  noticesOf,
+  revokeText,
   bucketOf,
   BUCKETS,
   kindWord,

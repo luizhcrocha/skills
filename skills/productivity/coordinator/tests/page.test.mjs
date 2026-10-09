@@ -615,3 +615,34 @@ test("stuckOf: a running worker silent for twenty minutes, here or in a fleet", 
   const fleets = [{ id: "infra", decisions: [], silent: [{ id: "b42", name: "neo4j-container", active: "2026-09-29T16:07:00Z" }] }];
   assert.deepEqual(Core.stuckOf({ decisions: [] }, fleets, [], now).map((r) => [r.fleet, r.ref]), [["infra", "b42"]]);
 });
+
+test("notices: done under a standing approval, in no decision list, never waiting, stuck or counted; newest first", () => {
+  const now = Date.parse("2026-10-09T17:00:00Z");
+  const notice = (id, closed, extra = {}) => ({ id, ref: id.toUpperCase(), kind: "notice", title: id, question: "Landed it.", status: "decided", answer: "done", resolution: "under A1", under: "A1", undo: "jj undo", blocking: false, asks: "user", options: [], opened: closed, closed, ...extra });
+  const open = { id: "d1", ref: "D1", kind: "decision", title: "Open", question: "?", status: "open", blocking: true, asks: "user", options: [], opened: "2026-10-09T16:00:00Z" };
+  const n1 = notice("n1", "2026-10-09T16:10:00Z");
+  const n2 = notice("n2", "2026-10-09T16:50:00Z");
+  /* One the ledger left open, by mistake, still never waits. */
+  const n3 = notice("n3", "2026-10-09T16:20:00Z", { status: "open", closed: undefined });
+  const all = [open, n1, n2, n3];
+  const answered = [{ id: 5, at: "2026-10-09T16:30:00Z", from: "user", to: ["coordinator"], text: "Landed?", decision: "n3" }];
+  assert.deepEqual(Core.decisionRows(all, {}).map((r) => r.item.id), ["d1"]);
+  assert.deepEqual(Core.queueOf(all, [], null).ids, ["d1"]);
+  assert.deepEqual(all.filter((d) => Core.awaiting(d, [])).map((d) => d.id), ["d1"]);
+  assert.equal(Core.bucketOf(n1, []), "done");
+  assert.deepEqual(Core.stuckOf({ decisions: [n1, n2, n3] }, [], answered, now), []);
+  assert.equal(Core.leadOf(all.filter((d) => Core.awaiting(d, []))).headline, "1 decision waits on you.");
+  assert.deepEqual(Core.noticesOf(all).map((d) => d.id), ["n2", "n3", "n1"]);
+  assert.equal(Core.isNotice(n1), true);
+  assert.equal(Core.kindWord("notice"), "notice");
+});
+
+test("parseState and revokeText: standing approvals, active unless revoked, and the message that revokes one", () => {
+  const base = { project: "p", goal: "g", status: "running", now: "n", started: "2026-10-09T10:00:00Z" };
+  assert.deepEqual(Core.parseState(base).approvals, []);
+  const s = Core.parseState({ ...base, approvals: [{ id: "A1", rule: "land a reviewed stack", by: "luiz", ref: "d7", message: 14, added: "2026-10-09T11:00:00Z", status: "active" }, { id: "A2", rule: "r", status: "revoked", revoked: "2026-10-09T12:00:00Z", revoked_why: "no" }, { rule: "no id" }, "x"] });
+  assert.deepEqual(s.approvals.map((a) => [a.id, a.status, a.message, a.revoked_why]), [["A1", "active", 14, ""], ["A2", "revoked", null, "no"]]);
+  assert.equal(Core.revokeText(s.approvals[0]), 'Revoke standing approval A1 ("land a reviewed stack"): routine acts under it go back to asking me.');
+  assert.deepEqual(Core.viewOf("#approval-A1"), { view: "decisions", decision: null, anchor: "approval-A1" });
+  assert.deepEqual(Core.viewOf("#approvals"), { view: "decisions", decision: null, anchor: "approvals" });
+});

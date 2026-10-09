@@ -198,3 +198,21 @@ export function ManualText(props: { readonly text: string }): JSX.Element {
     </Show>
   );
 }
+
+/**
+ * How to undo what a notice did: in the format when it uses it (inline code, fenced blocks with their copy
+ * button), one `nu` block when its every line is a command, else as words.
+ */
+export function UndoText(props: { readonly text: string }): JSX.Element {
+  const blocks = createMemo(() => manualBlocks(props.text));
+
+  return (
+    <Show when={blocks()} fallback={<Rich text={props.text} refs />}>
+      {(b) => (
+        <div class="rich">
+          <Blocks blocks={b()} parts={[]} mention={undefined} refs />
+        </div>
+      )}
+    </Show>
+  );
+}

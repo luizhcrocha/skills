@@ -181,7 +181,7 @@ test("a query: the recents that match (three at most), then each kind in its fix
   expect(drawn(sec(all, 0))).toEqual(["Step Adapter", "Step Docs", "Step Generator", "Step Load", "Step Notes", "+1"]);
   const more = arrange({ rows: ROWS, recents: [], query: "step", tab: "", more: new Set(["plan"]), here: null });
   expect(drawn(sec(more, 0))).toHaveLength(6);
-  expect(GROUPS.map((g) => g.key)).toEqual(["decisions", "coordinators", "roadblocks", "workers", "plan", "chat", "links", "log"]);
+  expect(GROUPS.map((g) => g.key)).toEqual(["decisions", "approvals", "coordinators", "roadblocks", "workers", "plan", "chat", "links", "log"]);
 });
 
 test("a tab: that kind alone, every row up to fifty, with or without words; no recents", () => {

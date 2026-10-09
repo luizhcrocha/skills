@@ -22,7 +22,8 @@ import { DecisionThread } from "./DecisionThread.tsx";
 import { FRAME_MAX_PX, parseEmbedMessage, postAnswered } from "./embed.ts";
 import { clock } from "./format.ts";
 import { KIND_WORDS, StatePill } from "./Overview.tsx";
-import { CodeBlock, ManualText, Rich } from "./Rich.tsx";
+import { CodeBlock, ManualText, Rich, UndoText } from "./Rich.tsx";
+import { approvalHref } from "./Approvals.tsx";
 
 const TOKENS = ["bg", "card", "card-2", "text", "muted", "faint", "line", "accent", "accent-soft", "you", "run", "good", "warning", "serious", "critical", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
 
@@ -734,6 +735,8 @@ function Answer(props: { readonly d: Decision }): JSX.Element {
 
     if (d.kind === "grill") return "grill";
 
+    if (Core.isNotice(d)) return "notice";
+
     if (d.status !== "open") return "closed";
     const p = pending();
 
@@ -920,6 +923,7 @@ function Info(props: { readonly d: Decision }): JSX.Element {
   const { m, ui } = usePage();
   const d = (): Decision => props.d;
   const open = (): boolean => d().status === "open";
+  const notice = (): boolean => Core.isNotice(d());
   const pending = createMemo(() => Core.pendingAnswer(d(), m.messages()));
   const successor = () => m.state.decisions.find((x) => x.supersedes === d().id);
   const before = () => (d().supersedes ? m.decisionById(d().supersedes) : undefined);
@@ -930,7 +934,9 @@ function Info(props: { readonly d: Decision }): JSX.Element {
     <>
       <header class="dv-head">
         <div class="dv-pills">
-          <StatePill d={d()} pending={pending()} />
+          <Show when={notice()} fallback={<StatePill d={d()} pending={pending()} />}>
+            <PillAs cls="done" text="done" />
+          </Show>
           <PillAs cls="plain" text={KIND_WORDS[d().kind] || d().kind} />
         </div>
         <h1>
@@ -939,8 +945,8 @@ function Info(props: { readonly d: Decision }): JSX.Element {
         </h1>
         <Origin d={d()} />
         <p class="dv-meta">
-          <Show when={d().agent && m.person(d().agent)} fallback="Asked">
-            For <Who id={d().agent} />, asked
+          <Show when={d().agent && m.person(d().agent)} fallback={notice() ? "Done" : "Asked"}>
+            For <Who id={d().agent} />, {notice() ? "done" : "asked"}
           </Show>{" "}
           {m.ago(d().opened)}
           {d().revised ? ", changed " + m.ago(d().revised) : ""}
@@ -957,7 +963,10 @@ function Info(props: { readonly d: Decision }): JSX.Element {
           </Show>
         </p>
       </header>
-      <Show when={!open()}>
+      <Show when={notice()}>
+        <NoticeNote d={d()} />
+      </Show>
+      <Show when={!open() && !notice()}>
         <div class={"note " + d().status}>
           <h3>{d().status === "decided" ? "Decided" : "Withdrawn, no answer needed"}</h3>
           <Show when={d().status === "decided"}>
@@ -1019,22 +1028,71 @@ function Info(props: { readonly d: Decision }): JSX.Element {
         </Show>
       </section>
       <Show when={d().why}>{(why) => <Why text={why()} blocking={d().blocking} />}</Show>
+      <Show when={notice() ? d().undo : null}>
+        {(u) => (
+          <div class="dv-block dv-undo">
+            <h3>Undo</h3>
+            <UndoText text={u()} />
+          </div>
+        )}
+      </Show>
     </>
   );
 }
 
-/** The recommendation with its reason, read after the body and before the options. */
+/** A notice's standing: the approval it was done under, with its rule, and when it was done. */
+function NoticeNote(props: { readonly d: Decision }): JSX.Element {
+  const { m } = usePage();
+  const approval = createMemo(() => m.state.approvals.find((a) => a.id === props.d.under));
+
+  return (
+    <div class="note decided" id="dv-notice">
+      <p class="dv-notice-under">
+        <b>
+          Done under{" "}
+          <Show when={props.d.under} fallback="a standing approval">
+            {(id) => <a href={approvalHref(id())}>{id()}</a>}
+          </Show>
+          <Show when={approval()?.rule}>:</Show>
+        </b>{" "}
+        {approval()?.rule ?? ""}
+      </p>
+      <span class="dv-meta">
+        {clock(props.d.closed || props.d.opened)}, {m.ago(props.d.closed || props.d.opened)}. Nobody was asked: you approved acts like this once
+        {approval()?.status === "revoked" ? "; that approval has been revoked since." : "."}
+      </span>
+    </div>
+  );
+}
+
+/** The recommendation with its reason, read after the body and before the options, and the advisor's line under it. */
 function Recommendation(props: { readonly d: Decision }): JSX.Element {
   const recommended = () => props.d.options.find((o) => o.id === props.d.recommend);
 
   return (
-    <Show when={props.d.recommend}>
-      <aside class="dv-rec" aria-label="Recommended">
-        <h3>Recommended</h3>
-        <p class="dv-rec-pick">{recommended() ? `${recommended()?.id ?? ""}: ${recommended()?.label ?? ""}` : props.d.recommend}</p>
-        <Show when={props.d.reason}>{(r) => <Rich class="dv-rec-why" text={r()} refs />}</Show>
-      </aside>
-    </Show>
+    <>
+      <Show when={props.d.recommend}>
+        <aside class="dv-rec" aria-label="Recommended">
+          <h3>Recommended</h3>
+          <p class="dv-rec-pick">{recommended() ? `${recommended()?.id ?? ""}: ${recommended()?.label ?? ""}` : props.d.recommend}</p>
+          <Show when={props.d.reason}>{(r) => <Rich class="dv-rec-why" text={r()} refs />}</Show>
+        </aside>
+      </Show>
+      <Show when={props.d.advised}>{(a) => <Advised text={a()} />}</Show>
+    </>
+  );
+}
+
+/** What the fleet's advisor said of the decision, in one line; "none:<reason>" when it was not asked, said muted. */
+function Advised(props: { readonly text: string }): JSX.Element {
+  const none = (): boolean => props.text.startsWith("none:");
+
+  return (
+    <p class={"dv-advised" + (none() ? " muted" : "")} id="dv-advised">
+      <Show when={none()} fallback={<><b>Advisor:</b> {props.text}</>}>
+        <b>Advisor not asked:</b> {props.text.slice("none:".length).trim()}
+      </Show>
+    </p>
   );
 }
 

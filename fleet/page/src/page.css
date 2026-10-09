@@ -209,6 +209,36 @@
   .ask .detail { overflow-wrap: anywhere; }
   .ask .meta { font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
 
+  /* done under a standing approval, and the approvals: records, not links; the number and title lead to the notice's page */
+  .notice, .approval { display: grid; gap: 4px; min-width: 0; padding: 13px 14px 13px 13px; border-left: 4px solid var(--good); }
+  .approval { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; border-left-color: var(--accent); }
+  .notice:first-child, .approval:first-child { border-top-left-radius: 9px; }
+  .notice:last-child, .approval:last-child { border-bottom-left-radius: 9px; }
+  .notice + .notice, .approval + .approval { border-top: 1px solid var(--line); }
+  .notice-head { justify-self: start; color: inherit; text-decoration: none; }
+  .notice-head b { font-weight: 700; font-stretch: var(--narrow); font-size: 1.0625rem; overflow-wrap: anywhere; }
+  .notice-head:focus-visible b { text-decoration: underline; }
+  @media (hover: hover) and (pointer: fine) { .notice-head:hover b { text-decoration: underline; } }
+  .notice-what, .approval-rule { max-width: 72ch; overflow-wrap: anywhere; }
+  .approval-rule { margin: 0; font-weight: 600; }
+  .notice-undo { display: grid; gap: 2px; min-width: 0; max-width: 72ch; font-size: var(--fs-s); }
+  .notice-undo > b { color: var(--muted); font-weight: 600; font-stretch: var(--narrow); }
+  .notice .meta, .approval .meta { font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
+  .approval .meta { grid-column: 1; }
+  .approval > .btn { grid-column: 2; grid-row: 1 / span 2; }
+  .approval > .btn:active:not(:disabled), .fold-more:active { transform: scale(0.97); }
+  @media (prefers-reduced-motion: no-preference) { .approval > .btn, .fold-more { transition: transform 120ms ease-out; } }
+  .approval-error { grid-column: 1 / -1; margin: 0; }
+  .approval.revoked { border-left-color: var(--line); color: var(--muted); }
+  .approval.revoked .approval-rule { font-weight: 500; }
+  .fold-more { justify-self: start; }
+  .approvals-revoked > summary { cursor: pointer; padding: 4px 0; color: var(--muted); font-size: var(--fs-s); font-weight: 600; }
+  .approvals-revoked > .card { margin-top: 6px; }
+  @media (max-width: 759.98px) {
+    .approval { grid-template-columns: minmax(0, 1fr); }
+    .approval > .btn { grid-column: 1; grid-row: auto; justify-self: start; }
+  }
+
   /* the plan's usage: one meter per window */
   .usage { display: grid; gap: 14px; padding: 14px; }
   .usage-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; }
@@ -522,6 +552,9 @@
   .dv-rec h3 { font-size: var(--fs-s); color: var(--accent); }
   .dv-rec-pick { margin: 0; font-weight: 700; font-stretch: var(--narrow); font-size: 1.125rem; overflow-wrap: anywhere; }
   .dv-rec-why { max-width: 68ch; }
+  .dv-advised { margin: -4px 0 0; padding-left: 17px; max-width: 72ch; font-size: var(--fs-s); overflow-wrap: anywhere; }
+  .dv-advised b { font-weight: 600; font-stretch: var(--narrow); }
+  .dv-notice-under { margin: 0; }
   .dv-history { display: grid; gap: 6px; min-width: 0; }
   .dv-history h2, .dv-body h2 { font-size: var(--fs-s); color: var(--muted); }
   .dv-h-list { list-style: none; margin: 0; padding: 0 0 0 14px; display: grid; gap: 2px; border-left: 2px solid var(--line); }

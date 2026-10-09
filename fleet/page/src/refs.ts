@@ -20,7 +20,7 @@ export interface KnownFleet {
 const CANDIDATE = /(?<![A-Za-z0-9_/-])([A-Za-z][A-Za-z0-9_-]*?\d+)(?![A-Za-z0-9_-])/gu;
 
 /** A decision's own number, standing alone. */
-const BARE = /^[DAISGP]\d+$/u;
+const BARE = /^[DAISGPN]\d+$/u;
 
 /** The word just before a number, possibly possessive: "pipeline's ", "Infra ". */
 const FLEET_BEFORE = /([A-Za-z0-9][\w.@-]*?)(?:'s|’s)?\s+$/u;

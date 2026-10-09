@@ -115,13 +115,15 @@ export function recordOf(row: FindRow, state: Partial<State>, messages: Iterable
       lead: one(d.question),
       options: d.options.map((o) => ({ id: o.id, label: one(o.label), recommended: o.id === d.recommend })),
       facts: factsOf([
-        ["For", d.asks === "manager" ? "the manager" : "you"],
+        ["For", Core.isNotice(d) ? "" : d.asks === "manager" ? "the manager" : "you"],
         ["Fleet", d.fleet],
         ["Raised by", name(d.agent)],
         ["Recommended", d.recommend && !d.options.length ? d.recommend : ""],
         ["Why", d.reason],
         ["Questions", qs.length ? `${String(qs.length)}, ${String(qs.filter((q) => q.status === "open").length)} open` : ""],
-        ["Answer", open ? "" : d.answer || d.resolution],
+        ["Answer", open || Core.isNotice(d) ? "" : d.answer || d.resolution],
+        ["Done under", d.under],
+        ["Undo", d.undo],
         ["Held", d.held],
       ]),
     };

@@ -1,11 +1,13 @@
 /**
  * The Decisions view, the page's first: what waits on the viewer said in a sentence (with what is stuck,
- * the goal, the Now line and the glance under it), the decisions in three lists, the fleet's totals, and on
+ * the goal, the Now line and the glance under it), the decisions in three lists, what was done under the
+ * viewer's standing approvals and the approvals, the fleet's totals, and on
  * a manager's page the plan's usage.
  */
 import { createMemo, createSignal, flush } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
+import { Approvals } from "./Approvals.tsx";
 import { Pill, PillAs, RefTag, usePage, When, Who, tf } from "./bits.tsx";
 import { Core, type Decision, type Json, type Lookup, type Message } from "./core.ts";
 import { dayTime, fmtDur, fmtInt, fmtShort, spentWords } from "./format.ts";
@@ -13,7 +15,7 @@ import { keyed } from "./model.ts";
 import { ALL, held, narrow, scopes, type Scope } from "./scope.ts";
 
 /** What each kind of decision asks for. */
-export const KIND_WORDS: Lookup = { decision: "a choice", input: "your input", secret: "a secret", action: "something to do", grill: "a grilling", permission: "a permission" };
+export const KIND_WORDS: Lookup = { decision: "a choice", input: "your input", secret: "a secret", action: "something to do", grill: "a grilling", permission: "a permission", notice: "done under your approval" };
 
 /** A decision's state as a pill (or two). */
 export function StatePill(props: { readonly d: Decision; readonly pending: ReturnType<typeof Core.pendingAnswer> }): JSX.Element {
@@ -73,7 +75,7 @@ function Lead(): JSX.Element {
     const msgs: readonly Message[] = m.messages();
     const every = m.everyDecision();
     const l = Core.leadOf(every.filter((d) => Core.awaiting(d, msgs)));
-    const away = every.filter((d) => d.status === "open" && d.asks !== "manager" && !Core.awaiting(d, msgs));
+    const away = every.filter((d) => d.status === "open" && d.asks !== "manager" && !Core.isNotice(d) && !Core.awaiting(d, msgs));
     const held = away.filter((d) => Core.isHeld(d));
     const sent = away.length - held.length;
 
@@ -490,6 +492,7 @@ export function Overview(): JSX.Element {
     <section class="view" id="decisions" data-view="decisions" aria-labelledby="h-decisions" hidden={m.place().view !== "decisions"}>
       <Lead />
       <DecisionList />
+      <Approvals />
       <div class="part">
         <h2 id="h-totals">{m.managed() ? "The fleets" : "The fleet"}</h2>
         <Tiles />

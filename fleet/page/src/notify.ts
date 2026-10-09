@@ -210,7 +210,7 @@ export function createNotify(m: Model, hooks: NotifyHooks) {
   const openForYou = (id: string): boolean => {
     const d = m.decisionById(id);
 
-    return Boolean(d) && d?.status === "open" && d.asks !== "manager" && !Core.isHeld(d);
+    return Boolean(d) && d?.status === "open" && d.asks !== "manager" && !Core.isHeld(d) && !Core.isNotice(d);
   };
 
   const tag = (e: Arrival): Item => ({ ...e, ...Core.noticeOf(e, openForYou) });
