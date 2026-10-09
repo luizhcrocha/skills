@@ -63,6 +63,7 @@ roadblocks[]
 decisions[]  what waits on the user, in the order they were opened
   id         short stable id ("d1"), also the page's address (#decision/d1)
   kind       decision (pick an option) | input (give a value) | secret (say where it lives) | action (do it by hand)
+             | notice (done under a standing approval: closed at once, asks nothing)
   title      the row's label
   question   one sentence
   why        what it blocks, or the assumption the fleet runs on meanwhile
@@ -84,13 +85,22 @@ decisions[]  what waits on the user, in the order they were opened
   resolution how it closed
   change     what the last revision changed
   page       false for a decision recorded after the fact
+  advised    the advisor's view in one line, or none:<why no advisor was asked> (optional)
+  under, undo  a notice's: the approval it was done under, and how to undo it
   opened, revised, closed   ISO
+
+approvals[]  the standing approvals the user gave once (absent until the first)
+  id, rule   its id (A1) and what it covers, in the user's words
+  by         who gave it
+  ref        the decided decision where the user gave it; message, author: the chat message of the answer
+  status     active | revoked; added, revoked, revoked_why
 
 events[]     activity log, oldest first
   at         ISO
   agent      agent id or null (coordinator events)
-  kind       spawned | reported | blocked | resolved | asked | decision | note | integrated
+  kind       spawned | reported | blocked | resolved | asked | decision | note | integrated | reviewed
   text       one or two sentences
+  findings, changes   a reviewed event's: how many findings, and the jj change ids it read (land-check looks them up)
   decision   decision id the event is about (optional); the page opens it from the event
   important  kept in the log (optional); the page notifies as important only what is about a decision open for the user
 ```
@@ -123,6 +133,7 @@ events[]     activity log, oldest first
 | Something needs the user | `decision d1 --kind decision --title T --question Q --why W --option "A: label \| consequence" --option "B: ..." --recommend A --reason R` (see [Decisions](#decisions)) |
 | Your own choice, for the record | `event --kind decision "split the adapter out of m2: its interface is contested"` |
 | A step's words or place changed | `step s2 --title "..."`, `step s2 --before s1` (or `--after`); `step s2 --remove "why"` takes out one recorded in error and logs the reason |
+| A stack was reviewed before landing | `event --kind reviewed --findings N --changes "<change id>,..." "what was reviewed, with what"`: both required for that kind, refused on any other; `land-check` looks the change ids up |
 | Milestone checks pass | `step s2 --status done` for any step not already done, `event --kind integrated "checks green"`, `set --now "..."` |
 | The user must see something now | open a decision for it: the page chimes and keeps a toast only for what asks the user something still open. Everything else is the fleet's record, which the user sees only when their page is set to notify about everything |
 | A worker is spawned | `agent a1 --task ... --milestone m1 --task-id <agentId>`: with the id the Agent tool returned, its tokens and duration are read from its own transcript on every command, so a finished worker's figures need no copying |
@@ -194,6 +205,10 @@ A manager's page shows how full the plan's 5-hour and 7-day windows are and when
 | The fleet works on the answer first | `decision A1 --hold "fix the role cut first"`: records the answer, keeps the item open and off the user's list (the page shows it under Waiting, "With the fleet: ..."). A revision of the question, options or manual re-presents it and clears the hold, as do `--unhold` and closing |
 | Nobody has to answer | `decision d1 --withdraw "the worker found the rule in the finance ADR"` |
 | Changed after it closed | `decision d7 ... --supersedes d1` (a closed decision refuses every change) |
+| The user approves a kind of act once | after the decision that asked is decided: `approval add A1 --rule "<what it covers, in the user's words>" --by luiz --ref D7`. Refused unless D7 is decided, a choice, input or grilling asked of the user on the page (not `--asks manager`, not recorded after the fact), with the user's answer to it in the chat; the row keeps that message's number and author. `approval list` prints them with the notices under each |
+| An act done under an approval | `decision n1 --kind notice --under A1 --title T --question "what was done" --undo "how to undo it"` (`--why`, `--agent`, `--step`, `--milestone`, `--body` too): recorded decided at once (answer `done`, resolution `under A1`), numbered N, posted to the fleets' news as an fyi, listed on the page under Done under your approvals. Refused: an unknown or revoked approval, no `--undo`, and options, a recommendation, a secret, a manual, `--asks manager`, `--blocking`, `--advised` or a close |
+| The user revokes an approval (Revoke on the page posts it to the chat) | `approval revoke A1 --reason "revoked on the page (#21)"`: a notice under it is refused from then on |
+| The advisor's view of a choice the user is asked | `--advised "<one line>"` or `--advised none:<why not>` on `decision`; warned when a choice or input goes to the user without it while the fleet has a live `advisor` row, or is the third choice (decisions, inputs, grillings) asked of the user today |
 | Decided in the session or the chat | `decision d8 --title T --question Q --decide "yes" --resolution "said in the session"` (recorded closed, no page) |
 
 **The page.** Each decision has a page at `<dashboard-url>#decision/<id>`, read top-down: the title; the question, large (one recorded before the 400-character rule shows its asking sentence large and the rest in reading type, in short paragraphs, its "(1) … (2) …" run as a list); what it blocks or what the fleet assumes meanwhile; the recommendation as a callout with its reason; the options as cards with their consequences, the recommended one marked; the conversation about it ("In the chat"); the body ("The details"); and the history, newest first, one line per moment (asked, each `--log`, held, the answers, decided), the earlier ones folded and each long one opening to its whole text. A decided one also offers Change my answer and Add to my answer (both start a message about it in the chat). Under the options sits the control for its kind (options to pick with a note, a field, a reference for a secret, Done and Failed buttons for an action, Failed with a note required on what happened). The user's answer posts to the chat tagged with the decision, and the page shows it as sent until you record it. A decision that was decided or withdrawn shows how, and takes no more answers: the server refuses one with the reason, so a page left open on a stale decision cannot answer it.
@@ -264,7 +279,7 @@ The page is built for a phone first, one view at a time: Decisions, Plan, Fleet,
 - Links: the pages and dev servers the fleet named (up or down, each opening in a new tab), and what the machine serves through `tailscale serve` that no link names, with the process, its directory, and the fleet that started it (found from its parent processes, else from the first transcript that wrote its address). A manager's page lists every fleet's. `fleet served` prints the same.
 - Stuck: at the top of every page, an answer the fleet has had for five minutes without recording it (a reply in the chat does not record an answer; only the decision command does), and a chat nobody reads while the user's messages wait there; on the manager's page, every fleet's.
 - One address: the hub serves every fleet's page at `/f/<fleet>/` and the manager's at `/f/manager/` (each page with its chat, its decisions and its live stream), and every page's header has a switcher between the manager and the fleets. Each page keeps its browser storage (drafts, what was read) under its own path.
-- Numbers: every decision, link and roadblock has one, given when it is recorded and kept: D a choice, A an action, I an input, S a secret, G a grilling, L a link, R a roadblock (D3, A1, L2). The page shows them, the chat's lines carry them (`[D3 d-cuts]`), and every command takes one in place of the id, written in capitals (`decision D3 --decide ...`).
+- Numbers: every decision, link and roadblock has one, given when it is recorded and kept: D a choice, A an action, I an input, S a secret, G a grilling, N a notice, L a link, R a roadblock (D3, A1, L2). A standing approval keeps the id it was given (A1 in the examples), which is not a number: `--under` and `approval revoke` take it. The page shows them, the chat's lines carry them (`[D3 d-cuts]`), and every command takes one in place of the id, written in capitals (`decision D3 --decide ...`).
 - Search: Ctrl/⌘K, or the magnifier in the header, finds anything the page holds (decisions and actions, links, roadblocks, plan steps, workers, coordinators on a manager's page, chat messages, the log) and goes there. A number (`D3`) comes first; `d`, `l`, `r`, `p`, `w`, `c`, `f` and a space look in one group.
 - An answer sent counts at once: the item leaves "waits on you" when the user sends it, and comes back only when the fleet revises it (new words, a new command, a new grilling round); a reply in the chat does not bring it back, nor record it. Record it as soon as the watch prints it, before other work: decide it, or hold it (`--hold`) while the fleet does what it needs first. A held item sits under Waiting with the reason and the time held, and is never stuck.
 - What waits is named by kind: "1 action waits on you", "1 decision and 1 action wait on you", "3 things wait on you" for three kinds or more, on the page's first line, the Decisions tab's tooltip and each fleet's facts on the manager's page; a stuck answer reads "action answered, not recorded".

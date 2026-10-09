@@ -99,6 +99,10 @@ A fleet's name is its session's: the registry reads it from the session's title,
 
 A fleet's advisor plays the Advisor role ([MODELS.md](../coordinator/MODELS.md)) and is restarted on the role's fallback when its model is unavailable (its row's model says which). When one fleet reports Fable unavailable, post it to the news (`--kind fyi`): their next advisor spawn goes straight to the fallback.
 
+Your own session plays the Manager role and the coordinators the Coordinator role ([MODELS.md](../coordinator/MODELS.md)): Opus at low effort, set by the launch settings (`CLAUDE_CODE_EFFORT_LEVEL`), since the turns are routing and bookkeeping and the hard calls go to an advisor or a Decider. So every agent you spawn gets its role's `model` and `effort` on the Agent call: one spawned bare inherits your low effort.
+
+A fleet's notices (acts done under a standing approval the user gave, the coordinator's SKILL.md "Standing approvals") reach you as fyi news: read them with the rest, and raise one with the user only when it looks outside its approval's words.
+
 A monitor agent you spawn (app metrics, runs, executions, reporting back to you) is a Watcher ([MODELS.md](../coordinator/MODELS.md)); when the watch is a command, a background Bash loop does it without a model. When a new default model comes out, the fleets move their agents to it (the coordinator's SKILL.md, "A new default model"); yours too.
 
 ## The user steps away
