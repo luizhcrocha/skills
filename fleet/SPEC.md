@@ -258,17 +258,18 @@ Checked in this order:
    `state: <id>'s question is N characters and it has no --body: ...` (question over 300, no
    body); `state: <id>'s question uses words the user may not know (sha1, alias): ...` (whole
    words, any case, from sha1, sha256, digest, stage cache, alias, uuid, idempotent, upsert, blob,
-   enum, turn gate, gold, harness, rubric, jev, listed in that order); `state: <id> names workers by
-   id (b333, a1): say what the work is (...); a worker's id means nothing to the user.` (a lowercase
-   letter and digits standing alone, each once in the order found, in the title, then the question,
-   then the reason, of those given); `state: <id>'s why is N characters: ...` (over 200); `state:
+   enum, turn gate, gold, harness, rubric, jev, listed in that order); `state: <id> names workers
+   (b333, invoice-gen): say what the work is (...); a worker's id or name means nothing to the user.`
+   (a word of letters, digits, `_` and `-` that is, any case, the id or name of an agent row of the
+   ledger, each once in the order found, in the title, then the question, then the reason, of those
+   given; a decision's number or id such as D40, g26 or p12 is not one unless a worker has it); `state: <id>'s why is N characters: ...` (over 200); `state:
    <id>'s consequences over 160 characters: A (212), ... ` (`--option`); `state: <id>'s manual has
    bash in a nu block (&&, export X=, $(...), 2>&1): ...` (`--manual`, the patterns found in its nu
    blocks, in that order); for a choice (kind decision) whose question, why or body this command gave,
    `state: <id> looks like it needs a visual (graph, database; 3 amounts to compare): see coordinator
    SKILL.md #decisions (show-me triggers): a small inline SVG of the parts, a table of the numbers, in
    --body.` when its question, why and body text (tags taken out) name database, graph, neo4j,
-   postgres, pipeline, store, lives in or queue (whole words, any case, a plural too; each once,
+   postgres, pipeline, stored in, lives in or queue (whole words, any case, a plural too; each once,
    lower-cased, in the order found) or carry three or more amounts (`US$7`, `R$ 3`, `$5`, `€2`, `12%`),
    and its body has no `<svg`, `<table` or `<img`; then, on a known one, `state: <id> was asked again with new words and
    no --log: ...` when `--question`, `--option` or `--manual` was given with no `--log`,
@@ -343,7 +344,7 @@ Checked in this order:
   Q<n> is N characters: ask it in one plain sentence, its choices as --option; the evidence goes in
   --body.` Then, for each question in order, warned, never refused: a worker's id in its title and
   question (asked or revised in this command) and its reason (as below), as for a decision (`state:
-  <id>'s Q<n> names workers by id (b333): ...`); its reason (asked, revised or given
+  <id>'s Q<n> names workers (b333): ...`); its reason (asked, revised or given
   with `--reason` in this command) over 200 characters (`state: <id>'s Q<n> reason is N characters: say
   the trade-off in one plain sentence (over 200 is hard to read on a phone); the evidence goes in
   --body.`); the sources in its reason's first sentence (up to the first `.`, `!` or `?` and a space): a
@@ -1676,7 +1677,7 @@ watch and news leaving it out), `emptied` (open-7), `workspaces` (`set --workspa
 fleet's refusal of lanes that meet, the isolated fleet's warning, `show`, validation, a render),
 `question-limit` (a decision's question limit and its warnings), `grill-options` (a grilling question's
 `--option`, its recommendation by id, a grilling's `--body`, the reason's warnings),
-`why-limit` (a why over 400 refused, over 200 warned, a worker's id and the internal names warned),
+`why-limit` (a why over 400 refused, over 200 warned, a worker's id or name from the ledger and the internal names warned),
 `grill-revise` (an open grilling's title, why and context revised with `--log`),
 `show-me-triggers` (the warning that a decision or grilling needs a picture),
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each

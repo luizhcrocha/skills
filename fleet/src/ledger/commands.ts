@@ -873,8 +873,13 @@ const WHY_MAX = 200;
 
 const JARGON = ["sha1", "sha256", "digest", "stage cache", "alias", "uuid", "idempotent", "upsert", "blob", "enum", "turn gate", "gold", "harness", "rubric", "jev"];
 
-/** A worker's id (b333, a12): one lowercase letter and digits, standing alone. */
-const WORKER_ID_RE = /(?<![A-Za-z0-9_])[a-z]\d+(?![A-Za-z0-9_])/gu;
+/** A word that may name a worker: letters, digits, '_' and '-', standing alone (b333, invoice-gen). */
+const TOKEN_RE = /[A-Za-z0-9_-]+/gu;
+
+/** The fleet's workers as the ledger records them: every agent row's id and name, lower-cased. */
+function workersOf(ledger: Ledger): Set<string> {
+  return new Set(ledger.agents.flatMap((a) => [a.id, a.name].flatMap((v) => (v ? [String(v).toLowerCase()] : []))));
+}
 
 /** A `--why` over WHY_REFUSED characters is refused: what the fleet does meanwhile, or why this needs the user, in
  * one or two lines; the plan goes in `--body`. A permission's is not checked. */
@@ -889,12 +894,12 @@ function checkWhy(why: string | undefined, kind: string | null | undefined): Ste
 }
 
 /** The workers' ids named in `texts`, each once, in the order found. */
-function workerIds(texts: readonly string[]): string[] {
-  return [...new Set(texts.flatMap((t) => [...t.matchAll(WORKER_ID_RE)].map((m) => m[0])))];
+function workerIds(texts: readonly string[], workers: ReadonlySet<string>): string[] {
+  return [...new Set(texts.flatMap((t) => [...t.matchAll(TOKEN_RE)].flatMap((m) => (workers.has(m[0].toLowerCase()) ? [m[0]] : []))))];
 }
 
 function workerWarning(what: string, found: readonly string[]): string {
-  return `state: ${what} names workers by id (${found.join(", ")}): say what the work is ("the fixes for the timeline questions in the Lavínia case"); a worker's id means nothing to the user.`;
+  return `state: ${what} names workers (${found.join(", ")}): say what the work is ("the fixes for the timeline questions in the Lavínia case"); a worker's id or name means nothing to the user.`;
 }
 
 const JARGON_RE = new RegExp(`\\b(${JARGON.map((w) => w.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("|")})\\b`, "giu");
@@ -966,7 +971,7 @@ function nuRefusal(manual: string): string | undefined {
 
 /* What reads as needing a picture (coordinator SKILL.md, Decisions, the show-me triggers): parts that talk to each
  * other, or three or more amounts to weigh; a body with an <svg>, a <table> or an <img> has one. */
-const ARCHITECTURE_RE = /\b(database|graph|neo4j|postgres|pipeline|store|lives in|queue)s?\b/giu;
+const ARCHITECTURE_RE = /\b(database|graph|neo4j|postgres|pipeline|stored in|lives in|queue)s?\b/giu;
 
 const AMOUNT_RE = /(?:US\$|R\$|\$|€)\s?\d[\d.,]*|\d+(?:[.,]\d+)?\s?%/gu;
 
@@ -995,7 +1000,7 @@ function visualWarning(what: string, texts: readonly string[], body: string): st
 }
 
 /** What the CLI says, without refusing, about a decision hard to read; `fields`: the fields this command wrote. */
-function readabilityWarnings(d: Decision, fields: ReadonlySet<string>, root?: string): string[] {
+function readabilityWarnings(d: Decision, fields: ReadonlySet<string>, root?: string, workers: ReadonlySet<string> = new Set()): string[] {
   if (d.kind === "permission" || d.kind === "grill") return [];
   const out: string[] = [];
   const q = d.question ?? "";
@@ -1010,7 +1015,7 @@ function readabilityWarnings(d: Decision, fields: ReadonlySet<string>, root?: st
     out.push(`state: ${d.id}'s question uses words the user may not know (${words.join(", ")}): say what they mean in the domain's words, or leave them to the body.`);
   }
 
-  const named = workerIds((["title", "question", "reason"] as const).flatMap((k) => (fields.has(k) ? [d[k] ?? ""] : [])));
+  const named = workerIds((["title", "question", "reason"] as const).flatMap((k) => (fields.has(k) ? [d[k] ?? ""] : [])), workers);
 
   if (named.length > 0) out.push(workerWarning(d.id, named));
 
@@ -1330,7 +1335,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         yield* checkKind(fresh, true);
         yield* setBody(run, fresh);
 
-        for (const warning of readabilityWarnings(fresh, writtenFields(args), run.root)) run.warn(warning);
+        for (const warning of readabilityWarnings(fresh, writtenFields(args), run.root, workersOf(ledger))) run.warn(warning);
         const forManager = fresh.asks === "manager";
         log(run, ledger, {
           kind: "asked",
@@ -1413,7 +1418,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       yield* checkKind(row, args.str("manual") !== undefined);
       yield* setBody(run, row);
 
-      for (const warning of readabilityWarnings(row, writtenFields(args), run.root)) run.warn(warning);
+      for (const warning of readabilityWarnings(row, writtenFields(args), run.root, workersOf(ledger))) run.warn(warning);
 
       if (["question", "option", "manual"].some((k) => changed.includes(k)) && !given(args.str("log")) && decide === undefined && withdraw === undefined) {
         run.warn(`state: ${row.id} was asked again with new words and no --log: say what changed in one line (--log "..."); the page's history shows it, and the user should not have to compare two versions.`);
@@ -1519,11 +1524,11 @@ function optionOf(text: string): Effect.Effect<readonly [string, Choice], Refusa
 
 /** What the CLI says, without refusing, about a grilling question hard to read: its reason (when this command
  * wrote it) long or opening with a source, its options (when written) long or too many. */
-function grillWarnings(d: Decision, q: Question, asked: boolean, reason: boolean, options: boolean): string[] {
+function grillWarnings(d: Decision, q: Question, asked: boolean, reason: boolean, options: boolean, workers: ReadonlySet<string>): string[] {
   const out: string[] = [];
   const qid = q.id.toUpperCase();
   const why = q.reason ?? "";
-  const named = workerIds([...(asked ? [q.title, q.body ?? ""] : []), ...(reason ? [why] : [])]);
+  const named = workerIds([...(asked ? [q.title, q.body ?? ""] : []), ...(reason ? [why] : [])], workers);
 
   if (named.length > 0) out.push(workerWarning(`${d.id}'s ${qid}`, named));
 
@@ -1773,7 +1778,7 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
     const reasoned = new Set([...askedNow, ...reasonedIds]);
 
     for (const q of qs) {
-      for (const warning of grillWarnings(row, q, askedNow.has(q.id), reasoned.has(q.id), askedNow.has(q.id) || givenOptions.has(q.id))) run.warn(warning);
+      for (const warning of grillWarnings(row, q, askedNow.has(q.id), reasoned.has(q.id), askedNow.has(q.id) || givenOptions.has(q.id), workersOf(ledger))) run.warn(warning);
     }
 
     if (askedNow.size > 0 || args.str("why") !== undefined || given(args.str("body"))) {

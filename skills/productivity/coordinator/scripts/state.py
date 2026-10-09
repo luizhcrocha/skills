@@ -699,8 +699,8 @@ WHY_REFUSED = 400  # characters: a --why over this is refused; one or two lines,
 WHY_MAX = 200  # a why over this is warned about: one line on why it needs the user, and what it blocks or assumes
 JARGON = ("sha1", "sha256", "digest", "stage cache", "alias", "uuid", "idempotent", "upsert", "blob", "enum",
           "turn gate", "gold", "harness", "rubric", "jev")
-# A worker's id (b333, a12): one lowercase letter and digits, standing alone.
-WORKER_ID_RE = re.compile(r"(?<![A-Za-z0-9_])[a-z]\d+(?![A-Za-z0-9_])")
+# A word that may name a worker: letters, digits, '_' and '-', standing alone (b333, invoice-gen).
+TOKEN_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 
 def check_why(why: str | None, kind: str | None) -> None:
@@ -712,14 +712,19 @@ def check_why(why: str | None, kind: str | None) -> None:
          "what the fleet does meanwhile, or why this needs the user, and move the plan, its parts and the cost into --body FILE")
 
 
-def worker_ids(texts: list[str]) -> list[str]:
-    """The workers' ids named in `texts`, each once, in the order found."""
-    return list(dict.fromkeys(m for t in texts for m in WORKER_ID_RE.findall(t)))
+def workers_of(state: dict) -> set[str]:
+    """The fleet's workers as the ledger records them: every agent row's id and name, lower-cased."""
+    return {str(v).lower() for a in state.get("agents", []) for v in (a.get("id"), a.get("name")) if v}
+
+
+def worker_ids(texts: list[str], workers: set[str]) -> list[str]:
+    """The words of `texts` that are a worker's id or name in the ledger, each once, in the order found."""
+    return list(dict.fromkeys(m for t in texts for m in TOKEN_RE.findall(t) if m.lower() in workers))
 
 
 def worker_warning(what: str, found: list[str]) -> str:
-    return (f"state: {what} names workers by id ({', '.join(found)}): say what the work is (\"the fixes for the timeline "
-            "questions in the Lavínia case\"); a worker's id means nothing to the user.")
+    return (f"state: {what} names workers ({', '.join(found)}): say what the work is (\"the fixes for the timeline "
+            "questions in the Lavínia case\"); a worker's id or name means nothing to the user.")
 JARGON_RE = re.compile(r"\b(" + "|".join(re.escape(w) for w in JARGON) + r")\b", re.I)
 BASHISMS = (("&&", re.compile(r"&&")), ("export X=", re.compile(r"^\s*export\s+\w+=", re.M)),
             ("$(...)", re.compile(r"\$\(")), ("2>&1", re.compile(r"2>&1")))
@@ -771,7 +776,7 @@ def check_nu(manual: str) -> None:
 
 # What reads as needing a picture (coordinator SKILL.md, Decisions, the show-me triggers): parts that talk to each
 # other, or three or more amounts to weigh; a body with an <svg>, a <table> or an <img> has one.
-ARCHITECTURE_RE = re.compile(r"\b(database|graph|neo4j|postgres|pipeline|store|lives in|queue)s?\b", re.I)
+ARCHITECTURE_RE = re.compile(r"\b(database|graph|neo4j|postgres|pipeline|stored in|lives in|queue)s?\b", re.I)
 AMOUNT_RE = re.compile(r"(?:US\$|R\$|\$|€)\s?\d[\d.,]*|\d+(?:[.,]\d+)?\s?%")
 VISUAL_RE = re.compile(r"<(?:svg|table|img)\b", re.I)
 
@@ -801,7 +806,7 @@ def visual_warning(what: str, texts: list[str], body: str) -> str | None:
             "(show-me triggers): a small inline SVG of the parts, a table of the numbers, in --body.")
 
 
-def readability_warnings(d: dict, given: set, root: Path | None = None) -> list[str]:
+def readability_warnings(d: dict, given: set, root: Path | None = None, workers: set | None = None) -> list[str]:
     """What the CLI says, without refusing, about a decision hard to read; `given`: the fields this command wrote."""
     if d["kind"] in ("permission", "grill"):
         return []
@@ -814,7 +819,7 @@ def readability_warnings(d: dict, given: set, root: Path | None = None) -> list[
     if "question" in given and words:
         out.append(f"state: {d['id']}'s question uses words the user may not know ({', '.join(words)}): "
                    "say what they mean in the domain's words, or leave them to the body.")
-    found = worker_ids([d.get(k) or "" for k in ("title", "question", "reason") if k in given])
+    found = worker_ids([d.get(k) or "" for k in ("title", "question", "reason") if k in given], workers or set())
     if found:
         out.append(worker_warning(d["id"], found))
     why = d.get("why") or ""
@@ -936,7 +941,7 @@ def cmd_decision(state, args):
             check_kind(d, True)
             set_body(Path(args.dir).resolve(), d, args)
             for warning in readability_warnings(d, {k for k in ("question", "why", "manual", "title", "reason", "body") if getattr(args, k) is not None} | ({"option"} if args.option else set()),
-                                                   Path(args.dir).resolve()):
+                                                   Path(args.dir).resolve(), workers_of(state)):
                 sys.stderr.write(warning + "\n")
             for_manager = d["asks"] == "manager"   # the manager looks first: the user is not called yet
             log(state, "asked", f"{'For the manager: ' if for_manager else ''}{d['title']}: {d['question']}", d["agent"],
@@ -982,7 +987,7 @@ def cmd_decision(state, args):
         check_kind(d, args.manual is not None)
         set_body(Path(args.dir).resolve(), d, args)
         for warning in readability_warnings(d, {k for k in ("question", "why", "manual", "title", "reason", "body") if getattr(args, k) is not None} | ({"option"} if args.option else set()),
-                                                   Path(args.dir).resolve()):
+                                                   Path(args.dir).resolve(), workers_of(state)):
             sys.stderr.write(warning + "\n")
         if any(k in changed for k in ("question", "option", "manual")) and not args.log and args.decide is None and args.withdraw is None:
             sys.stderr.write(f"state: {d['id']} was asked again with new words and no --log: say what changed in one line "
@@ -1050,12 +1055,12 @@ def _option(text: str) -> tuple[str, dict]:
     return m.group(1).lower(), {"id": m.group(2), "label": label, "consequence": consequence}
 
 
-def grill_warnings(d: dict, q: dict, asked: bool, reason: bool, options: bool) -> list[str]:
+def grill_warnings(d: dict, q: dict, asked: bool, reason: bool, options: bool, workers: set) -> list[str]:
     """What the CLI says, without refusing, about a grilling question hard to read: a worker's id in its
     title, question or reason (those this command wrote), its reason long or opening with a source, its
     options (when written) long or too many."""
     out, qid, why = [], q["id"].upper(), q.get("reason") or ""
-    found = worker_ids([q.get(k) or "" for k in ("title", "body") if asked] + ([why] if reason else []))
+    found = worker_ids([q.get(k) or "" for k in ("title", "body") if asked] + ([why] if reason else []), workers)
     if found:
         out.append(worker_warning(f"{d['id']}'s {qid}", found))
     if reason and len(why) > GRILL_REASON_MAX:
@@ -1177,7 +1182,7 @@ def cmd_grill(state, args):
                          "as --option; the evidence goes in --body.\n")
     reasoned = asked_now | {_q(t, "--reason")[0] for t in args.reason or []}
     for q in qs:
-        for warning in grill_warnings(d, q, q["id"] in asked_now, q["id"] in reasoned, q["id"] in asked_now or q["id"] in given_options):
+        for warning in grill_warnings(d, q, q["id"] in asked_now, q["id"] in reasoned, q["id"] in asked_now or q["id"] in given_options, workers_of(state)):
             sys.stderr.write(warning + "\n")
     if asked_now or args.why is not None or args.body:
         visual = visual_warning(d["id"], [d.get("why") or "", *(q.get("body") or "" for q in qs if q["id"] in asked_now)],

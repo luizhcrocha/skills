@@ -229,10 +229,11 @@ class ReadableTest(Fleet):
         base = ["--kind", "decision", "--title", "T", "--option", "A: yes | go", "--option", "B: no | stop", "--recommend", "A", "--reason", "r"]
         err = self.refused("decision", "d1", *base, "--question", "q?", "--why", "w" * 401)
         self.assertIn("--why is 401 characters, 1 over the 400 a why holds", err)
-        r = self.run_cli("decision", "d1", *base, "--question", "May infra run the turn gate on b333's fixes?", "--why", "w" * 201)
+        r = self.run_cli("decision", "d1", *base, "--question", "May infra run the turn gate on a1's fixes, as G26 and p12 say?", "--why", "w" * 201,
+                         "--title", "invoice-gen's fixes")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("uses words the user may not know (turn gate)", r.stderr)
-        self.assertIn("d1 names workers by id (b333)", r.stderr)
+        self.assertIn("d1 names workers (invoice-gen, a1):", r.stderr)
         self.assertIn("d1's why is 201 characters", r.stderr)
 
     def test_an_open_grillings_title_and_why_are_revised_with_a_log(self):

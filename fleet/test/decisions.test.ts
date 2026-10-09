@@ -278,10 +278,10 @@ describe("readable", () => {
   test("a long why is refused and a worker's id is warned", () => {
     const base = ["--kind", "decision", "--title", "T", "--option", "A: yes | go", "--option", "B: no | stop", "--recommend", "A", "--reason", "r"];
     expect(refused("decision", "d1", ...base, "--question", "q?", "--why", "w".repeat(401))).toContain("--why is 401 characters, 1 over the 400 a why holds");
-    const r = run("decision", "d1", ...base, "--question", "May infra run the turn gate on b333's fixes?", "--why", "w".repeat(201));
+    const r = run("decision", "d1", ...base, "--question", "May infra run the turn gate on a1's fixes, as G26 and p12 say?", "--why", "w".repeat(201), "--title", "invoice-gen's fixes");
     expect(r.code, r.stderr).toBe(0);
     expect(r.stderr).toContain("uses words the user may not know (turn gate)");
-    expect(r.stderr).toContain("d1 names workers by id (b333)");
+    expect(r.stderr).toContain("d1 names workers (invoice-gen, a1):");
     expect(r.stderr).toContain("d1's why is 201 characters");
   });
 
