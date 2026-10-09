@@ -614,6 +614,40 @@ class FleetCase(HookCase):
         return proc
 
 
+class TapeRoleTest(FleetCase):
+    """TSTACK_ROLE=tape, a tape builder's own `claude -p` call: every handler of every event stays silent and
+    writes nothing (no wake in the compaction prompt, no heartbeat, no state, no spawn)."""
+
+    def files(self):
+        return sorted(str(p.relative_to(self.tmp)) for p in self.tmp.rglob("*") if p.is_file())
+
+    def every_event(self, env):
+        self.memo("note", "decision", "a wake would carry this")
+        self.env.pop("MEMO_QUIET")
+        self.transcribe(said("edit it"), tool_use("Edit", file_path=str(self.repo / "a.py")))
+        before = self.files()
+        results = {}
+        for event in json.loads(HOOKS_JSON.read_text())["hooks"]:
+            payload = self.payload(event, source="startup", stop_hook_active=False, tool_name="Agent",
+                                   tool_input={"subagent_type": "general-purpose", "prompt": "p"},
+                                   tool_use_id="toolu_1", agent_id="ab12" if event.startswith("Subagent") else None)
+            results[event] = self.hook(event, payload, env=env)
+        return before, results
+
+    def test_every_handler_is_silent_and_writes_nothing(self):
+        before, results = self.every_event({"TSTACK_ROLE": "tape"})
+        for event, r in results.items():
+            self.assertSilent(r)
+        self.assertEqual(self.files(), before, "a tape call's hooks wrote a file")
+        self.assertFalse((self.fleet / "heartbeats").exists())
+
+    def test_the_same_events_speak_without_the_role(self):
+        before, results = self.every_event({})
+        self.assertIn("a wake would carry this", results["SessionStart"].stdout)
+        self.assertTrue((self.fleet / "heartbeats").is_dir(), "the control run beats")
+        self.assertNotEqual(self.files(), before)
+
+
 class StopGuardTest(FleetCase):
     """fleet_listen_guard: a coordinator or manager does not end a turn with no chat watch."""
 

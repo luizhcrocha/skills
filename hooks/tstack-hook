@@ -1155,7 +1155,11 @@ EMIT = {
 
 def dispatch(event, raw, env):
     """The text to print for this event, or "" for nothing. On Stop, a handler's Block turns the whole
-    output into the block decision, whose reason (every handler's text) Claude reads as it goes on."""
+    output into the block decision, whose reason (every handler's text) Claude reads as it goes on.
+    Under TSTACK_ROLE=tape (a tape builder's own `claude -p` call) no handler runs: no wake lands in the
+    compaction prompt, and nothing is written or spawned (docs/design/tape.md, section 4)."""
+    if env.get("TSTACK_ROLE") == "tape":
+        return ""
     data = json.loads(raw) if raw.strip() else {}
     if not isinstance(data, dict):
         raise ValueError("hook input is not a JSON object")
