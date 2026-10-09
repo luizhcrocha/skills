@@ -14,6 +14,8 @@ Every agent tstack spawns plays one of the roles below. The role fixes its model
 | Decider | One agent whose call decides what follows: the hardest single task, arena's judge, interrogate's verdict, why's and reflect's synthesizers, the trail review after a long absence. | Fable high | Opus high | |
 | Escalation | The hardest call after an attempt failed, once per diagnosis, behind the evidence gate in [diagnosing-bugs](../../engineering/diagnosing-bugs/SKILL.md) (Phase 3). | Fable high | Opus high | |
 | Advisor | A fleet's long-lived judge, asked many times (`agents/advisor.md`). | Fable high | Opus high, restarted | |
+| Coordinator | The session running a fleet (the `coordinator` skill): routes, briefs, records, integrates. | Opus low | Sonnet medium | |
+| Manager | The session over every coordinator on the machine (the `manager` skill): landing order, the gate, health across fleets. | Opus low | Sonnet medium | |
 
 ## Why each pair
 
@@ -23,12 +25,15 @@ Every agent tstack spawns plays one of the roles below. The role fixes its model
 - **Composer.** Sonnet high scores 47 against Opus low's 42 at half the price per token (sourced: Artificial Analysis).
 - **Implementer and Reviewer.** High is 3 points over medium for about 1.4 times the tokens (sourced: Artificial Analysis). A wrong decision costs a rework round, and a review miss ships (inferred). Not xhigh: 2 more points for about twice the tokens and 132 s to the first token on each turn (sourced: Artificial Analysis). A spawn without an effort runs Opus at medium (measured, 2026-10-08), so naming the pair is what raises these two.
 - **Verifier.** Opus gains most from low to medium, 9 points (sourced: Artificial Analysis). The work is running and observing, not designing (inferred).
+- **Coordinator and Manager.** Their turns are routing and bookkeeping (record a report, arm a watch, answer a chat line, brief the next worker), and about 85% of them are woken by machines, not by Luiz (measured over eight fleets, 09-26 to 10-09). The hard judgement in a fleet goes to the advisor (Fable high) or a Decider, not to the session that routes. Opus low scores 42 against medium's 51 on the Artificial Analysis index, for about half the tokens, and its first token comes in 8.7 s against 22 s (sourced: Artificial Analysis). Every wake re-reads the session's whole context, so the shorter turn is paid on every wake (inferred).
 - **Decider, Escalation, Advisor.** Luiz's policy puts decisive single roles on Fable (sourced: his CLAUDE.md). Fable's curve is flat (47, 49, 51, 53, 53 from low to max), so going above high buys little and adds about a minute per turn (sourced: Artificial Analysis). A spawn without an effort already runs Fable at high (measured, 2026-10-08). Escalation runs 20 to 40 turns, so xhigh would add half an hour or more for 2 points (inferred). The index does not show Fable debugging better than Opus (54 against 51 at high); escalation uses it as a second reasoner without the failed agent's blind spot (inferred).
 
 ## Rules
 
 - **Name the role.** A skill names the role and links here. The spawner reads the pair from this table and passes both on the Agent call, because the tool sets effort only when asked: a Reader is `model` and `effort` from the Reader row. An agent definition carries `effort:` next to `model:` in its frontmatter.
 - **Pick by the task's shape, not the budget.** Does it write code? Does its call decide what follows? Does it only read and reduce? Does anyone wait on it? A task that mixes reading and judgement takes the judgement role.
+- **A session's own effort comes from its launch settings, not from a skill.** No skill can lower the effort of the session it runs in. Coordinators and the manager run from `custom-mcp-servers`, whose `.claude/settings.local.json` sets `CLAUDE_CODE_EFFORT_LEVEL=low` (Luiz, 2026-10-09): that is what puts them at Opus low. A coordinator started elsewhere runs at its launch's effort until that repo's settings say the same.
+- **Every spawn passes its role's effort explicitly.** An Agent call without an effort inherits the session's, and a coordinator's session is at low: an Implementer, a Reviewer or a Decider spawned bare would run at low. The spawner passes both `model` and `effort` from the role's row, always (`fleet brief` prints them for a worker).
 - **Effort is fixed for an agent's life.** Changing it drops the message cache. A worker resumed with SendMessage keeps its level.
 - **Never max.** Sonnet scored lower at max than at xhigh on FrontierCode because it over-delegated, and every model's first token takes 5 to 12 minutes at max (sourced: Artificial Analysis).
 - **Read-only work never runs on Opus or Fable.** Research is a Researcher's (Sonnet), reading that reduces is a Reader's (Haiku); a judgement found on the way moves the task up, as each row says. Measured 2026-10-09: 504 read-only workers ran on Opus or Fable, about 4% of the fleets' cost.

@@ -82,6 +82,11 @@ class ModelsTable(unittest.TestCase):
     def test_no_role_runs_at_max(self):
         self.assertNotIn("max", {effort for _, effort in table_pairs()})
 
+    def test_the_sessions_that_run_fleets_route_at_low_effort(self):
+        rows = table_rows()
+        for role in ("Coordinator", "Manager"):
+            self.assertEqual(rows.get(role, [])[:2], [("opus", "low"), ("sonnet", "medium")], f"{role}'s row in MODELS.md")
+
 
 class NamedPairs(unittest.TestCase):
     def test_frontmatter_names_an_effort_from_the_table(self):
