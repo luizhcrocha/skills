@@ -749,6 +749,56 @@ class StopGuardTest(FleetCase):
         self.assertNotIn("failed", self.log())
 
 
+class NewsHookTest(FleetCase):
+    """fleet_news: SessionStart and Stop name the machine's unread news in one line, never as a block."""
+
+    def post(self, id, frm="skills", to=("all",), text="1.9.20 is out"):
+        folder = self.registry / "news"
+        folder.mkdir(exist_ok=True)
+        with open(folder / "news.jsonl", "a") as f:
+            f.write(json.dumps({"id": id, "at": "2026-01-05T09:00:00+00:00", "from": frm, "to": list(to), "kind": "fyi",
+                                "keep": False, "text": text}) + "\n")
+
+    def context(self, result):
+        """The hook's context text ("" for none), whatever else a handler added to it."""
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"] if result.stdout else ""
+
+    def news(self, result):
+        """The fleet news lines of the hook's context."""
+        return [l for l in self.context(result).splitlines() if l.startswith("Fleet news:")]
+
+    def line(self, count):
+        return (f"Fleet news: {count} unread for p, never a wake. Read them when convenient: "
+                f"`{self.fleet_cli} news read --as p`.")
+
+    def test_session_start_and_stop_print_the_unread_line(self):
+        self.watch()  # a live watch: the Stop guard stays quiet
+        self.assertEqual(self.news(self.hook("SessionStart", self.payload("SessionStart", source="startup"))), [])
+        self.post(1)
+        self.post(2, to=("infra",))
+        self.post(3, frm="p")
+        self.assertEqual(self.news(self.hook("SessionStart", self.payload("SessionStart", source="resume"))), [self.line(1)])
+        stop = lambda: self.hook("Stop", self.payload("Stop", stop_hook_active=False))
+        out = stop()
+        self.assertNotIn('"decision"', out.stdout, "news never blocks a stop")
+        self.assertEqual(self.news(out), [self.line(1)])
+        self.assertEqual(self.news(stop()), [], "told once per new item on Stop")
+        self.post(4, to=("p", "infra"))
+        self.assertEqual(self.news(stop()), [self.line(2)])
+        (self.registry / "news" / "read").mkdir()
+        (self.registry / "news" / "read" / "p").write_text("4")
+        self.assertEqual(self.news(stop()), [])
+        self.assertEqual(self.news(self.hook("SessionStart", self.payload("SessionStart", source="resume"))), [])
+
+    def test_a_worker_and_a_session_hosting_no_fleet_hear_nothing(self):
+        self.post(1)
+        self.assertEqual(self.news(self.hook("SessionStart", self.payload("SessionStart", source="startup", agent_id="a1"))), [])
+        self.assertEqual(self.news(self.hook("SessionStart", {**self.base("SessionStart"), "source": "startup"})), [])
+        self.register(self.fleet, session="sess-other")
+        self.assertEqual(self.news(self.hook("SessionStart", self.payload("SessionStart", source="startup"))), [])
+
+
 class SaidOnceTest(FleetCase):
     """fleet_said_once: a host that answered the user on the page ends the turn with one line naming where."""
 

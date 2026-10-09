@@ -557,6 +557,78 @@ def fleet_listen_guard(hook):
     return Block("\n".join(lines))
 
 
+NEWS_LINE = "Fleet news: {count} unread for {fleet}, never a wake. Read them when convenient: `{cli} news read --as {fleet}`."
+
+
+def _registry_fleet(hook, d):
+    """The name the registry gives the fleet at d (fleet/SPEC.md, the news), without a process."""
+    real = os.path.realpath(d)
+    try:
+        paths = sorted(p for p in fleet_registry(hook.env).glob("*.json") if p.is_file())
+    except OSError:
+        return None
+    for path in paths:
+        try:
+            entry = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and isinstance(entry.get("dir"), str) \
+                and os.path.realpath(entry["dir"]) == real:
+            return entry["id"]
+    return None
+
+
+def _news_unread(hook, fleet):
+    """The ids of the machine's news (REGISTRY/news/news.jsonl) that `fleet` has not read: to all or to it,
+    not its own, after its cursor (REGISTRY/news/read/<fleet>)."""
+    folder = fleet_registry(hook.env) / "news"
+    try:
+        after = int((folder / "read" / fleet).read_text().strip())
+    except (OSError, ValueError):
+        after = 0
+    try:
+        raw = (folder / "news.jsonl").read_bytes().decode("utf-8", "replace")
+    except OSError:
+        return []
+    ids = []
+    for text in raw.split("\n"):
+        try:
+            item = json.loads(text) if text.strip() else None
+        except ValueError:
+            continue
+        if not isinstance(item, dict) or not isinstance(item.get("id"), int) or isinstance(item.get("id"), bool) \
+                or not isinstance(item.get("to"), list):
+            continue
+        if item["id"] > after and ("all" in item["to"] or fleet in item["to"]) and item.get("from") != fleet:
+            ids.append(item["id"])
+    return ids
+
+
+def fleet_news(hook):
+    """SessionStart and Stop: one short line naming the machine's unread news for each fleet this session
+    hosts (the guard's membership), never a block: news never wakes anyone. A Stop says it once per new item
+    (the session's `fleet-news` state keeps the last item told); a SessionStart says it whenever any is unread."""
+    if fleet_worker(hook) or not (fleet_registry(hook.env) / "news" / "news.jsonl").is_file():
+        return None
+    dirs = fleet_dirs(hook)
+    if not hook.env.get("FLEET_DIR"):
+        dirs = [d for d in dirs if served_by_session(hook, d)]
+    told = hook.load_state("fleet-news") if hook.session_id and hook.event == "Stop" else {}
+    lines, seen = [], dict(told)
+    for d in dirs:
+        fleet = _registry_fleet(hook, d)
+        ids = _news_unread(hook, fleet) if fleet else []
+        if not ids:
+            continue
+        if hook.event == "Stop" and isinstance(told.get(fleet), int) and max(ids) <= told[fleet]:
+            continue
+        seen[fleet] = max(ids)
+        lines.append(NEWS_LINE.format(count=len(ids), fleet=fleet, cli=fleet_cli()))
+    if hook.event == "Stop" and hook.session_id and seen != told:
+        hook.save_state("fleet-news", seen)
+    return "\n".join(lines) or None
+
+
 SAID_ONCE = ("You answered on the page ({where}). Said once: end this turn with one line naming where, e.g. "
              "'Answered {first} on the page.' Do not repeat the answer here.")
 SAID_ONCE_CHARS = 200  # "Answered #42 on the page." and a short note of what comes next fit; an answer does not
@@ -1121,8 +1193,8 @@ def fleet_agent_grant(hook):
 
 
 HANDLERS = {
-    "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_heartbeat],
-    "Stop": [memo_nudge, fleet_listen_guard, fleet_said_once, fleet_heartbeat],
+    "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, fleet_heartbeat],
+    "Stop": [memo_nudge, fleet_listen_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
     "PreToolUse": [fleet_agent_grant],
     "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_chat_nudge],
