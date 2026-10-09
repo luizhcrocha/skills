@@ -4,6 +4,7 @@
  * the command says, and gives back the ledger to write (none for `show`) or a refusal. What it says is
  * printed only once the ledger it gives back is checked (open-2).
  */
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 import * as Effect from "effect/Effect";
@@ -827,11 +828,164 @@ function checkKind(d: Decision, manualGiven: boolean): Step$ {
     return refuse(`--manual has ${unfenced} lines and no fence: put the commands in a fenced block (a line \`\`\`nu, the commands, a line \`\`\`), any prose outside it`);
   }
 
+  const nu = (d.kind === "secret" || d.kind === "action") && manualGiven ? nuRefusal(d.manual ?? "") : undefined;
+
+  if (nu !== undefined) return refuse(nu);
+
   if (d.kind === "action" && ((d.options ?? []).length > 0 || given(d.recommend ?? undefined))) {
     return refuse("an action is a step only the user takes, with no options to choose: a yes or no on what the fleet would do is a decision (--kind decision, with the options and --recommend)");
   }
 
   return Effect.void;
+}
+
+/** Characters: the ask alone, one or two sentences (fleet/SPEC.md, decision); 95% of the asks recorded fit. */
+const QUESTION_MAX = 400;
+
+/** A question this long with no body is warned about. */
+const QUESTION_NEAR = 300;
+
+/** An option's consequence over this is warned about: one sentence. */
+const CONSEQUENCE_MAX = 160;
+
+/** Characters as Python counts them: code points. */
+const chars = (text: string): number => [...text].length;
+
+/** A `--question` over QUESTION_MAX characters is refused: the plan, the settings and the numbers go in `--body`.
+ * A permission's question, which the hook writes from the refused call, is not checked. */
+function checkQuestion(question: string | undefined, kind: string | null | undefined): Step$ {
+  if (question === undefined || kind === "permission" || chars(question) <= QUESTION_MAX) return Effect.void;
+  const n = chars(question);
+
+  return refuse(
+    `--question is ${n} characters, ${n - QUESTION_MAX} over the ${QUESTION_MAX} a question holds: ` +
+      "keep the ask, one or two plain sentences, and move the plan, the settings and the numbers into --body FILE " +
+      "(an HTML fragment: In short, What you're deciding, The plan, Settings, Cost and risk, How to undo, " +
+      "What happens after you answer)",
+  );
+}
+
+/** A why over this is warned about: one line on why it needs the user, and what it blocks or assumes. */
+const WHY_MAX = 300;
+
+const JARGON = ["sha1", "sha256", "digest", "stage cache", "alias", "uuid", "idempotent", "upsert", "blob", "enum"];
+
+const JARGON_RE = new RegExp(`\\b(${JARGON.map((w) => w.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("|")})\\b`, "giu");
+
+const BASHISMS: readonly (readonly [string, RegExp])[] = [
+  ["&&", /&&/u],
+  ["export X=", /^\s*export\s+\w+=/mu],
+  ["$(...)", /\$\(/u],
+  ["2>&1", /2>&1/u],
+];
+
+const FENCE_OPEN = /^ {0,3}(`{3,})[ \t]*([^`\s]*)/u;
+
+/** The fenced blocks of a `--manual` tagged nu (or nushell), in order; an unclosed fence runs to the end. */
+function nuBlocks(manual: string): string[] {
+  const out: string[] = [];
+  const lines = manual.split("\n");
+  let i = 0;
+
+  while (i < lines.length) {
+    const m = FENCE_OPEN.exec(lines[i] ?? "");
+
+    if (m === null) {
+      i += 1;
+      continue;
+    }
+
+    const run = m[1] ?? "```";
+    const lang = (m[2] ?? "").toLowerCase();
+    const body: string[] = [];
+    i += 1;
+
+    while (i < lines.length) {
+      const t = (lines[i] ?? "").trim();
+
+      if (t.startsWith(run) && /^`+$/u.test(t)) break;
+      body.push(lines[i] ?? "");
+      i += 1;
+    }
+
+    i += 1;
+
+    if (lang === "nu" || lang === "nushell") out.push(body.join("\n"));
+  }
+
+  return out;
+}
+
+/** Why `block` does not parse in nushell (`nu-check --debug`), or undefined when it parses or no nu is on PATH. */
+function nuParseError(block: string): string | undefined {
+  const done = spawnSync("nu", ["--no-config-file", "--stdin", "-c", "$in | nu-check --debug"], { input: block, encoding: "utf8", timeout: 20_000 });
+
+  if (done.error !== undefined || done.status === 0 || done.status === null) return undefined;
+  const found = [...`${done.stderr}${done.stdout}`.matchAll(/Found : (.*)/gu)];
+
+  return found.length > 0 ? (found.at(-1)?.[1] ?? "").trim() : "a parse error";
+}
+
+/** Why a `--manual` is refused when a ```nu block of it does not parse in nushell (nu on PATH): Luiz runs it in his shell. */
+function nuRefusal(manual: string): string | undefined {
+  for (const [k, block] of nuBlocks(manual).entries()) {
+    const why = nuParseError(block);
+
+    if (given(why)) return `--manual's nu block ${String(k + 1)} does not parse in nushell (nu-check --debug: ${why}): write it so it runs in Luiz's shell, or tag the block with the language it is in`;
+  }
+
+  return undefined;
+}
+
+/** What the CLI says, without refusing, about a decision hard to read; `fields`: the fields this command wrote. */
+function readabilityWarnings(d: Decision, fields: ReadonlySet<string>): string[] {
+  if (d.kind === "permission" || d.kind === "grill") return [];
+  const out: string[] = [];
+  const q = d.question ?? "";
+
+  if (fields.has("question") && chars(q) > QUESTION_NEAR && d.body !== true) {
+    out.push(`state: ${d.id}'s question is ${chars(q)} characters and it has no --body: say the ask in one or two sentences and put the plan, the settings and the numbers in --body FILE.`);
+  }
+
+  const words = [...new Set([...q.matchAll(JARGON_RE)].map((x) => (x[1] ?? "").toLowerCase()))].sort((a, b) => JARGON.indexOf(a) - JARGON.indexOf(b));
+
+  if (fields.has("question") && words.length > 0) {
+    out.push(`state: ${d.id}'s question uses words the user may not know (${words.join(", ")}): say what they mean in the domain's words, or leave them to the body.`);
+  }
+
+  const why = d.why ?? "";
+
+  if (fields.has("why") && chars(why) > WHY_MAX) {
+    out.push(`state: ${d.id}'s why is ${chars(why)} characters: say in one line why it needs the user, and what it blocks or assumes meanwhile; the rest goes in --body.`);
+  }
+
+  const long = (d.options ?? []).filter((o) => chars(o.consequence ?? "") > CONSEQUENCE_MAX);
+
+  if (fields.has("option") && long.length > 0) {
+    const said = long.map((o) => `${o.id} (${chars(o.consequence ?? "")})`).join(", ");
+    out.push(
+      `state: ${d.id}'s consequences over ${CONSEQUENCE_MAX} characters: ${said}. Say each in one sentence; ` +
+        "the detail goes in --body, and a setting the user may change on its own is its own option or decision.",
+    );
+  }
+
+  if (fields.has("manual")) {
+    const nu = nuBlocks(d.manual ?? "").join("\n");
+    const found = BASHISMS.flatMap(([name, pattern]) => (pattern.test(nu) ? [name] : []));
+
+    if (found.length > 0) out.push(`state: ${d.id}'s manual has bash in a nu block (${found.join(", ")}): Luiz's shell is nushell (\`;\` or \`and\`, \`$env.X = ...\`, \`(...)\`, \`o+e>|\`).`);
+  }
+
+  return out;
+}
+
+/** The fields of the decision a command wrote, for its warnings. */
+function writtenFields(args: Args): Set<string> {
+  const out = new Set(["question", "why", "manual"].filter((k) => args.str(k) !== undefined));
+
+  if ((args.list("option") ?? []).length > 0) out.add("option");
+
+  return out;
 }
 
 const REFUSAL_FLAGS = ["tool", "call", "cause", "root", "agent_id"] as const;
@@ -1054,6 +1208,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       const elsewhere = decide !== undefined;
       yield* require(run, elsewhere ? ["title", "question"] : ["kind", "title", "question", "why"], "decision");
       const kind = args.str("kind");
+      yield* checkQuestion(args.str("question"), given(kind) ? kind : "decision");
 
       const fresh: Decision = {
         id,
@@ -1090,6 +1245,8 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       if (!elsewhere) {
         yield* checkKind(fresh, true);
         yield* setBody(run, fresh);
+
+        for (const warning of readabilityWarnings(fresh, writtenFields(args))) run.warn(warning);
         const forManager = fresh.asks === "manager";
         log(run, ledger, {
           kind: "asked",
@@ -1126,6 +1283,8 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
             "(--option, once per option, with --recommend and --reason), or pass --same-options when they still answer it",
         );
       }
+
+      yield* checkQuestion(question, kindNow);
 
       const changed: string[] = FIELDS.filter((k) => args.str(k) !== undefined);
 
@@ -1167,6 +1326,12 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       if (yield* setRefusal(run, row)) changed.push("refusal");
       yield* checkKind(row, args.str("manual") !== undefined);
       yield* setBody(run, row);
+
+      for (const warning of readabilityWarnings(row, writtenFields(args))) run.warn(warning);
+
+      if (["question", "option", "manual"].some((k) => changed.includes(k)) && !given(args.str("log")) && decide === undefined && withdraw === undefined) {
+        run.warn(`state: ${row.id} was asked again with new words and no --log: say what changed in one line (--log "..."); the page's history shows it, and the user should not have to compare two versions.`);
+      }
 
       if (changed.length > 0) {
         const logText = args.str("log");

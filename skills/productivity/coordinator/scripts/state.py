@@ -45,6 +45,7 @@ import io
 import json
 import re
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -671,8 +672,108 @@ def check_kind(d: dict, manual_given: bool) -> None:
     if unfenced:
         fail(f"--manual has {unfenced} lines and no fence: put the commands in a fenced block (a line ```nu, the commands, a line ```),"
              " any prose outside it")
+    if d["kind"] in ("secret", "action") and manual_given:
+        check_nu(d["manual"] or "")
     if d["kind"] == "action" and (d["options"] or d["recommend"]):
         fail("an action is a step only the user takes, with no options to choose: a yes or no on what the fleet would do is a decision (--kind decision, with the options and --recommend)")
+
+
+QUESTION_MAX = 400   # characters: the ask alone, one or two sentences (fleet/SPEC.md, decision); 95% of the asks recorded fit
+QUESTION_NEAR = 300  # a question this long with no body is warned about
+CONSEQUENCE_MAX = 160  # an option's consequence over this is warned about: one sentence
+
+
+def check_question(question: str | None, kind: str | None) -> None:
+    """A --question over QUESTION_MAX characters is refused: the plan, the settings and the numbers go in --body.
+    A permission's question, which the hook writes from the refused call, is not checked."""
+    if question is None or kind == "permission" or len(question) <= QUESTION_MAX:
+        return
+    fail(f"--question is {len(question)} characters, {len(question) - QUESTION_MAX} over the {QUESTION_MAX} a question holds: "
+         "keep the ask, one or two plain sentences, and move the plan, the settings and the numbers into --body FILE "
+         "(an HTML fragment: In short, What you're deciding, The plan, Settings, Cost and risk, How to undo, "
+         "What happens after you answer)")
+
+
+WHY_MAX = 300  # a why over this is warned about: one line on why it needs the user, and what it blocks or assumes
+JARGON = ("sha1", "sha256", "digest", "stage cache", "alias", "uuid", "idempotent", "upsert", "blob", "enum")
+JARGON_RE = re.compile(r"\b(" + "|".join(re.escape(w) for w in JARGON) + r")\b", re.I)
+BASHISMS = (("&&", re.compile(r"&&")), ("export X=", re.compile(r"^\s*export\s+\w+=", re.M)),
+            ("$(...)", re.compile(r"\$\(")), ("2>&1", re.compile(r"2>&1")))
+FENCE_OPEN = re.compile(r"^ {0,3}(`{3,})[ \t]*([^`\s]*)")
+
+
+def nu_blocks(manual: str) -> list[str]:
+    """The fenced blocks of a --manual tagged nu (or nushell), in order; an unclosed fence runs to the end."""
+    out, lines, i = [], manual.split("\n"), 0
+    while i < len(lines):
+        m = FENCE_OPEN.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        run, lang, body = m.group(1), m.group(2).lower(), []
+        i += 1
+        while i < len(lines) and not (lines[i].strip().startswith(run) and set(lines[i].strip()) == {"`"}):
+            body.append(lines[i])
+            i += 1
+        i += 1
+        if lang in ("nu", "nushell"):
+            out.append("\n".join(body))
+    return out
+
+
+def nu_parse_error(block: str) -> str | None:
+    """Why `block` does not parse in nushell (`nu-check --debug`), or None when it parses or no nu is on PATH."""
+    if not shutil.which("nu"):
+        return None
+    try:
+        done = subprocess.run(["nu", "--no-config-file", "--stdin", "-c", "$in | nu-check --debug"], input=block,
+                              capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode == 0:
+        return None
+    found = re.findall(r"Found : (.*)", done.stderr + done.stdout)
+    return found[-1].strip() if found else "a parse error"
+
+
+def check_nu(manual: str) -> None:
+    """Each ```nu block of a --manual parses in nushell, when nu is on PATH: Luiz runs it in his shell."""
+    for n, block in enumerate(nu_blocks(manual), 1):
+        why = nu_parse_error(block)
+        if why:
+            fail(f"--manual's nu block {n} does not parse in nushell (nu-check --debug: {why}): "
+                 "write it so it runs in Luiz's shell, or tag the block with the language it is in")
+
+
+def readability_warnings(d: dict, given: set) -> list[str]:
+    """What the CLI says, without refusing, about a decision hard to read; `given`: the fields this command wrote."""
+    if d["kind"] in ("permission", "grill"):
+        return []
+    out = []
+    q = d.get("question") or ""
+    if "question" in given and len(q) > QUESTION_NEAR and not d.get("body"):
+        out.append(f"state: {d['id']}'s question is {len(q)} characters and it has no --body: say the ask in one or two "
+                   "sentences and put the plan, the settings and the numbers in --body FILE.")
+    words = sorted({w.lower() for w in JARGON_RE.findall(q)}, key=lambda w: JARGON.index(w))
+    if "question" in given and words:
+        out.append(f"state: {d['id']}'s question uses words the user may not know ({', '.join(words)}): "
+                   "say what they mean in the domain's words, or leave them to the body.")
+    why = d.get("why") or ""
+    if "why" in given and len(why) > WHY_MAX:
+        out.append(f"state: {d['id']}'s why is {len(why)} characters: say in one line why it needs the user, and what it "
+                   "blocks or assumes meanwhile; the rest goes in --body.")
+    long = [o for o in d.get("options") or [] if len(o.get("consequence") or "") > CONSEQUENCE_MAX]
+    if "option" in given and long:
+        said = ", ".join(f"{o['id']} ({len(o['consequence'])})" for o in long)
+        out.append(f"state: {d['id']}'s consequences over {CONSEQUENCE_MAX} characters: {said}. Say each in one sentence; "
+                   "the detail goes in --body, and a setting the user may change on its own is its own option or decision.")
+    if "manual" in given:
+        nu = "\n".join(nu_blocks(d.get("manual") or ""))
+        found = [name for name, pattern in BASHISMS if pattern.search(nu)]
+        if found:
+            out.append(f"state: {d['id']}'s manual has bash in a nu block ({', '.join(found)}): Luiz's shell is nushell "
+                       "(`;` or `and`, `$env.X = ...`, `(...)`, `o+e>|`).")
+    return out
 
 
 def set_body(root: Path, d: dict, args) -> None:
@@ -759,6 +860,7 @@ def cmd_decision(state, args):
             args.supersedes = old["id"]  # a number (D3) is kept as the id it names
         made_elsewhere = args.decide is not None
         require(args, ["title", "question"] if made_elsewhere else ["kind", "title", "question", "why"], "decision")
+        check_question(args.question, args.kind or "decision")
         d = {"id": args.id, "kind": args.kind or "decision", "title": args.title, "question": args.question,
              "why": args.why, "blocking": bool(args.blocking), "agent": args.agent or None,
              "options": parse_options(args.option or []), "recommend": args.recommend, "reason": args.reason,
@@ -769,6 +871,8 @@ def cmd_decision(state, args):
         if not made_elsewhere:
             check_kind(d, True)
             set_body(Path(args.dir).resolve(), d, args)
+            for warning in readability_warnings(d, {k for k in ("question", "why", "manual") if getattr(args, k) is not None} | ({"option"} if args.option else set())):
+                sys.stderr.write(warning + "\n")
             for_manager = d["asks"] == "manager"   # the manager looks first: the user is not called yet
             log(state, "asked", f"{'For the manager: ' if for_manager else ''}{d['title']}: {d['question']}", d["agent"],
                 d["blocking"] and not for_manager, d["id"])
@@ -788,6 +892,7 @@ def cmd_decision(state, args):
         if asks_anew and (args.kind or d["kind"]) == "decision" and not args.option and not args.same_options:
             fail("the question changed, and the options on the page would be the old question's: give them again "
                  "(--option, once per option, with --recommend and --reason), or pass --same-options when they still answer it")
+        check_question(args.question, args.kind or d["kind"])
         changed = [k for k in FIELDS if getattr(args, k) is not None] + [k for k in ("option", "body") if getattr(args, k)]
         for key in FIELDS:
             if key in ("step", "milestone"):
@@ -809,6 +914,11 @@ def cmd_decision(state, args):
             changed.append("asks")
         check_kind(d, args.manual is not None)
         set_body(Path(args.dir).resolve(), d, args)
+        for warning in readability_warnings(d, {k for k in ("question", "why", "manual") if getattr(args, k) is not None} | ({"option"} if args.option else set())):
+            sys.stderr.write(warning + "\n")
+        if any(k in changed for k in ("question", "option", "manual")) and not args.log and args.decide is None and args.withdraw is None:
+            sys.stderr.write(f"state: {d['id']} was asked again with new words and no --log: say what changed in one line "
+                             "(--log \"...\"); the page's history shows it, and the user should not have to compare two versions.\n")
         if changed:
             d["revised"], d["change"] = now(), args.log or None
             text = f"{d['title']} now asks you: {d['question']}" if passed_on else f"{d['title']} changed: {args.log or ', '.join(changed)}"
@@ -947,6 +1057,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
         [--body FILE | --no-body] [--agent A] [--supersedes ID] [--log TEXT] [--asks {"|".join(decisions.ASKS)}]
         [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]
         --manual: its commands in a fenced block (```nu), any prose outside it; one bare command line needs none
+        --question: the ask alone, up to 400 characters; a plan, settings or numbers go in --body (SKILL.md, Decisions)
   event [--kind {"|".join(KINDS)}] [--agent A] [--important] TEXT   (a note is `event --kind note TEXT`)
   park [--agent A]... REASON     stop every live worker row (or those named) in one command
   keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace

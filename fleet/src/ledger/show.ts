@@ -26,6 +26,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
         [--body FILE | --no-body] [--agent A] [--supersedes ID] [--log TEXT] [--asks ${ASKS.join("|")}]
         [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]
         --manual: its commands in a fenced block (\`\`\`nu), any prose outside it; one bare command line needs none
+        --question: the ask alone, up to 400 characters; a plan, settings or numbers go in --body (SKILL.md, Decisions)
   event [--kind ${EVENT_KINDS.join("|")}] [--agent A] [--important] TEXT   (a note is \`event --kind note TEXT\`)
   park [--agent A]... REASON     stop every live worker row (or those named) in one command
   keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace

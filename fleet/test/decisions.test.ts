@@ -223,6 +223,62 @@ describe("revise", () => {
   });
 });
 
+describe("readable", () => {
+  const BASE = ["--why", "w", "--option", "A: yes | go", "--option", "B: no | stop", "--recommend", "A", "--reason", "r"];
+  const hasNu = Bun.which("nu") !== null;
+
+  test("a question over 400 characters is refused with how far over", () => {
+    const err = refused("decision", "d1", "--kind", "decision", "--title", "T", "--question", "x".repeat(401), ...BASE);
+    expect(err).toContain("--question is 401 characters, 1 over the 400 a question holds");
+    expect(err).toContain("--body FILE");
+    ok("decision", "d1", "--kind", "decision", "--title", "T", "--question", "x".repeat(400), ...BASE);
+    expect(refused("decision", "d1", "--question", "y".repeat(401), "--same-options")).toContain("1 over");
+  });
+
+  test("a stored long question still takes other changes", () => {
+    ok("decision", "d1", "--kind", "decision", "--title", "T", "--question", "q?", ...BASE);
+    const s = state();
+    const decisions = (asArray(s["decisions"]) ?? []).map((r) => ({ ...asObject(r), question: "x".repeat(1300) }));
+    writeFileSync(join(root, "state.json"), JSON.stringify({ ...s, decisions }));
+    ok("decision", "d1", "--why", "infra reviewed it", "--log", "infra reviewed it");
+    expect(String(item()["question"]).length).toBe(1300);
+  });
+
+  test("hard reading is warned, not refused", () => {
+    let r = run("decision", "d1", "--kind", "decision", "--title", "T", "--question", "Re-read by sha1 and alias? " + "x".repeat(300), "--why", "w".repeat(301), "--option", "A: yes | " + "c".repeat(161), "--option", "B: no | stop", "--recommend", "A", "--reason", "r");
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toContain("d1's question is 327 characters and it has no --body");
+    expect(r.stderr).toContain("uses words the user may not know (sha1, alias)");
+    expect(r.stderr).toContain("d1's why is 301 characters");
+    expect(r.stderr).toContain("consequences over 160 characters: A (161)");
+    r = run("decision", "d1", "--question", "Ship it?", "--same-options");
+    expect(r.stderr).toContain("d1 was asked again with new words and no --log");
+    r = run("decision", "d1", "--question", "Ship it now?", "--same-options", "--log", "now, not tonight");
+    expect(r.stderr).toBe("");
+  });
+
+  test.skipIf(!hasNu)("a nu block that does not parse in nushell is refused", () => {
+    const base = ["--kind", "action", "--title", "T", "--question", "q", "--why", "w"];
+    expect(refused("decision", "a1", ...base, "--manual", "Run:\n```nu\nfor f in *; do echo $f; done\n```")).toContain(
+      "--manual's nu block 1 does not parse in nushell (nu-check --debug: Missing argument to `in`.)",
+    );
+    ok("decision", "a1", ...base, "--manual", "Run:\n```nu\nls | where size > 1kb\n```\n```sh\ncd x && make\n```");
+  });
+
+  test("bash in a nu block is warned without nu", () => {
+    const path = process.env["PATH"];
+    process.env["PATH"] = tmp();
+
+    try {
+      const r = run("decision", "a1", "--kind", "action", "--title", "T", "--question", "q", "--why", "w", "--manual", "```nu\nexport FOO=1\ncd x && echo $(date)\n```");
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr).toContain("a1's manual has bash in a nu block (&&, export X=, $(...))");
+    } finally {
+      process.env["PATH"] = path;
+    }
+  });
+});
+
 describe("close", () => {
   test("deciding records the answer and how it came", () => {
     ok("decision", ...SCHEMA);

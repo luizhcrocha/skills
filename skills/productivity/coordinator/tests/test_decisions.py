@@ -1,6 +1,7 @@
 """The decisions seam: what waits on the user, through the state CLI and the rule for what an answer may be."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -171,6 +172,57 @@ class ReviseTest(Fleet):
         self.assertFalse(self.item()["body"])
         self.assertFalse((self.root / "decisions" / "d1.html").exists())
         self.assertIn("cannot read", self.refused("decision", "d1", "--body", str(self.root / "missing.html")))
+
+
+class ReadableTest(Fleet):
+    """A decision the user can read cold: the question is the ask alone, the rest goes in the body; an action's nu runs in nushell."""
+    BASE = ["--why", "w", "--option", "A: yes | go", "--option", "B: no | stop", "--recommend", "A", "--reason", "r"]
+
+    def run_without_nu(self, *args: str) -> subprocess.CompletedProcess:
+        empty = tempfile.mkdtemp()
+        return subprocess.run([sys.executable, STATE, str(self.root), *args, "--no-render"], capture_output=True, text=True,
+                              timeout=20, env={**os.environ, "PATH": empty})
+
+    def test_a_question_over_400_characters_is_refused_with_how_far_over(self):
+        err = self.refused("decision", "d1", "--kind", "decision", "--title", "T", "--question", "x" * 401, *self.BASE)
+        self.assertIn("--question is 401 characters, 1 over the 400 a question holds", err)
+        self.assertIn("--body FILE", err)
+        self.ok("decision", "d1", "--kind", "decision", "--title", "T", "--question", "x" * 400, *self.BASE)
+        self.assertIn("1 over", self.refused("decision", "d1", "--question", "y" * 401, "--same-options"))
+
+    def test_a_stored_long_question_still_takes_other_changes(self):
+        self.ok("decision", "d1", "--kind", "decision", "--title", "T", "--question", "q?", *self.BASE)
+        s = self.state()
+        s["decisions"][0]["question"] = "x" * 1300
+        (self.root / "state.json").write_text(json.dumps(s))
+        self.ok("decision", "d1", "--why", "infra reviewed it", "--log", "infra reviewed it")
+        self.assertEqual(len(self.item()["question"]), 1300)
+
+    def test_hard_reading_is_warned_not_refused(self):
+        r = self.run_cli("decision", "d1", "--kind", "decision", "--title", "T", "--question", "Re-read by sha1 and alias? " + "x" * 300,
+                         "--why", "w" * 301, "--option", "A: yes | " + "c" * 161, "--option", "B: no | stop", "--recommend", "A", "--reason", "r")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("d1's question is 327 characters and it has no --body", r.stderr)
+        self.assertIn("uses words the user may not know (sha1, alias)", r.stderr)
+        self.assertIn("d1's why is 301 characters", r.stderr)
+        self.assertIn("consequences over 160 characters: A (161)", r.stderr)
+        r = self.run_cli("decision", "d1", "--question", "Ship it?", "--same-options")
+        self.assertIn("d1 was asked again with new words and no --log", r.stderr)
+        r = self.run_cli("decision", "d1", "--question", "Ship it now?", "--same-options", "--log", "now, not tonight")
+        self.assertEqual(r.stderr, "")
+
+    @unittest.skipUnless(shutil.which("nu"), "needs nu on PATH")
+    def test_a_nu_block_that_does_not_parse_in_nushell_is_refused(self):
+        base = ["--kind", "action", "--title", "T", "--question", "q", "--why", "w"]
+        err = self.refused("decision", "a1", *base, "--manual", "Run:\n```nu\nfor f in *; do echo $f; done\n```")
+        self.assertIn("--manual's nu block 1 does not parse in nushell (nu-check --debug: Missing argument to `in`.)", err)
+        self.ok("decision", "a1", *base, "--manual", "Run:\n```nu\nls | where size > 1kb\n```\n```sh\ncd x && make\n```")
+
+    def test_bash_in_a_nu_block_is_warned_without_nu(self):
+        r = self.run_without_nu("decision", "a1", "--kind", "action", "--title", "T", "--question", "q", "--why", "w",
+                                "--manual", "```nu\nexport FOO=1\ncd x && echo $(date)\n```")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("a1's manual has bash in a nu block (&&, export X=, $(...))", r.stderr)
 
 
 class CloseTest(Fleet):

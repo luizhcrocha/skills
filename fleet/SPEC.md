@@ -209,6 +209,13 @@ Checked in this order:
    `--step` and/or `--milestone` alone, which set where it came from.
 4. New: the id must match `[A-Za-z0-9_.-]+`. `--supersedes` must name a closed decision (an open
    one: `<title> is still open; change it instead of superseding it`) and is stored as its id.
+   - **The question's length** (new, and on a known one whenever `--question` is given; the
+     length is in characters, code points): over 400 is refused, checked right after the required
+     fields (`--question is N characters, M over the 400 a question holds: keep the ask, one or two
+     plain sentences, and move the plan, the settings and the numbers into --body FILE (an HTML
+     fragment: In short, What you're deciding, The plan, Settings, Cost and risk, How to undo, What
+     happens after you answer)`). A permission's question (the effective kind is permission) is not
+     checked. A stored question over the limit is kept: only a write is checked.
    - Recorded after the fact (`--decide` given): needs title and question. Stored with
      `page: false`, kind defaulting to decision, no kind check, no body, no `asked` event, and
      closed at once.
@@ -233,13 +240,31 @@ Checked in this order:
      `asked <id>. Arm its answer's wake now, as a background command (run_in_background):
      \`FLEET chat DIR wait <id>\`: it exits with the user's answer the moment it is given.`
 5. Known and open: `--supersedes` is refused. A new `--question` for a choice needs its options
-   again (`--option`) or `--same-options`. The fields given are set (an empty value clears);
+   again (`--option`) or `--same-options`; then the question's length is checked as in 4. The fields given are set (an empty value clears);
    `--option` replaces all options; `--blocking`/`--not-blocking`; `--asks` changes who looks
    first; the kind check runs on the result; `--body`/`--no-body` (the latter deletes the file).
    When anything changed, `revised` = now, `change` = `--log`, and an `asked` event is logged:
    `<title> now asks you: <question>` (important when blocking) when `--asks user` passes a
    manager's decision on, else `<title> changed: <--log, or the changed fields>`. A revision
    that gives `--question`, `--option` or `--manual` re-presents the item: it clears a hold.
+   **Warnings** on stderr, the write done, after the kind check and the body (new or known, not
+   for a permission or a grilling), in this order, each only for a field this command gave:
+   `state: <id>'s question is N characters and it has no --body: ...` (question over 300, no
+   body); `state: <id>'s question uses words the user may not know (sha1, alias): ...` (whole
+   words, any case, from sha1, sha256, digest, stage cache, alias, uuid, idempotent, upsert, blob,
+   enum, listed in that order); `state: <id>'s why is N characters: ...` (over 300); `state:
+   <id>'s consequences over 160 characters: A (212), ... ` (`--option`); `state: <id>'s manual has
+   bash in a nu block (&&, export X=, $(...), 2>&1): ...` (`--manual`, the patterns found in its nu
+   blocks, in that order); then, on a known one, `state: <id> was asked again with new words and
+   no --log: ...` when `--question`, `--option` or `--manual` was given with no `--log`,
+   `--decide` or `--withdraw`.
+   **A nu block that does not parse**: a secret's or action's `--manual` given in this command,
+   checked after the fence rule: each fenced block tagged `nu` or `nushell` (an unclosed fence runs
+   to the end) is piped to `nu --no-config-file --stdin -c '$in | nu-check --debug'` when `nu` is
+   on PATH (20 s at most; no nu, a timeout or a failure to start skips the check). A non-zero exit
+   is refused: `--manual's nu block N does not parse in nushell (nu-check --debug: <the last
+   "Found : " line of nu's output, else "a parse error">): write it so it runs in Luiz's shell, or
+   tag the block with the language it is in`.
    **Hold** (`--hold REASON`, `--unhold`; one of `--decide`/`--withdraw`/`--hold`/`--unhold`,
    else exit 2): the user answered and the fleet must act before the item can proceed. Only on a
    known decision (`unknown decision 'X'`); a closed one refuses as in 3. `--hold` with a blank

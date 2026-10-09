@@ -368,6 +368,8 @@ class Model:
             if c.get("options"):
                 d["options"] = [o.split(":")[0] for o in c["options"]]
             self.check_kind(d)
+            if any(k in changed for k in ("question", "options", "manual")) and not c.get("log") and "decide" not in c and "withdraw" not in c:
+                self.reworded = did  # warned: a revision says what changed (--log)
             if changed:
                 d["since"] = self.clock
                 self.log()
@@ -523,6 +525,8 @@ class Model:
             found["answer"] = "state: the user answered"
         if c["cmd"] == "set" and c.get("status") == "done" and any(d["status"] == "open" for d in self.decisions.values()):
             found["open"] = "state: the fleet is done with"
+        if c["cmd"] == "decision" and getattr(self, "reworded", None):
+            found["reworded"] = f"state: {self.reworded} was asked again with new words and no --log"
         if c["cmd"] == "agent" and ("model" in c or "effort" in c):
             a = self.agents[c["id"]]
             if a["model"] not in POLICY_MODELS:
@@ -620,6 +624,7 @@ class Model:
             self.__dict__.update(m.__dict__)
             return 0, {}
         said = m.warnings(c, self)
+        m.__dict__.pop("reworded", None)
         if c["cmd"] == "show":
             return 0, said
         m.number()
