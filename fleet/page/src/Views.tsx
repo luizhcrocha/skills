@@ -888,9 +888,16 @@ export function LinksView(): JSX.Element {
   );
 }
 
+/** How many lines the log shows at first, newest first, and how many more each "Show more" adds. */
+export const LOG_STEP = 200;
+
 /** The log: a time, what happened, who, and the words; the workers' filters narrow it too. */
 export function LogView(props: { readonly rows: () => readonly Agent[] }): JSX.Element {
   const { m, ui } = usePage();
+  /* The lines are made the first time the log is shown, the newest LOG_STEP of them: a ledger keeps every
+     event (a long-lived fleet, over a thousand), and none of them is any part of another view's first paint. */
+  const opened = createMemo((was: boolean | undefined) => Boolean(was) || m.place().view === "log");
+  const [limit, setLimit] = createSignal(LOG_STEP);
 
   const openForYou = (id: string): boolean => {
     const d = m.decisionById(id);
@@ -916,13 +923,15 @@ export function LogView(props: { readonly rows: () => readonly Agent[] }): JSX.E
         <div class="card">
           <ul class="log" id="log">
             <For
-              each={events()}
+              each={opened() ? events().slice(0, limit()) : []}
               keyed={(x) => x.key}
               fallback={
-                <li>
-                  <span />
-                  <span class="muted">Nothing logged yet.</span>
-                </li>
+                <Show when={opened()}>
+                  <li>
+                    <span />
+                    <span class="muted">Nothing logged yet.</span>
+                  </li>
+                </Show>
               }
             >
               {(x) => {
@@ -957,6 +966,13 @@ export function LogView(props: { readonly rows: () => readonly Agent[] }): JSX.E
               }}
             </For>
           </ul>
+          <Show when={opened() && events().length > limit()}>
+            <p class="log-more">
+              <button type="button" class="btn small" id="log-more" onClick={() => setLimit(limit() + LOG_STEP)}>
+                Show {Math.min(LOG_STEP, events().length - limit())} more of {events().length - limit()}
+              </button>
+            </p>
+          </Show>
         </div>
       </div>
     </section>
