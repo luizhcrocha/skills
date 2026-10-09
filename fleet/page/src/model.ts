@@ -170,9 +170,29 @@ export function createModel(initial: State) {
   const nameOf = (id: string): string => person(id)?.name || id;
   const roster = createMemo((): RosterRow[] => Core.rosterOf(state));
 
+  /* The ledger's decisions by id and by number, built again only when the list, an id or a number changes: a
+     row that names a decision reads two map entries, not the whole list, and so does not depend on every decision. */
+  const decisionIndex = createMemo(() => {
+    const byId = new Map<string, Decision>();
+    const byRef = new Map<string, Decision>();
+
+    for (const d of state.decisions) {
+      if (!byId.has(d.id)) byId.set(d.id, d);
+      const ref = d.ref?.toLowerCase();
+
+      if (ref !== undefined && !byRef.has(ref)) byRef.set(ref, d);
+    }
+
+    return { byId, byRef };
+  });
+
   /** A decision of this ledger by its id, else by its number ("D141", any case), as a link from another fleet may name it. */
-  const decisionById = (id: string | null | undefined): Decision | undefined =>
-    id ? (state.decisions.find((d) => d.id === id) ?? state.decisions.find((d) => d.ref !== undefined && d.ref.toLowerCase() === id.toLowerCase())) : undefined;
+  const decisionById = (id: string | null | undefined): Decision | undefined => {
+    if (!id) return undefined;
+    const { byId, byRef } = decisionIndex();
+
+    return byId.get(id) ?? byRef.get(id.toLowerCase());
+  };
 
   /** The ledger's decisions, and on a manager's page the ones open in each fleet, as "<fleet>/<id>". */
   const everyDecision = createMemo((): Decision[] => state.decisions.concat(state.coordinators.flatMap((c) => c.decisions.map((d) => ({ ...d, id: c.id + "/" + d.id, fleet: c.id })))));
@@ -203,7 +223,8 @@ export function createModel(initial: State) {
   const messageIds = new Set<number>();
   let lastId = 0;
   const messages = (): readonly Message[] => chat.list;
-  const messageById = (id: number | null): Message | undefined => (id === null ? undefined : chat.list.find((m) => m.id === id));
+  const messageIndex = createMemo(() => new Map(chat.list.map((m) => [m.id, m])));
+  const messageById = (id: number | null): Message | undefined => (id === null ? undefined : messageIndex().get(id));
   const [conn, setConnSignal] = createSignal<Conn>("off");
   const [write, setWrite] = createSignal<{ ok: boolean; reason: string }>({ ok: true, reason: "" });
   const [you, setYou] = createSignal("");
