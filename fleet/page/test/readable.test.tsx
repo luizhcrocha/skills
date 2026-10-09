@@ -1,6 +1,6 @@
 /**
- * A decision's page reads top-down: the title, the ask large, what it blocks or assumes, the recommendation
- * as a callout, the options, the conversation, the body, then the history newest first, the earlier moments
+ * A decision's page reads top-down: the title, the ask large, what it blocks or assumes, the body (folded when
+ * long), the recommendation as a callout, the options, the conversation, then the history newest first, the earlier moments
  * folded. A question recorded before the 400-character rule is shown in parts (its asking sentence large,
  * the rest in paragraphs, its numbered run as a list) without changing what is stored. The parts and the
  * history are pure (`askParts`, `historyOf`); the page is run in happy-dom.
@@ -140,8 +140,8 @@ afterEach(() => {
   root.remove();
 });
 
-test("the page reads top-down: the ask, the recommendation, the options, then the history", () => {
-  const order = ["#dv-info .dv-question", "#dv-info .dv-why", "#dv-info .dv-rec", "#dv-answer", "#dv-body", "#dv-history"].map((sel) => root.querySelector(sel));
+test("the page reads top-down: the ask, the details, the recommendation, the options, then the history", () => {
+  const order = ["#dv-info .dv-question", "#dv-info .dv-why", "#dv-body", ".dv-rec", "#dv-answer", "#dv-history"].map((sel) => root.querySelector(sel));
   expect(order.every((el) => el !== null)).toBe(true);
 
   for (let i = 1; i < order.length; i++) {
@@ -151,6 +151,7 @@ test("the page reads top-down: the ask, the recommendation, the options, then th
     if (before && after) expect(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   }
 
+  expect(root.querySelector(".dv-fold #dv-body")).not.toBeNull();
   expect(root.querySelector(".dv-rec .dv-rec-pick")?.textContent).toBe("A: Approve as proposed");
 });
 

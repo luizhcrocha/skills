@@ -1,6 +1,7 @@
 /**
- * The decision's page, a view of this page at #decision/<id>: what the user needs to decide, the evidence
- * (a frame without this page's origin, reloaded only when the item is revised), and the control to answer.
+ * The decision's page, a view of this page at #decision/<id>, read top-down: the ask, the evidence that
+ * explains it (a frame without this page's origin, reloaded only when the item is revised; folded when long),
+ * the recommendation, the options and the control to answer, then the conversation and the history.
  * The answer's form is built once per decision and shape, so a half-written answer survives every update
  * of the state; it is also kept in this browser per decision and revision, and put back when the form is
  * built again. On a manager's page, another fleet's decision is that fleet's own page in a frame (`?embed=1`),
@@ -15,6 +16,7 @@ import { listen, PillAs, RefTag, tf, usePage, Who } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
 import { Core, type Decision, type GrillEntry, type JsonRecord, type Queue } from "./core.ts";
 import { DecisionHistory } from "./DecisionHistory.tsx";
+import { DetailsFold } from "./DetailsFold.tsx";
 import { DecisionThread } from "./DecisionThread.tsx";
 import { FRAME_MAX_PX, parseEmbedMessage, postAnswered } from "./embed.ts";
 import { clock } from "./format.ts";
@@ -791,7 +793,6 @@ function Info(props: { readonly d: Decision }): JSX.Element {
   const d = (): Decision => props.d;
   const open = (): boolean => d().status === "open";
   const pending = createMemo(() => Core.pendingAnswer(d(), m.messages()));
-  const recommended = () => d().options.find((o) => o.id === d().recommend);
   const successor = () => m.state.decisions.find((x) => x.supersedes === d().id);
   const before = () => (d().supersedes ? m.decisionById(d().supersedes) : undefined);
   const ask = createMemo(() => askParts(d().question ?? "", d().title));
@@ -893,14 +894,22 @@ function Info(props: { readonly d: Decision }): JSX.Element {
           <Rich text={d().why ?? ""} />
         </div>
       </Show>
-      <Show when={d().recommend}>
-        <aside class="dv-rec" aria-label="Recommended">
-          <h3>Recommended</h3>
-          <p class="dv-rec-pick">{recommended() ? `${recommended()?.id ?? ""}: ${recommended()?.label ?? ""}` : d().recommend}</p>
-          <Show when={d().reason}>{(r) => <Rich class="dv-rec-why" text={r()} />}</Show>
-        </aside>
-      </Show>
     </>
+  );
+}
+
+/** The recommendation with its reason, read after the body and before the options. */
+function Recommendation(props: { readonly d: Decision }): JSX.Element {
+  const recommended = () => props.d.options.find((o) => o.id === props.d.recommend);
+
+  return (
+    <Show when={props.d.recommend}>
+      <aside class="dv-rec" aria-label="Recommended">
+        <h3>Recommended</h3>
+        <p class="dv-rec-pick">{recommended() ? `${recommended()?.id ?? ""}: ${recommended()?.label ?? ""}` : props.d.recommend}</p>
+        <Show when={props.d.reason}>{(r) => <Rich class="dv-rec-why" text={r()} />}</Show>
+      </aside>
+    </Show>
   );
 }
 
@@ -1114,13 +1123,16 @@ function OwnDecision(props: { readonly d: Decision | undefined }): JSX.Element {
           {(found) => <Info d={found()} />}
         </Show>
       </div>
+      <DetailsFold what="the details">
+        <Evidence d={d()} />
+      </DetailsFold>
+      <Show when={d()}>{(found) => <Recommendation d={found()} />}</Show>
       <div class="dv-answer" id="dv-answer">
         <Show when={d()?.id} keyed>
           {(id) => <AnswerFor id={id} />}
         </Show>
       </div>
       <DecisionThread id={m.viewing()} />
-      <Evidence d={d()} />
       <DecisionHistory d={d()} />
     </>
   );

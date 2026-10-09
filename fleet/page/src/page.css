@@ -597,6 +597,10 @@
   .dv-body { display: grid; gap: 8px; }
   .dv-body iframe { display: block; width: 100%; height: 160px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
   .dv-body iframe.fixed { height: 70dvh; }
+  .dv-fold { display: grid; gap: 8px; min-width: 0; }
+  .dv-fold-in { min-width: 0; }
+  .dv-fold.folded .dv-fold-in { max-height: 640px; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent); mask-image: linear-gradient(to bottom, #000 70%, transparent); }
+  .dv-fold-toggle { justify-self: start; }
   .dv-queue { display: grid; gap: 10px; }
   .dv-queue-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
   .dv-queue .btn[aria-disabled] { color: var(--faint); cursor: default; }
