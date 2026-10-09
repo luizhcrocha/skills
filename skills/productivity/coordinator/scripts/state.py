@@ -783,7 +783,7 @@ VISUAL_RE = re.compile(r"<(?:svg|table|img)\b", re.I)
 
 # A past answer of the user's, referred to: it names its decision's number (D18) in the same sentence.
 PAST_RE = re.compile(r"\b(you decided|you said|you chose|your rule|as decided|you approved)\b", re.I)
-NUMBER_RE = re.compile(r"\b[DAIG]\d+\b")
+NUMBER_RE = re.compile(r"\b[DAIG]\d+\b", re.I)
 SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 
 

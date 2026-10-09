@@ -271,7 +271,7 @@ Checked in this order:
    decided, you said, you chose, your rule, as decided, you approved; any case; each once, lower-cased,
    in the order found) in a sentence of the question, why or body text (tags taken out; a sentence ends
    at `.`, `!` or `?` and a space, or a line break) that holds no `D`, `A`, `I` or `G` and digits as a
-   word; then, for a choice (kind decision) whose question, why or body this command gave,
+   word, any case (a fleet's id such as `d172` counts); then, for a choice (kind decision) whose question, why or body this command gave,
    `state: <id> looks like it needs a visual (graph, database; 3 amounts to compare): see coordinator
    SKILL.md #decisions (show-me triggers): a small inline SVG of the parts, a table of the numbers, in
    --body.` when its question, why and body text (tags taken out) name database, graph, neo4j,

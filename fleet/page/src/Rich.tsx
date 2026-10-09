@@ -14,7 +14,7 @@ import { copyText, selectAndCopy, type Copied } from "./clip.ts";
 import type { Part } from "./core.ts";
 import { DecisionRef } from "./DecisionRef.tsx";
 import { tokensOf } from "./highlight.ts";
-import { refRuns } from "./refs.ts";
+import { refRuns, type KnownFleet } from "./refs.ts";
 import { isFormatted, manualBlocks, parseText, spansOf, type Block } from "./text.ts";
 
 /** How long "Copied" shows. */
@@ -78,14 +78,15 @@ export function CodeBlock(props: { readonly lang: string; readonly text: string 
 interface Piece {
   readonly text: string;
   readonly part?: Part;
-  readonly ref?: { readonly num: string; readonly fleet: string | null };
+  readonly ref?: { readonly num: string; readonly fleet: string | null; readonly question: number | null };
 }
 
-/** The fleets whose name may come before a decision's number on this page. */
-function useFleets(): () => readonly string[] {
+/** The fleets whose id or name may come before a decision's number on this page: the registry's, as the page knows them. */
+function useFleets(): () => readonly KnownFleet[] {
   const { m } = usePage();
 
-  return () => (m.state.role === "manager" ? m.state.coordinators.map((c) => c.id) : (m.state.fleets ?? []));
+  return () =>
+    m.state.role === "manager" ? m.state.coordinators.map((c) => ({ id: c.id, names: [c.name, c.session].filter((n) => n !== "") })) : (m.state.fleets ?? []).map((id) => ({ id, names: [] }));
 }
 
 /** Words of a paragraph, with the mentions marked in them shown by `mention`. */
@@ -94,7 +95,7 @@ function Words(props: { readonly text: string; readonly parts: readonly Part[]; 
 
   /* Plain words, with each decision's number split out when the item's words link them. */
   const plain = (text: string): Piece[] =>
-    props.refs ? refRuns(text, fleets()).map((r): Piece => (r.kind === "ref" ? { text: r.text, ref: { num: r.num, fleet: r.fleet } } : { text: r.text })) : [{ text }];
+    props.refs ? refRuns(text, fleets()).map((r): Piece => (r.kind === "ref" ? { text: r.text, ref: { num: r.num, fleet: r.fleet, question: r.question } } : { text: r.text })) : [{ text }];
 
   const pieces = (): Piece[] => {
     if (!props.mention) return plain(props.text);
@@ -118,7 +119,7 @@ function Words(props: { readonly text: string; readonly parts: readonly Part[]; 
   return (
     <For each={pieces()} keyed={false}>
       {(p) => (
-        <Show when={props.mention && p().part} fallback={<Show when={p().ref} fallback={p().text}>{(r) => <DecisionRef num={r().num} fleet={r().fleet} text={p().text} />}</Show>}>
+        <Show when={props.mention && p().part} fallback={<Show when={p().ref} fallback={p().text}>{(r) => <DecisionRef num={r().num} fleet={r().fleet} question={r().question} text={p().text} />}</Show>}>
           {(part) => <>{props.mention?.(part())}</>}
         </Show>
       )}

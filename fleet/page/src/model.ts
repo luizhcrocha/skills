@@ -169,7 +169,10 @@ export function createModel(initial: State) {
   const colourOfId = (id: string): string => (person(id) ? colorOf(id) : id === host() ? "var(--accent)" : "var(--faint)");
   const nameOf = (id: string): string => person(id)?.name || id;
   const roster = createMemo((): RosterRow[] => Core.rosterOf(state));
-  const decisionById = (id: string | null | undefined): Decision | undefined => (id ? state.decisions.find((d) => d.id === id) : undefined);
+
+  /** A decision of this ledger by its id, else by its number ("D141", any case), as a link from another fleet may name it. */
+  const decisionById = (id: string | null | undefined): Decision | undefined =>
+    id ? (state.decisions.find((d) => d.id === id) ?? state.decisions.find((d) => d.ref !== undefined && d.ref.toLowerCase() === id.toLowerCase())) : undefined;
 
   /** The ledger's decisions, and on a manager's page the ones open in each fleet, as "<fleet>/<id>". */
   const everyDecision = createMemo((): Decision[] => state.decisions.concat(state.coordinators.flatMap((c) => c.decisions.map((d) => ({ ...d, id: c.id + "/" + d.id, fleet: c.id })))));

@@ -980,7 +980,7 @@ const VISUAL_RE = /<(?:svg|table|img)\b/iu;
 /* A past answer of the user's, referred to: it names its decision's number (D18) in the same sentence. */
 const PAST_RE = /\b(you decided|you said|you chose|your rule|as decided|you approved)\b/giu;
 
-const NUMBER_RE = /\b[DAIG]\d+\b/u;
+const NUMBER_RE = /\b[DAIG]\d+\b/iu;
 
 const SENTENCE_RE = /(?<=[.!?])\s+|\n+/u;
 
