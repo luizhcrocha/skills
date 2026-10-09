@@ -1019,6 +1019,23 @@ describe("the index and the manager", () => {
     expect(collapse("/f/manager/f/p/chat")).toBe("/f/p/chat");
     expect((await request("GET", "/f/manager/f/p/chat")).status).toBe(200);
   });
+
+  test("the manager's state.json, which its page polls while the stream reconnects, is the view the stream sends", async () => {
+    const manager = join(base, "m", "manager");
+    mkdirSync(manager, { recursive: true });
+    writeState(manager, [], { role: "manager", project: "all" });
+    register(manager, "manager");
+    await start();
+    const stream = await Stream.open("/f/manager/events");
+    await stream.next();
+    const streamed = data(await stream.nextOf("state"));
+    stream.close();
+    const polled = await request("GET", "/f/manager/state.json");
+    expect(polled.headers.get("Cache-Control")).toBe("no-store");
+    expect(polled.headers.get("Content-Type")).toStartWith("application/json");
+    expect((asArray(polled.body["coordinators"]) ?? []).map((c) => asObject(c)?.["id"])).toEqual(["p"]);
+    expect(polled.body).toEqual(streamed);
+  });
 });
 
 describe("the user's word to a coordinator on the manager's page", () => {

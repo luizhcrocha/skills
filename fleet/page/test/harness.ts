@@ -2,7 +2,8 @@
  * A stand-in for the hub's fleet routes, for the page's browser tests and screenshots: the page rendered
  * from a template and a fixture view (the real `pageHtml`), `GET events` (SSE `hello`, `state`, `chat`),
  * `POST chat` (keeping its `re`, `decision`, `quote` and `side`), `POST chat/preview`, `POST name` (a worker's or the
- * fleet's name, applied to the view as the hub's ledger and registry would, a worker's name another has refused), `GET skills`, `GET state.json`,
+ * fleet's name, applied to the view as the hub's ledger and registry would, a worker's name another has refused), `GET skills`, `GET state.json`
+ * (the view, as the hub serves it to a page polling while its stream reconnects),
  * and two control routes a test drives: `POST /_state` (a new view, sent to every stream) and `POST /_chat`
  * (a message from the fleet).
  */
@@ -55,6 +56,10 @@ export interface Harness {
   readonly renames: JsonRecord[];
   setView(view: View): void;
   say(message: Message): void;
+  /** Close every stream and refuse new ones for `ms`, as a hub restarting does. */
+  cut(ms: number): void;
+  /** How many times `state.json` was asked for. */
+  polled(): number;
   stop(): void;
 }
 
@@ -74,6 +79,9 @@ export function serveHarness(options: HarnessOptions): Harness {
   const posted: Message[] = [];
   const renames: JsonRecord[] = [];
   const streams = new Set<(text: string) => void>();
+  const closers = new Set<() => void>();
+  let downUntil = 0;
+  let polls = 0;
   const encoder = new TextEncoder();
 
   const broadcast = (text: string): void => {
@@ -93,18 +101,36 @@ export function serveHarness(options: HarnessOptions): Harness {
         return new Response(pageHtml(options.template, view), { headers: { "Content-Type": "text/html; charset=utf-8" } });
       }
 
-      if (path === "/state.json") return json(200, view);
+      if (path === "/state.json") {
+        polls += 1;
+
+        return json(200, view);
+      }
 
       if (path === "/skills") return options.skills === undefined ? json(404, { error: "not found" }) : json(200, { skills: options.skills, builtins: false });
 
       if (path === "/events") {
+        if (Date.now() < downUntil) return json(503, { error: "restarting" });
         const after = Number(new URL(req.url).searchParams.get("after") ?? req.headers.get("Last-Event-ID") ?? 0);
         let send: ((text: string) => void) | undefined;
 
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
-            send = (text) => controller.enqueue(encoder.encode(text));
-            streams.add(send);
+            const own = (text: string): void => controller.enqueue(encoder.encode(text));
+
+            const close = (): void => {
+              streams.delete(own);
+
+              try {
+                controller.close();
+              } catch {
+                // the page had gone already
+              }
+            };
+
+            send = own;
+            streams.add(own);
+            closers.add(close);
             send(event("hello", { write: true, you: "luiz@example.com", max_bytes: 256 * 1024 }));
             send(event("state", view));
 
@@ -196,6 +222,13 @@ export function serveHarness(options: HarnessOptions): Harness {
       messages.push(m);
       broadcast(event("chat", m, m.id));
     },
+    cut(ms) {
+      downUntil = Date.now() + ms;
+
+      for (const close of closers) close();
+      closers.clear();
+    },
+    polled: () => polls,
     stop() {
       void server.stop(true);
     },

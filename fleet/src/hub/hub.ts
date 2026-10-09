@@ -7,7 +7,8 @@
  * - `/f/<fleet>/…` a fleet of this machine, as serve_dashboard.py served it: the page (rendered from
  *   state.json on each load), `GET /chat`, `GET /events` (SSE: `hello`, `state`, `chat`, pings),
  *   `POST /chat`, `POST /chat/preview`, `GET /skills` (what the session can be told to run, held 60 s),
- *   and the files under its DIR (`decisions/*` sandboxed), with the
+ *   `GET /state.json` (the view the stream sends, not the ledger: the page polls it while the stream
+ *   reconnects), and the files under its DIR (`decisions/*` sandboxed), with the
  *   same status codes. `/f/<a>/f/<b>/…` is `/f/<b>/…` (a manager's page links its fleets relatively), and
  *   a fleet's old id, from before its session's number was dropped (`/f/3.ui-coordinator/…`), moves (301)
  *   to its id while the entry lives.
@@ -568,6 +569,14 @@ export class Hub {
       const page = this.page(root);
 
       if (page !== undefined) return new Response(req.method === "HEAD" ? null : page, { headers: { "Content-Type": "text/html; charset=utf-8", ...NO_STORE } });
+    }
+
+    /* The page polls state.json while its stream reconnects: it gets the view the stream sends, never the bare
+       ledger (a manager's has no coordinators, so its queue would empty and the decision shown read as answered). */
+    if (rest === "/state.json") {
+      const shown = this.viewOf(root);
+
+      if (shown !== undefined) return new Response(req.method === "HEAD" ? null : shown.json, { headers: { "Content-Type": "application/json; charset=utf-8", ...NO_STORE } });
     }
 
     return this.file(req, root, rest === "/" ? "/index.html" : rest);
