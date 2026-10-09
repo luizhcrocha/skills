@@ -32,6 +32,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
   keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace
   link ID --url U --title T [--kind dev|page] [--decision D] [--note N] | --drop R   a dev server or a purpose-built page
   grill ID --title T --ask "TITLE | QUESTION | RECOMMENDATION | WHY"... [--of Q]   a grilling round, answered on the page
+        [--option "Q1 a: label | consequence"]... (RECOMMENDATION is then an option's id) [--body FILE | --no-body]
         [--answer "Q3: ..."] [--drop "Q4: why"] [--revise "Q3: T | Q | R | W"] [--reason "Q3: why"] [--done SUMMARY]
   step next --milestone M --title T   the next free step id, printed
   show

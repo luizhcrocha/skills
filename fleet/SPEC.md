@@ -299,7 +299,7 @@ Checked in this order:
    reason and when (held, held_at)`), and only on an open one (`decision X is <status> and still
    held`); no default fills them.
 
-**grill** `ID [--title T --why W] [--ask "TITLE | QUESTION | RECOMMENDATION | WHY"]... [--of Q] [--answer "Q3: ..."]... [--drop "Q4: why"]... [--revise "Q3: T | Q | R | W"]... [--reason "Q3: why"]... [--blocking] [--agent A] [--step S] [--milestone M] [--done SUMMARY]`
+**grill** `ID [--title T --why W] [--ask "TITLE | QUESTION | RECOMMENDATION | WHY"]... [--of Q] [--option "Q1 a: label | consequence"]... [--body FILE | --no-body] [--answer "Q3: ..."]... [--drop "Q4: why"]... [--revise "Q3: T | Q | R | W"]... [--reason "Q3: why"]... [--blocking] [--agent A] [--step S] [--milestone M] [--done SUMMARY]`
 - A known ID that is not a grilling: `X is a <kind>, not a grilling`. A closed one is refused.
 - New: needs `--title` and at least one `--ask`; a decision row of kind grill, `question` "",
   `page` true, `questions` [].
@@ -307,13 +307,37 @@ Checked in this order:
   `dropped` = reason), revisions (back to open with new words, `asked` = now), reasons, then new
   questions `q<n+1>` (`of` = `--of`, lower-cased; `--of` must name a question). A `Q<n>` that
   doesn't exist is refused, as is text without the `Q3:` head. `--ask` needs four non-empty parts.
+- Then options: each `--option "Q<n> <key>: label | consequence"` (key as a decision's option id, label
+  and consequence non-empty, else `--option reads "Q1 a: label | consequence", got '<text>'`) names a
+  question, the new ones of this command included (`--option Q9: no question Q9 in <id>`), that is open
+  (`--option Q1: Q1 is answered; options are for an open question`); a key twice for one question is
+  refused (`Q1's option 'a' is given twice`), as is a question given one option (`Q1 has one option: give
+  at least two (--option "Q1 a: label | consequence", once per option)`). The options given for a question
+  replace its `options` (a key added at the end of the question when it had none; a question asked
+  without them has no `options` key). Then each question asked, revised or given options in this command
+  that has options must recommend one of them by its id, exactly (`Q2's recommendation '(a)' is not one
+  of its options (a, b): recommend by the option's id`). A revision keeps the options unless given again.
+- Then the body: `--body FILE` copies FILE to `DIR/decisions/<id>.html` and sets `body` true, `--no-body`
+  deletes it and sets false, as for a decision (one of the two, else exit 2): the context every question
+  shares, which the page shows once above the first question, as "The context".
 - `question` becomes `N question(s) to answer` or `Every question is answered`.
 - A question asked or revised whose QUESTION part is over 300 characters is warned, never refused,
   once the round is taken, revisions first then new questions, in the order given: `state: <id>'s
-  Q<n> is N characters: ask it in one or two plain sentences with its choices; the evidence goes in
-  its WHY part.`
-- New questions, revisions or reasons log `asked` (`<title>: N new question(s)` / `a question
-  revised` / `reasons added`), important when blocking; on a known grilling they stamp
+  Q<n> is N characters: ask it in one plain sentence, its choices as --option; the evidence goes in
+  --body.` Then, for each question in order, warned, never refused: its reason (asked, revised or given
+  with `--reason` in this command) over 200 characters (`state: <id>'s Q<n> reason is N characters: say
+  the trade-off in one plain sentence (over 200 is hard to read on a phone); the evidence goes in
+  --body.`); the sources in its reason's first sentence (up to the first `.`, `!` or `?` and a space): a
+  path with a line (`store.ts:5-9`), `ADR-0024`, a decision's number (`D27`), each once in the order
+  found (`state: <id>'s Q<n> reason opens with sources (ADR-0024, store.ts:5-9): say the trade-off in
+  plain words first; files, lines, ADRs and decision numbers go after it, or in --body.`); and of its
+  options (asked, revised or given options in this command) the consequences over 160 characters
+  (`state: <id>'s Q<n> consequences over 160 characters: b (162). Say each in one line; the detail goes
+  in --body.`) and more than four (`state: <id>'s Q<n> has 5 options: give 2 to 4; a choice the user
+  makes on its own is a question of its own.`).
+- New questions, revisions, options, reasons or a body log `asked` (`<title>: N new question(s)` / `a
+  question revised` / `options given` / `reasons added` / `the context changed`, the first that
+  applies), important when blocking; on a known grilling they stamp
   `revised`, and new questions or revisions clear a hold. The first round prints the `wait` line.
 - `--done SUMMARY` needs no open question (`Q2, Q3 still open: answer them, drop them, or ask
   what is left`) and closes it decided with resolution `grilling finished`.
@@ -390,7 +414,8 @@ decisions[]   {id, ref, kind, title, question, why, blocking, agent, options[]: 
                recommend, reason, secret, manual, body, page, supersedes, status (open|decided|withdrawn),
                answer, resolution, change, asks (user|manager), opened, revised, closed, step, milestone,
                questions[]? (grill: {id: "q<n>", title, body, recommend, reason, of, status
-               (open|answered|dropped), answer, asked, answered?, dropped?}),
+               (open|answered|dropped), answer, asked, answered?, dropped?,
+               options[]?: {id, label, consequence}}),
                held?, held_at? (the fleet works on the answer first; removed when re-presented or closed),
                refusal? (permission, TypeScript only: {tool, call, rule, cause, root, agent_id})}
 events[]      {at, agent|null, kind, text, important?: true, decision?}   append-only
@@ -1626,6 +1651,8 @@ for `test_corpus.py` and `test_model.py`. The corpus: `ledger-lifecycle`, `decis
 `--fleets` watch and `fleets waiting`), `delivered` (what the hub delivered: the marks, the manager's
 watch and news leaving it out), `emptied` (open-7), `workspaces` (`set --workspaces`, the shared
 fleet's refusal of lanes that meet, the isolated fleet's warning, `show`, validation, a render),
+`question-limit` (a decision's question limit and its warnings), `grill-options` (a grilling question's
+`--option`, its recommendation by id, a grilling's `--body`, the reason's warnings),
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each
 hand-written trace, the same steps with every state command rendering, plus `render-page` (a
 session's scratchpad with its transcript, links, markup and U+2028 in the text, unread chat, a

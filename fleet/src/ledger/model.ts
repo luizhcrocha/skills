@@ -97,6 +97,8 @@ export interface Question {
   asked?: string | null;
   answered?: string | null;
   dropped?: string | null;
+  /** Its choices, when given with `--option`; a question asked before them has none. */
+  options?: Choice[];
 }
 
 /** The tool call the harness refused, which the user may let through once (a decision of kind `permission`). */
@@ -579,10 +581,9 @@ function readRoadblock(object: JsonObject): Fields | Roadblock {
 
 const CHOICE_KEYS = ["id", "label", "consequence"] as const;
 
-function readChoice(decision: string): (object: JsonObject) => Fields | Choice {
+function readChoice(decision: string, message = `decision ${decision} has an option without id, label and consequence`): (object: JsonObject) => Fields | Choice {
   return (object) => {
     const f = new Fields(object, `decision ${decision}`);
-    const message = `decision ${decision} has an option without id, label and consequence`;
 
     const row: Choice = {
       id: f.str("id", message),
@@ -609,6 +610,7 @@ export const QUESTION_KEYS = [
   "asked",
   "answered",
   "dropped",
+  "options",
 ] as const;
 
 function readQuestion(decision: string): (object: JsonObject) => Fields | Question {
@@ -629,6 +631,7 @@ function readQuestion(decision: string): (object: JsonObject) => Fields | Questi
       asked: f.nullStr("asked"),
       answered: f.nullStr("answered"),
       dropped: f.nullStr("dropped"),
+      options: f.rows("options", readChoice(decision, `grilling ${decision} has a question's option without id, label and consequence`)),
     });
 
     return f.done(row, QUESTION_KEYS);
@@ -884,7 +887,7 @@ function encodeDecision(d: Decision): Encoded {
     {
       ...d,
       options: d.options?.map((o) => encodeRow(o, { ...o })),
-      questions: d.questions?.map((q) => encodeRow(q, { ...q })),
+      questions: d.questions?.map((q) => encodeRow(q, { ...q, options: q.options?.map((o) => encodeRow(o, { ...o })) })),
       refusal: d.refusal === undefined || d.refusal === null ? d.refusal : encodeRow(d.refusal, { ...d.refusal }),
     },
   );

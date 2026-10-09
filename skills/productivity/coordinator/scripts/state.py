@@ -23,6 +23,7 @@
     state.py DIR keep ID [TEXT | --drop REASON]
     state.py DIR link ID --url U --title T [--kind dev|page] [--decision D] [--agent A] [--note N] | --drop REASON
     state.py DIR grill ID [--title T --why W] [--ask "TITLE | QUESTION | RECOMMENDATION | WHY"]... [--of Q]
+                          [--option "Q1 a: label | consequence"]... [--body FILE | --no-body]
                           [--answer "Q3: ..."]... [--drop "Q4: why"]... [--revise "Q3: T | Q | R | W"]... [--reason "Q3: why"]... [--done SUMMARY]
     state.py DIR step next --milestone M --title T   (records the next free step id and prints it)
     state.py DIR show
@@ -961,6 +962,51 @@ def _asked(text: str) -> tuple[str, str, str, str]:
     return parts[0], parts[1], parts[2], parts[3]
 
 
+GRILL_REASON_MAX = 200  # characters: a grilling question's reason over this is warned about, one plain sentence
+GRILL_OPTIONS_MAX = 4  # a grilling question with more options than this is warned about
+# What reads as a source, not a reason: a path with a line (store.ts:5-9), an ADR, a decision's number (D27).
+SOURCE_RE = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9_./-]+\.[A-Za-z0-9]+:\d+(?:-\d+)?|ADR[- ]?\d+|D\d+)(?![A-Za-z0-9_])")
+
+
+def first_sentence(text: str) -> str:
+    """`text` up to the first sentence end (., ! or ? and a space)."""
+    return re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0]
+
+
+def _option(text: str) -> tuple[str, dict]:
+    """ "Q1 a: label | consequence" as ("q1", {"id", "label", "consequence"})."""
+    head, colon, rest = text.partition(":")
+    m = re.fullmatch(r"\s*([Qq]\d+)\s+(\S+)\s*", head)
+    label, bar, consequence = rest.partition("|")
+    label, consequence = label.strip(), consequence.strip()
+    if not (colon and m and bar and label and consequence and decisions.ID.fullmatch(m.group(2))):
+        fail(f"--option reads \"Q1 a: label | consequence\", got {text!r}")
+    return m.group(1).lower(), {"id": m.group(2), "label": label, "consequence": consequence}
+
+
+def grill_warnings(d: dict, q: dict, reason: bool, options: bool) -> list[str]:
+    """What the CLI says, without refusing, about a grilling question hard to read: its reason (when this
+    command wrote it) long or opening with a source, its options (when written) long or too many."""
+    out, qid, why = [], q["id"].upper(), q.get("reason") or ""
+    if reason and len(why) > GRILL_REASON_MAX:
+        out.append(f"state: {d['id']}'s {qid} reason is {len(why)} characters: say the trade-off in one plain sentence "
+                   f"(over {GRILL_REASON_MAX} is hard to read on a phone); the evidence goes in --body.")
+    found = list(dict.fromkeys(SOURCE_RE.findall(first_sentence(why)))) if reason else []
+    if found:
+        out.append(f"state: {d['id']}'s {qid} reason opens with sources ({', '.join(found)}): say the trade-off in plain "
+                   "words first; files, lines, ADRs and decision numbers go after it, or in --body.")
+    opts = (q.get("options") or []) if options else []
+    long = [o for o in opts if len(o["consequence"]) > CONSEQUENCE_MAX]
+    if long:
+        said = ", ".join(f"{o['id']} ({len(o['consequence'])})" for o in long)
+        out.append(f"state: {d['id']}'s {qid} consequences over {CONSEQUENCE_MAX} characters: {said}. Say each in one line; "
+                   "the detail goes in --body.")
+    if len(opts) > GRILL_OPTIONS_MAX:
+        out.append(f"state: {d['id']}'s {qid} has {len(opts)} options: give 2 to {GRILL_OPTIONS_MAX}; a choice the user "
+                   "makes on its own is a question of its own.")
+    return out
+
+
 def cmd_grill(state, args):
     """A grilling: a round of numbered questions, each with its recommendation, answered one by one on
     the page. Questions are added round by round (follow-ups under what they follow), answered as
@@ -1023,20 +1069,47 @@ def cmd_grill(state, args):
         new.append(q)
         if len(body) > QUESTION_NEAR:
             long_asks.append((q["id"], len(body)))
+    byid = {q["id"]: q for q in qs}  # the new questions too
+    given_options: dict[str, list[dict]] = {}
+    for text in args.option or []:
+        qid, option = _option(text)
+        if qid not in byid:
+            fail(f"--option {qid.upper()}: no question {qid.upper()} in {d['id']}")
+        if byid[qid]["status"] != "open":
+            fail(f"--option {qid.upper()}: {qid.upper()} is {byid[qid]['status']}; options are for an open question")
+        if find(given_options.setdefault(qid, []), option["id"]):
+            fail(f"{qid.upper()}'s option '{option['id']}' is given twice")
+        given_options[qid].append(option)
+    for qid, options in given_options.items():
+        if len(options) < 2:
+            fail(f"{qid.upper()} has one option: give at least two (--option \"{qid.upper()} a: label | consequence\", once per option)")
+        byid[qid]["options"] = options
+    asked_now = {q["id"] for q in new} | {_q(t, "--revise")[0] for t in args.revise or []}
+    for q in qs:
+        if (q["id"] in asked_now or q["id"] in given_options) and q.get("options") and not find(q["options"], q.get("recommend") or ""):
+            fail(f"{q['id'].upper()}'s recommendation {q.get('recommend')!r} is not one of its options "
+                 f"({', '.join(o['id'] for o in q['options'])}): recommend by the option's id")
+    set_body(Path(args.dir).resolve(), d, args)
     open_ = [q for q in qs if q["status"] == "open"]
     d["question"] = f"{len(open_)} question{'s' if len(open_) != 1 else ''} to answer" if open_ else "Every question is answered"
     for qid, n in long_asks:
-        sys.stderr.write(f"state: {d['id']}'s {qid.upper()} is {n} characters: ask it in one or two plain sentences with its "
-                         "choices; the evidence goes in its WHY part.\n")
+        sys.stderr.write(f"state: {d['id']}'s {qid.upper()} is {n} characters: ask it in one plain sentence, its choices "
+                         "as --option; the evidence goes in --body.\n")
+    reasoned = asked_now | {_q(t, "--reason")[0] for t in args.reason or []}
+    for q in qs:
+        for warning in grill_warnings(d, q, q["id"] in reasoned, q["id"] in asked_now or q["id"] in given_options):
+            sys.stderr.write(warning + "\n")
     if new and created:
         print(f"asked {d['id']}. Arm its answers' wake now, as a background command (run_in_background): "
               f"`{FLEET} chat {Path(args.dir).resolve()} wait {d['id']}`; arm it again after each round.")
-    if new or args.revise or args.reason:
+    context = bool(args.body or args.no_body)
+    if new or args.revise or args.reason or given_options or context:
         if not created:
             d["revised"] = now()  # the page shows the round as new since the viewer last looked
         if new or args.revise:
             unheld(d)  # a new round re-presents it
-        words = f"{len(new)} new question{'s' if len(new) != 1 else ''}" if new else "a question revised" if args.revise else "reasons added"
+        words = f"{len(new)} new question{'s' if len(new) != 1 else ''}" if new else "a question revised" if args.revise else \
+            "options given" if given_options else "reasons added" if args.reason else "the context changed"
         log(state, "asked", f"{d['title']}: {words}", d["agent"], d["blocking"], d["id"])
     if args.done is not None:
         if open_:
@@ -1074,6 +1147,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
   keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace
   link ID --url U --title T [--kind dev|page] [--decision D] [--note N] | --drop R   a dev server or a purpose-built page
   grill ID --title T --ask "TITLE | QUESTION | RECOMMENDATION | WHY"... [--of Q]   a grilling round, answered on the page
+        [--option "Q1 a: label | consequence"]... (RECOMMENDATION is then an option's id) [--body FILE | --no-body]
         [--answer "Q3: ..."] [--drop "Q4: why"] [--revise "Q3: T | Q | R | W"] [--reason "Q3: why"] [--done SUMMARY]
   step next --milestone M --title T   the next free step id, printed
   show
@@ -1189,6 +1263,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--of", metavar="Q", help="the questions asked here follow up on this one")
     s.add_argument("--answer", action="append", metavar='"Q3: ANSWER"'); s.add_argument("--drop", action="append", metavar='"Q4: WHY"')
     s.add_argument("--revise", action="append", metavar='"Q3: TITLE | QUESTION | RECOMMENDATION | WHY"')
+    s.add_argument("--option", action="append", metavar='"Q1 a: label | consequence"',
+                   help="an option of a question asked or open, once per option; given for a question, replaces its options")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--body", metavar="FILE", help="an HTML fragment with the context every question shares, copied to DIR/decisions/ID.html")
+    g.add_argument("--no-body", action="store_true")
     s.add_argument("--blocking", action="store_true"); s.add_argument("--agent")
     s.add_argument("--step", help="the step of the plan it came from"); s.add_argument("--milestone")
     s.add_argument("--done", metavar="SUMMARY", help="every question is settled: what was agreed")

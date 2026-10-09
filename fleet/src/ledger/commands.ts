@@ -1417,6 +1417,78 @@ function asked(text: string): Effect.Effect<readonly [string, string, string, st
   return Effect.succeed([title, body, recommend, why] as const);
 }
 
+/** A grilling question's reason over this, in characters, is warned about: one plain sentence. */
+const GRILL_REASON_MAX = 200;
+
+/** A grilling question with more options than this is warned about. */
+const GRILL_OPTIONS_MAX = 4;
+
+/** What reads as a source, not a reason: a path with a line (store.ts:5-9), an ADR, a decision's number (D27). */
+const SOURCE_RE = /(?<![A-Za-z0-9_])(?:[A-Za-z0-9_./-]+\.[A-Za-z0-9]+:\d+(?:-\d+)?|ADR[- ]?\d+|D\d+)(?![A-Za-z0-9_])/gu;
+
+/** `text` up to the first sentence end (., ! or ? and a space). */
+function firstSentence(text: string): string {
+  return text.split(/(?<=[.!?])\s/u)[0] ?? "";
+}
+
+/** "Q1 a: label | consequence" as ["q1", the option]. */
+function optionOf(text: string): Effect.Effect<readonly [string, Choice], Refusal> {
+  const colon = text.indexOf(":");
+  const head = /^\s*([Qq]\d+)\s+(\S+)\s*$/u.exec(colon >= 0 ? text.slice(0, colon) : "");
+  const rest = colon >= 0 ? text.slice(colon + 1) : "";
+  const bar = rest.indexOf("|");
+  const label = (bar >= 0 ? rest.slice(0, bar) : rest).trim();
+  const consequence = bar >= 0 ? rest.slice(bar + 1).trim() : "";
+  const key = head?.[2] ?? "";
+
+  if (head === null || bar < 0 || label === "" || consequence === "" || !ID.test(key)) {
+    return refuse(`--option reads "Q1 a: label | consequence", got ${pyStr(text)}`);
+  }
+
+  return Effect.succeed([(head[1] ?? "").toLowerCase(), { id: key, label, consequence }] as const);
+}
+
+/** What the CLI says, without refusing, about a grilling question hard to read: its reason (when this command
+ * wrote it) long or opening with a source, its options (when written) long or too many. */
+function grillWarnings(d: Decision, q: Question, reason: boolean, options: boolean): string[] {
+  const out: string[] = [];
+  const qid = q.id.toUpperCase();
+  const why = q.reason ?? "";
+
+  if (reason && chars(why) > GRILL_REASON_MAX) {
+    out.push(
+      `state: ${d.id}'s ${qid} reason is ${String(chars(why))} characters: say the trade-off in one plain sentence ` +
+        `(over ${String(GRILL_REASON_MAX)} is hard to read on a phone); the evidence goes in --body.`,
+    );
+  }
+
+  const found = reason ? [...new Set([...firstSentence(why).matchAll(SOURCE_RE)].map((m) => m[0]))] : [];
+
+  if (found.length > 0) {
+    out.push(
+      `state: ${d.id}'s ${qid} reason opens with sources (${found.join(", ")}): say the trade-off in plain ` +
+        "words first; files, lines, ADRs and decision numbers go after it, or in --body.",
+    );
+  }
+
+  const opts = options ? (q.options ?? []) : [];
+  const long = opts.filter((o) => chars(o.consequence) > CONSEQUENCE_MAX);
+
+  if (long.length > 0) {
+    const said = long.map((o) => `${o.id} (${String(chars(o.consequence))})`).join(", ");
+    out.push(`state: ${d.id}'s ${qid} consequences over ${String(CONSEQUENCE_MAX)} characters: ${said}. Say each in one line; the detail goes in --body.`);
+  }
+
+  if (opts.length > GRILL_OPTIONS_MAX) {
+    out.push(
+      `state: ${d.id}'s ${qid} has ${String(opts.length)} options: give 2 to ${String(GRILL_OPTIONS_MAX)}; a choice the user ` +
+        "makes on its own is a question of its own.",
+    );
+  }
+
+  return out;
+}
+
 /** `grill`: a round of numbered questions, answered one by one on the page, until none is open. */
 export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
   return Effect.gen(function* () {
@@ -1509,8 +1581,11 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
     /* A question asked or revised over QUESTION_NEAR, as [Q id, characters]: warned once the round is taken. */
     const longAsks: [string, number][] = [];
 
+    const revisedIds: string[] = [];
+
     for (const text of revisions) {
       const [qid, rest] = yield* questionOf(text, "--revise");
+      revisedIds.push(qid);
       const q = yield* lookup(qid);
       const [title, body, recommend, why] = yield* asked(rest);
 
@@ -1520,8 +1595,11 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
 
     const reasons = args.list("reason") ?? [];
 
+    const reasonedIds: string[] = [];
+
     for (const text of reasons) {
       const [qid, why] = yield* questionOf(text, "--reason");
+      reasonedIds.push(qid);
       const q = byId.get(qid);
 
       if (q === undefined || why === "") {
@@ -1554,11 +1632,58 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
       if (chars(body) > QUESTION_NEAR) longAsks.push([q.id, chars(body)]);
     }
 
+    for (const q of added) byId.set(q.id, q);
+    const givenOptions = new Map<string, Choice[]>();
+
+    for (const text of args.list("option") ?? []) {
+      const [qid, option] = yield* optionOf(text);
+      const q = byId.get(qid);
+
+      if (q === undefined) return yield* refuse(`--option ${qid.toUpperCase()}: no question ${qid.toUpperCase()} in ${row.id}`);
+
+      if (q.status !== "open") return yield* refuse(`--option ${qid.toUpperCase()}: ${qid.toUpperCase()} is ${q.status}; options are for an open question`);
+      const list = givenOptions.get(qid) ?? [];
+
+      if (list.some((o) => o.id === option.id)) return yield* refuse(`${qid.toUpperCase()}'s option '${option.id}' is given twice`);
+      list.push(option);
+      givenOptions.set(qid, list);
+    }
+
+    for (const [qid, options] of givenOptions) {
+      if (options.length < 2) {
+        return yield* refuse(`${qid.toUpperCase()} has one option: give at least two (--option "${qid.toUpperCase()} a: label | consequence", once per option)`);
+      }
+
+      const q = byId.get(qid);
+
+      if (q !== undefined) q.options = options;
+    }
+
+    const askedNow = new Set([...added.map((q) => q.id), ...revisedIds]);
+
+    for (const q of qs) {
+      const options = q.options ?? [];
+
+      if ((askedNow.has(q.id) || givenOptions.has(q.id)) && options.length > 0 && !options.some((o) => o.id === (q.recommend ?? ""))) {
+        return yield* refuse(
+          `${q.id.toUpperCase()}'s recommendation ${pyStr(q.recommend ?? "None")} is not one of its options ` +
+            `(${options.map((o) => o.id).join(", ")}): recommend by the option's id`,
+        );
+      }
+    }
+
+    yield* setBody(run, row);
     const open = qs.filter((q) => q.status === "open");
     row.question = open.length > 0 ? `${open.length} question${open.length === 1 ? "" : "s"} to answer` : "Every question is answered";
 
     for (const [qid, n] of longAsks) {
-      run.warn(`state: ${row.id}'s ${qid.toUpperCase()} is ${String(n)} characters: ask it in one or two plain sentences with its choices; the evidence goes in its WHY part.`);
+      run.warn(`state: ${row.id}'s ${qid.toUpperCase()} is ${String(n)} characters: ask it in one plain sentence, its choices as --option; the evidence goes in --body.`);
+    }
+
+    const reasoned = new Set([...askedNow, ...reasonedIds]);
+
+    for (const q of qs) {
+      for (const warning of grillWarnings(row, q, reasoned.has(q.id), askedNow.has(q.id) || givenOptions.has(q.id))) run.warn(warning);
     }
 
     if (added.length > 0 && created) {
@@ -1568,7 +1693,9 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
       );
     }
 
-    if (added.length > 0 || revisions.length > 0 || reasons.length > 0) {
+    const context = given(args.str("body")) || args.flag("no_body");
+
+    if (added.length > 0 || revisions.length > 0 || reasons.length > 0 || givenOptions.size > 0 || context) {
       if (!created) row.revised = stamp(run);
 
       // A new round re-presents it.
@@ -1579,7 +1706,11 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
           ? `${added.length} new question${added.length === 1 ? "" : "s"}`
           : revisions.length > 0
             ? "a question revised"
-            : "reasons added";
+            : givenOptions.size > 0
+              ? "options given"
+              : reasons.length > 0
+                ? "reasons added"
+                : "the context changed";
 
       log(run, ledger, { kind: "asked", text: `${row.title ?? "None"}: ${words}`, agent: row.agent ?? null, important: row.blocking === true, decision: row.id });
     }

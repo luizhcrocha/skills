@@ -185,6 +185,11 @@ def validate(state: dict, fail) -> None:
             if not isinstance(qs, list) or not all(isinstance(q, dict) and isinstance(q.get("id"), str) and isinstance(q.get("title"), str)
                                                     and q.get("status") in QUESTION_STATUSES for q in qs):
                 fail(f"grilling {d['id']} has a question without id, title, or a status in {QUESTION_STATUSES}")
+            for q in qs:
+                options = q.get("options", [])
+                if not isinstance(options, list) or not all(isinstance(o, dict) and all(isinstance(o.get(k), str) for k in ("id", "label", "consequence"))
+                                                            for o in options):
+                    fail(f"grilling {d['id']} has a question's option without id, label and consequence")
         ids.add(d["id"])
         if d.setdefault("asks", "user") not in ASKS:
             fail(f"decision {d['id']} asks '{d['asks']}', not one of {ASKS}")

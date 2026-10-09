@@ -225,6 +225,30 @@ class ReadableTest(Fleet):
         r = self.run_cli("grill", "g1", "--revise", "Q1: t | short now? | r | w")
         self.assertNotIn("characters", r.stderr)
 
+    def test_a_grilling_question_takes_options_and_recommends_one_by_id(self):
+        self.ok("grill", "g1", "--title", "T", "--ask", "t | Where? | a | One store keeps it simple.",
+                "--option", "Q1 a: Postgres | one place to undo", "--option", "Q1 b: Neo4j | quicker to query")
+        q = self.item("g1")["questions"][0]
+        self.assertEqual(q["options"], [{"id": "a", "label": "Postgres", "consequence": "one place to undo"},
+                                        {"id": "b", "label": "Neo4j", "consequence": "quicker to query"}])
+        err = self.refused("grill", "g1", "--revise", "Q1: t | Where? | (a) | w")
+        self.assertIn("Q1's recommendation '(a)' is not one of its options (a, b)", err)
+        self.ok("grill", "g1", "--ask", "t2 | Legacy? (a) yes; (b) no | (a) | w")
+        self.assertNotIn("options", self.item("g1")["questions"][1])
+
+    def test_a_grilling_takes_a_body_and_warns_on_a_reason_for_engineers(self):
+        body = self.root / "context.html"
+        body.write_text("<p>ctx</p>")
+        r = self.run_cli("grill", "g1", "--title", "T", "--body", str(body),
+                         "--ask", "t | q? | r | The store holds it (store.ts:5-9), per ADR-0020. " + "w" * 200)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("g1's Q1 reason is 249 characters", r.stderr)
+        self.assertIn("g1's Q1 reason opens with sources (store.ts:5-9, ADR-0020)", r.stderr)
+        self.assertTrue(self.item("g1")["body"])
+        self.assertTrue((self.root / "decisions" / "g1.html").exists())
+        self.ok("grill", "g1", "--no-body")
+        self.assertEqual(self.state()["events"][-1]["text"], "T: the context changed")
+
     @unittest.skipUnless(shutil.which("nu"), "needs nu on PATH")
     def test_a_nu_block_that_does_not_parse_in_nushell_is_refused(self):
         base = ["--kind", "action", "--title", "T", "--question", "q", "--why", "w"]

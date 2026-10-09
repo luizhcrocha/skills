@@ -275,6 +275,32 @@ describe("readable", () => {
     expect(r.stderr).not.toContain("characters");
   });
 
+  test("a grilling question takes options and recommends one by id", () => {
+    ok("grill", "g1", "--title", "T", "--ask", "t | Where? | a | One store keeps it simple.", "--option", "Q1 a: Postgres | one place to undo", "--option", "Q1 b: Neo4j | quicker to query");
+    const questions = (asArray(item("g1")["questions"]) ?? []).map((q) => asObject(q) ?? {});
+    expect(questions[0]?.["options"]).toEqual([
+      { id: "a", label: "Postgres", consequence: "one place to undo" },
+      { id: "b", label: "Neo4j", consequence: "quicker to query" },
+    ]);
+    expect(refused("grill", "g1", "--revise", "Q1: t | Where? | (a) | w")).toContain("Q1's recommendation '(a)' is not one of its options (a, b)");
+    ok("grill", "g1", "--ask", "t2 | Legacy? (a) yes; (b) no | (a) | w");
+    const legacy = asObject((asArray(item("g1")["questions"]) ?? [])[1]) ?? {};
+    expect("options" in legacy).toBe(false);
+  });
+
+  test("a grilling takes a body and warns on a reason written for engineers", () => {
+    const body = join(root, "context.html");
+    writeFileSync(body, "<p>ctx</p>");
+    const r = run("grill", "g1", "--title", "T", "--body", body, "--ask", "t | q? | r | The store holds it (store.ts:5-9), per ADR-0020. " + "w".repeat(200));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toContain("g1's Q1 reason is 249 characters");
+    expect(r.stderr).toContain("g1's Q1 reason opens with sources (store.ts:5-9, ADR-0020)");
+    expect(item("g1")["body"]).toBe(true);
+    expect(existsSync(join(root, "decisions", "g1.html"))).toBe(true);
+    ok("grill", "g1", "--no-body");
+    expect(lastEvent()["text"]).toBe("T: the context changed");
+  });
+
   test.skipIf(!hasNu)("a nu block that does not parse in nushell is refused", () => {
     const base = ["--kind", "action", "--title", "T", "--question", "q", "--why", "w"];
     expect(refused("decision", "a1", ...base, "--manual", "Run:\n```nu\nfor f in *; do echo $f; done\n```")).toContain(
