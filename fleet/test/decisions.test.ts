@@ -285,6 +285,16 @@ describe("readable", () => {
     expect(r.stderr).toContain("d1's why is 201 characters");
   });
 
+  test("an open grilling's title and why are revised with a log", () => {
+    ok("grill", "g1", "--title", "Is the graph a projection, given the ontology's loop?", "--ask", "t | q? | r | w");
+    ok("grill", "g1", "--title", "Where the legal terms live", "--log", "the title in plain words");
+    expect([item("g1")["title"], item("g1")["change"]]).toEqual(["Where the legal terms live", "the title in plain words"]);
+    expect(lastEvent()["text"]).toBe("Where the legal terms live: the title in plain words");
+    ok("grill", "g1", "--why", "Nothing changes until you answer.");
+    expect(lastEvent()["text"]).toBe("Where the legal terms live: the why changed");
+    expect(refused("grill", "g1", "--title", "")).toContain("a grilling keeps a title");
+  });
+
   test("a grilling question takes options and recommends one by id", () => {
     ok("grill", "g1", "--title", "T", "--ask", "t | Where? | a | One store keeps it simple.", "--option", "Q1 a: Postgres | one place to undo", "--option", "Q1 b: Neo4j | quicker to query");
     const questions = (asArray(item("g1")["questions"]) ?? []).map((q) => asObject(q) ?? {});

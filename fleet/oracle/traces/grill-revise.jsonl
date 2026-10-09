@@ -1,0 +1,12 @@
+{"trace": 1, "name": "grill-revise", "about": "An open grilling's own title, why and context are revised like a decision's: `grill ID --title T`, `--why W`, `--body FILE` / `--no-body`, with `--log` saying what changed (stored as `change`, and the event's text); each stamps `revised`. The same value given again moves nothing; an empty --title is refused; a closed grilling is refused."}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"fixture": "write", "path": "$W/context.html", "content": "<h2>In short</h2><p>The terms stay in Postgres.</p>\n"}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--title", "Database and graph: is the graph a projection, given the ontology's loop?", "--ask", "t | q? | r | w", "--no-render"], "clock": "2026-01-05T09:05:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--title", "Where the legal terms and the graph live", "--log", "the title in plain words", "--no-render"], "clock": "2026-01-05T09:10:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--title", "Where the legal terms and the graph live", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--why", "Nothing changes in the graph until you answer.", "--body", "$W/context.html", "--no-render"], "clock": "2026-01-05T09:15:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--title", " ", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--why", "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "grill", "G1", "--answer", "Q1: ok", "--done", "agreed", "--no-render"], "clock": "2026-01-05T09:20:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "grill", "g1", "--title", "Late", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "show"]}

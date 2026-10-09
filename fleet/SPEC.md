@@ -306,10 +306,14 @@ Checked in this order:
    reason and when (held, held_at)`), and only on an open one (`decision X is <status> and still
    held`); no default fills them.
 
-**grill** `ID [--title T --why W] [--ask "TITLE | QUESTION | RECOMMENDATION | WHY"]... [--of Q] [--option "Q1 a: label | consequence"]... [--body FILE | --no-body] [--answer "Q3: ..."]... [--drop "Q4: why"]... [--revise "Q3: T | Q | R | W"]... [--reason "Q3: why"]... [--blocking] [--agent A] [--step S] [--milestone M] [--done SUMMARY]`
+**grill** `ID [--title T --why W --log TEXT] [--ask "TITLE | QUESTION | RECOMMENDATION | WHY"]... [--of Q] [--option "Q1 a: label | consequence"]... [--body FILE | --no-body] [--answer "Q3: ..."]... [--drop "Q4: why"]... [--revise "Q3: T | Q | R | W"]... [--reason "Q3: why"]... [--blocking] [--agent A] [--step S] [--milestone M] [--done SUMMARY]`
 - A known ID that is not a grilling: `X is a <kind>, not a grilling`. A closed one is refused.
+- `--why` over 400 characters is refused as a decision's is, new or known.
 - New: needs `--title` and at least one `--ask`; a decision row of kind grill, `question` "",
   `page` true, `questions` [].
+- Known and open: `--title` and `--why` revise the grilling itself, each only when its value moves
+  (an empty `--why` clears it; an empty or blank `--title` is refused: `--title is empty: a grilling
+  keeps a title`), checked before the questions.
 - Applied in order: answers (`status` answered, `answered` = now), drops (dropped, `answer` null,
   `dropped` = reason), revisions (back to open with new words, `asked` = now), reasons, then new
   questions `q<n+1>` (`of` = `--of`, lower-cased; `--of` must name a question). A `Q<n>` that
@@ -344,10 +348,12 @@ Checked in this order:
   (`state: <id>'s Q<n> consequences over 160 characters: b (162). Say each in one line; the detail goes
   in --body.`) and more than four (`state: <id>'s Q<n> has 5 options: give 2 to 4; a choice the user
   makes on its own is a question of its own.`).
-- New questions, revisions, options, reasons or a body log `asked` (`<title>: N new question(s)` / `a
-  question revised` / `options given` / `reasons added` / `the context changed`, the first that
-  applies), important when blocking; on a known grilling they stamp
-  `revised`, and new questions or revisions clear a hold. The first round prints the `wait` line.
+- New questions, revisions, options, reasons, a body, or a moved title or why log `asked`
+  (`<title>: N new question(s)` / `a question revised` / `options given` / `reasons added`, else what
+  of the grilling moved, `the title changed, the why changed, the context changed` as applies;
+  `<title>: <--log>` instead when `--log` is given), important when blocking; on a known grilling
+  they stamp `revised` and set `change` to `--log` (null without it), and new questions or revisions
+  clear a hold. The first round prints the `wait` line.
 - `--done SUMMARY` needs no open question (`Q2, Q3 still open: answer them, drop them, or ask
   what is left`) and closes it decided with resolution `grilling finished`.
 - **Answered, waiting to be recorded**: an open grilling with no question left open (every one
@@ -1663,6 +1669,7 @@ fleet's refusal of lanes that meet, the isolated fleet's warning, `show`, valida
 `question-limit` (a decision's question limit and its warnings), `grill-options` (a grilling question's
 `--option`, its recommendation by id, a grilling's `--body`, the reason's warnings),
 `why-limit` (a why over 400 refused, over 200 warned, a worker's id and the internal names warned),
+`grill-revise` (an open grilling's title, why and context revised with `--log`),
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each
 hand-written trace, the same steps with every state command rendering, plus `render-page` (a
 session's scratchpad with its transcript, links, markup and U+2028 in the text, unread chat, a

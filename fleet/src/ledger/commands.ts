@@ -1536,7 +1536,25 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
     if (d !== undefined && d.kind !== "grill") return yield* refuse(`${id} is a ${d.kind}, not a grilling`);
 
     if (d !== undefined && d.status !== "open") return yield* refuse(closedBecause(d));
+    yield* checkWhy(args.str("why"), "grill");
     const asks = args.list("ask") ?? [];
+    /* What of the grilling itself this command moved: its title, its why. */
+    const renamed: string[] = [];
+
+    if (d !== undefined) {
+      const title = args.str("title");
+
+      if (title !== undefined && title.trim() === "") return yield* refuse("--title is empty: a grilling keeps a title");
+
+      for (const key of ["title", "why"] as const) {
+        const value = args.str(key);
+
+        if (value !== undefined && value !== (d[key] ?? null)) {
+          d[key] = value === "" ? null : value;
+          renamed.push(key);
+        }
+      }
+    }
 
     if (d === undefined) {
       if (!ID.test(id)) return yield* refuse(`grilling id ${pyStr(id)} should be letters, digits, '_', '.', or '-'`);
@@ -1544,8 +1562,6 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
       if (!given(args.str("title")) || asks.length === 0) {
         return yield* refuse("a new grilling needs --title and its first round (--ask, once per question)");
       }
-
-      yield* checkWhy(args.str("why"), "grill");
 
       const agent = args.str("agent");
 
@@ -1733,8 +1749,11 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
 
     const context = given(args.str("body")) || args.flag("no_body");
 
-    if (added.length > 0 || revisions.length > 0 || reasons.length > 0 || givenOptions.size > 0 || context) {
-      if (!created) row.revised = stamp(run);
+    if (added.length > 0 || revisions.length > 0 || reasons.length > 0 || givenOptions.size > 0 || context || renamed.length > 0) {
+      if (!created) {
+        row.revised = stamp(run);
+        row.change = args.str("log") || null;
+      }
 
       // A new round re-presents it.
       if (added.length > 0 || revisions.length > 0) unheld(row);
@@ -1748,9 +1767,9 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
               ? "options given"
               : reasons.length > 0
                 ? "reasons added"
-                : "the context changed";
+                : [...renamed, ...(context ? ["context"] : [])].map((k) => `the ${k} changed`).join(", ");
 
-      log(run, ledger, { kind: "asked", text: `${row.title ?? "None"}: ${words}`, agent: row.agent ?? null, important: row.blocking === true, decision: row.id });
+      log(run, ledger, { kind: "asked", text: `${row.title ?? "None"}: ${args.str("log") || words}`, agent: row.agent ?? null, important: row.blocking === true, decision: row.id });
     }
 
     const done = args.str("done");

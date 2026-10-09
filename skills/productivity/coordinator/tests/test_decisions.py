@@ -235,6 +235,16 @@ class ReadableTest(Fleet):
         self.assertIn("d1 names workers by id (b333)", r.stderr)
         self.assertIn("d1's why is 201 characters", r.stderr)
 
+    def test_an_open_grillings_title_and_why_are_revised_with_a_log(self):
+        self.ok("grill", "g1", "--title", "Is the graph a projection, given the ontology's loop?", "--ask", "t | q? | r | w")
+        self.ok("grill", "g1", "--title", "Where the legal terms live", "--log", "the title in plain words")
+        g = self.item("g1")
+        self.assertEqual((g["title"], g["change"]), ("Where the legal terms live", "the title in plain words"))
+        self.assertEqual(self.state()["events"][-1]["text"], "Where the legal terms live: the title in plain words")
+        self.ok("grill", "g1", "--why", "Nothing changes until you answer.")
+        self.assertEqual(self.state()["events"][-1]["text"], "Where the legal terms live: the why changed")
+        self.assertIn("a grilling keeps a title", self.refused("grill", "g1", "--title", ""))
+
     def test_a_grilling_question_takes_options_and_recommends_one_by_id(self):
         self.ok("grill", "g1", "--title", "T", "--ask", "t | Where? | a | One store keeps it simple.",
                 "--option", "Q1 a: Postgres | one place to undo", "--option", "Q1 b: Neo4j | quicker to query")

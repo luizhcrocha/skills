@@ -169,6 +169,7 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
       opt.value("--step"),
       opt.value("--milestone"),
       opt.value("--done", { metavar: "SUMMARY" }),
+      opt.value("--log"),
     ],
     exclusive: [["body", "no_body"]],
   },

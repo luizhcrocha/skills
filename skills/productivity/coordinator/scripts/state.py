@@ -22,7 +22,7 @@
     state.py DIR park [--agent A]... REASON
     state.py DIR keep ID [TEXT | --drop REASON]
     state.py DIR link ID --url U --title T [--kind dev|page] [--decision D] [--agent A] [--note N] | --drop REASON
-    state.py DIR grill ID [--title T --why W] [--ask "TITLE | QUESTION | RECOMMENDATION | WHY"]... [--of Q]
+    state.py DIR grill ID [--title T --why W --log TEXT] [--ask "TITLE | QUESTION | RECOMMENDATION | WHY"]... [--of Q]
                           [--option "Q1 a: label | consequence"]... [--body FILE | --no-body]
                           [--answer "Q3: ..."]... [--drop "Q4: why"]... [--revise "Q3: T | Q | R | W"]... [--reason "Q3: why"]... [--done SUMMARY]
     state.py DIR step next --milestone M --title T   (records the next free step id and prints it)
@@ -1049,12 +1049,21 @@ def cmd_grill(state, args):
         fail(f"{args.id} is a {d['kind']}, not a grilling")
     if d is not None and d["status"] != "open":
         fail(decisions.closed_because(d))
+    check_why(args.why, "grill")
+    renamed = []  # what of the grilling itself this command moved: its title, its why
+    if d is not None:
+        if args.title is not None and not args.title.strip():
+            fail("--title is empty: a grilling keeps a title")
+        for key in ("title", "why"):
+            value = getattr(args, key)
+            if value is not None and value != d.get(key):
+                d[key] = value or None
+                renamed.append(key)
     if d is None:
         if not decisions.ID.fullmatch(args.id):
             fail(f"grilling id {args.id!r} should be letters, digits, '_', '.', or '-'")
         if not args.title or not args.ask:
             fail("a new grilling needs --title and its first round (--ask, once per question)")
-        check_why(args.why, "grill")
         d = {"id": args.id, "kind": "grill", "title": args.title, "question": "", "why": args.why, "blocking": bool(args.blocking),
              "agent": args.agent or None, "options": [], "recommend": None, "reason": None, "secret": None, "manual": None,
              "body": False, "page": True, "supersedes": None, "status": "open", "answer": None, "resolution": None,
@@ -1136,14 +1145,16 @@ def cmd_grill(state, args):
         print(f"asked {d['id']}. Arm its answers' wake now, as a background command (run_in_background): "
               f"`{FLEET} chat {Path(args.dir).resolve()} wait {d['id']}`; arm it again after each round.")
     context = bool(args.body or args.no_body)
-    if new or args.revise or args.reason or given_options or context:
+    if new or args.revise or args.reason or given_options or context or renamed:
         if not created:
             d["revised"] = now()  # the page shows the round as new since the viewer last looked
+            d["change"] = args.log or None
         if new or args.revise:
             unheld(d)  # a new round re-presents it
+        moved = ", ".join(f"the {k} changed" for k in (*renamed, *(["context"] if context else [])))
         words = f"{len(new)} new question{'s' if len(new) != 1 else ''}" if new else "a question revised" if args.revise else \
-            "options given" if given_options else "reasons added" if args.reason else "the context changed"
-        log(state, "asked", f"{d['title']}: {words}", d["agent"], d["blocking"], d["id"])
+            "options given" if given_options else "reasons added" if args.reason else moved
+        log(state, "asked", f"{d['title']}: {args.log or words}", d["agent"], d["blocking"], d["id"])
     if args.done is not None:
         if open_:
             fail(f"{', '.join(q['id'].upper() for q in open_)} still open: answer them, drop them, or ask what is left")
@@ -1181,6 +1192,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
   link ID --url U --title T [--kind dev|page] [--decision D] [--note N] | --drop R   a dev server or a purpose-built page
   grill ID --title T --ask "TITLE | QUESTION | RECOMMENDATION | WHY"... [--of Q]   a grilling round, answered on the page
         [--option "Q1 a: label | consequence"]... (RECOMMENDATION is then an option's id) [--body FILE | --no-body]
+        [--title T] [--why W] [--log TEXT] on an open grilling: its title, why or context revised, --log saying what changed
         [--answer "Q3: ..."] [--drop "Q4: why"] [--revise "Q3: T | Q | R | W"] [--reason "Q3: why"] [--done SUMMARY]
   step next --milestone M --title T   the next free step id, printed
   show
@@ -1304,6 +1316,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--blocking", action="store_true"); s.add_argument("--agent")
     s.add_argument("--step", help="the step of the plan it came from"); s.add_argument("--milestone")
     s.add_argument("--done", metavar="SUMMARY", help="every question is settled: what was agreed")
+    s.add_argument("--log", help="what changed, shown to the user on the page")
     s = sub.add_parser("link"); s.add_argument("id"); s.add_argument("--url"); s.add_argument("--title")
     s.add_argument("--kind", choices=LINK_KINDS, help="dev: a dev server; page: a page made for a purpose")
     s.add_argument("--decision", help="the decision it serves: its page links here"); s.add_argument("--agent")
