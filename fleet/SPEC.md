@@ -216,6 +216,10 @@ Checked in this order:
      fragment: In short, What you're deciding, The plan, Settings, Cost and risk, How to undo, What
      happens after you answer)`). A permission's question (the effective kind is permission) is not
      checked. A stored question over the limit is kept: only a write is checked.
+   - **The why's length**, the same way, right after the question's: a `--why` over 400 characters
+     is refused (`--why is N characters, M over the 400 a why holds: say in one or two lines what the
+     fleet does meanwhile, or why this needs the user, and move the plan, its parts and the cost into
+     --body FILE`), on a new decision, a revision that gives it, and a new grilling; not a permission's.
    - Recorded after the fact (`--decide` given): needs title and question. Stored with
      `page: false`, kind defaulting to decision, no kind check, no body, no `asked` event, and
      closed at once.
@@ -254,7 +258,10 @@ Checked in this order:
    `state: <id>'s question is N characters and it has no --body: ...` (question over 300, no
    body); `state: <id>'s question uses words the user may not know (sha1, alias): ...` (whole
    words, any case, from sha1, sha256, digest, stage cache, alias, uuid, idempotent, upsert, blob,
-   enum, listed in that order); `state: <id>'s why is N characters: ...` (over 300); `state:
+   enum, turn gate, gold, harness, rubric, jev, listed in that order); `state: <id> names workers by
+   id (b333, a1): say what the work is (...); a worker's id means nothing to the user.` (a lowercase
+   letter and digits standing alone, each once in the order found, in the title, then the question,
+   then the reason, of those given); `state: <id>'s why is N characters: ...` (over 200); `state:
    <id>'s consequences over 160 characters: A (212), ... ` (`--option`); `state: <id>'s manual has
    bash in a nu block (&&, export X=, $(...), 2>&1): ...` (`--manual`, the patterns found in its nu
    blocks, in that order); then, on a known one, `state: <id> was asked again with new words and
@@ -324,7 +331,9 @@ Checked in this order:
 - A question asked or revised whose QUESTION part is over 300 characters is warned, never refused,
   once the round is taken, revisions first then new questions, in the order given: `state: <id>'s
   Q<n> is N characters: ask it in one plain sentence, its choices as --option; the evidence goes in
-  --body.` Then, for each question in order, warned, never refused: its reason (asked, revised or given
+  --body.` Then, for each question in order, warned, never refused: a worker's id in its title and
+  question (asked or revised in this command) and its reason (as below), as for a decision (`state:
+  <id>'s Q<n> names workers by id (b333): ...`); its reason (asked, revised or given
   with `--reason` in this command) over 200 characters (`state: <id>'s Q<n> reason is N characters: say
   the trade-off in one plain sentence (over 200 is hard to read on a phone); the evidence goes in
   --body.`); the sources in its reason's first sentence (up to the first `.`, `!` or `?` and a space): a
@@ -1653,6 +1662,7 @@ watch and news leaving it out), `emptied` (open-7), `workspaces` (`set --workspa
 fleet's refusal of lanes that meet, the isolated fleet's warning, `show`, validation, a render),
 `question-limit` (a decision's question limit and its warnings), `grill-options` (a grilling question's
 `--option`, its recommendation by id, a grilling's `--body`, the reason's warnings),
+`why-limit` (a why over 400 refused, over 200 warned, a worker's id and the internal names warned),
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each
 hand-written trace, the same steps with every state command rendering, plus `render-page` (a
 session's scratchpad with its transcript, links, markup and U+2028 in the text, unread chat, a

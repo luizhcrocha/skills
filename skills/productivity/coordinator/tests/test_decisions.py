@@ -225,6 +225,16 @@ class ReadableTest(Fleet):
         r = self.run_cli("grill", "g1", "--revise", "Q1: t | short now? | r | w")
         self.assertNotIn("characters", r.stderr)
 
+    def test_a_long_why_is_refused_and_a_worker_id_is_warned(self):
+        base = ["--kind", "decision", "--title", "T", "--option", "A: yes | go", "--option", "B: no | stop", "--recommend", "A", "--reason", "r"]
+        err = self.refused("decision", "d1", *base, "--question", "q?", "--why", "w" * 401)
+        self.assertIn("--why is 401 characters, 1 over the 400 a why holds", err)
+        r = self.run_cli("decision", "d1", *base, "--question", "May infra run the turn gate on b333's fixes?", "--why", "w" * 201)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("uses words the user may not know (turn gate)", r.stderr)
+        self.assertIn("d1 names workers by id (b333)", r.stderr)
+        self.assertIn("d1's why is 201 characters", r.stderr)
+
     def test_a_grilling_question_takes_options_and_recommends_one_by_id(self):
         self.ok("grill", "g1", "--title", "T", "--ask", "t | Where? | a | One store keeps it simple.",
                 "--option", "Q1 a: Postgres | one place to undo", "--option", "Q1 b: Neo4j | quicker to query")

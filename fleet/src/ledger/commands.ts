@@ -865,10 +865,37 @@ function checkQuestion(question: string | undefined, kind: string | null | undef
   );
 }
 
-/** A why over this is warned about: one line on why it needs the user, and what it blocks or assumes. */
-const WHY_MAX = 300;
+/** A `--why` over this, in characters, is refused: one or two lines; the plan goes in `--body`. */
+const WHY_REFUSED = 400;
 
-const JARGON = ["sha1", "sha256", "digest", "stage cache", "alias", "uuid", "idempotent", "upsert", "blob", "enum"];
+/** A why over this is warned about: one line on why it needs the user, and what it blocks or assumes. */
+const WHY_MAX = 200;
+
+const JARGON = ["sha1", "sha256", "digest", "stage cache", "alias", "uuid", "idempotent", "upsert", "blob", "enum", "turn gate", "gold", "harness", "rubric", "jev"];
+
+/** A worker's id (b333, a12): one lowercase letter and digits, standing alone. */
+const WORKER_ID_RE = /(?<![A-Za-z0-9_])[a-z]\d+(?![A-Za-z0-9_])/gu;
+
+/** A `--why` over WHY_REFUSED characters is refused: what the fleet does meanwhile, or why this needs the user, in
+ * one or two lines; the plan goes in `--body`. A permission's is not checked. */
+function checkWhy(why: string | undefined, kind: string | null | undefined): Step$ {
+  if (why === undefined || kind === "permission" || chars(why) <= WHY_REFUSED) return Effect.void;
+  const n = chars(why);
+
+  return refuse(
+    `--why is ${String(n)} characters, ${String(n - WHY_REFUSED)} over the ${String(WHY_REFUSED)} a why holds: say in one or two lines ` +
+      "what the fleet does meanwhile, or why this needs the user, and move the plan, its parts and the cost into --body FILE",
+  );
+}
+
+/** The workers' ids named in `texts`, each once, in the order found. */
+function workerIds(texts: readonly string[]): string[] {
+  return [...new Set(texts.flatMap((t) => [...t.matchAll(WORKER_ID_RE)].map((m) => m[0])))];
+}
+
+function workerWarning(what: string, found: readonly string[]): string {
+  return `state: ${what} names workers by id (${found.join(", ")}): say what the work is ("the fixes for the timeline questions in the Lavínia case"); a worker's id means nothing to the user.`;
+}
 
 const JARGON_RE = new RegExp(`\\b(${JARGON.map((w) => w.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("|")})\\b`, "giu");
 
@@ -953,6 +980,10 @@ function readabilityWarnings(d: Decision, fields: ReadonlySet<string>): string[]
     out.push(`state: ${d.id}'s question uses words the user may not know (${words.join(", ")}): say what they mean in the domain's words, or leave them to the body.`);
   }
 
+  const named = workerIds((["title", "question", "reason"] as const).flatMap((k) => (fields.has(k) ? [d[k] ?? ""] : [])));
+
+  if (named.length > 0) out.push(workerWarning(d.id, named));
+
   const why = d.why ?? "";
 
   if (fields.has("why") && chars(why) > WHY_MAX) {
@@ -997,7 +1028,7 @@ function movedFields(changed: readonly string[], before: ReadonlyMap<string, str
 
 /** The fields of the decision a command wrote, for its warnings. */
 function writtenFields(args: Args): Set<string> {
-  const out = new Set(["question", "why", "manual"].filter((k) => args.str(k) !== undefined));
+  const out = new Set(["question", "why", "manual", "title", "reason"].filter((k) => args.str(k) !== undefined));
 
   if ((args.list("option") ?? []).length > 0) out.add("option");
 
@@ -1225,6 +1256,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       yield* require(run, elsewhere ? ["title", "question"] : ["kind", "title", "question", "why"], "decision");
       const kind = args.str("kind");
       yield* checkQuestion(args.str("question"), given(kind) ? kind : "decision");
+      yield* checkWhy(args.str("why"), given(kind) ? kind : "decision");
 
       const fresh: Decision = {
         id,
@@ -1301,6 +1333,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       }
 
       yield* checkQuestion(question, kindNow);
+      yield* checkWhy(args.str("why"), kindNow);
 
       const changed: string[] = FIELDS.filter((k) => args.str(k) !== undefined);
       const before = snapshot(d);
@@ -1450,10 +1483,13 @@ function optionOf(text: string): Effect.Effect<readonly [string, Choice], Refusa
 
 /** What the CLI says, without refusing, about a grilling question hard to read: its reason (when this command
  * wrote it) long or opening with a source, its options (when written) long or too many. */
-function grillWarnings(d: Decision, q: Question, reason: boolean, options: boolean): string[] {
+function grillWarnings(d: Decision, q: Question, asked: boolean, reason: boolean, options: boolean): string[] {
   const out: string[] = [];
   const qid = q.id.toUpperCase();
   const why = q.reason ?? "";
+  const named = workerIds([...(asked ? [q.title, q.body ?? ""] : []), ...(reason ? [why] : [])]);
+
+  if (named.length > 0) out.push(workerWarning(`${d.id}'s ${qid}`, named));
 
   if (reason && chars(why) > GRILL_REASON_MAX) {
     out.push(
@@ -1508,6 +1544,8 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
       if (!given(args.str("title")) || asks.length === 0) {
         return yield* refuse("a new grilling needs --title and its first round (--ask, once per question)");
       }
+
+      yield* checkWhy(args.str("why"), "grill");
 
       const agent = args.str("agent");
 
@@ -1683,7 +1721,7 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
     const reasoned = new Set([...askedNow, ...reasonedIds]);
 
     for (const q of qs) {
-      for (const warning of grillWarnings(row, q, reasoned.has(q.id), askedNow.has(q.id) || givenOptions.has(q.id))) run.warn(warning);
+      for (const warning of grillWarnings(row, q, askedNow.has(q.id), reasoned.has(q.id), askedNow.has(q.id) || givenOptions.has(q.id))) run.warn(warning);
     }
 
     if (added.length > 0 && created) {

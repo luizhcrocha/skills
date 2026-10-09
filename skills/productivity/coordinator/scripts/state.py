@@ -695,8 +695,31 @@ def check_question(question: str | None, kind: str | None) -> None:
          "What happens after you answer)")
 
 
-WHY_MAX = 300  # a why over this is warned about: one line on why it needs the user, and what it blocks or assumes
-JARGON = ("sha1", "sha256", "digest", "stage cache", "alias", "uuid", "idempotent", "upsert", "blob", "enum")
+WHY_REFUSED = 400  # characters: a --why over this is refused; one or two lines, the plan goes in --body
+WHY_MAX = 200  # a why over this is warned about: one line on why it needs the user, and what it blocks or assumes
+JARGON = ("sha1", "sha256", "digest", "stage cache", "alias", "uuid", "idempotent", "upsert", "blob", "enum",
+          "turn gate", "gold", "harness", "rubric", "jev")
+# A worker's id (b333, a12): one lowercase letter and digits, standing alone.
+WORKER_ID_RE = re.compile(r"(?<![A-Za-z0-9_])[a-z]\d+(?![A-Za-z0-9_])")
+
+
+def check_why(why: str | None, kind: str | None) -> None:
+    """A --why over WHY_REFUSED characters is refused: what the fleet does meanwhile, or why this needs the user,
+    in one or two lines; the plan goes in --body. A permission's is not checked."""
+    if why is None or kind == "permission" or len(why) <= WHY_REFUSED:
+        return
+    fail(f"--why is {len(why)} characters, {len(why) - WHY_REFUSED} over the {WHY_REFUSED} a why holds: say in one or two lines "
+         "what the fleet does meanwhile, or why this needs the user, and move the plan, its parts and the cost into --body FILE")
+
+
+def worker_ids(texts: list[str]) -> list[str]:
+    """The workers' ids named in `texts`, each once, in the order found."""
+    return list(dict.fromkeys(m for t in texts for m in WORKER_ID_RE.findall(t)))
+
+
+def worker_warning(what: str, found: list[str]) -> str:
+    return (f"state: {what} names workers by id ({', '.join(found)}): say what the work is (\"the fixes for the timeline "
+            "questions in the Lavínia case\"); a worker's id means nothing to the user.")
 JARGON_RE = re.compile(r"\b(" + "|".join(re.escape(w) for w in JARGON) + r")\b", re.I)
 BASHISMS = (("&&", re.compile(r"&&")), ("export X=", re.compile(r"^\s*export\s+\w+=", re.M)),
             ("$(...)", re.compile(r"\$\(")), ("2>&1", re.compile(r"2>&1")))
@@ -759,6 +782,9 @@ def readability_warnings(d: dict, given: set) -> list[str]:
     if "question" in given and words:
         out.append(f"state: {d['id']}'s question uses words the user may not know ({', '.join(words)}): "
                    "say what they mean in the domain's words, or leave them to the body.")
+    found = worker_ids([d.get(k) or "" for k in ("title", "question", "reason") if k in given])
+    if found:
+        out.append(worker_warning(d["id"], found))
     why = d.get("why") or ""
     if "why" in given and len(why) > WHY_MAX:
         out.append(f"state: {d['id']}'s why is {len(why)} characters: say in one line why it needs the user, and what it "
@@ -862,6 +888,7 @@ def cmd_decision(state, args):
         made_elsewhere = args.decide is not None
         require(args, ["title", "question"] if made_elsewhere else ["kind", "title", "question", "why"], "decision")
         check_question(args.question, args.kind or "decision")
+        check_why(args.why, args.kind or "decision")
         d = {"id": args.id, "kind": args.kind or "decision", "title": args.title, "question": args.question,
              "why": args.why, "blocking": bool(args.blocking), "agent": args.agent or None,
              "options": parse_options(args.option or []), "recommend": args.recommend, "reason": args.reason,
@@ -872,7 +899,7 @@ def cmd_decision(state, args):
         if not made_elsewhere:
             check_kind(d, True)
             set_body(Path(args.dir).resolve(), d, args)
-            for warning in readability_warnings(d, {k for k in ("question", "why", "manual") if getattr(args, k) is not None} | ({"option"} if args.option else set())):
+            for warning in readability_warnings(d, {k for k in ("question", "why", "manual", "title", "reason") if getattr(args, k) is not None} | ({"option"} if args.option else set())):
                 sys.stderr.write(warning + "\n")
             for_manager = d["asks"] == "manager"   # the manager looks first: the user is not called yet
             log(state, "asked", f"{'For the manager: ' if for_manager else ''}{d['title']}: {d['question']}", d["agent"],
@@ -894,6 +921,7 @@ def cmd_decision(state, args):
             fail("the question changed, and the options on the page would be the old question's: give them again "
                  "(--option, once per option, with --recommend and --reason), or pass --same-options when they still answer it")
         check_question(args.question, args.kind or d["kind"])
+        check_why(args.why, args.kind or d["kind"])
         changed = [k for k in FIELDS if getattr(args, k) is not None] + [k for k in ("option", "body") if getattr(args, k)]
         before = {**{k: d.get(k) for k in FIELDS}, "option": d.get("options"), "blocking": d.get("blocking")}
         for key in FIELDS:
@@ -916,7 +944,7 @@ def cmd_decision(state, args):
             changed.append("asks")
         check_kind(d, args.manual is not None)
         set_body(Path(args.dir).resolve(), d, args)
-        for warning in readability_warnings(d, {k for k in ("question", "why", "manual") if getattr(args, k) is not None} | ({"option"} if args.option else set())):
+        for warning in readability_warnings(d, {k for k in ("question", "why", "manual", "title", "reason") if getattr(args, k) is not None} | ({"option"} if args.option else set())):
             sys.stderr.write(warning + "\n")
         if any(k in changed for k in ("question", "option", "manual")) and not args.log and args.decide is None and args.withdraw is None:
             sys.stderr.write(f"state: {d['id']} was asked again with new words and no --log: say what changed in one line "
@@ -984,10 +1012,14 @@ def _option(text: str) -> tuple[str, dict]:
     return m.group(1).lower(), {"id": m.group(2), "label": label, "consequence": consequence}
 
 
-def grill_warnings(d: dict, q: dict, reason: bool, options: bool) -> list[str]:
-    """What the CLI says, without refusing, about a grilling question hard to read: its reason (when this
-    command wrote it) long or opening with a source, its options (when written) long or too many."""
+def grill_warnings(d: dict, q: dict, asked: bool, reason: bool, options: bool) -> list[str]:
+    """What the CLI says, without refusing, about a grilling question hard to read: a worker's id in its
+    title, question or reason (those this command wrote), its reason long or opening with a source, its
+    options (when written) long or too many."""
     out, qid, why = [], q["id"].upper(), q.get("reason") or ""
+    found = worker_ids([q.get(k) or "" for k in ("title", "body") if asked] + ([why] if reason else []))
+    if found:
+        out.append(worker_warning(f"{d['id']}'s {qid}", found))
     if reason and len(why) > GRILL_REASON_MAX:
         out.append(f"state: {d['id']}'s {qid} reason is {len(why)} characters: say the trade-off in one plain sentence "
                    f"(over {GRILL_REASON_MAX} is hard to read on a phone); the evidence goes in --body.")
@@ -1022,6 +1054,7 @@ def cmd_grill(state, args):
             fail(f"grilling id {args.id!r} should be letters, digits, '_', '.', or '-'")
         if not args.title or not args.ask:
             fail("a new grilling needs --title and its first round (--ask, once per question)")
+        check_why(args.why, "grill")
         d = {"id": args.id, "kind": "grill", "title": args.title, "question": "", "why": args.why, "blocking": bool(args.blocking),
              "agent": args.agent or None, "options": [], "recommend": None, "reason": None, "secret": None, "manual": None,
              "body": False, "page": True, "supersedes": None, "status": "open", "answer": None, "resolution": None,
@@ -1097,7 +1130,7 @@ def cmd_grill(state, args):
                          "as --option; the evidence goes in --body.\n")
     reasoned = asked_now | {_q(t, "--reason")[0] for t in args.reason or []}
     for q in qs:
-        for warning in grill_warnings(d, q, q["id"] in reasoned, q["id"] in asked_now or q["id"] in given_options):
+        for warning in grill_warnings(d, q, q["id"] in asked_now, q["id"] in reasoned, q["id"] in asked_now or q["id"] in given_options):
             sys.stderr.write(warning + "\n")
     if new and created:
         print(f"asked {d['id']}. Arm its answers' wake now, as a background command (run_in_background): "

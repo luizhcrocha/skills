@@ -275,6 +275,16 @@ describe("readable", () => {
     expect(r.stderr).not.toContain("characters");
   });
 
+  test("a long why is refused and a worker's id is warned", () => {
+    const base = ["--kind", "decision", "--title", "T", "--option", "A: yes | go", "--option", "B: no | stop", "--recommend", "A", "--reason", "r"];
+    expect(refused("decision", "d1", ...base, "--question", "q?", "--why", "w".repeat(401))).toContain("--why is 401 characters, 1 over the 400 a why holds");
+    const r = run("decision", "d1", ...base, "--question", "May infra run the turn gate on b333's fixes?", "--why", "w".repeat(201));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toContain("uses words the user may not know (turn gate)");
+    expect(r.stderr).toContain("d1 names workers by id (b333)");
+    expect(r.stderr).toContain("d1's why is 201 characters");
+  });
+
   test("a grilling question takes options and recommends one by id", () => {
     ok("grill", "g1", "--title", "T", "--ask", "t | Where? | a | One store keeps it simple.", "--option", "Q1 a: Postgres | one place to undo", "--option", "Q1 b: Neo4j | quicker to query");
     const questions = (asArray(item("g1")["questions"]) ?? []).map((q) => asObject(q) ?? {});
