@@ -1106,12 +1106,10 @@ function QueueNav(): JSX.Element {
   const from = (): string | null => (done() || ui.advancedFrom() === m.viewing() ? null : ui.advancedFrom());
   const [next, setNext] = createSignal<HTMLAnchorElement>();
 
-  createEffect(
-    () => [done(), next()] as const,
-    ([on, el]) => {
-      if (on) el?.focus();
-    },
-  );
+  /* Next takes the focus as the answer lands, not again: every state event re-creates the link, and focusing it scrolls the page up to it. */
+  createEffect(done, (on) => {
+    if (on) next()?.focus();
+  });
 
   const step = (id: string | null, label: string, rel: string): JSX.Element => (
     <Show when={id} fallback={<span class="btn small" aria-disabled="true">{label}</span>}>
