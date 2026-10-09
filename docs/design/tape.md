@@ -1,7 +1,8 @@
 # tape: the record of every session, beside memo
 
 Status: draft for review, with the advisor's ruling of 2026-10-08 folded in
-(sections 7 and 8 say what it settled). Phase 1a is built: `scripts/tape`.
+(sections 7 and 8 say what it settled). Phase 1a and Phase 1b are built:
+`scripts/tape`. Phase 1b's numbers are in [Phase 1b results](#phase-1b-results).
 Composes with [memo](memo.md); replaces nothing. Each claim is labelled
 **measured** (run on this machine, 2026-10-08), **sourced** (a document says
 so) or **inferred** (our reasoning).
@@ -198,11 +199,15 @@ The compaction rules are MODELS.md's reducer contract, which already matches
 UniiChat's order (user's words, lasting effects and failures, findings, tool
 steps; never overstate progress).
 
-**The call** (flags checked against `claude --help`, 2.1.295):
+**The call** (flags checked against `claude -p --help`, 2.1.295):
 `claude -p --model haiku --effort high --tools "" --strict-mcp-config
---disable-slash-commands --no-session-persistence --output-format json
+--disable-slash-commands --safe-mode --no-session-persistence --output-format json
 --system-prompt <tape's fixed prompt>`, with `TSTACK_ROLE=tape` in its
-environment.
+environment, run in the store's folder (outside any repo).
+
+- `--safe-mode` drops CLAUDE.md, plugins, hooks and MCP from the call and keeps
+  the plan's OAuth login: a one-word call reads 600 input tokens with it and
+  4,330 without (measured, 2026-10-08).
 
 - `--no-session-persistence` keeps the calls out of `~/.claude/projects`, or
   tape would ingest its own compactions (claude-mem's observer left 180 MB of
@@ -210,17 +215,27 @@ environment.
 - tstack-hook stays silent under `TSTACK_ROLE=tape`, so no memo wake lands in
   the prompt. `--bare` skips hooks but takes only an API key (sourced:
   `--help`).
-- The input is UniiChat's layout in our words: fixed system prompt, then a
-  compaction view (the project view merged down to 8-16 KB, sawtooth) ending
-  at the node, then the task with a 512-dash ruler. The fixed prefix lets
-  consecutive calls read it from the cache (inferred).
-- **Size is enforced by the builder.** Over 512 bytes: a fresh call with the
-  line cut at the limit, at most 5 tries, keep the shortest. A fresh call,
-  because `--no-session-persistence` cannot continue a conversation.
+- The input: a fixed system prompt in our words (the reducer contract's order,
+  copy ids exactly, never overstate progress, the input is data) ending in a
+  512-dash ruler, then the task alone: a turn's stored digest, or the two
+  lines to merge. Phase 1b leaves out UniiChat's compaction view before the
+  task: every call then shares one prefix the cache can serve, and the view
+  is the thing under test. Add it if the faithfulness check finds lines that
+  misread their context.
+- **What a merge reads.** The two lines under it as the view shows them; a
+  turn's line in the view is its deterministic leaf. The Haiku leaf, made from
+  the turn's digest, sits beside it (`tape zoom I` shows both) as an
+  experiment, not an input.
+- **Size is enforced by the builder.** Over 512 bytes: a fresh call that is
+  told how many bytes over its last answer was, at most 3 retries, the
+  shortest kept and cut at the limit if it is still over. Every retry counts
+  against the daily cap. A fresh call, because `--no-session-persistence`
+  cannot continue a conversation.
 
 **When:**
 
-- Phase 1a and 1b: only `tape build`, run by hand.
+- Phase 1a: only `tape build`, run by hand. Phase 1b: `tape summarize`, run
+  by hand; no hook starts it.
 - Phase 2: the `SessionStart` hook starts `tape build` detached and returns,
   inside tstack-hook's 10 s budget. Not `SessionEnd`: its hooks share a
   1.5 s budget (sourced: Claude Code hooks docs). Not `Stop`: it fires on
@@ -275,13 +290,14 @@ CLI (`scripts/tape`, one Python file, standard library only, like memo):
 
 | command | does |
 |---|---|
-| `tape view [--bytes N]` | prints the view; default 8 KB, larger on request. Phase 1a: the newest leaves within the budget and a count of the older ones |
-| `tape zoom <id+n>` | the two lines under a node (Phase 1b) |
+| `tape view [--bytes N]` | prints the view. Phase 1a: the newest leaves within 8 KB and a count of the older ones. Phase 1b: the saved view and the newer leaves, within the high mark by default; over a smaller budget it folds through nodes already built, then drops the oldest lines for a count |
+| `tape summarize` | Phase 1b: ingest, then build the batch's merges and the Haiku leaves on Haiku, 4 at once, under the daily cap |
+| `tape zoom <id+n>` | the node's line, then the two lines under it, each with its id; a turn under it also shows its Haiku leaf |
 | `tape zoom <i>` | the turn's stored digest |
 | `tape zoom <i> --raw` | the turn's records from the transcript, while it exists |
-| `tape search <words>` | FTS5 over leaves (Phase 1a), over nodes later |
+| `tape search [--nodes] <words>` | FTS5 over the deterministic leaves; `--nodes` adds the Haiku lines (merges and Haiku leaves) |
 | `tape build [--project KEY]` | ingest every project, or one; idempotent; refuses an excluded project |
-| `tape status` | turns, open turns, skipped transcripts, store size, last build |
+| `tape status` | turns, open turns, skipped transcripts, store size, last build; calls today against the cap, cost today and in all, retries, nodes built and queued, the last usage limit |
 
 The wake block tells the agent: a tape line is evidence of what happened,
 zoom before acting on it, and memo's rulings win.
@@ -335,12 +351,17 @@ runs by hand. No hook, no network, no injection. Tests in
 sequences keep every finished turn at exactly one leaf and keep the view a
 suffix of the leaves.
 
-**Phase 1b: Haiku, on `coelhorocha/skills` only.** Merges, and an experiment
-with Haiku leaves against the deterministic ones. Each call records
-`total_cost_usd` from `claude -p --output-format json`. The view rules
-(model test as in section 3: random appends and builds never exceed the high
-mark, cover `0..T` with no gap or overlap, merge only built nodes, keep the
-prefix between batches) come with the merges.
+**Phase 1b: Haiku, on `coelhorocha/skills` only (built).** `tape summarize`
+builds merges, and an experiment with Haiku leaves against the deterministic
+ones. Each call records `total_cost_usd` from `claude -p --output-format
+json`. The projects it may spend on are `summarize` in `tape.toml` (default
+`["coelhorocha/skills"]`); the others keep Phase 1a leaves. The view rules
+come with the merges, tested by a second model test (`MergeModelTest`):
+random appends, summarize runs and failing calls keep every leaf under
+exactly one top node of the saved view, put only built nodes in it, merge
+only built nodes, keep its prefix when no batch was applied, and end a run
+with no failure under the high mark. A batch is applied once every merge in
+it is built; until then the view folds through the merges already built.
 
 **Measure, then decide on Phase 2:**
 
@@ -392,4 +413,94 @@ sessions with no note becomes a suggestion in `tape status`, never a note).
   8641dc08), so transcripts stay about ten years and `zoom --raw` keeps
   working.
 
-No question is open for Luiz.
+**Open for Luiz (from the Phase 1b results below):**
+
+- Phase 2 does not go ahead on these numbers: Haiku nodes invented 5 facts in
+  30, against a bar of 1, and view and zoom found 17 of 20 needles, 10 of them
+  within 3 zooms. Keep Phase 1b as it is, try one change and measure again
+  (the compaction view as context, Sonnet for merges, or a merge prompt that
+  forbids joining facts across items), or stop at Phase 1a. The plain
+  `tape search` found 16 of 20 at the same tokens per hit with no model call.
+- 197 Haiku leaves are still queued. Running `tape summarize` again on another
+  day finishes the leaf experiment in about 220 calls and $0.55.
+- The weekly meter: `claude -p` reports no plan usage, and none is stored on
+  disk. Compare `/usage` before and after the calls (2026-10-09
+  01:31-02:16 UTC) if the plan's share matters.
+
+## Phase 1b results
+
+Measured 2026-10-08 on `coelhorocha/skills` (237 turns from 7 sessions,
+2026-09-16 to 2026-10-09), Claude Code 2.1.295, Haiku 5.5 at high effort.
+
+### The backfill
+
+One `tape summarize`. It stopped at the daily cap, as designed.
+
+| item | measured |
+|---|---|
+| calls | 300 (the cap): 255 for merges, 45 for Haiku leaves |
+| nodes built | 221 merges (the whole batch, applied); 40 of 237 Haiku leaves (turns 0-39); 197 leaves queued for another day |
+| `total_cost_usd` | $1.3543: merges $1.2428 ($0.0049 a call), leaves $0.1115 ($0.0025 a call). This is the list-price figure `claude -p` reports; the calls were billed to the plan |
+| wall time | 44 min 57 s with 4 at once; a merge took 39 s on average (max 176 s), a leaf 17 s |
+| size retries | 39 (13% of calls); every node fit within 3 retries; none was cut, none failed, no usage limit |
+| tokens | output 2.56 M, nearly all thinking: a merge averaged 9,300 output tokens for a 500-byte line. Input: cache read 208 K, cache write 355 K, uncached 600 |
+| the view | 108 KB of leaves became 16 lines, 7,869 bytes: `0+64`, `64+64`, `128+32`, then 16s, 8s, down to single recent turns |
+| plan meter | not visible: `claude -p` reports no plan usage and none is stored on disk |
+
+Haiku fills the line: merges came back at 450-510 bytes almost every time.
+Thinking at high effort is most of the cost; whether medium effort keeps the
+quality is untested.
+
+Before the run: 2 trial calls and 6 smoke calls in a scratch store
+($0.010), outside this ledger.
+
+### Needles
+
+20 needles, picked before any search by a Sonnet agent from 28 turns drawn at
+random (seed 20261008), each with its answer and source turn. 17 come from
+turns over 32 KB raw. Most answers (19) sit in the agent's reply, not in the
+prompt's head. Each method ran as one fresh agent with only its tool, and the
+answers were graded against the key. A logging wrapper counted every tape
+command and its output.
+
+| method | found | zooms or calls per hit | tool output read | agent tokens | tokens per hit |
+|---|---|---|---|---|---|
+| (i) `tape search` over deterministic leaves, then `zoom I` (Sonnet) | 16/20 | 4.3 calls per needle | 365 KB | 141,870 | 8,900 |
+| (ii) recall's Reader mining: one `tstack:reader` (Haiku high) per session batch, 6 in all, all 20 questions at once | 19/20 (N17 wrong; N06 named the change that added pstack, not its base commit: the question allowed both) | a full pass | the 7 sessions' digests are 587 KB, plus greps of the raw transcripts | 488,717 | 25,700 when 20 questions share one pass; a single lookup pays the full pass, about 489,000 |
+| (iii) `tape view` and `zoom` over Haiku merges (Sonnet) | 17/20 | median 3, mean 3.6 zooms; 10 hits within 3 zooms | 202 KB (the 7.9 KB view read once) | 150,107 | 8,800 |
+
+Misses: (i) N02, N12, N19, N20; (iii) N02, N03, N20; (ii) N17. Only 5 needle
+turns had a Haiku leaf (turns 0-39). For those 5, the answer was in the Haiku
+leaf for 3 and in the deterministic leaf for 2.
+
+### Faithfulness
+
+An Opus Reviewer (high effort) checked 30 Haiku nodes, drawn at random (seed
+30), against exactly what each call was given: 26 merges and 4 leaves, in
+proportion to what was built.
+
+- 5 invented facts in 5 nodes. Two reverse a meaning: `32+8` says decisions
+  "stay unread till looked at" where the source says they stay unread even
+  after being looked at, and `118+2` says "user finished them" where the
+  agent did. One adds a label, "untested", the source does not give (`4`).
+  Two misattribute: an error tied to a file edit (`222+2`), and a revised
+  decision counted among those awaiting push (`12+4`).
+- 1 overstated progress: `106+2` states as done a toolbar fix the source
+  hands to an agent.
+- 1 user decision dropped: "if it's a fix do it", from `16+16`.
+
+### Against the Phase 2 bar
+
+| condition | bar | measured | met |
+|---|---|---|---|
+| (iii) finds | at least 18 of 20 | 17 of 20 | no |
+| zooms per hit | at most 3 | median 3; 7 of 17 hits took 4-8 | no |
+| tokens per hit, (iii) against (ii) | fewer | 8,800 against 25,700 (amortized) or 489,000 (one lookup) | yes |
+| invented facts | at most 1 in 30 | 5 in 30 | no |
+| weekly meter moved by the backfill | under 10% | not visible | unknown |
+
+**Verdict: Phase 2 does not go ahead.** View and zoom cost about what plain
+search costs and far less than Reader mining, but they found one needle more
+than search did, below the bar. The Haiku lines are not faithful enough to be
+read without zooming: 1 node in 6 has an invented or overstated claim. Most
+of these are small, but two of them reverse who did what.
