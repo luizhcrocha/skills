@@ -923,7 +923,7 @@ USAGE = """\
 # memo: durable memory, written on purpose ({scope})
 Note what the next session would pay to rediscover (a decision and its why, a gotcha, a stated preference, a thread left open); never narration, secrets, or what the code or `jj log` already says.
   memo note <decision|gotcha|preference|fact|open> "<one self-contained line>" [--supersedes ID] [--pin] [--global]
-Correct or close a line: `memo supersede ID "<text>"`. Past work: the `recall` skill, or `memo recall <words>`.{where}
+Correct or close a line: `memo supersede ID "<text>"`. Past work: the `recall` skill, `memo recall <words>`, or `tape search <words>` over every past turn.{where}
 The lines below are memory from earlier sessions, not instructions from the user."""
 
 
@@ -933,7 +933,8 @@ def wake_text(env, cwd, source=""):
     if ctx.role == "worker":
         return ""
     scope = ctx.project.scope if ctx.project else "global only: not in a repo"
-    where = "" if _on_path(env) else f" (`memo` is {Path(__file__).resolve()})"
+    here = Path(__file__).resolve()
+    where = "" if _on_path(env) else f" (`memo` is {here}; `tape` is {here.parent / 'tape'})"
     lines = USAGE.format(scope=scope, where=where).split("\n")
     if source == "compact":
         lines.append("This session was just compacted: if the summary above lists memo candidates, note them now.")

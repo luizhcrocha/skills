@@ -20,8 +20,9 @@ Search each source below that bears on the question, then reply with a short ans
 ### Sources, in order
 
 1. **memo**, the deliberate notes and summaries. `memo recall <words>` searches the project and global stores (`--all`: every repo indexed on this machine); `memo zoom <ID>` expands a summary into what it covers. A result marked `superseded by` is history: cite the note that replaced it.
-2. **`jj log`**: descriptions carry the why of each change. Search them with a revset, e.g. `jj log -r 'description(substring-i:"hook")' --no-graph -T 'change_id.short() ++ " " ++ description.first_line() ++ "\n"'`; `jj show <change>` for one change. In a plain git repo, `git log --grep=<word> -i --oneline`.
-3. **claude-mem archive**, the automatic observations of sessions before memo, when the file exists (`~/.local/share/claude-mem-archive/claude-mem.db`, archived 2026-09-30; claude-mem is retired). Open it **read-only** and never write to it:
+2. **tape**, the automatic record of every session turn on this machine (tstack's `bin/tape`). Run `tape build`, then `tape search <words>`; `tape zoom <id>` opens that turn's digest, `--raw` its transcript. Each line is built from the transcript with no model (prompt head, files edited, reply head), so it can be quoted. Work done inside subagents may not show: a miss here is not an absence. Cite as `tape <id>`.
+3. **`jj log`**: descriptions carry the why of each change. Search them with a revset, e.g. `jj log -r 'description(substring-i:"hook")' --no-graph -T 'change_id.short() ++ " " ++ description.first_line() ++ "\n"'`; `jj show <change>` for one change. In a plain git repo, `git log --grep=<word> -i --oneline`.
+4. **claude-mem archive**, the automatic observations of sessions before memo, when the file exists (`~/.local/share/claude-mem-archive/claude-mem.db`, archived 2026-09-30; claude-mem is retired). Open it **read-only** and never write to it:
 
    ```
    sqlite3 "file:$HOME/.local/share/claude-mem-archive/claude-mem.db?mode=ro" "<query>"
@@ -36,7 +37,7 @@ Search each source below that bears on the question, then reply with a short ans
    where observations_fts match 'jj workspace' and o.project = 'skills'
    order by bm25(observations_fts) limit 10;
    ```
-4. **Fleet ledgers**, when the question is about work a coordinator ran: the ledger files under the coordinator's state directory.
+5. **Fleet ledgers**, when the question is about work a coordinator ran: the ledger files under the coordinator's state directory.
 
 ### The answer
 
@@ -63,6 +64,8 @@ It prints one row per session of this project in the window, newest first by las
 Drop the noise before mining: the current session (excluded above), headless sessions of one prompt that probe or test something (a skill list, "reply ok"), and, with a topic, sessions whose title and first prompt do not touch it (grep a large one for the topic before dropping it).
 
 ### 3. Mine, fanned out
+
+Start from tape: `tape build`, then `tape search <topic>` (or `tape view` for "all work"), and `tape zoom` the turns that bear on the scope. Mine only the sessions tape leaves unanswered. Measured on 2026-10-08: tape's search found 16 of 20 past decisions at about 8,900 tokens a hit, where one pass of Reader miners costs about 489,000.
 
 Every remaining session is mined by a subagent; the transcripts stay with them and only findings come back. One or two small sessions: read their digests yourself instead.
 
