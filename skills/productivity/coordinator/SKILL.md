@@ -22,7 +22,7 @@ Do a piece of work yourself when one of these holds, and say which one when you 
 
 Anything else goes to a worker.
 
-**Small or coupled work stays together.** A small follow-up to a worker's task (a fix its report missed, a note from your review) goes back to that worker by `SendMessage` (`agent <id> --status running` starts its next round), or is yours as a quick win; it never gets a new worker. Two tasks whose files depend on each other (one changes what the other imports, a test and the code under it) are one worker's task.
+**Small or coupled work stays together.** A small follow-up to a worker's task (a fix its report missed, a note from your review) goes back to that worker by `SendMessage` (`agent <id> --status running` starts its next round) while its context is under about 150k tokens, or is yours as a quick win. A worker past about 150k is replaced instead: ask it for a ten-line handoff (what it did, what is left, the files and commands it was in), and start a fresh worker with that handoff in its brief; every call of a worker re-reads its whole context, and calls above 150k carried 76% of the fleets' worker cost (measured 2026-10-09). Two tasks whose files depend on each other (one changes what the other imports, a test and the code under it) are one worker's task.
 
 ## Architecture discipline
 
@@ -62,7 +62,7 @@ Record the skill on the worker (`agent --skill`); `fleet brief` resolves its pat
 
 ### 3. Pick the model
 
-Pick the worker's role from [MODELS.md](MODELS.md) by the task's shape; the role fixes the model, the effort and the fallback. An implementation or debugging worker is an Implementer, a research worker a Researcher, and a monitor (app metrics, runs, executions, reporting back) a Watcher, whoever spawns it: you, a worker or the manager. Research a worker needs for its own task is a Researcher too.
+Pick the worker's role from [MODELS.md](MODELS.md) by the task's shape; the role fixes the model, the effort and the fallback. An implementation or debugging worker is an Implementer, a research worker a Researcher, and a monitor (app metrics, runs, executions, reporting back) a Watcher, whoever spawns it: you, a worker or the manager. Research a worker needs for its own task is a Researcher too. Research and read-only work is a Researcher's (Sonnet) or a Reader's (Haiku), never Opus or Fable: 504 read-only workers ran on Opus or Fable, about 4% of the fleets' cost (measured 2026-10-09).
 
 **What delegating saves.** A worker costs its brief, everything it reads, and your reading of its report, so hand a Reader what is read-heavy and comes back short: aggregating many reports into a table, reading logs, drafting a summary from files. A sentence you can write from what you already know stays yours: the handoff would cost more than the sentence. And the page computes what the ledger holds (the workers running, the current steps, what comes next, what waits on the user), so none of that needs writing.
 
@@ -82,7 +82,7 @@ A worker starts with an empty window. Everything it needs is in the brief or it 
 
 **What every worker of the fleet follows** is a file, `<dashboard-dir>/brief.md`, which the state CLI writes at `init`: the standards, the rules of a lane and of the worker's own workspace, how to use the chat, and the shape of the report (a first block of ten lines you can act on, the detail below it). Read it once at intake and add under "This fleet" the facts workers keep needing: addresses and ports, what is running and has to stay up, the setup a fresh workspace needs. A fact you caught yourself writing into a second brief belongs there.
 
-**What is this worker's** is printed by `fleet brief <dashboard-dir> <id>` from its row (it refuses a worker not yet recorded): the opening line, the task, the completion criterion, the skill and how to load it, the lane, the workspace, the step and its chat id. Record a checkable criterion (`--brief "done when tests in x.test.ts pass and the diff touches only the lane"`): a vague bound invites the worker to stop early. Below its output you add the context the worker cannot discover: decisions from this conversation, the domain vocabulary in `CONTEXT.md`, relevant ADRs, the user's constraints.
+**What is this worker's** is printed by `fleet brief <dashboard-dir> <id>` from its row (it refuses a worker not yet recorded): the opening line, the task, the completion criterion, the skill and how to load it, the lane, the workspace, the step and its chat id. Record a checkable criterion (`--brief "done when tests in x.test.ts pass and the diff touches only the lane"`): a vague bound invites the worker to stop early. Bound its reading too: name the files to read or the question to answer, never "the repo", and ask for its report before its context passes about 150k tokens, finished or not; brief.md says the same to every worker. Below its output you add the context the worker cannot discover: decisions from this conversation, the domain vocabulary in `CONTEXT.md`, relevant ADRs, the user's constraints.
 
 Similar tasks get one template brief with the blanks filled per worker. Skill outputs the workers would all recompute (a research finding, a scan), compute once and paste.
 
