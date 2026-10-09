@@ -925,7 +925,7 @@ function Info(props: { readonly d: Decision }): JSX.Element {
   const open = (): boolean => d().status === "open";
   const notice = (): boolean => Core.isNotice(d());
   const pending = createMemo(() => Core.pendingAnswer(d(), m.messages()));
-  const successor = () => m.state.decisions.find((x) => x.supersedes === d().id);
+  const successor = () => m.supersededBy(d().id);
   const before = () => (d().supersedes ? m.decisionById(d().supersedes) : undefined);
   /* A grilling asks in its questions: its title leads, and its question says how many are left. */
   const ask = createMemo(() => (d().kind === "grill" ? { lead: d().title, more: [] } : askParts(d().question ?? "", d().title)));

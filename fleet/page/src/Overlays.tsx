@@ -115,7 +115,7 @@ function FindRecord(): JSX.Element {
 
     if (!it) return EMPTY;
 
-    if (it.kind === "row") return { ...recordOf(ui.liveRows().get(it.row.key) ?? it.row, m.state, m.messages()), open: "Open" };
+    if (it.kind === "row") return { ...recordOf(ui.liveRows().get(it.row.key) ?? it.row, m.state, m.messages(), m.decisionNamed), open: "Open" };
 
     if (it.kind === "hint") {
       const g = groupOf(it.group);

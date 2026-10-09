@@ -32,6 +32,22 @@ function DecisionChips(props: { readonly list: readonly Decision[] }): JSX.Eleme
 function Roadmap(): JSX.Element {
   const { m } = usePage();
 
+  /* The decisions by step, and by milestone for those tied to no step: one pass, not one over every decision a step. */
+  const chipsOf = createMemo(() => {
+    const byStep = new Map<string, Decision[]>();
+    const byMilestone = new Map<string, Decision[]>();
+
+    for (const d of m.state.decisions) {
+      const [key, into] = d.step ? [d.step, byStep] : [d.milestone, byMilestone];
+      const list = key ? into.get(key) : undefined;
+
+      if (list) list.push(d);
+      else if (key) into.set(key, [d]);
+    }
+
+    return { byStep, byMilestone };
+  });
+
   return (
     <div class="part" id="roadmap">
       <h2>Roadmap</h2>
@@ -43,7 +59,7 @@ function Roadmap(): JSX.Element {
                 <div class="ms-name">
                   <h3>{ms().title}</h3>
                   <span>
-                    <DecisionChips list={m.state.decisions.filter((d) => d.milestone === ms().id && !d.step)} />
+                    <DecisionChips list={chipsOf().byMilestone.get(ms().id) ?? []} />
                   </span>
                 </div>
                 <span class="num faint">
@@ -54,7 +70,7 @@ function Roadmap(): JSX.Element {
                 <For each={ms().steps} keyed={(s) => s.id}>
                   {(s) => {
                     const a = () => m.person(s().agent);
-                    const chips = () => m.state.decisions.filter((d) => d.step === s().id);
+                    const chips = () => chipsOf().byStep.get(s().id) ?? [];
 
                     const inner = (): JSX.Element => (
                       <>

@@ -82,6 +82,32 @@ async function fetchSkills(): Promise<Skill[]> {
   });
 }
 
+/** The fleet decisions made so far, by the store's decision they read: made again only when the fleet, the id or the fields change. */
+const fleetDecisions = new WeakMap<Decision, { readonly fleet: string; readonly id: string; readonly keys: string; readonly made: Decision }>();
+
+/**
+ * Decision `d` of fleet `fleet` as the manager's page names it: id "<fleet>/<id>" and its fleet, every other
+ * field read from the store when it is read. Copying the fields would read each one through the store's proxy
+ * and make the list depend on all of them; this way only what a row shows is read, by that row.
+ */
+export function fleetDecision(d: Decision, fleet: string): Decision {
+  const keys = Object.keys(d).join("\n");
+  const held = fleetDecisions.get(d);
+
+  if (held?.fleet === fleet && held.id === d.id && held.keys === keys) return held.made;
+  const fields: PropertyDescriptorMap = {};
+
+  // SAFETY: Object.keys of a decision names its fields.
+  for (const k of Object.keys(d) as (keyof Decision)[]) fields[k] = { enumerable: true, get: () => d[k] };
+  fields["id"] = { enumerable: true, value: fleet + "/" + d.id };
+  fields["fleet"] = { enumerable: true, value: fleet };
+  // SAFETY: every field of d, read through, with the id and fleet the manager names it by.
+  const made = Object.defineProperties({}, fields) as Decision;
+  fleetDecisions.set(d, { fleet, id: d.id, keys, made });
+
+  return made;
+}
+
 /** The page's model. */
 export type Model = ReturnType<typeof createModel>;
 
@@ -175,15 +201,18 @@ export function createModel(initial: State) {
   const decisionIndex = createMemo(() => {
     const byId = new Map<string, Decision>();
     const byRef = new Map<string, Decision>();
+    const bySupersedes = new Map<string, Decision>();
 
     for (const d of state.decisions) {
       if (!byId.has(d.id)) byId.set(d.id, d);
       const ref = d.ref?.toLowerCase();
 
       if (ref !== undefined && !byRef.has(ref)) byRef.set(ref, d);
+
+      if (d.supersedes !== undefined && !bySupersedes.has(d.supersedes)) bySupersedes.set(d.supersedes, d);
     }
 
-    return { byId, byRef };
+    return { byId, byRef, bySupersedes };
   });
 
   /** A decision of this ledger by its id, else by its number ("D141", any case), as a link from another fleet may name it. */
@@ -194,11 +223,25 @@ export function createModel(initial: State) {
     return byId.get(id) ?? byRef.get(id.toLowerCase());
   };
 
+  /** The decision of this ledger that replaces decision `id`, if one does. */
+  const supersededBy = (id: string): Decision | undefined => decisionIndex().bySupersedes.get(id);
+
   /** The ledger's decisions, and on a manager's page the ones open in each fleet, as "<fleet>/<id>". */
-  const everyDecision = createMemo((): Decision[] => state.decisions.concat(state.coordinators.flatMap((c) => c.decisions.map((d) => ({ ...d, id: c.id + "/" + d.id, fleet: c.id })))));
+  const everyDecision = createMemo((): Decision[] => state.decisions.concat(state.coordinators.flatMap((c) => c.decisions.map((d) => fleetDecision(d, c.id)))));
   const everyById = createMemo(() => new Map(everyDecision().map((d) => [d.id, d])));
   /** A decision of this ledger or, on a manager's page, a fleet's ("<fleet>/<id>"). */
   const decisionAnywhere = (id: string | null | undefined): Decision | undefined => (id ? everyById().get(id) : undefined);
+
+  /** The decision a finder row names, as record.ts's decisionOf finds it: this ledger's by its id, a fleet's
+   * ("<fleet>/<id>") among that fleet's, else this ledger's of that id held for that fleet. */
+  const decisionNamed = (id: string): Decision | undefined => {
+    const theirs = Core.parseFleetDecision(id);
+
+    if (!theirs) return decisionIndex().byId.get(id);
+    const own = decisionIndex().byId.get(theirs.id);
+
+    return state.coordinators.find((c) => c.id === theirs.fleet)?.decisions.find((d) => d.id === theirs.id) ?? (own?.fleet === theirs.fleet ? own : undefined);
+  };
 
   /* Where the manager's page and the fleets' pages live, so moving between them stays on one address: the
      manager's root, and /f/<fleet>/ under it. Null when there is no manager. */
@@ -358,8 +401,10 @@ export function createModel(initial: State) {
     nameOf,
     roster,
     decisionById,
+    supersededBy,
     everyDecision,
     decisionAnywhere,
+    decisionNamed,
     hubRoot,
     fleetPage,
     managerPage,

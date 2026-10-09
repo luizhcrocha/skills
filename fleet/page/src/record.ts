@@ -67,8 +67,11 @@ function secondOf(go: Go): string | null {
   return "New tab";
 }
 
-/** The decision `id` names: this page's, or a fleet's ("<fleet>/<id>") as the manager holds it. */
-function decisionOf(state: Partial<State>, id: string): Decision | undefined {
+/** The decision a finder row's id names: this page's, or a fleet's ("<fleet>/<id>") as the manager holds it. */
+export type DecisionNamed = (id: string) => Decision | undefined;
+
+/** The decision `id` names in `state`, found by going through its lists. */
+export function decisionOf(state: Partial<State>, id: string): Decision | undefined {
   const theirs = Core.parseFleetDecision(id);
 
   if (!theirs) return state.decisions?.find((d) => d.id === id);
@@ -88,14 +91,14 @@ const KIND_HEADINGS: ReadonlyMap<string, string> = new Map([
   ["log", "Log event"],
 ]);
 
-/** The record of finder row `row`, from `state` and the chat's `messages` as they are now. */
-export function recordOf(row: FindRow, state: Partial<State>, messages: Iterable<Message> | null | undefined): RowRecord {
+/** The record of finder row `row`, from `state` and the chat's `messages` as they are now; `named` finds a decision (the page's own index, else a pass through the lists). */
+export function recordOf(row: FindRow, state: Partial<State>, messages: Iterable<Message> | null | undefined, named: DecisionNamed = (id) => decisionOf(state, id)): RowRecord {
   const base = plain(row, KIND_HEADINGS.get(row.group) ?? cap(groupOf(row.group).one));
   const name = (id: string | null | undefined): string => (id ? (state.agents?.find((a) => a.id === id)?.name ?? id) : "");
   const go = row.go;
 
   if (go.kind === "decision") {
-    const d = decisionOf(state, go.id);
+    const d = named(go.id);
 
     if (!d) return { ...base, kind: "Decision" };
     const open = d.status === "open";

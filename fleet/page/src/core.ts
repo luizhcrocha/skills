@@ -1173,10 +1173,11 @@ function queueOf(decisions: readonly Decision[] | null | undefined, messages: It
 function pendingAnswer(item: Decision | null | undefined, messages: Iterable<Message> | null | undefined): { answer: Message; replies: Message[] } | null {
   if (!item || item.status !== "open" || item.kind === "grill") return null;
   const since = stamp(item.revised || item.opened);
+  const id = item.id;
   let answer: Message | null = null;
   const list = [...(messages ?? [])].sort((a, b) => a.id - b.id);
 
-  for (const m of list) if (m.from === "user" && m.decision === item.id && stamp(m.at) >= since) answer = m;
+  for (const m of list) if (m.from === "user" && m.decision === id && stamp(m.at) >= since) answer = m;
   const found = answer;
 
   return found && { answer: found, replies: list.filter((m) => m.re === found.id && m.from !== "user") };
@@ -1680,9 +1681,17 @@ function awaiting(d: Decision | null | undefined, messages: Iterable<Message> | 
  * chat is not; any other is itself, with the chat given.
  */
 function asItsFleet(d: Decision, messages: Iterable<Message> | null | undefined): { item: Decision; chat: Iterable<Message> } {
-  const { said, ...item } = d;
+  /* Only a fleet's decision with its chat is copied: copying every decision would read all its fields, through the page's store. */
+  const said = d.said;
 
-  return said ? { item: { ...item, id: d.id.slice(d.id.lastIndexOf("/") + 1) }, chat: said } : { item: d, chat: messages ?? [] };
+  return said ? { item: { ...withoutSaid(d), id: d.id.slice(d.id.lastIndexOf("/") + 1) }, chat: said } : { item: d, chat: messages ?? [] };
+}
+
+/** A decision's fields but the fleet's chat about it. */
+function withoutSaid(d: Decision): Decision {
+  const { said: _said, ...item } = d;
+
+  return item;
 }
 
 /**
