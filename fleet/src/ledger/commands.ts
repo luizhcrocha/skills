@@ -977,6 +977,33 @@ const AMOUNT_RE = /(?:US\$|R\$|\$|€)\s?\d[\d.,]*|\d+(?:[.,]\d+)?\s?%/gu;
 
 const VISUAL_RE = /<(?:svg|table|img)\b/iu;
 
+/* A past answer of the user's, referred to: it names its decision's number (D18) in the same sentence. */
+const PAST_RE = /\b(you decided|you said|you chose|your rule|as decided|you approved)\b/giu;
+
+const NUMBER_RE = /\b[DAIG]\d+\b/u;
+
+const SENTENCE_RE = /(?<=[.!?])\s+|\n+/u;
+
+/** The warning for `what` when a sentence of its words refers to what the user decided or said with no decision number in it. */
+function unnamedPastWarning(what: string, texts: readonly string[], body: string): string | undefined {
+  const found: string[] = [];
+
+  for (const text of [...texts, body.replace(/<[^>]*>/gu, " ")]) {
+    for (const sentence of text.split(SENTENCE_RE)) {
+      if (!NUMBER_RE.test(sentence)) found.push(...[...sentence.matchAll(PAST_RE)].map((m) => (m[1] ?? "").toLowerCase()));
+    }
+  }
+
+  if (found.length === 0) return undefined;
+  const said = [...new Set(found)].map((w) => `"${w}"`).join(", ");
+
+  return (
+    `state: ${what} refers to what the user decided (${said}) with no decision number: name it in the same sentence, ` +
+    'its number, when, and what was chosen ("D18, 10-08: Claude over MCP stays read-only until per-person login"); ' +
+    "the page links the number."
+  );
+}
+
 /** The body `d` carries, as written to DIR/decisions/ID.html; "" when it has none. */
 function bodyText(root: string, d: Decision): string {
   return d.body === true ? (readText(join(root, "decisions", `${d.id}.html`)) ?? "") : "";
@@ -1040,6 +1067,12 @@ function readabilityWarnings(d: Decision, fields: ReadonlySet<string>, root?: st
     const found = BASHISMS.flatMap(([name, pattern]) => (pattern.test(nu) ? [name] : []));
 
     if (found.length > 0) out.push(`state: ${d.id}'s manual has bash in a nu block (${found.join(", ")}): Luiz's shell is nushell (\`;\` or \`and\`, \`$env.X = ...\`, \`(...)\`, \`o+e>|\`).`);
+  }
+
+  if (root !== undefined && ["question", "why", "body"].some((k) => fields.has(k))) {
+    const past = unnamedPastWarning(d.id, [d.question ?? "", d.why ?? ""], bodyText(root, d));
+
+    if (past !== undefined) out.push(past);
   }
 
   if (root !== undefined && d.kind === "decision" && ["question", "why", "body"].some((k) => fields.has(k))) {
@@ -1782,6 +1815,10 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
     }
 
     if (askedNow.size > 0 || args.str("why") !== undefined || given(args.str("body"))) {
+      const asked = qs.flatMap((q) => (askedNow.has(q.id) ? [q.body ?? "", q.reason ?? ""] : []));
+      const past = unnamedPastWarning(row.id, [row.why ?? "", ...asked], bodyText(run.root, row));
+
+      if (past !== undefined) run.warn(past);
       const visual = visualWarning(row.id, [row.why ?? "", ...qs.flatMap((q) => (askedNow.has(q.id) ? [q.body ?? ""] : []))], bodyText(run.root, row));
 
       if (visual !== undefined) run.warn(visual);

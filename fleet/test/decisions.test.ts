@@ -303,6 +303,12 @@ describe("readable", () => {
     expect(run("decision", "d2", ...base, "--question", "Should the terms move to the graph database?", "--body", picture).stderr).not.toContain("needs a visual");
   });
 
+  test("a past answer is named by its number", () => {
+    const base = ["--kind", "decision", "--title", "T", "--option", "A: yes | go", "--option", "B: no | stop", "--recommend", "A", "--reason", "r"];
+    expect(run("decision", "d1", ...base, "--question", "Block it, although you decided it stays read-only?", "--why", "w").stderr).toContain('d1 refers to what the user decided ("you decided") with no decision number');
+    expect(run("decision", "d2", ...base, "--question", "Block it, although D18 (10-08) you decided keeps it read-only?", "--why", "w").stderr).not.toContain("refers to what the user decided");
+  });
+
   test("a grilling question takes options and recommends one by id", () => {
     ok("grill", "g1", "--title", "T", "--ask", "t | Where? | a | One store keeps it simple.", "--option", "Q1 a: Postgres | one place to undo", "--option", "Q1 b: Neo4j | quicker to query");
     const questions = (asArray(item("g1")["questions"]) ?? []).map((q) => asObject(q) ?? {});

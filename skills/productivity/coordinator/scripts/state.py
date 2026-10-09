@@ -781,6 +781,28 @@ AMOUNT_RE = re.compile(r"(?:US\$|R\$|\$|€)\s?\d[\d.,]*|\d+(?:[.,]\d+)?\s?%")
 VISUAL_RE = re.compile(r"<(?:svg|table|img)\b", re.I)
 
 
+# A past answer of the user's, referred to: it names its decision's number (D18) in the same sentence.
+PAST_RE = re.compile(r"\b(you decided|you said|you chose|your rule|as decided|you approved)\b", re.I)
+NUMBER_RE = re.compile(r"\b[DAIG]\d+\b")
+SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def unnamed_past_warning(what: str, texts: list[str], body: str) -> str | None:
+    """The warning for `what` when a sentence of its words refers to what the user decided or said with no
+    decision number in it."""
+    found: list[str] = []
+    for text in [*texts, re.sub(r"<[^>]*>", " ", body)]:
+        for sentence in SENTENCE_RE.split(text):
+            if not NUMBER_RE.search(sentence):
+                found += [m.group(1).lower() for m in PAST_RE.finditer(sentence)]
+    if not found:
+        return None
+    said = ", ".join(f'"{w}"' for w in dict.fromkeys(found))
+    return (f"state: {what} refers to what the user decided ({said}) with no decision number: name it in the same sentence, "
+            "its number, when, and what was chosen (\"D18, 10-08: Claude over MCP stays read-only until per-person login\"); "
+            "the page links the number.")
+
+
 def body_text(root: Path, d: dict) -> str:
     """The body `d` carries, as written to DIR/decisions/ID.html; "" when it has none."""
     if not d.get("body"):
@@ -837,6 +859,10 @@ def readability_warnings(d: dict, given: set, root: Path | None = None, workers:
         if found:
             out.append(f"state: {d['id']}'s manual has bash in a nu block ({', '.join(found)}): Luiz's shell is nushell "
                        "(`;` or `and`, `$env.X = ...`, `(...)`, `o+e>|`).")
+    if given & {"question", "why", "body"} and root is not None:
+        past = unnamed_past_warning(d["id"], [d.get("question") or "", d.get("why") or ""], body_text(root, d))
+        if past:
+            out.append(past)
     if d["kind"] == "decision" and given & {"question", "why", "body"} and root is not None:
         visual = visual_warning(d["id"], [d.get("question") or "", d.get("why") or ""], body_text(root, d))
         if visual:
@@ -1185,6 +1211,10 @@ def cmd_grill(state, args):
         for warning in grill_warnings(d, q, q["id"] in asked_now, q["id"] in reasoned, q["id"] in asked_now or q["id"] in given_options, workers_of(state)):
             sys.stderr.write(warning + "\n")
     if asked_now or args.why is not None or args.body:
+        past = unnamed_past_warning(d["id"], [d.get("why") or "", *(t for q in qs if q["id"] in asked_now for t in (q.get("body") or "", q.get("reason") or ""))],
+                                    body_text(Path(args.dir).resolve(), d))
+        if past:
+            sys.stderr.write(past + "\n")
         visual = visual_warning(d["id"], [d.get("why") or "", *(q.get("body") or "" for q in qs if q["id"] in asked_now)],
                                 body_text(Path(args.dir).resolve(), d))
         if visual:

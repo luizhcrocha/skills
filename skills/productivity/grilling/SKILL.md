@@ -44,6 +44,7 @@ When this session runs a coordinator's or a manager's dashboard, the rounds go o
   - two to four options, each a few words and one line on what that means for the user;
   - the recommendation by the option's id, with one sentence that says the trade-off in plain words first; files and lines, ADR and decision numbers and internal terms after it or in the body (the page folds the sources);
   - no worker's id, every internal name glossed the first time, a case id with its name;
+  - something the user decided or said named by its number, when, and what was chosen ("D18, 10-08: read-only until per-person login"), never "as you decided" alone: the page links the number;
   - the context the questions share, and any picture, in `--body`, shown once above the first question; for an architecture question, the what and the how of each option ([coordinator SKILL.md, Grillings and links](../coordinator/SKILL.md#grillings-and-links)).
 - The grilling's own words change with `--title`, `--why` or `--body` on the open grilling, with `--log "what changed"`.
 - Answers arrive in the chat watch as `[<id>]` lines of `Q3: ...`. Record each: `--answer "Q3: <their words>"`. A question that stopped mattering: `--drop "Q4: why"`; one you would now ask differently: `--revise "Q3: <title> | <question> | <option id> | <why>"` (its options stay unless given again with `--option`).

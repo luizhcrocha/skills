@@ -9,10 +9,12 @@
 import { createMemo, createSignal, onCleanup } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
-import { tf } from "./bits.tsx";
+import { tf, usePage } from "./bits.tsx";
 import { copyText, selectAndCopy, type Copied } from "./clip.ts";
 import type { Part } from "./core.ts";
+import { DecisionRef } from "./DecisionRef.tsx";
 import { tokensOf } from "./highlight.ts";
+import { refRuns } from "./refs.ts";
 import { isFormatted, manualBlocks, parseText, spansOf, type Block } from "./text.ts";
 
 /** How long "Copied" shows. */
@@ -72,29 +74,43 @@ export function CodeBlock(props: { readonly lang: string; readonly text: string 
   );
 }
 
-/** A piece of a paragraph's words: plain text, or a mention's part. */
+/** A piece of a paragraph's words: plain text, a mention's part, or a decision's number. */
 interface Piece {
   readonly text: string;
   readonly part?: Part;
+  readonly ref?: { readonly num: string; readonly fleet: string | null };
+}
+
+/** The fleets whose name may come before a decision's number on this page. */
+function useFleets(): () => readonly string[] {
+  const { m } = usePage();
+
+  return () => (m.state.role === "manager" ? m.state.coordinators.map((c) => c.id) : (m.state.fleets ?? []));
 }
 
 /** Words of a paragraph, with the mentions marked in them shown by `mention`. */
-function Words(props: { readonly text: string; readonly parts: readonly Part[]; readonly mention: MentionView | undefined }): JSX.Element {
+function Words(props: { readonly text: string; readonly parts: readonly Part[]; readonly mention: MentionView | undefined; readonly refs: boolean }): JSX.Element {
+  const fleets = props.refs ? useFleets() : () => [];
+
+  /* Plain words, with each decision's number split out when the item's words link them. */
+  const plain = (text: string): Piece[] =>
+    props.refs ? refRuns(text, fleets()).map((r): Piece => (r.kind === "ref" ? { text: r.text, ref: { num: r.num, fleet: r.fleet } } : { text: r.text })) : [{ text }];
+
   const pieces = (): Piece[] => {
-    if (!props.mention) return [{ text: props.text }];
+    if (!props.mention) return plain(props.text);
     const out: Piece[] = [];
     let at = 0;
 
     for (const m of props.text.matchAll(MARK)) {
       const part = props.parts[Number(m[1])];
 
-      if ((m.index ?? 0) > at) out.push({ text: props.text.slice(at, m.index) });
+      if ((m.index ?? 0) > at) out.push(...plain(props.text.slice(at, m.index)));
 
       if (part) out.push({ text: part.text, part });
       at = (m.index ?? 0) + m[0].length;
     }
 
-    if (at < props.text.length) out.push({ text: props.text.slice(at) });
+    if (at < props.text.length) out.push(...plain(props.text.slice(at)));
 
     return out;
   };
@@ -102,7 +118,7 @@ function Words(props: { readonly text: string; readonly parts: readonly Part[]; 
   return (
     <For each={pieces()} keyed={false}>
       {(p) => (
-        <Show when={props.mention && p().part} fallback={p().text}>
+        <Show when={props.mention && p().part} fallback={<Show when={p().ref} fallback={p().text}>{(r) => <DecisionRef num={r().num} fleet={r().fleet} text={p().text} />}</Show>}>
           {(part) => <>{props.mention?.(part())}</>}
         </Show>
       )}
@@ -117,7 +133,7 @@ const unmark = (text: string, parts: readonly Part[]): string => text.replace(MA
 const keyOf = (b: Block, i: number): string => (b.kind === "code" ? `c${String(i)}|${b.lang}|${b.text}` : `p${String(i)}|${b.spans.map((s) => s.kind + s.text).join("\u0000")}`);
 
 /** Blocks, rendered. */
-function Blocks(props: { readonly blocks: readonly Block[]; readonly parts: readonly Part[]; readonly mention: MentionView | undefined }): JSX.Element {
+function Blocks(props: { readonly blocks: readonly Block[]; readonly parts: readonly Part[]; readonly mention: MentionView | undefined; readonly refs: boolean }): JSX.Element {
   const keyed = createMemo(() => props.blocks.map((b, i) => ({ key: keyOf(b, i), b })));
 
   return (
@@ -131,7 +147,7 @@ function Blocks(props: { readonly blocks: readonly Block[]; readonly parts: read
           <p>
             <For each={b.spans} keyed={false}>
               {(s) => (
-                <Show when={s().kind === "code"} fallback={<Words text={s().text} parts={props.parts} mention={props.mention} />}>
+                <Show when={s().kind === "code"} fallback={<Words text={s().text} parts={props.parts} mention={props.mention} refs={props.refs === true} />}>
                   <code class="ic">{unmark(s().text, props.parts)}</code>
                 </Show>
               )}
@@ -145,9 +161,10 @@ function Blocks(props: { readonly blocks: readonly Block[]; readonly parts: read
 
 /**
  * Free text in the page's format, in a `<div class={cls}>`. Text that uses no backtick is one paragraph,
- * exactly as before. A message's `parts` put its mentions back where they were, shown by `mention`.
+ * exactly as before. A message's `parts` put its mentions back where they were, shown by `mention`. With
+ * `refs`, an item's words link each decision number in them to that decision.
  */
-export function Rich(props: { readonly text: string; readonly class?: string; readonly parts?: readonly Part[]; readonly mention?: MentionView }): JSX.Element {
+export function Rich(props: { readonly text: string; readonly class?: string; readonly parts?: readonly Part[]; readonly mention?: MentionView; readonly refs?: boolean }): JSX.Element {
   const parts = (): readonly Part[] => props.parts ?? [];
 
   /* A message's words with each mention as a mark the format reads as plain text. */
@@ -161,7 +178,7 @@ export function Rich(props: { readonly text: string; readonly class?: string; re
 
   return (
     <div class={"rich" + (props.class ? " " + props.class : "")}>
-      <Blocks blocks={blocks()} parts={parts()} mention={props.mention} />
+      <Blocks blocks={blocks()} parts={parts()} mention={props.mention} refs={props.refs === true} />
     </div>
   );
 }
@@ -174,7 +191,7 @@ export function ManualText(props: { readonly text: string }): JSX.Element {
     <Show when={blocks()} fallback={<pre class="manual">{props.text}</pre>}>
       {(b) => (
         <div class="rich manual-rich">
-          <Blocks blocks={b()} parts={[]} mention={undefined} />
+          <Blocks blocks={b()} parts={[]} mention={undefined} refs={false} />
         </div>
       )}
     </Show>

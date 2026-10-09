@@ -265,7 +265,13 @@ Checked in this order:
    given; a decision's number or id such as D40, g26 or p12 is not one unless a worker has it); `state: <id>'s why is N characters: ...` (over 200); `state:
    <id>'s consequences over 160 characters: A (212), ... ` (`--option`); `state: <id>'s manual has
    bash in a nu block (&&, export X=, $(...), 2>&1): ...` (`--manual`, the patterns found in its nu
-   blocks, in that order); for a choice (kind decision) whose question, why or body this command gave,
+   blocks, in that order); when the question, why or body was given, `state: <id> refers to what the
+   user decided ("you decided", "your rule") with no decision number: name it in the same sentence,
+   its number, when, and what was chosen (...); the page links the number.` for each phrase (you
+   decided, you said, you chose, your rule, as decided, you approved; any case; each once, lower-cased,
+   in the order found) in a sentence of the question, why or body text (tags taken out; a sentence ends
+   at `.`, `!` or `?` and a space, or a line break) that holds no `D`, `A`, `I` or `G` and digits as a
+   word; then, for a choice (kind decision) whose question, why or body this command gave,
    `state: <id> looks like it needs a visual (graph, database; 3 amounts to compare): see coordinator
    SKILL.md #decisions (show-me triggers): a small inline SVG of the parts, a table of the numbers, in
    --body.` when its question, why and body text (tags taken out) name database, graph, neo4j,
@@ -355,8 +361,9 @@ Checked in this order:
   (`state: <id>'s Q<n> consequences over 160 characters: b (162). Say each in one line; the detail goes
   in --body.`) and more than four (`state: <id>'s Q<n> has 5 options: give 2 to 4; a choice the user
   makes on its own is a question of its own.`). Then, when questions were asked or revised or `--why`
-  or `--body` given, the show-me warning as for a decision, on the grilling's why, the QUESTION parts
-  asked or revised in this command, and its body.
+  or `--body` given, the past-answer warning as for a decision, on the grilling's why, the QUESTION and
+  WHY parts asked or revised in this command, and its body; then the show-me warning, on its why, the
+  QUESTION parts asked or revised in this command, and its body.
 - New questions, revisions, options, reasons, a body, or a moved title or why log `asked`
   (`<title>: N new question(s)` / `a question revised` / `options given` / `reasons added`, else what
   of the grilling moved, `the title changed, the why changed, the context changed` as applies;
@@ -1679,7 +1686,8 @@ fleet's refusal of lanes that meet, the isolated fleet's warning, `show`, valida
 `--option`, its recommendation by id, a grilling's `--body`, the reason's warnings),
 `why-limit` (a why over 400 refused, over 200 warned, a worker's id or name from the ledger and the internal names warned),
 `grill-revise` (an open grilling's title, why and context revised with `--log`),
-`show-me-triggers` (the warning that a decision or grilling needs a picture),
+`show-me-triggers` (the warning that a decision or grilling needs a picture), `past-decision` (a past answer
+referred to with no number),
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each
 hand-written trace, the same steps with every state command rendering, plus `render-page` (a
 session's scratchpad with its transcript, links, markup and U+2028 in the text, unread chat, a

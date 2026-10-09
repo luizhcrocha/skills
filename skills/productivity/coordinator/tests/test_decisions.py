@@ -255,6 +255,13 @@ class ReadableTest(Fleet):
         r = self.run_cli("decision", "d2", *base, "--question", "Should the terms move to the graph database?", "--body", str(picture))
         self.assertNotIn("needs a visual", r.stderr)
 
+    def test_a_past_answer_is_named_by_its_number(self):
+        base = ["--kind", "decision", "--title", "T", "--option", "A: yes | go", "--option", "B: no | stop", "--recommend", "A", "--reason", "r"]
+        r = self.run_cli("decision", "d1", *base, "--question", "Block it, although you decided it stays read-only?", "--why", "w")
+        self.assertIn('d1 refers to what the user decided ("you decided") with no decision number', r.stderr)
+        r = self.run_cli("decision", "d2", *base, "--question", "Block it, although D18 (10-08) you decided keeps it read-only?", "--why", "w")
+        self.assertNotIn("refers to what the user decided", r.stderr)
+
     def test_a_grilling_question_takes_options_and_recommends_one_by_id(self):
         self.ok("grill", "g1", "--title", "T", "--ask", "t | Where? | a | One store keeps it simple.",
                 "--option", "Q1 a: Postgres | one place to undo", "--option", "Q1 b: Neo4j | quicker to query")

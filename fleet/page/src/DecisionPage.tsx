@@ -153,7 +153,7 @@ function Options(props: { readonly d: Decision; readonly pick: boolean }): JSX.E
                 <PillAs cls="recommended plain" text="recommended" />
               </Show>
             </span>
-            <Show when={o().consequence}>{(c) => <Rich class="consequence" text={c()} />}</Show>
+            <Show when={o().consequence}>{(c) => <Rich class="consequence" text={c()} refs />}</Show>
           </>
         );
 
@@ -379,7 +379,7 @@ function GrillWhy(props: { readonly q: Question; readonly pick: string }): JSX.E
       <h4>{props.pick}</h4>
       <Show when={reason().text} fallback={<p class="gq-why muted">No reason given. Ask for one in a side chat, or with a note.</p>}>
         <div class={"gq-why" + (long() && !open() ? " folded" : "")}>
-          <Rich text={reason().text} />
+          <Rich text={reason().text} refs />
         </div>
         <Show when={long()}>
           <button type="button" class="btn small gq-why-more" aria-expanded={tf(open())} onClick={() => setOpen(!open())}>
@@ -423,7 +423,7 @@ function GrillQuestion(props: { readonly e: GrillEntry; readonly head: JSX.Eleme
     <fieldset class={"gq" + (props.e.depth > 0 ? " follow" : "")} data-q={q().id} style={`--depth:${props.e.depth}`}>
       <legend>{props.head}</legend>
       {props.parent}
-      <Rich class="gq-ask" text={shown().lead} />
+      <Rich class="gq-ask" text={shown().lead} refs />
       <Show when={shown().options.length} fallback={null}>
         <div class="gq-options" role={props.writable ? undefined : "list"}>
           <For each={shown().options} keyed={(o) => o.id}>
@@ -437,7 +437,7 @@ function GrillQuestion(props: { readonly e: GrillEntry; readonly head: JSX.Eleme
                       <PillAs cls="recommended plain" text="recommended" />
                     </Show>
                   </span>
-                  <Show when={o().consequence}>{(c) => <Rich class="consequence" text={c()} />}</Show>
+                  <Show when={o().consequence}>{(c) => <Rich class="consequence" text={c()} refs />}</Show>
                 </>
               );
 
@@ -453,7 +453,7 @@ function GrillQuestion(props: { readonly e: GrillEntry; readonly head: JSX.Eleme
           </For>
         </div>
       </Show>
-      <Show when={shown().after}>{(a) => <Rich class="gq-after" text={a()} />}</Show>
+      <Show when={shown().after}>{(a) => <Rich class="gq-after" text={a()} refs />}</Show>
       <GrillWhy q={q()} pick={pick()} />
       <Show when={props.e.sent}>
         <p class="gq-sent">
@@ -869,10 +869,10 @@ function Origin(props: { readonly d: Decision }): JSX.Element {
 /** A part of a long question's rest: a paragraph, or its numbered items as a list. */
 function AskPartView(props: { readonly part: AskPart }): JSX.Element {
   return (
-    <Show when={props.part.kind === "list" ? props.part.items : null} fallback={<Rich text={props.part.kind === "para" ? props.part.text : ""} />}>
+    <Show when={props.part.kind === "list" ? props.part.items : null} fallback={<Rich text={props.part.kind === "para" ? props.part.text : ""} refs />}>
       {(items) => (
         <ol>
-          <For each={items()}>{(item) => <li><Rich text={item} /></li>}</For>
+          <For each={items()}>{(item) => <li><Rich text={item} refs /></li>}</For>
         </ol>
       )}
     </Show>
@@ -904,7 +904,7 @@ function Why(props: { readonly text: string; readonly blocking: boolean }): JSX.
     <div class={"dv-why" + (props.blocking ? " blocking" : "") + (long() && !open() ? " folded" : "")}>
       <h3>{whyHeading(props.text, props.blocking)}</h3>
       <div class="dv-why-text">
-        <Rich text={props.text} />
+        <Rich text={props.text} refs />
       </div>
       <Show when={long()}>
         <button type="button" class="btn small dv-why-more" aria-expanded={tf(open())} onClick={() => setOpen(!open())}>
@@ -1010,7 +1010,7 @@ function Info(props: { readonly d: Decision }): JSX.Element {
         )}
       </Show>
       <section class="dv-ask" aria-label="The question">
-        <Rich class="dv-question" text={ask().lead} />
+        <Rich class="dv-question" text={ask().lead} refs />
         <Show when={d().kind === "grill" && open() ? d().question : null}>{(n) => <p class="dv-meta dv-count">{n()}</p>}</Show>
         <Show when={ask().more.length}>
           <div class="dv-ask-more">
@@ -1032,7 +1032,7 @@ function Recommendation(props: { readonly d: Decision }): JSX.Element {
       <aside class="dv-rec" aria-label="Recommended">
         <h3>Recommended</h3>
         <p class="dv-rec-pick">{recommended() ? `${recommended()?.id ?? ""}: ${recommended()?.label ?? ""}` : props.d.recommend}</p>
-        <Show when={props.d.reason}>{(r) => <Rich class="dv-rec-why" text={r()} />}</Show>
+        <Show when={props.d.reason}>{(r) => <Rich class="dv-rec-why" text={r()} refs />}</Show>
       </aside>
     </Show>
   );
