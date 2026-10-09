@@ -584,6 +584,9 @@ test("stuckOf: an answer the fleet has not recorded after five minutes, a chat n
   const rows = Core.stuckOf(own, [], [answer], now);
   assert.deepEqual(rows.map((r) => [r.ref, r.what]), [["A6", "answer not recorded"], ["", "chat not read"]]);
   assert.equal(Core.stuckOf(own, [], [answer], Date.parse("2026-09-29T15:20:00Z")).length, 0, "not before five minutes");
+  const reply = { id: 81, from: "coordinator", to: ["user"], re: 80, at: "2026-09-29T15:19:00Z", text: "Recorded" };
+  assert.deepEqual(Core.stuckOf({ decisions: own.decisions }, [], [answer, reply], now).map((r) => [r.ref, r.what]), [["A6", "answer not recorded"]],
+    "a reply in the chat does not record it: only the decision command does");
   const fleets = [{ id: "infra", decisions: [{ id: "d-a", ref: "A6", title: "Two things", answered: "2026-09-29T15:18:00Z" }], hearing: { on: true, seen: 80, unread: 0 } }];
   assert.deepEqual(Core.stuckOf({ decisions: [] }, fleets, [], now).map((r) => [r.fleet, r.ref]), [["infra", "A6"]]);
 });

@@ -1642,8 +1642,9 @@ function stuckOf(
     if (d.status !== "open" || d.kind === "grill") continue;
     const p = pendingAnswer(d, list);
 
-    // A hold records the answers given until then; one given after it is news again.
-    if (!p || p.replies.length || (isHeld(d) && stamp(p.answer.at) <= stamp(d.held_at))) continue;
+    // A hold records the answers given until then; one given after it is news again. A reply in the chat
+    // records nothing: only the decision command does (the ledger's `answerRecorded`, fleet/src/health.ts).
+    if (!p || (isHeld(d) && stamp(p.answer.at) <= stamp(d.held_at))) continue;
 
     if (now - stamp(p.answer.at) > STUCK_MS) rows.push({ fleet: "", ref: d.ref || "", title: d.title, since: p.answer.at, what: "answer not recorded", id: d.id, kind: d.kind });
   }
