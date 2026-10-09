@@ -794,7 +794,7 @@ function Info(props: { readonly d: Decision }): JSX.Element {
   const recommended = () => d().options.find((o) => o.id === d().recommend);
   const successor = () => m.state.decisions.find((x) => x.supersedes === d().id);
   const before = () => (d().supersedes ? m.decisionById(d().supersedes) : undefined);
-  const ask = createMemo(() => askParts(d().question ?? ""));
+  const ask = createMemo(() => askParts(d().question ?? "", d().title));
 
   return (
     <>

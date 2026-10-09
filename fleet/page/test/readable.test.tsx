@@ -36,6 +36,8 @@ describe("askParts", () => {
   test("a long one: its asking sentence large, the rest in paragraphs, its numbered run as a list", () => {
     const ask = askParts(LONG);
     expect(ask.lead).toBe("Approve?");
+    expect(askParts(LONG, "OCR build: approve the plan and its four settings").lead).toBe("OCR build: approve the plan and its four settings?");
+    expect(askParts(LONG.replace("Approve?", "Do you approve the plan with these four settings?"), "OCR build").lead).toBe("Do you approve the plan with these four settings?");
     expect(ask.more.at(-1)).toEqual({
       kind: "list",
       items: ["GPUs (10 at once): entities 6, OCR 3, Chandra 1.", "A US$5 cap for the checks.", "Old files' copies go up to Box only after a trial you look at.", "No PDF/A for now."],
@@ -153,7 +155,7 @@ test("the page reads top-down: the ask, the recommendation, the options, then th
 });
 
 test("a legacy long question shows its ask large and the rest in parts, its settings as a list", () => {
-  expect(root.querySelector("#dv-info .dv-question")?.textContent).toBe("Approve?");
+  expect(root.querySelector("#dv-info .dv-question")?.textContent).toBe("OCR build: approve the plan and its four settings?");
   const items = [...root.querySelectorAll(".dv-ask-more ol > li")].map((li) => li.textContent);
   expect(items).toEqual(["GPUs (10 at once): entities 6, OCR 3, Chandra 1.", "A US$5 cap for the checks.", "Old files' copies go up to Box only after a trial you look at.", "No PDF/A for now."]);
   expect(page.m.decisionById("d40")?.question).toBe(LONG);

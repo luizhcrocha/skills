@@ -979,6 +979,22 @@ function readabilityWarnings(d: Decision, fields: ReadonlySet<string>): string[]
   return out;
 }
 
+/** A decision's revisable values, each as JSON, to tell which a revision moved. */
+function snapshot(d: Decision): Map<string, string> {
+  const out = new Map<string, string>(FIELDS.map((k) => [k, JSON.stringify(d[k] ?? null)]));
+  out.set("option", JSON.stringify(d.options ?? null));
+  out.set("blocking", JSON.stringify(d.blocking ?? null));
+
+  return out;
+}
+
+/** The fields of `changed` whose value moved since `before`, as the revision's event lists them; one with no value kept (body, asks, refusal) counts as moved. */
+function movedFields(changed: readonly string[], before: ReadonlyMap<string, string>, d: Decision): string {
+  const after = snapshot(d);
+
+  return changed.filter((k) => !before.has(k) || before.get(k) !== after.get(k)).join(", ");
+}
+
 /** The fields of the decision a command wrote, for its warnings. */
 function writtenFields(args: Args): Set<string> {
   const out = new Set(["question", "why", "manual"].filter((k) => args.str(k) !== undefined));
@@ -1287,6 +1303,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       yield* checkQuestion(question, kindNow);
 
       const changed: string[] = FIELDS.filter((k) => args.str(k) !== undefined);
+      const before = snapshot(d);
 
       if (options !== undefined && options.length > 0) changed.push("option");
 
@@ -1339,7 +1356,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         row.change = given(logText) ? logText : null;
         log(run, ledger, {
           kind: "asked",
-          text: passedOn ? `${row.title ?? "None"} now asks you: ${row.question ?? "None"}` : `${row.title ?? "None"} changed: ${given(logText) ? logText : changed.join(", ")}`,
+          text: passedOn ? `${row.title ?? "None"} now asks you: ${row.question ?? "None"}` : `${row.title ?? "None"} changed: ${given(logText) ? logText : movedFields(changed, before, row) || "nothing new (the same values given again)"}`,
           agent: row.agent ?? null,
           important: passedOn && row.blocking === true,
           decision: row.id,
@@ -1489,11 +1506,15 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
     }
 
     const revisions = args.list("revise") ?? [];
+    /* A question asked or revised over QUESTION_NEAR, as [Q id, characters]: warned once the round is taken. */
+    const longAsks: [string, number][] = [];
 
     for (const text of revisions) {
       const [qid, rest] = yield* questionOf(text, "--revise");
       const q = yield* lookup(qid);
       const [title, body, recommend, why] = yield* asked(rest);
+
+      if (chars(body) > QUESTION_NEAR) longAsks.push([qid, chars(body)]);
       Object.assign(q, { title, body, recommend, reason: why, status: "open", answer: null, asked: stamp(run) });
     }
 
@@ -1529,10 +1550,16 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
 
       qs.push(q);
       added.push(q);
+
+      if (chars(body) > QUESTION_NEAR) longAsks.push([q.id, chars(body)]);
     }
 
     const open = qs.filter((q) => q.status === "open");
     row.question = open.length > 0 ? `${open.length} question${open.length === 1 ? "" : "s"} to answer` : "Every question is answered";
+
+    for (const [qid, n] of longAsks) {
+      run.warn(`state: ${row.id}'s ${qid.toUpperCase()} is ${String(n)} characters: ask it in one or two plain sentences with its choices; the evidence goes in its WHY part.`);
+    }
 
     if (added.length > 0 && created) {
       run.say(

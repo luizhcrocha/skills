@@ -245,7 +245,9 @@ Checked in this order:
    first; the kind check runs on the result; `--body`/`--no-body` (the latter deletes the file).
    When anything changed, `revised` = now, `change` = `--log`, and an `asked` event is logged:
    `<title> now asks you: <question>` (important when blocking) when `--asks user` passes a
-   manager's decision on, else `<title> changed: <--log, or the changed fields>`. A revision
+   manager's decision on, else `<title> changed: <--log, or the fields whose value moved (body,
+   asks and a permission's refusal count as moved when given), or "nothing new (the same values
+   given again)">`. A revision
    that gives `--question`, `--option` or `--manual` re-presents the item: it clears a hold.
    **Warnings** on stderr, the write done, after the kind check and the body (new or known, not
    for a permission or a grilling), in this order, each only for a field this command gave:
@@ -306,6 +308,10 @@ Checked in this order:
   questions `q<n+1>` (`of` = `--of`, lower-cased; `--of` must name a question). A `Q<n>` that
   doesn't exist is refused, as is text without the `Q3:` head. `--ask` needs four non-empty parts.
 - `question` becomes `N question(s) to answer` or `Every question is answered`.
+- A question asked or revised whose QUESTION part is over 300 characters is warned, never refused,
+  once the round is taken, revisions first then new questions, in the order given: `state: <id>'s
+  Q<n> is N characters: ask it in one or two plain sentences with its choices; the evidence goes in
+  its WHY part.`
 - New questions, revisions or reasons log `asked` (`<title>: N new question(s)` / `a question
   revised` / `reasons added`), important when blocking; on a known grilling they stamp
   `revised`, and new questions or revisions clear a hold. The first round prints the `wait` line.

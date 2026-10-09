@@ -211,6 +211,20 @@ class ReadableTest(Fleet):
         r = self.run_cli("decision", "d1", "--question", "Ship it now?", "--same-options", "--log", "now, not tonight")
         self.assertEqual(r.stderr, "")
 
+    def test_a_revision_logs_only_the_fields_it_moved(self):
+        self.ok("decision", "d1", "--kind", "decision", "--title", "T", "--question", "q?", *self.BASE)
+        self.ok("decision", "d1", "--kind", "decision", "--title", "T", "--question", "q?", "--why", "w2", "--same-options")
+        self.assertEqual(self.state()["events"][-1]["text"], "T changed: why")
+        self.ok("decision", "d1", "--title", "T")
+        self.assertEqual(self.state()["events"][-1]["text"], "T changed: nothing new (the same values given again)")
+
+    def test_a_long_grilling_question_is_warned_not_refused(self):
+        r = self.run_cli("grill", "g1", "--title", "T", "--ask", "t | " + "q" * 301 + " | r | w")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("g1's Q1 is 301 characters", r.stderr)
+        r = self.run_cli("grill", "g1", "--revise", "Q1: t | short now? | r | w")
+        self.assertNotIn("characters", r.stderr)
+
     @unittest.skipUnless(shutil.which("nu"), "needs nu on PATH")
     def test_a_nu_block_that_does_not_parse_in_nushell_is_refused(self):
         base = ["--kind", "action", "--title", "T", "--question", "q", "--why", "w"]

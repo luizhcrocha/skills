@@ -15,6 +15,9 @@ export interface Ask {
   readonly more: readonly AskPart[];
 }
 
+/** An asking sentence shorter than this ("Approve?") is too thin to lead: the title, asked, leads instead. */
+export const ASK_THIN = 25;
+
 /** A question longer than this, in characters, is shown in parts. */
 export const ASK_LONG = 300;
 
@@ -80,8 +83,16 @@ function partsOf(text: string): AskPart[] {
   return [...paragraphs(text.slice(0, at[0])), { kind: "list", items: [...items, lastItem] }, ...paragraphs(after.join(" "))];
 }
 
-/** The question `q` as shown: as it is when short or already laid out (paragraphs, code); else the ask and the rest in parts. */
-export function askParts(q: string): Ask {
+/** `title` as a question: its end punctuation replaced by a question mark. */
+function asked(title: string): string {
+  return title.trim().replace(/[.!?:;,\s]*$/u, "?");
+}
+
+/**
+ * The question `q` as shown: as it is when short or already laid out (paragraphs, code); else the ask and the
+ * rest in parts. An asking sentence under ASK_THIN characters gives way to `title`, asked, when there is one.
+ */
+export function askParts(q: string, title = ""): Ask {
   if (chars(q) <= ASK_LONG || q.includes("```")) return { lead: q, more: [] };
 
   if (q.includes("\n\n")) {
@@ -94,6 +105,7 @@ export function askParts(q: string): Ask {
   const at = Math.max(0, sentences.findIndex((s) => s.endsWith("?")));
   const lead = sentences[at] ?? q;
   const rest = sentences.filter((_, i) => i !== at).join(" ");
+  const thin = chars(lead) < ASK_THIN && title.trim() !== "";
 
-  return { lead, more: rest === "" ? [] : partsOf(rest) };
+  return { lead: thin ? asked(title) : lead, more: rest === "" ? [] : partsOf(rest) };
 }

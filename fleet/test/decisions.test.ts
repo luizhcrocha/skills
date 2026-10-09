@@ -257,6 +257,22 @@ describe("readable", () => {
     expect(r.stderr).toBe("");
   });
 
+  test("a revision logs only the fields it moved", () => {
+    ok("decision", "d1", "--kind", "decision", "--title", "T", "--question", "q?", ...BASE);
+    ok("decision", "d1", "--kind", "decision", "--title", "T", "--question", "q?", "--why", "w2", "--same-options");
+    expect(lastEvent()["text"]).toBe("T changed: why");
+    ok("decision", "d1", "--title", "T");
+    expect(lastEvent()["text"]).toBe("T changed: nothing new (the same values given again)");
+  });
+
+  test("a long grilling question is warned, not refused", () => {
+    let r = run("grill", "g1", "--title", "T", "--ask", "t | " + "q".repeat(301) + " | r | w");
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toContain("g1's Q1 is 301 characters");
+    r = run("grill", "g1", "--revise", "Q1: t | short now? | r | w");
+    expect(r.stderr).not.toContain("characters");
+  });
+
   test.skipIf(!hasNu)("a nu block that does not parse in nushell is refused", () => {
     const base = ["--kind", "action", "--title", "T", "--question", "q", "--why", "w"];
     expect(refused("decision", "a1", ...base, "--manual", "Run:\n```nu\nfor f in *; do echo $f; done\n```")).toContain(

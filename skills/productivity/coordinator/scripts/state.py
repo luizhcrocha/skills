@@ -894,6 +894,7 @@ def cmd_decision(state, args):
                  "(--option, once per option, with --recommend and --reason), or pass --same-options when they still answer it")
         check_question(args.question, args.kind or d["kind"])
         changed = [k for k in FIELDS if getattr(args, k) is not None] + [k for k in ("option", "body") if getattr(args, k)]
+        before = {**{k: d.get(k) for k in FIELDS}, "option": d.get("options"), "blocking": d.get("blocking")}
         for key in FIELDS:
             if key in ("step", "milestone"):
                 continue
@@ -921,7 +922,9 @@ def cmd_decision(state, args):
                              "(--log \"...\"); the page's history shows it, and the user should not have to compare two versions.\n")
         if changed:
             d["revised"], d["change"] = now(), args.log or None
-            text = f"{d['title']} now asks you: {d['question']}" if passed_on else f"{d['title']} changed: {args.log or ', '.join(changed)}"
+            moved = [k for k in changed if k not in before or before[k] != (d.get("options") if k == "option" else d.get(k))]
+            text = f"{d['title']} now asks you: {d['question']}" if passed_on else \
+                f"{d['title']} changed: {args.log or ', '.join(moved) or 'nothing new (the same values given again)'}"
             log(state, "asked", text, d["agent"], passed_on and d["blocking"], d["id"])
             if any(k in changed for k in ("question", "option", "manual")):
                 unheld(d)  # re-presented with new words: back on the user's list
@@ -997,11 +1000,14 @@ def cmd_grill(state, args):
         if qid not in byid:
             fail(f"no question {qid.upper()} in {d['id']}")
         byid[qid].update(status="dropped", answer=None, dropped=reason, answered=now())
+    long_asks = []  # (Q id, characters) of a question asked or revised over QUESTION_NEAR: warned once the round is taken
     for text in args.revise or []:
         qid, rest = _q(text, "--revise")
         if qid not in byid:
             fail(f"no question {qid.upper()} in {d['id']}")
         title, body, rec, why = _asked(rest)
+        if len(body) > QUESTION_NEAR:
+            long_asks.append((qid, len(body)))
         byid[qid].update(title=title, body=body, recommend=rec, reason=why, status="open", answer=None, asked=now())
     for text in args.reason or []:
         qid, why = _q(text, "--reason")
@@ -1015,8 +1021,13 @@ def cmd_grill(state, args):
              "status": "open", "answer": None, "asked": now()}
         qs.append(q)
         new.append(q)
+        if len(body) > QUESTION_NEAR:
+            long_asks.append((q["id"], len(body)))
     open_ = [q for q in qs if q["status"] == "open"]
     d["question"] = f"{len(open_)} question{'s' if len(open_) != 1 else ''} to answer" if open_ else "Every question is answered"
+    for qid, n in long_asks:
+        sys.stderr.write(f"state: {d['id']}'s {qid.upper()} is {n} characters: ask it in one or two plain sentences with its "
+                         "choices; the evidence goes in its WHY part.\n")
     if new and created:
         print(f"asked {d['id']}. Arm its answers' wake now, as a background command (run_in_background): "
               f"`{FLEET} chat {Path(args.dir).resolve()} wait {d['id']}`; arm it again after each round.")
