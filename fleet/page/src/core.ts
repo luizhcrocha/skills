@@ -90,6 +90,8 @@ export interface Question {
   readonly of?: string;
   readonly answer?: string;
   readonly dropped?: string;
+  /** Its choices, when asked with `--option`. */
+  readonly options?: readonly DecisionOption[];
 }
 
 /** The call auto mode refused, which a permission lets through once. */
@@ -987,8 +989,20 @@ function grillState(given: Decision, messages: Iterable<Message> | null | undefi
   };
 }
 
-/** The message a grilling's form sends: one "Q3: answer" line per question the viewer answered now. */
-function grillAnswerText(item: Decision, picks: readonly { readonly id: string; readonly pick: string; readonly text?: string | null }[]): { text: string } | { error: string } {
+/** A grilling question's choice in the form: the recommendation, the viewer's own words, later, or an option by its id (with its label). */
+export interface GrillPick {
+  readonly id: string;
+  readonly pick: string;
+  readonly text?: string | null;
+  readonly label?: string | null;
+  readonly recommended?: boolean;
+}
+
+/**
+ * The message a grilling's form sends: one "Q3: answer" line per question the viewer answered now; an option
+ * picked reads "Q3: b: <label>", "(as recommended)" when it is, and the viewer's words after it as a note.
+ */
+function grillAnswerText(item: Decision, picks: readonly GrillPick[]): { text: string } | { error: string } {
   const lines: string[] = [];
 
   for (const p of picks) {
@@ -1001,7 +1015,11 @@ function grillAnswerText(item: Decision, picks: readonly { readonly id: string; 
       .replace(/\s*\n\s*/gu, " ");
 
     if (p.pick === "own" && !own) return { error: `${q.id.toUpperCase()}: write your answer, or take the recommendation.` };
-    lines.push(`${q.id.toUpperCase()}: ${p.pick === "rec" ? "ok, as recommended (" + String(q.recommend) + ")" + (own ? ". " + own : "") : own}`);
+    const note = own ? ". " + own : "";
+
+    if (p.pick === "rec") lines.push(`${q.id.toUpperCase()}: ok, as recommended (${String(q.recommend)})${note}`);
+    else if (p.pick === "own") lines.push(`${q.id.toUpperCase()}: ${own}`);
+    else lines.push(`${q.id.toUpperCase()}: ${p.pick}${p.label ? ": " + p.label : ""}${p.recommended ? " (as recommended)" : ""}${note}`);
   }
 
   return lines.length ? { text: lines.join("\n") } : { error: "Answer at least one question." };

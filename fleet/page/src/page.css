@@ -878,17 +878,27 @@
   .link-title:hover { text-decoration: underline; }
   .link-row.down .link-title { color: var(--muted); }
   .part-note { margin: -4px 0 8px; font-size: var(--fs-s); }
-  .gq { margin: 0 0 14px calc(var(--depth, 0) * 18px); padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--you); border-radius: 10px; background: var(--card); min-width: 0; }
-  .gq legend, .gq-title { font-weight: 700; padding: 0 4px; margin: 0; }
-  .gq-id { font-variant-numeric: tabular-nums; color: var(--you); }
-  .gq-of { font-weight: 500; color: var(--muted); font-size: var(--fs-xs); }
-  .gq-body { white-space: pre-wrap; margin: 6px 0 10px; }
-  .gq textarea { width: 100%; box-sizing: border-box; margin: 4px 0 6px; font: inherit; font-size: 16px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
-  .gq.sent { border-left-color: var(--run); }
-  .gq-sent { color: var(--muted); font-size: var(--fs-s); }
-  .gq-rec { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px; background: var(--card-2); }
-  .gq-rec p { margin: 0; white-space: pre-wrap; }
-  .gq-why { margin-top: 4px !important; font-size: var(--fs-s); }
+  .dv .gq { margin: 0 0 16px calc(var(--depth, 0) * clamp(10px, 3vw, 18px)); padding: clamp(12px, 3vw, 14px) clamp(12px, 3vw, 16px) clamp(12px, 3vw, 16px); border: 1px solid var(--line); border-left: 3px solid var(--you); border-radius: 12px; background: var(--card); min-width: 0; display: grid; gap: 10px; }
+  .dv .gq.follow { border-left-color: var(--faint); background: color-mix(in srgb, var(--card) 60%, var(--card-2)); }
+  .dv .gq legend, .dv .gq-title { color: var(--text); font-weight: 700; font-stretch: var(--narrow); font-size: 1.0625rem; line-height: 1.25; padding: 0; margin: 0; overflow-wrap: anywhere; }
+  .dv .gq legend { float: left; width: 100%; }
+  .gq .option.own, .gq .option.later { padding-block: 9px; }
+  .gq .option.later .label { font-weight: 600; font-size: 1rem; }
+  .gq-id { font-variant-numeric: tabular-nums; color: var(--you); margin-right: 2px; }
+  .gq-of { margin: -4px 0 0; font-weight: 500; color: var(--muted); font-size: var(--fs-s); }
+  .gq-ask, .gq-after { max-width: 68ch; font-size: 1rem; line-height: 1.5; overflow-wrap: anywhere; }
+  .gq-options { display: grid; gap: 8px; min-width: 0; }
+  .gq .option.rec:not(:has(input)) { border-color: var(--accent); }
+  .gq textarea { width: 100%; box-sizing: border-box; margin: 0; font: inherit; font-size: 16px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
+  .dv .gq.sent { border-left-color: var(--run); gap: 4px; }
+  .gq-sent { color: var(--muted); font-size: var(--fs-s); margin: 0; }
+  .gq-rec { display: grid; gap: 4px; min-width: 0; padding: 10px 12px 10px 11px; border-radius: 10px; background: var(--accent-soft); border-left: 4px solid var(--accent); }
+  .gq-rec h4 { margin: 0; font-size: var(--fs-s); color: var(--accent); font-weight: 700; overflow-wrap: anywhere; }
+  .gq-why { max-width: 68ch; min-width: 0; overflow-wrap: anywhere; }
+  .gq-why.folded { max-height: 3em; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 50%, transparent); mask-image: linear-gradient(to bottom, #000 50%, transparent); }
+  .gq-why-more { justify-self: start; }
+  .gq-sources > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-s); font-weight: 600; }
+  .gq-sources ul { margin: 4px 0 0; padding-left: 18px; font-size: var(--fs-s); color: var(--muted); }
   .gq-done ul { margin: 8px 0 0; padding-left: 18px; }
   .gq-done li.dropped { color: var(--muted); }
   .btn.small { min-height: var(--tap); padding: 0 10px; font-size: var(--fs-xs); }

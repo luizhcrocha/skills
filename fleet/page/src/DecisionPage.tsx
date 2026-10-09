@@ -12,9 +12,10 @@ import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "so
 import { For, Match, Show, Switch, type JSX } from "@solidjs/web";
 
 import { askParts, type AskPart } from "./ask.ts";
+import { grillAsk, grillReason } from "./grill.ts";
 import { listen, PillAs, RefTag, tf, usePage, Who } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
-import { Core, type Decision, type GrillEntry, type JsonRecord, type Queue } from "./core.ts";
+import { Core, type Decision, type GrillEntry, type JsonRecord, type Question, type Queue } from "./core.ts";
 import { DecisionHistory } from "./DecisionHistory.tsx";
 import { DetailsFold } from "./DetailsFold.tsx";
 import { DecisionThread } from "./DecisionThread.tsx";
@@ -81,7 +82,7 @@ export interface EvidenceFrame {
 export const evidence: EvidenceFrame = { frame: null };
 
 /** The evidence: the fragment a worker or the coordinator wrote for this decision. */
-function Evidence(props: { readonly d: Decision | undefined }): JSX.Element {
+function Evidence(props: { readonly d: Decision | undefined; readonly title?: string }): JSX.Element {
   const { ui } = usePage();
   const key = createMemo(() => (props.d && props.d.body ? props.d.id + "|" + ui.revisionOf(props.d) : ""));
   const [holder, setHolder] = createSignal<HTMLDivElement>();
@@ -130,7 +131,7 @@ function Evidence(props: { readonly d: Decision | undefined }): JSX.Element {
 
   return (
     <section class="dv-body" id="dv-body" aria-labelledby="h-evidence" hidden={!key()}>
-      <h2 id="h-evidence">The details</h2>
+      <h2 id="h-evidence">{props.title ?? "The details"}</h2>
       <div id="dv-frame" ref={setHolder} />
     </section>
   );
@@ -276,7 +277,12 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
       d.kind === "grill"
         ? Core.grillAnswerText(
             d,
-            [...form.querySelectorAll<HTMLFieldSetElement>("fieldset.gq")].map((f) => ({ id: f.dataset["q"] ?? "", pick: text(f.dataset["q"] ?? "") || "later", text: text((f.dataset["q"] ?? "") + "-text") })),
+            [...form.querySelectorAll<HTMLFieldSetElement>("fieldset.gq")].map((f) => {
+              const id = f.dataset["q"] ?? "";
+              const checked = f.querySelector<HTMLInputElement>(`input[name="${CSS.escape(id)}"]:checked`);
+
+              return { id, pick: text(id) || "later", text: text(id + "-text"), label: checked?.dataset["label"] ?? null, recommended: checked?.dataset["rec"] === "1" };
+            }),
           )
         : Core.answerText(d, {
             choice: text("choice"),
@@ -345,8 +351,10 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
       onInput={(e) => {
         const box = e.target instanceof HTMLTextAreaElement ? e.target.closest("fieldset.gq") : null;
         const own = box?.querySelector<HTMLInputElement>('input[value="own"]');
+        const later = box?.querySelector<HTMLInputElement>('input[value="later"]');
 
-        if (own && e.target instanceof HTMLTextAreaElement && e.target.value.trim()) own.checked = true;
+        /* Typing is an answer of its own unless an option is picked: then it is a note to that option. */
+        if (own && e.target instanceof HTMLTextAreaElement && e.target.value.trim() && (later?.checked ?? true)) own.checked = true;
         save();
       }}
       onChange={save}
@@ -357,6 +365,122 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
         {error()}
       </p>
     </form>
+  );
+}
+
+/** A grilling question's reason: its words, folded after its first lines when long, and its sources apart. */
+function GrillWhy(props: { readonly q: Question; readonly pick: string }): JSX.Element {
+  const [open, setOpen] = createSignal(false);
+  const reason = createMemo(() => grillReason(props.q.reason ?? ""));
+  const long = (): boolean => [...reason().text].length > GRILL_WHY_FOLD;
+
+  return (
+    <aside class="gq-rec" aria-label={`Why ${props.pick}`}>
+      <h4>{props.pick}</h4>
+      <Show when={reason().text} fallback={<p class="gq-why muted">No reason given. Ask for one in a side chat, or with a note.</p>}>
+        <div class={"gq-why" + (long() && !open() ? " folded" : "")}>
+          <Rich text={reason().text} />
+        </div>
+        <Show when={long()}>
+          <button type="button" class="btn small gq-why-more" aria-expanded={tf(open())} onClick={() => setOpen(!open())}>
+            {open() ? "Less" : "More"}
+          </button>
+        </Show>
+      </Show>
+      <Show when={reason().sources.length}>
+        <details class="gq-sources">
+          <summary>Sources ({reason().sources.length})</summary>
+          <ul>
+            <For each={reason().sources}>{(src) => <li><code>{src}</code></li>}</For>
+          </ul>
+        </details>
+      </Show>
+    </aside>
+  );
+}
+
+/**
+ * A grilling question, like a small decision: its title, the question in plain size, its options as cards with
+ * the recommended one marked, the reason as a callout, and a field for the user's own words; each card, the
+ * own answer and Later are the question's choice. A question asked before options is read into cards.
+ */
+function GrillQuestion(props: { readonly e: GrillEntry; readonly head: JSX.Element; readonly parent: JSX.Element; readonly writable: boolean }): JSX.Element {
+  const { m } = usePage();
+  const q = (): Question => props.e.q;
+  const shown = createMemo(() => grillAsk(q()));
+  const recommended = () => shown().options.find((o) => o.id === shown().recommended);
+
+  const pick = (): string => {
+    const r = recommended();
+    const also = shown().also;
+
+    if (r) return `Recommended: ${r.id}${r.label ? ", " + r.label : ""}${also ? " (" + also + ")" : ""}`;
+
+    return `Recommended: ${q().recommend ?? ""}`;
+  };
+
+  return (
+    <fieldset class={"gq" + (props.e.depth > 0 ? " follow" : "")} data-q={q().id} style={`--depth:${props.e.depth}`}>
+      <legend>{props.head}</legend>
+      {props.parent}
+      <Rich class="gq-ask" text={shown().lead} />
+      <Show when={shown().options.length} fallback={null}>
+        <div class="gq-options" role={props.writable ? undefined : "list"}>
+          <For each={shown().options} keyed={(o) => o.id}>
+            {(o) => {
+              const inner = (): JSX.Element => (
+                <>
+                  <span class="label">
+                    {o().id + ": "}
+                    {o().label}
+                    <Show when={o().id === shown().recommended}>
+                      <PillAs cls="recommended plain" text="recommended" />
+                    </Show>
+                  </span>
+                  <Show when={o().consequence}>{(c) => <Rich class="consequence" text={c()} />}</Show>
+                </>
+              );
+
+              return (
+                <Show when={props.writable} fallback={<div class={"option" + (o().id === shown().recommended ? " rec" : "")} role="listitem">{inner()}</div>}>
+                  <label class={"option" + (o().id === shown().recommended ? " rec" : "")}>
+                    <input type="radio" name={q().id} value={o().id} data-label={o().label ?? ""} data-rec={o().id === shown().recommended ? "1" : undefined} />
+                    {inner()}
+                  </label>
+                </Show>
+              );
+            }}
+          </For>
+        </div>
+      </Show>
+      <Show when={shown().after}>{(a) => <Rich class="gq-after" text={a()} />}</Show>
+      <GrillWhy q={q()} pick={pick()} />
+      <Show when={props.e.sent}>
+        <p class="gq-sent">
+          You sent: {props.e.sent?.text}. The {m.host()} replied in the chat.
+        </p>
+      </Show>
+      <Show when={props.writable}>
+        <Show when={!shown().options.length}>
+          <label class="option">
+            <input type="radio" name={q().id} value="rec" />
+            <span class="label">Take the recommendation</span>
+          </label>
+        </Show>
+        <label class="option own">
+          <input type="radio" name={q().id} value="own" />
+          <span class="label">{shown().options.length ? "Your own answer" : "My answer"}</span>
+          <span class="consequence">{shown().options.length ? "Or a note to the option you picked." : "In your words."}</span>
+        </label>
+        <SlashField id={"dv-skills-" + q().id}>
+          {(caret) => <textarea name={q().id + "-text"} rows="2" aria-label={`Your answer to ${q().id.toUpperCase()}`} ref={caret} />}
+        </SlashField>
+        <label class="option later">
+          <input type="radio" name={q().id} value="later" checked />
+          <span class="label">Later</span>
+        </label>
+      </Show>
+    </fieldset>
   );
 }
 
@@ -373,54 +497,21 @@ function Grill(props: { readonly d: Decision }): JSX.Element {
   const head = (e: GrillEntry): JSX.Element => (
     <>
       <span class="gq-id">{e.q.id.toUpperCase()}</span> {e.q.title}
-      <Show when={e.q.of}>
-        {" "}
-        <span class="gq-of">follows up {String(e.q.of).toUpperCase()}</span>
-      </Show>
     </>
   );
 
-  const ask = (e: () => GrillEntry): JSX.Element => (
-    <fieldset class="gq" data-q={e().q.id} style={`--depth:${e().depth}`}>
-      <legend>{head(e())}</legend>
-      <Rich class="gq-body" text={e().q.body ?? ""} />
-      <div class="gq-rec">
-        <p>
-          <b>Recommended:</b> {e().q.recommend}
+  const parent = (e: GrillEntry): JSX.Element => (
+    <Show when={e.q.of}>
+      {(of) => (
+        <p class="gq-of">
+          Follows up {of().toUpperCase()}
+          <Show when={props.d.questions?.find((x) => x.id === of())?.title}>{(t) => <>: {t()}</>}</Show>
         </p>
-        <Show
-          when={e().q.reason}
-          fallback={<p class="gq-why muted">No reason given. Ask for one in a side chat, or with a note.</p>}
-        >
-          <p class="gq-why">
-            <b>Why:</b> {e().q.reason}
-          </p>
-        </Show>
-      </div>
-      <Show when={e().sent}>
-        <p class="gq-sent">
-          You sent: {e().sent?.text}. The {m.host()} replied in the chat.
-        </p>
-      </Show>
-      <Show when={writable()}>
-        <label class="option">
-          <input type="radio" name={e().q.id} value="rec" />
-          <span class="label">Take the recommendation</span>
-        </label>
-        <label class="option">
-          <input type="radio" name={e().q.id} value="own" />
-          <span class="label">My answer</span>
-        </label>
-        <SlashField id={"dv-skills-" + e().q.id}>
-          {(caret) => <textarea name={e().q.id + "-text"} rows="2" aria-label={`Your answer to ${e().q.id.toUpperCase()}`} ref={caret} />}
-        </SlashField>
-        <label class="option later">
-          <input type="radio" name={e().q.id} value="later" checked />
-          <span class="label">Later</span>
-        </label>
-      </Show>
-    </fieldset>
+      )}
+    </Show>
   );
+
+  const ask = (e: () => GrillEntry): JSX.Element => <GrillQuestion e={e()} head={head(e())} parent={parent(e())} writable={writable()} />;
 
   return (
     <>
@@ -444,8 +535,9 @@ function Grill(props: { readonly d: Decision }): JSX.Element {
           <h3>Sent, waiting on the {m.host()}</h3>
           <For each={sent()} keyed={(e) => e.q.id}>
             {(e) => (
-              <div class="gq sent" style={`--depth:${e().depth}`}>
+              <div class={"gq sent" + (e().depth > 0 ? " follow" : "")} style={`--depth:${e().depth}`}>
                 <p class="gq-title">{head(e())}</p>
+                {parent(e())}
                 <p>
                   You sent: <b>{e().sent?.text}</b>
                 </p>
@@ -787,6 +879,9 @@ function AskPartView(props: { readonly part: AskPart }): JSX.Element {
   );
 }
 
+/** A grilling question's reason longer than this, in characters, folds after its first lines. */
+const GRILL_WHY_FOLD = 220;
+
 /** A why longer than this, in characters, folds behind More. */
 export const WHY_FOLD = 300;
 
@@ -828,7 +923,8 @@ function Info(props: { readonly d: Decision }): JSX.Element {
   const pending = createMemo(() => Core.pendingAnswer(d(), m.messages()));
   const successor = () => m.state.decisions.find((x) => x.supersedes === d().id);
   const before = () => (d().supersedes ? m.decisionById(d().supersedes) : undefined);
-  const ask = createMemo(() => askParts(d().question ?? "", d().title));
+  /* A grilling asks in its questions: its title leads, and its question says how many are left. */
+  const ask = createMemo(() => (d().kind === "grill" ? { lead: d().title, more: [] } : askParts(d().question ?? "", d().title)));
 
   return (
     <>
@@ -915,6 +1011,7 @@ function Info(props: { readonly d: Decision }): JSX.Element {
       </Show>
       <section class="dv-ask" aria-label="The question">
         <Rich class="dv-question" text={ask().lead} />
+        <Show when={d().kind === "grill" && open() ? d().question : null}>{(n) => <p class="dv-meta dv-count">{n()}</p>}</Show>
         <Show when={ask().more.length}>
           <div class="dv-ask-more">
             <For each={ask().more}>{(part) => <AskPartView part={part} />}</For>
@@ -1151,8 +1248,8 @@ function OwnDecision(props: { readonly d: Decision | undefined }): JSX.Element {
           {(found) => <Info d={found()} />}
         </Show>
       </div>
-      <DetailsFold what="the details">
-        <Evidence d={d()} />
+      <DetailsFold what={d()?.kind === "grill" ? "the context" : "the details"}>
+        <Evidence d={d()} title={d()?.kind === "grill" ? "The context" : "The details"} />
       </DetailsFold>
       <Show when={d()}>{(found) => <Recommendation d={found()} />}</Show>
       <div class="dv-answer" id="dv-answer">
