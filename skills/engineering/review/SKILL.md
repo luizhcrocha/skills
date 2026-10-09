@@ -92,6 +92,19 @@ A finding that matches a memo gotcha, or that an earlier review of this repo alr
 
 End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
 
+In a fleet, record the review in the ledger before the stack lands, so `land-check` finds it: `fleet state <dashboard-dir> event --kind reviewed --findings <N> --changes "<change id>,..." "<what was reviewed, and with what>"`, the change ids from `jj log -r '<fixed>..@' -T 'change_id.short() ++ "\n"'` and N the findings of both axes (0 when there were none).
+
+### 6. Bug hunt: the option for a diff over about 2,000 lines
+
+Two readers over a diff that size skim it. When the diff has more than about 2,000 changed lines (lockfiles and generated files left out), offer a bug hunt instead of, or after, the two axes; it hunts defects, not standards:
+
+1. **Slices.** Cut the diff into slices of about 300 lines along module seams (one module and its tests per slice), never mid-function.
+2. **Readers that over-report.** Two `general-purpose` Reviewers per slice, in parallel, each told to list every place the code could be wrong (a claim: file and line, what breaks, the input that breaks it), with no filtering: a false claim costs one look, a missed one ships.
+3. **A second look.** One fresh Reviewer per slice reads both lists against the code and keeps the claims it cannot rule out, each with why.
+4. **Claim-only provers.** One Verifier ([MODELS.md](../../productivity/coordinator/MODELS.md)) per kept claim, given the claim alone (not the reader's reasoning), writes a failing test or a repro that shows it. A claim no prover can show is reported as unproven, not as a finding.
+
+Its cost, as an estimate: for 2,000 lines, about 7 slices, 14 readers and 7 second looks at about 60k tokens each, plus one prover per kept claim at about 80k, so about 1.5 million tokens, five to ten times the two axes. Say that cost when you offer it, and run it only on a yes, or when the coordinator's Integrate rule calls for it. Report the proven findings, then the unproven claims, and record it as a `reviewed` event with the proven count.
+
 ## Why two axes
 
 A change can pass one axis and fail the other:

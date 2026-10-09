@@ -327,6 +327,82 @@ class NoHabitTest(RepoCase):
         self.assertEqual(result["verdict"], "ask")
 
 
+class ReviewTest(RepoCase):
+    """A stack over 300 changed lines, or one that touches a schema, auth, billing or deletes data, gets a review
+    before it lands: land-check warns (never stops) when the fleet's ledger records no `reviewed` event for it."""
+
+    def ledger(self, *events):
+        d = self.tmp / "fleet"
+        d.mkdir(exist_ok=True)
+        base = {"project": "p", "goal": "g", "status": "running", "now": "", "started": "2026-01-05T09:00:00+00:00",
+                "roadmap": [], "agents": [], "roadblocks": [], "decisions": [], "events": list(events)}
+        (d / "state.json").write_text(json.dumps(base))
+        return str(d)
+
+    def changes(self):
+        return jj(self.repo, "log", "--no-graph", "--reversed", "-r", "master@origin..@-", "-T", 'change_id.short(12) ++ "\\n"').split()
+
+    def lines(self, n):
+        return "".join(f"line {i}\n" for i in range(n))
+
+    def test_a_small_stack_needs_no_review(self):
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        self.change("feat: b", {"b.ts": self.lines(40)})
+        result = self.check()
+        self.assertEqual(result["review"]["lines"], 40)
+        self.assertFalse(result["review"]["needed"])
+        self.assertFalse(any(r.startswith(("warning:", "reminder:")) for r in result["reasons"]))
+        self.assertEqual(result["verdict"], "push")
+
+    def test_a_big_stack_with_no_ledger_gets_a_reminder_and_still_pushes(self):
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        self.change("feat: b", {"b.ts": self.lines(301)})
+        result = self.check()
+        self.assertTrue(result["review"]["needed"])
+        self.assertIsNone(result["review"]["ledger"])
+        self.said(result, "reminder: 301 changed lines (over 300)")
+        self.assertEqual(result["verdict"], "push")
+
+    def test_lockfiles_and_generated_files_do_not_count(self):
+        self.trunk(("feat: a", {".gitattributes": "assets/page.html linguist-generated\n"}))
+        self.change("chore: deps", {"bun.lock": self.lines(900), "web/dist/app.js": self.lines(900),
+                                    "assets/page.html": self.lines(900), "b.ts": "b\n"})
+        result = self.check()
+        self.assertEqual(result["review"]["lines"], 1)
+        self.assertFalse(result["review"]["needed"])
+
+    def test_a_sensitive_path_without_a_review_warns(self):
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        self.change("feat: login", {"src/auth/session.ts": "x\n"})
+        self.change("feat: purge", {"db/clean.ts": "await sql`DELETE FROM invoices WHERE old`\n"})
+        result = self.check("--ledger", self.ledger())
+        self.assertEqual(result["review"]["sensitive"], ["a deletion of data: db/clean.ts", "auth or permissions: src/auth/session.ts"])
+        self.said(result, "warning: a deletion of data: db/clean.ts; auth or permissions: src/auth/session.ts, and the ledger has no")
+        self.assertEqual(result["review"]["unreviewed"], self.changes())
+        self.assertEqual(result["verdict"], "push")
+
+    def test_a_reviewed_event_for_every_change_clears_it(self):
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        self.change("feat: billing", {"src/billing/rates.ts": "x\n"})
+        self.change("feat: more billing", {"src/billing/tax.ts": "y\n"})
+        first, second = self.changes()
+        half = self.ledger({"at": "2026-01-05T10:00:00+00:00", "kind": "reviewed", "text": "r", "findings": 1, "changes": [first[:8]]})
+        result = self.check("--ledger", half)
+        self.assertEqual(result["review"]["unreviewed"], [second])
+        self.said(result, f"no `reviewed` event for {second}")
+        both = self.ledger({"at": "2026-01-05T10:00:00+00:00", "kind": "reviewed", "text": "r", "findings": 1, "changes": [first[:8], second]})
+        result = self.check("--ledger", both)
+        self.assertEqual(result["review"]["unreviewed"], [])
+        self.said(result, "reviewed: billing: src/billing/rates.ts")
+
+    def test_a_diff_over_two_thousand_lines_calls_for_the_bug_hunt(self):
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        self.change("feat: big", {"big.ts": self.lines(2001)})
+        result = self.check("--ledger", self.ledger())
+        self.assertTrue(result["review"]["bug_hunt"])
+        self.said(result, "review's bug hunt")
+
+
 @unittest.skipUnless(shutil.which("bun"), "needs bun for the fleet CLI")
 class LandingTurnTest(unittest.TestCase):
     """In a fleet whose machine serves a manager, land-check stops until the manager gave the fleet the turn

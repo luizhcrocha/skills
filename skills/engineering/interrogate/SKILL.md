@@ -99,3 +99,5 @@ Write the verdict through `tstack:unslop`, in this structure:
 The blast-radius safety fact, when you ran it, goes after the Agreement Map with the rung it reached.
 
 An Act on or Consider finding that matches a memo gotcha, or recurs from an earlier review, is named last as a `tstack:lint-evolve` candidate.
+
+In a fleet, record it in the ledger before the stack lands, so `land-check` finds it: `fleet state <dashboard-dir> event --kind reviewed --findings <the Act on count> --changes "<change id>,..." "interrogated: <the verdict in one line>"`.

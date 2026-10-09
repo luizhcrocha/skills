@@ -33,6 +33,19 @@ workspace. Exit 0 when the verdict is "push", 1 for "ask" or "stop", 2 on error.
     turn               in a fleet whose machine serves a manager, why this fleet
                        may not land yet (`fleet turn`): the manager has not given
                        it the landing turn. The verdict is then "stop"
+    review             whether the stack needs a review before landing (the
+                       coordinator's Integrate rule): `lines` changed (lockfiles
+                       and generated files left out), the `sensitive` paths or
+                       lines (a schema or migration, auth or permissions, a
+                       deletion of data, billing), `needed`, `bug_hunt` (over
+                       2,000 lines), the fleet `ledger` read, and the stack's
+                       changes it records as `reviewed` and `unreviewed`. Never
+                       changes the verdict: a stack that needs a review and has
+                       no `reviewed` event gets a "warning:" reason, and one with
+                       no ledger to read a "reminder:" reason
+
+--ledger DIR names the fleet's dashboard directory; else $FLEET_DIR, else the
+fleet whose registry entry's pid is among this process's parents.
 
 --apply-skip-ci appends " [skip ci]" to head's subject when suggest_skip_ci
 holds (idempotent, head only), then reports on the rewritten head.
@@ -71,6 +84,20 @@ OTHER_CI = [".gitlab-ci.yml", ".circleci/config.yml", "Jenkinsfile", ".buildkite
 PLATFORMS = ["**/netlify.toml", "**/vercel.json", "**/render.yaml", "**/wrangler.toml", "**/wrangler.json",
              "**/wrangler.jsonc", "**/.platform.app.yaml", "app.json", "**/railway.json", "**/railway.toml"]
 DOCS = ["CLAUDE.md", "AGENTS.md", "README.md", "CONTRIBUTING.md", "docs/deploy.md", "docs/deployment.md"]
+
+
+REVIEW_LINES = 300       # changed lines past which a stack gets a review before it lands
+BUG_HUNT_LINES = 2000    # changed lines past which the review is review's bug hunt
+LOCKFILES = ["**/*.lock", "**/package-lock.json", "**/pnpm-lock.yaml", "**/bun.lockb", "**/go.sum", "**/flake.lock",
+             "**/npm-shrinkwrap.json"]
+GENERATED = ["**/dist/**", "**/build/**", "**/generated/**", "**/__generated__/**", "**/*.generated.*", "**/*.min.js",
+             "**/*.min.css", "**/*.map", "**/*.pb.go", "**/*_pb2.py", "**/__snapshots__/**", "**/*.snap"]
+SENSITIVE = [
+    ("a schema or a migration", re.compile(r"(^|/)(migrations?|migrate|schemas?)(/|\.|_|-|$)|\.sql$|(^|/)schema\.prisma$", re.I)),
+    ("auth or permissions", re.compile(r"(^|/|_|-)(auth|oauth|login|permissions?|acl|rbac|grants?|polic(y|ies)|credentials?)(/|\.|_|-|$)", re.I)),
+    ("billing", re.compile(r"(^|/|_|-)(billing|payments?|invoices?|stripe|subscriptions?|pricing)(/|\.|_|-|$)", re.I)),
+]
+DELETION = re.compile(r"\b(drop\s+(table|database|schema|column)|delete\s+from|truncate\s+table)\b", re.I)
 
 
 class CheckError(Exception):
@@ -465,7 +492,7 @@ def skip_ci_habit(repo, base, head, tracked, workflows_text):
 
 # --- the check -------------------------------------------------------------
 
-def land_check(repo, bookmark, head_rev=None, remote="origin", apply_skip_ci=False):
+def land_check(repo, bookmark, head_rev=None, remote="origin", apply_skip_ci=False, ledger_dir=None):
     reasons = []
     remote_ref = f"{bookmark}@{remote}"
     if repo.exists(remote_ref):
@@ -538,7 +565,7 @@ def land_check(repo, bookmark, head_rev=None, remote="origin", apply_skip_ci=Fal
     if apply_skip_ci and suggest:
         first, _, rest = head["description"].partition("\n")
         repo.jj("describe", "-r", head["commit"], "-m", f"{first.rstrip()} [skip ci]\n{rest}".rstrip("\n") + "\n")
-        result = land_check(repo, bookmark, head["change"], remote)
+        result = land_check(repo, bookmark, head["change"], remote, ledger_dir=ledger_dir)
         result["skip_ci_applied"] = True
         return result
 
@@ -546,6 +573,12 @@ def land_check(repo, bookmark, head_rev=None, remote="origin", apply_skip_ci=Fal
         "head": rev_json(head, commit=True), "ff": ff, "stack": [rev_json(r) for r in stack], "files": files,
         "deploys_on_push": deploys, "skip_ci_habit": habit, "skip_ci_marked": marked, "suggest_skip_ci": suggest,
     })
+    if stack:
+        try:
+            result["review"] = review_status(repo, base, head["commit"], stack, ledger_dir)
+            reasons += review_reasons(result["review"])
+        except (CheckError, OSError) as e:
+            reasons.append(f"note: the review check did not run: {e}")
     blocked = (not ff or not stack or any(not r["subject"] or r["conflict"] for r in stack))
     if blocked:
         result["verdict"] = "stop"
@@ -561,6 +594,141 @@ def land_check(repo, bookmark, head_rev=None, remote="origin", apply_skip_ci=Fal
         if deploys is True and not only_actions and (marked or suggest):
             reasons.append("[skip ci] may not stop every deploy source")
     return result
+
+
+# --- review before landing ---------------------------------------------------
+
+def generated_patterns(repo, head):
+    """The .gitattributes patterns at head marked linguist-generated, -diff or binary, as filter patterns."""
+    text = repo.show(head, ".gitattributes") or ""
+    out = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 2 or parts[0].startswith("#"):
+            continue
+        attrs = parts[1:]
+        if any(a in ("linguist-generated", "linguist-generated=true", "-diff", "binary") for a in attrs):
+            pattern = parts[0].lstrip("/")
+            out.append(pattern if "/" in parts[0].rstrip("/") else "**/" + pattern)
+    return out
+
+
+def diff_counts(text):
+    """{path: (changed lines, added lines)} from a git-format diff."""
+    files, path = {}, None
+    for line in text.splitlines():
+        if line.startswith("diff --git "):
+            path = line.split(" b/", 1)[1] if " b/" in line else None
+            if path is not None:
+                files[path] = [0, []]
+        elif path is None or line.startswith(("+++ ", "--- ")):
+            continue
+        elif line.startswith("+"):
+            files[path][0] += 1
+            files[path][1].append(line[1:])
+        elif line.startswith("-"):
+            files[path][0] += 1
+    return {p: (n, added) for p, (n, added) in files.items()}
+
+
+def ancestors():
+    """This process and its parents, by pid."""
+    pids, pid = [], os.getpid()
+    while pid > 1 and pid not in pids:
+        pids.append(pid)
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            pid = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            r = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True)
+            try:
+                pid = int(r.stdout.strip())
+            except ValueError:
+                break
+    return pids
+
+
+def registry_home():
+    if os.environ.get("FLEET_HOME"):
+        return Path(os.environ["FLEET_HOME"])
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(base) / "fleet-board"
+
+
+def find_ledger(explicit=None):
+    """The fleet ledger to read: --ledger, $FLEET_DIR, else the served fleet (not the manager) whose
+    registry entry's pid is among this process's parents. None when there is none."""
+    for d in (explicit, os.environ.get("FLEET_DIR")):
+        if d and (Path(d) / "state.json").is_file():
+            return Path(d) / "state.json"
+    mine = set(ancestors())
+    try:
+        entries = sorted(p for p in registry_home().glob("*.json") if p.is_file())
+    except OSError:
+        return None
+    for p in entries:
+        try:
+            entry = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(entry, dict) and entry.get("pid") in mine and entry.get("role") != "manager" \
+                and isinstance(entry.get("dir"), str) and (Path(entry["dir"]) / "state.json").is_file():
+            return Path(entry["dir"]) / "state.json"
+    return None
+
+
+def reviewed_changes(ledger):
+    """The change ids the ledger's `reviewed` events name (four characters or more: a shorter one could be anything)."""
+    try:
+        state = json.loads(ledger.read_text())
+    except (OSError, ValueError):
+        return []
+    out = []
+    for e in state.get("events", []) if isinstance(state, dict) else []:
+        if isinstance(e, dict) and e.get("kind") == "reviewed" and isinstance(e.get("changes"), list):
+            out += [c for c in e["changes"] if isinstance(c, str) and len(c) >= 4]
+    return out
+
+
+def review_status(repo, base, head, stack, ledger_dir=None):
+    """Whether the stack needs a review before it lands, and whether the fleet's ledger records one."""
+    counts = diff_counts(repo.jj("diff", "--git", "--from", base, "--to", head).stdout)
+    skip = LOCKFILES + GENERATED + generated_patterns(repo, head)
+    counted = {p: v for p, v in counts.items() if not any(matches(g, p) for g in skip)}
+    lines = sum(n for n, _ in counted.values())
+    sensitive = []
+    for p, (_, added) in counted.items():
+        for label, pattern in SENSITIVE:
+            if pattern.search(p):
+                sensitive.append(f"{label}: {p}")
+        if any(DELETION.search(a) for a in added):
+            sensitive.append(f"a deletion of data: {p}")
+    needed = lines > REVIEW_LINES or bool(sensitive)
+    ledger = find_ledger(ledger_dir)
+    names = reviewed_changes(ledger) if ledger else []
+    changes = [r["change"] for r in stack if not r["empty"]]
+    done = [c for c in changes if any(c.startswith(n) or n.startswith(c) for n in names)]
+    return {"lines": lines, "threshold": REVIEW_LINES, "sensitive": sensitive[:12], "needed": needed,
+            "bug_hunt": lines > BUG_HUNT_LINES, "ledger": str(ledger) if ledger else None,
+            "reviewed": done, "unreviewed": [c for c in changes if c not in done]}
+
+
+def review_reasons(review):
+    """The reason lines a review status adds: a warning, a reminder, or what was reviewed."""
+    if not review["needed"]:
+        return []
+    why = [f"{review['lines']} changed lines (over {review['threshold']})"] if review["lines"] > review["threshold"] else []
+    why += review["sensitive"][:3]
+    what = "; ".join(why)
+    hunt = " (over 2,000 lines: review's bug hunt)" if review["bug_hunt"] else ""
+    if review["ledger"] is None:
+        return [f"reminder: {what}: a stack like this gets tstack:review (tstack:interrogate when contested){hunt} "
+                "before it lands (coordinator SKILL.md, Integrate); no fleet ledger found to check"]
+    if review["unreviewed"]:
+        return [f"warning: {what}, and the ledger has no `reviewed` event for {', '.join(review['unreviewed'])}: "
+                f"run tstack:review (tstack:interrogate when contested){hunt} before landing, then "
+                "`fleet state <dir> event --kind reviewed --findings N --changes \"<change id>,...\" \"...\"`"]
+    return [f"reviewed: {what}; the ledger records a review of every change in the stack"]
 
 
 def landing_turn():
@@ -600,14 +768,18 @@ def main(argv=None):
     parser.add_argument("--remote", default="origin")
     parser.add_argument("--apply-skip-ci", action="store_true",
                         help="append [skip ci] to head's subject when suggest_skip_ci holds")
+    parser.add_argument("--ledger", metavar="DIR", help="the fleet's dashboard directory, whose reviewed events are read")
     args = parser.parse_args(argv)
     try:
         result = land_check(Repo(str(Path(args.repo).resolve())), args.bookmark, args.head, args.remote,
-                            args.apply_skip_ci)
+                            args.apply_skip_ci, args.ledger)
     except CheckError as e:
         print(f"land-check: {e}", file=sys.stderr)
         return 2
     result = with_turn(result, landing_turn())
+    for reason in result["reasons"]:
+        if reason.startswith(("warning: ", "reminder: ")):
+            print(f"land-check: {reason}", file=sys.stderr)
     print(json.dumps(result, indent=2))
     return 0 if result["verdict"] == "push" else 1
 
