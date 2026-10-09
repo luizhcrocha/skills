@@ -941,6 +941,16 @@ class ChatNudgeTest(FleetCase):
         self.say(3, "2026-01-05T08:40:00+00:00", "go", decision="x7")  # held after it: the fleet works on it
         self.assertEqual(self.tool("2026-01-05T08:50:00+00:00"), "")
 
+    def test_a_reply_to_an_answer_does_not_record_it(self):
+        # Infra's D115: answered (#1), the coordinator replied "Recorded B" (#2, re 1), never ran --decide.
+        decision = {"id": "d115", "ref": "D115", "kind": "decision", "title": "Schema", "status": "open",
+                    "opened": "2026-01-05T08:00:00+00:00"}
+        self.ledger(decisions=[decision])
+        self.say(1, "2026-01-05T08:10:00+00:00", "B", decision="d115")
+        self.say(2, "2026-01-05T08:11:00+00:00", "Recorded B", frm="coordinator", to=("user",), re=1, decision="d115")
+        (self.fleet / "watch-coordinator.cursor").write_text("2")
+        self.assertIn("Fleet: #1 from the user answers D115 (Schema), not recorded for 12 min", self.tool("2026-01-05T08:22:00+00:00"))
+
     def test_a_grilling_answered_and_not_recorded_whatever_the_chat_said_after(self):
         question = lambda n, status: {"id": f"q{n}", "title": "T", "status": status, "asked": "2026-01-05T08:00:00+00:00"}
         grilling = {"id": "g6", "ref": "G6", "kind": "grill", "title": "Search", "status": "open",
@@ -955,8 +965,9 @@ class ChatNudgeTest(FleetCase):
                          "Fleet: G6 (Search): every question is answered and the grilling is still open, not recorded for 4 min. "
                          f'Record it now (`{self.fleet_cli} state {self.fleet} decision G6 --decide "..." --resolution "grilling finished"`).')
         self.assertEqual(self.tool("2026-01-05T08:20:00+00:00"), "")  # told once
-        # A reply to an answer that leaves a question open hands nothing back: nothing is due.
-        self.ledger(decisions=[{**grilling, "id": "g7", "ref": "G7", "questions": [question(1, "answered"), question(2, "open")]}])
+        # An answer recorded as a question answered after it, a question left open: nothing is due.
+        recorded = {**question(1, "answered"), "answered": "2026-01-05T08:30:20+00:00"}
+        self.ledger(decisions=[{**grilling, "id": "g7", "ref": "G7", "questions": [recorded, question(2, "open")]}])
         self.say(4, "2026-01-05T08:30:00+00:00", "Q1: ok", decision="g7")
         self.say(5, "2026-01-05T08:30:30+00:00", "Recorded.", frm="coordinator", to=("user",), re=4, decision="g7")
         self.assertEqual(self.tool("2026-01-05T08:40:00+00:00"), "")

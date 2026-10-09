@@ -65,15 +65,27 @@ def number(state: dict) -> None:
                 r["ref"] = _next(items, prefix, r)
 
 
-def answered_at(d: dict, said: list[dict]) -> str | None:
-    """When the user's answer to the open decision `d`, given after it last changed and not replied to, was
-    sent: the fleet has it and has not recorded it. None when there is none. A held decision (`held`, the
-    fleet works on it first) has recorded every answer given until `held_at`."""
+def recorded(d: dict, m: dict) -> bool:
+    """Whether decision `d` has recorded the user's answer `m`: its own state changed at or after it. Closed
+    (decided or withdrawn), it has recorded every answer; open, it has recorded one given before it was opened
+    or last revised, one given until it was held (`held_at`, the fleet works on it first), and, on a grilling,
+    one given before a question was answered or dropped. A reply in the chat records nothing: only the
+    decision command does (D115 sat waiting two days behind a "Recorded B"). TypeScript's `answerRecorded`."""
+    if d.get("status", "open") != "open":
+        return True
     since = d.get("revised") or d.get("opened") or ""
-    held = d.get("held_at") if d.get("held") else None  # held: the fleet has the answers given until then
-    answers = [m for m in said if m.get("decision") == d.get("id") and m["from"] == "user" and clock.at_or_after(m["at"], since)
-               and not (held and clock.at_or_after(held, m["at"]))
-               and not any(r.get("re") == m["id"] and r["from"] != "user" for r in said)]
+    held = d.get("held_at") if d.get("held") else None
+    if not clock.at_or_after(m["at"], since) or (held and clock.at_or_after(held, m["at"])):
+        return True
+    questions = d.get("questions") if isinstance(d.get("questions"), list) else []
+    return any(isinstance(q, dict) and isinstance(q.get("answered"), str) and q["answered"]
+               and clock.at_or_after(q["answered"], m["at"]) for q in questions)
+
+
+def answered_at(d: dict, said: list[dict]) -> str | None:
+    """When the user's latest answer to decision `d` that it has not recorded (`recorded`) was sent: the fleet
+    has it and has not recorded it. None when there is none. TypeScript's `answeredAt`."""
+    answers = [m for m in said if m.get("decision") == d.get("id") and m["from"] == "user" and not recorded(d, m)]
     return answers[-1]["at"] if answers else None
 
 

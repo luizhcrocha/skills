@@ -55,27 +55,47 @@ export function failureWords(m: Pick<Message, "text">): string {
   return chars.length > 60 ? chars.slice(0, 60).join("") + "…" : line;
 }
 
-/** When the user's answer to the open decision `d`, given after it last changed and not replied to,
- * was sent (stamps compared as instants, open-13); undefined when there is none. A held decision
- * (`held`, the fleet works on it first) has recorded every answer given until `held_at`. */
-export function answeredAt(d: JsonObject, said: readonly Message[]): string | undefined {
+/** Whether decision `d` has recorded the user's answer `m`: its own state changed at or after it. Closed
+ * (decided or withdrawn), it has recorded every answer; open, it has recorded one given before it was opened
+ * or last revised, one given until it was held (`held_at`, the fleet works on it first), and, on a grilling,
+ * one given before a question was answered or dropped. A reply in the chat records nothing: only the
+ * decision command does (D115 sat waiting two days behind a "Recorded B"). Python's `decisions.recorded`. */
+export function answerRecorded(d: JsonObject, m: Message): boolean {
+  const status = d["status"];
+
+  if (status !== undefined && status !== "open") return true;
+  const at = str(m.at);
   const revised = d["revised"];
-  const opened = d["opened"];
-  const since = revised !== undefined && revised !== null && revised !== "" ? str(revised) : str(opened);
+  const since = revised !== undefined && revised !== null && revised !== "" ? str(revised) : str(d["opened"]);
+  const heldAt = truthy(d["held"]) ? str(d["held_at"]) : "";
+
+  if (!atOrAfter(at, since) || (heldAt !== "" && atOrAfter(heldAt, at))) return true;
+
+  return (asArray(d["questions"]) ?? []).some((q) => {
+    const answered = asString(asObject(q)?.["answered"]);
+
+    return answered !== undefined && answered !== "" && atOrAfter(answered, at);
+  });
+}
+
+/** The fields of decision `d` that {@link answerRecorded} reads, as its ledger row holds them. */
+export function decisionRow(d: Pick<Decision, "id" | "status" | "opened" | "revised" | "held" | "held_at" | "questions">): JsonObject {
+  return {
+    id: d.id,
+    status: d.status,
+    opened: d.opened,
+    revised: d.revised ?? null,
+    held: d.held ?? null,
+    held_at: d.held_at ?? null,
+    questions: (d.questions ?? []).map((q) => ({ id: q.id, status: q.status, answered: q.answered ?? null })),
+  };
+}
+
+/** When the user's latest answer to decision `d` that it has not recorded ({@link answerRecorded}) was sent
+ * (stamps compared as instants, open-13); undefined when there is none. Python's `decisions.answered_at`. */
+export function answeredAt(d: JsonObject, said: readonly Message[]): string | undefined {
   const id = d["id"];
-  const heldAt = truthy(d["held"]) ? str(d["held_at"]) : undefined;
-
-  const answers = said.filter(
-    (m) =>
-      m.decision !== undefined &&
-      pyRepr(m.decision) === pyRepr(id) &&
-      m.from === "user" &&
-      atOrAfter(str(m.at), since) &&
-      !(heldAt !== undefined && heldAt !== "" && atOrAfter(heldAt, str(m.at))) &&
-      !said.some((r) => r.from !== "user" && r.re === m.id),
-  );
-
-  const last = answers.at(-1);
+  const last = said.filter((m) => m.decision !== undefined && pyRepr(m.decision) === pyRepr(id) && m.from === "user" && !answerRecorded(d, m)).at(-1);
 
   return last === undefined ? undefined : str(last.at);
 }

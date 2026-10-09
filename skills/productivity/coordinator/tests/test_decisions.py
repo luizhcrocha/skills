@@ -534,6 +534,46 @@ class FailedTest(Fleet):
         self.assertNotIn("and it failed", warned)
 
 
+class AnsweredAtTest(Fleet):
+    """Only the decision's own state records the user's answer (decided, withdrawn, held, revised, a grilling's
+    question answered), never a reply in the chat. TypeScript's `answeredAt` tests (fleet/test/decisions.test.ts)."""
+
+    D115 = {"id": "d115", "ref": "D115", "kind": "decision", "status": "open", "opened": "2026-10-05T09:00:00+00:00", "revised": None}
+    # Infra's D115: the user answered (#608), the coordinator replied "Recorded B" (#609, re 608) and never ran --decide.
+    CHAT = [{"id": 608, "at": "2026-10-07T14:00:00+00:00", "from": "user", "to": ["coordinator"], "text": "B", "re": None, "decision": "d115"},
+            {"id": 609, "at": "2026-10-07T14:01:00+00:00", "from": "coordinator", "to": ["user"], "text": "Recorded B", "re": 608}]
+
+    def test_an_answer_the_coordinator_replied_to_with_no_change_to_the_decision_is_not_recorded(self):
+        self.assertEqual(decisions.answered_at(self.D115, self.CHAT), "2026-10-07T14:00:00+00:00")
+
+    def test_revised_held_or_closed_at_or_after_the_answer_it_is_recorded(self):
+        for change in ({"revised": "2026-10-07T14:05:00+00:00"}, {"held": "the migration first", "held_at": "2026-10-07T14:00:00+00:00"},
+                       {"status": "decided", "closed": "2026-10-07T14:05:00+00:00"}, {"status": "withdrawn"}):
+            self.assertIsNone(decisions.answered_at({**self.D115, **change}, self.CHAT), change)
+
+    def test_held_before_the_answer_it_is_not(self):
+        held = {**self.D115, "held": "the migration first", "held_at": "2026-10-07T13:00:00+00:00"}
+        self.assertEqual(decisions.answered_at(held, self.CHAT), "2026-10-07T14:00:00+00:00")
+
+    def test_a_grilling_records_an_answer_by_answering_or_dropping_a_question_at_or_after_it(self):
+        def question(answered, id_="q1"):
+            return {"id": id_, "title": "T", "status": "open" if answered is None else "answered", "answered": answered}
+        g = {**self.D115, "kind": "grill", "questions": [question(None), question(None, "q2")]}
+        self.assertEqual(decisions.answered_at(g, self.CHAT), "2026-10-07T14:00:00+00:00")
+        self.assertIsNone(decisions.answered_at({**g, "questions": [question("2026-10-07T14:02:00+00:00"), question(None, "q2")]}, self.CHAT))
+        self.assertEqual(decisions.answered_at({**g, "questions": [question("2026-10-07T13:00:00+00:00"), question(None, "q2")]}, self.CHAT),
+                         "2026-10-07T14:00:00+00:00")
+
+    def test_a_reply_in_the_chat_does_not_record_it_the_warning_stands_until_the_decision_command_runs(self):
+        self.ok("decision", *SCHEMA)
+        said = [{"id": 1, "at": "2999-01-01T00:00:00+00:00", "from": "user", "to": ["coordinator"], "text": "B", "re": None, "decision": "d1"},
+                {"id": 2, "at": "2999-01-01T00:01:00+00:00", "from": "coordinator", "to": ["user"], "text": "Recorded B", "re": 1}]
+        (self.root / "chat.jsonl").write_text("".join(json.dumps(m) + "\n" for m in said))
+        self.assertIn("state: the user answered D1 (Invoice schema) as #1 at 00:00; record it before any other work: ", self.run_cli("event", "x").stderr)
+        self.ok("decision", "D1", "--decide", "B: keep both", "--resolution", "answered on the page (#1)")
+        self.assertNotIn("the user answered", self.run_cli("event", "y").stderr)
+
+
 class AnswerTest(Fleet):
     def refusal(self, id_: str, text: str):
         return decisions.answer_refusal(self.root, id_, text)

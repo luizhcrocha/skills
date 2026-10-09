@@ -8,10 +8,10 @@ import { join } from "node:path";
 
 import * as Effect from "effect/Effect";
 
-import { atOrAfter, parseInstant } from "../clock.ts";
+import { parseInstant } from "../clock.ts";
 import { ChatError } from "../errors.ts";
 import { readText, remove, resolvePath, writeText } from "../files.ts";
-import { answeredAt, answeredGrill, FAILED, silentWorkers } from "../health.ts";
+import { answeredAt, answeredGrill, answerRecorded, decisionRow, FAILED, silentWorkers } from "../health.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger, type Decision, type Ledger } from "../ledger/model.ts";
@@ -114,16 +114,7 @@ function numberedDecisions(root: string): JsonObject[] {
 
   number(ledger);
 
-  return (ledger.decisions ?? []).map((d) => ({
-    id: d.id,
-    ref: d.ref ?? null,
-    title: d.title,
-    status: d.status,
-    opened: d.opened,
-    revised: d.revised ?? null,
-    held: d.held ?? null,
-    held_at: d.held_at ?? null,
-  }));
+  return (ledger.decisions ?? []).map((d) => ({ ...decisionRow(d), ref: d.ref ?? null, title: d.title }));
 }
 
 function unrecorded(machine: Machine, entry: { readonly id: string; readonly dir: string; readonly session: string | null }, told: Map<string, Json>, unheardS: number): string[] {
@@ -485,14 +476,14 @@ function closedLine(d: Decision): string {
 }
 
 /** `wait`: the user's answer to one of these open decisions (ids or numbers), printed the moment it is
- * given; one given already and not replied to prints at once. The ledger is read again at every poll, so
+ * given; one given already and not recorded (a reply to it records nothing) prints at once. The ledger is read again at every poll, so
  * a decision closed meanwhile (withdrawn, or decided without an answer on the page) ends the wait as one
  * closed before does (open-21). */
 export function wait(machine: Machine, root: string, keys: readonly string[]): Effect.Effect<void, ChatError, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
     const ledger = numberedLedger(root);
-    const wanted = new Map<string, { readonly label: string; readonly kind: string; readonly since: string; readonly held: string | undefined }>();
+    const wanted = new Map<string, { readonly label: string; readonly kind: string; readonly row: JsonObject }>();
 
     for (const key of keys) {
       const d = ledger === undefined ? undefined : findDecision(ledger, key);
@@ -506,8 +497,7 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
         return;
       }
 
-      const revised = d.revised ?? "";
-      wanted.set(d.id, { label, kind: d.kind, since: revised !== "" ? revised : d.opened, held: d.held !== undefined && d.held !== null && d.held !== "" ? (d.held_at ?? "") : undefined });
+      wanted.set(d.id, { label, kind: d.kind, row: decisionRow(d) });
     }
 
     let tail: Tail | undefined;
@@ -521,12 +511,8 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
 
         if (d === undefined || m.from !== "user") continue;
 
-        if (first && !atOrAfter(pyText(m.at), d.since)) continue;
-
-        // A held decision has recorded the answers given until it was held.
-        if (first && d.held !== undefined && atOrAfter(d.held, pyText(m.at))) continue;
-
-        if (first && messages.some((r) => r.re === m.id && r.from !== "user")) continue;
+        // Given already, it is news until the decision records it (answerRecorded); a reply does not.
+        if (first && answerRecorded(d.row, m)) continue;
 
         for (const line of renderLines(machine, root, [m])) out.out(`${line}\n`);
         out.out(

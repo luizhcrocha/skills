@@ -1122,6 +1122,12 @@ class WaitTest(FleetDir):
         chat.append(self.root, "user", "Done.", allow_user=True, decision="d-x")
         self.assertIn("[A1 d-x]: Done.", run_cli(self.root, "wait", "d-x").stdout)
 
+    def test_an_answer_the_fleet_only_replied_to_prints_at_once_a_reply_does_not_record_it(self):
+        self.decide()
+        answer = chat.append(self.root, "user", "Done.", allow_user=True, decision="d-x")
+        chat.append(self.root, "coordinator", "Recorded", re=answer["id"])
+        self.assertIn("[A1 d-x]: Done.", run_cli(self.root, "wait", "d-x").stdout)
+
     def test_a_failed_answer_says_to_fix_and_re_present_the_step_never_to_decide_it(self):
         self.decide()
         chat.append(self.root, "user", "Failed: no such recipe", allow_user=True, decision="d-x")

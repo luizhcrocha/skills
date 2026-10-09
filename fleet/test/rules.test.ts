@@ -105,6 +105,15 @@ describe("an answer on the page is recorded before other work", () => {
     expect(ok("event", "later").stderr).not.toContain("the user answered");
   });
 
+  test("a reply in the chat does not record it: the warning stands until the decision command runs (D115)", () => {
+    ok("decision", "d1", ...CHOICE);
+    userSays(1, "2026-01-05T09:05:00+00:00", "B", "d1");
+    const reply = JSON.stringify({ id: 2, at: "2026-01-05T09:06:00+00:00", from: "coordinator", to: ["user"], text: "Recorded B", re: 1 });
+    writeFileSync(join(root, "chat.jsonl"), `${reply}\n`, { flag: "a" });
+    expect(ok("event", "something else").stderr).toContain("state: the user answered D1 (Schema) as #1 at 09:05; record it before any other work: ");
+    expect(ok("decision", "D1", "--decide", "B", "--resolution", "answered on the page (#1)").stderr).not.toContain("the user answered");
+  });
+
   test("an answer from before the decision last changed is not one, compared as instants across offsets (open-13)", () => {
     ok("decision", "d1", ...CHOICE);
     // 09:30+01:00 is 08:30 UTC: before the decision was opened, though its text sorts after.

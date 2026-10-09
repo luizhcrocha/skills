@@ -460,8 +460,12 @@ After the handler succeeds, before validation, on stderr, in this order (not for
 4. **An answer not recorded** (`state: the user answered D3 (<title>) as #14 at 09:12; record it
    before any other work: \`fleet state <dir> decision D3 --decide "..." --resolution "answered on the
    page (#14)"\`, then answer #14 with --re.`), one line per open decision of the ledger the command
-   leaves whose answer the user gave on the page after it was opened or last revised (instants), and
-   after `held_at` when it is held, with no reply from anyone but the user. Not for `init`. A
+   leaves whose answer the user gave on the page and the decision has not recorded (`answerRecorded`,
+   Python's `decisions.recorded`): given after it was opened or last revised (instants), after `held_at`
+   when it is held, and, on a grilling, after its last question answered or dropped. Only the decision's
+   own state records an answer: a reply in the chat does not record an answer; only the decision command
+   does (D115 sat two days under `fleets waiting` behind a "Recorded B" reply). Closed, it has recorded
+   every answer. Not for `init`. A
    grilling answered and waiting to be recorded (see `grill`) gets its own line instead, whatever
    the chat said after its last answer (a reply, a recap, amendments): `state: every question of G6
    (<title>) is answered and the grilling is still open; record it before any other work: \`fleet
@@ -631,9 +635,8 @@ window runs on the machine's monotonic clock, as `FLEET_CHECK_S` does: a pinned 
 the watch measures, not its pace. `--batch 0` exits with the first batch (the traces).
 
 `wait`: a closed decision prints `<ref> is already <status>: <answer or resolution>` and exits
-0. An answer already given (a user message tagged with the decision, sent at or after its
-`revised` or `opened` stamp, compared as instants, open-13, and after `held_at` on a held one) and
-not replied to by the fleet prints at once. Otherwise it waits for the next such message, and reads the ledger again at every poll: a
+0. An answer already given (a user message tagged with the decision) that the decision has not
+recorded, as [warning 4](#warnings) reads it (a reply to it records nothing), prints at once. Otherwise it waits for the next such message, and reads the ledger again at every poll: a
 decision closed meanwhile (withdrawn, or decided in the session) prints as a closed one does and
 exits 0 (open-21, fixed).
 
@@ -698,7 +701,7 @@ the inputs that page has; `held` and `held_at` are there only on a held decision
 
 | Command | Output | Exit |
 | :-- | :-- | :-- |
-| `waiting` | what waits on the user, from every live fleet's ledger, the manager's included: per open decision that asks the user and is not held, `<fleet> <ref> [<kind>(, blocks work)] <title>  since <revised or opened, YYYY-MM-DD HH:MM>`, then `  ANSWERED at HH:MM (#N): <first line>; not recorded yet` when the user's answer waits unrecorded; `nothing waits on the user`, or `no fleet is being served on this machine` | 0 |
+| `waiting` | what waits on the user, from every live fleet's ledger, the manager's included: per open decision that asks the user and is not held, `<fleet> <ref> [<kind>(, blocks work)] <title>  since <revised or opened, YYYY-MM-DD HH:MM>`, then `  ANSWERED at HH:MM (#N): <first line>; not recorded yet` when the user's answer waits unrecorded (warning 4's rule: a reply in the chat does not record an answer; only the decision command does); `nothing waits on the user`, or `no fleet is being served on this machine` | 0 |
 | `list` | per live fleet, one block, blocks a blank line apart: `<id>  (<role>, <status>)`, then `  session  <session or (not named yet)>(, last active YYYY-MM-DD HH:MM)`, `  page     <url>`, `  ledger   <dir>`, `  now      <now>` (when set) and `  chat     not read now(; N message(s) from the user wait since #S)` (when not read); then, after a blank line and each only when it has rows: `  agents   <n> running, <n> blocked, <n> queued` (the non-zero ones) with a row per queued, running or blocked agent `    <id>  <status>  <model or ->  <label>  lanes: <first lane>( +N)  SILENT since HH:MM`, the label its `name`, or its `task` when the name is its id, one line, cut at 48 characters with `…`, and its lanes each comma-separated glob once; `  links    <n>` with `    <ref>  <kind>  <url>  <title>` per link; `  waiting  <n>` with `    <ref>  <id>  <kind>  for the user|for the manager  <title>(  blocks work)(  ANSWERED at HH:MM, not recorded)(  held by the fleet: <reason>)` per open decision; `  tokens   workers <n>; <role> <n> written, <n> read` (three figures and k, M or B, rounded half up) when the session's transcript is found. Columns are padded to the widest cell, counted in code points; trailing spaces are cut. Or `no fleet is being served on this machine` | 0 |
 | `show FLEET` | now (with when it was said), chat, live workers with their last report (and `silent since HH:MM: check it before saying it runs` under a silent one), every lane of the queued, running and blocked workers, sorted, as `    lane <glob>  <agent ids>`, open decisions (and `held by the fleet since HH:MM: <reason>`, and an answer not recorded), open roadblocks, the last 8 events | 1 unknown fleet |
 | `manager` | `manager  session …  <url>  <dir>` and where `standing.md` is | 1 when none |
@@ -1184,13 +1187,14 @@ hook: a broken `chat.jsonl` or ledger is skipped, an error is logged.
   - a message to the role (or to no one named) after the cursor: `Fleet: #81 from the user, unread for 4
     min: "<first 80 chars>". Read the chat now (`<fleet> chat DIR inbox --as ROLE`) and answer or record
     it.`;
-  - an answer to a decision still open (given after it was opened or revised, and not held after it),
-    read or not: `Fleet: #82 from the user answers A7 (<title>), not recorded for 12 min: "<text>". Record
-    it now (`<fleet> state DIR decision A7 --decide "..." --resolution "answered on the page (#82)"`),
+  - an answer to a decision still open that it has not recorded (given after it was opened or revised,
+    not held after it, and on a grilling not followed by a question answered or dropped), read or not;
+    a reply in the chat does not record an answer; only the decision command does: `Fleet: #82 from
+    the user answers A7 (<title>), not recorded for 12 min: "<text>". Record it now (`<fleet> state DIR decision A7 --decide "..." --resolution "answered on the page (#82)"`),
     then answer #82 with --re.`
   - an answer to a grilling that is then answered and waiting to be recorded, even when the fleet
-    replied to it (a reply to an answer to a decision keeps it pending; otherwise it is dropped when
-    due): `Fleet: G6 (<title>): every question is answered and the grilling is still open, not
+    replied to it (a reply to an answer to a decision keeps it pending; a reply to any other message
+    drops it): `Fleet: G6 (<title>): every question is answered and the grilling is still open, not
     recorded for 4 min. Record it now (\`<fleet> state DIR decision G6 --decide "..." --resolution
     "grilling finished"\`).`
   Each message is told once. No process, no ledger read until something is due. Measured on a chat of

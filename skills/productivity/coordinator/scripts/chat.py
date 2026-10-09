@@ -992,7 +992,8 @@ def _watch(root, args, who: str) -> int | None:
 def cmd_wait(root, args) -> None:
     """Wait for the user's answer to any of these decisions (ids or numbers), print it and exit: the
     subscription a coordinator arms when it asks, so it knows at once, whatever its chat watch is doing.
-    An answer given already and not recorded prints at once; one closed meanwhile ends the wait too."""
+    An answer given already and not recorded (a reply to it records nothing) prints at once; one closed
+    meanwhile ends the wait too."""
     import decisions
     state = _state(root)
     decisions.number(state)
@@ -1011,10 +1012,8 @@ def cmd_wait(root, args) -> None:
         messages = tail.read() if not first else read(root)
         for m in messages:
             d = wanted.get(m.get("decision"))
-            if d and m["from"] == "user" and (not first or clock.at_or_after(m["at"], d.get("revised") or d.get("opened") or "")
-                                               and not (d.get("held") and clock.at_or_after(d.get("held_at") or "", m["at"]))):
-                if first and any(r.get("re") == m["id"] and r["from"] != "user" for r in messages):
-                    continue  # answered already, and replied to: not news
+            # Given already, it is news until the decision records it (decisions.recorded); a reply does not.
+            if d and m["from"] == "user" and not (first and decisions.recorded(d, m)):
                 _show(root, [m])
                 label = d.get("ref") or d["id"]
                 if d.get("kind") == "action" and str(m.get("text", "")).startswith("Failed:"):

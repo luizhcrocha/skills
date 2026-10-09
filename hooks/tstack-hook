@@ -742,9 +742,10 @@ def fleet_chat_nudge(hook):
     """PostToolUse: a coordinator or manager busy mid-turn hears its chat. At most once per NUDGE_EVERY_S
     per session, it reads the fleet's chat.jsonl from where it last stopped, and tells the session of each
     message from the user to its role left unread (after the watch's cursor) and unanswered, and of each
-    answer to an open decision left unrecorded, for FLEET_NUDGE_MIN minutes (3) on the fleet's clock. An
-    answer to a grilling that leaves every question answered is told once, as the grilling to
-    record, even when the fleet replied to it (a recap, amendments). Each message is told once. No process;
+    answer to an open decision left unrecorded, for FLEET_NUDGE_MIN minutes (3) on the fleet's clock: only
+    the decision's own state records it (decisions.py `recorded`), never a reply in the chat. An answer to a
+    grilling that leaves every question answered is told once, as the grilling to record. Each message is
+    told once. No process;
     the ledger is read only when something is due."""
     if fleet_worker(hook) or not hook.session_id:
         return None
@@ -777,11 +778,8 @@ def fleet_chat_nudge(hook):
                                              "decision": m.get("decision")}
             elif isinstance(m.get("re"), int):
                 answer = pending.get(str(m["re"]))
-                # A reply to an answer to a decision does not record it: kept, it is told only if the
-                # decision is then a grilling with every question answered and still open.
-                if isinstance(answer, dict) and answer.get("decision"):
-                    answer["replied"] = True
-                else:
+                # A reply to an answer to a decision does not record it: only the decision's own state does.
+                if not (isinstance(answer, dict) and answer.get("decision")):
                     pending.pop(str(m["re"]), None)
         due = {k: p for k, p in pending.items() if not isinstance(p, dict)
                or (_instant(p.get("at")) is not None and now - _instant(p["at"]) >= wait_s)}
@@ -813,13 +811,14 @@ def fleet_chat_nudge(hook):
                             f'decision {ref} --decide "..." --resolution "grilling finished"`).')
                         told.append(int(k))
                         continue
-                    if p.get("replied"):
-                        continue  # the fleet answered it: nothing waits on it here
                     since = _instant(dec.get("revised") or dec.get("opened"))
                     if since is not None and _instant(p["at"]) < since:
                         continue  # an answer to the question before it was revised
                     if dec.get("held") and (_instant(dec.get("held_at")) or 0) >= _instant(p["at"]):
                         continue  # held after this answer: the fleet works on it first
+                    questions = dec.get("questions") if isinstance(dec.get("questions"), list) else []
+                    if any(isinstance(q, dict) and (_instant(q.get("answered")) or 0) >= _instant(p["at"]) for q in questions):
+                        continue  # a grilling's question answered or dropped after it: recorded
                     lines.append(
                         f'Fleet: #{k} from the user answers {ref} ({_one_line(dec.get("title") or "", 60)}), '
                         f'not recorded for {minutes} min: "{said}". Record it now (`{fleet_cli()} state {d} '

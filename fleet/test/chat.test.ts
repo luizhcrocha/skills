@@ -723,6 +723,13 @@ describe("wait", () => {
     expect(cli("wait", "d-x").stdout).toContain("[A1 d-x]: Done.");
   });
 
+  test("an answer the fleet only replied to prints at once: a reply does not record it", () => {
+    decide();
+    const answer = user("Done.", { decision: "d-x" });
+    send("coordinator", "Recorded", { re: answer.id });
+    expect(cli("wait", "d-x").stdout).toContain("[A1 d-x]: Done.");
+  });
+
   test("a failed answer says to fix and re-present the step, never to decide it", () => {
     decide();
     user("Failed: no such recipe", { decision: "d-x" });

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { Message } from "../chat/store.ts";
 import { atOrAfter, parseInstant } from "../clock.ts";
 import { Refusal } from "../errors.ts";
-import { answeredAt, answeredGrill, failedAnswer, failureWords } from "../health.ts";
+import { answeredAt, answeredGrill, decisionRow, failedAnswer, failureWords } from "../health.ts";
 import { asArray, asNumber, asObject, asString, type JsonObject } from "../json.ts";
 import { readObject } from "../registry.ts";
 import { secondsNow, type Machine } from "../world.ts";
@@ -141,7 +141,7 @@ export function unrecorded(ledger: Ledger, said: readonly Message[]): string[] {
       continue;
     }
 
-    const at = answeredAt({ id: d.id, opened: d.opened, revised: d.revised ?? null, held: d.held ?? null, held_at: d.held_at ?? null }, said);
+    const at = answeredAt(decisionRow(d), said);
 
     if (at === undefined) continue;
     const m = [...said].reverse().find((x) => x.decision === d.id && x.from === "user" && x.at === at);

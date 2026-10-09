@@ -407,6 +407,7 @@ class Model:
             if not 1 <= n <= len(qs):
                 raise Refused("no such question")
             qs[n - 1] = "answered"
+            d["recorded"] = self.clock  # a question answered: the grilling has recorded the answers given until now
         qs += ["open"] * len(c.get("ask", []))
         if c.get("ask"):
             if not created:
@@ -543,13 +544,13 @@ class Model:
         return d["kind"] == "grill" and d["status"] == "open" and "open" not in d.get("questions", [])
 
     def answered(self, did: str) -> bool:
-        """The user answered decision `did` on the page after it last changed, and after the fleet held it, and
-        nobody replied to the answer."""
+        """The user answered decision `did` on the page after it last changed, after the fleet held it, and after
+        a grilling's question was last answered. A reply to the answer records nothing."""
         d = self.decisions[did]
-        replied = {m["re"] for m in self.messages if m["from"] != "user" and m["re"] is not None}
         held = d["held_at"] if d.get("held") else None
+        recorded = d.get("recorded")
         return any(m["from"] == "user" and m.get("decision") == did and m["at"] >= d["since"] and (held is None or m["at"] > held)
-                   and m["id"] not in replied for m in self.messages)
+                   and (recorded is None or m["at"] > recorded) for m in self.messages)
 
     def closed_ref(self, key: str) -> bool:
         did = self.find(self.decisions, key)

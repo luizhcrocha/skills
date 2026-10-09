@@ -7,6 +7,8 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
+import { messageOf, type Message } from "../src/chat/store.ts";
+import { answeredAt } from "../src/health.ts";
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
 import { answerRefusal } from "../src/ledger/answers.ts";
 import { baseEnv, fleet, readJson, tmp, type Environment, type Ran } from "./support.ts";
@@ -840,5 +842,43 @@ describe("permission", () => {
     expect(item("p1")["revised"]).not.toBeNull();
     ok("decision", "P1", "--decide", "allow-once: Allow this call once", "--resolution", "answered on the page (#3)");
     expect([item("p1")["status"], item("p1")["answer"]]).toEqual(["decided", "allow-once: Allow this call once"]);
+  });
+});
+
+describe("answeredAt: only the decision's own state records an answer, never a reply in the chat", () => {
+  const D115: JsonObject = { id: "d115", ref: "D115", kind: "decision", status: "open", opened: "2026-10-05T09:00:00+00:00", revised: null };
+
+  const say = (id: number, at: string, from: string, more: JsonObject = {}): Message => {
+    const m = messageOf({ id, at, from, to: [from === "user" ? "coordinator" : "user"], text: from === "user" ? "B" : "Recorded B", re: null, ...more });
+
+    if (m === undefined) throw new Error("a message the fixture wrote");
+
+    return m;
+  };
+
+  // Infra's D115: the user answered (#608), the coordinator replied "Recorded B" (#609, re 608) and never ran --decide.
+  const chat = [say(608, "2026-10-07T14:00:00+00:00", "user", { decision: "d115" }), say(609, "2026-10-07T14:01:00+00:00", "coordinator", { re: 608 })];
+
+  test("an answer the coordinator replied to, with no change to the decision, is not recorded", () => {
+    expect(answeredAt(D115, chat)).toBe("2026-10-07T14:00:00+00:00");
+  });
+
+  test("revised, held or closed at or after the answer, it is recorded", () => {
+    expect(answeredAt({ ...D115, revised: "2026-10-07T14:05:00+00:00" }, chat)).toBeUndefined();
+    expect(answeredAt({ ...D115, held: "the migration first", held_at: "2026-10-07T14:00:00+00:00" }, chat)).toBeUndefined();
+    expect(answeredAt({ ...D115, status: "decided", closed: "2026-10-07T14:05:00+00:00" }, chat)).toBeUndefined();
+    expect(answeredAt({ ...D115, status: "withdrawn" }, chat)).toBeUndefined();
+  });
+
+  test("held before the answer, it is not", () => {
+    expect(answeredAt({ ...D115, held: "the migration first", held_at: "2026-10-07T13:00:00+00:00" }, chat)).toBe("2026-10-07T14:00:00+00:00");
+  });
+
+  test("a grilling records an answer by answering or dropping a question at or after it", () => {
+    const question = (answered: string | null): JsonObject => ({ id: "q1", title: "T", status: answered === null ? "open" : "answered", answered });
+    const g = { ...D115, kind: "grill", questions: [question(null), { ...question(null), id: "q2" }] };
+    expect(answeredAt(g, chat)).toBe("2026-10-07T14:00:00+00:00");
+    expect(answeredAt({ ...g, questions: [question("2026-10-07T14:02:00+00:00"), { ...question(null), id: "q2" }] }, chat)).toBeUndefined();
+    expect(answeredAt({ ...g, questions: [question("2026-10-07T13:00:00+00:00"), { ...question(null), id: "q2" }] }, chat)).toBe("2026-10-07T14:00:00+00:00");
   });
 });
