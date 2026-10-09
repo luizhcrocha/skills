@@ -30,7 +30,8 @@
 
 Add --no-render anywhere to write state.json without rendering, -q to render without saying so.
 Every command also warns (on stderr) when the user's chat messages wait unread, and when worker
-rows still say running while the fleet is paused or done.
+rows still say running while the fleet is paused or done, and names the fleet's unread machine news
+(`fleet news read --as FLEET`) in one line.
 
 DIR holds state.json, the rendered index.html, and brief.md: what every worker
 of the fleet reads before its task, written once from assets/brief.md and the
@@ -56,6 +57,7 @@ import chat  # noqa: E402
 import clock  # noqa: E402
 import decisions  # noqa: E402
 import lanes  # noqa: E402
+import news  # noqa: E402
 import render_dashboard  # noqa: E402
 import spend  # noqa: E402
 
@@ -1425,7 +1427,8 @@ def main(argv: list[str]) -> None:
         result = handler(state, args)
     seen = result or state
     for warning in (chat.deaf_warning(root) if args.cmd != "init" else None, stale_rows(seen), stale_now(seen, args),
-                    *(unrecorded(root, seen) if args.cmd != "init" else []), left_open(seen, args), overlapping(seen, args), off_policy(seen, args)):
+                    *(unrecorded(root, seen) if args.cmd != "init" else []), left_open(seen, args), overlapping(seen, args), off_policy(seen, args),
+                    news.unread_line(root) if args.cmd != "init" else None):
         if warning:
             sys.stderr.write(warning + "\n")
     if result is None:

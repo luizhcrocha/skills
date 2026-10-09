@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import { deafWarning } from "../chat/chat.ts";
+import { unreadLine } from "../news/news.ts";
 import { stampOf } from "../clock.ts";
 import { Refusal, stateRefusal, UsageError } from "../errors.ts";
 import { exists, FLEET_BIN, makeDirs, readText, resolvePath, SKILL_DIR, writeText } from "../files.ts";
@@ -355,6 +356,7 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
       seen === undefined || !running ? undefined : overlapping(seen, args.str("id") ?? ""),
       seen === undefined || cmd !== "agent" ? undefined : gaveRole(seen, args.str("id") ?? "", args.str("model"), args.str("effort")),
       ...(seen === undefined ? [] : unpruned(seen, activeWorkspaces(readObject(path)), settingDone)),
+      cmd === "init" ? undefined : unreadLine(machine, root),
     ];
 
     for (const warning of warnings) if (warning !== undefined) run.warn(warning);

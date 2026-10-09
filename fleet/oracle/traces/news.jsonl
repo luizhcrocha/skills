@@ -1,0 +1,32 @@
+{"trace": 1, "name": "news", "about": "The machine's news (`fleet news`): numbered items addressed to all or to fleets, a cursor per reader that never sees its own items, the refusals, and the one line that names unread news on a state command and on a chat watch's wake."}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "acme-billing", "--goal", "usage records land", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$W/infra", "init", "--project", "infra", "--goal", "deploys stay green", "--no-render"]}
+{"fixture": "write", "path": "$REGISTRY/acme-billing.json", "content": "{\"id\": \"acme-billing\", \"role\": \"coordinator\", \"dir\": \"$DIR\", \"url\": \"http://box:7420/f/acme-billing/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:30:00+00:00\"}\n"}
+{"fixture": "write", "path": "$REGISTRY/infra.json", "content": "{\"id\": \"infra\", \"role\": \"coordinator\", \"dir\": \"$W/infra\", \"url\": \"http://box:7420/f/infra/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:40:00+00:00\"}\n"}
+{"cli": "news", "argv": ["list"]}
+{"cli": "news", "argv": ["read", "--as", "acme-billing"]}
+{"cli": "state", "argv": ["$DIR", "show"]}
+{"cli": "news", "argv": ["post", "--from", "skills", "--kind", "release", "tstack 1.9.20: a chat watch settles before it exits"], "clock": "2026-01-05T09:05:00+00:00"}
+{"cli": "news", "argv": ["post", "--from", "skills", "--to", "infra", "--kind", "rule", "--keep", "a full gate runs inside the gate slot"]}
+{"cli": "news", "argv": ["post", "--from", "acme-billing", "acme-billing moved to the new schema"]}
+{"cli": "news", "argv": ["post", "--from", "infra", "--to", "acme-billing, infra,acme-billing", "staging is down until 10:00\nretry after"]}
+{"cli": "news", "argv": ["post", "--from", "skills", "--to", "all,infra", "both"]}
+{"cli": "news", "argv": ["post", "--from", "the skills", "spaces"]}
+{"cli": "news", "argv": ["post", "--from", "skills", "  "]}
+{"cli": "news", "argv": ["post", "--from", "skills", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]}
+{"cli": "news", "argv": ["post", "--from", "skills", "--kind", "act", "act"]}
+{"cli": "news", "argv": ["post", "fyi"]}
+{"cli": "news", "argv": ["read"]}
+{"cli": "news", "argv": ["bogus"]}
+{"cli": "state", "argv": ["$DIR", "show"]}
+{"cli": "state", "argv": ["$W/infra", "event", "--kind", "note", "read the news later", "--no-render"]}
+{"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 1, "at": "2026-01-05T09:06:00+00:00", "from": "user", "to": ["coordinator"], "text": "status?", "re": null}}
+{"cli": "chat", "argv": ["$DIR", "watch", "--as", "coordinator", "--all", "--resume", "--once"], "clock": "2026-01-05T09:07:00+00:00"}
+{"cli": "news", "argv": ["read", "--as", "acme-billing"]}
+{"cli": "news", "argv": ["read", "--as", "acme-billing"]}
+{"cli": "state", "argv": ["$DIR", "show"]}
+{"cli": "news", "argv": ["read", "--as", "infra"]}
+{"fixture": "append", "path": "$REGISTRY/news/news.jsonl", "content": "not json\n{\"id\": true, \"from\": \"x\", \"to\": [\"all\"], \"text\": \"a bool id\"}\n{\"id\": 9, \"at\": \"2026-01-05T09:08:00+00:00\", \"from\": \"x\", \"to\": [\"all\"], \"text\": \"no kind, no keep\"}"}
+{"cli": "news", "argv": ["post", "--from", "skills", "after a torn line"], "clock": "2026-01-05T09:10:00+00:00"}
+{"cli": "news", "argv": ["list"]}
+{"cli": "news", "argv": ["read", "--as", "manager"]}

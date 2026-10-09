@@ -19,6 +19,7 @@ import { World, worldLayer, type Machine } from "../world.ts";
 import { briefCli } from "./brief.ts";
 import { chatCli } from "./chat.ts";
 import { fleetsCli } from "./fleets.ts";
+import { newsCli } from "./news.ts";
 import { previewCli } from "./preview.ts";
 import { CONTROL_CLIS, controlCli } from "./hub.ts";
 import { stateCli } from "./state.ts";
@@ -26,7 +27,7 @@ import { tellCli } from "./tell.ts";
 import { turnCli } from "./turn.ts";
 import { wsCli } from "./ws.ts";
 
-const USAGE = "usage: fleet {version,ls,tell,state,chat,fleets,ws,preview,brief,turn,advisor,hub,serve,render,usage,spend,served} ...\n";
+const USAGE = "usage: fleet {version,ls,tell,state,chat,fleets,news,ws,preview,brief,turn,advisor,hub,serve,render,usage,spend,served} ...\n";
 
 /** This copy of tstack: its version (from the plugin's manifest) and where it is, for `fleet version`. */
 function versionLine(): string {
@@ -115,6 +116,8 @@ function route(argv: readonly string[]): Effect.Effect<number, never, Out | Worl
 
   if (cli === "fleets") return fleetsCli(rest);
 
+  if (cli === "news") return newsCli(rest);
+
   if (cli === "ws") return wsCli(rest);
 
   if (cli === "preview") return previewCli(rest);
@@ -131,7 +134,7 @@ function route(argv: readonly string[]): Effect.Effect<number, never, Out | Worl
   return Effect.gen(function* () {
     const out = yield* Out;
 
-    out.err(`${USAGE}fleet: error: the first argument is state, chat, fleets, ws, preview, brief, turn, advisor, hub, serve, render, usage, spend or served\n`);
+    out.err(`${USAGE}fleet: error: the first argument is state, chat, fleets, news, ws, preview, brief, turn, advisor, hub, serve, render, usage, spend or served\n`);
 
     return 2;
   });

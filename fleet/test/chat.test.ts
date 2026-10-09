@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 
 import { address, append, deafWarning, listening, openFor, READING_GRACE_S, type Draft } from "../src/chat/chat.ts";
 import { FleetNews, firstLine } from "../src/chat/news.ts";
+import { Settle, settleOf } from "../src/chat/watch.ts";
 import { readChat, type Message, type Part } from "../src/chat/store.ts";
 import { stampOf } from "../src/clock.ts";
 import { ChatError } from "../src/errors.ts";
@@ -455,6 +456,114 @@ describe("watch", () => {
     user("status?");
     expect(await proc.exited).toBe(0);
     expect(await lines.rest()).toBe("#1 user -> coordinator: status?\n");
+  });
+});
+
+describe("a --once watch settles", () => {
+  test("nothing seen never ends it", () => {
+    expect(new Settle(30, 10, 120).due(10_000)).toBe(false);
+  });
+
+  test("a line settles, and each new line restarts it", () => {
+    const s = new Settle(30, 10, 120);
+    s.saw(100);
+    expect(s.due(129.9)).toBe(false);
+    s.saw(120);
+    expect(s.due(149.9)).toBe(false);
+    expect(s.due(150)).toBe(true);
+  });
+
+  test("a steady trickle ends at the cap", () => {
+    const s = new Settle(30, 10, 120);
+
+    for (let t = 0; t < 125; t += 25) {
+      s.saw(t);
+      expect(s.due(t)).toBe(t >= 120);
+    }
+  });
+
+  test("the user's message settles shorter, and machine lines do not hold it", () => {
+    const s = new Settle(30, 10, 120);
+    s.saw(0);
+    s.saw(5, true);
+    s.saw(12);
+    expect(s.due(14.9)).toBe(false);
+    expect(s.due(15)).toBe(true);
+    const typing = new Settle(30, 10, 120);
+    typing.saw(0, true);
+    typing.saw(8, true);
+    expect(typing.due(17.9)).toBe(false);
+    expect(typing.due(18)).toBe(true);
+  });
+
+  test("the user never waits longer than the settle, and zero is at once", () => {
+    const s = new Settle(4, 10, 120);
+    s.saw(0, true);
+    expect(s.due(4)).toBe(true);
+    const zero = new Settle(0, 10, 120);
+    zero.saw(7);
+    expect(zero.due(7)).toBe(true);
+  });
+
+  test("the defaults, the environment, and --settle over it", () => {
+    const at = (s: Settle, t: number): boolean => s.due(t);
+    const defaults = settleOf(() => undefined, undefined);
+    defaults.saw(0);
+    expect([at(defaults, 29.9), at(defaults, 30)]).toEqual([false, true]);
+    const fromUser = settleOf(() => undefined, undefined);
+    fromUser.saw(0, true);
+    expect([at(fromUser, 9.9), at(fromUser, 10)]).toEqual([false, true]);
+
+    const table = new Map([
+      ["FLEET_WATCH_SETTLE", "5"],
+      ["FLEET_WATCH_SETTLE_USER", "2"],
+      ["FLEET_WATCH_SETTLE_MAX", "6"],
+    ]);
+
+    const given = settleOf((k) => table.get(k), undefined);
+    given.saw(0);
+    given.saw(4);
+    expect([at(given, 5.9), at(given, 6)]).toEqual([false, true]);
+    const flag = settleOf((k) => table.get(k), 9);
+    flag.saw(0);
+    expect([at(flag, 5.9), at(flag, 6)]).toEqual([false, true]);
+    const flagNoCap = settleOf((k) => (k === "FLEET_WATCH_SETTLE" ? "1" : undefined), 9);
+    flagNoCap.saw(0);
+    expect([at(flagNoCap, 8.9), at(flagNoCap, 9)]).toEqual([false, true]);
+  });
+
+  test("a burst is one wake", async () => {
+    const { proc, lines } = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once", "--settle", "1"], env);
+    procs.push(proc);
+    await sleep(600);
+    send("a1", "@coordinator done with the parser");
+    await sleep(600);
+    expect(proc.exitCode).toBeNull();
+    send("a1", "@coordinator and the tests");
+    const last = performance.now();
+    expect(await proc.exited).toBe(0);
+    expect(performance.now() - last).toBeGreaterThanOrEqual(700);
+    expect(await lines.rest()).toBe(
+      "#1 a1 (notes-impl) -> user, coordinator: @coordinator done with the parser\n#2 a1 (notes-impl) -> user, coordinator: @coordinator and the tests\n",
+    );
+    expect(readFileSync(join(root, "watch-coordinator.cursor"), "utf8")).toBe("2");
+  });
+
+  test("the user's message settles shorter", async () => {
+    const { proc, lines } = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once", "--settle", "30"], { ...env, FLEET_WATCH_SETTLE_USER: "0.5" });
+    procs.push(proc);
+    await sleep(600);
+    const begun = performance.now();
+    user("status?");
+    expect(await proc.exited).toBe(0);
+    expect(performance.now() - begun).toBeLessThan(5000);
+    expect(await lines.rest()).toBe("#1 user -> coordinator: status?\n");
+  });
+
+  test("what waited already exits at once", () => {
+    user("status?");
+    const once = fleet(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once", "--settle", "30"], env);
+    expect(once.stdout).toBe("#1 user -> coordinator: status?\n");
   });
 });
 

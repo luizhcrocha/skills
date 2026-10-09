@@ -61,14 +61,17 @@ export interface Environment {
   [name: string]: string;
 }
 
-/** The environment every test process runs in: its own registry, no discovery. */
+/** The environment every test process runs in: its own registry, no discovery, a watch that does not settle. */
 export function baseEnv(home: string, more: Readonly<Environment> = {}): Environment {
   const env: Environment = {};
 
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
   delete env["FLEET_NOW"];
 
-  return { ...env, FLEET_HOME: home, FLEET_DISCOVER: "0", ...more };
+  for (const key of ["FLEET_WATCH_SETTLE_USER", "FLEET_WATCH_SETTLE_MAX"]) delete env[key];
+
+  // A --once watch exits with its first batch, as before it settled; a settle test gives its own.
+  return { ...env, FLEET_HOME: home, FLEET_DISCOVER: "0", FLEET_WATCH_SETTLE: "0", ...more };
 }
 
 /** Run `fleet ARGS` in this process, through the CLI's own interface, with `env` as its environment. */

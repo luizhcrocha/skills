@@ -26,7 +26,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 [The ledger](#the-ledger-statejson) · [Numbers](#numbers-refs) · [Warnings](#warnings) ·
 [chat.py](#chatpy-the-chat) · [fleets.py and the registry](#fleetspy-and-the-registry) ·
 [The other scripts](#the-other-scripts) · [The hub](#the-hub-fleet-hub) · [Heartbeats](#heartbeats) ·
-[Listening hooks](#listening-hooks) ·
+[Listening hooks](#listening-hooks) · [The news](#the-news-fleet-news) ·
 [Workspaces](#workspaces-fleet-ws) · [The preview](#the-preview-fleet-preview) · [The advisor](#the-advisor-fleet-advisor) · [Files by writer](#files-by-writer) ·
 [Oracle traces](#oracle-traces) · [The model](#the-model-based-test) · [Open](#open)
 
@@ -44,6 +44,9 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `FLEET_UNHEARD_S` | chat.py | how long the user's message waits unread before a manager's watch tells (default 120 s) |
 | `FLEET_UNANSWERED_S` | chat.py | how long the user's message to a fleet's host goes without a reply (`--re`) before a manager's watch tells, read or not (default 600 s) |
 | `FLEET_NUDGE_S` | chat.py | how long a message to a worker waits unanswered before the coordinator's watch tells (default 600 s, L1) |
+| `FLEET_WATCH_SETTLE` | chat.py | how long a `--once` watch waits after a new line for more before it exits (default 30 s; `--settle` wins) |
+| `FLEET_WATCH_SETTLE_USER` | chat.py | the same after the user's message to WHO (default 10 s, never more than the settle) |
+| `FLEET_WATCH_SETTLE_MAX` | chat.py | the longest a `--once` watch holds its first new line (default 120 s) |
 | `TAILSCALE` | serve_dashboard.py, `fleet hub`, `fleet serve`, `fleet served` | the tailscale binary |
 | `FLEET_HUB_PORT` | `fleet hub`, `fleet serve` | the hub's port (default 7420); `--port` wins |
 | `FLEET_DIR` | the plugin's hook (`fleet_heartbeat`) | the fleet DIR a session works for when its scratchpad holds none: a worker launched as its own Claude Code process. See [Heartbeats](#heartbeats) |
@@ -555,6 +558,10 @@ After the handler succeeds, before validation, on stderr, in this order (not for
    to the next worker of its lane (\`fleet ws <dir> add <next> --reuse a1\`).`), naming both ways out, on every command,
    and on `set --status done` **the workspaces left** (`state: the fleet is done with workspace(s) a1
    not pruned: ...`).
+9. **Unread news** (`news: N unread for <fleet>, never a wake: \`fleet news read --as <fleet>\``), one line,
+   last, when the machine's news holds items the fleet has not read ([The news](#the-news-fleet-news)).
+   Not for `init`. Read only when `REGISTRY/news/news.jsonl` exists, and the fleet's name is read from the
+   registry's entries without pruning or renaming any.
 
 Also from `set --now`: for each `[DAISGLR]<digits>` in the text that names a closed decision,
 `state: the Now line names <ref> (<title>) is <status>: check the decision's state before saying
@@ -611,7 +618,7 @@ its id.
 | `say --as WHO [--re N] [--decision D] TEXT` | appends | the stored line; when WHO is the host, with no `--re`, while the user's messages to the host are open (not answered with `--re`, nor answers to a decision since closed), one stderr line `chat: open from the user: #93 14:42, #95 14:48( (and K earlier)) — add \`--re N\` if this answers one` (the last five); the message is sent all the same | 1 refused |
 | `inbox --as WHO` | the messages open for WHO (`user` allowed) | one line each, oldest first | 1 unknown WHO |
 | `log [--after N]` | every message with id > N | one line each | 0 |
-| `watch --as WHO [--after N \| --resume] [--all] [--once] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager; 1 stdout is /dev/null; 1 `--once` while another watch as WHO runs for DIR; 1 without `--once` when stdout is not a terminal |
+| `watch --as WHO [--after N \| --resume] [--all] [--once] [--settle SECONDS] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager; 1 stdout is /dev/null; 1 `--once` while another watch as WHO runs for DIR; 1 without `--once` when stdout is not a terminal |
 | `wait DECISION...` | waits for the user's answer to one of these open decisions | the answer's line, then `-> the user answered <ref>: record it first, ...`; for an action answered `Failed: ...`, `-> the user's step <ref> failed, and it is not done: fix it and re-present it, ...`, or --withdraw "why"; never --decide` | 1 unknown decision |
 
 A printed line: `#<id> <from>( (<name or author>)) -> <to, each with its name>( [<ref> <decision>])( [side chat #N])( [delivered to <fleet> #<id>, ...])( [via <fleet> #<id>])( [from <origin>])( (quoting <from>: "<quote>"))`
@@ -658,7 +665,20 @@ chars>". Forward it (SendMessage a1).` (L1: workers read their inbox at checkpoi
 left this long is forwarded), and each grilling answered and waiting to be recorded: `! G6 (<title>):
 every question is answered and the grilling is still open. Record it now: \`fleet state <dir> decision
 G6 --decide "..." --resolution "grilling finished"\`, or withdraw it with its reason.` (once per round:
-the mark is its `revised`, else `opened`). Each told once (`watch-coordinator.told`). `--once` exits after the first batch it prints.
+the mark is its `revised`, else `opened`). Each told once (`watch-coordinator.told`).
+
+**When a `--once` watch exits.** What was open when it started exits at once, and so do the `!` lines of
+its first look (both were due before it began). A new line (a message, or a `!` line of a later look)
+does not: the watch settles, so one wake carries a burst. It keeps printing what lands and exits once no
+line has come for `--settle` seconds (int; else `FLEET_WATCH_SETTLE`, else 30), each new line restarting
+it, and at most `FLEET_WATCH_SETTLE_MAX` (120) seconds after the first. The user's message to WHO settles
+shorter: the watch exits `FLEET_WATCH_SETTLE_USER` (10, never more than the settle) seconds after the
+user's last message to WHO, whatever else lands, so the user never waits long. `--settle 0` exits with the
+first batch, as before the settle. The clock is the machine's monotonic one, as `--batch`'s is (`chat.Settle`,
+`Settle` in `fleet/src/chat/watch.ts`, take any monotonic seconds, so a test drives them on its own time).
+`wait` is unchanged: it exits the moment the answer is given. When a `--once` watch as the host exits on
+its own, and the fleet has unread news, it prints one more line, the state commands' warning 9: the
+news rides on a wake the chat makes and never makes one.
 
 **The other fleets' news** (`watch --as manager --fleets`, M20): the manager's watch also reads every
 served fleet's `chat.jsonl` and `state.json` (the manager's own DIR and any `manager` entry left out) and
@@ -684,11 +704,12 @@ stands}}]`. A fleet seen for the first time is read from then on, printing nothi
 the cursors the last watch left, so a fleet's news is printed once, whenever the watch runs. The
 manager's own chat is printed as before and never again as a fleet's.
 
-`--once` with `--fleets`: a message to the manager (and a `!` line) still ends the watch at once; the
+`--once` with `--fleets`: a message to the manager (and a `!` line) settles as above; the
 first news of the other fleets opens a window of `--batch` seconds (120 by default, an int), and the
 watch prints all that lands in it, then exits, so one wake covers a burst of the user's actions. The
 window runs on the machine's monotonic clock, as `FLEET_CHECK_S` does: a pinned `FLEET_NOW` dates what
-the watch measures, not its pace. `--batch 0` exits with the first batch (the traces).
+the watch measures, not its pace. `--batch 0` exits with the first batch (the traces). Whichever of the window and the settle ends first
+ends the watch.
 
 `wait`: a closed decision prints `<ref> is already <status>: <answer or resolution>` and exits
 0. An answer already given (a user message tagged with the decision) that the decision has not
@@ -1257,6 +1278,15 @@ hook: a broken `chat.jsonl` or ledger is skipped, an error is logged.
   2,000 lines: 0.96 ms median in process for a first look with an item due, 0.20 ms for the usual look
   from a kept offset.
 
+A handler of SessionStart and Stop tells the host of the machine's news ([The news](#the-news-fleet-news)):
+
+- **News** (`fleet_news`, SessionStart and Stop). For each fleet the session hosts (the Stop guard's
+  membership; a worker is out), when `REGISTRY/news/news.jsonl` holds items the fleet has not read, one
+  line of context, never a block: `Fleet news: N unread for <fleet>, never a wake. Read them when
+  convenient: \`<plugin>/fleet/bin/fleet news read --as <fleet>\`.` A SessionStart says it whenever any is
+  unread; a Stop once per new item (the session's `fleet-news` state keeps the last item told per fleet).
+  No process: it reads the registry's entries, the log and the cursor itself.
+
 A third Stop handler of the same dispatcher holds the host to "Said once, on the page" (coordinator
 SKILL.md, Respond; manager SKILL.md, Said once):
 
@@ -1270,6 +1300,36 @@ SKILL.md, Respond; manager SKILL.md, Said once):
   answer here."}`. Once per turn: never on a stop that follows a stop hook's block (`stop_hook_active`),
   nor twice for one prompt (the session's `said-once` state keeps the turn's key, the prompt's uuid).
   Anything it cannot read lets the turn stop.
+
+## The news (`fleet news`)
+
+What a session tells the fleets and that needs nobody to act now (a release note, an FYI, a rule) is news,
+not a message: a message to a session wakes it, and a wake re-reads the session's whole context. News
+never wakes anyone. `news.py` is the oracle; `fleet news` the CLI.
+
+The store is `REGISTRY/news/news.jsonl`, append-only, one item per line, appended under an exclusive
+`flock` of the file: `{id, at, from, to[], kind, keep, text}`, `id` numbered from 1, `to` `["all"]` or fleet
+names, `kind` `release`, `fyi` (the default) or `rule`, `keep` true when the reader saves it (a durable
+rule) and false for "do not save". A line that does not parse, or lacks `id` (an int, not a bool), `from`,
+`to` (a list) or `text`, is skipped; a torn last line is left alone and the next append starts a new line.
+Each reader has a cursor, `REGISTRY/news/read/<fleet>`, the last id it read.
+
+| Command | Does | Output | Exit |
+| :-- | :-- | :-- | :-- |
+| `post --from NAME [--to all\|FLEET[,FLEET...]] [--kind release\|fyi\|rule] [--keep] TEXT` | appends an item, text trimmed; `--to` names deduplicated in order | its line | 1 refused: a name not `[A-Za-z0-9_.-]+`, `all` among names, empty text, text over 1000 characters |
+| `read --as FLEET` | prints what FLEET has not read: items after its cursor, to `all` or to it, not from it; moves the cursor to the log's last id | one line each, or `no news for FLEET` | 1 a bad name |
+| `list` | every item | one line each, or `no news` | 0 |
+
+A line: `#<id> <YYYY-MM-DD HH:MM> <from> -> <to, joined by ", "> [<kind>, keep|do not save]: <text>`, one-lined
+as a chat message is.
+
+Where a fleet learns of unread news, each one line and never a wake: the state commands (warning 9),
+a `--once` chat watch as the host when it exits for a real line (above), and the plugin's SessionStart and
+Stop hooks (`fleet_news`, [Listening hooks](#listening-hooks)). A fleet's name for its cursor is its registry
+entry's `id`, matched by its dir.
+
+Why no relay: an item another fleet must act on goes to that fleet as one direct message, once; routing it
+through the manager wakes the manager (a large context) and then the fleet, two wakes for one.
 
 ## Workspaces (`fleet ws`)
 
@@ -1612,7 +1672,9 @@ recommendation attached.
 | the plugin's hook (grant removal) | `<root>/.claude/settings.local.json`, `DIR/grants.jsonl` (`remove` lines) |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |
-| the plugin's hook (`fleet_listen_guard`, `fleet_chat_nudge`, `fleet_said_once`) | nothing in DIR; the session's `fleet-guard`, `fleet-nudge` and `said-once` state in the plugin's data folder |
+| the plugin's hook (`fleet_listen_guard`, `fleet_chat_nudge`, `fleet_said_once`, `fleet_news`) | nothing in DIR; the session's `fleet-guard`, `fleet-nudge`, `said-once` and `fleet-news` state in the plugin's data folder |
+| `news post` | `REGISTRY/news/news.jsonl` (under its `flock`) |
+| `news read` | `REGISTRY/news/read/<fleet>` when the cursor moves |
 | `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / deleted (a shared fleet's `add` writes nothing) |
 | `fleet ws add --reuse` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; a new change in the workspace (`jj new`) |
 | `fleet ws split` | `DIR/state.json` (`events`, `updated`), `DIR/index.html`; the default workspace's `@` split in two |
@@ -1635,7 +1697,7 @@ a header, then one step per line.
 {"cli": "fleets", "argv": ["gate"], "env": {"FLEET_CHECK_S": "1"}, "timeout": 5}
 ```
 
-- `cli`: `state`, `chat` or `fleets`; `argv` after the program; `clock` (optional) sets the
+- `cli`: `state`, `chat`, `fleets` or `news`; `argv` after the program; `clock` (optional) sets the
   virtual clock from this step on (passed as `FLEET_NOW`; the first is `2026-01-05T09:00:00+00:00`);
   `env` overrides (null unsets); `stdin`; `timeout` (default 20 s, result `"timeout"`).
 - `fixture`: `write`, `append` (content a string, or an object written as one JSON line),
@@ -1675,8 +1737,8 @@ run.py record TRACE...                          TRACE's .expected.jsonl, from th
 ```
 
 Stage 2 runs `run.py check` on each trace in `oracle/traces/` with
-`--impl state="fleet state" --impl chat="fleet chat" --impl fleets="fleet fleets" --subst <its dir>='$SKILL'`,
-or sets `FLEET_ORACLE_IMPL='{"state": "fleet state", "chat": "fleet chat", "fleets": "fleet fleets", "subst": {"<its dir>": "$SKILL"}}'`
+`--impl state="fleet state" --impl chat="fleet chat" --impl fleets="fleet fleets" --impl news="fleet news" --subst <its dir>='$SKILL'`,
+or sets `FLEET_ORACLE_IMPL='{"state": "fleet state", "chat": "fleet chat", "fleets": "fleet fleets", "news": "fleet news", "subst": {"<its dir>": "$SKILL"}}'`
 for `test_corpus.py` and `test_model.py`. The corpus: `ledger-lifecycle`, `decisions`, `hold`,
 `plan-and-grill`, `chat`, `manager` (written by hand from the tests), `manager-news` (the manager's
 `--fleets` watch and `fleets waiting`), `delivered` (what the hub delivered: the marks, the manager's
@@ -1686,6 +1748,8 @@ fleet's refusal of lanes that meet, the isolated fleet's warning, `show`, valida
 `--option`, its recommendation by id, a grilling's `--body`, the reason's warnings),
 `why-limit` (a why over 400 refused, over 200 warned, a worker's id or name from the ledger and the internal names warned),
 `grill-revise` (an open grilling's title, why and context revised with `--log`),
+`news` (`fleet news`: numbering, cursors per reader, the refusals and usage errors, and the unread line on
+a state command and on a chat watch's wake),
 `show-me-triggers` (the warning that a decision or grilling needs a picture), `past-decision` (a past answer
 referred to with no number),
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each

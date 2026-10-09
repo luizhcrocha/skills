@@ -24,7 +24,7 @@ else the host listens on.
 
 An implementation is a command prefix per CLI. The default is the Python oracle,
 skills/productivity/coordinator/scripts/*.py; stage 2's binary is given as
-`--impl state="fleet state" --impl chat="fleet chat" --impl fleets="fleet fleets"`, plus
+`--impl state="fleet state" --impl chat="fleet chat" --impl fleets="fleet fleets" --impl news="fleet news"`, plus
 `--subst ITS_SKILL_DIR='$SKILL'` for the paths it prints. Stdlib only.
 """
 import argparse
@@ -45,7 +45,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent.parent
 SKILL = REPO / "skills" / "productivity" / "coordinator"
 FLEET = REPO / "fleet" / "bin" / "fleet"  # the CLI every printed command names, in both implementations
-CLIS = ("state", "chat", "fleets")
+CLIS = ("state", "chat", "fleets", "news")
 START = "2026-01-05T09:00:00+00:00"  # the clock of a step that names none, before any step named one
 STEP_TIMEOUT_S = 20
 IGNORED = {"__pycache__", "server.log"}  # never part of the observable state

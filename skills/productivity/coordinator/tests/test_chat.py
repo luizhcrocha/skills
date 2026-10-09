@@ -24,6 +24,8 @@ CHAT = str(SCRIPTS / "chat.py")
 # The registry of fleets is this machine's; the tests get one of their own.
 os.environ["FLEET_HOME"] = tempfile.mkdtemp(prefix="fleet-home-")
 os.environ["FLEET_DISCOVER"] = "0"
+# A --once watch exits with its first batch here, as before it settled; SettleTest and WatchSettlesTest set their own.
+os.environ["FLEET_WATCH_SETTLE"] = "0"
 
 
 def write_state(root: Path, agents: list[dict]) -> None:
@@ -1174,6 +1176,118 @@ class WatchOnceTest(FleetDir):
         chat.append(self.root, "user", "status?", allow_user=True)
         self.assertEqual(proc.wait(timeout=10), 0)
         self.assertEqual(proc.stdout.read(), "#1 user -> coordinator: status?\n")
+
+
+class SettleTest(unittest.TestCase):
+    """chat.Settle on simulated time: when a --once watch that printed new lines exits."""
+
+    def test_nothing_seen_never_ends_it(self):
+        self.assertFalse(chat.Settle(30, 10, 120).due(10_000))
+
+    def test_a_line_settles_and_each_new_line_restarts_it(self):
+        s = chat.Settle(30, 10, 120)
+        s.saw(100)
+        self.assertFalse(s.due(129.9))
+        s.saw(120)
+        self.assertFalse(s.due(149.9))
+        self.assertTrue(s.due(150))
+
+    def test_a_steady_trickle_ends_at_the_cap(self):
+        s = chat.Settle(30, 10, 120)
+        for t in range(0, 125, 25):
+            s.saw(t)
+            self.assertEqual(s.due(t), t >= 120, t)
+        self.assertTrue(s.due(120))
+
+    def test_the_users_message_settles_shorter_and_machine_lines_do_not_hold_it(self):
+        s = chat.Settle(30, 10, 120)
+        s.saw(0)
+        s.saw(5, user=True)
+        s.saw(12)
+        self.assertFalse(s.due(14.9))
+        self.assertTrue(s.due(15))
+        s = chat.Settle(30, 10, 120)
+        s.saw(0, user=True)
+        s.saw(8, user=True)  # the user is still typing
+        self.assertFalse(s.due(17.9))
+        self.assertTrue(s.due(18))
+
+    def test_the_user_never_waits_longer_than_the_settle_and_zero_is_at_once(self):
+        s = chat.Settle(4, 10, 120)
+        s.saw(0, user=True)
+        self.assertTrue(s.due(4))
+        s = chat.Settle(0, 10, 120)
+        s.saw(7)
+        self.assertTrue(s.due(7))
+
+    def test_the_defaults_and_the_environment(self):
+        args = chat.build_parser().parse_args(["d", "watch", "--as", "coordinator", "--once"])
+        env = {k: os.environ.pop(k) for k in ("FLEET_WATCH_SETTLE", "FLEET_WATCH_SETTLE_USER", "FLEET_WATCH_SETTLE_MAX") if k in os.environ}
+        self.addCleanup(os.environ.update, env)
+        s = chat.settle_of(args)
+        self.assertEqual((s.settle, s.user, s.cap), (30, 10, 120))
+        os.environ.update({"FLEET_WATCH_SETTLE": "5", "FLEET_WATCH_SETTLE_USER": "2", "FLEET_WATCH_SETTLE_MAX": "60"})
+        s = chat.settle_of(args)
+        self.assertEqual((s.settle, s.user, s.cap), (5, 2, 60))
+        args = chat.build_parser().parse_args(["d", "watch", "--as", "coordinator", "--once", "--settle", "9"])
+        self.assertEqual(chat.settle_of(args).settle, 9, "--settle wins over FLEET_WATCH_SETTLE")
+        for k in ("FLEET_WATCH_SETTLE", "FLEET_WATCH_SETTLE_USER", "FLEET_WATCH_SETTLE_MAX"):
+            os.environ.pop(k)
+
+
+class WatchSettlesTest(FleetDir):
+    """A --once watch carries a burst of new lines in one wake; the user's message settles shorter."""
+
+    def watch(self, *args: str, env=None) -> subprocess.Popen:
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "coordinator", "--all", "--resume", "--once", *args],
+                                stdout=subprocess.PIPE, text=True, encoding="utf-8", env={**os.environ, **(env or {})})
+        self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
+        time.sleep(0.6)
+        return proc
+
+    def test_a_burst_is_one_wake(self):
+        proc = self.watch("--settle", "1")
+        chat.append(self.root, "a1", "@coordinator done with the parser")
+        time.sleep(0.6)
+        self.assertIsNone(proc.poll(), "the first line waits for more")
+        chat.append(self.root, "a1", "@coordinator and the tests")
+        last = time.monotonic()
+        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertGreaterEqual(time.monotonic() - last, 0.7, "the second line restarted the settle")
+        self.assertEqual(proc.stdout.read(), "#1 a1 (notes-impl) -> user, coordinator: @coordinator done with the parser\n"
+                                             "#2 a1 (notes-impl) -> user, coordinator: @coordinator and the tests\n")
+        self.assertEqual((self.root / "watch-coordinator.cursor").read_text(), "2")
+
+    def test_the_users_message_settles_shorter(self):
+        proc = self.watch("--settle", "30", env={"FLEET_WATCH_SETTLE_USER": "0.5"})
+        start = time.monotonic()
+        chat.append(self.root, "user", "status?", allow_user=True)
+        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertLess(time.monotonic() - start, 5)
+        self.assertEqual(proc.stdout.read(), "#1 user -> coordinator: status?\n")
+
+    def test_what_waited_already_exits_at_once(self):
+        chat.append(self.root, "user", "status?", allow_user=True)
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "watch", "--as", "coordinator", "--all", "--resume", "--once", "--settle", "30"],
+                                stdout=subprocess.PIPE, text=True, encoding="utf-8")
+        self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
+        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertEqual(proc.stdout.read(), "#1 user -> coordinator: status?\n")
+
+    def test_wait_still_exits_at_once(self):
+        state = json.loads((self.root / "state.json").read_text())
+        state["decisions"] = [{"id": "d1", "kind": "decision", "title": "T", "question": "Q?", "why": "W", "status": "open",
+                               "opened": "2026-01-01T00:00:00+00:00", "options": []}]
+        (self.root / "state.json").write_text(json.dumps(state))
+        proc = subprocess.Popen([sys.executable, CHAT, str(self.root), "wait", "d1"], stdout=subprocess.PIPE, text=True, encoding="utf-8",
+                                env={**os.environ, "FLEET_WATCH_SETTLE": "30"})
+        self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
+        time.sleep(0.6)
+        start = time.monotonic()
+        chat.append(self.root, "user", "B", allow_user=True, decision="d1")
+        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertLess(time.monotonic() - start, 3)
+        self.assertIn("-> the user answered D1", proc.stdout.read())
 
 
 class ManagerRelaysTheUnheardTest(FleetDir):

@@ -4,12 +4,15 @@
     chat.py DIR say   --as WHO [--re N] [--decision D] TEXT
                                                  append a message from WHO; print the line written
     chat.py DIR inbox --as WHO                   the messages open for WHO, oldest first
-    chat.py DIR watch --as WHO [--after N | --resume] [--all] [--once] [--fleets [--batch SECONDS]]
+    chat.py DIR watch --as WHO [--after N | --resume] [--all] [--once] [--settle SECONDS] [--fleets [--batch SECONDS]]
                                                  every message open for WHO with id > N, then each
                                                  new one as it lands. --all also streams every
                                                  message from the user. --once exits after the first
                                                  lines it prints, which wakes the session that armed
-                                                 it as a background command; --resume takes N from
+                                                 it as a background command: what was open at once,
+                                                 a new line after it settles (--settle, 30 s, each
+                                                 new line restarting it, 120 s at most; 10 s after
+                                                 the user's last message to WHO); --resume takes N from
                                                  the last line a --once watch as WHO exited with.
                                                  Without --once it never exits, so it runs only on a
                                                  terminal, for a person, and marks nothing read.
@@ -59,6 +62,9 @@ PLACE_MAX = 200  # characters of each field of a quote's place (`at`)
 UNHEARD_S = float(os.environ.get("FLEET_UNHEARD_S", 120))  # how long the user's message waits unread before the manager is told
 UNANSWERED_S = float(os.environ.get("FLEET_UNANSWERED_S", 10 * 60))  # how long the user's message to a host goes without a reply before the manager is told
 NUDGE_S = float(os.environ.get("FLEET_NUDGE_S", 10 * 60))  # how long a worker leaves a message unanswered before its coordinator forwards it
+SETTLE_S = 30  # a --once watch's quiet time after a new line before it exits (FLEET_WATCH_SETTLE, --settle)
+SETTLE_USER_S = 10  # the same after the user's message to WHO (FLEET_WATCH_SETTLE_USER): the user never waits long
+SETTLE_MAX_S = 120  # the longest a --once watch holds its first new line (FLEET_WATCH_SETTLE_MAX)
 
 
 class ChatError(Exception):
@@ -917,6 +923,11 @@ def cmd_watch(root, args) -> None:
         last = _watch(root, args, who)
         if last is not None:
             _cursor(root, who).write_text(str(last))
+        if who == host(root):
+            import news  # the news never wakes anyone: it rides on a wake the chat makes
+            told = news.unread_line(root)
+            if told:
+                print(told, flush=True)
     finally:
         try:
             if pulse.read_text() == str(os.getpid()):
@@ -928,6 +939,43 @@ def cmd_watch(root, args) -> None:
             os.utime(_left(root, who), (clock.time(), clock.time()))  # its age is read against the same clock
         except OSError:
             pass
+
+
+def _env_seconds(name: str, default: float) -> float:
+    try:
+        return float(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+
+
+class Settle:
+    """When a --once watch that printed new lines exits: once no line came for `settle` seconds, `user`
+    seconds after the user's last message to WHO (never longer than `settle`), and `cap` seconds after
+    the first line at most. Times are any monotonic seconds, so a test drives it with its own."""
+
+    def __init__(self, settle: float, user: float, cap: float):
+        self.settle, self.user, self.cap = settle, min(user, settle), cap
+        self.first = self.last = self.user_last = None
+
+    def saw(self, now: float, user: bool = False) -> None:
+        if self.first is None:
+            self.first = now
+        self.last = now
+        if user:
+            self.user_last = now
+
+    def due(self, now: float) -> bool:
+        if self.first is None:
+            return False
+        end = min(self.first + self.cap, self.last + self.settle)
+        if self.user_last is not None:
+            end = min(end, self.user_last + self.user)
+        return now >= end
+
+
+def settle_of(args) -> Settle:
+    settle = args.settle if args.settle is not None else _env_seconds("FLEET_WATCH_SETTLE", SETTLE_S)
+    return Settle(settle, _env_seconds("FLEET_WATCH_SETTLE_USER", SETTLE_USER_S), _env_seconds("FLEET_WATCH_SETTLE_MAX", SETTLE_MAX_S))
 
 
 def _watch(root, args, who: str) -> int | None:
@@ -969,10 +1017,12 @@ def _watch(root, args, who: str) -> int | None:
     # tells all that lands in it before it exits, so one wake covers a burst of the user's actions.
     window = time.monotonic() + args.batch if tell() else None
     if args.once and first:
-        return last
-    checked = 0.0
+        return last  # what waited already is not held back
+    # A new line does not end the watch at once: it settles, so one wake carries a burst of lines.
+    settle = settle_of(args)
+    checked = None
     while True:
-        if args.once and window is not None and time.monotonic() >= window:
+        if args.once and ((window is not None and time.monotonic() >= window) or settle.due(time.monotonic())):
             return last
         time.sleep(POLL_S)
         new = [m for m in tail.read() if who in m["to"] or (args.all and m["from"] == "user" and _waits_here(m))]
@@ -980,13 +1030,18 @@ def _watch(root, args, who: str) -> int | None:
         if tell() and window is None:
             window = time.monotonic() + args.batch
         lines = []
-        if who in ("manager", "coordinator") and time.monotonic() - checked >= FLEETS_S:
+        backlog = checked is None
+        if who in ("manager", "coordinator") and (backlog or time.monotonic() - checked >= FLEETS_S):
             checked = time.monotonic()
             lines = _fleets_unheard(str(root)) if who == "manager" else _own_silent(root)
             for line in lines:
                 print(line, flush=True)
+        else:
+            backlog = False
+        if args.once and backlog and lines:
+            return last  # the first look's `!` lines were due before the watch began
         if args.once and (new or lines):
-            return last
+            settle.saw(time.monotonic(), user=any(m["from"] == "user" and who in m["to"] for m in new))
 
 
 def cmd_wait(root, args) -> None:
@@ -1060,6 +1115,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--after", type=int, default=0); s.add_argument("--all", action="store_true")
     s.add_argument("--resume", action="store_true", help="start after the last message a --once watch as WHO exited with")
     s.add_argument("--once", action="store_true", help="exit after the first batch it prints: a background task that wakes its session only when there is news; without it, the watch runs only on a terminal")
+    s.add_argument("--settle", type=int, metavar="SECONDS",
+                   help="with --once: how long a new line waits for more before the watch exits (30, FLEET_WATCH_SETTLE)")
     s.add_argument("--fleets", action="store_true", help="a manager's: also what the user does on every other fleet's page")
     s.add_argument("--batch", type=int, default=120, metavar="SECONDS",
                    help="with --fleets --once: how long the first news of the other fleets waits for more before the watch exits")

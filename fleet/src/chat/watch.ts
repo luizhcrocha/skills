@@ -39,11 +39,65 @@ import {
   waitsHere,
 } from "./chat.ts";
 import { FleetNews } from "./news.ts";
+import { unreadLine } from "../news/news.ts";
 import { isWatch } from "./watchers.ts";
 import { readChat, Tail, type Message } from "./store.ts";
 import * as Option from "effect/Option";
 
 const POLL_MS = 300;
+
+/** A `--once` watch's quiet time after a new line before it exits (FLEET_WATCH_SETTLE, `--settle`). */
+export const SETTLE_S = 30;
+
+/** The same after the user's message to WHO (FLEET_WATCH_SETTLE_USER): the user never waits long. */
+export const SETTLE_USER_S = 10;
+
+/** The longest a `--once` watch holds its first new line (FLEET_WATCH_SETTLE_MAX). */
+export const SETTLE_MAX_S = 120;
+
+/**
+ * When a `--once` watch that printed new lines exits: once no line came for `settle` seconds, `user` seconds
+ * after the user's last message to WHO (never longer than `settle`), and `cap` seconds after the first line
+ * at most. Times are any monotonic seconds, so a test drives it with its own. Python's `chat.Settle`.
+ */
+export class Settle {
+  private readonly settle: number;
+  private readonly user: number;
+  private readonly cap: number;
+  private first: number | undefined;
+  private last = 0;
+  private userLast: number | undefined;
+
+  constructor(settle: number, user: number, cap: number) {
+    this.settle = settle;
+    this.user = Math.min(user, settle);
+    this.cap = cap;
+  }
+
+  /** A new line was printed at `now`; `user` when it is the user's message to WHO. */
+  saw(now: number, user = false): void {
+    this.first ??= now;
+    this.last = now;
+
+    if (user) this.userLast = now;
+  }
+
+  /** Whether the watch exits at `now`. */
+  due(now: number): boolean {
+    if (this.first === undefined) return false;
+    let end = Math.min(this.first + this.cap, this.last + this.settle);
+
+    if (this.userLast !== undefined) end = Math.min(end, this.userLast + this.user);
+
+    return now >= end;
+  }
+}
+
+/** The settle of a watch: `--settle`, else FLEET_WATCH_SETTLE, else {@link SETTLE_S}; the user's and the cap
+ * from the environment. */
+export function settleOf(env: (name: string) => string | undefined, given: number | undefined): Settle {
+  return new Settle(given ?? seconds(env, "FLEET_WATCH_SETTLE", SETTLE_S), seconds(env, "FLEET_WATCH_SETTLE_USER", SETTLE_USER_S), seconds(env, "FLEET_WATCH_SETTLE_MAX", SETTLE_MAX_S));
+}
 
 /** What `watch` was asked. */
 export interface WatchRequest {
@@ -56,6 +110,9 @@ export interface WatchRequest {
   readonly fleets: boolean;
   /** With `fleets` and `once`: how long the first news of the other fleets waits for more. */
   readonly batch: number;
+  /** With `once`: how long a new line waits for more before the watch exits (`--settle`); undefined for
+   * FLEET_WATCH_SETTLE, else {@link SETTLE_S}. */
+  readonly settle?: number | undefined;
   /** Whether stdout is a terminal: a watch without `once` runs only there. */
   readonly terminal: boolean;
   /** Whether stdout is /dev/null: what the watch prints wakes nobody there, so it does not run. */
@@ -381,6 +438,11 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
         const last = yield* follow(machine, root, who, request);
 
         if (last !== undefined) writeText(cursorPath(root, who), String(last));
+
+        // The news never wakes anyone: it rides on a wake the chat makes.
+        const told = who === hostOf(root) ? unreadLine(machine, root) : undefined;
+
+        if (told !== undefined) (yield* Out).out(`${told}\n`);
       }),
       Effect.sync(() => {
         process.off("SIGTERM", onSignal);
@@ -433,27 +495,36 @@ function follow(machine: Machine, root: string, who: string, request: WatchReque
     // tells all that lands in it before it exits, so one wake covers a burst of the user's actions.
     let window = tell() ? performance.now() / 1000 + request.batch : undefined;
 
+    // What waited already is not held back.
     if (request.once && first.length > 0) return last;
     const checkS = seconds(machine.env, "FLEET_CHECK_S", 30);
-    let checked = -Infinity;
+    // A new line does not end the watch at once: it settles, so one wake carries a burst of lines.
+    const settle = settleOf(machine.env, request.settle);
+    let checked: number | undefined;
 
     for (;;) {
-      if (request.once && window !== undefined && performance.now() / 1000 >= window) return last;
+      const now = performance.now() / 1000;
+
+      if (request.once && ((window !== undefined && now >= window) || settle.due(now))) return last;
       yield* Effect.sleep(POLL_MS);
       const fresh = tail.read().filter((m) => m.to.includes(who) || (request.all && m.from === "user" && waitsHere(m)));
       show(fresh);
 
       if (tell() && window === undefined) window = performance.now() / 1000 + request.batch;
       let lines: string[] = [];
+      const backlog = checked === undefined;
 
-      if ((who === "manager" || who === "coordinator") && performance.now() / 1000 - checked >= checkS) {
+      if ((who === "manager" || who === "coordinator") && (checked === undefined || performance.now() / 1000 - checked >= checkS)) {
         checked = performance.now() / 1000;
         lines = who === "manager" ? fleetsUnheard(machine, resolvePath(root)) : ownSilent(machine, root);
 
         for (const line of lines) out.out(`${line}\n`);
       }
 
-      if (request.once && (fresh.length > 0 || lines.length > 0)) return last;
+      // The first look's `!` lines were due before the watch began.
+      if (request.once && backlog && lines.length > 0) return last;
+
+      if (request.once && (fresh.length > 0 || lines.length > 0)) settle.saw(performance.now() / 1000, fresh.some((m) => m.from === "user" && m.to.includes(who)));
     }
   });
 }

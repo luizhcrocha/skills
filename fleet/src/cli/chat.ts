@@ -38,6 +38,7 @@ export const CHAT_COMMANDS: readonly CommandSpec[] = [
       opt.flag("--all"),
       opt.flag("--resume"),
       opt.flag("--once"),
+      opt.value("--settle", { int: true, metavar: "SECONDS" }),
       opt.flag("--fleets"),
       opt.value("--batch", { int: true, metavar: "SECONDS" }),
     ],
@@ -53,10 +54,13 @@ The chat between the user (on the dashboard) and the fleet, stored in DIR/chat.j
 
     say   --as WHO [--re N] [--decision D] TEXT   append a message from WHO; print the line written
     inbox --as WHO                                the messages open for WHO, oldest first
-    watch --as WHO [--after N | --resume] [--all] [--once] [--fleets [--batch SECONDS]]
+    watch --as WHO [--after N | --resume] [--all] [--once] [--settle SECONDS] [--fleets [--batch SECONDS]]
                                                   what is open for WHO, then each new message as it lands;
                                                   --once exits with the first lines, waking the session
-                                                  that armed it; without --once, only on a terminal;
+                                                  that armed it: what was open at once, a new line once
+                                                  it settles (--settle, 30 s, each new line restarting it,
+                                                  120 s at most; 10 s after the user's last message to
+                                                  WHO); without --once, only on a terminal;
                                                   --fleets (the manager's) also what the user does on every
                                                   other fleet's page, its first line waiting --batch (120 s)
                                                   for more under --once
@@ -151,6 +155,7 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<vo
         once: args.flag("once"),
         fleets: args.flag("fleets"),
         batch: args.int("batch") ?? 120,
+        settle: args.int("settle"),
         terminal: process.stdout.isTTY === true,
         devnull: stdoutIsDevNull(),
       });
