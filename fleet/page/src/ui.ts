@@ -582,6 +582,9 @@ export function createUi(m: Model) {
   /** "Change my answer": the item's ask, starting with the words. */
   const changeAnswer = (d: Decision | undefined): void => askAbout(d, false, "I want to change my answer. ");
 
+  /** "Add to my answer": the item's ask, for a condition or an idea that adds to the answer recorded. */
+  const addToAnswer = (d: Decision | undefined): void => askAbout(d, false, "I want to add to my answer: ");
+
   /* ------------------------------------------------------------------ the worker sheet */
 
   const [sheetFor, setSheetFor] = createSignal<string | null>(null);
@@ -1086,6 +1089,7 @@ export function createUi(m: Model) {
     clearReply,
     writeTo,
     changeAnswer,
+    addToAnswer,
     askAbout,
     sheetFor,
     openWorker,

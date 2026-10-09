@@ -508,8 +508,35 @@
   .dv-meta { color: var(--muted); font-size: var(--fs-s); overflow-wrap: anywhere; }
   .dv-meta .who { min-height: 0; vertical-align: baseline; }
   .dv-question { font-size: clamp(1.5rem, 1.2rem + 1.6vw, 2rem); font-weight: 700; font-stretch: 80%; line-height: 1.12; letter-spacing: -0.005em; max-width: 26ch; text-wrap: balance; overflow-wrap: anywhere; }
+  .dv-ask { display: grid; gap: 14px; min-width: 0; }
+  .dv-ask-more { display: grid; gap: 10px; max-width: 68ch; font-size: 1.0625rem; line-height: 1.55; padding-left: 14px; border-left: 3px solid var(--line); }
+  .dv-ask-more ol { margin: 0; padding-left: 1.4em; display: grid; gap: 6px; }
+  .dv-ask-more li::marker { color: var(--muted); font-weight: 700; }
+  .dv-why { display: grid; gap: 2px; min-width: 0; max-width: 68ch; color: var(--muted); }
+  .dv-why h3 { font-size: var(--fs-s); color: var(--muted); }
+  .dv-why.blocking h3 { color: var(--critical); }
+  .dv-rec { display: grid; gap: 4px; min-width: 0; padding: 12px 14px 12px 13px; border-radius: 10px; background: var(--accent-soft); border-left: 4px solid var(--accent); }
+  .dv-rec h3 { font-size: var(--fs-s); color: var(--accent); }
+  .dv-rec-pick { margin: 0; font-weight: 700; font-stretch: var(--narrow); font-size: 1.125rem; overflow-wrap: anywhere; }
+  .dv-rec-why { max-width: 68ch; }
+  .dv-history { display: grid; gap: 6px; min-width: 0; }
+  .dv-history h2, .dv-body h2 { font-size: var(--fs-s); color: var(--muted); }
+  .dv-h-list { list-style: none; margin: 0; padding: 0 0 0 14px; display: grid; gap: 2px; border-left: 2px solid var(--line); }
+  .dv-h { position: relative; min-width: 0; }
+  .dv-h::before { content: ""; position: absolute; left: -19px; top: 0.6em; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+  .dv-h.answer::before { background: var(--you); }
+  .dv-h-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 3px 0; }
+  summary.dv-h-line { cursor: pointer; list-style: none; }
+  summary.dv-h-line::-webkit-details-marker { display: none; }
+  summary.dv-h-line::after { content: "+"; flex: none; color: var(--muted); font-weight: 700; }
+  details[open] > summary.dv-h-line::after { content: "–"; }
+  .dv-h-at { flex: none; color: var(--muted); font-size: var(--fs-s); font-variant-numeric: tabular-nums; }
+  .dv-h-what { flex: none; font-weight: 700; font-stretch: var(--narrow); }
+  .dv-h-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+  .dv-h-full { margin: 2px 0 8px; padding: 10px 12px; border-radius: 8px; background: var(--card-2); max-width: 72ch; }
+  .dv-h-more > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-s); font-weight: 600; padding: 4px 0 4px 14px; }
   .dv-block { display: grid; gap: 3px; min-width: 0; }
-  .dv-block h3, .note h3, .dv-form legend, .dv-body h2 { font-size: var(--fs-s); color: var(--muted); }
+  .dv-block h3, .note h3, .dv-form legend { font-size: var(--fs-s); color: var(--muted); }
   .dv-block p, .note p { max-width: 68ch; white-space: pre-wrap; overflow-wrap: anywhere; }
   .note { display: grid; gap: 3px; padding: 12px 14px 12px 13px; border-radius: 10px; background: var(--card-2); border-left: 4px solid var(--faint); min-width: 0; }
   .note.changed { border-left-color: var(--you); background: var(--you-soft); }

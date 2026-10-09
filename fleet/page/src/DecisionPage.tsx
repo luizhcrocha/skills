@@ -10,9 +10,11 @@
 import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { For, Match, Show, Switch, type JSX } from "@solidjs/web";
 
+import { askParts, type AskPart } from "./ask.ts";
 import { listen, PillAs, RefTag, tf, usePage, Who } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
 import { Core, type Decision, type GrillEntry, type JsonRecord, type Queue } from "./core.ts";
+import { DecisionHistory } from "./DecisionHistory.tsx";
 import { DecisionThread } from "./DecisionThread.tsx";
 import { FRAME_MAX_PX, parseEmbedMessage, postAnswered } from "./embed.ts";
 import { clock } from "./format.ts";
@@ -43,11 +45,17 @@ function frameDoc(html: string): string {
 html{font:15px/1.5 "Archivo","Helvetica Neue",Arial,system-ui,sans-serif;color:var(--text);background:var(--card)}
 body{margin:0;padding:14px 16px;overflow-x:auto;overflow-wrap:anywhere}
 body>:first-child{margin-top:0}body>:last-child{margin-bottom:0}
-h1,h2,h3,h4{margin:1.2em 0 .4em;line-height:1.2;font-weight:700;font-stretch:84%}h1{font-size:1.3rem}h2{font-size:1.15rem}h3,h4{font-size:1rem}
-p,ul,ol,table,pre,figure,dl{margin:0 0 .9em}a{color:var(--accent)}
+h1,h2,h3,h4{margin:1.2em 0 .4em;line-height:1.2;font-weight:700;font-stretch:84%}h1{font-size:1.3rem}h3,h4{font-size:1rem}
+h2{font-size:1.1rem;margin-top:1.5em;padding-top:.7em;border-top:1px solid var(--line)}body>h2:first-child{border-top:0;padding-top:0}
+p,ul,ol,table,pre,figure,dl{margin:0 0 .9em}a{color:var(--accent)}p,li{max-width:72ch}
+ol,ul{padding-left:1.4em}li{margin:.25em 0}li::marker{color:var(--muted);font-weight:600}
+.lead{font-size:1.1rem;line-height:1.45}.callout{padding:10px 14px;border-left:4px solid var(--accent);border-radius:8px;background:var(--accent-soft)}
 table{border-collapse:collapse;width:100%;font-size:.92rem}
-th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+thead th{background:var(--card-2)}tbody th{color:var(--text)}
 th{font-size:.85rem;color:var(--muted);font-weight:600;font-stretch:84%}
+caption,figcaption{caption-side:bottom;text-align:left;font-size:.85rem;color:var(--muted);padding-top:6px}
+@media (max-width:560px){table{display:block;overflow-x:auto}}
 code,pre{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.86em}
 pre{background:var(--card-2);padding:10px 12px;border-radius:6px;overflow-x:auto}
 img,svg,video,canvas{max-width:100%;height:auto}
@@ -120,7 +128,7 @@ function Evidence(props: { readonly d: Decision | undefined }): JSX.Element {
 
   return (
     <section class="dv-body" id="dv-body" aria-labelledby="h-evidence" hidden={!key()}>
-      <h2 id="h-evidence">What it rests on</h2>
+      <h2 id="h-evidence">The details</h2>
       <div id="dv-frame" ref={setHolder} />
     </section>
   );
@@ -523,7 +531,7 @@ function Form(props: { readonly d: Decision }): JSX.Element {
               <span class="consequence">Say what you want instead, in the note.</span>
             </label>
           </fieldset>
-          {note("Note, if you want to add one")}
+          {note("Your words, if any: a condition, a change to a setting, or another idea")}
           <div class="sheet-actions">
             <button type="submit" class="btn primary">
               Send my decision
@@ -663,6 +671,11 @@ function Answer(props: { readonly d: Decision }): JSX.Element {
             <button type="button" class="btn" data-change onClick={() => ui.changeAnswer(props.d)}>
               Change my answer
             </button>
+            <Show when={props.d.status === "decided"}>
+              <button type="button" class="btn" data-add onClick={() => ui.addToAnswer(props.d)}>
+                Add to my answer
+              </button>
+            </Show>
           </div>
         </Show>
       </Show>
@@ -670,14 +683,14 @@ function Answer(props: { readonly d: Decision }): JSX.Element {
         {(p) => (
           <>
             <div class="note pending" role="status">
-              {/* The answer and the replies are in the thread above ("In the chat"); this says only where the answer stands. */}
+              {/* The answer and the replies are in the thread below ("In the chat"); this says only where the answer stands. */}
               <h3>Your answer</h3>
               <span class="dv-meta">
                 Sent {clock(p().answer.at)}.{" "}
                 {Core.isHeld(props.d) && Core.stamp(p().answer.at) <= Core.stamp(props.d.held_at)
                   ? `The ${m.host()} has it and works on it first.`
                   : p().replies.length
-                    ? `The ${m.host()} replied above; answer again if it asks you something.`
+                    ? `The ${m.host()} replied below; answer again if it asks you something.`
                     : Core.unreadBy(m.state.hearing, p().answer)
                       ? `The ${m.host()} has not read it yet${m.state.hearing?.on ? "" : ": it is not reading the chat right now"}. Your answer is kept.`
                       : `The ${m.host()} has read it and has yet to record it; the fleet acts on it once it is recorded.`}
@@ -759,6 +772,19 @@ function Origin(props: { readonly d: Decision }): JSX.Element {
   );
 }
 
+/** A part of a long question's rest: a paragraph, or its numbered items as a list. */
+function AskPartView(props: { readonly part: AskPart }): JSX.Element {
+  return (
+    <Show when={props.part.kind === "list" ? props.part.items : null} fallback={<Rich text={props.part.kind === "para" ? props.part.text : ""} />}>
+      {(items) => (
+        <ol>
+          <For each={items()}>{(item) => <li><Rich text={item} /></li>}</For>
+        </ol>
+      )}
+    </Show>
+  );
+}
+
 /** The decision's facts. */
 function Info(props: { readonly d: Decision }): JSX.Element {
   const { m, ui } = usePage();
@@ -768,6 +794,7 @@ function Info(props: { readonly d: Decision }): JSX.Element {
   const recommended = () => d().options.find((o) => o.id === d().recommend);
   const successor = () => m.state.decisions.find((x) => x.supersedes === d().id);
   const before = () => (d().supersedes ? m.decisionById(d().supersedes) : undefined);
+  const ask = createMemo(() => askParts(d().question ?? ""));
 
   return (
     <>
@@ -790,7 +817,11 @@ function Info(props: { readonly d: Decision }): JSX.Element {
           <Show when={before()}>
             {(b) => (
               <>
-                . Replaces <a href={Core.decisionHref(b().id)}>{b().title}</a>
+                . Replaces{" "}
+                <a href={Core.decisionHref(b().id)}>
+                  <RefTag of={b()} />
+                  {b().title}
+                </a>
               </>
             )}
           </Show>
@@ -815,7 +846,11 @@ function Info(props: { readonly d: Decision }): JSX.Element {
           <div class="note changed">
             <h3>Replaced</h3>
             <p>
-              A newer decision takes its place: <a href={Core.decisionHref(s().id)}>{s().title}</a>
+              A newer decision takes its place:{" "}
+              <a href={Core.decisionHref(s().id)}>
+                <RefTag of={s()} />
+                {s().title}
+              </a>
             </p>
           </div>
         )}
@@ -844,21 +879,26 @@ function Info(props: { readonly d: Decision }): JSX.Element {
           </div>
         )}
       </Show>
-      <Rich class="dv-question" text={d().question} />
+      <section class="dv-ask" aria-label="The question">
+        <Rich class="dv-question" text={ask().lead} />
+        <Show when={ask().more.length}>
+          <div class="dv-ask-more">
+            <For each={ask().more}>{(part) => <AskPartView part={part} />}</For>
+          </div>
+        </Show>
+      </section>
       <Show when={d().why}>
-        <div class="dv-block">
+        <div class={"dv-why" + (d().blocking ? " blocking" : "")}>
           <h3>{d().blocking ? "What it blocks" : "Meanwhile"}</h3>
           <Rich text={d().why ?? ""} />
         </div>
       </Show>
       <Show when={d().recommend}>
-        <div class="dv-block">
+        <aside class="dv-rec" aria-label="Recommended">
           <h3>Recommended</h3>
-          <p>
-            <b>{recommended() ? `${recommended()?.id ?? ""}: ${recommended()?.label ?? ""}` : d().recommend}</b>
-          </p>
-          <Show when={d().reason}>{(r) => <Rich text={r()} />}</Show>
-        </div>
+          <p class="dv-rec-pick">{recommended() ? `${recommended()?.id ?? ""}: ${recommended()?.label ?? ""}` : d().recommend}</p>
+          <Show when={d().reason}>{(r) => <Rich class="dv-rec-why" text={r()} />}</Show>
+        </aside>
       </Show>
     </>
   );
@@ -1074,13 +1114,14 @@ function OwnDecision(props: { readonly d: Decision | undefined }): JSX.Element {
           {(found) => <Info d={found()} />}
         </Show>
       </div>
-      <Evidence d={d()} />
-      <DecisionThread id={m.viewing()} />
       <div class="dv-answer" id="dv-answer">
         <Show when={d()?.id} keyed>
           {(id) => <AnswerFor id={id} />}
         </Show>
       </div>
+      <DecisionThread id={m.viewing()} />
+      <Evidence d={d()} />
+      <DecisionHistory d={d()} />
     </>
   );
 }
