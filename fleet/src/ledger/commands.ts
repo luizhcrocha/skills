@@ -15,7 +15,7 @@ import type { Args } from "../cli/args.ts";
 import { Refusal, stateRefusal } from "../errors.ts";
 import { asString, pyStr } from "../json.ts";
 import { FLEET_BIN, isDir, makeDirs, readOrWhy, readText, remove, resolvePath, writeBytes } from "../files.ts";
-import { fleetOf, post as postNews, TEXT_MAX } from "../news/news.ts";
+import { fleetOf, managerOf, post as postNews, TEXT_MAX } from "../news/news.ts";
 import { failedAnswer, failureWords } from "../health.ts";
 import { placeRoot, registeredSession } from "../hub/grants.ts";
 import { pidOfEntry } from "../registry.ts";
@@ -77,6 +77,9 @@ const CHANGE_ID = /^[A-Za-z0-9]+$/u;
 
 /** The choices asked of the user in a day after which a fleet with no advisor starts one. */
 const ADVISOR_AFTER = 3;
+
+/** An approval's id: K and a number; the other letters number decisions, links and roadblocks. */
+const APPROVAL_ID = /^K[0-9]+$/u;
 
 /** What `approval` does. */
 const APPROVAL_ACTIONS = ["add", "list", "revoke"] as const;
@@ -1325,14 +1328,18 @@ function newsSender(run: Run, ledger: Ledger): string {
   return slug === "" ? "fleet" : slug;
 }
 
-/** The fleets' news of an act done under a standing approval, posted once the ledger holds it. */
+/** The manager's news of an act done under a standing approval, posted once the ledger holds it; none when no
+ * manager is served (the fleet's own page shows the notice). */
 function postNotice(run: Run, ledger: Ledger, d: Decision, a: Approval): string | undefined {
+  const manager = managerOf(run.machine);
   const sender = newsSender(run, ledger);
+
+  if (manager === undefined || manager === sender) return "no manager is served: no news item (the fleet's page lists the notice).";
   const full = `${sender} did under standing approval ${a.id} (${a.rule}): ${d.title ?? "None"}. ${d.question ?? "None"} Undo: ${d.undo ?? ""}`;
   const text = [...full].length <= TEXT_MAX ? full : `${[...full].slice(0, TEXT_MAX - 1).join("")}…`;
-  const item = postNews(run.machine, { from: sender, to: "all", kind: "fyi", keep: false, text });
+  const item = postNews(run.machine, { from: sender, to: manager, kind: "fyi", keep: false, text });
 
-  return item instanceof Refusal ? undefined : `news #${item.id} tells the fleets (fyi).`;
+  return item instanceof Refusal ? undefined : `news #${item.id} tells the manager (fyi).`;
 }
 
 /** `decision ID --kind notice --under A`: an act done under a standing approval, recorded closed at once. */
@@ -2138,7 +2145,10 @@ export function approval(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
     if (a !== undefined) return yield* refuse(`approval ${a.id} is already recorded (${a.status}): revoke it, or record the new rule under a new id`);
 
-    if (!ID.test(id)) return yield* refuse(`approval id ${pyStr(id)} should be letters, digits, '_', '.', or '-'`);
+    if (!APPROVAL_ID.test(id)) {
+      return yield* refuse(`an approval's id is K and a number (K1, K2, ...), not ${pyStr(id)}: the other letters number decisions, links and roadblocks`);
+    }
+
     yield* require(run, ["rule", "by", "ref"], "approval");
     const rule = args.str("rule") ?? "";
     const by = args.str("by") ?? "";

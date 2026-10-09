@@ -9,7 +9,7 @@ import { createEffect, createMemo, createSignal } from "solid-js";
 import { Show, type JSX } from "@solidjs/web";
 
 import { usePage } from "./bits.tsx";
-import { Core, type Decision, type Json } from "./core.ts";
+import { Core, type Approval, type Decision, type Json } from "./core.ts";
 import { fullTime } from "./format.ts";
 
 let tips = 0;
@@ -75,8 +75,47 @@ export function tipOf(d: Decision, question: number | null, fleet: string | null
   return d.status === "decided" ? `${head}${named}: ${state}: ${clipped(String(d.answer ?? d.resolution ?? ""))}` : `${head}${named}: ${state}.`;
 }
 
-/** Decision number `num` (of `fleet`, when named; question `question`, when named) as a link, its words `text`. */
+/** A standing approval's number (K3) as a link to it on the Decisions view, its rule and state on hover. */
+function ApprovalRef(props: { readonly approval: Approval; readonly text: string }): JSX.Element {
+  const id = "dref-" + String((tips += 1));
+  const [shown, setShown] = createSignal(false);
+  const a = (): Approval => props.approval;
+
+  const tip = (): string =>
+    `${a().id} standing approval: ${clipped(a().rule).replace(/\.$/u, "")}; ${a().status === "revoked" ? `revoked ${fullTime(a().revoked)}` : `given ${fullTime(a().added)}`}.`;
+
+  return (
+    <span class="dref-wrap" onMouseEnter={() => setShown(true)} onMouseLeave={() => setShown(false)} onFocusIn={() => setShown(true)} onFocusOut={() => setShown(false)}>
+      <a class="dref" href={"#approval-" + a().id} aria-describedby={shown() ? id : undefined} data-ref={a().id}>
+        {props.text}
+      </a>
+      <Show when={shown()}>
+        <span class="dref-tip" id={id} role="tooltip">
+          {tip()}
+        </span>
+      </Show>
+    </span>
+  );
+}
+
+/** Decision number `num` (of `fleet`, when named; question `question`, when named) as a link, its words `text`;
+ * a K number of this page is its standing approval. */
 export function DecisionRef(props: { readonly num: string; readonly fleet: string | null; readonly question: number | null; readonly text: string }): JSX.Element {
+  const { m } = usePage();
+
+  const approval = createMemo((): Approval | undefined =>
+    props.fleet === null && /^K\d+$/u.test(props.num) ? m.state.approvals.find((a) => a.id === props.num) : undefined,
+  );
+
+  return (
+    <Show when={approval()} fallback={<NumberRef {...props} />}>
+      {(a) => <ApprovalRef approval={a()} text={props.text} />}
+    </Show>
+  );
+}
+
+/** A decision's number as a link (see the module's comment). */
+function NumberRef(props: { readonly num: string; readonly fleet: string | null; readonly question: number | null; readonly text: string }): JSX.Element {
   const { m } = usePage();
   const [shown, setShown] = createSignal(false);
   const [fetched, setFetched] = createSignal<Decision | null | undefined>(undefined);

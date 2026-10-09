@@ -218,17 +218,20 @@ Checked in this order:
    `--decide`, `--withdraw`, `--hold`, `--advised`, `--asks manager`, `--blocking` given (`a notice reports
    what was done under a standing approval and asks nothing: leave out --option, ...`, in that order); then
    `new notice needs --title --question --under --undo` for those missing; an unknown approval (`unknown
-   approval 'A9': \`approval list\` shows ...`) or a revoked one (`approval A1 was revoked <when>: <why>.
+   approval 'K9': \`approval list\` shows ...`) or a revoked one (`approval K1 was revoked <when>: <why>.
    What it covered asks the user again: open a decision`); a blank `--undo`; the question's and the why's
    lengths as in 4. The row is a decision's with `kind` notice, `status` decided, `answer` "done",
    `resolution` "under <approval>", `closed` = `opened`, `asks` user, `page` true, no options, plus `under`
    (the approval's id) and `undo`; `--why`, `--agent`, `--step`, `--milestone` and `--body` as for a
-   decision. Logs `decision` (`Done under A1 (<rule>): <title>: <question>`, not important, tagged), prints
-   `recorded <id>, done under A1 and closed: ...`, and once `state.json` is written posts a news item
-   (`<fleet> did under standing approval A1 (<rule>): <title>. <question> Undo: <undo>`, cut to 1000
-   characters with `…`; kind fyi, to all, not kept) from the fleet's registry name, else its project's
+   decision. Logs `decision` (`Done under K1 (<rule>): <title>: <question>`, not important, tagged), prints
+   `recorded <id>, done under K1 and closed: ...`, and once `state.json` is written posts a news item to
+   the manager (`<fleet> did under standing approval K1 (<rule>): <title>. <question> Undo: <undo>`, cut to
+   1000 characters with `…`; kind fyi, `--to` the manager's name, not kept) from the fleet's registry name, else its project's
    name with every run of characters outside `[A-Za-z0-9_.-]` made one `-` (`fleet` when none is left),
-   and prints `news #N tells the fleets (fyi).` No readability warning applies.
+   and prints `news #N tells the manager (fyi).` The manager is the first registry entry, by file name,
+   whose role is manager and whose pid runs, read without pruning; with none (or when it is the sender)
+   nothing is posted and it prints `no manager is served: no news item (the fleet's page lists the
+   notice).` No readability warning applies.
    Otherwise, **`--advised`** given (new or known) must not be blank, nor `none:` with nothing after it:
    `--advised is the advisor's view in one line, or none:<why no advisor was asked>`.
 4. New: the id must match `[A-Za-z0-9_.-]+`. `--supersedes` must name a closed decision (an open
@@ -425,21 +428,23 @@ any other kind, `--findings` or `--changes` is refused (`--findings and --change
 `approvals[]` (created on the first). ACTION outside add, list, revoke is refused (`approval 'x' is not one
 of add, list, revoke`). `list` prints one line per approval (as `show` does, below; `no standing approvals:
 ...` when none) and writes nothing. `add` and `revoke` need ID (`approval add names the approval: ...`).
-- `add`: a known ID is refused (`approval A1 is already recorded (<status>): ...`); then the id pattern;
+- `add`: a known ID is refused (`approval K1 is already recorded (<status>): ...`); then an ID other than K
+  and ASCII digits (`an approval's id is K and a number (K1, K2, ...), not 'A1': the other letters number
+  decisions, links and roadblocks`);
   `new approval needs --rule --by --ref`; a blank rule or by; DECISION (an id or a number) must be known,
   `decided` (`D1 (<title>) is open: a standing approval comes from a decision the user decided`), of kind
   decision, input or grill, asks user and page true (`... was not asked of the user on the page: ...`), and
   have a message in the chat from the user tagged with it (`... has no answer from the user in the chat:
   ...`). The row: `{id, rule, by, ref (the decision's id), message (the latest such message's id), author
-  (its author, when it has one), added, status: "active"}`. Logs `decision` (`Standing approval A1 from D1
+  (its author, when it has one), added, status: "active"}`. Logs `decision` (`Standing approval K1 from D1
   (#14): <rule>`, tagged with the decision) and prints how to record a notice under it.
-- `revoke`: an unknown ID, a revoked one (`approval A1 is already revoked (<when>): <why>`) and a blank
+- `revoke`: an unknown ID, a revoked one (`approval K1 is already revoked (<when>): <why>`) and a blank
   `--reason` are refused. Sets `status` revoked, `revoked` = now, `revoked_why`; logs `decision`
-  (`Standing approval A1 revoked: <reason>`, tagged with its decision).
+  (`Standing approval K1 revoked: <reason>`, tagged with its decision).
 - Validation: `approvals`, when present, is a list of objects with non-empty strings `id, rule, by, ref,
-  added, status` (`approval X needs id, rule, by, ref, added and status`), ids matching the pattern and
-  unique, `status` active or revoked, `ref` naming a decision; a notice's `under` names an approval
-  (`notice X is done under unknown approval 'A9'`) and its `undo` is not blank. Checked after the
+  added, status` (`approval X needs id, rule, by, ref, added and status`), ids K and digits (`approval id
+  'A1' should be K and a number`) and unique, `status` active or revoked, `ref` naming a decision; a notice's `under` names an approval
+  (`notice X is done under unknown approval 'K9'`) and its `undo` is not blank. Checked after the
   roadblocks' decisions.
 
 **park** `[--agent A]... REASON`: every live row (running, queued, blocked), or only the named
@@ -550,7 +555,8 @@ older ledger comes out complete after one command.
 On every write, each decision, link and roadblock without a `ref` is given one: a letter for its
 kind (decision **D**, action **A**, input **I**, secret **S**, grill **G**, notice **N**, permission **P**
 (TypeScript only), link **L**, roadblock **R**), and 1 + the highest number of that letter already given, skipping a number that another row of
-the same list has as its id (open-1). Decisions are numbered in
+the same list has as its id (open-1). A standing approval is numbered **K** by its own id, which `approval add` takes
+only as K and digits. Decisions are numbered in
 `opened` order (as instants, open-13; a stamp that does not parse sorts after, as text), links and
 roadblocks in list order. A number, once given,
 never changes, even when a decision's kind changes (open-7).
@@ -1734,7 +1740,7 @@ recommendation attached.
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |
 | the plugin's hook (`fleet_listen_guard`, `fleet_chat_nudge`, `fleet_said_once`, `fleet_news`) | nothing in DIR; the session's `fleet-guard`, `fleet-nudge`, `said-once` and `fleet-news` state in the plugin's data folder |
-| `news post`, and a `state decision --kind notice` once its ledger is written | `REGISTRY/news/news.jsonl` (under its `flock`) |
+| `news post`, and a `state decision --kind notice` once its ledger is written, when a manager is served | `REGISTRY/news/news.jsonl` (under its `flock`) |
 | `news read` | `REGISTRY/news/read/<fleet>` when the cursor moves |
 | `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / deleted (a shared fleet's `add` writes nothing) |
 | `fleet ws add --reuse` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; a new change in the workspace (`jj new`) |
@@ -1812,7 +1818,7 @@ fleet's refusal of lanes that meet, the isolated fleet's warning, `show`, valida
 `news` (`fleet news`: numbering, cursors per reader, the refusals and usage errors, and the unread line on
 a state command and on a chat watch's wake),
 `show-me-triggers` (the warning that a decision or grilling needs a picture), `past-decision` (a past answer
-referred to with no number), `approvals` (standing approvals, notices and their news, `--advised` and the
+referred to with no number), `approvals` (standing approvals and their K ids, notices and their news to the manager or none, `--advised` and the
 advisor warnings, `reviewed` events),
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each
 hand-written trace, the same steps with every state command rendering, plus `render-page` (a

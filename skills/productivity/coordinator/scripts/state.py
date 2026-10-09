@@ -105,6 +105,7 @@ KINDS = ["spawned", "reported", "blocked", "resolved", "asked", "decision", "not
 CHANGE_ID = re.compile(r"[A-Za-z0-9]+")
 ADVISOR_AFTER = 3  # choices asked of the user in a day after which a fleet with no advisor starts one
 APPROVAL_ACTIONS = ["add", "list", "revoke"]
+APPROVAL_ID = re.compile(r"K[0-9]+")  # an approval's id: K and a number; the other letters number decisions, links and roadblocks
 AFTER: list = []  # what a command does once its ledger is written (a notice's news item): never for a refused one
 
 
@@ -966,12 +967,17 @@ def news_sender(root: Path, state: dict) -> str:
 
 
 def post_notice(root: Path, state: dict, d: dict, a: dict) -> None:
-    """The fleets' news of an act done under a standing approval, posted once the ledger holds it."""
+    """The manager's news of an act done under a standing approval, posted once the ledger holds it; none when no
+    manager is served (the fleet's own page shows the notice)."""
+    manager = news.manager_of()
     sender = news_sender(root, state)
+    if manager is None or manager == sender:
+        print("no manager is served: no news item (the fleet's page lists the notice).")
+        return
     text = f"{sender} did under standing approval {a['id']} ({a['rule']}): {d['title']}. {d['question']} Undo: {d['undo']}"
     text = text if len(text) <= news.TEXT_MAX else text[:news.TEXT_MAX - 1] + "…"
-    item = news.post(sender, "all", "fyi", False, text)
-    print(f"news #{item['id']} tells the fleets (fyi).")
+    item = news.post(sender, manager, "fyi", False, text)
+    print(f"news #{item['id']} tells the manager (fyi).")
 
 
 def cmd_notice(state, args, d) -> dict:
@@ -1396,8 +1402,8 @@ def cmd_approval(state, args):
         return state
     if a is not None:
         fail(f"approval {a['id']} is already recorded ({a['status']}): revoke it, or record the new rule under a new id")
-    if not decisions.ID.fullmatch(args.id):
-        fail(f"approval id {args.id!r} should be letters, digits, '_', '.', or '-'")
+    if not APPROVAL_ID.fullmatch(args.id):
+        fail(f"an approval's id is K and a number (K1, K2, ...), not {args.id!r}: the other letters number decisions, links and roadblocks")
     require(args, ["rule", "by", "ref"], "approval")
     if not args.rule.strip() or not args.by.strip():
         fail("--rule says what the approval covers, in the user's words, and --by who gave it")

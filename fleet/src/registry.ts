@@ -117,7 +117,8 @@ export function readObject(path: string): JsonObject | undefined {
   return text === undefined ? undefined : Option.getOrUndefined(parseObject(text));
 }
 
-function pidOf(value: Json | undefined): number | undefined {
+/** A registry entry's pid as the registry reads one (a number, or digits in a string). */
+export function pidOf(value: Json | undefined): number | undefined {
   const number = asNumber(value);
 
   if (number !== undefined) return Number.isFinite(number) ? Math.trunc(number) : undefined;

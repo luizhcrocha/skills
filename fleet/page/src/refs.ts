@@ -19,8 +19,8 @@ export interface KnownFleet {
 /** A word that may be a decision's number or id: a letter, then letters, digits, '_' or '-', ending in digits. */
 const CANDIDATE = /(?<![A-Za-z0-9_/-])([A-Za-z][A-Za-z0-9_-]*?\d+)(?![A-Za-z0-9_-])/gu;
 
-/** A decision's own number, standing alone. */
-const BARE = /^[DAISGPN]\d+$/u;
+/** A decision's own number, or a standing approval's (K), standing alone. */
+const BARE = /^[DAISGPNK]\d+$/u;
 
 /** The word just before a number, possibly possessive: "pipeline's ", "Infra ". */
 const FLEET_BEFORE = /([A-Za-z0-9][\w.@-]*?)(?:'s|’s)?\s+$/u;

@@ -21,11 +21,11 @@ const at = (minutes: number): string => new Date(NOW - minutes * 60_000).toISOSt
 
 const RULE = "land a stack that passed the full gate and a review";
 
-const APPROVAL: View = { id: "A1", rule: RULE, by: "luiz", ref: "d1", message: 14, author: "luiz@github", added: at(120), status: "active" };
+const APPROVAL: View = { id: "K1", rule: RULE, by: "luiz", ref: "d1", message: 14, author: "luiz@github", added: at(120), status: "active" };
 
-const REVOKED: View = { id: "A2", rule: "restart a silent worker", by: "luiz", ref: "d1", message: 9, added: at(200), status: "revoked", revoked: at(90), revoked_why: "it restarted one mid-migration" };
+const REVOKED: View = { id: "K2", rule: "restart a silent worker", by: "luiz", ref: "d1", message: 9, added: at(200), status: "revoked", revoked: at(90), revoked_why: "it restarted one mid-migration" };
 
-/** A notice: closed as it was recorded, done under A1. */
+/** A notice: closed as it was recorded, done under K1. */
 function notice(n: number, minutes: number, extra: View = {}): View {
   return {
     id: "n" + String(n),
@@ -35,13 +35,13 @@ function notice(n: number, minutes: number, extra: View = {}): View {
     question: `Landed the \`invoice-gen\` stack ${String(n)} on master.`,
     status: "decided",
     answer: "done",
-    resolution: "under A1",
+    resolution: "under K1",
     blocking: false,
     asks: "user",
     options: [],
     opened: at(minutes),
     closed: at(minutes),
-    under: "A1",
+    under: "K1",
     undo: "Back it out:\n\n```nu\njj undo\n```",
     ...extra,
   };
@@ -148,8 +148,8 @@ test("notices sit under the decisions, newest first, and change nothing that wai
   expect(first?.querySelector(".notice-undo > b")?.textContent).toBe("Undo:");
   expect(first?.querySelector('.notice-undo figure.code[data-lang="nu"] code')?.textContent).toBe("jj undo");
   expect(first?.querySelector(".notice-undo .code-copy")).not.toBeNull();
-  expect(first?.querySelector(".meta")?.textContent).toBe("under A1 · 5 min ago");
-  expect(first?.querySelector('.meta a[href="#approval-A1"]')).not.toBeNull();
+  expect(first?.querySelector(".meta")?.textContent).toBe("under K1 · 5 min ago");
+  expect(first?.querySelector('.meta a[href="#approval-K1"]')).not.toBeNull();
 });
 
 test("a notice never waits, even if the ledger left it open", () => {
@@ -174,8 +174,8 @@ test("past the ten newest, the rest fold behind Show all", () => {
 
 test("the approvals: the rule, where it was given, what was done under it, and Revoke posts a plain message", async () => {
   show(viewWith([notice(1, 30), notice(2, 5)], [APPROVAL, REVOKED]));
-  const row = root.querySelector("#approval-list #approval-A1");
-  expect(row?.querySelector(".approval-rule")?.textContent).toBe(`A1 ${RULE}`);
+  const row = root.querySelector("#approval-list #approval-K1");
+  expect(row?.querySelector(".approval-rule")?.textContent).toBe(`K1 ${RULE}`);
   const meta = row?.querySelector(".meta")?.textContent ?? "";
   expect(meta).toMatch(/^from D1 \(#14\), .+, by luiz · 2 done under it$/u);
   expect(row?.querySelector(".meta a.dref")?.getAttribute("href")).toBe("#decision/d1");
@@ -184,7 +184,7 @@ test("the approvals: the rule, where it was given, what was done under it, and R
   const fold = root.querySelector<HTMLDetailsElement>("#approvals-revoked");
   expect(fold?.open).toBe(false);
   expect(fold?.querySelector("summary")?.textContent).toBe("Revoked (1)");
-  expect(fold?.querySelector("#approval-A2 .meta")?.textContent).toMatch(/^Revoked .+: it restarted one mid-migration\. Given from D1 \(#9\), .+, by luiz\.$/u);
+  expect(fold?.querySelector("#approval-K2 .meta")?.textContent).toMatch(/^Revoked .+: it restarted one mid-migration\. Given from D1 \(#9\), .+, by luiz\.$/u);
   expect(fold?.querySelector("button")).toBeNull();
 
   const revoke = row?.querySelector<HTMLButtonElement>("button[data-revoke]");
@@ -193,15 +193,15 @@ test("the approvals: the rule, where it was given, what was done under it, and R
   revoke?.click();
   await Bun.sleep(0);
   flush();
-  expect(posted).toEqual([{ text: `Revoke standing approval A1 ("${RULE}"): routine acts under it go back to asking me.` }]);
+  expect(posted).toEqual([{ text: `Revoke standing approval K1 ("${RULE}"): routine acts under it go back to asking me.` }]);
   expect(revoke?.textContent).toBe("Revoke sent");
   expect(revoke?.disabled).toBe(true);
 
   /* A state that leaves the approval as it was keeps the button sent; one that revokes it moves it to the fold. */
   page.m.takeState(JSON.stringify({ ...viewWith([notice(1, 30), notice(2, 5), notice(3, 1)], [APPROVAL, REVOKED]) }));
   flush();
-  expect(root.querySelector<HTMLButtonElement>("#approval-A1 button[data-revoke]")?.textContent).toBe("Revoke sent");
-  expect(root.querySelector<HTMLButtonElement>("#approval-A1 button[data-revoke]")?.disabled).toBe(true);
+  expect(root.querySelector<HTMLButtonElement>("#approval-K1 button[data-revoke]")?.textContent).toBe("Revoke sent");
+  expect(root.querySelector<HTMLButtonElement>("#approval-K1 button[data-revoke]")?.disabled).toBe(true);
   page.m.takeState(JSON.stringify(viewWith([notice(1, 30), notice(2, 5)], [{ ...APPROVAL, status: "revoked", revoked: at(0), revoked_why: "asked from the page" }, REVOKED])));
   flush();
   expect(root.querySelector("#approval-list")).toBeNull();
@@ -213,7 +213,7 @@ test("a viewer who may not write sees Revoke disabled, with the reason", () => {
   show(viewWith([notice(1, 30)], [APPROVAL]));
   page.m.setWrite({ ok: false, reason: "Only luiz@example.com can write here." });
   flush();
-  const revoke = root.querySelector<HTMLButtonElement>("#approval-A1 button[data-revoke]");
+  const revoke = root.querySelector<HTMLButtonElement>("#approval-K1 button[data-revoke]");
   expect(revoke?.disabled).toBe(true);
   expect(revoke?.getAttribute("title")).toBe("Only luiz@example.com can write here.");
   expect(revoke?.getAttribute("aria-describedby")).toBe("approvals-why");
@@ -253,8 +253,8 @@ test("a notice's page reads as a record: what was done, under which approval, ho
   flush();
   expect(text("#decision h1")).toBe("N1 Landed stack 1");
   expect(text("#decision .dv-pills")).toBe("donedone under your approval");
-  expect(text("#dv-notice .dv-notice-under")).toBe(`Done under A1: ${RULE}`);
-  expect(root.querySelector('#dv-notice a[href="#approval-A1"]')).not.toBeNull();
+  expect(text("#dv-notice .dv-notice-under")).toBe(`Done under K1: ${RULE}`);
+  expect(root.querySelector('#dv-notice a[href="#approval-K1"]')).not.toBeNull();
   expect(text("#decision .dv-question")).toBe("Landed the invoice-gen stack 1 on master.");
   expect(text("#decision .dv-undo h3")).toBe("Undo");
   expect(text('#decision .dv-undo figure.code[data-lang="nu"] code')).toBe("jj undo");
@@ -273,6 +273,19 @@ test("the finder finds a notice by its number and words, and an approval by its 
   expect(rank(rows, "invoice-gen stack")[0]?.row.ref).toBe("N3");
   const a1 = rank(rows, "full gate review")[0]?.row;
   expect(a1?.group).toBe("approvals");
-  expect(a1?.go).toEqual({ kind: "view", hash: "#approval-A1" });
-  expect(Core.viewOf("#approval-A1")).toEqual({ view: "decisions", decision: null, anchor: "approval-A1" });
+  expect(a1?.go).toEqual({ kind: "view", hash: "#approval-K1" });
+  expect(Core.viewOf("#approval-K1")).toEqual({ view: "decisions", decision: null, anchor: "approval-K1" });
+});
+
+test("a K number in an item's words links to that standing approval, and an unknown one stays text", () => {
+  show(viewWith([notice(1, 5, { question: "Landed it under K1, not K7." })], [APPROVAL]));
+  location.hash = "#decision/n1";
+  flush();
+  const link = root.querySelector<HTMLAnchorElement>('a.dref[data-ref="K1"]');
+  expect(link?.getAttribute("href")).toBe("#approval-K1");
+  expect(root.querySelector('a.dref[data-ref="K7"]')).toBeNull();
+  link?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+  link?.parentElement?.dispatchEvent(new MouseEvent("mouseenter"));
+  flush();
+  expect(root.querySelector(".dref-tip")?.textContent ?? "").toStartWith(`K1 standing approval: ${RULE}; given `);
 });

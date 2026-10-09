@@ -16,6 +16,7 @@ import { exists, isDir, listDir, makeDirs, readBytes, readText, writeText } from
 import { asArray, asNumber, asObject, asString, dumps, parseJson, pyStr, type Json } from "../json.ts";
 import { oneLine } from "../chat/chat.ts";
 import { withExclusiveLock } from "../lock.ts";
+import { alive, pidOf } from "../registry.ts";
 import type { Machine } from "../world.ts";
 
 /** What an item is. */
@@ -221,6 +222,24 @@ export function fleetOf(machine: Machine, root: string): string | undefined {
     const id = asString(entry?.["id"]);
 
     if (dir !== undefined && id !== undefined && real(dir) === want) return id;
+  }
+
+  return undefined;
+}
+
+/** The name of the manager the registry serves, read without touching the registry: the first entry, by file
+ * name, whose role is manager and whose process runs; undefined when there is none. */
+export function managerOf(machine: Machine): string | undefined {
+  const home = machine.registry.place.home;
+
+  for (const file of listDir(home).filter((n) => n.endsWith(".json")).sort()) {
+    const path = join(home, file);
+
+    if (isDir(path)) continue;
+    const entry = asObject(Option.getOrUndefined(parseJson(readText(path) ?? "")));
+    const id = asString(entry?.["id"]);
+
+    if (entry?.["role"] === "manager" && id !== undefined && alive(pidOf(entry["pid"]))) return id;
   }
 
   return undefined;

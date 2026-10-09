@@ -224,7 +224,7 @@ function validateApprovals(ledger: Ledger, decisions: ReadonlySet<string>): Refu
       return invalid(`approval ${a.id === "" ? "?" : a.id} needs id, rule, by, ref, added and status`);
     }
 
-    if (!ID.test(a.id)) return invalid(`approval id ${pyStr(a.id)} should be letters, digits, '_', '.', or '-'`);
+    if (!/^K[0-9]+$/u.test(a.id)) return invalid(`approval id ${pyStr(a.id)} should be K and a number`);
 
     if (approvals.has(a.id)) return invalid(`duplicate approval id '${a.id}'`);
 

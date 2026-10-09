@@ -1,29 +1,32 @@
-{"trace": 1, "name": "approvals", "about": "Standing approvals and what they change: `approval add` only from a decided decision the user answered on the page (refused while open, for a decision recorded after the fact, without the user's answer in the chat, twice), `approval list`, a notice done under one (`decision --kind notice --under --undo`, closed at once, the fleets' news item, its refusals), `approval revoke` and the notice refused after it; `--advised` and the warnings when a choice goes to the user with no advisor's view (an advisor row, or a third choice in a day); a `reviewed` event with its findings and changes, and its refusals; `show`, and the page rendered."}
+{"trace": 1, "name": "approvals", "about": "Standing approvals and what they change: `approval add` only from a decided decision the user answered on the page (refused while open, for a decision recorded after the fact, without the user's answer in the chat, twice), `approval list`, an approval's id (K and a number), a notice done under one (`decision --kind notice --under --undo`, closed at once, no news item with no manager served and an fyi to the manager with one, its refusals), `approval revoke` and the notice refused after it; `--advised` and the warnings when a choice goes to the user with no advisor's view (an advisor row, or a third choice in a day); a `reviewed` event with its findings and changes, and its refusals; `show`, and the page rendered."}
 {"cli": "state", "argv": ["$DIR", "init", "--project", "acme billing", "--goal", "g", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "M", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "step", "s1", "--milestone", "m1", "--title", "Land the parser", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "d1", "--kind", "decision", "--title", "Landing without asking", "--question", "May the fleet land a stack that passed the full gate and a review, and tell you after?", "--why", "about a third of the asks were routine landings", "--option", "A: yes | it lands and you read a notice", "--option", "B: no | every landing asks", "--recommend", "A", "--reason", "the gate and the review already judge it", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "approval", "add", "A1", "--rule", "land a stack that passed the full gate and a review", "--by", "luiz", "--ref", "d1", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "K1", "--rule", "land a stack that passed the full gate and a review", "--by", "luiz", "--ref", "d1", "--no-render"]}
 {"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 1, "at": "2026-01-05T09:10:00+00:00", "from": "user", "author": "luiz@github", "to": ["coordinator"], "text": "A: yes (as recommended)", "re": null, "decision": "d1"}, "clock": "2026-01-05T09:10:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "decision", "D1", "--decide", "A: yes", "--resolution", "answered on the page (#1)", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "approval", "add", "A1", "--rule", "land a stack that passed the full gate and a review", "--by", "luiz", "--ref", "D1", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "approval", "add", "A1", "--rule", "again", "--by", "luiz", "--ref", "d1", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "A1", "--rule", "land a stack that passed", "--by", "luiz", "--ref", "D1", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "K1", "--rule", "land a stack that passed the full gate and a review", "--by", "luiz", "--ref", "D1", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "K1", "--rule", "again", "--by", "luiz", "--ref", "d1", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "d2", "--title", "Deploys", "--question", "Deploy on green?", "--decide", "yes", "--resolution", "said in the session", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "approval", "add", "A2", "--rule", "deploy on green", "--by", "luiz", "--ref", "d2", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "K2", "--rule", "deploy on green", "--by", "luiz", "--ref", "d2", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "d3", "--kind", "decision", "--title", "Grants", "--question", "Grant read access when asked?", "--why", "w", "--option", "A: yes | granted", "--option", "B: no | asked", "--recommend", "B", "--reason", "access is yours", "--no-render"]}
 {"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 2, "at": "2026-01-05T09:20:00+00:00", "from": "coordinator", "to": ["user"], "text": "noted", "re": null, "decision": "d3"}, "clock": "2026-01-05T09:20:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "decision", "d3", "--decide", "B", "--resolution", "answered on the page", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "approval", "add", "A3", "--rule", "grant read access", "--by", "luiz", "--ref", "d3", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "approval", "add", "A4", "--by", "luiz", "--ref", "d1", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "K3", "--rule", "grant read access", "--by", "luiz", "--ref", "d3", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "K4", "--by", "luiz", "--ref", "d1", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "approval", "add", "--rule", "r", "--by", "luiz", "--ref", "d1", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "approval", "bogus", "A5", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "bogus", "K5", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "approval", "list", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "decision", "n1", "--kind", "notice", "--under", "A1", "--title", "Landed the parser", "--question", "Pushed the parser stack to master after the full gate and a review (2 findings, fixed).", "--undo", "```nu\njj git push --bookmark master  # after `jj revert` of the stack\n```", "--step", "s1", "--no-render"], "clock": "2026-01-05T09:30:00+00:00"}
-{"cli": "state", "argv": ["$DIR", "decision", "n2", "--kind", "notice", "--under", "A9", "--title", "x", "--question", "y", "--undo", "z", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "decision", "n2", "--kind", "notice", "--under", "A1", "--title", "x", "--question", "y", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "decision", "n2", "--kind", "notice", "--under", "A1", "--title", "x", "--question", "y", "--undo", "z", "--option", "A: a | b", "--blocking", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "decision", "n2", "--under", "A1", "--title", "x", "--question", "y", "--undo", "z", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "decision", "n1", "--kind", "notice", "--under", "A1", "--title", "x", "--question", "y", "--undo", "z", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "n1", "--kind", "notice", "--under", "K1", "--title", "Landed the parser", "--question", "Pushed the parser stack to master after the full gate and a review (2 findings, fixed).", "--undo", "```nu\njj git push --bookmark master  # after `jj revert` of the stack\n```", "--step", "s1", "--no-render"], "clock": "2026-01-05T09:30:00+00:00"}
+{"fixture": "write", "path": "$REGISTRY/manager.json", "content": "{\"id\": \"manager\", \"role\": \"manager\", \"dir\": \"$W/manager\", \"url\": \"http://box:7420/f/manager/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:00:00+00:00\"}\n"}
+{"cli": "state", "argv": ["$DIR", "decision", "n4", "--kind", "notice", "--under", "K1", "--title", "Landed the timeline fixes", "--question", "Pushed the timeline stack to master after the full gate and a review (0 findings).", "--undo", "jj revert the stack and push", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "n2", "--kind", "notice", "--under", "K9", "--title", "x", "--question", "y", "--undo", "z", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "n2", "--kind", "notice", "--under", "K1", "--title", "x", "--question", "y", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "n2", "--kind", "notice", "--under", "K1", "--title", "x", "--question", "y", "--undo", "z", "--option", "A: a | b", "--blocking", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "n2", "--under", "K1", "--title", "x", "--question", "y", "--undo", "z", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "n1", "--kind", "notice", "--under", "K1", "--title", "x", "--question", "y", "--undo", "z", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "n1", "--why", "changed", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "approval", "list", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "d4", "--kind", "input", "--title", "Port", "--question", "Which port?", "--why", "w", "--no-render"], "clock": "2026-01-05T10:00:00+00:00"}
@@ -41,10 +44,10 @@
 {"cli": "state", "argv": ["$DIR", "event", "--kind", "reviewed", "--findings", "-1", "--changes", "kx", "reviewed", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "event", "--kind", "reviewed", "--findings", "0", "--changes", "kx/1", "reviewed", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "event", "--findings", "1", "a note", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "approval", "revoke", "A1", "--reason", "revoked on the page (#3)", "--no-render"], "clock": "2026-01-05T11:00:00+00:00"}
-{"cli": "state", "argv": ["$DIR", "approval", "revoke", "A1", "--reason", "again", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "approval", "revoke", "A7", "--reason", "x", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "approval", "revoke", "A1", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "decision", "n3", "--kind", "notice", "--under", "A1", "--title", "x", "--question", "y", "--undo", "z", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "revoke", "K1", "--reason", "revoked on the page (#3)", "--no-render"], "clock": "2026-01-05T11:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "approval", "revoke", "K1", "--reason", "again", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "revoke", "K7", "--reason", "x", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "revoke", "K1", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "n3", "--kind", "notice", "--under", "K1", "--title", "x", "--question", "y", "--undo", "z", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "show", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "set", "--now", "approvals recorded"]}

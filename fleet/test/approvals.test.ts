@@ -4,7 +4,7 @@
  * under one is recorded closed and told to the fleets, and a choice put to the user without the advisor's
  * view is warned.
  */
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, test } from "bun:test";
@@ -31,7 +31,7 @@ const CHOICE = [
   "the gate and the review already judge it",
 ];
 
-const NOTICE = ["--kind", "notice", "--under", "A1", "--title", "Landed the parser", "--question", "Pushed the parser stack to master.", "--undo", "jj revert the stack and push"];
+const NOTICE = ["--kind", "notice", "--under", "K1", "--title", "Landed the parser", "--question", "Pushed the parser stack to master.", "--undo", "jj revert the stack and push"];
 
 let root: string;
 
@@ -74,7 +74,7 @@ function approved(): void {
   ok("decision", "d1", ...CHOICE);
   answer("d1");
   ok("decision", "d1", "--decide", "A", "--resolution", "answered on the page (#1)");
-  ok("approval", "add", "A1", "--rule", "land a stack that passed the full gate and a review", "--by", "luiz", "--ref", "D1");
+  ok("approval", "add", "K1", "--rule", "land a stack that passed the full gate and a review", "--by", "luiz", "--ref", "D1");
 }
 
 beforeEach(() => {
@@ -88,39 +88,54 @@ beforeEach(() => {
 describe("approvals", () => {
   test("an approval comes only from the user's answer on the page", () => {
     ok("decision", "d1", ...CHOICE);
-    expect(refused("approval", "add", "A1", "--rule", "r", "--by", "luiz", "--ref", "d1")).toContain("is open");
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "d1")).toContain("is open");
     ok("decision", "d1", "--decide", "A", "--resolution", "said in the session");
-    expect(refused("approval", "add", "A1", "--rule", "r", "--by", "luiz", "--ref", "d1")).toContain("no answer from the user");
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "d1")).toContain("no answer from the user");
     ok("decision", "d2", "--title", "T", "--question", "Q?", "--decide", "yes", "--resolution", "said in the session");
-    expect(refused("approval", "add", "A2", "--rule", "r", "--by", "luiz", "--ref", "d2")).toContain("not asked of the user on the page");
+    expect(refused("approval", "add", "K2", "--rule", "r", "--by", "luiz", "--ref", "d2")).toContain("not asked of the user on the page");
     expect(rows("approvals")).toEqual([]);
+  });
+
+  test("an approval's id is K and a number", () => {
+    ok("decision", "d1", ...CHOICE);
+    answer("d1");
+    ok("decision", "d1", "--decide", "A", "--resolution", "answered on the page (#1)");
+    expect(refused("approval", "add", "A1", "--rule", "r", "--by", "luiz", "--ref", "d1")).toContain("K and a number");
   });
 
   test("an approval keeps where it came from, and a revoked one takes no notice", () => {
     approved();
     const a = rows("approvals")[0] ?? {};
     expect([a["ref"], a["message"], a["author"], a["status"]]).toEqual(["d1", 1, "luiz@github", "active"]);
-    expect(ok("approval", "list").stdout).toContain("approval A1 active [0 notices]");
-    expect(refused("approval", "revoke", "A1")).toContain("--reason");
-    ok("approval", "revoke", "A1", "--reason", "revoked on the page (#3)");
+    expect(ok("approval", "list").stdout).toContain("approval K1 active [0 notices]");
+    expect(refused("approval", "revoke", "K1")).toContain("--reason");
+    ok("approval", "revoke", "K1", "--reason", "revoked on the page (#3)");
     expect(refused("decision", "n1", ...NOTICE)).toContain("was revoked");
   });
 });
 
 describe("notices", () => {
-  test("a notice closes at once and tells the fleets", () => {
+  test("with no manager served, a notice posts no news", () => {
     approved();
-    expect(ok("decision", "n1", ...NOTICE).stdout).toContain("news #1 tells the fleets");
+    expect(ok("decision", "n1", ...NOTICE).stdout).toContain("no manager is served: no news item");
+    expect(existsSync(join(home, "news", "news.jsonl"))).toBe(false);
+  });
+
+  test("a notice closes at once and tells the manager", () => {
+    approved();
+    const manager = { id: "manager", role: "manager", dir: join(root, "..", "m"), url: "http://box:7420/f/manager/", pid: process.pid, session: null };
+    writeFileSync(join(home, "manager.json"), JSON.stringify(manager));
+    expect(ok("decision", "n1", ...NOTICE).stdout).toContain("news #1 tells the manager");
     const n = decision("n1");
-    expect([n["kind"], n["status"], n["under"], n["answer"], n["ref"], n["closed"] === n["opened"]]).toEqual(["notice", "decided", "A1", "done", "N1", true]);
+    expect([n["kind"], n["status"], n["under"], n["answer"], n["ref"], n["closed"] === n["opened"]]).toEqual(["notice", "decided", "K1", "done", "N1", true]);
     const item = asObject(JSON.parse(readFileSync(join(home, "news", "news.jsonl"), "utf8").split("\n")[0] ?? "{}")) ?? {};
-    expect([item["from"], item["kind"]]).toEqual(["acme-billing", "fyi"]);
+    expect([item["from"], item["to"], item["kind"]]).toEqual(["acme-billing", ["manager"], "fyi"]);
     expect(String(item["text"])).toContain("Undo: jj revert the stack and push");
   });
 
   test("a notice names an active approval and asks nothing", () => {
     approved();
-    expect(refused("decision", "n1", "--kind", "notice", "--under", "A9", ...NOTICE.slice(4))).toContain("unknown approval 'A9'");
+    expect(refused("decision", "n1", "--kind", "notice", "--under", "K9", ...NOTICE.slice(4))).toContain("unknown approval 'K9'");
     expect(refused("decision", "n1", ...NOTICE.slice(0, -2))).toContain("--undo");
     expect(refused("decision", "n1", ...NOTICE, "--option", "A: a | b", "--recommend", "A")).toContain("leave out --option, --recommend");
     expect(refused("decision", "n1", ...NOTICE.slice(2))).toContain("give --kind notice");

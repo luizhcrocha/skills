@@ -164,6 +164,24 @@ def fleet_of(root) -> str | None:
     return None
 
 
+def manager_of() -> str | None:
+    """The name of the manager the registry serves, read without touching the registry: the first entry, by file
+    name, whose role is manager and whose process runs. None when there is none."""
+    try:
+        paths = sorted(p for p in fleets.home().glob("*.json") if p.is_file())
+    except OSError:
+        return None
+    for p in paths:
+        try:
+            entry = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(entry, dict) and entry.get("role") == "manager" and isinstance(entry.get("id"), str) \
+                and fleets._alive(entry.get("pid")):
+            return entry["id"]
+    return None
+
+
 def unread_line(root) -> str | None:
     """The one line that tells the fleet at `root` of its unread news, or None: none, no news file, or a
     fleet the registry does not name."""

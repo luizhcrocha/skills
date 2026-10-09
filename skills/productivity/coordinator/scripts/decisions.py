@@ -227,8 +227,8 @@ def validate_approvals(state: dict, ids: set, fail) -> None:
         for a in rows:
             if not isinstance(a, dict) or not all(isinstance(a.get(k), str) and a[k] for k in ("id", "rule", "by", "ref", "added", "status")):
                 fail(f"approval {a.get('id', '?') if isinstance(a, dict) else '?'} needs id, rule, by, ref, added and status")
-            if not ID.fullmatch(a["id"]):
-                fail(f"approval id {a['id']!r} should be letters, digits, '_', '.', or '-'")
+            if not re.fullmatch(r"K[0-9]+", a["id"]):
+                fail(f"approval id {a['id']!r} should be K and a number")
             if a["id"] in approvals:
                 fail(f"duplicate approval id '{a['id']}'")
             if a["status"] not in APPROVAL_STATUSES:
