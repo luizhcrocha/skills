@@ -15,7 +15,7 @@ Your value is the hop you save the user. A question you settle from what another
 **Yours:**
 
 - The **turn**: the order in which fleets push, deploy, and move history that others build on. One fleet has the turn at a time.
-- **What fleets ask each other.** Coordinators reach one another through you.
+- **Judgement across fleets**: an order between them, an owner, a conflict between their lanes. You are not a mailbox: a fleet that needs another to act writes to it directly, once, and news goes to `fleet news` ([Messages between sessions](#messages-between-sessions)).
 - **Decisions** the coordinators put to you, before any reaches the user.
 - **What stands**: the user's decisions and constraints that hold for every fleet, who owns what, what is deployed. It lives in `standing.md`.
 
@@ -35,8 +35,8 @@ The manager runs on the plugin's fleet CLI, `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fle
 2. `fleet state <dir> init --role manager --project "<this machine, or the programme>" --goal "<what the fleets are landing together>"`: the ledger starts with the landing queue, milestone `landings`.
 3. `fleet serve <dir>` puts the manager on the machine's hub (the `fleet-hub` service), and give the user the hub's address (the printed one without its `f/manager/`): it is the one address for everything, since every fleet's page is served under it at `f/<fleet>/`, the index lists them all (and the fleets of the user's other machines that run a hub), and every page's header has a switcher. When it says no hub runs, ask the user to start it (`systemctl --user start fleet-hub`), or on a machine without the service run `fleet hub` as a background command of this session meanwhile (a hub already serving is left alone, and the service takes the port back when it starts). The page shows every coordinator with the way to its page, and one list of what waits on the user across all of them.
 4. `ListAgents` names this session. Record it, so coordinators can write to you: `fleet fleets name <dir> <session>`.
-5. Arm the chat watch as a background Bash command (`run_in_background: true`, `timeout: 3300000`, as DASHBOARD.md explains): `fleet chat <dir> watch --as manager --all --resume --once`, never as a shell job (`& disown`) or with its output redirected (`>/dev/null`): such a watch reads the user's messages into nowhere and wakes no one, so it is refused. It exits with the first news (a message, or a fleet not reading its chat), which wakes you; handle it and arm the watch again. While something you own or relay waits on the user (a decision you passed on, a question you asked them, a landing waiting on their go), add `--fleets`: see [Waiting on the user](#waiting-on-the-user). The plugin's hook enforces the watch (a turn ending without one goes on with the command) and tells you mid-turn of a message or an answer waiting three minutes; hand long hands-on work to workers so you stay responsive.
-6. Write to each coordinator (`SendMessage` to its session) that a manager is present: your session, your page, the path of `standing.md`, and that decisions, questions for other fleets, and landings now come to you. Ask each for what it owns, what it has in flight, and what it is waiting on.
+5. Arm the chat watch as a background Bash command (`run_in_background: true`, `timeout: 3300000`, as DASHBOARD.md explains): `fleet chat <dir> watch --as manager --all --resume --once`, never as a shell job (`& disown`) or with its output redirected (`>/dev/null`): such a watch reads the user's messages into nowhere and wakes no one, so it is refused. It exits with the first news (a message, or a fleet not reading its chat) once the burst settles (DASHBOARD.md, the watch), which wakes you; handle it and arm the watch again. While something you own or relay waits on the user (a decision you passed on, a question you asked them, a landing waiting on their go), add `--fleets`: see [Waiting on the user](#waiting-on-the-user). The plugin's hook enforces the watch (a turn ending without one goes on with the command) and tells you mid-turn of a message or an answer waiting three minutes; hand long hands-on work to workers so you stay responsive.
+6. Write to each coordinator (`SendMessage` to its session), one message each, that a manager is present: your session, your page, the path of `standing.md`, and that decisions and landings now come to you. Ask each for what it owns, what it has in flight, and what it is waiting on.
 7. Fill `standing.md` from their answers and from what the user tells you.
 
 Setup is done when every fleet in `fleet fleets list` has answered, and `standing.md` names an owner for every lane in flight (each fleet's `lane` lines in `fleet fleets show <fleet>`).
@@ -66,7 +66,7 @@ Decisions of your own (a landing to approve, an order to choose between fleets) 
 
 ### A question for another fleet
 
-Answer from what you know when you know it: `standing.md`, the fleets' ledgers (`fleet fleets list`), what passed through you. Otherwise carry it to the fleet that owns the matter and carry the answer back, each in the sender's words, marked as relayed.
+Answer from what you know when you know it: `standing.md`, the fleets' ledgers (`fleet fleets list`), what passed through you. Otherwise name the fleet that owns the matter and let the asker write to it directly, once; you do not carry it: a relayed question wakes you and then the owner, two wakes for one.
 
 When the matter needs rounds (a review of a diff, a diagnosis with measurements), open a **direct line**: tell both coordinators the question, its bounds, and that the outcome comes back to you. They settle it between them, with diffs as files on disk and a numbered summary. Log the outcome when it comes.
 
@@ -78,11 +78,11 @@ A coordinator asks for the turn before anything that goes out or moves history o
 2. Check it against `standing.md` (what a landing needs, who owns the files) and against the lanes in flight of the other fleets (`fleet fleets show <fleet>`). A landing that touches another fleet's files goes to that fleet as a diff first.
 3. Get the user's word when it is needed. A push or a deploy the user has approved first-hand, for this landing or as a standing rule in `standing.md`, goes ahead. Any other becomes a decision on your page (`--kind action` or `decision`, `--blocking`). An action's `--manual` is short prose plus every command in a fenced block with its language, never in the prose, ```` ```nu ```` on Luiz's machines since he runs nushell, commands that run in one go in one block, a new block only where Luiz acts between steps (reads output, decides, approves in 1Password).
 4. Give the turn: `step l4 --status current` (refused while another landing has it: close that one, `--status done`, or give it back, `--status pending`), and tell the coordinator. Its `fleet turn` and `land-check` pass from then on; it lands from its own workspace and reports the commit and the files that moved.
-5. Close it: `step l4 --status done`, `event --kind integrated --agent <fleet> "l4 landed as <commit>: <files>"`, the deploy in `standing.md`, and a notice to every fleet whose lanes touch what moved: the commit, the files, what to rebase.
+5. Close it: `step l4 --status done`, `event --kind integrated --agent <fleet> "l4 landed as <commit>: <files>"`, the deploy in `standing.md`, and a news item to the fleets whose lanes touch what moved (`fleet news post --from manager --to <those fleets> "l4 landed as <commit>: <files>; rebase before you land"`). A fleet that must act before its next landing is told so then, by `fleet turn`; one that must stop now gets a direct message.
 
 ### A notice
 
-Something another fleet should know (a schema changed, a shared tool's version moved, a test tier went red on master). Tell the fleets it touches, and put in `standing.md` what will still hold tomorrow.
+Something another fleet should know (a schema changed, a shared tool's version moved, a test tier went red on master). Post it to the news for the fleets it touches (`fleet news post --from manager --to <fleets> --kind fyi|rule [--keep] "..."`), never a message, and put in `standing.md` what will still hold tomorrow. A coordinator's notice to you is answered the same way: it posts its own news; you do not forward it.
 
 ## What the user writes on your page
 
@@ -97,7 +97,7 @@ A fleet's name is its session's: the registry reads it from the session's title,
 - **Where the user goes.** Your Links view lists every fleet's pages and dev servers, and every port the machine serves that no link names, with the fleet that started it. One left unnamed goes back to that fleet to record (`link`) or to stop.
 - **Whose files a landing moves.** `fleet fleets whose FROM TO`, in the repository, sorts the files by owning fleet from `<dir>/owners` (one `FLEET GLOB` per line, first match wins; keep it with the owners in `standing.md`).
 
-A fleet's advisor plays the Advisor role ([MODELS.md](../coordinator/MODELS.md)) and is restarted on the role's fallback when its model is unavailable (its row's model says which). When one fleet reports Fable unavailable, tell the others: their next advisor spawn goes straight to the fallback.
+A fleet's advisor plays the Advisor role ([MODELS.md](../coordinator/MODELS.md)) and is restarted on the role's fallback when its model is unavailable (its row's model says which). When one fleet reports Fable unavailable, post it to the news (`--kind fyi`): their next advisor spawn goes straight to the fallback.
 
 A monitor agent you spawn (app metrics, runs, executions, reporting back to you) is a Watcher ([MODELS.md](../coordinator/MODELS.md)); when the watch is a command, a background Bash loop does it without a model. When a new default model comes out, the fleets move their agents to it (the coordinator's SKILL.md, "A new default model"); yours too.
 
@@ -124,9 +124,19 @@ Waiting on the user is a subscription, never a status re-read: whoever asks arms
 - `infra: you answered D18 <title>: <first line>`, `infra: you wrote to coordinator: <first line>`;
 - `infra I2 opened for you: <title>`, and `infra D18 decided: ...`, `withdrawn: ...`, `held: ...`.
 
-The first such line waits two minutes for more (`--batch 120`), so one wake covers a burst of the user's answers; a message to you still wakes you at once. On each line, update your picture: what was answered or decided no longer waits, and you do not ask the user for it again. Its cursors are per fleet, so `--resume` misses nothing and tells nothing twice.
+The first such line waits two minutes for more (`--batch 120`), so one wake covers a burst of the user's answers; a message from the user to you ends the wait within 10 seconds, and other new lines settle as DASHBOARD.md's watch says. On each line, update your picture: what was answered or decided no longer waits, and you do not ask the user for it again. Its cursors are per fleet, so `--resume` misses nothing and tells nothing twice.
 
 A fleet's every state command warns while an answer on its page is unrecorded; your watch prints `! <fleet> has not recorded the user's answer to A6 ...` after two minutes: `SendMessage` that fleet to record it, and tell no one it still waits on the user. When the answer means the fleet must act first (a fix, a new command), it records it with `decision A6 --hold "<what it does first>"` and re-presents the item by revising it; the same for your own decisions. A held item is off `fleet fleets waiting`; `fleet fleets show` names it and its reason.
+
+## Messages between sessions
+
+A message to a session wakes it, and every wake re-reads its whole context: yours is among the largest (about 318k tokens a call), and a relayed item wakes you and then its target. Measured across the fleets on 2026-10-09: 77% of the messages between sessions were FYIs, the manager sent the most, and 29% were duplicates.
+
+- **A direct message is for an action only**: a fleet must do something now (stop, rebase before it lands, answer a question only it can, take the turn). Send it once, to the fleets affected, every item for one fleet in one message.
+- **Check before you write.** Read `fleet fleets waiting` and the fleets' ledgers (`fleet fleets show <fleet>`), and address only the fleets whose lanes, decisions or landings the matter touches.
+- **FYIs, release notes and rule changes go to `fleet news`**, never as a message. `--to` the fleets it concerns, `--keep` only for a durable rule.
+- **Never relay what another session already sent.** A fleet that told another fleet something needs no copy from you, and you need none from it.
+- **Read your own news** when the line appears (`news: N unread for manager ...`): `fleet news read --as manager`, between other work.
 
 ## Said once
 
@@ -155,7 +165,7 @@ Keep the user's words as they said them. Your summary of a decision for the user
 
 Your page shows, for each fleet, what its workers spent and what its coordinator itself spent (`fleet fleets list` prints both). A coordinator that reads far more than its workers write is doing work it should delegate; say so to it.
 
-Your page also shows how full the plan's 5-hour and 7-day windows are, and `fleet usage show` prints the same. Read it before you give a turn to work that spawns many workers, and when a window is nearly full say so to the user and to the fleets, with when it resets: a fleet that knows can finish what is in hand instead of starting what it cannot finish. When the page says there is no reading yet, the user's status line does not capture it; the line to add is in the coordinator skill's `DASHBOARD.md`.
+Your page also shows how full the plan's 5-hour and 7-day windows are, and `fleet usage show` prints the same. Read it before you give a turn to work that spawns many workers, and when a window is nearly full say so to the user and post it to the news for the fleets, with when it resets: a fleet that knows can finish what is in hand instead of starting what it cannot finish. When the page says there is no reading yet, the user's status line does not capture it; the line to add is in the coordinator skill's `DASHBOARD.md`.
 
 ## Staying current
 

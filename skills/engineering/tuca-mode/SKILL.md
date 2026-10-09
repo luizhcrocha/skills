@@ -38,6 +38,8 @@ Every tuca-mode session is a coordinator. The mindset always: your context is th
 
 The machinery only once it is earned: when you spawn a worker that outlives one turn, or the task runs as several lanes, keep the ledger and the dashboard as the coordinator skill runs them. It is user-invoked, so read `${CLAUDE_PLUGIN_ROOT}/skills/productivity/coordinator/SKILL.md` and follow its loop (Intake, Route, Pick the model, Brief, Track, Respond, Integrate) with the plugin's fleet CLI, `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet` (`fleet` in that skill and in the playbooks, run by this path).
 
+**Other sessions** (a fleet's coordinator, the manager), from this session or any that serves no fleet: a direct message wakes the session it reaches, and each wake re-reads its whole context. Message a fleet only when it must act, once, to the fleets affected (check `fleet fleets waiting` and their ledgers first), every item for one fleet in one message; never relay what another session already sent. Release notes, FYIs and rule changes go to `fleet news post --from <this session's name> [--to <fleets>] --kind release|fyi|rule [--keep] "..."`, which wakes nobody. The manager is not a mailbox: it keeps landings, the gate and cross-fleet judgement.
+
 N checks, measurements or attempts that come back as one verdict table (coverage matrices, races, gauntlets) → `tstack:swarm`. "Run this whole project", "fan these out", a batch of independent tasks that change code → the orchestrate skill (`tstack:orchestrate`) for the partition, under the coordinator's ledger for anything that runs longer than the session's attention.
 
 ## Autonomy
