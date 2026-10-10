@@ -1,7 +1,9 @@
 /**
  * A stand-in for the hub's fleet routes, for the page's browser tests and screenshots: the page rendered
  * from a template and a fixture view (the real `pageHtml`), `GET events` (SSE `hello`, `state`, `chat`),
- * `POST chat` (keeping its `re`, `decision`, `quote` and `side`), `POST chat/preview`, `POST name` (a worker's or the
+ * `POST chat` (keeping its `re`, `decision`, `quote`, `side` and `marks`), `POST chat/preview` (a batch of marks on
+ * `#decision/<fleet>/<id>` to that fleet, anything else to the host), `GET decisions/<id>.html` (a decision's
+ * body, as `bodies` or `setBody` give it), `POST name` (a worker's or the
  * fleet's name, applied to the view as the hub's ledger and registry would, a worker's name another has refused), `GET skills`, `GET state.json`
  * (the view, as the hub serves it to a page polling while its stream reconnects),
  * and two control routes a test drives: `POST /_state` (a new view, sent to every stream) and `POST /_chat`
@@ -46,6 +48,8 @@ export interface HarnessOptions {
   readonly messages: readonly Message[];
   readonly skills?: readonly SkillRow[];
   readonly port?: number;
+  /** Decisions' bodies by id, served at decisions/<id>.html. */
+  readonly bodies?: { readonly [id: string]: string };
 }
 
 /** A running harness. */
@@ -55,6 +59,8 @@ export interface Harness {
   /** The bodies `POST name` was sent, in order. */
   readonly renames: JsonRecord[];
   setView(view: View): void;
+  /** Serve `html` as decision `id`'s body from now on. */
+  setBody(id: string, html: string): void;
   say(message: Message): void;
   /** Close every stream and refuse new ones for `ms`, as a hub restarting does. */
   cut(ms: number): void;
@@ -78,6 +84,7 @@ export function serveHarness(options: HarnessOptions): Harness {
   const messages: Message[] = [...options.messages];
   const posted: Message[] = [];
   const renames: JsonRecord[] = [];
+  const bodies = new Map(Object.entries(options.bodies ?? {}));
   const streams = new Set<(text: string) => void>();
   const closers = new Set<() => void>();
   let downUntil = 0;
@@ -105,6 +112,14 @@ export function serveHarness(options: HarnessOptions): Harness {
         polls += 1;
 
         return json(200, view);
+      }
+
+      const body = /^\/decisions\/([A-Za-z0-9_.-]+)\.html$/u.exec(path)?.[1];
+
+      if (body !== undefined) {
+        const html = bodies.get(body);
+
+        return html === undefined ? json(404, { error: "not found" }) : new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
       }
 
       if (path === "/skills") return options.skills === undefined ? json(404, { error: "not found" }) : json(200, { skills: options.skills, builtins: false });
@@ -144,11 +159,17 @@ export function serveHarness(options: HarnessOptions): Harness {
         return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-store" } });
       }
 
-      if (req.method === "POST" && path === "/chat/preview") return json(200, { to: ["coordinator"], parts: [] });
+      if (req.method === "POST" && path === "/chat/preview") {
+        // SAFETY: the page posts a JSON object; a batch of marks names its place.
+        const asked = (await req.json()) as { readonly marks?: { readonly at?: { readonly hash?: string } } };
+        const fleet = /^#decision\/([^/]+)\/[^/]+$/u.exec(asked.marks?.at?.hash ?? "")?.[1];
+
+        return json(200, { to: [fleet ?? (view["role"] === "manager" ? "manager" : "coordinator")], parts: [] });
+      }
 
       if (req.method === "POST" && path === "/chat") {
         // SAFETY: the page posts a JSON object with these fields.
-        const body = (await req.json()) as { text: string; re?: number; decision?: string; quote?: Message["quote"]; side?: number | "new" };
+        const body = (await req.json()) as { text: string; re?: number; decision?: string; quote?: Message["quote"]; side?: number | "new"; marks?: JsonRecord };
         const id = Math.max(0, ...messages.map((x) => x.id)) + 1;
         let m: Message = { id, at: new Date().toISOString(), from: "user", to: ["coordinator"], text: body.text };
 
@@ -159,6 +180,8 @@ export function serveHarness(options: HarnessOptions): Harness {
         if (body.quote !== undefined) m = { ...m, quote: body.quote };
 
         if (body.side !== undefined) m = { ...m, side: body.side === "new" ? id : body.side };
+
+        if (body.marks !== undefined) m = { ...m, marks: body.marks };
         messages.push(m);
         posted.push(m);
         broadcast(event("chat", m, m.id));
@@ -217,6 +240,9 @@ export function serveHarness(options: HarnessOptions): Harness {
     setView(next) {
       view = next;
       broadcast(event("state", view));
+    },
+    setBody(id, html) {
+      bodies.set(id, html);
     },
     say(m) {
       messages.push(m);

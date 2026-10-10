@@ -7,9 +7,11 @@ import { For, Match, Show, Switch, type JSX } from "@solidjs/web";
 
 import { ChatIcon, CloseIcon, listen, Pill, usePage, tf } from "./bits.tsx";
 import { copyText, selectAndCopy, type Copied } from "./clip.ts";
-import { Core, type Agent, type Coordinator, type FindRow, type Json, type QuoteAt } from "./core.ts";
+import { Core, type Agent, type Coordinator, type FindRow, type Json, type MarkKind, type QuoteAt } from "./core.ts";
 import { evidence } from "./DecisionPage.tsx";
-import { parseEmbedMessage, parseEvidenceSelect, postSelect, type SelRect } from "./embed.ts";
+import { parseEmbedMessage, parseEvidenceSelect, parseFrameCommand, parseFrameSaid, postMark, postSelect, type SelRect } from "./embed.ts";
+import { KIND_WORDS, QUOTED_KINDS, type Claimed } from "./marks.ts";
+import { markDesk } from "./Marks.tsx";
 import { GROUPS, groupOf, highlight, rangesIn, type Item } from "./find.ts";
 import { fmtDur, fmtInt, plural, spentWords } from "./format.ts";
 import type { Model } from "./model.ts";
@@ -837,11 +839,36 @@ export function forwardSelections(): void {
   });
   listen(window, "message", (e) => {
     const frame = evidence.frame;
-    const said = frame && e.source === frame.contentWindow ? parseEvidenceSelect(e.data) : null;
+    const data: Json = e.data;
+
+    /* The marks' messages pass through both ways, each rebuilt from its own fields: the manager's to the body's frame, the frame's (a claim) to the manager. */
+    const command = frame && e.source === parent && e.origin === location.origin ? parseFrameCommand(data) : null;
+
+    if (frame && command) {
+      frame.contentWindow?.postMessage(command, "*");
+
+      return;
+    }
+
+    const mark = frame && e.source === frame.contentWindow ? parseFrameSaid(data) : null;
+
+    if (mark) {
+      postMark(mark);
+
+      return;
+    }
+
+    const said = frame && e.source === frame.contentWindow ? parseEvidenceSelect(data) : null;
 
     if (!frame || !said) return;
     const d = m.decisionById(m.viewing());
-    postSelect(said.text, within(frame, said.rect), "the evidence" + (d ? " of " + d.title : ""), said.touch, evidencePlace(m));
+    postSelect(said.text, within(frame, said.rect), "the evidence" + (d ? " of " + d.title : ""), said.touch, evidencePlace(m), said.raw);
+  });
+  /* Esc pressed on this page, outside a field, closes the manager's selection bar (and only that). */
+  listen(document, "keydown", (e) => {
+    const field = e.target instanceof Element && e.target.closest("textarea, input, select, [contenteditable]");
+
+    if (!field && e.key === "Escape") postMark({ kind: "esc" });
   });
   onCleanup(() => clearTimeout(settle));
 }
@@ -856,13 +883,16 @@ export function forwardSelections(): void {
  * released, then SETTLE_MS), never during a drag, and closes on a right-click, Escape, a press anywhere
  * else, and with a mouse a scroll (docked, it follows the screen instead). On a manager's page,
  * text selected in a fleet's decision (its page in a frame) shows the bar too, and its Reply and Side chat
- * write to that fleet's coordinator.
+ * write to that fleet's coordinator. Words selected in a decision's body, where its marks are on
+ * (Marks.tsx), are offered Comment, Delete, Replace and Question too, which open the mark's composer.
  */
 export function SelTool(): JSX.Element {
   const { m, ui } = usePage();
   let tool: HTMLDivElement | undefined;
-  /* Picked in a frame, not on the page: in a fleet's frame, the fleet a reply goes to. */
-  let framePicked: { readonly fleet: string | null } | null = null;
+  /* Picked in a frame, not on the page: in a fleet's frame, the fleet a reply goes to; the frame, to clear its selection. */
+  let framePicked: { readonly fleet: string | null; readonly frame: HTMLIFrameElement } | null = null;
+  /* The selection in a decision's body, as its frame claims it: the words a mark would be on, once the marks confirm them. */
+  const [anchor, setAnchor] = createSignal<readonly Claimed[] | null>(null);
   let settle: ReturnType<typeof setTimeout> | undefined;
   let pressed = false;
   /* Whether a touch made the selection: the last press's pointer, before any press the device's. */
@@ -884,6 +914,7 @@ export function SelTool(): JSX.Element {
   const hide = (): void => {
     clearTimeout(settle);
     framePicked = null;
+    setAnchor(null);
     box = null;
     holder = null;
     roomed?.classList.remove("seltool-room");
@@ -1032,12 +1063,19 @@ export function SelTool(): JSX.Element {
     later();
   };
 
-  const onKey = (e: KeyboardEvent): void => {
-    if (e.key === "Escape" && (ui.picked() || framePicked)) hide();
+  /* Escape closes the bar, and clears the selection of the frame it was picked in, unless a layer of the marks over it took the key. */
+  const dismiss = (e: Event): void => {
+    if (!(ui.picked() || framePicked) || markDesk.current?.took(e) || markDesk.current?.layered()) return;
+    framePicked?.frame.contentWindow?.postMessage({ annotClearSel: true }, "*");
+    hide();
   };
 
-  /* Text selected in `frame`, at `r` in its viewport and `at` on the page, by a touch or not; empty once the frame's selection is cleared. */
-  const pickIn = (frame: HTMLIFrameElement, text: string, r: SelRect | null, from: string, at: QuoteAt, fleet: string | null, byTouch: boolean): void => {
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === "Escape" && !e.defaultPrevented) dismiss(e);
+  };
+
+  /* Text selected in `frame`, at `r` in its viewport and `at` on the page, by a touch or not, with the words a mark would be on; empty once the frame's selection is cleared. */
+  const pickIn = (frame: HTMLIFrameElement, text: string, r: SelRect | null, from: string, at: QuoteAt, fleet: string | null, byTouch: boolean, quote: readonly Claimed[] | null): void => {
     if (!text) {
       if (framePicked) hide();
 
@@ -1046,8 +1084,9 @@ export function SelTool(): JSX.Element {
 
     touch = byTouch;
     const { top, bottom, left, width } = within(frame, r);
+    setAnchor(quote);
     show(text, from, at, { first: { top, bottom }, last: { top, bottom }, left, width }, frame);
-    framePicked = { fleet };
+    framePicked = { fleet, frame };
   };
 
   /* A selection inside the evidence frame, or a fleet's frame on the manager's page, arrives as a message. */
@@ -1059,17 +1098,21 @@ export function SelTool(): JSX.Element {
     if (fleetFrame && shown && fleet && e.source === fleetFrame.contentWindow) {
       const said = parseEmbedMessage(e.data);
 
-      if (said?.kind === "select") pickIn(fleetFrame, said.text, said.rect, said.from ? said.from + ", in " + fleet : fleet, fleetPlace(shown, said.at), fleet, said.touch);
+      if (said?.kind === "select") pickIn(fleetFrame, said.text, said.rect, said.from ? said.from + ", in " + fleet : fleet, fleetPlace(shown, said.at), fleet, said.touch, said.anchor ?? null);
+
+      if (parseFrameSaid(e.data)?.kind === "esc") dismiss(e);
 
       return;
     }
 
     const frame = evidence.frame;
+
+    if (frame && e.source === frame.contentWindow && parseFrameSaid(e.data)?.kind === "esc") dismiss(e);
     const said = frame && e.source === frame.contentWindow ? parseEvidenceSelect(e.data) : null;
 
     if (!frame || !said) return;
     const d = m.decisionById(m.viewing());
-    pickIn(frame, said.text, said.rect, "the evidence" + (d ? " of " + d.title : ""), evidencePlace(m), null, said.touch);
+    pickIn(frame, said.text, said.rect, "the evidence" + (d ? " of " + d.title : ""), evidencePlace(m), null, said.touch, said.anchor);
   };
 
   /*
@@ -1124,6 +1167,9 @@ export function SelTool(): JSX.Element {
     removeEventListener("scroll", onScroll, { capture: true });
   });
 
+  /* The selection is in a decision's body where marks are on: the bar offers the kinds of mark too. */
+  const marking = (): boolean => anchor() !== null && markDesk.current?.on() === true;
+
   const copy = (): void => {
     copyText(
       raw,
@@ -1138,7 +1184,7 @@ export function SelTool(): JSX.Element {
 
   return (
     <div
-      class="seltool"
+      class={"seltool" + (marking() ? " marking" : "")}
       id="seltool"
       role="toolbar"
       aria-label="Selected text"
@@ -1160,6 +1206,16 @@ export function SelTool(): JSX.Element {
           return;
         }
 
+        const kind = QUOTED_KINDS.find((k) => k === b.dataset["mark"]);
+        const words = anchor();
+
+        if (kind && words) {
+          hide();
+          markDesk.current?.begin(kind, words);
+
+          return;
+        }
+
         hide();
         getSelection()?.removeAllRanges();
         m.setQuote(quote);
@@ -1176,6 +1232,17 @@ export function SelTool(): JSX.Element {
         ui.refs.say?.focus();
       }}
     >
+      <Show when={marking()}>
+        <span class="seltool-marks" role="group" aria-label="Mark the words">
+          <For each={QUOTED_KINDS}>
+            {(k: MarkKind) => (
+              <button type="button" class={"k-" + k} data-sel="mark" data-mark={k}>
+                {KIND_WORDS[k]}
+              </button>
+            )}
+          </For>
+        </span>
+      </Show>
       <button type="button" data-sel="copy">
         {copied() === "copied" ? "Copied" : copied() === "selected" ? "Press Ctrl+C" : "Copy"}
       </button>

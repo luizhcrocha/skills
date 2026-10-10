@@ -27,6 +27,8 @@ export interface Message {
   readonly parts?: readonly { readonly text: string; readonly mention?: string }[];
   readonly quote?: { readonly text: string; readonly from: string; readonly at?: QuoteAt };
   readonly side?: number;
+  readonly marks?: JsonRecord;
+  readonly mark?: readonly number[];
 }
 
 const MIN = 60_000;

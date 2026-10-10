@@ -15,11 +15,14 @@ import { askParts, type AskPart } from "./ask.ts";
 import { grillAsk, grillReason } from "./grill.ts";
 import { listen, PillAs, RefTag, tf, usePage, Who } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
-import { Core, type Decision, type GrillEntry, type JsonRecord, type Question, type Queue } from "./core.ts";
+import { Core, type Decision, type GrillEntry, type JsonRecord, type MarkDecision, type Question, type Queue } from "./core.ts";
 import { DecisionHistory } from "./DecisionHistory.tsx";
 import { DetailsFold } from "./DetailsFold.tsx";
 import { DecisionThread } from "./DecisionThread.tsx";
 import { FRAME_MAX_PX, parseEmbedMessage, postAnswered } from "./embed.ts";
+import { MARK_CSS, markScript } from "./markframe.ts";
+import { draftsKey } from "./marks.ts";
+import { Marks, type MarkTarget } from "./Marks.tsx";
 import { clock } from "./format.ts";
 import { KIND_WORDS, StatePill } from "./Overview.tsx";
 import { CodeBlock, ManualText, Rich, UndoText } from "./Rich.tsx";
@@ -29,7 +32,6 @@ const TOKENS = ["bg", "card", "card-2", "text", "muted", "faint", "line", "accen
 
 const esc = (s: string): string => s.replace(/[&<>"']/gu, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
 
-/** The evidence's document: the fragment with the page's base styles and theme, reporting its height and selection (and whether a touch made it). */
 /** A refused Agent call's input, as the hook gave it (compact JSON), indented to read; as given when it is not JSON. */
 function spawnInput(call: string): string {
   try {
@@ -39,6 +41,7 @@ function spawnInput(call: string): string {
   }
 }
 
+/** The evidence's document: the fragment with the page's base styles and theme, reporting its height and selection (and whether a touch made it), and painting the marks on it (markframe.ts). */
 export function frameDoc(html: string): string {
   const cs = getComputedStyle(document.documentElement);
   const vars = TOKENS.map((t) => `--${t}:${cs.getPropertyValue("--" + t).trim()}`).join(";");
@@ -65,8 +68,10 @@ pre{background:var(--card-2);padding:10px 12px;border-radius:6px;overflow-x:auto
 img,svg,video,canvas{max-width:100%;height:auto}
 .num{font-variant-numeric:tabular-nums;font-stretch:84%;text-align:right}
 .muted{color:var(--muted)}.good{color:var(--good)}.warning{color:var(--warning)}.critical{color:var(--critical)}
+${MARK_CSS}
 </style></head><body>${html}
-<scr` + `ipt>(function(){document.querySelectorAll("table").forEach(function(t){var rows=Array.prototype.slice.call(t.rows),head=t.tHead&&t.tHead.rows[0];if(!head&&rows[0]&&Array.prototype.every.call(rows[0].cells,function(c){return c.tagName==="TH"})){head=rows[0];head.classList.add("head")}if(!head)return;var h=head.cells,long=false;rows.forEach(function(r){if(r===head||r.parentNode===t.tHead)return;Array.prototype.forEach.call(r.cells,function(c,i){if(h[i])c.setAttribute("data-label",h[i].textContent.trim());if(c.textContent.length>40)long=true})});if(long)t.classList.add("cards")});var post=function(){parent.postMessage({fleetEvidence:true,height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post();var t=0,touch=false;document.addEventListener("pointerdown",function(e){touch=e.pointerType==="touch"||e.pointerType==="pen"},true);document.addEventListener("selectionchange",function(){clearTimeout(t);t=setTimeout(function(){var s=getSelection(),r=s&&s.rangeCount&&!s.isCollapsed?s.getRangeAt(0).getBoundingClientRect():null;parent.postMessage({fleetSelect:true,text:r?String(s):"",rect:r?{top:r.top,bottom:r.bottom,left:r.left,width:r.width}:null,touch:touch},"*")},180)})})()</scr` + `ipt></body></html>`;
+<scr` + `ipt>(function(){document.querySelectorAll("table").forEach(function(t){var rows=Array.prototype.slice.call(t.rows),head=t.tHead&&t.tHead.rows[0];if(!head&&rows[0]&&Array.prototype.every.call(rows[0].cells,function(c){return c.tagName==="TH"})){head=rows[0];head.classList.add("head")}if(!head)return;var h=head.cells,long=false;rows.forEach(function(r){if(r===head||r.parentNode===t.tHead)return;Array.prototype.forEach.call(r.cells,function(c,i){if(h[i])c.setAttribute("data-label",h[i].textContent.trim());if(c.textContent.length>40)long=true})});if(long)t.classList.add("cards")});var post=function(){parent.postMessage({fleetEvidence:true,height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post();})();
+${markScript()}</scr` + `ipt></body></html>`;
 }
 
 /** What the server answers when it refuses a message. */
@@ -82,6 +87,9 @@ export interface EvidenceFrame {
 /** The frame the evidence is in, for the page's message listeners. */
 export const evidence: EvidenceFrame = { frame: null };
 
+/** The whole document the evidence frame was given (its srcdoc), for the marks to read the body themselves; null while there is none. */
+const [evidenceDoc, setEvidenceDoc] = createSignal<string | null>(null);
+
 /** The evidence: the fragment a worker or the coordinator wrote for this decision. */
 function Evidence(props: { readonly d: Decision | undefined; readonly title?: string }): JSX.Element {
   const { ui } = usePage();
@@ -93,6 +101,7 @@ function Evidence(props: { readonly d: Decision | undefined; readonly title?: st
     ([k, el]) => {
       const d = props.d;
       evidence.frame = null;
+      setEvidenceDoc(null);
 
       if (!el) return;
       el.replaceChildren();
@@ -107,7 +116,10 @@ function Evidence(props: { readonly d: Decision | undefined; readonly title?: st
       void fetch(url, { cache: "no-store" })
         .then((res) => (res.ok ? res.text() : Promise.reject(new Error(String(res.status)))))
         .then((html) => {
-          if (key() === k) frame.srcdoc = frameDoc(html);
+          if (key() !== k) return;
+          const doc = frameDoc(html);
+          frame.srcdoc = doc;
+          setEvidenceDoc(doc);
         })
         .catch(() => {
           if (key() === k) {
@@ -1271,6 +1283,91 @@ function FleetFrame(props: { readonly fleet: string; readonly id: string }): JSX
   );
 }
 
+/** A decision as a batch of marks names it: its own id in its fleet, its ref, title and revision. */
+function markDecision(d: Decision, id: string): MarkDecision {
+  const named = { id, title: d.title, revision: d.revised || d.opened || "?" };
+
+  return d.ref ? { ...named, ref: d.ref } : named;
+}
+
+/** This fleet's name, as the hub serves its page (/f/<fleet>/), else as the ledger names it. */
+function fleetName(m: ReturnType<typeof usePage>["m"]): string {
+  const path = /^\/f\/([^/]+)\//u.exec(location.pathname)?.[1];
+
+  return path ? decodeURIComponent(path) : (m.state.named?.id ?? Core.hostOf(m.state));
+}
+
+/**
+ * The fleet whose drafts these are, as its ledger is known: the hub's id for it, else the page's /f/<fleet>/,
+ * else its project. Never the host's role ("coordinator"), which every fleet served off the hub shares.
+ */
+function fleetIdentity(m: ReturnType<typeof usePage>["m"]): string {
+  const path = /^\/f\/([^/]+)\//u.exec(location.pathname)?.[1];
+
+  return m.state.named?.id ?? (path ? decodeURIComponent(path) : "project:" + m.state.project);
+}
+
+/**
+ * The marks on the decision `id` (`<fleet>/<id>` on the manager's page for a fleet's): on this page, its
+ * drafts kept per fleet and decision, sent to the chat of this page with the decision's place; painted in
+ * the evidence frame, or in the fleet's frame, which relays to the body's frame inside it.
+ */
+function MarksOn(props: { readonly id: string }): JSX.Element {
+  const { m, ui } = usePage();
+  const theirs = Core.parseFleetDecision(props.id);
+  const fleet = theirs?.fleet ?? fleetName(m);
+  const own = theirs?.id ?? props.id;
+  const found = (): Decision | undefined => (theirs ? m.decisionAnywhere(props.id) : m.decisionById(props.id));
+  /* A fleet's decision on the manager's page: its body fetched from the fleet's page, as that page fetches it for its frame. */
+  const [theirBody, setTheirBody] = createSignal<string | null>(null);
+
+  if (theirs)
+    createEffect(
+      () => {
+        const d = found();
+
+        return d ? ui.revisionOf(d) : null;
+      },
+      (revision) => {
+        let live = true;
+        setTheirBody(null);
+
+        if (revision === null) return;
+        void fetch(m.fleetPage(theirs.fleet) + `decisions/${encodeURIComponent(theirs.id)}.html?v=${encodeURIComponent(revision)}`, { cache: "no-store" })
+          .then((res) => (res.ok ? res.text() : Promise.reject(new Error(String(res.status)))))
+          .then((html) => {
+            if (live) setTheirBody(frameDoc(html));
+          })
+          .catch(() => undefined);
+
+        return () => {
+          live = false;
+        };
+      },
+    );
+
+  const target: MarkTarget = {
+    key: draftsKey(theirs?.fleet ?? fleetIdentity(m), own),
+    hash: Core.decisionHref(props.id),
+    fleet,
+    decision: () => {
+      const d = found();
+
+      return d ? markDecision(d, own) : null;
+    },
+    frame: () => (theirs ? document.querySelector<HTMLIFrameElement>("#dv-embed") : evidence.frame),
+    body: () => (theirs ? theirBody() : evidenceDoc()),
+    allowed: () => {
+      const d = found();
+
+      return d !== undefined && d.kind !== "grill" && !Core.isNotice(d);
+    },
+    relayed: theirs !== null,
+  };
+
+  return <Marks target={target} />;
+}
+
 /** The decision's page. */
 export function DecisionPage(): JSX.Element {
   const { m, ui } = usePage();
@@ -1292,6 +1389,9 @@ export function DecisionPage(): JSX.Element {
       </Show>
       <Show when={theirs()} fallback={<OwnDecision d={d()} />}>
         {(t) => <FleetFrame fleet={t().fleet} id={t().id} />}
+      </Show>
+      <Show when={!m.embed && m.viewing()} keyed>
+        {(id) => <MarksOn id={id} />}
       </Show>
     </main>
   );

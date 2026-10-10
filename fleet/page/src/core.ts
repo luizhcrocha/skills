@@ -435,6 +435,63 @@ export interface Message {
   readonly author: string;
   readonly quote: Quote | null;
   readonly side: number | null;
+  /** A batch of marks on a decision's body, sent as this one message. */
+  readonly marks?: MarkBatch;
+  /** An answer's marks: the `n` of each mark of the batch it is `re` that it answers. */
+  readonly mark?: readonly number[];
+}
+
+/** What a mark asks of the words it marks; `general` is one comment on the whole decision, with no quote. */
+export type MarkKind = "comment" | "delete" | "replace" | "question" | "general";
+
+/** A table cell a mark's block is in: the table's name, its row (1-based among the body rows, 0 for the header), the row's first cell, the column. */
+export interface MarkCell {
+  readonly table: string;
+  readonly row: number;
+  readonly rowLabel: string;
+  readonly column: string;
+  readonly head?: true;
+}
+
+/** One block a mark crosses (a cell, a paragraph, a list item), with the body's text around it, each found again on its own. */
+export interface MarkBlock {
+  readonly exact: string;
+  readonly prefix: string;
+  readonly suffix: string;
+  readonly cell?: MarkCell;
+}
+
+/** The words a mark is on: as read (`text`, one line per block), the text around them, where they were as words, and each block. */
+export interface MarkQuote {
+  readonly text: string;
+  readonly prefix: string;
+  readonly suffix: string;
+  readonly hint: string;
+  readonly blocks: readonly MarkBlock[];
+}
+
+/** A mark: its number on the decision, its kind, the words it is on, the user's comment and, for `replace`, the new words. */
+export interface MarkItem {
+  readonly n: number;
+  readonly kind: MarkKind;
+  readonly quote?: MarkQuote;
+  readonly comment?: string;
+  readonly replacement?: string;
+}
+
+/** The decision a batch of marks is on, as the page had it. */
+export interface MarkDecision {
+  readonly id: string;
+  readonly ref?: string;
+  readonly title: string;
+  readonly revision: string;
+}
+
+/** A batch of marks, one chat message's: the decision, its place (`#decision/<id>` or `#decision/<fleet>/<id>`), the marks. */
+export interface MarkBatch {
+  readonly decision: MarkDecision;
+  readonly at: { readonly hash: string };
+  readonly items: readonly MarkItem[];
 }
 
 /**
@@ -1596,6 +1653,65 @@ function parseQuoteAt(value: Json | undefined): QuoteAt | null {
   return at;
 }
 
+const MARK_KINDS: readonly string[] = ["comment", "delete", "replace", "question", "general"];
+
+/** A string field of `row`, or "" when it is not one. */
+const textIn = (row: JsonRecord, key: string): string => {
+  const v = row[key];
+
+  return isText(v) ? v : "";
+};
+
+/** A block of a mark's quote as stored, or null for anything else. */
+function parseMarkBlock(value: Json | undefined): MarkBlock | null {
+  if (!isRow(value) || !isText(value["exact"]) || !value["exact"]) return null;
+  const block = { exact: value["exact"], prefix: textIn(value, "prefix"), suffix: textIn(value, "suffix") };
+  const cell = value["cell"];
+
+  if (!isRow(cell) || !Number.isInteger(cell["row"])) return block;
+  const kept = { table: textIn(cell, "table"), row: Number(cell["row"]), rowLabel: textIn(cell, "rowLabel"), column: textIn(cell, "column") };
+
+  return { ...block, cell: cell["head"] === true ? { ...kept, head: true } : kept };
+}
+
+/** A mark as stored (in a batch, or a draft the page kept), or null for anything else. */
+function parseMarkItem(value: Json | undefined): MarkItem | null {
+  if (!isRow(value)) return null;
+  const n = value["n"];
+  const kind = value["kind"];
+
+  if (!Number.isInteger(n) || Number(n) < 1 || !isText(kind) || !MARK_KINDS.includes(kind)) return null;
+  // SAFETY: MARK_KINDS holds every MarkKind and nothing else.
+  let item: MarkItem = { n: Number(n), kind: kind as MarkKind };
+  const quote = value["quote"];
+
+  if (kind !== "general") {
+    const blocks = isRow(quote) && Array.isArray(quote["blocks"]) ? quote["blocks"].flatMap((b) => parseMarkBlock(b) ?? []) : [];
+
+    if (!isRow(quote) || !blocks.length) return null;
+    item = { ...item, quote: { text: textIn(quote, "text"), prefix: textIn(quote, "prefix"), suffix: textIn(quote, "suffix"), hint: textIn(quote, "hint"), blocks } };
+  }
+
+  if (isText(value["comment"]) && value["comment"]) item = { ...item, comment: value["comment"] };
+
+  if (kind === "replace" && isText(value["replacement"])) item = { ...item, replacement: value["replacement"] };
+
+  return item;
+}
+
+/** A message's batch of marks as stored, or null when it carries none. */
+function parseMarks(value: Json | undefined): MarkBatch | null {
+  if (!isRow(value) || !isRow(value["decision"]) || !isRow(value["at"]) || !Array.isArray(value["items"])) return null;
+  const d = value["decision"];
+  const hash = value["at"]["hash"];
+
+  if (!isText(d["id"]) || !isText(hash) || !hash.startsWith("#")) return null;
+  const ref = textIn(d, "ref");
+  const decision = { id: d["id"], title: textIn(d, "title"), revision: textIn(d, "revision") };
+
+  return { decision: ref ? { ...decision, ref } : decision, at: { hash }, items: value["items"].flatMap((i) => parseMarkItem(i) ?? []) };
+}
+
 /** A chat message as the server stores it, or null for anything else (an error body, a torn line). */
 function parseMessage(value: Json | undefined): Message | null {
   if (!isRow(value)) return null;
@@ -1623,8 +1739,10 @@ function parseMessage(value: Json | undefined): Message | null {
   const quoted: { text: string; from: string; at?: QuoteAt } | null = isRow(quote) && isText(quote["text"]) && quote["text"].trim() ? { text: quote["text"], from: isText(quote["from"]) ? quote["from"] : "" } : null;
 
   if (quoted && at) quoted.at = at;
+  const marks = parseMarks(value["marks"]);
+  const answers = Array.isArray(value["mark"]) ? value["mark"].flatMap((n) => (Number.isInteger(n) && Number(n) > 0 ? [Number(n)] : [])) : [];
 
-  return {
+  const message: Message = {
     id: Number(id),
     at: isText(value["at"]) ? value["at"] : "",
     from,
@@ -1637,6 +1755,10 @@ function parseMessage(value: Json | undefined): Message | null {
     quote: quoted,
     side: Number.isInteger(value["side"]) ? Number(value["side"]) : null,
   };
+
+  if (marks) return answers.length ? { ...message, marks, mark: answers } : { ...message, marks };
+
+  return answers.length ? { ...message, mark: answers } : message;
 }
 
 /** The page's views, in the dock's order. */
@@ -2032,6 +2154,8 @@ export const Core = {
   tooBig,
   parseState,
   parseMessage,
+  parseMarks,
+  parseMarkItem,
   parseQuoteAt,
   hearingOf,
   unreadBy,

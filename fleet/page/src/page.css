@@ -994,6 +994,8 @@
     .chat { position: sticky; top: 0; height: 100dvh; border-left: 1px solid var(--line); }
     .shell.chat-collapsed .chat { display: none; }
     :root:has(.shell:not(.chat-collapsed)) .toasts { right: calc(var(--chat-w) + 16px); }
+    /* The marks' floating button stays on the page's side of the docked chat. */
+    :root:has(.shell:not(.chat-collapsed)) .mk-fab { right: calc(var(--chat-w) + 16px); }
   }
   /* Below the docked width the chat is a sheet over the page, and looks it: a scrim dims the page behind
      it (inert while the sheet is open), and a click on it closes the sheet. */
@@ -1029,3 +1031,106 @@
     .chat-scrim { animation: fade-in 200ms ease-out; }
     @keyframes fade-in { from { opacity: 0; } }
   }
+
+  /* Marks on a decision's body (Marks.tsx): the selection bar's kinds, the list at the end of the page (a
+     bottom sheet from the floating button), the composer and the Send preview. Each kind keeps one colour:
+     a comment the accent, a deletion red, a replacement amber, a question blue. */
+  .k-comment { --k: var(--accent); --ks: var(--accent-soft); }
+  .k-delete { --k: var(--critical); --ks: var(--critical-soft); }
+  .k-replace { --k: var(--you); --ks: var(--you-soft); }
+  .k-question { --k: var(--run); --ks: var(--run-soft); }
+  .k-general { --k: var(--muted); --ks: var(--card-2); }
+  .seltool.marking { flex-wrap: wrap; max-width: calc(100vw - 16px); }
+  .seltool-marks { display: flex; gap: 2px; padding-right: 3px; margin-right: 1px; border-right: 1px solid color-mix(in srgb, var(--bg) 25%, transparent); }
+  .seltool-marks button { box-shadow: inset 0 -3px color-mix(in srgb, var(--k) 70%, var(--bg)); }
+  @media (max-width: 759.98px) {
+    .seltool.marking { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: min(380px, calc(100vw - 16px)); box-sizing: border-box; }
+    .seltool-marks { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 0 0 3px; margin: 0 0 1px; border-right: 0; border-bottom: 1px solid color-mix(in srgb, var(--bg) 25%, transparent); }
+    .seltool-marks button { padding: 0 4px; }
+  }
+  kbd.kb { font: 600 0.72rem/1 var(--sans); font-stretch: var(--narrow); opacity: 0.75; margin-left: 2px; }
+  @media (pointer: coarse) { kbd.kb { display: none; } }
+
+  .mk-section { --mpad: 12px; scroll-margin-top: calc(var(--top-h) + 8px); }
+  .mk-section.holding { min-height: 120px; }
+  .mk-marks { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 0 var(--mpad) var(--mpad); }
+  .mk-marks:focus { outline: none; }
+  /* The controls stick under the masthead while the marks scroll under them (the page's, or the sheet's own scroll). */
+  .mk-ctl { position: sticky; top: var(--mk-top, calc(var(--top-h) + 1px + env(safe-area-inset-top, 0px))); z-index: 2; background: var(--card); margin: 0 calc(-1 * var(--mpad)); padding: 10px var(--mpad) 0; border-radius: 12px 12px 0 0; transition: box-shadow 150ms; }
+  .mk-ctl.stuck { box-shadow: 0 1px 0 var(--line); border-radius: 0; }
+  .mk-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .mk-head h2 { flex: 1; font-size: 1.0625rem; }
+  .mk-count { font-weight: 500; color: var(--muted); font-size: var(--fs-s); }
+  .mk-section .btn { min-height: var(--tap); padding: 0 12px; }
+  .mk-section .btn.ghost, .mk-sheet .btn.ghost { background: transparent; }
+  .mk-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 10px 0; }
+  .mk-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; font-size: var(--fs-xs); }
+  .mk-toggle button { border: 0; background: transparent; padding: 0 10px; min-height: var(--tap); font: inherit; font-stretch: var(--narrow); color: var(--muted); cursor: pointer; }
+  .mk-toggle button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+  .mk-grab { display: none; }
+  .mk-list { list-style: none; margin: 0; padding: 0; }
+  .mk-item { border-top: 1px solid var(--line); padding: 10px 2px; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 4px 8px; cursor: pointer; }
+  .mk-item:first-child { border-top: 0; }
+  .mk-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+  .mk-n { width: 24px; height: 24px; border-radius: 50%; background: var(--k, var(--muted)); color: var(--card); display: grid; place-items: center; font-size: 0.75rem; font-weight: 700; }
+  .mk-body { min-width: 0; }
+  .mk-top { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: var(--fs-xs); font-stretch: var(--narrow); }
+  .mk-kind { color: var(--k, var(--muted)); font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; font-size: 0.75rem; }
+  .mk-tag { border-radius: 999px; padding: 0 7px; font-size: 0.75rem; border: 1px solid var(--line); color: var(--muted); }
+  .mk-tag.outdated { border-color: var(--critical); color: var(--critical); background: var(--critical-soft); }
+  .mk-tag.moved { border-color: var(--run); color: var(--run); background: var(--run-soft); }
+  .mk-tag.sent { border-color: var(--accent); color: var(--accent); }
+  .mk-tag.answered { border-color: var(--good); color: var(--good); }
+  .mk-item blockquote, .mk-sheet blockquote { margin: 2px 0; padding: 2px 0 2px 10px; border-left: 3px solid var(--k, var(--line)); font-size: 0.9rem; overflow-wrap: anywhere; }
+  .mk-item.k-delete blockquote { text-decoration: line-through; text-decoration-color: var(--critical); }
+  .mk-item blockquote.multi .qcell, .mk-item blockquote.multi .qline { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qrow { font-weight: 650; font-size: var(--fs-xs); color: var(--muted); margin-top: 2px; }
+  .qhd { color: var(--text); font-weight: 500; }
+  .qcell { padding-left: 10px; }
+  .qh { color: var(--muted); font-weight: 600; font-stretch: var(--narrow); }
+  .mk-with { font-size: 0.9rem; }
+  .mk-with b { color: var(--you); }
+  .mk-c { font-size: 0.9375rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .mk-hint { font-size: 0.75rem; color: var(--faint); }
+  .mk-item.outdated blockquote { opacity: 0.6; }
+  .mk-item.done { opacity: 0.72; }
+  .mk-reply { grid-column: 2; min-width: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); font-size: var(--fs-s); cursor: auto; }
+  .mk-reply summary { padding: 0 10px; cursor: pointer; list-style: none; display: flex; gap: 6px; align-items: center; min-height: var(--tap); }
+  .mk-reply summary::-webkit-details-marker { display: none; }
+  .mk-reply .who { font-weight: 700; color: var(--accent); flex: none; }
+  .mk-reply .gist { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  .mk-reply[open] .gist { display: none; }
+  .mk-reply .full { padding: 0 10px 8px; }
+  .mk-empty { color: var(--muted); font-size: 0.9rem; padding: 6px 0; }
+  .mk-history { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 6px; }
+  .mk-history > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-s); min-height: var(--tap); display: flex; align-items: center; }
+  /* The list as a bottom sheet, opened by the floating button; it scrolls inside itself, its controls on top. */
+  .mk-marks.sheeted { --mpad: 14px; position: fixed; left: 0; right: 0; bottom: 0; z-index: 46; max-width: 640px; margin: 0 auto; max-height: 78dvh; overflow: auto; overscroll-behavior: contain; border-radius: 16px 16px 0 0; border-bottom: 0; box-shadow: var(--shadow); padding: 0 14px calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .mk-marks.sheeted .mk-ctl { top: 0; padding-top: 0; border-radius: 16px 16px 0 0; }
+  .mk-marks.sheeted .mk-ctl.stuck { border-radius: 0; }
+  .mk-marks.sheeted .mk-grab { display: block; width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 6px auto 2px; }
+  .mk-scrim { position: fixed; inset: 0; z-index: 45; background: rgb(10 16 13 / 0.35); }
+  .mk-scrim.top { z-index: 47; }
+  /* The floating button: bottom right, over the tab bar on a phone, beside the docked chat; away while the list shows. */
+  .mk-fab { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(var(--dock-h) + env(safe-area-inset-bottom, 0px) + 16px); z-index: 33; width: 56px; height: 56px; padding: 0; border-radius: 50%; border: 0; background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow); display: grid; place-items: center; cursor: pointer; }
+  .mk-fab:active { transform: scale(0.94); }
+  .mk-fab svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  .mk-badge { position: absolute; top: -4px; right: -4px; display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; padding: 0 6px; box-sizing: border-box; border-radius: 12px; background: var(--you); color: #fff; font: 700 0.75rem/1 var(--sans); font-variant-numeric: tabular-nums; font-stretch: 100%; letter-spacing: 0; border: 2px solid var(--bg); }
+  .mk-fab.away { opacity: 0; transform: translateY(16px) scale(0.85); pointer-events: none; }
+  @media (prefers-reduced-motion: no-preference) { .mk-fab { transition: opacity 200ms ease, transform 200ms ease; } }
+  /* The composer and the Send preview: sheets from the bottom, over the list. */
+  .mk-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 48; max-width: 640px; margin: 0 auto; max-height: 88dvh; overflow: auto; overscroll-behavior: contain; box-sizing: border-box; background: var(--card); color: var(--text); border-radius: 16px 16px 0 0; box-shadow: var(--shadow); padding: 14px 16px calc(14px + env(safe-area-inset-bottom, 0px)); }
+  .mk-sheet h3 { font-size: 1.0625rem; margin: 0 0 8px; color: var(--text); }
+  .mk-sheet blockquote { margin: 0 0 10px; max-height: 7.5em; overflow: auto; }
+  .mk-sheet label { display: block; font-size: var(--fs-xs); color: var(--muted); margin: 8px 0 4px; font-weight: 600; }
+  .mk-sheet textarea { width: 100%; box-sizing: border-box; min-height: 84px; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; background: var(--bg); color: var(--text); font: inherit; font-size: 16px; }
+  .mk-sheet #mk-with { min-height: 56px; }
+  .mk-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; flex-wrap: wrap; }
+  .mk-acts .left { margin-right: auto; }
+  .mk-sheet .btn { min-height: var(--tap); padding: 0 14px; }
+  .mk-kinds { display: flex; gap: 6px; flex-wrap: wrap; }
+  .mk-kinds button { border: 1px solid var(--k); background: transparent; color: var(--k); border-radius: 999px; padding: 2px 10px; min-height: 32px; font: inherit; font-size: var(--fs-xs); font-weight: 600; cursor: pointer; }
+  .mk-kinds button[aria-pressed="true"] { background: var(--k); color: var(--card); }
+  .mk-md { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; font: 13px/1.45 var(--mono); margin: 0; }
+  .mk-dest { font-size: var(--fs-s); margin: 0 0 10px; padding: 8px 10px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); }
+  .mk-problem { color: var(--critical); font-size: var(--fs-s); margin: 8px 0 0; }
