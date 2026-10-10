@@ -94,6 +94,16 @@ class OpenTest(Fleet):
         self.ok("decision", "d2", "--kind", "secret", *base, "--secret", "NEO4J_PASSWORD", "--manual", "secretspec set NEO4J_PASSWORD")
         self.ok("decision", "d3", "--kind", "action", *base, "--manual", "tailscale up")
 
+    def test_an_action_that_only_asks_the_user_to_answer_is_refused(self):
+        base = ["--kind", "action", "--title", "T", "--question", "q", "--why", "w"]
+        for manual in ["Answer Go on this card.", "answer go", "reply yes", "type go", "say ok", "approve this", "Confirm."]:
+            why = self.refused("decision", "a1", *base, "--manual", manual)
+            self.assertIn("an approval is a decision: `fleet state <dir> decision ID --kind decision", why)
+            self.assertIn("an action is for steps Luiz performs outside the page", why)
+        self.assertEqual(self.state().get("decisions", []), [])
+        for k, manual in enumerate(["tailscale up", "Click Deploy in the Cloudflare console", "Plug in the YubiKey and touch it"]):
+            self.ok("decision", f"a{k + 1}", *base, "--manual", manual)
+
     def test_a_manual_of_more_than_one_line_puts_its_commands_in_a_fence(self):
         base = ["--title", "T", "--question", "q", "--why", "w"]
         fix = ("state: --manual has 2 lines and no fence: put the commands in a fenced block (a line ```nu, the commands, a line ```),"

@@ -842,6 +842,44 @@ function unfencedLines(manual: string): number {
   return lines > 1 ? lines : 0;
 }
 
+/** A manual step longer than this, in characters, is a real step, not an approval asked in words. */
+const APPROVAL_STEP_MAX = 120;
+
+const APPROVAL_WORD = String.raw`["'\x60*“”‘’]*(?:go|go ahead|yes|y|no|n|ok|okay|approved?|confirm(?:ed)?|accept(?:ed)?|lgtm|done|proceed|ship it)["'\x60*“”‘’]*`;
+
+/* A `--manual` that only asks the user to answer on the page: "Answer Go on this card", "reply yes", "approve this",
+ * "confirm". A step that names a place outside the page ("click Yes in the console") or a command is not one. */
+const APPROVAL_RE = new RegExp(
+  String.raw`^(?:(?:please|just|then|now)\s+)*` +
+    String.raw`(?:(?:answer|reply|respond|type|say|write|send|enter|click|press|hit|pick|choose|select)(?:\s+(?:with|in|by))?\s+(?:an?\s+)?${APPROVAL_WORD}` +
+    String.raw`|(?:approve|confirm|accept|ok|okay|sign off(?:\s+on)?|green-?light)` +
+    String.raw`(?:\s+(?:it|this|that|(?:the|this|my)\s+(?:plan|change|changes|step|card|decision|proposal|recommendation|option|merge|push|landing)))?)` +
+    String.raw`(?:\s+(?:on|in|to|from|at)\s+(?:this|the)\s+(?:card|page|decision|dashboard|chat|item|question))?` +
+    String.raw`(?:\s+(?:here|below|above))?` +
+    String.raw`(?:\s+(?:to|so)\s+(?:start|begin|proceed|continue|go ahead|unblock|approve|confirm|let)\b[^.!?]*)?` +
+    String.raw`(?:\s+when\s+(?:you(?:'re| are)\s+)?ready)?$`,
+  "u",
+);
+
+/** True when a `--manual` only asks the user to answer, approve or confirm on the page: that is a decision. */
+export function asksApproval(manual: string): boolean {
+  if (manual.includes("```") || chars(manual.trim()) > APPROVAL_STEP_MAX) return false;
+
+  const text = manual
+    .toLowerCase()
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/^(?:[-*•]|\d+[.)])\s+/u, "")
+    .replace(/[.!:;,\s]+$/u, "");
+
+  return APPROVAL_RE.test(text);
+}
+
+const APPROVAL_REFUSAL =
+  "--manual only asks the user to answer: an approval is a decision: " +
+  "`fleet state <dir> decision ID --kind decision --option 'A: yes | what yes does' --option 'B: no | what no does' --recommend A --reason R`; " +
+  "an action is for steps Luiz performs outside the page (a command to run, a click in a console, a key to plug in)";
+
 /** What `d`'s kind shows has to be there; `manualGiven`: the `--manual` is this command's, so its format is checked. */
 function checkKind(d: Decision, manualGiven: boolean): Step$ {
   if (d.kind === "grill" && d.questions === undefined) {
@@ -878,6 +916,8 @@ function checkKind(d: Decision, manualGiven: boolean): Step$ {
   const nu = (d.kind === "secret" || d.kind === "action") && manualGiven ? nuRefusal(d.manual ?? "") : undefined;
 
   if (nu !== undefined) return refuse(nu);
+
+  if (d.kind === "action" && manualGiven && asksApproval(d.manual ?? "")) return refuse(APPROVAL_REFUSAL);
 
   if (d.kind === "action" && ((d.options ?? []).length > 0 || given(d.recommend ?? undefined))) {
     return refuse("an action is a step only the user takes, with no options to choose: a yes or no on what the fleet would do is a decision (--kind decision, with the options and --recommend)");

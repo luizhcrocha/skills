@@ -125,6 +125,23 @@ describe("open", () => {
     ok("decision", "d3", "--kind", "action", ...base, "--manual", "tailscale up");
   });
 
+  test("an action that only asks the user to answer, approve or confirm is refused: that is a decision", () => {
+    const base = ["--kind", "action", "--title", "T", "--question", "q", "--why", "w"];
+    const asks = ["Answer Go on this card.", "answer go", "reply yes", "type go", "say ok", "approve this", "Confirm.", 'Reply "yes" here', "Answer `go` to start the deploy"];
+
+    for (const manual of asks) {
+      const why = refused("decision", "a1", ...base, "--manual", manual);
+      expect(why).toContain("an approval is a decision: `fleet state <dir> decision ID --kind decision --option 'A: yes | what yes does' --option 'B: no | what no does'");
+      expect(why).toContain("an action is for steps Luiz performs outside the page");
+    }
+
+    expect(rows("decisions")).toEqual([]);
+    const steps = ["tailscale up", "Click Deploy in the Cloudflare console", "Plug in the YubiKey and touch it", "Approve the PR on GitHub", "Run `just cut`, then answer yes"];
+
+    for (const [k, manual] of steps.entries()) ok("decision", `a${String(k + 1)}`, ...base, "--manual", manual);
+    expect(refused("decision", "a1", "--manual", "answer go")).toContain("an approval is a decision");
+  });
+
   test("a --manual of more than one line puts its commands in a fence", () => {
     const base = ["--title", "T", "--question", "q", "--why", "w"];
     const fix = "--manual has 2 lines and no fence: put the commands in a fenced block (a line ```nu, the commands, a line ```), any prose outside it\n";

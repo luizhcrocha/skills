@@ -680,6 +680,36 @@ def unfenced_lines(manual: str) -> int:
     return lines if lines > 1 else 0
 
 
+APPROVAL_STEP_MAX = 120  # characters: a manual step longer than this is a real step, not an approval asked in words
+_APPROVAL_WORD = r"""["'`*“”‘’]*(?:go|go ahead|yes|y|no|n|ok|okay|approved?|confirm(?:ed)?|accept(?:ed)?|lgtm|done|proceed|ship it)["'`*“”‘’]*"""
+# A --manual that only asks the user to answer on the page ("Answer Go on this card", "reply yes", "approve this", "confirm").
+APPROVAL_RE = re.compile(
+    r"^(?:(?:please|just|then|now)\s+)*"
+    r"(?:(?:answer|reply|respond|type|say|write|send|enter|click|press|hit|pick|choose|select)(?:\s+(?:with|in|by))?\s+(?:an?\s+)?" + _APPROVAL_WORD
+    + r"|(?:approve|confirm|accept|ok|okay|sign off(?:\s+on)?|green-?light)"
+    r"(?:\s+(?:it|this|that|(?:the|this|my)\s+(?:plan|change|changes|step|card|decision|proposal|recommendation|option|merge|push|landing)))?)"
+    r"(?:\s+(?:on|in|to|from|at)\s+(?:this|the)\s+(?:card|page|decision|dashboard|chat|item|question))?"
+    r"(?:\s+(?:here|below|above))?"
+    r"(?:\s+(?:to|so)\s+(?:start|begin|proceed|continue|go ahead|unblock|approve|confirm|let)\b[^.!?]*)?"
+    r"(?:\s+when\s+(?:you(?:'re| are)\s+)?ready)?$"
+)
+APPROVAL_REFUSAL = (
+    "--manual only asks the user to answer: an approval is a decision: "
+    "`fleet state <dir> decision ID --kind decision --option 'A: yes | what yes does' --option 'B: no | what no does' --recommend A --reason R`; "
+    "an action is for steps Luiz performs outside the page (a command to run, a click in a console, a key to plug in)"
+)
+
+
+def asks_approval(manual: str) -> bool:
+    """True when a --manual only asks the user to answer, approve or confirm on the page: that is a decision."""
+    if "```" in manual or len(manual.strip()) > APPROVAL_STEP_MAX:
+        return False
+    text = re.sub(r"\s+", " ", manual.lower()).strip()
+    text = re.sub(r"^(?:[-*•]|\d+[.)])\s+", "", text)
+    text = re.sub(r"[.!:;,\s]+$", "", text)
+    return bool(APPROVAL_RE.match(text))
+
+
 def check_kind(d: dict, manual_given: bool) -> None:
     """What each kind's answer control shows has to be there; manual_given: the --manual is this command's, so its format is checked."""
     if d["kind"] == "grill" and "questions" not in d:
@@ -702,6 +732,8 @@ def check_kind(d: dict, manual_given: bool) -> None:
              " any prose outside it")
     if d["kind"] in ("secret", "action") and manual_given:
         check_nu(d["manual"] or "")
+    if d["kind"] == "action" and manual_given and asks_approval(d["manual"] or ""):
+        fail(APPROVAL_REFUSAL)
     if d["kind"] == "action" and (d["options"] or d["recommend"]):
         fail("an action is a step only the user takes, with no options to choose: a yes or no on what the fleet would do is a decision (--kind decision, with the options and --recommend)")
 

@@ -260,7 +260,12 @@ Checked in this order:
      and no ```` ``` ```` in it is refused, new or changed: ``--manual has N lines and no fence: put the
      commands in a fenced block (a line ```nu, the commands, a line ```), any prose outside it``. One
      bare line is taken as it is, and a manual already stored is not checked again when another
-     field changes. An option is `KEY: label | consequence` with a key matching the
+     field changes. An action's `--manual` (new or changed) that only asks the user to answer, approve
+     or confirm on the page (120 characters or fewer, no fence, the whole text an ask such as "Answer Go
+     on this card", "reply yes", "approve this", "confirm") is refused: ``--manual only asks the user to
+     answer: an approval is a decision: `fleet state <dir> decision ID --kind decision --option 'A: yes |
+     what yes does' --option 'B: no | what no does' --recommend A --reason R`; an action is for steps Luiz
+     performs outside the page (a command to run, a click in a console, a key to plug in)``. An option is `KEY: label | consequence` with a key matching the
      id pattern; keys are unique. **permission** (TypeScript only: see [Permission
      grants](#permission-grants)) takes the refused call instead of options.
    - The row: `kind, title, question, why, blocking, agent, options[], recommend, reason, secret,
