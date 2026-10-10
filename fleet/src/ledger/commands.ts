@@ -5,7 +5,7 @@
  * printed only once the ledger it gives back is checked (open-2).
  */
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 
 import * as Effect from "effect/Effect";
 
@@ -13,10 +13,10 @@ import { readChat } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
 import type { Args } from "../cli/args.ts";
 import { Refusal, stateRefusal } from "../errors.ts";
-import { pyStr } from "../json.ts";
+import { asArray, asObject, asString, pyStr, type Json, type JsonObject } from "../json.ts";
 import { FLEET_BIN, isDir, makeDirs, readOrWhy, readText, remove, resolvePath, writeBytes } from "../files.ts";
 import { fleetOf, managerOf, post as postNews, TEXT_MAX } from "../news/news.ts";
-import { failedAnswer, failureWords } from "../health.ts";
+import { explainCommand, explained, failedAnswer, failureWords } from "../health.ts";
 import { placeRoot, registeredSession } from "../hub/grants.ts";
 import { pidOfEntry } from "../registry.ts";
 import { workerFigures, workerTitle } from "../transcripts.ts";
@@ -26,6 +26,7 @@ import { find, findDecision, milestoneOfStep, nextStepId } from "./numbers.ts";
 import { approvalSource, comesFrom, namesOf, NoSource, refOf, sameSource } from "./approvals.ts";
 import { LINK_KINDS, linkKind, OLD_LINK_KINDS, type LinkKind } from "./links.ts";
 import { makeRefusedCall, permissionOptions } from "./permission.ts";
+import { foldersOf, permissionWords, type RefusedBy, type Spawn } from "./permission-words.ts";
 import { roleDefaults } from "./roles.ts";
 import { CHOICE_KINDS, ID, KINDS, nameRefusal } from "./validate.ts";
 import { closedNamed, isLive, sharedOverlap, UNFINISHED } from "./warnings.ts";
@@ -1074,7 +1075,7 @@ function visualWarning(what: string, texts: readonly string[], body: string): st
 
 /** What the CLI says, without refusing, about a decision hard to read; `fields`: the fields this command wrote. */
 function readabilityWarnings(d: Decision, fields: ReadonlySet<string>, root?: string, workers: ReadonlySet<string> = new Set()): string[] {
-  if (d.kind === "permission" || d.kind === "grill" || d.kind === "notice") return [];
+  if (d.kind === "grill" || d.kind === "notice") return [];
   const out: string[] = [];
   const q = d.question ?? "";
 
@@ -1157,6 +1158,124 @@ function writtenFields(args: Args): Set<string> {
 
 const REFUSAL_FLAGS = ["tool", "call", "cause", "root", "agent_id"] as const;
 
+/** Whether this command is the harness's record of a refused call (the hook's): it names the call. The
+ * coordinator explains a permission without these flags. */
+function harnessWrites(args: Args): boolean {
+  return REFUSAL_FLAGS.some((k) => args.str(k) !== undefined);
+}
+
+/** The ledger's `workspaces[]` paths, resolved, to the agent each is for. */
+function workspaceAgents(root: string): Map<string, string> {
+  const out = new Map<string, string>();
+  let raw: Json;
+
+  try {
+    // SAFETY: JSON.parse returns JSON values only.
+    raw = JSON.parse(readText(join(root, "state.json")) ?? "null") as Json;
+  } catch {
+    return out;
+  }
+
+  for (const item of asArray(asObject(raw)?.["workspaces"]) ?? []) {
+    const row = asObject(item);
+    const path = asString(row?.["path"]);
+    const agent = asString(row?.["agent"]) ?? asString(row?.["id"]);
+
+    if (path !== undefined && agent !== undefined && isAbsolute(path)) out.set(resolvePath(path), agent);
+  }
+
+  return out;
+}
+
+/**
+ * The worker a permission's call came from, as the ledger has it: the row the hook named (`--agent`), the row
+ * whose `task_id` is the harness's agent id, else the worker whose workspace the call changes into (a
+ * `workspaces[]` row, or `<session root>-<worker id>` beside the session root, as the fleet names them).
+ */
+function refusedBy(run: Run, ledger: Ledger, d: Decision): RefusedBy | undefined {
+  const r = d.refusal ?? undefined;
+  const rowOf = (id: string | null | undefined): Agent | undefined => (given(id ?? undefined) ? ledger.agents.find((a) => a.id === id) : undefined);
+  let row = rowOf(d.agent) ?? (r?.agent_id ? ledger.agents.find((a) => a.task_id === r.agent_id) : undefined);
+
+  if (row === undefined && r !== undefined && r.tool === "Bash") {
+    const listed = workspaceAgents(run.root);
+    const sessionBase = basename(r.root.replace(/\/+$/u, ""));
+
+    for (const folder of foldersOf(r.call).filter((f) => isAbsolute(f))) {
+      const at = resolvePath(folder);
+      const byName = dirname(at) === dirname(resolvePath(r.root)) && basename(at).startsWith(`${sessionBase}-`) ? basename(at).slice(sessionBase.length + 1) : undefined;
+      row = rowOf(listed.get(at)) ?? rowOf(byName);
+
+      if (row !== undefined) break;
+    }
+  }
+
+  return row === undefined ? undefined : { name: row.name === row.id ? "" : row.name, lane: row.lane };
+}
+
+/** A refused Agent call's type and description, from its input (a JSON object the CLI checked). */
+function spawnOf(call: string): Spawn {
+  let input: JsonObject | undefined;
+
+  try {
+    // SAFETY: JSON.parse returns JSON values only.
+    input = asObject(JSON.parse(call) as Json);
+  } catch {
+    input = undefined;
+  }
+
+  const description = asString(input?.["description"]) ?? (asString(input?.["prompt"]) ?? "").split("\n")[0] ?? "";
+
+  return { type: asString(input?.["subagent_type"]) ?? "general-purpose", description };
+}
+
+/** Write a permission's title, question and why from its call, and say whether they moved. */
+function writePermissionWords(run: Run, ledger: Ledger, d: Decision): string[] {
+  if (d.refusal === undefined || d.refusal === null) return [];
+  const words = permissionWords(d.refusal, refusedBy(run, ledger, d), ledger.role === "manager" ? "manager" : "coordinator", spawnOf(d.refusal.call));
+  const moved = (["title", "question", "why"] as const).filter((k) => d[k] !== words[k]);
+
+  for (const k of moved) d[k] = words[k];
+
+  return moved;
+}
+
+/** Drop a permission's explanation: its call changed, so what the coordinator wrote was about another call. */
+function dropExplanation(run: Run, d: Decision): void {
+  d.recommend = null;
+  d.reason = null;
+
+  if (d.body === true) {
+    remove(join(run.root, "decisions", `${d.id}.html`));
+    d.body = false;
+  }
+}
+
+/** The explanation the coordinator gives a permission: a recommendation of one of its two options, with its
+ * reason; the first one also with the why and the body (what the call does, why the worker needs it, the cost
+ * and risk, what a denial means). */
+function checkExplanation(run: Run, d: Decision, wasExplained: boolean): Step$ {
+  if (d.kind !== "permission" || !given(d.recommend ?? undefined)) return Effect.void;
+  const ids = (d.options ?? []).map((o) => o.id);
+
+  if (!ids.includes(d.recommend ?? "")) return refuse(`--recommend '${d.recommend ?? "None"}' is not one of a permission's options (${ids.join(", ")})`);
+
+  const missing = [
+    ...(given(d.reason ?? undefined) ? [] : ["--reason"]),
+    ...(wasExplained || run.args.str("why") !== undefined ? [] : ["--why"]),
+    ...(wasExplained || d.body === true ? [] : ["--body FILE"]),
+  ];
+
+  if (missing.length > 0) {
+    return refuse(
+      `a permission's explanation also gives ${missing.join(", ")}: the why in one or two plain lines, and in the body what the call does, ` +
+        "why the worker needs it, its cost and risk (money, time, data, outside systems) and what a denial means",
+    );
+  }
+
+  return Effect.void;
+}
+
 /**
  * The root a permission records for `root` (absolute): the session root, where a subagent's session reads its
  * permissions. A worker's workspace of this fleet's work (hub/grants.ts `placeRoot`) is recorded as its
@@ -1201,7 +1320,10 @@ function setRefusal(run: Run, d: Decision): Effect.Effect<boolean, Refusal> {
 
     if ((args.list("option") ?? []).length > 0) return yield* refuse("a permission's options are allow-once and deny, which the CLI sets: --option is not taken");
 
-    if (args.str("recommend") !== undefined) return yield* refuse("a permission is the user's call alone: --recommend is not taken");
+    if (args.str("recommend") !== undefined && named.length > 0) {
+      return yield* refuse("the refused call's record takes no recommendation: explain the permission on its open row, without --tool, --call, --cause and --root");
+    }
+
     const before = d.refusal ?? undefined;
 
     if (named.length === 0 && before !== undefined) return false;
@@ -1294,6 +1416,9 @@ function revokeFrom(run: Run, ledger: Ledger, d: Decision, question: string | un
 }
 
 const FIELDS = ["kind", "title", "question", "why", "recommend", "reason", "secret", "manual", "agent", "step", "milestone", "advised"] as const;
+
+/** The words a permission's record of its call writes: the CLI's, from the call, never the hook's. */
+const WORDS: ReadonlySet<string> = new Set(["title", "question", "why"]);
 
 function placeOf(ledger: Ledger, d: Decision, run: Run): Step$ {
   const stepId = run.args.str("step");
@@ -1549,8 +1674,9 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       }
 
       const elsewhere = decide !== undefined;
-      yield* require(run, elsewhere ? ["title", "question"] : ["kind", "title", "question", "why"], "decision");
       const kind = args.str("kind");
+      // A permission's title, question and why are written from its call (below).
+      yield* require(run, elsewhere ? ["title", "question"] : kind === "permission" ? ["kind"] : ["kind", "title", "question", "why"], "decision");
       yield* checkQuestion(args.str("question"), given(kind) ? kind : "decision");
       yield* checkWhy(args.str("why"), given(kind) ? kind : "decision");
 
@@ -1589,12 +1715,15 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       yield* placeOf(ledger, fresh, run);
 
       yield* setRefusal(run, fresh);
+      const harness = fresh.kind === "permission" && harnessWrites(args);
+
+      if (harness) writePermissionWords(run, ledger, fresh);
 
       if (!elsewhere) {
         yield* checkKind(fresh, true);
         yield* setBody(run, fresh);
 
-        for (const warning of readabilityWarnings(fresh, writtenFields(args), run.root, workersOf(ledger))) run.warn(warning);
+        if (!harness) for (const warning of readabilityWarnings(fresh, writtenFields(args), run.root, workersOf(ledger))) run.warn(warning);
         const advice = unadvised(run, ledger, fresh);
 
         if (advice !== undefined) run.warn(advice);
@@ -1613,7 +1742,8 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       if (!elsewhere) {
         run.say(
           `asked ${fresh.id}. Arm its answer's wake now, as a background command (run_in_background): ` +
-            `${waitHint(run, fresh.id)}: it exits with the user's answer the moment it is given.`,
+            `${waitHint(run, fresh.id)}: it exits with the user's answer the moment it is given.` +
+            (explained(fresh) ? "" : ` Then explain it, this turn: ${explainCommand(FLEET_BIN, run.root, fresh.ref ?? fresh.id)}.`),
         );
       }
 
@@ -1635,10 +1765,16 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         );
       }
 
-      yield* checkQuestion(question, kindNow);
-      yield* checkWhy(args.str("why"), kindNow);
+      // The hook's record of the same refusal again leaves the coordinator's words as they are; its own words
+      // (title, question, why) are the CLI's to write from the call.
+      const harness = kindNow === "permission" && harnessWrites(args);
+      const checkedAs = kindNow === "permission" && !harness ? "decision" : kindNow;
+      const wasExplained = explained(d);
+      yield* checkQuestion(question, checkedAs);
+      yield* checkWhy(args.str("why"), checkedAs);
 
-      const changed: string[] = FIELDS.filter((k) => args.str(k) !== undefined);
+      const current = d;
+      const changed: string[] = FIELDS.filter((k) => args.str(k) !== undefined && !(harness && (WORDS.has(k) || args.str(k) === (current[k] ?? ""))));
       const before = snapshot(d);
 
       if (options !== undefined && options.length > 0) changed.push("option");
@@ -1647,7 +1783,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       const row = d;
 
       for (const key of FIELDS) {
-        if (key === "step" || key === "milestone") continue;
+        if (key === "step" || key === "milestone" || (harness && WORDS.has(key))) continue;
         const value = args.str(key);
 
         if (value === undefined) continue;
@@ -1662,7 +1798,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
       if (options !== undefined && options.length > 0) row.options = yield* parseOptions(options);
 
-      if (args.flag("blocking") || args.flag("not_blocking")) {
+      if ((args.flag("blocking") || args.flag("not_blocking")) && !(harness && row.blocking === args.flag("blocking"))) {
         row.blocking = args.flag("blocking");
         changed.push("blocking");
       }
@@ -1676,11 +1812,21 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         changed.push("asks");
       }
 
-      if (yield* setRefusal(run, row)) changed.push("refusal");
+      if (yield* setRefusal(run, row)) {
+        changed.push("refusal");
+
+        if (harness && explained(row)) {
+          dropExplanation(run, row);
+          changed.push("recommend");
+        }
+      }
+
+      if (harness && !explained(row)) changed.push(...writePermissionWords(run, ledger, row));
       yield* checkKind(row, args.str("manual") !== undefined);
       yield* setBody(run, row);
+      yield* checkExplanation(run, row, wasExplained);
 
-      for (const warning of readabilityWarnings(row, writtenFields(args), run.root, workersOf(ledger))) run.warn(warning);
+      if (!harness) for (const warning of readabilityWarnings(row, writtenFields(args), run.root, workersOf(ledger))) run.warn(warning);
       const advice = passedOn ? unadvised(run, ledger, row) : undefined;
 
       if (advice !== undefined) run.warn(advice);

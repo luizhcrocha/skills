@@ -767,9 +767,10 @@ describe("permission", () => {
   }
 
   test("a refused call opens a permission, numbered P, with the exact rule and the two options the CLI sets", () => {
-    ok(...refusal("p-1a2b3c4d", "--agent-id", "agent-7f", "--agent", "a1", "--blocking"));
+    const said = ok(...refusal("p-1a2b3c4d", "--agent-id", "agent-7f", "--agent", "a1", "--blocking"));
     const d = item("p-1a2b3c4d");
     expect([d["kind"], d["status"], d["ref"], d["agent"], d["blocking"], d["recommend"]]).toEqual(["permission", "open", "P1", "a1", true, null]);
+    expect(said).toContain("Then explain it, this turn: ");
     expect(d["refusal"]).toEqual({
       tool: "Bash",
       call: CALL,
@@ -782,7 +783,7 @@ describe("permission", () => {
       {
         id: "allow-once",
         label: "Allow this call once",
-        consequence: `the hub adds Bash(${CALL}) to /work/repo/.claude/settings.local.json; the plugin hook removes it once the call has run, or at the first tool call of the session after 30 minutes`,
+        consequence: "the worker runs this exact call once, and nothing like it after: the one-time grant goes once it is used, or after 30 minutes",
       },
       { id: "deny", label: "Deny", consequence: "the worker stays stopped; your note goes to it" },
     ]);
@@ -797,8 +798,9 @@ describe("permission", () => {
     const d = item("p1");
     expect(asObject(d["refusal"] ?? null)?.["rule"]).toBe(`Agent(${spawn})`);
     expect(asObject(asArray(d["options"])?.[0] ?? null)?.["consequence"]).toBe(
-      `the hub adds Agent(${spawn}) to /work/repo/.claude/tstack-grants.json, where the plugin's PreToolUse hook lets this exact Agent call through (auto mode ignores Agent allow rules in the settings); the plugin hook removes it once the call has run, or at the first tool call of the session after 30 minutes`,
+      "the worker starts this exact agent once, and nothing like it after: the one-time grant goes once it is used, or after 30 minutes",
     );
+    expect(d["title"]).toBe("Allow the coordinator to start the agent “prod count”?");
     args[args.indexOf("--call") + 1] = "spawn a worker";
     expect(refused(...args.map((a) => (a === "p1" ? "p2" : a)))).toContain("JSON object");
   });
@@ -830,7 +832,7 @@ describe("permission", () => {
     expect(refused(...with_("--root", "work/repo"))).toContain("absolute");
     expect(refused(...with_("--tool", "Edit"))).toContain("Bash and Agent");
     expect(refused(...refusal("p1", "--option", "a: x | y"))).toContain("--option");
-    expect(refused(...refusal("p1", "--recommend", "allow-once", "--reason", "r"))).toContain("--recommend");
+    expect(refused(...refusal("p1", "--recommend", "allow-once", "--reason", "r"))).toContain("takes no recommendation");
     expect(refused("decision", "p1", "--kind", "permission", "--title", "T", "--question", "q", "--why", "w")).toContain("--call");
     expect(refused("decision", "d1", "--kind", "input", "--title", "T", "--question", "q", "--why", "w", "--call", "ls")).toContain("permission");
     expect(rows("decisions")).toEqual([]);
@@ -870,7 +872,6 @@ describe("permission", () => {
       expect(result.stderr).toContain(`--root ${ws} is b155's workspace: recorded the session root ${session}, where the subagent's session reads its permissions`);
       const d = item("p1");
       expect(asObject(d["refusal"] ?? null)?.["root"]).toBe(session);
-      expect(JSON.stringify(d["options"])).toContain(`${session}/.claude/settings.local.json`);
     });
 
     test("is refused when the session root cannot be told, naming what it should be", () => {
@@ -895,13 +896,75 @@ describe("permission", () => {
     });
   });
 
-  test("the same refusal again revises the open row, and it closes as any decision does", () => {
-    ok(...refusal("p1", "--agent-id", "agent-7f"));
-    ok(...refusal("p1", "--agent-id", "agent-7f"));
+  test("the same refusal again leaves the open row as it is, and it closes as any decision does", () => {
+    ok(...refusal("p1", "--agent-id", "agent-7f", "--agent", "a1", "--blocking"));
+    ok(...refusal("p1", "--agent-id", "agent-7f", "--agent", "a1", "--blocking"));
     expect(rows("decisions").length).toBe(1);
-    expect(item("p1")["revised"]).not.toBeNull();
+    expect(item("p1")["revised"]).toBeNull();
     ok("decision", "P1", "--decide", "allow-once: Allow this call once", "--resolution", "answered on the page (#3)");
     expect([item("p1")["status"], item("p1")["answer"]]).toEqual(["decided", "allow-once: Allow this call once"]);
+  });
+
+  describe("in plain words", () => {
+    // Pipeline's P2 (10-10): a subagent the ledger has no task id for, in its workspace beside the session root.
+    const P2 = "cd /work/repo-m1; timeout 3000 secretspec run -- sh -c 'cd servers/case-analysis/tasks/lab-sameness && uv run python -I vlmrun.py run' > /tmp/m7-run.log 2>&1";
+
+    function p2(id = "p2", call = P2): string[] {
+      const args = refusal(id, "--agent-id", "ac5ca99391e27d894", "--blocking");
+      args[args.indexOf("--call") + 1] = call;
+      args[args.indexOf("--cause") + 1] = "[Real-World Transactions]";
+
+      return args;
+    }
+
+    beforeEach(() => {
+      ok("agent", "m1", "--task", "t", "--milestone", "m1", "--name", "the same-document matcher", "--lane", "servers/case-analysis/tasks/lab-sameness/**");
+    });
+
+    test("the title names the worker and what the call runs, never the harness's id or the raw command", () => {
+      ok(...p2());
+      const d = item("p2");
+      expect([d["title"], d["question"], d["why"]]).toEqual([
+        "Allow the same-document matcher to run `vlmrun.py run` (lab-sameness)?",
+        "Let the same-document matcher run this exact call once? It runs `vlmrun.py run` in lab-sameness.",
+        "Auto mode stopped this call: it may spend money or act outside this machine. Only you can let it through.",
+      ]);
+      expect(JSON.stringify(d)).not.toContain("ac5ca99391e27d894: ");
+    });
+
+    test("a subagent the ledger does not know is a worker; the session's own call is the coordinator's", () => {
+      ok(...p2("p3", "cd /elsewhere/x && make deploy"));
+      expect(item("p3")["title"]).toBe("Allow a worker to run `make deploy` (x)?");
+      ok(...refusal("p4"));
+      expect(item("p4")["title"]).toBe("Allow the coordinator to run `git push`?");
+    });
+
+    test("every state command asks for the explanation until the coordinator gives it", () => {
+      ok(...p2());
+      expect(run("event", "x").stderr).toContain("state: P1 (Allow the same-document matcher to run `vlmrun.py run` (lab-sameness)?) is a call auto mode refused");
+    });
+
+    test("the coordinator explains it on the open row: why, body, recommendation and reason", () => {
+      ok(...p2());
+      const body = join(tmp(), "p2.html");
+      writeFileSync(body, "<h2>In short</h2><p>It runs the matcher on 40 real pairs; about US$2 of model calls.</p>");
+      expect(refused("decision", "P1", "--recommend", "allow-once", "--reason", "cheap and needed")).toContain("--why, --body FILE");
+      expect(refused("decision", "P1", "--why", "w", "--body", body, "--recommend", "maybe", "--reason", "r")).toContain("not one of a permission's options");
+      expect(refused("decision", "P1", "--why", "w", "--body", body, "--recommend", "allow-once")).toContain("--reason");
+      const why = "The matcher's test needs the model service; it costs about US$2 and touches no client data.";
+      ok("decision", "P1", "--why", why, "--body", body, "--recommend", "allow-once", "--reason", "the run is cheap and the result decides the next step", "--log", "explained");
+      const d = item("p2");
+      expect([d["why"], d["recommend"], d["body"], d["title"]]).toEqual([why, "allow-once", true, "Allow the same-document matcher to run `vlmrun.py run` (lab-sameness)?"]);
+      expect(run("event", "x").stderr).not.toContain("is a call auto mode refused");
+      // The hook's record of the same refusal again keeps the explanation.
+      ok(...p2());
+      expect([item("p2")["why"], item("p2")["recommend"]]).toEqual([why, "allow-once"]);
+      // Another call is another question: the explanation goes, and the words are the call's again.
+      ok(...p2("p2", P2.replace("vlmrun.py run", "vlmrun.py score")));
+      const changed = item("p2");
+      expect([changed["recommend"], changed["reason"], changed["body"], changed["title"]]).toEqual([null, null, false, "Allow the same-document matcher to run `vlmrun.py score` (lab-sameness)?"]);
+      expect(existsSync(join(root, "decisions", "p2.html"))).toBe(false);
+    });
   });
 });
 

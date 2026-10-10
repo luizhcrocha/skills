@@ -32,6 +32,27 @@ export function answeredGrill(d: Pick<Decision, "kind" | "status" | "questions">
   return d.kind === "grill" && d.status === "open" && !(d.questions ?? []).some((q) => q.status === "open");
 }
 
+/** Whether `d` is explained: a permission is once the coordinator gave its recommendation (with the why and
+ * the body), the hook's record of the refused call having none; any other kind is. The page shows a
+ * permission that is not as waiting for the coordinator's explanation, by the same rule. */
+export function explained(d: Pick<Decision, "kind" | "recommend">): boolean {
+  return d.kind !== "permission" || (d.recommend ?? "") !== "";
+}
+
+/** Whether `d` is an open permission the coordinator has not explained yet. */
+export function unexplained(d: Pick<Decision, "kind" | "status" | "recommend">): boolean {
+  return d.status === "open" && !explained(d);
+}
+
+/** The command that explains permission `ref` of the fleet in `dir`, run with `bin`, and what its body says. */
+export function explainCommand(bin: string, dir: string, ref: string): string {
+  return (
+    `\`${bin} state ${dir} decision ${ref} --why "<why the worker needs it, one or two plain lines>" --body FILE ` +
+    `--recommend allow-once|deny --reason "<one line>" --log "explained"\`, the body saying what the call does, why the worker needs it, ` +
+    "its cost and risk (money, time, data, outside systems) and what a denial means"
+  );
+}
+
 /** How the page's answer to an action the user ran and that failed begins: `Failed: <what happened>`. */
 export const FAILED = "Failed:";
 

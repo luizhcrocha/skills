@@ -26,7 +26,7 @@ const PERMISSION: View = {
   id: "p-1a2b3c4d",
   ref: "P1",
   kind: "permission",
-  title: "Force-push main",
+  title: "Allow invoice-gen to run `git push`?",
   question: "Let invoice-gen's refused call run once?",
   why: "auto mode refused it",
   status: "open",
@@ -118,11 +118,14 @@ async function send(choice: string | undefined, note = ""): Promise<void> {
   flush();
 }
 
-test("the refused call shows as code, with its cause, the rule and the file it goes into", () => {
+test("the refused call shows as code in a folded block, with its cause in plain words, the rule and the file it goes into", () => {
+  const block = root.querySelector<HTMLDetailsElement>("#dv-answer details.refused");
+  expect([block?.open, block?.querySelector("summary")?.textContent]).toEqual([false, "The exact call"]);
   const call = root.querySelector("#dv-answer .refused figure.code");
   expect([call?.getAttribute("data-lang"), call?.querySelector("code")?.textContent]).toEqual(["sh", CALL]);
   const facts = [...root.querySelectorAll("#dv-answer .refused dl > *")].map((e) => e.textContent);
-  expect(facts).toEqual(["Refused because", "[Git Destructive]", "Rule", RULE, "Goes into", FILE]);
+  expect(facts).toEqual(["Auto mode stopped it because", "it can erase work in git: history or changes not yet saved ([Git Destructive])", "Rule", RULE, "Goes into", FILE]);
+  expect(root.querySelector("h1")?.textContent).not.toContain(CALL);
   expect([...root.querySelectorAll('#dv-answer input[name="choice"]')].map((i) => i.getAttribute("value"))).toEqual(["allow-once", "deny"]);
   expect(root.querySelector('#dv-answer textarea[name="note"]')).not.toBeNull();
 });
@@ -137,7 +140,7 @@ test("a refused Agent call shows its input as JSON, and the grants file the hook
   const shown = root.querySelector("#dv-answer .refused figure.code");
   expect([shown?.getAttribute("data-lang"), shown?.querySelector("code")?.textContent]).toEqual(["json", JSON.stringify(spawn, null, 2)]);
   const facts = [...root.querySelectorAll("#dv-answer .refused dl > *")].map((e) => e.textContent);
-  expect(facts).toEqual(["Refused because", "[Production Reads]", "Let through by", "the plugin's PreToolUse hook (auto mode ignores Agent allow rules in the settings)", "Goes into", "/home/me/repos/billing/.claude/tstack-grants.json"]);
+  expect(facts).toEqual(["Auto mode stopped it because", "it reads live production data ([Production Reads])", "Let through by", "the plugin's PreToolUse hook (auto mode ignores Agent allow rules in the settings)", "Goes into", "/home/me/repos/billing/.claude/tstack-grants.json"]);
   await send("allow-once");
   expect(posted).toEqual([{ text: "allow-once: Allow this call once", decision: "p-1a2b3c4d", rule }]);
 });
@@ -158,4 +161,25 @@ test("the hub's refusal to grant shows on the form", async () => {
 
 test("a permission is counted and named as one", () => {
   expect(Core.kindCount([{ kind: "permission" }])).toBe("1 permission waits");
+});
+
+const banner = (): Element | null => root.querySelector("#dv-info [data-explain]");
+
+test("before the coordinator explains it, the page says it waits for that, above the call, and the answer still works", async () => {
+  expect(banner()?.querySelector("h3")?.textContent).toBe("Waiting for the coordinator to explain this request");
+  const call = root.querySelector("#dv-answer .refused");
+  expect(call !== null && banner()?.compareDocumentPosition(call)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  await send("deny", "not now");
+  expect(posted).toEqual([{ text: "deny: Deny\nnot now", decision: "p-1a2b3c4d", rule: RULE }]);
+});
+
+test("the coordinator's explanation replaces the banner: its why, its recommendation and reason", () => {
+  dispose();
+  root.remove();
+  const why = "The push replaces main with the worker's branch; two commits from yesterday would be lost.";
+  show({ ...PERMISSION, why, recommend: "deny", reason: "push a branch and open a review instead", revised: new Date(NOW - 60_000).toISOString() });
+  expect(banner()).toBeNull();
+  expect(root.querySelector(".dv-why-text")?.textContent).toContain(why);
+  expect(root.querySelector(".dv-rec-pick")?.textContent).toBe("deny: Deny");
+  expect(root.querySelector(".dv-rec-why")?.textContent).toContain("push a branch");
 });

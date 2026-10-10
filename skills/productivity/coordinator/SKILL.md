@@ -141,7 +141,7 @@ When a milestone's workers are done: bring each worker's changes into the stack 
 
 ## Decisions
 
-Everything that needs the user is a **decision** in the ledger: a choice between options, an input, a secret, an action only they can take. Pick the kind by who acts next: asking leave to do something yourself (delete, push, spend) is a `decision` with yes and no options, and you act on the answer; an `action` is a step only the user can take, with `--manual` (its commands in a fenced ```` ```nu ```` block, any prose outside it; the CLI refuses more than one line with no fence) and no options (the CLI refuses options on one); a `permission` is a call the harness refused, which the plugin hook opens by itself, and the user allows it once or denies it. The user works through one list on the dashboard, and each decision has a page built for deciding. A question that lives only in a message is lost by the next report: record it, then name it in your message by its title.
+Everything that needs the user is a **decision** in the ledger: a choice between options, an input, a secret, an action only they can take. Pick the kind by who acts next: asking leave to do something yourself (delete, push, spend) is a `decision` with yes and no options, and you act on the answer; an `action` is a step only the user can take, with `--manual` (its commands in a fenced ```` ```nu ```` block, any prose outside it; the CLI refuses more than one line with no fence) and no options (the CLI refuses options on one); a `permission` is a call the harness refused, which the plugin hook opens by itself and you explain in the same turn (below), and the user allows it once or denies it. The user works through one list on the dashboard, and each decision has a page built for deciding. A question that lives only in a message is lost by the next report: record it, then name it in your message by its title.
 
 Settle what you can first: from this conversation, `CONTEXT.md`, the ADRs, a worker's report, one quick read, the advisor. What remains is the user's.
 
@@ -207,6 +207,12 @@ An answer also changes its neighbours. In the same turn, once it is recorded, go
 
 - The **permission** for the exact refused call. The plugin hook opens it by itself for a Bash command or an Agent spawn. Once they allow it, make the same call again, byte for byte (the same command; for a spawn the same `subagent_type`, `description` and `prompt`, no field added): the grant matches that call alone.
 - For a read they approved that was refused as a spawn, you may run the narrow read yourself instead, as one Bash command (the query alone, read-only), so its permission grants exactly what they approved. Say so in the same line.
+
+**Explain a permission in the turn it opens.** The hook records what auto mode refused, not what it means, and Luiz cannot judge a raw call ("this asks for permission for a call but doesn't, bro style, explain the context or what the call does"). The page shows "Waiting for the coordinator to explain this request" until you do. Your watch says when one opens (`! P2 (...): auto mode refused a worker's call ...`), and every state command warns until it is explained. In that turn, revise it without the call's flags: the why in one or two plain lines, a body that says what the call does, why the worker needs it, the cost and risk (money, time, data, outside systems) and what a denial means, and your recommendation with its reason. The CLI refuses a first explanation without the why, the body and the reason.
+
+```nu
+fleet state $dir decision P2 --why "The matcher's test calls the model service once per pair: 40 pairs, about US$2, no client data leaves the lab." --body p2.html --recommend allow-once --reason "cheap, and its score decides whether the new matcher ships" --log "explained"
+```
 
 **A decision or action that asks the user to add a permission rule** carries, from its first revision, the exact command in a ```` ```nu ```` block and says plainly whether the rule clears this refusal. Never prose and a file path that leave them to ask where it goes. The rule goes into the session root's settings, run from the session root in their terminal (an agent that writes its own rule is refused):
 

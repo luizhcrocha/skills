@@ -1257,32 +1257,69 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   (`json.dumps(..., sort_keys=True, ensure_ascii=False, separators=(",", ":"))`, the hook's `_agent_call`),
   and the rule `Agent(<call>)`, which only the plugin's hook matches; the CLI and the hub refuse an Agent
   call that is no JSON object.
-- **Opening** (`fleet state DIR decision ID --kind permission --title T --question Q --why W --tool
-  Bash|Agent --call CALL --cause CAUSE --root ROOT [--agent-id AID] [--agent WORKER] [--blocking]`): the row
-  gets `refusal: {tool, call, rule, cause, root, agent_id}` with `rule` = `TOOL(CALL)` and `agent_id`
-  null without `--agent-id`, and the two options the CLI sets: `allow-once: Allow this call once |
-  the hub adds <rule> to <root>/.claude/settings.local.json; the plugin hook removes it once the call
-  has run, or at the first tool call of the session after 30 minutes` (for Agent: `the hub adds <rule> to
-  <root>/.claude/tstack-grants.json, where the plugin's PreToolUse hook lets this exact Agent call through
-  (auto mode ignores Agent allow rules in the settings); the plugin hook removes it ...`) and `deny: Deny |
-  the worker stays stopped; your note goes to it`. Refused: a tool other than Bash and Agent, a CALL no
-  exact rule can hold (above),
-  a relative ROOT, `--option`, `--recommend`, a
-  permission without `--tool --call --cause --root`, and those flags on any other kind. ROOT is the
+- **Opening** (`fleet state DIR decision ID --kind permission --tool Bash|Agent --call CALL --cause CAUSE
+  --root ROOT [--agent-id AID] [--agent WORKER] [--blocking]`; the hook also passes `--title`, `--question`
+  and `--why`, which are ignored): the row gets `refusal: {tool, call, rule, cause, root, agent_id}` with
+  `rule` = `TOOL(CALL)` and `agent_id` null without `--agent-id`, and the two options the CLI sets:
+  `allow-once: Allow this call once | the worker runs this exact call once, and nothing like it after: the
+  one-time grant goes once it is used, or after 30 minutes` (for Agent: `starts this exact agent`) and
+  `deny: Deny | the worker stays stopped; your note goes to it`; the rule and the file it goes into show
+  with the call on the page. The CLI writes the title, question and why from the call
+  (`src/ledger/permission-words.ts`), as it writes the options:
+  - **who**: the worker's `name` (never the harness's agent id): the `--agent` row, else the agents row whose
+    `task_id` is AID, else the worker whose workspace the call changes into (a `workspaces[]` row by `path`,
+    or `<dirname(ROOT)>/<basename(ROOT)>-<worker id>`, as the fleet names them); else `a worker` for a
+    subagent, `the coordinator` (`the manager` for a manager's ledger) for the main thread.
+  - **what it runs**: the program and up to two plain words after it, past `cd`, `VAR=x`, `timeout`, `env`,
+    `nice`, `secretspec run --`, `uv run`, an interpreter and its flags, and into `sh -c '…'`; redirections
+    dropped. `cd X; timeout 3000 secretspec run -- sh -c 'cd tasks/lab-sameness && uv run python -I
+    vlmrun.py run' > log 2>&1` runs `vlmrun.py run`. Cut at 40 characters.
+  - **where**: the folder it changed into last, unless that is ROOT or a workspace beside it; else the
+    worker's lane, as its last plain path segment.
+  - **the category in plain words**: the classifier's `[Category]` as what it means for the user, a clause
+    that starts with "it": `[Real-World Transactions]` is "it may spend money or act outside this machine",
+    `[Production Reads]` "it reads live production data", `[PII Data Handling]` "it handles personal data
+    about people", and so on; one it does not know is "it falls under the “<category>” check".
+
+  Title `Allow <who> to run \`<what>\` (<where>)?` (an Agent call: `Allow <who> to start the agent
+  “<description>”?`); question `Let <who> run this exact call once? It runs \`<what>\` in <where>.`; why
+  `Auto mode stopped this call: <category in plain words>. Only you can let it through.` Refused: a tool
+  other than Bash and Agent, a CALL no exact rule can hold (above), a relative ROOT, `--option`,
+  `--recommend` with the call's flags, a permission without `--tool --call --cause --root`, and those
+  flags on any other kind. ROOT is the
   session root: a ROOT that is a worker's workspace of this fleet's work (as the hub tells it, under
   Granting) is recorded as its session's root, said on stderr (`state: --root <ws> is <name>'s
   workspace: recorded the session root <root>, where the subagent's session reads its permissions.`),
   or refused when that root cannot be told (`a permission's root is the session root (<roots, or "or">),
   where the subagent's session reads its permissions, not the worker's workspace <ws>`); any other ROOT
   is kept as given (the hub checks it again). A value that
-  starts with `-` is given as `--call=VALUE`. The same command on the open row revises it (a changed
-  refusal re-presents it and clears a hold); `--decide`, `--withdraw` and `--hold` work as for any
-  decision. `permission` is accepted by `--kind` but left out of its listed choices, and the five
-  flags out of the usage (as argparse's `help=SUPPRESS`), so every usage text stays the twin's.
-- **Answering**: the page's form shows the call as an `sh` block (an Agent call as its input, indented
-  JSON), its cause, the rule (for Agent, that the plugin's PreToolUse hook lets it through) and the file it
-  goes into, the two options and a note; the answer is `allow-once: Allow this call once` or `deny:
-  Deny`, the note on the next line, and the POST body carries `rule`, the rule the page showed.
+  starts with `-` is given as `--call=VALUE`. The same command on the open row (the same refusal again)
+  changes nothing; a changed refusal re-presents it, clears a hold, drops the explanation (recommend,
+  reason and body: they were about another call) and writes the words again. `--decide`, `--withdraw` and
+  `--hold` work as for any decision. `permission` is accepted by `--kind` but left out of its listed
+  choices, and the five flags out of the usage (as argparse's `help=SUPPRESS`), so every usage text stays
+  the twin's.
+- **Explaining**: the hook's words say what was refused, not what it means, so the coordinator explains a
+  permission in the turn it opens: `decision P<n> --why "<one or two lines>" --body FILE --recommend
+  allow-once|deny --reason "<one line>" [--question Q] [--log "explained"]`, without the call's flags. The
+  body says what the call does, why the worker needs it, its cost and risk (money, time, data, outside
+  systems) and what a denial means. A permission is **explained** once it has a recommendation (`health.ts`
+  `explained`, the page's `Core.explained`). The first explanation needs `--why`, the body and
+  `--reason`; `--recommend` is `allow-once` or `deny`. The coordinator's words are checked as a decision's
+  are (the question and why limits, the readability warnings); the hook's are not. Opening one prints `Then
+  explain it, this turn: <the command>`; every state command warns `state: P<n> (<title>) is a call auto
+  mode refused, and the user cannot judge it yet: explain it now, ...` while one is open, unexplained and
+  unanswered; the coordinator's watch says it once per revision (`! P<n> (<title>): auto mode refused a
+  worker's call, and the page waits for your explanation. Explain it now: ...`), which wakes it within
+  `FLEET_CHECK_S` of the hook opening it.
+- **Answering**: the page shows, while the permission is open and unexplained, "Waiting for the
+  coordinator to explain this request" under the ask; the explanation replaces it (the why, the body,
+  the recommendation and its reason, as on a decision). The form shows the call folded under "The exact
+  call" (an `sh` block; an Agent call as its input, indented JSON), with "Auto mode stopped it because" and
+  the category in plain words followed by the classifier's own, the rule (for Agent, that the plugin's
+  PreToolUse hook lets it through) and the file it goes into, then the two options and a note; the answer
+  is `allow-once: Allow this call once` or `deny: Deny`, the note on the next line, and the POST body
+  carries `rule`, the rule the page showed. The answer can be given before the explanation.
 - **Granting** (`src/hub/grants.ts`, before `POST /chat` stores an answer that starts with
   `allow-once` to a permission): the row must be open, its `refusal` a Bash call an exact rule can hold
   whose `rule` is `Bash(<call>)`, or an Agent call that is a JSON object whose `rule` is `Agent(<call>)`, the POST's `rule` that same rule (absent or different refuses: a row

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { Message } from "../chat/store.ts";
 import { atOrAfter, parseInstant } from "../clock.ts";
 import { Refusal } from "../errors.ts";
-import { answeredAt, answeredGrill, decisionRow, failedAnswer, failureWords } from "../health.ts";
+import { answeredAt, answeredGrill, decisionRow, explainCommand, failedAnswer, failureWords, unexplained } from "../health.ts";
 import { asArray, asNumber, asObject, asString, type JsonObject } from "../json.ts";
 import { readObject } from "../registry.ts";
 import { secondsNow, type Machine } from "../world.ts";
@@ -143,7 +143,17 @@ export function unrecorded(ledger: Ledger, said: readonly Message[]): string[] {
 
     const at = answeredAt(decisionRow(d), said);
 
-    if (at === undefined) continue;
+    if (at === undefined) {
+      if (unexplained(d)) {
+        lines.push(
+          `state: ${d.ref ?? d.id} (${d.title ?? "None"}) is a call auto mode refused, and the user cannot judge it yet: explain it now, ` +
+            `${explainCommand("fleet", "<dir>", d.ref ?? d.id)}.`,
+        );
+      }
+
+      continue;
+    }
+
     const m = [...said].reverse().find((x) => x.decision === d.id && x.from === "user" && x.at === at);
     const n = m?.id ?? "?";
     lines.push(

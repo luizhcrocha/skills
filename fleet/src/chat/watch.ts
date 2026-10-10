@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import { parseInstant } from "../clock.ts";
 import { ChatError } from "../errors.ts";
 import { readText, remove, resolvePath, writeText } from "../files.ts";
-import { answeredAt, answeredGrill, answerRecorded, decisionRow, FAILED, silentWorkers } from "../health.ts";
+import { answeredAt, answeredGrill, answerRecorded, decisionRow, explainCommand, FAILED, silentWorkers, unexplained } from "../health.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger, type Decision, type Ledger } from "../ledger/model.ts";
@@ -336,8 +336,28 @@ function answeredGrillings(root: string, told: Map<string, Json>): string[] {
   return lines;
 }
 
+/** The `!` lines for the permissions of `root` the coordinator has not explained and the user has not
+ * answered: the hook opened each from a refused call, and the page shows it as waiting for the explanation.
+ * Told once per round (its last change), as a grilling answered is. */
+function unexplainedPermissions(root: string, told: Map<string, Json>): string[] {
+  const lines: string[] = [];
+  const said = readChat(root);
+
+  for (const d of numberedLedger(root)?.decisions ?? []) {
+    const mark = `explain:${d.id}:${d.revised !== undefined && d.revised !== null && d.revised !== "" ? d.revised : d.opened}`;
+
+    if (!unexplained(d) || answeredAt(decisionRow(d), said) !== undefined || (told.has(mark) && told.get(mark) !== false)) continue;
+    told.set(mark, true);
+    const ref = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
+    lines.push(`! ${ref} (${oneLine(d.title)}): auto mode refused a worker's call, and the page waits for your explanation. Explain it now: ${explainCommand("fleet", root, ref)}.`);
+  }
+
+  return lines;
+}
+
 /** For a coordinator's watch: its own silent workers, the messages its workers left unanswered for
- * FLEET_NUDGE_S (ten minutes), and its grillings answered and not recorded, each told once across watches. */
+ * FLEET_NUDGE_S (ten minutes), its grillings answered and not recorded, and its permissions not explained,
+ * each told once across watches. */
 export function ownSilent(machine: Machine, root: string): string[] {
   const toldPath = join(root, "watch-coordinator.told");
   const told = readTold(toldPath);
@@ -346,6 +366,7 @@ export function ownSilent(machine: Machine, root: string): string[] {
     ...silentLines(machine, root, undefined, told),
     ...nudgeLines(machine, root, told, seconds(machine.env, "FLEET_NUDGE_S", NUDGE_S)),
     ...answeredGrillings(root, told),
+    ...unexplainedPermissions(root, told),
   ];
 
   if (lines.length > 0) writeTold(toldPath, told);

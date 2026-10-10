@@ -500,6 +500,7 @@
   .sheet-head h2 { font-size: 1.375rem; overflow-wrap: anywhere; }
   .icon-btn { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 8px; border: 0; background: none; color: var(--muted); cursor: pointer; flex: none; }
   .icon-btn:hover { background: var(--card-2); color: var(--text); }
+  details.refused > summary { cursor: pointer; font-weight: 600; }
   .refused dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 10px 0 0; }
   .refused dt { font-size: var(--fs-xs); color: var(--muted); font-stretch: var(--narrow); }
   .refused dd { margin: 0; overflow-wrap: anywhere; }
@@ -579,7 +580,7 @@
   .note.changed { border-left-color: var(--you); background: var(--you-soft); }
   .note.decided { border-left-color: var(--good); }
   .note.pending { border-left-color: var(--accent); background: var(--accent-soft); }
-  .note.held, .note.recording { border-left-color: var(--accent); }
+  .note.held, .note.recording, .note.waiting { border-left-color: var(--accent); }
   .note .by { font-weight: 600; font-stretch: var(--narrow); color: var(--muted); }
   .options { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
   .option { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; align-items: start; padding: 13px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }

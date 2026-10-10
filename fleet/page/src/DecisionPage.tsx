@@ -639,14 +639,16 @@ function Form(props: { readonly d: Decision }): JSX.Element {
         <AnswerForm d={props.d}>
           <Show when={props.d.refusal}>
             {(r) => (
-              <div class="dv-block refused">
-                <h3>The call auto mode refused</h3>
+              <details class="dv-block refused">
+                <summary>The exact call</summary>
                 <Show when={r().tool === "Agent"} fallback={<CodeBlock lang="sh" text={r().call} />}>
                   <CodeBlock lang="json" text={spawnInput(r().call)} />
                 </Show>
                 <dl>
-                  <dt>Refused because</dt>
-                  <dd>{r().cause}</dd>
+                  <dt>Auto mode stopped it because</dt>
+                  <dd>
+                    {Core.plainCause(r().cause)} ({r().cause})
+                  </dd>
                   <Show
                     when={r().tool === "Agent"}
                     fallback={
@@ -666,7 +668,7 @@ function Form(props: { readonly d: Decision }): JSX.Element {
                     <code>{r().root.replace(/\/+$/u, "") + (r().tool === "Agent" ? "/.claude/tstack-grants.json" : "/.claude/settings.local.json")}</code>
                   </dd>
                 </dl>
-              </div>
+              </details>
             )}
           </Show>
           <fieldset>
@@ -1028,6 +1030,15 @@ function Info(props: { readonly d: Decision }): JSX.Element {
         </Show>
       </section>
       <Show when={d().why}>{(why) => <Why text={why()} blocking={d().blocking} />}</Show>
+      <Show when={open() && !Core.explained(d())}>
+        <div class="note waiting" role="status" data-explain>
+          <h3>Waiting for the {m.host()} to explain this request</h3>
+          <p>
+            It will say what the call does, why the worker needs it, what it may cost or risk, and what a denial means, with its recommendation. You can answer now if you
+            already know.
+          </p>
+        </div>
+      </Show>
       <Show when={notice() ? d().undo : null}>
         {(u) => (
           <div class="dv-block dv-undo">

@@ -8,6 +8,7 @@
  * the fleet's own rule set (fleet/src/ledger/link-kind.ts), bundled in, not a copy.
  */
 import { linkKind, type LinkKind } from "../../src/ledger/link-kind.ts";
+import { plainCause } from "../../src/ledger/permission-words.ts";
 
 export type { LinkKind };
 
@@ -1683,6 +1684,10 @@ function noticesOf(decisions: readonly Decision[] | null | undefined): Decision[
 /** The chat message that asks the coordinator to revoke standing approval `a`. */
 const revokeText = (a: Pick<Approval, "id" | "rule">): string => `Revoke standing approval ${a.id} ("${a.rule}"): routine acts under it go back to asking me.`;
 
+/** Whether the coordinator has explained the item: a permission is once it carries a recommendation (the hook
+ * opens it with none); any other kind is. The CLI's `explained` (src/health.ts), by the same rule. */
+const explained = (d: Pick<Decision, "kind" | "recommend"> | null | undefined): boolean => Boolean(d && (d.kind !== "permission" || (isText(d.recommend) && d.recommend)));
+
 /** Whether the fleet holds the item: it has the viewer's answer and works on it before it comes back. */
 const isHeld = (d: Pick<Decision, "status" | "held"> | null | undefined): boolean => Boolean(d && d.status === "open" && isText(d.held) && d.held);
 
@@ -2005,6 +2010,8 @@ export const Core = {
   pendingAnswer,
   awaiting,
   isHeld,
+  explained,
+  plainCause,
   isNotice,
   noticesOf,
   revokeText,

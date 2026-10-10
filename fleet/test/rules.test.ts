@@ -183,6 +183,41 @@ describe("a grilling with every question answered is recorded before other work"
   }, 20_000);
 });
 
+describe("a permission the hook opened is explained by the coordinator in the same turn", () => {
+  const CALL = "cd /work/repo-a1 && uv run python vlmrun.py run";
+
+  function opened(): void {
+    ok("agent", "a1", "--task", "T", "--milestone", "m1", "--name", "the matcher");
+    ok("decision", "p1", "--kind", "permission", "--title", "a1: Bash refused", "--question", "q", "--why", "w", "--tool", "Bash", "--call", CALL, "--cause", "[Real-World Transactions]", "--root", "/work/repo", "--agent-id", "x9", "--blocking");
+  }
+
+  test("the coordinator's watch asks for the explanation once, and a watch after that stays quiet", async () => {
+    opened();
+    const watchEnv = { ...env, FLEET_NOW: "2026-01-05T09:10:00+00:00", FLEET_CHECK_S: "0.2" };
+    const first = start(["chat", root, "watch", "--as", "coordinator", "--resume", "--once"], watchEnv);
+    procs.push(first.proc);
+    const line = await first.lines.next();
+    expect(line).toStartWith(
+      "! P1 (Allow the matcher to run `vlmrun.py run`?): auto mode refused a worker's call, and the page waits for your explanation. Explain it now: " +
+        `\`fleet state ${root} decision P1 --why `,
+    );
+    expect(await first.proc.exited).toBe(0);
+    const again = start(["chat", root, "watch", "--as", "coordinator", "--resume", "--once"], watchEnv);
+    procs.push(again.proc);
+    await Bun.sleep(1500);
+    expect(again.proc.exitCode).toBeNull();
+    again.proc.kill();
+  }, 20_000);
+
+  test("an explained permission, or one the user answered, asks for nothing", () => {
+    opened();
+    userSays(1, "2026-01-05T09:05:00+00:00", "deny: Deny", "p1");
+    const warned = ok("event", "x").stderr;
+    expect(warned).toContain("state: the user answered P1");
+    expect(warned).not.toContain("is a call auto mode refused");
+  });
+});
+
 describe("a fleet set done says what it leaves open", () => {
   test("open decisions are named on `set --status done`", () => {
     ok("decision", "d1", ...CHOICE);

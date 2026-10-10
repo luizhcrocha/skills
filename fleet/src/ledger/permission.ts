@@ -81,16 +81,16 @@ export function makeRefusedCall(given: RefusedGiven): Effect.Effect<RefusedCall,
   return Effect.succeed({ tool: given.tool, call: given.call, rule: ruleOf(given.tool, given.call), cause: given.cause, root: given.root, agent_id: given.agentId });
 }
 
-/** A permission's two options, which the CLI sets itself. */
+/** A permission's two options, which the CLI sets itself, each saying what it means for the user; the rule
+ * and the file it goes into show with the call on the page. */
 export function permissionOptions(refusal: RefusedCall): Choice[] {
+  const what = refusal.tool === "Agent" ? "starts this exact agent" : "runs this exact call";
+
   return [
     {
       id: ALLOW_ONCE,
       label: "Allow this call once",
-      consequence:
-        `the hub adds ${refusal.rule} to ${grantFileOf(refusal.tool, refusal.root)}` +
-        (refusal.tool === "Agent" ? ", where the plugin's PreToolUse hook lets this exact Agent call through (auto mode ignores Agent allow rules in the settings)" : "") +
-        `; the plugin hook removes it once the call has run, or at the first tool call of the session after ${String(GRANT_TTL_MIN)} minutes`,
+      consequence: `the worker ${what} once, and nothing like it after: the one-time grant goes once it is used, or after ${String(GRANT_TTL_MIN)} minutes`,
     },
     { id: "deny", label: "Deny", consequence: "the worker stays stopped; your note goes to it" },
   ];
