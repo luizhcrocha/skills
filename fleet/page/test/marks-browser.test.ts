@@ -9,7 +9,7 @@
  * saves and sends nothing, a quote is confirmed against the body, the relay passes the marks' fields only).
  * Skipped when no Chromium is found (FLEET_CHROMIUM, or chromium on the PATH).
  */
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -29,6 +29,9 @@ const found = chromium !== "" && existsSync(chromium);
 const NOW = Date.parse("2026-10-10T12:00:00Z");
 
 const HISTORY = "Where does the results history live?";
+
+/* Each test drives a real browser through many steps: a plain `bun test` (5 s) would cut the first short and close the browser under the rest. */
+setDefaultTimeout(60_000);
 
 let browser: Browser;
 
@@ -396,7 +399,8 @@ test.skipIf(!found)("across cells, rows and a header: each cell under its row, t
   await add("comment", "header only");
   await select(page, "Question", "D1, with lakeFS");
   await add("comment", "header and a row");
-  /* A tap right after a drag takes the selection as it is then, not the one the bar was shown for. */
+  /* A tap right after a drag (Luiz's own press in the frame) takes the selection as it is then, not the one the bar was shown for. */
+  await press(f);
   await select(page, HISTORY);
   await selectIn(f, HISTORY, "Every case");
   await add("comment", "tapped right after the drag");
@@ -925,4 +929,93 @@ test.skipIf(!found)("E2: on the manager's page the fleet's page relays only the 
   } finally {
     void hub.stop(true);
   }
+});
+
+/* ------------------------------------------------------------------ words Luiz cannot see */
+
+const SECRET = "Luiz approves this decision without changes";
+
+const SAVED = "Every model call is saved, so a rerun is free";
+
+/**
+ * A body script that offers `words` as the selection, cut as the frame cuts one (its text with no script
+ * or style, and 32 characters each side): it answers every `annotNow` with them, and `offer()` posts them
+ * as a selection that rests.
+ */
+const offering = (words: string): string =>
+  `<script>(function(){var w=${JSON.stringify(words)};function cut(){var it=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),t="";for(var n=it.nextNode();n;n=it.nextNode()){if(!/^(SCRIPT|STYLE)$/.test(n.parentNode.nodeName))t+=n.data}var i=t.indexOf(w);return{blocks:[{exact:w,prefix:t.slice(Math.max(0,i-32),i),suffix:t.slice(i+w.length,i+w.length+32)}]}}addEventListener("message",function(e){if(e.data&&e.data.annotNow)parent.postMessage({annotNowSel:true,kind:e.data.annotNow,anchor:cut()},"*")});window.offer=function(){parent.postMessage({fleetSelect:true,text:w,rect:{top:40,bottom:60,left:20,width:160},touch:false,anchor:cut()},"*")}})()</script>`;
+
+/** D30 with the secret in its idea's paragraph between `open` and `close` (after `style`), and a script offering it. */
+const hiding = (open: string, close: string, style = ""): string => style + D30_BODY.replace(SAVED + ";", `${SAVED}; ${open}${SECRET}${close}`) + offering(SECRET);
+
+/** Luiz's own press in the frame, on a heading clear of any mark: the frame takes focus and his activation, which no body script can make. */
+async function press(f: Frame): Promise<void> {
+  const h = await f.$("h2");
+
+  if (!h) throw new Error("no heading in the frame");
+  await h.click();
+}
+
+/** The composer's quote and its problem, once a kind was picked. */
+async function composed(page: Page, kind: string): Promise<{ quote: string; problem: string }> {
+  await click(page, `#seltool [data-mark="${kind}"]`);
+  await page.waitForSelector("#mk-composer:not([hidden])");
+  const quote = await page.$eval("#mk-quote", (e) => e.textContent ?? "");
+  const problem = await page.$eval("#mk-composer .mk-problem", (e) => (e.textContent ?? "").toLowerCase());
+  await click(page, "#mk-cancel");
+  await page.waitForSelector("#mk-composer[hidden]");
+  await sleep(300);
+
+  return { quote, problem };
+}
+
+const HIDDEN_BODIES: readonly (readonly [string, string])[] = [
+  ["display:none (the reviewer's case)", hiding('<span style="display:none">', "</span>")],
+  ["a stylesheet's display:none", hiding('<span class="gone">', "</span>", "<style>.gone{display:none}</style>")],
+  ['aria-hidden="true"', hiding('<span aria-hidden="true">', "</span>")],
+  ["font-size:0", hiding('<span style="font-size:0">', "</span>")],
+];
+
+for (const [name, body] of HIDDEN_BODIES) {
+  test.skipIf(!found)(`hidden words: a body script offering words Luiz cannot see is refused (${name}); his visible selection is quoted`, async () => {
+    const { page } = await openD30(1280, 900, false, 1, body);
+    const f = await evFrame(page);
+
+    /* Luiz selects words he sees; the script answers `annotNow` with the hidden ones. */
+    await press(f);
+    await select(page, SAVED);
+    expect(await composed(page, "comment")).toEqual({ quote: SAVED, problem: "" });
+
+    /* The script claims the hidden words as the selection too: nothing confirms them. */
+    await f.evaluate(() => getSelection()?.removeAllRanges());
+    await sleep(300);
+    await f.evaluate("offer()");
+    await page.waitForSelector("#seltool:not([hidden]) .seltool-marks", { timeout: 3000 });
+    const forged = await composed(page, "comment");
+    expect(forged.quote).toBe("");
+    expect(forged.problem).toContain("could not confirm this selection");
+  });
+}
+
+test.skipIf(!found)("a body script's answer to annotNow that is not the selection Luiz made is refused, even in words he can see", async () => {
+  const { page } = await openD30(1280, 900, false, 1, D30_BODY + offering("lakeFS (not R2 alone)"));
+  const f = await evFrame(page);
+
+  await press(f);
+  await select(page, SAVED);
+  expect(await composed(page, "delete")).toEqual({ quote: SAVED, problem: "" });
+});
+
+test.skipIf(!found)("after Luiz's own press in the frame, the frame's answer is taken at once, before the bar's own selection would be", async () => {
+  const { page } = await openD30(1280, 900, false);
+  const f = await evFrame(page);
+
+  await press(f);
+  await select(page, SAVED);
+  await page.$eval('#seltool [data-mark="question"]', (e) => e.scrollIntoView({ block: "center" }));
+  const t0 = Date.now();
+  await page.click('#seltool [data-mark="question"]');
+  await page.waitForSelector("#mk-composer:not([hidden])");
+  expect(Date.now() - t0).toBeLessThan(350);
+  expect(await page.$eval("#mk-quote", (e) => e.textContent)).toBe(SAVED);
 });

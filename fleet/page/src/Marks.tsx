@@ -22,7 +22,7 @@ import { For, Show, type JSX } from "@solidjs/web";
 import { listen, tf, usePage } from "./bits.tsx";
 import { Core, type Json, type JsonRecord, type MarkDecision, type MarkItem, type MarkKind, type MarkQuote, type Message } from "./core.ts";
 import { readBody } from "./bodytext.ts";
-import { parseFrameSaid } from "./embed.ts";
+import { parseEmbedMessage, parseEvidenceSelect, parseFrameSaid } from "./embed.ts";
 import { deliveryWords, KIND_WORDS, loadDrafts, makeBatch, nextNumber, placeMark, QUOTED_KINDS, quoteLines, saveDrafts, sentOf, type Batch, type Claimed, type DraftStore } from "./marks.ts";
 import { Rich } from "./Rich.tsx";
 
@@ -71,6 +71,12 @@ const KB = /Mac|iPhone|iPad/u.test(globalThis.navigator?.platform ?? "") ? "âŒ˜â
 
 /** How long a tapped kind waits for the frame's selection as it is now before taking the bar's. */
 const NOW_MS = 400;
+
+/** How long the frame's selection, as it last told the page, stands for the selection it answers with now. */
+const TOLD_MS = 10_000;
+
+/** A selection's words with what the frame and the browser may differ on left out: spacing, case (a text-transform), soft hyphens and zero-width characters. */
+const squash = (s: string): string => s.replace(/[\s\u00ad\u200b-\u200d\u2060\ufeff]+/gu, "").toLowerCase();
 
 const isRecord = (v: Json | undefined): v is JsonRecord => v !== null && v !== undefined && Object(v) === v && !Array.isArray(v);
 
@@ -528,11 +534,45 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
   /* A tap the frame tells of acts only when it was one: focus in that frame and the user's own press just now (activation the body's scripts cannot make). */
   const tapped = (fr: HTMLIFrameElement): boolean => document.activeElement === fr && globalThis.navigator?.userActivation?.isActive === true;
 
+  /*
+   * The selection the frame last told of (`fleetSelect`, or the fleet's page relaying it), when, and whether
+   * the user's own press in that frame was live then. The frame's answer to `annotNow` is taken only when
+   * it is these words, told after a real press, just now; an answer the body confirms waits for that while
+   * the kind waits (the frame tells of a selection a moment after it rests). The body's scripts can post
+   * both messages, so this only raises the bar; that only words the user can see confirm (bodytext.ts) is
+   * what holds.
+   */
+  let told: { readonly text: string; readonly at: number; readonly real: boolean } | null = null;
+  let answer: { readonly kind: MarkKind; readonly claim: readonly Claimed[]; readonly quote: MarkQuote } | null = null;
+
+  const asTold = (claim: readonly Claimed[]): boolean =>
+    told !== null && told.real && Date.now() - told.at <= TOLD_MS && squash(told.text) !== "" && squash(told.text) === squash(claim.map((b) => b.exact).join(""));
+
+  /* The frame's answer, once it is the selection the frame told of, opens the composer on it. */
+  const takeAnswer = (): void => {
+    if (!pending || !answer || answer.kind !== pending.kind || !asTold(answer.claim)) return;
+    clearTimeout(pending.timer);
+    pending = null;
+    const { kind, quote } = answer;
+    answer = null;
+
+    if (!editing()) openComposer({ n: null, kind, quote, comment: "", replacement: "" });
+  };
+
   listen(window, "message", (e) => {
     const fr = t.frame();
 
     /* The body frame is sandboxed (origin "null"); a fleet's page on the manager's is this page's origin, and relays the body's messages rebuilt. */
-    const said = fr && e.source === fr.contentWindow && e.origin === (t.relayed ? location.origin : "null") ? parseFrameSaid(e.data) : null;
+    const fromFrame = fr !== null && e.source === fr.contentWindow && e.origin === (t.relayed ? location.origin : "null");
+    const relayed = fromFrame && t.relayed ? parseEmbedMessage(e.data) : null;
+    const selected = fromFrame ? (t.relayed ? (relayed?.kind === "select" ? relayed : null) : parseEvidenceSelect(e.data)) : null;
+
+    if (fr && selected) {
+      told = { text: selected.text, at: Date.now(), real: tapped(fr) };
+      takeAnswer();
+    }
+
+    const said = fromFrame ? parseFrameSaid(e.data) : null;
 
     if (!fr || !said) return;
 
@@ -550,11 +590,9 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
         /* The selection as it is now, for the kind the page asked about; one the body does not confirm waits for the frame's own answer, or the bar's. */
         const quote = pending && said.mark === pending.kind ? confirmed(said.claim) : null;
 
-        if (pending && quote) {
-          clearTimeout(pending.timer);
-          pending = null;
-
-          if (!editing()) openComposer({ n: null, kind: said.mark, quote, comment: "", replacement: "" });
+        if (quote && said.claim) {
+          answer = { kind: said.mark, claim: said.claim, quote };
+          takeAnswer();
         }
 
         break;
@@ -605,10 +643,12 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
 
       const timer = setTimeout(() => {
         pending = null;
+        answer = null;
         openOn(kind, claim);
       }, NOW_MS);
 
       pending = { kind, claim, timer };
+      answer = null;
       post({ annotNow: kind });
     },
     layered: () => editing() !== null || preview() !== null || sheet(),
