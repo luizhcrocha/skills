@@ -39,7 +39,7 @@ function spawnInput(call: string): string {
   }
 }
 
-function frameDoc(html: string): string {
+export function frameDoc(html: string): string {
   const cs = getComputedStyle(document.documentElement);
   const vars = TOKENS.map((t) => `--${t}:${cs.getPropertyValue("--" + t).trim()}`).join(";");
 
@@ -59,14 +59,14 @@ th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);verti
 thead th{background:var(--card-2)}tbody th{color:var(--text)}
 th{font-size:.85rem;color:var(--muted);font-weight:600;font-stretch:84%}
 caption,figcaption{caption-side:bottom;text-align:left;font-size:.85rem;color:var(--muted);padding-top:6px}
-@media (max-width:560px){table.cards,table.cards tbody,table.cards tr,table.cards td,table.cards th{display:block;min-width:0;width:auto}table.cards thead{display:none}table.cards tr{border-bottom:1px solid var(--line);padding:8px 0}table.cards td,table.cards tbody th{border:0;padding:3px 0}table.cards [data-label]::before{content:attr(data-label);display:block;font-size:.78rem;font-weight:600;color:var(--muted);font-stretch:84%}}
+@media (max-width:560px){table.cards,table.cards tbody,table.cards tr,table.cards td,table.cards th{display:block;min-width:0;width:auto}table.cards thead,table.cards tr.head{display:none}table.cards tr{border-bottom:1px solid var(--line);padding:8px 0}table.cards td,table.cards tbody th{border:0;padding:3px 0}table.cards [data-label]::before{content:attr(data-label);display:block;font-size:.78rem;font-weight:600;color:var(--muted);font-stretch:84%}}
 code,pre{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.86em}
 pre{background:var(--card-2);padding:10px 12px;border-radius:6px;overflow-x:auto}
 img,svg,video,canvas{max-width:100%;height:auto}
 .num{font-variant-numeric:tabular-nums;font-stretch:84%;text-align:right}
 .muted{color:var(--muted)}.good{color:var(--good)}.warning{color:var(--warning)}.critical{color:var(--critical)}
 </style></head><body>${html}
-<scr` + `ipt>(function(){document.querySelectorAll("table").forEach(function(t){var h=t.querySelectorAll("thead th");if(!h.length)return;var long=false;t.querySelectorAll("tbody tr").forEach(function(r){Array.prototype.forEach.call(r.children,function(c,i){if(h[i])c.setAttribute("data-label",h[i].textContent.trim());if(c.textContent.length>40)long=true})});if(long)t.classList.add("cards")});var post=function(){parent.postMessage({fleetEvidence:true,height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post();var t=0,touch=false;document.addEventListener("pointerdown",function(e){touch=e.pointerType==="touch"||e.pointerType==="pen"},true);document.addEventListener("selectionchange",function(){clearTimeout(t);t=setTimeout(function(){var s=getSelection(),r=s&&s.rangeCount&&!s.isCollapsed?s.getRangeAt(0).getBoundingClientRect():null;parent.postMessage({fleetSelect:true,text:r?String(s):"",rect:r?{top:r.top,bottom:r.bottom,left:r.left,width:r.width}:null,touch:touch},"*")},180)})})()</scr` + `ipt></body></html>`;
+<scr` + `ipt>(function(){document.querySelectorAll("table").forEach(function(t){var rows=Array.prototype.slice.call(t.rows),head=t.tHead&&t.tHead.rows[0];if(!head&&rows[0]&&Array.prototype.every.call(rows[0].cells,function(c){return c.tagName==="TH"})){head=rows[0];head.classList.add("head")}if(!head)return;var h=head.cells,long=false;rows.forEach(function(r){if(r===head||r.parentNode===t.tHead)return;Array.prototype.forEach.call(r.cells,function(c,i){if(h[i])c.setAttribute("data-label",h[i].textContent.trim());if(c.textContent.length>40)long=true})});if(long)t.classList.add("cards")});var post=function(){parent.postMessage({fleetEvidence:true,height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post();var t=0,touch=false;document.addEventListener("pointerdown",function(e){touch=e.pointerType==="touch"||e.pointerType==="pen"},true);document.addEventListener("selectionchange",function(){clearTimeout(t);t=setTimeout(function(){var s=getSelection(),r=s&&s.rangeCount&&!s.isCollapsed?s.getRangeAt(0).getBoundingClientRect():null;parent.postMessage({fleetSelect:true,text:r?String(s):"",rect:r?{top:r.top,bottom:r.bottom,left:r.left,width:r.width}:null,touch:touch},"*")},180)})})()</scr` + `ipt></body></html>`;
 }
 
 /** What the server answers when it refuses a message. */
