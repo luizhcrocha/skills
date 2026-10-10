@@ -47,7 +47,7 @@ function Composer(): JSX.Element {
 
   /* A reply, a quote or a draft changed elsewhere: the "To" line is asked again. */
   createEffect(
-    () => [m.chatWritable(), m.reply()] as const,
+    () => [m.chatWritable(), m.reply(), m.quote(), m.focus()] as const,
     () => ui.askPreview(true),
     { defer: true },
   );
@@ -210,6 +210,14 @@ export function Chat(): JSX.Element {
   const sideUnread = createMemo(() => ui.sides().reduce((n, x) => n + (ui.isArchived(x) ? 0 : x.unread), 0));
   const about = useAbout();
 
+  /** On the manager's page, the fleets the side chat shown belongs to: those its first message went to. */
+  const owners = createMemo(() => {
+    const s = here();
+    const to = s ? (m.messageById(s.id)?.to ?? []) : [];
+
+    return to.filter((id) => m.state.coordinators.some((c) => c.id === id)).map((id) => m.nameOf(id));
+  });
+
   const activity = createMemo(() => {
     const trail = decisionTrail(m.messages());
     const focus = m.focus();
@@ -299,7 +307,7 @@ export function Chat(): JSX.Element {
           Back to the chat
         </button>
         <span class="side-name">
-          <span class="side-title">Side chat</span>
+          <span class="side-title">{owners().length ? "Side chat with " + owners().join(", ") : "Side chat"}</span>
           <Show when={here()}>{(s) => <span class="side-about">{about(s()).label}</span>}</Show>
         </span>
         <Show when={here()}>

@@ -26,6 +26,8 @@ interface PreviewTimer {
 interface PreviewBody {
   text: string;
   re?: number;
+  quote?: Quote;
+  side?: number | "new";
 }
 
 /** What the page posts as a chat message. */
@@ -388,8 +390,14 @@ export function createUi(m: Model) {
         const seq = ++preview.seq;
         const body: PreviewBody = { text: say.value };
         const re = m.reply();
+        const quote = m.quote();
+        const focus = m.focus();
 
         if (re != null) body.re = re;
+
+        if (quote) body.quote = { ...quote };
+
+        if (focus != null) body.side = focus;
         void fetch("chat/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
           .then(async (res): Promise<Json> => (res.ok ? await res.json() : null))
           .then((data) => {

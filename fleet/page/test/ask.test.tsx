@@ -34,6 +34,8 @@ const posted: Json[] = [];
 
 const toParent: Json[] = [];
 
+const previewed: Json[] = [];
+
 const SKILLS = [{ name: "tstack:tdd", description: "Test-first development.", hint: "[what to fix]", source: "plugin" }];
 
 /** The page at `address`, with `view`, the chat live, posts to `chat` answered 201. */
@@ -42,6 +44,7 @@ function open(address: string, view: View, width = 1280): void {
   localStorage.clear();
   posted.length = 0;
   toParent.length = 0;
+  previewed.length = 0;
   happyDOM.setViewport({ width, height: 900 });
   history.replaceState(null, "", address);
   // SAFETY: the stub answers the calls the page makes with `fetch`: the skills list, a post to chat, else not found.
@@ -49,6 +52,12 @@ function open(address: string, view: View, width = 1280): void {
     const url = String(input);
 
     if (url === "skills") return new Response(JSON.stringify({ skills: SKILLS, builtins: false }), { status: 200 });
+
+    if (url === "chat/preview") {
+      previewed.push(JSON.parse(String(init?.body)));
+
+      return new Response(JSON.stringify({ to: ["billing"], parts: [] }), { status: 200 });
+    }
 
     if (url === "chat") {
       const body: { text: string; quote?: Json; side?: Json } = JSON.parse(String(init?.body));
@@ -278,4 +287,26 @@ test("on the manager's page, the frame's ask opens the manager's composer to the
   await page.ui.send();
   await settle();
   expect(posted).toEqual([{ text: "@billing I want to change my answer. per line", quote }]);
+});
+
+test("on the manager's page, a side chat names the fleet it belongs to, and the To line is asked within the side chat", async () => {
+  open("/f/manager/", managerView(NOW));
+  const at = new Date(NOW).toISOString();
+  const quote = { text: "Per line or on the total?", from: "D1 Rounding rule for totals, in billing", at: { hash: "#decision/billing/d1", anchor: "dv-info" } };
+
+  for (const m of [
+    { id: 3, at, from: "user", to: ["billing"], text: "why per line?", side: 3, quote },
+    { id: 4, at, from: "billing", to: ["user"], text: "the tax rule", re: 3, side: 3 },
+    { id: 5, at, from: "user", to: ["manager"], text: "about the plan", side: 5 },
+  ]) page.ui.addMessage(m, false);
+  flush();
+  page.ui.openSide(3);
+  flush();
+  expect(root.querySelector("#side-head .side-title")?.textContent).toBe("Side chat with billing");
+  await type("and on credit notes?");
+  await new Promise((r) => setTimeout(r, 250));
+  expect(previewed.at(-1)).toEqual({ text: "and on credit notes?", side: 3 });
+  page.ui.openSide(5);
+  flush();
+  expect(root.querySelector("#side-head .side-title")?.textContent).toBe("Side chat");
 });
