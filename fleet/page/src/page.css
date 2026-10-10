@@ -869,11 +869,27 @@
   }
   .ref { font-family: var(--mono, "JetBrains Mono", monospace); font-size: 0.82em; font-weight: 700; color: var(--muted); letter-spacing: 0; }
   /* The scroll margins carry the safe area to the script that docks the bar on a touch screen. */
-  .seltool { position: fixed; z-index: 60; transform-origin: 0 0; scroll-margin: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px); display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--text); box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 30%, transparent); }
+  /* One row of icons in two groups (the words: Copy, Reply, Side chat; marks: Comment, Delete, Replace, Question), each with its tooltip; docked at the bottom of a touch screen, their words under them. */
+  .seltool { position: fixed; z-index: 60; transform-origin: 0 0; scroll-margin: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px); display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); font-family: var(--sans); }
   /* Room at the end of the scroller that clears a selection over the docked bar, when it ends too soon. */
   .seltool-room::after { content: ""; display: block; flex: none; height: var(--seltool-room, 0px); }
-  .seltool button { min-height: var(--tap); padding: 0 12px; border: 0; border-radius: 7px; background: none; color: var(--bg); font: inherit; font-weight: 600; font-size: var(--fs-s); cursor: pointer; }
-  .seltool button:hover, .seltool button:focus-visible { background: color-mix(in srgb, var(--bg) 18%, transparent); }
+  .seltool-chat, .seltool-marks { display: flex; gap: 2px; }
+  .seltool-sep { width: 1px; align-self: stretch; margin: 4px; background: var(--line); }
+  .seltool button { position: relative; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--muted); font: inherit; cursor: pointer; }
+  .seltool button .i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  .seltool button:hover, .seltool button:focus-visible { background: var(--card-2); color: var(--text); }
+  .seltool-marks button { color: var(--k); }
+  .seltool-marks button:hover, .seltool-marks button:focus-visible { background: var(--ks); color: var(--k); }
+  .seltool button small { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .seltool button[data-tip]::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%) translateY(2px); padding: 4px 8px; border-radius: 6px; background: var(--text); color: var(--bg); font-size: 0.75rem; font-weight: 600; white-space: nowrap; pointer-events: none; opacity: 0; }
+  @media (hover: hover) and (pointer: fine) { .seltool button[data-tip]:hover::after, .seltool button[data-tip]:focus-visible::after { opacity: 1; transform: translateX(-50%); transition: opacity 120ms ease-out 250ms, transform 120ms ease-out 250ms; } }
+  .seltool.docked { width: min(420px, calc(100vw - 16px)); box-sizing: border-box; }
+  .seltool.docked .seltool-chat { flex: 3; }
+  .seltool.docked .seltool-marks { flex: 4; }
+  .seltool.docked .seltool-chat:only-child { flex: 1; }
+  .seltool.docked button { flex: 1; width: auto; height: 52px; gap: 3px; align-content: center; }
+  .seltool.docked button small { position: static; width: auto; height: auto; overflow: visible; clip-path: none; font-size: 11px; font-weight: 600; font-stretch: 78%; line-height: 1; }
+  .seltool.docked button[data-tip]::after { display: none; }
   .quote-chip .reply-text { white-space: pre-wrap; max-height: 4.5em; overflow: auto; }
   .quote-from { color: inherit; font-weight: 600; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); text-underline-offset: 2px; }
   @media (hover: hover) and (pointer: fine) { .quote-from:hover { text-decoration-color: currentColor; } }
@@ -994,8 +1010,9 @@
     .chat { position: sticky; top: 0; height: 100dvh; border-left: 1px solid var(--line); }
     .shell.chat-collapsed .chat { display: none; }
     :root:has(.shell:not(.chat-collapsed)) .toasts { right: calc(var(--chat-w) + 16px); }
-    /* The marks' floating button stays on the page's side of the docked chat. */
-    :root:has(.shell:not(.chat-collapsed)) .mk-fab { right: calc(var(--chat-w) + 16px); }
+    /* The inbox's rail and panel stay on the page's side of the docked chat. */
+    :root:has(.shell:not(.chat-collapsed)) .mk-rail { right: calc(var(--chat-w) + 12px); }
+    :root:has(.shell:not(.chat-collapsed)) .mk-panel { right: calc(var(--chat-w) + 68px); }
   }
   /* Below the docked width the chat is a sheet over the page, and looks it: a scrim dims the page behind
      it (inert while the sheet is open), and a click on it closes the sheet. */
@@ -1032,106 +1049,248 @@
     @keyframes fade-in { from { opacity: 0; } }
   }
 
-  /* Marks on a decision's body (Marks.tsx): the selection bar's kinds, the list at the end of the page (a
-     bottom sheet from the floating button), the composer and the Send preview. Each kind keeps one colour:
-     a comment the accent, a deletion red, a replacement amber, a question blue. */
+  /* Comments on a decision's body (Marks.tsx): the selection bar's kinds, the rail (the inbox button, its
+     badge the pending count and a dot for unread answers; the paper plane, its countdown ring and hover card),
+     the inbox panel of threads, the composer and the toast. Each kind keeps one colour: a comment the accent,
+     a deletion red, a replacement amber, a question blue. A sheet on a phone. */
   .k-comment { --k: var(--accent); --ks: var(--accent-soft); }
   .k-delete { --k: var(--critical); --ks: var(--critical-soft); }
   .k-replace { --k: var(--you); --ks: var(--you-soft); }
   .k-question { --k: var(--run); --ks: var(--run-soft); }
-  .k-general { --k: var(--muted); --ks: var(--card-2); }
-  .seltool.marking { flex-wrap: wrap; max-width: calc(100vw - 16px); }
-  .seltool-marks { display: flex; gap: 2px; padding-right: 3px; margin-right: 1px; border-right: 1px solid color-mix(in srgb, var(--bg) 25%, transparent); }
-  .seltool-marks button { box-shadow: inset 0 -3px color-mix(in srgb, var(--k) 70%, var(--bg)); }
-  .seltool-note { align-self: center; max-width: min(340px, calc(100vw - 32px)); padding: 6px 10px; color: var(--bg); font-size: var(--fs-s); font-weight: 600; line-height: 1.3; }
-  @media (max-width: 759.98px) {
-    .seltool.marking { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: min(380px, calc(100vw - 16px)); box-sizing: border-box; }
-    .seltool-marks { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 0 0 3px; margin: 0 0 1px; border-right: 0; border-bottom: 1px solid color-mix(in srgb, var(--bg) 25%, transparent); }
-    .seltool-marks button { padding: 0 4px; }
-  }
+  .k-general, .k-side { --k: var(--muted); --ks: var(--card-2); }
+  .seltool-note { align-self: center; max-width: min(340px, calc(100vw - 32px)); padding: 6px 10px; color: var(--text); font-size: var(--fs-s); font-weight: 600; line-height: 1.3; }
   kbd.kb { font: 600 0.72rem/1 var(--sans); font-stretch: var(--narrow); opacity: 0.75; margin-left: 2px; }
   @media (pointer: coarse) { kbd.kb { display: none; } }
+  .mk-rail .i, .mk-panel .i, .mk-split .i { flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .mk-rail .num, .mk-panel .num { font-stretch: var(--narrow); font-variant-numeric: tabular-nums; }
 
-  .mk-section { --mpad: 12px; scroll-margin-top: calc(var(--top-h) + 8px); }
-  .mk-section.holding { min-height: 120px; }
-  .mk-marks { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 0 var(--mpad) var(--mpad); }
-  .mk-marks:focus { outline: none; }
-  /* The controls stick under the masthead while the marks scroll under them (the page's, or the sheet's own scroll). */
-  .mk-ctl { position: sticky; top: var(--mk-top, calc(var(--top-h) + 1px + env(safe-area-inset-top, 0px))); z-index: 2; background: var(--card); margin: 0 calc(-1 * var(--mpad)); padding: 10px var(--mpad) 0; border-radius: 12px 12px 0 0; transition: box-shadow 150ms; }
-  .mk-ctl.stuck { box-shadow: 0 1px 0 var(--line); border-radius: 0; }
-  .mk-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .mk-head h2 { flex: 1; font-size: 1.0625rem; }
-  .mk-count { font-weight: 500; color: var(--muted); font-size: var(--fs-s); }
-  .mk-section .btn { min-height: var(--tap); padding: 0 12px; }
-  .mk-section .btn.ghost, .mk-sheet .btn.ghost { background: transparent; }
-  .mk-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 10px 0; }
-  .mk-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; font-size: var(--fs-xs); }
-  .mk-toggle button { border: 0; background: transparent; padding: 0 10px; min-height: var(--tap); font: inherit; font-stretch: var(--narrow); color: var(--muted); cursor: pointer; }
-  .mk-toggle button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
-  .mk-grab { display: none; }
-  .mk-list { list-style: none; margin: 0; padding: 0; }
-  .mk-item { border-top: 1px solid var(--line); padding: 10px 2px; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 4px 8px; cursor: pointer; }
-  .mk-item:first-child { border-top: 0; }
-  .mk-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
-  .mk-n { width: 24px; height: 24px; border-radius: 50%; background: var(--k, var(--muted)); color: var(--card); display: grid; place-items: center; font-size: 0.75rem; font-weight: 700; }
-  .mk-body { min-width: 0; }
-  .mk-top { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: var(--fs-xs); font-stretch: var(--narrow); }
-  .mk-kind { color: var(--k, var(--muted)); font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; font-size: 0.75rem; }
-  .mk-tag { border-radius: 999px; padding: 0 7px; font-size: 0.75rem; border: 1px solid var(--line); color: var(--muted); }
-  .mk-tag.outdated { border-color: var(--critical); color: var(--critical); background: var(--critical-soft); }
-  .mk-tag.moved { border-color: var(--run); color: var(--run); background: var(--run-soft); }
-  .mk-tag.sent { border-color: var(--accent); color: var(--accent); }
-  .mk-tag.answered { border-color: var(--good); color: var(--good); }
-  .mk-item blockquote, .mk-sheet blockquote { margin: 2px 0; padding: 2px 0 2px 10px; border-left: 3px solid var(--k, var(--line)); font-size: 0.9rem; overflow-wrap: anywhere; }
-  .mk-item.k-delete blockquote { text-decoration: line-through; text-decoration-color: var(--critical); }
-  .mk-item blockquote.multi .qcell, .mk-item blockquote.multi .qline { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The rail: one card at the page's right edge under the masthead, the inbox button over the paper plane. */
+  .mk-root { display: contents; }
+  .mk-rail { position: fixed; right: 12px; top: calc(var(--mk-top, calc(var(--top-h) + env(safe-area-inset-top, 0px))) + 12px); z-index: 50; display: grid; gap: 4px; justify-items: center; padding: 4px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); font-family: var(--sans); }
+  .mk-inbox, .mk-now { position: relative; display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 9px; background: none; color: var(--text); cursor: pointer; }
+  .mk-inbox:hover { background: var(--card-2); }
+  .mk-inbox.on { background: var(--accent-soft); color: var(--accent); }
+  .mk-badge { position: absolute; top: -6px; right: -6px; display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 10px; background: var(--you); color: var(--bg); font: 700 0.75rem/1 var(--sans); font-variant-numeric: tabular-nums; letter-spacing: 0; border: 2px solid var(--card); }
+  .mk-unread { position: absolute; bottom: 5px; right: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--card); }
+  .mk-now { color: var(--you); }
+  .mk-now:hover:not([aria-disabled="true"]) { background: var(--you-soft); }
+  .mk-now[aria-disabled="true"] { color: var(--faint); opacity: 0.55; cursor: default; }
+  .mk-ring { position: absolute; inset: -3px; width: calc(100% + 6px); height: calc(100% + 6px); transform: rotate(-90deg); pointer-events: none; overflow: visible; }
+  .mk-ring circle { fill: none; stroke-width: 2.5; }
+  .mk-ring .bg { stroke: color-mix(in srgb, var(--you) 18%, transparent); }
+  .mk-ring .fg { stroke: var(--you); stroke-linecap: round; }
+  .mk-ring.paused .fg { stroke: var(--faint); stroke-dasharray: 3 4 !important; }
+  @media (prefers-reduced-motion: no-preference) {
+    .mk-ring .fg { transition: stroke-dashoffset 1s linear; }
+    /* Held, the ring refills, easing to full; let go early, it springs back to the countdown. */
+    .mk-ring.holding .fg { transition: stroke-dashoffset 600ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+    .mk-now.pulsed { animation: mk-pulse 420ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+  }
+  @keyframes mk-pulse { 40% { transform: scale(1.12); } }
+  .mk-card .c-reset { padding: 6px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .mk-card .c-reset-btn { justify-self: start; min-height: var(--tap); }
+
+  /* The chat as a sheet over the page covers the rail and the inbox too. */
+  :root:has(.chat.open) .mk-rail, :root:has(.chat.open) .mk-panel { visibility: hidden; }
+
+  /* The paper plane's hover card: the send status, off the page (a long-press shows it on a phone). */
+  .mk-card { position: absolute; right: calc(100% + 10px); top: 0; z-index: 2; width: 264px; padding: 10px 12px; box-sizing: border-box; display: grid; gap: 6px; border-radius: 10px; background: var(--card); color: var(--text); border: 1px solid var(--line); box-shadow: var(--shadow); font: 400 var(--fs-xs)/1.4 var(--sans); opacity: 0; visibility: hidden; transform: translateX(4px); pointer-events: none; }
+  .mk-card p { margin: 0; }
+  .mk-card .c-head { display: grid; }
+  .mk-card .c-head b { font-size: var(--fs-s); }
+  .mk-card .c-head span, .mk-card .c-why { color: var(--muted); }
+  .mk-card .c-eta { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--you-soft); color: var(--you); }
+  .mk-card .c-k { display: block; color: var(--muted); font-weight: 600; font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .mk-card .c-eta .c-k { color: inherit; }
+  .mk-card .c-act { font-weight: 600; }
+  .mk-card .c-last { padding-top: 6px; border-top: 1px solid var(--line); }
+  .mk-card.show { opacity: 1; visibility: visible; transform: none; pointer-events: auto; }
+  @media (prefers-reduced-motion: no-preference) { .mk-card { transition: opacity 140ms ease-out, visibility 0s linear 140ms, transform 140ms cubic-bezier(0.23, 1, 0.32, 1); } .mk-card.show { transition-delay: 150ms, 0s, 150ms; } }
+
+  /* The inbox: a chat list beside the rail; a thread, its words, its turns and its box. */
+  .mk-panel { position: fixed; right: 68px; top: calc(var(--mk-top, calc(var(--top-h) + env(safe-area-inset-top, 0px))) + 8px); z-index: 55; width: min(400px, calc(100vw - 96px)); max-height: min(640px, calc(100dvh - var(--mk-top, var(--top-h)) - 24px)); display: flex; flex-direction: column; background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; font-size: 0.9375rem; line-height: 1.5; }
+  @media (prefers-reduced-motion: no-preference) { .mk-panel { animation: mk-in 160ms cubic-bezier(0.23, 1, 0.32, 1); transform-origin: 100% 0; } }
+  @keyframes mk-in { from { opacity: 0; transform: scale(0.97); } }
+  .mk-head { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--line); flex: none; }
+  .mk-head:has(> .mk-icon:first-child) { padding-left: 6px; }
+  .mk-head h2 { margin: 0; font-size: 1.0625rem; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .mk-count { color: var(--muted); font-size: var(--fs-s); margin-right: auto; }
+  .mk-th { flex: 1; min-width: 0; display: grid; gap: 1px; }
+  .mk-to { color: var(--muted); font-size: var(--fs-xs); font-stretch: var(--narrow); }
+  .mk-icon { display: grid; place-items: center; width: var(--tap); height: var(--tap); padding: 0; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; flex: none; }
+  .mk-icon:hover { background: var(--card-2); color: var(--text); }
+  .mk-threads { list-style: none; margin: 0; padding: 4px 6px 8px; overflow-y: auto; overscroll-behavior: contain; flex: 1; min-height: 0; }
+  .mk-row { display: grid; gap: 3px; width: 100%; min-height: var(--tap); padding: 8px 10px; border: 0; border-radius: 10px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+  .mk-row:hover { background: var(--card-2); }
+  .mk-threads li + li .mk-row { border-top: 1px solid var(--line); border-radius: 0; }
+  .mk-threads li + li .mk-row:hover { border-radius: 10px; border-top-color: transparent; }
+  .mk-row.t-page { background: var(--bg); border: 1px dashed var(--line); margin-bottom: 4px; }
+  .mk-l1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .mk-l1 time { margin-left: auto; flex: none; font-size: var(--fs-xs); color: var(--muted); font-stretch: var(--narrow); font-variant-numeric: tabular-nums; }
+  .mk-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-stretch: var(--narrow); flex: none; }
+  .mk-n { display: inline-block; min-width: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 5px; background: var(--card-2); color: var(--muted); font: 700 0.6875rem/18px var(--mono); text-align: center; flex: none; }
+  .mk-kind { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 4px; font-size: var(--fs-xs); font-weight: 700; font-stretch: var(--narrow); line-height: 1.5; color: var(--k); background: color-mix(in srgb, var(--k) 13%, var(--card)); white-space: nowrap; flex: none; }
+  .mk-q { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .mk-l2 { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: var(--fs-s); color: var(--muted); }
+  .mk-l2 .pill { flex: none; font-size: 0.75rem; }
+  .mk-last { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+  .mk-who { color: var(--faint); font-weight: 600; font-stretch: var(--narrow); }
+  .mk-row.unread .mk-l2 { color: var(--text); }
+  .mk-row.unread .mk-q, .mk-row.unread .mk-title { font-weight: 800; }
+  .mk-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .pill.st-pending { background: var(--you-soft); color: var(--you); }
+  .pill.st-sent { background: var(--card-2); color: var(--muted); }
+  .pill.st-answered { background: color-mix(in srgb, var(--good) 15%, var(--card)); color: var(--good); }
+  .mk-words { flex: none; margin: 10px 14px 0; }
+  .mk-words blockquote, .mk-sheet blockquote { margin: 0; padding: 2px 0 2px 10px; border-left: 3px solid var(--k, var(--line)); font-size: 0.9rem; overflow-wrap: anywhere; max-height: 7.5em; overflow: auto; }
+  .mk-words.k-delete blockquote, .mk-sheet.k-delete blockquote { text-decoration: line-through; text-decoration-color: var(--critical); }
   .qrow { font-weight: 650; font-size: var(--fs-xs); color: var(--muted); margin-top: 2px; }
   .qhd { color: var(--text); font-weight: 500; }
   .qcell { padding-left: 10px; }
   .qh { color: var(--muted); font-weight: 600; font-stretch: var(--narrow); }
-  .mk-with { font-size: 0.9rem; }
-  .mk-with b { color: var(--you); }
-  .mk-c { font-size: 0.9375rem; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .mk-hint { font-size: 0.75rem; color: var(--faint); }
-  .mk-item.outdated blockquote { opacity: 0.6; }
-  .mk-item.done { opacity: 0.72; }
-  .mk-reply { grid-column: 2; min-width: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); font-size: var(--fs-s); cursor: auto; }
-  .mk-reply summary { padding: 0 10px; cursor: pointer; list-style: none; display: flex; gap: 6px; align-items: center; min-height: var(--tap); }
-  .mk-reply summary::-webkit-details-marker { display: none; }
-  .mk-reply .who { font-weight: 700; color: var(--accent); flex: none; }
-  .mk-reply .gist { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
-  .mk-reply[open] .gist { display: none; }
-  .mk-reply .full { padding: 0 10px 8px; }
-  .mk-empty { color: var(--muted); font-size: 0.9rem; padding: 6px 0; }
-  .mk-history { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 6px; }
-  .mk-history > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-s); min-height: var(--tap); display: flex; align-items: center; }
-  /* The list as a bottom sheet, opened by the floating button; it scrolls inside itself, its controls on top. */
-  .mk-marks.sheeted { --mpad: 14px; position: fixed; left: 0; right: 0; bottom: 0; z-index: 46; max-width: 640px; margin: 0 auto; max-height: 78dvh; overflow: auto; overscroll-behavior: contain; border-radius: 16px 16px 0 0; border-bottom: 0; box-shadow: var(--shadow); padding: 0 14px calc(10px + env(safe-area-inset-bottom, 0px)); }
-  .mk-marks.sheeted .mk-ctl { top: 0; padding-top: 0; border-radius: 16px 16px 0 0; }
-  .mk-marks.sheeted .mk-ctl.stuck { border-radius: 0; }
-  .mk-marks.sheeted .mk-grab { display: block; width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 6px auto 2px; }
-  .mk-scrim { position: fixed; inset: 0; z-index: 45; background: rgb(10 16 13 / 0.35); }
-  .mk-scrim.top { z-index: 47; }
-  /* The floating button: bottom right, over the tab bar on a phone, beside the docked chat; away while the list shows. */
-  .mk-fab { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(var(--dock-h) + env(safe-area-inset-bottom, 0px) + 16px); z-index: 33; width: 56px; height: 56px; padding: 0; border-radius: 50%; border: 0; background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow); display: grid; place-items: center; cursor: pointer; }
-  .mk-fab:active { transform: scale(0.94); }
-  .mk-fab svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
-  .mk-badge { position: absolute; top: -4px; right: -4px; display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; padding: 0 6px; box-sizing: border-box; border-radius: 12px; background: var(--you); color: #fff; font: 700 0.75rem/1 var(--sans); font-variant-numeric: tabular-nums; font-stretch: 100%; letter-spacing: 0; border: 2px solid var(--bg); }
-  .mk-fab.away { opacity: 0; transform: translateY(16px) scale(0.85); pointer-events: none; }
-  @media (prefers-reduced-motion: no-preference) { .mk-fab { transition: opacity 200ms ease, transform 200ms ease; } }
-  /* The composer and the Send preview: sheets from the bottom, over the list. */
-  .mk-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 48; max-width: 640px; margin: 0 auto; max-height: 88dvh; overflow: auto; overscroll-behavior: contain; box-sizing: border-box; background: var(--card); color: var(--text); border-radius: 16px 16px 0 0; box-shadow: var(--shadow); padding: 14px 16px calc(14px + env(safe-area-inset-bottom, 0px)); }
+  .mk-hint { margin: 4px 0 0; font-size: 0.75rem; color: var(--muted); }
+  .mk-tag { border-radius: 999px; padding: 0 7px; font-size: 0.75rem; border: 1px solid var(--line); color: var(--muted); }
+  .mk-tag.outdated { border-color: var(--critical); color: var(--critical); background: var(--critical-soft); }
+  .mk-tag.moved { border-color: var(--run); color: var(--run); background: var(--run-soft); }
+  .mk-turns { list-style: none; margin: 0; padding: 6px 12px 10px; overflow-y: auto; overscroll-behavior: contain; flex: 1; min-height: 60px; display: flex; flex-direction: column; gap: 3px; }
+  .mk-empty { color: var(--muted); font-size: var(--fs-s); padding: 10px 2px; }
+  .mk-msg { position: relative; max-width: 85%; min-width: 0; box-sizing: border-box; padding: 7px 12px 8px; border-radius: 18px; background: var(--card-2); color: var(--text); overflow-wrap: anywhere; line-height: 1.45; }
+  .from-user .mk-msg { background: color-mix(in srgb, var(--accent) 24%, var(--card)); }
+  .from-user .mk-msg.pending { background: var(--card); border: 1px dashed color-mix(in srgb, var(--you) 55%, transparent); }
+  .mk-msg.editing { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .mk-msg-text { white-space: pre-wrap; }
+  .mk-msg .pill { margin-left: 6px; vertical-align: 1px; font-size: 0.75rem; }
+  .mk-msg-q { display: block; margin: 0 0 3px; padding-left: 8px; border-left: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); color: var(--muted); font-size: var(--fs-xs); }
+  .mk-keep { display: block; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
+  .mk-edit { margin-left: 6px; padding: 0 6px; border: 0; border-radius: 4px; background: none; color: var(--accent); font: 600 0.75rem/1.6 var(--sans); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+  .mk-composer { flex: none; padding: 8px 12px 10px; background: var(--card); border-top: 1px solid var(--line); }
+  .mk-box { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "chip chip" "text send"; align-items: end; row-gap: 6px; column-gap: 6px; padding: 6px 6px 6px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--bg); cursor: text; }
+  .mk-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
+  .mk-box .caret-wrap { grid-area: text; min-width: 0; }
+  .mk-box textarea { display: block; width: 100%; min-width: 0; margin: 0; padding: 5px 0; border: 0; background: none; color: var(--text); font: inherit; font-size: 16px; line-height: 1.45; field-sizing: content; min-height: calc(1lh + 10px); max-height: calc(8lh + 10px); overflow-y: auto; resize: none; outline: none; box-sizing: border-box; }
+  .mk-box textarea::placeholder { color: var(--faint); opacity: 1; }
+  /* The thread's sends, round: the primary adds to the wait (amber) or, in a thread already sent, sends (accent); the outlined plane sends the thread now. */
+  .mk-sends { grid-area: send; align-self: end; display: flex; gap: 6px; align-items: center; }
+  /* The paper plane's glyph sits optically centred in its circle. */
+  .mk-send .i[data-plane], .mk-now .i[data-plane] { transform: translate(-1px, 1px); }
+  .mk-send { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: var(--on-accent); cursor: pointer; flex: none; }
+  .mk-box.waits .mk-send { background: var(--you); color: var(--bg); }
+  .mk-box.waits .mk-send.now { background: transparent; color: var(--you); border: 1.5px solid color-mix(in srgb, var(--you) 55%, transparent); }
+  .mk-box.waits .mk-send.now:hover { background: var(--you-soft); }
+  .mk-chip { grid-area: chip; display: flex; align-items: center; gap: 4px; justify-self: start; max-width: 100%; min-width: 0; box-sizing: border-box; padding: 0 0 0 10px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: var(--fs-xs); }
+  .mk-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .mk-chip .mk-icon { color: inherit; width: 28px; height: 28px; }
+  .mk-composer .mk-hint { margin: 5px 6px 0; }
+
+  /* The split button: Save waits with the rest; the chevron's Send now sends this one alone, at once. */
+  .mk-split { position: relative; display: inline-flex; align-items: stretch; flex: none; border-radius: 999px; background: var(--accent); color: var(--on-accent); }
+  .mk-split > button { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; display: inline-flex; align-items: center; }
+  .mk-split .sp-main { gap: 6px; padding: 0 8px 0 14px; min-height: 32px; font-size: var(--fs-s); font-weight: 700; font-stretch: var(--narrow); border-radius: 999px 0 0 999px; }
+  .mk-split .sp-chev { padding: 0 8px 0 6px; border-left: 1px solid color-mix(in srgb, var(--on-accent) 35%, transparent); border-radius: 0 999px 999px 0; }
+  .mk-split > button:hover { background: color-mix(in srgb, var(--text) 12%, transparent); }
+  .mk-split .kb { opacity: 0.85; }
+  .sp-menu { position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 5; min-width: 230px; padding: 4px; background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
+  .sp-menu button { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 7px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+  .sp-menu button:hover { background: var(--accent-soft); }
+  .sp-menu span { display: grid; } .sp-menu b { font-size: var(--fs-s); } .sp-menu small { color: var(--muted); font-size: 0.75rem; }
+  /* A finger's targets: 44 px. */
+  @media (pointer: coarse) {
+    .mk-split .sp-main, .mk-split .sp-chev { min-height: 44px; }
+    .mk-hide, .mk-edit, .mk-toast .mk-undo, .sp-menu button { min-height: 44px; }
+    .mk-sheet .btn, .mk-kinds button { min-height: 44px; }
+  }
+
+  /* The composer of a comment: the kind, the quoted words, the replacement, the comment. */
+  .mk-scrim { position: fixed; inset: 0; z-index: 57; background: rgb(10 16 13 / 0.35); }
+  .mk-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 58; max-width: 640px; margin: 0 auto; max-height: 88dvh; overflow: auto; overscroll-behavior: contain; box-sizing: border-box; background: var(--card); color: var(--text); border-radius: 16px 16px 0 0; box-shadow: var(--shadow); padding: 14px 16px calc(14px + env(safe-area-inset-bottom, 0px)); }
   .mk-sheet h3 { font-size: 1.0625rem; margin: 0 0 8px; color: var(--text); }
-  .mk-sheet blockquote { margin: 0 0 10px; max-height: 7.5em; overflow: auto; }
+  .mk-sheet blockquote { margin: 8px 0 10px; }
   .mk-sheet label { display: block; font-size: var(--fs-xs); color: var(--muted); margin: 8px 0 4px; font-weight: 600; }
   .mk-sheet textarea { width: 100%; box-sizing: border-box; min-height: 84px; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; background: var(--bg); color: var(--text); font: inherit; font-size: 16px; }
   .mk-sheet #mk-with { min-height: 56px; }
-  .mk-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; flex-wrap: wrap; }
+  .mk-acts { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 12px; flex-wrap: wrap; }
   .mk-acts .left { margin-right: auto; }
   .mk-sheet .btn { min-height: var(--tap); padding: 0 14px; }
+  .mk-sheet .btn.ghost { background: transparent; }
   .mk-kinds { display: flex; gap: 6px; flex-wrap: wrap; }
   .mk-kinds button { border: 1px solid var(--k); background: transparent; color: var(--k); border-radius: 999px; padding: 2px 10px; min-height: 32px; font: inherit; font-size: var(--fs-xs); font-weight: 600; cursor: pointer; }
   .mk-kinds button[aria-pressed="true"] { background: var(--k); color: var(--card); }
-  .mk-md { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; font: 13px/1.45 var(--mono); margin: 0; }
-  .mk-dest { font-size: var(--fs-s); margin: 0 0 10px; padding: 8px 10px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); }
   .mk-problem { color: var(--critical); font-size: var(--fs-s); margin: 8px 0 0; }
+
+  /* A send leaves a brief toast, nothing else on the page. */
+  .mk-toast { position: fixed; left: 50%; bottom: calc(var(--dock-h) + env(safe-area-inset-bottom, 0px) + 24px); z-index: 70; transform: translateX(-50%); max-width: min(480px, calc(100vw - 32px)); padding: 8px 14px; border-radius: 10px; background: var(--text); color: var(--bg); font: 600 var(--fs-s)/1.35 var(--sans); box-shadow: var(--shadow); }
+  @media (prefers-reduced-motion: no-preference) { .mk-toast:not([hidden]) { animation: mk-toast 180ms ease-out; } }
+  @keyframes mk-toast { from { opacity: 0; transform: translate(-50%, 6px); } }
+
+  /* A phone: the rail is two buttons at the bottom right, the inbox a full-height sheet; the rail steps aside for the selection bar, the composer and the inbox. */
+  @media (max-width: 759.98px) {
+    .mk-rail { top: auto; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(var(--dock-h) + env(safe-area-inset-bottom, 0px) + 16px); display: flex; flex-direction: row-reverse; align-items: center; gap: 10px; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
+    .mk-inbox { width: 56px; height: 56px; border-radius: 50%; background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow); }
+    .mk-inbox:hover, .mk-inbox.on { background: var(--accent); color: var(--on-accent); }
+    .mk-inbox .i { width: 24px; height: 24px; }
+    .mk-badge { top: -4px; right: -4px; min-width: 24px; height: 24px; border-radius: 12px; color: #fff; border-color: var(--bg); }
+    .mk-unread { bottom: 4px; right: 4px; width: 11px; height: 11px; background: var(--you); box-shadow: 0 0 0 2px var(--bg); }
+    .mk-now { width: 48px; height: 48px; border-radius: 50%; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+    .mk-ring { inset: -4px; width: calc(100% + 8px); height: calc(100% + 8px); }
+    .mk-card { right: 0; top: auto; bottom: calc(100% + 12px); width: min(300px, calc(100vw - 32px)); font-size: var(--fs-s); }
+    .mk-rail.away { opacity: 0; pointer-events: none; transform: translateY(16px) scale(0.85); }
+    /* The inbox fills what is on screen, above the keyboard (the visual viewport: iOS keeps the layout one under it). */
+    .mk-panel, :root:has(.shell:not(.chat-collapsed)) .mk-panel { inset: auto 0; top: var(--vv-top, 0px); height: var(--vv-h, 100dvh); padding-top: env(safe-area-inset-top, 0px); box-sizing: border-box; width: auto; max-height: none; border-radius: 0; border: 0; box-shadow: none; font-size: 1rem; z-index: 56; overscroll-behavior: contain; visibility: visible; }
+    /* The sheet paints on under its bottom, so the strip between it and the keyboard never shows the page. */
+    .mk-panel::after { content: ""; position: absolute; top: 100%; left: 0; right: 0; height: 100lvh; background: var(--card); }
+    /* Nothing of the page leaks behind an open inbox: its scroll locked, its parts out of sight (as the chat's sheet). */
+    html:has(.mk-panel), html:has(.mk-panel) body { overflow: hidden; overscroll-behavior: none; background: var(--card); }
+    html:has(.mk-panel) .main, html:has(.mk-panel) .toasts, html:has(.mk-panel) .masthead { visibility: hidden; }
+    html:has(.mk-panel) .mk-sheet, html:has(.mk-panel) .mk-scrim, html:has(.mk-panel) .mk-toast { visibility: visible; }
+    /* The composer of a comment stays above the keyboard too. */
+    .mk-sheet { bottom: calc(100% - var(--vv-top, 0px) - var(--vv-h, 100%)); max-height: calc(var(--vv-h, 100dvh) * 0.92); overscroll-behavior: contain; }
+    .mk-panel .mk-composer { padding-bottom: max(10px, env(safe-area-inset-bottom, 0px)); }
+    .mk-panel .mk-icon { width: 44px; height: 44px; }
+    .mk-send { width: 44px; height: 44px; }
+    @media (prefers-reduced-motion: no-preference) { .mk-rail { transition: opacity 200ms ease, transform 200ms ease; } .mk-panel { animation: mk-up 240ms cubic-bezier(0.32, 0.72, 0, 1); } }
+  }
+  @keyframes mk-up { from { transform: translateY(100%); } }
+
+  /* Comments on the fields the dashboard draws (FieldMarks.tsx): their words highlighted in place, their pins at the field's end, in the flow, as the body's are. */
+  .fd-wrap { display: contents; }
+  ::highlight(fd-comment) { background-color: color-mix(in srgb, var(--accent) 22%, transparent); }
+  ::highlight(fd-delete) { background-color: color-mix(in srgb, var(--critical) 16%, transparent); text-decoration: line-through 2px var(--critical); }
+  ::highlight(fd-replace) { background-color: color-mix(in srgb, var(--you) 22%, transparent); }
+  ::highlight(fd-question) { background-color: color-mix(in srgb, var(--run) 20%, transparent); }
+  .fd-pins { position: absolute; top: 0; left: 0; width: 0; height: 0; z-index: 20; }
+  .fd-pin { position: absolute; display: block; min-width: 13px; height: 13px; box-sizing: border-box; margin: 0; padding: 0 3px; border: 0; border-radius: 4px; background: var(--card-2); color: var(--muted); box-shadow: 0 0 0 1px var(--card); font: 700 12px/13px var(--mono); font-variant-numeric: tabular-nums; letter-spacing: 0; text-align: center; cursor: pointer; -webkit-user-select: none; user-select: none; }
+  /* A larger hit area than the glyph, invisible. */
+  .fd-pin::after { content: ""; position: absolute; inset: -8px; }
+  .fd-pin::before { content: attr(data-n); }
+  .fd-pin.st-pending { background: var(--you-soft); color: var(--you); }
+  .fd-pin.st-answered { background: color-mix(in srgb, var(--good) 18%, var(--card)); color: var(--good); }
+  .fd-pin.unread { box-shadow: 0 0 0 1px var(--card), 5px -3px 0 -1px var(--accent); }
+  .fd-pin.on { outline: 1.5px solid var(--accent); }
+
+  /* A batch of comments in the chat (BatchCard.tsx): built from its structured marks, never its Markdown; a tap opens the decision's inbox on the comment. */
+  .batch-card { display: grid; gap: 4px; min-width: 0; }
+  .batch-card button { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .bc-head { font-weight: 700; font-stretch: var(--narrow); }
+  .bc-head:hover { text-decoration: underline; text-underline-offset: 2px; }
+  .bc-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+  .bc-item { display: flex !important; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; padding: 5px 8px !important; border-radius: 10px; background: color-mix(in srgb, var(--card) 70%, transparent) !important; }
+  .bc-item:hover { background: var(--card) !important; }
+  .bc-n { display: inline-block; min-width: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 5px; background: var(--card-2); color: var(--muted); font: 700 0.6875rem/18px var(--mono); text-align: center; }
+  .bc-kind { color: var(--k, var(--muted)); font-size: var(--fs-xs); font-weight: 700; font-stretch: var(--narrow); }
+  .bc-q { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+  .bc-with { color: var(--you); overflow-wrap: anywhere; }
+  .bc-c { flex-basis: 100%; color: var(--muted); font-size: var(--fs-s); overflow-wrap: anywhere; }
+
+  /* Hide answered: the switch (in the inbox's head and the plane's card), and the answered threads folded at the inbox's end. */
+  .mk-hide { flex: none; min-height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; background: none; color: var(--muted); font: 600 var(--fs-xs)/1 var(--sans); font-stretch: var(--narrow); cursor: pointer; }
+  .mk-hide[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .mk-card .mk-hide { justify-self: start; }
+  .mk-done { margin: 0 6px 8px; border-top: 1px dashed var(--line); }
+  .mk-done > summary { padding: 8px 10px; color: var(--muted); font-size: var(--fs-s); font-weight: 600; cursor: pointer; }
+  .mk-done .mk-threads { padding-top: 0; }
+  .mk-head .mk-count { margin-right: auto; }
+  .mk-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+  .mk-scroll > .mk-threads { overflow: visible; flex: none; }
+  .mk-toast .mk-undo { padding: 0; border: 0; background: none; color: var(--accent-soft); font: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+  .pill.st-withdrawn { background: var(--card-2); color: var(--faint); text-decoration: line-through; }
+  .bc-gone { color: var(--muted); font-size: var(--fs-s); }

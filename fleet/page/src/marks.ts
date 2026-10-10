@@ -14,7 +14,7 @@
 import { Core, type Json, type JsonRecord, type MarkBatch, type MarkBlock, type MarkDecision, type MarkItem, type MarkKind, type MarkQuote, type Message } from "./core.ts";
 
 /** The kinds a selection can be marked as, in the bar's order. */
-export const QUOTED_KINDS: readonly MarkKind[] = ["comment", "delete", "replace", "question"];
+export const QUOTED_KINDS: readonly Exclude<MarkKind, "general">[] = ["comment", "delete", "replace", "question"];
 
 /** Each kind, as a button and a list say it. */
 export const KIND_WORDS = { comment: "Comment", delete: "Delete", replace: "Replace", question: "Question", general: "General" } as const satisfies { readonly [K in MarkKind]: string };
@@ -377,7 +377,7 @@ function itemMarkdown(s: Sendable, i: number, revision: string): string[] {
 }
 
 /** The batch's message as people read it: the decision, then each mark with its words and comment, the general comments last. */
-export function batchMarkdown(decision: MarkDecision, hash: string, list: readonly Sendable[]): string {
+export function batchMarkdown(decision: MarkDecision, hash: string, list: readonly Sendable[], withdrawn: readonly number[] = [], quoteOf: (n: number) => string = () => ""): string {
   const count = `${String(list.length)} mark${list.length === 1 ? "" : "s"}`;
   const revision = decision.revision || "?";
   const out = [`**Marks on ${md(decision.ref || decision.id, NAME_MAX)}**: ${md(decision.title, WORDS_MAX)}`, `_${count} on revision ${md(revision, NAME_MAX)} · ${hash}_`, ""];
@@ -389,7 +389,8 @@ export function batchMarkdown(decision: MarkDecision, hash: string, list: readon
     out.push(...itemMarkdown(s, i, revision), "");
   }
 
-  const general = list.filter((s) => s.item.kind === "general");
+  const general = list.filter((s) => s.item.kind === "general" && s.item.on === undefined);
+  const replies = list.filter((s) => s.item.kind === "general" && s.item.on !== undefined);
 
   if (general.length) {
     out.push("**General**");
@@ -397,8 +398,35 @@ export function batchMarkdown(decision: MarkDecision, hash: string, list: readon
     for (const g of general) out.push(...quoted(g.item.comment ?? "", ""), "");
   }
 
+  /* Luiz's replies in a comment's thread, batched with the rest, grouped by thread: its comment's words once (one line, at most 120 characters), then each reply. */
+  if (replies.length) {
+    out.push("**Replies**");
+    const threads = [...new Set(replies.map((r) => r.item.on ?? 0))];
+
+    for (const on of threads) {
+      const words = md(quoteOf(on), 120);
+      out.push(`- On #${String(on)}${words ? ` “${words}”` : ""}:`);
+
+      for (const r of replies) if (r.item.on === on) out.push(...quoted(r.item.comment ?? "", "  "));
+      out.push("");
+    }
+  }
+
+  for (const n of withdrawn) out.push(`Luiz withdrew comment #${String(n)}.`);
+
   return out.join("\n").trim();
 }
+
+/** A batch as a card's head says it: how many comments, on what (`3 comments on D30`). */
+export const batchHead = (b: MarkBatch): string => {
+  const n = b.items.length;
+  const on = oneLine(b.decision.ref || b.decision.title || b.decision.id, 120);
+  const gone = b.withdrawn?.length ?? 0;
+
+  if (!n && gone) return `${String(gone)} comment${gone === 1 ? "" : "s"} withdrawn on ${on}`;
+
+  return `${String(n)} comment${n === 1 ? "" : "s"} on ${on}` + (gone ? `, ${String(gone)} withdrawn` : "");
+};
 
 /** A batch as it is posted to the chat: the Markdown people read and the marks, structured. */
 export interface Batch {
@@ -407,10 +435,12 @@ export interface Batch {
 }
 
 /** The one chat message that sends `list`: its Markdown `text` and its structured `marks` (SPEC), quoted marks first, then the general ones. */
-export function makeBatch(decision: MarkDecision, hash: string, list: readonly Sendable[]): Batch {
+export function makeBatch(decision: MarkDecision, hash: string, list: readonly Sendable[], withdrawn: readonly number[] = [], quoteOf: (n: number) => string = () => ""): Batch {
   const ordered = [...list].sort((a, b) => Number(a.item.kind === "general") - Number(b.item.kind === "general") || a.item.n - b.item.n).slice(0, BATCH_MAX);
+  const marks: MarkBatch = { decision, at: { hash }, items: ordered.map((s) => s.item) };
 
-  return { text: batchMarkdown(decision, hash, ordered), marks: { decision, at: { hash }, items: ordered.map((s) => s.item) } };
+  /* Comments Luiz withdrew after they were sent go in a batch to the agent that had them: `withdrawn`, said in a line each. */
+  return { text: batchMarkdown(decision, hash, ordered, withdrawn, quoteOf), marks: withdrawn.length ? { ...marks, withdrawn: [...withdrawn] } : marks };
 }
 
 /** Who a batch reaches, as the page and the server say it. */

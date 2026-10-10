@@ -439,6 +439,8 @@ export interface Message {
   readonly marks?: MarkBatch;
   /** An answer's marks: the `n` of each mark of the batch it is `re` that it answers. */
   readonly mark?: readonly number[];
+  /** Why an answer leaves the marks it names as they are (`say --no-change`): they asked for a change the fleet declines. */
+  readonly keep?: string;
 }
 
 /** What a mark asks of the words it marks; `general` is one comment on the whole decision, with no quote. */
@@ -468,6 +470,8 @@ export interface MarkQuote {
   readonly suffix: string;
   readonly hint: string;
   readonly blocks: readonly MarkBlock[];
+  /** The field of the decision's page the words are in (its title, an option, …), when not its body. */
+  readonly field?: string;
 }
 
 /** A mark: its number on the decision, its kind, the words it is on, the user's comment and, for `replace`, the new words. */
@@ -477,6 +481,8 @@ export interface MarkItem {
   readonly quote?: MarkQuote;
   readonly comment?: string;
   readonly replacement?: string;
+  /** A `general` item that replies in comment `on`'s thread (Luiz's words batched with the rest). */
+  readonly on?: number;
 }
 
 /** The decision a batch of marks is on, as the page had it. */
@@ -492,6 +498,10 @@ export interface MarkBatch {
   readonly decision: MarkDecision;
   readonly at: { readonly hash: string };
   readonly items: readonly MarkItem[];
+  /** The one agent this batch goes to (the decision's owner, or an agent its comments @-cite), as the hub names it. */
+  readonly to?: string;
+  /** Comments of the decision (their numbers) Luiz withdrew after they were sent. */
+  readonly withdrawn?: readonly number[];
 }
 
 /**
@@ -1674,6 +1684,12 @@ function parseMarkBlock(value: Json | undefined): MarkBlock | null {
   return { ...block, cell: cell["head"] === true ? { ...kept, head: true } : kept };
 }
 
+/** A field of a decision's page a mark's words can be in, as `quote.field` names it (fields.ts). */
+const FIELD = /^(?:title|question|why|step|recommendation|option:[A-Za-z0-9_.-]{1,40}(?::consequence)?|history:[1-9][0-9]{0,3})$/u;
+
+/** Whether `s` names a field of a decision's page. */
+const isField = (s: string): boolean => FIELD.test(s);
+
 /** A mark as stored (in a batch, or a draft the page kept), or null for anything else. */
 function parseMarkItem(value: Json | undefined): MarkItem | null {
   if (!isRow(value)) return null;
@@ -1689,12 +1705,17 @@ function parseMarkItem(value: Json | undefined): MarkItem | null {
     const blocks = isRow(quote) && Array.isArray(quote["blocks"]) ? quote["blocks"].flatMap((b) => parseMarkBlock(b) ?? []) : [];
 
     if (!isRow(quote) || !blocks.length) return null;
-    item = { ...item, quote: { text: textIn(quote, "text"), prefix: textIn(quote, "prefix"), suffix: textIn(quote, "suffix"), hint: textIn(quote, "hint"), blocks } };
+    const field = quote["field"];
+    const words = { text: textIn(quote, "text"), prefix: textIn(quote, "prefix"), suffix: textIn(quote, "suffix"), hint: textIn(quote, "hint"), blocks };
+    item = { ...item, quote: isText(field) && isField(field) ? { ...words, field } : words };
   }
 
   if (isText(value["comment"]) && value["comment"]) item = { ...item, comment: value["comment"] };
 
   if (kind === "replace" && isText(value["replacement"])) item = { ...item, replacement: value["replacement"] };
+  const on = value["on"];
+
+  if (kind === "general" && Number.isInteger(on) && Number(on) > 0) item = { ...item, on: Number(on) };
 
   return item;
 }
@@ -1709,7 +1730,12 @@ function parseMarks(value: Json | undefined): MarkBatch | null {
   const ref = textIn(d, "ref");
   const decision = { id: d["id"], title: textIn(d, "title"), revision: textIn(d, "revision") };
 
-  return { decision: ref ? { ...decision, ref } : decision, at: { hash }, items: value["items"].flatMap((i) => parseMarkItem(i) ?? []) };
+  const batch = { decision: ref ? { ...decision, ref } : decision, at: { hash }, items: value["items"].flatMap((i) => parseMarkItem(i) ?? []) };
+  const to = value["to"];
+  const gone = Array.isArray(value["withdrawn"]) ? value["withdrawn"].flatMap((n) => (Number.isInteger(n) && Number(n) > 0 ? [Number(n)] : [])) : [];
+  const sent = isText(to) && /^[A-Za-z0-9_.-]{1,64}$/u.test(to) ? { ...batch, to } : batch;
+
+  return gone.length ? { ...sent, withdrawn: gone } : sent;
 }
 
 /** A chat message as the server stores it, or null for anything else (an error body, a torn line). */
@@ -1756,9 +1782,10 @@ function parseMessage(value: Json | undefined): Message | null {
     side: Number.isInteger(value["side"]) ? Number(value["side"]) : null,
   };
 
-  if (marks) return answers.length ? { ...message, marks, mark: answers } : { ...message, marks };
+  const keep = answers.length && isText(value["keep"]) && value["keep"].trim() ? value["keep"] : null;
+  const answering: Message = answers.length ? (keep === null ? { ...message, mark: answers } : { ...message, mark: answers, keep }) : message;
 
-  return answers.length ? { ...message, mark: answers } : message;
+  return marks ? { ...answering, marks } : answering;
 }
 
 /** The page's views, in the dock's order. */
@@ -2156,6 +2183,7 @@ export const Core = {
   parseMessage,
   parseMarks,
   parseMarkItem,
+  isField,
   parseQuoteAt,
   hearingOf,
   unreadBy,

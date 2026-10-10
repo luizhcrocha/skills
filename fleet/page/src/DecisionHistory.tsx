@@ -13,7 +13,7 @@ import { fitsOneLine, historyOf, type HistoryEntry } from "./history.ts";
 import { Rich } from "./Rich.tsx";
 
 /** One moment: when, what happened, and what it said, on one line; opened to its whole text when cut. */
-function Entry(props: { readonly e: HistoryEntry }): JSX.Element {
+function Entry(props: { readonly e: HistoryEntry; readonly n: number }): JSX.Element {
   const line = (): JSX.Element => (
     <>
       <time class="dv-h-at" datetime={props.e.at} title={fullTime(props.e.at)}>
@@ -25,7 +25,7 @@ function Entry(props: { readonly e: HistoryEntry }): JSX.Element {
   );
 
   return (
-    <li class={"dv-h " + props.e.source}>
+    <li class={"dv-h " + props.e.source} data-field={"history:" + String(props.n)}>
       <Show
         when={fitsOneLine(props.e.text)}
         fallback={
@@ -52,14 +52,14 @@ export function DecisionHistory(props: { readonly d: Decision | undefined }): JS
       <section class="dv-history" id="dv-history" aria-labelledby="dv-history-title">
         <h2 id="dv-history-title">History</h2>
         <ol class="dv-h-list">
-          <Show when={entries()[0]}>{(e) => <Entry e={e()} />}</Show>
+          <Show when={entries()[0]}>{(e) => <Entry e={e()} n={1} />}</Show>
         </ol>
         <Show when={earlier().length}>
           <details class="dv-h-more">
             <summary>{earlier().length === 1 ? "1 earlier" : `${String(earlier().length)} earlier`}</summary>
             <ol class="dv-h-list">
               <For each={earlier()} keyed={(e) => e.key}>
-                {(e) => <Entry e={e()} />}
+                {(e, i) => <Entry e={e()} n={i() + 2} />}
               </For>
             </ol>
           </details>

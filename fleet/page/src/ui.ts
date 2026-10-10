@@ -14,6 +14,7 @@ import { postAsk } from "./embed.ts";
 import { arrange, countsOf, cycleTab, itemsOf, readPrefix, tabsOf, type Item, type Section } from "./find.ts";
 import type { Model } from "./model.ts";
 import { createNotify } from "./notify.ts";
+import { outbox } from "./outbox.ts";
 import { createRecents } from "./recents.ts";
 
 /** The timer and sequence number of the recipients preview. */
@@ -474,6 +475,8 @@ export function createUi(m: Model) {
     }
 
     try {
+      /* What waits on the decision shown goes first, in the same flush: its owner wakes once. */
+      await outbox.current?.();
       const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: json });
       let data: Json = null;
 

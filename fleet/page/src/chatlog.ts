@@ -10,6 +10,7 @@
  * leads to the decision. The decision's page shows it in full, as that decision's thread.
  */
 import { Core, type Message, type Side } from "./core.ts";
+import { batchHead } from "./marks.ts";
 
 /** How far apart two messages of one sender may be and still share their name and time. */
 export const GROUP_MS = 5 * 60_000;
@@ -226,6 +227,13 @@ export interface SideSummary {
   readonly words: string;
 }
 
+/** The decision a batch's place names (`#decision/<id>`, `#decision/<fleet>/<id>`), as the page addresses it. */
+const decisionOfHash = (hash: string): string | null => {
+  const id = /^#decision\/(.+)$/u.exec(hash)?.[1];
+
+  return id ? decodeURIComponent(id) : null;
+};
+
 /** The side chats among `all`, newest activity first; `readOf` is the last message read in each. */
 export function sideSummaries(all: readonly Message[], readOf: (side: number) => number): SideSummary[] {
   const byId = new Map(all.map((m) => [m.id, m]));
@@ -233,14 +241,16 @@ export function sideSummaries(all: readonly Message[], readOf: (side: number) =>
   return Core.sidesOf(all)
     .map((s): SideSummary => {
       const inSide = all.filter((m) => m.side === s.id);
+      /* A decision page's thread a batch of comments opened: titled by the batch, about its decision. */
+      const batch = byId.get(s.id)?.marks;
       const from = s.quote?.from ?? "";
       const first = (s.first.trim().split("\n")[0] ?? "").trim();
 
       return {
         id: s.id,
-        title: first || from || "Side chat",
+        title: batch ? batchHead(batch) : first || from || "Side chat",
         from,
-        decision: Core.quoteDecision(s.quote),
+        decision: batch ? decisionOfHash(batch.at.hash) : Core.quoteDecision(s.quote),
         last: s.last,
         lastAt: byId.get(s.last)?.at ?? "",
         count: s.count,

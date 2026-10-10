@@ -9,8 +9,10 @@ import { ChatIcon, CloseIcon, listen, Pill, usePage, tf } from "./bits.tsx";
 import { copyText, selectAndCopy, type Copied } from "./clip.ts";
 import { Core, type Agent, type Coordinator, type FindRow, type Json, type MarkKind, type QuoteAt } from "./core.ts";
 import { evidence, fromEvidence } from "./DecisionPage.tsx";
-import { parseEmbedMessage, parseEvidenceSelect, parseFrameCommand, parseFrameSaid, postMark, postSelect, REFUSAL_WORDS, type Refusal, type SelRect } from "./embed.ts";
+import { parseEmbedMessage, parseEvidenceSelect, parseFieldPaints, parseFrameCommand, parseFrameSaid, postFieldDelete, postFieldTap, postMark, postSelect, REFUSAL_WORDS, type Refusal, type SelRect } from "./embed.ts";
 import { KIND_WORDS, QUOTED_KINDS, type Claimed } from "./marks.ts";
+import { claimIn, fieldDelete, fieldOf, fieldTap, setFieldPaints } from "./FieldMarks.tsx";
+import type { FieldClaim } from "./fields.ts";
 import { markDesk } from "./Marks.tsx";
 import { GROUPS, groupOf, highlight, rangesIn, type Item } from "./find.ts";
 import { fmtDur, fmtInt, plural, spentWords } from "./format.ts";
@@ -825,14 +827,18 @@ export function forwardSelections(): void {
       return;
     }
 
-    const r = sel.getRangeAt(0).getBoundingClientRect();
-    postSelect(sel.toString(), { top: r.top, bottom: r.bottom, left: r.left, width: r.width }, whereOf(m, node), touch, placeOf(m, node));
+    const range = sel.getRangeAt(0);
+    const r = range.getBoundingClientRect();
+    const field = fieldOf(range);
+    postSelect(sel.toString(), { top: r.top, bottom: r.bottom, left: r.left, width: r.width }, whereOf(m, node), touch, placeOf(m, node), null, null, field ? claimIn(field, range) : null);
     told = true;
   };
 
   listen(document, "pointerdown", (e) => {
     touch = e.pointerType === "touch" || e.pointerType === "pen";
   });
+  fieldTap.current = postFieldTap;
+  fieldDelete.current = postFieldDelete;
   listen(document, "selectionchange", () => {
     clearTimeout(settle);
     settle = setTimeout(tell, FORWARD_MS);
@@ -842,6 +848,15 @@ export function forwardSelections(): void {
     const data: Json = e.data;
 
     /* The marks' messages pass through both ways, each rebuilt from its own fields: the manager's to the body's frame, the frame's (a claim) to the manager. */
+    /* The field marks the manager's page paints here, in this page's own DOM; a tap on one of their pins goes back to it. */
+    const fields = e.source === parent && e.origin === location.origin ? parseFieldPaints(data) : null;
+
+    if (fields) {
+      setFieldPaints(fields);
+
+      return;
+    }
+
     const command = frame && e.source === parent && e.origin === location.origin ? parseFrameCommand(data) : null;
 
     if (frame && command) {
@@ -873,9 +888,36 @@ export function forwardSelections(): void {
   onCleanup(() => clearTimeout(settle));
 }
 
+/** The selection bar's icons (lucide's shapes), drawn in the text's colour. */
+const SEL_ICONS = {
+  copy: ["M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z", "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"],
+  reply: ["M9 17l-5-5 5-5", "M20 18v-2a4 4 0 0 0-4-4H4"],
+  side: ["M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z", "M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"],
+  comment: ["M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", "M13 8H7", "M17 12H7"],
+  delete: ["M16 4H9a3 3 0 0 0-2.83 4", "M14 12a4 4 0 0 1 0 8H6", "M4 12h16"],
+  replace: ["M12 20h9", "M16.4 3.6a1 1 0 0 1 3 3L7.4 18.6a2 2 0 0 1-.9.5l-2.8.8a.5.5 0 0 1-.6-.6l.8-2.8a2 2 0 0 1 .5-.9z"],
+  question: ["M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z", "M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3", "M12 17h.01"],
+} as const satisfies { readonly [K in "copy" | "reply" | "side" | Exclude<MarkKind, "general">]: readonly string[] };
+
+/** One of the bar's icons. */
+function SelIcon(props: { readonly of: keyof typeof SEL_ICONS }): JSX.Element {
+  return (
+    <svg class="i" viewBox="0 0 24 24" aria-hidden="true">
+      <For each={SEL_ICONS[props.of]}>{(d) => <path d={d} />}</For>
+    </svg>
+  );
+}
+
+/** What each of the bar's buttons does, as its tooltip says it. */
+const SEL_TIPS = { copy: "Copy", reply: "Reply in the page's chat", side: "Side chat about these words", comment: "Comment", delete: "Mark for deletion", replace: "Suggest a replacement", question: "Ask a question" } as const satisfies { readonly [K in keyof typeof SEL_ICONS]: string };
+
 /**
  * Text selected anywhere on the page (or in a decision's evidence) offers Copy, and where the chat can be
  * written Reply (the text on the composer as a quote) and Side chat (a conversation of its own about it).
+ * One row of icons in two groups, each with its tooltip: Copy, Reply and Side chat, then, on words of a
+ * decision's body or of a field the dashboard draws on its page, where its marks are on, Comment, Delete,
+ * Replace and Question. On a body's words Reply quotes them into the page's main thread and Side chat
+ * starts a side chat on them, both in the page's inbox.
  * With a mouse the bar sits by the selection, never over it; on a touch screen it docks at the bottom of
  * the screen (`toolDock`), out of the way of the phone's own selection menu. It leaves the browser's own
  * handling alone: it listens to no `contextmenu` or `copy`, and prevents nothing in the text, so a
@@ -893,6 +935,8 @@ export function SelTool(): JSX.Element {
   let framePicked: { readonly fleet: string | null; readonly frame: HTMLIFrameElement } | null = null;
   /* The selection in a decision's body, as its frame claims it: the words a mark would be on, once the marks confirm them. */
   const [anchor, setAnchor] = createSignal<readonly Claimed[] | null>(null);
+  /* Words selected in a field the dashboard draws on a decision's page (its title, an option, a manual step…): a mark there needs no frame. */
+  const [fieldPick, setFieldPick] = createSignal<FieldClaim | null>(null);
   /* Why the frame refused the selection (none of its words is seen): the bar says so, and offers nothing. */
   const [refusal, setRefusal] = createSignal<Refusal | null>(null);
   let settle: ReturnType<typeof setTimeout> | undefined;
@@ -908,6 +952,8 @@ export function SelTool(): JSX.Element {
   /* The scroller given room at its end to scroll that far. */
   let roomed: HTMLElement | null = null;
   const [scale, setScale] = createSignal(1);
+  /* Docked at the bottom of a touch screen: the icons take their words under them. */
+  const [dock, setDock] = createSignal(false);
   /* The text exactly as selected, for Copy; `picked` holds the excerpt a quote takes. */
   let raw = "";
   const [copied, setCopied] = createSignal<Copied | "">("");
@@ -917,6 +963,7 @@ export function SelTool(): JSX.Element {
     clearTimeout(settle);
     framePicked = null;
     setAnchor(null);
+    setFieldPick(null);
     setRefusal(null);
     box = null;
     holder = null;
@@ -947,6 +994,8 @@ export function SelTool(): JSX.Element {
   /* The bar placed for the selection; where its top went, in the layout viewport. */
   const place = (): number | null => {
     if (!tool || !box) return null;
+    setDock(touch);
+    flush();
     const at = touch ? toolDock(tool.offsetWidth, tool.offsetHeight, visual(tool)) : toolPlace(box, tool.offsetWidth, tool.offsetHeight, innerWidth, innerHeight);
     setScale(at.scale ?? 1);
     ui.setToolAt({ top: at.top, left: at.left });
@@ -1015,6 +1064,8 @@ export function SelTool(): JSX.Element {
 
     if (!el || el.closest("textarea, input, .composer, #seltool, .seltool") || !el.closest("#app, #decision, #chat-log")) return;
     const range = sel.getRangeAt(0);
+    const field = markDesk.current?.fieldsOn() === true ? fieldOf(range) : null;
+    setFieldPick(field ? claimIn(field, range) : null);
     show(sel.toString(), whereOf(m, node), placeOf(m, node), boxOf(range), range.endContainer instanceof Element ? range.endContainer : range.endContainer.parentElement);
   };
 
@@ -1095,7 +1146,7 @@ export function SelTool(): JSX.Element {
   };
 
   /* Text selected in `frame`, at `r` in its viewport and `at` on the page, by a touch or not, with the words a mark would be on; empty once the frame's selection is cleared, or refused (`why`, with the marks on). */
-  const pickIn = (frame: HTMLIFrameElement, text: string, r: SelRect | null, from: string, at: QuoteAt, fleet: string | null, byTouch: boolean, quote: readonly Claimed[] | null, why: Refusal | null = null): void => {
+  const pickIn = (frame: HTMLIFrameElement, text: string, r: SelRect | null, from: string, at: QuoteAt, fleet: string | null, byTouch: boolean, quote: readonly Claimed[] | null, why: Refusal | null = null, field: FieldClaim | null = null): void => {
     if (!text) {
       if (why && r && markDesk.current?.on() === true) {
         touch = byTouch;
@@ -1112,6 +1163,7 @@ export function SelTool(): JSX.Element {
     touch = byTouch;
     const { top, bottom, left, width } = within(frame, r);
     setAnchor(quote);
+    setFieldPick(field && markDesk.current?.fieldsOn() === true ? field : null);
     show(text, from, at, { first: { top, bottom }, last: { top, bottom }, left, width }, frame);
     framePicked = { fleet, frame };
   };
@@ -1125,7 +1177,7 @@ export function SelTool(): JSX.Element {
     if (fleetFrame && shown && fleet && e.source === fleetFrame.contentWindow) {
       const said = parseEmbedMessage(e.data);
 
-      if (said?.kind === "select") pickIn(fleetFrame, said.text, said.rect, said.from ? said.from + ", in " + fleet : fleet, fleetPlace(shown, said.at), fleet, said.touch, said.anchor ?? null, said.refused ?? null);
+      if (said?.kind === "select") pickIn(fleetFrame, said.text, said.rect, said.from ? said.from + ", in " + fleet : fleet, fleetPlace(shown, said.at), fleet, said.touch, said.anchor ?? null, said.refused ?? null, said.field ?? null);
 
       if (parseFrameSaid(e.data)?.kind === "esc") dismiss(e);
 
@@ -1195,7 +1247,68 @@ export function SelTool(): JSX.Element {
   });
 
   /* The selection is in a decision's body where marks are on: the bar offers the kinds of mark too. */
-  const marking = (): boolean => anchor() !== null && markDesk.current?.on() === true;
+  const marking = (): boolean => (anchor() !== null && markDesk.current?.on() === true) || (fieldPick() !== null && markDesk.current?.fieldsOn() === true);
+
+  const onPick = (e: MouseEvent): void => {
+    const b = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-sel]") : null;
+    const quote = ui.picked();
+    const fleet = framePicked?.fleet;
+
+    if (!b || !quote) return;
+
+    if (b.dataset["sel"] === "copy") {
+      copy();
+
+      return;
+    }
+
+    const kind = QUOTED_KINDS.find((k) => k === b.dataset["mark"]);
+    const words = anchor();
+    const field = fieldPick();
+
+    if (kind && field) {
+      hide();
+      getSelection()?.removeAllRanges();
+      markDesk.current?.beginField(kind, field);
+
+      return;
+    }
+
+    if (kind && words) {
+      hide();
+      markDesk.current?.begin(kind, words);
+
+      return;
+    }
+
+    /* Words of a decision's body go to the page's own conversations, in its inbox; a field's words (the page's own text) keep the chat's Reply and Side chat, which link back to them. */
+    const inbox = anchor() !== null && markDesk.current?.on() === true ? markDesk.current : null;
+    const frame = framePicked?.frame ?? null;
+    hide();
+    getSelection()?.removeAllRanges();
+
+    if (inbox) {
+      frame?.contentWindow?.postMessage({ annotClearSel: true }, "*");
+
+      if (b.dataset["sel"] === "side") inbox.side(quote);
+      else inbox.reply(quote);
+
+      return;
+    }
+
+    m.setQuote(quote);
+    m.setReply(null);
+    m.setFocus(b.dataset["sel"] === "side" ? "new" : null);
+
+    if (fleet) {
+      ui.writeTo(fleet);
+
+      return;
+    }
+
+    ui.openChat();
+    ui.refs.say?.focus();
+  };
 
   const copy = (): void => {
     copyText(
@@ -1209,9 +1322,17 @@ export function SelTool(): JSX.Element {
     );
   };
 
+  /* A button of the bar: its icon, its tooltip, and its word (shown under the icon when docked). */
+  const Btn = (p: { readonly of: keyof typeof SEL_ICONS; readonly sel: string; readonly word: string; readonly tip?: string | undefined }): JSX.Element => (
+    <button type="button" class={"k-" + p.of} data-sel={p.sel} data-mark={p.sel === "mark" ? p.of : undefined} data-tip={p.tip ?? SEL_TIPS[p.of]} aria-label={p.tip ?? SEL_TIPS[p.of]}>
+      <SelIcon of={p.of} />
+      <small>{p.word}</small>
+    </button>
+  );
+
   return (
     <div
-      class={"seltool" + (marking() ? " marking" : "")}
+      class={"seltool" + (marking() ? " marking" : "") + (dock() ? " docked" : "")}
       id="seltool"
       role="toolbar"
       aria-label="Selected text"
@@ -1220,56 +1341,8 @@ export function SelTool(): JSX.Element {
       ref={(el) => (tool = el)}
       /* A press on the bar keeps the selection (a press on the text is the browser's). */
       onPointerDown={(e) => e.preventDefault()}
-      onClick={(e) => {
-        const b = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-sel]") : null;
-        const quote = ui.picked();
-        const fleet = framePicked?.fleet;
-
-        if (!b || !quote) return;
-
-        if (b.dataset["sel"] === "copy") {
-          copy();
-
-          return;
-        }
-
-        const kind = QUOTED_KINDS.find((k) => k === b.dataset["mark"]);
-        const words = anchor();
-
-        if (kind && words) {
-          hide();
-          markDesk.current?.begin(kind, words);
-
-          return;
-        }
-
-        hide();
-        getSelection()?.removeAllRanges();
-        m.setQuote(quote);
-        m.setReply(null);
-        m.setFocus(b.dataset["sel"] === "side" ? "new" : null);
-
-        if (fleet) {
-          ui.writeTo(fleet);
-
-          return;
-        }
-
-        ui.openChat();
-        ui.refs.say?.focus();
-      }}
+      onClick={onPick}
     >
-      <Show when={marking()}>
-        <span class="seltool-marks" role="group" aria-label="Mark the words">
-          <For each={QUOTED_KINDS}>
-            {(k: MarkKind) => (
-              <button type="button" class={"k-" + k} data-sel="mark" data-mark={k}>
-                {KIND_WORDS[k]}
-              </button>
-            )}
-          </For>
-        </span>
-      </Show>
       <Show when={refusal()}>
         {(why) => (
           <span class="seltool-note" role="status">
@@ -1278,17 +1351,19 @@ export function SelTool(): JSX.Element {
         )}
       </Show>
       <Show when={!refusal()}>
-        <button type="button" data-sel="copy">
-          {copied() === "copied" ? "Copied" : copied() === "selected" ? "Press Ctrl+C" : "Copy"}
-        </button>
+        <span class="seltool-chat" role="group" aria-label="The words">
+          <Btn of="copy" sel="copy" word={copied() === "copied" ? "Copied" : copied() === "selected" ? "Press Ctrl+C" : "Copy"} tip={copied() === "copied" ? "Copied" : copied() === "selected" ? "Press Ctrl+C" : undefined} />
+          <Show when={m.chatWritable() && ui.picked()?.text}>
+            <Btn of="reply" sel="reply" word="Reply" />
+            <Btn of="side" sel="side" word="Side chat" />
+          </Show>
+        </span>
       </Show>
-      <Show when={m.chatWritable() && ui.picked()?.text}>
-        <button type="button" data-sel="reply">
-          Reply
-        </button>
-        <button type="button" data-sel="side">
-          Side chat
-        </button>
+      <Show when={marking()}>
+        <span class="seltool-sep" aria-hidden="true" />
+        <span class="seltool-marks" role="group" aria-label="Mark the words">
+          <For each={QUOTED_KINDS}>{(k) => <Btn of={k} sel="mark" word={KIND_WORDS[k]} />}</For>
+        </span>
       </Show>
     </div>
   );

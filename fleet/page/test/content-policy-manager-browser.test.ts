@@ -15,7 +15,7 @@ test.skipIf(!found)("on the manager's page, inside the fleet's frame: no row run
     await page.goto(url, { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => document.querySelector("#conn")?.textContent === "Live");
     const frame = await bodyFrame(page);
-    await page.waitForSelector("#mk-section");
+    await page.waitForSelector("#mk-rail");
 
     return { url, frame, height: () => page.$eval("#dv-embed", (e) => e.getBoundingClientRect().height) };
   });

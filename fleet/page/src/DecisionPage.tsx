@@ -20,9 +20,11 @@ import { DecisionHistory } from "./DecisionHistory.tsx";
 import { DetailsFold } from "./DetailsFold.tsx";
 import { DecisionThread } from "./DecisionThread.tsx";
 import { FRAME_MAX_PX, parseEmbedMessage, postAnswered, saidBy } from "./embed.ts";
-import { MARK_CSS, markScript } from "./markframe.ts";
+import { markCss, markScript } from "./markframe.ts";
 import { draftsKey } from "./marks.ts";
-import { Marks, type MarkTarget } from "./Marks.tsx";
+import { answerBody } from "./autosend.ts";
+import { FieldHighlights } from "./FieldMarks.tsx";
+import { markDesk, Marks, type MarkTarget } from "./Marks.tsx";
 import { clock } from "./format.ts";
 import { KIND_WORDS, StatePill } from "./Overview.tsx";
 import { CodeBlock, ManualText, Rich, UndoText } from "./Rich.tsx";
@@ -30,7 +32,7 @@ import { approvalHref } from "./Approvals.tsx";
 import { bodyPolicy } from "../../src/hub/body-policy.ts";
 import { safeBody, type SafeBody } from "./safebody.ts";
 
-const TOKENS = ["bg", "card", "card-2", "text", "muted", "faint", "line", "accent", "accent-soft", "you", "run", "good", "warning", "serious", "critical", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
+const TOKENS = ["bg", "card", "card-2", "text", "muted", "faint", "line", "accent", "accent-soft", "you", "you-soft", "run", "good", "warning", "serious", "critical", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
 
 const esc = (s: string): string => s.replace(/[&<>"']/gu, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
 
@@ -99,7 +101,7 @@ pre{background:var(--card-2);padding:10px 12px;border-radius:6px;overflow-x:auto
 img,svg,video,canvas{max-width:100%;height:auto}
 .num{font-variant-numeric:tabular-nums;font-stretch:84%;text-align:right}
 .muted{color:var(--muted)}.good{color:var(--good)}.warning{color:var(--warning)}.critical{color:var(--critical)}
-${MARK_CSS}
+${markCss(token)}
 </style></head><body>${html}
 <scr` + `ipt nonce="${nonce}">(function(){document.querySelectorAll("table").forEach(function(t){var rows=Array.prototype.slice.call(t.rows),head=t.tHead&&t.tHead.rows[0];if(!head&&rows[0]&&Array.prototype.every.call(rows[0].cells,function(c){return c.tagName==="TH"})){head=rows[0];head.classList.add("head")}if(!head)return;var h=head.cells,long=false;rows.forEach(function(r){if(r===head||r.parentNode===t.tHead)return;Array.prototype.forEach.call(r.cells,function(c,i){if(h[i])c.setAttribute("data-label",h[i].textContent.trim());if(c.textContent.length>40)long=true})});if(long)t.classList.add("cards")});var post=function(){parent.postMessage({fleetEvidence:true,fleetFrame:${tok},height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post();})();
 ${markScript(token)}</scr` + `ipt></body></html>`;
@@ -226,14 +228,20 @@ function Options(props: { readonly d: Decision; readonly pick: boolean }): JSX.E
 
         const inner = (): JSX.Element => (
           <>
-            <span class="label">
+            <span class="label" data-field={"option:" + o().id}>
               {props.pick ? o().id + ": " : ""}
               {o().label}
               <Show when={o().id === props.d.recommend}>
                 <PillAs cls="recommended plain" text="recommended" />
               </Show>
             </span>
-            <Show when={o().consequence}>{(c) => <Rich class="consequence" text={c()} refs />}</Show>
+            <Show when={o().consequence}>
+              {(c) => (
+                <div class="fd-wrap" data-field={"option:" + o().id + ":consequence"}>
+                  <Rich class="consequence" text={c()} refs />
+                </div>
+              )}
+            </Show>
           </>
         );
 
@@ -264,7 +272,9 @@ function Manual(props: { readonly d: Decision; readonly title: string }): JSX.El
     <Show when={props.d.manual}>
       <div class="dv-block">
         <h3>{props.title}</h3>
-        <ManualText text={props.d.manual ?? ""} />
+        <div class="fd-wrap" data-field="step">
+          <ManualText text={props.d.manual ?? ""} />
+        </div>
       </div>
     </Show>
   );
@@ -378,10 +388,14 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
       return;
     }
 
-    const json = JSON.stringify({ ...out, decision: d.id });
+    /* The decision's pending comments ride along with the answer: one write, the batch first (SPEC, API 2). */
+    const desk = markDesk.current;
+    const ride = desk?.ride(d.id) ?? null;
+    const json = JSON.stringify(answerBody(out, d.id, ride));
     const over = Core.tooBig(json, m.maxBytes());
 
     if (over) {
+      desk?.rode(ride, null);
       setError(over);
 
       return;
@@ -392,6 +406,8 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
     buttons.forEach((b) => {
       b.disabled = true;
     });
+
+    let stored: Json = null;
 
     try {
       const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: json });
@@ -410,6 +426,7 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
       }
 
       m.prefs.remove(draftKey());
+      stored = body;
       ui.addMessage(body, true);
 
       /* A grilling answered in part still waits; the manager hears of it once nothing is left to answer. */
@@ -417,6 +434,7 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
     } catch {
       setError("Could not reach the dashboard's server. Your answer is kept here; send it again when the server is back.");
     } finally {
+      desk?.rode(ride, stored);
       buttons.forEach((b) => {
         b.disabled = false;
       });
@@ -991,7 +1009,7 @@ function Why(props: { readonly text: string; readonly blocking: boolean }): JSX.
   return (
     <div class={"dv-why" + (props.blocking ? " blocking" : "") + (long() && !open() ? " folded" : "")}>
       <h3>{whyHeading(props.text, props.blocking)}</h3>
-      <div class="dv-why-text">
+      <div class="dv-why-text" data-field="why">
         <Rich text={props.text} refs />
       </div>
       <Show when={long()}>
@@ -1024,7 +1042,7 @@ function Info(props: { readonly d: Decision }): JSX.Element {
           </Show>
           <PillAs cls="plain" text={KIND_WORDS[d().kind] || d().kind} />
         </div>
-        <h1>
+        <h1 data-field="title">
           <RefTag of={d()} />
           {d().title}
         </h1>
@@ -1104,7 +1122,9 @@ function Info(props: { readonly d: Decision }): JSX.Element {
         )}
       </Show>
       <section class="dv-ask" aria-label="The question">
-        <Rich class="dv-question" text={ask().lead} refs />
+        <div class="fd-wrap" data-field="question">
+          <Rich class="dv-question" text={ask().lead} refs />
+        </div>
         <Show when={d().kind === "grill" && open() ? d().question : null}>{(n) => <p class="dv-meta dv-count">{n()}</p>}</Show>
         <Show when={ask().more.length}>
           <div class="dv-ask-more">
@@ -1167,8 +1187,10 @@ function Recommendation(props: { readonly d: Decision }): JSX.Element {
       <Show when={props.d.recommend}>
         <aside class="dv-rec" aria-label="Recommended">
           <h3>Recommended</h3>
-          <p class="dv-rec-pick">{recommended() ? `${recommended()?.id ?? ""}: ${recommended()?.label ?? ""}` : props.d.recommend}</p>
-          <Show when={props.d.reason}>{(r) => <Rich class="dv-rec-why" text={r()} refs />}</Show>
+          <div class="fd-wrap" data-field="recommendation">
+            <p class="dv-rec-pick">{recommended() ? `${recommended()?.id ?? ""}: ${recommended()?.label ?? ""}` : props.d.recommend}</p>
+            <Show when={props.d.reason}>{(r) => <Rich class="dv-rec-why" text={r()} refs />}</Show>
+          </div>
         </aside>
       </Show>
       <Show when={props.d.advised}>{(a) => <Advised text={a()} />}</Show>
@@ -1384,7 +1406,26 @@ function MarksOn(props: { readonly id: string }): JSX.Element {
   const theirs = Core.parseFleetDecision(props.id);
   const fleet = theirs?.fleet ?? fleetName(m);
   const own = theirs?.id ?? props.id;
-  const found = (): Decision | undefined => (theirs ? m.decisionAnywhere(props.id) : m.decisionById(props.id));
+  /* A fleet's decision the manager's state no longer lists (decided, answered): read from the fleet's own state. */
+  const [theirOwn, setTheirOwn] = createSignal<Decision | undefined>(undefined);
+  const found = (): Decision | undefined => (theirs ? (m.decisionAnywhere(props.id) ?? theirOwn()) : m.decisionById(props.id));
+
+  if (theirs) {
+    let live = true;
+
+    void fetch(m.fleetPage(theirs.fleet) + "state.json", { cache: "no-store" })
+      .then(async (res): Promise<Json> => (res.ok ? await res.json() : null))
+      .then((data) => {
+        const d = Core.parseState(data)?.decisions.find((x) => x.id === theirs.id);
+
+        if (live && d) setTheirOwn(d);
+      })
+      .catch(() => undefined);
+    onCleanup(() => {
+      live = false;
+    });
+  }
+
   /* A fleet's decision on the manager's page: its body fetched from the fleet's page, as that page fetches it for its frame. */
   const [theirBody, setTheirBody] = createSignal<string | null>(null);
 
@@ -1422,6 +1463,11 @@ function MarksOn(props: { readonly id: string }): JSX.Element {
       const d = found();
 
       return d ? markDecision(d, own) : null;
+    },
+    answered: () => {
+      const d = found();
+
+      return d === undefined ? null : d.status !== "open";
     },
     frame: () => (theirs ? document.querySelector<HTMLIFrameElement>("#dv-embed") : evidence.frame),
     body: () => (theirs ? theirBody() : evidenceDoc()),
@@ -1462,6 +1508,7 @@ export function DecisionPage(): JSX.Element {
       <Show when={!m.embed && m.viewing()} keyed>
         {(id) => <MarksOn id={id} />}
       </Show>
+      <FieldHighlights />
     </main>
   );
 }

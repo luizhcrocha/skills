@@ -1,7 +1,8 @@
 /**
  * A stand-in for the hub's fleet routes, for the page's browser tests and screenshots: the page rendered
  * from a template and a fixture view (the real `pageHtml`), `GET events` (SSE `hello`, `state`, `chat`),
- * `POST chat` (keeping its `re`, `decision`, `quote`, `side` and `marks`), `POST chat/preview` (a batch of marks on
+ * `POST chat` (keeping its `re`, `decision`, `quote`, `side` and `marks`; an answer's `batch` stored before it, as the hub
+ * stores the comments riding along, and given back as its `batch`), `POST chat/preview` (a batch of marks on
  * `#decision/<fleet>/<id>` to that fleet, anything else to the host), `GET decisions/<id>.html` (a decision's
  * body, as `bodies` or `setBody` give it), `POST name` (a worker's or the
  * fleet's name, applied to the view as the hub's ledger and registry would, a worker's name another has refused), `GET skills`, `GET state.json`
@@ -75,8 +76,8 @@ interface SkillList {
   readonly builtins: boolean;
 }
 
-/** What the harness sends as JSON: a view, a message, the skills or any plain JSON. */
-type Payload = Json | Message | SkillList;
+/** What the harness sends as JSON: a view, a message (an answer with the batch stored before it), the skills or any plain JSON. */
+type Payload = Json | Message | SkillList | (Message & { readonly batch: Message });
 
 /** Serve the page at `/f/<fleet>/` and its routes beside it. */
 export function serveHarness(options: HarnessOptions): Harness {
@@ -169,7 +170,16 @@ export function serveHarness(options: HarnessOptions): Harness {
 
       if (req.method === "POST" && path === "/chat") {
         // SAFETY: the page posts a JSON object with these fields.
-        const body = (await req.json()) as { text: string; re?: number; decision?: string; quote?: Message["quote"]; side?: number | "new"; marks?: JsonRecord };
+        const body = (await req.json()) as { text: string; re?: number; decision?: string; quote?: Message["quote"]; side?: number | "new"; marks?: JsonRecord; batch?: { text: string; marks: JsonRecord } };
+        let stored: Message | null = null;
+
+        if (body.batch !== undefined) {
+          const bid = Math.max(0, ...messages.map((x) => x.id)) + 1;
+          stored = { id: bid, at: new Date().toISOString(), from: "user", to: ["coordinator"], text: body.batch.text, marks: body.batch.marks };
+          messages.push(stored);
+          posted.push(stored);
+        }
+
         const id = Math.max(0, ...messages.map((x) => x.id)) + 1;
         let m: Message = { id, at: new Date().toISOString(), from: "user", to: ["coordinator"], text: body.text };
 
@@ -184,9 +194,11 @@ export function serveHarness(options: HarnessOptions): Harness {
         if (body.marks !== undefined) m = { ...m, marks: body.marks };
         messages.push(m);
         posted.push(m);
+
+        if (stored) broadcast(event("chat", stored, stored.id));
         broadcast(event("chat", m, m.id));
 
-        return json(201, m);
+        return json(201, stored ? { ...m, batch: stored } : m);
       }
 
       if (req.method === "POST" && path === "/name") {

@@ -13,6 +13,9 @@
  * `parseFrameCommand`): the body's scripts post from the same frame, so nothing the frame says rides along.
  */
 import { Core, type ItemRef, type Json, type JsonRecord, type MarkKind, type QuoteAt } from "./core.ts";
+import type { FieldPaint } from "./FieldMarks.tsx";
+import { parseFieldClaim, type FieldClaim } from "./fields.ts";
+import type { MarkStatus } from "./inbox.ts";
 import { parseClaim, QUOTED_KINDS, type Claimed } from "./marks.ts";
 
 /** Where a selection sits in the frame's viewport: its first line's top, its last line's bottom, and across. */
@@ -22,10 +25,15 @@ export type SelRect = { readonly top: number; readonly bottom: number; readonly 
 export type EmbedMessage =
   | { readonly kind: "height"; readonly height: number }
   | { readonly kind: "answered"; readonly id: string }
-  | { readonly kind: "select"; readonly text: string; readonly rect: SelRect | null; readonly from: string; readonly touch: boolean; readonly at: QuoteAt | null; readonly anchor?: readonly Claimed[]; readonly refused?: Refusal }
+  | { readonly kind: "select"; readonly text: string; readonly rect: SelRect | null; readonly from: string; readonly touch: boolean; readonly at: QuoteAt | null; readonly anchor?: readonly Claimed[]; readonly refused?: Refusal; readonly field?: FieldClaim }
   | { readonly kind: "open"; readonly id: string }
+  | { readonly kind: "fieldTap"; readonly id: string }
+  | { readonly kind: "fieldDelete"; readonly id: string }
   | { readonly kind: "finder" }
   | { readonly kind: "ask"; readonly item: ItemRef; readonly side: boolean; readonly text: string };
+
+/** Where a mark's thread stands, as a pin shows it. */
+const MARK_STATUSES: readonly MarkStatus[] = ["pending", "sent", "answered"];
 
 /** The tallest a frame is made, whatever height it reports. */
 export const FRAME_MAX_PX = 20_000;
@@ -55,8 +63,10 @@ function parseSelect(v: Json | undefined): EmbedMessage | null {
 
   const said = { kind: "select", text, rect: text || refused ? rect : null, from, touch: v["touch"] === true, at: text || refused ? Core.parseQuoteAt(v["at"]) : null } as const;
   const anchor = text ? parseClaim(v["anchor"]) : null;
+  const field = text ? parseFieldClaim(v["field"]) : null;
+  const picked = anchor ? { ...said, anchor } : refused ? { ...said, refused } : said;
 
-  return anchor ? { ...said, anchor } : refused ? { ...said, refused } : said;
+  return field ? { ...picked, field } : picked;
 }
 
 /** Whether `e` comes from `frame` and from the document the page gave it, whose script posts with `token` (DecisionPage's `frameDoc`). */
@@ -113,8 +123,8 @@ export type FrameSaid =
   | { readonly kind: "tap"; readonly id: string }
   | { readonly kind: "esc" };
 
-/** A mark's id as the page names it to the frame: `d<n>` a draft, `s<batch>-<n>` one sent. */
-const MARK_ID = /^(d\d{1,9}|s\d{1,12}-\d{1,9})$/u;
+/** A mark's id as the page names it to the frame: its thread's key, `m:<n>`. */
+const MARK_ID = /^m:\d{1,9}$/u;
 
 /** A marks' message from the body's frame, rebuilt from its own fields; null for anything else. */
 export function parseFrameSaid(data: Json | undefined): FrameSaid | null {
@@ -160,7 +170,9 @@ const paintOf = (v: Json | undefined): JsonRecord | null => {
   if (!isRecord(v) || !isString(v["id"]) || !MARK_ID.test(v["id"]) || !isNumber(v["n"]) || !isString(v["kind"]) || !Array.isArray(v["blocks"])) return null;
   const claim = parseClaim(v);
 
-  return claim ? { ...claimJson(claim), id: v["id"], n: v["n"], kind: v["kind"], done: v["done"] === true, active: v["active"] === true, show: v["show"] === true } : null;
+  const status = MARK_STATUSES.find((x) => x === v["status"]) ?? "sent";
+
+  return claim ? { ...claimJson(claim), id: v["id"], n: v["n"], kind: v["kind"], done: v["done"] === true, active: v["active"] === true, show: v["show"] === true, status, unread: v["unread"] === true } : null;
 };
 
 /**
@@ -217,6 +229,18 @@ export function parseEmbedMessage(data: Json | undefined): EmbedMessage | null {
 
   if ("finder" in data) return data["finder"] === true ? { kind: "finder" } : null;
 
+  if ("fieldTap" in data) {
+    const id = data["fieldTap"];
+
+    return isString(id) && MARK_ID.test(id) ? { kind: "fieldTap", id } : null;
+  }
+
+  if ("fieldDelete" in data) {
+    const id = data["fieldDelete"];
+
+    return isString(id) && MARK_ID.test(id) ? { kind: "fieldDelete", id } : null;
+  }
+
   if ("ask" in data) return parseAsk(data["ask"]);
 
   if (height === Number(height) && Number(height) > 0) return { kind: "height", height: Number(height) };
@@ -231,16 +255,43 @@ export const postHeight = (): void => post({ fleetEmbed: true, height: Math.ceil
 export const postAnswered = (id: string): void => post({ fleetEmbed: true, answered: id });
 
 /** Text selected in the frame, where it sits, where on the page it is (as words and as a place), whether a touch made it, and in the body's frame the selection as it reads it (`anchor`); empty text once cleared. */
-export function postSelect(text: string, rect: SelRect | null, from: string, touch: boolean, at: QuoteAt | null = null, anchor: Json = null, refused: Refusal | null = null): void {
+export function postSelect(text: string, rect: SelRect | null, from: string, touch: boolean, at: QuoteAt | null = null, anchor: Json = null, refused: Refusal | null = null, field: FieldClaim | null = null): void {
   const why = text || !rect ? null : refused;
   const select = { text, rect: text || why ? rect : null, from: text ? from : "", touch: text || why ? touch : false };
   const placed = (text || why) && at ? { ...select, at: { ...at } } : select;
+  const said = text && anchor !== null ? { ...placed, anchor } : why ? { ...placed, refused: why } : placed;
 
-  post({ fleetEmbed: true, select: text && anchor !== null ? { ...placed, anchor } : why ? { ...placed, refused: why } : placed });
+  post({ fleetEmbed: true, select: text && field ? { ...said, field: { ...field } } : said });
 }
 
 /** A marks' message from the body's frame, told to the manager: rebuilt from its own fields. */
 export const postMark = (said: FrameSaid): void => post(frameSaidJson(said));
+
+/** A tap on a pin of a field's mark, told to the manager's page, whose inbox holds the mark. */
+export const postFieldTap = (id: string): void => post({ fleetEmbed: true, fieldTap: id });
+
+/** A pin of a field's mark deleted (its long-press, context menu or Delete key), told to the manager's page. */
+export const postFieldDelete = (id: string): void => post({ fleetEmbed: true, fieldDelete: id });
+
+/**
+ * The field marks the manager's page asks the fleet's page framed in it to paint (`{annotFields, marks}`),
+ * each rebuilt from its own fields; null for any other message.
+ */
+export function parseFieldPaints(data: Json | undefined): FieldPaint[] | null {
+  if (!isRecord(data) || data["annotFields"] !== true) return null;
+  const out: FieldPaint[] = [];
+
+  for (const v of Array.isArray(data["marks"]) ? data["marks"] : []) {
+    if (!isRecord(v) || !isString(v["id"]) || !MARK_ID.test(v["id"]) || !isNumber(v["n"]) || !isString(v["field"]) || !Core.isField(v["field"]) || !isString(v["kind"])) continue;
+    const kind = QUOTED_KINDS.find((k) => k === v["kind"]);
+    const claim = parseClaim(v);
+    const status = MARK_STATUSES.find((x) => x === v["status"]);
+
+    if (kind && claim && status) out.push({ id: v["id"], n: v["n"], field: v["field"], kind, blocks: claim, status, unread: v["unread"] === true, active: v["active"] === true });
+  }
+
+  return out;
+}
 
 /** Another of the fleet's decisions, to open on the manager's page. */
 export const postOpen = (id: string): void => post({ fleetEmbed: true, open: id });

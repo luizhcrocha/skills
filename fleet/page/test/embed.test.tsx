@@ -492,7 +492,8 @@ test("embedded, the fleet's page tells the manager of text selected in it once i
   expect(selects()).toEqual([]);
   await new Promise((r) => setTimeout(r, 250));
   const rect = { top: expect.any(Number), bottom: expect.any(Number), left: expect.any(Number), width: expect.any(Number) };
-  expect(selects()).toEqual([{ fleetEmbed: true, select: { text: String(getSelection()), rect, from: "Rounding rule for totals", touch: false, at: { hash: "#decision/d1", anchor: "dv-info" } } }]);
+  /* The title is a field the manager's page can mark: the fleet's page says which, and where in it. */
+  expect(selects()).toEqual([{ fleetEmbed: true, select: { text: String(getSelection()), rect, from: "Rounding rule for totals", touch: false, at: { hash: "#decision/d1", anchor: "dv-info" }, field: { field: "title", exact: "D1 Rounding rule for totals", prefix: "", suffix: "" } } }]);
   expect(String(getSelection())).toContain("Rounding rule for totals");
   getSelection()?.removeAllRanges();
   document.dispatchEvent(new Event("selectionchange"));

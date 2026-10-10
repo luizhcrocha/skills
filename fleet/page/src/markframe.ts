@@ -3,9 +3,10 @@
  * reaches it only by postMessage). It runs beside the body's own scripts, which can post the same messages,
  * so everything it says is a claim the page checks, never a command: it reports a selection as blocks of
  * words with the text around each (the page confirms them against the body as it parsed it, and reads the
- * cells and headings itself); paints the marks it is told of as numbered `<mark>` elements, each found
- * again by `placeMark`; and tells the page of a tap on a mark (acted on only after a real one) and of
- * Escape (which closes the selection bar only). Keys pressed here send, save and open nothing.
+ * cells and headings itself); paints the marks it is told of as `<mark>` elements, each found again by
+ * `placeMark`, with its pin (a footnote number raised over the end of its last piece by CSS, taking no
+ * room in the line, so the text wraps as it did and the pin stays over its own words); and tells the page of a tap on a mark or a
+ * pin (acted on only after a real one) and of Escape (which closes the selection bar only). Keys pressed here send, save and open nothing.
  *
  * With the body's scripts held off by the frame's policy, this script runs alone in the frame, so it reads the
  * browser's own layout: a selection keeps only the words Luiz could see there (`seen`), and one with none
@@ -19,6 +20,7 @@
  * visible words, `refused` why none of them is (`Unseen`). On the manager's page the fleet's embedded page
  * relays them, rebuilt.
  */
+import type { MarkStatus } from "./inbox.ts";
 import { placeMark } from "./marks.ts";
 
 /** A mark as the page tells the frame of it. */
@@ -30,6 +32,10 @@ interface Paint {
   readonly done: boolean;
   readonly active: boolean;
   readonly show: boolean;
+  /** Where its thread stands: its pin amber while pending, grey once sent, green once answered. */
+  readonly status: MarkStatus;
+  /** Whether an answer in its thread is unread: a dot on its pin. */
+  readonly unread: boolean;
 }
 
 /** One block of a selection, with the body's text around it. */
@@ -88,6 +94,8 @@ interface FrameCommand {
  * uses nothing outside itself.
  */
 function markFrame(place: typeof placeMark, token: string): void {
+  /* The pins' class, named after the render's token: one the body cannot guess, to style or to have removed. */
+  const FOOT = "af" + token.replace(/[^A-Za-z0-9]/gu, "");
   const BLOCK = "p,li,td,th,h1,h2,h3,h4,pre,dd,dt,caption,figcaption,blockquote";
   let touch = false;
   let marks: readonly Paint[] = [];
@@ -491,6 +499,7 @@ function markFrame(place: typeof placeMark, token: string): void {
   };
 
   const unpaint = (): void => {
+    for (const foot of document.querySelectorAll("." + FOOT)) foot.remove();
     const ms = [...document.querySelectorAll("mark.am")];
 
     for (const m of ms.reverse()) {
@@ -501,8 +510,12 @@ function markFrame(place: typeof placeMark, token: string): void {
     document.body.normalize();
   };
 
-  /* Wrap the body's text from `start` to `end` in <mark>s (one per text node it crosses), the first with the mark's number. */
-  const wrap = (start: number, end: number, m: Paint, first: boolean): void => {
+  /*
+   * Wrap the body's text from `start` to `end` in <mark>s (one per text node it crosses), the first with the
+   * mark's number; after the `last` one, its pin: an empty span whose CSS draws the number (the body's text,
+   * where marks are found, gains no character, and its lines no room).
+   */
+  const wrap = (start: number, end: number, m: Paint, first: boolean, last: boolean): void => {
     const cuts: { node: Text; a: number; b: number }[] = [];
 
     for (const { node, start: s } of texts().list) {
@@ -527,6 +540,16 @@ function markFrame(place: typeof placeMark, token: string): void {
 
       mid.parentNode?.insertBefore(el, mid);
       el.appendChild(mid);
+
+      /* After the last piece, its pin: an empty, zero-width span whose CSS raises a footnote number over the end of the words, taking no room in the line. */
+      if (last && i === cuts.length - 1) {
+        const foot = document.createElement("span");
+        foot.className = FOOT + " st-" + m.status + (m.unread ? " unread" : "") + (m.active ? " on" : "");
+        foot.setAttribute("data-id", m.id);
+        foot.setAttribute("data-pin", String(m.n));
+        foot.setAttribute("aria-hidden", "true");
+        el.after(foot);
+      }
     });
   };
 
@@ -562,11 +585,15 @@ function markFrame(place: typeof placeMark, token: string): void {
     const restore = keepSelection();
     unpaint();
     const text = texts().text;
-    const spots: { m: Paint; start: number; end: number; first: boolean }[] = [];
+    const spots: { m: Paint; start: number; end: number; first: boolean; last: boolean }[] = [];
 
-    for (const m of marks) if (m.show) place(m.blocks, text).spans.forEach((sp, i) => spots.push({ m, start: sp.start, end: sp.end, first: i === 0 }));
+    for (const m of marks) {
+      if (!m.show) continue;
+      const spans = place(m.blocks, text).spans;
+      spans.forEach((sp, i) => spots.push({ m, start: sp.start, end: sp.end, first: i === 0, last: i === spans.length - 1 }));
+    }
 
-    for (const x of spots) wrap(x.start, x.end, x.m, x.first);
+    for (const x of spots) wrap(x.start, x.end, x.m, x.first, x.last);
     restore();
     post({ annotPlaced: true });
   };
@@ -609,7 +636,7 @@ function markFrame(place: typeof placeMark, token: string): void {
     if (e.key === "Escape") post({ annotEsc: true });
   });
   document.addEventListener("click", (e) => {
-    const m = e.target instanceof Element ? e.target.closest("mark.am") : null;
+    const m = e.target instanceof Element ? e.target.closest("." + FOOT + ", mark.am") : null;
     const s = getSelection();
 
     if (m && (!s || s.isCollapsed)) {
@@ -622,16 +649,27 @@ function markFrame(place: typeof placeMark, token: string): void {
   post({ annotReady: true });
 }
 
-/** The frame's marks styles: each kind's highlight, an answered mark faded, the one being edited outlined, the number on its first piece. */
-export const MARK_CSS = `mark.am{color:inherit;border-radius:3px;padding:1px 0;cursor:pointer;-webkit-tap-highlight-color:transparent}
+/** The frame's marks styles: each kind's highlight, an answered mark faded, the one open outlined, and its pin, a footnote mark raised over the end of its last piece (no room taken in the line): amber pending, grey sent, green answered, a dot when unread. */
+export const markCss = (token: string): string => {
+  const foot = footOf(token);
+
+  return `mark.am{color:inherit;border-radius:3px;padding:1px 0;cursor:pointer;-webkit-tap-highlight-color:transparent}
 mark.am.k-comment{background:color-mix(in srgb,var(--accent) 22%,transparent);box-shadow:inset 0 -2px var(--accent)}
 mark.am.k-delete{background:color-mix(in srgb,var(--critical) 16%,transparent);text-decoration:line-through;text-decoration-color:var(--critical);text-decoration-thickness:2px}
 mark.am.k-replace{background:color-mix(in srgb,var(--you) 22%,transparent);box-shadow:inset 0 -2px var(--you)}
 mark.am.k-question{background:color-mix(in srgb,var(--run) 20%,transparent);box-shadow:inset 0 -2px var(--run)}
 mark.am.done{background:transparent;box-shadow:inset 0 -1px var(--faint);text-decoration-color:var(--faint)}
 mark.am.on{outline:2px solid var(--text);outline-offset:1px}
-mark.am.first::before{content:attr(data-n);display:inline-grid;place-items:center;min-width:1.25em;height:1.25em;margin-right:2px;border-radius:999px;font:700 .68rem/1 "Archivo",system-ui,sans-serif;vertical-align:.25em;color:var(--card);background:var(--accent);text-decoration:none;-webkit-user-select:none;user-select:none}
-mark.am.k-delete.first::before{background:var(--critical)}mark.am.k-replace.first::before{background:var(--you)}mark.am.k-question.first::before{background:var(--run)}mark.am.done.first::before{background:var(--faint)}`;
+.${foot}{position:relative}
+.${foot}::after{content:attr(data-pin);position:absolute;right:0;bottom:calc(100% - 4px);min-width:13px;box-sizing:border-box;padding:0 3px;border-radius:4px;font:700 12px/13px "JetBrains Mono",ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;font-style:normal;text-align:center;text-indent:0;text-decoration:none;letter-spacing:0;white-space:nowrap;background:var(--card-2);color:var(--muted);box-shadow:0 0 0 1px var(--card);cursor:pointer;-webkit-user-select:none;user-select:none}
+.${foot}.st-pending::after{background:var(--you-soft);color:var(--you)}
+.${foot}.st-answered::after{background:color-mix(in srgb,var(--good) 18%,var(--card));color:var(--good)}
+.${foot}.unread::before{content:"";position:absolute;right:-4px;bottom:calc(100% + 3px);width:5px;height:5px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 1px var(--card);pointer-events:none}
+.${foot}.on::after{outline:1.5px solid var(--accent)}`;
+};
+
+/** The pins' class for the render's token, as the frame's script names it. */
+const footOf = (token: string): string => "af" + token.replace(/[^A-Za-z0-9]/gu, "");
 
 /** The frame's marks script, as the text of a script element, with the render's token. */
 export const markScript = (token: string): string => `(${String(markFrame)})(${String(placeMark)}, ${JSON.stringify(token)});`;

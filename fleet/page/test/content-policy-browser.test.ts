@@ -71,7 +71,7 @@ test.skipIf(!found)("the page ignores fleetSelect and annot* from a frame that n
   await page.goto(`${hub.origin}/f/perf/#decision/d30`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelector("#conn")?.textContent === "Live");
   const frame = await bodyFrame(page);
-  await page.waitForSelector("#mk-section");
+  await page.waitForSelector("#mk-rail");
   await page.waitForFunction(() => (document.querySelector("#dv-frame iframe")?.getBoundingClientRect().height ?? 0) > 300);
   await sleep(600);
   const tall = await page.$eval("#dv-frame iframe", (e) => e.getBoundingClientRect().height);
@@ -96,12 +96,9 @@ test.skipIf(!found)("the page ignores fleetSelect and annot* from a frame that n
 
   expect(await page.$eval("#seltool", (e) => (e instanceof HTMLElement ? e.hidden : true))).toBe(true);
   expect(await page.$eval("#dv-frame iframe", (e) => e.getBoundingClientRect().height)).toBe(tall);
-  /* A draft made now is painted nowhere: the page tells the frame that left nothing, its marks' words least of all. */
-  await page.$eval("#mk-general", (e) => (e instanceof HTMLElement ? e.click() : undefined));
-  await page.waitForSelector("#mk-composer:not([hidden])");
-  await page.type("#mk-text", "A general note");
-  await page.$eval("#mk-save", (e) => (e instanceof HTMLElement ? e.click() : undefined));
-  await sleep(500);
+  /* A comment sent from elsewhere now is painted nowhere: the page tells the frame that left nothing, its marks' words least of all. */
+  hub.fleet.say({ id: 90, at: new Date(NOW).toISOString(), from: "user", to: ["coordinator"], text: "**Marks on D30**", marks: { decision: { id: "d30", ref: "D30", title: "Benchmark architecture", revision: "r" }, at: { hash: "#decision/d30" }, items: [{ n: 1, kind: "comment", quote: { text: "The idea", prefix: "", suffix: "", hint: "", blocks: [{ exact: "The idea", prefix: "", suffix: "" }] }, comment: "a note" }] } });
+  await sleep(800);
   expect(String(await forger.evaluate("said()"))).toBe("[]");
 }, 60_000);
 
@@ -111,7 +108,7 @@ test.skipIf(!found)("the page ignores fleetSelect and annot* from a frame that w
   await page.goto(`${hub.origin}/f/perf/#decision/d30`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelector("#conn")?.textContent === "Live");
   const old = await bodyFrame(page);
-  await page.waitForSelector("#mk-section");
+  await page.waitForSelector("#mk-rail");
   await sleep(400);
 
   /* A copy of the decision's frame as it was (its document and all), kept on the page; then a revision puts a new frame in the old one's place. */
@@ -125,7 +122,7 @@ test.skipIf(!found)("the page ignores fleetSelect and annot* from a frame that w
   });
   hub.setBody(D30_BODY.replace("The idea", "The idea, revised"));
   hub.fleet.setView(marksView(NOW, "2026-10-10T11:40:00Z"));
-  await page.waitForFunction(() => document.querySelector("#mk-section") !== null);
+  await page.waitForFunction(() => document.querySelector("#mk-rail") !== null);
 
   for (let i = 0; i < 50 && !old.detached; i += 1) await sleep(100);
   expect(old.detached).toBe(true);

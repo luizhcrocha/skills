@@ -108,7 +108,7 @@ export async function openD30(body: string, dark = false): Promise<{ readonly pa
   });
   await page.goto(new URL(harness.url).origin + "/f/perf/#decision/d30", { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelector("#conn")?.textContent === "Live");
-  await page.waitForSelector("#mk-section");
+  await page.waitForSelector("#mk-rail");
   const toggle = await page.waitForSelector(".dv-fold-toggle", { timeout: 1500 }).catch(() => null);
 
   if (toggle && (await page.$(".dv-fold.folded"))) await toggle.click();

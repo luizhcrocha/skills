@@ -29,6 +29,7 @@ export interface Message {
   readonly side?: number;
   readonly marks?: JsonRecord;
   readonly mark?: readonly number[];
+  readonly keep?: string;
 }
 
 const MIN = 60_000;

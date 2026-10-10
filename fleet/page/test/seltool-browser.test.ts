@@ -121,7 +121,8 @@ for (const [where, hash, selector] of [
 
     expect(text.length).toBeGreaterThan(10);
     expect(await covers(page)).toBe(false);
-    expect(await page.evaluate(() => [...document.querySelectorAll("#seltool button")].map((b) => b.textContent))).toEqual(["Copy", "Reply", "Side chat"]);
+    /* A decision's manual step takes comments too: the bar offers the four kinds beside the chat's three. */
+    expect(await page.evaluate(() => [...document.querySelectorAll("#seltool button")].map((b) => b.textContent))).toEqual(hash ? ["Copy", "Reply", "Side chat", "Comment", "Delete", "Replace", "Question"] : ["Copy", "Reply", "Side chat"]);
 
     /* Copy: exactly the selection. */
     await page.click('#seltool [data-sel="copy"]');
@@ -211,7 +212,7 @@ test.skipIf(!found)("on a phone the bar docks at the bottom of the screen, centr
   expect(got.bar.bottom).toBeCloseTo(got.floor - 8, 0);
   expect((got.bar.left + got.bar.right) / 2).toBeCloseTo(195, 0);
   expect(await covers(page)).toBe(false);
-  expect(await page.evaluate(() => [...document.querySelectorAll("#seltool button")].map((b) => b.textContent))).toEqual(["Copy", "Reply", "Side chat"]);
+  expect(await page.evaluate(() => [...document.querySelectorAll("#seltool button")].map((b) => b.textContent))).toEqual(["Copy", "Reply", "Side chat", "Comment", "Delete", "Replace", "Question"]);
 
   await page.tap('#seltool [data-sel="copy"]');
   await page.waitForFunction(() => document.querySelector('#seltool [data-sel="copy"]')?.textContent === "Copied");
@@ -301,8 +302,8 @@ test.skipIf(!found)("on a phone pinch-zoomed, the bar docks inside what is on sc
   expect(got.bar.bottom).toBeLessThanOrEqual(got.vv.bottom);
   expect(got.bar.left).toBeGreaterThanOrEqual(got.vv.left);
   expect(got.bar.right).toBeLessThanOrEqual(got.vv.right);
-  /* Drawn at half size: on screen, as tall as unzoomed. */
-  expect(got.bar.bottom - got.bar.top).toBeLessThan(30);
+  /* Drawn at half size: on screen, as tall as unzoomed (the docked bar is 62 px: its icons with their words under them). */
+  expect(got.bar.bottom - got.bar.top).toBeLessThanOrEqual(32);
   await page.close();
 });
 
