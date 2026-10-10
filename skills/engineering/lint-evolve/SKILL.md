@@ -59,6 +59,6 @@ Each false positive is a `valid` case in the suite (or a narrower config) and th
 
 ## 6. Propose
 
-A rule with clean trials moves to warn: `lint-registry set-status <id> warn --note "trial clean: <repos>, <hits> hits"`. Vendoring picks up warn and error rules (`lint-vendor wiring` prints them). Run `just test` and `just validate`, then describe the change in the repo's style (`jj log`): the lesson, the evidence refs, the mechanism and why it beats the others, the trial table (repo | hits | false positives), and the session trailer. `jj new`. No push, no bookmark move: landing the change is Luiz's yes. Promotion to error is `tstack:lint-audit`'s, with his explicit answer.
+A rule with clean trials moves to warn: `lint-registry set-status <id> warn --note "trial clean: <repos>, <hits> hits"`. Vendoring picks up warn and error rules (`lint-vendor wiring` prints them). Run `just test-changed` (the full gate runs once, in the session that lands), then describe the change in the repo's style (`jj log`): the lesson, the evidence refs, the mechanism and why it beats the others, the trial table (repo | hits | false positives), and the session trailer. `jj new`. No push, no bookmark move: landing the change is Luiz's yes. Promotion to error is `tstack:lint-audit`'s, with his explicit answer.
 
 **Reply:** the change id and workspace, the rule and its status, the trial table, reworks or the reason it was dropped, and the repos that will get it at the next `lint-vendor update`.
