@@ -42,4 +42,13 @@
 {"cli": "state", "argv": ["$DIR", "link", "L1", "--note", "mark each hit", "--decision", "G1", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "link", "dev", "--url", "http://127.0.0.1:5173/", "--title", "Vite", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "link", "review", "--drop", "the review is done", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "link", "map", "--url", "https://box.ts.net:47843/caso/CA1/prototipo/mapa", "--title", "Map, round 14", "--kind", "prototype", "--for", "review and mark", "--decision", "G1", "--no-render"]}
+{"fixture": "write", "path": "$DIR/notes/plan.md", "content": "# Plan\n"}
+{"cli": "state", "argv": ["$DIR", "link", "plan", "--url", "file://$DIR/notes/../notes/plan.md", "--title", "Plan", "--kind", "doc", "--for", "read", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "link", "outside", "--url", "file://$W/outside.md", "--title", "Outside", "--kind", "doc", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "link", "art", "--url", "https://claude.ai/artifact/X", "--title", "Design (a1)", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "link", "lake", "--url", "http://localhost:47843", "--title", "Lab lakeFS", "--kind", "service", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "link", "map", "--done", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "link", "map", "--reopen", "--done", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "link", "map", "--kind", "lab", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "show"], "clock": "2026-01-05T10:00:00+00:00"}

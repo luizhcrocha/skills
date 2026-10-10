@@ -391,6 +391,7 @@ def view(state: dict, root) -> dict:
     is one. The state itself is left as it is."""
     import copy
     import chat, decisions, served, spend
+    from urllib.parse import quote
     root = str(Path(root).resolve())
     state = copy.deepcopy(state)
     decisions.number(state)  # the numbers state.py gives on its next write, the same ones: the order is the ledger's
@@ -399,14 +400,15 @@ def view(state: dict, root) -> dict:
     state["agents"] = [{**a, "active": _iso(seen[a["id"]])} if isinstance(a, dict) and a.get("id") in seen else a
                        for a in state.get("agents", [])]
     me = find(root)
-    links = [{**link, "fleet": me["id"] if me else None} for link in served.links_of(state)]
+    links = [{**link, "fleet": me["id"] if me else None} for link in served.links_of(state, root)]
     if role_of(state) == "manager":
         import usage  # here, not above: usage.py reads the registry's place from this module
         others = [e for e in live() if e["role"] != "manager" and e["dir"] != root]
         for e in others:
             theirs = _read(Path(e["dir"]) / "state.json") or {}
             decisions.number(theirs)
-            links += [{**link, "fleet": e["id"]} for link in served.links_of(theirs)]
+            links += [{**link, "fleet": e["id"]}
+                      for link in served.links_of(theirs, str(Path(e["dir"]).resolve()), "f/" + quote(e["id"], safe="!*'()") + "/")]
         return {**state, "coordinators": [summary(e) for e in others], "usage": usage.read(), "gate": gate(),
                 "links": links, "found": _unlisted(served.discovered(), links)}
     mine = [x for x in served.discovered() if me and x["fleet"] == me["id"]]
@@ -515,7 +517,7 @@ def _label(agent: dict) -> str:
 
 
 def fleet_view(entry: dict) -> FleetView:
-    import chat
+    import chat, links
     s = summary(entry)
     state = _read(Path(entry["dir"]) / "state.json") or {}
     rows = lambda key: [r for r in state.get(key, []) if isinstance(r, dict)]  # noqa: E731
@@ -526,7 +528,7 @@ def fleet_view(entry: dict) -> FleetView:
         agents=[AgentLine(id=str(a.get("id")), status=str(a["status"]), model=str(a["model"]) if a.get("model") else "-",
                           label=_label(a), lanes=lanes_of(a), silent_since=silent.get(str(a.get("id"))))
                 for a in rows("agents") if a.get("status") in LIVE],
-        links=[LinkLine(ref=str(link.get("ref") or link.get("id")), kind=str(link.get("kind") or "dev"), url=link["url"],
+        links=[LinkLine(ref=str(link.get("ref") or link.get("id")), kind=links.kind_of(link.get("kind"), link["url"], link.get("title")) + (", done" if link.get("done") else ""), url=link["url"],
                         title=chat._one_line(link.get("title")))
                for link in rows("links") if isinstance(link.get("url"), str)],
         waiting=[WaitingLine(ref=str(d.get("ref") or ""), id=d["id"], kind=str(d["kind"]), asks="manager" if d["asks"] == "manager" else "user",

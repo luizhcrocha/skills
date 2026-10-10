@@ -23,6 +23,7 @@ import { workerFigures, workerTitle } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
 import { dropKey, REFUSAL_KEYS, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, milestoneOfStep, nextStepId } from "./numbers.ts";
+import { LINK_KINDS, linkKind, OLD_LINK_KINDS, type LinkKind } from "./links.ts";
 import { makeRefusedCall, permissionOptions } from "./permission.ts";
 import { roleDefaults } from "./roles.ts";
 import { CHOICE_KINDS, ID, KINDS, nameRefusal } from "./validate.ts";
@@ -84,8 +85,8 @@ const APPROVAL_ID = /^K[0-9]+$/u;
 /** What `approval` does. */
 const APPROVAL_ACTIONS = ["add", "list", "revoke"] as const;
 
-/** The kinds of link. */
-export const LINK_KINDS = ["dev", "page"] as const;
+/** The kinds `link --kind` takes: the five, and the two of links recorded before them. */
+export const LINK_KIND_CHOICES = [...LINK_KINDS, ...OLD_LINK_KINDS] as const;
 
 function log(
   run: Run,
@@ -246,7 +247,7 @@ export function nameFromSessions(machine: Machine, root: string, ledger: Ledger)
   }
 }
 
-/** `link`: a dev server or a purpose-built page. */
+/** `link`: a place the user opens (a preview, a prototype, a doc, a tool, a service). */
 export function link(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
   return Effect.gen(function* () {
     ledger.links ??= [];
@@ -279,6 +280,15 @@ export function link(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
     const title = run.args.str("title");
     const kind = run.args.str("kind");
     const note = run.args.str("note");
+    const purpose = run.args.str("for");
+    const done = run.args.flag("done");
+    const reopen = run.args.flag("reopen");
+
+    if (item === undefined && (done || reopen)) return yield* refuse(`no link '${id}' to mark ${done ? "done" : "open again"}`);
+
+    const named = given(title) ? workerIds([title], workersOf(ledger)) : [];
+
+    if (named.length > 0) run.warn(workerWarning(`link ${id}'s title`, named));
 
     if (item === undefined) {
       if (!given(url) || !given(title)) return yield* refuse("a new link needs --url and --title");
@@ -287,17 +297,22 @@ export function link(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
         id,
         url,
         title,
-        kind: given(kind) ? kind : "dev",
+        kind: given(kind) ? kind : linkKind(undefined, url, title),
         decision: decision ?? null,
         agent: agent ?? null,
         note: note ?? null,
+        for: given(purpose) ? purpose : null,
         since: stamp(run),
       };
+
+      if (!given(kind)) {
+        run.warn(`state: link ${id} has no --kind: recorded as ${fresh.kind}. Say which it is: ${LINK_KINDS.join(", ")} (the preview is the fleet's one live app).`);
+      }
 
       links.push(fresh);
       log(run, ledger, {
         kind: "note",
-        text: `${fresh.kind === "page" ? "Page" : "Dev server"} ${fresh.title ?? "None"}: ${fresh.url ?? "None"}`,
+        text: `${KIND_WORDS[linkKind(fresh.kind, url, title)]} ${fresh.title}: ${fresh.url}`,
         agent: agent ?? null,
         decision,
       });
@@ -320,9 +335,24 @@ export function link(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
 
     if (note !== undefined) item.note = orNull(note);
 
+    if (purpose !== undefined) item.for = orNull(purpose);
+
+    if (done) {
+      item.done = stamp(run);
+      log(run, ledger, { kind: "note", text: `Link ${id} (${item.title ?? "None"}) done`, agent: item.agent ?? null, decision: item.decision ?? null });
+    }
+
+    if (reopen && item.done !== undefined) {
+      delete item.done;
+      log(run, ledger, { kind: "note", text: `Link ${id} (${item.title ?? "None"}) open again`, agent: item.agent ?? null, decision: item.decision ?? null });
+    }
+
     return ledger;
   });
 }
+
+/** How the log names a new link of each kind. */
+const KIND_WORDS: Readonly<Record<LinkKind, string>> = { preview: "Preview", prototype: "Prototype", doc: "Doc", tool: "Tool", service: "Service" };
 
 /** `keep`: what must outlive a compaction. */
 export function keep(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {

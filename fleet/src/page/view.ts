@@ -5,6 +5,7 @@
  * (`summary`), the plan's usage and the gate; a coordinator's, how to reach its manager. The ledger
  * itself is left as it is. Key order is Python's, so the page's payload is byte for byte the same.
  */
+import { statSync } from "node:fs";
 import { join } from "node:path";
 
 import { readChat, type Message } from "../chat/store.ts";
@@ -22,6 +23,7 @@ import { readRecord, type DevServer } from "../preview/record.ts";
 import { readPortStates, type PortState } from "../hub/preview-ports.ts";
 import { runningHub } from "../hub/server.ts";
 import { candidates, everyMs, included } from "../preview/updater.ts";
+import { filePathOf, filesRoot, linkKind, reachOf, servedRel } from "../ledger/links.ts";
 import { numberState, pyStr } from "./number.ts";
 import { splitUrl } from "./url.ts";
 
@@ -46,6 +48,17 @@ export interface Lookups {
   readonly discovered: () => readonly Found[];
   /** What the session that owns a DIR spent. */
   readonly spend: SpendReader;
+  /** The hub's: each link's last HTTP probe, with when it was checked and since when it reads so; undefined
+   * until its first probe ends. Without it, a link is up when `up` says so. */
+  readonly probe?: (urls: readonly string[]) => readonly (Probed | undefined)[];
+}
+
+/** A link's last probe. */
+export interface Probed {
+  readonly up: boolean;
+  /** When it was checked, and since when it has read up (or down), as stamps. */
+  readonly checked: string;
+  readonly since: string;
 }
 
 function rows(state: JsonObject, key: string): JsonObject[] {
@@ -223,12 +236,61 @@ export function summary(machine: Machine, lookups: Lookups, entry: Entry): JsonO
   };
 }
 
-/** The fleet's own links as the page shows them: each with whether it answers now. */
-export function linksOf(lookups: Lookups, state: JsonObject): JsonObject[] {
-  const links = rows(state, "links").filter((l) => asString(l["url"]) !== undefined);
-  const up = lookups.up(links.map((l) => asString(l["url"]) ?? ""));
+/** The status of the decision `key` names in `state` (by id, else by number), or null. */
+function decisionStatus(state: JsonObject, key: Json | undefined): Json {
+  const k = asString(key);
 
-  return links.map((l, i) => ({ ...l, up: up[i] ?? false }));
+  if (k === undefined || k === "") return null;
+  const ds = rows(state, "decisions");
+  const d = ds.find((x) => x["id"] === k) ?? ds.find((x) => x["ref"] === k);
+
+  return d === undefined ? null : (d["status"] ?? null);
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** The links of the fleet whose ledger is `state` and DIR `root`, as the page shows them: each with its kind as
+ * the user sees it, where it is reached from, whether it answers now (a file: whether it is there), the status
+ * of the decision it serves, and, for a file under the fleet's files root, the hub path it is served at
+ * (`prefix` + `files/…`: `prefix` is how the page showing it reaches that fleet). */
+export function linksOf(machine: Machine, lookups: Lookups, state: JsonObject, root: string, prefix = ""): JsonObject[] {
+  const links = rows(state, "links").filter((l) => asString(l["url"]) !== undefined);
+  const urls = links.map((l) => asString(l["url"]) ?? "");
+  const reach = urls.map((u) => reachOf(u));
+  const probed = urls.filter((_, i) => reach[i] === "machine");
+  const up = lookups.probe === undefined ? lookups.up(probed) : [];
+  const seen = lookups.probe === undefined ? [] : lookups.probe(probed);
+  const base = filesRoot(root, machine.env);
+  let n = 0;
+
+  return links.map((l, i) => {
+    const url = urls[i] ?? "";
+    const where = reach[i] ?? "external";
+    const shown = { kind: linkKind(asString(l["kind"]), url, asString(l["title"])), reach: where };
+    const decision_status = decisionStatus(state, l["decision"]);
+
+    if (where === "file") {
+      const path = filePathOf(url);
+      const rel = path === undefined ? undefined : servedRel(base, path);
+
+      return { ...l, ...shown, up: path !== undefined && isFile(path), file: rel === undefined ? null : `${prefix}files/${rel}`, decision_status };
+    }
+
+    if (where === "external") return { ...l, ...shown, up: false, file: null, decision_status };
+    const at = n;
+    n += 1;
+
+    if (lookups.probe === undefined) return { ...l, ...shown, up: up[at] ?? false, file: null, decision_status };
+    const p = seen[at];
+
+    return { ...l, ...shown, up: p?.up ?? false, file: null, decision_status, checked: p?.checked ?? null, state_since: p?.since ?? null };
+  });
 }
 
 /** What the machine serves that no link names: a served port whose address no link points at. */
@@ -332,7 +394,7 @@ export function view(machine: Machine, lookups: Lookups, given: JsonObject, root
 
   const registry = machine.registry;
   const me = registry.find(root);
-  const links: JsonObject[] = linksOf(lookups, state).map((l) => ({ ...l, fleet: me?.id ?? null }));
+  const links: JsonObject[] = linksOf(machine, lookups, state, root).map((l) => ({ ...l, fleet: me?.id ?? null }));
 
   if (state["role"] === "manager") {
     const others = registry.live().filter((e) => e.role !== "manager" && e.dir !== root);
@@ -340,7 +402,7 @@ export function view(machine: Machine, lookups: Lookups, given: JsonObject, root
     for (const e of others) {
       const theirs = numberState(readObject(join(e.dir, "state.json")) ?? {});
 
-      for (const l of linksOf(lookups, theirs)) links.push({ ...l, fleet: e.id });
+      for (const l of linksOf(machine, lookups, theirs, resolvePath(e.dir), `f/${encodeURIComponent(e.id)}/`)) links.push({ ...l, fleet: e.id });
     }
 
     return {

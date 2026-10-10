@@ -369,6 +369,36 @@ describe("links", () => {
     f.ok("link", "review", "--drop", "the review is done");
     expect(f.state()["links"]).toEqual([]);
   });
+
+  test("a link takes the kinds people recognise, what the user does there, and done", () => {
+    f.ok("link", "map", "--url", "https://box.ts.net:7501/caso/CA1014/prototipo/mapa", "--title", "Map, round 14", "--kind", "prototype", "--for", "review and mark");
+    let link = f.rows("links")[0] ?? {};
+    expect([link["kind"], link["for"], link["done"]]).toEqual(["prototype", "review and mark", undefined]);
+    f.ok("link", "map", "--done");
+    expect(f.rows("links")[0]?.["done"]).toBeTruthy();
+    expect(f.ok("show")).toContain("[prototype, done] Map, round 14");
+    expect(asObject((asArray(f.state()["events"]) ?? []).at(-1))?.["text"]).toContain("Link map (Map, round 14) done");
+    f.ok("link", "map", "--reopen");
+    link = f.rows("links")[0] ?? {};
+    expect(link["done"]).toBeUndefined();
+    expect(f.refused("link", "gone", "--done")).toContain("no link 'gone' to mark done");
+    expect(f.run("link", "map", "--kind", "lab").code).toBe(2);
+  });
+
+  test("a new link without a kind is given the one its address reads as, and the CLI says so", () => {
+    const said = f.run("link", "a", "--url", "https://claude.ai/artifact/Pn", "--title", "Wrike design");
+    expect([said.code, said.stderr.includes("has no --kind: recorded as doc")]).toEqual([0, true]);
+    f.run("link", "b", "--url", "https://box.ts.net:5424/x", "--title", "Tarefas tab prototype (throwaway)");
+    f.run("link", "c", "--url", "https://box.ts.net:24116/", "--title", "Beta dev build");
+    expect(f.rows("links").map((l) => l["kind"])).toEqual(["doc", "prototype", "preview"]);
+  });
+
+  test("a link's title with a worker's id is warned", () => {
+    f.ok("agent", "b286", "--task", "write the note", "--milestone", "m1");
+    const said = f.run("link", "n", "--url", "file:///tmp/note.md", "--title", "Design note (b286)", "--kind", "doc");
+    expect([said.code, said.stderr.includes("link n's title names workers (b286)")]).toEqual([0, true]);
+    expect(f.run("link", "n", "--title", "Design note: judgements across cases").stderr).not.toContain("names workers");
+  });
 });
 
 describe("numbers", () => {

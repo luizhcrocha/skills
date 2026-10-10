@@ -8,6 +8,7 @@ import { join } from "node:path";
 import * as Effect from "effect/Effect";
 
 import { listening, oneLine, type Listening } from "../chat/chat.ts";
+import { linkKind } from "../ledger/links.ts";
 import { firstLine } from "../chat/news.ts";
 import { readChat } from "../chat/store.ts";
 import { Refusal } from "../errors.ts";
@@ -182,7 +183,7 @@ function fleetView(machine: Machine, e: Entry): FleetView {
       .filter((l) => asString(l["url"]) !== undefined)
       .map((l) => ({
         ref: truthy(l["ref"]) ? str(l["ref"]) : str(l["id"]),
-        kind: truthy(l["kind"]) ? str(l["kind"]) : "dev",
+        kind: linkKind(asString(l["kind"]), str(l["url"]), asString(l["title"])) + (truthy(l["done"]) ? ", done" : ""),
         url: str(l["url"]),
         title: oneLine(l["title"]),
       })),

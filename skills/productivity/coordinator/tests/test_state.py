@@ -255,6 +255,62 @@ class LinkTest(Fleet):
         self.ok("link", "review", "--drop", "the review is done")
         self.assertEqual(self.state()["links"], [])
 
+    def test_a_link_takes_the_kinds_people_recognise_what_the_user_does_there_and_done(self):
+        self.ok("link", "map", "--url", "https://box.ts.net:7501/caso/CA1014/prototipo/mapa", "--title", "Map, round 14",
+                "--kind", "prototype", "--for", "review and mark")
+        link = self.state()["links"][0]
+        self.assertEqual((link["kind"], link["for"]), ("prototype", "review and mark"))
+        self.assertNotIn("done", link)
+        self.ok("link", "map", "--done")
+        self.assertTrue(self.state()["links"][0]["done"])
+        self.assertIn("[prototype, done] Map, round 14", self.ok("show"))
+        self.assertIn("Link map (Map, round 14) done", self.state()["events"][-1]["text"])
+        self.ok("link", "map", "--reopen")
+        self.assertNotIn("done", self.state()["links"][0])
+        self.assertIn("no link 'gone' to mark done", self.refused("link", "gone", "--done"))
+        bad = subprocess.run([sys.executable, STATE, str(self.root), "link", "map", "--kind", "lab", "--no-render"], capture_output=True, text=True)
+        self.assertEqual(bad.returncode, 2)
+
+    def test_a_new_link_without_a_kind_is_given_the_one_its_address_reads_as_and_the_cli_says_so(self):
+        result = self.run_cli("link", "a", "--url", "https://claude.ai/artifact/Pn", "--title", "Wrike design")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("has no --kind: recorded as doc", result.stderr)
+        self.run_cli("link", "b", "--url", "https://box.ts.net:5424/x", "--title", "Tarefas tab prototype (throwaway)")
+        self.run_cli("link", "c", "--url", "https://box.ts.net:24116/", "--title", "Beta dev build")
+        self.assertEqual([x["kind"] for x in self.state()["links"]], ["doc", "prototype", "preview"])
+
+    def test_a_link_title_with_a_worker_id_is_warned(self):
+        self.ok("agent", "b286", "--task", "write the note", "--milestone", "m1")
+        result = self.run_cli("link", "n", "--url", "file:///tmp/note.md", "--title", "Design note (b286)", "--kind", "doc")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("link n's title names workers (b286)", result.stderr)
+        self.assertNotIn("names workers", self.run_cli("link", "n", "--title", "Design note: judgements across cases").stderr)
+
+
+class LinkKindTest(unittest.TestCase):
+    """An old row's kind is read at display time: dev as preview, page as doc, unless the address says otherwise."""
+
+    def test_old_kinds_are_read_as_the_new_ones(self):
+        sys.path.insert(0, str(SKILL / "scripts"))
+        import links
+        cases = [("dev", "https://box.ts.net:7501/", "Live preview", "preview"),
+                 ("page", "https://box.ts.net:4518/", "Gold-marking page", "doc"),
+                 ("page", "https://claude.ai/artifact/Bcwsy", "Agent tool architecture", "doc"),
+                 ("dev", "https://claude.ai/artifact/Bcwsy", "x", "doc"),
+                 ("page", "https://box.ts.net:7501/caso/CA1014/prototipo/mapa", "Map", "prototype"),
+                 ("dev", "https://box.ts.net:5424/caso/CA1116/tarefas", "Tarefas tab prototype (throwaway)", "prototype"),
+                 ("page", "file:///home/u/.local/state/infra/auth-review.md", "Auth review", "doc"),
+                 ("tool", "https://box.ts.net:7501/caso/CA1014/prototipo/mapa", "Map", "tool"),
+                 (None, "http://localhost:8000", "Lab lakeFS", "preview")]
+        self.assertEqual([links.kind_of(k, u, t) for k, u, t, _ in cases], [c[3] for c in cases])
+        self.assertEqual([links.reach_of(u) for u in ("http://localhost:8000", "https://box.ts.net:1/", "http://100.69.17.95:3/",
+                                                      "https://claude.ai/artifact/x", "file:///tmp/x.md", "http://example.com/")],
+                         ["machine", "machine", "machine", "external", "file", "external"])
+        self.assertEqual(links.served_rel("/r", "/r/a b/c.md"), "a%20b/c.md")
+        self.assertIsNone(links.served_rel("/r", "/r/../etc/passwd"))
+        self.assertIsNone(links.served_rel("/r", "/r/.env"))
+        self.assertIsNone(links.served_rel("/r", "/elsewhere/x.md"))
+
 
 class NumberTest(Fleet):
     def test_each_kind_is_numbered_in_order_and_a_number_finds_its_row(self):

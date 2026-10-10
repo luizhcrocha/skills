@@ -204,7 +204,11 @@ export interface Link {
   decision?: string | null;
   agent?: string | null;
   note?: string | null;
+  /** What the user does there ("review and mark", "read", "try"). */
+  for?: string | null;
   since?: string;
+  /** When the fleet marked it done (`link ID --done`). */
+  done?: string;
   ref?: string;
 }
 
@@ -785,7 +789,7 @@ function readEvent(object: JsonObject): Fields | LedgerEvent {
 }
 
 /** The keys of a link, in the order a new one has them. */
-export const LINK_KEYS = ["id", "url", "title", "kind", "decision", "agent", "note", "since", "ref"] as const;
+export const LINK_KEYS = ["id", "url", "title", "kind", "decision", "agent", "note", "for", "since", "done", "ref"] as const;
 
 function readLink(object: JsonObject): Fields | Link {
   const f = new Fields(object, `link ${asString(object["id"]) ?? "?"}`);
@@ -794,7 +798,9 @@ function readLink(object: JsonObject): Fields | Link {
     decision: f.nullStr("decision"),
     agent: f.nullStr("agent"),
     note: f.nullStr("note"),
+    for: f.nullStr("for"),
     since: f.optStr("since"),
+    done: f.optStr("done"),
     ref: f.optStr("ref"),
   });
 

@@ -196,9 +196,36 @@ def discovered(wait: bool = False) -> list[dict]:
     return [{**s, "up": s["pid"] is not None} for s in value]
 
 
-def links_of(state: dict) -> list[dict]:
-    """The fleet's own links as the page shows them: each with whether it answers now."""
-    return [{**link, "up": up(link["url"])} for link in state.get("links", []) if isinstance(link, dict) and isinstance(link.get("url"), str)]
+def links_of(state: dict, root: str, prefix: str = "") -> list[dict]:
+    """The links of the fleet whose ledger is `state` and DIR `root`, as the page shows them: each with its kind as
+    the user sees it, where it is reached from, whether it answers now (a file: whether it is there), the status
+    of the decision it serves, and, for a file under the fleet's files root, the hub path it is served at
+    (`prefix` + `files/...`: `prefix` is how the page showing it reaches that fleet)."""
+    import links
+    decisions = [d for d in state.get("decisions", []) if isinstance(d, dict)]
+
+    def status(key):
+        if not isinstance(key, str) or not key:
+            return None
+        d = next((x for x in decisions if x.get("id") == key), None) or next((x for x in decisions if x.get("ref") == key), None)
+        return None if d is None else d.get("status")
+
+    base = links.files_root(root)
+    out = []
+    for link in state.get("links", []):
+        if not isinstance(link, dict) or not isinstance(link.get("url"), str):
+            continue
+        url = link["url"]
+        where = links.reach_of(url)
+        shown = {"kind": links.kind_of(link.get("kind"), url, link.get("title")), "reach": where}
+        if where == "file":
+            path = links.file_path_of(url)
+            rel = links.served_rel(base, path) if path is not None else None
+            out.append({**link, **shown, "up": path is not None and os.path.isfile(path),
+                        "file": None if rel is None else f"{prefix}files/{rel}", "decision_status": status(link.get("decision"))})
+        else:
+            out.append({**link, **shown, "up": where == "machine" and up(url), "file": None, "decision_status": status(link.get("decision"))})
+    return out
 
 
 def main() -> None:

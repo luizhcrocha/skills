@@ -5,6 +5,7 @@ import type { Message } from "../chat/store.ts";
 import { answeredGrill, failedAnswer, failureWords } from "../health.ts";
 import { pyRepr } from "../json.ts";
 import { approvalLine, EVENT_KINDS, MODELS, NEEDS, SEVERITIES, SKILLS } from "./commands.ts";
+import { linkKind } from "./links.ts";
 import type { Ledger } from "./model.ts";
 import { EFFORTS } from "./roles.ts";
 import { AGENT_STATUSES, ASKS, SHARED_KINDS, STATUSES, STEP_STATUSES, WORKSPACE_MODES } from "./validate.ts";
@@ -33,7 +34,8 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
         --kind reviewed --findings N --changes C,...   a review of those jj changes, before landing
   park [--agent A]... REASON     stop every live worker row (or those named) in one command
   keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace
-  link ID --url U --title T [--kind dev|page] [--decision D] [--note N] | --drop R   a dev server or a purpose-built page
+  link ID --url U --title T --kind preview|prototype|doc|tool|service [--for WHAT] [--decision D] [--note N]
+        | --done | --reopen | --drop R   a place the user opens; --for what the user does there; --done when it ends
   grill ID --title T --ask "TITLE | QUESTION | RECOMMENDATION | WHY"... [--of Q]   a grilling round, answered on the page
         [--option "Q1 a: label | consequence"]... (RECOMMENDATION is then an option's id) [--body FILE | --no-body]
         [--title T] [--why W] [--log TEXT] on an open grilling: its title, why or context revised, --log saying what changed
@@ -102,7 +104,10 @@ export function showLines(ledger: Ledger, said: readonly Message[] = []): string
     lines.push(`  ${d.ref ?? ""} decision ${d.id} ${status} [${d.kind}] ${d.title ?? "None"}${outcome === "" ? "" : `: ${outcome}`}`);
   }
 
-  for (const l of ledger.links ?? []) lines.push(`  ${l.ref ?? ""} link ${l.id} [${l.kind}] ${l.title ?? "None"}: ${l.url ?? "None"}`);
+  for (const l of ledger.links ?? []) {
+    const kind = linkKind(l.kind, l.url ?? "", l.title);
+    lines.push(`  ${l.ref ?? ""} link ${l.id} [${kind}${l.done === undefined ? "" : ", done"}] ${l.title ?? "None"}: ${l.url ?? "None"}${l.for !== undefined && l.for !== null && l.for !== "" ? ` (for: ${l.for})` : ""}`);
+  }
 
   for (const a of ledger.approvals ?? []) lines.push(approvalLine(ledger, a));
 

@@ -23,7 +23,8 @@
     state.py DIR event [--agent A] [--kind K] [--important] [--findings N --changes C,...] TEXT
     state.py DIR park [--agent A]... REASON
     state.py DIR keep ID [TEXT | --drop REASON]
-    state.py DIR link ID --url U --title T [--kind dev|page] [--decision D] [--agent A] [--note N] | --drop REASON
+    state.py DIR link ID --url U --title T --kind preview|prototype|doc|tool|service [--for WHAT] [--decision D] [--agent A]
+                     [--note N] [--done | --reopen] | --drop REASON
     state.py DIR grill ID [--title T --why W --log TEXT] [--ask "TITLE | QUESTION | RECOMMENDATION | WHY"]... [--of Q]
                           [--option "Q1 a: label | consequence"]... [--body FILE | --no-body]
                           [--answer "Q3: ..."]... [--drop "Q4: why"]... [--revise "Q3: T | Q | R | W"]... [--reason "Q3: why"]... [--done SUMMARY]
@@ -59,6 +60,7 @@ import chat  # noqa: E402
 import clock  # noqa: E402
 import decisions  # noqa: E402
 import lanes  # noqa: E402
+import links  # noqa: E402
 import news  # noqa: E402
 import render_dashboard  # noqa: E402
 import spend  # noqa: E402
@@ -240,36 +242,52 @@ def measure(root, state: dict) -> None:
         a["tokens"], a["duration_ms"], a["measured"] = got["tokens"], got["duration_ms"], got["at"]
 
 
-LINK_KINDS = ["dev", "page"]
+LINK_KINDS = links.KINDS + links.OLD_KINDS  # what `link --kind` takes: the five, and the two of links recorded before them
 
 
 def cmd_link(state, args):
-    """A place the user opens: a dev server (`dev`) or a page made for a purpose (`page`: a review, a
-    lab, a report). The Links view lists them, up or down; one tied to a decision opens from its page."""
-    links = state.setdefault("links", [])
-    item = find(links, args.id)
+    """A place the user opens: the fleet's live preview, a prototype, a doc, a tool the user works in, a
+    service. The Links view lists them, active or not; one tied to a decision opens from its page."""
+    rows = state.setdefault("links", [])
+    item = find(rows, args.id)
     if args.drop is not None:
         if item is None:
             fail(f"no link '{args.id}'")
-        links.remove(item)
+        rows.remove(item)
         log(state, "note", f"Link {args.id} ({item['title']}) removed: {args.drop}")
         return state
     if args.decision:  # a number (D3) is kept as the id it names: the page looks decisions up by id
         args.decision = (decisions.find(state, args.decision) or fail(f"unknown decision '{args.decision}'"))["id"]
     if args.agent and not known(state, args.agent):
         fail(f"unknown agent '{args.agent}'")
+    if item is None and (args.done or args.reopen):
+        fail(f"no link '{args.id}' to mark {'done' if args.done else 'open again'}")
+    named = worker_ids([args.title], workers_of(state)) if args.title else []
+    if named:
+        sys.stderr.write(worker_warning(f"link {args.id}'s title", named) + "\n")
     if item is None:
         if not args.url or not args.title:
             fail("a new link needs --url and --title")
-        item = {"id": args.id, "url": args.url, "title": args.title, "kind": args.kind or "dev", "decision": args.decision,
-                "agent": args.agent, "note": args.note, "since": now()}
-        links.append(item)
-        log(state, "note", f"{'Page' if item['kind'] == 'page' else 'Dev server'} {item['title']}: {item['url']}", args.agent,
-            decision=args.decision)
+        item = {"id": args.id, "url": args.url, "title": args.title,
+                "kind": args.kind or links.kind_of(None, args.url, args.title), "decision": args.decision,
+                "agent": args.agent, "note": args.note, "for": args.for_ or None, "since": now()}
+        if not args.kind:
+            sys.stderr.write(f"state: link {args.id} has no --kind: recorded as {item['kind']}. Say which it is: "
+                             f"{', '.join(links.KINDS)} (the preview is the fleet's one live app).\n")
+        rows.append(item)
+        log(state, "note", f"{links.WORDS[links.kind_of(item['kind'], args.url, args.title)]} {item['title']}: {item['url']}",
+            args.agent, decision=args.decision)
     else:
-        for key in ("url", "title", "kind", "decision", "agent", "note"):
-            if getattr(args, key) is not None:
-                item[key] = getattr(args, key) or None
+        for key, dest in (("url", "url"), ("title", "title"), ("kind", "kind"), ("decision", "decision"), ("agent", "agent"),
+                          ("note", "note"), ("for", "for_")):
+            if getattr(args, dest) is not None:
+                item[key] = getattr(args, dest) or None
+        if args.done:
+            item["done"] = now()
+            log(state, "note", f"Link {args.id} ({item['title']}) done", item.get("agent"), decision=item.get("decision"))
+        if args.reopen and "done" in item:
+            del item["done"]
+            log(state, "note", f"Link {args.id} ({item['title']}) open again", item.get("agent"), decision=item.get("decision"))
     return state
 
 
@@ -1453,7 +1471,8 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
         --kind reviewed --findings N --changes C,...   a review of those jj changes, before landing
   park [--agent A]... REASON     stop every live worker row (or those named) in one command
   keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace
-  link ID --url U --title T [--kind dev|page] [--decision D] [--note N] | --drop R   a dev server or a purpose-built page
+  link ID --url U --title T --kind preview|prototype|doc|tool|service [--for WHAT] [--decision D] [--note N]
+        | --done | --reopen | --drop R   a place the user opens; --for what the user does there; --done when it ends
   grill ID --title T --ask "TITLE | QUESTION | RECOMMENDATION | WHY"... [--of Q]   a grilling round, answered on the page
         [--option "Q1 a: label | consequence"]... (RECOMMENDATION is then an option's id) [--body FILE | --no-body]
         [--title T] [--why W] [--log TEXT] on an open grilling: its title, why or context revised, --log saying what changed
@@ -1492,7 +1511,9 @@ def cmd_show(state, args):
         outcome = d.get("answer") or d.get("resolution")
         print(f"  {d.get('ref', '')} decision {d['id']} {status} [{d['kind']}] {d['title']}" + (f": {outcome}" if outcome else ""))
     for link in state.get("links", []):
-        print(f"  {link.get('ref', '')} link {link['id']} [{link['kind']}] {link['title']}: {link['url']}")
+        kind = links.kind_of(link.get("kind"), link.get("url") or "", link.get("title")) + (", done" if "done" in link else "")
+        print(f"  {link.get('ref', '')} link {link['id']} [{kind}] {link['title']}: {link['url']}"
+              + (f" (for: {link['for']})" if link.get("for") else ""))
     for a in state.get("approvals", []):
         print(approval_line(state, a))
     for k in state.get("kept", []):
@@ -1594,9 +1615,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--done", metavar="SUMMARY", help="every question is settled: what was agreed")
     s.add_argument("--log", help="what changed, shown to the user on the page")
     s = sub.add_parser("link"); s.add_argument("id"); s.add_argument("--url"); s.add_argument("--title")
-    s.add_argument("--kind", choices=LINK_KINDS, help="dev: a dev server; page: a page made for a purpose")
+    s.add_argument("--kind", choices=LINK_KINDS, help="preview: the fleet's live app; prototype: a throwaway sketch or round; "
+                   "doc: a design note, report or artifact; tool: a page the user works in; service: a lab or infra endpoint")
+    s.add_argument("--for", dest="for_", metavar="WHAT", help="what the user does there: review and mark, read, try")
     s.add_argument("--decision", help="the decision it serves: its page links here"); s.add_argument("--agent")
     s.add_argument("--note", help="what to do there"); s.add_argument("--drop", metavar="REASON")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--done", action="store_true", help="it has ended: the page lists it as inactive")
+    g.add_argument("--reopen", action="store_true", help="it is in use again")
     s = sub.add_parser("keep"); s.add_argument("id"); s.add_argument("text", nargs="?")
     s.add_argument("--drop", metavar="REASON", help="it no longer needs keeping")
     s = sub.add_parser("park"); s.add_argument("reason"); s.add_argument("--agent", action="append", help="only this worker (repeatable)")

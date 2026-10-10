@@ -838,7 +838,7 @@ def gen(rng: random.Random, m: Model) -> dict:
             return {"cmd": "link", "id": lid, "drop": "stopped"}
         c = {"cmd": "link", "id": lid}
         if maybe(0.8):
-            c.update(url="https://box.ts.net:1/", title="T")
+            c.update(url="https://box.ts.net:1/", title="T", kind="preview")
         if maybe(0.3):
             c["decision"] = pick(dec_ids)
         return c

@@ -251,7 +251,7 @@ class CliTest(Machine):
             "    b12  blocked  sonnet  Wire the invoices to the ledger and run the mig\u2026",
             "    q4   queued   fable   advisor",
             "  links    1",
-            "    L1  dev  https://box.ts.net:5173/  Billing dev server",
+            "    L1  preview  https://box.ts.net:5173/  Billing dev server",
             "  waiting  2",
             "    D1  d1  decision  for the user     Schema  blocks work",
             "    I1  d2  input     for the manager  Rate  held by the fleet: after the cost work",

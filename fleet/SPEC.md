@@ -457,11 +457,48 @@ blocked`.
 creates or rewrites; `--drop` removes it and logs `Dropped ID (<text>): REASON`; dropping an
 unknown one and TEXT missing are refused.
 
-**link** `ID [--url U --title T] [--kind dev|page] [--decision D] [--agent A] [--note N] | --drop REASON`:
+**link** `ID [--url U --title T] [--kind preview|prototype|doc|tool|service|dev|page] [--for WHAT] [--decision D] [--agent A] [--note N] [--done | --reopen] | --drop REASON`:
 `links[]` (created on first use). `--drop` removes a known one (logs `Link ID (<title>) removed:
 REASON`). `--decision` must name a decision, of any status, stored as its id; `--agent` must be
-known. New: needs url and title, kind defaults to dev, `since` = now, logs `Page <title>: <url>` or
-`Dev server <title>: <url>` tagged with agent and decision. Known: fields given are set.
+known. New: needs url and title, `since` = now, `for` = `--for` or null, logs `<Kind> <title>: <url>`
+(`Preview`, `Prototype`, `Doc`, `Tool`, `Service`, by the kind it reads as) tagged with agent and decision. A
+new link without `--kind` is stored with the kind its address reads as ([Link kinds](#link-kinds)) and
+warned: `state: link ID has no --kind: recorded as <kind>. Say which it is: preview, prototype, doc, tool,
+service (the preview is the fleet's one live app).` Known: fields given are set (an emptied one null).
+`--done` stamps `done` = now and logs `Link ID (<title>) done`; `--reopen` removes it and logs `Link ID
+(<title>) open again` (only when it was done); either on an unknown link is refused (`no link 'ID' to mark
+done`, `... to mark open again`), and the two together exit 2. A title (new or given) that names a worker's id or
+name as the ledger records it is warned, as a decision's is: `state: link ID's title names workers (b286):
+...`. `dev` and `page` stay accepted for the rows recorded before the five.
+
+### Link kinds
+
+What a link is to the user (`links.py`, `fleet/src/ledger/links.ts`): `preview` (the fleet's live
+preview of the app: one per fleet), `prototype` (a throwaway sketch or round), `doc` (a design note, a
+report, an artifact), `tool` (a page the user works in: marking, confirming gold), `service` (a lab or
+infra endpoint). A stored kind that is not one of the five (`dev`, `page`, missing) is read at display
+time, never rewritten: a claude.ai artifact (`https://claude.ai/artifact/…`, `/code/artifact/…`) is a doc;
+an address with `/prototipo`, `/protótipo` or `prototype` in it, or a title that says prototype or
+protótipo, is a prototype; else `page` and a `file:` address read as doc and the rest as preview. `show`,
+`fleets list` and the view use the kind as read; `show` adds `, done` and `(for: …)`.
+
+A link's **reach**: `machine` when its scheme is http(s) and its host is this machine or its tailnet
+(`localhost`, `*.localhost`, 127/8, `::1`, `0.0.0.0`, `*.ts.net`, 100.64/10), `file` for `file://`, else
+`external` (never probed).
+
+**In the view** (`fleets.view`, the page's state), each link carries, beside its row and `fleet`: `kind` as
+read, `reach`, `up`, `file` and `decision_status` (the status of the decision it serves, found by id then
+number, or null). `up`: a `machine` link's TCP probe of 127.0.0.1 at its port (the hub's: below); a `file`
+link's file is there; an `external` link's is false. `file`: for a `file` link under the fleet's files root
+with no dot part, the hub path `files/<path, its parts URI-encoded>`, prefixed `f/<fleet>/` on the manager's
+page for another fleet's; else null. The hub's view replaces a `machine` link's probe with an HTTP one and
+adds `checked` and `state_since` (stamps, null until its first probe ends): a HEAD of the address (a GET of
+`bytes=0-0` on 405 or 501), 3 s, redirects never followed, no credentials, a loopback address's certificate
+not checked; up unless it fails, times out, or answers 502, 503 or 504 (`tailscale serve` before a stopped
+server). Each address's answer is held 60 s and probed again in the background; `state_since` is when it last
+turned up or down. The page counts a link inactive when it is done, its decision is decided or withdrawn,
+a `machine` link is down, or a `file` link's file is gone; one that serves an open decision or says `for` waits
+on the user.
 
 **show**: prints the ledger and the command cheat sheet; writes nothing. Pinned lines:
 `<project> [<status>(, manager)(, shared working copy)] <now>`; per milestone `  <id> <title> (<done>/<steps>)` and
@@ -519,7 +556,8 @@ decisions[]   {id, ref, kind, title, question, why, blocking, agent, options[]: 
 approvals[]?  {id, rule, by, ref (a decision id), message?, author?, added, status (active|revoked),
                revoked?, revoked_why?}
 events[]      {at, agent|null, kind, text, important?: true, decision?, findings?, changes?}   append-only
-links[]?      {id, ref, url, title, kind (dev|page), decision, agent, note, since}
+links[]?      {id, ref, url, title, kind (preview|prototype|doc|tool|service; dev|page before them), decision, agent, note,
+               for (what the user does there, or null), since, done? (when the fleet marked it done)}
 kept[]?       {id, text, at}
 workspace_mode? "isolated" | "shared"   `set --workspaces`; absent reads as isolated
 workspaces[]? {id (the jj workspace's name), agent (its worker now), path, repo (the default workspace's root),
@@ -997,7 +1035,12 @@ itself. A manager made later appears the same way, on the same address.
   it), `{name}` names the fleet before every other name (200 `{id, session, path}`, the fleet's address
   after; 400 reserved or taken); an empty name gives either back to its session's; the page's state then
   carries `named: {id, session}`, the hub's alone), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
-  sandbox CSP; dot files and paths out of DIR 404). `/f/<fleet>` redirects (301) to `/f/<fleet>/`;
+  sandbox CSP; dot files and paths out of DIR 404), and `GET /f/<fleet>/files/<path>` (TypeScript only): a file a
+  `file://` link of that fleet names, read-only, at its path under the fleet's files root: DIR's parent when that
+  is a session's `scratchpad` or a directory of its own under the state home (`$XDG_STATE_HOME`, else
+  `~/.local/state`, not the state home itself), else DIR. Served with the sandbox CSP, `nosniff`, no-store,
+  Markdown and text as `text/plain; charset=utf-8`. 404 for anything else: a file no link names, a dot part,
+  `..`, a path out of the root, a symlink that leads out of it, a directory. `/f/<fleet>` redirects (301) to `/f/<fleet>/`;
   `/f/<a>/f/<b>/…` is `/f/<b>/…`, so the manager's page, whose coordinators' links are relative,
   works under `/f/manager/`. 421 on a `Host` the hub doesn't answer to (loopback, `localhost`, the
   Tailscale IP, the MagicDNS name and short name, at its port; the https name with `--https`). On a
