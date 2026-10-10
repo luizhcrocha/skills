@@ -15,11 +15,11 @@ import { askParts, type AskPart } from "./ask.ts";
 import { grillAsk, grillReason } from "./grill.ts";
 import { listen, PillAs, RefTag, tf, usePage, Who } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
-import { Core, type Decision, type GrillEntry, type JsonRecord, type MarkDecision, type Question, type Queue } from "./core.ts";
+import { Core, type Decision, type GrillEntry, type Json, type JsonRecord, type MarkDecision, type Question, type Queue } from "./core.ts";
 import { DecisionHistory } from "./DecisionHistory.tsx";
 import { DetailsFold } from "./DetailsFold.tsx";
 import { DecisionThread } from "./DecisionThread.tsx";
-import { FRAME_MAX_PX, parseEmbedMessage, postAnswered } from "./embed.ts";
+import { FRAME_MAX_PX, parseEmbedMessage, postAnswered, saidBy } from "./embed.ts";
 import { MARK_CSS, markScript } from "./markframe.ts";
 import { draftsKey } from "./marks.ts";
 import { Marks, type MarkTarget } from "./Marks.tsx";
@@ -27,10 +27,14 @@ import { clock } from "./format.ts";
 import { KIND_WORDS, StatePill } from "./Overview.tsx";
 import { CodeBlock, ManualText, Rich, UndoText } from "./Rich.tsx";
 import { approvalHref } from "./Approvals.tsx";
+import { bodyPolicy } from "../../src/hub/body-policy.ts";
+import { safeBody, type SafeBody } from "./safebody.ts";
 
 const TOKENS = ["bg", "card", "card-2", "text", "muted", "faint", "line", "accent", "accent-soft", "you", "run", "good", "warning", "serious", "critical", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
 
 const esc = (s: string): string => s.replace(/[&<>"']/gu, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
+
+const isRecord = (v: Json | undefined): v is JsonRecord => v !== null && v !== undefined && Object(v) === v && !Array.isArray(v);
 
 /** A refused Agent call's input, as the hook gave it (compact JSON), indented to read; as given when it is not JSON. */
 function spawnInput(call: string): string {
@@ -41,12 +45,39 @@ function spawnInput(call: string): string {
   }
 }
 
-/** The evidence's document: the fragment with the page's base styles and theme, reporting its height and selection (and whether a touch made it), and painting the marks on it (markframe.ts). */
-export function frameDoc(html: string): string {
+/** `url` as a CSP source: the URL itself, its policy-breaking characters escaped; for a page with no origin of its own (`file:`), its scheme. */
+function cspSource(url: URL): string {
+  return url.origin === "null" ? url.protocol : url.href.replace(/[\s;,']/gu, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0"));
+}
+
+/** The frame's Content-Security-Policy ({@link bodyPolicy}): only the script holding `nonce`, the fleet's own (sizing, tables, marks), runs.
+ * The hub is `base`'s origin; `base-uri` names the frame's own `<base>` rather than `'none'`, which would refuse it and with it every relative picture. */
+function framePolicy(nonce: string, base: URL): string {
+  return bodyPolicy(`'nonce-${nonce}'`, base.origin === "null" ? base.protocol : base.origin, cspSource(base));
+}
+
+/** A nonce for one render of the frame: 16 random bytes, base64. */
+function freshNonce(): string {
+  return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+}
+
+/** Where a body's relative addresses point: the page's `decisions/`, on the hub. */
+const bodyBase = (): URL => new URL("decisions/", location.href);
+
+/**
+ * The evidence's document: the body (safebody.ts, which only {@link bodyDoc} hands it) with the page's base
+ * styles and theme, reporting its height and selection (and whether a touch made it), and painting the marks on
+ * it (markframe.ts), under {@link framePolicy}. What the fleet's script posts carries `token`, which the body
+ * cannot read (it is in a script's text, which no style reaches) and a document the frame is taken to does not know.
+ */
+function frameDoc(html: SafeBody, token: string): string {
   const cs = getComputedStyle(document.documentElement);
   const vars = TOKENS.map((t) => `--${t}:${cs.getPropertyValue("--" + t).trim()}`).join(";");
+  const base = bodyBase();
+  const nonce = freshNonce();
+  const tok = JSON.stringify(token);
 
-  return `<!doctype html><html><head><meta charset="utf-8"><base href="${esc(new URL("decisions/", location.href).href)}" target="_blank">
+  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${esc(framePolicy(nonce, base))}"><meta charset="utf-8"><base href="${esc(base.href)}" target="_blank">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..700&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>:root{${vars};color-scheme:${cs.colorScheme === "dark" ? "dark" : "light"}}
 html{font:15px/1.5 "Archivo","Helvetica Neue",Arial,system-ui,sans-serif;color:var(--text);background:var(--card)}
@@ -70,8 +101,13 @@ img,svg,video,canvas{max-width:100%;height:auto}
 .muted{color:var(--muted)}.good{color:var(--good)}.warning{color:var(--warning)}.critical{color:var(--critical)}
 ${MARK_CSS}
 </style></head><body>${html}
-<scr` + `ipt>(function(){document.querySelectorAll("table").forEach(function(t){var rows=Array.prototype.slice.call(t.rows),head=t.tHead&&t.tHead.rows[0];if(!head&&rows[0]&&Array.prototype.every.call(rows[0].cells,function(c){return c.tagName==="TH"})){head=rows[0];head.classList.add("head")}if(!head)return;var h=head.cells,long=false;rows.forEach(function(r){if(r===head||r.parentNode===t.tHead)return;Array.prototype.forEach.call(r.cells,function(c,i){if(h[i])c.setAttribute("data-label",h[i].textContent.trim());if(c.textContent.length>40)long=true})});if(long)t.classList.add("cards")});var post=function(){parent.postMessage({fleetEvidence:true,height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post();})();
-${markScript()}</scr` + `ipt></body></html>`;
+<scr` + `ipt nonce="${nonce}">(function(){document.querySelectorAll("table").forEach(function(t){var rows=Array.prototype.slice.call(t.rows),head=t.tHead&&t.tHead.rows[0];if(!head&&rows[0]&&Array.prototype.every.call(rows[0].cells,function(c){return c.tagName==="TH"})){head=rows[0];head.classList.add("head")}if(!head)return;var h=head.cells,long=false;rows.forEach(function(r){if(r===head||r.parentNode===t.tHead)return;Array.prototype.forEach.call(r.cells,function(c,i){if(h[i])c.setAttribute("data-label",h[i].textContent.trim());if(c.textContent.length>40)long=true})});if(long)t.classList.add("cards")});var post=function(){parent.postMessage({fleetEvidence:true,fleetFrame:${tok},height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post();})();
+${markScript(token)}</scr` + `ipt></body></html>`;
+}
+
+/** The frame's whole document for the body `html` as fetched: cut to the allowlist and checked by a second parse ({@link safeBody}; `check` stands in for it in a test), else its plain text under a notice. */
+export async function bodyDoc(html: string, token: string = freshNonce(), check?: Parameters<typeof safeBody>[2]): Promise<string> {
+  return frameDoc(await safeBody(html, bodyBase().href, check), token);
 }
 
 /** What the server answers when it refuses a message. */
@@ -79,13 +115,24 @@ interface ServerError extends JsonRecord {
   readonly error?: string;
 }
 
-/** Where the evidence frame is kept. */
+/** Where the evidence frame is kept, and the token its document's script posts with. */
 export interface EvidenceFrame {
   frame: HTMLIFrameElement | null;
+  token: string | null;
 }
 
-/** The frame the evidence is in, for the page's message listeners. */
-export const evidence: EvidenceFrame = { frame: null };
+/** The frame the evidence is in, for the page's message listeners; none once the frame leaves its document. */
+export const evidence: EvidenceFrame = { frame: null, token: null };
+
+/** The decision's frame has left the document the page gave it: the page takes nothing more from it, and sends it nothing. */
+function leave(frame: HTMLIFrameElement): void {
+  if (evidence.frame !== frame) return;
+  evidence.frame = null;
+  evidence.token = null;
+}
+
+/** Whether `e` is the decision's frame speaking, from the document the page gave it ({@link frameDoc}'s token). */
+export const fromEvidence = (e: MessageEvent<Json>): boolean => saidBy(e, evidence.frame, evidence.token);
 
 /** The whole document the evidence frame was given (its srcdoc), for the marks to read the body themselves; null while there is none. */
 const [evidenceDoc, setEvidenceDoc] = createSignal<string | null>(null);
@@ -101,6 +148,7 @@ function Evidence(props: { readonly d: Decision | undefined; readonly title?: st
     ([k, el]) => {
       const d = props.d;
       evidence.frame = null;
+      evidence.token = null;
       setEvidenceDoc(null);
 
       if (!el) return;
@@ -111,13 +159,20 @@ function Evidence(props: { readonly d: Decision | undefined; readonly title?: st
       const frame = document.createElement("iframe");
       frame.setAttribute("sandbox", "allow-scripts allow-popups allow-popups-to-escape-sandbox");
       frame.title = "What the decision rests on";
+      const token = freshNonce();
       evidence.frame = frame;
+      evidence.token = token;
       el.appendChild(frame);
+      /* The document given loads once; a load after that is the frame taken somewhere else. */
+      let loads = 0;
+      frame.addEventListener("load", () => {
+        if (frame.hasAttribute("srcdoc") && (loads += 1) > 1) leave(frame);
+      });
       void fetch(url, { cache: "no-store" })
         .then((res) => (res.ok ? res.text() : Promise.reject(new Error(String(res.status)))))
-        .then((html) => {
+        .then((html) => bodyDoc(html, token))
+        .then((doc) => {
           if (key() !== k) return;
-          const doc = frameDoc(html);
           frame.srcdoc = doc;
           setEvidenceDoc(doc);
         })
@@ -130,11 +185,23 @@ function Evidence(props: { readonly d: Decision | undefined; readonly title?: st
     },
   );
 
-  const onMessage = (e: MessageEvent<{ readonly fleetEvidence?: boolean; readonly height?: number } | null>): void => {
+  const onMessage = (e: MessageEvent<Json>): void => {
     const frame = evidence.frame;
+    const data = e.data;
 
-    if (!frame || e.source !== frame.contentWindow || !e.data || e.data.fleetEvidence !== true) return;
-    const height = Number(e.data.height);
+    if (!frame || !isRecord(data)) return;
+
+    /* The frame leaves the page's document (a navigation; the window it leaves is gone by then, so the message has no source): from now on nothing it says is taken, and nothing is sent to it. */
+    if (data["annotGone"] === true && evidence.token !== null && data["fleetFrame"] === evidence.token && (e.source === null || e.source === frame.contentWindow)) {
+      leave(frame);
+
+      return;
+    }
+
+    if (!fromEvidence(e)) return;
+
+    if (data["fleetEvidence"] !== true) return;
+    const height = Number(data["height"]);
 
     if (height > 0) frame.style.height = String(Math.min(Math.ceil(height) + 2, FRAME_MAX_PX)) + "px";
   };
@@ -1335,8 +1402,9 @@ function MarksOn(props: { readonly id: string }): JSX.Element {
         if (revision === null) return;
         void fetch(m.fleetPage(theirs.fleet) + `decisions/${encodeURIComponent(theirs.id)}.html?v=${encodeURIComponent(revision)}`, { cache: "no-store" })
           .then((res) => (res.ok ? res.text() : Promise.reject(new Error(String(res.status)))))
-          .then((html) => {
-            if (live) setTheirBody(frameDoc(html));
+          .then((html) => bodyDoc(html))
+          .then((doc) => {
+            if (live) setTheirBody(doc);
           })
           .catch(() => undefined);
 
@@ -1363,6 +1431,7 @@ function MarksOn(props: { readonly id: string }): JSX.Element {
       return d !== undefined && d.kind !== "grill" && !Core.isNotice(d);
     },
     relayed: theirs !== null,
+    speaks: (e) => theirs !== null || fromEvidence(e),
   };
 
   return <Marks target={target} />;

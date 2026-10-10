@@ -77,7 +77,7 @@ LIMITS = {
     "test-coordinator": 240,         # 62-88 s
     "test-fleet-ts-own": 300,        # 66-97 s
     "test-fleet-ts-oracle": 300,     # 79-97 s
-    "test-page": 180,                # 37-55 s
+    "test-page": 420,                # 140-190 s since the frame's content-policy, mutation-XSS and visibility suites (headless Chromium; 37-55 s before)
     "test-fleet": 240,               # 66-86 s
     "test-lint-ts": 120,             # 8-14 s
     "test-coordinator-page": 120,    # under 1 s

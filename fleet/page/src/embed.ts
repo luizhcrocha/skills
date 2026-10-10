@@ -1,8 +1,9 @@
 /**
  * What a fleet's page in the manager's frame (`?embed=1`) tells the manager, posted to its own origin only:
  * its height, `{fleetEmbed: true, height}`, an answer sent there, `{fleetEmbed: true, answered}`, text
- * selected in it, `{fleetEmbed: true, select: {text, rect, from, touch, at?, anchor?}}` (`at` the place on the fleet's
+ * selected in it, `{fleetEmbed: true, select: {text, rect, from, touch, at?, anchor?, refused?}}` (`at` the place on the fleet's
  * page, as a quote keeps it; `anchor` a selection in the decision's body as its frame reads it, for a mark;
+ * `refused`, with `text` empty, why its frame found none of the selected words visible;
  * `text` empty and `rect` null once cleared), and what only the manager's page can do: open another of the fleet's decisions there,
  * `{fleetEmbed: true, open}`, its finder, `{fleetEmbed: true, finder: true}`, and its composer about the
  * decision shown, `{fleetEmbed: true, ask: {id, ref, title, question, side, text}}` (Ask in the chat, Side
@@ -21,7 +22,7 @@ export type SelRect = { readonly top: number; readonly bottom: number; readonly 
 export type EmbedMessage =
   | { readonly kind: "height"; readonly height: number }
   | { readonly kind: "answered"; readonly id: string }
-  | { readonly kind: "select"; readonly text: string; readonly rect: SelRect | null; readonly from: string; readonly touch: boolean; readonly at: QuoteAt | null; readonly anchor?: readonly Claimed[] }
+  | { readonly kind: "select"; readonly text: string; readonly rect: SelRect | null; readonly from: string; readonly touch: boolean; readonly at: QuoteAt | null; readonly anchor?: readonly Claimed[]; readonly refused?: Refusal }
   | { readonly kind: "open"; readonly id: string }
   | { readonly kind: "finder" }
   | { readonly kind: "ask"; readonly item: ItemRef; readonly side: boolean; readonly text: string };
@@ -50,12 +51,38 @@ function parseSelect(v: Json | undefined): EmbedMessage | null {
   const rect = parseSelRect(v["rect"]);
 
   if (!isString(text) || !isString(from) || (text && !rect)) return null;
+  const refused = text || !rect ? null : parseRefusal(v["refused"]);
 
-  const said = { kind: "select", text, rect: text ? rect : null, from, touch: v["touch"] === true, at: text ? Core.parseQuoteAt(v["at"]) : null } as const;
+  const said = { kind: "select", text, rect: text || refused ? rect : null, from, touch: v["touch"] === true, at: text || refused ? Core.parseQuoteAt(v["at"]) : null } as const;
   const anchor = text ? parseClaim(v["anchor"]) : null;
 
-  return anchor ? { ...said, anchor } : said;
+  return anchor ? { ...said, anchor } : refused ? { ...said, refused } : said;
 }
+
+/** Whether `e` comes from `frame` and from the document the page gave it, whose script posts with `token` (DecisionPage's `frameDoc`). */
+export function saidBy(e: MessageEvent<Json>, frame: HTMLIFrameElement | null, token: string | null): boolean {
+  const data = e.data;
+
+  return frame !== null && token !== null && e.source === frame.contentWindow && isRecord(data) && data["fleetFrame"] === token;
+}
+
+/** Why the frame refused a selection: none of its words could be seen (markframe.ts's `Unseen`). */
+export type Refusal = "hidden" | "offscreen" | "faint" | "tiny" | "covered" | "closed";
+
+const REFUSALS: readonly Refusal[] = ["hidden", "offscreen", "faint", "tiny", "covered", "closed"];
+
+/** A refusal as posted, or null for anything else. */
+export const parseRefusal = (v: Json | undefined): Refusal | null => REFUSALS.find((r) => r === v) ?? null;
+
+/** What the selection bar says of a refused selection, by why. */
+export const REFUSAL_WORDS = {
+  hidden: "These words are hidden in the decision: they cannot be marked.",
+  offscreen: "These words are off the page or cut away: they cannot be marked.",
+  faint: "These words are too faint to read: they cannot be marked.",
+  tiny: "These words are too small to read: they cannot be marked.",
+  covered: "These words are covered by something else: they cannot be marked.",
+  closed: "These words are in a closed section: open it to mark them.",
+} as const satisfies { readonly [K in Refusal]: string };
 
 /** A selection's blocks as a message carries them: only their words and the text around them. */
 const claimJson = (claim: readonly Claimed[]): JsonRecord => ({ blocks: claim.map((b) => ({ exact: b.exact, prefix: b.prefix, suffix: b.suffix })) });
@@ -65,12 +92,12 @@ const claimJson = (claim: readonly Claimed[]): JsonRecord => ({ blocks: claim.ma
  * null for any other message: `anchor` the blocks it claims (to be checked against the body), `raw` the
  * same rebuilt for relaying, nothing else of the message.
  */
-export function parseEvidenceSelect(data: Json | undefined): { readonly text: string; readonly rect: SelRect | null; readonly touch: boolean; readonly anchor: readonly Claimed[] | null; readonly raw: Json } | null {
+export function parseEvidenceSelect(data: Json | undefined): { readonly text: string; readonly rect: SelRect | null; readonly touch: boolean; readonly anchor: readonly Claimed[] | null; readonly raw: Json; readonly refused: Refusal | null } | null {
   if (!isRecord(data) || data["fleetSelect"] !== true) return null;
   const text = isString(data["text"]) ? data["text"] : "";
   const anchor = text ? parseClaim(data["anchor"]) : null;
 
-  return { text, rect: parseSelRect(data["rect"]), touch: data["touch"] === true, anchor, raw: anchor ? claimJson(anchor) : null };
+  return { text, rect: parseSelRect(data["rect"]), touch: data["touch"] === true, anchor, raw: anchor ? claimJson(anchor) : null, refused: text ? null : parseRefusal(data["refused"]) };
 }
 
 /**
@@ -204,11 +231,12 @@ export const postHeight = (): void => post({ fleetEmbed: true, height: Math.ceil
 export const postAnswered = (id: string): void => post({ fleetEmbed: true, answered: id });
 
 /** Text selected in the frame, where it sits, where on the page it is (as words and as a place), whether a touch made it, and in the body's frame the selection as it reads it (`anchor`); empty text once cleared. */
-export function postSelect(text: string, rect: SelRect | null, from: string, touch: boolean, at: QuoteAt | null = null, anchor: Json = null): void {
-  const select = { text, rect: text ? rect : null, from: text ? from : "", touch: text ? touch : false };
-  const placed = text && at ? { ...select, at: { ...at } } : select;
+export function postSelect(text: string, rect: SelRect | null, from: string, touch: boolean, at: QuoteAt | null = null, anchor: Json = null, refused: Refusal | null = null): void {
+  const why = text || !rect ? null : refused;
+  const select = { text, rect: text || why ? rect : null, from: text ? from : "", touch: text || why ? touch : false };
+  const placed = (text || why) && at ? { ...select, at: { ...at } } : select;
 
-  post({ fleetEmbed: true, select: text && anchor !== null ? { ...placed, anchor } : placed });
+  post({ fleetEmbed: true, select: text && anchor !== null ? { ...placed, anchor } : why ? { ...placed, refused: why } : placed });
 }
 
 /** A marks' message from the body's frame, told to the manager: rebuilt from its own fields. */

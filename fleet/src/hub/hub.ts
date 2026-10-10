@@ -8,10 +8,11 @@
  *   state.json on each load), `GET /chat`, `GET /events` (SSE: `hello`, `state`, `chat`, pings),
  *   `POST /chat`, `POST /chat/preview`, `GET /skills` (what the session can be told to run, held 60 s),
  *   `GET /state.json` (the view the stream sends, not the ledger: the page polls it while the stream
- *   reconnects), and the files under its DIR (`decisions/*` sandboxed), with the
- *   same status codes. `/f/<a>/f/<b>/…` is `/f/<b>/…` (a manager's page links its fleets relatively), and
- *   a fleet's old id, from before its session's number was dropped (`/f/3.ui-coordinator/…`), moves (301)
- *   to its id while the entry lives.
+ *   reconnects), and the files under its DIR, each sandboxed with no script (`decisions/*` as plain text,
+ *   `files/*` a linked file whose scripts run without an origin: body-policy.ts), with the same status codes.
+ *   `/f/<a>/f/<b>/…` is `/f/<b>/…` (a manager's page links its fleets relatively), and a fleet's old id,
+ *   from before its session's number was dropped (`/f/3.ui-coordinator/…`), moves (301) to its id while the
+ *   entry lives.
  * - `/f/<fleet>/preview/…` and `/f/<fleet>/preview/<worker>/…` the fleet's preview dev servers, HTTP and
  *   WebSocket (`preview-proxy.ts`); `POST /f/<fleet>/preview-workers` takes a worker in or out of the
  *   combined preview, under the chat's write policy; `POST /f/<fleet>/name` names a worker or the fleet from
@@ -48,6 +49,7 @@ import { pidOfEntry, type Entry } from "../registry.ts";
 import { SpendReader } from "../transcripts.ts";
 import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
+import { FILE_POLICY, LINKED_POLICY, servedBody } from "./body-policy.ts";
 import { indexHtml } from "./index-page.ts";
 import { LinkProbes, ProbeCache } from "./probes.ts";
 import { grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
@@ -80,8 +82,6 @@ const PEERS_MS = 30_000;
 /** How long a peer hub may take to answer. */
 const PEER_TIMEOUT_MS = 2500;
 
-/** A decision body's page runs without the hub's origin, so its scripts cannot post as the user. */
-export const BODY_SANDBOX = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox";
 
 /** What the hub needs from where it runs. */
 export interface HubOptions {
@@ -126,6 +126,9 @@ interface Viewed {
 }
 
 const NO_STORE = { "Cache-Control": "no-store" } as const;
+
+/** What a file of a fleet's DIR outside `decisions/` is served with: no origin, no script, never sniffed. */
+const FILE_HEADERS = { "Content-Security-Policy": FILE_POLICY, "X-Content-Type-Options": "nosniff" } as const;
 
 function isRegularFile(path: string): boolean {
   try {
@@ -613,7 +616,7 @@ export class Hub {
       return this.fleetEvents(req, root, viewer, resumePoint(req.headers.get("Last-Event-ID"), params));
     }
 
-    if (rest === "/" || rest === "/index.html") {
+    if (pageRoute(rest)) {
       const page = this.page(root);
 
       if (page !== undefined) return new Response(req.method === "HEAD" ? null : page, { headers: { "Content-Type": "text/html; charset=utf-8", ...NO_STORE } });
@@ -813,11 +816,12 @@ export class Hub {
     const bytes = readBytes(resolved);
 
     if (bytes === undefined) return jsonResponse(404, { error: "not found" });
-    const body = resolved.startsWith(`${join(base, "decisions")}/`) ? { "Content-Security-Policy": BODY_SANDBOX } : {};
+    const type = Bun.file(resolved).type;
+    const content = req.method === "HEAD" ? null : bytes;
 
-    return new Response(req.method === "HEAD" ? null : bytes, {
-      headers: { "Content-Type": Bun.file(resolved).type, ...NO_STORE, ...body },
-    });
+    if (resolved.startsWith(`${join(base, "decisions")}/`)) return servedBody(content, type, NO_STORE);
+
+    return new Response(content, { headers: { "Content-Type": type, ...NO_STORE, ...FILE_HEADERS } });
   }
 
   /** A file a link of the fleet at `root` names (`file://…`), read-only, at `files/<path under its files root>`:
@@ -866,7 +870,7 @@ export class Hub {
     const type = /\.(?:md|markdown|txt|log|csv|tsv|jsonl)$/iu.test(target) ? "text/plain; charset=utf-8" : Bun.file(target).type;
 
     return new Response(req.method === "HEAD" ? null : Bun.file(target), {
-      headers: { "Content-Type": type, ...NO_STORE, "Content-Security-Policy": BODY_SANDBOX, "X-Content-Type-Options": "nosniff" },
+      headers: { "Content-Type": type, ...NO_STORE, "Content-Security-Policy": LINKED_POLICY, "X-Content-Type-Options": "nosniff" },
     });
   }
 
@@ -1133,6 +1137,11 @@ export class Hub {
         if (!["connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding", "date", "server"].includes(key.toLowerCase())) passed.set(key, value);
       });
 
+      // A peer's file comes to this hub's origin: one the peer sent with no sandbox (a hub from before it had one) gets this hub's.
+      if (!/(?:^|;)\s*sandbox\b/iu.test(passed.get("Content-Security-Policy") ?? "") && !pageRoute(rest) && !rest.startsWith("/preview/")) {
+        for (const [name, value] of Object.entries(FILE_HEADERS)) passed.set(name, value);
+      }
+
       const location = passed.get("Location");
 
       if (location !== null && location.startsWith(`/f/${encodeURIComponent(fleet)}/`)) {
@@ -1144,6 +1153,11 @@ export class Hub {
       return jsonResponse(502, { error: `${peerName}'s hub did not answer: ${cause instanceof Error ? cause.message : String(cause)}` });
     }
   }
+}
+
+/** Whether `rest` (of `/f/<fleet>/rest`) is the fleet's page, which the hub renders and serves with its origin. */
+function pageRoute(rest: string): boolean {
+  return rest === "/" || rest === "/index.html";
 }
 
 function hostPart(ip: string): string {

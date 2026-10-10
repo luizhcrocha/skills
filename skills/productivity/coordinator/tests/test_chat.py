@@ -739,6 +739,18 @@ class HostTest(ServerTest):
             with self.subTest(origin):
                 self.assertEqual(self.post({"text": "hi"}, {"Origin": origin})[0], 403)
 
+    def test_a_sandboxed_pages_post_or_one_the_browser_says_is_not_same_origin_is_refused(self):
+        own = f"http://127.0.0.1:{self.port}"
+        for headers in [{"Origin": "null", "Sec-Fetch-Site": "cross-site"}, {"Origin": own, "Sec-Fetch-Site": "cross-site"},
+                        {"Origin": own, "Sec-Fetch-Site": "same-site"}, {"Sec-Fetch-Site": "none"},
+                        {"Origin": "null", "Sec-Fetch-Site": "same-origin"}]:
+            for route in ("/chat", "/chat/preview"):
+                with self.subTest(route=route, headers=headers):
+                    status, body = self.request("POST", route, b'{"text": "hi"}', {"Content-Type": "application/json", **headers})
+                    self.assertEqual((status, body), (403, {"error": "cross-origin post refused"}))
+        self.assertEqual(chat.read(self.root), [])
+        self.assertEqual(self.post({"text": "hi"}, {"Origin": own, "Sec-Fetch-Site": "same-origin"})[0], 201)
+
 
 class WorkerArgumentsTest(unittest.TestCase):
     def test_an_unknown_policy_stops_the_worker(self):
@@ -888,15 +900,69 @@ class BodyIsSandboxedTest(ServerTest):
         self.assertEqual(response.status, 200, path)
         return response.getheader("Content-Security-Policy")
 
+    def test_a_decision_body_is_served_as_plain_text_never_sniffed(self):
+        (self.root / "decisions").mkdir()
+        body = '<meta http-equiv="&#114;efresh" content="0;url=/elsewhere"><p>x</p>'
+        (self.root / "decisions" / "d1.html").write_text(body)
+        (self.root / "decisions" / "d1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        for method in ("GET", "HEAD"):
+            with self.subTest(method):
+                conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+                conn.request(method, "/decisions/d1.html")
+                response = conn.getresponse()
+                data = response.read()
+                conn.close()
+                self.assertEqual(response.getheader("Content-Type"), "text/plain; charset=utf-8")
+                self.assertEqual(response.getheader("X-Content-Type-Options"), "nosniff")
+                self.assertTrue((response.getheader("Content-Security-Policy") or "").startswith("sandbox allow-scripts"))
+                self.assertEqual(data, body.encode() if method == "GET" else b"")
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", "/decisions/d1.png")
+        response = conn.getresponse()
+        response.read()
+        conn.close()
+        self.assertEqual(response.getheader("Content-Type"), "image/png")
+
     def test_a_decision_body_is_served_without_the_pages_origin(self):
         (self.root / "decisions").mkdir()
         (self.root / "decisions" / "d1.html").write_text("<script>fetch('/chat')</script>")
         (self.root / "index.html").write_text("<p>dashboard</p>")
         for path in ["/decisions/d1.html", "/decisions/d1.html?v=2", "/decisions/../decisions/d1.html", "//decisions/d1.html"]:
             with self.subTest(path):
-                self.assertTrue((self.header(path) or "").startswith("sandbox allow-scripts"), path)
+                policy = self.header(path) or ""
+                self.assertTrue(policy.startswith("sandbox allow-scripts"), path)
+                self.assertIn("script-src 'none'", policy)
         self.assertIsNone(self.header("/index.html"))
         self.assertIsNone(self.header("/"))
+
+    def test_every_other_file_of_dir_is_served_with_no_origin_and_no_script_never_sniffed(self):
+        (self.root / "index.html").write_text('<p>dashboard</p><script>window.page = true</script>')
+        (self.root / "notes").mkdir()
+        hostile = "<script>fetch('chat', {method: 'POST'})</script>"
+        for name in ("evil.html", "notes/evil.html", "notes/evil.svg", "notes/noext"):
+            (self.root / name).write_text(hostile)
+        (self.root / "notes" / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        for path in ["/evil.html", "/notes/evil.html", "//notes/evil.html", "/notes/../evil.html", "/notes/evil.svg",
+                     "/notes/noext", "/notes/shot.png", "/notes/", "/state.json"]:
+            for method in ("GET", "HEAD"):
+                with self.subTest(path=path, method=method):
+                    conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+                    conn.request(method, path)
+                    response = conn.getresponse()
+                    response.read()
+                    conn.close()
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.getheader("Content-Security-Policy"),
+                                     "sandbox; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'")
+                    self.assertEqual(response.getheader("X-Content-Type-Options"), "nosniff")
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        for path in ("/", "/index.html", "/?x=1"):
+            conn.request("GET", path)
+            response = conn.getresponse()
+            self.assertEqual(response.read(), b'<p>dashboard</p><script>window.page = true</script>', path)
+            self.assertIsNone(response.getheader("Content-Security-Policy"), path)
+            self.assertEqual(response.getheader("Content-Type"), "text/html", path)
+        conn.close()
 
 
 def as_manager(root: Path, *coordinators: tuple[str, str]) -> None:

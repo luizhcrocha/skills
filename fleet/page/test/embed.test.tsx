@@ -508,11 +508,14 @@ test("embedded, the fleet's page passes its evidence frame's selection on to the
   page.ui.route();
   flush();
   const ev = placeAt(evidence.frame, 300, 16);
-  arrive({ fleetSelect: true, text: "one-cent drift", rect: { top: 10, bottom: 28, left: 5, width: 90 }, touch: true }, ev.contentWindow);
+  const fleetFrame = evidence.token ?? "";
+  /* Only the document the page gave the frame knows its token: a message without it is not the frame's. */
+  arrive({ fleetSelect: true, text: "forged", rect: { top: 10, bottom: 28, left: 5, width: 90 }, touch: true }, ev.contentWindow);
+  arrive({ fleetSelect: true, text: "one-cent drift", rect: { top: 10, bottom: 28, left: 5, width: 90 }, touch: true, fleetFrame }, ev.contentWindow);
   const at = { hash: "#decision/d1", anchor: "dv-body" };
   expect(selects()).toEqual([{ fleetEmbed: true, select: { text: "one-cent drift", rect: { top: 310, bottom: 328, left: 21, width: 90 }, from: "the evidence of Rounding rule for totals", touch: true, at } }]);
-  arrive({ fleetSelect: true, text: "elsewhere", rect: { top: 1, bottom: 2, left: 3, width: 4 } }, window);
-  arrive({ fleetSelect: true, text: "", rect: null }, ev.contentWindow);
+  arrive({ fleetSelect: true, text: "elsewhere", rect: { top: 1, bottom: 2, left: 3, width: 4 }, fleetFrame }, window);
+  arrive({ fleetSelect: true, text: "", rect: null, fleetFrame }, ev.contentWindow);
   expect(selects()).toEqual([
     { fleetEmbed: true, select: { text: "one-cent drift", rect: { top: 310, bottom: 328, left: 21, width: 90 }, from: "the evidence of Rounding rule for totals", touch: true, at } },
     { fleetEmbed: true, select: { text: "", rect: null, from: "", touch: false } },

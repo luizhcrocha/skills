@@ -66,19 +66,30 @@ interface Opened {
   readonly harness: Harness;
 }
 
-/** perf's page on D30 (its body `body`) at `width`×`height`, as a phone (touch) or not, in a browser context of its own. */
-async function openD30(width: number, height: number, phone: boolean, scale = 1, body = D30_BODY): Promise<Opened> {
+/**
+ * perf's page on D30 (its body `body`) at `width`×`height`, as a phone (touch) or not, in a browser context of its own.
+ * `hostile` is a script run in the frame's own world as a body's script would, had one got past the sanitiser and the
+ * frame's policy (neither of which lets a body's `<script>` in): the page's checks behind them hold on their own.
+ */
+async function openD30(width: number, height: number, phone: boolean, scale = 1, body = D30_BODY, hostile = ""): Promise<Opened> {
   const harness = serveHarness({ template, view: marksView(NOW), messages: coordinatorChat(NOW), bodies: { d30: body } });
   const context = await browser.createBrowserContext();
   open.push({ harness, context });
   const page = await context.newPage();
 
   if (phone) touching.add(page);
+
   await page.setViewport({ width, height, isMobile: phone, hasTouch: phone, deviceScaleFactor: scale });
   page.on("pageerror", (e) => console.error(`pageerror at ${String(width)}: ${String(e)}`));
   await page.goto(new URL(harness.url).origin + "/f/perf/#decision/d30", { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelector("#conn")?.textContent === "Live");
-  await evFrame(page);
+  const frame = await evFrame(page);
+
+  if (hostile) {
+    await frame.evaluate(hostile);
+    expect(await frame.evaluate("window.hostile && window.hostile.ran === true")).toBe(true);
+  }
+
   await page.waitForSelector("#mk-section");
   await unfold(page);
 
@@ -765,8 +776,19 @@ async function chordOn(page: Page): Promise<void> {
   await sleep(400);
 }
 
-/** What the body's own scripts can do: post to the page, and press keys inside the frame. */
-const bodyPosts = (f: Frame, data: Json): Promise<void> => f.evaluate((d: Json) => parent.postMessage(d, "*"), data);
+/**
+ * A body script's way to the frame's token: it reads the fleet's own script in the document, as a script past
+ * the frame's policy could (the token stops a document the frame is taken to, not a script inside this one).
+ */
+const STEAL = `function tok(){var s=document.scripts;for(var i=0;i<s.length;i++){var m=/fleetFrame:("[^"]*")/.exec(s[i].textContent);if(m)return JSON.parse(m[1])}return null}`;
+
+/** What the body's own scripts can do: post to the page (with the frame's token, read as {@link STEAL} does), and press keys inside the frame. */
+const bodyPosts = (f: Frame, data: Json): Promise<void> =>
+  f.evaluate((d: Json) => {
+    const token = [...document.scripts].map((x) => /fleetFrame:("[^"]*")/u.exec(x.textContent)?.[1]).find((m) => m !== undefined);
+
+    parent.postMessage({ ...Object(d), fleetFrame: token === undefined ? null : JSON.parse(token) }, "*");
+  }, data);
 
 const bodyKeys = (f: Frame, key: string, ctrlKey: boolean): Promise<boolean> => f.evaluate((k: string, c: boolean) => document.dispatchEvent(new KeyboardEvent("keydown", { key: k, ctrlKey: c, bubbles: true })), key, ctrlKey);
 
@@ -859,14 +881,16 @@ test.skipIf(!found)("E3: a heading's hidden text cannot add lines to the sent me
 });
 
 test.skipIf(!found)("E4: the body cannot pick the quote: a forged answer is refused for the real selection, and words it cannot confirm are refused", async () => {
-  const forger = `<script>addEventListener("message",function(e){if(e.data&&e.data.annotNow){parent.postMessage({annotNowSel:true,kind:e.data.annotNow,anchor:{blocks:[{exact:"lakeFS (not R2 alone)",prefix:"",suffix:""}],where:{tag:"p",section:"In short",label:"",row:0}}},"*")}})</script>`;
-  const { page } = await openD30(1280, 900, false, 1, D30_BODY + forger);
+  const forger = `${STEAL};window.hostile={ran:true,answered:0};addEventListener("message",function(e){if(e.data&&e.data.annotNow){window.hostile.answered+=1;parent.postMessage({fleetFrame:tok(),annotNowSel:true,kind:e.data.annotNow,anchor:{blocks:[{exact:"lakeFS (not R2 alone)",prefix:"",suffix:""}],where:{tag:"p",section:"In short",label:"",row:0}}},"*")}})`;
+  const { page } = await openD30(1280, 900, false, 1, D30_BODY, forger);
   const f = await evFrame(page);
 
   await select(page, "Every model call is saved, so a rerun is free");
   await click(page, '#seltool [data-mark="delete"]');
   await page.waitForSelector("#mk-composer:not([hidden])");
   expect(await page.$eval("#mk-quote", (e) => e.textContent)).toBe("Every model call is saved, so a rerun is free");
+  /* The forger did answer the page's annotNow, with its own words, and was not taken. */
+  expect(Number(await f.evaluate("window.hostile.answered"))).toBeGreaterThan(0);
   await click(page, "#mk-cancel");
   await page.waitForSelector("#mk-composer[hidden]");
   await sleep(300);
@@ -939,14 +963,14 @@ const SAVED = "Every model call is saved, so a rerun is free";
 
 /**
  * A body script that offers `words` as the selection, cut as the frame cuts one (its text with no script
- * or style, and 32 characters each side): it answers every `annotNow` with them, and `offer()` posts them
- * as a selection that rests.
+ * or style, and 32 characters each side): it answers every `annotNow` with them (counted in
+ * `window.hostile.answered`), and `offer()` posts them as a selection that rests.
  */
 const offering = (words: string): string =>
-  `<script>(function(){var w=${JSON.stringify(words)};function cut(){var it=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),t="";for(var n=it.nextNode();n;n=it.nextNode()){if(!/^(SCRIPT|STYLE)$/.test(n.parentNode.nodeName))t+=n.data}var i=t.indexOf(w);return{blocks:[{exact:w,prefix:t.slice(Math.max(0,i-32),i),suffix:t.slice(i+w.length,i+w.length+32)}]}}addEventListener("message",function(e){if(e.data&&e.data.annotNow)parent.postMessage({annotNowSel:true,kind:e.data.annotNow,anchor:cut()},"*")});window.offer=function(){parent.postMessage({fleetSelect:true,text:w,rect:{top:40,bottom:60,left:20,width:160},touch:false,anchor:cut()},"*")}})()</script>`;
+  `(function(){${STEAL};window.hostile={ran:true,answered:0};var w=${JSON.stringify(words)};function cut(){var it=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),t="";for(var n=it.nextNode();n;n=it.nextNode()){if(!/^(SCRIPT|STYLE)$/.test(n.parentNode.nodeName))t+=n.data}var i=t.indexOf(w);return{blocks:[{exact:w,prefix:t.slice(Math.max(0,i-32),i),suffix:t.slice(i+w.length,i+w.length+32)}]}}addEventListener("message",function(e){if(e.data&&e.data.annotNow){window.hostile.answered+=1;parent.postMessage({fleetFrame:tok(),annotNowSel:true,kind:e.data.annotNow,anchor:cut()},"*")}});window.offer=function(){parent.postMessage({fleetFrame:tok(),fleetSelect:true,text:w,rect:{top:40,bottom:60,left:20,width:160},touch:false,anchor:cut()},"*")}})()`;
 
-/** D30 with the secret in its idea's paragraph between `open` and `close` (after `style`), and a script offering it. */
-const hiding = (open: string, close: string, style = ""): string => style + D30_BODY.replace(SAVED + ";", `${SAVED}; ${open}${SECRET}${close}`) + offering(SECRET);
+/** D30 with the secret in its idea's paragraph between `open` and `close` (after `style`). */
+const hiding = (open: string, close: string, style = ""): string => style + D30_BODY.replace(SAVED + ";", `${SAVED}; ${open}${SECRET}${close}`);
 
 /** Luiz's own press in the frame, on a heading clear of any mark: the frame takes focus and his activation, which no body script can make. */
 async function press(f: Frame): Promise<void> {
@@ -978,13 +1002,14 @@ const HIDDEN_BODIES: readonly (readonly [string, string])[] = [
 
 for (const [name, body] of HIDDEN_BODIES) {
   test.skipIf(!found)(`hidden words: a body script offering words Luiz cannot see is refused (${name}); his visible selection is quoted`, async () => {
-    const { page } = await openD30(1280, 900, false, 1, body);
+    const { page } = await openD30(1280, 900, false, 1, body, offering(SECRET));
     const f = await evFrame(page);
 
     /* Luiz selects words he sees; the script answers `annotNow` with the hidden ones. */
     await press(f);
     await select(page, SAVED);
     expect(await composed(page, "comment")).toEqual({ quote: SAVED, problem: "" });
+    expect(Number(await f.evaluate("window.hostile.answered"))).toBeGreaterThan(0);
 
     /* The script claims the hidden words as the selection too: nothing confirms them. */
     await f.evaluate(() => getSelection()?.removeAllRanges());
@@ -998,12 +1023,14 @@ for (const [name, body] of HIDDEN_BODIES) {
 }
 
 test.skipIf(!found)("a body script's answer to annotNow that is not the selection Luiz made is refused, even in words he can see", async () => {
-  const { page } = await openD30(1280, 900, false, 1, D30_BODY + offering("lakeFS (not R2 alone)"));
+  const { page } = await openD30(1280, 900, false, 1, D30_BODY, offering("lakeFS (not R2 alone)"));
   const f = await evFrame(page);
 
   await press(f);
   await select(page, SAVED);
   expect(await composed(page, "delete")).toEqual({ quote: SAVED, problem: "" });
+  /* The script did answer, with words Luiz can see but did not select, and was not taken. */
+  expect(Number(await f.evaluate("window.hostile.answered"))).toBeGreaterThan(0);
 });
 
 test.skipIf(!found)("after Luiz's own press in the frame, the frame's answer is taken at once, before the bar's own selection would be", async () => {

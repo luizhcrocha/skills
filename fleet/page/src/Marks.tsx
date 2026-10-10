@@ -44,6 +44,8 @@ export interface MarkTarget {
   readonly allowed: () => boolean;
   /** Whether `frame` is a fleet's page on the manager's (same origin, relaying), not the sandboxed body frame (origin "null"). */
   readonly relayed: boolean;
+  /** Whether `e` is `frame` speaking: the body's frame from the document the page gave it (its token), or the fleet's page relaying. */
+  readonly speaks: (e: MessageEvent<Json>) => boolean;
 }
 
 /** What the selection bar asks of the marks on the decision shown. */
@@ -563,7 +565,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
     const fr = t.frame();
 
     /* The body frame is sandboxed (origin "null"); a fleet's page on the manager's is this page's origin, and relays the body's messages rebuilt. */
-    const fromFrame = fr !== null && e.source === fr.contentWindow && e.origin === (t.relayed ? location.origin : "null");
+    const fromFrame = fr !== null && e.source === fr.contentWindow && e.origin === (t.relayed ? location.origin : "null") && t.speaks(e);
     const relayed = fromFrame && t.relayed ? parseEmbedMessage(e.data) : null;
     const selected = fromFrame ? (t.relayed ? (relayed?.kind === "select" ? relayed : null) : parseEvidenceSelect(e.data)) : null;
 

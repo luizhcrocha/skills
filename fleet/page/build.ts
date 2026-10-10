@@ -56,7 +56,8 @@ async function bundle(entry: string, plugins: BunPlugin[]): Promise<string> {
     process.exit(1);
   }
 
-  const text = (await out.outputs[0]?.text())?.trim() ?? "";
+  /* A string that opens with "<!--" (DOMPurify's empty input) is written with an escape, the same string to JavaScript. */
+  const text = ((await out.outputs[0]?.text())?.trim() ?? "").replace(/(["'`])<!--/gu, "$1\\x3C!--");
 
   /* Inside a <script> no "</script" may end it early (escaped below, the same string to JavaScript) and no
      "<!--" may start an escaped section. */

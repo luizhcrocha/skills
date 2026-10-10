@@ -122,7 +122,10 @@ export function allowedOrigin(hosts: ReadonlySet<string>, allowed: ReadonlySet<s
 }
 
 /** Why a post is refused before its body is read, as [status, error], or undefined. `allowed` are the other
- * origins it may come from (a chat post's, from the hub's config); none for every other post. */
+ * origins it may come from (a chat post's, from the hub's config); none for every other post. Every post that
+ * acts as the user goes through it: a chat message, a decision's answer and the grant it carries
+ * (`/chat`, `/chat/preview`), a name (`/name`), a preview's workers (`/preview-workers`), and a post passed
+ * to a peer hub. */
 export function postRefusal(
   owner: string | undefined,
   viewer: Viewer,
@@ -137,12 +140,15 @@ export function postRefusal(
   if ((header("Content-Type") ?? "").split(";")[0]?.trim().toLowerCase() !== "application/json") return [415, "send the message as application/json"];
   const origin = header("Origin");
 
+  // A sandboxed page (an agent's file, a linked prototype) has an opaque origin and posts with `Origin: null`,
+  // which is no host this hub answers to.
   if (origin !== null && !sameOrigin(origin, hosts) && !allowed.has(origin)) return [403, "cross-origin post refused"];
 
-  // A browser names the page of every cross-site post; one that says it is cross-site and names none is refused.
-  const site = (header("Sec-Fetch-Site") ?? "").toLowerCase();
+  // A browser says where a post comes from: only the hub's own page (same-origin) acts as the user, besides a
+  // page `allowed` names. A post that says it is from anywhere else, an opaque origin's included, is refused.
+  const site = header("Sec-Fetch-Site");
 
-  if (origin === null && (site === "cross-site" || site === "same-site")) return [403, "cross-origin post refused"];
+  if (site !== null && site.toLowerCase() !== "same-origin" && !(origin !== null && allowed.has(origin))) return [403, "cross-origin post refused"];
 
   const length = header("Content-Length") ?? "0";
 

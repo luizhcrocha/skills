@@ -997,6 +997,84 @@ format and bidi characters dropped, capped, and Markdown-escaped where the text 
 (`re` the batch, `mark` naming n). Answered marks show dimmed (keep) or folded into a History (clear),
 a per-viewer choice.
 
+**Only words the user can see.** With the body's scripts held off (below), the marks' script runs alone
+in the frame and reads the browser's own layout (markframe.ts). When it reports a selection it checks
+each word: `checkVisibility` (opacity, `visibility`, `content-visibility`); a box of its own that meets
+the document's scrollable area and is not cut away by an element that clips its overflow (`overflow:
+hidden` or `clip`, `contain: paint`); ink above 0.1 alpha through every opacity above it, and above
+1.2:1 against what is painted under it; a font and a box of at least 4 px; not in a closed `<details>`
+(its summary aside); and at the word's centre `elementsFromPoint`, with every element made to take the
+pointer for the test, reaching the word's own element before anything that paints over it. The
+selection keeps only the words that pass, as blocks split where a hidden word falls, and its text is
+those words; one with none is refused with why (hidden, off the page or cut away, too faint, too small,
+covered, in a closed section), and the selection bar says so and offers nothing, not even Copy. The
+page then checks what it is told against its own parse (`bodytext.ts`): text in a `hidden` or
+`aria-hidden` element, or one that its inline style or the body's own `<style>` sheets hide, shrink,
+move off screen or paint in the background's colour, counts as hidden, and so does what it cannot work
+out (an external sheet, a computed value); an inline SVG's drawn text (`text` and `tspan` in `svg`, `g`,
+`a`) is read by its presentation attributes and its fill, against the rects, circles and ellipses drawn
+before it whose area holds its anchor (in the same coordinates: no transform between them), then what
+is behind the SVG; SVG's other elements (`defs`, `symbol`, `mask`, …) draw none. A word in a scroller's
+scroll area (a code block or a wide table scrolled sideways) is on the document wherever the scroller
+is scrolled, as long as the scroller is. Pinned by page `test/visibility-browser.test.ts` and
+`test/visibility-reach-browser.test.ts` (a table of
+CSS-only ways to hide or cover words, each refused alone and dropped from a selection across it, by the
+frame and in the quote; visible words in a table, a code block, a list and a show-me SVG figure still
+quoted; words scrolled out of a code block or past the page's width in a table, and a white label on a
+navy shape, quoted in both themes) and `test/bodytext.test.ts`.
+
+**The body runs no script.** Defence in depth for the rule above: the frame's document (`frameDoc`) opens
+its head with a Content-Security-Policy `<meta>`, before its `<base>`: `default-src 'none'; script-src
+'nonce-<N>'; style-src 'unsafe-inline' https://fonts.googleapis.com; img-src data: blob: <hub>; font-src
+data: https://fonts.gstatic.com <hub>; object-src 'none'; base-uri <the frame's base URL>; form-action
+'none'` (`fleet/src/hub/body-policy.ts`), N 16 random bytes drawn on each render, `<hub>` the page's
+origin. Only the fleet's own script carries the nonce (sizing, the tables' cards, the marks:
+markframe.ts); the body's `<script>`, its inline handlers (`onclick=`, `onerror=`, an SVG's `onload=`),
+its `javascript:` links, its frames, objects and forms do nothing, and a `<script` tag the body leaves
+open to swallow the nonce is refused by the browser (an attribute holding `<script` is never nonceable).
+`base-uri` names the frame's own base rather than `'none'`, which would refuse it and with it every
+relative picture. Styles, the page's fonts, inline SVG, and pictures from `data:`, `blob:` or the hub
+still show. Nor does the body take the frame anywhere: before it goes in (`bodyDoc`, `safebody.ts`) it is
+cut to an allowlist by DOMPurify (pinned in the page's package.json), which knows the parser's mutation
+tricks: text, tables, code, lists, headings, details, pictures from `data:` or the hub, the show-me SVG
+elements, classes and styles stay; `<script>`, `<meta>` (a refresh, which no policy stops), `<base>`,
+`<form>`, `<noscript>`, `<math>`, `<template>`, frames, objects, embeds, every `on*` handler and
+`javascript:` address go, and every link, HTML or SVG (whose `<a>` ignores the `<base>`'s target), opens a
+window of its own (`target=_blank rel="noopener noreferrer"`), never the frame or the page. An `id` or
+`name` that would clobber a property of the document or a form (`id="open"`), which DOMPurify drops, is
+kept as `user-content-<it>`, and every `href="#<it>"` (or SVG `xlink:href`) in the body with it, so the
+body's anchors still meet. DOMPurify
+reads with scripting off and the frame parses with it on, so the result is parsed again as the frame
+will parse it, in a hidden frame of its own (sandboxed with no origin, a policy letting only its own
+script run): a body that comes back holding a forbidden element, a handler, a `javascript:` address, a
+link not opening its own window, or changed by that parse, is not shown; its plain text is, under "This
+decision's body could not be shown safely". What the fleet's script posts
+carries a token drawn per render, kept in a script's text (no style reaches it); the page takes a
+message from the frame only from the decision's current frame and with that token, and once the frame
+leaves the document it was given (the fleet's script posts `annotGone` on `pagehide`; a second load
+says the same) the page takes nothing from it and sends it nothing. The body served by itself,
+`/f/<fleet>/decisions/<id>.html` on the hub (`servedBody`) and `decisions/<id>.html` on
+serve_dashboard.py, is plain text: `Content-Type: text/plain; charset=utf-8` and `X-Content-Type-Options:
+nosniff`, so nothing in it renders, runs or takes the tab anywhere, under the same policy as a header
+after the sandbox (`script-src 'none'`, `'self'` for the hub, `base-uri 'none'`); a picture, font or
+medium under `decisions/` keeps its type. The page fetches that text and shows it only through
+`bodyDoc`. An extension's content script (picasso)
+runs in an isolated world the page's policy does not reach, so it still reads the frame. A body
+published beside a claude.ai artifact is served by claude.ai, with no header of ours; the frame's
+`<meta>` still holds there. Pinned by page `test/body-policy-browser.test.ts`,
+`test/content-policy-browser.test.ts` and `test/content-policy-manager-browser.test.ts`: a row for each way a body could run or navigate (`<script>`,
+`onload`, `onerror`, a `javascript:` link, `<iframe srcdoc>`, `<object>`, `<embed>`, an SVG's
+`<script>` and `onload`, a `<meta>` refresh to `javascript:` and to a URL, a form, a link to `_top`, a
+`<base>`, a refresh whose `http-equiv` is an entity, the reviewer's two mutation-XSS shapes, an SVG link
+with no target or `_self`), each in a fleet's page, by itself on the hub's route (plain text) and on the
+manager's page, with the frame holding nothing the sanitiser forbids and the fleet's sizing, selection
+bar and marks still working; `test/mxss-browser.test.ts` a table of mutation-XSS shapes (DOMPurify's past bypasses); a frame
+navigated away (to a page that knows the token) or replaced ignored; and page
+`test/safebody-browser.test.ts` the second parse and the plain-text refusal. The defence tests of the rule
+above run their hostile body scripts in the frame's own world (as a script past the sanitiser and the
+policy would, reading the token from the fleet's script) and assert they ran, so the page's own checks
+are proved on their own; fleet `test/hub.test.ts` and `test_chat.py` pin the plain-text route.
+
 ## fleets.py and the registry
 
 `REGISTRY/<fleet>.json`, one per fleet being served:
@@ -1089,7 +1167,7 @@ at every rendering step.
   cross-origin `Origin`, 415 not JSON, 413 over 256 KiB, 400 bad body or `ChatError`, 409 an answer
   to a closed decision, 400 a secret that reads as a value, 500 store failure); `POST
   /chat/preview` (who a text would reach; stores nothing); files under DIR with `Cache-Control:
-  no-store`, `DIR/decisions/*` sandboxed by CSP; 421 on an unknown `Host`; on a manager's server
+  no-store`, `DIR/decisions/*` sandboxed by CSP and run no script (the body's policy); 421 on an unknown `Host`; on a manager's server
   `/f/<fleet>/…` proxied to that fleet's server. Pinned by test_chat, test_chat_serve and
   page.test.mjs.
   The most a post may be is `MAX_POST_BYTES`, 256 KiB, given to the page as `hello`'s `max_bytes`; the
@@ -1209,10 +1287,13 @@ itself. A manager made later appears the same way, on the same address.
   it), `{name}` names the fleet before every other name (200 `{id, session, path}`, the fleet's address
   after; 400 reserved or taken); an empty name gives either back to its session's; the page's state then
   carries `named: {id, session}`, the hub's alone), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
-  sandbox CSP; dot files and paths out of DIR 404), and `GET /f/<fleet>/files/<path>` (TypeScript only): a file a
+  sandbox CSP and the body's policy; every other file, whatever its type, with `Content-Security-Policy: sandbox;
+  script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'` and `nosniff`; dot files and paths
+  out of DIR 404), and `GET /f/<fleet>/files/<path>` (TypeScript only): a file a
   `file://` link of that fleet names, read-only, at its path under the fleet's files root: DIR's parent when that
   is a session's `scratchpad` or a directory of its own under the state home (`$XDG_STATE_HOME`, else
-  `~/.local/state`, not the state home itself), else DIR. Served with the sandbox CSP, `nosniff`, no-store,
+  `~/.local/state`, not the state home itself), else DIR. Served with the sandbox CSP (`sandbox allow-scripts
+  allow-popups allow-popups-to-escape-sandbox`: a linked prototype's scripts run, never `allow-same-origin`), `nosniff`, no-store,
   Markdown and text as `text/plain; charset=utf-8`, streamed from disk. 404 for anything else: a file no link
   names, a dot part in the path asked or in the real path a symlink leads to (relative to the root: `notes.md
   -> .env`, `repo -> .git`), `..`, a path out of the root, a symlink that leads out of it, a directory, a FIFO
@@ -1343,9 +1424,34 @@ teses-positionings).
   from a page on the same tailnet is identified exactly as the fleet's own page is; `credentials:
   "include"` is what the browser needs to accept the answer, not what identifies the user.
 - **CSRF**: the `Origin` check is the protection. A post whose `Origin` is neither the hub's own nor
-  listed is refused 403 as before, `Origin: null` included; one with no `Origin` that a browser marks
-  cross-site or same-site (`Sec-Fetch-Site`) is refused too. A post with neither header (`fleet tell`,
-  curl on this machine) is as before.
+  listed is refused 403 as before, `Origin: null` included; one whose `Sec-Fetch-Site` is anything but
+  `same-origin` is refused too, unless its `Origin` is listed. A post with neither header (`fleet tell`,
+  curl on this machine) is as before. Every post that acts as the user passes these checks
+  (`postRefusal`): `/chat` (a message, a decision's answer, the grant an answer carries), `/chat/preview`,
+  `/name`, `/preview-workers`, and a post to a peer's fleet, checked here before it is passed on.
+
+### The hub's origin: what runs on it
+
+A script on the hub's origin posts as the user (the checks above see a same-origin post). Agents write in
+DIR, so nothing the hub serves from a fleet's DIR runs on that origin: the page alone does, rendered from
+state.json (a DIR/index.html is served, sandboxed, only when the page cannot be rendered). The page loads no
+other DIR file as a document: state.json, the bodies' text and their pictures load the same under the sandbox
+header. A decision's body served by itself is plain text; any other DIR file is sandboxed without scripts
+(a body's link opens such a file in a window of its own: it has an opaque origin, its scripts do not run);
+a linked file under `files/` runs its scripts in a sandbox without `allow-same-origin`, so its posts carry
+`Origin: null` and are refused. A peer hub's file passed through without a sandbox gets this hub's.
+serve_dashboard.py does the same for DIR: every file but DIR/index.html (its rendered page) is sandboxed,
+and a post whose `Sec-Fetch-Site` is not `same-origin` is refused.
+
+**Known limits.** `/f/<fleet>/preview/…` passes the dev server's answers through as they are, on the hub's
+origin, with no sandbox: the preview's app (code the workers write) runs as the hub's page does and can
+post to any fleet's chat as the user, answer a decision or grant a permission. A root-mode preview is
+already apart: it is served on a public port of its own (another origin, whose posts the hub refuses unless
+its config lists it, and then takes only messages). The
+proposal, not built, for Luiz to decide: serve every preview from its own port's origin, as root mode does,
+and make `/f/<fleet>/preview/` a redirect to it. The cost is a port per preview (and per per-worker preview)
+and `tailscale serve` on each; a sandbox header on the path instead would break the apps (their storage,
+cookies and same-origin calls to their own API).
 
 ## Permission grants
 

@@ -8,8 +8,8 @@ import { For, Match, Show, Switch, type JSX } from "@solidjs/web";
 import { ChatIcon, CloseIcon, listen, Pill, usePage, tf } from "./bits.tsx";
 import { copyText, selectAndCopy, type Copied } from "./clip.ts";
 import { Core, type Agent, type Coordinator, type FindRow, type Json, type MarkKind, type QuoteAt } from "./core.ts";
-import { evidence } from "./DecisionPage.tsx";
-import { parseEmbedMessage, parseEvidenceSelect, parseFrameCommand, parseFrameSaid, postMark, postSelect, type SelRect } from "./embed.ts";
+import { evidence, fromEvidence } from "./DecisionPage.tsx";
+import { parseEmbedMessage, parseEvidenceSelect, parseFrameCommand, parseFrameSaid, postMark, postSelect, REFUSAL_WORDS, type Refusal, type SelRect } from "./embed.ts";
 import { KIND_WORDS, QUOTED_KINDS, type Claimed } from "./marks.ts";
 import { markDesk } from "./Marks.tsx";
 import { GROUPS, groupOf, highlight, rangesIn, type Item } from "./find.ts";
@@ -850,7 +850,7 @@ export function forwardSelections(): void {
       return;
     }
 
-    const mark = frame && e.source === frame.contentWindow ? parseFrameSaid(data) : null;
+    const mark = frame && fromEvidence(e) ? parseFrameSaid(data) : null;
 
     if (mark) {
       postMark(mark);
@@ -858,11 +858,11 @@ export function forwardSelections(): void {
       return;
     }
 
-    const said = frame && e.source === frame.contentWindow ? parseEvidenceSelect(data) : null;
+    const said = frame && fromEvidence(e) ? parseEvidenceSelect(data) : null;
 
     if (!frame || !said) return;
     const d = m.decisionById(m.viewing());
-    postSelect(said.text, within(frame, said.rect), "the evidence" + (d ? " of " + d.title : ""), said.touch, evidencePlace(m), said.raw);
+    postSelect(said.text, said.rect ? within(frame, said.rect) : null, "the evidence" + (d ? " of " + d.title : ""), said.touch, evidencePlace(m), said.raw, said.refused);
   });
   /* Esc pressed on this page, outside a field, closes the manager's selection bar (and only that). */
   listen(document, "keydown", (e) => {
@@ -893,6 +893,8 @@ export function SelTool(): JSX.Element {
   let framePicked: { readonly fleet: string | null; readonly frame: HTMLIFrameElement } | null = null;
   /* The selection in a decision's body, as its frame claims it: the words a mark would be on, once the marks confirm them. */
   const [anchor, setAnchor] = createSignal<readonly Claimed[] | null>(null);
+  /* Why the frame refused the selection (none of its words is seen): the bar says so, and offers nothing. */
+  const [refusal, setRefusal] = createSignal<Refusal | null>(null);
   let settle: ReturnType<typeof setTimeout> | undefined;
   let pressed = false;
   /* Whether a touch made the selection: the last press's pointer, before any press the device's. */
@@ -915,6 +917,7 @@ export function SelTool(): JSX.Element {
     clearTimeout(settle);
     framePicked = null;
     setAnchor(null);
+    setRefusal(null);
     box = null;
     holder = null;
     roomed?.classList.remove("seltool-room");
@@ -992,6 +995,7 @@ export function SelTool(): JSX.Element {
 
     raw = text;
     setCopied("");
+    setRefusal(null);
     ui.setPicked({ text: Core.excerptOf(text), from, at });
     tool.hidden = false;
     box = where;
@@ -1074,9 +1078,32 @@ export function SelTool(): JSX.Element {
     if (e.key === "Escape" && !e.defaultPrevented) dismiss(e);
   };
 
-  /* Text selected in `frame`, at `r` in its viewport and `at` on the page, by a touch or not, with the words a mark would be on; empty once the frame's selection is cleared. */
-  const pickIn = (frame: HTMLIFrameElement, text: string, r: SelRect | null, from: string, at: QuoteAt, fleet: string | null, byTouch: boolean, quote: readonly Claimed[] | null): void => {
+  /* The bar over a selection in `frame` the frame refused (`why`): it says so, and offers nothing to do with words Luiz cannot see. */
+  const refuse = (frame: HTMLIFrameElement, why: Refusal, r: SelRect, at: QuoteAt, fleet: string | null): void => {
+    if (!tool) return;
+    const { top, bottom, left, width } = within(frame, r);
+    raw = "";
+    setCopied("");
+    setAnchor(null);
+    setRefusal(why);
+    ui.setPicked({ text: "", from: "", at });
+    box = { first: { top, bottom }, last: { top, bottom }, left, width };
+    holder = frame;
+    framePicked = { fleet, frame };
+    flush();
+    clear(place());
+  };
+
+  /* Text selected in `frame`, at `r` in its viewport and `at` on the page, by a touch or not, with the words a mark would be on; empty once the frame's selection is cleared, or refused (`why`, with the marks on). */
+  const pickIn = (frame: HTMLIFrameElement, text: string, r: SelRect | null, from: string, at: QuoteAt, fleet: string | null, byTouch: boolean, quote: readonly Claimed[] | null, why: Refusal | null = null): void => {
     if (!text) {
+      if (why && r && markDesk.current?.on() === true) {
+        touch = byTouch;
+        refuse(frame, why, r, at, fleet);
+
+        return;
+      }
+
       if (framePicked) hide();
 
       return;
@@ -1098,7 +1125,7 @@ export function SelTool(): JSX.Element {
     if (fleetFrame && shown && fleet && e.source === fleetFrame.contentWindow) {
       const said = parseEmbedMessage(e.data);
 
-      if (said?.kind === "select") pickIn(fleetFrame, said.text, said.rect, said.from ? said.from + ", in " + fleet : fleet, fleetPlace(shown, said.at), fleet, said.touch, said.anchor ?? null);
+      if (said?.kind === "select") pickIn(fleetFrame, said.text, said.rect, said.from ? said.from + ", in " + fleet : fleet, fleetPlace(shown, said.at), fleet, said.touch, said.anchor ?? null, said.refused ?? null);
 
       if (parseFrameSaid(e.data)?.kind === "esc") dismiss(e);
 
@@ -1107,12 +1134,12 @@ export function SelTool(): JSX.Element {
 
     const frame = evidence.frame;
 
-    if (frame && e.source === frame.contentWindow && parseFrameSaid(e.data)?.kind === "esc") dismiss(e);
-    const said = frame && e.source === frame.contentWindow ? parseEvidenceSelect(e.data) : null;
+    if (frame && fromEvidence(e) && parseFrameSaid(e.data)?.kind === "esc") dismiss(e);
+    const said = frame && fromEvidence(e) ? parseEvidenceSelect(e.data) : null;
 
     if (!frame || !said) return;
     const d = m.decisionById(m.viewing());
-    pickIn(frame, said.text, said.rect, "the evidence" + (d ? " of " + d.title : ""), evidencePlace(m), null, said.touch, said.anchor);
+    pickIn(frame, said.text, said.rect, "the evidence" + (d ? " of " + d.title : ""), evidencePlace(m), null, said.touch, said.anchor, said.refused);
   };
 
   /*
@@ -1243,9 +1270,18 @@ export function SelTool(): JSX.Element {
           </For>
         </span>
       </Show>
-      <button type="button" data-sel="copy">
-        {copied() === "copied" ? "Copied" : copied() === "selected" ? "Press Ctrl+C" : "Copy"}
-      </button>
+      <Show when={refusal()}>
+        {(why) => (
+          <span class="seltool-note" role="status">
+            {REFUSAL_WORDS[why()]}
+          </span>
+        )}
+      </Show>
+      <Show when={!refusal()}>
+        <button type="button" data-sel="copy">
+          {copied() === "copied" ? "Copied" : copied() === "selected" ? "Press Ctrl+C" : "Copy"}
+        </button>
+      </Show>
       <Show when={m.chatWritable() && ui.picked()?.text}>
         <button type="button" data-sel="reply">
           Reply

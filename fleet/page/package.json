@@ -21,5 +21,8 @@
     "puppeteer-core": "25.12.0",
     "solid-js": "2.0.0-rc.13",
     "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "dompurify": "3.4.16"
   }
 }

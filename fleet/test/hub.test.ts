@@ -335,10 +335,79 @@ describe("the page and the files", () => {
       const res = await fetch(`http://127.0.0.1:${port}${path}`);
       expect(res.status).toBe(200);
       expect(res.headers.get("Content-Security-Policy") ?? "").toStartWith("sandbox allow-scripts");
+      expect(res.headers.get("Content-Security-Policy") ?? "").toContain("; default-src 'none'; script-src 'none'; ");
     }
 
     expect((await fetch(`http://127.0.0.1:${port}/f/p/`)).headers.get("Content-Security-Policy")).toBeNull();
     expect((await fetch(`http://127.0.0.1:${port}/f/p/state.json`)).headers.get("Content-Security-Policy")).toBeNull();
+  });
+
+  test("a decision's body served by itself is plain text, never sniffed: nothing in it renders, runs or takes the tab; a picture stays a picture", async () => {
+    mkdirSync(join(root, "decisions"), { recursive: true });
+    const body = '<meta http-equiv="&#114;efresh" content="0;url=/elsewhere"><p>Kept</p><a href="/x" target="_top">top</a><svg><a href="/y"><text>t</text></a></svg>';
+    writeFileSync(join(root, "decisions", "d2.html"), body);
+    writeFileSync(join(root, "decisions", "d2.svg"), '<svg xmlns="http://www.w3.org/2000/svg"><a href="/x" target="_top"><text>t</text></a></svg>');
+    writeFileSync(join(root, "decisions", "d2.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64"));
+
+    for (const method of ["GET", "HEAD"]) {
+      const res = await fetch(`http://127.0.0.1:${port}/f/p/decisions/d2.html`, { method });
+      expect(res.headers.get("Content-Type")).toBe("text/plain; charset=utf-8");
+      expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+      expect(res.headers.get("Content-Security-Policy") ?? "").toStartWith("sandbox allow-scripts");
+      expect(res.headers.get("Content-Security-Policy") ?? "").toContain("; script-src 'none'; ");
+      expect(await res.text()).toBe(method === "GET" ? body : "");
+    }
+
+    const png = await fetch(`http://127.0.0.1:${port}/f/p/decisions/d2.png`);
+    expect(png.headers.get("Content-Type")).toBe("image/png");
+    expect(png.headers.get("Content-Security-Policy") ?? "").toStartWith("sandbox allow-scripts");
+    expect((await fetch(`http://127.0.0.1:${port}/f/p/decisions/d2.svg`)).headers.get("Content-Type") ?? "").toStartWith("image/svg+xml");
+  });
+
+  test("every other file of the fleet's DIR is served with no origin and no script, never sniffed, whatever its type or path", async () => {
+    mkdirSync(join(root, "notes"), { recursive: true });
+    const hostile = "<script>fetch('chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{\"text\": \"x\"}' })</script>";
+    writeFileSync(join(root, "evil.html"), hostile);
+    writeFileSync(join(root, "notes", "evil.html"), hostile);
+    writeFileSync(join(root, "notes", "evil.svg"), `<svg xmlns="http://www.w3.org/2000/svg">${hostile}</svg>`);
+    writeFileSync(join(root, "notes", "evil.xhtml"), `<html xmlns="http://www.w3.org/1999/xhtml">${hostile}</html>`);
+    writeFileSync(join(root, "notes", "noext"), hostile);
+    writeFileSync(join(root, "notes", "shot.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64"));
+
+    for (const path of ["/f/p/evil.html", "/f/p/notes/evil.html", "/f/p/notes//evil.html", "/f/p/notes%2Fevil.html", "/f/p/notes/evil.svg", "/f/p/notes/evil.xhtml", "/f/p/notes/noext", "/f/p/notes/shot.png", "/f/p/Notes/../notes/evil.html"]) {
+      for (const method of ["GET", "HEAD"]) {
+        const res = await fetch(`http://127.0.0.1:${port}${path}`, { method });
+        expect([path, method, res.status, res.headers.get("Content-Security-Policy"), res.headers.get("X-Content-Type-Options")]).toEqual([
+          path,
+          method,
+          200,
+          "sandbox; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'",
+          "nosniff",
+        ]);
+      }
+    }
+
+    expect((await fetch(`http://127.0.0.1:${port}/f/p/notes/shot.png`)).headers.get("Content-Type")).toBe("image/png");
+    expect(await (await fetch(`http://127.0.0.1:${port}/f/p/evil.html`)).text()).toBe(hostile);
+  });
+
+  test("the page is rendered with the hub's origin; an index.html an agent left in DIR, served when the page cannot be, is sandboxed", async () => {
+    writeFileSync(join(root, "index.html"), "<script>window.agent = true</script>");
+
+    for (const path of ["/f/p/", "/f/p/index.html"]) {
+      const res = await fetch(`http://127.0.0.1:${port}${path}`);
+      const html = await res.text();
+      expect([path, res.headers.get("Content-Type"), res.headers.get("Content-Security-Policy"), html.includes('<script id="fleet-core">')]).toEqual([path, "text/html; charset=utf-8", null, true]);
+    }
+
+    for (const path of ["/f/p/state.json", "/f/p/chat", "/f/p/skills"]) {
+      const res = await fetch(`http://127.0.0.1:${port}${path}`);
+      expect([path, res.status, res.headers.get("Content-Type")?.startsWith("application/json")]).toEqual([path, 200, true]);
+    }
+
+    writeFileSync(join(root, "state.json"), "{ torn");
+    const fallback = await fetch(`http://127.0.0.1:${port}/f/p/`);
+    expect([await fallback.text(), fallback.headers.get("Content-Security-Policy")?.startsWith("sandbox; script-src 'none'")]).toEqual(["<script>window.agent = true</script>", true]);
   });
 
   test("nothing outside the fleet's directory is served", async () => {
@@ -709,6 +778,42 @@ describe("a prototype page posting from an origin the hub's config allows", () =
     ];
 
     for (const [status, got] of cases) expect([got.status, ...cors(got)]).toEqual([status, PAGE, "true"]);
+  });
+
+  test("a sandboxed page's post (Origin null), or one the browser says is not same-origin, is refused on every route that acts as the user", async () => {
+    const routes: readonly (readonly [string, JsonObject])[] = [
+      ["/f/p/chat", { text: "hi" }],
+      ["/f/p/chat", { text: "B: keep both", decision: "d1" }],
+      ["/f/p/chat", { text: "Allow once", rule: "Bash(ls)" }],
+      ["/f/p/chat/preview", { text: "hi" }],
+      ["/f/p/name", { agent: "a1", name: "Writer" }],
+      ["/f/p/preview-workers", { worker: "a1", include: true }],
+    ];
+
+    const self = `http://127.0.0.1:${port}`;
+
+    const hostile: readonly Record<string, string>[] = [
+      { Origin: "null" },
+      { Origin: "null", "Sec-Fetch-Site": "cross-site" },
+      { Origin: self, "Sec-Fetch-Site": "cross-site" },
+      { Origin: self, "Sec-Fetch-Site": "same-site" },
+      { Origin: self, "Sec-Fetch-Site": "none" },
+      { "Sec-Fetch-Site": "none" },
+      { Origin: OTHER, "Sec-Fetch-Site": "same-site" },
+      { Origin: "null", "Sec-Fetch-Site": "same-origin" },
+    ];
+
+    for (const [path, payload] of routes) {
+      for (const headers of hostile) {
+        const got = await post(payload, headers, path);
+        expect([path, payload, headers, got.status, asString(got.body["error"])]).toEqual([path, payload, headers, 403, "cross-origin post refused"]);
+      }
+    }
+
+    expect(readChat(root)).toEqual([]);
+    const own = await post({ text: "from the page" }, { Origin: self, "Sec-Fetch-Site": "same-origin" });
+    expect(own.status).toBe(201);
+    expect((await post({ agent: "a1", name: "Writer" }, { Origin: self, "Sec-Fetch-Site": "same-origin" }, "/f/p/name")).status).toBe(200);
   });
 
   test("every other post stays same-origin", async () => {
@@ -1352,6 +1457,9 @@ describe("a peer hub's fleets", () => {
     expect((await request("GET", "/f/infra@stub/skills")).status).toBe(200);
     expect(seen.at(-1)?.path).toBe("/f/infra/skills");
     expect((await request("GET", "/f/infra@nowhere/")).status).toBe(404);
+    const file = await fetch(`http://127.0.0.1:${port}/f/infra@stub/notes/evil.html`);
+    expect([file.headers.get("Content-Security-Policy")?.startsWith("sandbox; script-src 'none'"), file.headers.get("X-Content-Type-Options")]).toEqual([true, "nosniff"]);
+    expect((await fetch(`http://127.0.0.1:${port}/f/infra@stub/`)).headers.get("Content-Security-Policy")).toBeNull();
   });
 });
 

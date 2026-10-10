@@ -13,7 +13,8 @@ login may post, and only over https; the policy is recorded in server.json.
 A message may answer a decision (`"decision": ID`); decisions.py says whether
 the answer is taken. The files under DIR/decisions/ are the decisions' bodies,
 written by workers: they are served sandboxed, so a script in one runs without
-this server's origin and cannot post as the user.
+this server's origin and cannot post as the user. So is every other file of DIR
+but the page (DIR/index.html): no origin, no script, never sniffed.
 
 A local file server binds a free port on 127.0.0.1, and `tailscale serve`
 exposes it as https://<magicdns-name>:<port>/ with a certificate Tailscale
@@ -246,6 +247,16 @@ PASSED_HEADERS = {"accept", "content-type", "content-length", "last-event-id", "
                   "tailscale-user-name", "tailscale-user-profile-pic"}
 DROPPED_HEADERS = {"connection", "keep-alive", "transfer-encoding", "cache-control", "server", "date"}
 BODY_SANDBOX = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox"
+# What a decision's body may load and run (fleet/src/hub/body-policy.ts): no script, handler, frame or form;
+# its styles, the page's fonts and its pictures.
+BODY_POLICY = (BODY_SANDBOX + "; default-src 'none'; script-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; "
+               "img-src data: blob: 'self'; font-src data: https://fonts.gstatic.com 'self'; object-src 'none'; "
+               "base-uri 'none'; form-action 'none'")
+# Every other file of DIR but the page (DIR/index.html): agents write there, so a file opened by itself has no
+# origin and runs no script, whatever its type (fleet/src/hub/body-policy.ts's FILE_POLICY).
+FILE_POLICY = "sandbox; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+# The types a file under DIR/decisions/ keeps as served; anything else there (a body) is plain text.
+SHOWN_TYPES = ("image/", "font/", "audio/", "video/")
 PING_S = 15
 POLL_S = 0.3
 
@@ -283,10 +294,13 @@ def post_refusal(policy: str, hosts: set[str], headers) -> tuple[int, str] | Non
     if (headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
         return 415, "send the message as application/json"
     origin = headers.get("Origin")
-    if origin is not None:
+    if origin is not None:  # a sandboxed page (an opaque origin) sends "null", no host this server answers to
         url = urlsplit(origin)
         if url.scheme not in ("http", "https") or url.netloc.lower() not in hosts:
             return 403, "cross-origin post refused"
+    site = headers.get("Sec-Fetch-Site")
+    if site is not None and site.lower() != "same-origin":  # the browser says the post is not from this page
+        return 403, "cross-origin post refused"
     length = headers.get("Content-Length") or "0"
     if not length.isdigit():
         return 400, "bad Content-Length"
@@ -308,11 +322,27 @@ def worker(root: str, bind_ip: str, port: int, policy: str = "open", *hosts: str
         def __init__(self, *a, **kw):
             super().__init__(*a, directory=root, **kw)
 
+        passing = False
+
         def end_headers(self):
             self.send_header("Cache-Control", "no-store")
-            if self.serves_a_body():
-                self.send_header("Content-Security-Policy", BODY_SANDBOX)
+            if self.passing:  # a fleet's own server sent its headers, policy and all
+                pass
+            elif self.serves_a_body():
+                self.send_header("Content-Security-Policy", BODY_POLICY)
+                self.send_header("X-Content-Type-Options", "nosniff")
+            elif not self.serves_the_page():
+                self.send_header("Content-Security-Policy", FILE_POLICY)
+                self.send_header("X-Content-Type-Options", "nosniff")
             super().end_headers()
+
+        def guess_type(self, path):
+            """A body under DIR/decisions/ is sent as plain text, so nothing in it renders or takes the tab
+            elsewhere (the page shows it in its own frame); a picture, font or medium there as itself."""
+            kind = super().guess_type(path)
+            if self.serves_a_body() and not kind.startswith(SHOWN_TYPES):
+                return "text/plain; charset=utf-8"
+            return kind
 
         def serves_a_body(self) -> bool:
             """Whether this request resolves to a file under DIR/decisions/, however its path is spelled."""
@@ -321,6 +351,16 @@ def worker(root: str, bind_ip: str, port: int, policy: str = "open", *hosts: str
             except (OSError, ValueError):
                 return True
             return served.is_relative_to(Path(root).resolve() / "decisions")
+
+        def serves_the_page(self) -> bool:
+            """Whether this request resolves to the page, DIR/index.html, the one file served with this origin."""
+            page = Path(root).resolve() / "index.html"
+            try:
+                served = Path(self.translate_path(self.path))
+                served = (served / "index.html" if served.is_dir() else served).resolve()
+            except (OSError, ValueError):
+                return False
+            return served == page and page.is_file()
 
         def log_message(self, fmt, *args):
             pass
@@ -387,6 +427,7 @@ def worker(root: str, bind_ip: str, port: int, policy: str = "open", *hosts: str
             except OSError as exc:
                 self.send_json(502, {"error": f"{fleet}'s server did not answer: {exc}"})
                 return True
+            self.passing = True
             self.send_response(answer.status)
             for key, value in answer.getheaders():
                 if key.lower() not in DROPPED_HEADERS:

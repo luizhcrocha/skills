@@ -1043,6 +1043,7 @@
   .seltool.marking { flex-wrap: wrap; max-width: calc(100vw - 16px); }
   .seltool-marks { display: flex; gap: 2px; padding-right: 3px; margin-right: 1px; border-right: 1px solid color-mix(in srgb, var(--bg) 25%, transparent); }
   .seltool-marks button { box-shadow: inset 0 -3px color-mix(in srgb, var(--k) 70%, var(--bg)); }
+  .seltool-note { align-self: center; max-width: min(340px, calc(100vw - 32px)); padding: 6px 10px; color: var(--bg); font-size: var(--fs-s); font-weight: 600; line-height: 1.3; }
   @media (max-width: 759.98px) {
     .seltool.marking { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: min(380px, calc(100vw - 16px)); box-sizing: border-box; }
     .seltool-marks { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 0 0 3px; margin: 0 0 1px; border-right: 0; border-bottom: 1px solid color-mix(in srgb, var(--bg) 25%, transparent); }

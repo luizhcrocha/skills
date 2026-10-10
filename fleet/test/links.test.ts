@@ -353,11 +353,12 @@ describe("the hub's links: probes and files", () => {
     ]);
 
     const served = await get("/f/p/files/plan.md");
-    expect([served.status, await served.text(), served.headers.get("Content-Type"), served.headers.get("Content-Security-Policy")?.startsWith("sandbox")]).toEqual([
+    expect([served.status, await served.text(), served.headers.get("Content-Type"), served.headers.get("Content-Security-Policy"), served.headers.get("X-Content-Type-Options")]).toEqual([
       200,
       "# The plan\n",
       "text/plain; charset=utf-8",
-      true,
+      "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox",
+      "nosniff",
     ]);
 
     for (const path of [
