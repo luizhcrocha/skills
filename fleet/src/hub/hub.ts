@@ -24,6 +24,7 @@
  *
  * A request whose Host this hub does not answer to is refused (421), against DNS rebinding.
  */
+import { statSync } from "node:fs";
 import { join, normalize } from "node:path";
 
 import { address, append, hostOf, type Draft } from "../chat/chat.ts";
@@ -35,6 +36,7 @@ import { readBytes, readText, resolvePath, strerror } from "../files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { answerRefusal } from "../ledger/answers.ts";
 import { renameAgent } from "../ledger/rename.ts";
+import { filePathOf, filesRoot } from "../ledger/links.ts";
 import { pageHtml, readTemplate } from "../page/render.ts";
 import { pick, readLedger } from "../preview/updater.ts";
 import { isRunning } from "../preview/devserver.ts";
@@ -46,7 +48,7 @@ import { SpendReader } from "../transcripts.ts";
 import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
 import { indexHtml } from "./index-page.ts";
-import { ProbeCache } from "./probes.ts";
+import { LinkProbes, ProbeCache } from "./probes.ts";
 import { grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
 import { allowedOrigin, chatOriginsPath, grantor, hello, MAX_POST_BYTES, parseChatOrigins, postRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
 import { previewTarget, proxiedIdentity, proxyHttp, proxySocket, type Target, type Upgrade } from "./preview-proxy.ts";
@@ -95,6 +97,8 @@ export interface HubOptions {
   readonly peers: boolean;
   /** Further `host:port` names the hub answers to (a `tailscale serve` https name). */
   readonly hosts: readonly string[];
+  /** Whether a link's address answers (tests); else an HTTP probe ({@link answers}). */
+  readonly probe?: (url: string) => Promise<boolean>;
 }
 
 /** A root-mode preview the hub serves at the root of its public port: which fleet, which dev server. */
@@ -124,6 +128,14 @@ interface Viewed {
 }
 
 const NO_STORE = { "Cache-Control": "no-store" } as const;
+
+function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
 
 /** How long a browser may keep a chat preflight's answer, in seconds. */
 const PREFLIGHT_MAX_AGE = 600;
@@ -223,6 +235,7 @@ export class Hub {
   private readonly peerHubs = new Map<string, Peer>();
   private readonly served: Served;
   private readonly probes = new ProbeCache();
+  private readonly linkProbes: LinkProbes;
   private readonly spend = new SpendReader();
   private readonly views = new Map<string, Viewed>();
   private readonly skillLists = new Map<string, { readonly body: string; readonly at: number }>();
@@ -237,7 +250,8 @@ export class Hub {
   constructor(options: HubOptions) {
     this.options = options;
     this.served = new Served(options.machine);
-    this.lookups = { up: (urls) => this.probes.up(urls), discovered: () => this.served.latest(), spend: this.spend };
+    this.linkProbes = new LinkProbes(options.machine.now, options.probe);
+    this.lookups = { up: (urls) => this.probes.up(urls), probe: (urls) => this.linkProbes.get(urls), discovered: () => this.served.latest(), spend: this.spend };
     this.setHosts();
   }
 
@@ -579,6 +593,8 @@ export class Hub {
       if (shown !== undefined) return new Response(req.method === "HEAD" ? null : shown.json, { headers: { "Content-Type": "application/json; charset=utf-8", ...NO_STORE } });
     }
 
+    if (rest.startsWith("/files/")) return this.linkedFile(req, root, rest.slice("/files/".length));
+
     return this.file(req, root, rest === "/" ? "/index.html" : rest);
   }
 
@@ -767,6 +783,46 @@ export class Hub {
 
     return new Response(req.method === "HEAD" ? null : bytes, {
       headers: { "Content-Type": Bun.file(resolved).type, ...NO_STORE, ...body },
+    });
+  }
+
+  /** A file a link of the fleet at `root` names (`file://…`), read-only, at `files/<path under its files root>`:
+   * only under the fleet's files root (its DIR, or its session's scratchpad or state dir: `filesRoot`), only a
+   * file a link names, never a hidden part or a step out (`..`), never through a symlink that leads out. Anything
+   * else is not found. It is sent sandboxed, as a decision's body is: its scripts never run as the hub. */
+  private linkedFile(req: Request, root: string, rest: string): Response {
+    const missing = jsonResponse(404, { error: "not found" });
+    let decoded: string;
+
+    try {
+      decoded = decodeURIComponent(rest);
+    } catch {
+      return missing;
+    }
+
+    const parts = decoded.split("/");
+
+    if (decoded.includes("\0") || parts.some((p) => p === "" || p.startsWith("."))) return missing;
+    const base = resolvePath(filesRoot(resolvePath(root), this.options.machine.env));
+    const target = resolvePath(join(base, ...parts));
+
+    if (!target.startsWith(`${base}/`) || !isRegularFile(target)) return missing;
+    const ledger = Option.getOrUndefined(parseObject(readText(join(root, "state.json")) ?? "")) ?? {};
+
+    const named = (asArray(ledger["links"]) ?? []).some((l) => {
+      const path = filePathOf(asString(asObject(l)?.["url"]) ?? "");
+
+      return path !== undefined && resolvePath(path) === target;
+    });
+
+    if (!named) return missing;
+    const bytes = readBytes(target);
+
+    if (bytes === undefined) return missing;
+    const type = /\.(?:md|markdown|txt|log|csv|tsv|jsonl)$/iu.test(target) ? "text/plain; charset=utf-8" : Bun.file(target).type;
+
+    return new Response(req.method === "HEAD" ? null : bytes, {
+      headers: { "Content-Type": type, ...NO_STORE, "Content-Security-Policy": BODY_SANDBOX, "X-Content-Type-Options": "nosniff" },
     });
   }
 
