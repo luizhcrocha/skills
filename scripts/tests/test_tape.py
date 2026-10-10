@@ -567,11 +567,13 @@ class ModelTest(TapeCase):
 
 FAKE_CLAUDE = r"""#!{python}
 # A stand-in for `claude -p`: logs each call and answers from FAKE_CLAUDE_SPEC. No model is called.
-import hashlib, json, os, re, sys
+import fcntl, hashlib, json, os, re, sys
 stdin = sys.stdin.read()
 log = os.environ["FAKE_CLAUDE_LOG"]
-n = sum(1 for _ in open(log)) if os.path.exists(log) else 0
-with open(log, "a") as f:
+with open(log, "a+") as f:  # count and append under one lock: calls run WORKERS at once, and each must get its own n
+    fcntl.flock(f, fcntl.LOCK_EX)
+    f.seek(0)
+    n = sum(1 for _ in f)
     f.write(json.dumps({{"args": sys.argv[1:], "role": os.environ.get("TSTACK_ROLE"), "stdin": stdin,
                         "cwd": os.getcwd()}}) + "\n")
 path = os.environ.get("FAKE_CLAUDE_SPEC", "")

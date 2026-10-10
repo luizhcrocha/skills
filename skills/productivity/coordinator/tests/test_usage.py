@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -33,8 +34,11 @@ class Machine(unittest.TestCase):
             os.environ[name] = value
             self.addCleanup(lambda n=name, b=before: os.environ.pop(n, None) if b is None else os.environ.__setitem__(n, b))
 
-    def capture(self, stdin: str, *command: str, config: Path | None = None) -> subprocess.CompletedProcess:
+    def capture(self, stdin: str, *command: str, config: Path | None = None, at: float | None = None) -> subprocess.CompletedProcess:
+        """Run `usage capture`; `at` (seconds since the epoch) sets its clock through $FLEET_NOW."""
         env = {**os.environ, "CLAUDE_CONFIG_DIR": str(config or self.config)}
+        if at is not None:
+            env["FLEET_NOW"] = datetime.fromtimestamp(at, timezone.utc).isoformat()
         return subprocess.run([sys.executable, USAGE, "capture", "--", *command], input=stdin, capture_output=True, text=True, timeout=20, env=env)
 
     def login(self, name: str, email: str) -> Path:
@@ -108,8 +112,8 @@ class AccountsTest(Machine):
                          "a window maxed on another account does not stick over the one in use")
         self.assertEqual([(o["account"], o["seven_day"]["used_percentage"]) for o in read["others"]], [("work@example.com", 100)])
         self.capture(status({"used_percentage": 41, "resets_at": SOON}, {"used_percentage": 100, "resets_at": LATER}), "true", config=work)
-        time.sleep(1.1)
-        self.capture(status({"used_percentage": 12, "resets_at": SOON + 600}, {"used_percentage": 30, "resets_at": LATER + 600}), "true", config=home)
+        self.capture(status({"used_percentage": 12, "resets_at": SOON + 600}, {"used_percentage": 30, "resets_at": LATER + 600}), "true", config=home,
+                     at=time.time() + 2)  # a later second than work's capture, without waiting for it
         self.assertEqual(usage.read()["account"], "home@example.com", "the same figure again still says the account is the one working")
 
     def test_within_one_account_usage_only_grows(self):
