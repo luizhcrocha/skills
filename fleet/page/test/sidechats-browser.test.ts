@@ -75,6 +75,16 @@ async function scrollTo(page: Page, top: number): Promise<number> {
   return scrollTop(page);
 }
 
+/** The chat log's scroll position once it has come to rest within 2 px of `top` (the page restores it a frame or
+ * two after the click that switched chats), or where it stands after 3 s. */
+async function settledAt(page: Page, top: number): Promise<number> {
+  await page
+    .waitForFunction((t: number) => Math.abs((document.querySelector("#chat-log")?.scrollTop ?? -1e9) - t) < 2, { timeout: 3000 }, top)
+    .catch(() => undefined);
+
+  return scrollTop(page);
+}
+
 for (const width of [1280, 390]) {
   test.skipIf(!found)(`at ${width} px, Back to the chat returns the main chat to where it was, and a side chat from the list to where it was left`, async () => {
     const page = await open(width);
@@ -85,6 +95,16 @@ for (const width of [1280, 390]) {
     await page.click('#sl-rows [data-side="22"] .sl-open');
     await page.waitForFunction(() => document.querySelector('#chat-log article[data-id="69"]') !== null);
     /* A side chat opened for the first time shows its end. */
+    await page
+      .waitForFunction(
+        () => {
+          const log = document.querySelector("#chat-log");
+
+          return log !== null && log.scrollHeight - log.scrollTop - log.clientHeight < 2;
+        },
+        { timeout: 3000 },
+      )
+      .catch(() => undefined);
     expect(await page.evaluate(() => {
       const log = document.querySelector("#chat-log");
 
@@ -94,16 +114,16 @@ for (const width of [1280, 390]) {
 
     await page.click("#side-back");
     await page.waitForFunction(() => document.querySelector('#chat-log article[data-id="13"]') !== null);
-    expect(Math.abs((await scrollTop(page)) - main)).toBeLessThan(2);
+    expect(Math.abs((await settledAt(page, main)) - main)).toBeLessThan(2);
 
     await page.click("#side-list-btn");
     await page.click('#sl-rows [data-side="22"] .sl-open');
     await page.waitForFunction(() => document.querySelector('#chat-log article[data-id="69"]') !== null);
-    expect(Math.abs((await scrollTop(page)) - side)).toBeLessThan(2);
+    expect(Math.abs((await settledAt(page, side)) - side)).toBeLessThan(2);
 
     await page.click("#side-all");
     await page.click("#sl-back");
-    expect(Math.abs((await scrollTop(page)) - main)).toBeLessThan(2);
+    expect(Math.abs((await settledAt(page, main)) - main)).toBeLessThan(2);
     await page.close();
   });
 }
