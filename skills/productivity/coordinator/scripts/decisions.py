@@ -17,7 +17,10 @@ import clock  # noqa: E402
 KINDS = ["decision", "input", "secret", "action", "grill", "notice"]
 CHOICE_KINDS = ("decision", "input", "grill")  # what asks the user to choose or give: what a standing approval may come from
 APPROVAL_STATUSES = ["active", "revoked"]
-APPROVES = ("yes", "approve", "approved")  # the first word of a grilling question's answer that gives a standing approval
+APPROVES = ("yes", "y", "approve", "approved", "sim", "ok")  # the whole answers that give a standing approval: a plain yes
+# What a refusal over an answer that is not a plain yes tells the coordinator to do.
+ASK_AGAIN = ("only a plain yes (yes, approve, sim, ok) gives a standing approval; ask the user again for a plain yes "
+             "or no, one rule to a question")
 QUESTION_STATUSES = ["open", "answered", "dropped"]
 STATUSES = ["open", "decided", "withdrawn"]
 ASKS = ["user", "manager"]
@@ -265,25 +268,88 @@ def served(name: str) -> dict | None:
         next((e for e in entries if isinstance(e.get("aliases"), list) and name in e["aliases"]), None)
 
 
+def _folded(text: str) -> str:
+    """`text` trimmed, case-folded, without the full stops and exclamation marks it ends with."""
+    return re.sub(r"[.!\s]+$", "", text.strip().casefold())
+
+
+def plain_yes(text: str) -> bool:
+    """Whether `text`, whole, is a plain yes: one of APPROVES, nothing before or after it."""
+    return _folded(text) in APPROVES
+
+
+def plain_answer(text: str, options: list | None = None, recommend=None) -> dict | None:
+    """An answer as given on the page, read plainly: {words, option}. "as recommended" (or the page's "ok, as
+    recommended (X)") is the recommendation, a trailing "(as recommended)" is dropped, an option's key (`a`,
+    `(a)`, `a: <its label>`) or its label is that option. None when words follow an option's key that are not
+    its label ("(a) but not on fridays"): a qualifier, never a plain answer."""
+    options = [o for o in options or [] if isinstance(o, dict)]
+    t = str(text or "").strip()
+    rec = re.fullmatch(r"ok,\s*as recommended\s*\((.*)\)", t, re.I | re.S)
+    if rec:
+        t = str(recommend if recommend is not None else rec[1]).strip()
+    elif re.fullmatch(r"as recommended[.!]*", t, re.I):
+        t = str(recommend if recommend is not None else "").strip()
+    t = re.sub(r"\s*\(as recommended\)$", "", t, flags=re.I)
+    keyed = re.fullmatch(r"\(?([A-Za-z0-9]+)\)?(?:(?:\s*:\s*|\s+)(.*))?", t, re.S)
+    option = next((o for o in options if keyed and str(o.get("id", "")).lower() == keyed[1].lower()), None)
+    if option is not None:
+        rest = keyed[2]
+        label = str(option.get("label") or "")
+        return {"words": label, "option": option} if rest is None or _folded(rest) == _folded(label) else None
+    return {"words": t, "option": next((o for o in options if _folded(str(o.get("label") or "")) == _folded(t)), None)}
+
+
 def approves(q: dict) -> bool:
-    """Whether a grilling question was answered yes or approve: its answer's first word, after an option's key
-    (`(a)`, `a:`) is read as that option's label and "as recommended" as its recommendation."""
-    text = str(q.get("answer") or "").strip()
-    if text.lower().startswith("as recommended"):
-        text = str(q.get("recommend") or "")
-    head = re.match(r"\(?([A-Za-z0-9]+)\)?:?(?=\s|$)", text)
-    option = next((o for o in q.get("options") or [] if head and str(o.get("id", "")).lower() == head[1].lower()), None)
-    if option:
-        text = str(option.get("label") or "")
-    word = re.match(r"[^A-Za-z]*([A-Za-z]+)", text)
-    return bool(word) and word[1].lower() in APPROVES
+    """Whether a grilling question was answered with a plain yes (plain_answer, plain_yes)."""
+    plain = plain_answer(str(q.get("answer") or ""), q.get("options"), q.get("recommend"))
+    return plain is not None and plain_yes(plain["words"])
+
+
+def user_answer_to(said: list, d: dict, qid: str) -> dict | None:
+    """The user's own words to question `qid` of grilling `d`, from the chat the hub writes: {words, message}.
+    The last "Q<n>: ..." line of a message of theirs about the grilling (with the lines under it that are no
+    question's), else a message of theirs that answers (`re`) a message naming that question alone. None when
+    they never answered it."""
+    n = qid[1:]
+    by_id = {m.get("id"): m for m in said}
+    found = None
+    for m in said:
+        if m.get("from") != "user":
+            continue
+        lines = str(m.get("text") or "").split("\n")
+        heads = [re.match(r"\s*Q(\d+)\s*:\s*(.*)$", line, re.I) for line in lines]
+        if any(heads):
+            if m.get("decision") != d["id"]:
+                continue
+            for i, h in enumerate(heads):
+                if h is None or str(int(h[1])) != n:
+                    continue
+                more = []
+                j = i + 1
+                while j < len(lines) and heads[j] is None:
+                    if lines[j].strip():
+                        more.append(lines[j].strip())
+                    j += 1
+                found = {"words": " ".join([h[2], *more]).strip(), "message": m}
+            continue
+        re_ = m.get("re")
+        asked = by_id.get(re_) if isinstance(re_, int) and not isinstance(re_, bool) else None
+        if asked is None or (m.get("decision") != d["id"] and asked.get("decision") != d["id"]):
+            continue
+        named = {str(int(x)) for x in re.findall(r"\bQ(\d+)\b", str(asked.get("text") or ""), re.I)}
+        if named == {n}:
+            found = {"words": str(m.get("text") or "").strip(), "message": m}
+    return found
 
 
 def approval_source(state: dict | None, root, text: str) -> dict | str:
     """Where `approval add --ref TEXT` comes from, checked as a standing approval needs it: a decided choice,
     input or grilling asked of the user on the page, with the user's message tagged with it in that fleet's
     chat (the hub's, the only writer as the user), in this fleet's ledger or, as FLEET/DECISION, in a served
-    fleet's; a grilling's by one question (:Q<n>) answered yes or approve. The row's fields, or why not."""
+    fleet's; a grilling's by one question (:Q<n>). Only the user's own plain yes to that exact item grants: the
+    ledger's answer and the user's own message both one of APPROVES, whole; a choice's decided option one that
+    says yes, and the one the user picked. The row's fields, or why not."""
     import chat
     parsed = SOURCE.fullmatch(text or "")
     if not parsed:
@@ -316,6 +382,7 @@ def approval_source(state: dict | None, root, text: str) -> dict | str:
     if d["kind"] not in CHOICE_KINDS or d.get("asks", "user") != "user" or not d.get("page", True):
         return (f"{name} was not asked of the user on the page: only the user's own answer there gives a standing approval; "
                 "ask them with a decision that names the rule")
+    said = chat.read(Path(root).resolve())
     if question:
         q = next((x for x in d.get("questions") or [] if x.get("id") == question), None)
         if q is None:
@@ -324,12 +391,26 @@ def approval_source(state: dict | None, root, text: str) -> dict | str:
         if q.get("status") != "answered":
             return f"{label} is {q.get('status')}: a standing approval comes from a question the user answered yes or approve"
         if not approves(q):
-            return (f"{label} was answered {q.get('answer')!r}: a standing approval comes from a question answered yes or "
-                    "approve; ask it again, one rule to a question")
-    answers = [m for m in chat.read(Path(root).resolve()) if m.get("decision") == d["id"] and m.get("from") == "user"]
-    if not answers:
-        return f"{name} has no answer from the user in the chat: only the user's own answer on the page gives a standing approval"
-    m = answers[-1]
+            return f"{label} was answered {q.get('answer')!r}: {ASK_AGAIN}"
+        given = user_answer_to(said, d, question)
+        if given is None:
+            return f"{label} has no answer from the user in the chat: only the user's own answer on the page gives a standing approval"
+        plain = plain_answer(given["words"], q.get("options"), q.get("recommend"))
+        if plain is None or not plain_yes(plain["words"]):
+            return f"{label}: the user's own answer in the chat (#{given['message'].get('id')}) is {given['words']!r}, not a plain yes: {ASK_AGAIN}"
+        m = given["message"]
+    else:
+        answers = [x for x in said if x.get("decision") == d["id"] and x.get("from") == "user"]
+        if not answers:
+            return f"{name} has no answer from the user in the chat: only the user's own answer on the page gives a standing approval"
+        m = answers[-1]
+        options = [o for o in d.get("options") or [] if isinstance(o, dict)]
+        decided = plain_answer(str(d.get("answer") or ""), options)
+        if decided is None or (options and decided["option"] is None) or not plain_yes(decided["words"]):
+            return f"{name} was decided {d.get('answer')!r}, not a plain yes: {ASK_AGAIN}"
+        picked = plain_answer(str(m.get("text") or ""), options)
+        if picked is None or picked["option"] is not decided["option"] or not plain_yes(picked["words"]):
+            return f"{name}: the user's own answer in the chat (#{m.get('id')}) is {str(m.get('text') or '')!r}, not a plain yes: {ASK_AGAIN}"
     return {"ref": f"{entry['id']}/{d.get('ref') or d['id']}" if entry else d["id"], "question": question,
             "message": m["id"], "author": m["author"] if isinstance(m.get("author"), str) and m["author"] else None,
             "label": label, "decision": None if entry else d["id"], "id": d["id"], "dir": entry["dir"] if entry else None}

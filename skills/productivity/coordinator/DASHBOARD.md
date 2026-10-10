@@ -94,7 +94,7 @@ approvals[]  the standing approvals the user gave once (absent until the first)
   by         who gave it
   ref        the decided decision where the user gave it: its id, or FLEET/<number> (manager/G5) when it is in
              another fleet's ledger; message, author: the chat message of the answer, in that fleet's chat
-  question   q<n>: the grilling's question the user answered yes or approve (absent for a decision or input)
+  question   q<n>: the grilling's question the user answered with a plain yes (absent for a decision or input)
   status     active | revoked; added, revoked, revoked_why
 
 events[]     activity log, oldest first

@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
+import { approves, plainAnswer, plainYes } from "../src/ledger/approvals.ts";
 import { baseEnv, fleet, readJson, tmp, type Environment, type Ran } from "./support.ts";
 
 const CHOICE = [
@@ -111,6 +112,60 @@ describe("approvals", () => {
     expect(refused("approval", "revoke", "K1")).toContain("--reason");
     ok("approval", "revoke", "K1", "--reason", "revoked on the page (#3)");
     expect(refused("decision", "n1", ...NOTICE)).toContain("was revoked");
+    expect(refused("approval", "add", "K2", "--rule", "land again", "--by", "luiz", "--ref", "D1")).toContain(
+      "D1 backed approval K1, revoked (",
+    );
+  });
+});
+
+describe("only a plain yes grants", () => {
+  const said = (text: string, id = 1, decision = "d1"): void => {
+    const message = { id, at: "2026-01-05T09:10:00+00:00", from: "user", author: "luiz@github", to: ["coordinator"], text, re: null, decision };
+    appendFileSync(join(root, "chat.jsonl"), `${JSON.stringify(message)}\n`);
+  };
+
+  test("the whole answer is the yes: a qualifier refuses", () => {
+    const options = [{ id: "a", label: "yes", consequence: "" }];
+
+    for (const text of ["yes", "Yes.", "OK!", "sim", "y", "approve", "approved", "(a)", "a: yes", "a yes", "ok, as recommended (yes)", "as recommended", "a: yes (as recommended)"]) {
+      expect([text, approves({ id: "q1", title: "t", status: "answered", answer: text, options, recommend: "yes" })]).toEqual([text, true]);
+    }
+
+    for (const text of ["yes, but never to prod", "Yes for staging only; no for prod", "approved?? no wait", "no", "(a) but not on fridays", "yes?", "ok, as recommended (yes). Not on prod", ""]) {
+      expect([text, approves({ id: "q1", title: "t", status: "answered", answer: text, options, recommend: "yes" })]).toEqual([text, false]);
+    }
+
+    expect(plainAnswer("(a) but not on fridays", options)).toBeUndefined();
+    expect(plainYes("  YES!  ")).toBe(true);
+  });
+
+  test("a choice decided no gives none, though the user answered it on the page", () => {
+    ok("decision", "d1", ...CHOICE);
+    said("B: no");
+    ok("decision", "d1", "--decide", "B", "--resolution", "answered on the page (#1)");
+    const why = refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "D1");
+    expect(why).toContain("D1 (Landing without asking) was decided 'B', not a plain yes");
+    expect(why).toContain("ask the user again for a plain yes or no");
+    expect(rows("approvals")).toEqual([]);
+  });
+
+  test("a choice decided yes needs the user's own pick of that option", () => {
+    ok("decision", "d1", ...CHOICE);
+    said("B: no");
+    ok("decision", "d1", "--decide", "A", "--resolution", "answered on the page (#1)");
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "D1")).toContain("the user's own answer in the chat (#1) is 'B: no', not a plain yes");
+    said("A: yes\nbut never to prod", 2);
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "D1")).toContain("(#2) is 'A: yes\\nbut never to prod'");
+    said("A: yes", 3);
+    ok("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "D1");
+    expect(rows("approvals")[0]?.["message"]).toBe(3);
+  });
+
+  test("a choice decided with a qualifier gives none", () => {
+    ok("decision", "d1", ...CHOICE);
+    said("A: yes");
+    ok("decision", "d1", "--decide", "A: yes, but not on fridays", "--resolution", "answered on the page (#1)");
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "D1")).toContain("was decided 'A: yes, but not on fridays', not a plain yes");
   });
 });
 
@@ -282,5 +337,37 @@ describe("approvals answered once for every fleet", () => {
 
     for (const dir of [manager, root, other]) expect(approvalsAt(dir).map((a) => [a["status"], a["revoked_why"]])).toEqual([["revoked", "revoked on the page (#3)"]]);
     expect(fleets(0, "approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "again").stdout.split("none active").length - 1).toBe(3);
+  });
+  test("the ledger's yes is not enough: the user's own answer to that question must say it", () => {
+    at(manager, "grill", "g2", "--title", "Prod", "--ask", "Landing | May it land? | yes | r", "--ask", "Prod | May it deploy to prod? | no | r");
+    said(manager, { id: 2, from: "user", author: "luiz@github", text: "Q1: yes\nQ2: no", decision: "g2" });
+    at(manager, "grill", "g2", "--answer", "Q1: yes", "--answer", "Q2: yes");
+    at(manager, "grill", "g2", "--done", "x");
+    const why = refused("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2");
+    expect(why).toContain("manager/G2:Q2: the user's own answer in the chat (#2) is 'no', not a plain yes");
+    expect(why).toContain("ask the user again for a plain yes or no");
+    ok("approval", "add", "K1", "--rule", "land", "--by", "luiz", "--ref", "manager/G2:Q1");
+    expect(rows("approvals").map((a) => [a["question"], a["message"]])).toEqual([["q1", 2]]);
+  });
+
+  test("a chat message about the grilling that does not answer that question gives none", () => {
+    at(manager, "grill", "g2", "--title", "Prod", "--ask", "Landing | May it land? | yes | r", "--ask", "Prod | May it deploy to prod? | yes | r");
+    said(manager, { id: 2, from: "user", author: "luiz@github", text: "Q1: yes", decision: "g2" });
+    at(manager, "grill", "g2", "--answer", "Q1: yes", "--answer", "Q2: yes");
+    at(manager, "grill", "g2", "--done", "x");
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q2")).toContain("manager/G2:Q2 has no answer from the user in the chat");
+    said(manager, { id: 3, from: "user", author: "luiz@github", text: "Q2: yes, but never to prod", decision: "g2" });
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q2")).toContain("(#3) is 'yes, but never to prod', not a plain yes");
+  });
+
+  test("a reply to the message that asked that question alone answers it", () => {
+    at(manager, "grill", "g2", "--title", "Prod", "--ask", "Landing | May it land? | yes | r", "--ask", "Prod | May it deploy to prod? | yes | r");
+    said(manager, { id: 2, from: "manager", text: "Q2 again, plainly: may it deploy to prod?", decision: "g2" });
+    said(manager, { id: 3, from: "user", author: "luiz@github", text: "yes", re: 2 });
+    at(manager, "grill", "g2", "--answer", "Q1: yes", "--answer", "Q2: yes");
+    at(manager, "grill", "g2", "--done", "x");
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q1")).toContain("manager/G2:Q1 has no answer from the user");
+    ok("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2");
+    expect(rows("approvals")[0]?.["message"]).toBe(3);
   });
 });

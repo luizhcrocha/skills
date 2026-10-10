@@ -23,7 +23,7 @@ import { workerFigures, workerTitle } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
 import { dropKey, REFUSAL_KEYS, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, milestoneOfStep, nextStepId } from "./numbers.ts";
-import { approvalSource, NoSource } from "./approvals.ts";
+import { approvalSource, NoSource, sameSource } from "./approvals.ts";
 import { LINK_KINDS, linkKind, OLD_LINK_KINDS, type LinkKind } from "./links.ts";
 import { makeRefusedCall, permissionOptions } from "./permission.ts";
 import { roleDefaults } from "./roles.ts";
@@ -2188,6 +2188,13 @@ export function approval(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
     const src = approvalSource(run.machine, run.root, ledger, args.str("ref") ?? "");
 
     if (src instanceof NoSource) return yield* refuse(src.why);
+    const local = resolvePath(src.dir) === resolvePath(run.root) ? src.id : undefined;
+    const spent = rows.find((x) => x.status === "revoked" && sameSource(x, src.ref, src.question, local));
+
+    if (spent !== undefined) {
+      return yield* refuse(`${src.label} backed approval ${spent.id}, revoked (${spent.revoked ?? "None"}): a revoked approval's answer gives no new one; ask the user again`);
+    }
+
     const row: Approval = { id, rule, by, ref: src.ref, message: src.message, added: stamp(run), status: "active" };
 
     if (src.question !== undefined) row.question = src.question;

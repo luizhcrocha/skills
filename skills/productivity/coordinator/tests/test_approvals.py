@@ -96,6 +96,57 @@ class ApprovalTest(Fleet):
         self.assertEqual(self.state()["approvals"][0]["status"], "revoked")
         self.assertIn("was revoked", self.refused("decision", "n1", *NOTICE))
         self.assertIn("already revoked", self.refused("approval", "revoke", "K1", "--reason", "again"))
+        self.assertIn("D1 backed approval K1, revoked (", self.refused("approval", "add", "K2", "--rule", "land again", "--by", "luiz", "--ref", "D1"))
+
+
+class PlainYesTest(Fleet):
+    """Only the user's own plain yes to that exact item grants."""
+
+    def said(self, text: str, n: int = 1, decision: str = "d1") -> None:
+        with open(self.root / "chat.jsonl", "a") as f:
+            f.write(json.dumps({"id": n, "at": "2026-01-05T09:10:00+00:00", "from": "user", "author": "luiz@github",
+                                "to": ["coordinator"], "text": text, "re": None, "decision": decision}) + "\n")
+
+    def test_the_whole_answer_is_the_yes_and_a_qualifier_refuses(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import decisions
+        options = [{"id": "a", "label": "yes", "consequence": ""}]
+        for text in ("yes", "Yes.", "OK!", "sim", "y", "approve", "approved", "(a)", "a: yes", "a yes",
+                     "ok, as recommended (yes)", "as recommended", "a: yes (as recommended)"):
+            self.assertTrue(decisions.approves({"answer": text, "options": options, "recommend": "yes"}), text)
+        for text in ("yes, but never to prod", "Yes for staging only; no for prod", "approved?? no wait", "no",
+                     "(a) but not on fridays", "yes?", "ok, as recommended (yes). Not on prod", ""):
+            self.assertFalse(decisions.approves({"answer": text, "options": options, "recommend": "yes"}), text)
+        self.assertIsNone(decisions.plain_answer("(a) but not on fridays", options))
+        self.assertTrue(decisions.plain_yes("  YES!  "))
+
+    def test_a_choice_decided_no_gives_none(self):
+        self.ok("decision", "d1", *CHOICE)
+        self.said("B: no")
+        self.ok("decision", "d1", "--decide", "B", "--resolution", "answered on the page (#1)")
+        why = self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "D1")
+        self.assertIn("D1 (Landing without asking) was decided 'B', not a plain yes", why)
+        self.assertIn("ask the user again for a plain yes or no", why)
+        self.assertNotIn("approvals", self.state())
+
+    def test_a_choice_decided_yes_needs_the_users_own_pick_of_that_option(self):
+        self.ok("decision", "d1", *CHOICE)
+        self.said("B: no")
+        self.ok("decision", "d1", "--decide", "A", "--resolution", "answered on the page (#1)")
+        self.assertIn("the user's own answer in the chat (#1) is 'B: no', not a plain yes",
+                      self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "D1"))
+        self.said("A: yes\nbut never to prod", 2)
+        self.assertIn("(#2) is 'A: yes\\nbut never to prod'", self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "D1"))
+        self.said("A: yes", 3)
+        self.ok("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "D1")
+        self.assertEqual(self.state()["approvals"][0]["message"], 3)
+
+    def test_a_choice_decided_with_a_qualifier_gives_none(self):
+        self.ok("decision", "d1", *CHOICE)
+        self.said("A: yes")
+        self.ok("decision", "d1", "--decide", "A: yes, but not on fridays", "--resolution", "answered on the page (#1)")
+        self.assertIn("was decided 'A: yes, but not on fridays', not a plain yes",
+                      self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "D1"))
 
 
 class NoticeTest(Fleet):
@@ -240,6 +291,44 @@ class FleetWideTest(Fleet):
             self.assertEqual([(a["status"], a["revoked_why"]) for a in self.approvals(root)], [("revoked", "revoked on the page (#3)")])
         self.assertEqual(self.fleets("approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "again").stdout.count("none active"), 3)
 
+
+    def grill2(self, q2_recommend: str = "yes") -> None:
+        self.at(self.manager, "grill", "g2", "--title", "Prod", "--ask", "Landing | May it land? | yes | r",
+                "--ask", f"Prod | May it deploy to prod? | {q2_recommend} | r")
+
+    def close2(self) -> None:
+        self.at(self.manager, "grill", "g2", "--answer", "Q1: yes", "--answer", "Q2: yes")
+        self.at(self.manager, "grill", "g2", "--done", "x")
+
+    def test_the_ledgers_yes_is_not_enough_the_users_own_answer_must_say_it(self):
+        self.grill2("no")
+        self.said(self.manager, {"id": 2, "from": "user", "author": "luiz@github", "text": "Q1: yes\nQ2: no", "decision": "g2"})
+        self.close2()
+        why = self.refused("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2")
+        self.assertIn("manager/G2:Q2: the user's own answer in the chat (#2) is 'no', not a plain yes", why)
+        self.assertIn("ask the user again for a plain yes or no", why)
+        self.ok("approval", "add", "K1", "--rule", "land", "--by", "luiz", "--ref", "manager/G2:Q1")
+        self.assertEqual([(a["question"], a["message"]) for a in self.approvals(self.root)], [("q1", 2)])
+
+    def test_a_message_that_does_not_answer_that_question_gives_none(self):
+        self.grill2()
+        self.said(self.manager, {"id": 2, "from": "user", "author": "luiz@github", "text": "Q1: yes", "decision": "g2"})
+        self.close2()
+        self.assertIn("manager/G2:Q2 has no answer from the user in the chat",
+                      self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q2"))
+        self.said(self.manager, {"id": 3, "from": "user", "author": "luiz@github", "text": "Q2: yes, but never to prod", "decision": "g2"})
+        self.assertIn("(#3) is 'yes, but never to prod', not a plain yes",
+                      self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q2"))
+
+    def test_a_reply_to_the_message_that_asked_that_question_alone_answers_it(self):
+        self.grill2()
+        self.said(self.manager, {"id": 2, "from": "manager", "text": "Q2 again, plainly: may it deploy to prod?", "decision": "g2"})
+        self.said(self.manager, {"id": 3, "from": "user", "author": "luiz@github", "text": "yes", "re": 2})
+        self.close2()
+        self.assertIn("manager/G2:Q1 has no answer from the user",
+                      self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q1"))
+        self.ok("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2")
+        self.assertEqual(self.approvals(self.root)[0]["message"], 3)
 
 if __name__ == "__main__":
     unittest.main()

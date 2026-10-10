@@ -444,14 +444,26 @@ of add, list, revoke`). `list` prints one line per approval (as `show` does, bel
   be `decided` (`D1 (<title>) is open: a standing approval comes from a decision the user decided`), of
   kind decision, input or grill, asks user and page true (`... was not asked of the user on the page:
   ...`); the question must exist (`... has no question Q9`), be answered (`manager/G5:Q2 is open: ...`)
-  and answered yes or approve: the first word of its answer is yes, approve or approved, after a leading
-  option key (`(b)`, `b:`) is read as that option's label and a leading "as recommended" as the
-  question's recommendation (`manager/G5:Q2 was answered '(b) no': a standing approval comes from a
-  question answered yes or approve; ask it again, one rule to a question`). Last, a message in that
-  fleet's chat from the user (only the hub writes as the user) tagged with the decision (`... has no
-  answer from the user in the chat: ...`; a coordinator's or the manager's relay is not one). The row:
-  `{id, rule, by, ref, question? ("q2"), message (the latest such message's id), author (its author, when
-  it has one), added, status: "active"}`, `ref` the decision's id here, or `<fleet>/<its number>` for
+  and answered with a plain yes: the whole answer, trimmed, in lower case, its trailing full stops and
+  exclamation marks dropped, is one of yes, y, approve, approved, sim, ok, after an option key (`(b)`, `b:`,
+  alone or followed by that option's label only) is read as that option's label, "as recommended" or the
+  page's "ok, as recommended (X)" as the question's recommendation, and a trailing "(as recommended)" is
+  dropped; anything after it is a qualifier and refuses (`manager/G5:Q2 was answered '(b) no': only a plain
+  yes (yes, approve, sim, ok) gives a standing approval; ask the user again for a plain yes or no, one rule
+  to a question`). Then the user's own words, from that fleet's chat (only the hub writes as the user; a
+  coordinator's or the manager's relay is not one): for a question, the last `Q<n>: ...` line (with the
+  lines under it that are no question's) of a user message tagged with the grilling, else a user message
+  whose `re` is a message naming that question alone (`manager/G5:Q2 has no answer from the user in the
+  chat: ...`), and it must be a plain yes too (`manager/G5:Q2: the user's own answer in the chat (#14) is
+  'no', not a plain yes: ...`); for a decision or input, the latest user message tagged with it (`... has
+  no answer from the user in the chat: ...`), then the decision's `answer` must be a plain yes, or with options name
+  the option that says one (`D1 (<title>) was decided 'B', not a plain yes: ...`), and the user's message
+  must pick that same option, or for an input say a plain yes, with nothing after it (`D1 (<title>): the
+  user's own answer in the chat (#3) is 'B: no', not a plain yes: ...`). Last, no revoked approval of this
+  ledger may come from that same source (`D1 backed approval K1, revoked (<when>): a revoked approval's answer
+  gives no new one; ask the user again`). The row: `{id, rule, by, ref,
+  question? ("q2"), message (the id of the user's message that answered), author (its author, when it has
+  one), added, status: "active"}`, `ref` the decision's id here, or `<fleet>/<its number>` for
   another fleet's. Logs `decision` (`Standing approval K1 from manager/G5:Q1 (#14): <rule>`, tagged with
   the decision only when it is this fleet's) and prints how to record a notice under it.
 - `revoke`: an unknown ID, a revoked one (`approval K1 is already revoked (<when>): <why>`) and a blank

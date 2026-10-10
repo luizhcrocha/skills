@@ -1429,6 +1429,12 @@ def cmd_approval(state, args):
     src = decisions.approval_source(state, Path(args.dir).resolve(), args.ref)
     if isinstance(src, str):
         fail(src)
+    local = src["id"] if not src["dir"] or Path(src["dir"]).resolve() == Path(args.dir).resolve() else None
+    spent = next((a for a in state.get("approvals") or [] if isinstance(a, dict) and a.get("status") == "revoked"
+                  and decisions.same_source(a, src["ref"], src["question"], local)), None)
+    if spent:
+        fail(f"{src['label']} backed approval {spent['id']}, revoked ({spent.get('revoked')}): a revoked approval's answer "
+             "gives no new one; ask the user again")
     row = {"id": args.id, "rule": args.rule, "by": args.by, "ref": src["ref"],
            **({"question": src["question"]} if src["question"] else {}), "message": src["message"],
            **({"author": src["author"]} if src["author"] else {}), "added": now(), "status": "active"}
