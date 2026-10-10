@@ -34,7 +34,12 @@
       {"name": "a fleet reply to the user", "sender": "a1", "text": "reply", "re_sender": "user", "to": ["user"]},
       {"name": "a fleet reply to itself", "sender": "a1", "text": "reply", "re_sender": "a1", "to": ["user"]},
       {"name": "a coordinator reply plus a mention", "sender": "coordinator", "text": "@a1 go", "re_sender": "a3", "to": ["user", "a1", "a3"]},
-      {"name": "an agent reply to the coordinator", "sender": "a3", "text": "on it", "re_sender": "coordinator", "to": ["user", "coordinator"]}
+      {"name": "an agent reply to the coordinator", "sender": "a3", "text": "on it", "re_sender": "coordinator", "to": ["user", "coordinator"]},
+      {"name": "a batch of marks goes to the decision's owner, the host", "sender": "user", "text": "1 mark on D30", "re_sender": null, "marks": {"decision": {"id": "d30", "ref": "D30", "title": "Cache policy", "revision": "2026-10-10T09:12:00Z"}, "at": {"hash": "#decision/d30"}, "items": [{"n": 1, "kind": "general", "comment": "fine otherwise"}]}, "to": ["coordinator"]},
+      {"name": "a batch of marks goes to the host and whoever it cites", "sender": "user", "text": "1 mark on D30, @notes-impl too", "re_sender": null, "marks": {"decision": {"id": "d30", "ref": "D30", "title": "Cache policy", "revision": "2026-10-10T09:12:00Z"}, "at": {"hash": "#decision/d30"}, "items": [{"n": 1, "kind": "general", "comment": "fine otherwise"}]}, "to": ["coordinator", "a1"], "parts": [{"text": "1 mark on D30, "}, {"text": "@notes-impl", "mention": "a1"}, {"text": " too"}]},
+      {"name": "a batch in its decision's page thread (opened by an earlier batch) goes to the host and whoever it cites", "sender": "user", "text": "1 more mark, @a1 too", "re_sender": null, "marks": {"decision": {"id": "d30", "ref": "D30", "title": "Cache policy", "revision": "2026-10-10T09:12:00Z"}, "at": {"hash": "#decision/d30"}, "items": [{"n": 1, "kind": "general", "comment": "fine otherwise"}]}, "thread": true, "to": ["coordinator", "a1"]},
+      {"name": "a batch for one agent it cites (marks.to) goes to that agent alone", "sender": "user", "text": "1 mark for @a1, @a3 has another", "re_sender": null, "marks": {"decision": {"id": "d30", "ref": "D30", "title": "Cache policy", "revision": "2026-10-10T09:12:00Z"}, "at": {"hash": "#decision/d30"}, "to": "notes-impl", "items": [{"n": 1, "kind": "general", "comment": "fine otherwise"}]}, "to": ["a1"]},
+      {"name": "the decision page's main thread opens as a side chat quoting the decision, to the host", "sender": "user", "text": "is a week enough?", "re_sender": null, "quote": {"text": "Cache policy", "at": {"hash": "#decision/d30", "anchor": "dv-page"}}, "side": "new", "to": ["coordinator"]}
     ]
   },
   {

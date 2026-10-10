@@ -54,7 +54,9 @@ def shared_cases():
     """(name, roster, case) for every case in tests/recipients.json: the rule for who a message reaches."""
     for roster in json.loads((Path(__file__).parent / "recipients.json").read_text()):
         for case in roster["cases"]:
-            yield case["name"], roster["roster"], case
+            # A batch of marks routes by TypeScript's rule only (ADR 0003): chat.py has no marks.
+            if "marks" not in case:
+                yield case["name"], roster["roster"], case
 
 
 class SharedRecipientCasesTest(unittest.TestCase):

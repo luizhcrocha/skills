@@ -164,9 +164,26 @@ export function readChat(root: string, after = 0): Message[] {
 /** What {@link appendLocked} decides inside the lock, from the messages already stored. */
 export type Compose = (known: readonly Message[], nextId: number) => JsonOut | Error;
 
+/** What {@link appendAllLocked} decides inside the lock: the messages to write, in order, the first taking
+ * the next id. */
+export type ComposeAll = (known: readonly Message[], nextId: number) => readonly JsonOut[] | Error;
+
 /** Append one message under the store's lock: `compose` builds it from what is stored (its id is the
  * next one) or refuses with an error, which is returned and nothing is written. */
 export function appendLocked(root: string, compose: Compose): Message | Error {
+  const stored = appendAllLocked(root, (known, nextId) => {
+    const message = compose(known, nextId);
+
+    return message instanceof Error ? message : [message];
+  });
+
+  return stored instanceof Error ? stored : (stored[0] ?? new Error("nothing was stored"));
+}
+
+/** Append several messages in one write under the store's lock, so a reader sees them all at once or none:
+ * `compose` builds them from what is stored or refuses with an error, which is returned and nothing is
+ * written. */
+export function appendAllLocked(root: string, compose: ComposeAll): Message[] | Error {
   const fd = openSync(storePath(root), "a+");
 
   try {
@@ -177,19 +194,23 @@ export function appendLocked(root: string, compose: Compose): Message | Error {
       if (size > 0) readSync(fd, data, 0, size, 0);
       const known = parseStore(data);
       const nextId = known.reduce((max, m) => Math.max(max, m.id), 0) + 1;
-      const message = compose(known, nextId);
+      const messages = compose(known, nextId);
 
-      if (message instanceof Error) return message;
+      if (messages instanceof Error) return messages;
       const torn = size > 0 && data[size - 1] !== 0x0a;
-      const line = `${torn ? "\n" : ""}${dumps(message, { ensureAscii: false })}\n`;
-      const bytes = Buffer.from(line, "utf8");
+      const lines = messages.map((message) => dumps(message, { ensureAscii: false }));
+      const bytes = Buffer.from(`${torn ? "\n" : ""}${lines.map((line) => `${line}\n`).join("")}`, "utf8");
       let at = 0;
 
       while (at < bytes.length) at += writeSync(fd, bytes, at);
 
-      const read = asObject(Option.getOrUndefined(parseJson(dumps(message, { ensureAscii: false }))));
+      const read = lines.map((line) => {
+        const object = asObject(Option.getOrUndefined(parseJson(line)));
 
-      return (read === undefined ? undefined : messageOf(read)) ?? new Error("the stored message does not read back");
+        return object === undefined ? undefined : messageOf(object);
+      });
+
+      return read.some((m) => m === undefined) ? new Error("the stored message does not read back") : read.flatMap((m) => (m === undefined ? [] : [m]));
     });
   } finally {
     closeSync(fd);

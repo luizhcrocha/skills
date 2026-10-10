@@ -8,11 +8,11 @@ import { join } from "node:path";
 
 import { parseInstant } from "../clock.ts";
 import { ChatError } from "../errors.ts";
-import { readObject, roleOf } from "../registry.ts";
+import { readObject, roleOf, type Entry } from "../registry.ts";
 import { mtimeOf, readText, resolvePath } from "../files.ts";
 import { asArray, asNumber, asObject, asString, pyRepr, truthy, type Json, type JsonObject } from "../json.ts";
 import { secondsNow, type Machine } from "../world.ts";
-import { appendLocked, readChat, type Message, type Part } from "./store.ts";
+import { appendAllLocked, messageOf, readChat, type Message, type Part } from "./store.ts";
 import { liveWatch } from "./watchers.ts";
 
 /** Characters of a selected excerpt a message carries. */
@@ -146,6 +146,12 @@ function blockOf(value: Json, where: string): JsonObject | ChatError {
   return Object.fromEntries(block);
 }
 
+/** The decision's own text a mark's quote is in, when it is not the body (`quote.field`): the page renders
+ * it, not the frame. An option's id is 1 to 60 characters of [A-Za-z0-9_.-]; a history line is its number. */
+const FIELD = /^(?:title|question|why|step|recommendation|option:[A-Za-z0-9_.-]{1,60}(?::consequence)?|history:[0-9]+)$/u;
+
+const FIELDS_SAID = "title, question, why, step, recommendation, option:<id>, option:<id>:consequence or history:<n>";
+
 function markQuoteOf(value: Json | undefined, where: string): JsonObject | ChatError {
   const given = asObject(value);
   const text = given === undefined ? undefined : textOf(given, "text", where);
@@ -162,6 +168,13 @@ function markQuoteOf(value: Json | undefined, where: string): JsonObject | ChatE
     quote.push([key, cut(field ?? "", max)]);
   }
 
+  const field = textOf(given, "field", where);
+
+  if (field instanceof ChatError) return field;
+
+  if (field !== undefined && !FIELD.test(field)) return marksRefused(`${where}.field is ${FIELDS_SAID}`);
+
+  if (field !== undefined) quote.push(["field", field]);
   const blocks = asArray(given["blocks"]);
 
   if (blocks === undefined || blocks.length === 0 || blocks.length > BLOCKS_MAX) return marksRefused(`${where}.blocks is a list of 1 to ${BLOCKS_MAX} blocks`);
@@ -171,6 +184,8 @@ function markQuoteOf(value: Json | undefined, where: string): JsonObject | ChatE
     const block = blockOf(raw, `${where}.blocks[${i}]`);
 
     if (block instanceof ChatError) return block;
+
+    if (field !== undefined && block["cell"] !== undefined) return marksRefused(`${where}.blocks[${i}] is in ${field}, the page's own text: it has no cell`);
     kept.push(block);
   }
 
@@ -220,6 +235,15 @@ function markOf(value: Json, at: number, seen: Set<number>): JsonObject | ChatEr
     if (text !== undefined && text.trim() !== "") mark.push([key, text]);
   }
 
+  if (given["on"] !== undefined && given["on"] !== null) {
+    const on = asNumber(given["on"]);
+
+    if (kind !== "general") return marksRefused(`${where}.on is only for a general reply`);
+
+    if (on === undefined || !Number.isInteger(on) || on < 1) return marksRefused(`${where}.on is the number of an earlier mark it replies to`);
+    mark.push(["on", on]);
+  }
+
   return Object.fromEntries(mark);
 }
 
@@ -234,13 +258,62 @@ function placesDecision(hash: string, id: string): boolean {
   return fleet === "" || /^\/[^/]+$/u.test(fleet);
 }
 
-/** Why a batch of marks cannot go with the other fields a message has, or undefined when it can. */
+const MARKS_ALONE = "a batch of marks is a message of its own: no decision, quote or side chat with it";
+
+/** Why a batch of marks cannot go with the other fields a message has, or undefined when it can. A side chat
+ * it may name (an id) is checked against the store: only its decision's page thread takes it (`pageThreadOf`). */
 export function marksAlone(message: { readonly marks?: Json | undefined; readonly decision?: Json | undefined; readonly quote?: Json | undefined; readonly side?: Json | undefined }): ChatError | undefined {
   const given = (value: Json | undefined): boolean => value !== undefined && value !== null && value !== "";
+  const side = asNumber(message.side ?? undefined);
+  const threaded = given(message.side) && (side === undefined || !Number.isInteger(side));
 
-  if (!given(message.marks) || ![message.decision, message.quote, message.side].some(given)) return undefined;
+  if (!given(message.marks) || (![message.decision, message.quote].some(given) && !threaded)) return undefined;
 
-  return new ChatError({ reason: "a batch of marks is a message of its own: no decision, quote or side chat with it" });
+  return new ChatError({ reason: MARKS_ALONE });
+}
+
+/** Whether `m` may open a side chat without carrying `side` itself: a side-less message of the user's that is
+ * a batch of marks, or that quotes a decision's page as a whole (`anchor: "dv-page"`), its page thread. */
+function opensThread(m: Message): boolean {
+  if (m.from !== "user" || truthy(m.side)) return false;
+
+  return (isBatch(m) && toOwner(m)) || asObject(asObject(m.quote)?.["at"])?.["anchor"] === "dv-page";
+}
+
+/** Whether a stored batch went to its decision's owner: it names no `marks.to`, or its one recipient is the
+ * fleet its place names (`#decision/<fleet>/<id>`) or, on a page of its own, the host. */
+function toOwner(m: Message): boolean {
+  const marks = asObject(m.stored["marks"]);
+
+  if (marks?.["to"] === undefined) return true;
+  const fleet = quotedFleet(placedBy(marks), []);
+  const to = m.to[0];
+
+  return fleet === undefined ? to === "coordinator" || to === "manager" : to === fleet;
+}
+
+/** Whether side chat `id` is in `known`: a message carries it, or message `id` opens a thread by itself (`opensThread`). */
+export function sideChatIn(known: readonly Message[], id: number): boolean {
+  return known.some((m) => m.side === id || (m.id === id && opensThread(m)));
+}
+
+/** The side chat `m` is in, for a reply to it to join: its own `side`, or its id when it opens a page thread
+ * by itself (`opensThread`), from the moment it is stored; undefined otherwise. */
+export function threadOf(m: Message): Json | undefined {
+  if (truthy(m.side)) return m.side;
+
+  return opensThread(m) ? m.id : undefined;
+}
+
+/** Whether `opener` opens the page thread of the decision at `hash`: it quotes that page as a whole (`at` that
+ * hash, `anchor: "dv-page"`), or it is a side-less batch of marks on that decision. */
+function pageThreadOf(opener: Message | undefined, hash: string | undefined): boolean {
+  if (opener === undefined || hash === undefined) return false;
+  const at = asObject(asObject(opener.quote)?.["at"]);
+
+  if (asString(at?.["hash"]) === hash && at?.["anchor"] === "dv-page") return true;
+
+  return opensThread(opener) && isBatch(opener) && asString(asObject(asObject(opener.stored["marks"])?.["at"])?.["hash"]) === hash;
 }
 
 /**
@@ -266,9 +339,15 @@ export function marksOf(value: Json | undefined): JsonObject | undefined | ChatE
 
   if (!placesDecision(hash, asString(decision["id"]) ?? "")) return marksRefused(`at.hash ${hash} is not the place of decision ${pyText(decision["id"] ?? null)}`);
 
+  const withdrawn = withdrawnOf(given["withdrawn"]);
+
+  if (withdrawn instanceof ChatError) return withdrawn;
   const items = asArray(given["items"]);
 
-  if (items === undefined || items.length === 0 || items.length > MARKS_MAX) return marksRefused(`items is a list of 1 to ${MARKS_MAX} marks`);
+  if (items === undefined || items.length > MARKS_MAX || (items.length === 0 && withdrawn === undefined)) {
+    return marksRefused(`items is a list of 1 to ${MARKS_MAX} marks (none only beside a withdrawal)`);
+  }
+
   const seen = new Set<number>();
   const marks: JsonObject[] = [];
 
@@ -279,7 +358,45 @@ export function marksOf(value: Json | undefined): JsonObject | undefined | ChatE
     marks.push(mark);
   }
 
-  return { decision, at: { hash }, items: marks };
+  const to = textOf(given, "to", "marks");
+
+  if (to instanceof ChatError) return to;
+
+  // oxlint-disable-next-line no-control-regex -- control characters are what it refuses.
+  if (to !== undefined && (to === "" || [...to].length > PLACE_MAX || /[\u0000-\u001f\u007f]/u.test(to))) return marksRefused(`to is the one agent the batch is for, 1 to ${PLACE_MAX} characters`);
+
+  const batch: JsonObject = to === undefined ? { decision, at: { hash }, items: marks } : { decision, at: { hash }, to, items: marks };
+
+  return withdrawn === undefined ? batch : { ...batch, withdrawn };
+}
+
+/** The marks a batch withdraws (`withdrawn`): distinct positive whole numbers, at most MARKS_MAX; undefined
+ * when there are none. */
+function withdrawnOf(value: Json | undefined): number[] | undefined | ChatError {
+  if (value === undefined || value === null) return undefined;
+  const given = asArray(value);
+  const numbers = (given ?? []).map((n) => asNumber(n));
+  const whole = numbers.flatMap((n) => (n !== undefined && Number.isInteger(n) && n >= 1 ? [n] : []));
+
+  if (given === undefined || whole.length !== given.length || new Set(whole).size !== whole.length || whole.length > MARKS_MAX) {
+    return marksRefused(`withdrawn is a list of up to ${MARKS_MAX} distinct mark numbers`);
+  }
+
+  return whole.length === 0 ? undefined : whole;
+}
+
+/** The marks a stored batch withdraws; empty for any other message. */
+export function withdrawnNumbers(m: Message): number[] {
+  return (asArray(asObject(m.stored["marks"])?.["withdrawn"]) ?? []).flatMap((n) => {
+    const got = asNumber(n);
+
+    return got === undefined ? [] : [got];
+  });
+}
+
+/** Whether `m` is a batch of marks: its `marks` name a decision (some marks, or only a withdrawal). */
+export function isBatch(m: Message): boolean {
+  return asObject(asObject(m.stored["marks"])?.["decision"]) !== undefined;
 }
 
 /** The `n` of each mark a stored batch carries; empty for a message without marks. */
@@ -416,10 +533,10 @@ export interface Addressed {
   readonly parts: Part[];
 }
 
-/** Who a message from `sender` would reach now, and its text split into parts. On the manager's page, a
- * message of the user's in a side chat that a fleet owns (`ownersOf`), or a batch of marks on a fleet's
- * decision, reaches the owners, whoever it cites and the sender of the message it replies to, and no one
- * else. */
+/** Who a message from `sender` would reach now, and its text split into parts. A batch of marks of the
+ * user's reaches the decision's owner (`batchOwner`) and whoever it cites; on the manager's page, a message of
+ * the user's in a side chat that a fleet owns (`ownersOf`) reaches the owners and whoever it cites. Either
+ * also reaches the sender of the message it replies to, and no one else. */
 export function address(
   machine: Machine,
   root: string,
@@ -441,12 +558,32 @@ export function address(
   const parts = partsOf(roster, message.text);
   const cited = parts.flatMap((p) => (p.mention === undefined ? [] : [p.mention]));
   const re = message.re ?? null;
+  const batch = sender === "user" && message.marks !== undefined;
   const owned = sender === "user" && roster.host === "manager";
   const known = re !== null || owned ? readChat(root) : [];
   const answered = re === null ? undefined : known.find((m) => m.id === re);
 
   if (re !== null && answered === undefined) return new ChatError({ reason: `unknown message #${re}` });
-  const owners = owned ? ownersOf(machine, root, known, message.side, answered, message.quote ?? placedBy(message.marks), cited, message.marks !== undefined) : [];
+  let owners: string[] = [];
+
+  if (batch) {
+    const owner = batchOwner(machine, root, roster, message.marks);
+    const named = asString(message.marks?.["to"]);
+
+    if (named !== undefined) {
+      const one = recipientOf(roster, named);
+
+      if (one === undefined) return new ChatError({ reason: `marks.to ${named} names no one in this chat` });
+
+      if (one !== owner && !cited.includes(one)) return new ChatError({ reason: `a batch goes to the decision's owner (${owner}) or to an agent its text cites, and ${named} is neither` });
+
+      if (one !== owner && message.side !== undefined) return new ChatError({ reason: `a batch to ${named} goes in no side chat: the page thread is ${owner}'s` });
+
+      return { from: sender, to: [one], parts };
+    }
+
+    owners = [owner];
+  } else if (owned) owners = ownersOf(machine, root, known, message.side, answered, message.quote, cited);
   const replied = answered === undefined ? [] : [answered.from];
   const named = owners.length > 0 ? [...owners, ...cited, ...replied] : [...cited, ...replied];
   const to: string[] = sender === "user" ? [] : ["user"];
@@ -489,12 +626,52 @@ function placedBy(marks: Json | undefined): Json | undefined {
   return at === undefined ? undefined : { at };
 }
 
+/** Whom `name` names, as a mention would (`partsOf`): the host, an id or a name, any case, tried again
+ * without trailing dots and dashes. */
+function recipientOf(roster: Roster, name: string): string | undefined {
+  const token = name.replace(/^@/u, "");
+  const stripped = token.replace(/[.-]+$/u, "");
+
+  return resolveWho(roster, token) ?? (stripped === "" ? undefined : resolveWho(roster, stripped));
+}
+
+/** The owner of the decision a batch of marks is on (`batchOwner`), as the hub checks a ride-along by it. */
+export function ownerOfBatch(machine: Machine, root: string, marks: JsonObject | undefined): string {
+  return batchOwner(machine, root, rosterOf(machine, root), marks);
+}
+
+/** The live fleets the manager of `root` serves, its own DIR left out. */
+function servedFleets(machine: Machine, root: string): Entry[] {
+  const dir = resolvePath(root);
+
+  return machine.registry.live().filter((e) => e.role !== "manager" && e.dir !== dir);
+}
+
+/** The fleet `name` names among `fleets`: a fleet's id exactly, or an alias exactly one fleet has; an
+ * ambiguous one names none. */
+function fleetNamed(fleets: readonly Entry[], name: string | undefined): string | undefined {
+  if (name === undefined) return undefined;
+  const exact = fleets.find((e) => e.id === name);
+
+  if (exact !== undefined) return exact.id;
+  const aliased = fleets.filter((e) => e.aliases.includes(name));
+
+  return aliased.length === 1 ? aliased[0]?.id : undefined;
+}
+
+/** Who owns the decision a batch of marks is on: on a fleet's page its host; on the manager's page the live
+ * fleet its place names (`#decision/<fleet>/<id>`), else the manager (its own decision, or a fleet gone). */
+function batchOwner(machine: Machine, root: string, roster: Roster, marks: JsonObject | undefined): string {
+  if (roster.host !== "manager") return roster.host;
+
+  return fleetNamed(servedFleets(machine, root), quotedFleet(placedBy(marks), [])) ?? roster.host;
+}
+
 /**
  * The fleets that own the side chat a message of the user's on the manager's page is in: the fleet whose
- * item its first message quotes, and the fleets that first message cites. A batch of marks in no side chat
- * is owned as a side chat's first message is, by its place. None for a message outside a side chat, or in
- * one about the manager's own things. `cited` and `quote` are the message's own (a batch's place as its
- * quote), for a message that opens a side chat or a batch; `answered` passes on its side chat to a reply.
+ * item its first message quotes, and the fleets that first message cites. None for a message outside a side
+ * chat, or in one about the manager's own things. `cited` and `quote` are the message's own, for a message
+ * that opens a side chat; `answered` passes on its side chat to a reply.
  */
 function ownersOf(
   machine: Machine,
@@ -504,39 +681,23 @@ function ownersOf(
   answered: Message | undefined,
   quote: Json | undefined,
   cited: readonly string[],
-  batch: boolean,
 ): string[] {
-  const dir = resolvePath(root);
-  const fleets = machine.registry.live().filter((e) => e.role !== "manager" && e.dir !== dir);
-
-  // A name is a fleet's id exactly, or an alias exactly one fleet has; an ambiguous one names no owner.
-  const fleetOf = (name: string | undefined): string | undefined => {
-    if (name === undefined) return undefined;
-    const exact = fleets.find((e) => e.id === name);
-
-    if (exact !== undefined) return exact.id;
-    const aliased = fleets.filter((e) => e.aliases.includes(name));
-
-    return aliased.length === 1 ? aliased[0]?.id : undefined;
-  };
-
+  const fleets = servedFleets(machine, root);
   let opener: { readonly quote: Json | undefined; readonly cited: readonly string[] } | undefined;
 
   if (side === "new") opener = { quote, cited };
   else {
-    const thread = side ?? (answered !== undefined && truthy(answered.side) ? asNumber(answered.side) : undefined);
+    const thread = side ?? (answered === undefined ? undefined : asNumber(threadOf(answered)));
     const first = thread === undefined ? undefined : known.find((m) => m.id === thread);
 
-    if (first !== undefined) {
-      opener = { quote: first.quote ?? placedBy(first.stored["marks"]), cited: first.parts.flatMap((p) => (p.mention === undefined ? [] : [p.mention])) };
-    } else if (thread === undefined && batch) opener = { quote, cited };
+    if (first !== undefined) opener = { quote: first.quote ?? placedBy(first.stored["marks"]), cited: first.parts.flatMap((p) => (p.mention === undefined ? [] : [p.mention])) };
   }
 
   if (opener === undefined) return [];
   const owners: string[] = [];
 
   for (const name of [quotedFleet(opener.quote, known), ...opener.cited]) {
-    const fleet = fleetOf(name);
+    const fleet = fleetNamed(fleets, name);
 
     if (fleet !== undefined && !owners.includes(fleet)) owners.push(fleet);
   }
@@ -558,6 +719,7 @@ interface StoredMessage {
   quote?: JsonObject;
   marks?: JsonObject;
   mark?: number[];
+  keep?: string;
   side?: Json;
   origin?: string;
 }
@@ -575,6 +737,8 @@ export interface Draft {
   readonly marks?: JsonObject;
   /** The marks of the batch `re` names that this message answers (`n` of each). */
   readonly mark?: readonly number[];
+  /** Why the marks this message answers (`mark`) leave the decision as it is (`say --no-change`). */
+  readonly keep?: string;
   /** "new" opens a side chat; a number continues one. */
   readonly side?: number | "new";
   /** The page of another origin the user posted from (the hub's config allows it), as its `Origin`. */
@@ -584,8 +748,19 @@ export interface Draft {
   readonly alongside?: (message: JsonObject, known: readonly Message[]) => JsonObject | undefined;
 }
 
-/** Append a message and return it as stored, with the recipients and parts `address` resolves. */
-export function append(machine: Machine, root: string, draft: Draft, at: string): Message | ChatError {
+/** A draft checked and addressed (`prepare`), ready to be written. */
+export interface Prepared {
+  readonly draft: Draft;
+  readonly resolved: Addressed;
+  readonly marks: JsonObject | undefined;
+  readonly answering: readonly number[] | undefined;
+  readonly keep: string | undefined;
+  readonly quote: JsonObject | undefined;
+}
+
+/** Check a draft and resolve whom it reaches, before anything is written: what `append` refuses outside the
+ * store's lock. */
+export function prepare(machine: Machine, root: string, draft: Draft): Prepared | ChatError {
   const resolved = address(machine, root, draft);
 
   if (resolved instanceof ChatError) return resolved;
@@ -597,6 +772,11 @@ export function append(machine: Machine, root: string, draft: Draft, at: string)
 
   if (marks instanceof ChatError) return marks;
   const answering = draft.mark === undefined || draft.mark.length === 0 ? undefined : [...new Set(draft.mark)];
+  const keep = draft.keep?.trim();
+
+  if (keep !== undefined && answering === undefined) return new ChatError({ reason: "--no-change needs --mark: the marks it leaves as they are" });
+
+  if (keep !== undefined && (keep === "" || [...keep].length > MARK_TEXT_MAX)) return new ChatError({ reason: `--no-change takes why, in 1 to ${MARK_TEXT_MAX} characters` });
   let quote: JsonObject | undefined;
 
   if (draft.quote !== undefined) {
@@ -612,57 +792,117 @@ export function append(machine: Machine, root: string, draft: Draft, at: string)
     if (place !== undefined) quote = { ...quote, at: place };
   }
 
-  const stored = appendLocked(root, (known, nextId) => {
-    const parent = draft.re === undefined || draft.re === null ? undefined : known.find((m) => m.id === draft.re);
+  return { draft, resolved, marks, answering, keep, quote };
+}
 
-    if (answering !== undefined) {
-      const batch = parent === undefined ? [] : markNumbers(parent);
+/** The message `p` is as stored with id `nextId` after `known` (before its `alongside`), or why the store
+ * refuses it. */
+function composed(p: Prepared, known: readonly Message[], nextId: number, at: string): JsonObject | ChatError {
+  const { draft, resolved, answering } = p;
+  const parent = draft.re === undefined || draft.re === null ? undefined : known.find((m) => m.id === draft.re);
 
-      if (parent === undefined || batch.length === 0) return new ChatError({ reason: "--mark needs --re to a message with marks" });
-      const stray = answering.find((n) => !batch.includes(n));
+  if (answering !== undefined) {
+    const batch = parent === undefined ? [] : markNumbers(parent);
 
-      if (stray !== undefined) return new ChatError({ reason: `mark ${stray} is not in message #${parent.id}` });
-    }
+    if (parent === undefined || batch.length === 0) return new ChatError({ reason: "--mark needs --re to a message with marks" });
+    const stray = answering.find((n) => !batch.includes(n));
 
-    let side: Json | undefined;
+    if (stray !== undefined) return new ChatError({ reason: `mark ${stray} is not in message #${parent.id}` });
+  }
 
-    if (draft.side === "new") side = nextId;
-    else if (draft.side !== undefined) {
-      const wanted = draft.side;
+  let side: Json | undefined;
 
-      if (!known.some((m) => m.side === wanted)) return new ChatError({ reason: `no side chat #${wanted}` });
-      side = wanted;
-    } else if (parent !== undefined && truthy(parent.side)) side = parent.side;
+  if (draft.side === "new") side = nextId;
+  else if (draft.side !== undefined) {
+    const wanted = draft.side;
 
-    const message: StoredMessage = {
-      id: nextId,
-      at,
-      from: resolved.from,
-      to: resolved.to,
-      text: draft.text,
-      re: draft.re ?? null,
-      parts: resolved.parts.map((p) => (p.mention === undefined ? { text: p.text } : { text: p.text, mention: p.mention })),
-    };
+    if (!sideChatIn(known, wanted)) return new ChatError({ reason: `no side chat #${wanted}` });
 
-    if (draft.author !== undefined && draft.author !== "" && resolved.from === "user") message.author = draft.author;
+    // A batch goes in one side chat only: its decision's page thread.
+    if (p.marks !== undefined && !pageThreadOf(known.find((m) => m.id === wanted), asString(asObject(p.marks["at"])?.["hash"]))) return new ChatError({ reason: MARKS_ALONE });
+    side = wanted;
+  } else if (parent !== undefined) side = threadOf(parent);
 
-    if (draft.decision !== undefined && draft.decision !== "") message.decision = draft.decision;
+  const message: StoredMessage = {
+    id: nextId,
+    at,
+    from: resolved.from,
+    to: resolved.to,
+    text: draft.text,
+    re: draft.re ?? null,
+    parts: resolved.parts.map((part) => (part.mention === undefined ? { text: part.text } : { text: part.text, mention: part.mention })),
+  };
 
-    if (quote !== undefined) message.quote = quote;
+  if (draft.author !== undefined && draft.author !== "" && resolved.from === "user") message.author = draft.author;
 
-    if (marks !== undefined) message.marks = marks;
+  if (draft.decision !== undefined && draft.decision !== "") message.decision = draft.decision;
 
-    if (answering !== undefined) message.mark = answering;
+  if (p.quote !== undefined) message.quote = p.quote;
 
-    if (side !== undefined && truthy(side)) message.side = side;
+  if (p.marks !== undefined) message.marks = p.marks;
 
-    if (draft.origin !== undefined && draft.origin !== "" && resolved.from === "user") message.origin = draft.origin;
-    const built: JsonObject = { ...message };
+  if (answering !== undefined) message.mark = [...answering];
 
-    return { ...built, ...draft.alongside?.(built, known) };
+  if (p.keep !== undefined) message.keep = p.keep;
+
+  if (side !== undefined && truthy(side)) message.side = side;
+
+  if (draft.origin !== undefined && draft.origin !== "" && resolved.from === "user") message.origin = draft.origin;
+
+  return { ...message };
+}
+
+/** The messages `prepared` would be after `known`, each composed after the ones before it, without their
+ * `alongside`; the first refusal instead. */
+function composedAll(prepared: readonly Prepared[], known: readonly Message[], nextId: number, at: string): { readonly message: JsonObject; readonly before: readonly Message[] }[] | ChatError {
+  const seen = [...known];
+  const out: { readonly message: JsonObject; readonly before: readonly Message[] }[] = [];
+
+  for (const [i, p] of prepared.entries()) {
+    const message = composed(p, seen, nextId + i, at);
+
+    if (message instanceof ChatError) return message;
+    out.push({ message, before: [...seen] });
+    const read = messageOf(message);
+
+    if (read !== undefined) seen.push(read);
+  }
+
+  return out;
+}
+
+/** Why the store would refuse `prepared` now (a `--mark` or a side chat it does not hold), or undefined:
+ * the hub asks before it grants anything. The write checks again under the lock. */
+export function storeRefusal(root: string, prepared: readonly Prepared[], at: string): ChatError | undefined {
+  const known = readChat(root);
+  const got = composedAll(prepared, known, known.reduce((max, m) => Math.max(max, m.id), 0) + 1, at);
+
+  return got instanceof ChatError ? got : undefined;
+}
+
+/** Append prepared messages in one write under the store's lock, in order, so a watch reads them in one
+ * wake; each is composed after the ones before it. Nothing is written, and no `alongside` runs (the hub's
+ * delivery to the coordinators), when any is refused. */
+export function appendAll(root: string, prepared: readonly Prepared[], at: string): Message[] | ChatError {
+  const stored = appendAllLocked(root, (known, nextId) => {
+    const all = composedAll(prepared, known, nextId, at);
+
+    if (all instanceof ChatError) return all;
+
+    return all.map(({ message, before }, i) => ({ ...message, ...prepared[i]?.draft.alongside?.(message, before) }));
   });
 
   return stored instanceof Error && !(stored instanceof ChatError) ? new ChatError({ reason: stored.message }) : stored;
+}
+
+/** Append a message and return it as stored, with the recipients and parts `address` resolves. */
+export function append(machine: Machine, root: string, draft: Draft, at: string): Message | ChatError {
+  const prepared = prepare(machine, root, draft);
+
+  if (prepared instanceof ChatError) return prepared;
+  const stored = appendAll(root, [prepared], at);
+
+  return stored instanceof ChatError ? stored : (stored[0] ?? new ChatError({ reason: "nothing was stored" }));
 }
 
 /** The messages addressed to `who` that `who` has not answered. */
@@ -774,15 +1014,22 @@ function batchOf(m: Message, refs: ReadonlyMap<string, string>): string {
   const count = (asArray(marks["items"]) ?? []).length;
   const id = pyText(decision["id"] ?? null);
   const ref = truthy(decision["ref"]) ? pyText(decision["ref"]) : refs.get(id);
+  const gone = withdrawnNumbers(m);
+  const withdrew = gone.length === 0 ? "" : `withdrew mark${gone.length === 1 ? "" : "s"} ${gone.join(", ")}`;
+  const what = count === 0 ? withdrew : `${count} mark${count === 1 ? "" : "s"}${withdrew === "" ? "" : `, ${withdrew}`}`;
 
-  return ` [${count} mark${count === 1 ? "" : "s"} on ${oneLine(ref === undefined ? id : `${ref} ${id}`)}, revision ${oneLine(decision["revision"] ?? null)}]`;
+  return ` [${what} on ${oneLine(ref === undefined ? id : `${ref} ${id}`)}, revision ${oneLine(decision["revision"] ?? null)}]`;
 }
 
-/** `, mark 2` or `, marks 1, 3` on an answer to marks of a batch; empty on any other message. */
+/** `, mark 2` or `, marks 1, 3` on an answer to marks of a batch, then `, no change: <why>` when it keeps
+ * them as they are; empty on any other message. */
 function answered(m: Message): string {
   const numbers = (asArray(m.stored["mark"]) ?? []).map((n) => oneLine(n));
+  const keep = asString(m.stored["keep"]);
 
-  return numbers.length === 0 ? "" : `, mark${numbers.length === 1 ? "" : "s"} ${numbers.join(", ")}`;
+  if (numbers.length === 0) return "";
+
+  return `, mark${numbers.length === 1 ? "" : "s"} ${numbers.join(", ")}${keep === undefined ? "" : `, no change: ${oneLine(keep)}`}`;
 }
 
 /** Each message as its one printed line: `#12 user (login) -> a1 (notes-impl) [D1 d1]: text [re #9]`. */

@@ -278,6 +278,23 @@ describe("a fleet's chat through the hub", () => {
     stream.close();
   });
 
+  test("the page's exit post (fetch keepalive, same origin) is taken under the usual checks, and a cross-site one refused", async () => {
+    const marks = { decision: { id: "d30", title: "Cache policy", revision: "r1" }, at: { hash: "#decision/d30" }, items: [{ n: 1, kind: "general", comment: "fine" }] };
+    const body = JSON.stringify({ text: "1 mark on d30", marks });
+
+    const exit = async (headers: Record<string, string>): Promise<number> => {
+      const res = await fetch(`http://127.0.0.1:${port}/f/p/chat`, { method: "POST", keepalive: true, body, headers: { "Content-Type": "application/json", "Sec-Fetch-Mode": "cors", ...headers } });
+      await res.text();
+
+      return res.status;
+    };
+
+    expect(await exit({ Origin: `http://127.0.0.1:${port}`, "Sec-Fetch-Site": "same-origin" })).toBe(201);
+    expect(await exit({ Origin: "https://evil.example", "Sec-Fetch-Site": "cross-site" })).toBe(403);
+    expect(await exit({ "Sec-Fetch-Site": "cross-site" })).toBe(403);
+    expect(readChat(root).map((m) => [m.text, m.to])).toEqual([["1 mark on d30", ["coordinator"]]]);
+  });
+
   test("a same-origin post is taken", async () => {
     const sent = await post({ text: "hi" }, { Origin: `http://127.0.0.1:${port}`, "Content-Type": "application/json; charset=utf-8" });
     expect(sent.status).toBe(201);
@@ -535,7 +552,8 @@ describe("preview", () => {
         writeFileSync(join(root, "chat.jsonl"), "");
         const reSender = asString(c["re_sender"]);
         const re = reSender === undefined ? null : say(reSender, "earlier");
-        const got = await preview({ text: asString(c["text"]) ?? "", re });
+        const more = Object.fromEntries(["marks", "quote", "side"].flatMap((k) => (c[k] === undefined ? [] : [[k, c[k] ?? null]])));
+        const got = await preview({ text: asString(c["text"]) ?? "", re, ...more });
         expect([got.status, got.body["to"]]).toEqual([200, c["to"]]);
 
         if (c["parts"] !== undefined) expect(got.body["parts"]).toEqual(c["parts"]);
@@ -939,6 +957,65 @@ describe("answers to decisions", () => {
   test("a secret given as a reference is stored", async () => {
     const sent = await post({ text: "op://Engineering/Neo4j Aura/password", decision: "d3" });
     expect([sent.status, sent.body["decision"]]).toEqual([201, "d3"]);
+  });
+
+  const pending = (id = "d1", hash = `#decision/${id}`): JsonObject => ({
+    decision: { id, title: "Invoice schema", revision: "2026-01-01T00:00:00+00:00" },
+    at: { hash },
+    items: [{ n: 1, kind: "general", comment: "name the fields" }],
+  });
+
+  test("the decision's pending marks ride along with its answer: the batch, then the answer, in one write", async () => {
+    const sent = await post({ text: "B: keep both", decision: "d1", batch: { text: "1 mark on d1, @a1 too", marks: pending() } });
+    expect([sent.status, sent.body["id"], sent.body["decision"], sent.body["to"]]).toEqual([201, 2, "d1", ["coordinator"]]);
+    const batch = asObject(sent.body["batch"]);
+    expect([batch?.["id"], batch?.["from"], batch?.["to"], batch?.["text"], batch?.["marks"], batch?.["decision"]]).toEqual([1, "user", ["coordinator", "a1"], "1 mark on d1, @a1 too", pending(), undefined]);
+    expect(readChat(root).map((m) => m.stored)).toEqual([batch, { ...sent.body, batch: undefined }].map((o) => JSON.parse(JSON.stringify(o))));
+    const plain = await post({ text: "A", decision: "d1" });
+    expect([plain.status, plain.body["batch"]]).toEqual([201, undefined]);
+  });
+
+  test("a batch that cannot ride along is a 400, and neither it nor the answer is stored", async () => {
+    const cases: JsonObject[] = [
+      { text: "A", decision: "d1", batch: "1 mark" },
+      { text: "A", decision: "d1", batch: { text: "1 mark" } },
+      { text: "A", decision: "d1", batch: { text: "1 mark", marks: { ...pending(), items: [] } } },
+      { text: "A", decision: "d1", batch: { text: " ", marks: pending() } },
+      { text: "A", decision: "d1", batch: { text: "1 mark", marks: pending("d3") } },
+      { text: "A", batch: { text: "1 mark", marks: pending() } },
+    ];
+
+    for (const payload of cases) {
+      const got = await post(payload);
+      expect([got.status, asString(got.body["error"]) !== undefined]).toEqual([400, true]);
+    }
+
+    expect(asString((await post(cases[4] ?? {})).body["error"])).toBe("the batch's marks are on decision d3, not on d1, the one answered");
+    expect(readChat(root)).toEqual([]);
+  });
+
+  test("a ride-along batch may go in its decision's page thread, and in no other side chat", async () => {
+    const opener = await post({ text: "1 mark on d1", marks: pending() });
+    const sent = await post({ text: "B", decision: "d1", batch: { text: "1 more", marks: pending(), side: opener.body["id"] ?? null } });
+    expect([sent.status, asObject(sent.body["batch"])?.["side"], sent.body["side"]]).toEqual([201, 1, undefined]);
+    const loose = await post({ text: "why?", side: "new", quote: { text: "x", at: { hash: "#plan" } } });
+    const refused = await post({ text: "A", decision: "d1", batch: { text: "1 more", marks: pending(), side: loose.body["id"] ?? null } });
+    expect([refused.status, refused.body["error"]]).toEqual([400, "a batch of marks is a message of its own: no decision, quote or side chat with it"]);
+    expect(readChat(root).length).toBe(4);
+  });
+
+  test("the batch that rides along with an answer is the owner's", async () => {
+    const other = await post({ text: "B", decision: "d1", batch: { text: "1 mark for @a1", marks: { ...pending(), to: "a1" } } });
+    expect([other.status, other.body["error"]]).toEqual([400, "the batch that rides along with an answer is the decision owner's (coordinator)"]);
+    expect(readChat(root)).toEqual([]);
+    const own = await post({ text: "B", decision: "d1", batch: { text: "1 mark", marks: { ...pending(), to: "coordinator" } } });
+    expect([own.status, asObject(own.body["batch"])?.["to"]]).toEqual([201, ["coordinator"]]);
+  });
+
+  test("an answer the store refuses stores neither it nor its batch, and says no batch was stored", async () => {
+    const got = await post({ text: "B", decision: "d1", side: 99, batch: { text: "1 mark", marks: pending() } });
+    expect([got.status, got.body]).toEqual([400, { error: "no side chat #99" }]);
+    expect(readChat(root)).toEqual([]);
   });
 });
 
@@ -1365,12 +1442,74 @@ describe("the user's word to a coordinator on the manager's page", () => {
 
     if (answer instanceof ChatError) throw new Error(answer.reason);
     relay();
-    expect(fields(readChat(manager).at(-1), "from", "re", "mark", "via")).toEqual(["p", 1, [1, 2], { fleet: "p", id: 2 }]);
+    expect(fields(readChat(manager).at(-1), "from", "re", "mark", "keep", "via")).toEqual(["p", 1, [1, 2], undefined, { fleet: "p", id: 2 }]);
+    const kept = append(machine(env), root, { sender: "coordinator", text: "kept", re: 1, mark: [2], keep: "the legal minimum" }, "2026-01-01T00:00:00+00:00");
+
+    if (kept instanceof ChatError) throw new Error(kept.reason);
+    relay();
+    expect(fields(readChat(manager).at(-1), "from", "re", "mark", "keep", "via")).toEqual(["p", 1, [2], "the legal minimum", { fleet: "p", id: 3 }]);
   });
 
-  test("a batch on the manager's own decision stays the manager's, and a malformed one is refused with its reason", async () => {
+  test("a batch in its decision's page thread is delivered into the same thread in the fleet's chat, and its answer comes back there", async () => {
+    const opener = await toManager({ text: "2 marks on D30", marks: marks("#decision/p/d30") });
+    const next = await toManager({ text: "1 more", marks: marks("#decision/p/d30"), side: opener.body["id"] ?? null });
+    expect([next.status, next.body["side"], next.body["to"], next.body["delivered"]]).toEqual([201, 1, ["p"], [{ fleet: "p", id: 2 }]]);
+    const word = await toManager({ text: "and a word", side: 1 });
+    expect([word.status, word.body["to"], word.body["delivered"]]).toEqual([201, ["p"], [{ fleet: "p", id: 3 }]]);
+    expect(readChat(root).map((m) => fields(m, "id", "side", "via"))).toEqual([
+      [1, undefined, { fleet: "manager", id: 1 }],
+      [2, 1, { fleet: "manager", id: 2 }],
+      [3, 1, { fleet: "manager", id: 3 }],
+    ]);
+    const answer = append(machine(env), root, { sender: "coordinator", text: "done", re: 2, mark: [1] }, "2026-01-01T00:00:00+00:00");
+
+    if (answer instanceof ChatError) throw new Error(answer.reason);
+    relay();
+    expect(fields(readChat(manager).at(-1), "from", "re", "side", "mark")).toEqual(["p", 2, 1, [1]]);
+    const toOpener = append(machine(env), root, { sender: "coordinator", text: "first answered", re: 1, mark: [2] }, "2026-01-01T00:00:00+00:00");
+
+    if (toOpener instanceof ChatError) throw new Error(toOpener.reason);
+    expect(toOpener.side).toBe(1);
+    relay();
+    expect(fields(readChat(manager).at(-1), "from", "re", "side", "mark")).toEqual(["p", 1, 1, [2]]);
+    const loose = await toManager({ text: "why?", side: "new", quote: { text: "x", at: { hash: "#plan" } } });
+    const stray = await toManager({ text: "x", marks: marks("#decision/p/d30"), side: loose.body["id"] ?? null });
+    expect([stray.status, stray.body["error"]]).toEqual([400, "a batch of marks is a message of its own: no decision, quote or side chat with it"]);
+    expect((await toManager({ text: "x", marks: marks("#decision/p/d30"), side: 3 })).body["error"]).toBe("no side chat #3");
+  });
+
+  test("a withdrawal rides in a batch, posted and delivered with the marks it withdraws", async () => {
+    const gone = { ...marks("#decision/p/d30"), items: [], withdrawn: [2] };
+    const sent = await toManager({ text: "Luiz withdrew comment #2", marks: gone });
+    expect([sent.status, sent.body["to"], sent.body["marks"], sent.body["delivered"]]).toEqual([201, ["p"], gone, [{ fleet: "p", id: 1 }]]);
+    expect(fields(readChat(root)[0], "marks")).toEqual([{ ...gone, at: { hash: "#decision/d30" } }]);
+  });
+
+  test("one batch per recipient: each lands with its one fleet, delivered as the user's to its host", async () => {
+    writeState(join(base, "infra", "coordinator"), [], { project: "infra" });
+    const owner = await toManager({ text: "3 marks, 1 for @infra", marks: { ...marks("#decision/p/d30"), to: "p" } });
+    const cited = await toManager({ text: "1 mark for @infra", marks: { ...marks("#decision/p/d30"), to: "infra" } });
+    expect([owner.status, owner.body["to"], owner.body["delivered"]]).toEqual([201, ["p"], [{ fleet: "p", id: 1 }]]);
+    expect([cited.status, cited.body["to"], cited.body["delivered"]]).toEqual([201, ["infra"], [{ fleet: "infra", id: 1 }]]);
+    expect(fields(readChat(root)[0], "to", "marks")).toEqual([["coordinator"], { ...marks("#decision/d30"), to: "coordinator" }]);
+    const there = readChat(join(base, "infra", "coordinator"));
+    expect([there.length, asObject(there[0]?.stored["marks"])?.["to"], asObject(asObject(there[0]?.stored["marks"])?.["at"])?.["hash"]]).toEqual([1, "coordinator", "#decision/p/d30"]);
+    const neither = await toManager({ text: "1 mark", marks: { ...marks("#decision/p/d30"), to: "infra" } });
+    expect([neither.status, neither.body["error"]]).toEqual([400, "a batch goes to the decision's owner (p) or to an agent its text cites, and infra is neither"]);
+  });
+
+  test("a mark on a fleet decision's own text keeps its field through the post and the delivery", async () => {
+    const field = { ...marks("#decision/p/d30"), items: [{ n: 1, kind: "question", quote: { text: "7 days", prefix: "", suffix: "", hint: "option B's consequence", field: "option:B:consequence", blocks: [{ exact: "7 days", prefix: "", suffix: "" }] }, comment: "why seven?" }] };
+    const sent = await toManager({ text: "1 mark on D30", marks: field });
+    expect([sent.status, sent.body["marks"], sent.body["delivered"]]).toEqual([201, field, [{ fleet: "p", id: 1 }]]);
+    expect(fields(readChat(root)[0], "marks")).toEqual([{ ...field, at: { hash: "#decision/d30" } }]);
+  });
+
+  test("a batch on the manager's own decision goes to the manager and the fleets it cites, and a malformed one is refused with its reason", async () => {
     const own = await toManager({ text: "1 mark", marks: marks("#decision/d30") });
     expect([own.status, own.body["to"], own.body["delivered"]]).toEqual([201, ["manager"], undefined]);
+    const cited = await toManager({ text: "1 mark, @p too", marks: marks("#decision/d30") });
+    expect([cited.status, cited.body["to"], cited.body["delivered"]]).toEqual([201, ["manager", "p"], [{ fleet: "p", id: 1 }]]);
     const onFleet = await post({ text: "2 marks", marks: marks("#decision/d30") });
     expect([onFleet.status, onFleet.body["to"]]).toEqual([201, ["coordinator"]]);
 
@@ -1386,7 +1525,27 @@ describe("the user's word to a coordinator on the manager's page", () => {
       }
     }
 
-    expect(readChat(manager).length).toBe(1);
+    expect(readChat(manager).length).toBe(2);
+  });
+
+  test("a ride-along batch on the manager's page is placed on the answered decision itself, not on a fleet's", async () => {
+    writeState(manager, [{ id: "a9", name: "scout" }], { role: "manager", project: "all", decisions: [{ id: "d30", kind: "decision", title: "Cache policy", question: "q", status: "open", resolution: null, opened: "2026-01-01T00:00:00+00:00" }] });
+    const elsewhere = await toManager({ text: "B", decision: "d30", batch: { text: "2 marks", marks: marks("#decision/p/d30") } });
+    expect([elsewhere.status, elsewhere.body["error"]]).toEqual([400, "the batch's place #decision/p/d30 is not the answered decision's own, #decision/d30"]);
+    expect([readChat(manager), readChat(root)]).toEqual([[], []]);
+    const own = await toManager({ text: "B", decision: "d30", batch: { text: "2 marks", marks: marks("#decision/d30") } });
+    expect([own.status, asObject(own.body["batch"])?.["to"]]).toEqual([201, ["manager"]]);
+  });
+
+  test("a ride-along batch on the manager's own decision is delivered to the fleets it cites only once the answer is taken", async () => {
+    writeState(manager, [{ id: "a9", name: "scout" }], { role: "manager", project: "all", decisions: [{ id: "d30", kind: "decision", title: "Cache policy", question: "q", status: "open", resolution: null, opened: "2026-01-01T00:00:00+00:00" }] });
+    const batch = { text: "2 marks, @p too", marks: marks("#decision/d30") };
+    const refused = await toManager({ text: "B", decision: "d30", side: 99, batch });
+    expect([refused.status, refused.body["batch"]]).toEqual([400, undefined]);
+    expect([readChat(manager), readChat(root)]).toEqual([[], []]);
+    const taken = await toManager({ text: "B", decision: "d30", batch });
+    expect([taken.status, taken.body["to"], asObject(taken.body["batch"])?.["to"], asObject(taken.body["batch"])?.["delivered"]]).toEqual([201, ["manager"], ["manager", "p"], [{ fleet: "p", id: 1 }]]);
+    expect(readChat(root).map((m) => m.text)).toEqual(["2 marks, @p too"]);
   });
 
   test("a reply to a mirrored answer goes to the coordinator as a reply to its own message", async () => {
@@ -1575,6 +1734,13 @@ describe("a permission's answer grants the call once", () => {
     expect(readFileSync(join(root, "grants.jsonl"), "utf8")).toBe(`${JSON.stringify(grant)}\n`);
     expect(readChat(root).map((m) => m.stored["decision"])).toEqual(["p-1a2b3c4d"]);
     expect(readdirSync(join(session, ".claude"))).toEqual(["settings.local.json"]);
+  });
+
+  test("an answer whose ride-along batch is refused grants nothing", async () => {
+    await start();
+    const bad = await post({ ...allow, batch: { text: "1 mark", marks: { decision: { id: "p-1a2b3c4d", title: "t", revision: "r" }, at: { hash: "#decision/p-1a2b3c4d" }, items: [] } } });
+    expect(bad.status).toBe(400);
+    expect([grants(), existsSync(settings), readChat(root)]).toEqual([[], false, []]);
   });
 
   test("an Agent call's grant goes to the hook's grants file, live, and the settings stay untouched", async () => {

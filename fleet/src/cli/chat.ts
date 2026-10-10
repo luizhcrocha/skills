@@ -25,7 +25,7 @@ export const CHAT_COMMANDS: readonly CommandSpec[] = [
   {
     name: "say",
     positionals: [{ dest: "text" }],
-    options: [AS, opt.value("--re", { int: true }), opt.value("--decision", { metavar: "D" }), opt.append("--mark", { metavar: "N[,N...]" })],
+    options: [AS, opt.value("--re", { int: true }), opt.value("--decision", { metavar: "D" }), opt.append("--mark", { metavar: "N[,N...]" }), opt.value("--no-change", { metavar: "WHY" })],
     optionsFirst: true,
   },
   { name: "inbox", positionals: [], options: [AS] },
@@ -53,9 +53,10 @@ const HELP = `usage: ${PROG} DIR {say,inbox,wait,watch,log} ...
 
 The chat between the user (on the dashboard) and the fleet, stored in DIR/chat.jsonl.
 
-    say   --as WHO [--re N] [--decision D] [--mark N[,N...]] TEXT
+    say   --as WHO [--re N] [--decision D] [--mark N[,N...] [--no-change WHY]] TEXT
                                                   append a message from WHO; print the line written;
-                                                  --mark answers those marks of the batch --re names
+                                                  --mark answers those marks of the batch --re names,
+                                                  --no-change says why they leave the decision as it is
     inbox --as WHO                                the messages open for WHO, oldest first
     watch --as WHO [--after N | --resume] [--all] [--once] [--settle SECONDS] [--fleets [--batch SECONDS]]
                                                   what is open for WHO, then each new message as it lands;
@@ -151,6 +152,9 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<vo
       if (decision !== undefined) draft.decision = decision;
 
       if (mark !== undefined) draft.mark = mark;
+      const keep = args.str("no_change");
+
+      if (keep !== undefined) draft.keep = keep;
       const sent = append(machine, root, draft, stampOf(machine.now()));
 
       if (sent instanceof ChatError) return yield* Effect.fail(sent);

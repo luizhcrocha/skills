@@ -29,7 +29,7 @@ import { closeSync, constants, fstatSync, openSync, statSync } from "node:fs";
 import { join, normalize, relative, sep } from "node:path";
 
 import type { Building } from "../building.ts";
-import { address, append, hostOf, marksAlone, marksOf, type Draft } from "../chat/chat.ts";
+import { address, appendAll, hostOf, marksAlone, marksOf, ownerOfBatch, prepare, stateOfDir, storeRefusal, type Draft, type Prepared } from "../chat/chat.ts";
 import { Courier, deliveries } from "../chat/relay.ts";
 import { readChat, Tail } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
@@ -1039,6 +1039,54 @@ export class Hub {
 
       if (side instanceof ChatError) return jsonResponse(400, { error: side.reason });
 
+      // On the manager's page, a message to live coordinators goes into their own chats too (an answer to
+      // one of the manager's decisions stays the manager's).
+      const delivering = (sent: string, re: number | null): Draft["alongside"] =>
+        hostOf(root) !== "manager"
+          ? undefined
+          : (stored, known) => {
+              const delivered = deliveries(machine, root, known, (asArray(stored["to"]) ?? []).flatMap((t) => asString(t) ?? []), {
+                id: asNumber(stored["id"]) ?? 0,
+                at: asString(stored["at"]) ?? "",
+                text: sent,
+                re,
+                side: stored["side"],
+                author: asString(stored["author"]),
+                quote: stored["quote"],
+                marks: stored["marks"],
+                origin: asString(stored["origin"]),
+              });
+
+              return delivered.length === 0 ? undefined : { delivered: delivered.map((d) => ({ fleet: d.fleet, id: d.id })) };
+            };
+
+      // The decision's pending marks ride along with its answer: checked before anything is granted or stored.
+      const riding = rideAlong(machine, root, body["batch"], decision, viewer, origin, delivering);
+
+      if (riding instanceof ChatError) return jsonResponse(400, { error: riding.reason });
+      const draft: Building<Draft> = { sender: "user", text, re, allowUser: true };
+
+      if (viewer.login !== undefined) draft.author = viewer.login;
+
+      if (decision !== undefined) draft.decision = decision;
+
+      if (quote !== undefined) draft.quote = quote;
+
+      if (marks !== undefined) draft.marks = marks;
+
+      if (side !== undefined) draft.side = side;
+
+      if (origin !== undefined) draft.origin = origin;
+      const alongside = decision === undefined ? delivering(text, re) : undefined;
+
+      if (alongside !== undefined) draft.alongside = alongside;
+      const prepared = prepare(machine, root, draft);
+
+      if (prepared instanceof ChatError) return jsonResponse(400, { error: prepared.reason });
+      const writing = riding === undefined ? [prepared] : [riding, prepared];
+      const refused = storeRefusal(root, writing, stampOf(machine.now()));
+
+      if (refused !== undefined) return jsonResponse(400, { error: refused.reason });
       let granted: GrantAnswer = { granted: undefined };
 
       if (decision !== undefined) {
@@ -1053,47 +1101,18 @@ export class Hub {
         if ("refused" in granted) return jsonResponse(409, { error: granted.refused });
       }
 
-      const draft: Building<Draft> = { sender: "user", text, re, allowUser: true };
+      // The batch first, then the answer, in one write: one wake of the fleet's watch reads both.
+      const written = appendAll(root, writing, stampOf(machine.now()));
 
-      if (viewer.login !== undefined) draft.author = viewer.login;
+      if (written instanceof ChatError) return jsonResponse(400, { error: written.reason });
+      const message = written.at(-1);
 
-      if (decision !== undefined) draft.decision = decision;
-
-      if (quote !== undefined) draft.quote = quote;
-
-      if (marks !== undefined) draft.marks = marks;
-
-      if (side !== undefined) draft.side = side;
-
-      if (origin !== undefined) draft.origin = origin;
-
-      // On the manager's page, a message to live coordinators goes into their own chats too (an answer to
-      // one of the manager's decisions stays the manager's).
-      if (decision === undefined && hostOf(root) === "manager") {
-        draft.alongside = (stored, known) => {
-          const delivered = deliveries(machine, root, known, (asArray(stored["to"]) ?? []).flatMap((t) => asString(t) ?? []), {
-            id: asNumber(stored["id"]) ?? 0,
-            at: asString(stored["at"]) ?? "",
-            text,
-            re,
-            side: stored["side"],
-            author: asString(stored["author"]),
-            quote: stored["quote"],
-            marks: stored["marks"],
-            origin: asString(stored["origin"]),
-          });
-
-          return delivered.length === 0 ? undefined : { delivered: delivered.map((d) => ({ fleet: d.fleet, id: d.id })) };
-        };
-      }
-
-      const message = append(machine, root, draft, stampOf(machine.now()));
-
-      if (message instanceof ChatError) return jsonResponse(400, { error: message.reason });
+      if (message === undefined) return jsonResponse(500, { error: "could not store the message: nothing was written" });
+      const batch = riding === undefined ? {} : { batch: written[0]?.stored ?? null };
 
       const note = "granted" in granted ? granted.granted : undefined;
 
-      return jsonResponse(201, note === undefined ? message.stored : { ...message.stored, grant: note });
+      return jsonResponse(201, note === undefined ? { ...message.stored, ...batch } : { ...message.stored, grant: note, ...batch });
     } catch (cause: unknown) {
       return jsonResponse(500, { error: `could not store the message: ${strerror(cause)}` });
     }
@@ -1178,4 +1197,72 @@ function sideOf(value: Json | undefined): number | "new" | undefined | ChatError
   const n = asNumber(value);
 
   return n !== undefined && Number.isInteger(n) ? n : new ChatError({ reason: `no side chat #${asString(value) ?? dumps(value)}` });
+}
+
+/**
+ * The batch an answer to `decision` carries (`batch: {text, marks, side?}`), checked and addressed as the user's batch
+ * post would be, its marks on that same decision: undefined when there is none, refused when it is anything
+ * else or rides with no answer.
+ */
+function rideAlong(
+  machine: Machine,
+  root: string,
+  given: Json | undefined,
+  decision: string | undefined,
+  viewer: Viewer,
+  origin: string | undefined,
+  delivering: (text: string, re: number | null) => Draft["alongside"],
+): Prepared | undefined | ChatError {
+  if (given === undefined || given === null) return undefined;
+
+  if (decision === undefined) return new ChatError({ reason: "a batch rides along with an answer to its decision only" });
+  const batch = asObject(given);
+  const text = asString(batch?.["text"]);
+  const marks = marksOf(batch?.["marks"]);
+
+  if (batch === undefined || text === undefined || batch["marks"] === undefined || batch["marks"] === null) return new ChatError({ reason: "batch is {text, marks}: the decision's pending marks" });
+
+  if (marks instanceof ChatError) return marks;
+  const on = asString(asObject(marks?.["decision"])?.["id"]);
+
+  if (on === undefined || !decisionNamed(root, decision, on)) return new ChatError({ reason: `the batch's marks are on decision ${on ?? "?"}, not on ${decision}, the one answered` });
+  // The answered decision is this page's own, so the batch's place is its own address, never another fleet's.
+  const own = "#decision/" + on.split("/").map(encodeURIComponent).join("/");
+  const placed = asString(asObject(marks?.["at"])?.["hash"]);
+
+  if (placed !== own) return new ChatError({ reason: `the batch's place ${placed ?? "?"} is not the answered decision's own, ${own}` });
+  const side = sideOf(batch["side"]);
+
+  if (side instanceof ChatError) return side;
+  const draft: Building<Draft> = { sender: "user", text, re: null, allowUser: true };
+
+  if (marks !== undefined) draft.marks = marks;
+
+  if (side !== undefined) draft.side = side;
+
+  if (viewer.login !== undefined) draft.author = viewer.login;
+
+  if (origin !== undefined) draft.origin = origin;
+  const alongside = delivering(text, null);
+
+  if (alongside !== undefined) draft.alongside = alongside;
+  const prepared = prepare(machine, root, draft);
+  const owner = ownerOfBatch(machine, root, marks);
+
+  if (!(prepared instanceof ChatError) && marks?.["to"] !== undefined && prepared.resolved.to[0] !== owner) {
+    return new ChatError({ reason: `the batch that rides along with an answer is the decision owner's (${owner})` });
+  }
+
+  return prepared;
+}
+
+/** Whether `given` (an id or a ref, as an answer names its decision) names the decision whose id is `id`. */
+function decisionNamed(root: string, given: string, id: string): boolean {
+  if (given === id) return true;
+
+  return (asArray(stateOfDir(root)["decisions"]) ?? []).some((row) => {
+    const d = asObject(row);
+
+    return d?.["id"] === id && asString(d["ref"]) === given;
+  });
 }

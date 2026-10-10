@@ -743,7 +743,8 @@ next append starts on a new line. Bytes that aren't UTF-8 are read with replacem
 A message: `{id, at, from, to[], text, re (int|null), parts[]}` plus `author` (the user's tailnet
 login, set only by the server), `decision`, `quote {text ≤2000, from ≤200, at?}`, `marks` (a batch of
 marks on a decision's body, TypeScript only: [Marks on a decision](#marks-on-a-decision-typescript-only)),
-`mark [N, ...]` (on an answer, the marks of the batch `re` names that it answers, TypeScript only), `side`
+`mark [N, ...]` (on an answer, the marks of the batch `re` names that it answers, TypeScript only), `keep`
+(on such an answer, why those marks leave the decision as it is, TypeScript only), `side`
 (the id of the message that opened a side chat), and, written by the hub only (its Delivery, in [The hub](#the-hub-fleet-hub)),
 `delivered [{fleet, id}]` (on the manager's message: the coordinators that have it in their own chat, and
 its id there), `via {fleet, id}` (on that copy, `{fleet: "manager", id}`, and on a coordinator's answer
@@ -788,14 +789,14 @@ its id.
 
 | Command | Does | Output | Exit |
 | :-- | :-- | :-- | :-- |
-| `say --as WHO [--re N] [--decision D] [--mark N[,N...]] TEXT` | appends (`--mark`, TypeScript only: the answer's `mark`, [Marks on a decision](#marks-on-a-decision-typescript-only)) | the stored line; when WHO is the host, with no `--re`, while the user's messages to the host are open (not answered with `--re`, nor answers to a decision since closed), one stderr line `chat: open from the user: #93 14:42, #95 14:48( (and K earlier)) — add \`--re N\` if this answers one` (the last five); the message is sent all the same | 1 refused |
+| `say --as WHO [--re N] [--decision D] [--mark N[,N...] [--no-change WHY]] TEXT` | appends (`--mark` and `--no-change`, TypeScript only: the answer's `mark` and `keep`, [Marks on a decision](#marks-on-a-decision-typescript-only)) | the stored line; when WHO is the host, with no `--re`, while the user's messages to the host are open (not answered with `--re`, nor answers to a decision since closed), one stderr line `chat: open from the user: #93 14:42, #95 14:48( (and K earlier)) — add \`--re N\` if this answers one` (the last five); the message is sent all the same | 1 refused |
 | `inbox --as WHO` | the messages open for WHO (`user` allowed) | one line each, oldest first | 1 unknown WHO |
 | `log [--after N]` | every message with id > N | one line each | 0 |
 | `watch --as WHO [--after N \| --resume] [--all] [--once] [--settle SECONDS] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager; 1 stdout is /dev/null; 1 `--once` while another watch as WHO runs for DIR; 1 without `--once` when stdout is not a terminal |
 | `wait DECISION...` | waits for the user's answer to one of these open decisions | the answer's line, then `-> the user answered <ref>: record it first, ...`; for an action answered `Failed: ...`, `-> the user's step <ref> failed, and it is not done: fix it and re-present it, ...`, or --withdraw "why"; never --decide` | 1 unknown decision |
 
 A printed line: `#<id> <from>( (<name or author>)) -> <to, each with its name>( [<ref> <decision>])( [<n> mark(s) on <ref> <id>, revision <revision>])( [side chat #N])( [delivered to <fleet> #<id>, ...])( [via <fleet> #<id>])( [from <origin>])( (quoting <from>: "<quote>"))`
-`: <text>( [re #N(, mark N|, marks N, M, ...)])` (the marks parts TypeScript only). Line breaks print as ` ⏎ `, a tab as a space, and other control characters
+`: <text>( [re #N(, mark N|, marks N, M, ...)(, no change: <why>)])` (the marks parts TypeScript only). Line breaks print as ` ⏎ `, a tab as a space, and other control characters
 are dropped, so a message is always one line.
 
 `watch`: a `--once` watch holds its pid in `DIR/watch-WHO.pid` while it runs (removed at exit if still
@@ -838,7 +839,9 @@ chars>". Forward it (SendMessage a1).` (L1: workers read their inbox at checkpoi
 left this long is forwarded), and each grilling answered and waiting to be recorded: `! G6 (<title>):
 every question is answered and the grilling is still open. Record it now: \`fleet state <dir> decision
 G6 --decide "..." --resolution "grilling finished"\`, or withdraw it with its reason.` (once per round:
-the mark is its `revised`, else `opened`). Each told once (`watch-coordinator.told`).
+the mark is its `revised`, else `opened`). Each told once (`watch-coordinator.told`). Both a coordinator's
+watch and a manager's also remind of each batch of marks to the host still open, once per
+`FLEET_BATCH_REMIND_S` ([Marks on a decision](#marks-on-a-decision-typescript-only), Follow-through).
 
 **When a `--once` watch exits.** What was open when it started exits at once, and so do the `!` lines of
 its first look (both were due before it began). A new line (a message, or a `!` line of a later look)
@@ -905,8 +908,8 @@ marks as **one** chat message to the fleet that owns the decision. v1 covers dec
 fleet's page and on the manager's page; a grilling's context gets marks later (Python's chat.py has
 none: ADR 0003).
 
-**The batch** is a user message whose `text` is the readable Markdown the page built (what its Send
-preview shows) and whose `marks` is the same, structured:
+**The batch** is a user message whose `text` is the readable Markdown the page built and whose `marks`
+is the same, structured:
 
 ```
 marks: {
@@ -917,6 +920,16 @@ marks: {
 }
 ```
 
+- `on` (optional, on a `general` item only: `mark <n>.on is only for a general reply`): the earlier mark of
+  the decision whose thread this item replies in, a positive int; the user's replies in a comment thread or
+  the page thread wait for that agent's next batch as `general` items. The Delivery keeps it, and the
+  follow-through closes a `general` with `on` by any answer naming it, as a question.
+- `withdrawn` (optional): the marks of the decision the user withdrew since they were sent, distinct
+  positive ints, at most 100, riding with the next batch to that agent rather than waking it alone; a batch
+  may then have no `items` (never neither). It prints in the tag (`[2 marks, withdrew marks 5, 7 on D30 d30,
+  revision ...]`, `[withdrew mark 5 on D30 d30, revision ...]`), the Delivery keeps it, a `--mark` answer to a
+  withdrawn mark is still taken, and the follow-through closes a withdrawn mark in every earlier batch on that
+  decision the host received.
 - `n`: a positive int, unique in the batch; the page numbers a decision's marks 1, 2, … across the
   batches it sees, so `n` names one mark of the decision among them. The manager's page and the fleet's own
   page see different batches (the manager's page does not see one sent from the fleet's page), so two
@@ -938,46 +951,189 @@ marks: {
     anchored on its own; `cell: {table, row, rowLabel, column, head?}` for a table cell (`row` 1-based
     among the body rows, `head: true` for a header cell). Strings ≤ 2000 (`exact`), 64 (`prefix`,
     `suffix`), 200 (cell fields).
+  - `field` (optional): the decision's own text the quote is in, when it is not the body: the page
+    renders it, not the frame. One of `title`, `question`, `why`, `step` (a manual step or its command
+    block), `recommendation`, `option:<id>`, `option:<id>:consequence` (id 1 to 60 characters of
+    `[A-Za-z0-9_.-]`) or `history:<n>` (n an int); its blocks have no `cell`, and its `hint` names the
+    place in words (`the question`, `option B's consequence`). Any other value is refused (`mark <n>.quote.field
+    is title, question, ...`); the Delivery keeps it, and the printed line is as for any batch.
 
 A batch with any other shape is refused (`marks are {decision, at, items}: <what is wrong>`, a mark named
 `mark <n>`): `at.hash` is `#decision/<id>` or `#decision/<fleet>/<id>` for `decision.id` (encoded as the page
 encodes it); `decision.id` and `revision` are 1 to 200 characters, `title` a string; a quote's `prefix`, `suffix` and `hint`, a block's
 `prefix`, `suffix` and cell strings default to `""`; a cell's `row` is an int ≥ 0 and `head` is kept only
 when true. Other keys are dropped and a longer quote, hint, block or cell string is cut; a longer comment or
-replacement is refused. A batch is a message of its own: `marks` with a `decision`, `quote` or `side` is
-refused (`a batch of marks is a message of its own: no decision, quote or side chat with it`).
+replacement is refused. A batch is a message of its own: `marks` with a `decision` or `quote` is refused
+(`a batch of marks is a message of its own: no decision, quote or side chat with it`), and so is a `side`
+other than its decision's page thread: a side chat whose opener quotes the page as a whole (`quote.at` the
+batch's `marks.at.hash`, `anchor: "dv-page"`) or is a side-less batch on the same place. The first batch,
+with no page thread yet, goes side-less and opens it: later messages and batches name its id as `side`,
+the Delivery maps that `side` to its copy's id in the fleet's chat, and the Courier mirrors an answer's
+thread as for any side chat. A reply (`re`) to such an opener, from the moment it is stored, as to any message
+in a side chat, joins the thread (`side` = the opener's id) unless it names its own, and is owned as the
+thread is on the manager's page; so a `--mark` answer stays in the page thread.
 `fleet/src/chat/chat.ts`'s `marksOf` and `marksAlone` are the one check (the hub's 400, `append`).
 
-**Routing** reuses `address`. On a fleet's page the batch goes to the host, as any message of the user's.
-On the manager's page a batch that is in no side chat is owned as a side chat's first message is: by the
-fleet its `marks.at` names (`#decision/<fleet>/<id>`, `quotedFleet`) plus the fleets it cites. So
-`decision/<fleet>/<id>` goes to that fleet only, never the manager unless cited; a batch on the manager's
-own decision goes to the manager. The hub's Delivery copies `marks` into the fleet's chat with its `at`
-rewritten as a quote's is (`#decision/<id>`, the fleet's own page).
+**Routing** reuses `address`: a batch goes to the decision's owner plus whoever its text cites (the page
+writes each mark's @-cites into the batch's Markdown), and to no one else. On a fleet's page the owner is
+the host, so `1 mark, @a1 too` goes to `coordinator, a1` (any other message of the user's with a mention
+goes to the mentions only). On the manager's page the owner is the live fleet its `marks.at` names
+(`#decision/<fleet>/<id>`, `quotedFleet`), else the manager (its own decision, or a fleet no longer
+served): `decision/<fleet>/<id>` goes to that fleet only, never the manager unless cited. The hub's
+Delivery copies `marks` into the fleet's chat with its `at` rewritten as a quote's is (`#decision/<id>`,
+the fleet's own page). A comment reaches the owner plus the agents it cites, and the page sends one batch per
+recipient and decision (the owner's holds every comment; a cited agent's, the comments citing it), each
+naming its one agent in `marks.to` (a name as a mention resolves it, ≤ 200 characters). With `to` the batch
+goes to that agent alone (the text's mentions stay parts and add no one), refused unless it is the owner or
+cited in the text (`a batch goes to the decision's owner (<owner>) or to an agent its text cites, and <to> is
+neither`, `marks.to <to> names no one in this chat`). A batch to a cited agent goes side-less and opens no
+thread (`a batch to <to> goes in no side chat: the page thread is <owner>'s`); only the owner's batches join or
+open the page thread, and only the owner's rides along with an answer (`the batch that rides along with an
+answer is the decision owner's (<owner>)`). The Delivery writes `to` as `coordinator` in the fleet's copy.
+Without `to`, the batch goes to the owner plus whoever it cites. Each agent the page reaches wakes once.
+The decision page's main thread is a side chat like any other: its opener quotes the decision's title
+`at: {hash: <decision's place>, anchor: "dv-page"}`, so on the manager's page the decision's fleet owns
+it (`quotedFleet`), and on a fleet's page it goes to the host. `tests/recipients.json` pins both on a
+fleet's page (its batch cases are TypeScript's: `test_chat.py` skips a case with `marks`).
+
+**Ride-along.** The answer to a decision (`POST chat` with `decision`) may carry `batch: {text, marks}`,
+the decision's pending marks, `marks.decision.id` the answered decision (by id, or the id of the ref
+answered) and `marks.at.hash` its own address on this page (`#decision/<id>`; else `the batch's place <hash>
+is not the answered decision's own, #decision/<id>`). The hub checks it as a batch post (`marksOf`, `marksAlone`, `address`) before it grants or
+stores anything, and refuses with 400 and stores nothing (`batch is {text, marks}: ...`, `the batch's marks
+are on decision <id>, not on <decision>, the one answered`, `a batch rides along with an answer to its
+decision only`). Then it writes the batch and the answer in one write under the chat's lock, batch first
+(`appendAll`), so one wake of a `--once` watch prints both. What the store would refuse (a side chat it
+does not hold) is asked before the grant too (`storeRefusal`), and checked again under the lock: a refusal
+there stores neither message and delivers nothing (the Delivery runs only once both compose), so the 400
+never follows a stored batch and the page keeps its comments pending. The 201 is the answer as stored, plus `batch`:
+the batch as stored. The page's exit post (`fetch` with `keepalive`, same origin) passes `postRefusal`
+as any post does.
 
 **Answers.** The coordinator answers marks with `say --as coordinator --re <batch> --mark N[,N...] TEXT`:
 the message gains `mark: [N, ...]`. `--mark` needs `--re` to a message with `marks`, and each N must be
 one of its items (`--mark needs --re to a message with marks`, `mark N is not in message #<re>`). One
-answer may cover several marks (`--mark 1,3`, or `--mark` repeated). The Courier mirrors `mark` with the answer onto the manager's page.
-The page shows each answer under the mark it names; an answer with no `mark` shows under the batch.
+answer may cover several marks (`--mark 1,3`, or `--mark` repeated). `--no-change WHY` says why the marks
+it answers leave the decision as it is: stored as `keep` (trimmed; `--no-change needs --mark: the marks it
+leaves as they are`, `--no-change takes why, in 1 to 4000 characters`). The Courier mirrors `mark` and
+`keep` with the answer onto the manager's page. The page shows each answer under the mark it names (with
+`keep` as "No change: <why>"); an answer with no `mark` shows under the batch.
 
 **Printed lines.** A batch prints ` [N marks on <ref> <id>, revision <revision>]` (`1 mark` for one; the
 ref is the batch's, else the chat's own decision's by id, else left out) after the decision tag
 (`[3 marks on D30 d30, revision 2026-10-10T09:12:00Z]`), and its Markdown one-lined as any text, so one
-watch wake carries every mark. An answer ends ` [re #12, mark 2]` or ` [re #12, marks 1, 3]`.
+watch wake carries every mark. An answer ends ` [re #12, mark 2]` or ` [re #12, marks 1, 3]`, and
+` [re #12, mark 2, no change: <why>]` with `--no-change`.
 
-**The page.** Selecting words in the body offers Comment, Delete, Replace and Question beside Copy,
-Reply and Side chat (one bar). The frame paints each mark as a numbered `<mark>` inside the sandboxed
-frame (it is told the marks by postMessage). A block is found again after a revision by its `exact` at
+**Follow-through** (`fleet/src/chat/batches.ts`). A batch to the host stays open on the host's watch until
+every mark is closed. A `delete`, `replace`, `comment` or `general` mark asks for a change: it is closed
+when an answer (`re` the batch, from anyone but the user) names it in `mark`, and either the decision was
+revised since the batch (its `revised` later than the batch's `at`, or its `revised`, else `opened`, other
+than `marks.decision.revision`) or that answer has `keep`. A `question` is closed by any answer naming it.
+On a decision no longer open, or no longer in the ledger, it can no longer be revised, so any answer naming
+a mark closes it, whatever its kind.
+So "agreed, rewriting" with no revision stays open. The first `--re` answer still closes the batch as open
+(`inbox`, the page's unanswered). The coordinator's watch, and the manager's for its own chat, print one
+`!` line per open batch in each whole period of `FLEET_BATCH_REMIND_S` (1800) after the batch's `at`, none
+in the first, at most one per period (`batch:<id>` in `watch-WHO.told`, the period last told):
+`! batch #12 on D30 (<title>) is still open after 34 min: marks 2, 4 unanswered; mark 1 answered, but D30
+is not revised since. Close each mark: revise the decision (\`fleet state DIR decision D30 --body FILE --log
+"..."\`) and answer it (\`fleet chat DIR say --as <host> --re 12 --mark N "..."\`), or keep it as it is and
+say why (\`--re 12 --mark N --no-change "<why>" "..."\`). "Agreed, rewriting" without the revision leaves it
+open.` (either part left out when it names none). The ref and title are the ledger's, else the batch's.
+
+**The page.** Selecting words in the body offers one row of icons in two groups, each with its tooltip:
+Copy, Reply and Side chat, then Comment, Delete, Replace and Question (on a touch screen the bar docks at
+the bottom, never the top, with each icon's word under it, and the page scrolls the selection clear of
+it). There Reply quotes the words into the page's main thread and Side chat starts a side chat on them,
+both in the page's inbox; elsewhere on the page (a field's words too, below) they keep the chat's own
+Reply and Side chat, whose quote links back to the words. A kind opens the composer: the kind, the quoted words, the comment
+(@ and / as in the chat's composer), and a split button, Save (Cmd/Ctrl+Enter) with Send now
+(Cmd/Ctrl+Shift+Enter, this one alone, at once) behind its chevron. A saved comment is pending: a thread
+of the inbox, its pin in the body amber. The frame paints each mark as `<mark>`s inside the sandboxed
+frame (it is told the marks by postMessage), and its pin after its last word: a footnote number (an
+empty, zero-width `<span class="am-foot">` whose CSS `::after` is raised into the line gap over the end of
+the words), amber pending, grey sent, green answered, a dot when an answer is unread; it takes no room in
+the line (the text wraps as it did), adds no character to the body's text, and covers no glyph's ink. A tap on a mark or a pin (only Luiz's own) opens its thread. A block is found again after a revision by its `exact` at
 the place whose `prefix`/`suffix` match best, then by the same words with whitespace collapsed, scored
 the same way; it is found only when that place matches at least half of its context (up to 32
 characters each side) and no other place matches as well, so a phrase repeated elsewhere never takes a
 lost mark's place. A mark whose blocks are all found where they were is current, one found elsewhere (or
 only some blocks) is `moved`, one with none found is `outdated` and keeps its quote; a batch says so of
-each outdated mark (`_(no longer found on revision <revision>)_`). Unsent marks are drafts kept per
-viewer in the browser's localStorage (`fleet-marks:<fleet>:<decision id>`, `<fleet>` the fleet's ledger
-identity: the hub's id for it, else its `/f/<fleet>/`, else `project:<project>`; read and written in
-try/catch); Send clears them.
+each outdated mark (`_(no longer found on revision <revision>)_`).
+
+The rail (Marks.tsx), at the page's right edge under the masthead (on a phone, two round buttons at the
+bottom right, stepping aside for the bar, the composer and the inbox): the inbox button, with a dot for
+unread answers; and a paper plane that sends everything pending now, badged with the count of pending
+things, enabled only while something waits and ringed by the auto-send countdown. A tap on it sends; a
+press held 600 ms resets the countdown to the whole quiet period (the ring refilling while it is held, a
+pulse and a tap of the phone once done, none with reduced motion) and shows the card, and sends nothing; a
+press let go after 250 ms and before then does neither; Shift+click and the card's Reset timer reset too.
+Its hover card (the hold on a phone) is the only send status: what waits, how many comments to each agent
+("4 to perf, 2 to skills"), when it goes by itself, and the last send with its reason; a send leaves at
+most a brief toast ("Sent: 4 to perf, 2 to skills (you left the page)."). The inbox (a full
+sheet on a phone, filling the visual viewport above the keyboard, the page behind locked and out of sight; Esc closes it) lists the page's main thread first (a side chat per decision page, held
+with the decision's owner, named in words: its opener is a message of Luiz's quoting the decision's title
+at `{hash, anchor: "dv-page"}`, found by that place; empty with a hint before any message), then a thread
+per mark and per side chat on the decision's words, newest activity first, each with its quoted words,
+kind, status (pending, sent, answered) and last line. A thread shows the fleet's answers to its mark (an
+answer `keep`ing it says "No change: <why>"), Luiz's replies (`re` the thread's newest message, starting
+`Mark #<n>: `, or batched as below) and the fleet's answers to them. Every message batches: each thread's
+box takes Enter (Shift+Enter a new line, an open @ or / list takes Enter first) and adds the words to the
+wait (round amber arrow; in a pending comment's thread, to its comment), and its outlined plane
+(Cmd/Ctrl+Shift+Enter) sends that thread now, its waiting words as they are when the box is empty; one
+hint everywhere. A reply waiting in a sent comment's thread makes it pending again (amber), counts in the
+badge and restarts the timer. Only a pending comment can be edited. "Hide answered" (in the inbox's head and the card; per viewer, the 1.9.33
+`marks-answered` keep/clear choice, default show) takes answered marks' highlights and pins off the page
+and folds the done threads (answered marks, a batch's loose answers, side chats where nothing waits and
+the fleet spoke last) into "Answered (N)" at the inbox's end. The chat shows a batch as a card built from
+its structured `marks` ("N comments on <ref>", then each comment's number, kind, words, comment and new
+words, every string one line), never its Markdown; a tap opens the decision's inbox on that comment. A
+side chat a batch opened is titled by it, about its decision. A comment's trash (its thread's head; a field pin's long-press, context menu or
+Delete key) deletes a pending one outright, or withdraws a sent one: its highlight and pin leave the page,
+its thread goes apart as history marked withdrawn, and the withdrawal waits like a comment (badge, timer)
+to ride the owner's next batch as `marks.withdrawn: [n]` with a line "Luiz withdrew comment #n." (a batch of
+no items when nothing else waits). No confirmation: a toast offers Undo for 5 s. The body frame's pins take
+no delete (what the frame tells is a claim): its thread's trash does.
+
+**Words the dashboard draws** (fields.ts, FieldMarks.tsx) take comments too, a body or none: the
+decision's title, question, why, each option and its consequence, a manual step, the recommendation and
+each line of its history. Each is an element of the page's own DOM naming its field (`data-field`:
+`title`, `question`, `why`, `option:<id>`, `option:<id>:consequence`, `step`, `recommendation`,
+`history:<n>`), so a selection inside one field is Luiz's own and is read from the page directly: its
+block is `exact` with up to 32 characters of the field's text each side, the quote carries `field` and a
+hint in words ("the question", "option B's consequence", "manual step"), and the bar offers all seven
+actions. Such a mark is found again by its field and context; its words are highlighted in place with the
+CSS Custom Highlight API (the page's DOM is left as Solid drew it) and its pin is a footnote number in a
+layer over the page, raised over the end of its words and kept inside its field, taking no room. On the manager's page the fleet's page framed there tells the manager of such a selection
+(`select.field`, checked against the grammar), and the manager tells it the field marks to paint
+(`{annotFields, marks}`, rebuilt from their own fields) and hears a tap on their pins (`fieldTap`, only
+with Luiz's own activation); the mark goes, as any, to that fleet.
+
+**When pending things go** (autosend.ts): on whichever comes first of leaving the page (`pagehide`,
+`visibilitychange` to hidden, the dashboard's own move to another decision or view), answering the
+decision, or the quiet period (QUIET_MS, 3 minutes) after the last save or edit, which a new or edited
+comment restarts and editing one holds. Send now (the plane, or Cmd/Ctrl+Shift+Enter anywhere on the page
+outside a box and the frame) bypasses the wait. A send makes one batch per agent it reaches (`marks.to`):
+the decision's owner's (the page's host, or the fleet on the manager's page) with every pending mark, in
+the page's main thread (`side`) once it has one (a side-less owner's batch opens it), then each @-cited
+agent's with the marks citing it, side-less; items keep their numbers, in page order. A line waiting in
+the page's thread is a `general` item of the owner's batch; a reply in comment n's thread a `general` item
+`on: n`, in the batch of each agent comment n reached, the batch's Markdown grouping replies by thread
+under `On #n` with the comment's words once (one line, at most 120 characters). A side chat's words keep
+their own post, after the batches. A message Luiz sends in the main chat while a decision is shown first
+sends what waits on it, in the same flush. A thread's own Send now sends that comment as one batch
+per agent it reaches. The main thread is the first message that opens a side chat quoting the decision
+at `dv-page`, or a side-less batch on the decision; its batches show in it as cards. Answering the
+decision on its own page carries the owner's batch along as the answer's `batch` (with its `side`),
+stored before the answer in one write; the cited agents' batches and the conversations' messages follow. A page leaving posts them with `fetch(..., {keepalive: true})`
+while they total 60 KB or less, the rest as plain fetches. A send clears what it carried only once it is
+stored (or a keepalive post is handed to the browser); one that fails keeps everything and tries again
+after another quiet period. What waits is kept per viewer in the browser's localStorage under the 1.9.33
+drafts key (`fleet-marks:<fleet>:<decision id>`, `<fleet>` the fleet's ledger identity: the hub's id for
+it, else its `/f/<fleet>/`, else `project:<project>`; `{items, msgs}`, 1.9.33's list of drafts read as
+pending marks; read and written in try/catch). On the manager's page a fleet's decision it no longer lists
+(decided) is read from the fleet's own `state.json`, so its comments work there too.
 
 **The frame is untrusted.** The body is agent-written HTML, and its own scripts run in the frame beside
 the marks' script and can post the same messages. So the frame only reports a selection (its blocks:
@@ -987,15 +1143,14 @@ manager's page, the body fetched from the fleet's page) with DOMParser and confi
 when each block occurs there with that exact context; the quote, its cells and where it was are read
 from that parse, and a selection that does not confirm is refused ("Could not confirm this selection").
 Where each mark is now is found in that same text. A tap acts only with focus in the frame and the
-user's activation. Escape pressed in the frame closes the selection bar only; Cmd/Ctrl+Enter there does
-nothing. On this page Cmd/Ctrl+Enter acts on what focus is in: it sends only with focus in the preview
-(which takes focus when it opens), saves only in the composer, and opens the preview from the marks'
-list or with nothing focused. On the manager's page the fleet's page relays each marks' message
+user's activation. Escape pressed in the frame closes the selection bar only; Cmd/Ctrl(+Shift)+Enter there
+does nothing, and nothing the frame posts saves, sends, restarts or pauses the auto-send. On this page
+Cmd/Ctrl+Enter acts on what focus is in: it saves in the composer and in a thread's box; with Shift it
+sends that one now, and outside every field it sends everything pending. On the manager's page the fleet's page relays each marks' message
 rebuilt from its own fields, nothing else of it. Every frame-supplied string (a quote's words, a hint,
 a table's name, a column, a row's label) is one line in the batch: whitespace runs one space, control,
 format and bidi characters dropped, capped, and Markdown-escaped where the text interpolates it. Sent marks are read back from the chat: the page's batches for the decision, and the answers
-(`re` the batch, `mark` naming n). Answered marks show dimmed (keep) or folded into a History (clear),
-a per-viewer choice.
+(`re` the batch, `mark` naming n); an answered mark's highlight fades and its pin turns green.
 
 **Only words the user can see.** With the body's scripts held off (below), the marks' script runs alone
 in the frame and reads the browser's own layout (markframe.ts). When it reports a selection it checks

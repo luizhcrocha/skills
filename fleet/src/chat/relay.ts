@@ -8,14 +8,14 @@
  *   numbering, the quote's and the batch's place (`at`) as the fleet's page can follow it (`placeIn`).
  * - `Courier`: each answer of a coordinator in its own chat to a delivered message (`re` its id) is
  *   mirrored onto the manager's page from `<fleet>`, as the answer to the original, with
- *   `via: {fleet, id}` and the marks it answers (`mark`). The mirror is checked against the manager's chat under its lock, so it is written
+ *   `via: {fleet, id}`, the marks it answers (`mark`) and why it leaves them as they are (`keep`). The mirror is checked against the manager's chat under its lock, so it is written
  *   once however often the courier reads.
  */
 import { resolvePath } from "../files.ts";
 import { asArray, asNumber, asObject, asString, truthy, type Json, type JsonObject } from "../json.ts";
 import type { Entry } from "../registry.ts";
 import type { Machine } from "../world.ts";
-import { fromManager } from "./chat.ts";
+import { fromManager, sideChatIn, threadOf } from "./chat.ts";
 import { appendLocked, readChat, Tail, type Message } from "./store.ts";
 
 /** One copy of a message in a coordinator's chat: the fleet and the copy's id there. */
@@ -50,6 +50,7 @@ interface Copy {
   quote?: Json;
   marks?: Json;
   mark?: Json;
+  keep?: Json;
   side?: Json;
   origin?: string;
   via?: { fleet: string; id: number };
@@ -87,16 +88,19 @@ function copyIn(entry: Entry, m: Message): number | undefined {
   return names(entry, via?.["fleet"]) ? asNumber(via?.["id"]) : undefined;
 }
 
-/** The side chat in `entry`'s chat that the manager's side chat `side` continues, or "new" for one there. */
+/** The side chat in `entry`'s chat that the manager's side chat `side` continues, or "new" for one there. A
+ * thread whose opener carries no `side` (a batch, the decision page's thread) continues at its copy's id. */
 function sideIn(entry: Entry, known: readonly Message[], side: number): number | "new" {
   const theirs = readChat(entry.dir);
 
   for (const m of known) {
-    if (m.side !== side) continue;
+    if (m.side !== side && m.id !== side) continue;
     const copy = copyIn(entry, m);
     const there = copy === undefined ? undefined : theirs.find((t) => t.id === copy);
 
     if (there !== undefined && truthy(there.side)) return asNumber(there.side) ?? "new";
+
+    if (there !== undefined && m.id === side && sideChatIn(theirs, there.id)) return there.id;
   }
 
   return "new";
@@ -144,8 +148,8 @@ function deliverTo(entry: Entry, known: readonly Message[], message: Delivered, 
     let own: Json | undefined;
 
     if (side === "new") own = nextId;
-    else if (side !== undefined) own = theirs.some((m) => m.side === side) ? side : nextId;
-    else if (answered !== undefined && truthy(answered.side)) own = answered.side;
+    else if (side !== undefined) own = sideChatIn(theirs, side) ? side : nextId;
+    else if (answered !== undefined) own = threadOf(answered);
 
     const copy: Copy = {
       id: nextId,
@@ -162,9 +166,12 @@ function deliverTo(entry: Entry, known: readonly Message[], message: Delivered, 
     const quote = placeIn(entry, message.quote, managerPage);
 
     if (quote !== undefined) copy.quote = quote;
-    const marks = placeIn(entry, message.marks, managerPage);
+    const placed = placeIn(entry, message.marks, managerPage);
+    const marks = asObject(placed);
 
-    if (marks !== undefined) copy.marks = marks;
+    // A batch for one fleet is for its host there.
+    if (marks !== undefined) copy.marks = marks["to"] === undefined ? marks : { ...marks, to: "coordinator" };
+    else if (placed !== undefined) copy.marks = placed;
 
     if (own !== undefined) copy.side = own;
 
@@ -276,7 +283,11 @@ function mirror(managerRoot: string, entry: Entry, answer: Message, original: nu
 
     if (answer.stored["mark"] !== undefined) copy.mark = answer.stored["mark"];
 
-    if (truthy(parent.side)) copy.side = parent.side ?? null;
+    if (answer.stored["keep"] !== undefined) copy.keep = answer.stored["keep"];
+
+    const thread = threadOf(parent);
+
+    if (thread !== undefined) copy.side = thread;
     copy.via = { fleet: entry.id, id: answer.id };
 
     return { ...copy };

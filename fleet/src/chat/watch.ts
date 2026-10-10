@@ -40,6 +40,7 @@ import {
   stateOfDir,
   waitsHere,
 } from "./chat.ts";
+import { BATCH_REMIND_S, batchReminders } from "./batches.ts";
 import { FleetNews } from "./news.ts";
 import { unreadLine } from "../news/news.ts";
 import { isWatch } from "./watchers.ts";
@@ -242,7 +243,7 @@ function unanswered(machine: Machine, entry: { readonly id: string; readonly dir
 
 /** For a manager's watch: the fleets that do not read their chat while the user waits, or leave the user's
  * messages unanswered, the answers they have not recorded, their silent workers; each told once (kept in the
- * manager's DIR). */
+ * manager's DIR); and the manager's own batches of marks still open, once per FLEET_BATCH_REMIND_S. */
 export function fleetsUnheard(machine: Machine, me: string): string[] {
   const toldPath = join(me, "watch-manager.told");
   const told = readTold(toldPath);
@@ -280,6 +281,8 @@ export function fleetsUnheard(machine: Machine, me: string): string[] {
         `(${e.session ?? e.id}) to arm its watch as a background command, \`fleet chat ${e.dir} watch --as coordinator --all --resume --once\`; \`fleet chat ${e.dir} log --after ${heard.seen}\` shows them.${gone}`,
     );
   }
+
+  lines.push(...batchReminders(machine, me, told, seconds(machine.env, "FLEET_BATCH_REMIND_S", BATCH_REMIND_S)));
 
   if (lines.length > 0) writeTold(toldPath, told);
 
@@ -361,8 +364,8 @@ function unexplainedPermissions(root: string, told: Map<string, Json>): string[]
 }
 
 /** For a coordinator's watch: its own silent workers, the messages its workers left unanswered for
- * FLEET_NUDGE_S (ten minutes), its grillings answered and not recorded, and its permissions not explained,
- * each told once across watches. */
+ * FLEET_NUDGE_S (ten minutes), its grillings answered and not recorded, its permissions not explained, each
+ * told once across watches, and its batches of marks still open, once per FLEET_BATCH_REMIND_S. */
 export function ownSilent(machine: Machine, root: string): string[] {
   const toldPath = join(root, "watch-coordinator.told");
   const told = readTold(toldPath);
@@ -372,6 +375,7 @@ export function ownSilent(machine: Machine, root: string): string[] {
     ...nudgeLines(machine, root, told, seconds(machine.env, "FLEET_NUDGE_S", NUDGE_S)),
     ...answeredGrillings(root, told),
     ...unexplainedPermissions(root, told),
+    ...batchReminders(machine, root, told, seconds(machine.env, "FLEET_BATCH_REMIND_S", BATCH_REMIND_S)),
   ];
 
   if (lines.length > 0) writeTold(toldPath, told);
