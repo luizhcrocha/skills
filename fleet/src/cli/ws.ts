@@ -8,6 +8,13 @@
  * - `add WORKER --reuse WORKSPACE|WORKER [-r BASE]`: hands a recorded workspace whose worker is no longer
  *   at work to the next worker of its lane, on a fresh change (on BASE when given, else on what the last
  *   holder left), and records who held it before. Its setup (dependencies, a dev shell, build caches) stays.
+ * - After either, the repo's own executable `<repo>/.fleet/ws-add WORKSPACE SOURCE` prepares the workspace
+ *   (SOURCE: the default workspace, or the workspace handed over); a devenv repo without one gets
+ *   `devenv-run --prepare`. At most `--hook-timeout` seconds (100, under a Bash tool call's 120 s), then its
+ *   process group gets SIGTERM, and SIGKILL 2 s later; a TERM, INT or HUP to `add` stops it the same way and
+ *   ends `add`. Its output is printed under a header and its exit recorded on the row (`hook`); a failure is
+ *   a warning, never a failure of `add`. A hook writes only ignored paths: `add` warns, naming them, when
+ *   the workspace's @ is no longer empty after it.
  * - In a fleet whose workers share one working copy (`fleet state DIR set --workspaces shared`), `add` makes
  *   nothing: it prints the shared working copy (the repo's default workspace) for the brief; and
  *   `split WORKER -m MESSAGE` integrates a finished worker by splitting its lane's files out of that working
@@ -21,6 +28,7 @@
  *   for a second, deliberate command.
  */
 import { rmSync } from "node:fs";
+import { constants as osConstants } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import * as Effect from "effect/Effect";
@@ -41,13 +49,14 @@ import { validate } from "../ledger/validate.ts";
 import { cliLookups } from "../page/lookups.ts";
 import { pageHtml, readTemplate, writePage } from "../page/render.ts";
 import { view } from "../page/view.ts";
+import { HOOK_PATH, HOOK_TIMEOUT_S, hookOutcome, hookRecord, planHook, runHook, type HookCall, type HookRun } from "../ws/hook.ts";
 import { changes, jj, literal, unintegratedRevset, why, workspaceNames, workspaceRoot, type Change } from "../ws/jj.ts";
 import { readObject } from "../registry.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 
 const USAGE =
-  "usage: fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] | add WORKER --reuse WORKSPACE|WORKER [-r BASE] | " +
+  "usage: fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] [--hook-timeout S] | add WORKER --reuse WORKSPACE|WORKER [-r BASE] [--hook-timeout S] | " +
   "split WORKER -m MESSAGE [--repo PATH] | list | prune [--apply | --dry-run]";
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
@@ -113,7 +122,7 @@ function shared(raw: JsonObject): boolean {
 }
 
 /** The flags that take a value: one given last, with no value, is a usage error. */
-const VALUED = new Set(["-r", "--revision", "--agent", "--repo", "--reuse", "-m", "--message"]);
+const VALUED = new Set(["-r", "--revision", "--agent", "--repo", "--reuse", "-m", "--message", "--hook-timeout"]);
 
 /** The ledger in DIR as JSON, checked as every command checks it. */
 export function load(root: string): JsonObject | Refusal {
@@ -157,6 +166,92 @@ function described(c: Change): string {
 
 // -- add ----------------------------------------------------------------------------------------
 
+/** A workspace `add` has just made or handed over, for its hook. */
+interface Made {
+  readonly id: string;
+  readonly worker: string;
+  /** The root of the repo's default workspace, where its hook lives. */
+  readonly repo: string;
+  readonly workspace: string;
+  /** What it was made from: the default workspace, or the workspace handed over. */
+  readonly source: string;
+}
+
+/** Run the workspace's hook (the repo's own `.fleet/ws-add`, else `devenv-run --prepare` in a devenv
+ * repo), print its output under a header, and record on the workspace's row that it ran and how it
+ * ended. A hook that fails or times out is a warning: the workspace is made. The ledger is read again
+ * after the hook, since other commands may have written it while the hook ran. The exit code `ws add`
+ * ends with when a TERM, INT or HUP stopped it during the hook (128 + the signal's number), else
+ * undefined. */
+function prepare(machine: Machine, out: Out["Service"], root: string, made: Made, timeout: number): Effect.Effect<number | undefined> {
+  const plan = planHook(made.repo, made.workspace, made.source, machine.env("PATH") ?? "");
+
+  if (plan === undefined) return Effect.succeed(undefined);
+
+  if ("note" in plan) {
+    out.err(`${plan.note}\n`);
+
+    return Effect.succeed(undefined);
+  }
+
+  const { call } = plan;
+  out.out(`--- ${call.line} (at most ${String(timeout)} s) ---\n`);
+
+  return Effect.promise(() => runHook(call, timeout, { ...process.env, PATH: machine.env("PATH") })).pipe(
+    Effect.map((run) => {
+      reportHook(machine, out, root, made, call, run, timeout);
+
+      return run.interrupted === undefined ? undefined : 128 + (osConstants.signals[run.interrupted] ?? 0);
+    }),
+  );
+}
+
+/** Print how the hook ended, warn when it failed or left files in the workspace, and record the run. */
+function reportHook(machine: Machine, out: Out["Service"], root: string, made: Made, call: HookCall, run: HookRun, timeout: number): void {
+  if (run.output !== "") out.out(run.output.endsWith("\n") ? run.output : `${run.output}\n`);
+  const outcome = hookOutcome(call, run, timeout);
+  out.out(`--- ${outcome} ---\n`);
+
+  if (run.interrupted !== undefined) {
+    out.err(`ws: ${outcome}; workspace ${made.id} is made, but not prepared\n`);
+  } else if (run.exit !== 0) {
+    out.err(`ws: warning: ${outcome}; workspace ${made.id} is made, but not prepared: its worker's first command pays the setup${call.name === HOOK_PATH ? ` (fix ${join(made.repo, HOOK_PATH)}, or run it by hand)` : ""}\n`);
+  }
+
+  if (run.interrupted === undefined) {
+    // `jj diff --summary`, with the paths relative to the workspace's root rather than to this process's cwd.
+    const dirty = jj(made.workspace, ["log", "-r", "@", "--no-graph", "-T", 'self.diff().files().map(|f| f.path() ++ "\\n").join("")']);
+    const files = dirty.ok ? dirty.stdout.split("\n").filter((l) => l.trim() !== "") : [];
+
+    if (files.length > 0) {
+      out.err(
+        `ws: warning: ${call.name} left files in workspace ${made.id}'s @, which jj now tracks there: ${files.join(", ")}. ` +
+          "A hook writes only ignored paths (a .gitignore'd cache, .devenv/, node_modules/): ignore them, or write them elsewhere\n",
+      );
+    }
+  }
+
+  const now = load(root);
+
+  if (now instanceof Refusal) {
+    out.err(`ws: the hook's run is not recorded: ${now.reason}\n`);
+
+    return;
+  }
+
+  const record = hookRecord(call, run, stampOf(machine.now()));
+
+  const workspaces = (asArray(now["workspaces"]) ?? []).map((item) => {
+    const row = asObject(item);
+
+    return row !== undefined && asString(row["id"]) === made.id && row["status"] !== "pruned" ? { ...row, hook: record } : item;
+  });
+
+  const fault = save(machine, root, now, workspaces, [event(machine, now, made.worker, "note", `Workspace ${made.id}'s hook ran: ${outcome}.`)]);
+
+  if (fault !== undefined) out.err(`ws: the hook's run is not recorded: ${fault.reason}\n`);
+}
+
 /** The line `add` prints for the brief. */
 const BRIEF_LINE = (path: string): string =>
   `brief: your working copy is ${path}; edit, build and describe your changes there only. The coordinator rebases them onto the stack and prunes the workspace.\n`;
@@ -167,20 +262,24 @@ function add(machine: Machine, root: string, raw: JsonObject, argv: readonly str
     const [baseGiven, a] = option(argv, "-r", "--revision");
     const [agentGiven, b] = option(a, "--agent");
     const [repoGiven, c] = option(b, "--repo");
-    const [reuse, rest] = option(c, "--reuse");
+    const [reuse, d] = option(c, "--reuse");
+    const [timeoutGiven, rest] = option(d, "--hook-timeout");
     const name = rest[0];
 
     if (rest.length !== 1 || name === undefined) return yield* refuse(USAGE);
+    const timeout = timeoutGiven === undefined ? HOOK_TIMEOUT_S : Number(timeoutGiven);
+
+    if (!Number.isFinite(timeout) || timeout <= 0) return yield* refuse(`--hook-timeout takes the seconds the ws-add hook may run: ${JSON.stringify(timeoutGiven)}`);
 
     if (shared(raw)) return yield* addShared(root, raw, agentGiven ?? name, repoGiven, baseGiven, reuse);
 
     if (reuse !== undefined) {
       if (agentGiven !== undefined || repoGiven !== undefined) return yield* refuse(`--reuse takes the worker as NAME, and the workspace knows its repo: ${USAGE}`);
 
-      return yield* handOver(machine, root, raw, name, reuse, baseGiven);
+      return yield* handOver(machine, root, raw, name, reuse, baseGiven, timeout);
     }
 
-    return yield* addFresh(machine, root, raw, name, agentGiven ?? name, repoGiven, baseGiven ?? "@-");
+    return yield* addFresh(machine, root, raw, name, agentGiven ?? name, repoGiven, baseGiven ?? "@-", timeout);
   });
 }
 
@@ -221,6 +320,7 @@ function addFresh(
   agent: string,
   repoGiven: string | undefined,
   base: string,
+  timeout: number,
 ): Effect.Effect<number, Refusal, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
@@ -250,6 +350,9 @@ function addFresh(
     const fault = save(machine, root, raw, [...(asArray(raw["workspaces"]) ?? []), row], [event(machine, raw, agent, "note", `Workspace ${name} for ${agent} at ${path}, on ${described(from)}.`)]);
 
     if (fault !== undefined) return yield* Effect.fail(fault);
+    const stopped = yield* prepare(machine, out, root, { id: name, worker: agent, repo: main, workspace: path, source: main }, timeout);
+
+    if (stopped !== undefined) return stopped;
     noRowYet(out, root, raw, agent);
 
     for (const idle of reusable(raw, agent)) {
@@ -287,7 +390,15 @@ function reusable(raw: JsonObject, worker: string): Recorded[] {
 
 /** `add WORKER --reuse TARGET`: hand the workspace TARGET names (by its name, else by its worker) to
  * WORKER, on a fresh change, once its last holder is no longer at work. */
-function handOver(machine: Machine, root: string, raw: JsonObject, worker: string, target: string, base: string | undefined): Effect.Effect<number, Refusal, Out> {
+function handOver(
+  machine: Machine,
+  root: string,
+  raw: JsonObject,
+  worker: string,
+  target: string,
+  base: string | undefined,
+  timeout: number,
+): Effect.Effect<number, Refusal, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
     const all = recorded(raw);
@@ -344,6 +455,9 @@ function handOver(machine: Machine, root: string, raw: JsonObject, worker: strin
     const fault = save(machine, root, raw, workspaces, [event(machine, raw, worker, "note", text)]);
 
     if (fault !== undefined) return yield* Effect.fail(fault);
+    const stopped = yield* prepare(machine, out, root, { id: r.id, worker, repo: r.repo, workspace: r.path, source: r.path }, timeout);
+
+    if (stopped !== undefined) return stopped;
     noRowYet(out, root, raw, worker);
     out.out(`workspace ${r.id} for ${worker} at ${r.path}, reused from ${r.agent}, on ${described(parent)}\n`);
     out.out(BRIEF_LINE(r.path));

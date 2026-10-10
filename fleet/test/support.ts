@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import * as Option from "effect/Option";
 
-import { runFleetSync } from "../src/cli/run.ts";
+import { runFleet, runFleetSync } from "../src/cli/run.ts";
 import { stampOf } from "../src/clock.ts";
 import { envOf, recordingOut } from "../src/io.ts";
 import { asObject, parseJson, type JsonObject } from "../src/json.ts";
@@ -87,6 +87,24 @@ export function fleet(args: readonly string[], env: Readonly<Environment>): Ran 
   else process.env["TZ"] = zone;
 
   return { code, stdout: recorded.stdout.join(""), stderr: recorded.stderr.join("") };
+}
+
+/** {@link fleet} for a command that waits on a process (`ws add` running a hook). */
+export async function fleetAsync(args: readonly string[], env: Readonly<Environment>): Promise<Ran> {
+  const { layer, recorded } = recordingOut();
+  const zone = process.env["TZ"];
+  const wanted = env["TZ"] ?? zone;
+
+  if (wanted !== undefined) process.env["TZ"] = wanted;
+
+  try {
+    const code = await runFleet(args, envOf(env), layer, env["FLEET_NOW"]);
+
+    return { code, stdout: recorded.stdout.join(""), stderr: recorded.stderr.join("") };
+  } finally {
+    if (zone === undefined) delete process.env["TZ"];
+    else process.env["TZ"] = zone;
+  }
 }
 
 /** Run `fleet ARGS` as its own process and wait for it. */

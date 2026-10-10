@@ -202,6 +202,14 @@ published source, by the criteria in order:
 | Per-fleet browser storage under the hub (`fleet:/f/<fleet>/`) | dom (draft key) |
 | Rendered without a state: "No fleet state embedded" | read |
 
+## The fleet CLI, TypeScript only
+
+The Python twin is frozen (ADR 0003): these exist in the TypeScript fleet alone, with no page of their own.
+
+| Feature | Checked |
+|---|---|
+| **new (2026-10-10)** The ws-add hook: `fleet ws add` (fresh or `--reuse`) runs the repo's executable `.fleet/ws-add <workspace> <source>`, else in a devenv repo `devenv-run --prepare`, for at most `--hook-timeout` (100 s), in its own process group (SIGTERM, then SIGKILL 2 s later, on a timeout or a TERM/INT/HUP to `add`); its output under a header, its exit on the workspace's row (`hook`); a failure or timeout a warning, a hook outside the repo never run (SPEC "Workspaces"). Python has no `fleet ws` | fleet `test/ws.test.ts` "the ws-add hook…" (present, absent, failing, timing out, ignoring SIGTERM, interrupted by TERM/HUP/INT, unable to start, leaving files in @, `--reuse`, outside the repo, the devenv default with a fake `devenv-run`) |
+
 ## Known differences
 
 - The old page fell back to `webkitAudioContext`; the Solid page uses `AudioContext` only (Safari has it since 14.1).

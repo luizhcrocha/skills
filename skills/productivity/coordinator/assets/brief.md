@@ -22,6 +22,8 @@ Never poll in a foreground loop. A long job runs as a Bash command with `run_in_
 
 A round of N screenshots or N probe runs is one script that does all N and writes a summary (each path and a one-line result), run once, never N tool calls. Keep the script in your scratch dir and rerun it each round. Measured the same day, experiments and screenshots took 2.9 hours, 31% of the Bash wait, as 334 separate calls.
 
+In a devenv repo, run a command as `devenv-run <cmd>`, never `devenv shell -- <cmd>`: `devenv-run` uses the env saved for the workspace (`fleet ws add` prepares it), 0.37 s a call against 4.5 to 17 s for `devenv shell`.
+
 ## Chat
 
 The user may write to you on the fleet dashboard, under the id your brief gives you. At each checkpoint (a test cycle green, a file finished, before your final report) run

@@ -3,13 +3,14 @@
  * records it; `list` says what each holds; `prune` deletes only what is recorded, known to jj as that
  * workspace, idle, and integrated, and refuses the rest by name.
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { constants as osConstants } from "node:os";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
-import { baseEnv, FLEET, fleet, readJson, tmp, type Environment } from "./support.ts";
+import { baseEnv, FLEET, fleet, fleetAsync, readJson, tmp, type Environment } from "./support.ts";
 
 let base: string;
 
@@ -453,5 +454,227 @@ describe("prune is part of integrating", () => {
     expect(existsSync(at)).toBe(false);
     expect(fleet(["state", dir, "event", "x", "--no-render"], env).stderr).not.toContain("still there");
     expect(jj(repo, "log", "--no-graph", "-r", "@-", "-T", "description")).toBe("a1: one\n");
+  });
+});
+
+describe("the ws-add hook: the repo prepares each new workspace", () => {
+  /** The repo's own hook, `.fleet/ws-add`, as this shell script, made executable. */
+  function hook(script: string): string {
+    const at = join(repo, ".fleet", "ws-add");
+    mkdirSync(join(repo, ".fleet"), { recursive: true });
+    writeFileSync(at, `#!/bin/sh\n${script}\n`);
+    chmodSync(at, 0o755);
+
+    return at;
+  }
+
+  /** `fleet ws DIR ARGS`, which waits on the hook it runs. */
+  function wsHook(...args: string[]): Promise<ReturnType<typeof fleet>> {
+    return fleetAsync(["ws", dir, ...args], env);
+  }
+
+  function alive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The workspace row's `hook`. */
+  function ran(id: string): JsonObject | undefined {
+    return asObject(workspaces().find((w) => w["id"] === id)?.["hook"]);
+  }
+
+  test("present: run in the new workspace with it and the main checkout, its output under a header, its exit recorded", async () => {
+    writeFileSync(join(repo, ".gitignore"), ".prepared\n");
+    jj(repo, "describe", "-m", "ignore");
+    jj(repo, "new");
+    hook('echo "preparing $1 from $2 in $(pwd -P)"; echo "a warning" >&2; touch "$1/.prepared"');
+    state("agent", "a1", "--task", "t", "--milestone", "m1");
+    const made = await wsHook("add", "a1", "--repo", repo);
+    const path = join(base, "repo-a1");
+    expect(made.code).toBe(0);
+    expect(made.stdout).toContain(`--- .fleet/ws-add ${path} ${repo} (at most 100 s) ---\npreparing ${path} from ${repo} in ${path}\na warning\n--- .fleet/ws-add exited 0 in `);
+    expect(made.stdout).toContain(`your working copy is ${path}`);
+    expect(made.stderr).toBe("");
+    expect(existsSync(join(path, ".prepared"))).toBe(true);
+    expect(ran("a1")).toMatchObject({ command: ".fleet/ws-add", exit: 0, at: "2026-01-05T09:00:00+00:00" });
+    expect(ran("a1")?.["timed_out"]).toBeUndefined();
+    expect(lastEvent()?.["text"]).toMatch(/^Workspace a1's hook ran: \.fleet\/ws-add exited 0 in [\d.]+ s\.$/);
+  });
+
+  test("absent: nothing runs and nothing is recorded", async () => {
+    const made = await wsHook("add", "a1", "--repo", repo);
+    expect(made.code).toBe(0);
+    expect(made.stdout).not.toContain("---");
+    expect(made.stderr).not.toContain("hook");
+    expect(ran("a1")).toBeUndefined();
+  });
+
+  test("failing: a warning, never a failure of ws add; the exit is recorded", async () => {
+    hook('echo "no venv for you" >&2; exit 3');
+    const made = await wsHook("add", "a1", "--repo", repo);
+    expect(made.code).toBe(0);
+    expect(made.stdout).toContain("no venv for you\n--- .fleet/ws-add exited 3 in ");
+    expect(made.stderr).toMatch(/^ws: warning: \.fleet\/ws-add exited 3 in [\d.]+ s; workspace a1 is made, but not prepared: .*\(fix .*\.fleet\/ws-add, or run it by hand\)\n/);
+    expect(existsSync(join(base, "repo-a1", "README"))).toBe(true);
+    expect(ran("a1")).toMatchObject({ command: ".fleet/ws-add", exit: 3 });
+  });
+
+  test("timing out: killed with everything it started after --hook-timeout, recorded as timed out", async () => {
+    hook('sleep 30 & echo $! > "$1/.child"; echo started; sleep 30');
+    const started = Date.now();
+    const made = await wsHook("add", "a1", "--repo", repo, "--hook-timeout", "1");
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(made.code).toBe(0);
+    expect(made.stdout).toContain("(at most 1 s) ---\nstarted\n--- .fleet/ws-add timed out after 1 s and was killed ---\n");
+    expect(made.stderr).toContain("ws: warning: .fleet/ws-add timed out after 1 s and was killed; workspace a1 is made");
+    expect(ran("a1")).toMatchObject({ exit: null, timed_out: true });
+    const child = Number(readFileSync(join(base, "repo-a1", ".child"), "utf8"));
+    expect(() => process.kill(child, 0)).toThrow();
+    expect((await wsHook("add", "a2", "--repo", repo, "--hook-timeout", "soon")).stderr).toContain("--hook-timeout takes the seconds");
+    expect((await wsHook("add", "a2", "--repo", repo, "--hook-timeout")).code).toBe(1);
+  });
+
+  test("a hook that ignores SIGTERM and never ends is killed with its group at the timeout, 2 s after the SIGTERM", async () => {
+    hook('trap "" TERM; echo $$ > "$1/.pid"; echo started; while :; do sleep 1; done');
+    const started = Date.now();
+    const made = await wsHook("add", "a1", "--repo", repo, "--hook-timeout", "1");
+    const took = Date.now() - started;
+    const pid = Number(readFileSync(join(base, "repo-a1", ".pid"), "utf8"));
+    expect(alive(pid)).toBe(false);
+    expect(took).toBeGreaterThanOrEqual(2900);
+    expect(took).toBeLessThan(8000);
+    expect(made.stdout).toContain("started\n--- .fleet/ws-add timed out after 1 s and was killed ---\n");
+    expect(ran("a1")).toMatchObject({ exit: null, timed_out: true });
+  }, 20_000);
+
+  test("a hook that ends by itself before its time is not recorded as timed out", async () => {
+    hook("sleep 0.2");
+    const made = await wsHook("add", "a1", "--repo", repo, "--hook-timeout", "5");
+    expect(made.stdout).toContain("--- .fleet/ws-add exited 0 in ");
+    expect(ran("a1")?.["timed_out"]).toBeUndefined();
+  });
+
+  for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"] as const) {
+    test(`${signal} to ws add during the hook stops the hook's group, removes its temp dir, records it, and ends ws add`, async () => {
+      hook('echo $$ > "$1/.pid"; sleep 30 & echo $! > "$1/.child"; wait');
+      const temp = join(base, "tmp");
+      mkdirSync(temp);
+      const child = Bun.spawn([FLEET, "ws", dir, "add", "a1", "--repo", repo], { env: { ...env, FLEET_NO_FORWARD: "1", TMPDIR: temp }, stdout: "pipe", stderr: "pipe" });
+      const pidFile = join(base, "repo-a1", ".child");
+      const until = Date.now() + 15_000;
+
+      while (!existsSync(pidFile) && Date.now() < until) await Bun.sleep(50);
+      await Bun.sleep(200);
+      const pid = Number(readFileSync(join(base, "repo-a1", ".pid"), "utf8"));
+      const sleeper = Number(readFileSync(pidFile, "utf8"));
+      child.kill(signal);
+      const code = await child.exited;
+      const stdout = await new Response(child.stdout).text();
+      const stopped = Date.now() + 5000;
+
+      while ((alive(pid) || alive(sleeper)) && Date.now() < stopped) await Bun.sleep(50);
+      expect(alive(pid)).toBe(false);
+      expect(alive(sleeper)).toBe(false);
+      expect(readdirSync(temp)).toEqual([]);
+      expect(ran("a1")).toMatchObject({ command: ".fleet/ws-add", exit: null, interrupted: signal });
+      expect(stdout).toContain("--- .fleet/ws-add was stopped after ");
+      expect(code).toBe(128 + osConstants.signals[signal]);
+    }, 30_000);
+  }
+
+  test("a hook that cannot start (a #! line naming a missing interpreter) says why, and records exit null", async () => {
+    const at = join(repo, ".fleet", "ws-add");
+    mkdirSync(join(repo, ".fleet"), { recursive: true });
+    writeFileSync(at, "#!/nonexistent/interp\necho hi\n");
+    chmodSync(at, 0o755);
+    const made = await wsHook("add", "a1", "--repo", repo);
+    expect(made.code).toBe(0);
+    expect(made.stdout).not.toContain("undefined");
+    expect(made.stdout).toMatch(/--- \.fleet\/ws-add could not start: .*ENOENT.* \(a missing program, or a #! line that names one\) ---\n/);
+    expect(made.stderr).toContain("ws: warning: .fleet/ws-add could not start: ");
+    expect(ran("a1")).toMatchObject({ command: ".fleet/ws-add", exit: null });
+    expect(String(ran("a1")?.["error"])).toContain("ENOENT");
+  });
+
+  test("a hook that leaves files in the workspace's @ is warned about, by name", async () => {
+    hook('echo x > "$1/junk.txt"; mkdir -p "$1/cache"; echo y > "$1/cache/env"');
+    const made = await wsHook("add", "a1", "--repo", repo);
+    expect(made.code).toBe(0);
+    expect(made.stderr).toContain("ws: warning: .fleet/ws-add left files in workspace a1's @, which jj now tracks there: cache/env, junk.txt. A hook writes only ignored paths");
+  });
+
+  test("--reuse: run in the reused workspace, which is its source too", async () => {
+    state("agent", "a1", "--task", "t", "--milestone", "m1", "--status", "done");
+    await wsHook("add", "a1", "--repo", repo);
+    hook('echo "again $1 from $2"');
+    state("agent", "b1", "--task", "t2", "--milestone", "m1");
+    const made = await wsHook("add", "b1", "--reuse", "a1");
+    const path = join(base, "repo-a1");
+    expect(made.code).toBe(0);
+    expect(made.stdout).toContain(`again ${path} from ${path}\n--- .fleet/ws-add exited 0 in `);
+    expect(ran("a1")).toMatchObject({ command: ".fleet/ws-add", exit: 0 });
+    expect(lastEvent()).toMatchObject({ agent: "b1", kind: "note" });
+  });
+
+  test("never run from outside the repo, nor when it is not executable", async () => {
+    const elsewhere = join(base, "outside.sh");
+    writeFileSync(elsewhere, `#!/bin/sh\ntouch "$1/.ran"\n`);
+    chmodSync(elsewhere, 0o755);
+    mkdirSync(join(repo, ".fleet"));
+    symlinkSync(elsewhere, join(repo, ".fleet", "ws-add"));
+    const made = await wsHook("add", "a1", "--repo", repo);
+    expect(made.code).toBe(0);
+    expect(made.stderr).toContain(`ws: ${join(repo, ".fleet", "ws-add")} resolves outside the repo (${repo}): not run\n`);
+    expect(existsSync(join(base, "repo-a1", ".ran"))).toBe(false);
+    expect(ran("a1")).toBeUndefined();
+    rmSync(join(repo, ".fleet", "ws-add"));
+    writeFileSync(join(repo, ".fleet", "ws-add"), "#!/bin/sh\nexit 0\n");
+    expect((await wsHook("add", "a2", "--repo", repo)).stderr).toContain("is not an executable file: not run");
+  });
+
+  describe("a devenv repo with no hook of its own: devenv-run --prepare", () => {
+    let bin: string;
+
+    beforeEach(() => {
+      writeFileSync(join(repo, "devenv.nix"), "{ ... }: { }\n");
+      jj(repo, "describe", "-m", "devenv");
+      jj(repo, "new");
+      bin = join(base, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "devenv-run"), '#!/bin/sh\necho "devenv-run $* in $(pwd -P)"\n');
+      chmodSync(join(bin, "devenv-run"), 0o755);
+    });
+
+    test("runs in the new workspace when devenv-run is on PATH", async () => {
+      env = { ...env, PATH: `${bin}:${env["PATH"] ?? ""}` };
+      const made = await wsHook("add", "a1", "--repo", repo);
+      const path = join(base, "repo-a1");
+      expect(made.code).toBe(0);
+      expect(made.stdout).toContain(`--- devenv-run --prepare (at most 100 s) ---\ndevenv-run --prepare in ${path}\n--- devenv-run --prepare exited 0 in `);
+      expect(ran("a1")).toMatchObject({ command: "devenv-run --prepare", exit: 0 });
+    });
+
+    test("skipped with a one-line note when devenv-run is not on PATH", async () => {
+      env = { ...env, PATH: join(base, "empty") };
+      const made = await wsHook("add", "a1", "--repo", repo);
+      expect(made.code).toBe(0);
+      expect(made.stderr).toContain("ws: a devenv repo, and devenv-run is not on PATH: the workspace's devenv env is not prepared\n");
+      expect(made.stdout).not.toContain("---");
+      expect(ran("a1")).toBeUndefined();
+    });
+
+    test("the repo's own hook replaces it", async () => {
+      env = { ...env, PATH: `${bin}:${env["PATH"] ?? ""}` };
+      hook('echo "the repo\'s own"');
+      const made = await wsHook("add", "a1", "--repo", repo);
+      expect(made.stdout).toContain("the repo's own\n");
+      expect(made.stdout).not.toContain("devenv-run");
+      expect(ran("a1")).toMatchObject({ command: ".fleet/ws-add" });
+    });
   });
 });

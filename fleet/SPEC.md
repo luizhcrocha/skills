@@ -613,7 +613,10 @@ kept[]?       {id, text, at}
 workspace_mode? "isolated" | "shared"   `set --workspaces`; absent reads as isolated
 workspaces[]? {id (the jj workspace's name), agent (its worker now), path, repo (the default workspace's root),
                base (change id), added, status (active|pruned), pruned?,
-               handovers[]? {from (the worker that held it before), at}}   written by `fleet ws` only
+               handovers[]? {from (the worker that held it before), at},
+               hook? {command (".fleet/ws-add" | "devenv-run --prepare"), at, exit (null: timed out, killed,
+               interrupted, or could not start), seconds, timed_out?, interrupted? (the signal `add` got),
+               error? (why it could not start, or what killed it)}}   written by `fleet ws` only
 ```
 
 **Text on the page.** The page shows a decision's `question`, `why`, `reason`, its options'
@@ -1690,7 +1693,7 @@ makes as few as the work allows: sequential work **reuses** a lane's workspace (
 one is for parallel workers whose files could meet, risky experiments, and arena or swarm comparisons; and
 a fleet may opt into one **shared** working copy (`workspace_mode: "shared"`).
 
-- `fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH]`: `jj workspace add <repo>-NAME -r
+- `fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] [--hook-timeout S]`: `jj workspace add <repo>-NAME -r
   <BASE's commit> --name NAME`, beside the default workspace of the repo `--repo` (else the cwd) is
   in. BASE defaults to `@-` there and must name one commit. Refused: an invalid name or `default`, a
   name the ledger or jj already has, an existing directory, no jj repo. Records `{id, agent (--agent,
@@ -1713,6 +1716,39 @@ a fleet may opt into one **shared** working copy (`workspace_mode: "shared"`).
   `base` the new `@`'s parent, and `handovers` gains `{from: <the last holder>, at}`; a note event
   (`Workspace a1 handed from a1 (done) to b1 at PATH, on <change>.`), the page rendered, and the same two
   lines printed (`workspace a1 for b1 at PATH, reused from a1, on <change>`, then the brief line).
+- **The ws-add hook** (TypeScript only). Once `add` has made a workspace, or `--reuse` has handed one
+  over, it prepares it, so a worker does not pay the repo's setup (a saved devenv env, a uv venv: about
+  70 s) on its first command. The repo's own executable `<root>/.fleet/ws-add WORKSPACE SOURCE` (root: the
+  repo's default workspace; SOURCE: that default workspace for a fresh one, the workspace itself for a
+  reused one) runs in WORKSPACE. Without one, a repo whose new workspace has a `devenv.nix` gets the
+  machine's default, `devenv-run --prepare` there (a command from the dotfiles that saves the workspace's
+  devenv env once); with no `devenv-run` on PATH it is skipped with one line (`ws: a devenv repo, and
+  devenv-run is not on PATH: ...`). A repo's own hook replaces the default; with neither, nothing runs.
+  A hook file that resolves (symlinks followed) outside the repo's root, or is not an executable file, is
+  never run, and says so on stderr. It runs for at most `--hook-timeout S` seconds (100: under the 120 s a
+  Bash tool call gets by default, so a hung hook ends before the call running `add` is killed; a longer
+  setup runs `ws add` in the background), in a process group of its own, its stdout and stderr to a file
+  rather than a pipe, so a process it left running never holds `add` open. On a timeout the whole group
+  gets SIGTERM, and SIGKILL once 2 s have passed with any of it left, so a hook that ignores SIGTERM or
+  loops forever still ends; `timed_out` is recorded only then. A TERM, INT or HUP that `add` itself
+  receives while the hook runs stops the group the same way, removes the output's temporary directory,
+  records the run (`exit: null, interrupted: "SIGTERM"`, `--- <command> was stopped after T s: fleet ws
+  add received SIGTERM ---`) and ends `add` with 128 + the signal's number. Its output is printed between
+  `--- <command> (at most S s) ---` and `--- <command> exited N in T s ---` (or `timed out after S s and
+  was killed`, or `could not start: <the spawn error> (a missing program, or a #! line that names one)`,
+  with `exit: null` and the `error` recorded), before the workspace's lines. The ledger is read again
+  after it (other commands may write it meanwhile): the row gains `hook: {command, at, exit, seconds,
+  timed_out?, interrupted?, error?}` and a note event says how it ended (`Workspace a1's hook ran:
+  .fleet/ws-add exited 0 in 41.2 s.`). A hook that exits non-zero, times out or cannot start is a warning
+  (`ws: warning: <how it ended>; workspace a1 is made, but not prepared: ...`), never a failure: `add`
+  exits 0, the workspace made. A hook writes only ignored paths (a `.gitignore`d cache, `.devenv/`,
+  `node_modules/`): once it has run, `add` reads the workspace's `@`, and when it is no longer empty warns
+  and names the files (`ws: warning: .fleet/ws-add left files in workspace a1's @, which jj now tracks
+  there: junk.txt. ...`), since they would ride in the worker's change and keep `prune` from deleting the
+  workspace. Known limits, kept as they are: a process the hook starts in a session of its own (`setsid`,
+  a daemon) leaves the hook's process group, so neither a timeout nor an interruption reaches it; and a
+  hook's output is printed whole before the workspace's lines, so a hook that prints more than the 30 KB a
+  Bash tool call shows pushes the path and the brief line out of what the caller sees.
 - **Shared mode** (`fleet state DIR set --workspaces shared`; isolated is the default). The workers share
   the coordinator's own working copy, the repo's `default` workspace, rather than one named shared
   workspace: it is already set up, which is the point of the mode (a named one would pay the setup once
@@ -2026,7 +2062,7 @@ recommendation attached.
 | the plugin's hook (`fleet_listen_guard`, `fleet_chat_nudge`, `fleet_said_once`, `fleet_news`) | nothing in DIR; the session's `fleet-guard`, `fleet-nudge`, `said-once` and `fleet-news` state in the plugin's data folder |
 | `news post`, and a `state decision --kind notice` once its ledger is written, when a manager is served | `REGISTRY/news/news.jsonl` (under its `flock`) |
 | `news read` | `REGISTRY/news/read/<fleet>` when the cursor moves |
-| `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / deleted (a shared fleet's `add` writes nothing) |
+| `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / deleted (a shared fleet's `add` writes nothing); whatever the repo's ws-add hook (or `devenv-run --prepare`) writes |
 | `fleet ws add --reuse` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; a new change in the workspace (`jj new`) |
 | `fleet ws split` | `DIR/state.json` (`events`, `updated`), `DIR/index.html`; the default workspace's `@` split in two |
 | `fleet preview start` / `stop` / `set` | `DIR/state.json` (`workspaces` with the preview's row on its first start, `preview` by `set`, `events`, `updated`), `DIR/index.html`; `DIR/preview.json` (under `DIR/preview.lock`); `DIR/preview/*.log`; the `<repo>-preview` workspace (made once); a node_modules install in a workspace that has none |
