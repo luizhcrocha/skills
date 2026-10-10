@@ -514,7 +514,11 @@ protótipo, is a prototype; else `page` and a `file:` address read as doc and th
 
 A link's **reach**: `machine` when its scheme is http(s) and its host is this machine or its tailnet
 (`localhost`, `*.localhost`, 127/8, `::1`, `0.0.0.0`, `*.ts.net`, 100.64/10), `file` for `file://`, else
-`external` (never probed).
+`external` (never probed). The TypeScript fleet reads the host as fetch will (WHATWG `new URL`: `0127.0.0.1`
+is 87.0.0.1, so elsewhere), and an address with userinfo (`user@`) or a backslash is `external`. In the hub,
+`*.ts.net` is only this machine's own tailnet suffix (`MagicDNSSuffix` from `tailscale status --json`, else
+its name without the first label), read once at its start; none read, no `*.ts.net` name is this machine's.
+The CLI's render and the Python twin take any `*.ts.net`.
 
 **In the view** (`fleets.view`, the page's state), each link carries, beside its row and `fleet`: `kind` as
 read, `reach`, `up`, `file` and `decision_status` (the status of the decision it serves, found by id then

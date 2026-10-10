@@ -11,8 +11,6 @@
  */
 import { basename, dirname, join, normalize, relative, sep } from "node:path";
 
-import { splitUrl } from "../page/url.ts";
-
 /** The kinds `link --kind` records. */
 export const LINK_KINDS = ["preview", "prototype", "doc", "tool", "service"] as const;
 
@@ -45,12 +43,21 @@ export function linkKind(kind: string | null | undefined, url: string, title: st
  * probed), or a file on this machine (`file`). */
 export type Reach = "machine" | "external" | "file";
 
-/** Whether `host` is this machine or a host of its tailnet. */
-export function onTailnet(host: string | undefined): boolean {
+/** This machine's tailnet as {@link reachOf} reads it: its MagicDNS suffix (`tail1234.ts.net`), the hub's, read
+ * once at its start; `null` when the hub found none, so no `*.ts.net` host is this machine's; undefined when no hub
+ * asked (the CLI's render, like the Python twin, takes any `*.ts.net`). */
+export type TailnetSuffix = string | null | undefined;
+
+/** Whether `host`, a hostname as WHATWG `URL` normalises it (lower case, IPv4 in dotted decimal, IPv6 in
+ * brackets), is this machine or a host of its tailnet: loopback, `localhost`, 0.0.0.0, a Tailscale address
+ * (100.64.0.0/10), or a name under this machine's tailnet suffix. */
+export function onTailnet(host: string | undefined, tailnet?: TailnetSuffix): boolean {
   if (host === undefined) return false;
   const h = host.toLowerCase();
 
-  if (h === "localhost" || h.endsWith(".localhost") || h === "::1" || h === "0.0.0.0" || h.endsWith(".ts.net")) return true;
+  if (h === "localhost" || h.endsWith(".localhost") || h === "[::1]" || h === "::1" || h === "0.0.0.0") return true;
+
+  if (tailnet === undefined ? h.endsWith(".ts.net") : tailnet !== null && tailnet !== "" && (h === tailnet || h.endsWith(`.${tailnet}`))) return true;
   const ip = /^(\d+)\.(\d+)\.\d+\.\d+$/u.exec(h);
 
   if (ip === null) return false;
@@ -59,13 +66,28 @@ export function onTailnet(host: string | undefined): boolean {
   return a === 127 || (a === 100 && b >= 64 && b <= 127);
 }
 
-/** Where `url` can be reached from. */
-export function reachOf(url: string): Reach {
-  const parts = splitUrl(url);
+/** The host fetch will connect to for `url`, as WHATWG `URL` reads it; undefined when it does not parse, or holds
+ * userinfo (`user@`) or a backslash, which readers of an address disagree on. */
+export function fetchHost(url: string): string | undefined {
+  if (url.includes("\\")) return undefined;
 
-  if (parts.scheme === "file") return "file";
+  try {
+    const u = new URL(url);
 
-  return (parts.scheme === "http" || parts.scheme === "https") && onTailnet(parts.hostname) ? "machine" : "external";
+    return u.username !== "" || u.password !== "" || u.hostname === "" ? undefined : u.hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Where `url` can be reached from, its host read as fetch reads it ({@link fetchHost}): an address that does not
+ * read plainly is `external`, never probed. */
+export function reachOf(url: string, tailnet?: TailnetSuffix): Reach {
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):/u.exec(url)?.[1]?.toLowerCase();
+
+  if (scheme === "file") return "file";
+
+  return (scheme === "http" || scheme === "https") && onTailnet(fetchHost(url), tailnet) ? "machine" : "external";
 }
 
 /** The path a `file://` address names, normalised (`a/../b` is `b`); undefined for any other address or a remote host. */

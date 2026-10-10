@@ -252,6 +252,10 @@ export class Hub {
   /** Names added once it runs (`answerTo`): kept across the tailnet's re-reads. */
   private readonly added = new Set<string>();
   private tailnet: Tailnet | undefined;
+  /** This machine's MagicDNS suffix, read once, at the first read of the tailnet (the hub's start): the only
+   * `*.ts.net` names a link reaches this machine by. Null until then, and when Tailscale gave none. */
+  private suffix: string | null = null;
+  private suffixRead = false;
   private readonly peerHubs = new Map<string, Peer>();
   private readonly served: Served;
   private readonly probes = new ProbeCache();
@@ -271,7 +275,13 @@ export class Hub {
     this.options = options;
     this.served = new Served(options.machine);
     this.linkProbes = new LinkProbes(options.machine.now, options.probe);
-    this.lookups = { up: (urls) => this.probes.up(urls), probe: (urls) => this.linkProbes.get(urls), discovered: () => this.served.latest(), spend: this.spend };
+    this.lookups = {
+      up: (urls) => this.probes.up(urls),
+      probe: (urls) => this.linkProbes.get(urls),
+      tailnet: () => this.suffix,
+      discovered: () => this.served.latest(),
+      spend: this.spend,
+    };
     this.setHosts();
   }
 
@@ -336,6 +346,12 @@ export class Hub {
   /** Read the tailnet again, and ask each online peer for its fleets. */
   async refresh(): Promise<void> {
     this.tailnet = await readTailnet(this.options.tailscale);
+
+    if (!this.suffixRead) {
+      this.suffix = this.tailnet?.suffix ?? null;
+      this.suffixRead = true;
+    }
+
     this.setHosts();
 
     if (!this.options.peers || this.tailnet === undefined) {

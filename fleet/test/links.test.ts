@@ -45,6 +45,43 @@ describe("a link's kind and reach", () => {
     expect(filePathOf("file://elsewhere/a.md")).toBeUndefined();
   });
 
+  test("a host is read as fetch reads it: what does not read plainly is elsewhere, never probed", () => {
+    const cases: readonly (readonly [string, string])[] = [
+      ["http://0127.0.0.1/", "external"],
+      ["http://0100.64.0.1/", "external"],
+      ["http://evil.example\\@127.0.0.1/", "external"],
+      ["http://user@127.0.0.1/", "external"],
+      ["http://user:pw@localhost:3000/", "external"],
+      ["http://[::ffff:7f00:1]/", "external"],
+      ["http://127.0.0.1\t.evil.com/", "external"],
+      ["http://2130706433/", "machine"],
+      ["http://[::1]:3000/", "machine"],
+      ["http://127.0.0.1:8080/", "machine"],
+      ["http://100.64.0.1/", "machine"],
+    ];
+
+    expect(cases.map(([u]) => [u, reachOf(u)])).toEqual(cases.map(([u, r]) => [u, r]));
+  });
+
+  test("a ts.net name is this machine's only under its own tailnet's suffix, once a hub read it", () => {
+    const url = "https://foo.tail1234.ts.net/";
+    expect([reachOf(url, "tail1234.ts.net"), reachOf(url, "other.ts.net"), reachOf(url, null), reachOf(url)]).toEqual(["machine", "external", "external", "machine"]);
+    expect(reachOf("https://tail1234.ts.net.evil.com/", "tail1234.ts.net")).toBe("external");
+  });
+
+  test("an address read one way and fetched another is never probed", async () => {
+    let seen = "";
+
+    const local = serve((req) => {
+      seen = req.url;
+
+      return new Response("x");
+    });
+
+    const tricky = `${local.slice(0, -1)}\\@100.64.0.1/`;
+    expect([reachOf(tricky), await answers(tricky, 1000), seen]).toEqual(["external", false, ""]);
+  });
+
   test("a file is served from under the files root only, with no hidden part", () => {
     expect(servedRel("/r", "/r/a b/c.md")).toBe("a%20b/c.md");
     expect([servedRel("/r", "/r/../etc/passwd"), servedRel("/r", "/r/.env"), servedRel("/r", "/elsewhere/x.md"), servedRel("/r", "/r")]).toEqual([
@@ -311,5 +348,11 @@ describe("the hub's links: probes and files", () => {
       "text/plain; charset=utf-8",
       "This file is 51 MB; the hub serves a linked file of at most 50 MB. Open it on the machine.\n",
     ]);
+  });
+  test("with no tailnet read at the hub's start, a ts.net link is elsewhere and never probed", async () => {
+    writeLinks([{ id: "l1", url: "https://box.tail1234.ts.net:7501/", title: "App", kind: "preview" }]);
+    const links = await shownLinks();
+    await sleep(100);
+    expect([links.map((l) => l["reach"]), probed]).toEqual([["external"], []]);
   });
 });

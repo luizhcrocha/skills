@@ -51,6 +51,9 @@ export interface Lookups {
   /** The hub's: each link's last HTTP probe, with when it was checked and since when it reads so; undefined
    * until its first probe ends. Without it, a link is up when `up` says so. */
   readonly probe?: (urls: readonly string[]) => readonly (Probed | undefined)[];
+  /** The hub's: this machine's MagicDNS suffix, the only `*.ts.net` names a link reaches it by (`null`: none).
+   * Without it any `*.ts.net` name is this machine's tailnet, as the Python twin reads it. */
+  readonly tailnet?: () => string | null;
 }
 
 /** A link's last probe. */
@@ -262,7 +265,8 @@ function isFile(path: string): boolean {
 export function linksOf(machine: Machine, lookups: Lookups, state: JsonObject, root: string, prefix = ""): JsonObject[] {
   const links = rows(state, "links").filter((l) => asString(l["url"]) !== undefined);
   const urls = links.map((l) => asString(l["url"]) ?? "");
-  const reach = urls.map((u) => reachOf(u));
+  const suffix = lookups.tailnet?.();
+  const reach = urls.map((u) => reachOf(u, suffix));
   const probed = urls.filter((_, i) => reach[i] === "machine");
   const up = lookups.probe === undefined ? lookups.up(probed) : [];
   const seen = lookups.probe === undefined ? [] : lookups.probe(probed);

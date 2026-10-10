@@ -5,7 +5,8 @@
  */
 import { stampOf } from "../clock.ts";
 import { accepts } from "../page/probe.ts";
-import { probeTarget, splitUrl } from "../page/url.ts";
+import { fetchHost } from "../ledger/links.ts";
+import { probeTarget } from "../page/url.ts";
 import type { Probed } from "../page/view.ts";
 
 /** How long a probe's answer holds. */
@@ -49,8 +50,10 @@ export const LINK_PROBE_TIMEOUT_MS = 3000;
  * front says its server is gone (502, 503, 504: `tailscale serve` before a stopped dev server). A loopback
  * address is not held to its certificate. Only ever called for a link of this machine or its tailnet. */
 export async function answers(url: string, timeoutMs = LINK_PROBE_TIMEOUT_MS): Promise<boolean> {
-  const host = splitUrl(url).hostname ?? "";
-  const loopback = host === "localhost" || host === "::1" || host.startsWith("127.");
+  const host = fetchHost(url);
+
+  if (host === undefined) return false;
+  const loopback = host === "localhost" || host === "[::1]" || /^127\.\d+\.\d+\.\d+$/u.test(host);
 
   const ask = (method: "HEAD" | "GET"): Promise<Response> => {
     const init: RequestInit & { tls?: { rejectUnauthorized: boolean } } = {

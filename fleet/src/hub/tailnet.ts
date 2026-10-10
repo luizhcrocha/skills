@@ -27,6 +27,9 @@ export interface Tailnet {
   /** The login that owns this machine (`luizhcrocha@github`), when Tailscale says. */
   readonly login: string | undefined;
   readonly peers: readonly Node[];
+  /** Its MagicDNS suffix (`tail1234.ts.net`): Tailscale's `MagicDNSSuffix`, else this machine's name without its
+   * first label. */
+  readonly suffix: string | undefined;
 }
 
 /** The tailscale binary. */
@@ -69,7 +72,10 @@ export function tailnetOf(status: Json | undefined): Tailnet | undefined {
     return node === undefined ? [] : [node];
   });
 
-  return { self: { ...self, online: true }, login, peers };
+  const given = asString(root["MagicDNSSuffix"]) ?? asString(asObject(root["CurrentTailnet"])?.["MagicDNSSuffix"]);
+  const suffix = (given ?? self.dns.split(".").slice(1).join(".")).replace(/\.$/u, "").toLowerCase();
+
+  return { self: { ...self, online: true }, login, peers, suffix: suffix === "" ? undefined : suffix };
 }
 
 function decode(text: string): Json | undefined {
