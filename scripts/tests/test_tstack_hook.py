@@ -925,6 +925,17 @@ class SaidOnceTest(FleetCase):
         self.assertNotIn("failed", self.log())
 
 
+# The chat nudge's budget, 2 ms where json.loads of 300 chat lines takes 0.82 ms (2026-10-09), as a multiple of that
+# parse: a cost that holds on a busy machine, where both run slower together.
+REF_BUDGET = 2 / 0.82
+# The handler's wall time, at most WALL_PER_CPU times its CPU time plus WALL_SLACK_MS: CPU time alone misses a sleep, an
+# I/O wait or a subprocess. 2026-10-10, 32 cores, medians of first look / steady (CPU, wall ms): as it is 1.06/1.07 and
+# 0.24/0.24, and under 64 busy loops 1.95/1.98 and 0.34/0.36 (preemption barely moves a median); a planted 3 ms sleep
+# 1.27/4.34 and 0.32/3.38, a planted subprocess.run(["true"]) 1.39/2.85 and 0.41/1.80: the steady bound (1.14 and
+# 1.32 ms) fails both.
+WALL_PER_CPU, WALL_SLACK_MS = 2, 0.5
+
+
 class ChatNudgeTest(FleetCase):
     """fleet_chat_nudge: a session busy mid-turn is told of the user's messages its chat left waiting."""
 
@@ -1075,7 +1086,15 @@ class ChatNudgeTest(FleetCase):
 
     def test_the_handler_takes_under_two_milliseconds(self):
         """2,000 lines (workers talking, the user's messages answered), measured as its worst case: each run
-        is a session's first look (no offset kept) and something is due, so the ledger is read too."""
+        is a session's first look (no offset kept) and something is due, so the ledger is read too.
+
+        The budget is the handler's own work: 2 ms on the machine it was set on, where json.loads of 300 chat
+        lines takes 0.82 ms, so the handler may cost REF_BUDGET (2 / 0.82) times that parse, timed beside it
+        in this process's CPU time. Neither the wall clock nor CPU time alone holds still on a busy machine:
+        with every core taken, the handler's median went from 1.2 to 2.2 ms in both (SMT siblings and clock
+        speed slow the work itself), while the ratio to the parse stayed at 1.3-1.4. The absolute medians
+        are printed beside it. CPU time misses time spent off the CPU (a sleep, a wait on I/O or on a child), so
+        the median wall time is held to WALL_PER_CPU times the median CPU time plus WALL_SLACK_MS too."""
         n = 0
         for i in range(400):
             at = "2026-01-05T08:00:00+00:00"
@@ -1092,13 +1111,24 @@ class ChatNudgeTest(FleetCase):
         env = {**self.env, "FLEET_NOW": "2026-01-05T09:00:00+00:00"}
         payload = self.payload("PostToolUse", tool_name="Bash")
         state = self.data / "sessions" / "sess-1.fleet-nudge.json"
-        times = []
+        reference = (self.fleet / "chat.jsonl").read_text().splitlines()[:300]
+
+        def timed(run):
+            """(the run's CPU ms, the reference parse's CPU ms, the run's wall ms), timed back to back."""
+            r0 = time.process_time()
+            for line in reference:
+                json.loads(line)
+            r1, w1 = time.process_time(), time.perf_counter()
+            got = run()
+            r2, w2 = time.process_time(), time.perf_counter()
+            return got, (r2 - r1) * 1000, (r1 - r0) * 1000, (w2 - w1) * 1000
+
+        first = []
         for _ in range(100):
             state.unlink(missing_ok=True)
             hook = module.Hook("PostToolUse", payload, env)
-            started = time.perf_counter()
-            out = module.fleet_chat_nudge(hook)
-            times.append((time.perf_counter() - started) * 1000)
+            out, cpu, ref, wall = timed(lambda: module.fleet_chat_nudge(hook))
+            first.append((cpu, ref, wall))
             self.assertIn(f"#{n + 1} from the user", out)
         steady = []
         for _ in range(100):  # the usual run: an offset kept, a line or two new
@@ -1107,18 +1137,22 @@ class ChatNudgeTest(FleetCase):
             state.write_text(json.dumps(saved))
             self.say(n + 2, "2026-01-05T08:59:00+00:00", frm="a1", to=("coordinator",))
             hook = module.Hook("PostToolUse", payload, env)
-            started = time.perf_counter()
-            module.fleet_chat_nudge(hook)
-            steady.append((time.perf_counter() - started) * 1000)
-        print(f"\n  chat nudge on 2,000 lines: first look median {statistics.median(times):.2f} ms, "
-              f"then {statistics.median(steady):.2f} ms", end="", file=sys.stderr)
-        self.assertLess(statistics.median(times), 2, times[:20])
-        self.assertLess(statistics.median(steady), 2, steady[:20])
+            steady.append(timed(lambda: module.fleet_chat_nudge(hook))[1:])
+        med = lambda rows, i: statistics.median(r[i] for r in rows)  # noqa: E731
+        ratio = lambda rows: statistics.median(cpu / ref for cpu, ref, _ in rows)  # noqa: E731
+        print(f"\n  chat nudge on 2,000 lines: first look median {med(first, 0):.2f} ms CPU ({med(first, 2):.2f} wall), "
+              f"then {med(steady, 0):.2f} ms ({med(steady, 2):.2f}); {ratio(first):.2f} and {ratio(steady):.2f} times "
+              f"a 300-line parse ({med(first, 1):.2f} ms)", end="", file=sys.stderr)
+        self.assertLess(ratio(first), REF_BUDGET, first[:10])
+        self.assertLess(ratio(steady), REF_BUDGET, steady[:10])
+        for name, rows in (("first look", first), ("steady", steady)):
+            self.assertLess(med(rows, 2), WALL_PER_CPU * med(rows, 0) + WALL_SLACK_MS,
+                            f"{name}: the handler waits off the CPU (a sleep, I/O, a subprocess): {rows[:10]}")
         quiet = module.Hook("PostToolUse", self.base("PostToolUse"), self.env)
-        started = time.perf_counter()
+        started = time.process_time()
         for _ in range(200):
             module.fleet_chat_nudge(quiet)
-        self.assertLess((time.perf_counter() - started) * 1000 / 200, 0.5)  # outside a fleet: next to nothing
+        self.assertLess((time.process_time() - started) * 1000 / 200, 0.5)  # outside a fleet: next to nothing
 
 
 STAND_IN = """#!{python}
