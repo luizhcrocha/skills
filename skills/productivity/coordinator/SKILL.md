@@ -239,7 +239,15 @@ Each question is a small decision, written as one. Luiz, on a dense one: "is den
 - The same naming rules as a decision's: no worker's id, every internal name glossed, a case id with its name.
 - The grilling's own title, why and context change with `--title`, `--why`, `--body` on the open grilling, with `--log "what changed"`. The `grilling` skill's "On a fleet dashboard" says how rounds, follow-ups, answers, and the end are recorded. A confirmation after the last answer (a recap, the advisor's amendments) is one more question of the grilling (`grill <id> --ask`), answerable on the page, never a chat message asking for "confirm". Once every question is answered, record the grilling at once (`grill <id> --done "what was agreed"`, or `decision <id> --withdraw "why"`): until then it waits on you, not on the user, and `fleet state` says so at every command.
 
-A **link** names a place the user opens: `fleet state <dir> link <id> --url <address> --title "<what it is>" --kind dev|page`. Record every dev server and every page a worker builds for the user (a review, a lab, a report), from the worker's report; `--decision` ties a page to the decision it serves, so the decision's page opens it; `--drop "why"` when it stops. The Links view lists them, up or down, and what the machine serves that no link names.
+A **link** names a place the user opens: `fleet state <dir> link <id> --url <address> --title "<what it is>" --kind <kind> [--for "<what the user does there>"] [--decision D12]`. Record every server and page a worker builds for the user, from the worker's report, as one of five kinds, so Luiz recognises it on the Links page:
+
+- `preview`: the fleet's live app (`fleet preview`, or the one dev server the user tests on). A fleet has one; a second build of the app is a prototype or is dropped.
+- `prototype`: a throwaway sketch or a round of one. Name the round in the title ("Map, round 14").
+- `doc`: a design note, a report, a claude.ai artifact. A file in the dashboard dir or the session's scratchpad opens on Luiz's phone through the hub; anywhere else it is only on this machine.
+- `tool`: a page the user works in (marking gold, confirming cuts). Give it `--for "mark each decision"`.
+- `service`: a lab or infra endpoint (lakeFS, a queue's console).
+
+The title is plain words for the place, never a worker's id or name (`fleet state` warns, as it does for decisions): "Auth architecture review", not "Auth review (b290)". `--for` says what Luiz does there ("review and mark", "read", "try"); `--decision` ties it to the open decision it serves, so the decision's page opens it. Both put it under "Needs you" on the Links page. When it ends (the round is over, the server is stopped, the decision is closed), mark it `link <id> --done`: it moves to Inactive and stays findable; `--drop "why"` only for a link recorded by mistake. The Links page shows each one active or not: the hub probes every address on this machine and the tailnet, and a link whose server is down, whose decision is closed, or that is done is inactive.
 
 ## With a manager
 
