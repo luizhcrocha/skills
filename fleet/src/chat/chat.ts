@@ -178,27 +178,36 @@ export interface Addressed {
   readonly parts: Part[];
 }
 
-/** Who a message from `sender` would reach now, and its text split into parts. */
+/** Who a message from `sender` would reach now, and its text split into parts. On the manager's page, a
+ * message of the user's in a side chat that a fleet owns (`ownersOf`) reaches the owners, whoever it
+ * cites and the sender of the message it replies to, and no one else. */
 export function address(
   machine: Machine,
   root: string,
-  message: { readonly sender: string; readonly text: string; readonly re?: number | null; readonly allowUser?: boolean },
+  message: {
+    readonly sender: string;
+    readonly text: string;
+    readonly re?: number | null;
+    readonly side?: number | "new";
+    readonly quote?: JsonObject;
+    readonly allowUser?: boolean;
+  },
 ): Addressed | ChatError {
   const roster = rosterOf(machine, root);
   const sender = participant(roster, message.sender, message.allowUser ?? false);
 
   if (sender instanceof ChatError) return sender;
   const parts = partsOf(roster, message.text);
-  const named = parts.flatMap((p) => (p.mention === undefined ? [] : [p.mention]));
+  const cited = parts.flatMap((p) => (p.mention === undefined ? [] : [p.mention]));
+  const re = message.re ?? null;
+  const owned = sender === "user" && roster.host === "manager";
+  const known = re !== null || owned ? readChat(root) : [];
+  const answered = re === null ? undefined : known.find((m) => m.id === re);
 
-  if (message.re !== undefined && message.re !== null) {
-    const re = message.re;
-    const answered = readChat(root).find((m) => m.id === re);
-
-    if (answered === undefined) return new ChatError({ reason: `unknown message #${re}` });
-    named.push(answered.from);
-  }
-
+  if (re !== null && answered === undefined) return new ChatError({ reason: `unknown message #${re}` });
+  const owners = owned ? ownersOf(machine, root, known, message.side, answered, message.quote, cited) : [];
+  const replied = answered === undefined ? [] : [answered.from];
+  const named = owners.length > 0 ? [...owners, ...cited, ...replied] : [...cited, ...replied];
   const to: string[] = sender === "user" ? [] : ["user"];
 
   for (const who of named) {
@@ -206,6 +215,81 @@ export function address(
   }
 
   return { from: sender, to: to.length > 0 ? to : [roster.host], parts };
+}
+
+/** The fleet a quote's place on the manager's page is an item of: a decision or grilling of its
+ * (`#decision/<fleet>/<id>`), or a message from it in the chat. Never `#agent-<x>`: that anchor is a
+ * worker's row on the manager's page, not a fleet's, and the page has no anchor of a fleet's own row. */
+function quotedFleet(quote: Json | undefined, known: readonly Message[]): string | undefined {
+  const at = asObject(asObject(quote)?.["at"]);
+  const message = asString(at?.["message"]);
+
+  if (message !== undefined && /^[0-9]+$/u.test(message)) return known.find((m) => m.id === Number(message))?.from;
+
+  for (const place of [asString(at?.["hash"]), asString(at?.["anchor"])]) {
+    const named = /^#decision\/([^/]+)\/[^/]+$/u.exec(place ?? "")?.[1];
+
+    if (named === undefined) continue;
+
+    try {
+      return decodeURIComponent(named);
+    } catch {
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * The fleets that own the side chat a message of the user's on the manager's page is in: the fleet whose
+ * item its first message quotes, and the fleets that first message cites. None for a message outside a side
+ * chat, or in one about the manager's own things. `cited` and `quote` are the message's own, for a message
+ * that opens a side chat; `answered` passes on its side chat to a reply.
+ */
+function ownersOf(
+  machine: Machine,
+  root: string,
+  known: readonly Message[],
+  side: number | "new" | undefined,
+  answered: Message | undefined,
+  quote: Json | undefined,
+  cited: readonly string[],
+): string[] {
+  const dir = resolvePath(root);
+  const fleets = machine.registry.live().filter((e) => e.role !== "manager" && e.dir !== dir);
+
+  // A name is a fleet's id exactly, or an alias exactly one fleet has; an ambiguous one names no owner.
+  const fleetOf = (name: string | undefined): string | undefined => {
+    if (name === undefined) return undefined;
+    const exact = fleets.find((e) => e.id === name);
+
+    if (exact !== undefined) return exact.id;
+    const aliased = fleets.filter((e) => e.aliases.includes(name));
+
+    return aliased.length === 1 ? aliased[0]?.id : undefined;
+  };
+
+  let opener: { readonly quote: Json | undefined; readonly cited: readonly string[] } | undefined;
+
+  if (side === "new") opener = { quote, cited };
+  else {
+    const thread = side ?? (answered !== undefined && truthy(answered.side) ? asNumber(answered.side) : undefined);
+    const first = thread === undefined ? undefined : known.find((m) => m.id === thread);
+
+    if (first !== undefined) opener = { quote: first.quote, cited: first.parts.flatMap((p) => (p.mention === undefined ? [] : [p.mention])) };
+  }
+
+  if (opener === undefined) return [];
+  const owners: string[] = [];
+
+  for (const name of [quotedFleet(opener.quote, known), ...opener.cited]) {
+    const fleet = fleetOf(name);
+
+    if (fleet !== undefined && !owners.includes(fleet)) owners.push(fleet);
+  }
+
+  return owners;
 }
 
 /** A message as `append` stores it, in Python's key order. */

@@ -764,7 +764,14 @@ is a mention; one that doesn't is retried without trailing dots and dashes (`@a1
 sentence). Recipients are the mentions, then the sender of the message `re` answers. A message
 from the user goes to them, or to the host when there are none; a message from anyone else goes
 to `user` plus them. Nobody is their own recipient. An unknown `re` is refused, and so is empty
-text.
+text. On the manager's page (the hub's `address`) a side chat belongs to fleets: to the live
+coordinator whose item its first message quotes (`quote.at`: `#decision/<fleet>/<id>`, or a chat message
+from that fleet; never `#agent-<x>`, a worker's row there), and to each live coordinator that first message
+cites. A name is a fleet's id exactly, or an alias exactly one live fleet has; an ambiguous one names no
+owner. A message
+of the user's in an owned side chat (`side`, or a `re` to one of its messages) goes to the owners plus
+its own mentions and the sender of its `re` (a Reply cites), and to no one else: not the host unless cited. A side chat
+no fleet owns follows the rule above.
 
 **Open.** A message is open for each recipient until that recipient sends a message with `re` =
 its id.

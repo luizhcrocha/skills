@@ -1129,6 +1129,104 @@ describe("the user's word to a coordinator on the manager's page", () => {
     expect(fields(readChat(manager).at(-1), "from", "re", "side", "text")).toEqual(["p", 2, 1, "both"]);
   });
 
+  const fleetSays = (dir: string, text: string, re: number): void => {
+    const said = append(machine(env), dir, { sender: "coordinator", text, re }, "2026-01-01T00:00:00+00:00");
+
+    if (said instanceof ChatError) throw new Error(said.reason);
+  };
+
+  test("a side chat on infra's decision is infra's: every message goes to infra, @ or not, and a cited fleet gets that one message too", async () => {
+    const perf = join(base, "perf", "coordinator");
+    mkdirSync(perf, { recursive: true });
+    writeState(perf, [], { project: "perf" });
+    register(perf, "perf");
+    const opened = await toManager({ text: "why both?", side: "new", quote: { text: "keep both", from: "Invoice schema, in infra", at: { hash: "#decision/infra/d1", anchor: "dv-info" } } });
+    expect([opened.body["to"], opened.body["delivered"]]).toEqual([["infra"], [{ fleet: "infra", id: 1 }]]);
+    fleetSays(infra, "because", 1);
+    relay();
+    expect(fields(readChat(manager).at(-1), "id", "from", "side")).toEqual([2, "infra", 1]);
+    expect((await post({ text: "and the cost?", side: 1 }, {}, "/f/manager/chat/preview")).body["to"]).toEqual(["infra"]);
+    const more = await toManager({ text: "and the cost?", side: 1 });
+    expect([more.body["to"], more.body["delivered"]]).toEqual([["infra"], [{ fleet: "infra", id: 3 }]]);
+    const reply = await toManager({ text: "fine", re: 2 });
+    expect([reply.body["to"], reply.body["side"], reply.body["delivered"]]).toEqual([["infra"], 1, [{ fleet: "infra", id: 4 }]]);
+    const cited = await toManager({ text: "@perf what would it cost to run?", side: 1 });
+    expect([cited.body["to"], cited.body["delivered"]]).toEqual([["infra", "perf"], [{ fleet: "infra", id: 5 }, { fleet: "perf", id: 1 }]]);
+    fleetSays(perf, "a cent a page", 1);
+    relay();
+    expect(fields(readChat(manager).at(-1), "from", "re", "side", "text")).toEqual(["perf", 5, 1, "a cent a page"]);
+    const toPerf = await toManager({ text: "per document?", re: 6 });
+    expect([toPerf.body["to"], toPerf.body["side"], toPerf.body["delivered"]]).toEqual([["infra", "perf"], 1, [{ fleet: "infra", id: 6 }, { fleet: "perf", id: 3 }]]);
+    const after = await toManager({ text: "thanks", side: 1 });
+    expect([after.body["to"], after.body["delivered"]]).toEqual([["infra"], [{ fleet: "infra", id: 7 }]]);
+    const noted = await toManager({ text: "@manager note this", side: 1 });
+    expect([noted.body["to"], noted.body["delivered"]]).toEqual([["infra", "manager"], [{ fleet: "infra", id: 8 }]]);
+    const said = append(machine(env), manager, { sender: "manager", text: "noted", re: 9 }, "2026-01-01T00:00:00+00:00");
+
+    if (said instanceof ChatError) throw new Error(said.reason);
+    const back = await toManager({ text: "and file it", re: said.id });
+    expect([back.body["to"], back.body["side"], back.body["delivered"]]).toEqual([["infra", "manager"], 1, [{ fleet: "infra", id: 9 }]]);
+    expect((await toManager({ text: "last one", side: 1 })).body["to"]).toEqual(["infra"]);
+  });
+
+  test("a side chat opened with @p is p's: a follow-up without the @ goes to p, and p's answer comes back inside it", async () => {
+    await toManager({ text: "@p what did you try?", side: "new" });
+    say("coordinator", "these three", { re: 1 });
+    relay();
+    expect(fields(readChat(manager).at(-1), "id", "from", "side")).toEqual([2, "p", 1]);
+    const more = await toManager({ text: "and models?", side: 1 });
+    expect([more.status, more.body["to"], more.body["delivered"]]).toEqual([201, ["p"], [{ fleet: "p", id: 3 }]]);
+    expect(fields(readChat(root)[2], "from", "to", "text", "side", "via")).toEqual(["user", ["coordinator"], "and models?", 1, { fleet: "manager", id: 3 }]);
+    say("coordinator", "none yet", { re: 3 });
+    relay();
+    expect(fields(readChat(manager).at(-1), "from", "re", "side", "text")).toEqual(["p", 3, 1, "none yet"]);
+  });
+
+  test("a side chat on a fleet's message in the chat is that fleet's", async () => {
+    await toManager({ text: "@p hello" });
+    say("coordinator", "hi", { re: 1 });
+    relay();
+    const opened = await toManager({ text: "what did you mean?", side: "new", quote: { text: "hi", from: "p", at: { hash: "#plan", message: "2" } } });
+    expect([opened.body["to"], opened.body["delivered"]]).toEqual([["p"], [{ fleet: "p", id: 3 }]]);
+  });
+
+  test("a side chat on a worker's row stays the manager's: `#agent-<x>` there is a worker, not a fleet", async () => {
+    const opened = await toManager({ text: "who is this?", side: "new", quote: { text: "scout", from: "the fleet table", at: { hash: "#agent-p", anchor: "agent-p" } } });
+    expect([opened.body["to"], opened.body["delivered"]]).toEqual([["manager"], undefined]);
+  });
+
+  test("a fleet is named by its id exactly, or by an alias only one fleet has; an ambiguous alias names no owner", async () => {
+    const reg = machine(env).registry;
+
+    const renamed = (dir: string, name: string): void => {
+      const done = reg.rename(dir, name);
+
+      if ("why" in done) throw new Error(done.why);
+    };
+
+    // p becomes z, then a; infra becomes z, then b: both keep the alias z.
+    renamed(root, "z");
+    renamed(root, "a");
+    renamed(infra, "z");
+    renamed(infra, "b");
+    const quoting = (fleet: string): JsonObject => ({ text: "keep both", from: "Invoice schema", at: { hash: `#decision/${fleet}/d1`, anchor: "dv-info" } });
+    expect((await toManager({ text: "why?", side: "new", quote: quoting("z") })).body["to"]).toEqual(["manager"]);
+    expect((await toManager({ text: "and this?", side: "new", quote: quoting("infra") })).body["to"]).toEqual(["b"]);
+    // An id wins over another fleet's alias: infra, renamed to p, is p; a (once p) keeps p as an alias.
+    renamed(infra, "p");
+    expect((await toManager({ text: "and p?", side: "new", quote: quoting("p") })).body["to"]).toEqual(["p"]);
+    expect(reg.live().find((e) => e.id === "a")?.aliases).toContain("p");
+  });
+
+  test("a side chat on the manager's own things stays the manager's, and the main chat is as before", async () => {
+    await toManager({ text: "about this", side: "new", quote: { text: "a line", from: "the plan", at: { hash: "#plan" } } });
+    const more = await toManager({ text: "and that", side: 1 });
+    expect([more.body["to"], more.body["delivered"]]).toEqual([["manager"], undefined]);
+    await toManager({ text: "@p hello" });
+    const own = await toManager({ text: "and one more thing", re: 3 });
+    expect([own.body["to"], own.body["delivered"]]).toEqual([["manager"], undefined]);
+  });
+
   test("a quote's place goes across: the fleet's own decision as its own page's, anything else on the manager's page", async () => {
     await toManager({ text: "@p why?", quote: { text: "per line", from: "Rounding, in p", at: { hash: "#decision/p/d1", anchor: "dv-info" } } });
     await toManager({ text: "@p and this?", quote: { text: "halfway", from: "the chat", at: { hash: "#plan", message: "1" } } });

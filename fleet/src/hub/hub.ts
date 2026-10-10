@@ -987,7 +987,18 @@ export class Hub {
 
     try {
       if (rest === "/chat/preview") {
-        const resolved = address(machine, root, { sender: "user", text, re, allowUser: true });
+        const side = sideOf(body["side"]);
+        const quote = quoteOf(body["quote"]);
+
+        if (side instanceof ChatError) return jsonResponse(400, { error: side.reason });
+
+        if (quote instanceof ChatError) return jsonResponse(400, { error: quote.reason });
+        const asked: Building<Parameters<typeof address>[2]> = { sender: "user", text, re, allowUser: true };
+
+        if (side !== undefined) asked.side = side;
+
+        if (quote !== undefined) asked.quote = quote;
+        const resolved = address(machine, root, asked);
 
         if (resolved instanceof ChatError) return jsonResponse(400, { error: resolved.reason });
 
