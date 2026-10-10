@@ -1019,7 +1019,7 @@ export function createUi(m: Model) {
     const target = at.anchor ? document.getElementById(at.anchor) : null;
 
     if (target) target.scrollIntoView();
-    else if (shown && shown !== place) window.scrollTo(0, 0);
+    else if ((shown && shown !== place) || (id && was && was !== id)) window.scrollTo(0, 0);
 
     if (id && was !== id && shown) refs.decision?.focus({ preventScroll: true });
     shown = place;
