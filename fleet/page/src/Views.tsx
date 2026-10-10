@@ -1,17 +1,20 @@
 /**
  * The views under the masthead, one at a time: Plan (roadmap, roadblocks, held for later), Fleet (a
- * manager's coordinators, the live preview, the workers with their filters, tokens by worker), Links (the
- * preview, pages, dev servers, what else the machine serves) and Log.
+ * manager's coordinators, the live preview, the workers with their filters, tokens by worker), Links (what
+ * waits on the user, then previews, prototypes, tools, docs and services, active or not, and what else the
+ * machine serves) and Log.
  */
 import { createEffect, createMemo, createSignal } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
 import { Pill, PillAs, RefTag, usePage, When, Who, tf } from "./bits.tsx";
-import { Core, type Agent, type Coordinator, type Decision, type Link, type Preview, type PreviewServer } from "./core.ts";
+import { Core, type Agent, type Coordinator, type Decision, type Preview, type PreviewServer } from "./core.ts";
 import { clock, fmtDur, fmtInt, fmtShort, plural, spentWords } from "./format.ts";
 import { keyed } from "./model.ts";
 import { Rich } from "./Rich.tsx";
 import { FILTERS, type Filter } from "./ui.ts";
+import { LinkFilterBar, linkFilters, LinkGroup, LinkRow } from "./Links.tsx";
+import { arrange as arrangeLinks, KIND_NAME as LINK_KIND_NAME, KINDS as LINK_KINDS } from "./links.ts";
 
 /** The decisions tied to a step, or to a milestone and no one step, as chips that open them. */
 function DecisionChips(props: { readonly list: readonly Decision[] }): JSX.Element {
@@ -766,46 +769,31 @@ export function FleetView(props: { readonly rows: () => readonly Agent[] }): JSX
   );
 }
 
-/** A link the fleet named, up or down. */
-function LinkRow(props: { readonly link: Link }): JSX.Element {
-  const { m } = usePage();
-  const l = (): Link => props.link;
-
-  return (
-    <div class={"block link-row " + (l().up ? "" : "down")}>
-      <div class="block-head">
-        <RefTag of={l()} />
-        <a class="link-title" href={l().url} target="_blank" rel="noopener">
-          {l().title}
-        </a>
-        <PillAs cls={l().up ? "running" : "stopped"} text={l().up ? "up" : "down"} />
-        <Show when={m.managed() && l().fleet}>
-          <PillAs cls="plain" text={l().fleet} />
-        </Show>
-      </div>
-      <p class="meta lane">{l().url}</p>
-      <Show when={l().note}>
-        <p class="detail">{l().note}</p>
-      </Show>
-      <Show when={l().decision ? m.decisionById(l().decision) : undefined}>
-        {(d) => (
-          <a class="block-link" href={Core.decisionHref(l().decision)}>
-            For: {d().title}
-          </a>
-        )}
-      </Show>
-    </div>
-  );
-}
-
-/** The places the user opens: the pages and dev servers the fleet named, then what the machine serves that nobody named. */
+/** The places the user opens. What waits on the user first (a link tied to an open decision, or that says what
+ * the user does there), then the active ones by kind, then the inactive ones folded; filtered by state, kind
+ * and, on the manager's page, fleet. Then what the machine serves that nobody named. */
 export function LinksView(): JSX.Element {
   const { m } = usePage();
-  const pages = createMemo(() => m.state.links.filter((l) => l.kind === "page"));
-  const devs = createMemo(() => m.state.links.filter((l) => l.kind === "dev"));
+  const f = linkFilters();
+  const fleets = createMemo(() => [...new Set(m.state.links.map((l) => l.fleet).filter((x) => x !== ""))].sort());
+  const fleet = (): string => (fleets().includes(f.fleet()) ? f.fleet() : "");
+  const arranged = createMemo(() => arrangeLinks(m.state.links, f.showing(), f.kind(), fleet()));
+
+  const kinds = createMemo(() =>
+    LINK_KINDS.flatMap((k) => {
+      const n = m.state.links.filter((l) => l.kind === k && (fleet() === "" || l.fleet === fleet())).length;
+
+      return n > 0 ? [[k, n] as const] : [];
+    }),
+  );
+
+  const showPreview = (): boolean => f.showing() !== "inactive" && (f.kind() === "" || f.kind() === "preview") && fleet() === "";
+  const nothing = (): boolean => !arranged().needs.length && !arranged().groups.length && !arranged().inactive.length;
 
   return (
     <section class="view" id="links-view" data-view="links" aria-label="Links" hidden={m.place().view !== "links"}>
+      <LinkFilterBar f={f} arranged={arranged()} kinds={kinds()} fleets={fleets()} />
+      <Show when={showPreview()}>
       <Show when={m.state.preview}>
         {(p) => (
           <div class="part" id="preview-links">
@@ -840,23 +828,42 @@ export function LinksView(): JSX.Element {
           </div>
         )}
       </Show>
-      <div class="part">
-        <h2>Pages</h2>
-        <p class="muted part-note">Pages made for one purpose: a review, a lab, a report.</p>
-        <div class="card" id="page-list">
-          <For each={pages()} keyed={(l) => l.id} fallback={<p class="empty">No page yet. The {m.host()} lists one here when a worker builds it.</p>}>
-            {(l) => <LinkRow link={l()} />}
-          </For>
-        </div>
-      </div>
-      <div class="part">
-        <h2>Dev servers</h2>
-        <div class="card" id="dev-list">
-          <For each={devs()} keyed={(l) => l.id} fallback={<p class="empty">No dev server recorded.</p>}>
-            {(l) => <LinkRow link={l()} />}
-          </For>
-        </div>
-      </div>
+      </Show>
+      <Show when={arranged().needs.length}>
+        <LinkGroup id="links-needs" title="Needs you" note="Tied to an open decision, or a place the fleet asks you to use." links={arranged().needs} />
+      </Show>
+      <For each={arranged().groups} keyed={(g) => g[0]}>
+        {(g) => <LinkGroup id={"links-" + g()[0]} title={LINK_KIND_NAME[g()[0]][1]} links={g()[1]} />}
+      </For>
+      <Show when={arranged().inactive.length}>
+        <Show
+          when={f.showing() === "all"}
+          fallback={
+            <For each={arranged().inactive} keyed={(g) => g[0]}>
+              {(g) => <LinkGroup id={"links-inactive-" + g()[0]} title={LINK_KIND_NAME[g()[0]][1] + ", inactive"} links={g()[1]} />}
+            </For>
+          }
+        >
+          <details class="part link-inactive" id="links-inactive">
+            <summary>
+              <h2>
+                Inactive <span class="n">{arranged().inactive.reduce((n, g) => n + g[1].length, 0)}</span>
+              </h2>
+            </summary>
+            <p class="muted part-note">Down, done, or serving a closed decision.</p>
+            <div class="card">
+              <For each={arranged().inactive.flatMap((g) => g[1])} keyed={(l) => l.fleet + "/" + l.id}>
+                {(l) => <LinkRow link={l()} />}
+              </For>
+            </div>
+          </details>
+        </Show>
+      </Show>
+      <Show when={nothing() && !(showPreview() && m.state.preview)}>
+        <p class="empty card" id="links-empty">
+          {m.state.links.length ? (f.showing() === "inactive" ? "No inactive link." : "No active link here.") : `No link yet. The ${m.host()} lists a page here when a worker builds one.`}
+        </p>
+      </Show>
       <div class="part" id="found-part" hidden={!m.state.found.length}>
         <h2>Also served on this machine</h2>
         <p class="muted part-note">Found by looking at what the machine serves; no fleet has said what they are.</p>

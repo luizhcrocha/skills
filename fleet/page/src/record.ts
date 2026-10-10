@@ -184,9 +184,9 @@ export function recordOf(row: FindRow, state: Partial<State>, messages: Iterable
 
     return {
       ...base,
-      pills: [l.up ? { text: "up", tone: "done" } : { text: "down", tone: "failed" }],
-      lead: one(l.note),
-      facts: factsOf([["Address", l.url], ["Answers", l.up ? "yes" : "no"], ["Kind", l.kind === "page" ? "page" : "dev server"], ["Fleet", l.fleet]]),
+      pills: l.reach === "machine" ? [l.up ? { text: "up", tone: "done" } : { text: "down", tone: "failed" }] : [],
+      lead: one(l.for || l.note),
+      facts: factsOf([["Address", l.url], ["Answers", l.reach === "machine" ? (l.up ? "yes" : "no") : l.reach === "file" ? "a file on this machine" : "not checked"], ["Kind", l.kind], ["Fleet", l.fleet]]),
     };
   }
 

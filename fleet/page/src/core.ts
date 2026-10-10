@@ -227,17 +227,43 @@ export interface Roadblock {
   readonly decision?: string;
 }
 
+/** What a link is to the user. */
+export type LinkKind = "preview" | "prototype" | "doc" | "tool" | "service";
+
 /** A link the fleet named. */
 export interface Link {
   readonly id: string;
   readonly ref?: string;
   readonly url: string;
   readonly title: string;
-  readonly kind: "page" | "dev";
+  readonly kind: LinkKind;
+  /** Where it is reached from: this machine or its tailnet (probed), elsewhere (not probed), a file here. */
+  readonly reach: "machine" | "external" | "file";
+  /** Whether it answers (a file: whether it is there). */
   readonly up: boolean;
   readonly fleet: string;
   readonly note: string;
   readonly decision: string;
+  /** What the user does there. */
+  readonly for: string;
+  /** When the fleet marked it done; empty while in use. */
+  readonly done: string;
+  /** The status of the decision it serves; empty when none. */
+  readonly decision_status: string;
+  /** The hub path a file is served at; empty when it is not. */
+  readonly file: string;
+  /** The hub's probe: when it was checked, and since when it reads up or down. */
+  readonly checked: string;
+  readonly state_since: string;
+}
+
+const LINK_KINDS: readonly LinkKind[] = ["preview", "prototype", "doc", "tool", "service"];
+
+/** A link's kind from the view; an older view's `dev` reads as preview, `page` as doc. */
+function linkKind(value: Json | undefined): LinkKind {
+  const known = LINK_KINDS.find((k) => k === value);
+
+  return known ?? (value === "page" ? "doc" : "preview");
 }
 
 /** Something the machine serves that no fleet named. */
@@ -877,7 +903,7 @@ function findRows(state: Partial<State>, messages: Iterable<Message> | null | un
     }
   }
 
-  for (const l of state.links ?? []) rows.push({ key: "u:" + l.url, group: "links", ref: l.ref || "", title: one(l.title), sub: one(l.url), hint: (l.kind === "page" ? "page" : "dev") + (l.up ? "" : ", down"), pill: "", go: { kind: "url", url: l.url } });
+  for (const l of state.links ?? []) rows.push({ key: "u:" + l.url, group: "links", ref: l.ref || "", title: one(l.title), sub: one(l.url), hint: l.kind + (l.reach === "machine" && !l.up ? ", down" : ""), pill: "", go: { kind: "url", url: l.reach === "file" && l.file ? l.file : l.url } });
 
   for (const c of state.coordinators ?? []) rows.push({ key: "f:" + c.id, group: "coordinators", ref: "", title: c.id, sub: one(c.now), hint: c.status, pill: "", go: { kind: "url", url: c.url } });
 
@@ -1410,15 +1436,22 @@ function parseState(value: Json | undefined): State | null {
       }),
     ),
     links: withId(list(value["links"]))
-      .filter((l) => isText(l["url"]) && /^https?:\/\//u.test(l["url"]))
+      .filter((l) => isText(l["url"]) && /^(?:https?|file):\/\//iu.test(l["url"]))
       .map((l) => ({
         ...l,
         title: text(l["title"], l["id"]),
-        kind: l["kind"] === "page" ? "page" : "dev",
+        kind: linkKind(l["kind"]),
+        reach: l["reach"] === "file" || /^file:/iu.test(String(l["url"])) ? "file" : l["reach"] === "external" ? "external" : "machine",
         up: l["up"] === true,
         fleet: text(l["fleet"], ""),
         note: text(l["note"], ""),
         decision: text(l["decision"], ""),
+        for: text(l["for"], ""),
+        done: text(l["done"], ""),
+        decision_status: text(l["decision_status"], ""),
+        file: text(l["file"], ""),
+        checked: text(l["checked"], ""),
+        state_since: text(l["state_since"], ""),
       })),
     found: list(value["found"])
       .filter((f) => isText(f["url"]) && f["url"].startsWith('https://'))

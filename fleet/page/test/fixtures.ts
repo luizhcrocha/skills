@@ -163,6 +163,34 @@ export function managerView(now: number): View {
 /** Rows of a list in a view that are objects. */
 const views = (v: Json | undefined): View[] => (Array.isArray(v) ? v.filter((x): x is View => x !== null && Object(x) === x && !Array.isArray(x)) : []);
 
+/** A manager's page whose Links view has every kind and state: what waits on the user, active links of each kind,
+ * and the inactive ones (done, a closed decision, down, a file gone), across two fleets. */
+export function linksView(now: number): View {
+  const view = managerView(now);
+
+  const link = (fleet: string, id: string, kind: string, title: string, url: string, extra: View = {}): View => ({
+    id, ref: id.toUpperCase(), kind, title, url, fleet, note: "", decision: "", for: null, reach: "machine", up: true, file: null, decision_status: null,
+    checked: before(now, 2), state_since: before(now, 90), ...extra,
+  });
+
+  return {
+    ...view,
+    links: [
+      link("billing", "l1", "tool", "Gold-marking page, tier 0 (b286)", "https://box.ts.net:4518/", { for: "mark each decision", decision: "d1", decision_status: "open" }),
+      link("billing", "l2", "preview", "Live preview: every worker's changes", "https://box.ts.net:7501/"),
+      link("billing", "l3", "prototype", "Map prototype round 14: possible duplicates", "https://box.ts.net:7501/caso/CA1014/prototipo/mapa"),
+      link("infra", "l4", "doc", "Auth architecture review (b290)", "file:///home/u/.local/state/infra/auth-review.md", { reach: "file", file: "f/infra/files/auth-review.md" }),
+      link("infra", "l5", "doc", "Agent tool architecture", "https://claude.ai/artifact/Bcwsy", { reach: "external", up: false, checked: null, state_since: null }),
+      link("infra", "l6", "service", "Lab lakeFS: gold sets", "http://localhost:8000"),
+      link("infra", "l7", "prototype", "Timeline prototype, round 2", "https://box.ts.net:7512/timeline/", { up: false, state_since: before(now, 140) }),
+      link("billing", "l8", "prototype", "Tarefas tab, round 1", "https://box.ts.net:5424/", { done: before(now, 30) }),
+      link("billing", "l9", "tool", "Confirm cuts", "https://box.ts.net:5300/", { decision: "d0", decision_status: "decided" }),
+      link("infra", "l10", "doc", "Old plan", "file:///tmp/gone.md", { reach: "file", up: false }),
+      link("infra", "l11", "doc", "Sandbox plan", "file:///home/u/elsewhere/plan.md", { reach: "file" }),
+    ],
+  };
+}
+
 /**
  * The manager's view with open decisions in three fleets (billing 1, infra 2, site 1) and its own that
  * names no agent, for the quick filter by agent; `closed` leaves some out ("<fleet>/<id>").
