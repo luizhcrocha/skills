@@ -635,7 +635,10 @@ SAID_ONCE_CHARS = 200  # "Answered #42 on the page." and a short note of what co
 SAID_ONCE_LINES = 2
 SAID_ONCE_TAIL = 256 * 1024  # the turn is read from the transcript's end, the window doubled until it holds it
 SAID_ONCE_MAX = 8 * 1024 * 1024  # a turn longer than this is let stop: never read a whole long transcript
-_POSTED = re.compile(r"^#(\d+) \S.* -> ", re.M)
+# A `fleet chat DIR say --re M` line as the chat prints it: `#42 coordinator -> user, a1: text [re #41]`
+# (fleet/src/chat/chat.ts renderLines). A news item (`#21 <stamp> skills -> all [release, kept]: text`),
+# a `fleet tell` (`<fleet>: ...`) or a state event never ends in `[re #M]`.
+_POSTED = re.compile(r"^#(\d+) \S+(?: \([^)]*\))? -> (.+?): .*\[re #(\d+)(?:, marks? [\d, ]+)?\]\s*$", re.M)
 
 
 def _is_prompt(entry):
@@ -680,14 +683,36 @@ def _current_turn(path):
 
 
 def _is_say(command):
-    """Whether a shell command runs `fleet chat DIR say` (the CLI by any path, or a variable naming it)."""
+    """Whether a shell command runs `fleet chat DIR say ... --re N` (the CLI by any path, or a variable naming
+    it): a reply. A say with no --re answers nobody's message."""
     import shlex
     try:
         words = _tokens(shlex.split(command))
     except ValueError:
         return False
     return any(words[i] == "chat" and words[i + 2] == "say" and "fleet" in os.path.basename(words[i - 1]).lower()
+               and any(w == "--re" or w.startswith("--re=") for w in words[i + 3:])
                for i in range(1, len(words) - 2))
+
+
+def _from_user(dirs, ids):
+    """Which of the message numbers `ids` are the user's own messages, in the chats of the fleets `dirs`."""
+    found = set()
+    for d in dirs:
+        try:
+            with open(os.path.join(d, "chat.jsonl"), "rb") as f:
+                for line in f:
+                    if b'"user"' not in line:
+                        continue
+                    try:
+                        m = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(m, dict) and m.get("from") == "user" and m.get("id") in ids:
+                        found.add(m["id"])
+        except OSError:
+            continue
+    return found
 
 
 def _blocks(entry, kind):
@@ -705,9 +730,10 @@ def _result_text(block):
 
 
 def fleet_said_once(hook):
-    """Stop: a coordinator or manager that answered the user on the page this turn (a `fleet chat DIR say`
-    whose output shows the message written) ends the turn with one line naming where, not the answer
-    again. A final text over SAID_ONCE_LINES lines or SAID_ONCE_CHARS characters is blocked, once per
+    """Stop: a coordinator or manager that answered the user on the page this turn (a `fleet chat DIR say
+    --re M` whose output shows the message written to the user, M being one of the user's own messages)
+    ends the turn with one line naming where, not the answer again. A news post, a `fleet tell`, a state
+    event, or a message that answers no message of the user's is not an answer on the page. A final text over SAID_ONCE_LINES lines or SAID_ONCE_CHARS characters is blocked, once per
     turn: never on a stop that follows a stop hook's block (stop_hook_active), nor twice for one prompt."""
     if fleet_worker(hook) or hook.input.get("stop_hook_active"):
         return None
@@ -725,11 +751,16 @@ def fleet_said_once(hook):
         return None
     says = [b.get("id") for e in entries if e.get("type") == "assistant" for b in _blocks(e, "tool_use")
             if b.get("name") == "Bash" and _is_say(str((b.get("input") or {}).get("command") or ""))]
-    posted = []
+    replies = []
     for e in entries:
         for b in _blocks(e, "tool_result"):
             if b.get("tool_use_id") in says and not b.get("is_error"):
-                posted += [f"#{n}" for n in _POSTED.findall(_result_text(b))]
+                replies += [(int(n), int(m)) for n, to, m in _POSTED.findall(_result_text(b))
+                            if re.search(r"(?:^|, )user\b", to)]
+    if not replies:
+        return None
+    asked = _from_user(fleet_dirs(hook), {m for _, m in replies})
+    posted = [f"#{n}" for n, m in replies if m in asked]
     if not posted:
         return None
     final = hook.input.get("last_assistant_message")

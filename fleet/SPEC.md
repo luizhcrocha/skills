@@ -1654,8 +1654,12 @@ SKILL.md, Respond; manager SKILL.md, Said once):
 
 - **Said once** (`fleet_said_once`, Stop). When the session hosts a fleet (the same membership and worker
   exclusion as above) and the current turn (the transcript from its last user entry carrying text, read
-  from the end: 256 KiB, doubled up to 8 MiB, else the turn is let stop) ran a Bash `fleet chat DIR say`
-  whose result shows the message written (`#N ... -> ...`, not an error), and the turn's final text
+  from the end: 256 KiB, doubled up to 8 MiB, else the turn is let stop) answered the user on the page:
+  a Bash `fleet chat DIR say ... --re M` whose result (not an error) shows the message written to the
+  user as a reply (`#N <from> -> user...: <text> [re #M]`), M being a message `from: user` in a hosted
+  fleet's `chat.jsonl`. A `fleet news post` (its `#21 <stamp> skills -> all [release, ...]` line, even
+  when its text names a say), a `fleet tell`, a state event, a say with no `--re`, and a reply to a
+  worker's message are not answers on the page. When it did, and the turn's final text
   (`last_assistant_message`, else the turn's last assistant text block) is over 2 non-empty lines or 200
   characters, the hook returns `{"decision": "block", "reason": "You answered on the page (#N). Said
   once: end this turn with one line naming where, e.g. 'Answered #N on the page.' Do not repeat the

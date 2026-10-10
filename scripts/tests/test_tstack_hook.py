@@ -822,9 +822,12 @@ class SaidOnceTest(FleetCase):
                 {"type": "tool_result", "tool_use_id": tid, "content": result, "is_error": is_error}]}})
 
     def say_on_page(self, n=42, re=41, fleet=None, role="coordinator"):
+        """The user's message #re in the chat, and a `say --re` answering it as #n, as the CLI prints it."""
         fleet = fleet or self.fleet_cli
+        self.say(re, "2026-01-05T09:00:00+00:00", text="how is the deploy?", to=(role,))
+        self.say(n, "2026-01-05T09:01:00+00:00", text=self.LONG, frm=role, to=("user",), re=re)
         self.bash(f'{fleet} chat {self.fleet} say --as {role} --re {re} "{self.LONG}"',
-                  f"#{n} {role} -> user [re #{re}]: {self.LONG}\n")
+                  f"#{n} {role} -> user: {self.LONG} [re #{re}]\n")
 
     def reply(self, text):
         self.transcribe({"type": "assistant", "message": {"role": "assistant", "content": [
@@ -855,8 +858,9 @@ class SaidOnceTest(FleetCase):
         self.ledger(role="manager")
         self.watch(role="manager")
         self.transcribe(said("go"))
-        self.bash(f"cd /tmp && fleet chat {self.fleet} say --as manager 'short' && echo ok",
-                  f"#7 manager -> user: short\nok\n")
+        self.say(6, "2026-01-05T09:00:00+00:00", to=("manager",))
+        self.bash(f"cd /tmp && fleet chat {self.fleet} say --as manager --re 6 'short' && echo ok",
+                  f"#7 manager -> user: short [re #6]\nok\n")
         self.assertIn("(#7)", self.blocked(self.stop(last=self.LONG)))
 
     def test_reads_the_final_text_from_the_transcript_without_last_assistant_message(self):
@@ -876,6 +880,30 @@ class SaidOnceTest(FleetCase):
         self.transcribe(said("go"))
         self.bash(f"{self.fleet_cli} chat {self.fleet} inbox --as coordinator", "#41 user -> coordinator: hi\n")
         self.bash("echo fleet chat say", "fleet chat say\n")
+        self.assertSilent(self.stop(last=self.LONG))
+
+    def test_a_news_post_is_not_an_answer_on_the_page(self):
+        # The false positive: a release note to every fleet, whose text names a say, printed as #21.
+        self.transcribe(said("ship 1.9.33 and tell the fleets"))
+        self.bash(f'{self.fleet_cli} news post --from skills --to all --kind release '
+                  f'"1.9.33: answer with fleet chat DIR say --re N; see [re #3]"',
+                  "#21 2026-10-10T14:00:00+00:00 skills -> all [release, kept]: "
+                  "1.9.33: answer with fleet chat DIR say --re N; see [re #3]\n")
+        self.reply(self.LONG)
+        self.assertSilent(self.stop(last=self.LONG))
+        # beside a real answer in the same turn, only the answer counts
+        self.say_on_page()
+        self.assertIn("You answered on the page (#42).", self.blocked(self.stop(last=self.LONG)))
+
+    def test_only_a_reply_to_the_users_own_message_counts(self):
+        self.transcribe(said("go"))
+        self.say(30, "2026-01-05T09:00:00+00:00", frm="a1", to=("coordinator",), text="a1: done")
+        self.bash(f'{self.fleet_cli} chat {self.fleet} say --as coordinator --re 30 "thanks, a1"',
+                  "#31 coordinator -> user, a1 (notes-impl): thanks, a1 [re #30]\n")
+        self.bash(f'{self.fleet_cli} chat {self.fleet} say --as coordinator "status: a2 runs"',
+                  "#32 coordinator -> user: status: a2 runs\n")
+        self.bash(f'{self.fleet_cli} tell p "go on"', "p: #33 user -> coordinator: go on\n")
+        self.bash(f'{self.fleet_cli} state {self.fleet} event "a2 started" --no-render', "")
         self.assertSilent(self.stop(last=self.LONG))
 
     def test_a_say_in_an_earlier_turn_does_not_count(self):
