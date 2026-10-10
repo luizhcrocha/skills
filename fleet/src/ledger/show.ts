@@ -29,7 +29,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
         --manual: its commands in a fenced block (\`\`\`nu), any prose outside it; one bare command line needs none
         --question: the ask alone, up to 400 characters; a plan, settings or numbers go in --body (SKILL.md, Decisions)
   decision ID --kind notice --under APPROVAL --title T --question "what was done" --undo "how to undo it"   closed at once
-  approval add ID --rule R --by WHO --ref DECISION | approval list | approval revoke ID --reason R   standing approvals
+  approval add ID --rule R --by WHO --ref [FLEET/]DECISION[:Q<n>] | approval list | approval revoke ID --reason R   standing approvals
   event [--kind ${EVENT_KINDS.join("|")}] [--agent A] [--important] TEXT   (a note is \`event --kind note TEXT\`)
         --kind reviewed --findings N --changes C,...   a review of those jj changes, before landing
   park [--agent A]... REASON     stop every live worker row (or those named) in one command

@@ -17,10 +17,14 @@ import clock  # noqa: E402
 KINDS = ["decision", "input", "secret", "action", "grill", "notice"]
 CHOICE_KINDS = ("decision", "input", "grill")  # what asks the user to choose or give: what a standing approval may come from
 APPROVAL_STATUSES = ["active", "revoked"]
+APPROVES = ("yes", "approve", "approved")  # the first word of a grilling question's answer that gives a standing approval
 QUESTION_STATUSES = ["open", "answered", "dropped"]
 STATUSES = ["open", "decided", "withdrawn"]
 ASKS = ["user", "manager"]
 ID = re.compile(r"[A-Za-z0-9_.-]+")
+# Where a standing approval comes from: a decision of this fleet, or FLEET/DECISION in another's, and :Q<n> a grilling's question.
+SOURCE = re.compile(r"(?:([A-Za-z0-9_.-]+)/)?([A-Za-z0-9_.-]+)(?::[Qq]([0-9]+))?")
+_ELSEWHERE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 _REFERENCE = re.compile(r"op://[^/\n]+/[^/\n]+/[^/\n]+(/[^/\n]+)?")
 _VALUE_PREFIX = re.compile(r"sk-|ghp_|gho_|ghs_|github_pat_|glpat-|xox[abposr]-|AKIA|AIza|eyJ|-----BEGIN")
@@ -233,11 +237,105 @@ def validate_approvals(state: dict, ids: set, fail) -> None:
                 fail(f"duplicate approval id '{a['id']}'")
             if a["status"] not in APPROVAL_STATUSES:
                 fail(f"approval {a['id']} status '{a['status']}' not in {APPROVAL_STATUSES}")
-            if a["ref"] not in ids:
+            if "/" in a["ref"] and not _ELSEWHERE.fullmatch(a["ref"]):
+                fail(f"approval {a['id']} comes from {a['ref']!r}: another fleet's decision is FLEET/DECISION")
+            if "/" not in a["ref"] and a["ref"] not in ids:
                 fail(f"approval {a['id']} comes from unknown decision '{a['ref']}'")
+            if "question" in a and not (isinstance(a["question"], str) and re.fullmatch(r"q[0-9]+", a["question"])):
+                fail(f"approval {a['id']}'s question {a['question']!r} should be q and a number")
             approvals.add(a["id"])
     for d in state.get("decisions", []):
         if d["kind"] == "notice" and (not isinstance(d.get("under"), str) or d["under"] not in approvals):
             fail(f"notice {d['id']} is done under unknown approval '{d.get('under')}'")
         if d["kind"] == "notice" and not (isinstance(d.get("undo"), str) and d["undo"].strip()):
             fail(f"notice {d['id']} says no way to undo it (undo)")
+
+
+def served(name: str) -> dict | None:
+    """The registry's live entry for the fleet called `name` (its id, else one of its aliases), read without
+    touching the registry; None when no fleet of that name is served."""
+    import fleets
+    try:
+        paths = sorted(p for p in fleets.home().glob("*.json") if p.is_file())
+    except OSError:
+        return None
+    entries = [e for e in (fleets._read(p) for p in paths)
+               if e and isinstance(e.get("id"), str) and isinstance(e.get("dir"), str) and fleets._alive(e.get("pid"))]
+    return next((e for e in entries if e["id"] == name), None) or \
+        next((e for e in entries if isinstance(e.get("aliases"), list) and name in e["aliases"]), None)
+
+
+def approves(q: dict) -> bool:
+    """Whether a grilling question was answered yes or approve: its answer's first word, after an option's key
+    (`(a)`, `a:`) is read as that option's label and "as recommended" as its recommendation."""
+    text = str(q.get("answer") or "").strip()
+    if text.lower().startswith("as recommended"):
+        text = str(q.get("recommend") or "")
+    head = re.match(r"\(?([A-Za-z0-9]+)\)?:?(?=\s|$)", text)
+    option = next((o for o in q.get("options") or [] if head and str(o.get("id", "")).lower() == head[1].lower()), None)
+    if option:
+        text = str(option.get("label") or "")
+    word = re.match(r"[^A-Za-z]*([A-Za-z]+)", text)
+    return bool(word) and word[1].lower() in APPROVES
+
+
+def approval_source(state: dict | None, root, text: str) -> dict | str:
+    """Where `approval add --ref TEXT` comes from, checked as a standing approval needs it: a decided choice,
+    input or grilling asked of the user on the page, with the user's message tagged with it in that fleet's
+    chat (the hub's, the only writer as the user), in this fleet's ledger or, as FLEET/DECISION, in a served
+    fleet's; a grilling's by one question (:Q<n>) answered yes or approve. The row's fields, or why not."""
+    import chat
+    parsed = SOURCE.fullmatch(text or "")
+    if not parsed:
+        return f"--ref reads [FLEET/]DECISION[:Q<n>] (D7, manager/G5:Q1), got {text!r}"
+    fleet, key, n = parsed[1], parsed[2], parsed[3]
+    question = f"q{int(n)}" if n else None
+    entry = None
+    if fleet is not None:
+        entry = served(fleet)
+        if entry is None:
+            return f"no fleet '{fleet}' is being served: --ref FLEET/DECISION names a decision in a fleet `fleet fleets list` names"
+        try:
+            state = json.loads((Path(entry["dir"]) / "state.json").read_text())
+        except (OSError, ValueError):
+            state = None
+        if not isinstance(state, dict) or not isinstance(state.get("decisions"), list):
+            return f"fleet '{entry['id']}' has no ledger at {Path(entry['dir']) / 'state.json'}"
+        root = entry["dir"]
+    d = find(state, key)
+    if d is None:
+        return f"unknown decision '{key}'" + (f" in {entry['id']}" if entry else "")
+    label = (f"{entry['id']}/" if entry else "") + (d.get("ref") or d["id"])
+    name = f"{label} ({d.get('title')})"
+    if question and d.get("kind") != "grill":
+        return f"{name} is a {d.get('kind')}, not a grilling: :{question.upper()} names a grilling's question"
+    if not question and d.get("kind") == "grill":
+        return f"{name} is a grilling: name the question the user answered yes or approve ({label}:Q1)"
+    if d["status"] != "decided":
+        return f"{name} is {d['status']}: a standing approval comes from a decision the user decided"
+    if d["kind"] not in CHOICE_KINDS or d.get("asks", "user") != "user" or not d.get("page", True):
+        return (f"{name} was not asked of the user on the page: only the user's own answer there gives a standing approval; "
+                "ask them with a decision that names the rule")
+    if question:
+        q = next((x for x in d.get("questions") or [] if x.get("id") == question), None)
+        if q is None:
+            return f"{name} has no question {question.upper()}"
+        label = f"{label}:{question.upper()}"
+        if q.get("status") != "answered":
+            return f"{label} is {q.get('status')}: a standing approval comes from a question the user answered yes or approve"
+        if not approves(q):
+            return (f"{label} was answered {q.get('answer')!r}: a standing approval comes from a question answered yes or "
+                    "approve; ask it again, one rule to a question")
+    answers = [m for m in chat.read(Path(root).resolve()) if m.get("decision") == d["id"] and m.get("from") == "user"]
+    if not answers:
+        return f"{name} has no answer from the user in the chat: only the user's own answer on the page gives a standing approval"
+    m = answers[-1]
+    return {"ref": f"{entry['id']}/{d.get('ref') or d['id']}" if entry else d["id"], "question": question,
+            "message": m["id"], "author": m["author"] if isinstance(m.get("author"), str) and m["author"] else None,
+            "label": label, "decision": None if entry else d["id"], "id": d["id"], "dir": entry["dir"] if entry else None}
+
+
+def same_source(a: dict, ref: str, question: str | None, local: str | None = None) -> bool:
+    """Whether approval row `a` comes from `ref` (FLEET/DECISION) and `question`; `local`, in the source fleet's
+    own ledger, is the decision's id there, which an approval added without FLEET/ names."""
+    return (a.get("ref") == ref or (local is not None and a.get("ref") == local)) and a.get("question") == question

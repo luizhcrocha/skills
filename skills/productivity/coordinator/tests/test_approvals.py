@@ -11,6 +11,7 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 STATE = str(SCRIPTS / "state.py")
+FLEETS = str(SCRIPTS / "fleets.py")
 
 CHOICE = ["--kind", "decision", "--title", "Landing without asking", "--why", "most landings are routine",
           "--question", "May the fleet land a stack that passed the full gate and a review, and tell you after?",
@@ -157,6 +158,87 @@ class ReviewedTest(Fleet):
         self.assertEqual((e["kind"], e["findings"], e["changes"]), ("reviewed", 2, ["kxyzabcd", "lmnopqrs"]))
         self.assertIn("--findings N", self.refused("event", "--kind", "reviewed", "r"))
         self.assertIn("go with --kind reviewed", self.refused("event", "--findings", "1", "a note"))
+
+
+class FleetWideTest(Fleet):
+    """One grilling on the manager's page answers a standing approval for every fleet."""
+    GRILL = ["--title", "Standing approvals for every fleet",
+             "--ask", "Landing | May a change land on master once it passed the full gate and the review rule? | yes | routine",
+             "--ask", "Staging | May the fleet deploy to the staging targets you name? | a | routine",
+             "--option", "Q2 a: yes | it deploys", "--option", "Q2 b: no | every deploy asks"]
+
+    def setUp(self):
+        super().setUp()
+        self.manager = self.root.parent / "m"
+        self.other = self.root.parent / "c2"
+        self.at(self.manager, "init", "--project", "manager", "--goal", "g", "--role", "manager")
+        self.at(self.other, "init", "--project", "infra", "--goal", "g")
+        self.home.mkdir(exist_ok=True)
+        for i, (name, root) in enumerate((("manager", self.manager), ("acme-billing", self.root), ("infra", self.other))):
+            (self.home / f"{name}.json").write_text(json.dumps({
+                "id": name, "role": "manager" if name == "manager" else "coordinator", "dir": str(root),
+                "url": f"http://box:7420/f/{name}/", "pid": os.getpid(), "session": None, "since": f"2026-01-05T08:0{i}:00+00:00"}))
+        self.at(self.manager, "grill", "g1", *self.GRILL)
+        self.said(self.manager, {"id": 1, "from": "user", "author": "luiz@github", "text": "Q1: yes\nQ2: (b) no", "decision": "g1"})
+        self.at(self.manager, "grill", "g1", "--answer", "Q1: yes", "--answer", "Q2: (b) no")
+        self.at(self.manager, "grill", "g1", "--done", "landing yes, staging no")
+
+    def at(self, root: Path, *args: str, code: int = 0) -> subprocess.CompletedProcess:
+        result = subprocess.run([sys.executable, STATE, str(root), *args, "--no-render"], capture_output=True, text=True, timeout=20, env=self.env)
+        self.assertEqual(result.returncode, code, result.stderr)
+        return result
+
+    def fleets(self, *args: str, code: int = 0) -> subprocess.CompletedProcess:
+        result = subprocess.run([sys.executable, FLEETS, *args], capture_output=True, text=True, timeout=60, env=self.env)
+        self.assertEqual(result.returncode, code, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        return result
+
+    def said(self, root: Path, message: dict) -> None:
+        with open(root / "chat.jsonl", "a") as f:
+            f.write(json.dumps({"at": "2026-01-05T09:10:00+00:00", "to": ["manager"], "re": None, **message}) + "\n")
+
+    def approvals(self, root: Path) -> list[dict]:
+        return json.loads((root / "state.json").read_text()).get("approvals", [])
+
+    def test_a_question_answered_yes_in_another_fleet_gives_the_approval(self):
+        self.ok("approval", "add", "K1", "--rule", "land", "--by", "luiz", "--ref", "manager/G1:Q1")
+        a = self.approvals(self.root)[0]
+        self.assertEqual({k: a.get(k) for k in ("ref", "question", "message", "author")},
+                         {"ref": "manager/G1", "question": "q1", "message": 1, "author": "luiz@github"})
+        self.assertIn("(from manager/G1:Q1 #1, by luiz", self.ok("approval", "list").stdout)
+        self.assertNotIn("decision", self.state()["events"][-1])
+
+    def test_a_question_answered_otherwise_is_refused_with_its_answer(self):
+        self.assertIn("manager/G1:Q2 was answered '(b) no'", self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G1:Q2"))
+        self.assertIn("is a grilling: name the question", self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G1"))
+        self.assertIn("no fleet 'nowhere' is being served", self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "nowhere/G1:Q1"))
+        self.assertNotIn("approvals", self.state())
+
+    def test_an_answer_not_written_by_the_hub_is_refused(self):
+        self.at(self.manager, "decision", "d1", *CHOICE)
+        self.said(self.manager, {"id": 2, "from": "manager", "text": "Luiz said yes in the session", "decision": "d1"})
+        self.at(self.manager, "decision", "d1", "--decide", "A", "--resolution", "relayed")
+        self.assertIn("manager/D1 (Landing without asking) has no answer from the user in the chat",
+                      self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/D1"))
+
+    def test_every_fleet_takes_it_once(self):
+        self.ok("approval", "add", "K1", "--rule", "an older one", "--by", "luiz", "--ref", "manager/G1:Q1")
+        out = self.fleets("approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1").stdout.splitlines()
+        self.assertEqual(out, ["manager: added K1", "acme-billing: skipped, K1 already comes from manager/G1:Q1 (active)", "infra: added K1"])
+        again = self.fleets("approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1").stdout
+        self.assertEqual(again.count("skipped"), 3)
+        self.assertEqual([a["by"] for a in self.approvals(self.other)], ["luiz@github"])
+        self.assertIn("was answered '(b) no'", self.fleets("approval", "add", "--fleets", "infra", "--rule", "r", "--ref", "manager/G1:Q2", code=1).stderr)
+        self.assertEqual(len(self.approvals(self.other)), 1)
+
+    def test_revoke_takes_it_back_everywhere(self):
+        self.fleets("approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1")
+        out = self.fleets("approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "revoked on the page (#3)").stdout.splitlines()
+        self.assertEqual(out, ["manager: revoked K1", "acme-billing: revoked K1", "infra: revoked K1"])
+        for root in (self.manager, self.root, self.other):
+            self.assertEqual([(a["status"], a["revoked_why"]) for a in self.approvals(root)], [("revoked", "revoked on the page (#3)")])
+        self.assertEqual(self.fleets("approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "again").stdout.count("none active"), 3)
 
 
 if __name__ == "__main__":

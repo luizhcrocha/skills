@@ -19,7 +19,7 @@
                              [--agent A] [--supersedes ID] [--log TEXT] [--asks user|manager] [--advised VIEW]
                              [--decide ANSWER --resolution HOW | --withdraw REASON | --hold REASON | --unhold]
     state.py DIR decision ID --kind notice --under APPROVAL --title T --question WHAT-WAS-DONE --undo HOW
-    state.py DIR approval add ID --rule R --by WHO --ref DECISION | approval list | approval revoke ID --reason R
+    state.py DIR approval add ID --rule R --by WHO --ref [FLEET/]DECISION[:Q<n>] | approval list | approval revoke ID --reason R
     state.py DIR event [--agent A] [--kind K] [--important] [--findings N --changes C,...] TEXT
     state.py DIR park [--agent A]... REASON
     state.py DIR keep ID [TEXT | --drop REASON]
@@ -1387,11 +1387,12 @@ def cmd_event(state, args):
 
 def approval_line(state: dict, a: dict) -> str:
     """One standing approval as `approval list` and `show` print it."""
-    d = decisions.find(state, a["ref"]) or {}
+    d = (decisions.find(state, a["ref"]) if "/" not in a["ref"] else None) or {}
     done = sum(1 for x in state.get("decisions", []) if x.get("kind") == "notice" and x.get("under") == a["id"])
     status = "active" if a["status"] == "active" else f"revoked {a.get('revoked')}: {a.get('revoked_why')}"
+    source = (d.get("ref") or a["ref"]) + (f":{a['question'].upper()}" if a.get("question") else "")
     return (f"  approval {a['id']} {status} [{done} notice{'s' if done != 1 else ''}] {a['rule']} "
-            f"(from {d.get('ref') or a['ref']} #{a.get('message')}, by {a['by']}, {a['added']})")
+            f"(from {source} #{a.get('message')}, by {a['by']}, {a['added']})")
 
 
 def cmd_approval(state, args):
@@ -1415,7 +1416,7 @@ def cmd_approval(state, args):
         if not (args.reason or "").strip():
             fail("--reason says why, or where the user said it (\"revoked on the page (#21)\")")
         a.update(status="revoked", revoked=now(), revoked_why=args.reason)
-        log(state, "decision", f"Standing approval {a['id']} revoked: {args.reason}", decision=a["ref"])
+        log(state, "decision", f"Standing approval {a['id']} revoked: {args.reason}", decision=a["ref"] if "/" not in a["ref"] else None)
         print(f"revoked approval {a['id']}: what it covered asks the user again.")
         return state
     if a is not None:
@@ -1425,24 +1426,14 @@ def cmd_approval(state, args):
     require(args, ["rule", "by", "ref"], "approval")
     if not args.rule.strip() or not args.by.strip():
         fail("--rule says what the approval covers, in the user's words, and --by who gave it")
-    d = decisions.find(state, args.ref)
-    if d is None:
-        fail(f"unknown decision '{args.ref}'")
-    name = f"{d.get('ref') or d['id']} ({d['title']})"
-    if d["status"] != "decided":
-        fail(f"{name} is {d['status']}: a standing approval comes from a decision the user decided")
-    if d["kind"] not in decisions.CHOICE_KINDS or d.get("asks", "user") != "user" or not d.get("page", True):
-        fail(f"{name} was not asked of the user on the page: only the user's own answer there gives a standing approval; "
-             "ask them with a decision that names the rule")
-    answers = [m for m in chat.read(Path(args.dir).resolve()) if m.get("decision") == d["id"] and m.get("from") == "user"]
-    if not answers:
-        fail(f"{name} has no answer from the user in the chat: only the user's own answer on the page gives a standing approval")
-    m = answers[-1]
-    row = {"id": args.id, "rule": args.rule, "by": args.by, "ref": d["id"], "message": m["id"],
-           **({"author": m["author"]} if isinstance(m.get("author"), str) and m["author"] else {}),
-           "added": now(), "status": "active"}
+    src = decisions.approval_source(state, Path(args.dir).resolve(), args.ref)
+    if isinstance(src, str):
+        fail(src)
+    row = {"id": args.id, "rule": args.rule, "by": args.by, "ref": src["ref"],
+           **({"question": src["question"]} if src["question"] else {}), "message": src["message"],
+           **({"author": src["author"]} if src["author"] else {}), "added": now(), "status": "active"}
     state.setdefault("approvals", []).append(row)
-    log(state, "decision", f"Standing approval {args.id} from {d.get('ref') or d['id']} (#{m['id']}): {args.rule}", decision=d["id"])
+    log(state, "decision", f"Standing approval {args.id} from {src['label']} (#{src['message']}): {args.rule}", decision=src["decision"])
     print(f"recorded approval {args.id}. An act it covers is recorded, not asked: `decision ID --kind notice --under {args.id} "
           "--title T --question \"what was done\" --undo \"how to undo it\"`")
     return state
@@ -1466,7 +1457,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
         --manual: its commands in a fenced block (```nu), any prose outside it; one bare command line needs none
         --question: the ask alone, up to 400 characters; a plan, settings or numbers go in --body (SKILL.md, Decisions)
   decision ID --kind notice --under APPROVAL --title T --question "what was done" --undo "how to undo it"   closed at once
-  approval add ID --rule R --by WHO --ref DECISION | approval list | approval revoke ID --reason R   standing approvals
+  approval add ID --rule R --by WHO --ref [FLEET/]DECISION[:Q<n>] | approval list | approval revoke ID --reason R   standing approvals
   event [--kind {"|".join(KINDS)}] [--agent A] [--important] TEXT   (a note is `event --kind note TEXT`)
         --kind reviewed --findings N --changes C,...   a review of those jj changes, before landing
   park [--agent A]... REASON     stop every live worker row (or those named) in one command
@@ -1597,7 +1588,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("approval"); s.add_argument("action", help="add, list or revoke"); s.add_argument("id", nargs="?")
     s.add_argument("--rule", help="add: what the approval covers, in the user's words")
     s.add_argument("--by", help="add: who gave it")
-    s.add_argument("--ref", metavar="DECISION", help="add: the decided decision where the user gave it")
+    s.add_argument("--ref", metavar="[FLEET/]DECISION[:Q<n>]", help="add: the decided decision where the user gave it: this fleet's,"
+                   " or FLEET/DECISION in a served fleet's; :Q<n> a grilling's question, answered yes or approve")
     s.add_argument("--reason", help="revoke: why, or where the user said it")
     s = sub.add_parser("grill"); s.add_argument("id"); s.add_argument("--title"); s.add_argument("--why")
     s.add_argument("--ask", action="append", metavar='"TITLE | QUESTION | RECOMMENDATION | WHY"', help="a question of this round (repeatable)")

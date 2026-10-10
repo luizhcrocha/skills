@@ -1,0 +1,38 @@
+{"trace": 1, "name": "approvals-fleets", "about": "Standing approvals answered once for every fleet: `approval add --ref FLEET/DECISION:Q<n>` backed by a grilling in the manager's ledger, found through the registry (a question answered yes, as an option's label, or as recommended; refused: answered no, a grilling with no question, a question that is not there, a fleet not served, a decision the user's chat never answered, only a relay from the manager); `fleet fleets approval add --all` (each fleet's next K, one line per fleet, the same --ref skipped on a second run) and `--fleets`; `fleet fleets approval revoke --ref` everywhere; `approval list` and `show`."}
+{"cli": "state", "argv": ["$W/manager", "init", "--project", "manager", "--goal", "g", "--role", "manager", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "init", "--project", "acme billing", "--goal", "g", "--no-render"]}
+{"cli": "state", "argv": ["$W/infra", "init", "--project", "infra", "--goal", "g", "--no-render"]}
+{"fixture": "write", "path": "$REGISTRY/manager.json", "content": "{\"id\": \"manager\", \"role\": \"manager\", \"dir\": \"$W/manager\", \"url\": \"https://box.ts.net:40004/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:00:00+00:00\"}\n"}
+{"fixture": "write", "path": "$REGISTRY/acme-billing.json", "content": "{\"id\": \"acme-billing\", \"role\": \"coordinator\", \"dir\": \"$DIR\", \"url\": \"https://box.ts.net:40005/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:30:00+00:00\"}\n"}
+{"fixture": "write", "path": "$REGISTRY/infra.json", "content": "{\"id\": \"infra\", \"role\": \"coordinator\", \"dir\": \"$W/infra\", \"url\": \"https://box.ts.net:40006/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:40:00+00:00\"}\n"}
+{"cli": "state", "argv": ["$W/manager", "grill", "g-standing", "--title", "Standing approvals for every fleet", "--ask", "Landing | May a change land on master once it passed the full gate and the review rule, without asking? | yes | most asks were landings", "--ask", "Staging | May the fleet deploy to the staging targets you name, without asking? | a | staging is routine", "--option", "Q2 a: yes | it deploys and you read a notice", "--option", "Q2 b: no | every deploy asks", "--ask", "Re-runs | May the fleet re-run a job you approved, on new data or after a fix, without asking again? | yes | re-runs were asked twice", "--no-render"]}
+{"cli": "state", "argv": ["$W/manager", "decision", "d-relay", "--kind", "decision", "--title", "Deploy production", "--question", "May the fleet deploy production without asking?", "--why", "w", "--option", "A: yes | it deploys", "--option", "B: no | it asks", "--recommend", "B", "--reason", "production is not routine", "--no-render"]}
+{"fixture": "append", "path": "$W/manager/chat.jsonl", "content": {"id": 1, "at": "2026-01-05T09:10:00+00:00", "from": "user", "author": "luiz@github", "to": ["manager"], "text": "Q1: yes\nQ2: (b) no\nQ3: as recommended", "re": null, "decision": "g-standing"}, "clock": "2026-01-05T09:10:00+00:00"}
+{"fixture": "append", "path": "$W/manager/chat.jsonl", "content": {"id": 2, "at": "2026-01-05T09:11:00+00:00", "from": "manager", "to": ["user"], "text": "Luiz said yes in the session", "re": null, "decision": "d-relay"}}
+{"cli": "state", "argv": ["$W/manager", "grill", "g-standing", "--answer", "Q1: yes", "--answer", "Q2: (b) no", "--answer", "Q3: as recommended", "--no-render"]}
+{"cli": "state", "argv": ["$W/manager", "grill", "g-standing", "--done", "landing and re-runs yes, staging no", "--no-render"]}
+{"cli": "state", "argv": ["$W/manager", "decision", "d-relay", "--decide", "A", "--resolution", "relayed from the session", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "K1", "--rule", "land a change that passed the full gate and the review rule", "--by", "luiz", "--ref", "manager/G1:Q1", "--no-render"], "clock": "2026-01-05T09:20:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "K2", "--rule", "deploy to staging", "--by", "luiz", "--ref", "manager/G1:Q2", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "K2", "--rule", "r", "--by", "luiz", "--ref", "manager/G1", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "K2", "--rule", "r", "--by", "luiz", "--ref", "manager/g-standing:q9", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "K2", "--rule", "r", "--by", "luiz", "--ref", "nowhere/G1:Q1", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "K2", "--rule", "r", "--by", "luiz", "--ref", "manager/D1", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "K2", "--rule", "r", "--by", "luiz", "--ref", "manager/D1:Q1", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "approval", "add", "K2", "--rule", "r", "--by", "luiz", "--ref", "manager/G1:x", "--no-render"]}
+{"cli": "fleets", "argv": ["approval", "add", "--all", "--rule", "re-run a job you approved, on new data or after a fix", "--ref", "manager/G1:Q3"], "clock": "2026-01-05T09:30:00+00:00"}
+{"cli": "fleets", "argv": ["approval", "add", "--all", "--rule", "land a change that passed the full gate and the review rule", "--ref", "manager/G1:Q1", "--by", "luiz"]}
+{"cli": "fleets", "argv": ["approval", "add", "--all", "--rule", "land a change that passed the full gate and the review rule", "--ref", "manager/G1:Q1", "--by", "luiz"]}
+{"cli": "fleets", "argv": ["approval", "add", "--all", "--rule", "deploy to staging", "--ref", "manager/G1:Q2"]}
+{"cli": "fleets", "argv": ["approval", "add", "--rule", "r", "--ref", "manager/G1:Q1"]}
+{"cli": "fleets", "argv": ["approval", "add", "--all", "--rule", "r", "--ref", "G1:Q1"]}
+{"cli": "fleets", "argv": ["approval", "add", "--fleets", "infra,nowhere", "--rule", "r", "--ref", "manager/G1:Q1"]}
+{"cli": "fleets", "argv": ["approval", "add", "--fleets", "infra", "--rule", "r", "--ref", "manager/G1:Q1"]}
+{"cli": "state", "argv": ["$W/infra", "approval", "list", "--no-render"]}
+{"cli": "fleets", "argv": ["approval", "revoke", "--ref", "manager/G1:Q1"], "clock": "2026-01-05T09:40:00+00:00"}
+{"cli": "fleets", "argv": ["approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "revoked on the page (#3)"]}
+{"cli": "fleets", "argv": ["approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "again"]}
+{"cli": "fleets", "argv": ["approval", "list"]}
+{"cli": "state", "argv": ["$DIR", "approval", "list", "--no-render"]}
+{"cli": "state", "argv": ["$W/manager", "approval", "list", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "show", "--no-render"]}

@@ -182,8 +182,10 @@ export interface Approval {
   id: string;
   rule: string;
   by: string;
-  /** The decision where the user gave it. */
+  /** The decision where the user gave it: its id here, or `FLEET/<its number>` in another fleet's ledger. */
   ref: string;
+  /** The grilling's question the user answered yes or approve (`q2`), when it came from one. */
+  question?: string;
   /** The chat message that carried the user's answer. */
   message?: number;
   author?: string;
@@ -815,7 +817,7 @@ function readKept(object: JsonObject): Fields | Kept {
   return f.done({ id: f.str("id"), text: f.str("text"), at: f.str("at") }, KEPT_KEYS);
 }
 
-const APPROVAL_KEYS = ["id", "rule", "by", "ref", "message", "author", "added", "status", "revoked", "revoked_why"] as const;
+const APPROVAL_KEYS = ["id", "rule", "by", "ref", "question", "message", "author", "added", "status", "revoked", "revoked_why"] as const;
 
 function readApproval(object: JsonObject): Fields | Approval {
   const f = new Fields(object, `approval ${asString(object["id"]) ?? "?"}`);
@@ -830,7 +832,7 @@ function readApproval(object: JsonObject): Fields | Approval {
     status: f.str("status", needs),
   };
 
-  present(row, { message: f.optNumber("message"), author: f.optStr("author"), revoked: f.optStr("revoked"), revoked_why: f.optStr("revoked_why") });
+  present(row, { question: f.optStr("question"), message: f.optNumber("message"), author: f.optStr("author"), revoked: f.optStr("revoked"), revoked_why: f.optStr("revoked_why") });
 
   return f.done(row, APPROVAL_KEYS);
 }
@@ -941,6 +943,13 @@ function encodeRow(row: Row, fields: Encoded): Encoded {
   return out;
 }
 
+/** An approval in Python's key order: the question after the ref, the author after the message. */
+function encodeApproval(a: Approval): Encoded {
+  const { id, rule, by, ref, question, message, author, added, status, revoked, revoked_why } = a;
+
+  return encodeRow(a, { id, rule, by, ref, question, message, author, added, status, revoked, revoked_why });
+}
+
 function encodeStep(step: Step): Encoded {
   return encodeRow(step, { ...step });
 }
@@ -974,7 +983,7 @@ export function encodeLedger(ledger: Ledger): Encoded {
       events: ledger.events.map((e) => encodeRow(e, { ...e, changes: e.changes === undefined ? undefined : [...e.changes] })),
       links: ledger.links?.map((l) => encodeRow(l, { ...l })),
       kept: ledger.kept?.map((k) => encodeRow(k, { ...k })),
-      approvals: ledger.approvals?.map((a) => encodeRow(a, { ...a })),
+      approvals: ledger.approvals?.map(encodeApproval),
     },
   );
 }

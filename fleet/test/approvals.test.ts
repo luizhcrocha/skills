@@ -171,3 +171,116 @@ describe("reviewed events", () => {
     expect(refused("event", "--findings", "1", "a note")).toContain("go with --kind reviewed");
   });
 });
+
+describe("approvals answered once for every fleet", () => {
+  let manager: string;
+
+  let other: string;
+
+  const at = (dir: string, ...args: string[]): Ran => {
+    const result = fleet(["state", dir, ...args, "--no-render"], env);
+    expect(result.code, result.stderr).toBe(0);
+
+    return result;
+  };
+
+  const fleets = (code: number, ...args: string[]): Ran => {
+    const result = fleet(["fleets", ...args], env);
+    expect(result.code, result.stderr).toBe(code);
+
+    return result;
+  };
+
+  const said = (dir: string, message: JsonObject): void => {
+    appendFileSync(join(dir, "chat.jsonl"), `${JSON.stringify({ at: "2026-01-05T09:10:00+00:00", to: ["manager"], re: null, ...message })}\n`);
+  };
+
+  const approvalsAt = (dir: string): JsonObject[] => (asArray(readJson(join(dir, "state.json"))["approvals"]) ?? []).map((r) => asObject(r) ?? {});
+
+  beforeEach(() => {
+    manager = join(root, "..", "m");
+    other = join(root, "..", "c2");
+    at(manager, "init", "--project", "manager", "--goal", "g", "--role", "manager");
+    at(other, "init", "--project", "infra", "--goal", "g");
+
+    const fleetsServed: readonly (readonly [string, string])[] = [
+      ["manager", manager],
+      ["acme-billing", root],
+      ["infra", other],
+    ];
+
+    for (const [i, [name, dir]] of fleetsServed.entries()) {
+      const role = name === "manager" ? "manager" : "coordinator";
+      const entry = { id: name, role, dir, url: `http://box:7420/f/${name}/`, pid: process.pid, session: null, since: `2026-01-05T08:0${String(i)}:00+00:00` };
+      writeFileSync(join(home, `${name}.json`), JSON.stringify(entry));
+    }
+
+    at(
+      manager,
+      "grill",
+      "g1",
+      "--title",
+      "Standing approvals for every fleet",
+      "--ask",
+      "Landing | May a change land on master once it passed the full gate and the review rule? | yes | routine",
+      "--ask",
+      "Staging | May the fleet deploy to the staging targets you name? | a | routine",
+      "--option",
+      "Q2 a: yes | it deploys",
+      "--option",
+      "Q2 b: no | every deploy asks",
+    );
+    said(manager, { id: 1, from: "user", author: "luiz@github", text: "Q1: yes\nQ2: (b) no", decision: "g1" });
+    at(manager, "grill", "g1", "--answer", "Q1: yes", "--answer", "Q2: (b) no");
+    at(manager, "grill", "g1", "--done", "landing yes, staging no");
+  });
+
+  test("a question answered yes in another fleet gives the approval", () => {
+    ok("approval", "add", "K1", "--rule", "land", "--by", "luiz", "--ref", "manager/G1:Q1");
+    const a = rows("approvals")[0] ?? {};
+    expect([a["ref"], a["question"], a["message"], a["author"]]).toEqual(["manager/G1", "q1", 1, "luiz@github"]);
+    expect(ok("approval", "list").stdout).toContain("(from manager/G1:Q1 #1, by luiz");
+    expect(rows("events").at(-1)?.["decision"]).toBeUndefined();
+  });
+
+  test("a question answered otherwise is refused with its answer", () => {
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G1:Q2")).toContain("manager/G1:Q2 was answered '(b) no'");
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G1")).toContain("is a grilling: name the question");
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "nowhere/G1:Q1")).toContain("no fleet 'nowhere' is being served");
+    expect(rows("approvals")).toEqual([]);
+  });
+
+  test("an answer the hub did not write is refused", () => {
+    at(manager, "decision", "d1", ...CHOICE);
+    said(manager, { id: 2, from: "manager", text: "Luiz said yes in the session", decision: "d1" });
+    at(manager, "decision", "d1", "--decide", "A", "--resolution", "relayed");
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/D1")).toContain(
+      "manager/D1 (Landing without asking) has no answer from the user in the chat",
+    );
+  });
+
+  test("every fleet takes it once", () => {
+    ok("approval", "add", "K1", "--rule", "an older one", "--by", "luiz", "--ref", "manager/G1:Q1");
+    expect(fleets(0, "approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1").stdout.trimEnd().split("\n")).toEqual([
+      "manager: added K1",
+      "acme-billing: skipped, K1 already comes from manager/G1:Q1 (active)",
+      "infra: added K1",
+    ]);
+    expect(fleets(0, "approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1").stdout.split("skipped").length - 1).toBe(3);
+    expect(approvalsAt(other).map((a) => a["by"])).toEqual(["luiz@github"]);
+    expect(fleets(1, "approval", "add", "--fleets", "infra", "--rule", "r", "--ref", "manager/G1:Q2").stderr).toContain("was answered '(b) no'");
+    expect(approvalsAt(other).length).toBe(1);
+  });
+
+  test("revoke takes it back everywhere", () => {
+    fleets(0, "approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1");
+    expect(fleets(0, "approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "revoked on the page (#3)").stdout.trimEnd().split("\n")).toEqual([
+      "manager: revoked K1",
+      "acme-billing: revoked K1",
+      "infra: revoked K1",
+    ]);
+
+    for (const dir of [manager, root, other]) expect(approvalsAt(dir).map((a) => [a["status"], a["revoked_why"]])).toEqual([["revoked", "revoked on the page (#3)"]]);
+    expect(fleets(0, "approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "again").stdout.split("none active").length - 1).toBe(3);
+  });
+});

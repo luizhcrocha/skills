@@ -424,26 +424,44 @@ event as `findings` and `changes` after `text`; refused without them (`a reviewe
 review found and of which changes: ...`), with a negative count, or a change id with another character. On
 any other kind, `--findings` or `--changes` is refused (`--findings and --changes go with --kind reviewed`).
 
-**approval** `ACTION [ID] [--rule R --by WHO --ref DECISION] [--reason R]`: the standing approvals,
+**approval** `ACTION [ID] [--rule R --by WHO --ref [FLEET/]DECISION[:Q<n>]] [--reason R]`: the standing approvals,
 `approvals[]` (created on the first). ACTION outside add, list, revoke is refused (`approval 'x' is not one
 of add, list, revoke`). `list` prints one line per approval (as `show` does, below; `no standing approvals:
 ...` when none) and writes nothing. `add` and `revoke` need ID (`approval add names the approval: ...`).
 - `add`: a known ID is refused (`approval K1 is already recorded (<status>): ...`); then an ID other than K
   and ASCII digits (`an approval's id is K and a number (K1, K2, ...), not 'A1': the other letters number
   decisions, links and roadblocks`);
-  `new approval needs --rule --by --ref`; a blank rule or by; DECISION (an id or a number) must be known,
-  `decided` (`D1 (<title>) is open: a standing approval comes from a decision the user decided`), of kind
-  decision, input or grill, asks user and page true (`... was not asked of the user on the page: ...`), and
-  have a message in the chat from the user tagged with it (`... has no answer from the user in the chat:
-  ...`). The row: `{id, rule, by, ref (the decision's id), message (the latest such message's id), author
-  (its author, when it has one), added, status: "active"}`. Logs `decision` (`Standing approval K1 from D1
-  (#14): <rule>`, tagged with the decision) and prints how to record a notice under it.
+  `new approval needs --rule --by --ref`; a blank rule or by. Then `--ref` (`approval_source` in
+  decisions.py, `approvalSource` in fleet/src/ledger/approvals.ts), in this order: it reads
+  `[FLEET/]DECISION[:Q<n>]` (`--ref reads [FLEET/]DECISION[:Q<n>] (D7, manager/G5:Q1), got 'x'`); FLEET,
+  when given, is a fleet the registry serves, by its id, else an alias, read without touching the registry
+  (`no fleet 'x' is being served: ...`), and its `state.json` is the ledger read (`fleet 'x' has no ledger
+  at <path>`), its `chat.jsonl` the chat; DECISION (an id or a number) must be known there (`unknown
+  decision 'G9'`, ` in <fleet>` added for another fleet's). It is named `<label> (<title>)`, the label its
+  number (`D1`, `manager/G5`). `:Q<n>` names a grilling's question: refused on another kind (`manager/D5
+  (<title>) is a decision, not a grilling: :Q2 names a grilling's question`), and a grilling needs one
+  (`... is a grilling: name the question the user answered yes or approve (manager/G5:Q1)`). Then it must
+  be `decided` (`D1 (<title>) is open: a standing approval comes from a decision the user decided`), of
+  kind decision, input or grill, asks user and page true (`... was not asked of the user on the page:
+  ...`); the question must exist (`... has no question Q9`), be answered (`manager/G5:Q2 is open: ...`)
+  and answered yes or approve: the first word of its answer is yes, approve or approved, after a leading
+  option key (`(b)`, `b:`) is read as that option's label and a leading "as recommended" as the
+  question's recommendation (`manager/G5:Q2 was answered '(b) no': a standing approval comes from a
+  question answered yes or approve; ask it again, one rule to a question`). Last, a message in that
+  fleet's chat from the user (only the hub writes as the user) tagged with the decision (`... has no
+  answer from the user in the chat: ...`; a coordinator's or the manager's relay is not one). The row:
+  `{id, rule, by, ref, question? ("q2"), message (the latest such message's id), author (its author, when
+  it has one), added, status: "active"}`, `ref` the decision's id here, or `<fleet>/<its number>` for
+  another fleet's. Logs `decision` (`Standing approval K1 from manager/G5:Q1 (#14): <rule>`, tagged with
+  the decision only when it is this fleet's) and prints how to record a notice under it.
 - `revoke`: an unknown ID, a revoked one (`approval K1 is already revoked (<when>): <why>`) and a blank
   `--reason` are refused. Sets `status` revoked, `revoked` = now, `revoked_why`; logs `decision`
-  (`Standing approval K1 revoked: <reason>`, tagged with its decision).
+  (`Standing approval K1 revoked: <reason>`, tagged with its decision when it is this fleet's).
 - Validation: `approvals`, when present, is a list of objects with non-empty strings `id, rule, by, ref,
   added, status` (`approval X needs id, rule, by, ref, added and status`), ids K and digits (`approval id
-  'A1' should be K and a number`) and unique, `status` active or revoked, `ref` naming a decision; a notice's `under` names an approval
+  'A1' should be K and a number`) and unique, `status` active or revoked, `ref` naming a decision of
+  this ledger or, with a `/`, `FLEET/DECISION` (`approval K1 comes from 'x/': another fleet's decision is
+  FLEET/DECISION`), `question`, when present, q and digits; a notice's `under` names an approval
   (`notice X is done under unknown approval 'K9'`) and its `undo` is not blank. Checked after the
   roadblocks' decisions.
 
@@ -553,7 +571,8 @@ decisions[]   {id, ref, kind, title, question, why, blocking, agent, options[]: 
                held?, held_at? (the fleet works on the answer first; removed when re-presented or closed),
                refusal? (permission, TypeScript only: {tool, call, rule, cause, root, agent_id}),
                advised? (the advisor's view, or none:<why>), under?, undo? (a notice's)}
-approvals[]?  {id, rule, by, ref (a decision id), message?, author?, added, status (active|revoked),
+approvals[]?  {id, rule, by, ref (a decision id, or FLEET/<number> in another fleet's ledger), question? (q<n>),
+               message?, author?, added, status (active|revoked),
                revoked?, revoked_why?}
 events[]      {at, agent|null, kind, text, important?: true, decision?, findings?, changes?}   append-only
 links[]?      {id, ref, url, title, kind (preview|prototype|doc|tool|service; dev|page before them), decision, agent, note,
@@ -893,6 +912,8 @@ the inputs that page has; `held` and `held_at` are there only on a held decision
 | `gate free TOKEN` | `free`; the holder's name in place of the token frees it too, as before tokens | 1 held by another |
 | `name DIR SESSION` | `this fleet is <id>, the session <session>: use that one name everywhere`; renames the entry | 1 not served, reserved, or taken |
 | `procs` | background processes each fleet's session started (by `/proc`, real time) | 0 |
+| `approval add --all\|--fleets A,B --rule R --ref FLEET/DECISION[:Q<n>] [--by WHO]` | one standing approval in every served fleet's ledger (`--all`, in `live()` order) or in those `--fleets` names (ids or aliases, comma-separated, in that order): the ref is checked once as `approval add` checks it (refused as there, `fleets: <why>`, before any fleet is written), then per fleet one line: `<fleet>: skipped, K2 already comes from manager/G5:Q1 (<status>)` when an approval of its ledger, active or revoked, has the same `ref` and `question` (in the source fleet's own ledger, its decision's id as `ref` counts too); else `<fleet>: added K<n>`, n one more than its highest K, by running `state DIR approval add K<n> --rule R --by WHO --ref REF -q` (its page rendered); `<fleet>: refused, <state's reason>` when that refuses. `--by` defaults to the answer's author, else `user` | 1 the usage, neither `--all` nor `--fleets`, a blank rule, a ref with no fleet, a ref refused, a fleet not served (before any write), or any fleet refused (after the others) |
+| `approval revoke --ref FLEET/DECISION[:Q<n>] --reason R [--fleets A,B]` | per served fleet (or those named), each active approval from that ref (as given, or as `<fleet>/<number>` when the fleet is served and has the decision) revoked by `state DIR approval revoke K --reason R -q`: `<fleet>: revoked K3`, or `<fleet>: none active from manager/G5:Q1` | 1 the usage, no `--reason`, a ref with no fleet, a fleet not served, any fleet refused |
 | `whose FROM TO` | the files `jj diff --from FROM --to TO` moves, by owning fleet, from the manager's `DIR/owners` (`FLEET GLOB` per line, first match wins) | 1 no owners file, jj failed |
 | anything else | usage | 1 |
 
@@ -1862,7 +1883,8 @@ fleet's refusal of lanes that meet, the isolated fleet's warning, `show`, valida
 a state command and on a chat watch's wake),
 `show-me-triggers` (the warning that a decision or grilling needs a picture), `past-decision` (a past answer
 referred to with no number), `approvals` (standing approvals and their K ids, notices and their news to the manager or none, `--advised` and the
-advisor warnings, `reviewed` events),
+advisor warnings, `reviewed` events), `approvals-fleets` (`--ref FLEET/DECISION:Q<n>` through the registry, its refusals, `fleets
+approval add --all` and `--fleets`, skipped on a second run, and `fleets approval revoke` everywhere),
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each
 hand-written trace, the same steps with every state command rendering, plus `render-page` (a
 session's scratchpad with its transcript, links, markup and U+2028 in the text, unread chat, a

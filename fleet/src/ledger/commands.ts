@@ -13,7 +13,7 @@ import { readChat } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
 import type { Args } from "../cli/args.ts";
 import { Refusal, stateRefusal } from "../errors.ts";
-import { asString, pyStr } from "../json.ts";
+import { pyStr } from "../json.ts";
 import { FLEET_BIN, isDir, makeDirs, readOrWhy, readText, remove, resolvePath, writeBytes } from "../files.ts";
 import { fleetOf, managerOf, post as postNews, TEXT_MAX } from "../news/news.ts";
 import { failedAnswer, failureWords } from "../health.ts";
@@ -23,6 +23,7 @@ import { workerFigures, workerTitle } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
 import { dropKey, REFUSAL_KEYS, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, milestoneOfStep, nextStepId } from "./numbers.ts";
+import { approvalSource, NoSource } from "./approvals.ts";
 import { LINK_KINDS, linkKind, OLD_LINK_KINDS, type LinkKind } from "./links.ts";
 import { makeRefusedCall, permissionOptions } from "./permission.ts";
 import { roleDefaults } from "./roles.ts";
@@ -2121,10 +2122,10 @@ export function event(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
 
 /** One standing approval as `approval list` and `show` print it. */
 export function approvalLine(ledger: Ledger, a: Approval): string {
-  const d = findDecision(ledger, a.ref);
+  const d = a.ref.includes("/") ? undefined : findDecision(ledger, a.ref);
   const done = (ledger.decisions ?? []).filter((x) => x.kind === "notice" && x.under === a.id).length;
   const status = a.status === "active" ? "active" : `revoked ${a.revoked ?? "None"}: ${a.revoked_why ?? "None"}`;
-  const from = d?.ref !== undefined && d.ref !== "" ? d.ref : a.ref;
+  const from = (d?.ref !== undefined && d.ref !== "" ? d.ref : a.ref) + (a.question === undefined ? "" : `:${a.question.toUpperCase()}`);
 
   return `  approval ${a.id} ${status} [${done} notice${done === 1 ? "" : "s"}] ${a.rule} (from ${from} #${a.message === undefined ? "None" : String(a.message)}, by ${a.by}, ${a.added})`;
 }
@@ -2167,7 +2168,7 @@ export function approval(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       a.status = "revoked";
       a.revoked = stamp(run);
       a.revoked_why = reason;
-      log(run, ledger, { kind: "decision", text: `Standing approval ${a.id} revoked: ${reason}`, decision: a.ref });
+      log(run, ledger, { kind: "decision", text: `Standing approval ${a.id} revoked: ${reason}`, decision: a.ref.includes("/") ? undefined : a.ref });
       run.say(`revoked approval ${a.id}: what it covered asks the user again.`);
 
       return ledger;
@@ -2184,32 +2185,16 @@ export function approval(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
     const by = args.str("by") ?? "";
 
     if (rule.trim() === "" || by.trim() === "") return yield* refuse("--rule says what the approval covers, in the user's words, and --by who gave it");
-    const ref = args.str("ref") ?? "";
-    const d = findDecision(ledger, ref);
+    const src = approvalSource(run.machine, run.root, ledger, args.str("ref") ?? "");
 
-    if (d === undefined) return yield* refuse(`unknown decision '${ref}'`);
-    const name = `${d.ref !== undefined && d.ref !== "" ? d.ref : d.id} (${d.title ?? "None"})`;
+    if (src instanceof NoSource) return yield* refuse(src.why);
+    const row: Approval = { id, rule, by, ref: src.ref, message: src.message, added: stamp(run), status: "active" };
 
-    if (d.status !== "decided") return yield* refuse(`${name} is ${d.status}: a standing approval comes from a decision the user decided`);
+    if (src.question !== undefined) row.question = src.question;
 
-    if (!CHOICE_KINDS.some((k) => k === d.kind) || (d.asks ?? "user") !== "user" || d.page === false) {
-      return yield* refuse(
-        `${name} was not asked of the user on the page: only the user's own answer there gives a standing approval; ` +
-          "ask them with a decision that names the rule",
-      );
-    }
-
-    const answers = readChat(run.root).filter((m) => m.decision === d.id && m.from === "user");
-    const m = answers.at(-1);
-
-    if (m === undefined) return yield* refuse(`${name} has no answer from the user in the chat: only the user's own answer on the page gives a standing approval`);
-
-    const row: Approval = { id, rule, by, ref: d.id, message: m.id, added: stamp(run), status: "active" };
-    const author = asString(m.author);
-
-    if (author !== undefined && author !== "") row.author = author;
+    if (src.author !== undefined) row.author = src.author;
     rows.push(row);
-    log(run, ledger, { kind: "decision", text: `Standing approval ${id} from ${d.ref !== undefined && d.ref !== "" ? d.ref : d.id} (#${m.id}): ${rule}`, decision: d.id });
+    log(run, ledger, { kind: "decision", text: `Standing approval ${id} from ${src.label} (#${String(src.message)}): ${rule}`, decision: src.decision });
     run.say(
       `recorded approval ${id}. An act it covers is recorded, not asked: \`decision ID --kind notice --under ${id} ` +
         '--title T --question "what was done" --undo "how to undo it"`',

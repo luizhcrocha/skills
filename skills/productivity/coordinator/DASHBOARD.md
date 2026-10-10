@@ -92,7 +92,9 @@ decisions[]  what waits on the user, in the order they were opened
 approvals[]  the standing approvals the user gave once (absent until the first)
   id, rule   its id (K1: K and a number) and what it covers, in the user's words
   by         who gave it
-  ref        the decided decision where the user gave it; message, author: the chat message of the answer
+  ref        the decided decision where the user gave it: its id, or FLEET/<number> (manager/G5) when it is in
+             another fleet's ledger; message, author: the chat message of the answer, in that fleet's chat
+  question   q<n>: the grilling's question the user answered yes or approve (absent for a decision or input)
   status     active | revoked; added, revoked, revoked_why
 
 events[]     activity log, oldest first
@@ -208,6 +210,8 @@ A manager's page shows how full the plan's 5-hour and 7-day windows are and when
 | The user approves a kind of act once | after the decision that asked is decided: `approval add K1 --rule "<what it covers, in the user's words>" --by luiz --ref D7`. Refused unless D7 is decided, a choice, input or grilling asked of the user on the page (not `--asks manager`, not recorded after the fact), with the user's answer to it in the chat; the row keeps that message's number and author. `approval list` prints them with the notices under each |
 | An act done under an approval | `decision n1 --kind notice --under K1 --title T --question "what was done" --undo "how to undo it"` (`--why`, `--agent`, `--step`, `--milestone`, `--body` too): recorded decided at once (answer `done`, resolution `under K1`), numbered N, posted to the manager's news as an fyi (no item when no manager is served), listed on the page under Done under your approvals. Refused: an unknown or revoked approval, no `--undo`, and options, a recommendation, a secret, a manual, `--asks manager`, `--blocking`, `--advised` or a close |
 | The user revokes an approval (Revoke on the page posts it to the chat) | `approval revoke K1 --reason "revoked on the page (#21)"`: a notice under it is refused from then on |
+| The user approves a kind of act once for every fleet (a grilling on the manager's page, one yes/no question per rule) | in one fleet: `approval add K1 --rule "..." --by luiz --ref manager/G5:Q1`, the decision found through the registry and checked in that fleet's ledger and chat as above; a grilling is always named by its question, and the question must be answered yes or approve (its first word, an option key read as its label, "as recommended" as its recommendation), else it is refused with the answer found. In every fleet at once: `fleet fleets approval add --all --rule "..." --ref manager/G5:Q1 [--fleets a,b]`, each fleet's next K, one line per fleet (`infra: added K3`), a fleet that already has one from that ref skipped and named (`skipped, K2 already comes from ...`); exit 1 when a fleet refused |
+| The user revokes a fleet-wide approval | `fleet fleets approval revoke --ref manager/G5:Q1 --reason "revoked on the page (#21)" [--fleets a,b]`: each fleet's active approval from that ref revoked, one line per fleet; `approval revoke K3` still revokes one fleet's alone |
 | The advisor's view of a choice the user is asked | `--advised "<one line>"` or `--advised none:<why not>` on `decision`; warned when a choice or input goes to the user without it while the fleet has a live `advisor` row, or is the third choice (decisions, inputs, grillings) asked of the user today |
 | Decided in the session or the chat | `decision d8 --title T --question Q --decide "yes" --resolution "said in the session"` (recorded closed, no page) |
 

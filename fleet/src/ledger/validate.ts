@@ -23,6 +23,9 @@ export const SHARED_KINDS = ["decision", "input", "secret", "action", "grill", "
 /** What asks the user to choose or give: what a standing approval may come from, and what counts toward the advisor rule. */
 export const CHOICE_KINDS = ["decision", "input", "grill"] as const;
 
+/** Another fleet's decision, as an approval row stores it: `FLEET/DECISION`. */
+export const ELSEWHERE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
+
 /** A standing approval's statuses. */
 export const APPROVAL_STATUSES = ["active", "revoked"] as const;
 
@@ -230,7 +233,11 @@ function validateApprovals(ledger: Ledger, decisions: ReadonlySet<string>): Refu
 
     if (!has(APPROVAL_STATUSES, a.status)) return invalid(`approval ${a.id} status '${a.status}' not in ${list(APPROVAL_STATUSES)}`);
 
-    if (!decisions.has(a.ref)) return invalid(`approval ${a.id} comes from unknown decision '${a.ref}'`);
+    if (a.ref.includes("/") && !ELSEWHERE.test(a.ref)) return invalid(`approval ${a.id} comes from ${pyStr(a.ref)}: another fleet's decision is FLEET/DECISION`);
+
+    if (!a.ref.includes("/") && !decisions.has(a.ref)) return invalid(`approval ${a.id} comes from unknown decision '${a.ref}'`);
+
+    if (a.question !== undefined && !/^q[0-9]+$/u.test(a.question)) return invalid(`approval ${a.id}'s question ${pyStr(a.question)} should be q and a number`);
     approvals.add(a.id);
   }
 

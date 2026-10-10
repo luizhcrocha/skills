@@ -21,6 +21,12 @@
     fleets.py whose FROM TO     the files a landing moves, by owning fleet (the manager's DIR/owners)
     fleets.py name DIR SESSION  give the fleet its one name: the session's, which the registry, the
                                 manager's page and chat, and SendMessage all use from then on
+    fleets.py approval add --all|--fleets A,B --rule R --ref FLEET/DECISION[:Q<n>] [--by WHO]
+                                one standing approval, from one answer of the user's, in every served
+                                fleet's ledger (or those named), each under its next K; a fleet that
+                                has one from the same --ref is skipped
+    fleets.py approval revoke --ref FLEET/DECISION[:Q<n>] --reason R [--fleets A,B]
+                                revoke the approvals from that answer in every fleet that has them
 
 serve_dashboard.py registers a fleet when it starts serving DIR and forgets it on --stop; a fleet
 whose server died is forgotten the next time anyone looks, its last entry kept under names/ until its
@@ -906,6 +912,117 @@ def cmd_decision(fleet: str, id_: str) -> None:
     print(f"    page: {entry['url']}#decision/{d['id']}")  # the page finds a decision by its id, not its number
 
 
+APPROVAL_USAGE = ("usage: fleet fleets approval add --all|--fleets A,B --rule R --ref FLEET/DECISION[:Q<n>] [--by WHO]"
+                  " | approval revoke --ref FLEET/DECISION[:Q<n>] --reason R [--fleets A,B]")
+
+
+def _approval_args(argv: list[str]) -> dict | None:
+    """`approval add|revoke` and its flags, or None when they do not read."""
+    if not argv or argv[0] not in ("add", "revoke"):
+        return None
+    given: dict = {"action": argv[0], "all": False}
+    i = 1
+    while i < len(argv):
+        if argv[i] == "--all":
+            given["all"] = True
+            i += 1
+        elif argv[i] in ("--fleets", "--rule", "--ref", "--by", "--reason") and i + 1 < len(argv):
+            given[argv[i][2:]] = argv[i + 1]
+            i += 2
+        else:
+            return None
+    return given
+
+
+def _targets(names: str | None) -> list[dict]:
+    """The served fleets an approval goes to: every one, or those `names` lists (ids or aliases, comma-separated)."""
+    entries = live()
+    if names is None:
+        return entries
+    found = []
+    for n in dict.fromkeys(x.strip() for x in names.split(",") if x.strip()):
+        e = next((e for e in entries if e["id"] == n), None) or \
+            next((e for e in entries if isinstance(e.get("aliases"), list) and n in e["aliases"]), None)
+        if e is None:
+            fail(f"no fleet '{n}' is being served; `fleet fleets list` names the ones that are")
+        if e not in found:
+            found.append(e)
+    if not found:
+        fail("--fleets names no fleet: --fleets A,B")
+    return found
+
+
+def _state(root: str, *argv: str) -> tuple[bool, str]:
+    """Run one state command on the fleet at `root` (rendering its page quietly): whether it took, and its refusal."""
+    import subprocess
+    done = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "state.py"), root, *argv, "-q"],
+                          capture_output=True, text=True)
+    said = [x for x in done.stderr.splitlines() if x.strip()]
+    return done.returncode == 0, (said[-1].removeprefix("state: ") if said else f"exit {done.returncode}")
+
+
+def cmd_approval(argv: list[str]) -> None:
+    """`approval add` the same standing approval to every served fleet (or those listed), or `approval revoke`
+    it everywhere: one line per fleet; exit 1 when a fleet refused."""
+    import decisions
+    given = _approval_args(argv)
+    if given is None:
+        fail(APPROVAL_USAGE)
+    ref = given.get("ref")
+    parsed = decisions.SOURCE.fullmatch(ref or "")
+    if not parsed or parsed[1] is None:
+        fail("--ref names the decision and the fleet whose ledger holds it: FLEET/DECISION[:Q<n>] (manager/G5:Q1)")
+    question = f"q{int(parsed[3])}" if parsed[3] else None
+    refused = False
+    if given["action"] == "add":
+        if not given["all"] and given.get("fleets") is None:
+            fail("approval add goes to every served fleet (--all) or to those named (--fleets A,B)")
+        if not (given.get("rule") or "").strip():
+            fail("approval add needs --rule: what the approval covers, in the user's words")
+        src = decisions.approval_source(None, None, ref)
+        if isinstance(src, str):
+            fail(src)
+        by = (given.get("by") or "").strip() or src["author"] or "user"
+        for e in _targets(given.get("fleets")):
+            state = _read(Path(e["dir"]) / "state.json")
+            if state is None:
+                print(f"{e['id']}: refused, no ledger at {Path(e['dir']) / 'state.json'}")
+                refused = True
+                continue
+            local = src["id"] if Path(e["dir"]).resolve() == Path(src["dir"]).resolve() else None
+            rows = [a for a in state.get("approvals") or [] if isinstance(a, dict)]
+            had = next((a for a in rows if decisions.same_source(a, src["ref"], question, local)), None)
+            if had:
+                print(f"{e['id']}: skipped, {had.get('id')} already comes from {src['label']} ({had.get('status')})")
+                continue
+            k = "K" + str(max((int(a["id"][1:]) for a in rows if re.fullmatch(r"K[0-9]+", str(a.get("id")))), default=0) + 1)
+            took, why = _state(e["dir"], "approval", "add", k, "--rule", given["rule"], "--by", by, "--ref", ref)
+            print(f"{e['id']}: added {k}" if took else f"{e['id']}: refused, {why}")
+            refused = refused or not took
+    else:
+        if not (given.get("reason") or "").strip():
+            fail("approval revoke needs --reason: why, or where the user said it (\"revoked on the page (#21)\")")
+        if given.get("rule") or given.get("by"):
+            fail(APPROVAL_USAGE)
+        source = decisions.served(parsed[1])
+        state = _read(Path(source["dir"]) / "state.json") if source else None
+        d = decisions.find(state, parsed[2]) if isinstance(state, dict) and isinstance(state.get("decisions"), list) else None
+        refs = {f"{parsed[1]}/{parsed[2]}"} | ({f"{source['id']}/{d.get('ref') or d['id']}"} if d else set())
+        label = (f"{source['id']}/{d.get('ref') or d['id']}" if d else f"{parsed[1]}/{parsed[2]}") + (f":{question.upper()}" if question else "")
+        for e in _targets(given.get("fleets")):
+            rows = [a for a in ((_read(Path(e["dir"]) / "state.json") or {}).get("approvals") or []) if isinstance(a, dict)]
+            local = d["id"] if d and Path(e["dir"]).resolve() == Path(source["dir"]).resolve() else None
+            mine = [a for a in rows if a.get("status") == "active" and any(decisions.same_source(a, r, question, local) for r in refs)]
+            if not mine:
+                print(f"{e['id']}: none active from {label}")
+            for a in mine:
+                took, why = _state(e["dir"], "approval", "revoke", str(a["id"]), "--reason", given["reason"])
+                print(f"{e['id']}: revoked {a['id']}" if took else f"{e['id']}: refused, {why}")
+                refused = refused or not took
+    if refused:
+        sys.exit(1)
+
+
 def main(argv: list[str]) -> None:
     if argv == ["list"]:
         cmd_list()
@@ -923,13 +1040,15 @@ def main(argv: list[str]) -> None:
         cmd_show(argv[1])
     elif len(argv) == 3 and argv[0] == "decision":
         cmd_decision(argv[1], argv[2])
+    elif argv and argv[0] == "approval":
+        cmd_approval(argv[1:])
     elif len(argv) == 3 and argv[0] == "name":
         entry = name(argv[1], argv[2])
         if isinstance(entry, str):
             fail(entry)
         print(f"this fleet is {entry['id']}, the session {entry['session']}: use that one name everywhere")
     else:
-        fail("usage: fleet fleets list | waiting | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET|--as NAME WHAT | free TOKEN] | procs | whose FROM TO")
+        fail("usage: fleet fleets list | waiting | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET|--as NAME WHAT | free TOKEN] | procs | whose FROM TO | approval add|revoke ...")
 
 
 if __name__ == "__main__":
