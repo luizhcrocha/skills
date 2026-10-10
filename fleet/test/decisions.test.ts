@@ -11,6 +11,7 @@ import { messageOf, type Message } from "../src/chat/store.ts";
 import { answeredAt } from "../src/health.ts";
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
 import { answerRefusal } from "../src/ledger/answers.ts";
+import { callRev } from "../src/ledger/permission.ts";
 import { baseEnv, fleet, readJson, tmp, type Environment, type Ran } from "./support.ts";
 
 const SCHEMA = [
@@ -771,6 +772,7 @@ describe("permission", () => {
     const d = item("p-1a2b3c4d");
     expect([d["kind"], d["status"], d["ref"], d["agent"], d["blocking"], d["recommend"]]).toEqual(["permission", "open", "P1", "a1", true, null]);
     expect(said).toContain("Then explain it, this turn: ");
+    expect(said).toContain(` decision p-1a2b3c4d --call ${callRev(`Bash(${CALL})`)} --why `);
     expect(d["refusal"]).toEqual({
       tool: "Bash",
       call: CALL,
@@ -783,7 +785,7 @@ describe("permission", () => {
       {
         id: "allow-once",
         label: "Allow this call once",
-        consequence: "the worker runs this exact call once, and nothing like it after: the one-time grant goes once it is used, or after 30 minutes",
+        consequence: "the worker runs exactly the call shown above, once, and nothing like it after: the one-time grant goes once it is used, or after 30 minutes",
       },
       { id: "deny", label: "Deny", consequence: "the worker stays stopped; your note goes to it" },
     ]);
@@ -798,9 +800,9 @@ describe("permission", () => {
     const d = item("p1");
     expect(asObject(d["refusal"] ?? null)?.["rule"]).toBe(`Agent(${spawn})`);
     expect(asObject(asArray(d["options"])?.[0] ?? null)?.["consequence"]).toBe(
-      "the worker starts this exact agent once, and nothing like it after: the one-time grant goes once it is used, or after 30 minutes",
+      "the worker starts exactly the agent shown above, once, and nothing like it after: the one-time grant goes once it is used, or after 30 minutes",
     );
-    expect(d["title"]).toBe("Allow the coordinator to start the agent “prod count”?");
+    expect(d["title"]).toBe("Allow the coordinator to start a general-purpose agent, described by the coordinator as “prod count”?");
     args[args.indexOf("--call") + 1] = "spawn a worker";
     expect(refused(...args.map((a) => (a === "p1" ? "p2" : a)))).toContain("JSON object");
   });
@@ -921,49 +923,98 @@ describe("permission", () => {
       ok("agent", "m1", "--task", "t", "--milestone", "m1", "--name", "the same-document matcher", "--lane", "servers/case-analysis/tasks/lab-sameness/**");
     });
 
-    test("the title names the worker and what the call runs, never the harness's id or the raw command", () => {
+    const P2_TITLE = "Allow the same-document matcher to run a compound command (3 parts, redirect to /tmp/m7-run.log, sh -c)?";
+
+    test("a compound call is named by its parts and risky markers, never by its first command; never the harness's id", () => {
       ok(...p2());
       const d = item("p2");
       expect([d["title"], d["question"], d["why"]]).toEqual([
-        "Allow the same-document matcher to run `vlmrun.py run` (lab-sameness)?",
-        "Let the same-document matcher run this exact call once? It runs `vlmrun.py run` in lab-sameness.",
+        P2_TITLE,
+        "Let the same-document matcher run this exact call once? It is a compound command of 3 parts: read the exact call in full below before you answer.",
         "Auto mode stopped this call: it may spend money or act outside this machine. Only you can let it through.",
       ]);
       expect(JSON.stringify(d)).not.toContain("ac5ca99391e27d894: ");
     });
 
-    test("a subagent the ledger does not know is a worker; the session's own call is the coordinator's", () => {
+    test("a simple call is named by its whole command line and the folder it changes into", () => {
       ok(...p2("p3", "cd /elsewhere/x && make deploy"));
-      expect(item("p3")["title"]).toBe("Allow a worker to run `make deploy` (x)?");
-      ok(...refusal("p4"));
-      expect(item("p4")["title"]).toBe("Allow the coordinator to run `git push`?");
+      expect(item("p3")["title"]).toBe("Allow a worker to run `make deploy` in /elsewhere/x?");
+      ok(...p2("p4", "cd /work/repo/servers/api && make deploy"));
+      expect(item("p4")["title"]).toBe("Allow a worker to run `make deploy` in servers/api?");
+      ok(...refusal("p5"));
+      expect(item("p5")["title"]).toBe("Allow the coordinator to run `git push --force origin HEAD:main 2>&1`?");
     });
 
-    test("every state command asks for the explanation until the coordinator gives it", () => {
+    test("every state command asks for the explanation until the coordinator gives it, naming the call's revision", () => {
       ok(...p2());
-      expect(run("event", "x").stderr).toContain("state: P1 (Allow the same-document matcher to run `vlmrun.py run` (lab-sameness)?) is a call auto mode refused");
+      const warned = run("event", "x").stderr;
+      expect(warned).toContain(`state: P1 (${P2_TITLE}) is a call auto mode refused`);
+      expect(warned).toContain(`decision P1 --call ${callRev(`Bash(${P2})`)} --why`);
+      expect(warned).toContain(`Its call is ${P2} (revision ${callRev(`Bash(${P2})`)}): explain it now`);
     });
 
-    test("the coordinator explains it on the open row: why, body, recommendation and reason", () => {
+    test("no one sets a permission's title or question: they come from its call", () => {
+      // The review set "Allow w1 to run git status?" on a call that also resets the branch.
+      const call = "git status; git reset --hard HEAD~5";
+      ok(...p2("p2", call));
+      const rev = callRev(`Bash(${call})`);
+      expect(refused("decision", "P1", "--call", rev, "--title", "Allow w1 to run git status?")).toContain("a permission's title and question are written from its call");
+      expect(refused("decision", "P1", "--question", "Let w1 run git status once?")).toContain("--question cannot be set");
+      expect(refused("decision", "P1", "--title", "T", "--question", "Q")).toContain("--title and --question cannot be set");
+      expect(item("p2")["title"]).toBe("Allow a worker to run a compound command (2 parts, git reset --hard)?");
+    });
+
+    test("the coordinator explains it on the open row: why, body, recommendation and reason, for the call's revision", () => {
       ok(...p2());
+      const rev = callRev(`Bash(${P2})`);
       const body = join(tmp(), "p2.html");
       writeFileSync(body, "<h2>In short</h2><p>It runs the matcher on 40 real pairs; about US$2 of model calls.</p>");
-      expect(refused("decision", "P1", "--recommend", "allow-once", "--reason", "cheap and needed")).toContain("--why, --body FILE");
-      expect(refused("decision", "P1", "--why", "w", "--body", body, "--recommend", "maybe", "--reason", "r")).toContain("not one of a permission's options");
-      expect(refused("decision", "P1", "--why", "w", "--body", body, "--recommend", "allow-once")).toContain("--reason");
+      expect(refused("decision", "P1", "--call", rev, "--recommend", "allow-once", "--reason", "cheap and needed")).toContain("--why, --body FILE");
+      expect(refused("decision", "P1", "--call", rev, "--why", "w", "--body", body, "--recommend", "maybe", "--reason", "r")).toContain("not one of a permission's options");
+      expect(refused("decision", "P1", "--call", rev, "--why", "w", "--body", body, "--recommend", "allow-once")).toContain("--reason");
       const why = "The matcher's test needs the model service; it costs about US$2 and touches no client data.";
-      ok("decision", "P1", "--why", why, "--body", body, "--recommend", "allow-once", "--reason", "the run is cheap and the result decides the next step", "--log", "explained");
+      ok("decision", "P1", "--call", rev, "--why", why, "--body", body, "--recommend", "allow-once", "--reason", "the run is cheap and the result decides the next step", "--log", "explained");
       const d = item("p2");
-      expect([d["why"], d["recommend"], d["body"], d["title"]]).toEqual([why, "allow-once", true, "Allow the same-document matcher to run `vlmrun.py run` (lab-sameness)?"]);
+      expect([d["why"], d["recommend"], d["body"], d["title"]]).toEqual([why, "allow-once", true, P2_TITLE]);
+      expect(asObject(d["refusal"] ?? null)?.["call"]).toBe(P2);
       expect(run("event", "x").stderr).not.toContain("is a call auto mode refused");
       // The hook's record of the same refusal again keeps the explanation.
       ok(...p2());
       expect([item("p2")["why"], item("p2")["recommend"]]).toEqual([why, "allow-once"]);
       // Another call is another question: the explanation goes, and the words are the call's again.
-      ok(...p2("p2", P2.replace("vlmrun.py run", "vlmrun.py score")));
+      ok(...p2("p2", "cd /work/repo-m1 && uv run python -I vlmrun.py score"));
       const changed = item("p2");
-      expect([changed["recommend"], changed["reason"], changed["body"], changed["title"]]).toEqual([null, null, false, "Allow the same-document matcher to run `vlmrun.py score` (lab-sameness)?"]);
+      expect([changed["recommend"], changed["reason"], changed["body"], changed["title"]]).toEqual([null, null, false, "Allow the same-document matcher to run `python -I vlmrun.py score` in /work/repo-m1?"]);
       expect(existsSync(join(root, "decisions", "p2.html"))).toBe(false);
+    });
+
+    test("an explanation written for a call the hook has since replaced is refused, quoting the call it would land on", () => {
+      // The replay: hook(A), hook(B), then the explanation written for A.
+      const a = "cd /work/repo-m1 && git status";
+      const b = "cd /work/repo-m1 && git reset --hard HEAD~5";
+      ok(...p2("p2", a));
+      ok(...p2("p2", b));
+      const body = join(tmp(), "a.html");
+      writeFileSync(body, "<p>It only shows git status. Safe.</p>");
+      const explainA = ["decision", "P1", "--why", "It only shows git status.", "--body", body, "--recommend", "allow-once", "--reason", "read-only", "--log", "explained"];
+      const stale = refused(...explainA.slice(0, 2), "--call", callRev(`Bash(${a})`), ...explainA.slice(2));
+      expect(stale).toContain(`is not the call this permission asks about any more: P1's call is now: ${b} (revision ${callRev(`Bash(${b})`)})`);
+      expect(refused(...explainA)).toContain(`names the call it explains, as --call ${callRev(`Bash(${b})`)}: P1's call is now: ${b}`);
+
+      for (const writes of [["--recommend", "deny", "--reason", "r"], ["--why", "w"], ["--body", body]]) expect(refused("decision", "P1", ...writes)).toContain("--call");
+
+      const d = item("p2");
+      expect([d["recommend"], d["body"], asObject(d["refusal"] ?? null)?.["call"]]).toEqual([null, false, b]);
+      expect(existsSync(join(root, "decisions", "p2.html"))).toBe(false);
+      // `--call` alone names the revision; it never replaces the recorded call.
+      ok(...explainA.slice(0, 2), "--call", callRev(`Bash(${b})`), ...explainA.slice(2));
+      expect([item("p2")["recommend"], asObject(item("p2")["refusal"] ?? null)?.["call"]]).toEqual(["allow-once", b]);
+    });
+
+    test("a worker's name with a bidi override reaches the title without it", () => {
+      ok("agent", "m2", "--task", "t", "--milestone", "m1", "--name", "safe\u202Eetis", "--lane", "x/**");
+      ok(...p2("p6", "cd /work/repo-m2 && make test"));
+      expect(item("p6")["title"]).toBe("Allow safeetis to run `make test` in /work/repo-m2?");
     });
   });
 });

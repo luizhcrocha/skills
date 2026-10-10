@@ -1261,8 +1261,9 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   --root ROOT [--agent-id AID] [--agent WORKER] [--blocking]`; the hook also passes `--title`, `--question`
   and `--why`, which are ignored): the row gets `refusal: {tool, call, rule, cause, root, agent_id}` with
   `rule` = `TOOL(CALL)` and `agent_id` null without `--agent-id`, and the two options the CLI sets:
-  `allow-once: Allow this call once | the worker runs this exact call once, and nothing like it after: the
-  one-time grant goes once it is used, or after 30 minutes` (for Agent: `starts this exact agent`) and
+  `allow-once: Allow this call once | the worker runs exactly the call shown above, once, and nothing like
+  it after: the one-time grant goes once it is used, or after 30 minutes` (for Agent: `starts exactly the
+  agent shown above, once`) and
   `deny: Deny | the worker stays stopped; your note goes to it`; the rule and the file it goes into show
   with the call on the page. The CLI writes the title, question and why from the call
   (`src/ledger/permission-words.ts`), as it writes the options:
@@ -1270,20 +1271,45 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
     `task_id` is AID, else the worker whose workspace the call changes into (a `workspaces[]` row by `path`,
     or `<dirname(ROOT)>/<basename(ROOT)>-<worker id>`, as the fleet names them); else `a worker` for a
     subagent, `the coordinator` (`the manager` for a manager's ledger) for the main thread.
-  - **what it runs**: the program and up to two plain words after it, past `cd`, `VAR=x`, `timeout`, `env`,
-    `nice`, `secretspec run --`, `uv run`, an interpreter and its flags, and into `sh -c '…'`; redirections
-    dropped. `cd X; timeout 3000 secretspec run -- sh -c 'cd tasks/lab-sameness && uv run python -I
-    vlmrun.py run' > log 2>&1` runs `vlmrun.py run`. Cut at 40 characters.
-  - **where**: the folder it changed into last, unless that is ROOT or a workspace beside it; else the
-    worker's lane, as its last plain path segment.
+  - **simple or compound**: the words never understate the call. A **simple** call is one command, after at
+    most one `cd <path> &&` or `cd <path>;`, with no other `;`, `&&`, `||`, `|`, `&` or newline, no `$( )`
+    or backtick (quoted or not), no redirection to or from a file (`2>&1`, which copies a stream and names
+    none, is kept), no `sudo`, `doas`, `eval` or `xargs`, no inline code (`sh -c`, `bash -lc`, `python -c`,
+    `node -e`, `perl -e`, …), no heredoc, no `if`/`for`/`while`/`case`/`{ }`/`( )`, no unclosed quote, no
+    hidden character (below), and no text that expands at run time: a `$` outside single quotes (`$B`,
+    `"$@"`, `${X}`, `$IFS`) or an unquoted brace expansion (`{rm,-rf,/}`, `a{1..3}`) anywhere, the `cd`
+    path included, or a glob (`r?`) as the program. Any other call is **compound**.
+  - **what a simple call runs**: its whole command line after `timeout N`, `secretspec run --` and `uv
+    run` (without flags of its own), every flag kept, on one line, cut at 100 characters with "…" (the
+    title and question then end with ` (cut, see the exact call)`):
+    `timeout 30 git push --force origin HEAD:main` runs `git push --force origin HEAD:main`.
+  - **where a simple call runs**: its `cd` path, relative to ROOT when inside it by path components (so
+    `/r/repo-evil` is not inside `/r/repo`; ROOT itself is "the repo root"), else in full, `..` resolved; a
+    relative or `~`/`$` path as written. None without a `cd`, nor when the command then works elsewhere:
+    a `-C`, `--cwd`, `--directory`-like flag, an absolute or `~` path, a `..`, or a `$` variable among its
+    arguments.
+  - **a compound call**: its count of parts (each command, the ones inside `sh -c '…'`, `eval` and `$( )`
+    counted in place of their wrapper) and its risky markers, each once in the order found, at most six
+    (then "and N more"): `pipe to <program>`, `redirect to <file>`, `redirect from <file>`, `heredoc`,
+    `command substitution`, `background &`, `subshell`, `if`/`for`/`while`, `sh -c`, `python3 -c`, `node
+    -e`, `eval`, `sudo`, `xargs`, `rm -rf`, `git push --force`, `git reset --hard`, a network or system
+    program (`curl`, `ssh`, `dd`, `kubectl`, …), `hidden characters`, `expands at run time: <the word as
+    written>`.
   - **the category in plain words**: the classifier's `[Category]` as what it means for the user, a clause
     that starts with "it": `[Real-World Transactions]` is "it may spend money or act outside this machine",
     `[Production Reads]` "it reads live production data", `[PII Data Handling]` "it handles personal data
     about people", and so on; one it does not know is "it falls under the “<category>” check".
 
-  Title `Allow <who> to run \`<what>\` (<where>)?` (an Agent call: `Allow <who> to start the agent
-  “<description>”?`); question `Let <who> run this exact call once? It runs \`<what>\` in <where>.`; why
-  `Auto mode stopped this call: <category in plain words>. Only you can let it through.` Refused: a tool
+  A simple call's title is `Allow <who> to run \`<what>\` in <where>?` (no ` in <where>` without one),
+  its question `Let <who> run this exact call once? It runs \`<what>\` in <where>.`; a compound call's
+  title `Allow <who> to run a compound command (<N> parts, <markers>)?`, its question `Let <who> run this
+  exact call once? It is a compound command of <N> parts: read the exact call in full below before you
+  answer.` An Agent call's title is `Allow <who> to start a <type> agent, described by the worker as
+  “<description>”?` (`by the coordinator` for the main thread's; no description, no quote): the description
+  is the caller's words, never the CLI's. The why is `Auto mode stopped this call: <category in plain
+  words>. Only you can let it through.` Title, question and why go without the characters that hide or
+  reorder text (`stripHidden`: U+202A–202E, U+2066–2069, U+200E, U+200F, U+061C, and C0 and C1 controls
+  but tab); the coordinator's watch strips them from its `!` lines too. Refused: a tool
   other than Bash and Agent, a CALL no exact rule can hold (above), a relative ROOT, `--option`,
   `--recommend` with the call's flags, a permission without `--tool --call --cause --root`, and those
   flags on any other kind. ROOT is the
@@ -1300,24 +1326,36 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   choices, and the five flags out of the usage (as argparse's `help=SUPPRESS`), so every usage text stays
   the twin's.
 - **Explaining**: the hook's words say what was refused, not what it means, so the coordinator explains a
-  permission in the turn it opens: `decision P<n> --why "<one or two lines>" --body FILE --recommend
-  allow-once|deny --reason "<one line>" [--question Q] [--log "explained"]`, without the call's flags. The
+  permission in the turn it opens: `decision P<n> --call REV --why "<one or two lines>" --body FILE
+  --recommend allow-once|deny --reason "<one line>" [--log "explained"]`, without the call's other
+  flags. No one sets a permission's title or question: `--title` or `--question` on one is refused (`a
+  permission's title and question are written from its call, so they never say less than it does: …`),
+  while the hook's own `--title` and `--question` are ignored. REV is the call's revision, the first 12 hex digits of the SHA-256 of its rule
+  (`permission.ts` `callRev`), which every explain hint below prints: on a recorded permission, `--call`
+  without `--tool`, `--cause` and `--root` names that revision and never replaces the call. `--why`,
+  `--recommend`, `--reason`, `--body` or `--no-body` on a permission without `--call` is refused (`an
+  explanation of a permission names the call it explains, as --call <rev>: P<n>'s call is now: <call>
+  (revision <rev>). Read it, then explain this call`), and with another revision too (`--call <given> is
+  not the call this permission asks about any more: …`): an explanation written for a call the hook has
+  since replaced never lands on the new one. The
   body says what the call does, why the worker needs it, its cost and risk (money, time, data, outside
   systems) and what a denial means. A permission is **explained** once it has a recommendation (`health.ts`
   `explained`, the page's `Core.explained`). The first explanation needs `--why`, the body and
   `--reason`; `--recommend` is `allow-once` or `deny`. The coordinator's words are checked as a decision's
-  are (the question and why limits, the readability warnings); the hook's are not. Opening one prints `Then
+  are (the why limit, the readability warnings); the hook's are not. Opening one prints `Then
   explain it, this turn: <the command>`; every state command warns `state: P<n> (<title>) is a call auto
-  mode refused, and the user cannot judge it yet: explain it now, ...` while one is open, unexplained and
+  mode refused, and the user cannot judge it yet. Its call is <the call, a hidden character written as
+  \u{…}> (revision <rev>): explain it now, ...` while one is open, unexplained and
   unanswered; the coordinator's watch says it once per revision (`! P<n> (<title>): auto mode refused a
   worker's call, and the page waits for your explanation. Explain it now: ...`), which wakes it within
   `FLEET_CHECK_S` of the hook opening it.
 - **Answering**: the page shows, while the permission is open and unexplained, "Waiting for the
   coordinator to explain this request" under the ask; the explanation replaces it (the why, the body,
-  the recommendation and its reason, as on a decision). The form shows the call folded under "The exact
-  call" (an `sh` block; an Agent call as its input, indented JSON), with "Auto mode stopped it because" and
+  the recommendation and its reason, as on a decision). The form shows "Auto mode stopped it because" and
   the category in plain words followed by the classifier's own, the rule (for Agent, that the plugin's
-  PreToolUse hook lets it through) and the file it goes into, then the two options and a note; the answer
+  PreToolUse hook lets it through) and the file it goes into; then, unfolded and directly above the
+  options, "The exact call you allow" ("The exact agent you allow"): the call as an `sh` block (an Agent
+  call as its input, indented JSON), monospace and wrapped; then the two options and a note; the answer
   is `allow-once: Allow this call once` or `deny: Deny`, the note on the next line, and the POST body
   carries `rule`, the rule the page showed. The answer can be given before the explanation.
 - **Granting** (`src/hub/grants.ts`, before `POST /chat` stores an answer that starts with

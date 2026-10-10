@@ -25,7 +25,7 @@ import { dropKey, REFUSAL_KEYS, type Approval, type LedgerEvent, type Agent, typ
 import { find, findDecision, milestoneOfStep, nextStepId } from "./numbers.ts";
 import { approvalSource, comesFrom, namesOf, NoSource, refOf, sameSource } from "./approvals.ts";
 import { LINK_KINDS, linkKind, OLD_LINK_KINDS, type LinkKind } from "./links.ts";
-import { makeRefusedCall, permissionOptions } from "./permission.ts";
+import { callRev, makeRefusedCall, permissionOptions } from "./permission.ts";
 import { foldersOf, permissionWords, type RefusedBy, type Spawn } from "./permission-words.ts";
 import { roleDefaults } from "./roles.ts";
 import { CHOICE_KINDS, ID, KINDS, nameRefusal } from "./validate.ts";
@@ -1158,10 +1158,37 @@ function writtenFields(args: Args): Set<string> {
 
 const REFUSAL_FLAGS = ["tool", "call", "cause", "root", "agent_id"] as const;
 
-/** Whether this command is the harness's record of a refused call (the hook's): it names the call. The
- * coordinator explains a permission without these flags. */
+/** Whether this command is the harness's record of a refused call (the hook's): it names the tool, cause or
+ * root of the call. The coordinator explains a permission without these, `--call` naming alone the revision of
+ * the call it explains (`callGuard`). */
 function harnessWrites(args: Args): boolean {
-  return REFUSAL_FLAGS.some((k) => args.str(k) !== undefined);
+  return REFUSAL_FLAGS.some((k) => k !== "call" && args.str(k) !== undefined);
+}
+
+/** The fields an explanation of a permission writes, each bound to the call it was written for. */
+const EXPLAINING = ["why", "recommend", "reason", "body"] as const;
+
+/**
+ * An explanation of a permission is for one call: `--call` names that call's revision (permission.ts
+ * `callRev`, which the explain hint prints), and one written for a call the hook has since replaced is
+ * refused, quoting the call it would land on.
+ */
+function callGuard(run: Run, d: Decision): Step$ {
+  const r = d.refusal ?? undefined;
+
+  if (d.kind !== "permission" || r === undefined || harnessWrites(run.args)) return Effect.void;
+  const writes = EXPLAINING.filter((k) => run.args.str(k) !== undefined);
+
+  if (writes.length === 0 && !run.args.flag("no_body")) return Effect.void;
+  const rev = callRev(r.rule);
+  const named = run.args.str("call");
+  const now = `${d.ref ?? d.id}'s call is now: ${r.call} (revision ${rev})`;
+
+  if (named === undefined) return refuse(`an explanation of a permission names the call it explains, as --call ${rev}: ${now}. Read it, then explain this call`);
+
+  if (named !== rev) return refuse(`--call ${named} is not the call this permission asks about any more: ${now}. Read it, then explain this call with --call ${rev}`);
+
+  return Effect.void;
 }
 
 /** The ledger's `workspaces[]` paths, resolved, to the agent each is for. */
@@ -1310,7 +1337,9 @@ function sessionRootOf(run: Run, root: string): Effect.Effect<string, Refusal> {
 function setRefusal(run: Run, d: Decision): Effect.Effect<boolean, Refusal> {
   return Effect.gen(function* () {
     const args = run.args;
-    const named = REFUSAL_FLAGS.filter((k) => args.str(k) !== undefined);
+    const before = d.refusal ?? undefined;
+    // On a recorded call, `--call` alone names the revision an explanation is for (`callGuard`).
+    const named = REFUSAL_FLAGS.filter((k) => args.str(k) !== undefined && !(k === "call" && before !== undefined && !harnessWrites(args)));
 
     if (d.kind !== "permission") {
       if (named.length === 0) return false;
@@ -1324,7 +1353,6 @@ function setRefusal(run: Run, d: Decision): Effect.Effect<boolean, Refusal> {
       return yield* refuse("the refused call's record takes no recommendation: explain the permission on its open row, without --tool, --call, --cause and --root");
     }
 
-    const before = d.refusal ?? undefined;
 
     if (named.length === 0 && before !== undefined) return false;
     const tool = args.str("tool") ?? before?.tool;
@@ -1743,7 +1771,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         run.say(
           `asked ${fresh.id}. Arm its answer's wake now, as a background command (run_in_background): ` +
             `${waitHint(run, fresh.id)}: it exits with the user's answer the moment it is given.` +
-            (explained(fresh) ? "" : ` Then explain it, this turn: ${explainCommand(FLEET_BIN, run.root, fresh.ref ?? fresh.id)}.`),
+            (explained(fresh) ? "" : ` Then explain it, this turn: ${explainCommand(FLEET_BIN, run.root, fresh.ref ?? fresh.id, callRev(fresh.refusal?.rule ?? ""))}.`),
         );
       }
 
@@ -1770,6 +1798,18 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       const harness = kindNow === "permission" && harnessWrites(args);
       const checkedAs = kindNow === "permission" && !harness ? "decision" : kindNow;
       const wasExplained = explained(d);
+
+      if (d.kind === "permission" && !harness) {
+        const set = (["title", "question"] as const).filter((k) => args.str(k) !== undefined);
+
+        if (set.length > 0) {
+          return yield* refuse(
+            `a permission's title and question are written from its call, so they never say less than it does: --${set.join(" and --")} cannot be set; explain it with --why and --body`,
+          );
+        }
+      }
+
+      yield* callGuard(run, d);
       yield* checkQuestion(question, checkedAs);
       yield* checkWhy(args.str("why"), checkedAs);
 

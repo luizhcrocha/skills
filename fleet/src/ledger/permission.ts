@@ -6,6 +6,7 @@
  * for a spawn, `Agent(<its input as JSON>)`, which the plugin's PreToolUse hook matches (auto mode drops
  * Agent allow rules from the settings, and a hook's allow is what clears a refused spawn).
  */
+import { createHash } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 
 import * as Effect from "effect/Effect";
@@ -26,6 +27,12 @@ const GRANT_TTL_MIN = 30;
 /** The exact rule that lets `tool`'s `call` through. */
 export function ruleOf(tool: string, call: string): string {
   return `${tool}(${call})`;
+}
+
+/** The revision of a permission's call: a hash of its exact rule. An explanation names it (`--call`), so one
+ * written for a call the hook has since replaced is refused, not shown with the new call. */
+export function callRev(rule: string): string {
+  return createHash("sha256").update(rule).digest("hex").slice(0, 12);
 }
 
 /** Why no exact rule can let `tool`'s `call` through, or undefined when one can. An Agent call is its input
@@ -84,13 +91,13 @@ export function makeRefusedCall(given: RefusedGiven): Effect.Effect<RefusedCall,
 /** A permission's two options, which the CLI sets itself, each saying what it means for the user; the rule
  * and the file it goes into show with the call on the page. */
 export function permissionOptions(refusal: RefusedCall): Choice[] {
-  const what = refusal.tool === "Agent" ? "starts this exact agent" : "runs this exact call";
+  const what = refusal.tool === "Agent" ? "starts exactly the agent shown above, once" : "runs exactly the call shown above, once";
 
   return [
     {
       id: ALLOW_ONCE,
       label: "Allow this call once",
-      consequence: `the worker ${what} once, and nothing like it after: the one-time grant goes once it is used, or after ${String(GRANT_TTL_MIN)} minutes`,
+      consequence: `the worker ${what}, and nothing like it after: the one-time grant goes once it is used, or after ${String(GRANT_TTL_MIN)} minutes`,
     },
     { id: "deny", label: "Deny", consequence: "the worker stays stopped; your note goes to it" },
   ];

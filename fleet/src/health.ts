@@ -44,10 +44,11 @@ export function unexplained(d: Pick<Decision, "kind" | "status" | "recommend">):
   return d.status === "open" && !explained(d);
 }
 
-/** The command that explains permission `ref` of the fleet in `dir`, run with `bin`, and what its body says. */
-export function explainCommand(bin: string, dir: string, ref: string): string {
+/** The command that explains permission `ref` of the fleet in `dir`, run with `bin`, for its call of revision
+ * `rev` (permission.ts `callRev`), and what its body says. */
+export function explainCommand(bin: string, dir: string, ref: string, rev: string): string {
   return (
-    `\`${bin} state ${dir} decision ${ref} --why "<why the worker needs it, one or two plain lines>" --body FILE ` +
+    `\`${bin} state ${dir} decision ${ref} --call ${rev} --why "<why the worker needs it, one or two plain lines>" --body FILE ` +
     `--recommend allow-once|deny --reason "<one line>" --log "explained"\`, the body saying what the call does, why the worker needs it, ` +
     "its cost and risk (money, time, data, outside systems) and what a denial means"
   );

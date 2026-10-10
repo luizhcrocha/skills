@@ -1,7 +1,7 @@
 /**
  * A permission: a call auto mode refused, which the user lets through once or denies. Its page shows the
- * call as code with its cause, the rule and the file the hub writes it into, then the two options and a
- * note; the answer posts as the options word it, and the hub's refusal shows on the form. Run in happy-dom,
+ * cause, the rule and the file the hub writes it into, then the exact call as code, unfolded and wrapped,
+ * directly above the two options and a note; the answer posts as the options word it, and the hub's refusal shows on the form. Run in happy-dom,
  * through `takeState` and the form's own submit.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -26,7 +26,7 @@ const PERMISSION: View = {
   id: "p-1a2b3c4d",
   ref: "P1",
   kind: "permission",
-  title: "Allow invoice-gen to run `git push`?",
+  title: "Allow invoice-gen to run `git push --force origin HEAD:main 2>&1`?",
   question: "Let invoice-gen's refused call run once?",
   why: "auto mode refused it",
   status: "open",
@@ -37,7 +37,11 @@ const PERMISSION: View = {
   recommend: null,
   refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "[Git Destructive]", root: "/home/me/repos/billing", agent_id: "agent-7f" },
   options: [
-    { id: "allow-once", label: "Allow this call once", consequence: `the hub adds ${RULE} to ${FILE}; the plugin hook removes it once the call has run, or at the first tool call of the session after 30 minutes` },
+    {
+      id: "allow-once",
+      label: "Allow this call once",
+      consequence: "the worker runs exactly the call shown above, once, and nothing like it after: the one-time grant goes once it is used, or after 30 minutes",
+    },
     { id: "deny", label: "Deny", consequence: "the worker stays stopped; your note goes to it" },
   ],
 };
@@ -118,14 +122,11 @@ async function send(choice: string | undefined, note = ""): Promise<void> {
   flush();
 }
 
-test("the refused call shows as code in a folded block, with its cause in plain words, the rule and the file it goes into", () => {
-  const block = root.querySelector<HTMLDetailsElement>("#dv-answer details.refused");
-  expect([block?.open, block?.querySelector("summary")?.textContent]).toEqual([false, "The exact call"]);
-  const call = root.querySelector("#dv-answer .refused figure.code");
-  expect([call?.getAttribute("data-lang"), call?.querySelector("code")?.textContent]).toEqual(["sh", CALL]);
+const exact = (): Element | null => root.querySelector("#dv-answer [data-exact-call]");
+
+test("the refused call shows with its cause in plain words, the rule and the file it goes into", () => {
   const facts = [...root.querySelectorAll("#dv-answer .refused dl > *")].map((e) => e.textContent);
   expect(facts).toEqual(["Auto mode stopped it because", "it can erase work in git: history or changes not yet saved ([Git Destructive])", "Rule", RULE, "Goes into", FILE]);
-  expect(root.querySelector("h1")?.textContent).not.toContain(CALL);
   expect([...root.querySelectorAll('#dv-answer input[name="choice"]')].map((i) => i.getAttribute("value"))).toEqual(["allow-once", "deny"]);
   expect(root.querySelector('#dv-answer textarea[name="note"]')).not.toBeNull();
 });
@@ -137,12 +138,27 @@ test("a refused Agent call shows its input as JSON, and the grants file the hook
   dispose();
   root.remove();
   show({ ...PERMISSION, refusal: { tool: "Agent", call, rule, cause: "[Production Reads]", root: "/home/me/repos/billing", agent_id: null } });
-  const shown = root.querySelector("#dv-answer .refused figure.code");
+  const shown = exact()?.querySelector("figure.code");
   expect([shown?.getAttribute("data-lang"), shown?.querySelector("code")?.textContent]).toEqual(["json", JSON.stringify(spawn, null, 2)]);
   const facts = [...root.querySelectorAll("#dv-answer .refused dl > *")].map((e) => e.textContent);
   expect(facts).toEqual(["Auto mode stopped it because", "it reads live production data ([Production Reads])", "Let through by", "the plugin's PreToolUse hook (auto mode ignores Agent allow rules in the settings)", "Goes into", "/home/me/repos/billing/.claude/tstack-grants.json"]);
   await send("allow-once");
   expect(posted).toEqual([{ text: "allow-once: Allow this call once", decision: "p-1a2b3c4d", rule }]);
+});
+
+test("the exact call shows with no click: unfolded, wrapped, in monospace, directly above the answer buttons", () => {
+  const block = exact();
+  expect(root.querySelector("#dv-answer details")).toBeNull();
+  expect(block?.querySelector("h3")?.textContent).toBe("The exact call you allow");
+  const code = block?.querySelector("figure.code");
+  expect([code?.getAttribute("data-lang"), code?.querySelector("pre code")?.textContent]).toEqual(["sh", CALL]);
+  expect([code?.querySelector("pre")?.classList.contains("wrap"), code?.querySelector(".code-wrap")?.getAttribute("aria-pressed")]).toEqual([true, "true"]);
+  expect(block?.nextElementSibling?.tagName).toBe("FIELDSET");
+  expect(block?.nextElementSibling?.querySelector('input[value="allow-once"]')).not.toBeNull();
+  // The plain words stay above it, and the Allow option says it runs that call.
+  const ask = root.querySelector(".dv-ask");
+  expect(ask !== null && block?.compareDocumentPosition(ask)).toBe(Node.DOCUMENT_POSITION_PRECEDING);
+  expect(root.querySelector('#dv-answer label.option:has(input[value="allow-once"])')?.textContent).toContain("runs exactly the call shown above, once");
 });
 
 test("an answer is the option as it reads, with the note after it; none picked asks for one", async () => {
@@ -167,7 +183,8 @@ const banner = (): Element | null => root.querySelector("#dv-info [data-explain]
 
 test("before the coordinator explains it, the page says it waits for that, above the call, and the answer still works", async () => {
   expect(banner()?.querySelector("h3")?.textContent).toBe("Waiting for the coordinator to explain this request");
-  const call = root.querySelector("#dv-answer .refused");
+  expect(banner()?.textContent).not.toContain("answer now");
+  const call = exact();
   expect(call !== null && banner()?.compareDocumentPosition(call)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   await send("deny", "not now");
   expect(posted).toEqual([{ text: "deny: Deny\nnot now", decision: "p-1a2b3c4d", rule: RULE }]);

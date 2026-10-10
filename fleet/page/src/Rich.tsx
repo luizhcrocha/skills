@@ -27,8 +27,8 @@ const MARK = /(\d+)/gu;
 type MentionView = (part: Part) => JSX.Element;
 
 /** A code block: its language, highlighted, a wrap switch (off), and a copy button that copies exactly its text. */
-export function CodeBlock(props: { readonly lang: string; readonly text: string }): JSX.Element {
-  const [wrap, setWrap] = createSignal(false);
+export function CodeBlock(props: { readonly lang: string; readonly text: string; readonly wrap?: boolean }): JSX.Element {
+  const [wrap, setWrap] = createSignal(props.wrap === true);
   const [copied, setCopied] = createSignal<Copied | "">("");
   let code: HTMLElement | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;

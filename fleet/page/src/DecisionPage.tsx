@@ -639,36 +639,40 @@ function Form(props: { readonly d: Decision }): JSX.Element {
         <AnswerForm d={props.d}>
           <Show when={props.d.refusal}>
             {(r) => (
-              <details class="dv-block refused">
-                <summary>The exact call</summary>
-                <Show when={r().tool === "Agent"} fallback={<CodeBlock lang="sh" text={r().call} />}>
-                  <CodeBlock lang="json" text={spawnInput(r().call)} />
-                </Show>
-                <dl>
-                  <dt>Auto mode stopped it because</dt>
-                  <dd>
-                    {Core.plainCause(r().cause)} ({r().cause})
-                  </dd>
-                  <Show
-                    when={r().tool === "Agent"}
-                    fallback={
-                      <>
-                        <dt>Rule</dt>
-                        <dd>
-                          <code>{r().rule}</code>
-                        </dd>
-                      </>
-                    }
-                  >
-                    <dt>Let through by</dt>
-                    <dd>the plugin's PreToolUse hook (auto mode ignores Agent allow rules in the settings)</dd>
+              <>
+                <div class="dv-block refused">
+                  <dl>
+                    <dt>Auto mode stopped it because</dt>
+                    <dd>
+                      {Core.plainCause(r().cause)} ({r().cause})
+                    </dd>
+                    <Show
+                      when={r().tool === "Agent"}
+                      fallback={
+                        <>
+                          <dt>Rule</dt>
+                          <dd>
+                            <code>{r().rule}</code>
+                          </dd>
+                        </>
+                      }
+                    >
+                      <dt>Let through by</dt>
+                      <dd>the plugin's PreToolUse hook (auto mode ignores Agent allow rules in the settings)</dd>
+                    </Show>
+                    <dt>Goes into</dt>
+                    <dd>
+                      <code>{r().root.replace(/\/+$/u, "") + (r().tool === "Agent" ? "/.claude/tstack-grants.json" : "/.claude/settings.local.json")}</code>
+                    </dd>
+                  </dl>
+                </div>
+                <div class="dv-block exact-call" data-exact-call>
+                  <h3>{r().tool === "Agent" ? "The exact agent you allow" : "The exact call you allow"}</h3>
+                  <Show when={r().tool === "Agent"} fallback={<CodeBlock lang="sh" text={r().call} wrap />}>
+                    <CodeBlock lang="json" text={spawnInput(r().call)} wrap />
                   </Show>
-                  <dt>Goes into</dt>
-                  <dd>
-                    <code>{r().root.replace(/\/+$/u, "") + (r().tool === "Agent" ? "/.claude/tstack-grants.json" : "/.claude/settings.local.json")}</code>
-                  </dd>
-                </dl>
-              </details>
+                </div>
+              </>
             )}
           </Show>
           <fieldset>
@@ -1034,8 +1038,7 @@ function Info(props: { readonly d: Decision }): JSX.Element {
         <div class="note waiting" role="status" data-explain>
           <h3>Waiting for the {m.host()} to explain this request</h3>
           <p>
-            It will say what the call does, why the worker needs it, what it may cost or risk, and what a denial means, with its recommendation. You can answer now if you
-            already know.
+            It will say what the call does, why the worker needs it, what it may cost or risk, and what a denial means, with its recommendation.
           </p>
         </div>
       </Show>

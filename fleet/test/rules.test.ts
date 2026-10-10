@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
+import { callRev } from "../src/ledger/permission.ts";
 import { baseEnv, fleet, readJson, start, tmp, type Environment, type Ran } from "./support.ts";
 
 let base: string;
@@ -131,8 +132,8 @@ describe("a grilling with every question answered is recorded before other work"
   }
 
   /** G1 with both questions answered on the page and recorded, the last answer replied to with a recap, then amendments. */
-  function answered(): void {
-    ok("grill", "g1", "--title", "Search", "--ask", "Seam | one or many? | one | less code", "--ask", "Tier | local first? | yes | it is faster");
+  function answered(title = "Search"): void {
+    ok("grill", "g1", "--title", title, "--ask", "Seam | one or many? | one | less code", "--ask", "Tier | local first? | yes | it is faster");
     userSays(1, "2026-01-05T09:05:00+00:00", "Q1: one\nQ2: yes", "g1");
     ok("grill", "g1", "--answer", "Q1: one", "--answer", "Q2: yes");
     coordinatorSays(2, "2026-01-05T09:06:00+00:00", "That empties the tree. Say 'confirm' and I start.", 1);
@@ -181,6 +182,14 @@ describe("a grilling with every question answered is recorded before other work"
     expect(again.proc.exitCode).toBeNull();
     again.proc.kill();
   }, 20_000);
+
+  test("a title's bidi override or control character never reaches the watch's line", async () => {
+    answered("Se\u202Earch\u2066");
+    const watch = start(["chat", root, "watch", "--as", "coordinator", "--resume", "--once"], { ...env, FLEET_NOW: "2026-01-05T09:10:00+00:00", FLEET_CHECK_S: "0.2" });
+    procs.push(watch.proc);
+    expect(await watch.lines.next()).toStartWith("! G1 (Search): every question is answered");
+    expect(await watch.proc.exited).toBe(0);
+  }, 20_000);
 });
 
 describe("a permission the hook opened is explained by the coordinator in the same turn", () => {
@@ -198,8 +207,8 @@ describe("a permission the hook opened is explained by the coordinator in the sa
     procs.push(first.proc);
     const line = await first.lines.next();
     expect(line).toStartWith(
-      "! P1 (Allow the matcher to run `vlmrun.py run`?): auto mode refused a worker's call, and the page waits for your explanation. Explain it now: " +
-        `\`fleet state ${root} decision P1 --why `,
+      "! P1 (Allow the matcher to run `python vlmrun.py run` in /work/repo-a1?): auto mode refused a worker's call, and the page waits for your explanation. Explain it now: " +
+        `\`fleet state ${root} decision P1 --call ${callRev(`Bash(${CALL})`)} --why `,
     );
     expect(await first.proc.exited).toBe(0);
     const again = start(["chat", root, "watch", "--as", "coordinator", "--resume", "--once"], watchEnv);

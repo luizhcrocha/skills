@@ -15,6 +15,8 @@ import { answeredAt, answeredGrill, answerRecorded, decisionRow, explainCommand,
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger, type Decision, type Ledger } from "../ledger/model.ts";
+import { callRev } from "../ledger/permission.ts";
+import { stripHidden } from "../ledger/permission-words.ts";
 import { findDecision, number } from "../ledger/numbers.ts";
 import { Refusal } from "../errors.ts";
 import { readObject } from "../registry.ts";
@@ -349,7 +351,10 @@ function unexplainedPermissions(root: string, told: Map<string, Json>): string[]
     if (!unexplained(d) || answeredAt(decisionRow(d), said) !== undefined || (told.has(mark) && told.get(mark) !== false)) continue;
     told.set(mark, true);
     const ref = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
-    lines.push(`! ${ref} (${oneLine(d.title)}): auto mode refused a worker's call, and the page waits for your explanation. Explain it now: ${explainCommand("fleet", root, ref)}.`);
+    lines.push(
+      `! ${ref} (${oneLine(d.title)}): auto mode refused a worker's call, and the page waits for your explanation. ` +
+        `Explain it now: ${explainCommand("fleet", root, ref, callRev(d.refusal?.rule ?? ""))}.`,
+    );
   }
 
   return lines;
@@ -539,7 +544,8 @@ function follow(machine: Machine, root: string, who: string, request: WatchReque
         checked = performance.now() / 1000;
         lines = who === "manager" ? fleetsUnheard(machine, resolvePath(root)) : ownSilent(machine, root);
 
-        for (const line of lines) out.out(`${line}\n`);
+        // A title or a name in a line may carry a bidi override or a control character: they never reach the session.
+        for (const line of lines) out.out(`${stripHidden(line)}\n`);
       }
 
       // The first look's `!` lines were due before the watch began.

@@ -500,7 +500,7 @@
   .sheet-head h2 { font-size: 1.375rem; overflow-wrap: anywhere; }
   .icon-btn { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 8px; border: 0; background: none; color: var(--muted); cursor: pointer; flex: none; }
   .icon-btn:hover { background: var(--card-2); color: var(--text); }
-  details.refused > summary { cursor: pointer; font-weight: 600; }
+  .dv-block.exact-call h3 { margin: 0 0 6px; color: var(--text); }
   .refused dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 10px 0 0; }
   .refused dt { font-size: var(--fs-xs); color: var(--muted); font-stretch: var(--narrow); }
   .refused dd { margin: 0; overflow-wrap: anywhere; }
