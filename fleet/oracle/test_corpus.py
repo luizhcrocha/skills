@@ -43,7 +43,7 @@ class CorpusTest(unittest.TestCase):
         self.assertFalse(missing, "record them with `just record-traces`")
 
     def test_every_trace_replays_to_its_expected_results(self):
-        with ThreadPoolExecutor(max_workers=len(TRACES)) as pool:
+        with ThreadPoolExecutor(max_workers=run.workers(len(TRACES))) as pool:
             found = [f for f in pool.map(replayed, TRACES) if f]
         self.assertFalse(found, "\n\n".join(found))
 

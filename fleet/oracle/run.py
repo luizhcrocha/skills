@@ -46,6 +46,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(REPO / "scripts"))
+from run_limits import env_jobs  # noqa: E402
 SKILL = REPO / "skills" / "productivity" / "coordinator"
 FLEET = REPO / "fleet" / "bin" / "fleet"  # the CLI every printed command names, in both implementations
 CLIS = ("state", "chat", "fleets", "news")
@@ -54,6 +56,13 @@ STEP_TIMEOUT_S = 20
 IGNORED = {"__pycache__", "server.log"}  # never part of the observable state
 IGNORED_SUFFIXES = (".pyc", ".tmp")
 LISTENING = (47843,)  # the ports a trace's links name as up (https://box.ts.net:47843/); the probe asks 127.0.0.1
+
+
+def workers(most: int) -> int:
+    """Replays at once, each spawning the CLIs: $TSTACK_TEST_JOBS (scripts/gates' memory-aware cap), else min(most, cores)."""
+    return max(1, min(most, env_jobs() or os.cpu_count() or 2))
+
+
 PAGE_STATE = re.compile(r'<script id="fleet-state" type="application/json">(.*?)</script>', re.S)
 
 

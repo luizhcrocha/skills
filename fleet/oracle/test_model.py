@@ -1056,7 +1056,7 @@ class ModelTest(unittest.TestCase):
         else:
             base = random.SystemRandom().randrange(1, 10**9)
             seeds = [base + i for i in range(int(os.environ.get("FLEET_MODEL_SEQS", 25)))]
-        with ThreadPoolExecutor(max_workers=min(16, os.cpu_count() or 2)) as pool:
+        with ThreadPoolExecutor(max_workers=run.workers(16)) as pool:
             failures = [f for f in pool.map(lambda sd: drive(sd, steps), seeds) if f]
         self.assertFalse(failures, f"{len(failures)} of {len(seeds)} sequences diverged (seeds {seeds[0]}..{seeds[-1]}):\n\n"
                          + "\n\n".join(failures[:3]))
