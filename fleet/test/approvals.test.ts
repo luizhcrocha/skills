@@ -4,14 +4,14 @@
  * under one is recorded closed and told to the fleets, and a choice put to the user without the advisor's
  * view is warned.
  */
-import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
 import { approves, plainAnswer, plainYes } from "../src/ledger/approvals.ts";
-import { baseEnv, FLEET, fleet, readJson, tmp, type Environment, type Ran } from "./support.ts";
+import { baseEnv, FLEET, fleet, now, readJson, tmp, type Environment, type Ran } from "./support.ts";
 
 const CHOICE = [
   "--kind",
@@ -247,7 +247,7 @@ describe("approvals answered once for every fleet", () => {
   };
 
   const said = (dir: string, message: JsonObject): void => {
-    appendFileSync(join(dir, "chat.jsonl"), `${JSON.stringify({ at: "2026-01-05T09:10:00+00:00", to: ["manager"], re: null, ...message })}\n`);
+    appendFileSync(join(dir, "chat.jsonl"), `${JSON.stringify({ at: now(), to: ["manager"], re: null, ...message })}\n`);
   };
 
   const approvalsAt = (dir: string): JsonObject[] => (asArray(readJson(join(dir, "state.json"))["approvals"]) ?? []).map((r) => asObject(r) ?? {});
@@ -369,6 +369,165 @@ describe("approvals answered once for every fleet", () => {
     expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q1")).toContain("manager/G2:Q1 has no answer from the user");
     ok("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2");
     expect(rows("approvals")[0]?.["message"]).toBe(3);
+  });
+
+  test("a question answered yes grants while another is still open", () => {
+    at(
+      manager,
+      "grill",
+      "g2",
+      "--title",
+      "Prod",
+      "--ask",
+      "Landing | May it land? | yes | r",
+      "--ask",
+      "Prod | May it deploy to prod? | a | r",
+      "--option",
+      "Q2 a: yes | it deploys",
+      "--option",
+      "Q2 b: no | every deploy asks",
+    );
+    said(manager, { id: 2, from: "user", author: "luiz@github", text: "Q2: a: yes", decision: "g2" });
+    at(manager, "grill", "g2", "--answer", "Q2: a: yes");
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q1")).toContain(
+      "manager/G2:Q1 is open, not answered yet: a standing approval comes from a question the user answered",
+    );
+    ok("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2");
+    expect(rows("approvals").map((a) => [a["question"], a["message"]])).toEqual([["q2", 2]]);
+    expect(fleets(0, "approval", "add", "--all", "--rule", "deploy to prod", "--ref", "manager/G2:Q2").stdout.trimEnd().split("\n")).toEqual([
+      "manager: added K1",
+      "acme-billing: skipped, K1 already comes from manager/G2:Q2 (active)",
+      "infra: added K1",
+    ]);
+    expect(fleets(1, "approval", "add", "--all", "--rule", "r", "--ref", "manager/G2:Q1").stderr).toContain("manager/G2:Q1 is open, not answered yet");
+  });
+
+  const G2 = ["--title", "Prod", "--ask", "Landing | May it land? | yes | r", "--ask", "Prod | May it deploy to prod? | yes | r"];
+
+  /** Grilling g2 in the manager's ledger, its Q2 answered yes by the user on the page, Q1 still open. */
+  const q2Yes = (): void => {
+    at(manager, "grill", "g2", ...G2);
+    said(manager, { id: 2, from: "user", author: "luiz@github", text: "Q2: yes", decision: "g2" });
+    at(manager, "grill", "g2", "--answer", "Q2: yes");
+  };
+
+  test("an approval is checked again at use: a later no refuses the notice", () => {
+    q2Yes();
+    ok("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2");
+    said(manager, { id: 3, from: "user", author: "luiz@github", text: "Q2: no", decision: "g2" });
+    at(manager, "grill", "g2", "--answer", "Q2: no");
+    const why = refused("decision", "n1", ...NOTICE);
+    expect(why).toContain("approval K1 no longer stands: manager/G2:Q2 was answered 'no'");
+    expect(why).toContain("approval revoke K1");
+    expect(rows("decisions").filter((d) => d["kind"] === "notice")).toEqual([]);
+  });
+
+  test("a source fleet no longer served is read from where the registry kept it", () => {
+    q2Yes();
+    ok("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2");
+    rmSync(join(home, "manager.json"));
+    mkdirSync(join(home, "names"), { recursive: true });
+    writeFileSync(join(home, "names", "manager.json"), JSON.stringify({ id: "manager", role: "manager", dir: manager, url: "x", pid: 999999999, session: null }));
+    ok("decision", "n1", ...NOTICE);
+    rmSync(join(home, "names", "manager.json"));
+    expect(refused("decision", "n2", ...NOTICE)).toContain("approval K1 no longer stands: no fleet 'manager' is being served");
+  });
+
+  test("a question answered again, revised or dropped revokes the approvals it gave in its own ledger", () => {
+    q2Yes();
+    fleets(0, "approval", "add", "--all", "--rule", "deploy to prod", "--ref", "manager/G2:Q2");
+    said(manager, { id: 3, from: "user", author: "luiz@github", text: "Q2: no", decision: "g2" });
+    expect(at(manager, "grill", "g2", "--answer", "Q2: no").stdout).toContain("revoked approval K1 (from manager/G2:Q2): G2:Q2 was answered again (no)");
+    expect(approvalsAt(manager).map((a) => [a["status"], a["revoked_why"]])).toEqual([["revoked", "G2:Q2 was answered again (no)"]]);
+    expect(approvalsAt(root).map((a) => a["status"])).toEqual(["active"]);
+    expect(refused("decision", "n1", ...NOTICE)).toContain("approval K1 no longer stands");
+
+    at(root, "grill", "g3", ...G2);
+    appendFileSync(join(root, "chat.jsonl"), `${JSON.stringify({ id: 9, at: "2099-01-01T00:00:00+00:00", from: "user", author: "luiz@github", to: ["coordinator"], text: "Q1: yes\nQ2: yes", re: null, decision: "g3" })}\n`);
+    at(root, "grill", "g3", "--answer", "Q1: yes", "--answer", "Q2: yes");
+    ok("approval", "add", "K2", "--rule", "land", "--by", "luiz", "--ref", "G1:Q1");
+    ok("approval", "add", "K3", "--rule", "deploy", "--by", "luiz", "--ref", "G1:Q2");
+    expect(at(root, "grill", "g3", "--revise", "Q1: Landing | May it land on Fridays? | yes | r").stdout).toContain("revoked approval K2 (from g3:Q1): G1:Q1 was revised");
+    expect(at(root, "grill", "g3", "--drop", "Q2: not needed").stdout).toContain("revoked approval K3 (from g3:Q2): G1:Q2 was dropped (not needed)");
+    expect(rows("approvals").map((a) => [a["id"], a["status"]])).toEqual([["K1", "active"], ["K2", "revoked"], ["K3", "revoked"]]);
+  });
+
+  test("a withdrawn grilling revokes every approval it gave, and gives none", () => {
+    q2Yes();
+    fleets(0, "approval", "add", "--fleets", "manager", "--rule", "deploy to prod", "--ref", "manager/G2:Q2");
+    expect(at(manager, "decision", "g2", "--withdraw", "plan dropped").stdout).toContain("revoked approval K1 (from manager/G2:Q2): G2 was withdrawn (plan dropped)");
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q2")).toContain("manager/G2 (Prod) was withdrawn");
+  });
+
+  test("a superseded grilling gives none", () => {
+    q2Yes();
+    said(manager, { id: 3, from: "user", author: "luiz@github", text: "Q1: yes", decision: "g2" });
+    at(manager, "grill", "g2", "--answer", "Q1: yes", "--done", "both yes");
+    at(manager, "decision", "d9", ...CHOICE, "--supersedes", "g2");
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q2")).toContain("manager/G2 (Prod) is superseded by D1");
+  });
+
+  test("the user's words count only from when the question was last asked", () => {
+    at(manager, "grill", "g2", ...G2);
+    said(manager, { id: 2, at: "2026-01-05T09:10:00+00:00", from: "user", author: "luiz@github", text: "Q2: yes", decision: "g2" });
+    at(manager, "grill", "g2", "--revise", "Q2: Prod | May it deploy AND migrate prod DBs? | yes | r");
+    at(manager, "grill", "g2", "--answer", "Q2: yes");
+    expect(refused("approval", "add", "K1", "--rule", "migrate", "--by", "luiz", "--ref", "manager/G2:Q2")).toContain(
+      "manager/G2:Q2 has no answer from the user in the chat since it was last asked",
+    );
+    said(manager, { id: 3, from: "user", author: "luiz@github", text: "Q2: yes", decision: "g2" });
+    ok("approval", "add", "K1", "--rule", "migrate", "--by", "luiz", "--ref", "manager/G2:Q2");
+  });
+
+  /** The stamp every command and message of a test that sets it shares: one second, as a revise may share it. */
+  const SECOND = "2026-01-05T09:30:00+00:00";
+
+  const asked = (n: number): JsonObject => {
+    const g2 = (asArray(readJson(join(manager, "state.json"))["decisions"]) ?? []).map((d) => asObject(d) ?? {}).find((d) => d["id"] === "g2") ?? {};
+
+    return asObject((asArray(g2["questions"]) ?? [])[n - 1] ?? null) ?? {};
+  };
+
+  /** G2 with its Q2 revised after the user's "Q2: yes" to the old Q2, all in one second, and answered yes. */
+  const revisedInOneSecond = (): void => {
+    env["FLEET_NOW"] = SECOND;
+    env["TZ"] = "UTC";
+    at(manager, "grill", "g2", ...G2);
+    said(manager, { id: 2, at: SECOND, from: "user", author: "luiz@github", text: "Q2: yes", decision: "g2" });
+    at(manager, "grill", "g2", "--revise", "Q2: Prod | May it deploy AND migrate prod DBs? | yes | r");
+    at(manager, "grill", "g2", "--answer", "Q2: yes");
+  };
+
+  test("an old yes in the same second as the revise does not answer the revised question", () => {
+    revisedInOneSecond();
+    expect([asked(2)["asked"], asked(2)["asked_after"]]).toEqual([SECOND, 2]);
+    expect(refused("approval", "add", "K1", "--rule", "migrate", "--by", "luiz", "--ref", "manager/G2:Q2")).toContain(
+      "manager/G2:Q2 has no answer from the user in the chat since it was last asked",
+    );
+  });
+
+  test("a yes after the revise answers it, in the same second too", () => {
+    revisedInOneSecond();
+    said(manager, { id: 3, at: SECOND, from: "user", author: "luiz@github", text: "Q2: yes", decision: "g2" });
+    ok("approval", "add", "K1", "--rule", "migrate", "--by", "luiz", "--ref", "manager/G2:Q2");
+    expect(rows("approvals").map((a) => [a["question"], a["message"]])).toEqual([["q2", 3]]);
+  });
+
+  test("a question recorded without asked_after keeps the time rule", () => {
+    revisedInOneSecond();
+    const path = join(manager, "state.json");
+    writeFileSync(path, readFileSync(path, "utf8").replace(/,\s*"asked_after":\s*\d+/gu, ""));
+    expect(asked(2)["asked_after"]).toBeUndefined();
+    ok("approval", "add", "K1", "--rule", "migrate", "--by", "luiz", "--ref", "manager/G2:Q2");
+    expect(rows("approvals").map((a) => [a["question"], a["message"]])).toEqual([["q2", 2]]);
+  });
+
+  test("a choice still open gives none", () => {
+    at(manager, "decision", "d1", ...CHOICE);
+    said(manager, { id: 2, from: "user", author: "luiz@github", text: "A: yes", decision: "d1" });
+    expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/D1")).toContain(
+      "manager/D1 (Landing without asking) is open: a standing approval comes from a decision the user decided",
+    );
   });
 
   const stop = (name: string, dir: string): void => {

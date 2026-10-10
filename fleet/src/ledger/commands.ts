@@ -23,7 +23,7 @@ import { workerFigures, workerTitle } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
 import { dropKey, REFUSAL_KEYS, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, milestoneOfStep, nextStepId } from "./numbers.ts";
-import { approvalSource, NoSource, sameSource } from "./approvals.ts";
+import { approvalSource, comesFrom, namesOf, NoSource, refOf, sameSource } from "./approvals.ts";
 import { LINK_KINDS, linkKind, OLD_LINK_KINDS, type LinkKind } from "./links.ts";
 import { makeRefusedCall, permissionOptions } from "./permission.ts";
 import { roleDefaults } from "./roles.ts";
@@ -1277,6 +1277,22 @@ function close(run: Run, ledger: Ledger, d: Decision, outcome: { readonly status
   }
 }
 
+/** Revoke every active approval of this ledger that came from decision `d` (from its question `question`, or
+ * from any of it), saying `why`: the user's answer it rests on moved, so what it covered asks them again. One
+ * line per approval revoked. Another fleet's copy (`fleets approval add`) is refused at use instead. */
+function revokeFrom(run: Run, ledger: Ledger, d: Decision, question: string | undefined, why: string): void {
+  const names = namesOf(run.machine, run.root);
+
+  for (const a of ledger.approvals ?? []) {
+    if (a.status !== "active" || !comesFrom(a, d, names, question)) continue;
+    a.status = "revoked";
+    a.revoked = stamp(run);
+    a.revoked_why = why;
+    log(run, ledger, { kind: "decision", text: `Standing approval ${a.id} revoked: ${why}`, decision: a.ref.includes("/") ? undefined : a.ref });
+    run.say(`revoked approval ${a.id} (from ${refOf(a)}): ${why}; what it covered asks the user again.`);
+  }
+}
+
 const FIELDS = ["kind", "title", "question", "why", "recommend", "reason", "secret", "manual", "agent", "step", "milestone", "advised"] as const;
 
 function placeOf(ledger: Ledger, d: Decision, run: Run): Step$ {
@@ -1409,6 +1425,15 @@ function notice(ledger: Ledger, run: Run, known: Decision | undefined): Effect.E
 
     if (a.status !== "active") {
       return yield* refuse(`approval ${a.id} was revoked ${a.revoked ?? "None"}: ${a.revoked_why ?? "None"}. What it covered asks the user again: open a decision`);
+    }
+
+    const still = approvalSource(run.machine, run.root, ledger, refOf(a), true);
+
+    if (still instanceof NoSource) {
+      return yield* refuse(
+        `approval ${a.id} no longer stands: ${still.why}. What it covered asks the user again: ` +
+          `revoke it (approval revoke ${a.id} --reason "...") and open a decision`,
+      );
     }
 
     const undo = args.str("undo") ?? "";
@@ -1700,7 +1725,10 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
     }
 
     if (decide !== undefined) close(run, ledger, d, { status: "decided", answer: decide, resolution: resolution ?? "" });
-    else if (withdraw !== undefined) close(run, ledger, d, { status: "withdrawn", answer: null, resolution: withdraw });
+    else if (withdraw !== undefined) {
+      close(run, ledger, d, { status: "withdrawn", answer: null, resolution: withdraw });
+      revokeFrom(run, ledger, d, undefined, `${d.ref ?? d.id} was withdrawn (${withdraw})`);
+    }
 
     return ledger;
   });
@@ -1904,15 +1932,19 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
       const [qid, answer] = yield* questionOf(text, "--answer");
       const q = yield* lookup(qid);
       Object.assign(q, { status: "answered", answer, answered: stamp(run) });
+      revokeFrom(run, ledger, row, qid, `${row.ref ?? row.id}:${qid.toUpperCase()} was answered again (${answer})`);
     }
 
     for (const text of args.list("drop") ?? []) {
       const [qid, reason] = yield* questionOf(text, "--drop");
       const q = yield* lookup(qid);
       Object.assign(q, { status: "dropped", answer: null, dropped: reason, answered: stamp(run) });
+      revokeFrom(run, ledger, row, qid, `${row.ref ?? row.id}:${qid.toUpperCase()} was dropped (${reason})`);
     }
 
     const revisions = args.list("revise") ?? [];
+    /* The chat's last message id now: the user's words answer a question asked or revised here only after it. */
+    const chatAt = asks.length + revisions.length === 0 ? 0 : readChat(run.root).reduce((last, m) => Math.max(last, m.id), 0);
     /* A question asked or revised over QUESTION_NEAR, as [Q id, characters]: warned once the round is taken. */
     const longAsks: [string, number][] = [];
 
@@ -1925,7 +1957,8 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
       const [title, body, recommend, why] = yield* asked(rest);
 
       if (chars(body) > QUESTION_NEAR) longAsks.push([qid, chars(body)]);
-      Object.assign(q, { title, body, recommend, reason: why, status: "open", answer: null, asked: stamp(run) });
+      Object.assign(q, { title, body, recommend, reason: why, status: "open", answer: null, asked: stamp(run), asked_after: chatAt });
+      revokeFrom(run, ledger, row, qid, `${row.ref ?? row.id}:${qid.toUpperCase()} was revised`);
     }
 
     const reasons = args.list("reason") ?? [];
@@ -1959,6 +1992,7 @@ export function grill(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
         status: "open",
         answer: null,
         asked: stamp(run),
+        asked_after: chatAt,
       };
 
       qs.push(q);

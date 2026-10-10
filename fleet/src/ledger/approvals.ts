@@ -1,7 +1,8 @@
 /**
- * Where a standing approval comes from (Python's `decisions.approval_source`): a decided choice, input or
- * grilling the user answered on the page, in this fleet's ledger or, as `FLEET/DECISION`, in a served fleet's,
- * found through the registry; a grilling's by one question (`:Q<n>`). Only the user's own plain yes to that exact
+ * Where a standing approval comes from (Python's `decisions.approval_source`): a decided choice or input, or a
+ * grilling's question, that the user answered on the page, in this fleet's ledger or, as `FLEET/DECISION`, in a
+ * served fleet's, found through the registry; a grilling's by one question (`:Q<n>`), answered while the others
+ * may still be open. Only the user's own plain yes to that exact
  * item grants: the ledger's answer and the user's message the hub wrote (`from: user`) must both be one of
  * {@link APPROVES}, whole; a choice's decided option must be one that says yes, and the one the user picked. The
  * same check backs `fleet state DIR approval add` and `fleet fleets approval add`.
@@ -11,6 +12,7 @@ import { join } from "node:path";
 import * as Option from "effect/Option";
 
 import { readChat, type Message } from "../chat/store.ts";
+import { parseInstant } from "../clock.ts";
 import { Refusal } from "../errors.ts";
 import { isDir, listDir, readText, resolvePath } from "../files.ts";
 import { asArray, asNumber, asObject, asString, parseJson, pyStr, type JsonObject } from "../json.ts";
@@ -52,24 +54,61 @@ export interface ServedFleet {
   readonly dir: string;
 }
 
-/** The registry's live entry for the fleet called `name` (its id, else one of its aliases), read without
- * touching the registry; undefined when no fleet of that name is served. */
-export function servedFleet(machine: Machine, name: string): ServedFleet | undefined {
-  const home = machine.registry.place.home;
+/** The registry entries in `dir` that name a fleet and its DIR; `live`, only those whose pid runs. */
+function entriesIn(dir: string, live: boolean): JsonObject[] {
   const entries: JsonObject[] = [];
 
-  for (const file of listDir(home).filter((n) => n.endsWith(".json")).sort()) {
-    const path = join(home, file);
+  for (const file of listDir(dir).filter((n) => n.endsWith(".json")).sort()) {
+    const path = join(dir, file);
 
     if (isDir(path)) continue;
     const entry = asObject(Option.getOrUndefined(parseJson(readText(path) ?? "")));
 
-    if (entry !== undefined && asString(entry["id"]) !== undefined && asString(entry["dir"]) !== undefined && alive(pidOf(entry["pid"]))) entries.push(entry);
+    if (entry !== undefined && asString(entry["id"]) !== undefined && asString(entry["dir"]) !== undefined && (!live || alive(pidOf(entry["pid"])))) entries.push(entry);
   }
 
+  return entries;
+}
+
+function named(entries: readonly JsonObject[], name: string): ServedFleet | undefined {
   const found = entries.find((e) => e["id"] === name) ?? entries.find((e) => (asArray(e["aliases"]) ?? []).some((a) => a === name));
 
   return found === undefined ? undefined : { id: asString(found["id"]) ?? "", dir: asString(found["dir"]) ?? "" };
+}
+
+/** The registry's live entry for the fleet called `name` (its id, else one of its aliases), read without
+ * touching the registry; undefined when no fleet of that name is served. `stopped`: else the entry the registry
+ * keeps for a fleet no longer served (`REGISTRY/names/`), whose ledger is still where it was. */
+export function servedFleet(machine: Machine, name: string, stopped = false): ServedFleet | undefined {
+  const home = machine.registry.place.home;
+
+  return named(entriesIn(home, true), name) ?? (stopped ? named(entriesIn(join(home, "names"), false), name) : undefined);
+}
+
+/** The names the fleet served from `root` goes by in the registry (its id and aliases, live or kept), read
+ * without touching it: an approval in its own ledger may name its decisions as `<name>/G2`. */
+export function namesOf(machine: Machine, root: string): string[] {
+  const home = machine.registry.place.home;
+  const dir = resolvePath(root);
+
+  return [...entriesIn(home, false), ...entriesIn(join(home, "names"), false)]
+    .filter((e) => e["dir"] === dir)
+    .flatMap((e) => [asString(e["id"]) ?? "", ...(asArray(e["aliases"]) ?? []).flatMap((a) => asString(a) ?? [])])
+    .filter((n) => n !== "");
+}
+
+/** The `--ref` an approval was added from: its ref, and `:Q<n>` when it came from a grilling's question. */
+export function refOf(a: Approval): string {
+  return a.question === undefined || a.question === "" ? a.ref : `${a.ref}:${a.question.toUpperCase()}`;
+}
+
+/** Whether approval `a` came from decision `d` of the fleet whose names are `names` (its own ledger's), and,
+ * given `question`, from that question of it. */
+export function comesFrom(a: Approval, d: Decision, names: readonly string[], question?: string): boolean {
+  const num = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
+  const ours = a.ref === d.id || names.some((n) => a.ref === `${n}/${num}` || a.ref === `${n}/${d.id}`);
+
+  return ours && (question === undefined || a.question === question);
 }
 
 /** `text` trimmed, in lower case, without the full stops and exclamation marks it ends with. */
@@ -123,14 +162,27 @@ export function approves(q: Question): boolean {
 
 /** The user's own words to question `qid` of grilling `d`, from the chat the hub writes: the last "Q<n>: ..." line
  * of a message of theirs about the grilling (with the lines under it that are no question's), else a message of
- * theirs that answers (`re`) a message naming that question alone. Undefined when they never answered it. */
-export function userAnswerTo(chat: readonly Message[], d: Decision, qid: string): { readonly words: string; readonly message: Message } | undefined {
+ * theirs that answers (`re`) a message naming that question alone. Undefined when they never answered it.
+ * Only words after the question's last asking count: a message whose id is over `after` (the chat's last id
+ * when it was asked; ids only grow), else, for a question recorded without one, a message not older than `since`. */
+export function userAnswerTo(
+  chat: readonly Message[],
+  d: Decision,
+  qid: string,
+  since?: string | null,
+  after?: number | null,
+): { readonly words: string; readonly message: Message } | undefined {
   const n = qid.slice(1);
   const byId = new Map(chat.map((m) => [m.id, m]));
+  const from = after !== undefined && after !== null ? undefined : since === undefined || since === null ? undefined : parseInstant(since);
   let found: { words: string; message: Message } | undefined;
 
   for (const m of chat) {
     if (m.from !== "user") continue;
+
+    if (after !== undefined && after !== null && m.id <= after) continue;
+
+    if (from !== undefined && (parseInstant(asString(m.at) ?? "") ?? -Infinity) < from) continue;
     const lines = m.text.split("\n");
     const heads = lines.map((line) => /^\s*Q(\d+)\s*:\s*(.*)$/iu.exec(line));
 
@@ -192,11 +244,13 @@ function ledgerAt(fleet: ServedFleet): Ledger | NoSource {
   return read === undefined || read instanceof Refusal ? new NoSource(`fleet '${fleet.id}' has no ledger at ${path}`) : read;
 }
 
-/** Where `approval add --ref TEXT` comes from, checked as a standing approval needs it: a decided choice,
- * input or grilling asked of the user on the page, decided with a plain yes, and the user's own message in that
+/** Where `approval add --ref TEXT` comes from, checked as a standing approval needs it: a decided choice or
+ * input, or a grilling's answered question (the grilling itself may be open), none withdrawn or superseded,
+ * asked of the user on the page, the user's words after the question's last asking,
+ * decided with a plain yes, and the user's own message in that
  * fleet's chat (the hub's: only it writes as the user) saying that same plain yes to that item: for a grilling,
  * their answer to that question; for a choice, their pick of the decided option. The row's fields, or why not. */
-export function approvalSource(machine: Machine, root: string, here: Ledger | undefined, text: string): Source | NoSource {
+export function approvalSource(machine: Machine, root: string, here: Ledger | undefined, text: string, stopped = false): Source | NoSource {
   const parsed = parseSource(text);
 
   if (parsed === undefined) return new NoSource(`--ref reads [FLEET/]DECISION[:Q<n>] (D7, manager/G5:Q1), got ${pyStr(text)}`);
@@ -206,7 +260,7 @@ export function approvalSource(machine: Machine, root: string, here: Ledger | un
   let where: ServedFleet | undefined;
 
   if (fleet !== undefined) {
-    where = servedFleet(machine, fleet);
+    where = servedFleet(machine, fleet, stopped);
 
     if (where === undefined) return new NoSource(`no fleet '${fleet}' is being served: --ref FLEET/DECISION names a decision in a fleet \`fleet fleets list\` names`);
     const read = ledgerAt(where);
@@ -227,7 +281,14 @@ export function approvalSource(machine: Machine, root: string, here: Ledger | un
 
   if (question === undefined && d.kind === "grill") return new NoSource(`${name} is a grilling: name the question the user answered yes or approve (${label}:Q1)`);
 
-  if (d.status !== "decided") return new NoSource(`${name} is ${d.status}: a standing approval comes from a decision the user decided`);
+  if (d.status === "withdrawn") return new NoSource(`${name} was withdrawn: a standing approval comes from a decision that stands`);
+  const over = (ledger?.decisions ?? []).find((x) => x.supersedes === d.id);
+
+  if (over !== undefined) {
+    return new NoSource(`${name} is superseded by ${over.ref !== undefined && over.ref !== "" ? over.ref : over.id}: a standing approval comes from a decision that stands`);
+  }
+
+  if (question === undefined && d.status !== "decided") return new NoSource(`${name} is ${d.status}: a standing approval comes from a decision the user decided`);
 
   if (!CHOICE_KINDS.some((k) => k === d.kind) || (d.asks ?? "user") !== "user" || d.page === false) {
     return new NoSource(`${name} was not asked of the user on the page: only the user's own answer there gives a standing approval; ask them with a decision that names the rule`);
@@ -242,12 +303,19 @@ export function approvalSource(machine: Machine, root: string, here: Ledger | un
     if (q === undefined) return new NoSource(`${name} has no question ${question.toUpperCase()}`);
     label = `${label}:${question.toUpperCase()}`;
 
-    if (q.status !== "answered") return new NoSource(`${label} is ${q.status}: a standing approval comes from a question the user answered yes or approve`);
+    if (q.status !== "answered") {
+      return new NoSource(`${label} is ${q.status}${q.status === "open" ? ", not answered yet" : ""}: a standing approval comes from a question the user answered yes or approve`);
+    }
 
     if (!approves(q)) return new NoSource(`${label} was answered ${q.answer === undefined || q.answer === null ? "None" : pyStr(q.answer)}: ${ASK_AGAIN}`);
-    const said = userAnswerTo(chat, d, question);
+    const said = userAnswerTo(chat, d, question, q.asked, q.asked_after);
 
-    if (said === undefined) return new NoSource(`${label} has no answer from the user in the chat: only the user's own answer on the page gives a standing approval`);
+    if (said === undefined) {
+      const since = q.asked === undefined || q.asked === null ? "" : ` since it was last asked (${q.asked})`;
+
+      return new NoSource(`${label} has no answer from the user in the chat${since}: only the user's own answer on the page gives a standing approval`);
+    }
+
     const plain = plainAnswer(said.words, q.options ?? [], q.recommend);
 
     if (plain === undefined || !plainYes(plain.words)) {

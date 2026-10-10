@@ -95,6 +95,9 @@ export interface Question {
   status: string;
   answer?: string | null;
   asked?: string | null;
+  /** The chat's last message id when it was last asked: only the user's messages after it answer it. A
+   * question recorded before this field has none, and its answers are told by time (`asked`). */
+  asked_after?: number;
   answered?: string | null;
   dropped?: string | null;
   /** Its choices, when given with `--option`; a question asked before them has none. */
@@ -642,6 +645,7 @@ export const QUESTION_KEYS = [
   "status",
   "answer",
   "asked",
+  "asked_after",
   "answered",
   "dropped",
   "options",
@@ -663,6 +667,7 @@ function readQuestion(decision: string): (object: JsonObject) => Fields | Questi
       of: f.nullStr("of"),
       answer: f.nullStr("answer"),
       asked: f.nullStr("asked"),
+      asked_after: f.optNumber("asked_after"),
       answered: f.nullStr("answered"),
       dropped: f.nullStr("dropped"),
       options: f.rows("options", readChoice(decision, `grilling ${decision} has a question's option without id, label and consequence`)),

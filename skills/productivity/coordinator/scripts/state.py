@@ -918,6 +918,19 @@ def unheld(d: dict) -> None:
     d.pop("held_at", None)
 
 
+def revoke_from(state: dict, root, d: dict, question: str | None, why: str) -> None:
+    """Revoke every active approval of this ledger that came from decision D (from its question QUESTION, or
+    from any of it), saying WHY: the user's answer it rests on moved, so what it covered asks them again. One
+    line per approval revoked. Another fleet's copy (`fleets approval add`) is refused at use instead."""
+    names = decisions.names_of(root)
+    for a in state.get("approvals") or []:
+        if not isinstance(a, dict) or a.get("status") != "active" or not decisions.comes_from(a, d, names, question):
+            continue
+        a.update(status="revoked", revoked=now(), revoked_why=why)
+        log(state, "decision", f"Standing approval {a['id']} revoked: {why}", decision=a["ref"] if "/" not in a["ref"] else None)
+        print(f"revoked approval {a['id']} (from {decisions.ref_of(a)}): {why}; what it covered asks the user again.")
+
+
 def close(state, d: dict, status: str, answer: str | None, resolution: str) -> None:
     d.update(status=status, answer=answer, resolution=resolution, closed=now())
     unheld(d)
@@ -1019,6 +1032,10 @@ def cmd_notice(state, args, d) -> dict:
         fail(f"unknown approval '{args.under}': `approval list` shows the standing approvals; an act no approval covers is asked (a decision)")
     if a["status"] != "active":
         fail(f"approval {a['id']} was revoked {a.get('revoked')}: {a.get('revoked_why')}. What it covered asks the user again: open a decision")
+    still = decisions.approval_source(state, Path(args.dir).resolve(), decisions.ref_of(a), stopped=True)
+    if isinstance(still, str):
+        fail(f"approval {a['id']} no longer stands: {still}. What it covered asks the user again: "
+             f"revoke it (approval revoke {a['id']} --reason \"...\") and open a decision")
     if not args.undo.strip():
         fail("--undo says how to undo what was done; an act that cannot be undone is not routine: ask the user (a decision)")
     check_question(args.question, "notice")
@@ -1164,6 +1181,7 @@ def cmd_decision(state, args):
         close(state, d, "decided", args.decide, args.resolution)
     elif args.withdraw is not None:
         close(state, d, "withdrawn", None, args.withdraw)
+        revoke_from(state, args.dir, d, None, f"{d.get('ref') or d['id']} was withdrawn ({args.withdraw})")
     return state
 
 
@@ -1276,12 +1294,16 @@ def cmd_grill(state, args):
         if qid not in byid:
             fail(f"no question {qid.upper()} in {d['id']}")
         byid[qid].update(status="answered", answer=answer, answered=now())
+        revoke_from(state, args.dir, d, qid, f"{d.get('ref') or d['id']}:{qid.upper()} was answered again ({answer})")
     for text in args.drop or []:
         qid, reason = _q(text, "--drop")
         if qid not in byid:
             fail(f"no question {qid.upper()} in {d['id']}")
         byid[qid].update(status="dropped", answer=None, dropped=reason, answered=now())
+        revoke_from(state, args.dir, d, qid, f"{d.get('ref') or d['id']}:{qid.upper()} was dropped ({reason})")
     long_asks = []  # (Q id, characters) of a question asked or revised over QUESTION_NEAR: warned once the round is taken
+    # The chat's last message id now: the user's words answer a question asked or revised here only after it.
+    chat_at = max((m["id"] for m in chat.read(Path(args.dir).resolve())), default=0) if args.ask or args.revise else 0
     for text in args.revise or []:
         qid, rest = _q(text, "--revise")
         if qid not in byid:
@@ -1289,7 +1311,8 @@ def cmd_grill(state, args):
         title, body, rec, why = _asked(rest)
         if len(body) > QUESTION_NEAR:
             long_asks.append((qid, len(body)))
-        byid[qid].update(title=title, body=body, recommend=rec, reason=why, status="open", answer=None, asked=now())
+        byid[qid].update(title=title, body=body, recommend=rec, reason=why, status="open", answer=None, asked=now(), asked_after=chat_at)
+        revoke_from(state, args.dir, d, qid, f"{d.get('ref') or d['id']}:{qid.upper()} was revised")
     for text in args.reason or []:
         qid, why = _q(text, "--reason")
         if qid not in byid or not why:
@@ -1299,7 +1322,7 @@ def cmd_grill(state, args):
     for text in args.ask or []:
         title, body, rec, why = _asked(text)
         q = {"id": f"q{len(qs) + 1}", "title": title, "body": body, "recommend": rec, "reason": why, "of": args.of.lower() if args.of else None,
-             "status": "open", "answer": None, "asked": now()}
+             "status": "open", "answer": None, "asked": now(), "asked_after": chat_at}
         qs.append(q)
         new.append(q)
         if len(body) > QUESTION_NEAR:

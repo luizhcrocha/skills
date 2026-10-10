@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -247,7 +248,7 @@ class FleetWideTest(Fleet):
 
     def said(self, root: Path, message: dict) -> None:
         with open(root / "chat.jsonl", "a") as f:
-            f.write(json.dumps({"at": "2026-01-05T09:10:00+00:00", "to": ["manager"], "re": None, **message}) + "\n")
+            f.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "to": ["manager"], "re": None, **message}) + "\n")
 
     def approvals(self, root: Path) -> list[dict]:
         return json.loads((root / "state.json").read_text()).get("approvals", [])
@@ -329,6 +330,138 @@ class FleetWideTest(Fleet):
                       self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q1"))
         self.ok("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2")
         self.assertEqual(self.approvals(self.root)[0]["message"], 3)
+
+    def test_a_question_answered_yes_grants_while_another_is_still_open(self):
+        self.at(self.manager, "grill", "g2", "--title", "Prod", "--ask", "Landing | May it land? | yes | r",
+                "--ask", "Prod | May it deploy to prod? | a | r", "--option", "Q2 a: yes | it deploys", "--option", "Q2 b: no | every deploy asks")
+        self.said(self.manager, {"id": 2, "from": "user", "author": "luiz@github", "text": "Q2: a: yes", "decision": "g2"})
+        self.at(self.manager, "grill", "g2", "--answer", "Q2: a: yes")
+        why = self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q1")
+        self.assertIn("manager/G2:Q1 is open, not answered yet: a standing approval comes from a question the user answered", why)
+        self.ok("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2")
+        self.assertEqual([(a["question"], a["message"]) for a in self.approvals(self.root)], [("q2", 2)])
+        out = self.fleets("approval", "add", "--all", "--rule", "deploy to prod", "--ref", "manager/G2:Q2").stdout.splitlines()
+        self.assertEqual(out, ["manager: added K1", "acme-billing: skipped, K1 already comes from manager/G2:Q2 (active)", "infra: added K1"])
+        self.assertIn("manager/G2:Q1 is open, not answered yet",
+                      self.fleets("approval", "add", "--all", "--rule", "r", "--ref", "manager/G2:Q1", code=1).stderr)
+
+    G2 = ["--title", "Prod", "--ask", "Landing | May it land? | yes | r", "--ask", "Prod | May it deploy to prod? | yes | r"]
+
+    def q2_yes(self) -> None:
+        """Grilling g2 in the manager's ledger, its Q2 answered yes by the user on the page, Q1 still open."""
+        self.at(self.manager, "grill", "g2", *self.G2)
+        self.said(self.manager, {"id": 2, "from": "user", "author": "luiz@github", "text": "Q2: yes", "decision": "g2"})
+        self.at(self.manager, "grill", "g2", "--answer", "Q2: yes")
+
+    def test_an_approval_is_checked_again_at_use_a_later_no_refuses_the_notice(self):
+        self.q2_yes()
+        self.ok("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2")
+        self.said(self.manager, {"id": 3, "from": "user", "author": "luiz@github", "text": "Q2: no", "decision": "g2"})
+        self.at(self.manager, "grill", "g2", "--answer", "Q2: no")
+        why = self.refused("decision", "n1", *NOTICE)
+        self.assertIn("approval K1 no longer stands: manager/G2:Q2 was answered 'no'", why)
+        self.assertIn("approval revoke K1", why)
+        self.assertEqual([d for d in self.state()["decisions"] if d["kind"] == "notice"], [])
+
+    def test_a_source_fleet_no_longer_served_is_read_from_where_the_registry_kept_it(self):
+        self.q2_yes()
+        self.ok("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2")
+        (self.home / "manager.json").unlink()
+        (self.home / "names").mkdir(exist_ok=True)
+        (self.home / "names" / "manager.json").write_text(json.dumps({"id": "manager", "role": "manager", "dir": str(self.manager),
+                                                                      "url": "x", "pid": 999999999, "session": None}))
+        self.ok("decision", "n1", *NOTICE)
+        (self.home / "names" / "manager.json").unlink()
+        self.assertIn("approval K1 no longer stands: no fleet 'manager' is being served", self.refused("decision", "n2", *NOTICE))
+
+    def test_a_question_answered_again_revised_or_dropped_revokes_the_approvals_it_gave_in_its_own_ledger(self):
+        self.q2_yes()
+        self.fleets("approval", "add", "--all", "--rule", "deploy to prod", "--ref", "manager/G2:Q2")
+        self.said(self.manager, {"id": 3, "from": "user", "author": "luiz@github", "text": "Q2: no", "decision": "g2"})
+        self.assertIn("revoked approval K1 (from manager/G2:Q2): G2:Q2 was answered again (no)",
+                      self.at(self.manager, "grill", "g2", "--answer", "Q2: no").stdout)
+        self.assertEqual([(a["status"], a["revoked_why"]) for a in self.approvals(self.manager)], [("revoked", "G2:Q2 was answered again (no)")])
+        self.assertEqual([a["status"] for a in self.approvals(self.root)], ["active"])
+        self.assertIn("approval K1 no longer stands", self.refused("decision", "n1", *NOTICE))
+        self.at(self.root, "grill", "g3", *self.G2)
+        with open(self.root / "chat.jsonl", "a") as f:
+            f.write(json.dumps({"id": 9, "at": "2099-01-01T00:00:00+00:00", "from": "user", "author": "luiz@github", "to": ["coordinator"],
+                                "text": "Q1: yes\nQ2: yes", "re": None, "decision": "g3"}) + "\n")
+        self.at(self.root, "grill", "g3", "--answer", "Q1: yes", "--answer", "Q2: yes")
+        self.ok("approval", "add", "K2", "--rule", "land", "--by", "luiz", "--ref", "G1:Q1")
+        self.ok("approval", "add", "K3", "--rule", "deploy", "--by", "luiz", "--ref", "G1:Q2")
+        self.assertIn("revoked approval K2 (from g3:Q1): G1:Q1 was revised",
+                      self.at(self.root, "grill", "g3", "--revise", "Q1: Landing | May it land on Fridays? | yes | r").stdout)
+        self.assertIn("revoked approval K3 (from g3:Q2): G1:Q2 was dropped (not needed)",
+                      self.at(self.root, "grill", "g3", "--drop", "Q2: not needed").stdout)
+        self.assertEqual([(a["id"], a["status"]) for a in self.approvals(self.root)], [("K1", "active"), ("K2", "revoked"), ("K3", "revoked")])
+
+    def test_a_withdrawn_grilling_revokes_every_approval_it_gave_and_gives_none(self):
+        self.q2_yes()
+        self.fleets("approval", "add", "--fleets", "manager", "--rule", "deploy to prod", "--ref", "manager/G2:Q2")
+        self.assertIn("revoked approval K1 (from manager/G2:Q2): G2 was withdrawn (plan dropped)",
+                      self.at(self.manager, "decision", "g2", "--withdraw", "plan dropped").stdout)
+        self.assertIn("manager/G2 (Prod) was withdrawn", self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q2"))
+
+    def test_a_superseded_grilling_gives_none(self):
+        self.q2_yes()
+        self.said(self.manager, {"id": 3, "from": "user", "author": "luiz@github", "text": "Q1: yes", "decision": "g2"})
+        self.at(self.manager, "grill", "g2", "--answer", "Q1: yes", "--done", "both yes")
+        self.at(self.manager, "decision", "d9", *CHOICE, "--supersedes", "g2")
+        self.assertIn("manager/G2 (Prod) is superseded by D1",
+                      self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q2"))
+
+    def test_the_users_words_count_only_from_when_the_question_was_last_asked(self):
+        self.at(self.manager, "grill", "g2", *self.G2)
+        self.said(self.manager, {"id": 2, "at": "2026-01-05T09:10:00+00:00", "from": "user", "author": "luiz@github", "text": "Q2: yes", "decision": "g2"})
+        self.at(self.manager, "grill", "g2", "--revise", "Q2: Prod | May it deploy AND migrate prod DBs? | yes | r")
+        self.at(self.manager, "grill", "g2", "--answer", "Q2: yes")
+        self.assertIn("manager/G2:Q2 has no answer from the user in the chat since it was last asked",
+                      self.refused("approval", "add", "K1", "--rule", "migrate", "--by", "luiz", "--ref", "manager/G2:Q2"))
+        self.said(self.manager, {"id": 3, "from": "user", "author": "luiz@github", "text": "Q2: yes", "decision": "g2"})
+        self.ok("approval", "add", "K1", "--rule", "migrate", "--by", "luiz", "--ref", "manager/G2:Q2")
+
+    SECOND = "2026-01-05T09:30:00+00:00"  # every command and message of a test that sets it: a revise may share a second
+
+    def asked(self, n: int) -> dict:
+        g2 = next(d for d in json.loads((self.manager / "state.json").read_text())["decisions"] if d["id"] == "g2")
+        return g2["questions"][n - 1]
+
+    def revised_in_one_second(self) -> None:
+        """G2 with its Q2 revised after the user's "Q2: yes" to the old Q2, all in one second, and answered yes."""
+        self.env.update(FLEET_NOW=self.SECOND, TZ="UTC")
+        self.at(self.manager, "grill", "g2", *self.G2)
+        self.said(self.manager, {"id": 2, "at": self.SECOND, "from": "user", "author": "luiz@github", "text": "Q2: yes", "decision": "g2"})
+        self.at(self.manager, "grill", "g2", "--revise", "Q2: Prod | May it deploy AND migrate prod DBs? | yes | r")
+        self.at(self.manager, "grill", "g2", "--answer", "Q2: yes")
+
+    def test_an_old_yes_in_the_same_second_as_the_revise_does_not_answer_the_revised_question(self):
+        self.revised_in_one_second()
+        self.assertEqual([self.asked(2)["asked"], self.asked(2)["asked_after"]], [self.SECOND, 2])
+        self.assertIn("manager/G2:Q2 has no answer from the user in the chat since it was last asked",
+                      self.refused("approval", "add", "K1", "--rule", "migrate", "--by", "luiz", "--ref", "manager/G2:Q2"))
+
+    def test_a_yes_after_the_revise_answers_it_in_the_same_second_too(self):
+        self.revised_in_one_second()
+        self.said(self.manager, {"id": 3, "at": self.SECOND, "from": "user", "author": "luiz@github", "text": "Q2: yes", "decision": "g2"})
+        self.ok("approval", "add", "K1", "--rule", "migrate", "--by", "luiz", "--ref", "manager/G2:Q2")
+        self.assertEqual([(a["question"], a["message"]) for a in self.approvals(self.root)], [("q2", 3)])
+
+    def test_a_question_recorded_without_asked_after_keeps_the_time_rule(self):
+        self.revised_in_one_second()
+        path = self.manager / "state.json"
+        ledger = json.loads(path.read_text())
+        for q in next(d for d in ledger["decisions"] if d["id"] == "g2")["questions"]:
+            q.pop("asked_after", None)
+        path.write_text(json.dumps(ledger))
+        self.ok("approval", "add", "K1", "--rule", "migrate", "--by", "luiz", "--ref", "manager/G2:Q2")
+        self.assertEqual([(a["question"], a["message"]) for a in self.approvals(self.root)], [("q2", 2)])
+
+    def test_a_choice_still_open_gives_none(self):
+        self.at(self.manager, "decision", "d1", *CHOICE)
+        self.said(self.manager, {"id": 2, "from": "user", "author": "luiz@github", "text": "A: yes", "decision": "d1"})
+        self.assertIn("manager/D1 (Landing without asking) is open: a standing approval comes from a decision the user decided",
+                      self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/D1"))
 
     def stop(self, name: str, root: Path) -> None:
         (self.home / f"{name}.json").write_text(json.dumps({"id": name, "role": "coordinator", "dir": str(root), "url": "x",

@@ -9,6 +9,7 @@ render_dashboard.py checks the rows with `validate`.
 import json
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -195,6 +196,9 @@ def validate(state: dict, fail) -> None:
                                                     and q.get("status") in QUESTION_STATUSES for q in qs):
                 fail(f"grilling {d['id']} has a question without id, title, or a status in {QUESTION_STATUSES}")
             for q in qs:
+                after = q.get("asked_after", 0)
+                if not isinstance(after, (int, float)) or isinstance(after, bool):
+                    fail(f"grilling {d['id']}: 'asked_after' should be a number, got {after!r}")
                 options = q.get("options", [])
                 if not isinstance(options, list) or not all(isinstance(o, dict) and all(isinstance(o.get(k), str) for k in ("id", "label", "consequence"))
                                                             for o in options):
@@ -254,18 +258,51 @@ def validate_approvals(state: dict, ids: set, fail) -> None:
             fail(f"notice {d['id']} says no way to undo it (undo)")
 
 
-def served(name: str) -> dict | None:
-    """The registry's live entry for the fleet called `name` (its id, else one of its aliases), read without
-    touching the registry; None when no fleet of that name is served."""
+def _entries_in(folder: Path, live: bool) -> list[dict]:
+    """The registry entries in FOLDER that name a fleet and its DIR; `live`, only those whose pid runs."""
     import fleets
     try:
-        paths = sorted(p for p in fleets.home().glob("*.json") if p.is_file())
+        paths = sorted(p for p in folder.glob("*.json") if p.is_file())
     except OSError:
-        return None
-    entries = [e for e in (fleets._read(p) for p in paths)
-               if e and isinstance(e.get("id"), str) and isinstance(e.get("dir"), str) and fleets._alive(e.get("pid"))]
+        return []
+    return [e for e in (fleets._read(p) for p in paths)
+            if e and isinstance(e.get("id"), str) and isinstance(e.get("dir"), str) and (not live or fleets._alive(e.get("pid")))]
+
+
+def _named(entries: list[dict], name: str) -> dict | None:
     return next((e for e in entries if e["id"] == name), None) or \
         next((e for e in entries if isinstance(e.get("aliases"), list) and name in e["aliases"]), None)
+
+
+def served(name: str, stopped: bool = False) -> dict | None:
+    """The registry's live entry for the fleet called `name` (its id, else one of its aliases), read without
+    touching the registry; None when no fleet of that name is served. `stopped`: else the entry the registry
+    keeps for a fleet no longer served (REGISTRY/names/), whose ledger is still where it was."""
+    import fleets
+    return _named(_entries_in(fleets.home(), True), name) or \
+        (_named(_entries_in(fleets.home() / "names", False), name) if stopped else None)
+
+
+def names_of(root) -> list[str]:
+    """The names the fleet served from DIR goes by in the registry (its id and aliases, live or kept), read
+    without touching it: an approval in its own ledger may name its decisions as `<name>/G2`."""
+    import fleets
+    root = str(Path(root).resolve())
+    found = [e for e in _entries_in(fleets.home(), False) + _entries_in(fleets.home() / "names", False) if e["dir"] == root]
+    return [n for e in found for n in [e["id"], *[a for a in e.get("aliases") or [] if isinstance(a, str)]] if n]
+
+
+def ref_of(a: dict) -> str:
+    """The --ref an approval was added from: its ref, and :Q<n> when it came from a grilling's question."""
+    return f"{a['ref']}:{a['question'].upper()}" if a.get("question") else a["ref"]
+
+
+def comes_from(a: dict, d: dict, names: list[str], question: str | None = None) -> bool:
+    """Whether approval A came from decision D of the fleet whose names are NAMES (its own ledger's), and,
+    given QUESTION, from that question of it."""
+    num = d.get("ref") or d["id"]
+    ours = a.get("ref") == d["id"] or any(a.get("ref") in (f"{n}/{num}", f"{n}/{d['id']}") for n in names)
+    return ours and (question is None or a.get("question") == question)
 
 
 def _folded(text: str) -> str:
@@ -306,16 +343,30 @@ def approves(q: dict) -> bool:
     return plain is not None and plain_yes(plain["words"])
 
 
-def user_answer_to(said: list, d: dict, qid: str) -> dict | None:
+def _instant(text) -> float | None:
+    try:
+        return datetime.fromisoformat(str(text)).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def user_answer_to(said: list, d: dict, qid: str, since: str | None = None, after: int | None = None) -> dict | None:
     """The user's own words to question `qid` of grilling `d`, from the chat the hub writes: {words, message}.
     The last "Q<n>: ..." line of a message of theirs about the grilling (with the lines under it that are no
     question's), else a message of theirs that answers (`re`) a message naming that question alone. None when
-    they never answered it."""
+    they never answered it. Only words after the question's last asking count: a message whose id is over AFTER
+    (the question's `asked_after`, the chat's last id when it was asked; ids only grow), else, for a question
+    recorded without one, a message not older than SINCE (its `asked`)."""
     n = qid[1:]
     by_id = {m.get("id"): m for m in said}
+    start = _instant(since) if since and after is None else None
     found = None
     for m in said:
         if m.get("from") != "user":
+            continue
+        if after is not None and m["id"] <= after:
+            continue
+        if start is not None and (_instant(m.get("at")) or float("-inf")) < start:
             continue
         lines = str(m.get("text") or "").split("\n")
         heads = [re.match(r"\s*Q(\d+)\s*:\s*(.*)$", line, re.I) for line in lines]
@@ -343,9 +394,10 @@ def user_answer_to(said: list, d: dict, qid: str) -> dict | None:
     return found
 
 
-def approval_source(state: dict | None, root, text: str) -> dict | str:
-    """Where `approval add --ref TEXT` comes from, checked as a standing approval needs it: a decided choice,
-    input or grilling asked of the user on the page, with the user's message tagged with it in that fleet's
+def approval_source(state: dict | None, root, text: str, stopped: bool = False) -> dict | str:
+    """Where `approval add --ref TEXT` comes from, checked as a standing approval needs it: a decided choice
+    or input, or a grilling's answered question (the grilling itself may be open), none withdrawn or superseded,
+    asked of the user on the page, the user's words after the question's last asking, with the user's message tagged with it in that fleet's
     chat (the hub's, the only writer as the user), in this fleet's ledger or, as FLEET/DECISION, in a served
     fleet's; a grilling's by one question (:Q<n>). Only the user's own plain yes to that exact item grants: the
     ledger's answer and the user's own message both one of APPROVES, whole; a choice's decided option one that
@@ -358,7 +410,7 @@ def approval_source(state: dict | None, root, text: str) -> dict | str:
     question = f"q{int(n)}" if n else None
     entry = None
     if fleet is not None:
-        entry = served(fleet)
+        entry = served(fleet, stopped)
         if entry is None:
             return f"no fleet '{fleet}' is being served: --ref FLEET/DECISION names a decision in a fleet `fleet fleets list` names"
         try:
@@ -377,7 +429,12 @@ def approval_source(state: dict | None, root, text: str) -> dict | str:
         return f"{name} is a {d.get('kind')}, not a grilling: :{question.upper()} names a grilling's question"
     if not question and d.get("kind") == "grill":
         return f"{name} is a grilling: name the question the user answered yes or approve ({label}:Q1)"
-    if d["status"] != "decided":
+    if d["status"] == "withdrawn":
+        return f"{name} was withdrawn: a standing approval comes from a decision that stands"
+    over = next((x for x in state.get("decisions") or [] if isinstance(x, dict) and x.get("supersedes") == d["id"]), None)
+    if over is not None:
+        return f"{name} is superseded by {over.get('ref') or over['id']}: a standing approval comes from a decision that stands"
+    if not question and d["status"] != "decided":
         return f"{name} is {d['status']}: a standing approval comes from a decision the user decided"
     if d["kind"] not in CHOICE_KINDS or d.get("asks", "user") != "user" or not d.get("page", True):
         return (f"{name} was not asked of the user on the page: only the user's own answer there gives a standing approval; "
@@ -389,12 +446,14 @@ def approval_source(state: dict | None, root, text: str) -> dict | str:
             return f"{name} has no question {question.upper()}"
         label = f"{label}:{question.upper()}"
         if q.get("status") != "answered":
-            return f"{label} is {q.get('status')}: a standing approval comes from a question the user answered yes or approve"
+            return (f"{label} is {q.get('status')}{', not answered yet' if q.get('status') == 'open' else ''}: "
+                    "a standing approval comes from a question the user answered yes or approve")
         if not approves(q):
             return f"{label} was answered {q.get('answer')!r}: {ASK_AGAIN}"
-        given = user_answer_to(said, d, question)
+        given = user_answer_to(said, d, question, q.get("asked"), q.get("asked_after"))
         if given is None:
-            return f"{label} has no answer from the user in the chat: only the user's own answer on the page gives a standing approval"
+            since = f" since it was last asked ({q['asked']})" if q.get("asked") else ""
+            return f"{label} has no answer from the user in the chat{since}: only the user's own answer on the page gives a standing approval"
         plain = plain_answer(given["words"], q.get("options"), q.get("recommend"))
         if plain is None or not plain_yes(plain["words"]):
             return f"{label}: the user's own answer in the chat (#{given['message'].get('id')}) is {given['words']!r}, not a plain yes: {ASK_AGAIN}"

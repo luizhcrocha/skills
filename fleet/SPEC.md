@@ -219,7 +219,10 @@ Checked in this order:
    what was done under a standing approval and asks nothing: leave out --option, ...`, in that order); then
    `new notice needs --title --question --under --undo` for those missing; an unknown approval (`unknown
    approval 'K9': \`approval list\` shows ...`) or a revoked one (`approval K1 was revoked <when>: <why>.
-   What it covered asks the user again: open a decision`); a blank `--undo`; the question's and the why's
+   What it covered asks the user again: open a decision`); an approval whose source no longer grants,
+   checked again as `approval add` checks its `--ref` (`ref`, and `:Q<n>` for its `question`), a fleet no
+   longer served read from its entry kept in `REGISTRY/names/` (`approval K1 no longer stands: <why>. What it
+   covered asks the user again: revoke it (approval revoke K1 --reason "...") and open a decision`); a blank `--undo`; the question's and the why's
    lengths as in 4. The row is a decision's with `kind` notice, `status` decided, `answer` "done",
    `resolution` "under <approval>", `closed` = `opened`, `asks` user, `page` true, no options, plus `under`
    (the approval's id) and `undo`; `--why`, `--agent`, `--step`, `--milestone` and `--body` as for a
@@ -415,6 +418,13 @@ Checked in this order:
   watch and the mid-turn nudge say it, and the page (`grillState`'s `answered`, by the same rule)
   lists it under Waiting with the pill `answered, waiting to be recorded` and a note on its page,
   until `--done`, `--decide` or `--withdraw` closes it.
+  A question answered (`--answer`), dropped or revised, and a grilling withdrawn (`decision ID --withdraw`),
+  revoke every active approval of this ledger that came from it (its `ref` the grilling's id, or
+  `<name>/<its number>` for a name the registry gives this DIR; a question's, that question's): each is
+  set `revoked` with `revoked_why` `G2:Q2 was answered again (<answer>)`, `... was dropped (<why>)`, `... was
+  revised` or `G2 was withdrawn (<reason>)`, logs `decision` (`Standing approval K1 revoked: <why>`) and prints
+  `revoked approval K1 (from <ref>:Q2): <why>; what it covered asks the user again.` A copy in another
+  fleet's ledger is refused at use instead (a notice, above).
 
 **event** `[--agent A] [--kind spawned|reported|blocked|resolved|asked|decision|note|integrated|reviewed] [--important] [--findings N --changes C,...] TEXT`:
 logs one event (kind note by default). `--agent` must be a worker row (a manager's: any name). Kind
@@ -440,11 +450,14 @@ of add, list, revoke`). `list` prints one line per approval (as `show` does, bel
   decision 'G9'`, ` in <fleet>` added for another fleet's). It is named `<label> (<title>)`, the label its
   number (`D1`, `manager/G5`). `:Q<n>` names a grilling's question: refused on another kind (`manager/D5
   (<title>) is a decision, not a grilling: :Q2 names a grilling's question`), and a grilling needs one
-  (`... is a grilling: name the question the user answered yes or approve (manager/G5:Q1)`). Then it must
-  be `decided` (`D1 (<title>) is open: a standing approval comes from a decision the user decided`), of
-  kind decision, input or grill, asks user and page true (`... was not asked of the user on the page:
-  ...`); the question must exist (`... has no question Q9`), be answered (`manager/G5:Q2 is open: ...`)
-  and answered with a plain yes: the whole answer, trimmed, in lower case, its trailing full stops and
+  (`... is a grilling: name the question the user answered yes or approve (manager/G5:Q1)`). A withdrawn
+  decision refuses (`manager/G5 (<title>) was withdrawn: a standing approval comes from a decision that
+  stands`), and so does one another decision of its ledger supersedes (`... is superseded by D3: ...`). Then a choice
+  or input must be `decided` (`D1 (<title>) is open: a standing approval comes from a decision the user
+  decided`); a grilling's status is not read, only its question's, so a question answered while another is
+  still open grants. It must be of kind decision, input or grill, asks user and page true (`... was not
+  asked of the user on the page: ...`); the question must exist (`... has no question Q9`), be answered
+  (`manager/G5:Q2 is open, not answered yet: ...`) and answered with a plain yes: the whole answer, trimmed, in lower case, its trailing full stops and
   exclamation marks dropped, is one of yes, y, approve, approved, sim, ok, after an option key (`(b)`, `b:`,
   alone or followed by that option's label only) is read as that option's label, "as recommended" or the
   page's "ok, as recommended (X)" as the question's recommendation, and a trailing "(as recommended)" is
@@ -453,8 +466,9 @@ of add, list, revoke`). `list` prints one line per approval (as `show` does, bel
   to a question`). Then the user's own words, from that fleet's chat (only the hub writes as the user; a
   coordinator's or the manager's relay is not one): for a question, the last `Q<n>: ...` line (with the
   lines under it that are no question's) of a user message tagged with the grilling, else a user message
-  whose `re` is a message naming that question alone (`manager/G5:Q2 has no answer from the user in the
-  chat: ...`), and it must be a plain yes too (`manager/G5:Q2: the user's own answer in the chat (#14) is
+  whose `re` is a message naming that question alone, its `at` not older than the question's `asked` (its
+  last asking or revision) (`manager/G5:Q2 has no answer from the user in the chat since it was last asked
+  (<asked>): ...`), and it must be a plain yes too (`manager/G5:Q2: the user's own answer in the chat (#14) is
   'no', not a plain yes: ...`); for a decision or input, the latest user message tagged with it (`... has
   no answer from the user in the chat: ...`), then the decision's `answer` must be a plain yes, or with options name
   the option that says one (`D1 (<title>) was decided 'B', not a plain yes: ...`), and the user's message
