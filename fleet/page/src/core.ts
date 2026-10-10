@@ -4,8 +4,12 @@
  * state and messages as they arrive. Pure functions over plain values. The build emits this module alone
  * as the template's `fleet-core` script (`var FleetCore`), which `tests/page.test.mjs` evaluates, and the
  * page reads it from there. Who a message reaches, and which @tokens are mentions, is the fleet chat's
- * rule alone (fleet/src/chat): the page renders the `parts` and `to` the server resolved.
+ * rule alone (fleet/src/chat): the page renders the `parts` and `to` the server resolved. A link's kind is
+ * the fleet's own rule set (fleet/src/ledger/link-kind.ts), bundled in, not a copy.
  */
+import { linkKind, type LinkKind } from "../../src/ledger/link-kind.ts";
+
+export type { LinkKind };
 
 /** A JSON value as parsed. */
 export type Json = null | boolean | number | string | readonly Json[] | JsonRecord;
@@ -227,8 +231,6 @@ export interface Roadblock {
   readonly decision?: string;
 }
 
-/** What a link is to the user. */
-export type LinkKind = "preview" | "prototype" | "doc" | "tool" | "service";
 
 /** A link the fleet named. */
 export interface Link {
@@ -259,14 +261,6 @@ export interface Link {
   readonly state_since: string;
 }
 
-const LINK_KINDS: readonly LinkKind[] = ["preview", "prototype", "doc", "tool", "service"];
-
-/** A link's kind from the view; an older view's `dev` reads as preview, `page` as doc. */
-function linkKind(value: Json | undefined): LinkKind {
-  const known = LINK_KINDS.find((k) => k === value);
-
-  return known ?? (value === "page" ? "doc" : "preview");
-}
 
 /** Something the machine serves that no fleet named. */
 export interface Found {
@@ -1442,7 +1436,7 @@ function parseState(value: Json | undefined): State | null {
       .map((l) => ({
         ...l,
         title: text(l["title"], l["id"]),
-        kind: linkKind(l["kind"]),
+        kind: linkKind(isText(l["kind"]) ? l["kind"] : undefined, String(l["url"]), isText(l["title"]) ? l["title"] : undefined),
         reach: l["reach"] === "file" || /^file:/iu.test(String(l["url"])) ? "file" : l["reach"] === "external" ? "external" : "machine",
         up: l["up"] === true,
         checking: l["up"] === null && l["reach"] !== "file" && l["reach"] !== "external" && !/^file:/iu.test(String(l["url"])),

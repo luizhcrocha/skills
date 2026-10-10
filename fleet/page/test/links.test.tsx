@@ -153,3 +153,22 @@ test("a link the hub has not probed yet stays active, and its row says checkingâ
   expect(groups()).toEqual([["Live previews", ["l12"]]]);
   expect(view()?.querySelector('.link-row[data-link="l12"] .status-words')?.textContent).toBe("checkingâ€¦");
 });
+
+test("an older view's kind is read by the fleet's own rules: an artifact is a doc, a prototype's address a prototype, a file a doc", () => {
+  const old = (id: string, kind: string, url: string, title = "T") => ({ id, ref: id.toUpperCase(), kind, title, url, fleet: "billing", reach: "machine" });
+
+  const state = Core.parseState({
+    ...linksView(NOW),
+    links: [
+      old("l1", "dev", "https://claude.ai/artifact/x"),
+      old("l2", "page", "https://box.ts.net:7501/caso/CA1/prototipo/mapa"),
+      old("l3", "dev", "https://box.ts.net:7502/", "Map prototype round 3"),
+      old("l4", "dev", "file:///tmp/plan.md"),
+      old("l5", "dev", "https://box.ts.net:7503/"),
+      old("l6", "page", "https://example.com/report"),
+      old("l7", "tool", "https://claude.ai/artifact/y"),
+    ],
+  });
+
+  expect(state?.links?.map((l) => l.kind)).toEqual(["doc", "prototype", "prototype", "doc", "preview", "doc", "tool"]);
+});
