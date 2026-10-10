@@ -26,6 +26,10 @@ Bun is already required. `fleet/package.json` declares `engines.bun >=1.4.2`, an
 - **Until step 3, `just test-fleet` checks the frozen Python against traces recorded from TypeScript.** It passes as long as both behave alike. When a deliberate TypeScript change diverges from Python, that divergence is the signal to run step 3, not to port the change back.
 - **The model test reads its role table from `state.py`** (`test_model.py` imports `ROLES`). A role-table change (ADR 0002, "Evolving it") still edits `state.py` until step 3 moves that read to the TypeScript table. That edit is data, not a feature.
 
+- **The Python hub has no file route and no HTTP probe.** `GET /f/<fleet>/files/<path>` and the links' HTTP probe (with its unknown state and the tailnet-suffix check) exist in the TypeScript hub only. The Python dashboard server shows a link up or down by a TCP probe and serves no linked file. That gap is accepted: nobody runs the Python hub, and step 4 deletes it.
+- **A revoked approval cannot be re-granted by the same answer.** `approval add` skips a fleet whose ledger holds an approval from that ref, active or revoked, so the answer that backed a revoked approval never backs a new one. To give it again, ask the user again: the new answer is a new decision, or a new question of the grilling.
+- **`from: user` lines are trusted.** A standing approval rests on the user's own message in the fleet's chat, and the hub is the only writer of `from: user` lines: it writes them for what the user sends on the page. An agent that forges such a line by writing `chat.jsonl` directly is outside this model; the fleet's agents write the chat only through `fleet chat`, which never writes as the user.
+
 ## Considered and rejected
 
 - **Delete Python in one step:** the status line and the recorder still depended on it. Moving them first lets each deletion be checked by the gate on its own.
