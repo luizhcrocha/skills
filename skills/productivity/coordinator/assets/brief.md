@@ -16,6 +16,12 @@ Your working copy is the one the `Workspace:` line of your brief names, and that
 
 Every call you make re-reads your whole context, so its size is the cost of your work. Read what your brief names (its files, its question), not the repository around it; hand a sweep to a Reader or a Researcher (`{skill_dir}/MODELS.md`) and keep its short result. Before your context passes about 150k tokens, stop and end with your report, finished or not, with what is left in its first block: the coordinator gives the rest to a fresh worker with your handoff.
 
+## Waits and rounds
+
+Never poll in a foreground loop. A long job runs as a Bash command with `run_in_background: true`, and you are notified when it exits; to watch a log or a file for a condition, use the Monitor tool. Meanwhile do other work from your task. When nothing is left, say what you are waiting on and end your turn: the notification wakes you. A foreground `until ...; do sleep N; done`, a `tail -f` or a long timeout that holds you is not allowed; one short wait under about 30 seconds is fine. Measured on 2026-10-10 over 69 worker transcripts, poll loops held workers 3.4 hours, 36% of all their Bash wait.
+
+A round of N screenshots or N probe runs is one script that does all N and writes a summary (each path and a one-line result), run once, never N tool calls. Keep the script in your scratch dir and rerun it each round. Measured the same day, experiments and screenshots took 2.9 hours, 31% of the Bash wait, as 334 separate calls.
+
 ## Chat
 
 The user may write to you on the fleet dashboard, under the id your brief gives you. At each checkpoint (a test cycle green, a file finished, before your final report) run

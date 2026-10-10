@@ -100,7 +100,7 @@ Put the picker in a single shared component so both sub-shapes can reuse it. Loc
 
 ### 5. Verify and hand it over
 
-Run it and flip through every variant yourself before the user does: each renders, each interaction responds, the console is clean. Take a screenshot of each when browser tooling is available.
+Run it and flip through every variant yourself before the user does: each renders, each interaction responds, the console is clean. When browser tooling is available, screenshot every variant with one script that writes each path and a one-line result, not one tool call per variant.
 
 Then present the set as a table and stop, because the choice is the user's:
 
