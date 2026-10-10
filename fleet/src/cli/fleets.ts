@@ -171,7 +171,7 @@ function fleetView(machine: Machine, e: Entry): FleetView {
     role: e.role,
     status: raw !== undefined && truthy(raw["status"]) ? str(raw["status"]) : "unknown",
     session: e.session,
-    active: activeAt(e.dir, machine.config),
+    active: activeAt(e.dir, machine.config, asString(e.raw["session_id"])),
     url: e.url,
     dir: e.dir,
     now: truthy(state["now"]) ? oneLine(state["now"]) : "",

@@ -41,9 +41,32 @@ def transcript_of(root) -> Path | None:
     return config / "projects" / parts[-4] / f"{parts[-3]}.jsonl"
 
 
-def active(root) -> str | None:
-    """When the session whose scratchpad holds DIR last wrote its transcript, or None when unknown."""
-    path = transcript_of(root)
+def session_folder(session_id) -> Path | None:
+    """The folder beside session SESSION_ID's transcript (`projects/<project>/<session>`), in whichever project
+    holds that transcript or folder, or None."""
+    if not isinstance(session_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
+        return None
+    projects = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+    try:
+        found = sorted(p / session_id for p in projects.iterdir())
+    except OSError:
+        return None
+    return next((f for f in found if f.is_dir() or f.with_name(f"{session_id}.jsonl").exists()), None)
+
+
+def serving_transcript(root, session_id=None) -> Path | None:
+    """The transcript of the session serving DIR now: session SESSION_ID's, the one its registry entry records
+    (a resumed session has a new id while DIR stays in the scratchpad of the session that made it), when
+    found, else the scratchpad's."""
+    folder = session_folder(session_id)
+    own = folder.with_name(f"{folder.name}.jsonl") if folder else None
+    return own if own and own.exists() else transcript_of(root)
+
+
+def active(root, session_id=None) -> str | None:
+    """When the session serving DIR (session SESSION_ID, else the scratchpad's) last wrote its transcript,
+    or None when unknown."""
+    path = serving_transcript(root, session_id)
     try:
         return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).astimezone().isoformat(timespec="seconds") if path else None
     except OSError:

@@ -208,7 +208,7 @@ export function summary(machine: Machine, lookups: Lookups, entry: Entry): JsonO
     tokens: agents.reduce((sum, a) => sum + intOf(a["tokens"]), 0),
     spent: spentJson(lookups.spend.of(entry.dir, machine.config)),
     chat: { on: heard.on, seen: heard.seen, unread: heard.unread, since: heard.since },
-    active: activeAt(entry.dir, machine.config) ?? null,
+    active: activeAt(entry.dir, machine.config, asString(entry.raw["session_id"])) ?? null,
     now_at: state["now_at"] ?? null,
     lanes,
     roadblocks: rows(state, "roadblocks").filter((r) => !truthy(r["resolved"])).length,

@@ -93,25 +93,21 @@ def scratchpad_session(root) -> str | None:
 
 def _session_folder(session_id) -> Path | None:
     """The folder beside session SESSION_ID's transcript, in whichever project holds it, or None."""
-    if not isinstance(session_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
-        return None
-    projects = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
-    try:
-        found = sorted(p / session_id for p in projects.iterdir())
-    except OSError:
-        return None
-    return next((f for f in found if f.is_dir()), None)
+    import spend
+    return spend.session_folder(session_id)
 
 
 def title_of(root, session_id=None) -> str | None:
-    """The title (its /rename) the session whose scratchpad holds DIR goes by, else session SESSION_ID's,
-    or None when it has none."""
+    """The title (its /rename) session SESSION_ID, the one serving DIR, goes by, else the session's whose
+    scratchpad holds DIR (a resumed session has a new id, its old scratchpad keeps the old title), or None
+    when it has none."""
     import spend
     transcript = spend.transcript_of(root)
-    folder = transcript.with_suffix("") if transcript else _session_folder(session_id)
-    value = _read(folder / "custom-title.json") if folder else None
-    title = (value or {}).get("customTitle")
-    return title.strip() if isinstance(title, str) and title.strip() else None
+    for folder in (_session_folder(session_id), transcript.with_suffix("") if transcript else None):
+        title = ((_read(folder / "custom-title.json") if folder else None) or {}).get("customTitle")
+        if isinstance(title, str) and title.strip():
+            return title.strip()
+    return None
 
 
 def live() -> list[dict]:
@@ -320,7 +316,7 @@ def summary(entry: dict) -> dict:
         "status": str(state["status"]) if state and state.get("status") else "unknown",
         "now": str((state or {}).get("now") or ""), "updated": (state or {}).get("updated"),
         "workers": workers, "tokens": sum(int(a.get("tokens") or 0) for a in rows("agents")),
-        "spent": spend.of(entry["dir"]), "chat": chat.listening(entry["dir"]), "active": spend.active(entry["dir"]),
+        "spent": spend.of(entry["dir"]), "chat": chat.listening(entry["dir"]), "active": spend.active(entry["dir"], entry.get("session_id")),
         "now_at": (state or {}).get("now_at"),
         "lanes": sorted({str(lane) for a in running for lane in a.get("lane") or []}),
         "roadblocks": sum(1 for r in rows("roadblocks") if not r.get("resolved")),

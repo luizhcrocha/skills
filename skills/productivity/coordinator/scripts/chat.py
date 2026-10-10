@@ -748,7 +748,7 @@ def _fleets_unheard(me: str) -> list[str]:
             continue
         told[e["id"]] = mark
         import spend
-        active = spend.active(e["dir"])
+        active = spend.active(e["dir"], e.get("session_id"))
         gone = ""
         try:
             if active and clock.time() - datetime.fromisoformat(active).timestamp() > 1800:

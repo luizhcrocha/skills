@@ -264,7 +264,7 @@ export function fleetsUnheard(machine: Machine, me: string): string[] {
     }
 
     told.set(e.id, mark);
-    const active = activeAt(e.dir, machine.config);
+    const active = activeAt(e.dir, machine.config, asString(e.raw["session_id"]));
     const activeAtS = active === undefined ? undefined : parseInstant(active);
 
     const gone =

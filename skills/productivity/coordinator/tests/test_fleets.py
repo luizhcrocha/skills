@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -504,6 +505,54 @@ class RespawnTest(Machine):
         root.mkdir(parents=True)
         (root / "state.json").write_text(json.dumps({"project": "custom-mcp-servers"}))
         return root
+
+    def wrote(self, project: str, sid: str, at: str) -> str:
+        path = self.config / "projects" / project / f"{sid}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n")
+        t = datetime.fromisoformat(at).timestamp()
+        os.utime(path, (t, t))
+        return datetime.fromtimestamp(t, timezone.utc).astimezone().isoformat(timespec="seconds")
+
+    def test_a_resumed_session_serving_its_dir_again_is_the_fleets_session(self):
+        root = self.scratchpad("-home-x-repo", "s1")
+        self.title("-home-x-repo", "s1", "Infra")
+        before = self.wrote("-home-x-repo", "s1", "2026-10-07T21:06:00+00:00")
+        entry = fleets.register(root, "u", os.getpid(), "s1")
+        self.assertEqual((entry["id"], fleets.summary(entry)["active"]), ("infra", before))
+        self.title("-home-x-repo", "s2", "Infra Two")
+        after = self.wrote("-home-x-repo", "s2", "2026-10-10T10:50:00+00:00")
+        again = fleets.register(root, "u", os.getpid(), "s2")
+        self.assertEqual((again["id"], again["session"], again["session_id"]), ("infra-two", "Infra Two", "s2"))
+        self.assertEqual(fleets.summary(again)["active"], after)
+
+    def test_fleets_name_from_another_session_renames_only(self):
+        root = self.scratchpad("-home-x-repo", "s1")
+        self.title("-home-x-repo", "s1", "Alpha")
+        at = self.wrote("-home-x-repo", "s1", "2026-10-10T10:00:00+00:00")
+        fleets.register(root, "u", os.getpid(), "s1")
+        self.title("-home-y-other", "sB", "Bravo")
+        self.wrote("-home-y-other", "sB", "2026-10-01T09:00:00+00:00")
+        env = {**os.environ, "CLAUDE_CODE_SESSION_ID": "sB"}
+        r = subprocess.run([sys.executable, FLEETS, "name", str(root), "Alpha"], capture_output=True, text=True, timeout=30, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([(e["id"], e["session"], e["session_id"]) for e in fleets.live()], [("alpha", "Alpha", "s1")])
+        self.assertEqual(fleets.summary(fleets.live()[0])["active"], at)
+
+    def test_a_resumed_session_with_no_title_of_its_own_keeps_the_scratchpads(self):
+        root = self.scratchpad("-home-x-repo", "s1")
+        self.title("-home-x-repo", "s1", "Infra")
+        self.wrote("-home-x-repo", "s1", "2026-10-07T21:06:00+00:00")
+        fleets.register(root, "u", os.getpid(), "s1")
+        self.wrote("-home-x-repo", "s2", "2026-10-10T10:50:00+00:00")
+        self.assertEqual(fleets.title_of(root, "s2"), "Infra")
+        again = fleets.register(root, "u", os.getpid(), "s2")
+        self.assertEqual((again["id"], again["session"], again["session_id"]), ("infra", "Infra", "s2"))
+
+    def test_a_recorded_session_whose_transcript_is_not_found_reads_the_scratchpads(self):
+        root = self.scratchpad("-home-x-repo", "s1")
+        old = self.wrote("-home-x-repo", "s1", "2026-10-01T10:00:00+00:00")
+        self.assertEqual(fleets.summary(fleets.register(root, "u", os.getpid(), "s2"))["active"], old)
 
     def test_the_entry_records_the_sessions_id(self):
         self.assertEqual(fleets.register(self.fleet("a", "infra"), "u", os.getpid(), "5579180b")["session_id"], "5579180b")

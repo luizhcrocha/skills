@@ -3,11 +3,12 @@
  * manager finds the coordinators and they it, and the `fleets` CLI. The page's view of them
  * (`fleets.view`) is the hub's, stage 3; what it summarises is checked here through `fleets list`.
  */
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
+import { stampOf } from "../src/clock.ts";
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
 import { tokenCount } from "../src/cli/fleets.ts";
 import { fleetsNamed } from "../src/cli/run.ts";
@@ -647,6 +648,59 @@ describe("a fleet served again by a restarted session", () => {
     title("-home-x-repo", "5579180b", "infra-coordinator (2)");
     const renamed = registry.live()[0];
     expect([renamed?.id, renamed?.session, renamed?.aliases]).toEqual(["infra-coordinator-2", "infra-coordinator (2)", ["infra-coordinator"]]);
+  });
+
+  /** Session `sid`'s transcript in `project`, last written at `at`. */
+  function wrote(project: string, sid: string, at: string): string {
+    const path = join(config, "projects", project, `${sid}.jsonl`);
+    mkdirSync(join(config, "projects", project), { recursive: true });
+    writeFileSync(path, "{}\n");
+    utimesSync(path, new Date(at), new Date(at));
+
+    return stampOf(new Date(at)).slice(0, 16).replace("T", " ");
+  }
+
+  test("a resumed session serving its dir again is the fleet's session: its last activity and title, not the scratchpad's", () => {
+    const root = scratchpad("-home-x-repo", "s1");
+    title("-home-x-repo", "s1", "Infra");
+    const before = wrote("-home-x-repo", "s1", "2026-10-07T21:06:00Z");
+    expect(registry.register(root, "u", process.pid, now(), "s1").id).toBe("infra");
+    expect(cli("list").stdout).toContain(`session  Infra, last active ${before}`);
+    title("-home-x-repo", "s2", "Infra Two");
+    const after = wrote("-home-x-repo", "s2", "2026-10-10T10:50:00Z");
+    const again = registry.register(root, "u", process.pid, now(), "s2");
+    expect([again.id, again.session, again.raw["session_id"]]).toEqual(["infra-two", "Infra Two", "s2"]);
+    expect(cli("list").stdout).toContain(`session  Infra Two, last active ${after}`);
+  });
+
+  test("fleets name run from another session renames only: the entry keeps the session serving it", () => {
+    const root = scratchpad("-home-x-repo", "s1");
+    title("-home-x-repo", "s1", "Alpha");
+    const at = wrote("-home-x-repo", "s1", "2026-10-10T10:00:00Z");
+    registry.register(root, "u", process.pid, now(), "s1");
+    title("-home-y-other", "sB", "Bravo");
+    wrote("-home-y-other", "sB", "2026-10-01T09:00:00Z");
+    expect(fleet(["fleets", "name", root, "Alpha"], { ...env, CLAUDE_CODE_SESSION_ID: "sB" }).code).toBe(0);
+    expect(registry.live().map((e) => [e.id, e.session, e.raw["session_id"]])).toEqual([["alpha", "Alpha", "s1"]]);
+    expect(cli("list").stdout).toContain(`session  Alpha, last active ${at}`);
+  });
+
+  test("a resumed session with no title of its own keeps the scratchpad's title", () => {
+    const root = scratchpad("-home-x-repo", "s1");
+    title("-home-x-repo", "s1", "Infra");
+    wrote("-home-x-repo", "s1", "2026-10-07T21:06:00Z");
+    registry.register(root, "u", process.pid, now(), "s1");
+    wrote("-home-x-repo", "s2", "2026-10-10T10:50:00Z");
+    expect(registry.titleOf(root, "s2")).toEqual({ title: "Infra", given: true });
+    const again = registry.register(root, "u", process.pid, now(), "s2");
+    expect([again.id, again.session, again.raw["session_id"]]).toEqual(["infra", "Infra", "s2"]);
+  });
+
+  test("a recorded session whose transcript is not found reads the scratchpad's", () => {
+    const root = scratchpad("-home-x-repo", "s1");
+    const old = wrote("-home-x-repo", "s1", "2026-10-01T10:00:00Z");
+    registry.register(root, "u", process.pid, now(), "s2");
+    expect(cli("list").stdout).toContain(`last active ${old}`);
   });
 
   test("a brand-new dir with no title still gets its project's slug", async () => {

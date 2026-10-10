@@ -17,7 +17,7 @@ import { stampOf, parseInstant } from "./clock.ts";
 import { exists, isDir, listDir, makeDirs, readText, remove, resolvePath, writeAtomic } from "./files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject } from "./json.ts";
 import { withExclusiveLock } from "./lock.ts";
-import { AiTitles, transcriptOf } from "./transcripts.ts";
+import { AiTitles, sessionFolderOf, transcriptOf } from "./transcripts.ts";
 
 /** The names the chat keeps for itself. */
 export const KEPT_NAMES = ["coordinator", "manager", "user"] as const;
@@ -209,7 +209,8 @@ export class Registry {
 
   /**
    * What the fleet served from `root` is called, first found of: the name given on its page; its session's
-   * /rename (`custom-title.json`: the session whose scratchpad holds `root`, else session `sessionId`); the
+   * /rename (`custom-title.json`: session `sessionId`'s, the one serving it, else the session's whose
+   * scratchpad holds `root`: a resumed session has a new id, its old scratchpad keeps the old title); the
    * name in Claude Code's live record of process `pid` (`sessions/<pid>.json`) while it is session
    * `sessionId`, a derived one included; the transcript's last AI title. Undefined when none says.
    */
@@ -217,9 +218,11 @@ export class Registry {
     const override = this.overrideOf(root);
 
     if (override !== undefined) return { title: override, given: true };
-    const transcript = transcriptOf(root, this.place.config);
-    const folder = transcript !== undefined ? transcript.replace(/\.jsonl$/, "") : this.sessionFolder(sessionId);
-    const custom = folder === undefined ? undefined : trimmed(readObject(join(folder, "custom-title.json"))?.["customTitle"]);
+    const own = this.sessionFolder(sessionId);
+    const scratch = transcriptOf(root, this.place.config)?.replace(/\.jsonl$/, "");
+    const folder = own ?? scratch;
+    const customOf = (f: string | undefined): string | undefined => (f === undefined ? undefined : trimmed(readObject(join(f, "custom-title.json"))?.["customTitle"]));
+    const custom = customOf(own) ?? customOf(scratch);
 
     if (custom !== undefined) return { title: custom, given: true };
     const record = pid === undefined ? undefined : readObject(join(this.place.config, "sessions", `${pid}.json`));
@@ -256,12 +259,7 @@ export class Registry {
 
   /** The folder beside session `sessionId`'s transcript, in whichever project holds it, or undefined. */
   private sessionFolder(sessionId: string | null | undefined): string | undefined {
-    if (sessionId === undefined || sessionId === null || !/^[A-Za-z0-9_-]+$/.test(sessionId)) return undefined;
-    const projects = join(this.place.config, "projects");
-
-    return listDir(projects)
-      .map((project) => join(projects, project, sessionId))
-      .find((folder) => isDir(folder));
+    return sessionFolderOf(this.place.config, sessionId);
   }
 
   private namesDir(): string {

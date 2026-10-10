@@ -8,7 +8,7 @@ import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
 
 import { stampOf } from "./clock.ts";
-import { isDir, listDir, mtimeOf, readText, resolvePath } from "./files.ts";
+import { exists, isDir, listDir, mtimeOf, readText, resolvePath } from "./files.ts";
 import { asNumber, asObject, asString, parseJson, truthy, type JsonObject } from "./json.ts";
 import * as Option from "effect/Option";
 
@@ -29,9 +29,30 @@ export function transcriptOf(root: string, config: string): string | undefined {
   return join(config, "projects", parts.at(-4) ?? "", `${parts.at(-3) ?? ""}.jsonl`);
 }
 
-/** When that session last wrote its transcript, as a local stamp, or undefined. */
-export function activeAt(root: string, config: string): string | undefined {
-  const path = transcriptOf(root, config);
+/** The folder beside session `sessionId`'s transcript (`projects/<project>/<session>`), in whichever project
+ * holds that transcript or folder, or undefined. */
+export function sessionFolderOf(config: string, sessionId: string | null | undefined): string | undefined {
+  if (sessionId === undefined || sessionId === null || !/^[A-Za-z0-9_-]+$/.test(sessionId)) return undefined;
+  const projects = join(config, "projects");
+
+  return listDir(projects)
+    .map((project) => join(projects, project, sessionId))
+    .find((folder) => isDir(folder) || exists(`${folder}.jsonl`));
+}
+
+/** The transcript of the session serving `root` now: session `sessionId`'s, the one its registry entry
+ * records (`fleet serve` writes it; a resumed session has a new id while `root` stays in the scratchpad of
+ * the session that made it), when that transcript is found, else the scratchpad's; undefined when neither. */
+export function servingTranscriptOf(root: string, config: string, sessionId?: string | null): string | undefined {
+  const folder = sessionFolderOf(config, sessionId);
+
+  return folder !== undefined && exists(`${folder}.jsonl`) ? `${folder}.jsonl` : transcriptOf(root, config);
+}
+
+/** When the session serving `root` (session `sessionId`, else the scratchpad's) last wrote its transcript,
+ * as a local stamp, or undefined. */
+export function activeAt(root: string, config: string, sessionId?: string | null): string | undefined {
+  const path = servingTranscriptOf(root, config, sessionId);
   const at = path === undefined ? undefined : mtimeOf(path);
 
   return at === undefined ? undefined : stampOf(new Date(at * 1000));
