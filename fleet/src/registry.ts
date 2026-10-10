@@ -149,11 +149,11 @@ export function pidOfEntry(entry: Entry): number | undefined {
   return pidOf(entry.raw["pid"]);
 }
 
-function entryOf(raw: JsonObject): Entry | undefined {
+function entryOf(raw: JsonObject, live = true): Entry | undefined {
   const id = asString(raw["id"]);
   const dir = asString(raw["dir"]);
 
-  if (id === undefined || dir === undefined || !alive(pidOf(raw["pid"]))) return undefined;
+  if (id === undefined || dir === undefined || (live && !alive(pidOf(raw["pid"])))) return undefined;
 
   return {
     id,
@@ -340,6 +340,24 @@ export class Registry {
     });
 
     return entries.sort((a, b) => (a.since < b.since ? -1 : a.since > b.since ? 1 : 0));
+  }
+
+  /** Every fleet the registry knows, served or not: the live ones ({@link live}, which keeps a dead one's entry),
+   * then the kept entries of the fleets no longer served whose DIR none of them serves, by id. A fleet stopped with
+   * `fleet serve --stop` is forgotten, so it is not among them. */
+  known(): Entry[] {
+    const live = this.live();
+    const dirs = new Set(live.map((e) => e.dir));
+
+    const stopped = this.keptNames()
+      .flatMap(({ raw }) => {
+        const entry = entryOf(raw, false);
+
+        return entry === undefined || dirs.has(entry.dir) || live.some((e) => e.id === entry.id) ? [] : [entry];
+      })
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+    return [...live, ...stopped];
   }
 
   /** The live fleet served from `root`. */

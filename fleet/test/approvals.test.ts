@@ -4,14 +4,14 @@
  * under one is recorded closed and told to the fleets, and a choice put to the user without the advisor's
  * view is warned.
  */
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
 import { approves, plainAnswer, plainYes } from "../src/ledger/approvals.ts";
-import { baseEnv, fleet, readJson, tmp, type Environment, type Ran } from "./support.ts";
+import { baseEnv, FLEET, fleet, readJson, tmp, type Environment, type Ran } from "./support.ts";
 
 const CHOICE = [
   "--kind",
@@ -369,5 +369,38 @@ describe("approvals answered once for every fleet", () => {
     expect(refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q1")).toContain("manager/G2:Q1 has no answer from the user");
     ok("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2");
     expect(rows("approvals")[0]?.["message"]).toBe(3);
+  });
+
+  const stop = (name: string, dir: string): void => {
+    writeFileSync(join(home, `${name}.json`), JSON.stringify({ id: name, role: "coordinator", dir, url: "x", pid: 999999999, session: null, since: "2026-01-05T08:02:00+00:00" }));
+  };
+
+  test("revoke reaches a fleet that is not served now", () => {
+    fleets(0, "approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1");
+    stop("infra", other);
+    expect(fleets(0, "approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "revoked on the page (#3)").stdout.trimEnd().split("\n")).toEqual([
+      "manager: revoked K1",
+      "acme-billing: revoked K1",
+      "infra: revoked K1",
+    ]);
+    expect(approvalsAt(other).map((a) => a["status"])).toEqual(["revoked"]);
+  });
+
+  test("revoke names the fleet it could not reach and fails", () => {
+    fleets(0, "approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1");
+    stop("infra", other);
+    rmSync(join(other, "state.json"));
+    const r = fleets(1, "approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "revoked on the page (#3)");
+    expect(r.stdout.trimEnd().split("\n")).toEqual(["manager: revoked K1", "acme-billing: revoked K1", `infra: not reached, no ledger at ${join(other, "state.json")}`]);
+    expect(r.stderr).toContain("not reached: infra; the approval is still active there");
+  });
+
+  test("concurrent adds skip what another just added", async () => {
+    const runs = [0, 1, 2].map(() => Bun.spawn([FLEET, "fleets", "approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1"], { env, stdout: "pipe", stderr: "pipe" }));
+    const codes = await Promise.all(runs.map(async (p) => [await p.exited, await new Response(p.stdout).text()] as const));
+
+    for (const [code, said] of codes) expect([code, said]).toEqual([0, expect.not.stringContaining("refused")]);
+
+    for (const dir of [manager, root, other]) expect(approvalsAt(dir).map((a) => a["id"])).toEqual(["K1"]);
   });
 });

@@ -139,6 +139,17 @@ def live() -> list[dict]:
     return sorted(entries, key=lambda e: str(e.get("since", "")))
 
 
+def known() -> list[dict]:
+    """Every fleet the registry knows, served or not: the live ones (live(), which keeps a dead one's entry),
+    then the kept entries of the fleets no longer served whose DIR none of them serves, by id. A fleet
+    stopped with `serve --stop` is forgotten, so it is not among them."""
+    entries = live()
+    dirs = {e["dir"] for e in entries}
+    ids = {e["id"] for e in entries}
+    stopped = [e for _, e in _kept_names() if isinstance(e.get("dir"), str) and e["dir"] not in dirs and e["id"] not in ids]
+    return entries + sorted(stopped, key=lambda e: e["id"])
+
+
 def find(root) -> dict | None:
     root = str(Path(root).resolve())
     return next((e for e in live() if e["dir"] == root), None)
@@ -952,6 +963,30 @@ def _targets(names: str | None) -> list[dict]:
     return found
 
 
+def _known_fleet(entries: list[dict], name: str) -> dict | None:
+    """The fleet the registry knows by `name` (its id, else an alias), served or not."""
+    return next((e for e in entries if e["id"] == name), None) or \
+        next((e for e in entries if isinstance(e.get("aliases"), list) and name in e["aliases"]), None)
+
+
+def _revoke_targets(names: str | None) -> list[dict]:
+    """The fleets a revoke reaches: every fleet the registry knows whose DIR is there, served or stopped
+    (known()), or those `names` lists."""
+    entries = known()
+    if names is None:
+        return [e for e in entries if Path(e["dir"]).is_dir()]
+    found = []
+    for n in dict.fromkeys(x.strip() for x in names.split(",") if x.strip()):
+        e = _known_fleet(entries, n)
+        if e is None:
+            fail(f"no fleet '{n}' is known to the registry; `fleet fleets list` names the ones served")
+        if e not in found:
+            found.append(e)
+    if not found:
+        fail("--fleets names no fleet: --fleets A,B")
+    return found
+
+
 def _state(root: str, *argv: str) -> tuple[bool, str]:
     """Run one state command on the fleet at `root` (rendering its page quietly): whether it took, and its refusal."""
     import subprocess
@@ -997,28 +1032,45 @@ def cmd_approval(argv: list[str]) -> None:
                 continue
             k = "K" + str(max((int(a["id"][1:]) for a in rows if re.fullmatch(r"K[0-9]+", str(a.get("id")))), default=0) + 1)
             took, why = _state(e["dir"], "approval", "add", k, "--rule", given["rule"], "--by", by, "--ref", ref)
-            print(f"{e['id']}: added {k}" if took else f"{e['id']}: refused, {why}")
-            refused = refused or not took
+            raced = None if took else next((a for a in ((_read(Path(e["dir"]) / "state.json") or {}).get("approvals") or [])
+                                            if isinstance(a, dict) and decisions.same_source(a, src["ref"], question, local)), None)
+            if raced:
+                print(f"{e['id']}: skipped, {raced.get('id')} already comes from {src['label']} ({raced.get('status')})")
+            else:
+                print(f"{e['id']}: added {k}" if took else f"{e['id']}: refused, {why}")
+            refused = refused or (not took and raced is None)
     else:
         if not (given.get("reason") or "").strip():
             fail("approval revoke needs --reason: why, or where the user said it (\"revoked on the page (#21)\")")
         if given.get("rule") or given.get("by"):
             fail(APPROVAL_USAGE)
-        source = decisions.served(parsed[1])
+        reached = _revoke_targets(given.get("fleets"))
+        source = _known_fleet(known(), parsed[1])
         state = _read(Path(source["dir"]) / "state.json") if source else None
         d = decisions.find(state, parsed[2]) if isinstance(state, dict) and isinstance(state.get("decisions"), list) else None
         refs = {f"{parsed[1]}/{parsed[2]}"} | ({f"{source['id']}/{d.get('ref') or d['id']}"} if d else set())
         label = (f"{source['id']}/{d.get('ref') or d['id']}" if d else f"{parsed[1]}/{parsed[2]}") + (f":{question.upper()}" if question else "")
-        for e in _targets(given.get("fleets")):
-            rows = [a for a in ((_read(Path(e["dir"]) / "state.json") or {}).get("approvals") or []) if isinstance(a, dict)]
+        unreached = []
+        for e in reached:
+            state = _read(Path(e["dir"]) / "state.json")
+            if state is None:
+                print(f"{e['id']}: not reached, no ledger at {Path(e['dir']) / 'state.json'}")
+                unreached.append(e["id"])
+                continue
+            rows = [a for a in state.get("approvals") or [] if isinstance(a, dict)]
             local = d["id"] if d and Path(e["dir"]).resolve() == Path(source["dir"]).resolve() else None
             mine = [a for a in rows if a.get("status") == "active" and any(decisions.same_source(a, r, question, local) for r in refs)]
             if not mine:
                 print(f"{e['id']}: none active from {label}")
             for a in mine:
                 took, why = _state(e["dir"], "approval", "revoke", str(a["id"]), "--reason", given["reason"])
-                print(f"{e['id']}: revoked {a['id']}" if took else f"{e['id']}: refused, {why}")
-                refused = refused or not took
+                print(f"{e['id']}: revoked {a['id']}" if took else f"{e['id']}: not reached, {why}")
+                if not took and e["id"] not in unreached:
+                    unreached.append(e["id"])
+        if unreached:
+            sys.stdout.flush()
+            print(f"fleets: not reached: {', '.join(unreached)}; the approval is still active there", file=sys.stderr)
+            refused = True
     if refused:
         sys.exit(1)
 

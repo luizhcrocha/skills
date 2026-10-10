@@ -330,5 +330,35 @@ class FleetWideTest(Fleet):
         self.ok("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2")
         self.assertEqual(self.approvals(self.root)[0]["message"], 3)
 
+    def stop(self, name: str, root: Path) -> None:
+        (self.home / f"{name}.json").write_text(json.dumps({"id": name, "role": "coordinator", "dir": str(root), "url": "x",
+                                                            "pid": 999999999, "session": None, "since": "2026-01-05T08:02:00+00:00"}))
+
+    def test_revoke_reaches_a_fleet_that_is_not_served_now(self):
+        self.fleets("approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1")
+        self.stop("infra", self.other)
+        out = self.fleets("approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "revoked on the page (#3)").stdout.splitlines()
+        self.assertEqual(out, ["manager: revoked K1", "acme-billing: revoked K1", "infra: revoked K1"])
+        self.assertEqual([a["status"] for a in self.approvals(self.other)], ["revoked"])
+
+    def test_revoke_names_the_fleet_it_could_not_reach_and_fails(self):
+        self.fleets("approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1")
+        self.stop("infra", self.other)
+        (self.other / "state.json").unlink()
+        r = self.fleets("approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "revoked on the page (#3)", code=1)
+        self.assertEqual(r.stdout.splitlines(), ["manager: revoked K1", "acme-billing: revoked K1",
+                                                 f"infra: not reached, no ledger at {self.other / 'state.json'}"])
+        self.assertIn("not reached: infra; the approval is still active there", r.stderr)
+
+    def test_concurrent_adds_skip_what_another_just_added(self):
+        runs = [subprocess.Popen([sys.executable, FLEETS, "approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.env) for _ in range(3)]
+        for p in runs:
+            out, err = p.communicate(timeout=60)
+            self.assertEqual(p.returncode, 0, out + err)
+            self.assertNotIn("refused", out)
+        for root in (self.manager, self.root, self.other):
+            self.assertEqual([a["id"] for a in self.approvals(root)], ["K1"])
+
 if __name__ == "__main__":
     unittest.main()

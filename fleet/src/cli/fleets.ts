@@ -13,14 +13,14 @@ import { linkKind } from "../ledger/links.ts";
 import { firstLine } from "../chat/news.ts";
 import { readChat } from "../chat/store.ts";
 import { Refusal } from "../errors.ts";
-import { exists, readText, resolvePath } from "../files.ts";
+import { exists, isDir, readText, resolvePath } from "../files.ts";
 import { answeredAt, silentWorkers } from "../health.ts";
 import { Out, recordingOut } from "../io.ts";
 import { asArray, asNumber, asObject, asString, pyRepr, truthy, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger } from "../ledger/model.ts";
 import { find, number } from "../ledger/numbers.ts";
 import { processes } from "../procs.ts";
-import { approvalSource, NoSource, parseSource, sameSource, servedFleet } from "../ledger/approvals.ts";
+import { approvalSource, NoSource, parseSource, sameSource } from "../ledger/approvals.ts";
 import { parseLedger, type Approval } from "../ledger/model.ts";
 import { findDecision } from "../ledger/numbers.ts";
 import { stateOf, type Entry, type GateHolder } from "../registry.ts";
@@ -690,6 +690,34 @@ function targets(machine: Machine, names: string | undefined): Effect.Effect<Ent
   });
 }
 
+/** The fleet the registry knows by `name` (its id, else an alias), served or not. */
+function knownFleet(entries: readonly Entry[], name: string): Entry | undefined {
+  return entries.find((x) => x.id === name) ?? entries.find((x) => x.aliases.includes(name));
+}
+
+/** The fleets a revoke reaches: every fleet the registry knows whose DIR is there, served or stopped
+ * (`Registry.known`), or those `names` lists. */
+function revokeTargets(machine: Machine, names: string | undefined): Effect.Effect<Entry[], Refusal> {
+  return Effect.gen(function* () {
+    const entries = machine.registry.known();
+
+    if (names === undefined) return entries.filter((e) => isDir(e.dir));
+    const found: Entry[] = [];
+
+    for (const n of new Set(names.split(",").map((x) => x.trim()).filter((x) => x !== ""))) {
+      const e = knownFleet(entries, n);
+
+      if (e === undefined) return yield* fail(`no fleet '${n}' is known to the registry; \`fleet fleets list\` names the ones served`);
+
+      if (!found.includes(e)) found.push(e);
+    }
+
+    if (found.length === 0) return yield* fail("--fleets names no fleet: --fleets A,B");
+
+    return found;
+  });
+}
+
 /** One state command on the fleet at `dir` (its page rendered quietly): whether it took, and its refusal. */
 function stateOn(dir: string, ...argv: string[]): Effect.Effect<readonly [boolean, string], never, World> {
   return Effect.gen(function* () {
@@ -754,8 +782,11 @@ function approval(machine: Machine, argv: readonly string[]): Effect.Effect<numb
 
         const k = `K${String(Math.max(0, ...rows.flatMap((a) => (/^K[0-9]+$/u.test(a.id) ? [Number(a.id.slice(1))] : []))) + 1)}`;
         const [took, why] = yield* stateOn(e.dir, "approval", "add", k, "--rule", rule, "--by", by, "--ref", ref);
-        say(took ? `${e.id}: added ${k}` : `${e.id}: refused, ${why}`);
-        refused ||= !took;
+        const raced = took ? undefined : (approvalsAt(e.dir) ?? []).find((a) => sameSource(a, src.ref, question, local));
+
+        if (raced !== undefined) say(`${e.id}: skipped, ${raced.id} already comes from ${src.label} (${raced.status})`);
+        else say(took ? `${e.id}: added ${k}` : `${e.id}: refused, ${why}`);
+        refused ||= !took && raced === undefined;
       }
     } else {
       const reason = given.values.get("reason") ?? "";
@@ -763,24 +794,41 @@ function approval(machine: Machine, argv: readonly string[]): Effect.Effect<numb
       if (reason.trim() === "") return yield* fail('approval revoke needs --reason: why, or where the user said it ("revoked on the page (#21)")');
 
       if (given.values.has("rule") || given.values.has("by")) return yield* fail(APPROVAL_USAGE);
-      const source = servedFleet(machine, parsed.fleet);
+      const reached = yield* revokeTargets(machine, given.values.get("fleets"));
+      const source = knownFleet(machine.registry.known(), parsed.fleet);
       const ledger = source === undefined ? undefined : Option.getOrUndefined(parseLedger(readText(join(source.dir, "state.json")) ?? ""));
       const d = ledger === undefined || ledger instanceof Refusal ? undefined : findDecision(ledger, parsed.key);
       const canonical = source !== undefined && d !== undefined ? `${source.id}/${d.ref !== undefined && d.ref !== "" ? d.ref : d.id}` : undefined;
       const refs = [`${parsed.fleet}/${parsed.key}`, ...(canonical === undefined ? [] : [canonical])];
       const label = (canonical ?? `${parsed.fleet}/${parsed.key}`) + (question === undefined ? "" : `:${question.toUpperCase()}`);
 
-      for (const e of yield* targets(machine, given.values.get("fleets"))) {
+      const unreached: string[] = [];
+
+      for (const e of reached) {
         const local = d !== undefined && source !== undefined && resolvePath(e.dir) === resolvePath(source.dir) ? d.id : undefined;
-        const mine = (approvalsAt(e.dir) ?? []).filter((a) => a.status === "active" && refs.some((r) => sameSource(a, r, question, local)));
+        const rows = approvalsAt(e.dir);
+
+        if (rows === undefined) {
+          say(`${e.id}: not reached, no ledger at ${join(e.dir, "state.json")}`);
+          unreached.push(e.id);
+          continue;
+        }
+
+        const mine = rows.filter((a) => a.status === "active" && refs.some((r) => sameSource(a, r, question, local)));
 
         if (mine.length === 0) say(`${e.id}: none active from ${label}`);
 
         for (const a of mine) {
           const [took, why] = yield* stateOn(e.dir, "approval", "revoke", a.id, "--reason", reason);
-          say(took ? `${e.id}: revoked ${a.id}` : `${e.id}: refused, ${why}`);
-          refused ||= !took;
+          say(took ? `${e.id}: revoked ${a.id}` : `${e.id}: not reached, ${why}`);
+
+          if (!took && !unreached.includes(e.id)) unreached.push(e.id);
         }
+      }
+
+      if (unreached.length > 0) {
+        out.err(`fleets: not reached: ${unreached.join(", ")}; the approval is still active there\n`);
+        refused = true;
       }
     }
 
