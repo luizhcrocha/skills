@@ -38,6 +38,7 @@ import { spentBy } from "../transcripts.ts";
 import { accountOf, keepUsage, usageLines } from "../usage.ts";
 import { secondsNow, World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
+import { load, pruneOutlook } from "./ws.ts";
 
 function refuse(speaker: "hub" | "serve" | "render_dashboard" | "usage" | "spend", reason: string): Effect.Effect<never, Refusal> {
   return Effect.fail(new Refusal({ speaker, reason }));
@@ -153,6 +154,9 @@ function serve(machine: Machine, argv: readonly string[]): Effect.Effect<number,
       const entry = registry.find(root);
       registry.unregister(root);
       out.out(entry === undefined ? `${root} was not being served\n` : `stopped ${entry.url}\n`);
+      const raw = load(root);
+
+      if (!(raw instanceof Refusal)) for (const line of pruneOutlook(root, raw)) out.out(`${line}\n`);
 
       return 0;
     }

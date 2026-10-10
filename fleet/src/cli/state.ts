@@ -26,8 +26,9 @@ import { lockLedger } from "../ledger/store.ts";
 import { AGENT_STATUSES, ASKS, SHARED_KINDS, STATUSES, STEP_STATUSES, validate, WORKSPACE_MODES } from "../ledger/validate.ts";
 import { readChat } from "../chat/store.ts";
 import { EFFORTS, offPolicy } from "../ledger/roles.ts";
-import { activeWorkspaces, leftOpen, overlapping, staleNow, staleRows, unpruned, unrecorded } from "../ledger/warnings.ts";
+import { activeWorkspaces, idleWorkspaces, leftOpen, overlapping, staleNow, staleRows, unpruned, unrecorded } from "../ledger/warnings.ts";
 import { readObject } from "../registry.ts";
+import { pruneOutlook } from "./ws.ts";
 import { World, type Machine } from "../world.ts";
 import { opt, parseCommand, usageWidth, type Args, type CommandSpec } from "./args.ts";
 import { exitOf, printUsage } from "./exit.ts";
@@ -378,6 +379,8 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
       seen === undefined || !running ? undefined : overlapping(seen, args.str("id") ?? ""),
       seen === undefined || cmd !== "agent" ? undefined : gaveRole(seen, args.str("id") ?? "", args.str("model"), args.str("effort")),
       ...(seen === undefined ? [] : unpruned(seen, activeWorkspaces(readObject(path)), settingDone)),
+      seen === undefined ? undefined : idleWorkspaces(seen, activeWorkspaces(readObject(path))),
+      ...(settingDone ? pruneOutlook(root, readObject(path) ?? {}) : []),
       cmd === "init" ? undefined : unreadLine(machine, root),
     ];
 

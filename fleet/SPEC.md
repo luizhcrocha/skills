@@ -716,7 +716,12 @@ After the handler succeeds, before validation, on stderr, in this order (not for
    changes into the stack, then prune it (\`fleet ws <dir> prune\`, a dry run, then --apply), or hand it
    to the next worker of its lane (\`fleet ws <dir> add <next> --reuse a1\`).`), naming both ways out, on every command,
    and on `set --status done` **the workspaces left** (`state: the fleet is done with workspace(s) a1
-   not pruned: ...`).
+   not pruned: ...`), followed by what prune would remove and keep, as `fleet serve --stop` prints it
+   ([fleets.py and the registry](#fleetspy-and-the-registry)). And **more than 4 idle workspaces** (`state: 5 idle workspaces (a1,
+   ...), more than 4: their workers are no longer at work. \`fleet ws <dir> prune --apply\` removes each
+   whose changes are in the stack and keeps the others, naming why; the next worker of a lane reuses its
+   workspace ...`), on every command: an idle workspace is one prune's first rule lets go (its worker
+   done, failed, stopped, or with no row; one handed over is its new worker's), never the preview.
 9. **Unread news** (`news: N unread for <fleet>, never a wake: \`fleet news read --as <fleet>\``), one line,
    last, when the machine's news holds items the fleet has not read ([The news](#the-news-fleet-news)).
    Not for `init`. Read only when `REGISTRY/news/news.jsonl` exists, and the fleet's name is read from the
@@ -1011,7 +1016,10 @@ Every take, release and removal of a lapsed hold runs under an exclusive `flock`
 holds the plan usage per account, `{"accounts": {KEY: {email, seen, five_hour?, seven_day?}}}` (see usage.py). Every read of the registry (`live()`) deletes the entry of a fleet whose
 pid is dead or whose record is malformed; a dead one's entry is kept as `REGISTRY/names/<fleet>.json` (one
 per dir: a newer one for the same dir replaces it), so the fleet gets its name back when it is served again.
-`fleet serve --stop` keeps nothing. It also renames a fleet whose session got a custom title
+`fleet serve --stop` keeps nothing; in TypeScript it then prints, for a fleet with active workspaces,
+what `fleet ws DIR prune --apply` would remove (`ws: prune would remove a1 (PATH), ...`), what it keeps
+and why (`ws: prune keeps a2: <why>`, prune's own rules), and the command (`ws: \`fleet ws DIR prune
+--apply\` removes them`), so a fleet's end is where its workspaces go. It also renames a fleet whose session got a custom title
 (`custom-title.json` beside the transcript: the entry's `session_id`'s, looked up in every project under
 `$CLAUDE_CONFIG_DIR/projects/`, else, when that session has none, DIR's scratchpad's session's) to the title's slug, unless that is taken or
 reserved; a missing or blank title renames nothing. In TypeScript the session's name is, first found of

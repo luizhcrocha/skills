@@ -738,6 +738,32 @@ function keepBecause(root: string, raw: JsonObject, r: Recorded): string | undef
   return undefined;
 }
 
+/** What `prune --apply` would do now, for a fleet that stops (`fleet serve --stop`, `set --status done`):
+ * the workspaces it would remove, those it keeps with why (prune's own rules), and the command. Empty when
+ * the fleet has no active workspace. Snapshots each idle workspace, as prune's dry run does. */
+export function pruneOutlook(root: string, raw: JsonObject): string[] {
+  const all = recorded(raw);
+
+  if (all.length === 0) return [];
+  const going: Recorded[] = [];
+  const lines: string[] = [];
+
+  for (const r of all) {
+    const because = keepBecause(root, raw, r);
+
+    if (because === undefined) going.push(r);
+    else lines.push(`ws: prune keeps ${r.id}: ${because}`);
+  }
+
+  if (going.length === 0) return [...lines, "ws: prune would remove no workspace"];
+
+  return [
+    `ws: prune would remove ${going.map((r) => `${r.id} (${r.path})`).join(", ")}`,
+    ...lines,
+    `ws: \`fleet ws ${root} prune --apply\` removes ${going.length === 1 ? "it" : "them"}`,
+  ];
+}
+
 function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly string[]): Effect.Effect<number, Refusal, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;

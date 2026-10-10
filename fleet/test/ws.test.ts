@@ -678,3 +678,57 @@ describe("the ws-add hook: the repo prepares each new workspace", () => {
     });
   });
 });
+
+describe("idle workspaces are pruned at the end of a fleet", () => {
+  /** N workers, each with a workspace, done; a1's change integrated, a2's not. */
+  function finished(n: number): void {
+    for (let i = 1; i <= n; i += 1) {
+      state("agent", `a${String(i)}`, "--task", "t", "--milestone", "m1");
+      ws("add", `a${String(i)}`, "--repo", repo);
+    }
+
+    work(join(base, "repo-a1"), "one.txt", "a1: one");
+    work(join(base, "repo-a2"), "two.txt", "a2: two");
+    jj(repo, "rebase", "-r", "a1@-", "-B", "@");
+
+    for (let i = 1; i <= n; i += 1) state("agent", `a${String(i)}`, "--status", i === n ? "stopped" : "done");
+  }
+
+  test("every state command warns past four idle workspaces, naming prune --apply; four, or live ones, do not", () => {
+    finished(4);
+    const four = fleet(["state", dir, "event", "x", "--no-render"], env);
+    expect(four.stderr).not.toContain("idle workspaces");
+    state("agent", "a5", "--task", "t", "--milestone", "m1");
+    ws("add", "a5", "--repo", repo);
+    expect(fleet(["state", dir, "event", "x", "--no-render"], env).stderr).not.toContain("idle workspaces");
+    state("agent", "a5", "--status", "stopped");
+    const five = fleet(["state", dir, "event", "x", "--no-render"], env);
+    expect(five.stderr).toContain(
+      "state: 5 idle workspaces (a1, a2, a3, a4, a5), more than 4: their workers are no longer at work. `fleet ws <dir> prune --apply` removes each whose changes are in the stack",
+    );
+    // one handed to a running worker is that worker's, not idle
+    state("agent", "b1", "--task", "t", "--milestone", "m1");
+    expect(ws("add", "b1", "--reuse", "a5").code).toBe(0);
+    expect(fleet(["state", dir, "event", "x", "--no-render"], env).stderr).not.toContain("idle workspaces");
+  });
+
+  test("serve --stop and set --status done print what prune would remove, what it keeps and why, and the command", () => {
+    finished(3);
+    const stopped = fleet(["serve", dir, "--stop"], env);
+    expect(stopped.code).toBe(0);
+    const lines = stopped.stdout.split("\n");
+    expect(lines[0]).toBe(`${dir} was not being served`);
+    expect(lines[1]).toBe(`ws: prune would remove a1 (${join(base, "repo-a1")}), a3 (${join(base, "repo-a3")})`);
+    expect(lines[2]).toMatch(/^ws: prune keeps a2: 1 change\(s\) not in the stack: \w+ a2: two$/);
+    expect(lines[3]).toBe(`ws: \`fleet ws ${dir} prune --apply\` removes them`);
+    expect([existsSync(join(base, "repo-a1")), existsSync(join(base, "repo-a3"))]).toEqual([true, true]);
+    const done = fleet(["state", dir, "set", "--status", "done", "--no-render"], env);
+    expect(done.stderr).toContain(`ws: prune would remove a1 (${join(base, "repo-a1")}), a3 (${join(base, "repo-a3")})\n`);
+    expect(done.stderr).toContain(`ws: \`fleet ws ${dir} prune --apply\` removes them\n`);
+    expect(fleet(["state", dir, "event", "x", "--no-render"], env).stderr).not.toContain("prune would remove");
+  });
+
+  test("a fleet with no workspace says nothing of prune", () => {
+    expect(fleet(["serve", dir, "--stop"], env).stdout).toBe(`${dir} was not being served\n`);
+  });
+});

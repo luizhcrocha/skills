@@ -239,6 +239,8 @@ export interface ActiveWorkspace {
   readonly path: string;
   /** The port its worker runs a dev server on (`fleet ws add` gives one), when it has one. */
   readonly port: number | undefined;
+  /** The fleet's combined preview (`fleet preview`), never a worker's. */
+  readonly preview: boolean;
 }
 
 /** The workspaces of a ledger that are still active, from its raw JSON (`workspaces` is `fleet ws`'s key). */
@@ -247,7 +249,7 @@ export function activeWorkspaces(raw: JsonObject | undefined): ActiveWorkspace[]
     const row = asObject(item);
     const id = asString(row?.["id"]);
 
-    return row === undefined || id === undefined || row["status"] === "pruned" ? [] : [{ id, agent: asString(row["agent"]) ?? id, path: asString(row["path"]) ?? "", port: asNumber(row["port"]) }];
+    return row === undefined || id === undefined || row["status"] === "pruned" ? [] : [{ id, agent: asString(row["agent"]) ?? id, path: asString(row["path"]) ?? "", port: asNumber(row["port"]), preview: row["kind"] === "preview" }];
   });
 }
 
@@ -273,4 +275,26 @@ export function unpruned(ledger: Ledger, workspaces: readonly ActiveWorkspace[],
   }
 
   return lines;
+}
+
+/** More idle workspaces than this in one fleet are pointed out on every state command. */
+export const IDLE_MAX = 4;
+
+/** When the fleet holds more than {@link IDLE_MAX} idle workspaces: a worker's whose worker is no longer at
+ * work (`prune`'s first rule: done, failed, stopped, or no row; one handed over is its new worker's). Each
+ * still costs its disk and its setup, and nobody prunes them unless told. */
+export function idleWorkspaces(ledger: Ledger, workspaces: readonly ActiveWorkspace[]): string | undefined {
+  const idle = workspaces.filter((w) => {
+    const status = ledger.agents.find((a) => a.id === w.agent)?.status;
+
+    return !w.preview && (status === undefined || !isLive(status));
+  });
+
+  if (idle.length <= IDLE_MAX) return undefined;
+
+  return (
+    `state: ${String(idle.length)} idle workspaces (${idle.map((w) => w.id).join(", ")}), more than ${String(IDLE_MAX)}: their workers are no longer at work. ` +
+    "`fleet ws <dir> prune --apply` removes each whose changes are in the stack and keeps the others, naming why; " +
+    "the next worker of a lane reuses its workspace (`fleet ws <dir> add <next> --reuse <workspace>`) rather than making one."
+  );
 }
