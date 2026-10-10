@@ -1864,7 +1864,7 @@ reads `$PID`. With the clock pinned, timestamps are deterministic and are compar
 run.py run TRACE [--impl CLI=COMMAND]... [--subst PATH=TOKEN]... [-o OUT]
 run.py check TRACE [EXPECTED] [--impl ...]      exit 1 at the first divergence, printed with the steps before it
 run.py diff A B                                 two result files
-run.py record TRACE...                          TRACE's .expected.jsonl, from the Python oracle
+run.py record [TRACE...]                        TRACE's .expected.jsonl (default: every trace), from the TypeScript fleet
 ```
 
 Stage 2 runs `run.py check` on each trace in `oracle/traces/` with
@@ -1888,9 +1888,9 @@ approval add --all` and `--fleets`, skipped on a second run, and `fleets approva
 `model-seed-1`, `model-seed-2` (random sequences), and the page's: `render-<name>` for each
 hand-written trace, the same steps with every state command rendering, plus `render-page` (a
 session's scratchpad with its transcript, links, markup and U+2028 in the text, unread chat, a
-manager with a coordinator's summary, the plan's usage and the gate). Where a behaviour marked open changes on purpose, re-record
-the trace with the Python oracle and edit the expected lines by hand, or record them from the
-new implementation once it's the reference. Either way, review the diff.
+manager with a coordinator's summary, the plan's usage and the gate). The TypeScript fleet is the reference
+(ADR 0003): where a behaviour changes on purpose, re-record the trace from it with `just record-traces
+fleet/oracle/traces/NAME.jsonl` and review the diff. The frozen Python twin is not changed to match.
 
 ## The model-based test
 

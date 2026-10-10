@@ -7,7 +7,8 @@
                                     replay TRACE and diff against EXPECTED (TRACE's .expected.jsonl
                                     beside it by default); exit 1 at the first divergence
     run.py diff A B                 compare two result files; print the first divergence with context
-    run.py record TRACE...          replay each TRACE on the Python oracle and write its .expected.jsonl
+    run.py record [TRACE...]        replay each TRACE (default: every trace in traces/) on the TypeScript
+                                    fleet and write its .expected.jsonl
 
 A trace is JSON lines (the format is in fleet/SPEC.md, "Oracle traces"): a header, then steps. A `cli`
 step is one invocation of one of the fleet's CLIs (`state`, `chat`, `fleets`), with its argv, env
@@ -22,8 +23,9 @@ as alive, reads back as $PID. A link's `up` probes this machine, so while a repl
 itself listens on 127.0.0.1 at each port of LISTENING: a link on one of those reads as up, whatever
 else the host listens on.
 
-An implementation is a command prefix per CLI. The default is the Python oracle,
-skills/productivity/coordinator/scripts/*.py; stage 2's binary is given as
+An implementation is a command prefix per CLI. Traces are recorded from the TypeScript fleet,
+fleet/bin/fleet (ADR 0003). `run` and `check` default to the frozen Python twin,
+skills/productivity/coordinator/scripts/*.py, until it is deleted; the TypeScript fleet is given as
 `--impl state="fleet state" --impl chat="fleet chat" --impl fleets="fleet fleets" --impl news="fleet news"`, plus
 `--subst ITS_SKILL_DIR='$SKILL'` for the paths it prints. Stdlib only.
 """
@@ -40,6 +42,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -55,11 +58,17 @@ PAGE_STATE = re.compile(r'<script id="fleet-state" type="application/json">(.*?)
 
 
 def python_impl() -> dict:
-    """The oracle: the coordinator's Python scripts, run by this interpreter."""
+    """The frozen Python twin: the coordinator's Python scripts, run by this interpreter."""
     return {cli: [sys.executable, str(SKILL / "scripts" / f"{cli}.py")] for cli in CLIS}
 
 
-def python_subst() -> dict:
+def ts_impl() -> dict:
+    """The TypeScript fleet, which the traces are recorded from: this checkout's fleet/bin/fleet."""
+    return {cli: [str(FLEET), cli] for cli in CLIS}
+
+
+def skill_subst() -> dict:
+    """The coordinator's directory, which both implementations print, as `$SKILL`."""
     return {str(SKILL): "$SKILL"}
 
 
@@ -102,7 +111,7 @@ class Session:
         self.clock = START
         self.pid = str(os.getpid())
         # Longest first, so $DIR wins over $W; the implementation's own paths first of all.
-        pairs = {str(FLEET): "$FLEET", **(subst if subst is not None else python_subst()), str(self.dir): "$DIR", str(self.w): "$W",
+        pairs = {str(FLEET): "$FLEET", **(subst if subst is not None else skill_subst()), str(self.dir): "$DIR", str(self.w): "$W",
                  str(self.registry): "$REGISTRY", str(self.home): "$USERHOME", str(base): "$TMP"}
         self.subst = sorted(pairs.items(), key=lambda kv: -len(kv[0]))
         self.view: dict[str, object] = {}
@@ -369,9 +378,14 @@ def impl_of(args) -> tuple[dict, dict]:
     impl = python_impl()
     given = {k: shlex.split(v) for k, v in _pairs(args.impl, "--impl").items()}
     impl.update(given)
-    subst = python_subst() if not given else {}
+    subst = skill_subst() if not given else {}
     subst.update({k: v for k, v in _pairs(args.subst, "--subst").items()})
     return impl, subst
+
+
+def traces() -> list[Path]:
+    """The corpus: every trace in traces/, by name."""
+    return sorted(p for p in (Path(__file__).resolve().parent / "traces").glob("*.jsonl") if not p.name.endswith(".expected.jsonl"))
 
 
 def expected_of(trace: str) -> Path:
@@ -392,14 +406,16 @@ def main(argv: list[str]) -> int:
         if name == "run":
             s.add_argument("-o", "--out")
     s = sub.add_parser("diff"); s.add_argument("a"); s.add_argument("b")
-    s = sub.add_parser("record"); s.add_argument("trace", nargs="+")
+    s = sub.add_parser("record"); s.add_argument("trace", nargs="*")
     args = p.parse_args(argv)
 
     if args.cmd == "record":
-        for t in args.trace:
-            with open(expected_of(t), "w", encoding="utf-8") as f:
-                write_lines(replay(read_lines(t)), f)
-            print(f"recorded {expected_of(t)}")
+        given = args.trace or traces()
+        with ThreadPoolExecutor(max_workers=len(given)) as pool:  # each replay runs in its own tree
+            for t, lines in zip(given, pool.map(lambda t: replay(read_lines(t), ts_impl(), skill_subst()), given)):
+                with open(expected_of(t), "w", encoding="utf-8") as f:
+                    write_lines(lines, f)
+                print(f"recorded {expected_of(t)}")
         return 0
     if args.cmd == "diff":
         found = divergence(read_lines(args.a), read_lines(args.b), names=(args.a, args.b))

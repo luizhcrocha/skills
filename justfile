@@ -58,6 +58,10 @@ test-fleet-ts-own: _deps-fleet _deps-lint
 test-fleet-ts-oracle: _deps-fleet
     FLEET_ORACLE_IMPL='{"state": "{{justfile_directory()}}/fleet/bin/fleet state", "chat": "{{justfile_directory()}}/fleet/bin/fleet chat", "fleets": "{{justfile_directory()}}/fleet/bin/fleet fleets", "news": "{{justfile_directory()}}/fleet/bin/fleet news", "subst": {"{{justfile_directory()}}/skills/productivity/coordinator": "$SKILL"}}' python3 -m unittest discover -s fleet/oracle -p 'test_*.py'
 
+# Record the oracle's golden traces from the TypeScript fleet (default: every trace in fleet/oracle/traces); review the .expected.jsonl diff like code
+record-traces *traces: _deps-fleet
+    python3 fleet/oracle/run.py record {{traces}}
+
 # Build the dashboard page (fleet/page, Solid 2.0) into the coordinator's template, assets/dashboard.html; commit the result
 build-page:
     cd fleet/page && bun install --frozen-lockfile --silent && bun build.ts

@@ -1,10 +1,11 @@
 """The golden traces: every traces/*.jsonl replayed now gives the results committed beside it.
 
-On the Python oracle this is a self-diff: it proves the runner is deterministic and that the
-scripts still do what the corpus recorded. With FLEET_ORACLE_IMPL (as for test_model.py) it is
-stage 2's differential check against the recorded Python results, no Python scripts needed.
-After an intended change of behaviour, `python3 fleet/oracle/run.py record fleet/oracle/traces/NAME.jsonl`
-records the trace again; review the diff of its .expected.jsonl like code.
+The traces are recorded from the TypeScript fleet (ADR 0003). With FLEET_ORACLE_IMPL naming it
+(`just test-fleet-ts-oracle`) this is a self-diff: it proves the runner is deterministic and that the
+fleet still does what the corpus recorded. Without it, it replays on the frozen Python twin and checks
+that it still behaves as the TypeScript fleet did, until the twin is deleted. After an intended change
+of behaviour, `just record-traces fleet/oracle/traces/NAME.jsonl` records the trace again from the
+TypeScript fleet; review the diff of its .expected.jsonl like code.
 """
 import json
 import os
@@ -17,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run  # noqa: E402
 
-TRACES = sorted(p for p in (Path(__file__).resolve().parent / "traces").glob("*.jsonl") if not p.name.endswith(".expected.jsonl"))
+TRACES = run.traces()
 
 
 def impl() -> tuple[dict | None, dict | None]:
@@ -39,7 +40,7 @@ class CorpusTest(unittest.TestCase):
     def test_every_trace_has_its_expected_results(self):
         self.assertTrue(TRACES)
         missing = [t.name for t in TRACES if not run.expected_of(t).exists()]
-        self.assertFalse(missing, "record them with run.py record")
+        self.assertFalse(missing, "record them with `just record-traces`")
 
     def test_every_trace_replays_to_its_expected_results(self):
         with ThreadPoolExecutor(max_workers=len(TRACES)) as pool:
