@@ -39,7 +39,6 @@ import argparse
 import fnmatch
 import os
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -49,6 +48,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from run_limits import run_limited  # noqa: E402
 from unittest_shards import MB_PER_JOB, mem_available_mb, mem_total_mb, tmp_root  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -135,8 +135,12 @@ SCOPE = (
     ("fleet/*", (*FLEET_TS, "test-fleet"), "the TypeScript fleet, and the oracle against both"),
     ("lint/*", ("test-lint-ts", "test-fleet-ts-own", "test-page", "test-scripts"),
      "the lint packs every TypeScript suite runs, and the registry test-scripts checks"),
-    ("scripts/unittest_shards.py", ("test-scripts", "test-coordinator", *FLEET_TS[1:], "test-fleet"),
-     "the runner that shards the Python suites, and the caps gates reads from it"),
+    ("scripts/unittest_shards.py", ("test-scripts", "test-coordinator", *FLEET_TS, "test-fleet"),
+     "the runner that shards the Python suites, the caps gates reads from it, and bun_files.py's durations cache"),
+    ("scripts/bun_files.py", ("test-scripts", FLEET_TS[0]), "the runner of the TypeScript fleet's test files"),
+    ("scripts/run_limits.py", ("test-scripts", "test-coordinator", *FLEET_TS, "test-fleet"),
+     "what the runners share: the $TSTACK_TEST_JOBS cap (unittest_shards.py, bun_files.py, the oracle's replays) "
+     "and run_limited (gates' suites, bun_files.py's files)"),
     ("scripts/*", ("test-scripts",), "the repo scripts"),
     ("bin/*", ("test-scripts",), "the scripts' wrappers"),
     ("hooks/*", ("test-scripts",), "the plugin hook"),
@@ -174,66 +178,15 @@ _first_wait: dict[str, float] = {}  # a suite waiting for memory with nothing el
 TIMED_OUT = 124  # timeout(1)'s exit code
 
 
-TERM_GRACE = 10.0  # seconds a timed-out group has to clean up after SIGTERM before SIGKILL
-
-
-def _kill_group(proc: subprocess.Popen, grace: float = 0.0) -> None:
-    """SIGTERM the group and wait up to `grace` s for it to empty (zombies of an unreaped leader count as gone),
-    then SIGKILL what is left."""
-    if grace > 0:
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        deadline = time.monotonic() + grace
-        while time.monotonic() < deadline:
-            proc.poll()
-            try:
-                os.killpg(proc.pid, 0)
-            except ProcessLookupError:
-                return
-            time.sleep(0.05)
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-
-
-def run_limited(argv: list[str], limit: float, cwd: Path | None = None, env: dict | None = None,
-                nice: int = 0) -> tuple[int, bool, float, str]:
-    """Run argv in its own process group; on `limit` seconds stop the whole group: SIGTERM, then SIGKILL after TERM_GRACE seconds.
-
-    Returns (exit code, timed out, seconds, output). The output is read as it comes, so what a hung
-    suite printed before it hung survives the kill.
-    """
-    start = time.monotonic()
-    # A suite runs this checkout's fleet, never the newest tstack elsewhere on the machine.
-    proc = subprocess.Popen(["nice", "-n", str(nice), *argv] if nice else argv, cwd=cwd or REPO, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
-                            env={**os.environ, "FLEET_NO_FORWARD": "1", **(env or {})})
-    chunks: list[bytes] = []
-    reader = threading.Thread(target=lambda: [chunks.append(c) for c in iter(lambda: proc.stdout.read1(65536), b"")],
-                              daemon=True)
-    reader.start()
-    timed_out = False
-    try:
-        proc.wait(timeout=limit)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-    _kill_group(proc, TERM_GRACE if timed_out else 0.0)  # also reaps what the suite left behind when it exited on its own
-    proc.wait()
-    reader.join(5)
-    proc.stdout.close()
-    return proc.returncode, timed_out, time.monotonic() - start, b"".join(chunks).decode("utf-8", "replace")
-
-
 def _limit(recipe: str, override: float | None) -> float:
     return override if override is not None else LIMITS.get(recipe, DEFAULT_LIMIT)
 
 
 def _run(recipe: str, override: float | None = None, env: dict | None = None) -> tuple[str, int, float, str]:
     limit = _limit(recipe, override)
-    code, timed_out, secs, out = run_limited(["just", "--no-deps", recipe], limit, env=env, nice=NICE.get(recipe, 0))
+    # A suite runs this checkout's fleet, never the newest tstack elsewhere on the machine.
+    code, timed_out, secs, out = run_limited(["just", "--no-deps", recipe], limit, cwd=REPO, nice=NICE.get(recipe, 0),
+                                             env={"FLEET_NO_FORWARD": "1", **(env or {})})
     if timed_out:
         lines = out.splitlines()[-TAIL_LINES:]
         out = (f"gates: {recipe} timed out after {limit:g}s; its process group was killed. "

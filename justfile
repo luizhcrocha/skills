@@ -50,9 +50,9 @@ test-fleet:
 # The TypeScript fleet (fleet/): its own checks, then the oracle against it
 test-fleet-ts: test-fleet-ts-own test-fleet-ts-oracle
 
-# The TypeScript fleet's own checks: strict types, the lint/ts packs, its tests ($TSTACK_TEST_JOBS bun worker processes, default and cap 4, a fresh global per file)
+# The TypeScript fleet's own checks: strict types, the lint/ts packs, its tests, one `bun test` process per file ($TSTACK_TEST_JOBS at once, default and cap 4): `bun test --parallel` wedges on Bun 1.4.2's spawnSync (scripts/bun_files.py)
 test-fleet-ts-own: _deps-fleet _deps-lint
-    cd fleet && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/oxlint -c .oxlintrc.json --deny-warnings src test && bun test --parallel=$(( ${TSTACK_TEST_JOBS:-4} < 4 ? ${TSTACK_TEST_JOBS:-4} : 4 ))
+    cd fleet && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/oxlint -c .oxlintrc.json --deny-warnings src test && python3 ../scripts/bun_files.py
 
 # The oracle's golden traces and model test run against the TypeScript fleet
 test-fleet-ts-oracle: _deps-fleet

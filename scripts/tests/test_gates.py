@@ -21,6 +21,8 @@ sys.dont_write_bytecode = True
 _loader = SourceFileLoader("gates", str(ROOT / "scripts" / "gates"))
 gates = module_from_spec(spec_from_loader("gates", _loader))
 _loader.exec_module(gates)
+sys.path.insert(0, str(ROOT / "scripts"))
+import run_limits  # noqa: E402  the module gates takes run_limited from
 
 
 def suites(*paths):
@@ -49,7 +51,13 @@ class Scope(unittest.TestCase):
         self.assertEqual(suites("lint/ts/tstack/rules/x.ts"), ["test-scripts", "test-fleet-ts-own", "test-page", "test-lint-ts"])
 
     def test_the_shard_runner_runs_every_python_suite_it_shards(self):
-        self.assertEqual(suites("scripts/unittest_shards.py"), ["test-scripts", "test-coordinator", *gates.FLEET_TS[1:], "test-fleet"])
+        self.assertEqual(suites("scripts/unittest_shards.py"), ["test-scripts", "test-coordinator", *gates.FLEET_TS, "test-fleet"])
+
+    def test_the_runners_shared_module_runs_every_suite_a_runner_runs(self):
+        self.assertEqual(suites("scripts/run_limits.py"), ["test-scripts", "test-coordinator", *gates.FLEET_TS, "test-fleet"])
+
+    def test_the_bun_file_runner_runs_the_ts_fleets_own_checks(self):
+        self.assertEqual(suites("scripts/bun_files.py"), ["test-scripts", gates.FLEET_TS[0]])
 
     def test_scripts_run_test_scripts(self):
         self.assertEqual(suites("scripts/land-check", "scripts/tests/test_gates.py"), ["test-scripts"])
@@ -133,7 +141,7 @@ class TimeLimit(unittest.TestCase):
             script = Path(tmp) / "suite.sh"
             script.write_text("#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 0.1; done\n")
             script.chmod(0o755)
-            with mock.patch.object(gates, "TERM_GRACE", 1.0):
+            with mock.patch.object(run_limits, "TERM_GRACE", 1.0):
                 started = time.monotonic()
                 code, timed_out, secs, _ = gates.run_limited([str(script)], 1, cwd=Path(tmp))
             self.assertTrue(timed_out)
@@ -142,7 +150,7 @@ class TimeLimit(unittest.TestCase):
 
     def test_a_suite_inside_its_limit_keeps_its_exit_code(self):
         code, timed_out, _, out = gates.run_limited(["sh", "-c", "echo ok; exit 3"], 30)
-        self.assertEqual((code, timed_out, out), (3, False, "ok\n"))
+        self.assertEqual((code, timed_out, out), (3, None, "ok\n"))
 
     def test_the_gate_reports_a_timeout_as_fail_with_the_seconds_and_the_last_lines(self):
         with tempfile.TemporaryDirectory() as tmp:
