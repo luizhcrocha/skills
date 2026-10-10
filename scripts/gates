@@ -15,6 +15,20 @@ PASS/FAIL line and duration, and a summary closes the run. Exit 1 when any suite
 failed. Every suite already works in throwaway temp dirs and ephemeral ports, so they share
 nothing else. Stdlib only.
 
+The caps, so that gates of several fleets on one machine cannot run it out of memory:
+- at most --jobs suites at once (default a quarter of the cores), and a suite starts only while
+  MemAvailable covers its MEM_MB estimate plus RESERVE_MB; with nothing else of the gate running, it
+  waits for min(its estimate, half the RAM) only, and after FIRST_WAIT_S starts anyway with a warning;
+- each suite gets $TSTACK_TEST_JOBS worker processes (unittest_shards.py's shards, bun test --parallel
+  up to 4, the oracle's replay threads): an eighth of the cores, lowered so the sharded suites' workers
+  fit in half of MemAvailable at MB_PER_JOB each (jobs_per_suite);
+- the oracle suites run at nice 10 (NICE) with twice the workers, so the suites that assert on timing
+  get the cores first and the oracles soak up the rest;
+- each suite's $TMPDIR is its own directory on a tmpfs (unittest_shards.tmp_root(): the per-user
+  $XDG_RUNTIME_DIR, which the system caps at 10% of RAM), removed when the suite passes and kept, with
+  its path printed, when it fails. The tests' jj, git and SQLite fsyncs were most of the gate's
+  wall time on the btrfs disk.
+
 A suite that outlives its wall-clock limit is killed, process group and all, and reported as FAIL
 with "timed out after Ns" and the last lines of its output, so a hung worker fails the gate instead
 of holding it. `bun test` has no such limit of its own: its --timeout (default 5000 ms) is per test,
@@ -24,13 +38,18 @@ suite's normal time, or one number for every suite: `--timeout SECONDS` or $GATE
 import argparse
 import fnmatch
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from unittest_shards import MB_PER_JOB, mem_available_mb, mem_total_mb, tmp_root  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_REVSET = "master@origin..@"
@@ -50,22 +69,46 @@ SUITES = {
     "test-coordinator-page": (),  # page.test.mjs alone; test-coordinator runs it too
     "validate": (),
 }
-# Wall-clock limit per suite in seconds: about 3x its normal time, under the parallel gate's load.
+# Wall-clock limit per suite in seconds: about 3x its normal time under the parallel gate's load. The normal times
+# (2026-10-09, after tmpfs and sharding; quiet machine to load 60) are in the comments.
 DEFAULT_LIMIT = 900
 LIMITS = {
-    "test-scripts": 600,
-    "test-coordinator": 300,
-    "test-fleet-ts-own": 600,
-    "test-fleet-ts-oracle": 600,
-    "test-page": 900,
-    "test-fleet": 600,
-    "test-lint-ts": 600,
-    "test-coordinator-page": 300,
+    "test-scripts": 240,             # 57-77 s
+    "test-coordinator": 240,         # 62-88 s
+    "test-fleet-ts-own": 300,        # 66-97 s
+    "test-fleet-ts-oracle": 300,     # 79-97 s
+    "test-page": 180,                # 37-55 s
+    "test-fleet": 240,               # 66-86 s
+    "test-lint-ts": 120,             # 8-14 s
+    "test-coordinator-page": 120,    # under 1 s
     "validate": 300,
     "_deps-fleet": 600,
     "_deps-lint": 600,
     "_deps-page": 600,
 }
+# Peak memory per suite in MB: measured alone on 2026-10-09 with TSTACK_TEST_JOBS=8 and TMPDIR on tmpfs (cgroup
+# memory.peak, its tmpfs files included), times about 1.5. A suite starts only while MemAvailable covers its
+# estimate plus RESERVE_MB.
+MEM_MB = {
+    "test-scripts": 500,             # measured 323
+    "test-coordinator": 800,         # 515
+    "test-fleet-ts-own": 1300,       # 851
+    "test-fleet-ts-oracle": 1000,    # 652
+    "test-page": 5000,               # 3286: headless Chromium
+    "test-fleet": 600,               # 350
+    "test-lint-ts": 200,             # 76
+    "test-coordinator-page": 200,
+    "validate": 500,
+}
+RESERVE_MB = 2048
+RAMP_S = 30  # a suite this young has not reached its peak yet: its estimate still counts against MemAvailable
+FIRST_WAIT_S = 120  # the longest a suite waits for memory when nothing else of the gate runs; then it starts, warned
+# Suites run at a lower CPU priority (nice 10): the oracles' replays are most of the gate's CPU time and time nothing,
+# while test-page (Chromium renders), test-scripts (hook latency budgets) and the bun suites assert on timing, so
+# they get the cores first and the oracles take what is left, with twice the workers to soak it up.
+NICE = {"test-fleet": 10, "test-fleet-ts-oracle": 10}
+# The suites whose workers $TSTACK_TEST_JOBS sets; jobs_per_suite() fits their workers in memory.
+SHARDED = ("test-scripts", "test-coordinator", "test-fleet-ts-own", "test-fleet-ts-oracle", "test-page", "test-fleet")
 TAIL_LINES = 25
 FULL = tuple(s for s in SUITES if s not in ("test-coordinator-page", "validate"))  # `just test`
 EVERYTHING = FULL + ("validate",)
@@ -92,6 +135,8 @@ SCOPE = (
     ("fleet/*", (*FLEET_TS, "test-fleet"), "the TypeScript fleet, and the oracle against both"),
     ("lint/*", ("test-lint-ts", "test-fleet-ts-own", "test-page", "test-scripts"),
      "the lint packs every TypeScript suite runs, and the registry test-scripts checks"),
+    ("scripts/unittest_shards.py", ("test-scripts", "test-coordinator", *FLEET_TS[1:], "test-fleet"),
+     "the runner that shards the Python suites, and the caps gates reads from it"),
     ("scripts/*", ("test-scripts",), "the repo scripts"),
     ("bin/*", ("test-scripts",), "the scripts' wrappers"),
     ("hooks/*", ("test-scripts",), "the plugin hook"),
@@ -124,6 +169,8 @@ def changed_paths(revset: str) -> list[str]:
 
 # -- running -------------------------------------------------------------------------------------
 _print_lock = threading.Lock()
+_waiting_said: set[str] = set()  # the suites a memory wait was already printed for
+_first_wait: dict[str, float] = {}  # a suite waiting for memory with nothing else running -> when that wait began
 TIMED_OUT = 124  # timeout(1)'s exit code
 
 
@@ -152,7 +199,8 @@ def _kill_group(proc: subprocess.Popen, grace: float = 0.0) -> None:
         pass
 
 
-def run_limited(argv: list[str], limit: float, cwd: Path | None = None) -> tuple[int, bool, float, str]:
+def run_limited(argv: list[str], limit: float, cwd: Path | None = None, env: dict | None = None,
+                nice: int = 0) -> tuple[int, bool, float, str]:
     """Run argv in its own process group; on `limit` seconds stop the whole group: SIGTERM, then SIGKILL after TERM_GRACE seconds.
 
     Returns (exit code, timed out, seconds, output). The output is read as it comes, so what a hung
@@ -160,8 +208,9 @@ def run_limited(argv: list[str], limit: float, cwd: Path | None = None) -> tuple
     """
     start = time.monotonic()
     # A suite runs this checkout's fleet, never the newest tstack elsewhere on the machine.
-    proc = subprocess.Popen(argv, cwd=cwd or REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            stdin=subprocess.DEVNULL, start_new_session=True, env={**os.environ, "FLEET_NO_FORWARD": "1"})
+    proc = subprocess.Popen(["nice", "-n", str(nice), *argv] if nice else argv, cwd=cwd or REPO, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
+                            env={**os.environ, "FLEET_NO_FORWARD": "1", **(env or {})})
     chunks: list[bytes] = []
     reader = threading.Thread(target=lambda: [chunks.append(c) for c in iter(lambda: proc.stdout.read1(65536), b"")],
                               daemon=True)
@@ -182,9 +231,9 @@ def _limit(recipe: str, override: float | None) -> float:
     return override if override is not None else LIMITS.get(recipe, DEFAULT_LIMIT)
 
 
-def _run(recipe: str, override: float | None = None) -> tuple[str, int, float, str]:
+def _run(recipe: str, override: float | None = None, env: dict | None = None) -> tuple[str, int, float, str]:
     limit = _limit(recipe, override)
-    code, timed_out, secs, out = run_limited(["just", "--no-deps", recipe], limit)
+    code, timed_out, secs, out = run_limited(["just", "--no-deps", recipe], limit, env=env, nice=NICE.get(recipe, 0))
     if timed_out:
         lines = out.splitlines()[-TAIL_LINES:]
         out = (f"gates: {recipe} timed out after {limit:g}s; its process group was killed. "
@@ -201,6 +250,33 @@ def _report(recipe: str, code: int, secs: float, out: str) -> None:
         print(f"===== end {recipe}: {verdict} =====", flush=True)
 
 
+def jobs_per_suite(suites: list[str], avail_mb: int | None) -> int:
+    """$TSTACK_TEST_JOBS for each suite: an eighth of the cores, so the sharded suites together (the oracles run two
+    replays at once, the bun suites four workers each) hold about one worker per core, lowered until their workers
+    fit in half of MemAvailable at MB_PER_JOB each. 2026-10-09, 32 cores: a quarter (8 each) ran the gate slower
+    than an eighth and failed two timing tests (a 2 ms hook budget, a 2 s page render) on CPU contention."""
+    n = max(2, (os.cpu_count() or 4) // 8)
+    sharded = sum(2 if s in NICE else 1 for s in suites if s in SHARDED) or 1  # a niced suite gets twice the workers
+    if avail_mb is not None:
+        n = min(n, (avail_mb // 2) // (MB_PER_JOB * sharded))
+    return max(1, n)
+
+
+def _tmp_base() -> Path | None:
+    """This run's directory on a tmpfs, after removing what runs over a day old left: a gate's TMPDIRs kept for their
+    failures, and the TMPDIR of a unittest_shards.py run killed before its cleanup (SIGKILL)."""
+    root = tmp_root()
+    if root is None:
+        return None
+    for old in [*root.glob("tstack-gates-*"), *root.glob("tstack-tests-*")]:
+        try:
+            if time.time() - old.stat().st_mtime > 86400:
+                shutil.rmtree(old, ignore_errors=True)
+        except OSError:
+            pass
+    return Path(tempfile.mkdtemp(prefix="tstack-gates-", dir=root))
+
+
 def run(suites: list[str], jobs: int, timeout: float | None = None) -> int:
     t0 = time.monotonic()
     results: dict[str, tuple[int, float]] = {}
@@ -214,18 +290,84 @@ def run(suites: list[str], jobs: int, timeout: float | None = None) -> int:
     if any(code for code, _ in results.values()):
         print("gates: an install failed; no suite ran", file=sys.stderr)
         return 1
-    print(f"gates: running {', '.join(suites)} ({min(jobs, len(suites))} at a time)", flush=True)
+    base = _tmp_base()
+    per_suite = jobs_per_suite(suites, mem_available_mb())
+    print(f"gates: running {', '.join(suites)} ({min(jobs, len(suites))} at a time, {per_suite} workers each, "
+          f"TMPDIR under {base or 'the default'})", flush=True)
+
+    def one(recipe: str) -> tuple[str, int, float, str]:
+        env = {"TSTACK_TEST_JOBS": str(per_suite * (2 if recipe in NICE else 1))}  # a niced suite only takes idle cores
+        tmp = None
+        if base is not None:
+            tmp = base / recipe
+            tmp.mkdir()
+            env["TMPDIR"] = str(tmp)
+        recipe, code, secs, out = _run(recipe, timeout, env)
+        if tmp is not None:
+            if code == 0:
+                shutil.rmtree(tmp, ignore_errors=True)
+            else:
+                out += f"gates: kept {recipe}'s TMPDIR, {tmp}, for its failure; it goes with the next gate after a day\n"
+        return recipe, code, secs, out
+
+    pending, running = list(suites), {}  # running: future -> (recipe, when it started)
     with ThreadPoolExecutor(max(1, jobs)) as pool:
-        for fut in as_completed([pool.submit(_run, s, timeout) for s in suites]):
-            recipe, code, secs, out = fut.result()
-            _report(recipe, code, secs, out)
-            results[recipe] = (code, secs)
+        while pending or running:
+            while pending and len(running) < max(1, jobs) and _fits(pending[0], running.values()):
+                recipe = pending.pop(0)
+                running[pool.submit(one, recipe)] = (recipe, time.monotonic())
+            done = [f for f in running if f.done()]
+            if not done:
+                time.sleep(0.2)
+                continue
+            for fut in done:
+                del running[fut]
+                recipe, code, secs, out = fut.result()
+                _report(recipe, code, secs, out)
+                results[recipe] = (code, secs)
+    if base is not None and not any(base.iterdir()):
+        base.rmdir()
     print(f"\n===== summary ({time.monotonic() - t0:.1f}s wall) =====")
     for recipe in [*deps, *suites]:
         code, secs = results[recipe]
         verdict = "PASS" if code == 0 else "FAIL"
         print(f"  {verdict}  {recipe:<22} {secs:6.1f}s")
     return 1 if any(code for code, _ in results.values()) else 0
+
+
+def _fits(recipe: str, running) -> bool:
+    """Whether `recipe` may start now: while MemAvailable, less the estimates of the suites started in the last RAMP_S
+    seconds, covers its estimate and RESERVE_MB. With nothing else of the gate running, while MemAvailable covers
+    min(its estimate, half the RAM), and after FIRST_WAIT_S of waiting in any case, with a warning: what holds the
+    memory then is not this gate, and may never let go."""
+    running = list(running)
+    avail = mem_available_mb()
+    if avail is None:
+        return True
+    if not running:
+        total = mem_total_mb()
+        need = min(MEM_MB.get(recipe, 1000), total // 2) if total else MEM_MB.get(recipe, 1000)
+        if avail >= need:
+            return True
+        waited = time.monotonic() - _first_wait.setdefault(recipe, time.monotonic())
+        if waited >= FIRST_WAIT_S:
+            print(f"gates: warning: {recipe} starts with {avail} MB available, under the {need} MB it needs, "
+                  f"after waiting {waited:.0f}s for memory", flush=True)
+            return True
+        if recipe not in _waiting_said:
+            _waiting_said.add(recipe)
+            print(f"gates: {recipe} waits for memory: {avail} MB available, it needs {need} MB "
+                  f"(at most {FIRST_WAIT_S}s, then it starts anyway)", flush=True)
+        return False
+    young = sum(MEM_MB.get(r, 1000) for r, started in running if time.monotonic() - started < RAMP_S)
+    if avail - young >= MEM_MB.get(recipe, 1000) + RESERVE_MB:
+        return True
+    avail -= young
+    if recipe not in _waiting_said:
+        _waiting_said.add(recipe)
+        print(f"gates: {recipe} waits for memory: {avail} MB available, it needs {MEM_MB.get(recipe, 1000)} + {RESERVE_MB} MB",
+              flush=True)
+    return False
 
 
 def default_jobs() -> int:

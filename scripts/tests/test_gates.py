@@ -48,6 +48,9 @@ class Scope(unittest.TestCase):
     def test_lint_runs_every_ts_suite(self):
         self.assertEqual(suites("lint/ts/tstack/rules/x.ts"), ["test-scripts", "test-fleet-ts-own", "test-page", "test-lint-ts"])
 
+    def test_the_shard_runner_runs_every_python_suite_it_shards(self):
+        self.assertEqual(suites("scripts/unittest_shards.py"), ["test-scripts", "test-coordinator", *gates.FLEET_TS[1:], "test-fleet"])
+
     def test_scripts_run_test_scripts(self):
         self.assertEqual(suites("scripts/land-check", "scripts/tests/test_gates.py"), ["test-scripts"])
 
@@ -158,3 +161,94 @@ class TimeLimit(unittest.TestCase):
     def test_every_suite_has_a_limit(self):
         for recipe in (*gates.SUITES, *{d for deps in gates.SUITES.values() for d in deps}):
             self.assertIn(recipe, gates.LIMITS)
+
+
+class Caps(unittest.TestCase):
+    """The gate's caps: workers per suite, a suite's start held for memory, a TMPDIR of its own on tmpfs."""
+
+    def test_workers_per_suite_are_an_eighth_of_the_cores_lowered_to_fit_half_the_memory(self):
+        suites = list(gates.FULL)
+        sharded = sum(2 if s in gates.NICE else 1 for s in suites if s in gates.SHARDED)
+        with mock.patch.object(os, "cpu_count", return_value=32):
+            self.assertEqual(gates.jobs_per_suite(suites, 10**6), 4)
+            self.assertEqual(gates.jobs_per_suite(suites, 2 * 3 * gates.MB_PER_JOB * sharded), 3)
+            self.assertEqual(gates.jobs_per_suite(suites, 100), 1, "never zero")
+            self.assertEqual(gates.jobs_per_suite(suites, None), 4)
+
+    def setUp(self):
+        for patch in (mock.patch.object(gates, "_waiting_said", set()), mock.patch.object(gates, "_first_wait", {}),
+                      mock.patch.object(gates, "mem_total_mb", return_value=64000)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_a_suite_waits_while_memory_is_short(self):
+        need = gates.MEM_MB["test-page"] + gates.RESERVE_MB
+        old = time.monotonic() - gates.RAMP_S - 1
+        with mock.patch.object(gates, "mem_available_mb", return_value=need - 1), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertTrue(gates._fits("test-page", []), "alone, it needs no reserve")
+            self.assertFalse(gates._fits("test-page", [("test-scripts", old)]))
+        self.assertIn("test-page waits for memory", out.getvalue())
+        with mock.patch.object(gates, "mem_available_mb", return_value=need):
+            self.assertTrue(gates._fits("test-page", [("test-scripts", old)]))
+            self.assertFalse(gates._fits("test-page", [("test-scripts", time.monotonic())]),
+                             "a suite started a moment ago still counts its estimate: it has not reached its peak")
+
+    def test_the_first_suite_waits_for_its_peak_or_half_the_ram_then_starts_warned(self):
+        peak = gates.MEM_MB["test-page"]
+        with mock.patch.object(gates, "mem_available_mb", return_value=peak - 1), \
+                mock.patch.object(gates, "FIRST_WAIT_S", 0.3), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertFalse(gates._fits("test-page", []))
+            self.assertFalse(gates._fits("test-page", []))
+            self.assertEqual(out.getvalue().count("test-page waits for memory"), 1, "said once")
+            time.sleep(0.35)
+            self.assertTrue(gates._fits("test-page", []), "after FIRST_WAIT_S it starts anyway")
+        self.assertIn(f"gates: warning: test-page starts with {peak - 1} MB available, under the {peak} MB", out.getvalue())
+        with mock.patch.object(gates, "mem_available_mb", return_value=peak), contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(gates._fits("test-page", []), "its peak is free")
+        with mock.patch.object(gates, "mem_available_mb", return_value=peak // 2 + 1), \
+                mock.patch.object(gates, "mem_total_mb", return_value=peak), contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(gates._fits("test-page", []), "half the RAM is free: its peak may never be")
+
+    def test_the_sweep_removes_day_old_tmpdirs_of_gates_and_of_shard_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            names = ("tstack-gates-old", "tstack-tests-old", "tstack-gates-new", "tstack-tests-new", "other-old")
+            for name in names:
+                (root / name).mkdir()
+                if name.endswith("old"):
+                    day_ago = time.time() - 86400 - 60
+                    os.utime(root / name, (day_ago, day_ago))
+            with mock.patch.object(gates, "tmp_root", return_value=root):
+                base = gates._tmp_base()
+            self.assertEqual(sorted(p.name for p in root.iterdir() if p != base),
+                             ["other-old", "tstack-gates-new", "tstack-tests-new"])
+
+    def test_a_niced_suite_runs_at_that_priority(self):
+        code, _, _, out = gates.run_limited(["sh", "-c", "cut -d' ' -f19 /proc/self/stat"], 30, nice=7)
+        self.assertEqual((code, int(out) - os.nice(0)), (0, 7))
+
+    def test_every_suite_has_a_memory_estimate(self):
+        self.assertEqual(set(gates.MEM_MB), set(gates.SUITES))
+
+    def test_each_suite_gets_its_own_tmpdir_and_the_cap_kept_only_when_it_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "root").mkdir()
+            (tmp / "justfile").write_text(
+                "good:\n    echo \"$TMPDIR $TSTACK_TEST_JOBS\" > seen-good; touch \"$TMPDIR/x\"\n"
+                "bad:\n    echo \"$TMPDIR\" > seen-bad; touch \"$TMPDIR/x\"; exit 1\n")
+            with mock.patch.object(gates, "REPO", tmp), mock.patch.object(gates, "SUITES", {"good": (), "bad": ()}), \
+                    mock.patch.object(gates, "tmp_root", return_value=tmp / "root"), \
+                    mock.patch.object(gates, "jobs_per_suite", return_value=3), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(gates.run(["good", "bad"], 2), 1)
+            good_tmp, jobs = (tmp / "seen-good").read_text().split()
+            bad_tmp = Path((tmp / "seen-bad").read_text().strip())
+            self.assertEqual(jobs, "3")
+            self.assertEqual(Path(good_tmp).parent, bad_tmp.parent)
+            self.assertEqual(bad_tmp.parent.parent, tmp / "root")
+            self.assertFalse(Path(good_tmp).exists(), "a passing suite's TMPDIR goes")
+            self.assertTrue((bad_tmp / "x").exists(), "a failing suite's TMPDIR stays for its failure")
+            self.assertIn(f"kept bad's TMPDIR, {bad_tmp}", out.getvalue())
+            self.assertRegex(out.getvalue(), r"PASS  good .*\n  FAIL  bad ")
+
