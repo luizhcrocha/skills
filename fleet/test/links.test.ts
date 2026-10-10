@@ -155,7 +155,7 @@ describe("the hub's probe", () => {
     const probes = new LinkProbes(() => clock, () => Promise.resolve(up), 0);
     const url = "https://box.ts.net:7501/";
 
-    expect(probes.get([url])).toEqual([undefined]);
+    expect(probes.get([url])).toEqual([{ up: null, checked: "", since: "" }]);
     await probes.settled();
     const at = (iso: string): string => stampOf(new Date(iso));
     expect(probes.get([url])[0]).toEqual({ up: true, checked: at("2026-10-09T18:02:00-05:00"), since: at("2026-10-09T18:02:00-05:00") });
@@ -168,6 +168,69 @@ describe("the hub's probe", () => {
     probes.get([url]);
     await probes.settled();
     expect(probes.get([url])[0]).toEqual({ up: false, checked: at("2026-10-09T20:40:00-05:00"), since: at("2026-10-09T20:31:00-05:00") });
+  });
+  test("a probe that rejects or throws reads as unknown, never stays busy, and is tried again after its time", async () => {
+    let clock = new Date("2026-10-09T18:00:00Z");
+    let calls = 0;
+
+    const failing = new LinkProbes(
+      () => clock,
+      () => {
+        calls += 1;
+
+        return calls === 1 ? Promise.reject(new Error("boom")) : Promise.resolve(true);
+      },
+      60_000,
+    );
+
+    const url = "http://127.0.0.1:1/";
+    failing.get([url]);
+    await failing.settled();
+    expect(failing.get([url])[0]).toEqual({ up: null, checked: stampOf(clock), since: stampOf(clock) });
+    expect(calls).toBe(1);
+    clock = new Date("2026-10-09T18:01:01Z");
+    failing.get([url]);
+    await failing.settled();
+    expect([failing.get([url])[0]?.up, calls]).toEqual([true, 2]);
+
+    const throwing = new LinkProbes(
+      () => clock,
+      () => {
+        throw new Error("sync");
+      },
+    );
+
+    expect(throwing.get([url])).toEqual([{ up: null, checked: stampOf(clock), since: stampOf(clock) }]);
+    await throwing.settled();
+  });
+
+  test("a probe's time runs on the injected clock, and the held addresses are bounded", async () => {
+    let clock = new Date("2026-10-09T18:00:00Z");
+    let calls = 0;
+
+    const probes = new LinkProbes(
+      () => clock,
+      () => {
+        calls += 1;
+
+        return Promise.resolve(true);
+      },
+      60_000,
+      2,
+    );
+
+    probes.get(["http://127.0.0.1:1/"]);
+    await probes.settled();
+    await sleep(20);
+    probes.get(["http://127.0.0.1:1/"]);
+    expect(calls).toBe(1);
+    clock = new Date("2026-10-09T18:01:00Z");
+    probes.get(["http://127.0.0.1:1/"]);
+    await probes.settled();
+    expect(calls).toBe(2);
+    probes.get(["http://127.0.0.1:2/", "http://127.0.0.1:3/"]);
+    await probes.settled();
+    expect(probes.size).toBe(2);
   });
 });
 
@@ -354,5 +417,10 @@ describe("the hub's links: probes and files", () => {
     const links = await shownLinks();
     await sleep(100);
     expect([links.map((l) => l["reach"]), probed]).toEqual([["external"], []]);
+  });
+  test("a link not probed yet is unknown in the view, not down", async () => {
+    writeLinks([{ id: "l1", url: serve(() => new Response("ok")), title: "Live app", kind: "preview" }]);
+    const first = await shownLinks();
+    expect(first.map((l) => [l["reach"], l["up"], l["checked"], l["state_since"]])).toEqual([["machine", null, null, null]]);
   });
 });

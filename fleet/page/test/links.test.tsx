@@ -134,3 +134,22 @@ test("the rules alone: why a link is inactive, its round, its place, its plain t
   const all = arrange(links, "all", "", "");
   expect([all.needs.length, all.groups.length, all.inactive.length, all.counts]).toEqual([1, 4, 3, { active: 7, inactive: 4 }]);
 });
+
+test("a link the hub has not probed yet stays active, and its row says checking…", () => {
+  dispose();
+  root.remove();
+  root = document.createElement("div");
+  document.body.append(root);
+  const fresh = { id: "l12", ref: "L12", kind: "preview", title: "New build", url: "https://box.ts.net:7600/", fleet: "billing", note: "", decision: "", for: null, reach: "machine", up: null, file: null, decision_status: null, checked: null, state_since: null };
+  const state = Core.parseState({ ...linksView(NOW), links: [fresh] });
+
+  if (!state) throw new Error("the fixture is not a state");
+  const [link] = state.links ?? [];
+  expect([link?.checking, link?.up, link === undefined ? "?" : inactiveWhy(link)]).toEqual([true, false, ""]);
+  dispose = render(() => <App state={state} live={false} expose={(p) => (page = p)} />, root);
+  flush();
+  page.ui.route();
+  flush();
+  expect(groups()).toEqual([["Live previews", ["l12"]]]);
+  expect(view()?.querySelector('.link-row[data-link="l12"] .status-words')?.textContent).toBe("checking…");
+});

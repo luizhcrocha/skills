@@ -1116,7 +1116,7 @@ function AnswerFor(props: { readonly id: string }): JSX.Element {
                       <a class="btn" href={l().url} target="_blank" rel="noopener">
                         {l().title}
                       </a>
-                      <Show when={!l().up}>
+                      <Show when={!l().up && !l().checking}>
                         {" "}
                         <span class="muted">(not answering now)</span>
                       </Show>

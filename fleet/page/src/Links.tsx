@@ -44,7 +44,7 @@ interface Status {
   readonly words: string;
 }
 
-/** Whether a link answers, in words: "up · checked 20:31", "down since 18:02", "only on this machine". */
+/** Whether a link answers, in words: "up · checked 20:31", "down since 18:02", "checking…", "only on this machine". */
 function statusOf(l: Link): Status {
   if (l.reach === "file") {
     if (!l.up) return { dot: "down", words: "file missing" };
@@ -53,6 +53,8 @@ function statusOf(l: Link): Status {
   }
 
   if (l.reach === "external") return { dot: "none", words: "elsewhere, not checked" };
+
+  if (l.checking) return { dot: "none", words: "checking…" };
 
   if (l.up) return { dot: "up", words: l.checked ? `up · checked ${clock(l.checked)}` : "up" };
 

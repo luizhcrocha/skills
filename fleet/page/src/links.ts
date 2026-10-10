@@ -3,7 +3,7 @@
  * grouped by kind, and the small words a row shows (its round, its port or host, its plain title).
  *
  * A link is inactive when the fleet marked it done, when the decision it serves is closed, when its server
- * does not answer, or when its file is gone. One that needs the user is active and serves an open decision or
+ * does not answer, or when its file is gone. One the hub is still checking stays active. One that needs the user is active and serves an open decision or
  * says what the user does there (`--for`).
  */
 import type { Link, LinkKind } from "./core.ts";
@@ -29,7 +29,7 @@ export function inactiveWhy(l: Link): string {
 
   if (l.decision_status === "decided" || l.decision_status === "withdrawn") return "its decision is closed";
 
-  if (l.reach === "machine" && !l.up) return "down";
+  if (l.reach === "machine" && !l.up && !l.checking) return "down";
 
   if (l.reach === "file" && !l.up) return "file missing";
 

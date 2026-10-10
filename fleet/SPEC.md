@@ -529,10 +529,12 @@ page for another fleet's; else null. The hub's view replaces a `machine` link's 
 adds `checked` and `state_since` (stamps, null until its first probe ends): a HEAD of the address (a GET of
 `bytes=0-0` on 405 or 501), 3 s, redirects never followed, no credentials, a loopback address's certificate
 not checked; up unless it fails, times out, or answers 502, 503 or 504 (`tailscale serve` before a stopped
-server). Each address's answer is held 60 s and probed again in the background; `state_since` is when it last
-turned up or down. The page counts a link inactive when it is done, its decision is decided or withdrawn,
-a `machine` link is down, or a `file` link's file is gone; one that serves an open decision or says `for` waits
-on the user.
+server). `up` is null (unknown) until its first probe ends, and when the probe itself fails (throws or
+rejects). Each address's answer is held 60 s of the hub's clock and probed again in the background, at most
+512 addresses held (the least recently asked dropped first); `state_since` is when it last turned up, down or
+unknown. The page counts a link inactive when it is done, its decision is decided or withdrawn, a `machine`
+link is down, or a `file` link's file is gone; an unknown one stays active and its row says "checking…". One
+that serves an open decision or says `for` waits on the user.
 
 **show**: prints the ledger and the command cheat sheet; writes nothing. Pinned lines:
 `<project> [<status>(, manager)(, shared working copy)] <now>`; per milestone `  <id> <title> (<done>/<steps>)` and

@@ -239,8 +239,10 @@ export interface Link {
   readonly kind: LinkKind;
   /** Where it is reached from: this machine or its tailnet (probed), elsewhere (not probed), a file here. */
   readonly reach: "machine" | "external" | "file";
-  /** Whether it answers (a file: whether it is there). */
+  /** Whether it answers (a file: whether it is there); false while it is checking. */
   readonly up: boolean;
+  /** Not known yet: the hub has not probed it, or its probe failed (the view's `up: null`). It stays active. */
+  readonly checking: boolean;
   readonly fleet: string;
   readonly note: string;
   readonly decision: string;
@@ -903,7 +905,7 @@ function findRows(state: Partial<State>, messages: Iterable<Message> | null | un
     }
   }
 
-  for (const l of state.links ?? []) rows.push({ key: "u:" + l.url, group: "links", ref: l.ref || "", title: one(l.title), sub: one(l.url), hint: l.kind + (l.reach === "machine" && !l.up ? ", down" : ""), pill: "", go: { kind: "url", url: l.reach === "file" && l.file ? l.file : l.url } });
+  for (const l of state.links ?? []) rows.push({ key: "u:" + l.url, group: "links", ref: l.ref || "", title: one(l.title), sub: one(l.url), hint: l.kind + (l.reach === "machine" && l.checking ? ", checking" : l.reach === "machine" && !l.up ? ", down" : ""), pill: "", go: { kind: "url", url: l.reach === "file" && l.file ? l.file : l.url } });
 
   for (const c of state.coordinators ?? []) rows.push({ key: "f:" + c.id, group: "coordinators", ref: "", title: c.id, sub: one(c.now), hint: c.status, pill: "", go: { kind: "url", url: c.url } });
 
@@ -1443,6 +1445,7 @@ function parseState(value: Json | undefined): State | null {
         kind: linkKind(l["kind"]),
         reach: l["reach"] === "file" || /^file:/iu.test(String(l["url"])) ? "file" : l["reach"] === "external" ? "external" : "machine",
         up: l["up"] === true,
+        checking: l["up"] === null && l["reach"] !== "file" && l["reach"] !== "external" && !/^file:/iu.test(String(l["url"])),
         fleet: text(l["fleet"], ""),
         note: text(l["note"], ""),
         decision: text(l["decision"], ""),

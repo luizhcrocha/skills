@@ -48,8 +48,8 @@ export interface Lookups {
   readonly discovered: () => readonly Found[];
   /** What the session that owns a DIR spent. */
   readonly spend: SpendReader;
-  /** The hub's: each link's last HTTP probe, with when it was checked and since when it reads so; undefined
-   * until its first probe ends. Without it, a link is up when `up` says so. */
+  /** The hub's: each link's last HTTP probe, with when it was checked and since when it reads so; `up` null
+   * (the view's `up: null`) while unknown. Without it, a link is up when `up` says so. */
   readonly probe?: (urls: readonly string[]) => readonly (Probed | undefined)[];
   /** The hub's: this machine's MagicDNS suffix, the only `*.ts.net` names a link reaches it by (`null`: none).
    * Without it any `*.ts.net` name is this machine's tailnet, as the Python twin reads it. */
@@ -58,7 +58,8 @@ export interface Lookups {
 
 /** A link's last probe. */
 export interface Probed {
-  readonly up: boolean;
+  /** Null while unknown: never probed yet, or the probe itself failed. */
+  readonly up: boolean | null;
   /** When it was checked, and since when it has read up (or down), as stamps. */
   readonly checked: string;
   readonly since: string;
@@ -293,7 +294,9 @@ export function linksOf(machine: Machine, lookups: Lookups, state: JsonObject, r
     if (lookups.probe === undefined) return { ...l, ...shown, up: up[at] ?? false, file: null, decision_status };
     const p = seen[at];
 
-    return { ...l, ...shown, up: p?.up ?? false, file: null, decision_status, checked: p?.checked ?? null, state_since: p?.since ?? null };
+    const stamp = (x: string | undefined): string | null => (x === undefined || x === "" ? null : x);
+
+    return { ...l, ...shown, up: p === undefined ? null : p.up, file: null, decision_status, checked: stamp(p?.checked), state_since: stamp(p?.since) };
   });
 }
 

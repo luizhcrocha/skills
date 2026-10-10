@@ -1,7 +1,8 @@
 /**
  * Links up or down, for a long-running hub: each address's last probe is answered at once, and an
  * address probed more than {@link PROBE_S} seconds ago is probed again in the background (Python's
- * `served.up`, cached the same way). An address never probed reads as down until its first probe ends.
+ * `served.up`, cached the same way). For the TCP cache, an address never probed reads as down until its first
+ * probe ends; for the links' HTTP probes ({@link LinkProbes}), it is unknown.
  */
 import { stampOf } from "../clock.ts";
 import { accepts } from "../page/probe.ts";
@@ -86,56 +87,90 @@ export async function answers(url: string, timeoutMs = LINK_PROBE_TIMEOUT_MS): P
 
 /** A link's last probe, held. */
 interface Held {
-  up: boolean;
+  /** Whether it answered; null while unknown: never probed yet, or its probe itself failed. */
+  up: boolean | null;
   checked: string;
   since: string;
+  /** When it was checked, in ms of the injected clock. */
   at: number;
   busy: boolean;
   seen: boolean;
 }
 
+/** How many addresses the hub holds a probe for: the least recently asked goes first. */
+export const LINK_PROBES_HELD = 512;
+
 /** The links' HTTP probes, for a long-running hub: each address's last answer at once, with when it was
- * checked and since when it reads up or down; an address probed more than {@link LINK_PROBE_S} seconds ago is
- * probed again in the background. An address never probed has no answer until its first probe ends. */
+ * checked and since when it reads up, down or unknown; an address probed more than {@link LINK_PROBE_S} seconds
+ * ago (on the injected clock) is probed again in the background. An address never probed, or whose probe
+ * failed, is unknown (`up: null`). At most {@link LINK_PROBES_HELD} addresses are held, the least recently
+ * asked dropped first. */
 export class LinkProbes {
   private readonly held = new Map<string, Held>();
   private readonly now: () => Date;
   private readonly probe: (url: string) => Promise<boolean>;
   private readonly ttlMs: number;
+  private readonly most: number;
 
-  constructor(now: () => Date, probe: (url: string) => Promise<boolean> = (url) => answers(url), ttlMs = LINK_PROBE_S * 1000) {
+  constructor(now: () => Date, probe: (url: string) => Promise<boolean> = (url) => answers(url), ttlMs = LINK_PROBE_S * 1000, most = LINK_PROBES_HELD) {
     this.now = now;
     this.probe = probe;
     this.ttlMs = ttlMs;
+    this.most = most;
   }
 
   /** The last probe of each of `urls`; stale ones are probed again. */
-  get(urls: readonly string[]): (Probed | undefined)[] {
+  get(urls: readonly string[]): Probed[] {
     return urls.map((url) => {
-      let hit = this.held.get(url);
+      const hit = this.held.get(url) ?? { up: null, checked: "", since: "", at: 0, busy: false, seen: false };
+      this.held.delete(url);
+      this.held.set(url, hit);
 
-      if (hit === undefined) {
-        hit = { up: false, checked: "", since: "", at: 0, busy: false, seen: false };
-        this.held.set(url, hit);
+      for (const oldest of this.held.keys()) {
+        if (this.held.size <= this.most) break;
+        this.held.delete(oldest);
       }
 
-      if (!hit.busy && (!hit.seen || performance.now() - hit.at >= this.ttlMs)) {
-        const entry = hit;
-        entry.busy = true;
-        void this.probe(url).then((up) => {
-          const stamp = stampOf(this.now());
+      if (!hit.busy && (!hit.seen || this.now().getTime() - hit.at >= this.ttlMs)) this.start(url, hit);
 
-          if (!entry.seen || entry.up !== up) entry.since = stamp;
-          entry.up = up;
-          entry.checked = stamp;
-          entry.at = performance.now();
-          entry.seen = true;
-          entry.busy = false;
-        });
-      }
-
-      return hit.seen ? { up: hit.up, checked: hit.checked, since: hit.since } : undefined;
+      return { up: hit.up, checked: hit.checked, since: hit.since };
     });
+  }
+
+  /** Probe `url` for `entry`, owning the promise: a probe that throws or rejects reads as unknown, and the
+   * entry is never left busy. */
+  private start(url: string, entry: Held): void {
+    entry.busy = true;
+
+    const done = (up: boolean | null): void => {
+      const stamp = stampOf(this.now());
+
+      if (!entry.seen || entry.up !== up) entry.since = stamp;
+      entry.up = up;
+      entry.checked = stamp;
+      entry.at = this.now().getTime();
+      entry.seen = true;
+      entry.busy = false;
+    };
+
+    let running: Promise<boolean>;
+
+    try {
+      running = this.probe(url);
+    } catch {
+      done(null);
+
+      return;
+    }
+
+    running.then(done, () => {
+      done(null);
+    });
+  }
+
+  /** How many addresses are held (tests). */
+  get size(): number {
+    return this.held.size;
   }
 
   /** Every probe under way, done (tests). */
