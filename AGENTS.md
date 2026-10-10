@@ -13,6 +13,10 @@ Each skill entry in the top-level `README.md` must link the skill name to its `S
 
 Each bucket folder has a `README.md` that lists every skill in the bucket with a one-line description, with the skill name linked to its `SKILL.md`.
 
+## The fleet
+
+The TypeScript fleet (`fleet/`, run as `fleet/bin/fleet`) is the only fleet. The Python scripts in `skills/productivity/coordinator/scripts/` are a frozen twin: bug fixes only, no new features, until they are deleted (ADR 0003, docs/adr/0003-typescript-fleet-is-the-only-fleet.md).
+
 ## Testing
 
 - `just test-changed [REVSET]` runs only the suites whose inputs changed in REVSET (default `master@origin..@`, the stack) and prints which it chose and why. The table is `SCOPE` in `scripts/gates`; a path it doesn't name runs everything. A worker runs this before it reports.

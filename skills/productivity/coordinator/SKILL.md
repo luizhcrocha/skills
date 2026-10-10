@@ -10,7 +10,7 @@ For the rest of this session you run a **fleet**: workers do the work, you coord
 
 You still own the outcome. A coordinator who spawns and forgets is worse than no coordinator: the value is in the brief, the tracking, and the integration.
 
-**The fleet CLI** is `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet`, written `fleet` below and in [DASHBOARD.md](DASHBOARD.md); it is not on PATH, so run it by that path (when the variable shows unexpanded, the plugin's root is three directories above this skill's). `fleet state <dashboard-dir> …` is the ledger, `fleet chat` the chat, `fleet fleets` the machine's fleets, and `fleet ws`, `fleet preview`, `fleet brief`, `fleet advisor`, `fleet turn` and `fleet serve` are named where they are used. Its first run installs its dependencies (Bun is the one requirement).
+**The fleet CLI** is `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet`, written `fleet` below and in [DASHBOARD.md](DASHBOARD.md); it is not on PATH, so run it by that path (when the variable shows unexpanded, the plugin's root is three directories above this skill's). `fleet state <dashboard-dir> …` is the ledger, `fleet chat` the chat, `fleet fleets` the machine's fleets, and `fleet ws`, `fleet preview`, `fleet brief`, `fleet advisor`, `fleet turn` and `fleet serve` are named where they are used. Its first run installs its dependencies (Bun is the one requirement). The Python scripts in this skill's `scripts/` are a frozen twin, kept until they are deleted: never run them in place of `fleet`.
 
 ## Do it yourself only with a named exemption
 
