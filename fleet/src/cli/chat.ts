@@ -6,6 +6,7 @@ import { fstatSync, readFileSync, statSync } from "node:fs";
 
 import * as Effect from "effect/Effect";
 
+import type { Building } from "../building.ts";
 import { append, noReWarning, openFor, renderLines, type Draft } from "../chat/chat.ts";
 import { readChat } from "../chat/store.ts";
 import { wait, watch } from "../chat/watch.ts";
@@ -24,7 +25,7 @@ export const CHAT_COMMANDS: readonly CommandSpec[] = [
   {
     name: "say",
     positionals: [{ dest: "text" }],
-    options: [AS, opt.value("--re", { int: true }), opt.value("--decision", { metavar: "D" })],
+    options: [AS, opt.value("--re", { int: true }), opt.value("--decision", { metavar: "D" }), opt.append("--mark", { metavar: "N[,N...]" })],
     optionsFirst: true,
   },
   { name: "inbox", positionals: [], options: [AS] },
@@ -52,7 +53,9 @@ const HELP = `usage: ${PROG} DIR {say,inbox,wait,watch,log} ...
 
 The chat between the user (on the dashboard) and the fleet, stored in DIR/chat.jsonl.
 
-    say   --as WHO [--re N] [--decision D] TEXT   append a message from WHO; print the line written
+    say   --as WHO [--re N] [--decision D] [--mark N[,N...]] TEXT
+                                                  append a message from WHO; print the line written;
+                                                  --mark answers those marks of the batch --re names
     inbox --as WHO                                the messages open for WHO, oldest first
     watch --as WHO [--after N | --resume] [--all] [--once] [--settle SECONDS] [--fleets [--batch SECONDS]]
                                                   what is open for WHO, then each new message as it lands;
@@ -95,6 +98,16 @@ function argIsUtf8(text: string): boolean {
   }
 }
 
+/** The mark numbers `--mark` names, each given as `2` or `1,3`. */
+function markList(given: readonly string[] | undefined): number[] | undefined | ChatError {
+  if (given === undefined) return undefined;
+  const pieces = given.flatMap((g) => g.split(",")).map((p) => p.trim());
+
+  if (pieces.some((p) => !/^[0-9]+$/u.test(p) || Number(p) < 1)) return new ChatError({ reason: "--mark takes mark numbers, as --mark 2 or --mark 1,3" });
+
+  return pieces.map(Number);
+}
+
 /** Whether stdout is /dev/null (`>/dev/null`): the same device and inode. */
 function stdoutIsDevNull(): boolean {
   try {
@@ -130,9 +143,15 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<vo
       // A text whose bytes are not UTF-8 is refused where Python refuses it, after its sender and `re`.
       const text = argIsUtf8(given) ? given : "\uD800";
       const decision = args.str("decision");
+      const mark = markList(args.list("mark"));
 
-      const draft: Draft = { sender: who, text, re: args.int("re") ?? null };
-      const sent = append(machine, root, decision === undefined ? draft : { ...draft, decision }, stampOf(machine.now()));
+      if (mark instanceof ChatError) return yield* Effect.fail(mark);
+      const draft: Building<Draft> = { sender: who, text, re: args.int("re") ?? null };
+
+      if (decision !== undefined) draft.decision = decision;
+
+      if (mark !== undefined) draft.mark = mark;
+      const sent = append(machine, root, draft, stampOf(machine.now()));
 
       if (sent instanceof ChatError) return yield* Effect.fail(sent);
       yield* lines(machine, root, [sent]);

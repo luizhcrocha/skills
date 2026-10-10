@@ -53,6 +53,244 @@ function placeOf(at: Json | undefined): JsonObject | undefined | ChatError {
   return message !== undefined && !/^[0-9]+$/u.test(message) ? new ChatError({ reason: PLACE_REFUSED }) : place;
 }
 
+/** Marks one batch carries, at most. */
+export const MARKS_MAX = 100;
+
+/** Characters of a mark's comment or replacement. */
+export const MARK_TEXT_MAX = 4000;
+
+/** Blocks one mark's quote crosses, at most. */
+const BLOCKS_MAX = 200;
+
+/** Characters kept of the body's text around a quote or a block. */
+const CONTEXT_MAX = 64;
+
+/** Characters kept of where a quote was, in words. */
+const HINT_MAX = 300;
+
+const MARK_KINDS: readonly string[] = ["comment", "delete", "replace", "question", "general"];
+
+function marksRefused(what: string): ChatError {
+  return new ChatError({ reason: `marks are {decision, at, items}: ${what}` });
+}
+
+function cut(text: string, max: number): string {
+  return [...text].slice(0, max).join("");
+}
+
+/** `given[key]` as a string: undefined when absent or null, refused when it is anything else. */
+function textOf(given: JsonObject, key: string, where: string): string | undefined | ChatError {
+  const value = given[key];
+
+  if (value === undefined || value === null) return undefined;
+
+  return asString(value) ?? marksRefused(`${where}.${key} is not a string`);
+}
+
+function decisionOfMarks(value: Json | undefined): JsonObject | ChatError {
+  const given = asObject(value);
+
+  if (given === undefined) return marksRefused("decision is {id, ref?, title, revision}");
+  const fields: [string, string][] = [];
+
+  for (const key of ["id", "ref", "title", "revision"]) {
+    const text = textOf(given, key, "decision");
+
+    if (text instanceof ChatError) return text;
+
+    if ((key === "id" || key === "revision") && (text === undefined || text === "" || [...text].length > PLACE_MAX)) {
+      return marksRefused(`decision.${key} is a string of 1 to ${PLACE_MAX} characters`);
+    }
+
+    if (key === "title" && text === undefined) return marksRefused("decision.title is a string");
+
+    if (text !== undefined && (text !== "" || key === "title")) fields.push([key, cut(text, PLACE_MAX)]);
+  }
+
+  return Object.fromEntries(fields);
+}
+
+function blockOf(value: Json, where: string): JsonObject | ChatError {
+  const given = asObject(value);
+  const exact = given === undefined ? undefined : textOf(given, "exact", where);
+
+  if (exact instanceof ChatError) return exact;
+
+  if (given === undefined || exact === undefined || exact === "") return marksRefused(`${where} is {exact, prefix, suffix, cell?}, exact the block's text`);
+  const block: [string, Json][] = [["exact", cut(exact, QUOTE_MAX)]];
+
+  for (const key of ["prefix", "suffix"]) {
+    const text = textOf(given, key, where);
+
+    if (text instanceof ChatError) return text;
+    block.push([key, cut(text ?? "", CONTEXT_MAX)]);
+  }
+
+  if (given["cell"] === undefined || given["cell"] === null) return Object.fromEntries(block);
+  const cell = asObject(given["cell"]);
+  const row = asNumber(cell?.["row"]);
+
+  if (cell === undefined || row === undefined || !Number.isInteger(row) || row < 0) return marksRefused(`${where}.cell is {table, row, rowLabel, column, head?}, row a row number`);
+  const kept: [string, Json][] = [];
+
+  for (const key of ["table", "row", "rowLabel", "column"]) {
+    const text = key === "row" ? undefined : textOf(cell, key, `${where}.cell`);
+
+    if (text instanceof ChatError) return text;
+    kept.push([key, key === "row" ? row : cut(text ?? "", PLACE_MAX)]);
+  }
+
+  if (cell["head"] === true) kept.push(["head", true]);
+  block.push(["cell", Object.fromEntries(kept)]);
+
+  return Object.fromEntries(block);
+}
+
+function markQuoteOf(value: Json | undefined, where: string): JsonObject | ChatError {
+  const given = asObject(value);
+  const text = given === undefined ? undefined : textOf(given, "text", where);
+
+  if (text instanceof ChatError) return text;
+
+  if (given === undefined || text === undefined || text.trim() === "") return marksRefused(`${where} is {text, prefix, suffix, hint, blocks}, text the words marked`);
+  const quote: [string, Json][] = [["text", cut(text, QUOTE_MAX)]];
+
+  for (const [key, max] of [["prefix", CONTEXT_MAX], ["suffix", CONTEXT_MAX], ["hint", HINT_MAX]] as const) {
+    const field = textOf(given, key, where);
+
+    if (field instanceof ChatError) return field;
+    quote.push([key, cut(field ?? "", max)]);
+  }
+
+  const blocks = asArray(given["blocks"]);
+
+  if (blocks === undefined || blocks.length === 0 || blocks.length > BLOCKS_MAX) return marksRefused(`${where}.blocks is a list of 1 to ${BLOCKS_MAX} blocks`);
+  const kept: JsonObject[] = [];
+
+  for (const [i, raw] of blocks.entries()) {
+    const block = blockOf(raw, `${where}.blocks[${i}]`);
+
+    if (block instanceof ChatError) return block;
+    kept.push(block);
+  }
+
+  quote.push(["blocks", kept]);
+
+  return Object.fromEntries(quote);
+}
+
+function markOf(value: Json, at: number, seen: Set<number>): JsonObject | ChatError {
+  const given = asObject(value);
+
+  if (given === undefined) return marksRefused(`items[${at}] is {n, kind, quote?, comment?, replacement?}`);
+  const n = asNumber(given["n"]);
+
+  if (n === undefined || !Number.isInteger(n) || n < 1) return marksRefused(`items[${at}].n is a positive whole number`);
+  const where = `mark ${n}`;
+
+  if (seen.has(n)) return marksRefused(`mark ${n} is in the batch twice`);
+  seen.add(n);
+  const kind = asString(given["kind"]);
+
+  if (kind === undefined || !MARK_KINDS.includes(kind)) return marksRefused(`${where}.kind is one of ${MARK_KINDS.join(", ")}`);
+  const mark: [string, Json][] = [["n", n], ["kind", kind]];
+  const quoted = given["quote"] !== undefined && given["quote"] !== null;
+
+  if (kind === "general" && quoted) return marksRefused(`${where} is a general mark: it has no quote`);
+
+  if (kind !== "general") {
+    const quote = markQuoteOf(given["quote"], `${where}.quote`);
+
+    if (quote instanceof ChatError) return quote;
+    mark.push(["quote", quote]);
+  }
+
+  for (const key of ["comment", "replacement"]) {
+    const text = textOf(given, key, where);
+
+    if (text instanceof ChatError) return text;
+
+    if (text !== undefined && [...text].length > MARK_TEXT_MAX) return marksRefused(`${where}.${key} is longer than ${MARK_TEXT_MAX} characters`);
+    const needed = key === "comment" ? kind === "comment" || kind === "question" || kind === "general" : kind === "replace";
+
+    if (needed && (text === undefined || text.trim() === "")) return marksRefused(`${where} is a ${kind} mark: it needs its ${key}`);
+
+    if (key === "replacement" && !needed && text !== undefined) return marksRefused(`${where} is a ${kind} mark: only a replace mark has a replacement`);
+
+    if (text !== undefined && text.trim() !== "") mark.push([key, text]);
+  }
+
+  return Object.fromEntries(mark);
+}
+
+/** Whether `hash` is the place of decision `id`: `#decision/<id>` on a fleet's page, `#decision/<fleet>/<id>`
+ * on the manager's, the id encoded as the page encodes it. */
+function placesDecision(hash: string, id: string): boolean {
+  const tail = "/" + id.split("/").map(encodeURIComponent).join("/");
+
+  if (!hash.startsWith("#decision/") || !hash.endsWith(tail)) return false;
+  const fleet = hash.slice("#decision".length, hash.length - tail.length);
+
+  return fleet === "" || /^\/[^/]+$/u.test(fleet);
+}
+
+/** Why a batch of marks cannot go with the other fields a message has, or undefined when it can. */
+export function marksAlone(message: { readonly marks?: Json | undefined; readonly decision?: Json | undefined; readonly quote?: Json | undefined; readonly side?: Json | undefined }): ChatError | undefined {
+  const given = (value: Json | undefined): boolean => value !== undefined && value !== null && value !== "";
+
+  if (!given(message.marks) || ![message.decision, message.quote, message.side].some(given)) return undefined;
+
+  return new ChatError({ reason: "a batch of marks is a message of its own: no decision, quote or side chat with it" });
+}
+
+/**
+ * The marks a batch carries (`marks`, on the user's message): `{decision: {id, ref?, title, revision}, at:
+ * {hash}, items: [{n, kind, quote?, comment?, replacement?}]}`, other keys dropped and long quoted text cut;
+ * any other shape is refused, saying what is wrong. Undefined when there are none.
+ */
+export function marksOf(value: Json | undefined): JsonObject | undefined | ChatError {
+  if (value === undefined || value === null) return undefined;
+  const given = asObject(value);
+
+  if (given === undefined) return marksRefused("not an object");
+  const decision = decisionOfMarks(given["decision"]);
+
+  if (decision instanceof ChatError) return decision;
+  const at = asObject(given["at"]);
+  const hash = asString(at?.["hash"]);
+
+  // oxlint-disable-next-line no-control-regex -- control characters are what it refuses.
+  if (hash === undefined || !hash.startsWith("#") || [...hash].length > PLACE_MAX || /[\u0000-\u001f\u007f]/u.test(hash)) {
+    return marksRefused(`at is {hash}, the decision's place, a # and at most ${PLACE_MAX} characters`);
+  }
+
+  if (!placesDecision(hash, asString(decision["id"]) ?? "")) return marksRefused(`at.hash ${hash} is not the place of decision ${pyText(decision["id"] ?? null)}`);
+
+  const items = asArray(given["items"]);
+
+  if (items === undefined || items.length === 0 || items.length > MARKS_MAX) return marksRefused(`items is a list of 1 to ${MARKS_MAX} marks`);
+  const seen = new Set<number>();
+  const marks: JsonObject[] = [];
+
+  for (const [i, raw] of items.entries()) {
+    const mark = markOf(raw, i, seen);
+
+    if (mark instanceof ChatError) return mark;
+    marks.push(mark);
+  }
+
+  return { decision, at: { hash }, items: marks };
+}
+
+/** The `n` of each mark a stored batch carries; empty for a message without marks. */
+export function markNumbers(m: Message): number[] {
+  return (asArray(asObject(m.stored["marks"])?.["items"]) ?? []).flatMap((item) => {
+    const n = asNumber(asObject(item)?.["n"]);
+
+    return n === undefined ? [] : [n];
+  });
+}
+
 /** A host whose watch ended, or who spoke, this recently still counts as reading. */
 export const READING_GRACE_S = 10 * 60;
 
@@ -179,8 +417,9 @@ export interface Addressed {
 }
 
 /** Who a message from `sender` would reach now, and its text split into parts. On the manager's page, a
- * message of the user's in a side chat that a fleet owns (`ownersOf`) reaches the owners, whoever it
- * cites and the sender of the message it replies to, and no one else. */
+ * message of the user's in a side chat that a fleet owns (`ownersOf`), or a batch of marks on a fleet's
+ * decision, reaches the owners, whoever it cites and the sender of the message it replies to, and no one
+ * else. */
 export function address(
   machine: Machine,
   root: string,
@@ -190,6 +429,8 @@ export function address(
     readonly re?: number | null;
     readonly side?: number | "new";
     readonly quote?: JsonObject;
+    /** A batch's marks: on the manager's page their decision's fleet owns it, as a side chat's. */
+    readonly marks?: JsonObject;
     readonly allowUser?: boolean;
   },
 ): Addressed | ChatError {
@@ -205,7 +446,7 @@ export function address(
   const answered = re === null ? undefined : known.find((m) => m.id === re);
 
   if (re !== null && answered === undefined) return new ChatError({ reason: `unknown message #${re}` });
-  const owners = owned ? ownersOf(machine, root, known, message.side, answered, message.quote, cited) : [];
+  const owners = owned ? ownersOf(machine, root, known, message.side, answered, message.quote ?? placedBy(message.marks), cited, message.marks !== undefined) : [];
   const replied = answered === undefined ? [] : [answered.from];
   const named = owners.length > 0 ? [...owners, ...cited, ...replied] : [...cited, ...replied];
   const to: string[] = sender === "user" ? [] : ["user"];
@@ -241,11 +482,19 @@ function quotedFleet(quote: Json | undefined, known: readonly Message[]): string
   return undefined;
 }
 
+/** A batch's place as a quote holds one (`{at}`), so a batch is owned as a quote is; undefined without marks. */
+function placedBy(marks: Json | undefined): Json | undefined {
+  const at = asObject(marks)?.["at"];
+
+  return at === undefined ? undefined : { at };
+}
+
 /**
  * The fleets that own the side chat a message of the user's on the manager's page is in: the fleet whose
- * item its first message quotes, and the fleets that first message cites. None for a message outside a side
- * chat, or in one about the manager's own things. `cited` and `quote` are the message's own, for a message
- * that opens a side chat; `answered` passes on its side chat to a reply.
+ * item its first message quotes, and the fleets that first message cites. A batch of marks in no side chat
+ * is owned as a side chat's first message is, by its place. None for a message outside a side chat, or in
+ * one about the manager's own things. `cited` and `quote` are the message's own (a batch's place as its
+ * quote), for a message that opens a side chat or a batch; `answered` passes on its side chat to a reply.
  */
 function ownersOf(
   machine: Machine,
@@ -255,6 +504,7 @@ function ownersOf(
   answered: Message | undefined,
   quote: Json | undefined,
   cited: readonly string[],
+  batch: boolean,
 ): string[] {
   const dir = resolvePath(root);
   const fleets = machine.registry.live().filter((e) => e.role !== "manager" && e.dir !== dir);
@@ -277,7 +527,9 @@ function ownersOf(
     const thread = side ?? (answered !== undefined && truthy(answered.side) ? asNumber(answered.side) : undefined);
     const first = thread === undefined ? undefined : known.find((m) => m.id === thread);
 
-    if (first !== undefined) opener = { quote: first.quote, cited: first.parts.flatMap((p) => (p.mention === undefined ? [] : [p.mention])) };
+    if (first !== undefined) {
+      opener = { quote: first.quote ?? placedBy(first.stored["marks"]), cited: first.parts.flatMap((p) => (p.mention === undefined ? [] : [p.mention])) };
+    } else if (thread === undefined && batch) opener = { quote, cited };
   }
 
   if (opener === undefined) return [];
@@ -304,6 +556,8 @@ interface StoredMessage {
   author?: string;
   decision?: string;
   quote?: JsonObject;
+  marks?: JsonObject;
+  mark?: number[];
   side?: Json;
   origin?: string;
 }
@@ -317,6 +571,10 @@ export interface Draft {
   readonly allowUser?: boolean;
   readonly decision?: string;
   readonly quote?: JsonObject;
+  /** A batch of marks on a decision's body, as the page sends it (`marksOf` checks it). */
+  readonly marks?: JsonObject;
+  /** The marks of the batch `re` names that this message answers (`n` of each). */
+  readonly mark?: readonly number[];
   /** "new" opens a side chat; a number continues one. */
   readonly side?: number | "new";
   /** The page of another origin the user posted from (the hub's config allows it), as its `Origin`. */
@@ -335,6 +593,10 @@ export function append(machine: Machine, root: string, draft: Draft, at: string)
   if (draft.text.trim() === "") return new ChatError({ reason: "the message has no text" });
 
   if (!draft.text.isWellFormed()) return new ChatError({ reason: "the text is not valid UTF-8" });
+  const marks = marksAlone(draft) ?? marksOf(draft.marks);
+
+  if (marks instanceof ChatError) return marks;
+  const answering = draft.mark === undefined || draft.mark.length === 0 ? undefined : [...new Set(draft.mark)];
   let quote: JsonObject | undefined;
 
   if (draft.quote !== undefined) {
@@ -352,6 +614,16 @@ export function append(machine: Machine, root: string, draft: Draft, at: string)
 
   const stored = appendLocked(root, (known, nextId) => {
     const parent = draft.re === undefined || draft.re === null ? undefined : known.find((m) => m.id === draft.re);
+
+    if (answering !== undefined) {
+      const batch = parent === undefined ? [] : markNumbers(parent);
+
+      if (parent === undefined || batch.length === 0) return new ChatError({ reason: "--mark needs --re to a message with marks" });
+      const stray = answering.find((n) => !batch.includes(n));
+
+      if (stray !== undefined) return new ChatError({ reason: `mark ${stray} is not in message #${parent.id}` });
+    }
+
     let side: Json | undefined;
 
     if (draft.side === "new") side = nextId;
@@ -377,6 +649,10 @@ export function append(machine: Machine, root: string, draft: Draft, at: string)
     if (draft.decision !== undefined && draft.decision !== "") message.decision = draft.decision;
 
     if (quote !== undefined) message.quote = quote;
+
+    if (marks !== undefined) message.marks = marks;
+
+    if (answering !== undefined) message.mark = answering;
 
     if (side !== undefined && truthy(side)) message.side = side;
 
@@ -489,6 +765,26 @@ function marks(m: Message): string {
   return out;
 }
 
+/** ` [3 marks on D30 d30, revision 2026-10-10T09:12:00Z]` on a batch of marks; empty on any other message. */
+function batchOf(m: Message, refs: ReadonlyMap<string, string>): string {
+  const marks = asObject(m.stored["marks"]);
+  const decision = asObject(marks?.["decision"]);
+
+  if (marks === undefined || decision === undefined) return "";
+  const count = (asArray(marks["items"]) ?? []).length;
+  const id = pyText(decision["id"] ?? null);
+  const ref = truthy(decision["ref"]) ? pyText(decision["ref"]) : refs.get(id);
+
+  return ` [${count} mark${count === 1 ? "" : "s"} on ${oneLine(ref === undefined ? id : `${ref} ${id}`)}, revision ${oneLine(decision["revision"] ?? null)}]`;
+}
+
+/** `, mark 2` or `, marks 1, 3` on an answer to marks of a batch; empty on any other message. */
+function answered(m: Message): string {
+  const numbers = (asArray(m.stored["mark"]) ?? []).map((n) => oneLine(n));
+
+  return numbers.length === 0 ? "" : `, mark${numbers.length === 1 ? "" : "s"} ${numbers.join(", ")}`;
+}
+
 /** Each message as its one printed line: `#12 user (login) -> a1 (notes-impl) [D1 d1]: text [re #9]`. */
 export function renderLines(machine: Machine, root: string, messages: readonly Message[]): string[] {
   const names = new Map(rosterOf(machine, root).members.map((m) => [m.id, m.name]));
@@ -515,6 +811,8 @@ export function renderLines(machine: Machine, root: string, messages: readonly M
       line += ` [${oneLine(ref === undefined ? "" : `${ref} `)}${oneLine(m.decision)}]`;
     }
 
+    line += batchOf(m, refs);
+
     if (truthy(m.side)) line += ` [side chat #${pyText(m.side)}]`;
     line += marks(m);
     const quote = asObject(m.quote);
@@ -527,7 +825,7 @@ export function renderLines(machine: Machine, root: string, messages: readonly M
 
     line += `: ${oneLine(m.text)}`;
 
-    if (m.re !== null) line += ` [re #${oneLine(m.re)}]`;
+    if (m.re !== null) line += ` [re #${oneLine(m.re)}${answered(m)}]`;
 
     return line;
   });

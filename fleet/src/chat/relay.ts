@@ -4,15 +4,15 @@
  * - `deliveries`: a message the user writes on the manager's page to one or more live coordinators is
  *   written, as the hub stores it, into each one's own chat as the user's message to `coordinator`, with
  *   `via: {fleet: "manager", id}`; the manager's message records each copy in `delivered: [{fleet, id}]`
- *   (the link). A reply, a side chat and a quote go across in the coordinator's own numbering, the quote's
- *   place (`at`) as the fleet's page can follow it (`quoteIn`).
+ *   (the link). A reply, a side chat, a quote and a batch of marks go across in the coordinator's own
+ *   numbering, the quote's and the batch's place (`at`) as the fleet's page can follow it (`placeIn`).
  * - `Courier`: each answer of a coordinator in its own chat to a delivered message (`re` its id) is
  *   mirrored onto the manager's page from `<fleet>`, as the answer to the original, with
- *   `via: {fleet, id}`. The mirror is checked against the manager's chat under its lock, so it is written
+ *   `via: {fleet, id}` and the marks it answers (`mark`). The mirror is checked against the manager's chat under its lock, so it is written
  *   once however often the courier reads.
  */
 import { resolvePath } from "../files.ts";
-import { asArray, asNumber, asObject, asString, truthy, type Json } from "../json.ts";
+import { asArray, asNumber, asObject, asString, truthy, type Json, type JsonObject } from "../json.ts";
 import type { Entry } from "../registry.ts";
 import type { Machine } from "../world.ts";
 import { fromManager } from "./chat.ts";
@@ -33,6 +33,7 @@ export interface Delivered {
   readonly side: Json | undefined;
   readonly author: string | undefined;
   readonly quote: Json | undefined;
+  readonly marks: Json | undefined;
   readonly origin: string | undefined;
 }
 
@@ -47,6 +48,8 @@ interface Copy {
   parts: { text: string }[];
   author?: string;
   quote?: Json;
+  marks?: Json;
+  mark?: Json;
   side?: Json;
   origin?: string;
   via?: { fleet: string; id: number };
@@ -99,18 +102,22 @@ function sideIn(entry: Entry, known: readonly Message[], side: number): number |
   return "new";
 }
 
+/** `holder` with its `at` replaced by `place`, or left out when there is none; its other fields keep their order. */
+function withPlace(holder: JsonObject, place: JsonObject | undefined): JsonObject {
+  return Object.fromEntries(Object.entries(holder).flatMap(([key, value]) => (key !== "at" ? [[key, value]] : place === undefined ? [] : [[key, place]])));
+}
+
 /**
- * The quote as `entry`'s copy carries it. Its place (`at`) is an address on the manager's page: one of
- * `entry`'s own decisions shown there (`#decision/<fleet>/<id>`) becomes that decision's address on the
- * fleet's own page; any other place keeps the manager's address and gains `page`, the manager's page's path,
- * so the link on the fleet's page leads to it. Without the manager's path the place is dropped.
+ * A quote, or a batch of marks, as `entry`'s copy carries it. Its place (`at`) is an address on the manager's
+ * page: one of `entry`'s own decisions shown there (`#decision/<fleet>/<id>`) becomes that decision's address
+ * on the fleet's own page; any other place keeps the manager's address and gains `page`, the manager's page's
+ * path, so the link on the fleet's page leads to it. Without the manager's path the place is dropped.
  */
-function quoteIn(entry: Entry, quote: Json | undefined, managerPage: string | undefined): Json | undefined {
-  const q = asObject(quote);
+function placeIn(entry: Entry, placed: Json | undefined, managerPage: string | undefined): Json | undefined {
+  const q = asObject(placed);
   const at = asObject(q?.["at"]);
 
-  if (q === undefined || at === undefined) return quote;
-  const { at: _place, ...rest } = q;
+  if (q === undefined || at === undefined) return placed;
   const own = /^#decision\/([^/]+)\/([^/]+)$/u.exec(asString(at["hash"]) ?? "");
   let fleet: string | undefined;
 
@@ -120,9 +127,9 @@ function quoteIn(entry: Entry, quote: Json | undefined, managerPage: string | un
     fleet = undefined;
   }
 
-  if (own?.[2] !== undefined && names(entry, fleet)) return { ...rest, at: { ...at, hash: "#decision/" + own[2] } };
+  if (own?.[2] !== undefined && names(entry, fleet)) return withPlace(q, { ...at, hash: "#decision/" + own[2] });
 
-  return managerPage === undefined ? rest : { ...rest, at: { ...at, page: managerPage } };
+  return withPlace(q, managerPage === undefined ? undefined : { ...at, page: managerPage });
 }
 
 /** Write `message` into one coordinator's chat; its id there, or undefined when it could not be. */
@@ -152,9 +159,12 @@ function deliverTo(entry: Entry, known: readonly Message[], message: Delivered, 
 
     if (message.author !== undefined) copy.author = message.author;
 
-    const quote = quoteIn(entry, message.quote, managerPage);
+    const quote = placeIn(entry, message.quote, managerPage);
 
     if (quote !== undefined) copy.quote = quote;
+    const marks = placeIn(entry, message.marks, managerPage);
+
+    if (marks !== undefined) copy.marks = marks;
 
     if (own !== undefined) copy.side = own;
 
@@ -263,6 +273,8 @@ function mirror(managerRoot: string, entry: Entry, answer: Message, original: nu
     };
 
     if (answer.quote !== undefined) copy.quote = answer.quote;
+
+    if (answer.stored["mark"] !== undefined) copy.mark = answer.stored["mark"];
 
     if (truthy(parent.side)) copy.side = parent.side ?? null;
     copy.via = { fleet: entry.id, id: answer.id };

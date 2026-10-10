@@ -1240,6 +1240,50 @@ describe("the user's word to a coordinator on the manager's page", () => {
     ]);
   });
 
+  const marks = (hash: string): JsonObject => ({
+    decision: { id: "d30", ref: "D30", title: "Cache policy", revision: "2026-10-10T09:12:00Z" },
+    at: { hash },
+    items: [
+      { n: 1, kind: "comment", quote: { text: "fourteen days", prefix: "keep for ", suffix: "", hint: "a paragraph", blocks: [{ exact: "fourteen days", prefix: "keep for ", suffix: "" }] }, comment: "why?" },
+      { n: 2, kind: "general", comment: "fine otherwise" },
+    ],
+  });
+
+  test("a batch of marks on a fleet's decision goes to that fleet only, its place as the fleet's own page has it, and the marks it answers come back", async () => {
+    const asked = await post({ text: "2 marks on D30", marks: marks("#decision/p/d30") }, {}, "/f/manager/chat/preview");
+    expect([asked.status, asked.body["to"]]).toEqual([200, ["p"]]);
+    const sent = await toManager({ text: "2 marks on D30", marks: marks("#decision/p/d30") });
+    expect([sent.status, sent.body["to"], sent.body["delivered"]]).toEqual([201, ["p"], [{ fleet: "p", id: 1 }]]);
+    expect(sent.body["marks"]).toEqual(marks("#decision/p/d30"));
+    expect(fields(readChat(root)[0], "to", "marks", "via")).toEqual([["coordinator"], marks("#decision/d30"), { fleet: "manager", id: 1 }]);
+    const answer = append(machine(env), root, { sender: "coordinator", text: "seven days then", re: 1, mark: [1, 2] }, "2026-01-01T00:00:00+00:00");
+
+    if (answer instanceof ChatError) throw new Error(answer.reason);
+    relay();
+    expect(fields(readChat(manager).at(-1), "from", "re", "mark", "via")).toEqual(["p", 1, [1, 2], { fleet: "p", id: 2 }]);
+  });
+
+  test("a batch on the manager's own decision stays the manager's, and a malformed one is refused with its reason", async () => {
+    const own = await toManager({ text: "1 mark", marks: marks("#decision/d30") });
+    expect([own.status, own.body["to"], own.body["delivered"]]).toEqual([201, ["manager"], undefined]);
+    const onFleet = await post({ text: "2 marks", marks: marks("#decision/d30") });
+    expect([onFleet.status, onFleet.body["to"]]).toEqual([201, ["coordinator"]]);
+
+    for (const path of ["/f/manager/chat", "/f/manager/chat/preview"]) {
+      const bad = await post({ text: "x", marks: { ...marks("#decision/p/d30"), items: [] } }, {}, path);
+      expect([bad.status, asString(bad.body["error"])?.startsWith("marks are {decision, at, items}: ")]).toEqual([400, true]);
+      const elsewhere = await post({ text: "x", marks: marks("#decision/p/d31") }, {}, path);
+      expect([elsewhere.status, elsewhere.body["error"]]).toEqual([400, "marks are {decision, at, items}: at.hash #decision/p/d31 is not the place of decision d30"]);
+
+      for (const more of [{ decision: "d30" }, { quote: { text: "q" } }, { side: "new" }]) {
+        const mixed = await post({ text: "x", marks: marks("#decision/p/d30"), ...more }, {}, path);
+        expect([mixed.status, mixed.body["error"]]).toEqual([400, "a batch of marks is a message of its own: no decision, quote or side chat with it"]);
+      }
+    }
+
+    expect(readChat(manager).length).toBe(1);
+  });
+
   test("a reply to a mirrored answer goes to the coordinator as a reply to its own message", async () => {
     await toManager({ text: "@p hello" });
     say("coordinator", "hi", { re: 1 });

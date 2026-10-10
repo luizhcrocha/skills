@@ -27,7 +27,8 @@
 import { closeSync, constants, fstatSync, openSync, statSync } from "node:fs";
 import { join, normalize, relative, sep } from "node:path";
 
-import { address, append, hostOf, type Draft } from "../chat/chat.ts";
+import type { Building } from "../building.ts";
+import { address, append, hostOf, marksAlone, marksOf, type Draft } from "../chat/chat.ts";
 import { Courier, deliveries } from "../chat/relay.ts";
 import { readChat, Tail } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
@@ -57,9 +58,6 @@ import { PLUGIN_ROOT, readSkills, repoOf } from "./skills.ts";
 import { readTailnet, whois, type Tailnet } from "./tailnet.ts";
 
 import * as Option from "effect/Option";
-
-/** A record built field by field before it is handed on. */
-type Building<T> = { -readonly [K in keyof T]: T[K] };
 
 /** How often a stream looks at its files. */
 export const POLL_MS = 300;
@@ -986,6 +984,10 @@ export class Hub {
     if (ruleGiven !== undefined && ruleGiven !== null && rule === undefined) return jsonResponse(400, { error: "rule must be the rule the page showed" });
 
     try {
+      const marks = marksAlone({ marks: body["marks"], decision: body["decision"], quote: body["quote"], side: body["side"] }) ?? marksOf(body["marks"]);
+
+      if (marks instanceof ChatError) return jsonResponse(400, { error: marks.reason });
+
       if (rest === "/chat/preview") {
         const side = sideOf(body["side"]);
         const quote = quoteOf(body["quote"]);
@@ -998,6 +1000,8 @@ export class Hub {
         if (side !== undefined) asked.side = side;
 
         if (quote !== undefined) asked.quote = quote;
+
+        if (marks !== undefined) asked.marks = marks;
         const resolved = address(machine, root, asked);
 
         if (resolved instanceof ChatError) return jsonResponse(400, { error: resolved.reason });
@@ -1053,6 +1057,8 @@ export class Hub {
 
       if (quote !== undefined) draft.quote = quote;
 
+      if (marks !== undefined) draft.marks = marks;
+
       if (side !== undefined) draft.side = side;
 
       if (origin !== undefined) draft.origin = origin;
@@ -1069,6 +1075,7 @@ export class Hub {
             side: stored["side"],
             author: asString(stored["author"]),
             quote: stored["quote"],
+            marks: stored["marks"],
             origin: asString(stored["origin"]),
           });
 

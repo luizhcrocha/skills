@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as Option from "effect/Option";
 
-import { address, append, deafWarning, listening, openFor, READING_GRACE_S, type Draft } from "../src/chat/chat.ts";
+import { address, append, deafWarning, listening, marksOf, openFor, READING_GRACE_S, type Draft } from "../src/chat/chat.ts";
 import { FleetNews, firstLine } from "../src/chat/news.ts";
 import { Settle, settleOf } from "../src/chat/watch.ts";
 import { readChat, type Message, type Part } from "../src/chat/store.ts";
@@ -803,6 +803,166 @@ describe("quotes and side chats", () => {
     expect(user("and when?", { side: opener.id }).side).toBe(opener.id);
     expect(user("status?").stored).not.toHaveProperty("side");
     expect(append(m, root, { sender: "user", text: "x", allowUser: true, side: 99 }, now())).toBeInstanceOf(ChatError);
+  });
+});
+
+describe("marks on a decision", () => {
+  const QUOTE: JsonObject = {
+    text: "fourteen days",
+    prefix: "keep for ",
+    suffix: ", then drop",
+    hint: "under “Policy” · a paragraph",
+    blocks: [{ exact: "fourteen days", prefix: "keep for ", suffix: ", then drop" }],
+  };
+
+  const CELL: JsonObject = {
+    text: "Row 'cold'\n  TTL: 14d",
+    prefix: "",
+    suffix: "",
+    hint: "table “Tiers”, rows 2–2, columns TTL→TTL",
+    blocks: [{ exact: "14d", prefix: "cold", suffix: "", cell: { table: "Tiers", row: 2, rowLabel: "cold", column: "TTL", head: false, extra: 1 } }],
+  };
+
+  const batch = (hash = "#decision/d30", more: JsonObject = {}): JsonObject => ({
+    decision: { id: "d30", ref: "D30", title: "Cache policy", revision: "2026-10-10T09:12:00Z" },
+    at: { hash },
+    items: [
+      { n: 1, kind: "comment", quote: QUOTE, comment: "why fourteen?" },
+      { n: 2, kind: "replace", quote: CELL, replacement: "7d" },
+      { n: 3, kind: "general", comment: "fine otherwise" },
+    ],
+    ...more,
+  });
+
+  const refusal = (value: Json): string => {
+    const got = marksOf(value);
+
+    return got instanceof ChatError ? got.reason : "accepted";
+  };
+
+  test("a batch keeps its shape: other keys dropped, an empty ref left out, long strings cut", () => {
+    const given = batch("#decision/d30", { extra: true });
+    const got = marksOf({ ...given, decision: { id: "d30", ref: "", title: "Cache policy", revision: "r1", other: 1 } });
+    expect(got).toEqual({
+      decision: { id: "d30", title: "Cache policy", revision: "r1" },
+      at: { hash: "#decision/d30" },
+      items: [
+        { n: 1, kind: "comment", quote: QUOTE, comment: "why fourteen?" },
+        { n: 2, kind: "replace", quote: { ...CELL, blocks: [{ exact: "14d", prefix: "cold", suffix: "", cell: { table: "Tiers", row: 2, rowLabel: "cold", column: "TTL" } }] }, replacement: "7d" },
+        { n: 3, kind: "general", comment: "fine otherwise" },
+      ],
+    });
+    const long = marksOf(batch("#decision/d30", { items: [{ n: 1, kind: "delete", quote: { ...QUOTE, prefix: "p".repeat(100), hint: "h".repeat(400) } }] }));
+    const quote = asObject(asObject(asArray(asObject(long instanceof ChatError ? undefined : long)?.["items"])?.[0])?.["quote"]);
+    expect([asString(quote?.["prefix"])?.length, asString(quote?.["hint"])?.length]).toEqual([64, 300]);
+    expect(marksOf(got instanceof ChatError ? null : (got ?? null))).toEqual(got);
+    expect(marksOf(undefined)).toBeUndefined();
+    expect(marksOf(null)).toBeUndefined();
+  });
+
+  test("any other shape is refused, saying what is wrong", () => {
+    const item = (more: JsonObject): JsonObject => batch("#decision/d30", { items: [{ n: 1, kind: "comment", quote: QUOTE, comment: "c", ...more }] });
+    const many = Array.from({ length: 101 }, (_, i) => ({ n: i + 1, kind: "general", comment: "c" }));
+
+    const bad: Json[] = [
+      "marks",
+      { ...batch(), decision: "d30" },
+      { ...batch(), decision: { title: "t", revision: "r" } },
+      { ...batch(), decision: { id: "d30", title: "t" } },
+      { ...batch(), at: { hash: "decision/d30" } },
+      { ...batch(), at: "#decision/d30" },
+      { ...batch(), items: [] },
+      { ...batch(), items: many },
+      item({ n: 0 }),
+      item({ n: 1.5 }),
+      batch("#decision/d30", { items: [{ n: 1, kind: "general", comment: "a" }, { n: 1, kind: "general", comment: "b" }] }),
+      item({ kind: "praise" }),
+      item({ comment: "" }),
+      item({ kind: "question", comment: null }),
+      item({ kind: "general", comment: "c" }),
+      item({ kind: "replace", comment: null }),
+      item({ kind: "delete", replacement: "x" }),
+      item({ comment: "c".repeat(4001) }),
+      item({ quote: null }),
+      item({ quote: { ...QUOTE, text: "" } }),
+      item({ quote: { ...QUOTE, blocks: [] } }),
+      item({ quote: { ...QUOTE, blocks: Array.from({ length: 201 }, () => ({ exact: "x" })) } }),
+      item({ quote: { ...QUOTE, blocks: [{ exact: "" }] } }),
+      item({ quote: { ...QUOTE, blocks: [{ exact: "x", cell: { table: "T", row: "2", rowLabel: "r", column: "c" } }] } }),
+      batch("#decision/d31"),
+      batch("#plan"),
+      batch("#decision/a/b/d30"),
+      batch("#decision//d30"),
+    ];
+
+    for (const value of bad) expect(refusal(value)).toStartWith("marks are {decision, at, items}: ");
+    expect(refusal(item({ kind: "question", comment: "" }))).toBe("marks are {decision, at, items}: mark 1 is a question mark: it needs its comment");
+    expect(refusal(batch("#decision/p/d30"))).toBe("accepted");
+    expect(refusal({ ...batch("#decision/a%2Fb"), decision: { id: "a/b", title: "t", revision: "r" } })).toStartWith("marks are");
+    expect(refusal({ ...batch("#decision/a/b"), decision: { id: "a/b", title: "t", revision: "r" } })).toBe("accepted");
+    expect(refusal(item({ kind: "question", comment: "why?" }))).toBe("accepted");
+    expect(refusal(item({ kind: "delete", comment: null }))).toBe("accepted");
+  });
+
+  test("a batch is stored with its message and prints how many marks it carries, on which revision", () => {
+    const sent = user("**3 marks on D30**", { author: "luiz@github", marks: batch() });
+    expect(Object.keys(sent.stored)).toEqual(["id", "at", "from", "to", "text", "re", "parts", "author", "marks"]);
+    expect(sent.to).toEqual(["coordinator"]);
+    expect(cli("log").stdout).toBe("#1 user (luiz@github) -> coordinator [3 marks on D30 d30, revision 2026-10-10T09:12:00Z]: **3 marks on D30**\n");
+    expect(append(m, root, { sender: "user", text: "x", allowUser: true, marks: { decision: {} } }, now())).toBeInstanceOf(ChatError);
+    const alone = "a batch of marks is a message of its own: no decision, quote or side chat with it";
+
+    for (const more of [{ decision: "d30" }, { quote: { text: "q" } }, { side: "new" as const }]) {
+      const mixed = append(m, root, { sender: "user", text: "x", allowUser: true, marks: batch(), ...more }, now());
+      expect(mixed instanceof ChatError ? mixed.reason : "stored").toBe(alone);
+    }
+
+    expect(readChat(root).length).toBe(1);
+  });
+
+  test("say --mark answers marks of a batch, one or several", () => {
+    user("marks", { marks: batch() });
+    expect(cli("say", "--as", "coordinator", "--re", "1", "--mark", "2", "seven it is").stdout).toBe("#2 coordinator -> user: seven it is [re #1, mark 2]\n");
+    expect(cli("say", "--as", "coordinator", "--re", "1", "--mark", "1,3", "both answered").stdout).toBe("#3 coordinator -> user: both answered [re #1, marks 1, 3]\n");
+    expect(cli("say", "--as", "coordinator", "--re", "1", "--mark", "1", "--mark", "3", "again").stdout).toBe("#4 coordinator -> user: again [re #1, marks 1, 3]\n");
+    expect(readChat(root).map((msg) => msg.stored["mark"])).toEqual([undefined, [2], [1, 3], [1, 3]]);
+    expect(cli("say", "--as", "coordinator", "--re", "1", "plain").stdout).toBe("#5 coordinator -> user: plain [re #1]\n");
+  });
+
+  test("say --mark is refused without a batch to answer, or for a mark not in it", () => {
+    user("marks", { marks: batch() });
+    user("plain");
+
+    const refused = (...args: string[]): string => {
+      const ran = cli("say", "--as", "coordinator", ...args);
+      expect(ran.code).toBe(1);
+
+      return ran.stderr;
+    };
+
+    expect(refused("--mark", "1", "no re")).toBe("chat: --mark needs --re to a message with marks\n");
+    expect(refused("--re", "2", "--mark", "1", "not a batch")).toBe("chat: --mark needs --re to a message with marks\n");
+    expect(refused("--re", "1", "--mark", "1,4", "four")).toBe("chat: mark 4 is not in message #1\n");
+    expect(refused("--re", "1", "--mark", "one", "words")).toContain("--mark");
+    expect(readChat(root).length).toBe(2);
+  });
+
+  test("on the manager's page a batch goes to the fleet whose decision it marks, and only there", () => {
+    asManager(["perf", "perf"], ["infra", "infra"]);
+
+    const to = (text: string, hash: string): Json => {
+      const got = address(m, root, { sender: "user", text, allowUser: true, marks: batch(hash) });
+
+      return got instanceof ChatError ? got.reason : [...got.to];
+    };
+
+    expect(to("3 marks", "#decision/perf/d30")).toEqual(["perf"]);
+    expect(to("3 marks, @infra too", "#decision/perf/d30")).toEqual(["perf", "infra"]);
+    expect(to("3 marks", "#decision/d30")).toEqual(["manager"]);
+    expect(to("3 marks", "#decision/gone/d30")).toEqual(["manager"]);
+    const plain = address(m, root, { sender: "user", text: "status?", allowUser: true });
+    expect(plain instanceof ChatError ? plain.reason : plain.to).toEqual(["manager"]);
+    expect(user("3 marks", { marks: batch("#decision/perf/d30") }).to).toEqual(["perf"]);
   });
 });
 
