@@ -4,7 +4,8 @@
  * the probe cache's "checked" and "since", and the hub's `files/` route, which serves a file a link names under
  * the fleet's files root and refuses everything else.
  */
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -274,5 +275,41 @@ describe("the hub's links: probes and files", () => {
 
       expect([path, res.status === 200 || text.includes("outside") || text.includes("hidden")]).toEqual([path, false]);
     }
+  });
+  test("a link's symlink to a hidden file or into a hidden directory, a FIFO and a device are not found", async () => {
+    const scratch = join(base, "session", "scratchpad");
+    writeFileSync(join(scratch, ".env"), "SECRET=1\n");
+    symlinkSync(join(scratch, ".env"), join(scratch, "notes.md"));
+    mkdirSync(join(scratch, ".git"));
+    writeFileSync(join(scratch, ".git", "config"), "gitcfg\n");
+    symlinkSync(join(scratch, ".git"), join(scratch, "repo"));
+    spawnSync("mkfifo", [join(scratch, "pipe.log")]);
+    symlinkSync("/dev/zero", join(scratch, "zero.log"));
+    writeLinks(["notes.md", "repo/config", "pipe.log", "zero.log"].map((p, i) => ({ id: `l${String(i)}`, url: `file://${join(scratch, p)}`, title: p, kind: "doc" })));
+
+    for (const path of ["notes.md", "repo/config", "pipe.log", "zero.log"]) {
+      const res = await get(`/f/p/files/${path}`);
+      const text = await res.text();
+
+      expect([path, res.status, text.includes("SECRET") || text.includes("gitcfg")]).toEqual([path, 404, false]);
+    }
+  });
+
+  test("a linked file is streamed, and one over 50 MB is refused with 413", async () => {
+    const scratch = join(base, "session", "scratchpad");
+    writeFileSync(join(scratch, "big.log"), "");
+    truncateSync(join(scratch, "big.log"), 40 * 1024 * 1024);
+    writeFileSync(join(scratch, "huge.log"), "");
+    truncateSync(join(scratch, "huge.log"), 51 * 1024 * 1024);
+    writeLinks(["big.log", "huge.log"].map((p, i) => ({ id: `l${String(i)}`, url: `file://${join(scratch, p)}`, title: p, kind: "doc" })));
+
+    const big = await get("/f/p/files/big.log");
+    expect([big.status, (await big.arrayBuffer()).byteLength]).toEqual([200, 40 * 1024 * 1024]);
+    const huge = await get("/f/p/files/huge.log");
+    expect([huge.status, huge.headers.get("Content-Type"), await huge.text()]).toEqual([
+      413,
+      "text/plain; charset=utf-8",
+      "This file is 51 MB; the hub serves a linked file of at most 50 MB. Open it on the machine.\n",
+    ]);
   });
 });

@@ -1072,8 +1072,10 @@ itself. A manager made later appears the same way, on the same address.
   `file://` link of that fleet names, read-only, at its path under the fleet's files root: DIR's parent when that
   is a session's `scratchpad` or a directory of its own under the state home (`$XDG_STATE_HOME`, else
   `~/.local/state`, not the state home itself), else DIR. Served with the sandbox CSP, `nosniff`, no-store,
-  Markdown and text as `text/plain; charset=utf-8`. 404 for anything else: a file no link names, a dot part,
-  `..`, a path out of the root, a symlink that leads out of it, a directory. `/f/<fleet>` redirects (301) to `/f/<fleet>/`;
+  Markdown and text as `text/plain; charset=utf-8`, streamed from disk. 404 for anything else: a file no link
+  names, a dot part in the path asked or in the real path a symlink leads to (relative to the root: `notes.md
+  -> .env`, `repo -> .git`), `..`, a path out of the root, a symlink that leads out of it, a directory, a FIFO
+  or a device (checked again when it is opened, non-blocking). 413 `text/plain` for a file over 50 MB. `/f/<fleet>` redirects (301) to `/f/<fleet>/`;
   `/f/<a>/f/<b>/…` is `/f/<b>/…`, so the manager's page, whose coordinators' links are relative,
   works under `/f/manager/`. 421 on a `Host` the hub doesn't answer to (loopback, `localhost`, the
   Tailscale IP, the MagicDNS name and short name, at its port; the https name with `--https`). On a

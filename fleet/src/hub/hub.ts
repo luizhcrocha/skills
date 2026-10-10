@@ -24,8 +24,8 @@
  *
  * A request whose Host this hub does not answer to is refused (421), against DNS rebinding.
  */
-import { statSync } from "node:fs";
-import { join, normalize } from "node:path";
+import { closeSync, constants, fstatSync, openSync, statSync } from "node:fs";
+import { join, normalize, relative, sep } from "node:path";
 
 import { address, append, hostOf, type Draft } from "../chat/chat.ts";
 import { Courier, deliveries } from "../chat/relay.ts";
@@ -134,6 +134,26 @@ function isRegularFile(path: string): boolean {
     return statSync(path).isFile();
   } catch {
     return false;
+  }
+}
+
+/** The most a linked file may weigh to be served: over it, 413. */
+export const LINKED_FILE_MAX = 50 * 1024 * 1024;
+
+/** The size of `path` when, opened now (non-blocking, so a FIFO cannot hold the hub), it is a regular file;
+ * undefined for a FIFO, a device, a directory or a file that cannot be opened. */
+function openedFileSize(path: string): number | undefined {
+  let fd: number | undefined;
+
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+    const st = fstatSync(fd);
+
+    return st.isFile() ? st.size : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
 }
 
@@ -788,8 +808,10 @@ export class Hub {
 
   /** A file a link of the fleet at `root` names (`file://…`), read-only, at `files/<path under its files root>`:
    * only under the fleet's files root (its DIR, or its session's scratchpad or state dir: `filesRoot`), only a
-   * file a link names, never a hidden part or a step out (`..`), never through a symlink that leads out. Anything
-   * else is not found. It is sent sandboxed, as a decision's body is: its scripts never run as the hub. */
+   * file a link names, never a hidden part or a step out (`..`), in the path asked or in the one a symlink leads
+   * to (`notes.md -> .env` is not found), never through a symlink that leads out, never a FIFO or a device (checked
+   * when it is opened). Anything else is not found; a file over {@link LINKED_FILE_MAX} is 413. It is streamed, so
+   * a big file never holds the hub, and sent sandboxed, as a decision's body is: its scripts never run as the hub. */
   private linkedFile(req: Request, root: string, rest: string): Response {
     const missing = jsonResponse(404, { error: "not found" });
     let decoded: string;
@@ -806,7 +828,7 @@ export class Hub {
     const base = resolvePath(filesRoot(resolvePath(root), this.options.machine.env));
     const target = resolvePath(join(base, ...parts));
 
-    if (!target.startsWith(`${base}/`) || !isRegularFile(target)) return missing;
+    if (!target.startsWith(`${base}/`) || relative(base, target).split(sep).some((p) => p.startsWith(".")) || !isRegularFile(target)) return missing;
     const ledger = Option.getOrUndefined(parseObject(readText(join(root, "state.json")) ?? "")) ?? {};
 
     const named = (asArray(ledger["links"]) ?? []).some((l) => {
@@ -816,12 +838,20 @@ export class Hub {
     });
 
     if (!named) return missing;
-    const bytes = readBytes(target);
+    const size = openedFileSize(target);
 
-    if (bytes === undefined) return missing;
+    if (size === undefined) return missing;
+
+    if (size > LINKED_FILE_MAX) {
+      return new Response(`This file is ${String(Math.ceil(size / 1024 / 1024))} MB; the hub serves a linked file of at most ${String(LINKED_FILE_MAX / 1024 / 1024)} MB. Open it on the machine.\n`, {
+        status: 413,
+        headers: { "Content-Type": "text/plain; charset=utf-8", ...NO_STORE },
+      });
+    }
+
     const type = /\.(?:md|markdown|txt|log|csv|tsv|jsonl)$/iu.test(target) ? "text/plain; charset=utf-8" : Bun.file(target).type;
 
-    return new Response(req.method === "HEAD" ? null : bytes, {
+    return new Response(req.method === "HEAD" ? null : Bun.file(target), {
       headers: { "Content-Type": type, ...NO_STORE, "Content-Security-Policy": BODY_SANDBOX, "X-Content-Type-Options": "nosniff" },
     });
   }
