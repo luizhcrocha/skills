@@ -443,6 +443,17 @@ describe("fleet turn", () => {
     expect(holds.code).toBe(0);
     expect(holds.stdout).toContain("acme holds the landing turn: l2 (acme: push)");
   });
+
+  test("a landing recorded under the fleet's name in another case is still the fleet's", () => {
+    const manager = join(base, "manager");
+    expect(fleet(["state", manager, "init", "--role", "manager", "--project", "box", "--goal", "land", "--no-render"], env).code).toBe(0);
+    serve("manager", manager, "manager");
+    serve("acme", root, "coordinator");
+    fleet(["state", manager, "step", "l1", "--milestone", "landings", "--title", "Acme: push", "--agent", "Acme", "--status", "current", "--no-render"], env);
+    const holds = fleet(["turn", root], env);
+    expect(holds.code).toBe(0);
+    expect(holds.stdout).toContain("acme holds the landing turn: l1 (Acme: push)");
+  });
 });
 
 describe("fleet brief", () => {

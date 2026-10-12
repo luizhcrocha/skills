@@ -63,7 +63,9 @@ function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
     const raw: JsonObject = readObject(join(manager.dir, "state.json")) ?? {};
     const ledger = decodeLedger(raw);
     const queue = ledger instanceof Refusal ? [] : (ledger.roadmap.find((m) => m.id === LANDINGS)?.steps ?? []);
-    const mine = queue.find((s) => s.agent === fleet.id && s.status === "current");
+    const names = new Set([fleet.id, ...fleet.aliases].map((n) => n.toLowerCase()));
+    const ours = (agent: string | null | undefined): boolean => agent != null && names.has(agent.toLowerCase());
+    const mine = queue.find((s) => ours(s.agent) && s.status === "current");
 
     if (mine !== undefined) {
       out.out(`${fleet.id} holds the landing turn: ${mine.id} (${mine.title}). Land, then report the commit and the files that moved to the manager\n`);
@@ -72,7 +74,7 @@ function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
     }
 
     const held = queue.find((s) => s.status === "current");
-    const queued = queue.find((s) => s.agent === fleet.id && s.status === "pending");
+    const queued = queue.find((s) => ours(s.agent) && s.status === "pending");
 
     const where = [
       held === undefined ? "no landing has the turn" : `${held.id} (${held.title}) has it, ${held.agent ?? "no fleet"}'s`,
