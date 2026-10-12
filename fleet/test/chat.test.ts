@@ -956,14 +956,14 @@ describe("marks on a decision", () => {
     const cell = batch("#decision/d30", { items: [{ n: 1, kind: "comment", quote: { ...CELL, field: "question" }, comment: "c" }] });
     expect(refusal(cell)).toBe("marks are {decision, at, items}: mark 1.quote.blocks[0] is in question, the page's own text: it has no cell");
     user("**1 mark on D30**", { marks: on("option:B:consequence") });
-    expect(cli("log").stdout).toBe("#1 user -> coordinator [1 mark on D30 d30, revision 2026-10-10T09:12:00Z]: **1 mark on D30**\n");
+    expect(cli("log").stdout).toBe("#1 user -> coordinator [1 mark on D30 d30, revision 2026-10-10T09:12:00Z; answer with --re 1 --mark 1]: **1 mark on D30**\n");
   });
 
   test("a batch is stored with its message and prints how many marks it carries, on which revision", () => {
     const sent = user("**3 marks on D30**", { author: "luiz@github", marks: batch() });
     expect(Object.keys(sent.stored)).toEqual(["id", "at", "from", "to", "text", "re", "parts", "author", "marks"]);
     expect(sent.to).toEqual(["coordinator"]);
-    expect(cli("log").stdout).toBe("#1 user (luiz@github) -> coordinator [3 marks on D30 d30, revision 2026-10-10T09:12:00Z]: **3 marks on D30**\n");
+    expect(cli("log").stdout).toBe("#1 user (luiz@github) -> coordinator [3 marks on D30 d30, revision 2026-10-10T09:12:00Z; answer each with --re 1 --mark N]: **3 marks on D30**\n");
     expect(append(m, root, { sender: "user", text: "x", allowUser: true, marks: { decision: {} } }, now())).toBeInstanceOf(ChatError);
     const alone = "a batch of marks is a message of its own: no decision, quote or side chat with it";
 
@@ -982,6 +982,26 @@ describe("marks on a decision", () => {
     expect(cli("say", "--as", "coordinator", "--re", "1", "--mark", "1", "--mark", "3", "again").stdout).toBe("#4 coordinator -> user [side chat #1]: again [re #1, marks 1, 3]\n");
     expect(readChat(root).map((msg) => msg.stored["mark"])).toEqual([undefined, [2], [1, 3], [1, 3]]);
     expect(cli("say", "--as", "coordinator", "--re", "1", "plain").stdout).toBe("#5 coordinator -> user [side chat #1]: plain [re #1]\n");
+  });
+
+  test("say --re to a batch of one mark answers that mark with no --mark; to a batch of several it names none, and says so on stderr", () => {
+    user("1 mark", { marks: batch("#decision/d30", { items: [{ n: 4, kind: "question", quote: QUOTE, comment: "why fourteen?" }] }) });
+    const said = cli("say", "--as", "coordinator", "--re", "1", "the legal minimum");
+    expect([said.stdout, said.stderr]).toEqual(["#2 coordinator -> user [side chat #1]: the legal minimum [re #1, mark 4]\n", ""]);
+    expect(cli("say", "--as", "coordinator", "--re", "1", "--no-change", "the law sets it", "Kept").stdout).toBe("#3 coordinator -> user [side chat #1]: Kept [re #1, mark 4, no change: the law sets it]\n");
+    expect(cli("say", "--as", "a1", "--re", "1", "from a worker too").stdout).toEndWith("[re #1, mark 4]\n");
+    /* The user's own words in the thread answer nothing. */
+    user("and then?", { re: 1 });
+    expect(readChat(root).map((msg) => [msg.stored["mark"], msg.stored["keep"]])).toEqual([[undefined, undefined], [[4], undefined], [[4], "the law sets it"], [[4], undefined], [undefined, undefined]]);
+
+    const several = user("3 marks", { marks: batch(), side: 1 });
+    const plain = cli("say", "--as", "coordinator", "--re", String(several.id), "thanks, on it");
+    expect([plain.code, plain.stdout]).toEqual([0, `#${several.id + 1} coordinator -> user [side chat #1]: thanks, on it [re #${several.id}]\n`]);
+    expect(plain.stderr).toBe(`chat: #${several.id} carries marks 1, 2, 3 and this answer names none: it answers no mark — add \`--mark N[,N...]\` to answer them\n`);
+    expect(readChat(root).at(-1)?.stored["mark"]).toBeUndefined();
+    expect(cli("say", "--as", "coordinator", "--re", String(several.id), "--mark", "2", "seven").stderr).toBe("");
+    /* A reply to a message that carries no marks says nothing of marks. */
+    expect(cli("say", "--as", "coordinator", "--re", "2", "more").stderr).toBe("");
   });
 
   test("say --mark is refused without a batch to answer, or for a mark not in it", () => {
@@ -1042,7 +1062,7 @@ describe("marks on a decision", () => {
     const next = user("1 more mark, @a1 too", { marks: batch(), side: opener.id });
     expect([next.side, next.to]).toEqual([opener.id, ["coordinator", "a1"]]);
     expect(user("and a word in the thread", { side: opener.id }).side).toBe(opener.id);
-    expect(cli("log", "--after", "1").stdout.split("\n")[0]).toBe("#2 user -> coordinator, a1 (notes-impl) [3 marks on D30 d30, revision 2026-10-10T09:12:00Z] [side chat #1]: 1 more mark, @a1 too");
+    expect(cli("log", "--after", "1").stdout.split("\n")[0]).toBe("#2 user -> coordinator, a1 (notes-impl) [3 marks on D30 d30, revision 2026-10-10T09:12:00Z; answer each with --re 2 --mark N] [side chat #1]: 1 more mark, @a1 too");
     const page = user("is a week enough?", { side: "new", quote: { text: "Cache policy", at: { hash: "#decision/d30", anchor: "dv-page" } } });
     expect(user("1 mark", { marks: batch(), side: page.id }).side).toBe(page.id);
     const elsewhere = user("why this?", { side: "new", quote: { text: "l19", at: { hash: "#decision/d30", anchor: "dv-info" } } });
@@ -1096,7 +1116,7 @@ describe("marks on a decision", () => {
     expect(reply({ on: "1" })).toBe("marks are {decision, at, items}: mark 4.on is the number of an earlier mark it replies to");
     expect(refusal(batch("#decision/d30", { items: [{ n: 4, kind: "question", quote: QUOTE, comment: "q", on: 1 }] }))).toBe("marks are {decision, at, items}: mark 4.on is only for a general reply");
     user("1 reply", { marks: batch("#decision/d30", { items: [{ n: 4, kind: "general", comment: "and the cold tier?", on: 1 }] }) });
-    expect(cli("log").stdout).toBe("#1 user -> coordinator [1 mark on D30 d30, revision 2026-10-10T09:12:00Z]: 1 reply\n");
+    expect(cli("log").stdout).toBe("#1 user -> coordinator [1 mark on D30 d30, revision 2026-10-10T09:12:00Z; answer with --re 1 --mark 4]: 1 reply\n");
   });
 
   test("a batch may withdraw sent marks, with or without marks of its own, and prints so", () => {
@@ -1116,7 +1136,7 @@ describe("marks on a decision", () => {
     user("1 mark; Luiz withdrew comments #5 and #7", { marks: { ...batch(), items: [{ n: 8, kind: "general", comment: "c" }], withdrawn: [5, 7] } });
     expect(cli("log", "--after", "1").stdout).toBe(
       "#2 user -> coordinator [withdrew mark 5 on D30 d30, revision 2026-10-10T09:12:00Z]: Luiz withdrew comment #5\n" +
-        "#3 user -> coordinator [1 mark, withdrew marks 5, 7 on D30 d30, revision 2026-10-10T09:12:00Z]: 1 mark; Luiz withdrew comments #5 and #7\n",
+        "#3 user -> coordinator [1 mark, withdrew marks 5, 7 on D30 d30, revision 2026-10-10T09:12:00Z; answer with --re 3 --mark 8]: 1 mark; Luiz withdrew comments #5 and #7\n",
     );
     expect(cli("say", "--as", "coordinator", "--re", "1", "--mark", "2", "answered all the same").code).toBe(0);
   });
@@ -1212,7 +1232,7 @@ describe("marks on a decision", () => {
     const written = appendAll(root, [riding, answer], now());
     expect(written instanceof ChatError ? written.reason : written.map((w) => w.id)).toEqual([1, 2]);
     expect(await proc.exited).toBe(0);
-    expect(await lines.rest()).toBe("#1 user -> coordinator [3 marks on D30 d30, revision 2026-10-10T09:12:00Z]: 3 marks on D30\n#2 user -> coordinator [d30]: B\n");
+    expect(await lines.rest()).toBe("#1 user -> coordinator [3 marks on D30 d30, revision 2026-10-10T09:12:00Z; answer each with --re 1 --mark N]: 3 marks on D30\n#2 user -> coordinator [d30]: B\n");
   });
 });
 
@@ -1314,6 +1334,28 @@ describe("the follow-through on a batch", () => {
     answer(sent.id, [6, 7]);
     const later = openBatches(readChat(root), [decision(null)], "coordinator").filter((o) => o.batch.id === sent.id);
     expect(later.map((o) => [[...o.unanswered], [...o.unrevised]])).toEqual([[[], [7]]]);
+  });
+
+  test("a batch of one mark is answered by an answer naming no mark, as stored before say named it by itself", () => {
+    const alone = (kind: string): number => {
+      const sent = append(m, root, { sender: "user", text: "1 mark", allowUser: true, marks: { decision: { id: "d30", title: "t", revision: "2026-10-10T09:00:00+00:00" }, at: { hash: "#decision/d30" }, items: [{ n: 6, kind, quote: { text: "x", blocks: [{ exact: "x" }] }, comment: "c" }] } }, SENT);
+
+      if (sent instanceof ChatError) throw new Error(sent.reason);
+      /* As chats hold it from before: `re` the batch, no `mark`. */
+      appendFileSync(join(root, "chat.jsonl"), JSON.stringify({ id: sent.id + 1, at: SENT, from: "coordinator", to: ["user"], text: "answer", re: sent.id, side: 1 }) + "\n");
+
+      return sent.id;
+    };
+
+    const question = alone("question");
+    const comment = alone("comment");
+    const later = openBatches(readChat(root), [decision(null)], "coordinator").filter((o) => o.batch.id !== 1);
+    /* The question is closed; the comment asks for a change, so it is answered and waits for the revision. */
+    expect(later.map((o) => [o.batch.id, [...o.unanswered], [...o.unrevised]])).toEqual([[comment, [], [6]]]);
+    expect(question).toBe(2);
+    /* An answer naming no mark still closes none of a batch of several. */
+    answer(1, []);
+    expect(open()).toContainEqual({ batch: 1, unanswered: [1, 2, 3, 4, 5], unrevised: [] });
   });
 
   test("--no-change closes the marks it names without a revision", () => {

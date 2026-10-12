@@ -1,7 +1,8 @@
 /**
  * The follow-through on a batch of marks: a batch stays open on the host's watch until every mark is
  * answered. A mark that asks for a change (`delete`, `replace`, `comment`, `general`) counts as answered only
- * when an answer names it (`--mark`) and the decision was revised after the batch, or that answer says why
+ * when an answer names it (`--mark`; an answer naming none names the one mark of a batch of one) and the
+ * decision was revised after the batch, or that answer says why
  * not (`--no-change`, stored as `keep`); a `question` counts as answered by any answer that names it; a mark
  * a later batch on the same decision withdraws (`withdrawn`) is closed. The
  * watch reminds the host of each open batch every FLEET_BATCH_REMIND_S, at most once per period.
@@ -100,7 +101,12 @@ export function openBatches(messages: readonly Message[], decisions: readonly Js
     const unrevised: number[] = [];
 
     for (const n of numbers.filter((k) => !withdrawn.has(k))) {
-      const naming = answers.filter((m) => (asArray(m.stored["mark"]) ?? []).includes(n));
+      // An answer naming no mark is the batch's one mark's: `say` stores it so now, and older answers read so.
+      const naming = answers.filter((m) => {
+        const named = asArray(m.stored["mark"]) ?? [];
+
+        return named.length === 0 ? numbers.length === 1 : named.includes(n);
+      });
 
       if (naming.length === 0) unanswered.push(n);
       else if (marked.kinds.get(n) !== "question" && !marked.replies.has(n) && !revised && !naming.some((m) => asString(m.stored["keep"]) !== undefined)) unrevised.push(n);

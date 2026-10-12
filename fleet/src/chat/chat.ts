@@ -774,8 +774,6 @@ export function prepare(machine: Machine, root: string, draft: Draft): Prepared 
   const answering = draft.mark === undefined || draft.mark.length === 0 ? undefined : [...new Set(draft.mark)];
   const keep = draft.keep?.trim();
 
-  if (keep !== undefined && answering === undefined) return new ChatError({ reason: "--no-change needs --mark: the marks it leaves as they are" });
-
   if (keep !== undefined && (keep === "" || [...keep].length > MARK_TEXT_MAX)) return new ChatError({ reason: `--no-change takes why, in 1 to ${MARK_TEXT_MAX} characters` });
   let quote: JsonObject | undefined;
 
@@ -795,11 +793,32 @@ export function prepare(machine: Machine, root: string, draft: Draft): Prepared 
   return { draft, resolved, marks, answering, keep, quote };
 }
 
+/** The mark an answer from `sender` to `parent` answers when it names none (no `--mark`): the batch's one mark,
+ * since it can answer no other; undefined for a batch of several, a message without marks, and the user's
+ * own words. So the page shows the answer in that mark's thread, and the follow-through counts it. */
+function soleMark(sender: string, parent: Message | undefined): readonly number[] | undefined {
+  const numbers = sender === "user" || parent === undefined ? [] : markNumbers(parent);
+
+  return numbers.length === 1 ? numbers : undefined;
+}
+
+/** What `say` tells whoever answers a batch of several marks naming none (`--re` with no `--mark`): the
+ * answer is the whole batch's, each mark stays unanswered on the page and on the watch. Undefined otherwise. */
+export function noMarkWarning(root: string, sent: Message): string | undefined {
+  if (sent.from === "user" || sent.re === null || (asArray(sent.stored["mark"]) ?? []).length > 0) return undefined;
+  const numbers = readChat(root).flatMap((m) => (m.id === sent.re ? markNumbers(m) : []));
+
+  return numbers.length < 2 ? undefined : `chat: #${pyText(sent.re)} carries marks ${numbers.join(", ")} and this answer names none: it answers no mark — add \`--mark N[,N...]\` to answer them`;
+}
+
 /** The message `p` is as stored with id `nextId` after `known` (before its `alongside`), or why the store
  * refuses it. */
 function composed(p: Prepared, known: readonly Message[], nextId: number, at: string): JsonObject | ChatError {
-  const { draft, resolved, answering } = p;
+  const { draft, resolved } = p;
   const parent = draft.re === undefined || draft.re === null ? undefined : known.find((m) => m.id === draft.re);
+  const answering = p.answering ?? soleMark(resolved.from, parent);
+
+  if (p.keep !== undefined && answering === undefined) return new ChatError({ reason: "--no-change needs --mark: the marks it leaves as they are" });
 
   if (answering !== undefined) {
     const batch = parent === undefined ? [] : markNumbers(parent);
@@ -1005,7 +1024,9 @@ function marks(m: Message): string {
   return out;
 }
 
-/** ` [3 marks on D30 d30, revision 2026-10-10T09:12:00Z]` on a batch of marks; empty on any other message. */
+/** ` [3 marks on D30 d30, revision 2026-10-10T09:12:00Z; answer each with --re 12 --mark N]` on a batch of marks
+ * (`answer with --re 12 --mark 4` for its one mark; no answer asked of a batch that only withdraws); empty on
+ * any other message. The line itself says how to answer, so each answer lands in its mark's thread. */
 function batchOf(m: Message, refs: ReadonlyMap<string, string>): string {
   const marks = asObject(m.stored["marks"]);
   const decision = asObject(marks?.["decision"]);
@@ -1017,8 +1038,10 @@ function batchOf(m: Message, refs: ReadonlyMap<string, string>): string {
   const gone = withdrawnNumbers(m);
   const withdrew = gone.length === 0 ? "" : `withdrew mark${gone.length === 1 ? "" : "s"} ${gone.join(", ")}`;
   const what = count === 0 ? withdrew : `${count} mark${count === 1 ? "" : "s"}${withdrew === "" ? "" : `, ${withdrew}`}`;
+  const numbers = markNumbers(m);
+  const answer = numbers.length === 0 ? "" : numbers.length === 1 ? `; answer with --re ${m.id} --mark ${numbers.join("")}` : `; answer each with --re ${m.id} --mark N`;
 
-  return ` [${what} on ${oneLine(ref === undefined ? id : `${ref} ${id}`)}, revision ${oneLine(decision["revision"] ?? null)}]`;
+  return ` [${what} on ${oneLine(ref === undefined ? id : `${ref} ${id}`)}, revision ${oneLine(decision["revision"] ?? null)}${answer}]`;
 }
 
 /** `, mark 2` or `, marks 1, 3` on an answer to marks of a batch, then `, no change: <why>` when it keeps

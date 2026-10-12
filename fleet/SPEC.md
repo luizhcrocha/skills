@@ -838,7 +838,7 @@ its id.
 
 | Command | Does | Output | Exit |
 | :-- | :-- | :-- | :-- |
-| `say --as WHO [--re N] [--decision D] [--mark N[,N...] [--no-change WHY]] TEXT` | appends (`--mark` and `--no-change`, TypeScript only: the answer's `mark` and `keep`, [Marks on a decision](#marks-on-a-decision-typescript-only)) | the stored line; when WHO is the host, with no `--re`, while the user's messages to the host are open (not answered with `--re`, nor answers to a decision since closed), one stderr line `chat: open from the user: #93 14:42, #95 14:48( (and K earlier)) — add \`--re N\` if this answers one` (the last five); the message is sent all the same | 1 refused |
+| `say --as WHO [--re N] [--decision D] [--mark N[,N...] [--no-change WHY]] TEXT` | appends (`--mark` and `--no-change`, TypeScript only: the answer's `mark` and `keep`, [Marks on a decision](#marks-on-a-decision-typescript-only); with no `--mark`, `--re` to a batch of one mark answers that mark) | the stored line; when `--re` names a batch of several marks and no `--mark` is given, one stderr line naming its marks and the flag; when WHO is the host, with no `--re`, while the user's messages to the host are open (not answered with `--re`, nor answers to a decision since closed), one stderr line `chat: open from the user: #93 14:42, #95 14:48( (and K earlier)) — add \`--re N\` if this answers one` (the last five); the message is sent all the same | 1 refused |
 | `inbox --as WHO` | the messages open for WHO (`user` allowed) | one line each, oldest first | 1 unknown WHO |
 | `log [--after N]` | every message with id > N | one line each | 0 |
 | `watch --as WHO [--after N \| --resume] [--all] [--once] [--settle SECONDS] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager; 1 stdout is /dev/null; 1 `--once` while another watch as WHO runs for DIR; 1 without `--once` when stdout is not a terminal |
@@ -1069,20 +1069,28 @@ leaves as they are`, `--no-change takes why, in 1 to 4000 characters`). The Cour
 `keep` as "No change: <why>").
 
 **An answer that names no mark** (`--re <batch>` with no `--mark`) is never left out of a comment's thread.
-The page (`sentOf`) reads an answer with no `mark` to a batch of one mark as that mark's, in the chats as
-they are, with no migration. The one mark is a comment on words or a reply in a comment's thread (a
-`general` with `on`); the answer to a batch of one note on the whole decision (a `general` without `on`),
-which has no thread, stays under its batch. To a batch of several it stays an answer to the whole batch.
+To a batch of one mark it answers that mark: `say` from anyone but the user stores `mark: [n]` by itself
+(`composed`'s `soleMark`; `--no-change WHY` then keeps that mark), so `--mark` is needed only to pick among
+several. To a batch of several it stays an answer to the whole batch, with no `mark`, and `say` prints one
+stderr line and sends all the same: `chat: #12 carries marks 1, 2, 3 and this answer names none: it answers
+no mark — add \`--mark N[,N...]\` to answer them`. The readers apply the same rule to what the chats
+already hold, with no migration: the page (`sentOf`) and the follow-through (`openBatches`) read an answer
+with no `mark` to a batch of one mark as that mark's. On the page the one mark is a comment on words or a
+reply in a comment's thread (a `general` with `on`); the answer to a batch of one note on the whole decision
+(a `general` without `on`), which has no thread, stays under its batch.
 
-**Printed lines.** A batch prints ` [N marks on <ref> <id>, revision <revision>]` (`1 mark` for one; the
-ref is the batch's, else the chat's own decision's by id, else left out) after the decision tag
-(`[3 marks on D30 d30, revision 2026-10-10T09:12:00Z]`), and its Markdown one-lined as any text, so one
-watch wake carries every mark. An answer ends ` [re #12, mark 2]` or ` [re #12, marks 1, 3]`, and
+**Printed lines.** A batch prints ` [N marks on <ref> <id>, revision <revision>; answer each with --re <its
+id> --mark N]` (`1 mark` for one, which ends `; answer with --re <its id> --mark <n>`; the ref is the
+batch's, else the chat's own decision's by id, else left out; a batch that only withdraws asks for no
+answer) after the decision tag (`[3 marks on D30 d30, revision 2026-10-10T09:12:00Z; answer each with --re
+12 --mark N]`), and its Markdown one-lined as any text, so one watch wake carries every mark and says how
+each is answered. An answer ends ` [re #12, mark 2]` or ` [re #12, marks 1, 3]`, and
 ` [re #12, mark 2, no change: <why>]` with `--no-change`.
 
 **Follow-through** (`fleet/src/chat/batches.ts`). A batch to the host stays open on the host's watch until
 every mark is closed. A `delete`, `replace`, `comment` or `general` mark asks for a change: it is closed
-when an answer (`re` the batch, from anyone but the user) names it in `mark`, and either the decision was
+when an answer (`re` the batch, from anyone but the user) names it in `mark` (an answer with no `mark` names
+the one mark of a batch of one), and either the decision was
 revised since the batch (its `revised` later than the batch's `at`, or its `revised`, else `opened`, other
 than `marks.decision.revision`) or that answer has `keep`. A `question` is closed by any answer naming it.
 On a decision no longer open, or no longer in the ledger, it can no longer be revised, so any answer naming

@@ -7,7 +7,7 @@ import { fstatSync, readFileSync, statSync } from "node:fs";
 import * as Effect from "effect/Effect";
 
 import type { Building } from "../building.ts";
-import { append, noReWarning, openFor, renderLines, type Draft } from "../chat/chat.ts";
+import { append, noMarkWarning, noReWarning, openFor, renderLines, type Draft } from "../chat/chat.ts";
 import { readChat } from "../chat/store.ts";
 import { wait, watch } from "../chat/watch.ts";
 import { stampOf } from "../clock.ts";
@@ -55,7 +55,8 @@ The chat between the user (on the dashboard) and the fleet, stored in DIR/chat.j
 
     say   --as WHO [--re N] [--decision D] [--mark N[,N...] [--no-change WHY]] TEXT
                                                   append a message from WHO; print the line written;
-                                                  --mark answers those marks of the batch --re names,
+                                                  --mark answers those marks of the batch --re names
+                                                  (its one mark when it has one and --mark is left out),
                                                   --no-change says why they leave the decision as it is
     inbox --as WHO                                the messages open for WHO, oldest first
     watch --as WHO [--after N | --resume] [--all] [--once] [--settle SECONDS] [--fleets [--batch SECONDS]]
@@ -159,9 +160,8 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<vo
 
       if (sent instanceof ChatError) return yield* Effect.fail(sent);
       yield* lines(machine, root, [sent]);
-      const warning = noReWarning(root, sent);
 
-      if (warning !== undefined) (yield* Out).err(`${warning}\n`);
+      for (const warning of [noReWarning(root, sent), noMarkWarning(root, sent)]) if (warning !== undefined) (yield* Out).err(`${warning}\n`);
     } else if (cmd === "inbox") {
       const open = openFor(machine, root, who);
 
