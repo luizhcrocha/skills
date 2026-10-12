@@ -1220,11 +1220,16 @@ def fleet_agent_grant(hook):
     allow = permissions.get("allow") if isinstance(permissions, dict) else None
     if not isinstance(allow, list) or f"Agent({_agent_call(tool_input)})" not in allow:
         return None
-    return "tstack: the user allowed this exact Agent call once, on the fleet page (a permission grant)."
+    return Allow("tstack: the user allowed this exact Agent call once, on the fleet page (a permission grant).")
 
 
 class Deny(str):
     """What a PreToolUse handler returns to refuse the call: the text becomes the denial's reason."""
+
+
+class Allow(str):
+    """What a PreToolUse handler returns to allow the call: only fleet_agent_grant, for an Agent call the hub granted
+    once. Any other PreToolUse text decides nothing."""
 
 
 # The push gate. It catches honest mistakes, not an adversary: a plain `jj git push` or `git push` is read
@@ -1741,11 +1746,435 @@ def _log_denial(hook, lc, cli, text):
             log(hook.data_dir, f"{hook.event} land_turn_gate: {cli} state failed: {e}")
 
 
+# The suite gate. A repo's whole test suite (`pnpm test`, `vitest run`, `just test`, `pytest`, ...) spikes memory; a
+# fleet's workers running several at once ran the machine out of it. In a managed fleet's session such a command runs
+# only through the gate slot, in a memory-capped scope that dies whole (`fleet fleets gate run`): the hook denies the
+# call and names that command, so Claude issues it and the permission check reviews it as any other. The hook never
+# allows or rewrites a call. A scoped run (a path, `--changed`, `related`, one package, a name filter: `-t`, `-k`,
+# `--lf`, `cargo test NAME`, `go test -run X`) is left alone. Reading follows the push gate's: redirections, wrappers,
+# `cd`, `-C`, `sh -c`; a test runner the hook cannot read (a script, eval, xargs, a substitution) counts as a full suite.
+Suite = namedtuple("Suite", "what unclear")
+SUITE_WAIT_S = 1800
+SUITE_TIMEOUT_MS = 600000  # the Bash tool's most: a run may queue behind another suite
+# `just` recipes that run a full suite, by name: tstack's `test` (every suite) and its per-suite recipes (justfile).
+# Any other recipe, `test-changed` and `test-coordinator-page` (one file) included, is left alone.
+JUST_FULL_SUITES = {"test", "test-scripts", "test-lint-ts", "test-coordinator", "test-fleet", "test-fleet-ts",
+                    "test-fleet-ts-own", "test-fleet-ts-oracle", "test-page"}
+# Options that narrow a run to the tests a name matches: passed to a package's `test` script, they make it scoped.
+NAME_FILTERS = {"-t", "--testNamePattern", "--test-name-pattern", "-k", "--lf", "--last-failed"}
+TEST_IN_TEXT = re.compile(r"\b(?:(?:pnpm|npm|yarn|bun)\s+(?:-\S+\s+)*(?:run\s+)?test\b|vitest\b|vp\s+test\b|pytest\b|py\.test\b"
+                          r"|cargo\s+(?:test|nextest)\b|go\s+test\b|just\s+test\b|node\s+--test\b)")
+PM_TEST = {"test", "t", "tst"}
+PM_RUN = {"run", "run-script", "rum", "urn"}
+PNPM_VALUED = {"-C", "--dir", "--filter", "-F", "--reporter", "--loglevel", "--workspace-concurrency", "--filter-prod",
+               "--test-pattern", "--changed-files-ignore-pattern"}
+NPM_VALUED = {"--prefix", "-w", "--workspace", "--loglevel", "--userconfig"}
+YARN_VALUED = {"--cwd"}
+BUN_VALUED = {"--cwd", "--config", "-c", "--preload", "-r", "--filter", "-F"}
+VITEST_VALUED = {"-t", "--testNamePattern", "-c", "--config", "-r", "--root", "--project", "--reporter", "--pool",
+                 "--shard", "--environment", "--outputFile", "--maxWorkers", "--minWorkers", "--mode", "--exclude",
+                 "--bail", "--retry", "--testTimeout", "--hookTimeout", "--sequence.seed", "--inspect-brk",
+                 "--coverage.provider", "--coverage.reporter", "--silent", "--logHeapUsage"}
+VITEST_BOOLEAN_VALUED = {"--silent", "--logHeapUsage"}  # take a value only as --flag=value
+BUN_TEST_VALUED = {"-t", "--test-name-pattern", "--timeout", "--preload", "--rerun-each", "--coverage-reporter",
+                   "--coverage-dir", "--reporter", "--reporter-outfile", "--max-concurrency", "--seed", "--parallel"}
+PYTEST_VALUED = {"-k", "-m", "-p", "-c", "-o", "-n", "-W", "-r", "--rootdir", "--maxfail", "--durations", "--tb",
+                 "--junitxml", "--junit-xml", "--ignore", "--ignore-glob", "--deselect", "--confcutdir", "--basetemp",
+                 "--log-level", "--timeout", "--dist", "--cov-report", "--color", "--import-mode", "-x"}
+PYTEST_FLAGS = {"-x"}  # -x is a flag, not valued
+PYTEST_SCOPES = {"-k", "--lf", "--last-failed"}
+CARGO_TEST_VALUED = {"--manifest-path", "--features", "-F", "--target", "--target-dir", "-j", "--jobs", "--profile",
+                     "--message-format", "--color", "--config", "-Z", "--test", "--bench", "--example", "--bin"}
+JUST_VALUED = {"-f", "--justfile", "-d", "--working-directory", "--set", "--shell", "--shell-arg", "--dotenv-filename",
+               "--dotenv-path", "--color", "--command-color", "--chooser", "--list-heading", "--list-prefix"}
+TEST_FILE = re.compile(r"(\.|_)(test|spec)\.[cm]?[jt]sx?$|^test_.*\.py$|_test\.py$|\.py$")
+
+
+def _opts(args, valued):
+    """(positionals, options) of args: a `--flag value` pair in valued counts as one option; `--` ends the options."""
+    pos, opts, i = [], [], 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            pos += args[i + 1:]
+            break
+        if a.startswith("-") and a != "-":
+            opts.append(a)
+            if a in valued and "=" not in a and i + 1 < len(args):
+                opts.append(args[i + 1])
+                i += 1
+        else:
+            pos.append(a)
+        i += 1
+    return pos, opts
+
+
+def _filters(opts, flags):
+    """Whether opts hold one of flags, as `-t x`, `--flag=x` or `-tx`."""
+    return any(o in flags or o.split("=", 1)[0] in flags or (o[:2] in flags and len(o) > 2 and not o.startswith("--"))
+               for o in opts)
+
+
+def _value(args, *flags):
+    """The value args give the first of flags (`-C dir`, `--dir=dir`), else None."""
+    for i, a in enumerate(args):
+        for f in flags:
+            if a == f and i + 1 < len(args):
+                return args[i + 1]
+            if a.startswith(f + "=") and f.startswith("--"):
+                return a.split("=", 1)[1]
+    return None
+
+
+def _scripts(cwd):
+    """The "scripts" of the package.json in cwd: a dict, {} when it has none, None when it cannot be read."""
+    if cwd is None:
+        return None
+    try:
+        data = json.loads(Path(cwd, "package.json").read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        return None
+    scripts = data.get("scripts") if isinstance(data, dict) else None
+    return {k: v for k, v in scripts.items() if isinstance(v, str)} if isinstance(scripts, dict) else {}
+
+
+class SuiteReader:
+    """Reads a Bash command for the full test suites it runs."""
+
+    def suites(self, command, cwd, unclear=False, depth=0):
+        text = _strip_heredocs(command)
+        out = []
+        if depth < 4:
+            for sub in _substitutions(text):
+                out += self.suites(sub, cwd, True, depth + 1)
+        try:
+            segments = _segments(text)
+        except ValueError:
+            return out + ([Suite("a command the hook cannot parse", True)] if TEST_IN_TEXT.search(text) else [])
+        for words, nesting in segments:
+            words, stdin = _unwrap(words)
+            if not words:
+                continue
+            name = os.path.basename(words[0])
+            if name in ("cd", "pushd"):
+                target = words[1] if len(words) > 1 else "~"
+                cwd = None if target == "-" or nesting > 0 else _path(cwd, target)
+            elif name == "systemd-run" and "--scope" in words:
+                continue  # already in a scope of its own
+            elif name == "eval" and depth < 4:
+                out += self.suites(" ".join(words[1:]), cwd, True, depth + 1)
+            elif name in SHELLS and depth < 4:
+                flag = next((i for i, w in enumerate(words[1:], 1) if re.fullmatch(r"-[a-z]*c[a-z]*", w)), None)
+                if flag is not None and flag + 1 < len(words):
+                    out += self.suites(words[flag + 1], cwd, unclear or stdin, depth + 1)
+                else:
+                    files = [w for w in words[1:] if not w.startswith("-")]
+                    if files and cwd and self._script_tests(os.path.join(cwd, files[0]), True):
+                        out.append(Suite(" ".join(words), True))
+            elif name in ("source", ".") and len(words) > 1:
+                if cwd and self._script_tests(os.path.join(cwd, words[1]), True):
+                    out.append(Suite(" ".join(words), True))
+            else:
+                found = self.command(words, cwd, depth)
+                if found:
+                    out.append(Suite(found, unclear or stdin or nesting > 0))
+                elif ("/" in words[0] or words[0].endswith(SCRIPT_SUFFIXES)) and cwd \
+                        and self._script_tests(_path(cwd, words[0]) or ""):
+                    out.append(Suite(" ".join(words), True))
+        return out
+
+    @staticmethod
+    def _script_tests(path, by_shell=False):
+        try:
+            with open(path, "rb") as f:
+                text = f.read(SCRIPT_MAX).decode("utf-8", "replace")
+        except OSError:
+            return False
+        first = text.split("\n", 1)[0]
+        shell = by_shell or path.endswith(SCRIPT_SUFFIXES) or (
+            first.startswith("#!") and any(re.search(rf"\b{s}\b", first) for s in SHELLS))
+        return shell and bool(TEST_IN_TEXT.search(text))
+
+    def command(self, words, cwd, depth=0):
+        """The full suite one simple command runs, as the words to name it by, else None."""
+        name, args = os.path.basename(words[0]), words[1:]
+        shown = " ".join(words[:4])
+        if name in ("npx", "bunx", "pnpx", "uvx"):
+            pos = [a for a in args if not a.startswith("-")]
+            return self.command(args[args.index(pos[0]):], cwd, depth) if pos else None
+        if name in ("uv", "poetry", "pipenv", "hatch", "pdm", "rye") and args[:1] == ["run"]:
+            rest = [a for a in args[1:] if not a.startswith("-")]
+            return self.command(args[args.index(rest[0], 1):], cwd, depth) if rest else None
+        if re.fullmatch(r"python[\d.]*", name) and len(args) >= 2 and args[0] == "-m":
+            return self.command([args[1], *args[2:]], cwd, depth)
+        if re.fullmatch(r"python[\d.]*", name) and args and os.path.basename(args[0]) == "gates" and args[1:2] == ["all"]:
+            return shown
+        if name == "gates" and args[:1] == ["all"]:
+            return shown
+        if name in ("pnpm", "npm", "yarn", "bun"):
+            return self._package_manager(name, args, cwd, depth, shown)
+        if name == "vitest":
+            return self._vitest(args, shown)
+        if name == "vp":
+            pos = [a for a in args if not a.startswith("-")]
+            if pos[:1] == ["test"]:
+                return self._vitest(args[args.index("test") + 1:], shown)
+            if pos[:1] == ["run"] and len(pos) > 1:
+                return self._script(pos[1], args[args.index(pos[1]) + 1:], cwd, depth, shown, recursive=False)
+            return None
+        if name in ("pytest", "py.test"):
+            pos, opts = _opts([a for a in args if a not in PYTEST_FLAGS], PYTEST_VALUED - PYTEST_FLAGS)
+            return None if pos or _filters(opts, PYTEST_SCOPES) else shown
+        if name == "cargo":
+            own = args[:args.index("--")] if "--" in args else args
+            pos, opts = _opts(own, CARGO_TEST_VALUED | {"-p", "--package", "--exclude", "-E", "--filter-expr"})
+            sub = pos[:1]
+            if sub == ["test"] or (sub == ["nextest"] and pos[1:2] == ["run"]):
+                named = pos[1:] if sub == ["test"] else pos[2:]  # `cargo test NAME`, `cargo nextest run NAME`
+                if named or _filters(opts, {"-E", "--filter-expr"}):
+                    return None
+                return None if any(o in ("-p", "--package") or o.startswith("--package=") for o in opts) and \
+                    "--workspace" not in opts else shown
+            return None
+        if name == "go":
+            i = 0
+            while i < len(args) and args[i].startswith("-"):
+                i += 2 if args[i] == "-C" else 1
+            if args[i:i + 1] != ["test"]:
+                return None
+            rest = args[i + 1:]
+            if any(re.fullmatch(r"--?run(=.*)?", a) for a in rest):
+                return None  # `go test -run X ./...`: the tests X names
+            pos = [a for a in rest if not a.startswith("-")]
+            return shown if any(p in ("./...", "...") for p in pos) else None
+        if name == "just":
+            pos, _ = _opts(args, JUST_VALUED)
+            return shown if pos[:1] and pos[0] in JUST_FULL_SUITES else None
+        if name in ("node", "bun") and "--test" in args:
+            pos, _ = _opts(args, {"--test-name-pattern", "--test-reporter", "--test-reporter-destination",
+                                  "--test-concurrency", "--test-shard", "--import", "--require", "-r"})
+            return None if pos else shown
+        return None
+
+    def _vitest(self, args, shown):
+        pos, opts = _opts(args, VITEST_VALUED - VITEST_BOOLEAN_VALUED)
+        if pos[:1] in (["related"], ["list"], ["bench"], ["init"]):
+            return None
+        if pos[:1] in (["run"], ["watch"], ["dev"]):
+            pos = pos[1:]
+        if pos or any(o == "--changed" or o.startswith("--changed=") or o == "--dir" or o.startswith("--dir=") for o in opts):
+            return None
+        return None if _filters(opts, {"-t", "--testNamePattern"}) else shown
+
+    def _package_manager(self, name, args, cwd, depth, shown):
+        valued = {"pnpm": PNPM_VALUED, "npm": NPM_VALUED, "yarn": YARN_VALUED, "bun": BUN_VALUED}[name]
+        at = _value(args, "-C", "--dir") if name == "pnpm" else _value(args, "--prefix") if name == "npm" else \
+            _value(args, "--cwd")
+        here = _path(cwd, at) if at is not None and cwd is not None else (None if at is not None else cwd)
+        recursive = any(a in ("-r", "--recursive", "-ws", "--workspaces") or a.startswith("--filter")
+                        or a in ("-F", "-w", "--workspace") for a in args)
+        i = 0
+        while i < len(args) and args[i].startswith("-"):
+            i += 2 if args[i] in valued and "=" not in args[i] else 1
+        if i >= len(args):
+            return None
+        sub, rest = args[i], args[i + 1:]
+        if name == "bun" and sub == "test":
+            pos, opts = _opts(rest, BUN_TEST_VALUED)
+            return None if pos or _filters(opts, {"-t", "--test-name-pattern"}) else shown
+        if name == "bun" and sub == "x":
+            return self.command(rest, here, depth) if rest else None
+        if sub in ("exec", "dlx") or (name == "npm" and sub in ("exec", "x")):
+            rest = rest[rest.index("--") + 1:] if "--" in rest else rest
+            pos = [a for a in rest if not a.startswith("-")]
+            return self.command(rest[rest.index(pos[0]):], here, depth) if pos else None
+        if sub in PM_TEST:
+            return self._script("test", rest, here, depth, shown, recursive)
+        if sub in PM_RUN:
+            pos = [a for a in rest if not a.startswith("-")]
+            if not pos:
+                return None
+            return self._script(pos[0], rest[rest.index(pos[0]) + 1:], here, depth, shown, recursive)
+        if name in ("npm",):
+            return None  # npm runs only its own commands: `npm run X`
+        scripts = _scripts(here)
+        if (scripts is not None and sub in scripts) or (scripts is None and sub.startswith("test")):
+            return self._script(sub, rest, here, depth, shown, recursive)
+        if name in ("pnpm", "yarn") and sub in ("vitest", "jest", "pytest"):
+            return self.command([sub, *rest], here, depth)
+        return None
+
+    def _script(self, script, rest, cwd, depth, shown, recursive):
+        """Whether `<pm> run SCRIPT REST` runs a full suite: `test` is the repo's whole test entry point unless REST
+        names a path; any other script, when its body runs one (read from package.json, with REST appended)."""
+        passed = rest[rest.index("--") + 1:] if "--" in rest else rest
+        if any(("/" in a or TEST_FILE.search(a)) and not a.startswith("-") for a in passed) \
+                or any(a == "--changed" or a.startswith("--changed=") or a == "related" for a in passed) \
+                or _filters(passed, NAME_FILTERS):
+            return None
+        if script == "test":
+            return shown
+        scripts = _scripts(cwd)
+        if scripts is None:
+            return shown if script.startswith("test") else None  # unreadable: a test-named script counts
+        body = scripts.get(script)
+        if body is None:
+            return shown if recursive and script.startswith("test") else None
+        if depth >= 4:
+            return shown if script.startswith("test") else None
+        inner = self.suites(" ".join([body, *passed]), cwd, False, depth + 1)
+        return f"{shown} (`{_one_line(body, 80)}`)" if inner else None
+
+
+def managed_fleet(hook):
+    """The fleet this session serves when this machine serves a manager, else None: the live registry entry for
+    $FLEET_DIR, else the coordinator whose session process is among this hook's parents (as `fleet turn` finds it),
+    else the one recorded with this session's id (the manager's own too), else the one whose dir is a fleet folder of
+    the session's scratchpad."""
+    live = []
+    try:
+        paths = list(fleet_registry(hook.env).glob("*.json"))
+    except OSError:
+        return None
+    for path in paths:
+        try:
+            entry = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not isinstance(entry.get("dir"), str):
+            continue
+        try:
+            pid = int(entry.get("pid"))
+            os.kill(pid, 0)
+        except (TypeError, ValueError, ProcessLookupError, PermissionError, OverflowError):
+            continue
+        live.append({**entry, "pid": pid})
+    if not any(e.get("role") == "manager" for e in live):
+        return None
+
+    def real(p):
+        return os.path.realpath(p)
+
+    given = hook.env.get("FLEET_DIR")
+    if given:
+        found = [e for e in live if real(e["dir"]) == real(given)]
+        if found:
+            return found[0]["id"]
+    mine = set(_ancestors())
+    for e in live:
+        if e["pid"] in mine and e.get("role") != "manager":  # as `fleet turn` finds it
+            return e["id"]
+    for e in live:
+        if hook.session_id and e.get("session_id") == hook.session_id:
+            return e["id"]
+    dirs = {real(d) for d in fleet_dirs(hook)}
+    return next((e["id"] for e in live if real(e["dir"]) in dirs), None)
+
+
+def _ancestors():
+    """This process's parents, nearest first (/proc on Linux, `ps` elsewhere)."""
+    pid, out = os.getppid(), []
+    parents = None
+    if not os.path.isdir("/proc/self"):
+        import subprocess
+        try:
+            text = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, timeout=3).stdout
+        except (OSError, subprocess.SubprocessError):
+            return out
+        parents = {}
+        for line in text.splitlines():
+            bits = line.split()
+            if len(bits) == 2 and all(b.isdigit() for b in bits):
+                parents[int(bits[0])] = int(bits[1])
+    while pid > 1 and len(out) < 64:
+        out.append(pid)
+        if parents is not None:
+            pid = parents.get(pid, 0)
+            continue
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            pid = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+    return out
+
+
+def _gate_hold(env):
+    """Who holds the gate slot, as `fleet fleets gate` would say it, or None when it is free (or unreadable)."""
+    from datetime import datetime
+    try:
+        held = json.loads((fleet_registry(env) / "gate" / "gate.json").read_text())
+        until = datetime.fromisoformat(held["until"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    now = datetime.now(until.tzinfo) if until.tzinfo else datetime.now()
+    if now >= until:
+        return None
+    if held.get("pid") is not None:  # `gate run`'s hold lapses with its runner
+        try:
+            os.kill(int(held["pid"]), 0)
+        except PermissionError:
+            pass
+        except (OSError, TypeError, ValueError, OverflowError):
+            return None
+    return f"{held.get('fleet')}: {held.get('what')}"
+
+
+def suite_gate(hook):
+    """PreToolUse (Bash): a full test suite in a managed fleet's session runs through the gate slot, in a memory-capped
+    scope (`fleet fleets gate run`). The call is denied with the exact command to run instead, so Claude issues it and
+    the permission check reviews it like any other call: the hook never allows or rewrites one. Outside a managed
+    fleet nothing changes: an interactive session gets a hint on stderr."""
+    import shlex
+    tool_input = hook.input.get("tool_input") if isinstance(hook.input.get("tool_input"), dict) else {}
+    command = tool_input.get("command") if hook.input.get("tool_name") == "Bash" else None
+    if not isinstance(command, str) or re.search(r"\bfleets\s+gate\s+(?:run|take)\b", command):
+        return None
+    found = SuiteReader().suites(command, hook.cwd)
+    if not found:
+        return None
+    what = found[0].what
+    fleet = managed_fleet(hook)
+    cli = hook.env.get("TSTACK_FLEET_CLI") or fleet_cli()
+    if fleet is None:
+        if not hook.headless:
+            sys.stderr.write(f"tstack: `{_one_line(what, 80)}` runs a whole test suite; "
+                             f"`{cli} fleets gate run --as <name> -- <command>` queues it behind other suites and caps "
+                             f"its memory.\n")
+        return None
+    words = None
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        pass
+    simple = words and not re.search(r"[;&|<>()$`\n\\#]", command) and not re.match(r"^[A-Za-z_]\w*=", words[0]) \
+        and os.path.basename(words[0]) not in ("cd", "pushd", "eval", "source", ".")
+    inner = command.strip() if simple else f"{'bash' if shutil_which('bash') else 'sh'} -c {shlex.quote(command)}"
+    wrapped = f"{shlex.quote(cli)} fleets gate run --as {shlex.quote(fleet)} --wait {SUITE_WAIT_S} -- {inner}"
+    held = _gate_hold(hook.env)
+    slot = (f"The slot is held now ({_one_line(held, 120)}), so it waits for it (up to {SUITE_WAIT_S // 60} min). "
+            if held else "")
+    unclear = (" The hook couldn't tell all that this line runs around the test runner." if any(s.unclear for s in found)
+               else "")
+    return Deny(f"`{_one_line(what, 80)}` runs a full test suite, and in fleet {fleet} (this machine serves a manager) a "
+                f"full suite runs only through the gate slot, in a memory-capped scope that dies whole.{unclear} Run "
+                f"it as: `{wrapped}` (Bash timeout {SUITE_TIMEOUT_MS}, or run_in_background: it may queue behind "
+                f"another suite). {slot}It exits with the suite's code, except 75: the slot stayed held past --wait "
+                f"and the suite never ran; 124: the suite ran past its time and was stopped.")
+
+
+def shutil_which(name):
+    import shutil
+    return shutil.which(name)
+
+
 HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, fleet_heartbeat],
     "Stop": [memo_nudge, fleet_listen_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
-    "PreToolUse": [fleet_agent_grant, land_turn_gate],
+    "PreToolUse": [fleet_agent_grant, land_turn_gate, suite_gate],
     "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_chat_nudge],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep],
     "PermissionDenied": [fleet_permission_denied],
@@ -1758,18 +2187,13 @@ def _context(event, text):
     return json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}})
 
 
-def _allow(event, text):
-    """PreToolUse speaks to allow a granted call, or (a Deny) to refuse one."""
-    return _decide(event, "allow", text)
-
-
 def _decide(event, decision, text):
     return json.dumps({"hookSpecificOutput": {"hookEventName": event, "permissionDecision": decision,
                                               "permissionDecisionReason": text}})
 
 
 EMIT = {
-    "PreToolUse": _allow,
+    "PreToolUse": None,  # dispatch decides: a Deny refuses, an Allow allows, nothing else speaks
     "SessionStart": _context,
     "Stop": _context,
     "PreCompact": lambda event, text: text,
@@ -1780,7 +2204,8 @@ EMIT = {
 def dispatch(event, raw, env):
     """The text to print for this event, or "" for nothing. On Stop, a handler's Block turns the whole
     output into the block decision, whose reason (every handler's text) Claude reads as it goes on. On
-    PreToolUse, a handler's Deny refuses the call, with the Deny texts alone as the reason.
+    PreToolUse, a handler's Deny refuses the call, with the Deny texts alone as the reason; else an Allow (an Agent
+    call the hub granted) allows it; any other text decides nothing.
     Under TSTACK_ROLE=tape (a tape builder's own `claude -p` call) no handler runs: no wake lands in the
     compaction prompt, and nothing is written or spawned (docs/design/tape.md, section 4)."""
     if env.get("TSTACK_ROLE") == "tape":
@@ -1789,7 +2214,7 @@ def dispatch(event, raw, env):
     if not isinstance(data, dict):
         raise ValueError("hook input is not a JSON object")
     hook = Hook(event, data, env)
-    parts, denials = [], []
+    parts, denials, allows = [], [], []
     blocked = False
     for handler in HANDLERS.get(event, ()):
         try:
@@ -1802,10 +2227,14 @@ def dispatch(event, raw, env):
             blocked = blocked or isinstance(text, Block)
             if isinstance(text, Deny):
                 denials.append(text.strip())
+            if isinstance(text, Allow):
+                allows.append(text.strip())
     if not parts or event not in EMIT:
         return ""
     if denials and event == "PreToolUse":
         return _decide(event, "deny", "\n\n".join(denials))
+    if event == "PreToolUse":
+        return _decide(event, "allow", "\n\n".join(allows)) if allows else ""
     if blocked and event == "Stop":
         return json.dumps({"decision": "block", "reason": "\n\n".join(parts)})
     return EMIT[event](event, "\n\n".join(parts))

