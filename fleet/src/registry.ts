@@ -552,12 +552,16 @@ export class Registry {
     if (until !== undefined && now.getTime() >= until) return undefined;
 
     if (held["kind"] !== "session" && !this.live().some((e) => e.id === held["fleet"])) return undefined;
+    const pid = pidOf(held["pid"]);
+
+    if (pid !== undefined && !alive(pid)) return undefined;
 
     return held;
   }
 
-  /** Who holds the gate slot at `now`, or undefined. A hold lapses at its `until`, and a fleet's hold
-   * when the fleet is no longer served; a lapsed hold is removed. */
+  /** Who holds the gate slot at `now`, or undefined. A hold lapses at its `until`, a fleet's hold when
+   * the fleet is no longer served, and a hold `gate run` took when its runner (`pid`) is gone; a lapsed
+   * hold is removed. */
   gate(now: Date): JsonObject | undefined {
     const held = this.liveHold(now);
 
@@ -573,8 +577,9 @@ export class Registry {
   }
 
   /** `holder` takes the gate for `what` until `minutes` after `now`, unless someone holds it, itself
-   * included: the hold it made, or the one in its way. */
-  takeGate(holder: GateHolder, what: string, now: Date, minutes: number): { readonly took: JsonObject } | { readonly held: JsonObject } {
+   * included: the hold it made, or the one in its way. A hold given a `pid` (`gate run`'s runner) also
+   * lapses when that process is gone. */
+  takeGate(holder: GateHolder, what: string, now: Date, minutes: number, pid?: number): { readonly took: JsonObject } | { readonly held: JsonObject } {
     return this.underGateLock(() => {
       const held = this.liveHold(now);
 
@@ -582,7 +587,7 @@ export class Registry {
       const since = stampOf(now);
       const token = createHash("sha256").update(`${holder.name}\n${what}\n${since}`).digest("hex").slice(0, 8);
 
-      const took: JsonObject = {
+      const hold: JsonObject = {
         fleet: holder.name,
         kind: holder.kind,
         what,
@@ -591,9 +596,41 @@ export class Registry {
         token,
       };
 
+      const took: JsonObject = pid === undefined ? hold : { ...hold, pid };
+
       writeAtomic(this.gatePath(), dumps(took));
 
       return { took };
+    });
+  }
+
+  /** `gate run` as `name` runs under the hold `name` took by hand (`gate take`, no `pid`), as runner `pid`:
+   * one run per hold. Refused (`held`) when the slot is free, another holds it, or another live runner already
+   * runs under it; a dead runner's mark is taken over. */
+  joinGate(name: string, pid: number, now: Date): { readonly joined: JsonObject } | { readonly held: JsonObject | undefined } {
+    return this.underGateLock(() => {
+      const held = this.liveHold(now);
+
+      if (held === undefined || held["fleet"] !== name || held["pid"] !== undefined) return { held };
+      const runner = pidOf(held["runner"]);
+
+      if (runner !== undefined && runner !== pid && alive(runner)) return { held };
+      const joined: JsonObject = { ...held, runner: pid };
+
+      writeAtomic(this.gatePath(), dumps(joined));
+
+      return { joined };
+    });
+  }
+
+  /** Runner `pid` leaves the hold it joined (`joinGate`): the hold stays its taker's, open to the next run. */
+  leaveGate(pid: number, now: Date): void {
+    this.underGateLock(() => {
+      const held = this.liveHold(now);
+
+      if (held === undefined || pidOf(held["runner"]) !== pid) return;
+
+      writeAtomic(this.gatePath(), dumps(Object.fromEntries(Object.entries(held).filter(([key]) => key !== "runner"))));
     });
   }
 

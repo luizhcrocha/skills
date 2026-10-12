@@ -704,9 +704,21 @@ class _GateLock:
         self.file.close()
 
 
+def _runs(pid) -> bool:
+    """Whether process pid runs (another user's included)."""
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, TypeError, ValueError, OverflowError):
+        return False
+
+
 def _live_hold(now: datetime) -> dict | None:
-    """The hold in gate.json, or None when there is none or it has lapsed: at its until, or (a fleet's)
-    when the fleet is no longer served."""
+    """The hold in gate.json, or None when there is none or it has lapsed: at its until, (a fleet's)
+    when the fleet is no longer served, or (one `gate run` took, with its runner's pid) when that runner
+    is gone."""
     held = _read(_gate_path())
     if not held:
         return None
@@ -717,6 +729,8 @@ def _live_hold(now: datetime) -> dict | None:
     if until is not None and now >= (until if until.tzinfo else until.replace(tzinfo=timezone.utc)):
         return None
     if held.get("kind") != "session" and not any(e["id"] == held.get("fleet") for e in live()):
+        return None
+    if held.get("pid") is not None and not _runs(held["pid"]):
         return None
     return held
 

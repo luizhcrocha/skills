@@ -19,6 +19,7 @@ import { Out, recordingOut } from "../io.ts";
 import { asArray, asNumber, asObject, asString, pyRepr, truthy, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger } from "../ledger/model.ts";
 import { find, number } from "../ledger/numbers.ts";
+import { gateRun, RUN_USAGE, runArgs } from "../gate-run.ts";
 import { processes } from "../procs.ts";
 import { approvalSource, NoSource, parseSource, sameSource } from "../ledger/approvals.ts";
 import { parseLedger, type Approval } from "../ledger/model.ts";
@@ -462,6 +463,7 @@ function heldText(held: JsonObject): string {
   return `held by ${who} since ${str(held["since"])}${until}: ${str(held["what"])}`;
 }
 
+// The usage lines are the oracle traces' (and the Python twin's) byte for byte: `gate run` prints its own (RUN_USAGE).
 const GATE_USAGE = "usage: fleet fleets gate | gate take FLEET|--as NAME WHAT [--for MINUTES] [--wait SECONDS] | gate free TOKEN";
 
 /** How long a hold lasts when `--for` does not say: a dead holder frees the slot after this. */
@@ -504,11 +506,19 @@ function takeArgs(argv: readonly string[]): Take | undefined {
   return words.length === 2 ? { holder: { name: words[0] ?? "", kind: "fleet" }, what: words[1] ?? "", minutes, waitS } : undefined;
 }
 
-function gate(machine: Machine, argv: readonly string[]): Effect.Effect<void, Refusal, Out> {
+function gate(machine: Machine, argv: readonly string[]): Effect.Effect<void | number, Refusal, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
     const registry = machine.registry;
     const [what, key] = argv;
+
+    if (what === "run") {
+      const ask = runArgs(argv.slice(1));
+
+      if (ask === undefined) return yield* fail(RUN_USAGE);
+
+      return yield* Effect.promise(() => gateRun(machine, ask, (line) => out.err(`${line}\n`)));
+    }
 
     if (argv.length === 0) {
       const held = registry.gate(machine.now());
@@ -542,6 +552,8 @@ function gate(machine: Machine, argv: readonly string[]): Effect.Effect<void, Re
     } else {
       return yield* fail(GATE_USAGE);
     }
+
+    return undefined;
   });
 }
 

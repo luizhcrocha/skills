@@ -446,6 +446,17 @@ class GateTest(unittest.TestCase):
         self.assertIn("held by w1", self.at("2026-10-05T12:09:59+00:00", "gate").stdout)
         self.assertEqual(self.at("2026-10-05T12:10:00+00:00", "gate").stdout, "free\n")
 
+    def test_a_gate_run_hold_lapses_with_its_runner(self):
+        gate = Path(os.environ["FLEET_HOME"]) / "gate"
+        gate.mkdir(parents=True, exist_ok=True)
+        hold = {"fleet": "w1", "kind": "session", "what": "gate run: just test", "since": "2026-10-05T12:00:00+00:00",
+                "until": "2999-01-01T00:00:00+00:00", "token": "79df7205"}
+        (gate / "gate.json").write_text(json.dumps({**hold, "pid": os.getpid()}))
+        self.assertIn("held by w1", self.cli("gate").stdout)
+        (gate / "gate.json").write_text(json.dumps({**hold, "pid": 2 ** 22 + 7}))
+        self.assertEqual(self.cli("gate").stdout, "free\n")
+        self.assertFalse((gate / "gate.json").exists())
+
     def test_two_takes_at_once_one_wins(self):
         for n in range(5):
             procs = [subprocess.Popen([sys.executable, str(SCRIPTS / "fleets.py"), "gate", "take", "--as", f"{who}-{n}", "race"],
