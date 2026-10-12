@@ -1693,10 +1693,19 @@ that writes its own allow rule), adds a one-time allow rule to the session's set
 removes the rule once the call has run, or at the first tool call of the session after 30 minutes (one
 constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
 
+- **Whose fleet** (`grant_dirs`): the hook records a refusal in, and counts a call against the grants of,
+  every fleet of the session: those of `fleet_dirs` (Heartbeats: `$FLEET_DIR`, else the scratchpad's), and
+  each fleet the registry records under this session's id (`fleet serve`), wherever its DIR is, when it
+  holds a `state.json`. A coordinator whose DIR is outside its scratchpad and that has no `$FLEET_DIR` is
+  found only by the registry. Measured 2026-10-12, before this: such a fleet's ten one-time rules, granted
+  from 10-03 to 10-09, were all still in its session's settings with no `remove` line, and none of its
+  refusals had opened an item.
 - **What the hook records** (`fleet_permission_denied`, on `PermissionDenied`, which auto mode fires with
   `tool_name`, `tool_input`, `reason` and, in a subagent, `agent_id`): a Bash command an exact rule can
   hold, and an Agent spawn with any input, open a `permission`; a Bash command no exact rule can hold
-  opens an `action` whose `--manual` is the command in a `nu` block; a refused call of any other tool
+  opens an `action` whose `--manual` is the command in a `bash` block (the call is bash as the harness saw
+  it; in a `nu` block the CLI checked it as nushell and refused the item for its `&&` or `2>&1`, so nothing
+  opened: four of the eight failures in the hook's log on 2026-10-12); a refused call of any other tool
   opens an `action` whose `--manual` is its input as JSON, to make by hand. What a grant can clear,
   measured in auto mode on Claude Code 2.1.287 and 2.1.288 (a headless `claude -p --permission-mode auto`
   in a throwaway project, the spawn refused as `[Production Reads]`): an exact `Bash(<call>)` allow rule
@@ -1722,10 +1731,23 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   refused as `Classifier unavailable` each ran on their repeat and had opened two actions for the user.
 
 - **An exact rule**: `Bash(<call>)`, for a call that holds none of newline (`\n`, `\r`), `*` (a rule
-  reads it as a wildcard) and `\` (Claude Code's rule parser reads an escape, so the rule would not match
-  the call). This one set is `whyNoRule` in `src/ledger/permission.ts` and `RULE_UNSAFE_CHARS` in the hook; the CLI
+  reads it as a wildcard), `\` (Claude Code's rule parser reads an escape, so the rule would not match
+  the call) and `|` (no exact rule cleared a piped command, below). This one set is `whyNoRule` in
+  `src/ledger/permission.ts` and `RULE_UNSAFE_CHARS` in the hook; the CLI
   refuses a permission for any other call, the hook opens an action with `--manual` for it, and the hub
-  grants none. For an Agent spawn the call is its `tool_input` as compact JSON with sorted keys
+  grants none. **What a rule matches in a compound command**, measured in auto mode on Claude Code 2.1.296
+  (a headless `claude -p --permission-mode auto` in a throwaway project whose stand-in scripts only append
+  to a log; each call refused as `[Production Deploy]` without a rule, one run per shape but the pipe):
+  - an exact rule for the whole string cleared `cd <dir> && A`, `A; B`, `A && B && C`, `VAR=x A`,
+    `VAR="$(cat f)&y" A`, `env -u X A`, `A 2>&1` and `bash tasks/x.sh`; a rule that differs by one
+    space cleared nothing;
+  - it did not clear `A | tail -n 5` or `A | cat` (four runs of four refused);
+  - a rule for each part clears the compound with no rule for the whole: three rules cleared
+    `A && B && C`, two cleared `A; B` and `A | tail -n 5`, and **one rule for A cleared `A; A`, which ran
+    A twice**; a rule for some parts only (`echo start; A`, `B && A` with A's rule) cleared nothing;
+  - a rule for `B && A` cleared neither `A` alone nor `B && A && B && A`.
+
+  So a rule clears more than its own string, and the hook keeps a grant to its call alone (below). For an Agent spawn the call is its `tool_input` as compact JSON with sorted keys
   (`json.dumps(..., sort_keys=True, ensure_ascii=False, separators=(",", ":"))`, the hook's `_agent_call`),
   and the rule `Agent(<call>)`, which only the plugin's hook matches; the CLI and the hub refuse an Agent
   call that is no JSON object.
@@ -1883,9 +1905,22 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   cwd>/.claude/tstack-grants.json` gets `permissionDecision: allow`; anything else, an absent or broken
   file included, gets no output. It needs no fleet DIR, and it allows that input for any caller, as a
   settings rule does; the sweep below ends the grant.
+- **A granted call runs alone** (the plugin's hook, `fleet_grant_alone`, PreToolUse with matcher `Bash`): a
+  Bash command that holds the call of a grant no `remove` line has ended (expired or not: the rule is in the
+  settings until the sweep takes it back) inside a longer command is denied, with the call and what to do
+  (`run it by itself, and anything else in a call of its own`). Without this, one grant for A let `A; A`
+  run A twice in one call, and two grants let `A; B` and `A | B` through as one call the user never read.
+  A command that is itself a granted call is left to the permission check, though it holds a shorter
+  granted call in its text; so is a command that holds none. The handler returns a deny or nothing, never
+  an allow.
 - **Removal** (the plugin's hook, PostToolUse and PostToolUseFailure): a grant is `used` when the call
-  that just ran is its rule's call (for Agent, the spawn's input as the rule names it) and the hook's `agent_id` (absent on the main thread) is the grant's;
-  it is `expired` 30 minutes after its `at`. The hook takes the rule out under the settings lock, then
+  that just ran is its rule's call (for Agent, the spawn's input as the rule names it), whoever in the
+  fleet's sessions ran it: the rule let any caller of the session through, so one yes is one run. A Bash
+  command that holds a granted call inside more uses it up too, unless the command is itself another
+  granted call (it then uses up that one alone); `fleet_grant_alone` refuses such a command first, and a
+  grant ends with it all the same if it ran. Each rule of a permission that granted several calls is a
+  grant of its own (the same `decision`, its own `rule`): it goes when its call ran, the rest when they
+  expire. A grant is `expired` 30 minutes after its `at`. The hook takes the rule out under the settings lock, then
   appends a `remove` line, `{"op":"remove",decision,rule,file,at,why}` (`why`: `used` or `expired`), which
   ends the grant with the same `decision` and `rule`. The hook rewrites only an absolute
   `<root>/.claude/settings.local.json` or `<root>/.claude/tstack-grants.json`. Two hooks sweeping at once are kept apart by a
@@ -1895,7 +1930,8 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   the settings file, retry for up to 2 s, and take over a lock older than 10 s (a crashed holder's). A
   lock still held after 2 s refuses the grant (409) or leaves the removal for the next tool call.
 - **Lines**: every `grants.jsonl` line is compact JSON, one object, on both sides.
-- **What it defends**: an allow rule that lets through only the call the user saw, for its caller, once.
+- **What it defends**: an allow rule that lets through only the call the user saw, once, as a call of its
+  own, in the sessions whose hook finds the fleet (`grant_dirs`).
   The Agent grants file sits in `.claude`, a protected path whose writes by an agent auto mode routes to
   the classifier, as it does a write of `settings.local.json`; an agent told to write its own grant
   there was refused as `[Self-Modification]` (measured once, Claude Code 2.1.288). With that file in
@@ -1906,7 +1942,8 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   hub reads where it runs, so a forged entry grants only in a directory some live process of the user's
   runs in. A forged `op:grant` line can make the sweep remove a rule that matches it, one added by hand
   included: the failure is fewer allowed calls, never more. The 30 minutes run only while some session of
-  the fleet makes tool calls.
+  the fleet makes tool calls, and a session rooted in the same folder that serves another fleet reads the
+  rule too while it stands, without the hook that keeps it to one call.
 
 ## Heartbeats
 

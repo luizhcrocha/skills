@@ -38,6 +38,11 @@ class Hook:
         self.session_id = str(data.get("session_id") or "")
         self._states = {}
         self._fleet_dirs = None
+        self._grant_dirs = None
+        self._grant_state_dirs = None
+        self._allows = {}
+        # Set once a PreToolUse handler has refused the call: fleet_grant_alone, the last one, then takes no grant for it.
+        self.denied = False
         cwd = data.get("cwd")
         self.cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else (env.get("CLAUDE_PROJECT_DIR") or os.getcwd())
         # Inside a subagent the input carries agent_id: that is a worker.
@@ -412,6 +417,67 @@ def served_by_session(hook, d):
                 and isinstance(entry.get("dir"), str) and os.path.realpath(entry["dir"]) == real:
             return True
     return False
+
+
+def grant_dirs(hook):
+    """The fleets whose refused calls this session records and whose one-time grants its calls count against:
+    fleet_dirs, and every fleet the registry records under this session (`fleet serve`), wherever its DIR is. A
+    coordinator whose DIR is outside its scratchpad and that has no $FLEET_DIR is found only this way. Measured
+    2026-10-12: one such fleet's ten one-time rules, granted since 10-03, were all still in its settings, and none
+    of its refusals had opened an item. Looked up once per hook."""
+    if hook._grant_dirs is None:
+        dirs = list(fleet_dirs(hook))
+        seen = {os.path.realpath(d) for d in dirs}
+        for d in _served_dirs(hook):
+            if os.path.realpath(d) not in seen and os.path.isfile(os.path.join(d, "state.json")):
+                seen.add(os.path.realpath(d))
+                dirs.append(d)
+        hook._grant_dirs = dirs
+    return hook._grant_dirs
+
+
+def grant_state_dirs(hook):
+    """The folders whose grants.jsonl this session's calls count against: grant_dirs, and each of the same places
+    (the scratchpad's folders or $FLEET_DIR, the registry's entries of this session) that holds a grants.jsonl with no
+    ledger beside it, so moving state.json away does not lift the grants. Looked up once per hook."""
+    if hook._grant_state_dirs is None:
+        dirs = list(grant_dirs(hook))
+        seen = {os.path.realpath(d) for d in dirs}
+        given = hook.env.get("FLEET_DIR")
+        pad = hook.input.get("scratchpad_dir")
+        places = [given] if given else []
+        if not given and isinstance(pad, str) and os.path.isabs(pad):
+            try:
+                with os.scandir(pad) as entries:
+                    places = [e.path for e in entries if e.is_dir()]
+            except OSError:
+                pass
+        for d in places + _served_dirs(hook):
+            if os.path.realpath(d) not in seen and os.path.lexists(os.path.join(d, "grants.jsonl")):
+                seen.add(os.path.realpath(d))
+                dirs.append(d)
+        hook._grant_state_dirs = dirs
+    return hook._grant_state_dirs
+
+
+def _served_dirs(hook):
+    """The DIR of each registry entry whose session_id is this session's."""
+    if not hook.session_id:
+        return []
+    try:
+        entries = sorted(fleet_registry(hook.env).glob("*.json"))
+    except OSError:
+        return []
+    found = []
+    for path in entries:
+        try:
+            entry = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(entry, dict) and entry.get("session_id") == hook.session_id \
+                and isinstance(entry.get("dir"), str) and os.path.isabs(entry["dir"]):
+            found.append(entry["dir"])
+    return found
 
 
 def fleet_cli():
@@ -947,12 +1013,23 @@ CLI_TIMEOUT_S = 25
 GRANT_TTL_S = 30 * 60
 SETTINGS_LOCK_WAIT_S = 2.0
 SETTINGS_LOCK_STALE_S = 10.0
-RULE_UNSAFE_CHARS = "\n\r*\\"
+RULE_UNSAFE_CHARS = "\n\r*\\|"
 SETTINGS_LOCK_SHARED_WITH_HUB = ".settings.local.json.lock"
 # Auto mode drops Agent allow rules from the settings, so the hub writes an Agent grant here instead and
 # fleet_agent_grant lets the exact spawn through; permission.ts's grantFileOf names the same file.
 AGENT_GRANTS = "tstack-grants.json"
 GRANT_FILES = ("settings.local.json", AGENT_GRANTS)
+
+CALL_MAX_CHARS = 2000
+
+
+def _holdable(call):
+    """Whether an exact allow rule can hold a Bash call, and the user can read it whole on the card: permission.ts's
+    whyNoRule refuses the same calls (a newline, `*`, a backslash, a pipe, a character outside printable ASCII, more
+    than CALL_MAX_CHARS characters, a space at either end)."""
+    return (bool(call) and len(call) <= CALL_MAX_CHARS and call == call.strip(" ")
+            and not any(c in RULE_UNSAFE_CHARS or not " " <= c <= "~" for c in call))
+
 
 Refused = namedtuple("Refused", "tool call manual_unless_grantable agent_id reason root")
 
@@ -1104,7 +1181,7 @@ def fleet_refusal_forgotten(hook):
 
 
 def fleet_permission_denied(hook):
-    dirs = fleet_dirs(hook)
+    dirs = grant_dirs(hook)
     if not dirs:
         return None
     data = hook.input
@@ -1120,8 +1197,9 @@ def fleet_permission_denied(hook):
                            f"nothing opened unless the same call is refused again")
         return None
     if tool == "Bash" and isinstance(tool_input.get("command"), str):
-        grantable = not any(c in RULE_UNSAFE_CHARS for c in call)
-        manual = None if grantable else f"Run it yourself, in the project ({root}):\n\n{_fenced('nu', call)}"
+        grantable = _holdable(call)
+        # The call is bash as the harness saw it: a `nu` fence would be checked as nushell, and refused for its `&&`.
+        manual = None if grantable else f"Run it yourself in bash, in the project ({root}):\n\n{_fenced('bash', call)}"
     elif tool == "Agent" and tool_input:
         manual = None
     else:
@@ -1178,8 +1256,30 @@ def _grant_file(value):
     return value if path.name in GRANT_FILES and path.parent.name == ".claude" else None
 
 
-def _due_grants(raw, used, caller, now):
-    active = {}
+GRANT_STATE_MAX_BYTES = 8 * 1024 * 1024
+GRANTS_TAKEN = "grants.taken"
+
+
+def _read_grants(d):
+    """A fleet's grants.jsonl as (bytes, None), empty when it has none; (None, why) when it is there and cannot be
+    read, or is larger than a record of grants ever is: the caller then fails closed."""
+    path = os.path.join(d, "grants.jsonl")
+    try:
+        if os.path.getsize(path) > GRANT_STATE_MAX_BYTES:
+            return None, f"{path} is larger than {GRANT_STATE_MAX_BYTES // (1024 * 1024)} MB"
+        with open(path, "rb") as f:
+            return f.read(), None
+    except FileNotFoundError:
+        return b"", None
+    except OSError as e:
+        return None, f"{path} cannot be read ({e.strerror})"
+
+
+def _latest_grants(raw):
+    """The last grant line of each (file, rule) of a grants.jsonl, each with `ended`: the why of a `remove` line that
+    follows it for the same decision, None when none does. A remove line is a record, never the proof: any agent can
+    append one, so whether a grant still stands is read from its settings file (_stands)."""
+    latest, lists = {}, {}
     for line in raw[:raw.rfind(b"\n") + 1].splitlines():
         try:
             entry = json.loads(line)
@@ -1187,23 +1287,354 @@ def _due_grants(raw, used, caller, now):
             continue
         if not isinstance(entry, dict) or not isinstance(entry.get("decision"), str) or not isinstance(entry.get("rule"), str):
             continue
-        key = (entry["decision"], entry["rule"])
-        if entry.get("op") == "grant" and _grant_file(entry.get("file")):
-            active[key] = entry
-        elif entry.get("op") == "remove":
-            active.pop(key, None)
+        file = _grant_file(entry.get("file"))
+        if file is None:
+            continue
+        key = (file, entry["rule"])
+        if entry.get("op") == "grant":
+            # A list's calls are granted in the order asked, one line each: a line's place in its list is its turn.
+            turn = lists[_list_of(entry)] = lists.get(_list_of(entry), 0) + 1
+            latest[key] = dict(entry, ended=None, turn=turn)
+        elif entry.get("op") == "remove" and key in latest and latest[key]["decision"] == entry["decision"]:
+            latest[key]["ended"] = entry["why"] if isinstance(entry.get("why"), str) else "removed"
+    return list(latest.values())
+
+
+def _read_allow(file):
+    try:
+        with open(file, encoding="utf-8") as f:
+            settings = json.load(f)
+    except FileNotFoundError:
+        return frozenset()
+    except (OSError, ValueError):
+        return None
+    permissions = settings.get("permissions") if isinstance(settings, dict) else None
+    allow = permissions.get("allow") if isinstance(permissions, dict) else None
+    return frozenset(r for r in allow if isinstance(r, str)) if isinstance(allow, list) else frozenset()
+
+
+def _allow_of(hook, file):
+    """A settings file's allow rules, read once per hook: none when the file is not there; None when it cannot be
+    read or does not parse, and then every grant written to it is taken to stand."""
+    if file not in hook._allows:
+        hook._allows[file] = _read_allow(file)
+    return hook._allows[file]
+
+
+def _stands(hook, grant):
+    """Whether the grant's rule is still in its file: the one fact that says a one-time grant is not over."""
+    allow = _allow_of(hook, grant["file"])
+    return allow is None or grant["rule"] in allow
+
+
+def _bash_call(rule):
+    """The command a `Bash(<call>)` rule names, or None for another tool's rule."""
+    return rule[5:-1] if rule.startswith("Bash(") and rule.endswith(")") else None
+
+
+HEREDOC_RE = re.compile(r"""<<(-?)[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|\\?([A-Za-z0-9_.+-]+))""")
+SHELL_LEADERS = ("{", "!", "if", "then", "else", "elif", "do", "while", "until")
+
+
+def _after_heredoc(text, i, word, tabs):
+    while True:
+        j = text.find("\n", i)
+        line = text[i:] if j < 0 else text[i:j]
+        if (line.lstrip("\t") if tabs else line) == word:
+            return len(text) if j < 0 else j + 1
+        if j < 0:
+            raise ValueError("a here-document with no end")
+        i = j + 1
+
+
+def _simple_commands(text):
+    """The simple commands a bash command runs, each as its text: split on `;`, `&&`, `||`, `&`, `|` and newlines
+    outside quotes, with what a subshell, `$( )`, backticks or `<( )` holds split the same way (it runs too) and
+    listed before the command it sits in. A here-document's body and a comment are no commands. ValueError when the
+    text does not parse (an open quote, a group or here-document that never ends)."""
+    out = []
+    n = len(text)
+
+    def quoted(i):
+        i += 1
+        while i < n:
+            c = text[i]
+            if c == "\\":
+                i += 2
+            elif c == '"':
+                return i + 1
+            elif c == "`":
+                i = scan(i + 1, "`")
+            elif text.startswith("$(", i):
+                i = scan(i + 2, ")")
+            else:
+                i += 1
+        raise ValueError("an open double quote")
+
+    def scan(i, close):
+        start = i
+        heredocs = []
+
+        def cut(j):
+            piece = text[start:j].strip()
+            if piece:
+                out.append(piece)
+
+        while i < n:
+            c = text[i]
+            if c == close:
+                cut(i)
+                return i + 1
+            if c == "\\":
+                i += 2
+            elif c == "'":
+                j = text.find("'", i + 1)
+                if j < 0:
+                    raise ValueError("an open single quote")
+                i = j + 1
+            elif c == '"':
+                i = quoted(i)
+            elif c == "`":
+                i = scan(i + 1, "`")
+            elif c == "(":
+                i = scan(i + 1, ")")
+            elif c == "#" and (i == 0 or text[i - 1] in " \t\n;&|("):
+                cut(i)
+                j = text.find("\n", i)
+                i = start = n if j < 0 else j
+            elif text.startswith("<<<", i):
+                i += 3
+            elif text.startswith("<<", i) and HEREDOC_RE.match(text, i):
+                m = HEREDOC_RE.match(text, i)
+                heredocs.append((next(g for g in m.groups()[1:] if g is not None), m.group(1) == "-"))
+                i = m.end()
+            elif c == "\n":
+                cut(i)
+                i += 1
+                for word, tabs in heredocs:
+                    i = _after_heredoc(text, i, word, tabs)
+                heredocs = []
+                start = i
+            elif c == ";":
+                cut(i)
+                while i < n and text[i] == ";":
+                    i += 1
+                start = i
+            elif c == "|":
+                cut(i)
+                i += 2 if text[i + 1:i + 2] in ("|", "&") else 1
+                start = i
+            elif c == "&" and not (text[i - 1:i] in ("<", ">") and i > 0) and text[i + 1:i + 2] != ">":
+                cut(i)
+                i += 2 if text[i + 1:i + 2] == "&" else 1
+                start = i
+            else:
+                i += 1
+        if close is not None:
+            raise ValueError(f"no closing {close}")
+        cut(n)
+        return n
+
+    scan(0, None)
+    return out
+
+
+# What Claude Code 2.1.296 does to a command before it compares it with an exact Bash rule, read from its source and
+# measured headless on 51 variants of one stand-in command (2026-10-12): it trims the ends, removes redirections, and
+# then, until nothing changes, strips a leading assignment of one of these names (no other), strips these wrappers,
+# and removes the quotes and backslashes of the first word alone. Two spaces for one, a quoted argument, `env A`,
+# `exec A`, `sudo A`, `FOO=1 A` and `./A` were not cleared by the rule for A.
+SAFE_ENV_NAMES = frozenset(
+    "GOEXPERIMENT GOOS GOARCH CGO_ENABLED GO111MODULE RUST_BACKTRACE RUST_LOG NODE_ENV PYTHONUNBUFFERED "
+    "PYTHONDONTWRITEBYTECODE PYTEST_DISABLE_PLUGIN_AUTOLOAD PYTEST_DEBUG ANTHROPIC_API_KEY LANG LANGUAGE LC_ALL LC_CTYPE "
+    "LC_TIME CHARSET TERM COLORTERM NO_COLOR FORCE_COLOR TZ LS_COLORS LSCOLORS GREP_COLOR GREP_COLORS GCC_COLORS TIME_STYLE "
+    "BLOCK_SIZE BLOCKSIZE COLUMNS LINES CLICOLOR CLICOLOR_FORCE CI DEBIAN_FRONTEND GIT_TERMINAL_PROMPT".split())
+SAFE_ENV_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=[A-Za-z0-9_./:-]+[ \t]+")
+WRAPPER_RES = tuple(re.compile(pattern) for pattern in (
+    r"timeout[ \t]+(?:(?:--(?:foreground|preserve-status|verbose)|--(?:kill-after|signal)=\S+|-v|-[ks][ \t]+\S+)[ \t]+)*"
+    r"(?:--[ \t]+)?\d+(?:\.\d+)?[smhd]?[ \t]+",
+    r"time[ \t]+(?:--[ \t]+)?",
+    r"nice(?:[ \t]+-n[ \t]+-?\d+|[ \t]+-\d+)?[ \t]+(?:--[ \t]+)?",
+    r"stdbuf(?:[ \t]+-[ioe][LN0-9]+)+[ \t]+(?:--[ \t]+)?",
+    r"nohup[ \t]+(?:--[ \t]+)?",
+    r"command[ \t]+(?:-p[ \t]+)?(?:--[ \t]+)?",
+    r"builtin[ \t]+(?:--[ \t]+)?",
+    r"noglob[ \t]+",
+))
+
+
+def _without_redirections(piece):
+    """A simple command without its redirections (`2>&1`, `> file`, `>>file`, `&> file`, `< file`): each with the
+    file descriptor before it and the word after it."""
+    out = []
+    i, n = 0, len(piece)
+    while i < n:
+        c = piece[i]
+        if c == "\\":
+            out.append(piece[i:i + 2])
+            i += 2
+        elif c == "'":
+            j = piece.find("'", i + 1)
+            j = n - 1 if j < 0 else j
+            out.append(piece[i:j + 1])
+            i = j + 1
+        elif c == '"':
+            j = i + 1
+            while j < n and piece[j] != '"':
+                j += 2 if piece[j] == "\\" else 1
+            out.append(piece[i:j + 1])
+            i = j + 1
+        elif c in "<>" and piece[i + 1:i + 2] != "(":
+            k = len(out)
+            while k > 0 and len(out[k - 1]) == 1 and out[k - 1].isdigit():
+                k -= 1
+            if k == 0 or out[k - 1] in (" ", "\t"):
+                del out[k:]
+            elif out[-1] == "&":
+                out.pop()
+            while i < n and piece[i] in "<>&|-":
+                i += 1
+            while i < n and piece[i] in " \t":
+                i += 1
+            while i < n and piece[i] not in " \t":
+                if piece[i] == "\\":
+                    i += 2
+                elif piece[i] in "'\"":
+                    j = piece.find(piece[i], i + 1)
+                    i = n if j < 0 else j + 1
+                else:
+                    i += 1
+            if out and out[-1] in (" ", "\t"):
+                while i < n and piece[i] in " \t":
+                    i += 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def _first_word_bare(text):
+    """`text` with the quotes and backslashes of its first word removed; unchanged when a quote there is open."""
+    token = text.split(None, 1)[0] if text.strip() else ""
+    out = []
+    i, n = 0, len(token)
+    while i < n:
+        c = token[i]
+        if c == "'":
+            j = token.find("'", i + 1)
+            if j < 0:
+                return text
+            out.append(token[i + 1:j])
+            i = j + 1
+        elif c == '"':
+            j = i + 1
+            while j < n and token[j] != '"':
+                if token[j] == "\\" and token[j + 1:j + 2] in ("$", "`", '"', "\\"):
+                    j += 1
+                out.append(token[j])
+                j += 1
+            if j >= n:
+                return text
+            i = j + 1
+        elif c == "\\":
+            if i + 1 >= n:
+                return text
+            out.append(token[i + 1])
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out) + text[len(token):] if text.startswith(token) else text
+
+
+def _normal(piece):
+    """A simple command as Claude Code compares it with an exact rule (the comment above), and, beyond that, without
+    the shell words that only lead to it (`{`, `!`, `if`, `then`, `do`...): what follows them runs all the same."""
+    text = _without_redirections(piece).strip()
+    while True:
+        words = text.split(None, 1)
+        if len(words) == 2 and words[0] in SHELL_LEADERS:
+            text = words[1]
+            continue
+        env = SAFE_ENV_RE.match(text)
+        if env and env.group(1) in SAFE_ENV_NAMES:
+            text = text[env.end():]
+            continue
+        wrapped = next((m for m in (w.match(text) for w in WRAPPER_RES) if m and m.end() < len(text)), None)
+        if wrapped:
+            text = text[wrapped.end():]
+            continue
+        bare = _first_word_bare(text)
+        if bare == text:
+            return text
+        text = bare
+
+
+def _pieces(text, _memo={}):
+    """A command's simple commands, each as a rule is matched against it; None when the text does not parse."""
+    if text not in _memo:
+        try:
+            _memo[text] = [p for p in (_normal(piece) for piece in _simple_commands(text)) if p and p != "}"]
+        except (ValueError, IndexError):
+            _memo[text] = None
+    return _memo[text]
+
+
+def _is_call(command, call):
+    """Whether `command` is the granted `call` and nothing more: the same text, or the same simple commands in the
+    same order (what Claude Code's rule matcher takes for the same command)."""
+    if command == call:
+        return True
+    mine, granted = _pieces(command), _pieces(call)
+    return bool(granted) and mine == granted
+
+
+def _holds_call(command, call):
+    """Whether `command` runs the granted `call` in command position: the call's simple commands, in order, among
+    its own. `grep "just deploy" README` and `just deploy-check` do not hold `just deploy`. A command that does not
+    parse holds a call its text holds."""
+    mine, granted = _pieces(command), _pieces(call)
+    if mine is None or not granted:
+        return bool(call) and call in command
+    return any(mine[k:k + len(granted)] == granted for k in range(len(mine) - len(granted) + 1))
+
+
+def _spent(standing, used):
+    """The standing grants the call that ran uses up: the grant of that call, whoever in the fleet's sessions ran it
+    (the rule let any of them through); else each grant whose call the command holds inside more, which never runs
+    past fleet_grant_alone, and ends the grant all the same if it did."""
+    if used is None:
+        return []
+    tool, text = used
+    if tool != "Bash":
+        return [g for g in standing if g["rule"] == text]
+    bash = [g for g in standing if _bash_call(g["rule"]) is not None]
+    exact = [g for g in bash if _is_call(text, _bash_call(g["rule"]))]
+    return exact or [g for g in bash if _holds_call(text, _bash_call(g["rule"]))]
+
+
+def _list_of(grant):
+    """What says two grants came from one answer to one permission: the calls of a list."""
+    return (grant["decision"], grant.get("at"))
+
+
+def _due_grants(hook, raw, used, now, failed=False, void=None):
+    """(grant, why) for each standing grant to end now: `used` (its call ran), `revoked` (a call of its list failed,
+    or the list is `void`: a list is a sequence, and what comes after a failure was allowed for another state of
+    things), `expired` (30 minutes old, or with no readable stamp)."""
+    standing = [g for g in _latest_grants(raw) if _stands(hook, g)]
+    spent = _spent(standing, used)
+    lost = {_list_of(g) for g in spent if failed} | ({void} if void else set())
     due = []
-    for grant in active.values():
+    for grant in standing:
         at = _instant(grant.get("at"))
-        if _ran_by_grantee(grant, used, caller):
+        if any(grant is g for g in spent):
             due.append((grant, "used"))
+        elif _list_of(grant) in lost:
+            due.append((grant, "revoked"))
         elif at is None or now - at >= GRANT_TTL_S:
             due.append((grant, "expired"))
     return due
-
-
-def _ran_by_grantee(grant, used, caller):
-    return used is not None and grant["rule"] == used and (grant.get("agent_id") or None) == caller
 
 
 def _lock_settings(file):
@@ -1258,37 +1689,44 @@ def _take_back_locked(file, rule):
     os.replace(tmp, file)
 
 
+def _shell_command(hook):
+    """The command of a Bash or Monitor call: Monitor runs its command under Bash's permission rules."""
+    tool_input = hook.input.get("tool_input") if isinstance(hook.input.get("tool_input"), dict) else {}
+    command = tool_input.get("command") if hook.input.get("tool_name") in ("Bash", "Monitor") else None
+    return command if isinstance(command, str) else None
+
+
 def fleet_grant_sweep(hook):
-    dirs = fleet_dirs(hook)
+    dirs = grant_state_dirs(hook)
     if not dirs:
         return None
     tool_input = hook.input.get("tool_input") if isinstance(hook.input.get("tool_input"), dict) else {}
-    command = tool_input.get("command") if hook.input.get("tool_name") == "Bash" else None
-    used = f"Bash({command})" if isinstance(command, str) else None
+    command = _shell_command(hook)
+    used = ("Bash", command) if command is not None else None
     if hook.input.get("tool_name") == "Agent" and tool_input:
-        used = f"Agent({_agent_call(tool_input)})"
-    caller = hook.input.get("agent_id") if isinstance(hook.input.get("agent_id"), str) and hook.input.get("agent_id") else None
+        used = ("Agent", f"Agent({_agent_call(tool_input)})")
     now = fleet_now(hook.env)
+    failed = hook.event == "PostToolUseFailure"
     for d in dirs:
-        path = os.path.join(d, "grants.jsonl")
-        try:
-            with open(path, "rb") as f:
-                raw = f.read()
-        except FileNotFoundError:
-            continue
-        if _due_grants(raw, used, caller, now):
-            _close_due_grants_exclusively(hook, path, used, caller, now)
+        raw, unread = _read_grants(d)
+        if raw is None:
+            log(hook.data_dir, f"{hook.event} fleet_grant_sweep: {unread}; its grants are left to the hub's timer")
+        elif raw and _due_grants(hook, raw, used, now, failed):
+            _close_due_grants_exclusively(hook, d, used, now, failed)
     return None
 
 
-def _close_due_grants_exclusively(hook, path, used, caller, now):
+def _close_due_grants_exclusively(hook, d, used, now, failed=False, void=None):
     import fcntl
-    with open(path, "a+b") as f:
+    with open(os.path.join(d, "grants.jsonl"), "a+b") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         f.seek(0)
-        raw = f.read()
+        raw = f.read(GRANT_STATE_MAX_BYTES + 1)
+        if len(raw) > GRANT_STATE_MAX_BYTES:
+            return
+        hook._allows.clear()
         lead = b"\n" if raw and not raw.endswith(b"\n") else b""
-        for grant, why in _due_grants(raw, used, caller, now):
+        for grant, why in _due_grants(hook, raw, used, now, failed, void):
             try:
                 _take_back(grant["file"], grant["rule"])
             except Exception:  # this grant stays open for the next call; the others go on
@@ -1300,6 +1738,11 @@ def _close_due_grants_exclusively(hook, path, used, caller, now):
             f.write(lead + json.dumps(removal, ensure_ascii=False, separators=(",", ":")).encode() + b"\n")
             f.flush()
             lead = b""
+            try:
+                os.unlink(_taken_path(d, grant))
+            except OSError:
+                pass
+        hook._allows.clear()
 
 
 def fleet_agent_grant(hook):
@@ -1326,6 +1769,144 @@ def fleet_agent_grant(hook):
     if not isinstance(allow, list) or f"Agent({_agent_call(tool_input)})" not in allow:
         return None
     return Allow("tstack: the user allowed this exact Agent call once, on the fleet page (a permission grant).")
+
+
+def _taken_path(d, grant):
+    import hashlib
+    key = "\0".join(str(grant.get(k)) for k in ("decision", "rule", "file", "at"))
+    return os.path.join(d, GRANTS_TAKEN, hashlib.sha256(key.encode()).hexdigest()[:32])
+
+
+def _take(hook, d, grant):
+    """Mark the grant taken by this call, before it runs: the file is created exclusively, so of two calls that
+    reach PreToolUse before either has finished, one takes it. None when this call has it; else why not."""
+    path = _taken_path(d, grant)
+    mine = hook.input.get("tool_use_id") if isinstance(hook.input.get("tool_use_id"), str) else ""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        try:
+            with open(path, encoding="utf-8") as f:
+                if mine and f.read().strip() == mine:
+                    return None
+        except OSError:
+            pass
+        return "another call already took this grant: one yes is one run"
+    except OSError as e:
+        return f"the grant could not be marked as taken in {os.path.dirname(path)} ({e.strerror}), so it cannot be told from a second run"
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(mine + "\n")
+    return None
+
+
+def _moved_file(grant):
+    """Why a file the grant binds is no longer the one the user allowed (the hub recorded each one's sha256 when it
+    granted); None when every one is, or the grant binds none."""
+    import hashlib
+    runs = grant.get("runs")
+    for run in runs if isinstance(runs, list) else []:
+        path, sha = (run.get("path"), run.get("sha256")) if isinstance(run, dict) else (None, None)
+        if not isinstance(path, str) or not isinstance(sha, str):
+            return "its record of the file it runs does not read"
+        digest = hashlib.sha256()
+        try:
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    digest.update(chunk)
+        except OSError as e:
+            return f"the file it runs, {path}, cannot be read ({e.strerror})"
+        if digest.hexdigest() != sha:
+            return f"the file it runs, {path}, changed after the user allowed it"
+    return None
+
+
+ASK_AGAIN = ("Ask the user again with a new permission for it (coordinator skill, \"Ask for the permission before the "
+             "call\"), and run nothing of it until that one is allowed.")
+
+
+def _alone_by_settings(hook, command, unread):
+    """With no readable record of grants, every exact Bash rule of the session's settings.local.json is taken for a
+    one-time grant: a longer command that holds one is refused."""
+    project = hook.env.get("CLAUDE_PROJECT_DIR")
+    root = project if project and os.path.isabs(project) else hook.cwd
+    file = os.path.join(root, ".claude", "settings.local.json")
+    for rule in sorted(_allow_of(hook, file) or ()):
+        call = _bash_call(rule)
+        if call and "*" not in call and not _is_call(command, call) and _holds_call(command, call):
+            return Deny(f"tstack: this fleet's record of one-time grants cannot be read ({unread}), so every exact Bash rule "
+                        f"in {file} is taken for a one-time grant, and this command holds one inside more: `{call}`. Run that "
+                        "call by itself, as a Bash call of its own, and put the record back as it was.")
+    return None
+
+
+def _alone_by_grants(hook, d, raw, command, now):
+    grants = [g for g in _latest_grants(raw) if _bash_call(g["rule"]) is not None]
+    standing = [g for g in grants if _stands(hook, g)]
+    mine = [g for g in standing if _is_call(command, _bash_call(g["rule"]))]
+    if not mine:
+        for grant in standing:
+            call = _bash_call(grant["rule"])
+            if _holds_call(command, call):
+                return Deny(f"tstack: this command holds a call the user allowed once ({grant.get('ref') or grant['decision']}): "
+                            f"`{call}`. A one-time grant is for that call alone, byte for byte, as a Bash call of its own: "
+                            "run it by itself, and anything else in a call of its own. Inside a longer command it would "
+                            "run on the grant without using it up.")
+        for grant in grants:
+            if grant["ended"] == "revoked" and not _stands(hook, grant) and _is_call(command, _bash_call(grant["rule"])):
+                return Deny(f"tstack: this call was allowed once as part of a list ({grant.get('ref') or grant['decision']}), and a "
+                            f"call of that list failed, so what was left of it is no longer allowed. {ASK_AGAIN}")
+        return None
+    grant = mine[0]
+    ref = grant.get("ref") or grant["decision"]
+    at = _instant(grant.get("at"))
+    if at is None or now - at >= GRANT_TTL_S:
+        try:
+            _close_due_grants_exclusively(hook, d, None, now)
+        except Exception:  # the hub's timer or the next sweep takes the rule back; the call is refused all the same
+            log(hook.data_dir, f"{hook.event} fleet_grant_alone could not close {ref}\n{traceback.format_exc()}")
+        return Deny(f"tstack: the user allowed this call once ({ref}), and a one-time grant lasts {GRANT_TTL_S // 60} minutes: "
+                    f"this one is over. {ASK_AGAIN}")
+    before = sorted((g for g in standing if _list_of(g) == _list_of(grant) and g["turn"] < grant["turn"]), key=lambda g: g["turn"])
+    if before:
+        return Deny(f"tstack: this is call {grant['turn']} of the list the user allowed ({ref}), and call "
+                    f"{before[0]['turn']} has not run: `{_bash_call(before[0]['rule'])}`. The list is a sequence: run "
+                    "that one first, as a Bash call of its own.")
+    moved = _moved_file(grant)
+    if moved:
+        try:
+            _close_due_grants_exclusively(hook, d, None, now, void=_list_of(grant))
+        except Exception:
+            log(hook.data_dir, f"{hook.event} fleet_grant_alone could not revoke {ref}\n{traceback.format_exc()}")
+        return Deny(f"tstack: the user allowed this call once ({ref}), and {moved}: the grant was for the file as it was, "
+                    f"so it is gone (with what was left of its list). {ASK_AGAIN}")
+    if hook.denied:
+        return None
+    taken = _take(hook, d, grant)
+    if taken:
+        return Deny(f"tstack: the user allowed this call once ({ref}), and {taken}. {ASK_AGAIN}")
+    return None
+
+
+def fleet_grant_alone(hook):
+    """PreToolUse (Bash, Monitor), last of its handlers: a one-time grant is for its call alone, once. Claude Code
+    lets a compound command through when each of its parts has an allow rule (measured on 2.1.296: with one rule for
+    A, `A; A` ran A twice, and two rules let `A; B` and `A | B` through), so a command that runs a granted call inside
+    more would run on the grant, more than once or beside what the user never read as one call: refused while the
+    rule stands. The call itself is refused when its grant is over 30 minutes old, when an earlier call of its list
+    has not run, when a file it binds changed, and when another call took the grant first; else it is marked taken
+    and left to the permission check, where its rule lets it through. A record of grants that cannot be read fails
+    closed (_alone_by_settings). This handler never allows."""
+    command = _shell_command(hook)
+    if command is None:
+        return None
+    now = fleet_now(hook.env)
+    for d in grant_state_dirs(hook):
+        raw, unread = _read_grants(d)
+        denial = _alone_by_settings(hook, command, unread) if raw is None else _alone_by_grants(hook, d, raw, command, now)
+        if denial:
+            return denial
+    return None
 
 
 class Deny(str):
@@ -2518,7 +3099,7 @@ HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, fleet_heartbeat],
     "Stop": [memo_nudge, fleet_listen_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
-    "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, land_turn_gate, suite_gate],
+    "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, land_turn_gate, suite_gate, fleet_grant_alone],
     "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_chat_nudge],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep],
     "PermissionDenied": [fleet_permission_denied],
@@ -2572,6 +3153,7 @@ def dispatch(event, raw, env):
             blocked = blocked or isinstance(text, Block)
             if isinstance(text, Deny):
                 denials.append(text.strip())
+                hook.denied = True
             if isinstance(text, Allow):
                 allows.append(text.strip())
             if isinstance(text, Note):

