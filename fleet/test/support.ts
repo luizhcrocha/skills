@@ -70,8 +70,9 @@ export function baseEnv(home: string, more: Readonly<Environment> = {}): Environ
 
   for (const key of ["FLEET_WATCH_SETTLE_USER", "FLEET_WATCH_SETTLE_MAX"]) delete env[key];
 
-  // A --once watch exits with its first batch, as before it settled; a settle test gives its own.
-  return { ...env, FLEET_HOME: home, FLEET_DISCOVER: "0", FLEET_WATCH_SETTLE: "0", ...more };
+  // A --once watch exits with its first batch, as before it settled; a settle test gives its own. A preview's
+  // processes stay in the test's own process tree (and the gate's scope), not in systemd user scopes of their own.
+  return { ...env, FLEET_HOME: home, FLEET_DISCOVER: "0", FLEET_WATCH_SETTLE: "0", FLEET_PREVIEW_SCOPE: "0", ...more };
 }
 
 /** Run `fleet ARGS` in this process, through the CLI's own interface, with `env` as its environment. */

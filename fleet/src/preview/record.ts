@@ -21,14 +21,19 @@ import * as Option from "effect/Option";
 import { exists, readText, writeAtomic } from "../files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { withExclusiveLock } from "../lock.ts";
+import type { Tracked } from "./tracked.ts";
 
 /** A dev server the preview started. */
 export interface DevServer {
   /** The command as it runs (`/bin/sh -c`), its port and base filled in. */
   readonly cmd: string;
   readonly port: number;
-  /** Its process group's leader, while it runs. */
+  /** Its process (`sh -c` the command, a session's leader), while it runs. */
   readonly pid: number | null;
+  /** When that process started, in epoch seconds (`tracked.ts`): what proves a pid is still it. */
+  readonly pidStarted: number | null;
+  /** The systemd user scope it runs in, or null (`tracked.ts`). */
+  readonly unit: string | null;
   /** The path it serves under: `/f/<fleet>/preview/` (or `…/preview/<worker>/`) when it was told its base,
    * `/` when it runs at the root and the hub strips the prefix. */
   readonly base: string;
@@ -39,6 +44,21 @@ export interface DevServer {
   readonly started: string;
   /** In root mode, the public port the hub serves it at, at the root of an origin of its own; else null. */
   readonly public: number | null;
+  /** The keeper that puts it to sleep when idle and wakes it on a request (`sleep.ts`), or null when it never sleeps. */
+  readonly keeper: number | null;
+  readonly keeperStarted: number | null;
+  readonly keeperUnit: string | null;
+  /** When its keeper put it to sleep (its pid then null), or null while it is awake. */
+  readonly asleep: string | null;
+  /** Why its keeper gave up on it (it could not start, or it exited while it ran), or null. */
+  readonly failed: Failure | null;
+}
+
+/** A dev server its keeper gave up on: when, why, and the last lines of its log then. */
+export interface Failure {
+  readonly at: string;
+  readonly why: string;
+  readonly log: string;
 }
 
 /** A per-worker preview: a dev server in that worker's own workspace. */
@@ -70,8 +90,9 @@ export interface PreviewRecord {
   readonly repo: string;
   /** The combined preview's dev server, while one was started. */
   readonly server: DevServer | null;
-  /** The updater's pid, while it runs. */
+  /** The updater's pid, while it runs, and when it started. */
   readonly updater: number | null;
+  readonly updaterStarted: number | null;
   /** Workers the user took in although they are not running, and workers taken out. */
   readonly include: readonly string[];
   readonly exclude: readonly string[];
@@ -97,6 +118,27 @@ export interface PreviewRecord {
 export interface PublicPorts {
   readonly combined: number | null;
   readonly workers: Readonly<Record<string, number>>;
+}
+
+/** A server's process as `tracked.ts` checks it. A record from before start times were kept (1.9.37) has
+ * only the second the server was recorded started, which its process's start time is checked against. */
+export function serverProc(s: DevServer): Tracked | null {
+  if (s.pid === null) return null;
+
+  if (s.pidStarted !== null) return { pid: s.pid, started: s.pidStarted, unit: s.unit };
+  const stamp = Date.parse(s.started);
+
+  return { pid: s.pid, started: Number.isNaN(stamp) ? null : stamp / 1000, unit: s.unit, slack: 3 };
+}
+
+/** A server's keeper as `tracked.ts` checks it. */
+export function keeperProc(s: DevServer): Tracked | null {
+  return s.keeper === null ? null : { pid: s.keeper, started: s.keeperStarted, unit: s.keeperUnit };
+}
+
+/** The updater as `tracked.ts` checks it. */
+export function updaterProc(r: PreviewRecord): Tracked | null {
+  return r.updater === null ? null : { pid: r.updater, started: r.updaterStarted, unit: null };
 }
 
 /** Where the record is. */
@@ -137,6 +179,19 @@ function portsOf(value: Json | undefined): PublicPorts {
   return { combined: portOf(o?.["combined"]), workers: Object.fromEntries(workers) };
 }
 
+function startOf(value: Json | undefined): number | null {
+  const n = asNumber(value);
+
+  return n !== undefined && Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function failureOf(value: Json | undefined): Failure | null {
+  const o = asObject(value);
+  const at = asString(o?.["at"]);
+
+  return o === undefined || at === undefined ? null : { at, why: asString(o["why"]) ?? "", log: asString(o["log"]) ?? "" };
+}
+
 function serverOf(value: Json | undefined): DevServer | null {
   const o = asObject(value);
   const cmd = asString(o?.["cmd"]);
@@ -145,7 +200,23 @@ function serverOf(value: Json | undefined): DevServer | null {
 
   if (o === undefined || cmd === undefined || port === undefined || path === undefined) return null;
 
-  return { cmd, port, pid: pidOf(o["pid"]), base: asString(o["base"]) ?? "/", path, log: asString(o["log"]) ?? "", started: asString(o["started"]) ?? "", public: portOf(o["public"]) };
+  return {
+    cmd,
+    port,
+    pid: pidOf(o["pid"]),
+    pidStarted: startOf(o["pid_started"]),
+    unit: asString(o["unit"]) ?? null,
+    base: asString(o["base"]) ?? "/",
+    path,
+    log: asString(o["log"]) ?? "",
+    started: asString(o["started"]) ?? "",
+    public: portOf(o["public"]),
+    keeper: pidOf(o["keeper"]),
+    keeperStarted: startOf(o["keeper_started"]),
+    keeperUnit: asString(o["keeper_unit"]) ?? null,
+    asleep: asString(o["asleep"]) ?? null,
+    failed: failureOf(o["failed"]),
+  };
 }
 
 /** The record as `text` holds it; undefined when it is not one. */
@@ -188,6 +259,7 @@ export function parseRecord(text: string): PreviewRecord | undefined {
     repo,
     server: serverOf(o["server"]),
     updater: pidOf(o["updater"]),
+    updaterStarted: startOf(o["updater_started"]),
     include: strings(o["include"]),
     exclude: strings(o["exclude"]),
     merged,
@@ -211,7 +283,23 @@ export function readRecord(root: string): PreviewRecord | undefined {
 }
 
 function serverJson(s: DevServer): JsonObject {
-  return { cmd: s.cmd, port: s.port, pid: s.pid, base: s.base, path: s.path, log: s.log, started: s.started, public: s.public };
+  return {
+    cmd: s.cmd,
+    port: s.port,
+    pid: s.pid,
+    pid_started: s.pidStarted,
+    unit: s.unit,
+    base: s.base,
+    path: s.path,
+    log: s.log,
+    started: s.started,
+    public: s.public,
+    keeper: s.keeper,
+    keeper_started: s.keeperStarted,
+    keeper_unit: s.keeperUnit,
+    asleep: s.asleep,
+    failed: s.failed === null ? null : { at: s.failed.at, why: s.failed.why, log: s.failed.log },
+  };
 }
 
 /** The record as JSON. */
@@ -223,6 +311,7 @@ export function recordJson(r: PreviewRecord): JsonObject {
     repo: r.repo,
     server: r.server === null ? null : serverJson(r.server),
     updater: r.updater,
+    updater_started: r.updaterStarted,
     include: [...r.include],
     exclude: [...r.exclude],
     merged: r.merged.map((m) => ({ id: m.id, workspace: m.workspace, commit: m.commit, change: m.change })),

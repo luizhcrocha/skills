@@ -19,8 +19,9 @@ import { activeAt, SpendReader, type Spent } from "../transcripts.ts";
 import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
 import type { Orphan } from "../orphans.ts";
-import { isRunning, lastError, logTail } from "../preview/devserver.ts";
-import { readRecord, type DevServer } from "../preview/record.ts";
+import { lastError, logTail } from "../preview/devserver.ts";
+import { readRecord, serverProc, updaterProc, type DevServer } from "../preview/record.ts";
+import { runs } from "../preview/tracked.ts";
 import { readPortStates, type PortState } from "../hub/preview-ports.ts";
 import { runningHub } from "../hub/server.ts";
 import { candidates, everyMs, included } from "../preview/updater.ts";
@@ -331,7 +332,7 @@ function publicState(machine: Machine, port: number | null): Pick<PortState, "ur
  * mode its public port, the https address the hub serves it at (the page links it), and why the hub
  * cannot serve https there. */
 function serverView(machine: Machine, lookups: Lookups, s: DevServer | null): JsonObject {
-  const running = s !== null && s.pid !== null && isRunning(s.pid);
+  const running = s !== null && runs(serverProc(s));
   const pub = running ? publicState(machine, s?.public ?? null) : { url: null, error: null };
 
   return {
@@ -370,7 +371,7 @@ export function previewView(machine: Machine, lookups: Lookups, root: string, st
     url: combined ? "preview/" : null,
     address: combined && address !== null ? `${address}preview/` : null,
     ...serverView(machine, lookups, combined ? record.server : null),
-    updater: record.updater !== null && isRunning(record.updater),
+    updater: runs(updaterProc(record)),
     every: everyMs(machine) / 1000,
     workers,
     conflicts: record.conflicts.map((c) => ({ path: c.path, workers: [...c.workers] })),

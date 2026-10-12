@@ -18,7 +18,9 @@ import * as Option from "effect/Option";
 import { PreviewError } from "../errors.ts";
 import { exists, makeDirs, readText } from "../files.ts";
 import { asObject, asString, parseObject } from "../json.ts";
-import { alive } from "../registry.ts";
+import { inScope, isRunning, track, type Tracked } from "./tracked.ts";
+
+export { isRunning };
 
 /** The package manager a directory's lockfile names, npm when none does. */
 export function packageManager(dir: string): "bun" | "pnpm" | "yarn" | "npm" {
@@ -178,52 +180,27 @@ export function freePort(): number {
   return port;
 }
 
-/** Start `cmd` in `dir` as a process group of its own, detached, its output appended to `log`; its pid. */
-export function startServer(dir: string, cmd: string, port: number, log: string, env: Readonly<Record<string, string>>): number | PreviewError {
-  makeDirs(join(log, ".."));
-  const fd = openSync(log, "a");
-
-  try {
-    const child = spawn("/bin/sh", ["-c", cmd], {
-      cwd: dir,
-      detached: true,
-      stdio: ["ignore", fd, fd],
-      env: { ...process.env, ...env, PORT: String(port), BROWSER: "none", NO_COLOR: "1", FORCE_COLOR: "0" },
-    });
-
-    child.unref();
-
-    return child.pid ?? new PreviewError({ reason: `${cmd} could not start` });
-  } finally {
-    closeSync(fd);
-  }
+/** Start `cmd` in `dir` as a session of its own, detached, its output appended to `log`, in the systemd user
+ * scope `unit` when given (`tracked.ts`); the process, with its start time. */
+export function startServer(dir: string, cmd: string, port: number, log: string, env: Readonly<Record<string, string>>, unit: string | null = null): Tracked | PreviewError {
+  return startDetached(["/bin/sh", "-c", cmd], dir, log, { ...env, PORT: String(port), BROWSER: "none", NO_COLOR: "1", FORCE_COLOR: "0" }, unit);
 }
 
-/** Start a detached process (the updater) with `argv`, its output appended to `log`; its pid. */
-export function startDetached(argv: readonly string[], cwd: string, log: string, env: Readonly<Record<string, string>>): number | PreviewError {
+/** Start a detached process (the updater, a keeper) with `argv`, its output appended to `log`, in the systemd
+ * user scope `unit` when given; the process, with its start time. */
+export function startDetached(argv: readonly string[], cwd: string, log: string, env: Readonly<Record<string, string>>, unit: string | null = null): Tracked | PreviewError {
   makeDirs(join(log, ".."));
   const fd = openSync(log, "a");
-  const [program = "", ...args] = argv;
+  const [program = "", ...args] = unit === null ? argv : inScope(unit, argv);
 
   try {
     const child = spawn(program, args, { cwd, detached: true, stdio: ["ignore", fd, fd], env: { ...process.env, ...env } });
     child.unref();
 
-    return child.pid ?? new PreviewError({ reason: `${program} could not start` });
+    return child.pid === undefined ? new PreviewError({ reason: `${argv[0] ?? program} could not start` }) : track(child.pid, unit);
   } finally {
     closeSync(fd);
   }
-}
-
-/** Whether process `pid` runs: it exists and is not a zombie waiting for its parent to reap it (a dev
- * server stopped while the process that started it still runs). */
-export function isRunning(pid: number | null | undefined): boolean {
-  if (pid === null || pid === undefined || !alive(pid)) return false;
-
-  if (process.platform === "darwin") return !spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim().startsWith("Z");
-  const stat = readText(`/proc/${pid}/stat`);
-
-  return stat === undefined || stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) !== "Z";
 }
 
 /** Stop what is left of process group `pgid` once its leader is gone (TERM, then KILL after `graceMs`). */
@@ -246,40 +223,16 @@ export function stopLeftovers(pgid: number, graceMs: number): void {
   signal("SIGKILL");
 }
 
-/** Stop the process group `pid` leads (TERM, then KILL after `graceMs`); whether it is gone. */
-export function stopGroup(pid: number | null, graceMs = 3000): boolean {
-  if (pid === null || !isRunning(pid)) return true;
-
-  const signal = (name: NodeJS.Signals): void => {
-    try {
-      process.kill(-pid, name);
-    } catch {
-      try {
-        process.kill(pid, name);
-      } catch {
-        // already gone
-      }
-    }
-  };
-
-  signal("SIGTERM");
-  const deadline = Date.now() + graceMs;
-
-  while (isRunning(pid) && Date.now() < deadline) Bun.sleepSync(50);
-
-  if (isRunning(pid)) {
-    signal("SIGKILL");
-    Bun.sleepSync(100);
-  }
-
-  return !isRunning(pid);
-}
-
 /** The last 64 KiB of a log, as text ("" when there is none). */
 export function logTail(path: string): string {
   const text = readText(path) ?? "";
 
   return text.length > 65536 ? text.slice(-65536) : text;
+}
+
+/** The last `n` lines of a log, its colour codes taken out. */
+export function plainTail(path: string, n: number): string {
+  return tail(logTail(path).replace(ANSI, ""), n);
 }
 
 /** The last `n` lines of `text`. */

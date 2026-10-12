@@ -1,7 +1,8 @@
 /**
  * A stand-in dev server for the preview's tests: `bun stub-dev.ts PORT [BASE]` serves the files of its
  * working directory under BASE (as Vite does with `--base`), says in headers which path and Host it was
- * asked with, redirects BASE without its slash, and echoes WebSocket messages on the `vite-hmr` protocol.
+ * asked with, redirects BASE without its slash, and echoes WebSocket messages on the `vite-hmr` protocol, but
+ * for Vite's ping (`{"type":"ping"}`), which Vite's server does not answer either.
  */
 const [portText = "0", base = "/"] = process.argv.slice(2);
 
@@ -24,6 +25,7 @@ Bun.serve({
   },
   websocket: {
     message(ws, message) {
+      if (String(message) === '{"type":"ping"}') return;
       ws.send(`echo:${String(message)}`);
     },
   },

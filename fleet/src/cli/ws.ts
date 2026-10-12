@@ -43,8 +43,9 @@ import { asArray, asObject, asString, dumps, parseObject, type Json, type JsonOb
 import { laneMatches, lanesMeet } from "../ledger/lanes.ts";
 import { activeWorkspaces } from "../ledger/warnings.ts";
 import { decodeLedger } from "../ledger/model.ts";
-import { readRecord, recordPath, updateRecord } from "../preview/record.ts";
-import { isRunning } from "../preview/devserver.ts";
+import { readRecord, recordPath, serverProc, updateRecord, updaterProc } from "../preview/record.ts";
+import { kept, serverStanding } from "../preview/sleep.ts";
+import { runs } from "../preview/tracked.ts";
 import { validate } from "../ledger/validate.ts";
 import { cliLookups } from "../page/lookups.ts";
 import { pageHtml, readTemplate, writePage } from "../page/render.ts";
@@ -624,13 +625,17 @@ function previewLine(root: string, r: Recorded): string {
   return `  ${r.id}  the fleet's preview, ${live ?? "stopped"}  ${r.path}${isDir(r.path) ? "" : " (gone)"}\n    ${at}\n`;
 }
 
-/** What of the preview still runs (its dev server, its updater), in words; undefined when nothing does. */
+/** What of the preview still runs (its dev server, or the keeper that wakes it, its updater), in words;
+ * undefined when nothing does. */
 export function previewLive(root: string): string | undefined {
   const record = readRecord(root);
+  const server = record?.server ?? null;
+  const on = server !== null && runs(serverProc(server));
 
   const parts = [
-    record?.server?.pid !== null && record?.server?.pid !== undefined && isRunning(record.server.pid) ? `dev server pid ${record.server.pid}` : undefined,
-    record?.updater !== null && record?.updater !== undefined && isRunning(record.updater) ? `updater pid ${record.updater}` : undefined,
+    on ? `dev server pid ${server.pid ?? "?"}` : undefined,
+    !on && server !== null && kept(server) ? `dev server ${serverStanding(server)}, keeper pid ${server.keeper ?? "?"}` : undefined,
+    record !== undefined && runs(updaterProc(record)) ? `updater pid ${record.updater ?? "?"}` : undefined,
   ].filter((p) => p !== undefined);
 
   return parts.length === 0 ? undefined : `running (${parts.join(", ")})`;
@@ -702,7 +707,7 @@ function forgetPreview(root: string): void {
 
   if (record === undefined) return;
 
-  if (record.workers.some((w) => w.pid !== null && isRunning(w.pid))) updateRecord(root, (now) => (now === undefined ? undefined : { ...now, path: "", server: null, merged: [], commit: null, conflicts: [] }));
+  if (record.workers.some((w) => runs(serverProc(w)) || kept(w))) updateRecord(root, (now) => (now === undefined ? undefined : { ...now, path: "", server: null, merged: [], commit: null, conflicts: [] }));
   else remove(recordPath(root));
 }
 

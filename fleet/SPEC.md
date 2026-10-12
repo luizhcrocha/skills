@@ -53,6 +53,9 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `FLEET_WORKER` | the plugin's hook | the worker id such a process is; written into its heartbeat. A session with it is a worker: the listening hooks leave it alone |
 | `FLEET_PREVIEW_S` | `fleet preview`'s updater | how often it looks at the workers' working copies (default 3 s) |
 | `FLEET_PREVIEW_WAIT_S` | `fleet preview start` | how long it waits for a dev server to answer before saying it does not yet (default 30 s) |
+| `FLEET_PREVIEW_IDLE_S` | `fleet preview start`, the keeper, the hub | how long a dev server may go with no request before it sleeps (default 1800 s; `0` turns sleep off) |
+| `FLEET_PREVIEW_AWAKE` | `fleet preview start` | the dev servers that never sleep: public ports, worker ids, `combined` (default `7501`) |
+| `FLEET_PREVIEW_SCOPE` | `fleet preview start`, the keeper | `0`: the preview's processes run without systemd user scopes of their own, stopped by their tree (the tests set it) |
 | `FLEET_NUDGE_MIN` | the plugin's hook (`fleet_chat_nudge`) | how long the user's message waits unread, or an answer unrecorded, before the session is told mid-turn (default 3 minutes). See [Listening hooks](#listening-hooks) |
 
 A DIR at `…/<project>/<session>/scratchpad/<name>` names a session transcript; any other DIR has
@@ -1293,7 +1296,9 @@ Every take, release and removal of a lapsed hold runs under an exclusive `flock`
 holds the plan usage per account, `{"accounts": {KEY: {email, seen, five_hour?, seven_day?}}}` (see usage.py). Every read of the registry (`live()`) deletes the entry of a fleet whose
 pid is dead or whose record is malformed; a dead one's entry is kept as `REGISTRY/names/<fleet>.json` (one
 per dir: a newer one for the same dir replaces it), so the fleet gets its name back when it is served again.
-`fleet serve --stop` keeps nothing; in TypeScript it then prints, for a fleet with active workspaces,
+`fleet serve --stop` keeps nothing; in TypeScript it stops the fleet's previews that sleep when idle,
+with their keepers (`stopped the previews that sleep when idle, with their keepers: a1, combined`; see
+Preview, *Idle sleep*), then prints, for a fleet with active workspaces,
 what `fleet ws DIR prune --apply` would remove (`ws: prune would remove a1 (PATH), ...`), what it keeps
 and why (`ws: prune keeps a2: <why>`, prune's own rules), and the command (`ws: \`fleet ws DIR prune
 --apply\` removes them`), so a fleet's end is where its workspaces go. It also renames a fleet whose session got a custom title
@@ -2217,28 +2222,83 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   fleet preview DIR start ...` or `op run --env-file=<file of op:// references> -- fleet preview DIR start
   ...` (the file holds references only, never values); nothing writes or copies a secret file. secretspec's
   1Password provider can fail to reach the desktop app (`connecting to desktop app … timed out`) where `op`
-  works: `op run --env-file` is then the fallback. Nothing else starts a dev server (the updater merges,
-  the hub proxies), so a server that dies is started again by `start`, under the same loader.
+  works: `op run --env-file` is then the fallback. Nothing else starts a dev server but its keeper, which
+  wakes it in `start`'s environment (the updater merges, the hub proxies), so a server that dies is
+  started again by `start`, under the same loader.
+- **Idle sleep** (D160, `fleet/src/preview/sleep.ts`): a Vite dev server and its workerd grow while they run
+  (3.5 GB after 54 hours; the idle per-worker previews held about 11 GB and the machine OOM-killed a
+  terminal). Every dev server `start` starts (combined or per-worker, root mode or not) that is not exempt
+  gets a **keeper**, `fleet preview DIR keeper [--per-worker WORKER]`, detached, logging to
+  `DIR/preview/keeper-<worker|combined>.log`, recorded as the server's `keeper`. It runs in `start`'s whole
+  environment, so dev secrets from `op run` or secretspec reach the server it starts again and are written
+  nowhere. The hub notes each use of a server, at most every 5 s, by writing the time to
+  `DIR/preview/<worker|combined>.seen`: each request it passes, and each WebSocket frame either way (an HMR
+  session at work, the dev server's updates to an open tab). Each second the keeper reads it: a server with
+  no use (and no start or wake) for `FLEET_PREVIEW_IDLE_S` seconds (1800) is stopped (see *Processes*) and
+  recorded with `pid` null and `asleep` its time; a request after that starts it again with the recorded
+  command, port and log. While a server is asleep, or woken and not yet answering, the hub answers 503 with
+  `Retry-After: 2`: a page that reloads itself every 2 s for a browser (`Accept: text/html`), a line of
+  JSON otherwise; a root-mode preview's public port stays open while it sleeps. When a server sleeps, the
+  hub closes each browser socket piped to it with a close frame (1001), so Vite's client takes it as a clean
+  close and does not poll; the tab's next request gets the waking page. Vite's pings are no use: the
+  `{"type":"ping"}` frame its client sends every 30 s on an open socket, and its HTTP ping after a socket
+  closed (`Accept: text/x-vite-ping`, a socket on `vite-ping`), which is answered 503 and wakes nothing.
+  So an open tab alone neither keeps a server awake nor wakes it. A server is exempt, and has no keeper, when
+  `FLEET_PREVIEW_AWAKE` (comma or space separated; default `7501`, the main preview's public port) names its
+  public port, its worker, or `combined`; `FLEET_PREVIEW_IDLE_S=0` turns sleep off. Both are read at
+  `start`: a server started before this, or under another setting, is stopped and started again for it to
+  apply. By design the combined preview outside root mode has no public port, so the default exempts it
+  not, and it sleeps like a per-worker one; `FLEET_PREVIEW_AWAKE=combined` keeps it awake (D163).
+  - *Failure* (D163): a wake that does not come up (the command exits, the port is taken, nothing answers
+    in 120 s) is tried again after 1, 2 and 4 s; after the fourth try, or when the server exits while it
+    runs, the keeper records `failed` (`at`, `why`, the last 30 lines of its log, colour codes removed),
+    takes itself off the record and ends. The hub then answers 502, a page that says the server couldn't
+    start, shows that log, names the command that starts it again (`fleet preview DIR start
+    [--per-worker W] [--root]`), and does not reload itself (JSON with `error`, `log`, `restart`
+    otherwise). A server whose keeper is gone (it was killed, the machine rebooted) gets the same page
+    saying the keeper stopped. `status` says `failed` (and the log), or that the keeper is gone, never
+    "stopped … sleeps after". A new `start` clears it; `start --per-worker` refuses a server asleep or
+    waking, as one that runs.
+  - *Processes* (D163, `fleet/src/preview/tracked.ts`): each process the preview starts (dev server,
+    keeper, updater) is recorded with its pid and its start time (`pid_started`, `keeper_started`,
+    `updater_started`: `/proc/PID/stat`, `ps -o lstart` on the Mac), and a dev server or keeper, where a
+    systemd user manager answers (Linux, `systemd-run`, `systemctl --user`; `FLEET_PREVIEW_SCOPE=0` says no), the transient
+    scope it runs in (`unit`, `keeper_unit`: `fleet-preview-<name>-<random>`, `TimeoutStopSec=3`), as
+    `gate run` does. A process is stopped by its scope, which takes everything it started, double forks
+    too; else by its own tree (its descendants, and on Linux the members of the session it leads), each
+    pid while it is still the process first seen (TERM, then KILL after 3 s), never a process group, as
+    `stopTree` does for an orphan. Before any signal the pid's start time is read again: a pid that no
+    longer has it (a reboot, a reused pid) is never signalled, and counts as gone to `status` and the hub.
+    A record from before start times were kept (1.9.37) proves a server only within 3 s of its `started`
+    stamp, and a keeper or updater not at all (an updater ends by itself once the record no longer names
+    it). `stop` takes the keeper off the record first, then stops it, then stops the server the record
+    names after: a keeper starts a server only under the record's lock while the record names it, and a
+    signal ends it between ticks, never between a start and its record, so a `stop` racing a wake leaves
+    nothing running. `fleet serve DIR --stop` stops the fleet's keepers and the servers they keep, since no
+    request reaches them after; a server with no keeper runs on until `fleet preview DIR stop`. The orphan
+    report counts the keepers among the preview's own processes.
 - `status`: the address, the stack (`stack: devloop@ (<commit>)`, or `stack: the default workspace's @
   (<commit>)`), the dev server (pid, port, answering), the updater, each worker's workspace
   (`[x]` merged at its commit and change, `[ ]` and why not: `running`, `taken in`, `taken out`, `done,
   merged`, `done, already in the stack`, `done, its workspace is gone`), the conflicts, the updater's last error and
   the dev server's last error (below); the same for each per-worker preview.
-- `stop [--per-worker WORKER | --all]`: TERM, then KILL after 3 s, to each process group (the updater
-  first): plain `stop` stops the combined preview's dev server and its updater and leaves each per-worker
+- `stop [--per-worker WORKER | --all]`: stops each by its scope or its tree, while it still has its
+  recorded start time (*Processes* above; the updater first, then each server's keeper before the server):
+  plain `stop` stops the combined preview's dev server and its updater and leaves each per-worker
   preview running (it names those); `--per-worker WORKER` stops that one alone; `--all` stops the combined
   preview and every per-worker one. The record keeps the ports with no pids. The workspace stays for the next start. **`fleet ws prune`** keeps
-  the preview's workspace while its dev server or its updater runs (`ws: kept preview: the fleet's preview
-  is running (...)`) or when its @ holds changes of its own; otherwise it forgets it, abandons its merge
+  the preview's workspace while its dev server, its keeper (the server asleep or waking) or its updater
+  runs (`ws: kept preview: the fleet's preview is running (...)`) or when its @ holds changes of its own; otherwise it forgets it, abandons its merge
   commit, deletes the directory and the record.
-- **The record**, `DIR/preview.json`: `{fleet, workspace, path, repo, server {cmd, port, pid, base, path,
-  log, started, public}, updater, include[], exclude[], merged[] {id, workspace, commit, change}, stack,
+- **The record**, `DIR/preview.json`: `{fleet, workspace, path, repo, server {cmd, port, pid, pid_started, unit, base, path,
+  log, started, public, keeper, keeper_started, keeper_unit, asleep, failed {at, why, log}}, updater, updater_started, include[], exclude[], merged[] {id, workspace, commit, change}, stack,
   stack_from (the revset the last merge's stack came from, null for the default rule), stack_given
   (`start --stack`'s, for that start), commit, conflicts[] {path, workers[]}, error, updated, workers[] (per-worker servers), ports {combined,
   workers}}`. It is not a key of
   `state.json`: it has three writers (the coordinator's commands, the updater, the hub), and `state.json`
   is locked only by `fleet state` and the hub's rename. Each change is made under an exclusive `flock` on `DIR/preview.lock` and
-  written whole through a rename. A pid counts as running when the process exists and is no zombie.
+  written whole through a rename. A pid counts as running when the process exists, is no zombie, and still
+  has its recorded start time (*Processes* above).
 - **The dev server's last error** (`status`, the page): in the last 400 lines of its log, colours
   stripped, the burst of lines around the last one that reads as an error (from the first error line
   after the last time-stamped line that was none, so Vite's "Internal server error" and its parse error

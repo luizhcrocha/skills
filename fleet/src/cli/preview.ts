@@ -20,6 +20,8 @@
  *   install) the fleet's previews run, whether they run in root mode, and the combined preview's stack, in
  *   the ledger (`--stack ''` clears it, as `--no-stack` does).
  * - `updater`: the updater's loop, which `start` runs in the background.
+ * - `keeper [--per-worker WORKER]`: a dev server's idle sleep (`preview/sleep.ts`), which `start` runs in the
+ *   background for each server not exempt (`FLEET_PREVIEW_AWAKE`, default the main preview's 7501).
  *
  * The command is `--cmd`, else the ledger's, else `<package manager> run dev` when package.json has a
  * `dev` script; `{port}` and `{base}` in it are filled in, and Vite is told its port, host and base.
@@ -43,10 +45,12 @@ import { exists, isDir, readText, resolvePath } from "../files.ts";
 import { Out } from "../io.ts";
 import { asArray, asBoolean, asObject, asString, type Json, type JsonObject } from "../json.ts";
 import { upAllSync } from "../page/probe.ts";
-import { isRunning, lastError, freePort, logTail, planCommand, fill, runSetup, setupCommand, startDetached, startServer, stopGroup, tail } from "../preview/devserver.ts";
+import { lastError, freePort, logTail, planCommand, fill, runSetup, setupCommand, startDetached, startServer, tail } from "../preview/devserver.ts";
 import { readCopies, resolveStack, stackOf } from "../preview/merge.ts";
-import { logDir, readRecord, updateRecord, type DevServer, type PreviewRecord, type WorkerServer } from "../preview/record.ts";
+import { keeperProc, logDir, readRecord, serverProc, updateRecord, updaterProc, type DevServer, type PreviewRecord, type WorkerServer } from "../preview/record.ts";
 import { allocate } from "../preview/ports.ts";
+import { asleep, idleMs, kept, restartCommand, runKeeper, serverStanding, sleeps, stopServer } from "../preview/sleep.ts";
+import { runs, scopes, stopTracked, unitName, type Tracked } from "../preview/tracked.ts";
 import { candidates, everyMs, freshMemory, included, ledgerStack, lookOnce, pick, runUpdater, standing } from "../preview/updater.ts";
 import { jj, why, workspaceNames, workspaceRoot } from "../ws/jj.ts";
 import { World, type Machine } from "../world.ts";
@@ -64,7 +68,7 @@ const PREVIEW = "preview";
 const MAIN = fileURLToPath(new URL("../main.ts", import.meta.url));
 
 /** The environment a preview's processes take from the command's own (a test's registry, its interval). */
-const PASSED = ["FLEET_HOME", "XDG_STATE_HOME", "CLAUDE_CONFIG_DIR", "FLEET_PREVIEW_S", "FLEET_DISCOVER", "TZ"] as const;
+const PASSED = ["FLEET_HOME", "XDG_STATE_HOME", "CLAUDE_CONFIG_DIR", "FLEET_PREVIEW_S", "FLEET_PREVIEW_IDLE_S", "FLEET_PREVIEW_AWAKE", "FLEET_PREVIEW_SCOPE", "FLEET_DISCOVER", "PATH", "TZ"] as const;
 
 function refuse(reason: string): Effect.Effect<never, Refusal> {
   return Effect.fail(new Refusal({ speaker: "preview", reason }));
@@ -133,9 +137,19 @@ function previewRow(raw: JsonObject): JsonObject | undefined {
   return (asArray(raw["workspaces"]) ?? []).flatMap((w) => objectOf(w)).find((w) => w["kind"] === "preview" && w["status"] !== "pruned");
 }
 
-/** Whether a dev server runs. */
+/** Whether a dev server runs: its process is still the one recorded (`tracked.ts`). */
 function running(server: DevServer | null): server is DevServer & { readonly pid: number } {
-  return server !== null && server.pid !== null && isRunning(server.pid);
+  return server !== null && server.pid !== null && runs(serverProc(server));
+}
+
+/** Whether this command starts the preview's processes in systemd user scopes (`tracked.ts`), read once. */
+const scoped = new WeakMap<Machine, boolean>();
+
+function scopeFor(machine: Machine, what: string): string | null {
+  const yes = scoped.get(machine) ?? scopes(machine.env);
+  scoped.set(machine, yes);
+
+  return yes ? unitName(what) : null;
 }
 
 /** The fleet's address on the hub, and its name. */
@@ -155,7 +169,7 @@ function waitUp(server: DevServer, seconds: number): Came {
   for (;;) {
     if (upAllSync([`http://127.0.0.1:${server.port}/`])[0] === true) return "up";
 
-    if (!isRunning(server.pid)) return "exited";
+    if (!running(server)) return "exited";
 
     if (Date.now() >= deadline) return "starting";
     Bun.sleepSync(250);
@@ -185,6 +199,8 @@ interface Place {
   readonly base: string;
   /** In root mode: the dev server runs at `/` and gets a public port; `worker` undefined for the combined preview. */
   readonly rooted: { readonly worker: string | undefined } | undefined;
+  /** `combined`, or the worker: what its scope is named after. */
+  readonly name: string;
 }
 
 /** A dev server for `dir`: installed when it needs it, its public port given in root mode, its command
@@ -217,11 +233,73 @@ function launch(
   }
 
   const ready = fill(dir, planned.template, port, pub === null ? place.base : "/");
-  const pid = startServer(dir, ready.cmd, port, log, passedEnv(machine));
+  const proc = startServer(dir, ready.cmd, port, log, passedEnv(machine), scopeFor(machine, place.name));
 
-  if (pid instanceof PreviewError) return pid;
+  if (proc instanceof PreviewError) return proc;
 
-  return { cmd: ready.cmd, port, pid, base: ready.base, path: dir, log, started: stampOf(machine.now()), public: pub };
+  return {
+    cmd: ready.cmd,
+    port,
+    pid: proc.pid,
+    pidStarted: proc.started,
+    unit: proc.unit,
+    base: ready.base,
+    path: dir,
+    log,
+    started: stampOf(machine.now()),
+    public: pub,
+    keeper: null,
+    keeperStarted: null,
+    keeperUnit: null,
+    asleep: null,
+    failed: null,
+  };
+}
+
+/** Start the keeper of a server that sleeps when idle (`sleep.ts`), detached, in this command's whole
+ * environment, which it starts the server again in; the keeper, or null for a server that never sleeps. */
+function startKeeper(machine: Machine, root: string, server: DevServer, worker: string | undefined): Tracked | null {
+  if (!sleeps(machine.env, server, worker)) return null;
+  const name = worker ?? "combined";
+  const argv = [process.execPath, MAIN, "preview", root, "keeper", ...(worker === undefined ? [] : ["--per-worker", worker])];
+  const proc = startDetached(argv, root, join(logDir(root), `keeper-${name}.log`), passedEnv(machine), scopeFor(machine, `keeper-${name}`));
+
+  return proc instanceof PreviewError ? null : proc;
+}
+
+/** A server with `keeper` (or none) as its keeper. */
+function keptBy<S extends DevServer>(server: S, keeper: Tracked | null): S {
+  return { ...server, keeper: keeper?.pid ?? null, keeperStarted: keeper?.started ?? null, keeperUnit: keeper?.unit ?? null };
+}
+
+/** What a status line says of a server's sleep, or of why it does not run. */
+function sleepNote(machine: Machine, root: string, worker: string | undefined, s: DevServer): string {
+  const again = `\`${restartCommand(root, worker, s)}\` starts it again`;
+
+  switch (serverStanding(s)) {
+    case "asleep":
+      return `, asleep since ${s.asleep ?? "?"} (keeper pid ${s.keeper ?? "?"} wakes it on the next request)`;
+    case "waking":
+      return ` (keeper pid ${s.keeper ?? "?"} is starting it)`;
+    case "failed":
+      return `, its keeper gave up on it at ${s.failed?.at ?? "?"}: ${s.failed?.why ?? "?"}; ${again}`;
+    case "unkept":
+      return `, its keeper (pid ${s.keeper ?? "?"}) is gone, so nothing wakes it; ${again}`;
+    case "running":
+      if (kept(s)) return `, sleeps after ${(idleMs(machine.env) ?? 0) / 1000} s with no request (keeper pid ${s.keeper ?? "?"})`;
+
+      return s.keeper === null ? "" : `, its keeper (pid ${s.keeper}) is gone, so it no longer sleeps`;
+    case "stopped":
+      return "";
+  }
+}
+
+/** The word for a server in `status`: running, asleep, waking, failed, stopped. */
+function standingWord(s: DevServer | null): string {
+  if (s === null) return "stopped";
+  const now = serverStanding(s);
+
+  return now === "unkept" ? "stopped" : now;
 }
 
 /** This machine on the tailnet, read once per command (one machine each). */
@@ -357,8 +435,8 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
     if (at === undefined) return yield* refuse(`${root} is not being served: the preview is reached through the hub at /f/<fleet>/preview/; \`fleet serve ${root}\` first`);
     const before = readRecord(root);
 
-    if (before !== undefined && running(before.server) && before.updater !== null && isRunning(before.updater)) {
-      return yield* refuse(`the preview already runs at ${at.url}preview/ (dev server pid ${before.server.pid}, updater pid ${before.updater}): \`fleet preview ${root} status\`, or stop it first`);
+    if (before !== undefined && before.server !== null && (running(before.server) || asleep(before.server)) && runs(updaterProc(before))) {
+      return yield* refuse(`the preview already runs at ${at.url}preview/ (dev server pid ${before.server.pid ?? "asleep"}, updater pid ${before.updater}): \`fleet preview ${root} status\`, or stop it first`);
     }
 
     const stackGiven = revsetOf(given.get("--stack"));
@@ -381,6 +459,7 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
       repo,
       server: now?.server ?? null,
       updater: now?.updater ?? null,
+      updaterStarted: now?.updaterStarted ?? null,
       include: now?.include ?? [],
       exclude: now?.exclude ?? [],
       merged: now?.merged ?? [],
@@ -397,54 +476,59 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
 
     // The first merge before the dev server reads the files.
     const first = lookOnce(machine, root, freshMemory());
-    let server = first?.server ?? null;
+    const had = first?.server ?? null;
+    let server: DevServer;
 
     const log = join(logDir(root), "combined.log");
     const since = (readText(log) ?? "").length;
 
-    if (!running(server)) {
-      const place: Place = { root, base: `/f/${at.fleet}/preview/`, rooted: rootMode(given, raw) ? { worker: undefined } : undefined };
+    if (had !== null && (running(had) || asleep(had))) server = had;
+    else {
+      if (had !== null) stopServer(root, undefined, machine.env("PATH"));
+      const place: Place = { root, base: `/f/${at.fleet}/preview/`, rooted: rootMode(given, raw) ? { worker: undefined } : undefined, name: "combined" };
       const started = launch(machine, path, place, log, { cmd: given.get("--cmd"), port: given.get("--port"), setup: given.get("--setup") }, recordedCommand(raw));
 
       if (started instanceof PreviewError) return yield* refuse(started.reason);
       server = started;
     }
 
-    let updater = first?.updater ?? null;
+    let updater = first === undefined ? null : updaterProc(first);
 
-    if (updater === null || !isRunning(updater)) {
-      const pid = startDetached([process.execPath, MAIN, "preview", root, "updater"], root, join(logDir(root), "updater.log"), passedEnv(machine));
+    if (!runs(updater)) {
+      const proc = startDetached([process.execPath, MAIN, "preview", root, "updater"], root, join(logDir(root), "updater.log"), passedEnv(machine));
 
-      if (pid instanceof PreviewError) {
-        stopGroup(server.pid);
+      if (proc instanceof PreviewError) {
+        stopTracked(serverProc(server), { path: machine.env("PATH") });
 
-        return yield* refuse(pid.reason);
+        return yield* refuse(proc.reason);
       }
 
-      updater = pid;
+      updater = proc;
     }
 
-    const kept = server;
+    const ours = keptBy(server, kept(server) ? keeperProc(server) : startKeeper(machine, root, server, undefined));
 
     const record = updateRecord(root, (now) =>
-      now === undefined ? undefined : { ...now, server: kept, updater, ports: kept.public === null ? now.ports : { ...now.ports, combined: kept.public } },
+      now === undefined
+        ? undefined
+        : { ...now, server: ours, updater: updater?.pid ?? null, updaterStarted: updater?.started ?? null, ports: ours.public === null ? now.ports : { ...now.ports, combined: ours.public } },
     );
 
-    const came = waitUp(kept, Number(machine.env("FLEET_PREVIEW_WAIT_S") ?? 30));
+    const came = asleep(ours) ? "up" : waitUp(ours, Number(machine.env("FLEET_PREVIEW_WAIT_S") ?? 30));
     const workers = (record?.merged ?? []).map((m) => m.id);
     const address = `${at.url}preview/`;
     const fresh = readLedger(root) ?? raw;
-    const text = `Preview started at ${address}: ${workers.length === 0 ? "no worker yet, the stack alone" : `workers ${workers.join(", ")} merged`} in workspace ${PREVIEW} (${path}), dev server on port ${kept.port}.`;
+    const text = `Preview started at ${address}: ${workers.length === 0 ? "no worker yet, the stack alone" : `workers ${workers.join(", ")} merged`} in workspace ${PREVIEW} (${path}), dev server on port ${ours.port}.`;
     const fault = save(machine, root, fresh, undefined, [event(machine, fresh, null, "note", text)]);
 
     if (fault !== undefined) return yield* Effect.fail(fault);
     out.out(`preview: ${address}\n`);
-    out.out(`  dev server: ${kept.cmd} (pid ${kept.pid}, port ${kept.port}${cameNote(came)}), log ${kept.log}\n`);
-    out.out(`  updater: pid ${updater}, every ${everyMs(machine) / 1000} s; merged: ${workers.length === 0 ? "the stack alone" : workers.join(", ")}\n`);
-    waitHub(machine, kept.public);
-    out.out(publicLine(machine, kept) ?? "");
+    out.out(`  dev server: ${ours.cmd} (pid ${ours.pid}, port ${ours.port}${cameNote(came)}), log ${ours.log}\n`);
+    out.out(`  updater: pid ${updater?.pid ?? "?"}, every ${everyMs(machine) / 1000} s; merged: ${workers.length === 0 ? "the stack alone" : workers.join(", ")}\n`);
+    waitHub(machine, ours.public);
+    out.out(publicLine(machine, ours) ?? "");
 
-    const said = cameLine(came, kept, root, since);
+    const said = cameLine(came, ours, root, since);
 
     if (said !== undefined) out.err(said);
 
@@ -479,13 +563,19 @@ function startPerWorker(machine: Machine, root: string, raw: JsonObject, worker:
     const before = readRecord(root)?.workers.find((w) => w.worker === cand.id) ?? null;
 
     if (running(before)) return yield* refuse(`${cand.id}'s preview already runs at ${at.url}preview/${cand.id}/ (pid ${before.pid}); stop it first`);
+
+    if (asleep(before)) return yield* refuse(`${cand.id}'s preview is asleep at ${at.url}preview/${cand.id}/ and wakes on the next request; stop it first to start it again`);
+
+    if (before !== null && serverStanding(before) === "waking") return yield* refuse(`${cand.id}'s preview is waking at ${at.url}preview/${cand.id}/ (keeper pid ${before.keeper ?? "?"} is starting it); stop it first to start it again`);
+
+    if (before !== null) stopServer(root, cand.id, machine.env("PATH"));
     const log = join(logDir(root), `${cand.id}.log`);
     const since = (readText(log) ?? "").length;
-    const place: Place = { root, base: `/f/${at.fleet}/preview/${cand.id}/`, rooted: rootMode(given, raw) ? { worker: cand.id } : undefined };
+    const place: Place = { root, base: `/f/${at.fleet}/preview/${cand.id}/`, rooted: rootMode(given, raw) ? { worker: cand.id } : undefined, name: cand.id };
     const started = launch(machine, cand.path, place, log, { cmd: given.get("--cmd"), port: given.get("--port"), setup: given.get("--setup") }, recordedCommand(raw));
 
     if (started instanceof PreviewError) return yield* refuse(started.reason);
-    const server: WorkerServer = { ...started, worker: cand.id };
+    const server: WorkerServer = keptBy({ ...started, worker: cand.id }, startKeeper(machine, root, started, cand.id));
 
     updateRecord(root, (now) => {
       const base: PreviewRecord = now ?? {
@@ -495,6 +585,7 @@ function startPerWorker(machine: Machine, root: string, raw: JsonObject, worker:
         repo: "",
         server: null,
         updater: null,
+        updaterStarted: null,
         include: [],
         exclude: [],
         merged: [],
@@ -537,11 +628,19 @@ function conflictLine(conflicts: readonly { readonly path: string; readonly work
   return conflicts.map((c) => `${c.path} (${c.workers.length === 0 ? "the stack" : c.workers.join(", ")})`).join(", ");
 }
 
-function serverLine(s: DevServer): string {
+function serverLine(machine: Machine, root: string, worker: string | undefined, s: DevServer): string {
   const on = running(s);
   const up = on && upAllSync([`http://127.0.0.1:${s.port}/`])[0] === true;
 
-  return `${on ? `pid ${s.pid}` : "stopped"}, port ${s.port}${on ? (up ? ", answering" : ", not answering") : ""}: ${s.cmd}`;
+  return `${on ? `pid ${s.pid}` : standingWord(s)}, port ${s.port}${on ? (up ? ", answering" : ", not answering") : ""}: ${s.cmd}${sleepNote(machine, root, worker, s)}`;
+}
+
+/** What `status` says of a server's log: the end its keeper kept when it gave up on it, else its last error. */
+function logLines(s: DevServer): string {
+  if (s.failed !== null && serverStanding(s) === "failed") return `  its log ended (${s.log}):\n${indent(s.failed.log)}\n`;
+  const error = lastError(logTail(s.log));
+
+  return error === null ? "" : `  dev server's last error (${s.log}):\n${indent(error)}\n`;
 }
 
 function status(machine: Machine, root: string, raw: JsonObject): Effect.Effect<number, Refusal, Out> {
@@ -557,14 +656,14 @@ function status(machine: Machine, root: string, raw: JsonObject): Effect.Effect<
 
     const at = served(machine, root);
     const base = at === undefined ? `/f/${record.fleet}/` : at.url;
-    const updater = record.updater !== null && isRunning(record.updater);
+    const updater = runs(updaterProc(record));
 
     if (record.path !== "") {
-      out.out(`preview: ${base}preview/ (${running(record.server) ? "running" : "stopped"})\n`);
+      out.out(`preview: ${base}preview/ (${standingWord(record.server)})\n`);
       out.out(`  workspace ${record.workspace} at ${record.path}, @ ${record.commit?.slice(0, 12) ?? "?"}${record.conflicts.length > 0 ? " (conflicted)" : ""}, merged ${record.updated ?? "never"}\n`);
       out.out(`  stack: ${record.stackFrom ?? DEFAULT_STACK} (${record.stack?.slice(0, 12) ?? "?"})\n`);
 
-      if (record.server !== null) out.out(`  dev server: ${serverLine(record.server)}\n${publicLine(machine, record.server) ?? ""}`);
+      if (record.server !== null) out.out(`  dev server: ${serverLine(machine, root, undefined, record.server)}\n${publicLine(machine, record.server) ?? ""}`);
       out.out(`  updater: ${updater ? `pid ${record.updater}, every ${everyMs(machine) / 1000} s` : "not running"}\n`);
       const all = candidates(raw);
 
@@ -578,18 +677,16 @@ function status(machine: Machine, root: string, raw: JsonObject): Effect.Effect<
       if (record.conflicts.length > 0) out.out(`  conflicts: ${conflictLine(record.conflicts)}\n`);
 
       if (record.error !== null) out.out(`  updater's last error: ${record.error}\n`);
-      const error = record.server === null ? null : lastError(logTail(record.server.log));
+      const said = record.server === null ? "" : logLines(record.server);
 
-      if (error !== null) out.out(`  dev server's last error (${record.server?.log ?? ""}):\n${indent(error)}\n`);
+      if (said !== "") out.out(said);
       else if (record.server !== null && !running(record.server)) out.out(`  its log ends:\n${indent(tail(logTail(record.server.log), 8))}\n`);
     }
 
     for (const w of record.workers) {
-      out.out(`preview of ${w.worker}: ${base}preview/${w.worker}/ (${running(w) ? "running" : "stopped"})\n`);
-      out.out(`  dev server: ${serverLine(w)} in ${w.path}\n${publicLine(machine, w) ?? ""}`);
-      const error = lastError(logTail(w.log));
-
-      if (error !== null) out.out(`  dev server's last error (${w.log}):\n${indent(error)}\n`);
+      out.out(`preview of ${w.worker}: ${base}preview/${w.worker}/ (${standingWord(w)})\n`);
+      out.out(`  dev server: ${serverLine(machine, root, w.worker, w)} in ${w.path}\n${publicLine(machine, w) ?? ""}`);
+      out.out(logLines(w));
     }
 
     return 0;
@@ -624,6 +721,7 @@ function stop(machine: Machine, root: string, raw: JsonObject, worker: string | 
   return Effect.gen(function* () {
     const out = yield* Out;
     const record = readRecord(root);
+    const path = machine.env("PATH");
 
     if (record === undefined) return yield* refuse("there is no preview to stop");
 
@@ -631,25 +729,20 @@ function stop(machine: Machine, root: string, raw: JsonObject, worker: string | 
       const w = record.workers.find((x) => x.worker === worker);
 
       if (w === undefined) return yield* refuse(`no preview of ${worker}: \`fleet preview ${root} status\` lists them`);
-      stopGroup(w.pid);
-      updateRecord(root, (now) => (now === undefined ? undefined : { ...now, workers: now.workers.map((x) => (x.worker === worker ? { ...x, pid: null } : x)) }));
+      stopServer(root, worker, path);
       out.out(`stopped ${worker}'s preview (port ${w.port})\n`);
 
       return 0;
     }
 
-    // The updater first, so it does not look again while the servers go.
-    updateRecord(root, (now) => (now === undefined ? undefined : { ...now, updater: null }));
-    stopGroup(record.updater);
-    stopGroup(record.server?.pid ?? null);
+    // The updater first, so it does not look again while the servers go; then each server with its keeper
+    // (`stopServer`), so none is woken while it goes.
+    updateRecord(root, (now) => (now === undefined ? undefined : { ...now, updater: null, updaterStarted: null }));
+    stopTracked(updaterProc(record), { path });
 
-    if (all) for (const w of record.workers) stopGroup(w.pid);
+    if (record.server !== null) stopServer(root, undefined, path);
 
-    updateRecord(root, (now) =>
-      now === undefined
-        ? undefined
-        : { ...now, updater: null, server: now.server === null ? null : { ...now.server, pid: null }, workers: all ? now.workers.map((x) => ({ ...x, pid: null })) : now.workers },
-    );
+    if (all) for (const w of record.workers) stopServer(root, w.worker, path);
 
     const left = all ? [] : record.workers.filter((w) => running(w));
     const fault = save(machine, root, raw, undefined, [event(machine, raw, null, "note", `Preview stopped${all ? ", with every per-worker one" : ""}; its workspace stays at ${record.path || "(none)"} for the next start.`)]);
@@ -764,6 +857,12 @@ export function previewCli(argv: readonly string[]): Effect.Effect<number, never
       const root = resolvePath(dir);
 
       return yield* Effect.promise(() => runUpdater(machine, root));
+    }
+
+    if (dir !== undefined && command === "keeper" && (rest.length === 0 || (rest.length === 2 && rest[0] === "--per-worker"))) {
+      const root = resolvePath(dir);
+
+      return yield* Effect.promise(() => runKeeper(machine, root, rest[1]));
     }
 
     return yield* run(machine, argv).pipe(Effect.catch(exitOf));

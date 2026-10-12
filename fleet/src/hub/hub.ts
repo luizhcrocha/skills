@@ -43,7 +43,6 @@ import { renameAgent } from "../ledger/rename.ts";
 import { filePathOf, filesRoot } from "../ledger/links.ts";
 import { pageHtml, readTemplate } from "../page/render.ts";
 import { pick, readLedger } from "../preview/updater.ts";
-import { isRunning } from "../preview/devserver.ts";
 import { readRecord, recordPath, type DevServer } from "../preview/record.ts";
 import { PreviewError } from "../errors.ts";
 import { summary, view, type Lookups } from "../page/view.ts";
@@ -56,7 +55,8 @@ import { indexHtml } from "./index-page.ts";
 import { LinkProbes, ProbeCache } from "./probes.ts";
 import { grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
 import { allowedOrigin, chatOriginsPath, grantor, hello, MAX_POST_BYTES, parseChatOrigins, postRefusal, STOP_TOKEN_META, stopRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
-import { previewTarget, proxiedIdentity, proxyHttp, proxySocket, type Target, type Upgrade } from "./preview-proxy.ts";
+import { idleMs, noteRequest, serverStanding } from "../preview/sleep.ts";
+import { haltedPage, isPing, previewTarget, proxiedIdentity, proxyHttp, proxySocket, startingPage, type Target, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
 import { OrphanWatch } from "./orphan-watch.ts";
 import { PLUGIN_ROOT, readSkills, repoOf } from "./skills.ts";
@@ -273,6 +273,9 @@ export class Hub {
   private readonly spend = new SpendReader();
   private readonly views = new Map<string, Viewed>();
   private readonly skillLists = new Map<string, { readonly body: string; readonly at: number }>();
+
+  /** When the hub last noted a request to each preview's dev server (`preview/sleep.ts`), by fleet dir and worker. */
+  private readonly noted = new Map<string, number>();
   private readonly logins = new Map<string, { readonly login: string | undefined; readonly at: number }>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private courierTimer: ReturnType<typeof setInterval> | undefined;
@@ -660,22 +663,52 @@ export class Hub {
   private async preview(req: Request, ip: string, entry: Entry, tail: string, search: string, keepOpen: () => void, upgrade: Upgrade | undefined): Promise<Response | undefined> {
     const target = previewTarget(readRecord(entry.dir), entry.id, tail);
 
+    if ("waking" in target) return this.wake(req, entry.dir, target.waking);
+
+    if ("halted" in target) return haltedPage(req, entry.dir, target);
+
     if (!("server" in target)) return jsonResponse(target[0], { error: target[1].replace("DIR", entry.dir) });
 
-    return this.pass(req, ip, target, search, keepOpen, upgrade);
+    return this.pass(req, ip, entry.dir, target, search, keepOpen, upgrade);
+  }
+
+  /** A request to a dev server asleep or waking: noted, which wakes it (unless it is Vite's ping), and
+   * answered with the page that reloads itself until the server answers. */
+  private wake(req: Request, root: string, worker: string | undefined): Response {
+    if (isPing(req)) return jsonResponse(503, { error: "the preview's dev server is asleep" });
+    noteRequest(root, worker);
+    this.noted.set(`${root}\0${worker ?? ""}`, Date.now());
+
+    return startingPage(req);
+  }
+
+  /** Note a request to a dev server for its idle sleep (not Vite's ping). */
+  private note(req: Request, root: string, worker: string | undefined): void {
+    if (!isPing(req)) this.noteUse(root, worker);
+  }
+
+  /** Note a use of a dev server (a request, a WebSocket frame) for its idle sleep, at most every few seconds per server. */
+  private noteUse(root: string, worker: string | undefined): void {
+    const key = `${root}\0${worker ?? ""}`;
+    const every = Math.min(5000, (idleMs(this.options.machine.env) ?? 20_000) / 4);
+
+    if (Date.now() - (this.noted.get(key) ?? 0) < every) return;
+    this.noted.set(key, Date.now());
+    noteRequest(root, worker);
   }
 
   /** Pass a request to a preview's dev server: a WebSocket piped, anything else asked and answered, with the
    * identity the hub verified. A request that could change something there (not GET, HEAD or OPTIONS) is the
    * chat's writers' only. */
-  private async pass(req: Request, ip: string, target: Target, search: string, keepOpen: () => void, upgrade: Upgrade | undefined): Promise<Response | undefined> {
+  private async pass(req: Request, ip: string, root: string, target: Target, search: string, keepOpen: () => void, upgrade: Upgrade | undefined): Promise<Response | undefined> {
+    this.note(req, root, target.worker);
     const viewer = await this.viewer(req, ip);
     const identity = proxiedIdentity(ip, viewer, req.headers);
 
     if ((req.headers.get("Upgrade") ?? "").toLowerCase() === "websocket") {
       if (upgrade === undefined) return jsonResponse(400, { error: "WebSockets are not served here" });
 
-      return proxySocket(req, target, search, upgrade, identity);
+      return proxySocket(req, target, search, upgrade, identity, () => this.noteUse(root, target.worker));
     }
 
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
@@ -692,7 +725,8 @@ export class Hub {
   // -- root mode -------------------------------------------------------------------------------
 
   /** The root-mode previews of this machine's fleets the hub listens for: each recorded dev server with a
-   * public port, while it is started (its pid recorded). A port named twice goes to the first; the hub's own never. */
+   * public port, while it is started (its pid recorded), asleep, or failed or unkept (to say so). A port named
+   * twice goes to the first; the hub's own never. */
   rootedPreviews(): Rooted[] {
     const found: Rooted[] = [];
     const ports = new Set<number>([this.options.port]);
@@ -704,7 +738,7 @@ export class Hub {
       const servers: (readonly [string | undefined, DevServer | null])[] = [[undefined, record.server], ...record.workers.map((w) => [w.worker, w] as const)];
 
       for (const [worker, server] of servers) {
-        if (server === null || server.public === null || server.pid === null || ports.has(server.public)) continue;
+        if (server === null || server.public === null || (server.pid === null && server.keeper === null && server.failed === null) || ports.has(server.public)) continue;
         ports.add(server.public);
         found.push({ port: server.public, fleet: entry.id, dir: entry.dir, worker });
       }
@@ -729,7 +763,13 @@ export class Hub {
     const record = readRecord(slot.dir);
     const server = slot.worker === undefined ? record?.server : record?.workers.find((w) => w.worker === slot.worker);
 
-    if (server === undefined || server === null || server.pid === null || !isRunning(server.pid)) {
+    const now = server === undefined || server === null ? "stopped" : serverStanding(server);
+
+    if (now === "asleep" || now === "waking") return this.wake(req, slot.dir, slot.worker);
+
+    if (server !== undefined && server !== null && (now === "failed" || now === "unkept")) return haltedPage(req, slot.dir, { halted: now, worker: slot.worker, server });
+
+    if (server === undefined || server === null || now !== "running") {
       const start = slot.worker === undefined ? `fleet preview ${slot.dir} start --root` : `fleet preview ${slot.dir} start --per-worker ${slot.worker} --root`;
 
       return jsonResponse(502, { error: `this preview's dev server is not running: \`${start}\`` });
@@ -737,7 +777,7 @@ export class Hub {
 
     const url = new URL(req.url);
 
-    return this.pass(req, ip, { server, path: url.pathname, prefix: "/" }, url.search, keepOpen, upgrade);
+    return this.pass(req, ip, slot.dir, { server, path: url.pathname, prefix: "/", worker: slot.worker }, url.search, keepOpen, upgrade);
   }
 
   /** `POST /f/<fleet>/preview-workers` `{worker, include}`: a worker taken into the combined preview or out

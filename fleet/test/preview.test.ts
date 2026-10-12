@@ -13,7 +13,8 @@ import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
 import { view } from "../src/page/view.ts";
 import { fill, lastError, runSetup } from "../src/preview/devserver.ts";
-import { readRecord, type PreviewRecord } from "../src/preview/record.ts";
+import { readRecord, updateRecord, type PreviewRecord } from "../src/preview/record.ts";
+import { startedAt } from "../src/preview/tracked.ts";
 import { isRunning as alive } from "../src/preview/devserver.ts";
 import { SpendReader } from "../src/transcripts.ts";
 import { baseEnv, fleet, machine, readJson, SKILL, sleep, spawnFleet, tmp, type Environment } from "./support.ts";
@@ -398,6 +399,40 @@ describe("fleet preview stop, and prune", () => {
     expect(workspaceRows().filter((w) => w["kind"] === "preview")).toHaveLength(1);
   });
 
+  test("start and stop never signal a recorded pid that no longer has its recorded start time (a reboot, a reused pid)", async () => {
+    expect(preview("start", "--cmd", STUB).code).toBe(0);
+    expect(preview("stop").code).toBe(0);
+    const others = [0, 1, 2].map(() => Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" }));
+    await sleep(100);
+    const [server, keeper, updater] = others.map((p) => [p.pid, (startedAt(p.pid) ?? 0) - 100] as const);
+
+    const stale = (): void => {
+      updateRecord(dir, (now) =>
+        now === undefined || now.server === null
+          ? undefined
+          : {
+              ...now,
+              updater: updater?.[0] ?? null,
+              updaterStarted: updater?.[1] ?? null,
+              server: { ...now.server, pid: server?.[0] ?? null, pidStarted: server?.[1] ?? null, keeper: keeper?.[0] ?? null, keeperStarted: keeper?.[1] ?? null, asleep: null },
+            },
+      );
+    };
+
+    try {
+      stale();
+      expect(preview("start", "--cmd", STUB).code).toBe(0);
+      expect(record().server?.pid).not.toBe(server?.[0]);
+      expect(preview("stop").code).toBe(0);
+      stale();
+      expect(preview("stop").code).toBe(0);
+      await sleep(300);
+      expect(others.map((p) => alive(p.pid))).toEqual([true, true, true]);
+    } finally {
+      for (const p of others) p.kill();
+    }
+  });
+
   test("prune never deletes a live preview, and removes a stopped one with its merge", async () => {
     expect(preview("start", "--cmd", STUB).code).toBe(0);
     const live = fleet(["ws", dir, "prune", "--apply"], env);
@@ -407,6 +442,8 @@ describe("fleet preview stop, and prune", () => {
     const r = record();
     Bun.spawnSync(["kill", String(r.server?.pid ?? 0)]);
     await until(() => !alive(r.server?.pid));
+    // Its keeper wakes nothing after a crash: it records the server failed and ends.
+    await until(() => (record().server?.failed ?? null) !== null);
     expect(fleet(["ws", dir, "prune", "--apply"], env).stderr).toContain("ws: kept preview: the fleet's preview is running (updater pid");
 
     preview("stop");

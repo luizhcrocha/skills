@@ -33,6 +33,7 @@ import { validate } from "../ledger/validate.ts";
 import { cliLookups } from "../page/lookups.ts";
 import { pageHtml, readTemplate, writePage } from "../page/render.ts";
 import { view } from "../page/view.ts";
+import { stopKept } from "../preview/sleep.ts";
 import { ancestry, exeOf, isClaudeBinary, nameOf } from "../procs.ts";
 import { spentBy } from "../transcripts.ts";
 import { accountOf, keepUsage, usageLines } from "../usage.ts";
@@ -154,6 +155,10 @@ function serve(machine: Machine, argv: readonly string[]): Effect.Effect<number,
       const entry = registry.find(root);
       registry.unregister(root);
       out.out(entry === undefined ? `${root} was not being served\n` : `stopped ${entry.url}\n`);
+      // No request reaches its previews now: a sleeping one would never wake, an awake one never sleep.
+      const kept = stopKept(root, machine.env("PATH"));
+
+      if (kept.length > 0) out.out(`stopped the previews that sleep when idle, with their keepers: ${kept.join(", ")}\n`);
       const raw = load(root);
 
       if (!(raw instanceof Refusal)) for (const line of pruneOutlook(root, raw)) out.out(`${line}\n`);

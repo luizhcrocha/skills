@@ -20,8 +20,9 @@ import { asArray, asObject, asString, parseObject, type JsonObject } from "../js
 import { decodeLedger, type Agent, type Ledger } from "../ledger/model.ts";
 import { activeWorkspaces } from "../ledger/warnings.ts";
 import { readObject } from "../registry.ts";
-import { isRunning } from "../preview/devserver.ts";
-import { readRecord } from "../preview/record.ts";
+import { readRecord, serverProc } from "../preview/record.ts";
+import { kept } from "../preview/sleep.ts";
+import { runs } from "../preview/tracked.ts";
 import { workspaceRoot } from "../ws/jj.ts";
 import { World } from "../world.ts";
 import { exitOf } from "./exit.ts";
@@ -137,7 +138,9 @@ function devLine(root: string, a: Agent, port: number | undefined): string | und
   if (a.lane.length === 0) return undefined;
   const preview = readRecord(root);
 
-  if (preview?.server?.pid !== null && preview?.server?.pid !== undefined && isRunning(preview.server.pid)) {
+  const server = preview?.server ?? null;
+
+  if (preview !== undefined && server !== null && (runs(serverProc(server)) || kept(server))) {
     return (
       `Dev server: the fleet runs a preview, so start none of your own. Check your change alone on your per-worker preview ` +
       `(\`fleet preview ${root} start --per-worker ${a.id}\`, which prints its address), and the merged work at /f/${preview.fleet}/preview/ on the hub.`

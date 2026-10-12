@@ -14,6 +14,7 @@ import { connect } from "node:tls";
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 
 import { readRecord, recordJson, type DevServer, type PreviewRecord } from "../src/preview/record.ts";
+import { startedAt } from "../src/preview/tracked.ts";
 import { viewerOf } from "../src/hub/policy.ts";
 import { previewSockets, proxiedIdentity, type SocketData } from "../src/hub/preview-proxy.ts";
 import type { Certificate, CertificateSource } from "../src/hub/preview-tls.ts";
@@ -130,7 +131,23 @@ function stub(name: string): number {
 }
 
 function server(port: number, base$: string, public$: number | null = null): DevServer {
-  return { cmd: "stub", port, pid: process.pid, base: base$, path: dir, log: join(dir, "x.log"), started: "", public: public$ };
+  return {
+    cmd: "stub",
+    port,
+    pid: process.pid,
+    pidStarted: startedAt(process.pid) ?? null,
+    unit: null,
+    base: base$,
+    path: dir,
+    log: join(dir, "x.log"),
+    started: "",
+    public: public$,
+    keeper: null,
+    keeperStarted: null,
+    keeperUnit: null,
+    asleep: null,
+    failed: null,
+  };
 }
 
 function writeRecord(record: Partial<PreviewRecord>): void {
@@ -141,6 +158,7 @@ function writeRecord(record: Partial<PreviewRecord>): void {
     repo: dir,
     server: null,
     updater: null,
+    updaterStarted: null,
     include: [],
     exclude: [],
     merged: [],

@@ -443,14 +443,15 @@ export function processTable(detailed: (rows: readonly ProcRow[]) => ReadonlySet
   return rows.map((r) => (wanted.has(r.pid) ? linuxDetails(r) : r));
 }
 
-/** The pids of the preview dev servers and updaters the served fleets in `live` run: detached on purpose, they
- * outlive the command that started them, and `fleet preview stop` stops them. */
+/** The pids of the preview dev servers, their keepers and the updaters the served fleets in `live` run:
+ * detached on purpose, they outlive the command that started them, and `fleet preview stop` stops them. */
 export function previewPids(live: readonly Entry[]): Set<number> {
   return new Set(
     live.flatMap((e) => {
       const record = readRecord(e.dir);
+      const servers = record === undefined ? [] : [...(record.server === null ? [] : [record.server]), ...record.workers];
 
-      return record === undefined ? [] : [record.server?.pid ?? null, record.updater, ...record.workers.map((w) => w.pid)].flatMap((p) => (p === null ? [] : [p]));
+      return record === undefined ? [] : [record.updater, ...servers.flatMap((s) => [s.pid, s.keeper])].flatMap((p) => (p === null ? [] : [p]));
     }),
   );
 }
