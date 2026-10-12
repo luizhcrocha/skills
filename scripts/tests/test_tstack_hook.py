@@ -418,13 +418,16 @@ class NeverBreakTest(HookCase):
         self.assertIn("# memo", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
 
 
-def load_hook():
-    """hooks/tstack-hook as a module, to time a handler without the interpreter's start-up."""
+def load_hook(onepw=True):
+    """hooks/tstack-hook as a module, to time a handler without the interpreter's start-up; with its 1Password part
+    (hooks/tstack-hook-onepw.py, which the hook reads only for a call that needs it) unless `onepw` is False."""
     from importlib.machinery import SourceFileLoader
     from importlib.util import module_from_spec, spec_from_loader
     loader = SourceFileLoader("tstack_hook_under_test", str(HOOK))
     module = module_from_spec(spec_from_loader("tstack_hook_under_test", loader))
     loader.exec_module(module)
+    if onepw:
+        module._onepw()
     return module
 
 
@@ -3276,6 +3279,1083 @@ class SuiteGateTest(FleetCase):
                                                            "pid": os.getpid(), "since": "2026-01-05T09:00:00+00:00"}))
         d = self.decision(self.run_bash("pnpm test", env={"FLEET_DIR": str(other)}))
         self.assertIn("--as ui ", d["permissionDecisionReason"])
+
+
+NO_ACCESS = ("fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\n"
+             "and the repository exists.\n")
+SIGNING_LINE = 'sign_and_send_pubkey: signing failed for ED25519 "GitHub" from agent: communication with agent failed'
+SIGNING = f"git: {SIGNING_LINE}\ngit: git@github.com: Permission denied (publickey).\n{NO_ACCESS}"  # as jj prints it
+SSH_SIGNING = f"{SIGNING_LINE}\r\ngit@github.com: Permission denied (publickey).\r\n"  # as ssh and git print it
+SSH_OWN_EXIT = 255  # ssh's own failure to connect; any other exit code is the remote command's
+OP_LINE = "[ERROR] 2026/10/12 10:00:00 authorization prompt dismissed, please try again"
+OP_DISMISSED = OP_LINE + "\n"
+OP_TIMEOUT = "[ERROR] 2026/10/12 10:00:00 error initializing client: authorization timeout\n"
+OP_APP = ("[ERROR] 2026/10/12 10:00:00 could not read secret 'op://Vault/item/field': error initializing client: "
+          "connecting to desktop app: connecting to desktop app timed out, make sure it is installed, running\n")
+SECRETSPEC_APP = ("Error:   × Provider operation failed: Provider operation failed: [ERROR] 2026/10/12 10:00:00 could not "
+                  "read secret 'op://Vault/item/field': error initializing client: connecting to desktop app: read: "
+                  "connection reset, make sure the CLI is correctly installed\n")
+SSH_KIND = "SSH through the 1Password agent (jj and git remotes, ssh)"
+OP_KIND = "secrets read through the 1Password app (op, secretspec, gh, aws)"
+
+
+def onepw_repos(root):
+    """Throwaway repos whose git config is all the hook reads, by name: `ssh` (one SSH remote; a jj repo too, with the
+    workspace `ws` beside it, whose `.jj/repo` is a file), `https`, `mixed` (`origin` over HTTPS, `fork` over SSH) and
+    `none`, a folder of no repo."""
+    def repo(name, **remotes):
+        (root / name / ".git").mkdir(parents=True)
+        (root / name / ".git" / "config").write_text("[core]\n\tbare = false\n" + "".join(
+            f'[remote "{remote}"]\n\turl = {url}\n\tfetch = +refs/heads/*:refs/remotes/{remote}/*\n'
+            for remote, url in remotes.items()))
+        return root / name
+
+    repos = {"ssh": repo("ssh", origin="git@github.com:acme/app.git"),
+             "https": repo("https", origin="https://github.com/acme/app.git"),
+             "mixed": repo("mixed", origin="https://github.com/acme/app.git", fork="git@github.com:me/app.git"),
+             "ws": root / "ws", "none": root / "none"}
+    (repos["ssh"] / ".jj" / "repo" / "store").mkdir(parents=True)
+    (repos["ssh"] / ".jj" / "repo" / "store" / "git_target").write_text("../../../.git")
+    (repos["ws"] / ".jj").mkdir(parents=True)
+    (repos["ws"] / ".jj" / "repo").write_text("../../ssh/.jj/repo")
+    repos["none"].mkdir()
+    return repos
+
+
+def over_ssh(what, host="github.com", held=True, clears=True):
+    return ("ssh-agent", what, host, held, clears)
+
+
+def app(what, clears=False):
+    return ("op-desktop", what, None, True, clears)
+
+
+UNTOLD = (None, False, False)  # a remote the hook cannot tell: no host, not held, never clearing; it may show a lock
+USES = (
+    # jj and git on a remote: SSH is held; a fetch, a pull, a clone clear, jj's push does not
+    ("ssh", "jj git push --bookmark main", over_ssh("jj git push", clears=False)),
+    ("ssh", "jj git fetch", over_ssh("jj git fetch")),
+    ("ssh", "jj git fetch --remote origin", over_ssh("jj git fetch")),
+    ("none", "jj -R ../ssh git fetch", over_ssh("jj git fetch")),
+    ("ws", "jj git fetch", over_ssh("jj git fetch")),
+    ("ws", "jj git push --bookmark main", over_ssh("jj git push", clears=False)),
+    ("none", "jj git clone git@github.com:acme/app.git", over_ssh("jj git clone")),
+    ("ssh", "git fetch", over_ssh("git fetch")),
+    ("ssh", "git pull", over_ssh("git pull")),
+    ("ssh", "git ls-remote", over_ssh("git ls-remote")),
+    ("ssh", "git push origin main", over_ssh("git push")),
+    ("ssh", "git push -u origin main 2>&1", over_ssh("git push")),
+    ("none", "git -C ../ssh fetch --depth 1 origin", over_ssh("git fetch")),
+    ("none", "git clone git@gitlab.example.com:a/b.git", over_ssh("git clone", "gitlab.example.com")),
+    ("none", "git clone --depth 1 ssh://git@Host.Example:2222/a/b.git dest", over_ssh("git clone", "host.example")),
+    ("mixed", "git fetch fork", over_ssh("git fetch")),
+    ("mixed", "git fetch --all", over_ssh("git fetch")),
+    ("https", "git fetch git@github.com:acme/app.git", over_ssh("git fetch")),
+    # a remote that is not SSH is no use at all
+    ("https", "git fetch", None), ("https", "jj git fetch", None), ("https", "git fetch origin", None),
+    ("https", "jj git push --bookmark main", None), ("mixed", "git fetch origin", None),
+    ("ssh", "git fetch upstream", None), ("ssh", "jj git fetch --remote upstream", None),
+    ("ssh", "git clone /tmp/a /tmp/b", None), ("ssh", "git clone https://github.com/acme/app", None),
+    ("ssh", "git fetch ../other", None), ("ssh", "git push /srv/bare.git main", None),
+    ("ssh", "git fetch file:///srv/app.git", None), ("ssh", "git -C ../https fetch", None),
+    # one the hook cannot tell only shows
+    ("mixed", "git fetch", ("ssh-agent", "git fetch", *UNTOLD)),
+    ("mixed", "jj git fetch", ("ssh-agent", "jj git fetch", *UNTOLD)),
+    ("none", "git fetch", ("ssh-agent", "git fetch", *UNTOLD)), ("none", "jj git push", ("ssh-agent", "jj git push", *UNTOLD)),
+    ("ssh", "git -c core.sshCommand=ssh fetch", ("ssh-agent", "git fetch", *UNTOLD)),
+    ("ssh", "jj git fetch --remote 'glob:*'", ("ssh-agent", "jj git fetch", *UNTOLD)),
+    ("ssh", "GIT_SSH_COMMAND='ssh -i key' git fetch", over_ssh("git fetch", held=False, clears=False)),
+    # never a dry run, a help page, or a subcommand that reaches no remote
+    ("ssh", "jj git push --dry-run", None), ("ssh", "git push --dry-run", None), ("ssh", "git push -n origin main", None),
+    ("ssh", "jj git push --help", None), ("ssh", "git fetch --help", None), ("ssh", "git --version fetch", None),
+    ("ssh", "git ls-remote --get-url", None), ("ssh", "git status", None), ("ssh", "git commit -m 'ssh and gh'", None),
+    ("ssh", "jj log", None), ("ssh", "jj status", None), ("ssh", "jj git remote list", None),
+    # ssh: the host is the first word that is no option; a key of its own clears nothing
+    ("ssh", "ssh github.com", over_ssh("ssh")), ("ssh", "ssh nixbox uptime", over_ssh("ssh", "nixbox")),
+    ("ssh", "ssh -o BatchMode=yes localhost true", over_ssh("ssh", "localhost")),
+    ("ssh", "ssh -tt -p 2222 Git@GitHub.com ls", over_ssh("ssh")), ("ssh", "ssh -p2222 -l git github.com", over_ssh("ssh")),
+    ("ssh", "ssh -i ~/.ssh/key github.com", over_ssh("ssh", clears=False)),
+    ("ssh", "ssh -o IdentityAgent=none github.com", over_ssh("ssh", clears=False)),
+    ("ssh", "ssh -J jump github.com", over_ssh("ssh", clears=False)),
+    ("ssh", "ssh -V", None), ("ssh", "ssh -G github.com", None), ("ssh", "ssh -Q cipher", None), ("ssh", "ssh", None),
+    ("ssh", "ssh -p 22", None), ("ssh", "ssh 'host;id'", None), ("ssh", "ssh ssh://host:22", None),
+    ("ssh", "scp a.txt b.txt", None), ("ssh", "scp a.txt casa-pc:", None), ("ssh", "sftp casa-pc", None),
+    ("ssh", "ssh-add -l", None),
+    # op: a read clears; run, inject, signin and plugin run are held and clear nothing; the rest never ask the app
+    ("ssh", "op read op://v/i/f", app("op read", clears=True)), ("ssh", "op read op://v/i/f 2>&1", app("op read", clears=True)),
+    ("ssh", "op read op://v/i/f > out.txt 2>&1", app("op read", clears=True)),
+    ("ssh", "op --format json item get x", app("op item", clears=True)),
+    ("ssh", "op --account acme vault list", app("op vault", clears=True)),
+    ("ssh", "op document get x", app("op document", clears=True)), ("ssh", "op run -- true", app("op run")),
+    ("ssh", "op inject -i a.tpl -o a.env", app("op inject")), ("ssh", "op signin", app("op signin")),
+    ("ssh", "op plugin run -- gh pr list", app("op plugin run")),
+    ("ssh", "op whoami", None), ("ssh", "op --version", None), ("ssh", "op account list", None),
+    ("ssh", "op plugin list", None), ("ssh", "op read --help", None), ("ssh", "op item template list", None),
+    ("ssh", "op completion zsh", None), ("ssh", "op", None),
+    # secretspec: held, never clearing; none with a provider that is not 1Password's app
+    ("ssh", "secretspec run -- node x", app("secretspec run")), ("ssh", "secretspec check", app("secretspec check")),
+    ("ssh", "secretspec run -- true", app("secretspec run")), ("ssh", "secretspec -f s.toml get KEY", app("secretspec get")),
+    ("ssh", "secretspec run --provider onepassword://Vault -- x", app("secretspec run")),
+    ("ssh", "secretspec run -- node -p 1", app("secretspec run")),
+    ("ssh", "secretspec export < in.txt", app("secretspec export")),
+    ("ssh", "SECRETSPEC_PROVIDER=onepassword secretspec check", app("secretspec check")),
+    ("ssh", "secretspec check --provider dotenv", None), ("ssh", "secretspec run --provider dotenv -- node x.js", None),
+    ("ssh", "secretspec run -p keyring -- x", None), ("ssh", "secretspec --provider=env run -- x", None),
+    ("ssh", "secretspec run -pdotenv -- x", None), ("ssh", "SECRETSPEC_PROVIDER=dotenv secretspec run -- x", None),
+    ("ssh", "secretspec run --provider onepassword+token://x -- y", None), ("ssh", "secretspec --version", None),
+    ("ssh", "secretspec init", None), ("ssh", "secretspec run --help", None), ("ssh", "secretspec cache clear", None),
+    # the bare gh and aws: held, never clearing
+    ("ssh", "gh pr list --json number", app("gh pr")), ("ssh", "gh api user", app("gh api")),
+    ("ssh", "gh -R acme/x pr view 1", app("gh pr")), ("ssh", "gh pr list &> out.txt", app("gh pr")),
+    ("ssh", "GH_TOKEN=x gh api user", app("gh api")), ("ssh", "aws s3 ls", app("aws s3")),
+    ("ssh", "aws --profile prod s3 ls", app("aws s3")), ("ssh", "aws configure list", app("aws configure")),
+    ("ssh", "gh --version", None), ("ssh", "gh pr --help", None), ("ssh", "gh help", None), ("ssh", "gh", None),
+    ("ssh", "gh completion -s zsh", None), ("ssh", "aws --version", None), ("ssh", "aws s3 help", None),
+    ("ssh", "aws help", None),
+    # no wrapper is seen through, and a path is not the bare tool
+    ("ssh", "timeout 60 gh pr list", None), ("ssh", "env GH_TOKEN=x gh api user", None), ("ssh", "sh -c 'gh pr list'", None),
+    ("ssh", "sh -c 'gh api user'", None), ("ssh", "bash -c 'secretspec check'", None),
+    ("ssh", "pnpm exec secretspec run -- x", None), ("ssh", "devenv shell -- secretspec run -- x", None),
+    ("ssh", "nu -c 'secretspec run -- node x'", None), ("ssh", "devenv-run secretspec run -- x", None),
+    ("ssh", "./deploy.sh", None), ("ssh", "just deploy", None), ("ssh", "sudo ssh github.com", None),
+    ("ssh", "command gh pr list", None), ("ssh", "exec op read op://v/i/f", None), ("ssh", "nohup gh pr list", None),
+    ("ssh", "time gh pr list", None), ("ssh", "xargs gh pr view", None), ("ssh", "/usr/bin/gh pr list", None),
+    ("ssh", "./ssh github.com", None), ("ssh", "'gh' pr list", None), ("ssh", "\\gh pr list", None),
+    # only a single simple command
+    ("ssh", "! op read op://v/i/f", None), ("ssh", "op read op://v/i/f || true", None),
+    ("ssh", "git fetch origin && git show HEAD", None), ("ssh", "gh pr list | head", None), ("ssh", "gh pr list &", None),
+    ("ssh", "gh pr list; ls", None), ("ssh", "(gh pr list)", None), ("ssh", "{ gh pr list; }", None),
+    ("ssh", "if true; then gh pr list; fi", None), ("ssh", "gh pr list\ngh pr view 1", None),
+    ("ssh", f"ssh -o BatchMode=yes localhost true; echo '{SIGNING_LINE}'", None),
+    ("ssh", 'op read "op://v/$ITEM/f"', None), ("ssh", "op read `cat ref`", None), ("ssh", "x=$(op read op://v/i/f)", None),
+    ("ssh", "gh pr create --body \"$(cat <<'EOF'\nhi\nEOF\n)\"", None), ("ssh", "op inject <<EOF\n{{ op://v/i/f }}\nEOF", None),
+    ("ssh", "gh pr list # mine", None), ("ssh", "gh pr view <(echo 1)", None), ("ssh", "gh pr list 'unclosed", None),
+    ("ssh", "cd ../x && jj git fetch", None),
+    # the tool's name in another command's words
+    ("ssh", "cat op.log | grep 'op read'", None), ("ssh", "echo 'jj git push'", None), ("ssh", "rg 'gh pr' docs", None),
+    ("ssh", "cat hook.log", None), ("ssh", "tail -5 deploy.log", None), ("ssh", "pnpm build", None), ("ssh", "ls -la", None),
+)
+
+
+class OnepwParseTest(unittest.TestCase):
+    """onepw_use, the one reading of a Bash command for detection, hold and clear, and what feeds it: the remote a jj or
+    git operation reaches, 1Password's own failure texts, and the state file."""
+
+    NOW = "2026-01-05T09:00:00+00:00"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.hook = load_hook()
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls._tmp.cleanup)
+        cls.tmp = Path(cls._tmp.name).resolve()
+        cls.repos = onepw_repos(cls.tmp)
+        cls.env = {"HOME": str(cls.tmp / "home"), "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def use(self, command, repo="ssh", env=None):
+        found = self.hook.onepw_use(command, str(self.repos[repo]), {**self.env, **(env or {})})
+        return found if found is None else tuple(found)
+
+    def test_every_command_form(self):
+        for repo, command, want in USES:
+            with self.subTest(command=command, repo=repo):
+                self.assertEqual(self.use(command, repo), want)
+
+    def test_the_words_never_hold_an_argument(self):
+        for command in ("op read op://Vault/item/password", "gh api -H 'Authorization: token abc' /user",
+                        "secretspec run --profile prod -- deploy --token abc", "ssh root@host 'cat /etc/shadow'",
+                        "gh --hostname abc.example pr list", "aws --no-such-flag abc s3 ls", "gh ABC-token",
+                        "aws --debug s3 cp abc s3://abc"):
+            with self.subTest(command=command):
+                what = self.use(command)[1]
+                self.assertRegex(what, r"^[a-z]+( [a-z0-9-]+){0,2}$")
+                self.assertNotIn("abc", what.lower())
+
+    def test_a_token_means_op_and_secretspec_are_no_use(self):
+        token, connect = {"OP_SERVICE_ACCOUNT_TOKEN": "ops_x"}, {"OP_CONNECT_HOST": "http://c", "OP_CONNECT_TOKEN": "t"}
+        for command in ("op read op://v/i/f", "op run -- true", "secretspec run -- node x", "secretspec check"):
+            with self.subTest(command=command):
+                self.assertIsNotNone(self.use(command))
+                self.assertIsNone(self.use(command, env=token))
+                self.assertIsNone(self.use(command, env=connect))
+                self.assertIsNone(self.use(f"OP_SERVICE_ACCOUNT_TOKEN=fake {command}"))
+                self.assertIsNone(self.use(f"OP_CONNECT_HOST=http://c OP_CONNECT_TOKEN=t {command}"))
+                self.assertIsNone(self.use(f"OP_CONNECT_TOKEN=t {command}", env={"OP_CONNECT_HOST": "http://c"}))
+                self.assertIsNotNone(self.use(command, env={"OP_CONNECT_HOST": "http://c"}))
+                self.assertIsNotNone(self.use(f"OP_SERVICE_ACCOUNT_TOKEN= {command}", env=token))  # unset on the line
+        for command in ("gh pr list", "aws s3 ls", "git fetch", "ssh github.com"):
+            self.assertIsNotNone(self.use(command, env=token), command)
+
+    def test_secretspec_reads_its_provider_from_the_environment_too(self):
+        self.assertIsNone(self.use("secretspec run -- x", env={"SECRETSPEC_PROVIDER": "dotenv"}))
+        self.assertIsNotNone(self.use("secretspec run -- x", env={"SECRETSPEC_PROVIDER": "onepassword://Vault"}))
+        self.assertIsNotNone(self.use("secretspec run -p onepassword -- x", env={"SECRETSPEC_PROVIDER": "dotenv"}))
+
+    def test_an_ssh_is_bound_only_to_a_host_the_lock_saw_fail(self):
+        lock = {"since": "2026-01-05T09:00:00+00:00", "why": "w", "hosts": ["github.com"]}
+        for command, bound in (("ssh github.com", True), ("ssh -T git@GitHub.com", True), ("ssh nixbox uptime", False),
+                               ("git fetch", True), ("jj git push", True)):
+            use = self.hook.onepw_use(command, str(self.repos["ssh"]), self.env)
+            self.assertEqual(self.hook._onepw_bound(use, lock), bound, command)
+            self.assertFalse(self.hook._onepw_bound(use, None), command)
+        self.assertFalse(self.hook._onepw_bound(self.hook.onepw_use("ssh github.com", "/", self.env), {"since": "x"}))
+
+    def test_a_remote_is_read_as_git_rewrites_it(self):
+        home = self.tmp / "rewritten"
+        (home / ".config" / "git").mkdir(parents=True)
+        env = {"HOME": str(home)}
+        (home / ".config" / "git" / "config").write_text(
+            '[user]\n\tname = "A B"\n[url "git@github.com:acme/"]\n\tinsteadOf = "https://github.com/acme/"\n')
+        self.assertEqual(self.use("jj git push", "https", env), over_ssh("jj git push", clears=False))
+        self.assertEqual(self.use("git fetch origin", "mixed", env), over_ssh("git fetch"))
+        self.assertEqual(self.use("git clone https://github.com/acme/x.git", "none", env), over_ssh("git clone"))
+        self.assertIsNone(self.use("git clone https://github.com/other/x.git", "none", env))
+        (home / ".config" / "git" / "config").write_text('[url "https://github.com/"]\n\tinsteadOf = git@github.com:\n')
+        self.assertIsNone(self.use("git fetch", "ssh", env))
+        self.assertIsNone(self.use("git fetch", "ssh", {**env, "XDG_CONFIG_HOME": str(home / ".config")}))
+        self.assertEqual(self.use("git fetch", "ssh", {**env, "GIT_CONFIG_GLOBAL": "/dev/null"}), over_ssh("git fetch"))
+        (home / ".config" / "git" / "config").write_text('[url "https://github.com/"]\n\tpushInsteadOf = git@github.com:\n')
+        self.assertEqual(self.use("git fetch", "ssh", env), over_ssh("git fetch"))
+        self.assertIsNone(self.use("git push", "ssh", env))
+        (home / ".config" / "git" / "config").write_text("[include]\n\tpath = more.inc\n")
+        self.assertEqual(self.use("git fetch", "ssh", env), ("ssh-agent", "git fetch", *UNTOLD))
+
+    def test_a_push_goes_to_the_pushurl_and_a_worktree_to_its_repo(self):
+        repo = self.tmp / "pushurl"
+        (repo / ".git" / "worktrees" / "wt").mkdir(parents=True)
+        (repo / ".git" / "config").write_text('[remote "origin"]\n\turl = https://github.com/acme/app.git\n'
+                                              "\tpushurl = git@github.com:acme/app.git  # over SSH\n")
+        self.repos["pushurl"] = repo
+        for command in ("git push", "git push origin", "git push --repo origin", "git push --repo=origin"):
+            self.assertEqual(self.use(command, "pushurl"), over_ssh("git push"), command)
+        for command in ("git fetch", "git fetch origin", "git pull", "jj git fetch"):
+            self.assertIsNone(self.use(command, "pushurl"), command)
+        (repo / ".git" / "worktrees" / "wt" / "commondir").write_text("../..\n")
+        self.repos["wt"] = self.tmp / "wt"
+        self.repos["wt"].mkdir()
+        (self.repos["wt"] / ".git").write_text(f"gitdir: {repo}/.git/worktrees/wt\n")
+        self.assertEqual(self.use("git push origin", "wt"), over_ssh("git push"))
+
+    def test_only_1passwords_own_text_is_a_failure(self):
+        refused = SIGNING.replace("communication with agent failed", "agent refused operation")
+        reset = OP_APP.replace("connecting to desktop app timed out", "read: connection reset")
+        no_item = '[ERROR] 2026/10/12 10:00:01 "nope" isn\'t an item in the "Employee" vault\n'
+        fallback = ("warning: primary provider onepassword://Employee failed: Provider operation failed: Provider "
+                    f"operation failed: {OP_LINE}\n; will try fallback chain for affected secrets\n"
+                    "Error:   × Failed to run command\n  ╰─▶ Provider operation failed: [ERROR] 2026/10/12\n"
+                    "      10:00:00 authorization prompt dismissed, please try again\n")
+        for command, text, want in (
+                ("jj git push", SIGNING, "signing"), ("git fetch", SSH_SIGNING, "signing"), ("jj git fetch", refused, "signing"),
+                ("git fetch", f"Exit code 128\n{SSH_SIGNING}{NO_ACCESS}", "signing"),
+                ("op read op://v/i/f", OP_DISMISSED, "dismissed"), ("gh pr list", OP_TIMEOUT, "timeout"),
+                ("op read op://v/i/f", OP_APP, "app"), ("aws s3 ls", reset, "app"),
+                ("secretspec run -- node x", SECRETSPEC_APP, "app"), ("secretspec run -- node x", fallback, "dismissed"),
+                ("op read op://v/i/f", "Exit code 1\n" + OP_DISMISSED, "dismissed"),
+                ("op run -- node x", f"Exit code 1\n\n{OP_LINE}\r\n\n", "dismissed"),
+                # the same words for a command of the other kind
+                ("git fetch", OP_DISMISSED, None), ("op read op://v/i/f", SIGNING, None),
+                # git's line says nothing of 1Password, whatever stands beside it
+                ("git fetch", NO_ACCESS, None), ("git fetch", "ERROR: Repository not found.\n" + NO_ACCESS, None),
+                ("git fetch", "git@github.com: Permission denied (publickey).\n" + NO_ACCESS, None),
+                # ssh's line where ssh did not put it: quoted by a failing pre-push test, echoed by the remote, in a log
+                ("git push origin main", f"FAILED test_x\nE  assert '{SIGNING_LINE}' in out\nerror: failed to push\n", None),
+                ("git fetch", f"remote: {SIGNING_LINE}\nfatal: protocol error\n", None),
+                ("jj git fetch", f"/var/log/ci/a.log:10:{SIGNING_LINE}\n", None), ("git pull", f"    {SIGNING_LINE}\n", None),
+                # op's line where op did not put it: quoted by a test, inside a log line, after a tab
+                ("op read op://v/i/f", f"E  assert '{OP_LINE}' in out\n", None), ("gh run view 9", f"deploy\t{OP_LINE}\n", None),
+                ("op read op://v/i/f", f"2026-10-12 hook: {OP_LINE}\n", None),
+                # op's line that a child printed, or that stands before another error: op asks the app before anything runs
+                ("op run -- pytest -k onepw", f"----- Captured stdout call -----\n{OP_LINE}\n1 failed\n", None),
+                ("op run -- node deploy.js", f"{OP_LINE}\nError: deploy failed\n", None),
+                ("gh issue view 12 --comments", f"title: x\n\n{OP_LINE}\nGraphQL: Could not resolve\n", None),
+                ("aws logs tail /x --since 1h", f"{OP_LINE}\nAn error occurred (ExpiredToken)\n", None),
+                ("op item get runbook --format json", OP_DISMISSED + no_item, None),
+                ("op read op://v/i/f", no_item + OP_DISMISSED, "dismissed"),
+                # secretspec's own failure names its provider: a bare line is its child's
+                ("secretspec run -- pytest -k onepw", f"----- Captured stdout call -----\n{OP_LINE}\n1 failed\n", None),
+                ("secretspec run -- node deploy.js", f"{OP_LINE}\nError: deploy failed\n", None),
+                ("secretspec run -- node deploy.js", OP_DISMISSED, None),
+                # measured: op whoami says this with the app unlocked
+                ("op read op://v/i/f", "[ERROR] 2026/10/12 10:00:00 account is not signed in\n", None),
+                ("op read op://v/i/f", "authorization prompt dismissed, please try again\n", None)):
+            with self.subTest(command=command, text=text[:50]):
+                use = self.hook.onepw_use(command, str(self.repos["ssh"]), self.env)
+                self.assertEqual(self.hook.onepw_why(use, text, 1), want)
+
+    def test_an_ssh_fails_through_1password_only_when_ssh_itself_could_not_connect(self):
+        for command, text, code, want in (
+                ("ssh nixbox uptime", SSH_SIGNING, 255, "signing"), ("ssh -tt git@github.com", SSH_SIGNING, 255, "signing"),
+                # a remote command that ran: its exit code and its output are the remote's
+                ("ssh nixbox 'cd repo && git pull'", SSH_SIGNING + NO_ACCESS, 1, None),
+                ("ssh build1 'grep -rn signing /var/log/ci'", f"/var/log/ci/a.log:10:{SIGNING_LINE}\n", 2, None),
+                ("ssh build1 'journalctl -u ci -n 20; false'", f"Oct 12 ci[1]: {SIGNING_LINE}\n", 1, None),
+                ("ssh build1 cat ci.log", SSH_SIGNING, 0, None), ("ssh build1 cat ci.log", SSH_SIGNING, None, None),
+                ("ssh build1 'tail -1 ci.log; exit 255'", f"10:01 {SIGNING_LINE}\n", 255, None)):
+            with self.subTest(command=command, code=code):
+                use = self.hook.onepw_use(command, str(self.repos["ssh"]), self.env)
+                self.assertEqual(self.hook.onepw_why(use, text, code), want)
+
+    def parse(self, state):
+        text = state if isinstance(state, str) else json.dumps(state)
+        return self.hook._onepw_parse(text, self.hook._instant(self.NOW))
+
+    def test_a_state_that_does_not_read_is_broken_for_a_fixed_reason(self):
+        kind = {"since": "2026-01-05T08:50:00+00:00", "why": "w"}
+        for state, reason in BROKEN_STATES:
+            with self.subTest(state=str(state)[:60]):
+                self.assertEqual(self.parse(state), (None, reason))
+                self.assertIn(reason, self.hook.ONEPW_BROKEN)
+        for more in ({}, {"cleared": None}, {"cleared": False}, {"cleared": {}}, {"since": "2026-01-05T09:00:59+00:00"},
+                     {"cleared": {"at": "2026-01-05T08:55:00+00:00", "by": "user", "note": "n"}}):
+            with self.subTest(more=more):
+                state, reason = self.parse({"v": 2, "kinds": {"op-desktop": {**kind, **more}}})
+                self.assertIsNone(reason)
+                self.assertEqual(state["kinds"]["op-desktop"], {**kind, **more})
+
+    def test_what_is_tolerated_in_a_state_is_dropped(self):
+        row = {"dir": "/f", "fleet": "p", "session": "s", "worker": None, "kind": "ssh-agent", "what": "git fetch"}
+        state, reason = self.parse({"v": 2, "kinds": {"ssh-agent": {
+            "since": "2026-01-05T08:50:00+00:00", "why": "w", "hosts": ["github.com", 3, "Not A Host", "x" * 300, None],
+            "again": "soon", "lapsed": 7}, "op-desktop": {"since": "2026-01-05T08:50:00+00:00", "hosts": "github.com"}},
+            "waiting": [3, "x", {"kind": "ssh"}, {"kind": ["ssh-agent"]}, {}, row], "told": {"/f": "never", "/g": self.NOW}})
+        self.assertIsNone(reason)
+        self.assertEqual(state["kinds"]["ssh-agent"],
+                         {"since": "2026-01-05T08:50:00+00:00", "why": "w", "hosts": ["github.com"]})
+        self.assertEqual(state["kinds"]["op-desktop"], {"since": "2026-01-05T08:50:00+00:00"})
+        self.assertEqual((state["waiting"], state["told"]), ([row], {"/g": self.NOW}))
+
+    def test_a_fleet_waits_once_per_kind_and_the_cap_counts_fleets(self):
+        row = {"dir": "/f", "fleet": "p", "session": "s", "worker": None, "kind": "ssh-agent", "what": "git fetch"}
+        state, new = self.hook._onepw_add({"waiting": [row]}, [
+            {**row, "session": "s2"}, {**row, "worker": "a3", "what": "ssh"}, {**row, "kind": "op-desktop", "what": "gh pr"},
+            {**row, "kind": "op-desktop", "what": "gh api"}, {**row, "dir": None}, {**row, "dir": None, "session": "s3"}])
+        self.assertEqual(new, [{**row, "kind": "op-desktop", "what": "gh pr"}, {**row, "dir": None}])
+        self.assertEqual(state["waiting"], [row, *new])
+        rows = [{**row, "dir": f"/f{i}"} for i in range(self.hook.ONEPW_WAITING_MAX - 1)]
+        state, new = self.hook._onepw_add({"waiting": rows}, [{**row, "dir": "/g"}, {**row, "dir": "/h"}])
+        self.assertEqual((len(state["waiting"]), new), (self.hook.ONEPW_WAITING_MAX, [{**row, "dir": "/g"}]))
+        self.assertEqual(self.hook._onepw_add(state, [{**row, "dir": "/h"}, rows[0]]), (state, []))
+
+    def test_a_probe_window_opens_after_the_last_of_since_again_and_probe(self):
+        at = self.hook._instant
+        now, minute = at("2026-01-05T12:00:00+00:00"), 60
+        for entry, opens in (({"since": "2026-01-05T09:00:00+00:00"}, "2026-01-05T09:15:00+00:00"),
+                             ({"since": "2026-01-05T09:00:00+00:00", "again": "2026-01-05T09:40:00+00:00"},
+                              "2026-01-05T09:55:00+00:00"),
+                             ({"since": "2026-01-05T09:00:00+00:00", "again": "2026-01-05T09:40:00+00:00",
+                               "probe": "2026-01-05T10:01:30+00:00"}, "2026-01-05T10:16:30+00:00"),
+                             ({"since": "2026-01-05T09:00:00+00:00", "probe": "soon"}, "2026-01-05T09:15:00+00:00"),
+                             # a stamp ahead of now cannot keep the window shut
+                             ({"since": "2026-01-05T09:00:00+00:00", "probe": "2099-01-01T00:00:00+00:00"},
+                              "2026-01-05T12:15:00+00:00")):
+            self.assertEqual(self.hook._onepw_window(entry, now), at(opens), entry)
+        self.assertEqual(self.hook.ONEPW_PROBE_S, 15 * minute)
+
+
+OP_LOCK = {"since": "2026-01-05T08:50:00+00:00", "why": "the 1Password prompt was dismissed"}
+BROKEN_STATES = (
+    ("{not json", "not JSON"), ("", "not JSON"), ("[]", "not JSON"), ('"locked"', "not JSON"), ("[" * 100000, "not JSON"),
+    ({"v": 2}, "no kinds"), ({"v": 2, "kinds": []}, "no kinds"), ({"v": 2, "kinds": None}, "no kinds"),
+    ({"since": "2026-01-05T08:50:00+00:00", "why": "SSH signing through 1Password failed", "waiting": []}, "no kinds"),
+    ({"v": 2, "kinds": {"ssh": OP_LOCK}}, "an unknown kind"),
+    ({"v": 2, "kinds": {"op-desktop": OP_LOCK, "ssh-remote": OP_LOCK}}, "an unknown kind"),
+    ({"v": 2, "kinds": {"op-desktop": "locked"}}, "a kind's since"), ({"v": 2, "kinds": {"op-desktop": {}}}, "a kind's since"),
+    ({"v": 2, "kinds": {"op-desktop": {"since": "yesterday"}}}, "a kind's since"),
+    ({"v": 2, "kinds": {"op-desktop": {"since": 1767603000}}}, "a kind's since"),
+    ({"v": 2, "kinds": {"op-desktop": {"since": "2026-01-05T09:01:01+00:00"}}}, "a kind's since"),
+    ({"v": 2, "kinds": {"op-desktop": {"since": "2099-01-01T00:00:00+00:00"}}}, "a kind's since"),
+    ({"v": 2, "kinds": {"op-desktop": {**OP_LOCK, "cleared": True}}}, "a kind's cleared"),
+    ({"v": 2, "kinds": {"op-desktop": {**OP_LOCK, "cleared": "yes"}}}, "a kind's cleared"),
+    ({"v": 2, "kinds": {"op-desktop": {**OP_LOCK, "cleared": {"at": "then"}}}}, "a kind's cleared"),
+    ({"v": 2, "kinds": {"op-desktop": {**OP_LOCK, "cleared": {"by": "user"}}}}, "a kind's cleared"),
+    ({"v": 2, "kinds": {"op-desktop": OP_LOCK}, "waiting": 3}, "waiting"),
+    ({"v": 2, "kinds": {"op-desktop": OP_LOCK}, "waiting": {"0": {}}}, "waiting"),
+    ({"v": 2, "kinds": {"op-desktop": OP_LOCK}, "waiting": None}, "waiting"),
+    ({"v": 2, "kinds": {"op-desktop": OP_LOCK}, "told": ["/f"]}, "told"),
+    ({"v": 2, "kinds": {}, "told": "2026-01-05T08:50:00+00:00"}, "told"),
+)
+
+
+class OnepwTest(FleetCase):
+    """1Password locked (fleet/SPEC.md): a failed command with 1Password's own text locks its kind once for the machine,
+    later ones join it, a command of that kind is denied in every fleet's session until the kind clears, a state that
+    does not read holds nothing, and nothing is ever allowed."""
+
+    NOW = "2026-01-05T09:00:00+00:00"
+
+    def setUp(self):
+        super().setUp()
+        self.env.update(FLEET_NOW=self.NOW, TZ="UTC", GIT_CONFIG_NOSYSTEM="1")
+        self.locked = self.registry / "onepw" / "locked.json"
+        self.repos = onepw_repos(self.tmp / "repos")
+
+    def state(self):
+        return json.loads(self.locked.read_text())
+
+    def kinds(self):
+        return self.state()["kinds"] if self.locked.exists() else {}
+
+    def onepw_log(self):
+        path = self.registry / "onepw" / "onepw.log"
+        return path.read_text() if path.exists() else ""
+
+    def call(self, event, command, body, env=None, payload=None, repo=None, background=False, **extra):
+        payload = {**(payload or self.payload(event)), **({"cwd": str(self.repos[repo])} if repo else {})}
+        tool_input = {"command": command, **({"run_in_background": True} if background else {})}
+        r = self.hook(event, {**payload, "tool_name": "Bash", "tool_input": tool_input, **body, **extra}, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn('"allow"', r.stdout)
+        return r
+
+    def ran(self, command, output="ok\n", **more):
+        """The command exited 0 (PostToolUse)."""
+        response = {"stdout": output, "stderr": "", "interrupted": False}
+        return self.call("PostToolUse", command, {"tool_response": response}, **more)
+
+    def failed(self, command, output, event="PostToolUseFailure", code=1, **more):
+        """The command failed: the failure event, or a PostToolUse whose response carries the exit code."""
+        body = {"error": f"Exit code {code}\n{output}"} if event == "PostToolUseFailure" else \
+            {"tool_response": {"stdout": "", "stderr": output, "interrupted": False, "exit_code": code}}
+        return self.call(event, command, body, **more)
+
+    def asks(self, command, **more):
+        r = self.call("PreToolUse", command, {}, **more)
+        return json.loads(r.stdout)["hookSpecificOutput"] if r.stdout else None
+
+    def held(self, command, **more):
+        return (self.asks(command, **more) or {}).get("permissionDecision") == "deny"
+
+    def other_fleet(self, id="q", session="sess-2"):
+        pad = self.tmp / f"pad-{id}"
+        fleet = pad / "coordinator"
+        fleet.mkdir(parents=True)
+        (fleet / "state.json").write_text((self.fleet / "state.json").read_text())
+        self.register(fleet, session=session, id=id)
+        return {**self.base("x"), "session_id": session, "scratchpad_dir": str(pad)}, fleet
+
+    def outsider(self):
+        return {**self.base("x"), "session_id": "sess-9"}  # no scratchpad: a session of no fleet
+
+    def lock(self, *kinds, **more):
+        """A true lock of each kind (both by default): a fetch failed signing through the agent on github.com, an
+        `op read` was dismissed."""
+        for kind in kinds or ("ssh-agent", "op-desktop"):
+            if kind == "ssh-agent":
+                self.failed("git fetch", SIGNING, repo="ssh", **more)
+            else:
+                self.failed("op read op://v/i/f", OP_DISMISSED, **more)
+            self.assertIn(kind, self.kinds(), self.log())
+
+    def test_a_failure_of_1passwords_own_locks_its_kind_once_and_tells_the_session(self):
+        r = self.failed("jj git push --bookmark main", SIGNING, event="PostToolUse")
+        self.assertEqual(self.state(), {"v": 2, "kinds": {"ssh-agent": {
+            "since": self.NOW, "why": "SSH signing through 1Password failed", "hosts": ["github.com"]}}, "waiting": [
+                {"dir": str(self.fleet), "fleet": "p", "session": "sess-1", "worker": None, "kind": "ssh-agent",
+                 "what": "jj git push", "at": self.NOW, "seen": "failed"}]})
+        said = json.loads(r.stdout)["hookSpecificOutput"]
+        self.assertEqual(said["hookEventName"], "PostToolUse")
+        self.assertEqual(said["additionalContext"], (
+            f"1Password is locked for {SSH_KIND} (SSH signing through 1Password failed): recorded once for the machine "
+            "at 09:00, and Luiz is asked on the fleet's page (the card \"Unlock 1Password\"). Don't retry `jj git push` "
+            "and don't open a card or ask him again. Do other work that does not need it, or end the turn if nothing "
+            "else is left; the hub tells this fleet when it is unlocked."))
+        self.assertEqual(self.onepw_log(), f"{self.NOW} locked: SSH signing through 1Password failed (ssh-agent in p)\n")
+
+    def test_each_kind_of_failure_locks_and_the_failure_event_says_nothing(self):
+        refused = SIGNING.replace("communication with agent failed", "agent refused operation")
+        for command, text, kind, why, hosts in (
+                ("git fetch", SIGNING, "ssh-agent", "SSH signing through 1Password failed", ["github.com"]),
+                ("jj git fetch", refused, "ssh-agent", "SSH signing through 1Password failed", ["github.com"]),
+                ("ssh -o BatchMode=yes localhost true", SSH_SIGNING, "ssh-agent", "SSH signing through 1Password failed",
+                 ["localhost"]),
+                ("op read op://v/i/f", OP_APP, "op-desktop", "the 1Password app did not answer", None),
+                ("secretspec run -- node deploy.js", SECRETSPEC_APP, "op-desktop", "the 1Password app did not answer", None),
+                ("gh pr list", OP_TIMEOUT, "op-desktop", "the 1Password prompt timed out", None),
+                ("aws s3 ls", OP_DISMISSED, "op-desktop", "the 1Password prompt was dismissed", None)):
+            with self.subTest(command=command):
+                self.locked.unlink(missing_ok=True)
+                r = self.failed(command, text, code=SSH_OWN_EXIT if command.startswith("ssh") else 1)
+                self.assertEqual(r.stdout, "")
+                want = {"since": self.NOW, "why": why, **({"hosts": hosts} if hosts else {})}
+                self.assertEqual(self.kinds(), {kind: want})
+                self.assertEqual([w["kind"] for w in self.state()["waiting"]], [kind])
+
+    def test_a_response_that_says_it_failed_is_a_failure_and_an_interrupted_one_is_not(self):
+        for response, locks in (({"exit_code": 1}, True), ({"exitCode": 128}, True), ({"returnCode": 2}, True),
+                                ({"code": 1}, True), ({"is_error": True}, True), ({"isError": True}, True),
+                                ({"exit_code": 0}, False), ({"exit_code": True}, False), ({"exit_code": "1"}, False),
+                                ({"is_error": False}, False), ({}, False), ({"exit_code": 1, "interrupted": True}, False)):
+            with self.subTest(response=response):
+                self.locked.unlink(missing_ok=True)
+                body = {"tool_response": {"stdout": "", "stderr": OP_DISMISSED, **response}}
+                self.call("PostToolUse", "op read op://v/i/f", body)
+                self.assertEqual(self.locked.exists(), locks)
+        self.call("PostToolUseFailure", "op read op://v/i/f", {"error": OP_DISMISSED, "is_interrupt": True})
+        self.assertFalse(self.locked.exists())
+
+    def test_what_is_not_1passwords_own_failure_never_locks(self):
+        token = {"OP_SERVICE_ACCOUNT_TOKEN": "ops_x"}
+        for command, text, more in (
+                ("git fetch upstream", "fatal: 'upstream' does not appear to be a git repository\n" + NO_ACCESS, {}),
+                ("jj git fetch --remote upstream", "Error: Git process failed\n" + NO_ACCESS, {}),
+                ("git push origin main", "ERROR: Permission to acme/x.git denied to luizhcrocha.\n" + NO_ACCESS, {}),
+                ("git clone git@gitlab.example.com:a/b.git",
+                 "git@gitlab.example.com: Permission denied (publickey).\n" + NO_ACCESS, {}),
+                ("jj git push --bookmark main",
+                 "ssh: connect to host github.com port 22: Operation timed out\n" + NO_ACCESS, {}),
+                ("git pull", "ERROR: The 'acme' organization has enabled or enforced SAML SSO.\n" + NO_ACCESS, {}),
+                ("jj git push --bookmark main", "Error: Git process failed: External git program failed:\n" + NO_ACCESS, {}),
+                ("secretspec run -- pytest -k onepw", f"E  assert '{OP_LINE}' in out\n", {}),
+                ("gh run view 99 --log-failed", f"deploy\t{OP_LINE}\n", {}),
+                # what a remote command, a failing pre-push test or a child printed is not the tool's own failure
+                ("ssh nixbox 'cd repo && git pull'", SSH_SIGNING + NO_ACCESS, {}),
+                ("ssh build1 \"grep -rn signing /var/log/ci\"", f"/var/log/ci/a.log:10:{SIGNING_LINE}\n", {"code": 2}),
+                ("ssh build1 'journalctl -u ci -n 20; false'", f"Oct 12 ci[1]: {SIGNING_LINE}\n", {}),
+                ("ssh build1 'tail -1 ci.log; exit 255'", f"10:01 {SIGNING_LINE}\n", {"code": 255}),
+                ("git push origin main", f"FAILED test_x\nE  assert '{SIGNING_LINE}' in out\nerror: failed to push\n", {}),
+                ("git fetch origin", f"remote: {SIGNING_LINE}\nfatal: protocol error\n", {"code": 128}),
+                ("op run -- pytest -k onepw", f"----- Captured stdout call -----\n{OP_LINE}\n1 failed\n", {}),
+                ("secretspec run -- node deploy.js", f"{OP_LINE}\nError: deploy failed\n", {}),
+                ("gh issue view 12 --comments", f"title: x\n\n{OP_LINE}\nGraphQL: Could not resolve\n", {}),
+                ("aws logs tail /x --since 1h", f"{OP_LINE}\nAn error occurred (ExpiredToken)\n", {"code": 255}),
+                ("cat hook.log", OP_DISMISSED + SIGNING, {}), ("git status", SIGNING + OP_DISMISSED, {}),
+                ("tail -20 hook.log | grep ERROR", OP_APP, {}),
+                ("python3 -m unittest scripts/tests/test_tstack_hook.py", SIGNING + OP_TIMEOUT, {}),
+                (f"ssh -o BatchMode=yes localhost true; echo '{SIGNING_LINE}'", SIGNING, {}),
+                ("gh pr list || true", OP_DISMISSED, {}), ("timeout 60 gh pr list", OP_TIMEOUT, {}),
+                ("sh -c 'op read op://v/i/f'", OP_DISMISSED, {}), ("git fetch", SIGNING, {"repo": "https"}),
+                ("op read op://v/i/f", SIGNING, {}), ("git fetch", OP_DISMISSED, {}), ("jj git push --dry-run", SIGNING, {}),
+                ("op whoami", "[ERROR] 2026/10/12 10:00:00 account is not signed in\n", {}),
+                ("op read op://v/i/f", OP_DISMISSED, {"env": token}),
+                ("secretspec run -- node x", SECRETSPEC_APP, {"env": token}),
+                ("OP_SERVICE_ACCOUNT_TOKEN=ops_x op read op://v/i/f", OP_DISMISSED, {}),
+                ("OP_SERVICE_ACCOUNT_TOKEN=ops_x secretspec check", OP_TIMEOUT, {}),
+                ("secretspec run --provider dotenv -- node x.js", OP_DISMISSED, {})):
+            for event in ("PostToolUseFailure", "PostToolUse"):
+                with self.subTest(command=command, event=event):
+                    r = self.failed(command, text, event=event, **more)
+                    self.assertEqual(r.stdout, "")
+                    self.assertFalse(self.locked.exists())
+        self.assertEqual(self.log(), "")
+
+    def test_an_exit_0_never_locks_whatever_it_prints(self):
+        for command, text in (("git fetch origin && git show HEAD", f"    {SIGNING_LINE}\n"),
+                              ("ssh build1 tail -50 /var/log/ci.log", SIGNING),
+                              ("gh issue view 12 --repo acme/x", OP_DISMISSED),
+                              ("gh run view 99 --log-failed", f"deploy\t{OP_LINE}\n"),
+                              ("git fetch", SIGNING), ("jj git push --bookmark main", SIGNING), ("op read op://v/i/f", OP_APP),
+                              ("secretspec run -- node x", SECRETSPEC_APP), ("ssh github.com", SIGNING)):
+            with self.subTest(command=command):
+                r = self.ran(command, text)
+                self.assertEqual(r.stdout, "")
+                self.assertFalse(self.locked.exists())
+
+    def test_a_session_of_no_fleet_never_locks_and_is_never_held(self):
+        for command, text in (("jj git push", SIGNING), ("op read op://v/i/f", OP_DISMISSED), ("gh pr list", OP_TIMEOUT)):
+            for event in ("PostToolUseFailure", "PostToolUse"):
+                self.assertEqual(self.failed(command, text, event=event, payload=self.outsider()).stdout, "")
+                self.assertFalse(self.locked.exists(), command)
+        self.lock()
+        for command in ("jj git push", "git fetch", "op read op://v/i/f", "gh pr list", "ssh github.com"):
+            self.assertIsNone(self.asks(command, payload=self.outsider()), command)
+        self.assertEqual(len(self.state()["waiting"]), 2)
+
+    def test_a_later_failure_joins_its_kind_and_another_kind_is_a_lock_of_its_own(self):
+        self.lock("ssh-agent")
+        payload, fleet = self.other_fleet()
+        later = {"FLEET_NOW": "2026-01-05T09:10:00+00:00"}
+        for _ in range(2):
+            self.failed("git clone git@gitlab.example.com:a/b.git", SIGNING, env=later, payload=payload)
+        state = self.state()
+        self.assertEqual(state["kinds"], {"ssh-agent": {"since": self.NOW, "why": "SSH signing through 1Password failed",
+                                                        "hosts": ["github.com", "gitlab.example.com"]}})
+        self.assertEqual([(w["fleet"], w["what"], w["seen"]) for w in state["waiting"]],
+                         [("p", "git fetch", "failed"), ("q", "git clone", "failed")])
+        self.assertEqual(state["waiting"][1]["dir"], str(fleet))
+        self.failed("secretspec run -- node deploy.js", SECRETSPEC_APP, env=later, payload=payload)
+        state = self.state()
+        self.assertEqual(state["kinds"]["ssh-agent"]["since"], self.NOW)
+        self.assertEqual(state["kinds"]["op-desktop"], {"since": "2026-01-05T09:10:00+00:00",
+                                                        "why": "the 1Password app did not answer"})
+        self.assertEqual([(w["fleet"], w["kind"]) for w in state["waiting"]],
+                         [("p", "ssh-agent"), ("q", "ssh-agent"), ("q", "op-desktop")])
+        self.assertEqual([line.split(" ", 1)[1] for line in self.onepw_log().splitlines()], [
+            "locked: SSH signing through 1Password failed (ssh-agent in p)", "another waits: ssh-agent in q",
+            "locked: the 1Password app did not answer (op-desktop in q)"])
+        self.assertEqual(sorted(p.name for p in (self.registry / "onepw").iterdir()),
+                         ["locked.json", "onepw.lock", "onepw.log"])
+        self.assertFalse(json.loads((self.fleet / "state.json").read_text())["decisions"])  # no card of the fleet's own
+
+    def test_what_is_held_while_ssh_through_the_agent_is_locked(self):
+        home = self.tmp / "home" / ".config" / "git"
+        self.assertFalse(self.held("jj git push --bookmark main"))
+        self.lock("ssh-agent")
+        for command, more in (("jj git push --bookmark main", {}), ("git fetch", {"repo": "ssh"}),
+                              ("git ls-remote", {"repo": "ssh"}), ("jj git fetch", {"repo": "ws"}), ("git fetch fork", {"repo": "mixed"}),
+                              ("ssh github.com", {}), ("ssh -T git@github.com", {}), ("ssh -i key github.com ls", {}),
+                              ("git clone git@gitlab.example.com:a/b.git", {}), ("git push origin main 2>&1", {})):
+            with self.subTest(held=command):
+                self.assertTrue(self.held(command, **more))
+        for command, more in (
+                ("git status", {}), ("jj log", {}), ("git fetch", {"repo": "https"}), ("jj git fetch", {"repo": "https"}),
+                ("git fetch origin", {"repo": "mixed"}), ("git fetch", {"repo": "mixed"}), ("git clone /tmp/a /tmp/b", {}),
+                ("git fetch ../other", {}), ("git push /srv/bare.git main", {}), ("ssh nixbox uptime", {}),
+                ("scp a.txt b.txt", {}), ("git push --dry-run", {}), ("jj git push --dry-run", {}), ("ssh -V", {}),
+                ("timeout 60 jj git push", {}), ("sh -c 'git fetch'", {}), ("cd . && jj git push", {}),
+                ("./deploy.sh", {}), ("just deploy", {}), ("pnpm build", {}), ("cat deploy.log", {}),
+                # the other kind
+                ("op read op://v/i/f", {}), ("secretspec run -- node x", {}), ("secretspec check", {}), ("gh pr list", {}),
+                ("aws s3 ls", {})):
+            with self.subTest(free=command):
+                self.assertIsNone(self.asks(command, **more))
+        home.mkdir(parents=True)
+        (home / "config").write_text('[url "git@github.com:acme/"]\n\tinsteadOf = https://github.com/acme/\n')
+        self.assertTrue(self.held("jj git fetch", repo="https"))  # an HTTPS remote that git rewrites to SSH
+
+    def test_what_is_held_while_reading_through_the_app_is_locked(self):
+        token = {"OP_SERVICE_ACCOUNT_TOKEN": "ops_x"}
+        self.lock("op-desktop")
+        for command in ("op read op://v/i/f", "secretspec run -- node x", "secretspec check", "gh pr list", "aws s3 ls",
+                        "op run -- node x", "gh pr create --fill > out.txt 2>&1", "GH_PAGER=cat gh pr view 1"):
+            with self.subTest(held=command):
+                self.assertTrue(self.held(command))
+        for command, more in (
+                ("OP_SERVICE_ACCOUNT_TOKEN=x op read op://v/i/f", {}), ("op read op://v/i/f", {"env": token}),
+                ("secretspec run -- node x", {"env": token}), ("secretspec run --provider dotenv -- node x.js", {}),
+                ("timeout 60 gh pr list", {}), ("env GH_TOKEN=x gh api user", {}), ("sh -c 'gh pr list'", {}),
+                ("pnpm exec secretspec run -- x", {}), ("devenv shell -- secretspec run -- x", {}),
+                ("nu -c 'secretspec run -- node x'", {}), ("devenv-run secretspec run -- x", {}), ("./deploy.sh", {}),
+                ("just deploy", {}), ("op whoami", {}), ("op --version", {}), ("op account list", {}), ("gh --version", {}),
+                ("/usr/bin/gh pr list", {}), ("gh pr list | head", {}), ("cat op.log", {}),
+                # the other kind
+                ("jj git push --bookmark main", {}), ("git fetch", {"repo": "ssh"}), ("git ls-remote", {"repo": "ssh"}),
+                ("ssh github.com", {}), ("git push --dry-run", {}), ("ssh -V", {})):
+            with self.subTest(free=command):
+                self.assertIsNone(self.asks(command, **more))
+
+    def test_an_ssh_is_held_only_for_a_host_the_lock_saw_fail(self):
+        self.lock("ssh-agent")
+        self.assertTrue(self.held("ssh github.com"))
+        self.assertFalse(self.held("ssh nixbox uptime"))
+        self.failed("ssh nixbox uptime", SSH_SIGNING)  # exit 1: the remote command's, never ssh's own
+        self.assertEqual(self.kinds()["ssh-agent"]["hosts"], ["github.com"])
+        self.failed("ssh nixbox uptime", SSH_SIGNING, code=SSH_OWN_EXIT)
+        self.assertEqual(self.kinds()["ssh-agent"]["hosts"], ["github.com", "nixbox"])
+        self.assertTrue(self.held("ssh root@NixBox uptime"))
+        self.failed("git fetch", SIGNING, repo="none")  # a remote the hook cannot tell still shows the lock
+        self.assertEqual([w["what"] for w in self.state()["waiting"]], ["git fetch"])  # the fleet waits once per kind
+        self.assertFalse(self.held("git fetch", repo="none"))
+
+    def test_the_denial_ends_on_who_tells_the_fleet(self):
+        self.lock()
+        got = self.asks("secretspec run -- node deploy.js", env={"FLEET_NOW": "2026-01-05T09:10:00+00:00"})
+        self.assertEqual(got["permissionDecision"], "deny")
+        self.assertEqual(got["permissionDecisionReason"], (
+            f"1Password is locked for {OP_KIND}: Luiz was asked at 09:00 (the card \"Unlock 1Password\" on the fleet's "
+            "page). Don't retry `secretspec run` before 09:15: one command of this kind is let through then, to test "
+            "the lock. Don't open a card or ask him again. Do other work that does not need it, or end the turn if "
+            "nothing else is left; the hub tells this fleet when it is unlocked."))
+        self.assertEqual([(w["fleet"], w["what"], w["seen"]) for w in self.state()["waiting"]],
+                         [("p", "git fetch", "failed"), ("p", "op read", "failed")])  # the fleet already waits for both
+        (self.registry / "p.json").unlink()
+        got = self.asks("jj git push --bookmark main")
+        self.assertEqual(got["permissionDecisionReason"], (
+            f"1Password is locked for {SSH_KIND}: Luiz was asked at 09:00 (the card \"Unlock 1Password\" on the fleet's "
+            "page). Don't retry `jj git push` before 09:15: one command of this kind is let through then, to test the "
+            "lock. Don't open a card or ask him again. Do other work that does not need it, or end the turn if nothing "
+            "else is left. This fleet is not in the registry, so it will not be told when it is unlocked: check "
+            f"`{self.fleet_cli} onepw` before you retry."))
+        self.assertEqual([(w["dir"], w["fleet"], w["what"], w["seen"]) for w in self.state()["waiting"]][2:],
+                         [(None, None, "jj git push", "held")])
+        said = json.loads(self.failed("gh pr list", OP_TIMEOUT, event="PostToolUse").stdout)["hookSpecificOutput"]
+        self.assertEqual(said["additionalContext"], (
+            f"1Password is locked for {OP_KIND} (the 1Password prompt timed out): recorded once for the machine at "
+            "09:00, and Luiz is asked on the fleet's page (the card \"Unlock 1Password\"). Don't retry `gh pr` and "
+            "don't open a card or ask him again. Do other work that does not need it, or end the turn if nothing else "
+            "is left. This fleet is not in the registry, so it will not be told when it is unlocked: check "
+            f"`{self.fleet_cli} onepw` before you retry."))
+        self.assertIn(f"{self.NOW} held: jj git push in a session\n", self.onepw_log())
+        self.assertIn("another waits: op-desktop in a session\n", self.onepw_log())
+
+    def test_every_fleet_and_its_workers_are_held_and_each_fleet_waits_once(self):
+        payload, fleet = self.other_fleet()
+        self.lock("op-desktop", payload=payload)
+        self.ledger(agents=[{"id": "a3", "task_id": "agent-77", "status": "running"}])
+        self.assertTrue(self.held("gh pr create --fill", agent_id="agent-77"))
+        for command in ("gh api user", "gh pr list", "secretspec check"):
+            self.assertTrue(self.held(command))
+            self.assertTrue(self.held(command, payload=payload))
+        self.assertEqual([(w["fleet"], w["worker"], w["what"], w["seen"]) for w in self.state()["waiting"]],
+                         [("q", None, "op read", "failed"), ("p", "a3", "gh pr", "held")])
+        self.assertEqual(self.onepw_log().count("held: "), 1)
+
+    def test_a_fleet_is_told_by_the_hub_however_many_commands_another_one_had_held(self):
+        self.lock("op-desktop")
+        for n, sub in enumerate(("pr", "api", "run", "issue", "repo", "release")):
+            self.assertTrue(self.held(f"gh {sub} list", agent_id=f"agent-{n}"))
+        payload, fleet = self.other_fleet()
+        got = self.asks("gh pr list", payload=payload)
+        self.assertTrue(got["permissionDecisionReason"].endswith("; the hub tells this fleet when it is unlocked."))
+        self.assertEqual([(w["dir"], w["kind"]) for w in self.state()["waiting"]],
+                         [(str(self.fleet), "op-desktop"), (str(fleet), "op-desktop")])
+
+    def test_a_fleet_that_found_no_room_is_told_that_nobody_will_tell_it(self):
+        self.lock("op-desktop")
+        state = self.state()
+        row = state["waiting"][0]
+        state["waiting"] += [{**row, "dir": f"/gone/{n}"} for n in range(load_hook().ONEPW_WAITING_MAX - 1)]
+        self.locked.write_text(json.dumps(state))
+        payload, _ = self.other_fleet()
+        for said in (self.asks("gh pr list", payload=payload)["permissionDecisionReason"],
+                     json.loads(self.failed("gh pr list", OP_TIMEOUT, event="PostToolUse", payload=payload).stdout)[
+                         "hookSpecificOutput"]["additionalContext"]):
+            self.assertTrue(said.endswith(
+                "nothing else is left. This fleet could not be added to those the hub tells, so it will not be told "
+                f"when it is unlocked: check `{self.fleet_cli} onepw` before you retry."), said)
+        self.assertEqual(len(self.state()["waiting"]), load_hook().ONEPW_WAITING_MAX)
+        self.assertTrue(self.asks("gh pr list")["permissionDecisionReason"].endswith("; the hub tells this fleet when it "
+                                                                                    "is unlocked."))
+
+    def test_the_hook_never_allows(self):
+        import inspect
+        mod = load_hook()
+        self.lock()
+        for command in ("jj git push", "jj log", "pnpm build", "op read op://v/i/f", "gh pr list", "ssh github.com", "ls -la"):
+            got = self.asks(command)
+            self.assertIn(got and got.get("permissionDecision"), (None, "deny"), command)
+            self.assertEqual(self.ran(command, payload=self.outsider()).stdout, "", command)
+        for handler in (mod.onepw_hold, mod.onepw_watch, mod._onepw_hold, mod._onepw_watch):
+            self.assertNotIn("Allow", inspect.getsource(handler))
+        self.assertNotIn("Allow", HOOK.with_name("tstack-hook-onepw.py").read_text())
+
+    def test_a_command_that_did_not_read_through_a_locked_kind_never_clears_it(self):
+        self.lock()
+        before = self.locked.read_text()
+        token = {"OP_SERVICE_ACCOUNT_TOKEN": "fake"}
+        for command, more in (
+                ("ssh nixbox uptime", {}), ("op read op://v/i/f", {"env": token}), ("secretspec check --provider dotenv", {}),
+                ("aws configure list", {}), ("git clone /tmp/a /tmp/b", {}), ("git fetch origin", {"repo": "https"}),
+                ("git fetch origin", {"repo": "mixed"}), ("timeout 60 gh pr list", {}), ("sh -c 'gh api user'", {}),
+                ("scp a.txt b.txt", {}), ("! op read op://v/i/f", {}), ("op read op://v/i/f || true", {}),
+                ("git push --dry-run", {"repo": "ssh"}), ("op --version", {}), ("ssh -V", {}), ("op account list", {}),
+                ("op whoami", {}), ("secretspec run -- true", {}), ("gh pr list --json number", {}),
+                ("op read op://v/i/f", {"background": True}), ("git fetch", {"repo": "ssh", "background": True}),
+                ("op run -- true", {}), ("op read --help", {}), ("jj git push --bookmark main", {"repo": "ssh"}),
+                ("jj git push --dry-run", {"repo": "ssh"}), ("git fetch --help", {"repo": "ssh"}),
+                ("git ls-remote --get-url", {"repo": "ssh"}), ("ssh -i key github.com true", {}),
+                ("GIT_SSH_COMMAND='ssh -i key' git fetch", {"repo": "ssh"}), ("git fetch", {"repo": "none"}),
+                ("op read op://v/i/f; true", {}), ("op read op://v/i/f | cat", {}), ("op read op://v/i/f &", {}),
+                ("jj git fetch 2>&1 | tail -3", {"repo": "ssh"}), ("cd . && git fetch", {"repo": "ssh"}), ("jj log", {}),
+                ("gh --version", {})):
+            with self.subTest(command=command):
+                env = {"FLEET_NOW": "2026-01-05T09:30:00+00:00", **more.pop("env", {})}
+                self.ran(command, payload=self.outsider(), env=env, **more)
+                self.assertEqual(self.locked.read_text(), before)
+        for body in ({"tool_response": {"stdout": "", "stderr": "", "interrupted": True}},
+                     {"tool_response": {"stdout": "", "stderr": "", "backgroundTaskId": "b1"}},
+                     {"tool_response": {"stdout": "", "stderr": "", "exit_code": 1}}, {"tool_response": "ok"}, {}):
+            with self.subTest(body=body):
+                self.call("PostToolUse", "op read op://v/i/f", body, payload=self.outsider())
+                self.assertEqual(self.locked.read_text(), before)
+        self.call("PostToolUseFailure", "op read op://v/i/f", {"error": "Exit code 1\nno such item"}, payload=self.outsider())
+        self.assertEqual(self.locked.read_text(), before)
+        # an exit 0 that still shows the failure: ssh fell back to a key of its own, the agent is as locked as before
+        for command, text, more in (("git fetch", SIGNING + "From github.com:acme/app\n", {"repo": "ssh"}),
+                                    ("ssh github.com true", f"{SIGNING_LINE}\n", {}), ("op read op://v/i/f", OP_DISMISSED, {})):
+            self.ran(command, text, payload=self.outsider(), **more)
+            self.assertEqual(self.locked.read_text(), before, command)
+
+    def test_a_command_that_read_through_a_locked_kind_clears_that_kind_alone(self):
+        later = {"FLEET_NOW": "2026-01-05T09:30:00+00:00"}
+        for command, kind, what, more in (
+                ("op read op://v/i/f", "op-desktop", "op read", {}), ("op read op://v/i/f 2>&1", "op-desktop", "op read", {}),
+                ("op item get x --format json > item.json", "op-desktop", "op item", {}),
+                ("jj git fetch", "ssh-agent", "jj git fetch", {"repo": "ssh"}),
+                ("jj git fetch", "ssh-agent", "jj git fetch", {"repo": "ws"}),
+                ("git fetch", "ssh-agent", "git fetch", {"repo": "ssh"}),
+                ("git fetch fork", "ssh-agent", "git fetch", {"repo": "mixed"}),
+                ("ssh github.com true", "ssh-agent", "ssh", {}),
+                ("ssh -o BatchMode=yes git@github.com true", "ssh-agent", "ssh", {})):
+            with self.subTest(command=command):
+                self.locked.unlink(missing_ok=True)
+                self.lock()
+                other = next(k for k in ("ssh-agent", "op-desktop") if k != kind)
+                self.ran(command, payload=self.outsider(), env=later, **more)
+                kinds = self.kinds()
+                self.assertEqual(kinds[kind]["cleared"], {"at": "2026-01-05T09:30:00+00:00", "by": "command", "note": what})
+                self.assertEqual(kinds[kind]["since"], self.NOW)
+                self.assertNotIn("cleared", kinds[other])
+                self.assertEqual(len(self.state()["waiting"]), 2)  # kept for the hub to tell
+                self.assertTrue(self.onepw_log().endswith(
+                    f"2026-01-05T09:30:00+00:00 cleared: {kind} by a command ({what}) in session sess-9\n"))
+                self.assertEqual(self.held("jj git push"), kind != "ssh-agent")
+                self.assertEqual(self.held("gh pr list"), kind != "op-desktop")
+
+    def test_a_failure_soon_after_a_clear_reopens_the_same_lock(self):
+        self.lock("op-desktop")
+        self.ran("op read op://v/i/f", payload=self.outsider(), env={"FLEET_NOW": "2026-01-05T09:30:00+00:00"})
+        self.assertFalse(self.held("gh pr list", env={"FLEET_NOW": "2026-01-05T09:31:00+00:00"}))
+        payload, _ = self.other_fleet()
+        self.failed("gh pr list", OP_TIMEOUT, payload=payload, env={"FLEET_NOW": "2026-01-05T09:39:59+00:00"})
+        state = self.state()
+        self.assertEqual(state["kinds"], {"op-desktop": {"since": self.NOW, "why": "the 1Password prompt was dismissed",
+                                                         "again": "2026-01-05T09:39:59+00:00"}})
+        self.assertEqual([(w["fleet"], w["what"]) for w in state["waiting"]], [("p", "op read"), ("q", "gh pr")])
+        self.assertTrue(self.onepw_log().endswith("2026-01-05T09:39:59+00:00 still locked: op-desktop failed again in q\n"))
+        self.assertTrue(self.held("gh pr list", env={"FLEET_NOW": "2026-01-05T09:41:00+00:00"}))
+
+    def test_a_failure_long_after_a_clear_is_a_new_lock_that_keeps_who_waited(self):
+        self.lock("op-desktop")
+        self.ran("op read op://v/i/f", payload=self.outsider(), env={"FLEET_NOW": "2026-01-05T09:30:00+00:00"})
+        payload, _ = self.other_fleet()
+        self.failed("gh pr list", OP_TIMEOUT, payload=payload, env={"FLEET_NOW": "2026-01-05T09:40:00+00:00"})
+        state = self.state()
+        self.assertEqual(state["kinds"], {"op-desktop": {"since": "2026-01-05T09:40:00+00:00",
+                                                         "why": "the 1Password prompt timed out"}})
+        self.assertEqual([(w["fleet"], w["what"]) for w in state["waiting"]], [("p", "op read"), ("q", "gh pr")])
+        self.assertTrue(self.onepw_log().endswith("locked: the 1Password prompt timed out (op-desktop in q)\n"))
+
+    def test_a_reopened_lock_does_not_outlive_its_lapse(self):
+        self.lock("op-desktop")
+        self.ran("op read op://v/i/f", payload=self.outsider(), env={"FLEET_NOW": "2026-01-05T10:58:00+00:00"})
+        self.failed("gh pr list", OP_TIMEOUT, env={"FLEET_NOW": "2026-01-05T11:01:00+00:00"})
+        self.assertEqual(self.kinds(), {"op-desktop": {"since": "2026-01-05T11:01:00+00:00",
+                                                       "why": "the 1Password prompt timed out"}})
+
+    def test_a_stale_lock_lapses_and_a_failure_after_it_is_a_new_lock(self):
+        self.lock("ssh-agent")
+        self.assertFalse(self.held("jj git push", env={"FLEET_NOW": "2026-01-05T10:59:58+00:00"}))  # the probe window
+        self.assertTrue(self.held("jj git push", env={"FLEET_NOW": "2026-01-05T10:59:59+00:00"}))
+        self.assertFalse(self.held("jj git push", env={"FLEET_NOW": "2026-01-05T11:00:00+00:00"}))
+        self.assertFalse(self.held("jj git push", env={"FLEET_NOW": "2026-01-05T09:05:00+00:00", "FLEET_ONEPW_LAPSE_S": "300"}))
+        for unset in ("", "soon", "nan"):
+            env = {"FLEET_NOW": "2026-01-05T09:05:00+00:00", "FLEET_ONEPW_LAPSE_S": unset}
+            self.assertTrue(self.held("jj git push", env=env), unset)
+        before = self.locked.read_text()
+        self.ran("git fetch", repo="ssh", env={"FLEET_NOW": "2026-01-05T11:30:00+00:00"})  # nothing locked to clear
+        self.assertEqual(self.locked.read_text(), before)
+        self.failed("ssh nixbox uptime", SSH_SIGNING, code=SSH_OWN_EXIT, env={"FLEET_NOW": "2026-01-05T11:30:00+00:00"})
+        self.assertEqual(self.kinds(), {"ssh-agent": {"since": "2026-01-05T11:30:00+00:00", "hosts": ["nixbox"],
+                                                      "why": "SSH signing through 1Password failed"}})
+
+    def at(self, clock):
+        return {"FLEET_NOW": f"2026-01-05T{clock}+00:00"}
+
+    def reason(self, command, **more):
+        return self.asks(command, **more)["permissionDecisionReason"]
+
+    def test_a_probe_window_lets_one_held_command_through_and_the_denial_says_when(self):
+        self.lock()
+        payload, _ = self.other_fleet()
+        self.assertIn("Don't retry `jj git fetch` before 09:15: one command of this kind is let through then, to test "
+                      "the lock. ", self.reason("jj git fetch", env=self.at("09:14:59")))
+        before = self.state()
+        for command, more in (("git status", {}), ("ssh nixbox uptime", {}), ("jj git push --dry-run", {}),
+                              ("timeout 60 jj git push", {}), ("jj git fetch", {"payload": self.outsider()})):
+            self.assertIsNone(self.asks(command, env=self.at("09:15:00"), **more), command)  # never held: no window taken
+        self.assertEqual(self.state(), before)
+        self.assertIsNone(self.asks("jj git push --bookmark main", env=self.at("09:15:00"), payload=payload))
+        self.assertEqual(self.state(), {**before, "kinds": {**before["kinds"], "ssh-agent": {
+            **before["kinds"]["ssh-agent"], "probe": "2026-01-05T09:15:00+00:00"}}})
+        self.assertTrue(self.onepw_log().endswith(
+            "2026-01-05T09:15:00+00:00 probe: jj git push in q is let through to test ssh-agent\n"))
+        for clock, command, more in (("09:15:00", "jj git push --bookmark main", {"payload": payload}),
+                                     ("09:15:01", "git fetch", {"repo": "ssh"}), ("09:29:59", "ssh github.com", {})):
+            self.assertIn(" before 09:30: ", self.reason(command, env=self.at(clock), **more))
+        self.assertIsNone(self.asks("git fetch", repo="ssh", env=self.at("09:30:00")))
+        self.assertEqual(self.kinds()["ssh-agent"]["probe"], "2026-01-05T09:30:00+00:00")
+        # each kind has its own window
+        self.assertNotIn("probe", self.kinds()["op-desktop"])
+        self.assertIsNone(self.asks("gh pr list", env=self.at("09:30:00")))
+        self.assertIn(" before 09:45: ", self.reason("secretspec check", env=self.at("09:30:01")))
+        # a window that would open after the lapse: the hold ends first
+        self.assertIsNone(self.asks("jj git fetch", env=self.at("10:50:00")))
+        self.assertIn(" before 11:00: ", self.reason("jj git fetch", env=self.at("10:50:01")))
+
+    def test_of_many_held_commands_at_once_one_takes_the_window(self):
+        from concurrent.futures import ThreadPoolExecutor
+        self.lock("op-desktop")
+        payload, _ = self.other_fleet()
+        with ThreadPoolExecutor(12) as pool:
+            held = list(pool.map(lambda n: self.held("gh pr list", env=self.at("09:20:00"), agent_id=f"agent-{n}",
+                                                     payload=payload if n % 2 else None), range(12)))
+        self.assertEqual(held.count(False), 1, held)
+        self.assertEqual(self.onepw_log().count(" probe: "), 1)
+        self.assertEqual(self.kinds()["op-desktop"]["probe"], "2026-01-05T09:20:00+00:00")
+        self.assertEqual(sorted(w["fleet"] for w in self.state()["waiting"]), ["p", "q"])
+
+    def test_a_probe_that_fails_keeps_the_lock_and_one_that_succeeds_clears_the_kind(self):
+        self.lock("ssh-agent")
+        # it fails with the signature: the lock stays, and the next window opens 15 minutes after this one
+        self.assertFalse(self.held("git fetch", repo="ssh", env=self.at("09:16:00")))
+        self.failed("git fetch", SSH_SIGNING + NO_ACCESS, code=128, repo="ssh", env=self.at("09:16:05"))
+        self.assertEqual(self.kinds()["ssh-agent"], {"since": self.NOW, "why": "SSH signing through 1Password failed",
+                                                     "hosts": ["github.com"], "probe": "2026-01-05T09:16:00+00:00"})
+        self.assertIn(" before 09:31: ", self.reason("git fetch", repo="ssh", env=self.at("09:30:59")))
+        # anything else changes nothing: an exit 0 that proves no read (jj git push), a failure of another cause
+        self.assertFalse(self.held("jj git push --bookmark main", env=self.at("09:31:00")))
+        before = self.locked.read_text()
+        self.ran("jj git push --bookmark main", env=self.at("09:31:05"))
+        self.failed("jj git push --bookmark main", NO_ACCESS, env=self.at("09:31:06"))
+        self.assertEqual(self.locked.read_text(), before)
+        self.assertTrue(self.held("git fetch", repo="ssh", env=self.at("09:45:59")))
+        # it exits 0 and read through the kind: the kind clears, and nothing of it is held
+        self.assertFalse(self.held("git fetch", repo="ssh", env=self.at("09:46:00")))
+        self.ran("git fetch", repo="ssh", env=self.at("09:46:03"))
+        self.assertEqual(self.kinds()["ssh-agent"]["cleared"],
+                         {"at": "2026-01-05T09:46:03+00:00", "by": "command", "note": "git fetch"})
+        self.assertTrue(self.onepw_log().endswith("cleared: ssh-agent by a command (git fetch) in session sess-1\n"))
+        self.assertFalse(self.held("jj git push --bookmark main", env=self.at("09:46:10")))
+
+    def test_a_failure_that_reopens_a_lock_starts_its_window_again(self):
+        self.lock("op-desktop")
+        self.ran("op read op://v/i/f", payload=self.outsider(), env=self.at("09:14:00"))
+        self.failed("gh pr list", OP_TIMEOUT, env=self.at("09:20:00"))
+        self.assertEqual(self.kinds()["op-desktop"]["again"], "2026-01-05T09:20:00+00:00")
+        self.assertIn(" before 09:35: ", self.reason("gh pr list", env=self.at("09:34:59")))
+        self.assertFalse(self.held("gh pr list", env=self.at("09:35:00")))
+
+    def hold(self, mod, command="gh pr list", denied=False, **env):
+        payload = {**self.payload("PreToolUse"), "tool_name": "Bash", "tool_input": {"command": command}}
+        hook = mod.Hook("PreToolUse", payload, {**self.env, **env})
+        hook.denied = denied
+        return mod.onepw_hold(hook)
+
+    def test_a_call_another_gate_refused_takes_no_window(self):
+        mod = load_hook()
+        self.lock("op-desktop")
+        got = self.hold(mod, denied=True, **self.at("09:20:00"))
+        self.assertIsInstance(got, mod.Deny)
+        self.assertRegex(got, r" before \d\d:20: ")  # the window is open: the next call that is not refused takes it
+        self.assertNotIn("probe", self.kinds()["op-desktop"])
+        self.assertIsNone(self.hold(mod, **self.at("09:20:00")))
+        self.assertEqual(mod._instant(self.kinds()["op-desktop"]["probe"]), mod._instant("2026-01-05T09:20:00+00:00"))
+
+    def test_a_kind_that_cleared_before_the_lock_was_taken_denies_nothing(self):
+        mod = load_hook()
+        self.lock("op-desktop")
+        read, stale = mod._onepw_read, mod._onepw_read(self.env)
+        self.ran("op read op://v/i/f", payload=self.outsider())
+        before = self.locked.read_text()
+        first = [stale]
+        mod._onepw_read = lambda env: first.pop() if first else read(env)  # the read before the lock saw it locked
+        self.assertIsNone(self.hold(mod))
+        self.assertEqual(first, [])
+        self.assertEqual(self.locked.read_text(), before)
+        self.assertNotIn("held: ", self.onepw_log())
+
+    def test_a_window_that_cannot_be_written_is_not_taken(self):
+        self.lock("op-desktop")
+        os.chmod(self.registry / "onepw", 0o500)
+        self.addCleanup(os.chmod, self.registry / "onepw", 0o700)
+        if os.access(self.registry / "onepw", os.W_OK):
+            self.skipTest("runs as a user no mode stops")
+        for _ in range(2):
+            self.assertTrue(self.held("gh pr list", env=self.at("09:20:00")))
+        self.assertIn("onepw_hold: could not record the hold", self.log())
+
+    def test_a_state_that_does_not_read_holds_nothing_and_is_set_aside_once(self):
+        folder = self.registry / "onepw"
+        folder.mkdir()
+        for state, reason in BROKEN_STATES:
+            text = state if isinstance(state, str) else json.dumps(state)
+            with self.subTest(state=text[:60]):
+                for name in ("locked.json.broken", "onepw.log"):
+                    (folder / name).unlink(missing_ok=True)
+                self.locked.write_text(text)
+                self.assertIsNone(self.asks("timeout 5 gh pr list"))  # no use of 1Password: nothing is set aside
+                self.ran("git status")
+                self.assertEqual(self.locked.read_text(), text)
+                for command in ("op read op://v/i/f", "jj git push"):
+                    self.assertIsNone(self.asks(command))
+                self.ran("gh pr list")
+                self.assertFalse(self.locked.exists())
+                self.assertEqual((folder / "locked.json.broken").read_text(), text)
+                self.assertEqual(self.onepw_log(), f"{self.NOW} set aside: the state did not read ({reason})\n")
+        self.assertEqual(self.log(), "")  # no traceback, no failed handler
+
+    def test_a_clear_or_a_failure_sets_a_broken_state_aside_too(self):
+        (self.registry / "onepw").mkdir()
+        self.locked.write_text('{"v": 2, "kinds": {"op-desktop": {"since": "2099-01-01T00:00:00+00:00"}}}')
+        self.ran("op read op://v/i/f", payload=self.outsider())
+        self.assertFalse(self.locked.exists())
+        self.locked.write_text('{"since": "2026-01-05T08:00:00+00:00", "why": "x", "waiting": [{"what": "secret"}]}')
+        self.failed("op read op://v/i/f", OP_DISMISSED)
+        self.assertEqual(self.kinds(), {"op-desktop": {"since": self.NOW, "why": "the 1Password prompt was dismissed"}})
+        self.assertEqual(len(self.state()["waiting"]), 1)
+        self.assertEqual([line.split(" ", 1)[1] for line in self.onepw_log().splitlines()], [
+            "set aside: the state did not read (a kind's since)", "set aside: the state did not read (no kinds)",
+            "locked: the 1Password prompt was dismissed (op-desktop in p)"])
+        self.assertNotIn("secret", self.onepw_log())
+        self.assertEqual(self.log(), "")
+
+    def test_what_a_state_tolerates_still_locks(self):
+        (self.registry / "onepw").mkdir()
+        self.locked.write_text(json.dumps({"v": 2, "kinds": {
+            "op-desktop": {"since": "2026-01-05T09:00:30+00:00", "why": 7, "again": "x", "cleared": {}},
+            "ssh-agent": {"since": "2026-01-05T08:50:00+00:00", "hosts": [1, "github.com", {}], "lapsed": [],
+                          "probe": "soon"}},
+            "waiting": [3, {"kind": []}, {"kind": "op-desktop", "dir": {}, "what": ["x"]}], "told": {"/f": "never"}}))
+        self.assertTrue(self.held("gh pr list"))
+        self.assertTrue(self.held("ssh github.com"))
+        self.failed("op read op://v/i/f", OP_DISMISSED, event="PostToolUse")
+        state = self.state()
+        self.assertEqual(state["kinds"]["op-desktop"], {"since": "2026-01-05T09:00:30+00:00", "why": 7, "cleared": {}})
+        self.assertEqual(state["kinds"]["ssh-agent"], {"since": "2026-01-05T08:50:00+00:00", "hosts": ["github.com"]})
+        self.assertEqual((len(state["waiting"]), state["told"]), (3, {}))
+        self.assertEqual(self.log(), "")
+
+    def test_its_own_errors_let_the_call_through(self):
+        self.lock("op-desktop")
+        os.chmod(self.registry / "onepw", 0o500)  # the state can be read, not written
+        self.addCleanup(os.chmod, self.registry / "onepw", 0o700)
+        if os.access(self.registry / "onepw", os.W_OK):
+            self.skipTest("runs as a user no mode stops")
+        self.assertTrue(self.held("gh pr list"))  # held on what was read: its fleet waits already, nothing to write
+        self.assertEqual(self.log(), "")
+        other = self.other_fleet()[0]
+        self.assertTrue(self.reason("gh pr list", payload=other).endswith(  # held, and its row could not be written
+            "This fleet could not be added to those the hub tells, so it will not be told when it is unlocked: check "
+            f"`{self.fleet_cli} onepw` before you retry."))
+        self.assertIn("onepw_hold: could not record the hold", self.log())
+        r = self.failed("gh pr list", OP_DISMISSED, event="PostToolUse", payload=other)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("onepw_watch failed", self.log())
+
+    def handle(self, hook, event, command, tool="Bash", **body):
+        h = hook.Hook(event, {**self.payload(event), "tool_name": tool, "tool_input": {"command": command}, **body}, self.env)
+        return (hook.onepw_hold if event == "PreToolUse" else hook.onepw_watch)(h)
+
+    def test_a_command_that_is_no_candidate_reads_nothing_and_loads_no_1password_code(self):
+        hook = load_hook(onepw=False)
+        self.lock()
+        printed = {"tool_response": {"stdout": SIGNING}, "error": OP_DISMISSED}
+        for event in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
+            for command in ("pnpm build && ls", "ls -la", "cat op.log", "timeout 60 gh pr list", "", "  ", "(gh pr list)"):
+                self.assertIsNone(self.handle(hook, event, command, **printed), command)
+            for tool in ("Read", "Agent", "Write"):
+                self.assertIsNone(self.handle(hook, event, "gh pr list", tool=tool, **printed))
+        self.assertIsNone(self.handle(hook, "PreToolUse", {"gh": "pr"}))
+        os.chmod(self.registry / "onepw", 0)  # any read of the state would raise; to the hook there is no state
+        self.addCleanup(os.chmod, self.registry / "onepw", 0o700)
+        # a tool's command with no state on disk and no failure text: still nothing to read
+        for command in ("git status", "jj log", "gh pr list", "jj git fetch", "FOO=1 ls", "op read op://v/i/f"):
+            self.assertIsNone(self.handle(hook, "PreToolUse", command), command)
+            self.assertIsNone(self.handle(hook, "PostToolUse", command, tool_response={"stdout": "ok\n", "exit_code": 0}))
+            self.assertIsNone(self.handle(hook, "PostToolUseFailure", command, error="Exit code 1\nfatal: no such ref\n"))
+        self.assertNotIn("onepw_use", vars(hook))
+        os.chmod(self.registry / "onepw", 0o700)
+        self.assertIsInstance(self.handle(hook, "PreToolUse", "  GH_PAGER=cat gh pr list"), hook.Deny)
+        self.assertIn("onepw_use", vars(hook))
+        self.assertEqual(self.log(), "")
+
+    def test_a_failure_text_loads_the_1password_code_with_no_state_on_disk(self):
+        for text, loads in ((OP_DISMISSED, True), (SIGNING, True), (NO_ACCESS, False)):
+            hook = load_hook(onepw=False)
+            self.locked.unlink(missing_ok=True)
+            self.handle(hook, "PostToolUseFailure", "git status", error=f"Exit code 1\n{text}")  # a tool, and no use
+            self.assertEqual("onepw_use" in vars(hook), loads, text)
+            self.assertFalse(self.locked.exists())
 
 
 class PreToolUseDecisionTest(unittest.TestCase):

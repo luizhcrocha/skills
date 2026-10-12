@@ -18,6 +18,9 @@
  *   combined preview, under the chat's write policy; `POST /f/<fleet>/name` names a worker or the fleet from
  *   the page, under the same policy; `POST /f/<manager>/orphans/stop` stops an orphaned test or dev process
  *   tree Luiz clicked Stop on, on the manager's page (orphans.ts), under the same policy;
+ *   `POST /f/<fleet>/onepw/unlocked` is Luiz's "1Password is unlocked" on the card every page shows while it
+ *   is locked (onepw.ts), under the same policy: it clears every locked kind and tells the held fleets, each
+ *   in its chat, or in its session when its host's watch is dead;
  *   `POST /f/<fleet>/wake` is Luiz's "Wake now" on a fleet whose host does not listen (wake.ts), under the
  *   same policy: one wake to the session's socket at once.
  * - `/f/<fleet>@<machine>/…` a fleet of a peer hub, passed through: this hub checks a post by its own
@@ -53,6 +56,7 @@ import { SpendReader } from "../transcripts.ts";
 import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
 import type { Probe } from "../host.ts";
+import { clear as clearLock, settle as settleLock, statePath as lockPath, type Settled } from "../onepw.ts";
 import { deafView, deliver, socksDir, WAKE_MS, wakeNow, wakePass, Wakes, wakesPath, type Send, type Woken } from "../wake.ts";
 import { takeoverView } from "../takeover.ts";
 import { FILE_POLICY, LINKED_POLICY, servedBody } from "./body-policy.ts";
@@ -86,6 +90,10 @@ const SKILLS_TTL_MS = 60_000;
 
 /** How often the hub reads the tailnet and asks the peer hubs for their fleets. */
 const PEERS_MS = 30_000;
+
+/** How often the hub settles what is over of the 1Password lock (a kind cleared by a command, or lapsed): the
+ * hook holds and clears without the hub, so this only paces when the held fleets are told. */
+export const ONEPW_MS = 5000;
 
 /** How long a peer hub may take to answer. */
 const PEER_TIMEOUT_MS = 2500;
@@ -291,6 +299,7 @@ export class Hub {
   private readonly logins = new Map<string, { readonly login: string | undefined; readonly at: number }>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private courierTimer: ReturnType<typeof setInterval> | undefined;
+  private onepwTimer: ReturnType<typeof setInterval> | undefined;
   private wakeTimer: ReturnType<typeof setInterval> | undefined;
   /** What the hub did to wake each fleet's host (wake.ts), and the look that runs now, if one does. */
   private readonly wakes: Wakes;
@@ -298,6 +307,8 @@ export class Hub {
   private waking: Promise<Woken[]> | undefined;
   /** Why the last look failed as a whole, while it did: said once in the log, not at every look. */
   private lookFault: string | undefined;
+  /** The settle of the 1Password lock that runs now, if one does. */
+  private settling: Promise<Settled | undefined> | undefined;
   private readonly indexWatchers = new Set<(json: string) => void>();
   private indexTimer: ReturnType<typeof setInterval> | undefined;
   private readonly courier = new Courier();
@@ -360,6 +371,7 @@ export class Hub {
     await this.refresh();
     this.timer = setInterval(() => void this.refresh(), PEERS_MS);
     this.courierTimer = setInterval(() => this.relay(), POLL_MS);
+    this.onepwTimer = setInterval(() => void this.settleOnepw(), ONEPW_MS);
     this.wakeTimer = setInterval(() => void this.wakeHosts(), WAKE_MS);
   }
 
@@ -368,6 +380,8 @@ export class Hub {
     if (this.timer !== undefined) clearInterval(this.timer);
 
     if (this.courierTimer !== undefined) clearInterval(this.courierTimer);
+
+    if (this.onepwTimer !== undefined) clearInterval(this.onepwTimer);
 
     if (this.wakeTimer !== undefined) clearInterval(this.wakeTimer);
 
@@ -383,6 +397,21 @@ export class Hub {
     } catch {
       return 0;
     }
+  }
+
+  /** Settle what is over of the 1Password lock (a kind cleared, or lapsed; onepw.ts `settle`): each held fleet
+   * is told once, in its chat when its host's watch runs, else in its session through the verified write a wake
+   * takes (wake.ts `deliverTo`). Runs every ONEPW_MS, one at a time: a call while one runs gets that one. What it
+   * did, or undefined when nothing changed or it failed (the next run tries again): it never throws into the
+   * server. */
+  async settleOnepw(): Promise<Settled | undefined> {
+    this.settling ??= settleLock(this.options.machine, { socks: this.socks, send: this.options.send ?? deliver, probe: this.options.session })
+      .catch(() => undefined)
+      .finally(() => {
+        this.settling = undefined;
+      });
+
+    return this.settling;
   }
 
   /** Wake each served fleet's host that does not listen while the user's messages wait, when it may be woken
@@ -518,9 +547,9 @@ export class Hub {
     const state = readBytes(join(root, "state.json"));
 
     if (state === undefined) return undefined;
-    // The preview's record changes the view too (the updater writes it), and so do the wakes the hub wrote:
-    // each is part of what is compared.
-    const also = [recordPath(root), wakesPath(this.options.machine)].map((path) => readBytes(path) ?? Buffer.alloc(0));
+    // The preview's record changes the view too (the updater writes it), and so do the machine's 1Password
+    // lock (the card every page shows) and the wakes the hub wrote: each is part of what is compared.
+    const also = [recordPath(root), lockPath(this.options.machine), wakesPath(this.options.machine)].map((path) => readBytes(path) ?? Buffer.alloc(0));
     const bytes = Buffer.concat([state, ...also]);
     const held = this.views.get(root);
 
@@ -679,6 +708,8 @@ export class Hub {
     if (rest === "/name" && req.method === "POST") return this.rename(req, ip, root);
 
     if (rest === "/orphans/stop" && req.method === "POST") return this.stopOrphan(req, ip, entry);
+
+    if (rest === "/onepw/unlocked" && req.method === "POST") return this.onepwUnlocked(req, ip);
 
     if (rest === "/wake" && req.method === "POST") return this.wakeFleet(req, ip, entry);
 
@@ -928,6 +959,32 @@ export class Hub {
     if ("why" in done) return jsonResponse(409, { error: done.why });
 
     return jsonResponse(200, { stopped: [...done.stopped], left: [...done.left] });
+  }
+
+  /** `POST /f/<fleet>/onepw/unlocked` `{}`, on any fleet's page: Luiz's "1Password is unlocked" on the card.
+   * Checked as a chat post is. It clears every locked kind as the user and settles at once, after the settle
+   * that ran when it came, so each held fleet is told and every page loses the card: 200 `{cleared, told:
+   * [{fleet, to, id, via}]}`, `via` `chat` with the notice's `id`, or `session` with `id` null. With nothing
+   * locked it changes nothing (`cleared: false`); a hold already over and not yet settled is settled all the
+   * same. */
+  private async onepwUnlocked(req: Request, ip: string): Promise<Response> {
+    const viewer = await this.viewer(req, ip);
+    const refusal = postRefusal(this.owner, viewer, this.hosts, (name) => req.headers.get(name));
+
+    if (refusal !== undefined) return jsonResponse(refusal[0], { error: refusal[1] }, { Connection: "close" });
+
+    if (Buffer.byteLength(await req.text()) > MAX_POST_BYTES) return jsonResponse(413, { error: `an answer is at most ${MAX_POST_BYTES / 1024} KiB` });
+
+    try {
+      const cleared = clearLock(this.options.machine, "user", "answered on the page") !== undefined;
+      // A settle that runs now decided before this answer: the one after it tells the fleets.
+      await this.settling;
+      const settled = await this.settleOnepw();
+
+      return jsonResponse(200, { cleared, told: (settled?.told ?? []).map((t) => ({ fleet: t.fleet, to: t.to, id: t.id ?? null, via: t.via })) });
+    } catch (cause: unknown) {
+      return jsonResponse(500, { error: `could not record the answer: ${strerror(cause)}` });
+    }
   }
 
   /** `POST /f/<fleet>/wake` `{}`, or on the manager's page `{"fleet": "<id>"}` for one of its fleets: Luiz's

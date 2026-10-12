@@ -1,5 +1,6 @@
 /**
- * The Decisions view, the page's first: what waits on the viewer said in a sentence (with what is stuck,
+ * The Decisions view, the page's first: the card that asks to unlock 1Password while it is locked, what
+ * waits on the viewer said in a sentence (with what is stuck,
  * the goal, the Now line and the glance under it), the decisions in three lists, what was done under the
  * viewer's standing approvals and the approvals, the fleet's totals, and on
  * a manager's page the plan's usage.
@@ -67,6 +68,80 @@ export function originText(m: ReturnType<typeof usePage>["m"], d: Decision): str
   return [d.step || "", d.agent && m.person(d.agent) ? (m.person(d.agent)?.name ?? "") : ""].filter(Boolean).join(", ");
 }
 
+/** The card as the lead counts it: one action of the user's that blocks work. */
+const UNLOCK = { status: "open", asks: "user", blocking: true, kind: "action" } as const;
+
+/**
+ * While 1Password is locked on the machine: the card that asks the user to unlock it, the same on every
+ * page, above everything else that waits. It reads as an action of the user's, though no decision holds it:
+ * the hub shows it from the machine's state, and it goes when that state does. The button tells the hub,
+ * which tells each held fleet in its chat. Cleared and then seen locked again, it is the same card, asked
+ * since the same moment, marked "still locked".
+ */
+function Unlock(): JSX.Element {
+  const { m } = usePage();
+  const [said, setSaid] = createSignal("");
+  const [busy, setBusy] = createSignal(false);
+  const denied = (): string => (m.chatWritable() ? "" : m.chatAvailable() ? m.write().reason || "Read-only here." : "This copy of the page cannot tell the hub.");
+
+  async function unlocked(): Promise<void> {
+    if (!m.chatWritable() || busy()) return;
+    setBusy(true);
+    setSaid("");
+
+    try {
+      const res = await fetch("onepw/unlocked", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      // SAFETY: the hub answers {cleared, told} or {error}; anything else shows as its status.
+      const body = (await res.json().catch(() => ({}))) as { readonly error?: string };
+
+      setSaid(res.ok ? "The fleets are told." : (body.error ?? `the hub answered ${String(res.status)}`));
+    } catch {
+      setSaid("the hub did not answer");
+    }
+
+    setBusy(false);
+  }
+
+  return (
+    <Show when={m.state.onepw}>
+      {(o) => (
+        <div class="part" id="onepw">
+          <div class="card">
+            <div class="ask open blocking">
+              <span class="ask-head">
+                <b>Unlock 1Password</b>
+                <PillAs cls="blocking" text="blocks work" />
+                <Show when={o().again}>
+                  <PillAs cls="warning" text="still locked" />
+                </Show>
+                <PillAs cls="plain" text={KIND_WORDS["action"] ?? ""} />
+              </span>
+              <span class="detail">1Password, here or on the machine you are connected from, is refusing commands: {o().why}. Unlock the app, then say so here.</span>
+              <Show when={o().again}>{(again) => <span class="detail onepw-again">It was cleared and a command failed again {m.ago(again())}.</span>}</Show>
+              <For each={o().waiting} keyed={(w) => w.who}>
+                {(w) => (
+                  <span class="detail onepw-waits">
+                    Waiting: <b>{w().who}</b>, for {w().what}.
+                  </span>
+                )}
+              </For>
+              <span class="meta">Asked {m.ago(o().since)}. Every fleet holds its commands that need 1Password until then, and goes on with the rest.</span>
+              <button type="button" class="btn primary" id="onepw-unlocked" disabled={!m.chatWritable() || busy()} title={denied() || undefined} onClick={() => void unlocked()}>
+                {busy() ? "Telling the fleets…" : "1Password is unlocked"}
+              </button>
+              <Show when={said() || denied()}>
+                <span class="meta" id="onepw-said" role="status">
+                  {said() || denied()}
+                </span>
+              </Show>
+            </div>
+          </div>
+        </div>
+      )}
+    </Show>
+  );
+}
+
 /**
  * A fleet whose host does not listen while the user's messages wait, in the stuck band: since when, how many
  * wait, when the hub woke its session and how that ended, in the hub's facts and the page's words
@@ -127,7 +202,9 @@ function Lead(): JSX.Element {
   const lead = createMemo(() => {
     const msgs: readonly Message[] = m.messages();
     const every = m.everyDecision();
-    const l = Core.leadOf(every.filter((d) => Core.awaiting(d, msgs)));
+    const waits = every.filter((d) => Core.awaiting(d, msgs));
+    // The card that asks to unlock 1Password is one more action that waits, and it blocks work.
+    const l = Core.leadOf(m.state.onepw ? [UNLOCK, ...waits] : waits);
     const away = every.filter((d) => d.status === "open" && d.asks !== "manager" && !Core.isNotice(d) && !Core.awaiting(d, msgs));
     const held = away.filter((d) => Core.isHeld(d));
     const sent = away.length - held.length;
@@ -569,6 +646,7 @@ export function Overview(): JSX.Element {
 
   return (
     <section class="view" id="decisions" data-view="decisions" aria-labelledby="h-decisions" hidden={m.place().view !== "decisions"}>
+      <Unlock />
       <Lead />
       <DecisionList />
       <Approvals />

@@ -250,6 +250,7 @@ describe("a fleet's name", () => {
     registry.register(other, "u", process.pid, "2026-10-06T10:00:00+00:00");
     expect(registry.rename(root, "Billing")).toEqual({ why: "another fleet is already called 'billing'; pick another name" });
     expect(registry.rename(root, "user")).toEqual({ why: "'user' cannot name a fleet; the chat keeps ['coordinator', 'manager', 'user'] for itself" });
+    expect(registry.rename(root, "fleet-hub")).toEqual({ why: "'fleet-hub' cannot name a fleet; the hub signs its own lines in a chat with it" });
     expect(now()).toContainEqual(["p", null]);
   });
 });

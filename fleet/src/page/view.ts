@@ -2,7 +2,8 @@
  * The state as the page shows it (Python's `fleets.view`): the ledger with its numbers, what its
  * session spent, whether its host reads the chat, when each worker last wrote, its links up or down,
  * and what the machine serves that no link names. A manager's carries every coordinator being served
- * (`summary`), the plan's usage and the gate; a coordinator's, how to reach its manager. The ledger
+ * (`summary`), the plan's usage and the gate; a coordinator's, how to reach its manager; every page's, the
+ * card that asks Luiz to unlock 1Password while it is locked (`onepw`, onepw.ts). The ledger
  * itself is left as it is. Key order is Python's, so the page's payload is byte for byte the same.
  */
 import { statSync } from "node:fs";
@@ -18,6 +19,7 @@ import { workerActivity } from "../heartbeat.ts";
 import { activeAt, SpendReader, type Spent } from "../transcripts.ts";
 import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
+import { cardOf } from "../onepw.ts";
 import type { Orphan } from "../orphans.ts";
 import { lastError, logTail } from "../preview/devserver.ts";
 import { readRecord, serverProc, updaterProc, type DevServer } from "../preview/record.ts";
@@ -438,6 +440,15 @@ function saidIn(dir: string): Message[] {
 
 /** The state of the DIR `root` as the page shows it. */
 export function view(machine: Machine, lookups: Lookups, given: JsonObject, rootGiven: string): JsonObject {
+  const shown = ledgerView(machine, lookups, given, rootGiven);
+  const onepw = cardOf(machine);
+
+  // The machine's one card, on every page, and only while 1Password is locked: with none, the frozen Python
+  // twin's page and every trace read the same.
+  return onepw === undefined ? shown : { ...shown, onepw };
+}
+
+function ledgerView(machine: Machine, lookups: Lookups, given: JsonObject, rootGiven: string): JsonObject {
   const root = resolvePath(rootGiven);
   let state: JsonObject = numberState(given);
   const heard = heardIn(machine, root);

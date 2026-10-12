@@ -3277,13 +3277,88 @@ def shutil_which(name):
     return shutil.which(name)
 
 
+# 1Password locked (fleet/SPEC.md, "1Password locked"): a failed command that shows 1Password is locked records it once
+# for the machine, and until it clears a command of that kind is denied in every fleet's session. The code is
+# hooks/tstack-hook-onepw.py, executed into this module only for a call that can matter to it (_onepw): this script is
+# compiled from source on every call, so what a call does not need it should not carry. The two handlers below end
+# every other call at a test of its first word, then of a file's existence or two fixed strings.
+ONEPW_TOOLS = frozenset(("jj", "git", "ssh", "op", "secretspec", "gh", "aws"))
+ONEPW_TEXTS = ("sign_and_send_pubkey: signing failed", "[ERROR] ")
+
+
+def _onepw():
+    """This module's namespace with the 1Password part in it, read from the file beside the hook the first time."""
+    names = globals()
+    if "onepw_use" not in names:
+        path = Path(__file__).resolve().with_name("tstack-hook-onepw.py")
+        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), names)
+    return names
+
+
+def __getattr__(name):
+    """A name of the 1Password part asked of this module from outside, by a test or a script that loads the hook: the
+    part is read first. Inside the hook nothing comes here: its handlers read the part themselves."""
+    if name.startswith("__") or "onepw_use" in globals():
+        raise AttributeError(name)
+    try:
+        return _onepw()[name]
+    except KeyError:
+        raise AttributeError(name) from None
+
+
+def _onepw_command(hook):
+    """This call's Bash command when its first word can be a tool that uses 1Password, or an assignment before one,
+    else None: the cheap test every other call ends at, with no regular expression and no file read."""
+    tool_input = hook.input.get("tool_input") if isinstance(hook.input.get("tool_input"), dict) else {}
+    command = tool_input.get("command") if hook.input.get("tool_name") == "Bash" else None
+    first = command.split(None, 1)[:1] if isinstance(command, str) else []
+    return command if first and (first[0] in ONEPW_TOOLS or "=" in first[0]) else None
+
+
+def _onepw_state(env):
+    """Whether a state is on disk (REGISTRY/onepw/locked.json), one that reads or not: without one nothing is held and
+    nothing can clear."""
+    return os.path.exists(fleet_registry(env) / "onepw" / "locked.json")
+
+
+def _bash_output(data):
+    """Everything a Bash call printed, as the event carries it: tool_response's text fields, or the failure's error."""
+    parts = []
+    for key in ("tool_response", "error"):
+        value = data.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, dict):
+            parts += [v for k, v in value.items() if isinstance(v, str) and k in ("stdout", "stderr", "output", "error")]
+    return "\n".join(parts)
+
+
+def onepw_hold(hook):
+    """PreToolUse (Bash): the hold of a command that uses a locked kind of 1Password (_onepw_hold in the part), asked
+    only when the first word can be such a tool and a state is on disk."""
+    if _onepw_command(hook) is None or not _onepw_state(hook.env):
+        return None
+    return _onepw()["_onepw_hold"](hook)
+
+
+def onepw_watch(hook):
+    """PostToolUse and PostToolUseFailure (Bash): the detection and the clear of a lock (_onepw_watch in the part),
+    asked only when the first word can be such a tool, and a state is on disk (a clear, a join) or the output holds
+    a text 1Password's failures all hold (a new lock)."""
+    if _onepw_command(hook) is None:
+        return None
+    if not _onepw_state(hook.env) and not any(text in _bash_output(hook.input) for text in ONEPW_TEXTS):
+        return None
+    return _onepw()["_onepw_watch"](hook)
+
+
 HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, fleet_heartbeat],
     "Stop": [memo_nudge, fleet_listen_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
-    "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, land_turn_gate, suite_gate, fleet_grant_alone],
-    "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_chat_nudge],
-    "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep],
+    "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, land_turn_gate, suite_gate, onepw_hold, fleet_grant_alone],
+    "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_chat_nudge, onepw_watch],
+    "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep, onepw_watch],
     "PermissionDenied": [fleet_permission_denied],
     "SubagentStart": [fleet_heartbeat],
     "SubagentStop": [fleet_heartbeat],

@@ -331,6 +331,18 @@ export interface Orphan {
   readonly fleet: string;
 }
 
+/** While 1Password is locked on the machine: the card that asks the user to unlock it (fleet/src/onepw.ts),
+ * the same on every page. The words are the hub's: the page only lays them out. */
+export interface Onepw {
+  /** When the user was asked. */
+  readonly since: string;
+  readonly why: string;
+  /** When a command failed again after the lock was cleared (the same card, "still locked"), or null. */
+  readonly again: string | null;
+  /** Who waits (a fleet's name, or "a session outside the fleets") and for what, a row each. */
+  readonly waiting: readonly { readonly who: string; readonly what: string }[];
+}
+
 /** A fleet whose host does not listen while the user's messages wait, and what the hub did to wake its
  * session (fleet/src/wake.ts `deafView`). Only a hub gives it, and only for such a fleet. */
 export interface Deaf {
@@ -542,6 +554,8 @@ export interface State {
   readonly found: readonly Found[];
   /** On a manager's page, the machine's orphaned test and dev processes; empty elsewhere. */
   readonly orphans: readonly Orphan[];
+  /** The card that asks the user to unlock 1Password, while it is locked on the machine; null otherwise. */
+  readonly onepw: Onepw | null;
   readonly kept: readonly Kept[];
   readonly events: readonly FleetEvent[];
   readonly preview: Preview | null;
@@ -1575,6 +1589,7 @@ function parseState(value: Json | undefined): State | null {
   const rows = (key: string): JsonRecord[] => lists[key] ?? [];
   const gate = value["gate"];
   const named = value["named"];
+  const onepw = value["onepw"];
 
   const shown = {
     ...value,
@@ -1678,6 +1693,15 @@ function parseState(value: Json | undefined): State | null {
         session: text(o["session"], ""),
         fleet: text(o["fleet"], ""),
       })),
+    onepw:
+      isRow(onepw) && isText(onepw["since"])
+        ? {
+            since: onepw["since"],
+            why: text(onepw["why"], ""),
+            again: isText(onepw["again"]) && !Number.isNaN(Date.parse(onepw["again"])) ? onepw["again"] : null,
+            waiting: list(onepw["waiting"]).flatMap((w) => (isText(w["who"]) && isText(w["what"]) ? [{ who: w["who"], what: w["what"] }] : [])),
+          }
+        : null,
     kept: withId(list(value["kept"])).map((k) => ({ ...k, text: text(k["text"], ""), at: text(k["at"], "") })),
     preview: previewOf(value["preview"]),
     events: rows("events")

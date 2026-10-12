@@ -27,6 +27,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 [chat.py](#chatpy-the-chat) · [fleets.py and the registry](#fleetspy-and-the-registry) ·
 [The other scripts](#the-other-scripts) · [The hub](#the-hub-fleet-hub) · [Heartbeats](#heartbeats) ·
 [Listening hooks](#listening-hooks) · [The hub's wake](#the-hubs-wake) · [The news](#the-news-fleet-news) ·
+[1Password locked](#1password-locked-fleet-onepw) ·
 [Workspaces](#workspaces-fleet-ws) · [The preview](#the-preview-fleet-preview) · [The advisor](#the-advisor-fleet-advisor) · [Files by writer](#files-by-writer) ·
 [Oracle traces](#oracle-traces) · [The model](#the-model-based-test) · [Open](#open)
 
@@ -58,6 +59,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `FLEET_PREVIEW_SCOPE` | `fleet preview start`, the keeper | `0`: the preview's processes run without systemd user scopes of their own, stopped by their tree (the tests set it) |
 | `FLEET_NUDGE_MIN` | the plugin's hook (`fleet_chat_nudge`) | how long the user's message waits unread, or an answer unrecorded, before the session is told mid-turn (default 3 minutes). See [Listening hooks](#listening-hooks) |
 | `FLEET_CC_SOCKS` | the hub | the folder of Claude Code's session sockets, `<pid>.sock` each, that the hub's wake writes to (default `$XDG_RUNTIME_DIR/cc-socks`; the tests set a folder of their own, so no test reaches a real session). See [The hub's wake](#the-hubs-wake) |
+| `FLEET_ONEPW_LAPSE_S` | the plugin's hook (`onepw_watch`, `onepw_hold`), the hub, `fleet onepw` | how long a kind of 1Password lock holds with no answer before it lapses (default 7200 s; unset, empty or no number is the default; 0 or less means nothing ever holds). See [1Password locked](#1password-locked-fleet-onepw) |
 
 A DIR at `…/<project>/<session>/scratchpad/<name>` names a session transcript; any other DIR has
 none, and every figure read from a transcript (spend, worker tokens, liveness) is absent.
@@ -1698,9 +1700,13 @@ stderr, `serve: the takeover is not recorded where it should be: <why>`, and the
   name_by?}`, 400 an unknown worker or a name a mention could not tell apart, as [Names](#statepy-the-ledger-cli) words
   it), `{name}` names the fleet before every other name (200 `{id, session, path}`, the fleet's address
   after; 400 reserved or taken); an empty name gives either back to its session's; the page's state then
-  carries `named: {id, session}`, the hub's alone), `POST /wake` (TypeScript only; under `POST /chat`'s write
-  policy: 403, 415, 413): Luiz's "Wake now" on a host that does not listen (200 `{woken, fleet, at}`, 409,
-  429, 502; see [The hub's wake](#the-hubs-wake)), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
+  carries `named: {id, session}`, the hub's alone), `POST /onepw/unlocked` (TypeScript only; under `POST
+  /chat`'s write policy: 403, 415, 413): Luiz's "1Password is unlocked" on the card every page shows while the
+  machine's 1Password is locked, which clears every locked kind and tells the held fleets, each in its chat
+  or, when its host's watch is dead, in its session (200 `{cleared, told[]}`; see
+  [1Password locked](#1password-locked-fleet-onepw)), `POST /wake` (TypeScript only; under the same policy):
+  Luiz's "Wake now" on a host that does not listen (200 `{woken, fleet, at}`, 409, 502; see [The hub's
+  wake](#the-hubs-wake)), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
   sandbox CSP and the body's policy; every other file, whatever its type, with `Content-Security-Policy: sandbox;
   script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'` and `nosniff`; dot files and paths
   out of DIR 404), and `GET /f/<fleet>/files/<path>` (TypeScript only): a file a
@@ -1842,7 +1848,7 @@ teses-positionings).
   `same-origin` is refused too, unless its `Origin` is listed. A post with neither header (`fleet tell`,
   curl on this machine) is as before. Every post that acts as the user passes these checks
   (`postRefusal`): `/chat` (a message, a decision's answer, the grant an answer carries), `/chat/preview`,
-  `/name`, `/preview-workers`, `/wake`, and a post to a peer's fleet, checked here before it is passed on.
+  `/name`, `/preview-workers`, `/onepw/unlocked`, `/wake`, and a post to a peer's fleet, checked here before it is passed on.
 
 ### The hub's origin: what runs on it
 
@@ -2714,6 +2720,699 @@ entry's `id`, matched by its dir.
 Why no relay: an item another fleet must act on goes to that fleet as one direct message, once; routing it
 through the manager wakes the manager (a large context) and then the fleet, two wakes for one.
 
+## 1Password locked (`fleet onepw`)
+
+For Luiz: "1p problems ask the user to unlock and pauses all fleet until unblocked." On his machines git
+over SSH signs through the 1Password agent, and `op`, `secretspec`, `gh` and `aws` read their secrets from
+the 1Password app. When the app is locked, each of those commands fails in every session, and each fleet
+would open its own card for the same cause. So the machine keeps one state: the first failure of a kind
+asks Luiz once, with one card on every page; while that kind is locked, the plugin's hook denies the fleets'
+commands of that kind, but for one every 15 minutes that tests the lock, and the rest of the work goes on;
+when it ends, the hub tells each held fleet once.
+TypeScript and the plugin's hook only: the Python twin has none of it, and with nothing locked no view or
+trace differs.
+
+### The two kinds
+
+A lock is per kind. There are two, and their words are fixed:
+
+| Kind | What is locked | Tools (the command's first word) | In a denial, a note and a notice | On the card |
+| :-- | :-- | :-- | :-- | :-- |
+| `ssh-agent` | SSH signing through the 1Password agent | `jj` and `git` on an SSH remote, `ssh` | `SSH through the 1Password agent (jj and git remotes, ssh)` | `SSH (a push, a fetch or a connection)` |
+| `op-desktop` | secrets read through the 1Password desktop app | `op`, `secretspec`, bare `gh`, bare `aws` | `secrets read through the 1Password app (op, secretspec, gh, aws)` | `reading secrets` |
+
+`gh` and `aws` count because in Luiz's sessions both are shell aliases of `op plugin run --` (measured:
+`gh: aliased to op plugin run -- gh`). `scp`, `sftp` and every other tool are out: never detected, never
+held, never clearing. Each kind is detected, held and ended on its own: a lock of one holds nothing of the
+other.
+
+### A command form
+
+Detection, hold and clear read a Bash command through one function of the hook, `onepw_use(command, cwd,
+env)`. It matches only a single simple command whose first word is the bare tool name: `jj`, `git`, `ssh`,
+`op`, `secretspec`, `gh` or `aws`.
+
+| In the command | What the hook does with it |
+| :-- | :-- |
+| leading `VAR=value` assignments | read (the token rule, secretspec's provider, `GIT_*` and `SSH_*`, all below), then dropped |
+| a redirection with its target (`2>&1`, `>file`, `>>file`, `>\|file`, `<file`, `&>file`, `<<<word`) | dropped |
+| `&&`, `\|\|`, `;`, `\|`, `&`, `(`, `)`, a newline inside the command | no match |
+| `$` or a backtick anywhere: a variable, `$(...)`, a substitution | no match |
+| a here-document (`<<`), a redirection with no target, quoting that does not close, a word that starts with `#` | no match |
+| a first word that is not the bare tool: a wrapper (`sh -c`, `timeout`, `env`, `pnpm`, `just`, `devenv`, `devenv-run`, `nix`, `sudo`, `xargs`, `command`, `exec`, `nohup`, `time`), a keyword or a group (`if`, `for`, `{`, `(`, `!`), a path to the tool (`/usr/bin/gh`, `./ssh`), a quoted or escaped name (`'gh'`, `\gh`, which no alias expands) | no match |
+
+Detection is deliberately narrow. A piped, chained or wrapped command, and a script that runs one of the
+tools, is not detected, not held and cannot clear: it fails as it did before the feature. The reason is the
+cost of each mistake: a missed lock costs one more failing command, and a false lock stops every fleet. The
+hook does not chase wrappers or scripts.
+
+`onepw_use` answers nothing (no match), or a use:
+
+| Part of a use | What |
+| :-- | :-- |
+| `kind` | `ssh-agent` or `op-desktop` |
+| `what` | the tool's words only (`jj git push`, `git fetch`, `ssh`, `op read`, `op plugin run`, `secretspec run`, `gh pr`): never an argument, a host or a secret reference. For `gh` and `aws` the subcommand is named only when it is `[a-z][a-z0-9-]{0,30}` and nothing but options the hook knows stands before it; else `what` is the tool alone |
+| `host` | `ssh-agent` only: the SSH host in lower case, or none when it is not known |
+| shows | every use: with a 1Password failure in its output it may detect a lock |
+| held | it is denied while its kind is locked |
+| clears | its exit 0 proves the kind works again |
+
+Per tool:
+
+| Tool | A use | Not a use | Held | Clears |
+| :-- | :-- | :-- | :-- | :-- |
+| `jj` | `jj [global options] git push\|fetch\|clone ...` whose remote is SSH or unknown | `--dry-run`, `--help`, `-h`, `--version` or `-V` anywhere on the line; a remote that is not SSH | the remote is SSH | `fetch` and `clone` on an SSH remote. A `push` never: with nothing to push, jj exits 0 without reaching the remote |
+| `git` | `git [options] push\|fetch\|pull\|clone\|ls-remote ...` whose remote is SSH or unknown | a dry-run push (`--dry-run`, or a short option that holds `n`: `-n`); `--help` or `-h` after the subcommand; `ls-remote --get-url`; before the subcommand `--help`, `-h`, `--version`, `-v`, `--exec-path`, `--html-path`, `--man-path`, `--info-path`; a remote that is not SSH | the remote is SSH | the remote is SSH |
+| `ssh` | `ssh [options] host [command...]` | `-V`, `-G` or `-Q`; no host, or a host that is not `[a-z0-9][a-z0-9._-]{0,252}` once `user@` is dropped and it is in lower case | the host is in the lock's `hosts` | the host is in the lock's `hosts`, and no option gives the connection a key or a route of its own (below) |
+| `op` | `op [global options]` then `read`, `item`, `document`, `vault`, `user` or `group`; or `run`, `inject`, `signin`, `plugin run` | `--help`, `-h`, `--version` or `-v` before a `--`; `op item template`; every other subcommand (`account`, `whoami`, `completion`, `update`): `op account list` reads the config only, and `op whoami` says `account is not signed in` with the app unlocked | always | `read`, `item`, `document`, `vault`, `user`, `group`. Never `run`, `inject`, `signin` or `plugin run`: their exit 0 does not prove a read through the app (`op run -- true` reads nothing) |
+| `secretspec` | `secretspec [global options] run\|check\|get\|set\|import\|export ...` | `--help`, `-h`, `--version` or `-V` among secretspec's own words (for `run`, the words before the child command); a provider that is not 1Password's desktop one (below) | always | never: secretspec 0.17+ keeps a cache of what providers gave, so its exit 0 does not prove a read through the app |
+| `gh`, `aws` | the bare tool with a subcommand (the first word that is no option nor an option's value) | no subcommand; the subcommand `help`, `version` or `completion`; `--help`, `-h` or `--version` before a `--`; for `aws`, a `help` before a `--` | always | never: the tool's exit 0 says nothing of what the plugin read |
+
+Options that take the next word as their value, which the hook skips to find the subcommand or the host:
+
+| Tool | Valued options |
+| :-- | :-- |
+| `jj` | `-R`, `--repository`, `--at-operation`, `--at-op`, `--color`, `--config`, `--config-file`, `--config-toml`; to find a clone's source also `--remote`, `-b`, `--bookmark`, `--branch`, `-r`, `--revision`, `--revisions`, `-c`, `--change`, `--named`, `-o`, `--option`, `--depth`, `--fetch-tags` |
+| `git` | before the subcommand `-C`, `-c`, `--git-dir`, `--work-tree`, `--namespace`, `--config-env`, `--super-prefix`; after it, the subcommand's own (`GIT_REMOTE_VALUED` in the hook) |
+| `ssh` | `-B -b -c -D -E -e -F -I -i -J -L -l -m -O -o -P -p -R -S -W -w` |
+| `op` | `--account`, `--config`, `--encoding`, `--format`, `--session` |
+| `secretspec` | `-f`, `--file`, `-p`, `--provider`, `-P`, `--profile`, `-S`, `--scope`, `--reason`, `--caller`, `--caller-version`, `--caller-operation`, `--caller-resource` |
+| `gh`, `aws` | `-R`, `--repo`, `--profile`, `--region`, `--output`, `--endpoint-url`, `--ca-bundle`, `--color`, `--query`, `--cli-read-timeout`, `--cli-connect-timeout`, `--cli-binary-format` |
+
+**Shows only.** A `jj`, `git` or `ssh` use shows but is never held and never clears when the line or the
+environment takes SSH out of the agent's hands, or moves the config out of the files the hook reads:
+
+- an inline assignment whose name starts with `GIT_` or `SSH_` (`SSH_AUTH_SOCK=... ssh host`);
+- for `jj` and `git`: `GIT_SSH_COMMAND`, `GIT_SSH` or `GIT_DIR` set in the session's environment;
+- for `git`: `-c`, `--config-env` or `--git-dir` before the subcommand, or `--multiple` after it;
+- for `jj` and `git`: a remote the hook cannot resolve (unknown, below).
+
+Such a command may still detect a lock: ssh's own signing text in its output proves the agent was used.
+
+**secretspec's provider.** The provider is the one in effect: `-p X`, `-pX`, `--provider X` or
+`--provider=X`, else an inline `SECRETSPEC_PROVIDER=X`, else `SECRETSPEC_PROVIDER` in the session's
+environment. When one is named and it is neither `onepassword` nor starts with `onepassword:`, the command is
+no use (`dotenv`, `keyring`, `env`, `onepassword+token://...` are out). With none named it is a use.
+
+**The token rule.** With `OP_SERVICE_ACCOUNT_TOKEN` set and not empty, or `OP_CONNECT_HOST` and
+`OP_CONNECT_TOKEN` both set and not empty, `op` and `secretspec` are no use at all: they never lock, are
+never held and never clear, because with a service-account or a Connect token they do not touch the app.
+Each variable is read from an inline assignment on the command when there is one (an empty one unsets it for
+this reading), else from the session's environment, which is the hook's own. `gh` and `aws` are not under
+the rule.
+
+**Remote resolution.** For `jj` and `git` the hook resolves the remote the command reaches to one of three
+answers: SSH (with its host, when known), not SSH, or unknown. It reads files only and starts no process.
+
+| Command | The remote |
+| :-- | :-- |
+| `jj git clone`, `git clone` | the source, the first word after `clone` that is no option: read as a URL, never as a remote's name. `jj git clone` with no source is unknown |
+| `jj git push\|fetch` | each `--remote NAME` or `--remote=NAME`; with `--all-remotes`, every remote of the repo; else the default |
+| `git push\|fetch\|pull\|ls-remote` | the first word after the subcommand that is no option: a remote of the repo, else a URL or a path when it holds `:` or `/`; for a `push` with no such word, each `--repo`; `fetch` and `pull` with `--all` and no such word, every remote; else the default |
+| the default (no remote named) | answered only when the repo's config reads, it has `origin` or at most one remote, and every remote of the repo has the same transport (a branch may track another remote than `origin`): then SSH or not SSH. Otherwise unknown |
+
+- **The repo** is the command's directory (the event's `cwd`), moved by git's `-C DIR` and jj's `-R DIR`,
+  `--repository DIR`. Its git directory is the nearest upward, at most 24 levels: a `.git` directory, or a
+  `.git` file whose `gitdir:` line is followed, and from there a `commondir` file (a worktree's shared
+  directory). For jj a `.jj` at that level comes first: `.jj/repo` is the repo, or, in a jj workspace, a file
+  that names the main repo's `.jj/repo` (relative to `.jj`); then `<repo>/store/git_target` names the git
+  directory, relative to `store`. So a jj workspace with no `.git` of its own resolves. The repo's config is
+  `<git directory>/config`.
+- **A remote's URL**: for a fetch, the remote's first `url`; for a push, every `pushurl` when it has one,
+  else every `url`.
+- **`insteadOf`.** Each URL is read as git rewrites it: the longest `insteadOf` prefix it starts with is
+  replaced by that `[url "<base>"]` section's base; for a push, `pushInsteadOf` is tried first (a `pushurl`
+  takes `insteadOf` only). The rewrites are read from the repo's config and from the system's and the user's:
+  `$GIT_CONFIG_SYSTEM`, else `/etc/gitconfig` (skipped when `GIT_CONFIG_NOSYSTEM` is true), then
+  `$GIT_CONFIG_GLOBAL` alone when it is set, else `$XDG_CONFIG_HOME/git/config` (`~/.config/git/config`) and
+  `~/.gitconfig`. The reason: Luiz's remotes are `https://github.com/...` URLs that
+  `[url "git@github.com:..."] insteadOf` in his user config rewrites to SSH, so read from the repo's config
+  alone none of his pushes would be an SSH one.
+- **SSH** is a URL of scheme `ssh://`, `git+ssh://` or `ssh+git://`, or the scp-like `[user@]host:path`: a
+  colon with no `/` before it, more than one character before it (not a Windows drive), not starting with
+  `~` or `.`, and no path that exists in the repo's directory. Every other scheme (`https://`, `http://`,
+  `file://`, `git://`) and a local path (`/x`, `./x`, `../x`, `~/x`) are not SSH. The host is the URL's, in
+  lower case, when it is `[a-z0-9][a-z0-9._-]{0,252}`; several URLs reached together give a host only when
+  they share it.
+- **Unknown**: no config that reads (no git directory found), unless the line gives a URL; a config, the
+  repo's, the user's or the system's, with an `[include]` or `[includeIf]` section (the hook follows none);
+  `--all-remotes` or `--all` with no config; a jj `--remote` that is a pattern (`*`, `?`, `[`, `]`, `{`, `}`,
+  `:`); several remotes with no `origin` and none named; remotes of both transports and none named. An
+  unknown remote shows only. A name that is no remote of a repo whose config reads, and no URL, counts for
+  nothing.
+
+**`ssh` and hosts.** The host of an `ssh` command is its first word that is no option nor an option's
+value, with `user@` dropped, in lower case. An `ssh` use is held, and clears, only when that host is in the
+lock's `hosts`: the hosts this lock saw fail through the agent, from an `ssh` to it or from a `jj` or `git`
+remote on it. The reason: an SSH connection over Tailscale SSH or with a file key never touches 1Password,
+so `ssh nixbox uptime` must neither be held by, nor clear, a lock seen on `github.com`. On a recorded host,
+an `ssh` with a key or a route of its own stays held but never clears: `-i`, `-I`, `-F`, `-J`, `-S`, `-W`,
+`-O`, or an `-o` whose option is not one of `BatchMode`, `ConnectTimeout`, `ConnectionAttempts`, `LogLevel`,
+`RequestTTY`, `ServerAliveInterval`, `ServerAliveCountMax`, `StrictHostKeyChecking`, `UserKnownHostsFile`
+(read without case).
+
+### A 1Password failure
+
+A lock of a kind is recorded only when all four hold:
+
+1. **The command failed.** The event is `PostToolUseFailure`; or it is `PostToolUse` and its `tool_response`
+   says so: `is_error` or `isError` is true, or one of `exit_code`, `exitCode`, `returnCode`, `code` is an
+   integer that is not 0. Never when `tool_response.interrupted` or the event's `is_interrupt` is set. An
+   exit 0 never locks, whatever it prints.
+2. **The command is a use** of that kind (every use shows).
+3. **Its output holds 1Password's own text for that kind, where the tool itself puts it** (the table, and
+   the rules under it). The output is the event's `tool_response` and `error`: each as it is when it is a
+   string, else its `stdout`, `stderr`, `output` and `error` strings, joined by newlines. A text counts only
+   for the kind of command that prints it.
+4. **The session works for a fleet** (`fleet_dirs`, the [heartbeat's](#heartbeats) membership). A session of
+   no fleet never locks.
+
+| Kind | The text | `why` |
+| :-- | :-- | :-- |
+| `ssh-agent` | `sign_and_send_pubkey: signing failed for <at most 300 characters> from agent: communication with agent failed`, or the same ending `agent refused operation` | `SSH signing through 1Password failed` |
+| `op-desktop` | op's error line, `[ERROR] YYYY/MM/DD HH:MM:SS <text>`, whose text holds `authorization prompt dismissed` | `the 1Password prompt was dismissed` |
+| `op-desktop` | such a line holding `authorization timeout` | `the 1Password prompt timed out` |
+| `op-desktop` | such a line holding `connecting to desktop app: <at most 80 characters>` then `timed out` or `connection reset` | `the 1Password app did not answer` |
+
+The text alone is not enough: a log, a test and a remote machine all print it. It counts only where the
+tool itself puts it (`onepw_why`):
+
+- **ssh's line stands at the start of a line**, or right after `git: ` at the start of a line, which is how
+  `jj` prints git's messages (measured in the transcripts: `git: sign_and_send_pubkey: signing failed ...`).
+  A line that holds it elsewhere is not one: a failing pre-push test that quotes it (`E  assert
+  'sign_and_send_pubkey: ...'`), the remote's own message (`remote: sign_and_send_pubkey: ...`), a line of a
+  log (`a.log:10:sign_and_send_pubkey: ...`).
+- **For `ssh`, the exit code is 255**: ssh's own, for a connection it could not make. Any other code is the
+  remote command's. It ran, so the connection was made, and what it printed is the remote's business:
+  `ssh nixbox 'cd repo && git pull'` that fails on nixbox's own agent (exit 1) and `ssh build1 "grep -rn
+  signing /var/log/ci"` (exit 2) lock nothing here. The code is the response's `exit_code`, `exitCode`,
+  `returnCode` or `code`, else the `Exit code N` the failure's `error` opens with. An `ssh` whose event
+  gives no code locks nothing.
+- **For `op`, `gh` and `aws`, op's lines are the whole output, and the last one holds the text.** Every
+  line that is not blank is an op error line (`[ERROR] YYYY/MM/DD HH:MM:SS ` from its first character; a
+  first line `Exit code N` is skipped). The reason: op asks the app before it runs anything, so when op
+  itself failed nothing else was printed. A line that stands beside other output came from the child (`op
+  run -- pytest` whose test prints it, `gh issue view` whose body holds it), and one that stands before
+  another error is not what ended the command.
+- **For `secretspec`, op's line follows `Provider operation failed: `** (measured in the transcripts:
+  `warning: primary provider onepassword://Employee failed: Provider operation failed: Provider operation
+  failed: [ERROR] 2026/... authorization prompt dismissed, please try again`, and `× Provider operation
+  failed: Provider operation failed: [ERROR] 2026/... connecting to desktop app: ...`). A bare `[ERROR]`
+  line in a `secretspec` command's output is its child's.
+
+Two failures are not told apart from 1Password's own, and lock: a `gh` or an `aws` command whose whole
+output is op's line although the tool printed it (`gh run view --log-failed` of a job whose only line is
+that one); and an `ssh` whose remote command prints ssh's line at the start of a line and exits 255 itself
+(an `ssh` run on the remote). [The probe window](#the-probe-window) bounds both.
+
+Two texts are not signatures:
+
+- Git's `Please make sure you have the correct access rights and the repository exists.` A missing remote, a
+  permission error and a network failure all print it, so it says nothing of 1Password. A failed push
+  locks only when ssh's signing line stands in the output.
+- `account is not signed in` (measured: `op whoami` says it with the app unlocked).
+
+### The state: `REGISTRY/onepw/`
+
+| File | What |
+| :-- | :-- |
+| `onepw.lock` | every read-modify-write of `locked.json` runs under an exclusive `flock` of it: Python's `fcntl.flock` in the hook, `withExclusiveLock` in the fleet, as `gate.lock` |
+| `locked.json` | the state, version 2, written atomically (a temp file, then a rename). Absent: 1Password is not known to be locked |
+| `locked.json.broken` | the last state that did not read, set aside (below); a newer one replaces it |
+| `onepw.log` | append-only, one line per event, `<stamp> <text>` |
+
+```json
+{
+  "v": 2,
+  "kinds": {
+    "ssh-agent": {
+      "since": "2026-10-12T13:50:02-05:00",
+      "why": "SSH signing through 1Password failed",
+      "hosts": ["github.com"],
+      "again": "2026-10-12T14:36:40-05:00",
+      "probe": "2026-10-12T14:05:02-05:00",
+      "cleared": {"at": "2026-10-12T14:32:10-05:00", "by": "user", "note": "answered on the page"},
+      "lapsed": "2026-10-12T15:50:02-05:00"
+    },
+    "op-desktop": {"since": "2026-10-12T13:52:40-05:00", "why": "the 1Password prompt was dismissed"}
+  },
+  "waiting": [
+    {"dir": "/abs/fleet/DIR", "fleet": "skills", "session": "<session id>", "worker": "a3",
+     "kind": "ssh-agent", "what": "jj git push", "at": "2026-10-12T13:50:02-05:00", "seen": "failed"}
+  ],
+  "told": {"/abs/fleet/DIR": "2026-10-12T14:32:11-05:00"}
+}
+```
+
+The example shows every key a kind can have, not a state that occurs: a kind never has both `cleared` and
+`lapsed`. Stamps are the fleet's clock (local time with its offset, `FLEET_NOW` honoured):
+`fleet_stamp(env)` in the hook, `stampOf(machine.now())` in the fleet.
+
+| Key | Meaning |
+| :-- | :-- |
+| `v` | 2. Written, never read: a version 1 file has no `kinds`, so it is broken (`no kinds`) |
+| `kinds` | the kinds that have a lock or had one not yet pruned; a key is `ssh-agent` or `op-desktop` |
+| `kinds.<k>.since` | the first detection of this kind: the time Luiz "was asked at" |
+| `kinds.<k>.why` | what the first failure was, one of the four fixed phrases of [A 1Password failure](#a-1password-failure). The fleet shows any other text as `a command that uses 1Password failed` |
+| `kinds.<k>.hosts` | `ssh-agent` only: the hosts seen failing through the agent, at most `HOSTS_MAX`, each `[a-z0-9][a-z0-9._-]{0,252}` as the hook writes it (the fleet keeps `[a-z0-9._-]{1,253}`). Absent when none is known |
+| `kinds.<k>.again` | set when the kind was locked again inside the reopen window of a clear ([Damping](#damping)): the card says `still locked` |
+| `kinds.<k>.probe` | when the last probe window of this lock was taken ([The probe window](#the-probe-window)). Written and read by the hook; the fleet keeps it as it is |
+| `kinds.<k>.cleared` | `{at, by, note}`: `by` is `user` (`note`: `answered on the page` for the button, else the CLI's `--note` or `fleet onepw unlocked`) or `command` (`note`: the command's `what`). Absent or empty (null, false, `{}`) while locked |
+| `kinds.<k>.lapsed` | written by the settle pass the first time it sees the kind past its lapse, so the lapse is logged once |
+| `waiting[]` | who is held: one row per fleet DIR and kind, written for the first command of that kind that failed or was held there, at most `ONEPW_WAITING_MAX` rows. A fleet is told once per hold, so one row per kind is all it needs, and the cap counts fleets, never one fleet's commands. The sessions of no registered fleet share one row per kind, with no `dir`. A row stays until its fleet is told, or it is dropped because nobody can be told |
+| `waiting[].dir` | the fleet's DIR, resolved; null for a session whose fleet is in no registry |
+| `waiting[].fleet` | the registry id as the hook read it; may be null or stale, so the fleet resolves the name from `dir` through the registry |
+| `waiting[].session` | that first command's session id, or null. The fleet never reads it |
+| `waiting[].worker` | that first command's worker, by the ledger's id; null for the host itself. The fleet never reads it |
+| `waiting[].kind` | the lock kind |
+| `waiting[].what` | that first command's `what`: the tool's words only |
+| `waiting[].at` | when the row was added |
+| `waiting[].seen` | `failed` (the command ran and failed) or `held` (the hook denied it) |
+| `told` | per fleet DIR, when it last got an unlocked or a lapsed notice ([Damping](#damping)) |
+
+Top-level keys this section does not name are kept on every write.
+
+**Constants.** The hook and the fleet hold the same values:
+
+| The hook | The fleet | Value | What |
+| :-- | :-- | :-- | :-- |
+| `ONEPW_LAPSE_S` | `LAPSE_S` | 7200 s (2 h) | how long a kind holds with no answer. `FLEET_ONEPW_LAPSE_S` replaces it when it is a number, read each time (unset, empty or no number is the default; 0 or less means nothing ever holds) |
+| `ONEPW_REOPEN_S` | `REOPEN_S` | 600 s (10 min) | how long after a clear a failure of that kind reopens the same card; a cleared kind stays in the state that long |
+| | `NOTICE_GAP_S` | 1800 s (30 min) | the least time between two notices to one fleet DIR |
+| `ONEPW_PROBE_S` | | 900 s (15 min) | how long after a kind was locked, reopened or last probed its next probe window opens |
+| `ONEPW_HOSTS_MAX` | `HOSTS_MAX` | 20 | the most hosts a kind keeps |
+| `ONEPW_WAITING_MAX` | | 50 | the most `waiting` rows: 25 fleets that wait for both kinds |
+| `ONEPW_SKEW_S` | `SKEW_S` | 60 s | how far ahead of now a `since` may be and still read (two clocks, two writers) |
+| | `ONEPW_MS` (the hub) | 5000 ms | how often the hub settles |
+
+**A broken file.** The hook and the fleet read the file the same way. It is broken on the first of these,
+in this order, and the word in the left column is the reason:
+
+| Reason | When |
+| :-- | :-- |
+| `not JSON` | the text is not JSON, or not a JSON object (in the hook, also bytes that are not UTF-8) |
+| `no kinds` | `kinds` is missing or no object |
+| `an unknown kind` | a key of `kinds` is neither `ssh-agent` nor `op-desktop` |
+| `a kind's since` | a kind's value is no object; or its `since` is no stamp that parses; or its `since` is more than 60 s after now |
+| `a kind's cleared` | a kind's `cleared` is not empty and is no object with an `at` that parses |
+| `waiting` | `waiting` is present and no list (`"waiting": null` too) |
+| `told` | `told` is present and no object |
+
+Tolerated, and dropped without a word: a `waiting` item that is no object or whose `kind` is not one of the
+two; a `hosts` that is no list, and its items that are no such host; an `again`, a `lapsed` or (in the
+hook, the only reader of it) a `probe` that does not parse; a `told` value that does not parse. A file that
+cannot be opened is treated as no file.
+
+A broken file is never a lock and holds nothing. Whoever reads it broken while acting sets it aside: the
+hook on a command that is a use, and the settle pass. `fleet onepw` and the card only read: to them a broken
+file is "not known to be locked". Setting aside runs under `onepw.lock`: the file is read there (again, for
+the hook, which first read it without the lock), and when it is still broken it is renamed to
+`locked.json.broken` (replacing an older one) and one line is appended to `onepw.log`:
+
+```
+<stamp> set aside: the state did not read (<reason>)
+```
+
+`<reason>` is one of the seven fixed reasons above. Nothing of the file's content is ever logged. After
+that there is no file, so nothing logs again.
+
+**A kind at `now`** has one of three statuses:
+
+| Status | When |
+| :-- | :-- |
+| cleared | its `cleared` is not empty |
+| lapsed | else, `now - since >= lapse` (`FLEET_ONEPW_LAPSE_S`, default 7200 s; a `since` up to 60 s ahead counts as now) |
+| locked | else |
+
+A kind is over when it is cleared or lapsed. 1Password is locked when at least one kind is locked. A kind
+that is over holds nothing; it stays in the file until it is pruned
+([Settle and the notice](#settle-and-the-notice)).
+
+### What the hook does
+
+Two handlers of the plugin's dispatcher (`hooks/tstack-hook`), on Bash only: `onepw_watch` on PostToolUse
+and PostToolUseFailure (detect, clear), `onepw_hold` on PreToolUse (hold; it runs after the land turn's gate
+and the suite gate, and before the grant's). Their code is a file beside the hook,
+`hooks/tstack-hook-onepw.py`, which the hook executes into itself only for a call that can matter
+([Cost](#cost)). Every write of the state runs under `onepw.lock` and is atomic (`_onepw_update`), and
+re-checks under the lock what it read before it. The hook never allows a call, and any error of its own
+lets the call through. A use that finds the state broken sets it aside, then acts as with no file.
+
+**Detect** (`onepw_watch`; a failure as [above](#a-1password-failure), of kind `k`, in a fleet's session).
+Under the lock, by the status of `k`:
+
+| `k` is | What is written | Log line |
+| :-- | :-- | :-- |
+| locked | the session joins: its rows are added (`seen: "failed"`), and the use's host | `another waits: <k> in <fleet>`, only when a row was new |
+| cleared less than `REOPEN_S` ago, and its `since` is still inside the lapse | the same card is reopened: `cleared` and `lapsed` are dropped, `since`, `why` and `hosts` are kept, `again` is set to now, rows and host are added | `still locked: <k> failed again in <fleet>` |
+| anything else: no entry, lapsed, cleared longer ago, or cleared with a `since` past the lapse | a new lock: `kinds[k] = {since: now, why}` with the use's host; rows are added. The rows already waiting are kept: their fleets were never told | `locked: <why> (<k> in <fleet>)` |
+
+A session's rows are one per fleet DIR it works for that the registry names; a session whose fleet is in no
+registry has one row with no `dir` and no `fleet`. A row is added only where the state holds none for that
+DIR and kind yet, and while there is room. `<fleet>` in a log line is the first row's fleet id with
+every character outside `[A-Za-z0-9_.-]` replaced by `_`, at most 64 characters, or `a session` when it has
+none. A host is added when it is known, new, and the kind has fewer than `HOSTS_MAX`. Detection opens
+nothing else: no decision, no message.
+
+**Hold** (`onepw_hold`, PreToolUse). The call is denied when all hold: the session works for a fleet; the
+command is a use that is held; its kind is locked; for `ssh`, its host is in the lock's `hosts`; and the
+call does not take a probe window ([The probe window](#the-probe-window)). The kind is read again under the
+lock: one that cleared or lapsed since the first read denies nothing. The hook adds the session's rows
+(`seen: "held"`) and logs `held: <what> in <fleet>` when a row was new; a row that cannot be written does
+not lift the denial. Nothing else is held, and nothing is held in a session of no fleet. The denial is one
+line, with the kind's fixed words, the local `HH:MM` of the kind's `since`, the use's `what`, and `<next>`,
+the local `HH:MM` the kind's next probe window opens at (its lapse when that comes first; never before now):
+
+```
+1Password is locked for <kind's words>: Luiz was asked at HH:MM (the card "Unlock 1Password" on the fleet's page). Don't retry `<what>` before <next>: one command of this kind is let through then, to test the lock. Don't open a card or ask him again. Do other work that does not need it, or end the turn if nothing else is left<ending>
+```
+
+`<ending>` is one of three, the first that fits:
+
+| The session's fleet | `<ending>` |
+| :-- | :-- |
+| is in no registry (its row has no `dir`) | ``. This fleet is not in the registry, so it will not be told when it is unlocked: check `<cli> onepw` before you retry.`` |
+| has a row of this kind in the state | `; the hub tells this fleet when it is unlocked.` |
+| has none: no room was left (`ONEPW_WAITING_MAX`), or the state could not be written | ``. This fleet could not be added to those the hub tells, so it will not be told when it is unlocked: check `<cli> onepw` before you retry.`` |
+
+`<cli>` is the plugin's fleet CLI by its path, `<plugin root>/fleet/bin/fleet`, as the hook names it in the
+news line.
+
+**Clear** (`onepw_watch`, PostToolUse only, any session, of a fleet or not). A command clears its kind when
+all hold:
+
+- it did not fail (rule 1 of [A 1Password failure](#a-1password-failure)) and was not interrupted;
+- `tool_response` is an object, and not an empty one;
+- it did not run in the background: `tool_input.run_in_background` is not set, and the response carries no
+  `backgroundTaskId`;
+- it is a use that clears ([A command form](#a-command-form));
+- its kind is locked, and for `ssh` its host is in the lock's `hosts`;
+- its output holds none of the kind's failure text, anywhere a tool may put it: ssh's line at the start of a
+  line, op's at the start of a line or after `Provider operation failed: ` (an `ssh` that could not sign can
+  fall back to a file key and still exit 0).
+
+Then `kinds[k].cleared = {at: now, by: "command", note: <what>}`, for that kind alone: the other kind stays
+as it is. The log line is `cleared: <k> by a command (<what>) in session <id>`, `<id>` the session id with
+the same characters replaced, or `unknown`.
+
+**The note.** On PostToolUse a detection returns one note to the session, as the event's
+`additionalContext`, with the same three endings as the denial:
+
+```
+1Password is locked for <kind's words> (<why>): recorded once for the machine at HH:MM, and Luiz is asked on the fleet's page (the card "Unlock 1Password"). Don't retry `<what>` and don't open a card or ask him again. Do other work that does not need it, or end the turn if nothing else is left<ending>
+```
+
+On PostToolUseFailure nothing is returned: the event is registered asynchronous, so the session reads no
+output of it. The first failing session therefore gets no note, which is accepted: its next command of that
+kind is denied with the full instruction.
+
+A hub that is not running changes nothing here: the hook detects, holds and clears from the file alone.
+Only the notices wait for a settle.
+
+### How a lock ends
+
+A lock ends in exactly three ways, each kind on its own:
+
+| Way | Which kinds | What is written |
+| :-- | :-- | :-- |
+| Luiz's answer: the button on the card ([The card](#the-card)), or `fleet onepw unlocked` typed in a terminal outside Claude Code ([The CLI](#the-cli)) | every kind that is locked at that moment | `cleared: {at, by: "user", note}` on each, log `cleared by user: <note>` |
+| a command that clears ([What the hook does](#what-the-hook-does)) | that command's kind alone | `cleared: {at, by: "command", note: <what>}` |
+| the lapse: `FLEET_ONEPW_LAPSE_S` (2 h) after the kind's `since` with no answer | each kind by its own `since` | nothing at that moment: the kind reads as lapsed from then on, and the settle pass stamps `lapsed` when it first sees it |
+
+An agent does not say that 1Password is unlocked: `fleet onepw unlocked` is refused inside a Claude Code
+session, and the button's POST passes the checks of a post that acts as the user. Both stop an honest agent
+only ([The card](#the-card), [The CLI](#the-cli)). While a kind is locked, a fleet's sessions are denied
+every command that could clear it (a use that clears is always held), so a command clears from a session of
+no fleet, when it was already running as the lock was recorded, or when it took a probe window.
+
+### The probe window
+
+The probe window bounds a false lock. A lock is false when the text was 1Password's own and the app is
+not locked, for example one approval prompt dismissed while it is unlocked (inferred, not measured: that
+too prints `agent refused operation`), or when the text was not the tool's own after all
+([A 1Password failure](#a-1password-failure)). Inside a fleet every command that could clear the kind is
+held, so without the window only Luiz's answer and the 2 h lapse would end such a lock.
+
+- **When it opens.** `ONEPW_PROBE_S` (15 minutes) after the latest of the kind's `since`, `again` and
+  `probe`: 15 minutes after the kind was locked or reopened, then 15 minutes after each window taken. A
+  stamp ahead of now counts as now.
+- **Who takes it.** The next call that `onepw_hold` would deny for that kind, in any fleet's session, and
+  that no earlier gate of the hook refused (the land turn's, the suite's). Under `onepw.lock` the hook
+  reads the kind again, and when its window is still open it writes `kinds.<k>.probe = now`, logs `probe:
+  <what> in <fleet> is let through to test <k>`, and denies nothing. The state's lock makes the take
+  atomic: of however many calls arrive together one is let through, and the others are denied with the next
+  window's time. The session gets no row for it. When the state cannot be written no window is taken, and
+  the call is denied. The hook still allows nothing: the call goes on to the permission check as any other.
+- **What its command does** is read by `onepw_watch` as any other command's. Nothing marks it as the probe.
+
+| The command the window let through | What follows |
+| :-- | :-- |
+| exits 0, and is a use that clears ([What the hook does](#what-the-hook-does), Clear) | the kind is cleared, `by: "command"`, and the hub tells the held fleets |
+| fails with the kind's text | the lock stays, and the next window opens 15 minutes after the one it took |
+| anything else: an exit 0 that proves no read (`jj git push`, `gh`, `aws`, `secretspec`, an `ssh` with a key of its own), a failure of another cause, a command in the background, a call the permission check or the grant's gate refused after the hook let it through | nothing changes; the next window opens 15 minutes after the one it took |
+
+So while 1Password is truly locked the fleets send it at most one command per kind in 15 minutes, and a
+false lock ends at the first window whose command reads through the kind: `jj git fetch`, `git fetch`,
+`git pull`, `git push`, `op read`. A fleet whose only commands of the kind clear nothing (`jj git push`,
+`gh`, `secretspec`) takes its windows with them, and its false lock still ends by Luiz's answer or the
+lapse.
+
+### Damping
+
+A flapping lock must not flood Luiz with cards or the fleets with notices.
+
+- **One card.** A failure of a kind less than `REOPEN_S` (10 minutes) after that kind was cleared, while its
+  `since` is still inside the lapse, reopens the same lock: the same `since` (the card still says when Luiz
+  was first asked), `again` set, and the card marked `still locked`. So a kind that was cleared and fails
+  again right after does not start a new card. A cleared kind stays in the file for `REOPEN_S` for this.
+- **One notice per fleet in 30 minutes.** A fleet DIR gets at most one notice in `NOTICE_GAP_S`. A notice
+  that falls inside the gap is owed: its rows stay in the file, and a later settle pass sends it once the gap
+  has passed, when those rows are still due. It is deferred and not dropped because a fleet that was told to
+  retry, was held again, and is never told again would wait forever. When the kind is locked again in the
+  meantime, the rows are no longer due and wait for that lock's end.
+
+### Settle and the notice
+
+`settle(machine, {socks, send?, probe?})` (`src/onepw.ts`, asynchronous) tells the held fleets of what is
+over and prunes the state. Three callers run it: the hub, every 5 s on a timer of its own (`ONEPW_MS`; one
+pass at a time, a call while one runs gets that one, and it never throws into the server); the card's POST;
+and `fleet onepw unlocked`. A fleet is told once however many callers: the first stamps its DIR and drops
+its rows.
+
+**Phase 1**, under `onepw.lock`, synchronous:
+
+1. No file: nothing. A broken file: it is set aside, and nothing more.
+2. Each kind that is lapsed and has no `lapsed` yet gets `lapsed: now`, logged as
+   `lapsed: <k> locked since <since>, <span> with no answer` (`<span>` is the lapse in words: `2 h`,
+   `1 h 30 min`, `45 s`).
+3. A row whose kind the state does not name is dropped. A row whose kind is over is due.
+4. The due rows, by fleet DIR in the order first seen; the first line that fits:
+
+   | The DIR | What happens to its due rows |
+   | :-- | :-- |
+   | none (a session whose fleet is in no registry) | dropped: nobody can be told |
+   | no fleet is served at it now (`registry.live()`) | dropped, logged `not told: no fleet is served at <dir>` |
+   | `told[dir]` is less than `NOTICE_GAP_S` from now | left as they are: the notice is owed |
+   | any other | the fleet is told (below), `told[dir] = now`, the rows are dropped |
+
+5. Pruning. A kind that is over is removed when no row of its kind is left and it is lapsed, or was cleared
+   at least `REOPEN_S` ago. A `told` stamp at least `NOTICE_GAP_S` old is removed. A `told` stamp or a
+   `cleared.at` in the future is measured by its distance from now, so it cannot pin a kind or an owed
+   notice forever.
+6. With no kind, no row and no `told` left, `locked.json` is removed; else it is written. A pass that
+   changed nothing writes nothing.
+
+**Who is told, and how.** One notice per fleet DIR, to the fleet's host: `manager` for a manager's ledger,
+`coordinator` otherwise.
+
+| The host's chat watch (`watchLive`) | The notice goes |
+| :-- | :-- |
+| live | to the fleet's chat, in phase 1: appended to `chat.jsonl` under the store's lock, `{id, at, from: "fleet-hub", to: [<host>], text, re: null, parts}`. A `--once` chat watch as that host wakes on it as on any message to it, and prints `#<id> fleet-hub -> coordinator: [hub] ...` |
+| dead | to the session itself, in phase 2, after the lock is released: one line to its socket through `deliverTo(entry, socks, text, send, probe)` (`src/wake.ts`), the one verified way to a session's socket: it writes only when the process is the Claude Code session the registry entry names and the socket is its own ([The hub's wake](#the-hubs-wake)). `socks` is the folder of the sessions' sockets (`FLEET_CC_SOCKS`) |
+| dead, and the session did not take the line | to the fleet's chat, as a fallback |
+| live, and the chat could not be written | to the session, in phase 2 |
+
+A chat that nobody watches wakes nobody, which is why a dead watch sends the notice to the session. When
+neither the session nor the chat takes it, that is logged and the notice is lost: the rows were dropped and
+the DIR stamped in phase 1, so nothing is sent twice and nothing retries.
+
+| Log line | When |
+| :-- | :-- |
+| `told <fleet> (<host>, #<id>): <text>` | the notice is in the fleet's chat, as message `<id>` |
+| `told <fleet> (its session): <text>` | the notice was written to the session's socket |
+| `could not tell <fleet>: <why of the session>; its chat: <why of the chat>` | neither took it |
+
+`settle` answers `{told: [{fleet, to, id, via, text}]}`, `via` being `chat` (with the message's `id`) or
+`session` (`id` undefined), or undefined when it changed nothing. Lines the fleet writes to `onepw.log` are
+one line each, without control characters, at most 600 characters.
+
+**The text** is a fixed template: a dated fact, the kinds that were held there, and `Retry`. A line that
+opens with `[hub]` is a fact about the machine, never a command and never Luiz (the advisor's ruling); both
+skills say so. It carries only the kinds' fixed words and two instants as `HH:MM`: never a row's `what`, a
+worker id, a session id, a fleet or a host, and nothing else read from the file.
+
+| The fleet's due kinds | The notice |
+| :-- | :-- |
+| at least one was cleared | `[hub] 1Password is unlocked (14:32; locked since 13:50). Held here: SSH through the 1Password agent (jj and git remotes, ssh). Retry.` |
+| every one lapsed | `[hub] The 1Password hold lapsed (15:50; locked since 13:50, 2 h with no answer). Held here: SSH through the 1Password agent (jj and git remotes, ssh). Retry once.` |
+
+Times are `HH:MM`, local. The first is the latest `cleared.at` among the fleet's due kinds that were
+cleared, or, when every one lapsed, the latest lapse instant (`since` plus the lapse). `locked since` is the
+earliest `since` among the due kinds. The span is the lapse in words. `Held here` lists the distinct kinds
+of the fleet's due rows in the order `ssh-agent`, `op-desktop`, each in its fixed words
+([The two kinds](#the-two-kinds)), two joined by ` and `. With a mix of cleared and lapsed kinds the
+unlocked template is used.
+
+**`fleet-hub` is kept** (TypeScript only): no worker may have it as its id or name (`agent X cannot be
+called 'fleet-hub': that name is a chat participant`, with `user` and `coordinator`), and no fleet may be
+named it (`'<name>' cannot name a fleet; the hub signs its own lines in a chat with it`), so nobody but the
+hub writes a line from it through `chat say`.
+
+### The card
+
+One card for the machine. While at least one kind is locked, the view of every page, the manager's and
+each fleet's, carries `onepw` (`cardOf`); otherwise the key is absent, so every trace and the Python twin's
+page read the same.
+
+```json
+{"since": "2026-10-12T13:50:02-05:00", "why": "SSH signing through 1Password failed",
+ "again": "2026-10-12T14:36:40-05:00",
+ "waiting": [{"who": "skills", "what": "SSH (a push, a fetch or a connection) and reading secrets"},
+             {"who": "a session outside the fleets", "what": "reading secrets"}]}
+```
+
+| Key | Meaning |
+| :-- | :-- |
+| `since` | the earliest `since` among the locked kinds: when Luiz was first asked |
+| `why` | that kind's `why`: one of the hook's four phrases, else `a command that uses 1Password failed` |
+| `again` | the latest `again` among the locked kinds, else null. The page reads it only when it is a stamp `Date.parse` reads |
+| `waiting[]` | one row per fleet DIR in the order first seen, then one for the rows of no fleet. Only rows of a locked kind: rows of a kind that is over are not on the card |
+| `waiting[].who` | the fleet's id in the registry now (served or kept, by its `dir`), else the id the hook read, else `a fleet no longer served`; for the rows of no fleet, `a session outside the fleets` |
+| `waiting[].what` | that fleet's distinct locked kinds in the card's words ([The two kinds](#the-two-kinds)), in the order `ssh-agent`, `op-desktop`, joined as a sentence lists them |
+
+No worker id, no session id and no row's `what` is in it.
+
+The page draws it first in the Decisions view, as an open action that blocks work, with no number and no
+page of its own:
+
+| Part | Words |
+| :-- | :-- |
+| title | `Unlock 1Password` |
+| pills | `blocks work`; `still locked` when `again` is set; `something to do` |
+| first line | `1Password, here or on the machine you are connected from, is refusing commands: <why>. Unlock the app, then say so here.` It names both machines because `~/.ssh/config` may send SSH signing to a forwarded agent (`~/.ssh/forwarded-agent.sock`, the machine the user connected from), and the hook reads no ssh config |
+| with `again` | `It was cleared and a command failed again <N min ago>.` |
+| a line per row | `Waiting: <who>, for <what>.` |
+| under them | `Asked <N min ago>. Every fleet holds its commands that need 1Password until then, and goes on with the rest.` |
+| the button | `1Password is unlocked` (`Telling the fleets…` while it posts); then `The fleets are told.`, or the hub's error |
+
+A card that was cleared and reopened is the same card: the same `since`, so the same "Asked ... ago". The
+lead sentence counts it as one action that blocks work; the tab's badge and the decision lists do not. The
+button is disabled, with the reason, for a viewer who may not write.
+
+**The button** is `POST /f/<fleet>/onepw/unlocked` with `{}`, from any fleet's page (the manager's too). It
+passes the checks of the page's other posts that act as the user (`postRefusal`, the same as `/chat`,
+`/name` and `/wake`), and a refused post changes nothing:
+
+| Check | Refused with |
+| :-- | :-- |
+| the viewer may write: local, or the hub's owner | 403 |
+| `Content-Type` is `application/json` | 415 |
+| `Origin`, when sent, is the hub's own (`Origin: null` is not) | 403 `cross-origin post refused` |
+| `Sec-Fetch-Site`, when sent, is `same-origin` | 403 `cross-origin post refused` |
+| `Content-Length` is a number, and at most 256 KiB; the body read is at most 256 KiB | 400, 413 |
+
+Then it clears every locked kind as the user (`note`: `answered on the page`), waits for a settle pass
+already running (that pass decided before the answer), and runs its own: 200 `{cleared, told: [{fleet, to,
+id, via}]}`, `cleared` true when a kind was locked, `via` `chat` with the notice's `id`, or `session` with
+`id` null. With nothing locked, `{cleared: false, told: []}`, or the fleets told by a hold that was over
+and not yet settled. 500 `could not record the answer: <why>` when the state could not be written. The
+stream's next `state` has no `onepw`, and the card goes.
+
+The residual: a loopback POST with no `Origin` is stamped local, and everything on the machine runs as one
+Unix user, so these checks keep honest agents and other origins out, not a process that sets out to forge
+the user. The refusal of `fleet onepw unlocked` inside a Claude Code session stops an honest agent only, in
+the same way ([The CLI](#the-cli)).
+
+### The CLI
+
+| Command | Does | Output | Exit |
+| :-- | :-- | :-- | :-- |
+| `fleet onepw` | reads the state; runs anywhere, in a session too; changes nothing | `1Password: not known to be locked`, or `1Password: locked: ssh-agent since 13:50 (<why>), op-desktop since 13:52 (<why>); waiting: skills (jj git push, secretspec run), casos (gh pr)` (`nothing waits` with no row; the rows of no fleet as `a session outside the fleets (...)`). A second line when a notice is owed: `a hold is over and N fleet(s) are not told yet: the hub tells each within seconds, or 30 min after its last notice` | 0 |
+| `fleet onepw unlocked [--note TEXT]` | outside Claude Code only: clears every locked kind as the user (`note` TEXT, else `fleet onepw unlocked`) and settles at once, with or without a hub | a line per fleet told, `told <fleet> (<host>, #<id>): <text>` or `told <fleet> (its session): <text>`; with none told, `1Password: nothing was locked` or `1Password: unlocked; no fleet was told now`; then the owed line, when one is owed | 0; 1 refused, or the settle failed; 2 a usage error |
+| `fleet onepw -h` | prints the usage | | 0 |
+
+In `fleet onepw`'s line a row's `what` is printed when it is one to four words of `[A-Za-z0-9_.-]`, at most
+40 characters; else its kind is printed. `<why>` is whitelisted as on the card. A state that does not read
+is `not known to be locked`.
+
+**`unlocked` is refused inside a Claude Code session.** It is Luiz's own word, and an agent does not say for
+him that 1Password is unlocked. A session is told by either of:
+
+- `CLAUDECODE` or `CLAUDE_CODE_SESSION_ID` set and not empty in the environment (as `fleet tell` reads it);
+- a Claude Code process among the caller's ancestors (`procs.ts`: `ancestry` from the parent, `runningOf`),
+  which unsetting the two variables does not hide. An ancestor the machine could not be asked about (a failed
+  `ps` on the Mac) counts as Claude Code: what cannot be shown to be a terminal outside Claude Code does not
+  speak for the user.
+
+The refusal stops an honest agent only. A command that unsets the two variables and leaves its session
+(`env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID setsid --fork fleet onepw unlocked`) has no Claude Code
+ancestor, and clears as the user (measured, 2026-10-12).
+
+Refused, it clears nothing, exits 1 and prints on stderr:
+
+```
+onepw: only the button on the card clears the lock ("1Password is unlocked", on any fleet's page); an agent does not say for the user that 1Password is unlocked. `fleet onepw` prints the state.
+```
+
+A usage error (exit 2: the usage and `fleet onepw: error: unrecognized arguments: ...` on stderr) and
+`--help` are answered before the refusal. When the settle fails after the clear, stderr says
+`onepw: unlocked, and the fleets could not be told: <why>` (`onepw: nothing was locked, and ...` when nothing
+was), exit 1.
+
+### Cost
+
+Measured against master on this machine (2026-10-12; the median of 25 alternating runs of the hook per
+case, seven cases over PreToolUse and PostToolUse). Written into the hook itself, the feature cost about 9
+ms on every hook call, of every event and every tool: 58.6 ms to 67.7 ms. Most of it was not the feature's
+work: the hook is a script, compiled from source on each call, and 770 more lines took its compile from
+22.6 ms to 30.8 ms.
+
+So the code is a file of its own, `hooks/tstack-hook-onepw.py`, which the hook executes into its own
+namespace (`_onepw`) only for a call that can matter:
+
+| The call | What it pays for the feature |
+| :-- | :-- |
+| not a Bash command, or its first word is neither one of the seven tools nor an assignment (`_onepw_command`: one split of the command, no regular expression, no file) | about 0.6 ms, the compile of the 75 lines that make this test: 59.2 ms against master's 58.6 ms |
+| such a first word, with no `locked.json` on disk and, after the command, neither `sign_and_send_pubkey: signing failed` nor `[ERROR] ` in its output | the same, and one `stat` and two searches of the output, which did not measure |
+| any other: a state is on disk, or the output holds one of the two texts | the part is read and compiled, then `onepw_use` reads the command: about 10 ms (59 ms to 69 ms), as before the split |
+
+So with nothing locked the feature costs a hook call about half a millisecond, and while a kind is locked
+only a command whose first word is one of the tools pays the 10 ms. `LatencyTest`'s budget is unchanged.
+
+### Why the hook asks 1Password nothing itself
+
+The hook starts no command of its own to ask 1Password whether it is locked:
+[the probe window](#the-probe-window) lets through a command a fleet was about to run anyway. So a lock
+ends in the three ways of [How a lock ends](#how-a-lock-ends) only: Luiz's answer, a command that clears,
+or the lapse.
+
+- **Measured** on this machine with 1Password unlocked (2026-10-12): `ssh-add -l` against
+  `~/.1password/agent.sock` lists the keys (exit 0, 13 keys, 0.1 s, no prompt); `op account list` reads the
+  config only (exit 0, 19 ms); `op whoami` exits 1 with `account is not signed in` while the app is
+  unlocked, so it cannot tell locked from unlocked.
+- **Read** (2026-10-12): 1Password does not document what each of these does while the app is locked.
+- **Not measured**: any of them with the app locked. An agent cannot lock the app.
+
+**Known residuals**, not handled:
+
+- An ssh `ControlMaster` in `~/.ssh/config`: the hook reads no ssh config, so a connection that reuses an
+  open master is read as any other, and its exit 0 clears as any other (read, not measured: such a
+  connection signs nothing).
+- A bare repo, and a repo or a user config with an `[include]` or `[includeIf]`, resolve to unknown: their
+  `jj` and `git` commands show only, so they are never held and never clear.
+- A remote written in the dotted section form (`[remote.origin]`) is not read: the hook does not see that
+  remote.
+
 ## Workspaces (`fleet ws`)
 
 A worker that edits code works in a jj workspace; the coordinator's own (`default`) is the stack. A new
@@ -3180,6 +3879,8 @@ recommendation attached.
 | the plugin's hook (`fleet_listen_guard`, `fleet_chat_nudge`, `fleet_said_once`, `fleet_news`) | nothing in DIR; the session's `fleet-guard`, `fleet-nudge`, `said-once` and `fleet-news` state in the plugin's data folder |
 | `news post`, and a `state decision --kind notice` once its ledger is written, when a manager is served | `REGISTRY/news/news.jsonl` (under its `flock`) |
 | `news read` | `REGISTRY/news/read/<fleet>` when the cursor moves |
+| the plugin's hook (`onepw_watch`, `onepw_hold`) | `REGISTRY/onepw/locked.json` (under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken` (a state that did not read, set aside), `REGISTRY/onepw/onepw.log` |
+| the hub (its settle timer, `POST onepw/unlocked`), `fleet onepw unlocked` outside Claude Code | `REGISTRY/onepw/locked.json` (`cleared`, `lapsed` and `told` set, rows dropped, kinds pruned, and the file removed when nothing is left; under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken`, `REGISTRY/onepw/onepw.log`, and for each held fleet the hub's notice: its `DIR/chat.jsonl` (under the store's lock), or one line to its session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, when its host's watch is dead |
 | `state`, on a write that numbers a row or `approval add next` (TypeScript only) | `REGISTRY/numbers/numbers.json` (under `REGISTRY/numbers/numbers.lock`), when `REGISTRY` exists |
 | `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / deleted (a shared fleet's `add` writes nothing); whatever the repo's ws-add hook (or `devenv-run --prepare`) writes |
 | `fleet ws add --reuse` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; a new change in the workspace (`jj new`) |

@@ -23,9 +23,18 @@ import { AiTitles, sessionFolderOf, transcriptOf } from "./transcripts.ts";
 /** The names the chat keeps for itself. */
 export const KEPT_NAMES = ["coordinator", "manager", "user"] as const;
 
+/** Who the hub's own lines in a chat are from (`[hub] ...`): no fleet and no worker may be called it, so a
+ * line from it is the hub's. The TypeScript fleet's alone: the frozen twin keeps {@link KEPT_NAMES} only. */
+export const HUB_NAME = "fleet-hub";
+
 /** Whether the chat keeps `name` for itself. */
 export function isKept(name: string): boolean {
-  return KEPT_NAMES.some((kept) => kept === name);
+  return name === HUB_NAME || KEPT_NAMES.some((kept) => kept === name);
+}
+
+/** Why `given`, which names a fleet `name`, cannot: `name` is empty or one the chat keeps. */
+function keptWhy(given: string, name: string): string {
+  return name === HUB_NAME ? `'${given}' cannot name a fleet; the hub signs its own lines in a chat with it` : `'${given}' cannot name a fleet; the chat keeps ['coordinator', 'manager', 'user'] for itself`;
 }
 
 /** One fleet being served. */
@@ -482,7 +491,7 @@ export class Registry {
     const next = entry.role === "manager" ? "manager" : fleetName(session);
 
     if (next === "" || (isKept(next) && entry.role !== "manager")) {
-      return { why: `'${session}' cannot name a fleet; the chat keeps ['coordinator', 'manager', 'user'] for itself` };
+      return { why: keptWhy(session, next) };
     }
 
     if (this.live().some((e) => e.id === next && e.dir !== entry.dir)) {
@@ -516,7 +525,7 @@ export class Registry {
     const next = entry.role === "manager" ? entry.id : fleetName(wanted);
 
     if (next === "" || (isKept(next) && entry.role !== "manager")) {
-      return { why: `'${wanted}' cannot name a fleet; the chat keeps ['coordinator', 'manager', 'user'] for itself` };
+      return { why: keptWhy(wanted, next) };
     }
 
     if (this.live().some((e) => e.id === next && e.dir !== entry.dir)) return { why: `another fleet is already called '${next}'; pick another name` };

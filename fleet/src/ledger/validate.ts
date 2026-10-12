@@ -6,6 +6,7 @@
  */
 import { invalid, type Refusal } from "../errors.ts";
 import { pyStr } from "../json.ts";
+import { HUB_NAME } from "../registry.ts";
 import type { Ledger } from "./model.ts";
 
 /** The fleet's statuses. */
@@ -47,7 +48,8 @@ export const ASKS = ["user", "manager"] as const;
 /** An id: letters, digits, `_`, `.`, `-`. */
 export const ID = /^[A-Za-z0-9_.-]+$/;
 
-const RESERVED = new Set(["user", "coordinator"]);
+/** The names no worker takes: the chat's own, and the hub's (a `[hub]` line is the hub's, never a worker's). */
+const RESERVED = new Set(["user", "coordinator", HUB_NAME]);
 
 function list(values: readonly string[]): string {
   return `[${values.map((v) => pyStr(v)).join(", ")}]`;

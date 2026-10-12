@@ -208,6 +208,8 @@
   .ask.closed .ask-head b { font-weight: 600; }
   .ask .detail { overflow-wrap: anywhere; }
   .ask .meta { font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
+  .ask > .btn { justify-self: start; margin: 6px 0 2px; }
+  div.ask:hover { background: none; }
 
   /* done under a standing approval, and the approvals: records, not links; the number and title lead to the notice's page */
   .notice, .approval { display: grid; gap: 4px; min-width: 0; padding: 13px 14px 13px 13px; border-left: 4px solid var(--good); }

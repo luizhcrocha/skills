@@ -26,7 +26,7 @@ import { parseInstant, stampOf } from "../src/clock.ts";
 import type { Probe } from "../src/host.ts";
 import { elapsedOf, holdsSocket, isClaudeBinary, lsofFiles, parentsOf, startedOf } from "../src/procs.ts";
 import { recordTakeover, type Party } from "../src/takeover.ts";
-import { lineOf, socketOf, wakeText } from "../src/wake.ts";
+import { lineOf, socketOf, wakeText, type Send } from "../src/wake.ts";
 import { machineOf, type Machine } from "../src/world.ts";
 import { baseEnv, fleet, machine, spawnFleet, tmp, type Environment } from "./support.ts";
 
@@ -827,6 +827,7 @@ describe("a prototype page posting from an origin the hub's config allows", () =
       ["/f/p/name", { agent: "a1", name: "Writer" }],
       ["/f/p/preview-workers", { worker: "a1", include: true }],
       ["/f/p/orphans/stop", { pid: 4242, started: 1 }],
+      ["/f/p/onepw/unlocked", {}],
       ["/f/p/wake", {}],
     ];
 
@@ -1155,6 +1156,207 @@ describe("names given on the page", () => {
     expect((await post({ name: "user" }, {}, "/f/checkout/name")).status).toBe(400);
     const cleared = await post({ name: "" }, {}, "/f/checkout/name");
     expect([cleared.status, cleared.body]).toEqual([200, { id: "checkout", session: null, path: "/f/checkout/" }]);
+  });
+});
+
+describe("1Password locked: the card on every page, and Luiz's answer", () => {
+  const SINCE = "2026-01-01T00:00:00+00:00";
+
+  const SSH: JsonObject = { since: SINCE, why: "SSH signing through 1Password failed", hosts: ["github.com"] };
+
+  const OP: JsonObject = { since: "2026-01-01T00:10:00+00:00", why: "the 1Password prompt was dismissed" };
+
+  const NOTICE = "[hub] 1Password is unlocked (T). Held here: SSH through the 1Password agent (jj and git remotes, ssh). Retry.";
+
+  let manager: string;
+
+  /** What this hub was asked to write to a session's socket (it writes to none), and how each write ends. */
+  let sent: { readonly path: string; readonly text: string }[];
+
+  let written: () => Promise<string | undefined>;
+
+  /** What this hub is told of a session's process: gone, unless a test says it is there; then the one the entry
+   * names (this test's own, with its real start) is taken for Claude Code, which no test process is. */
+  let there: boolean;
+
+  const session: Probe = {
+    running: (pid) => {
+      const started = startedOf(pid);
+
+      return there && started !== undefined ? { claude: true, started } : "gone";
+    },
+    holds: () => true,
+    startedMs: () => undefined,
+  };
+
+  const statePath = (): string => join(home, "onepw", "locked.json");
+
+  const logged = (): string => (existsSync(join(home, "onepw", "onepw.log")) ? readFileSync(join(home, "onepw", "onepw.log"), "utf8") : "");
+
+  const dated = (text: string): string => text.replace(/\(\d\d:\d\d; locked since \d\d:\d\d\)/u, "(T)");
+
+  const held = (dir: string, kind = "ssh-agent", what = "jj git push"): JsonObject => ({ dir, fleet: "p", session: "s-secret-1", worker: "a1", kind, what, at: SINCE, seen: "failed" });
+
+  /** Write `REGISTRY/onepw/locked.json` as the plugin's hook does: this fleet's worker held, since a time that never lapses in a test. */
+  function lock(kinds: JsonObject = { "ssh-agent": SSH }, waiting: readonly JsonObject[] = [held(root)]): void {
+    mkdirSync(join(home, "onepw"), { recursive: true });
+    writeFileSync(statePath(), JSON.stringify({ v: 2, kinds, waiting }));
+  }
+
+  const card = async (fleet: string): Promise<JsonObject | undefined> => asObject((await request("GET", `/f/${fleet}/state.json`)).body["onepw"]);
+
+  const kinds = (): JsonObject => asObject(asObject(JSON.parse(readFileSync(statePath(), "utf8")))?.["kinds"]) ?? {};
+
+  const hub = (): Running["hub"] => {
+    if (running === undefined) throw new Error("no hub");
+
+    return running.hub;
+  };
+
+  /** The session process's socket, as a file: with `there`, the hub reads the session as one it can write to. */
+  function socket(): string {
+    const path = socketOf(join(home, "cc-socks"), process.pid);
+    mkdirSync(join(home, "cc-socks"), { recursive: true });
+    writeFileSync(path, "");
+
+    return path;
+  }
+
+  beforeEach(async () => {
+    env = baseEnv(home, { FLEET_ONEPW_LAPSE_S: String(100 * 365 * 86400), HOME: join(base, "home") });
+    manager = join(base, "all", "coordinator");
+    mkdirSync(manager, { recursive: true });
+    writeState(manager, [], { role: "manager", project: "all" });
+    register(manager, "manager");
+    sent = [];
+    written = () => Promise.resolve(undefined);
+    there = false;
+
+    const send: Send = (path, text) => {
+      sent.push({ path, text });
+
+      return written();
+    };
+
+    port = freePort();
+    const got = await startHub({ port, machine: machine(env), tailscale: join(base, "no-tailscale"), peers: false, hosts: [], https: undefined, send, session }, () => {});
+
+    if (got instanceof Error) throw got;
+    running = got;
+  });
+
+  test("every page's view carries the card while it is locked, the manager's and a fleet's, and no page does otherwise", async () => {
+    expect([await card("p"), await card("manager")]).toEqual([undefined, undefined]);
+    expect(Object.keys((await request("GET", "/f/p/state.json")).body)).not.toContain("onepw");
+    lock({ "ssh-agent": SSH, "op-desktop": { ...OP, again: "2026-01-01T00:20:00+00:00" } }, [held(root), held(manager, "op-desktop", "gh pr")]);
+
+    const shown = {
+      since: SINCE,
+      why: "SSH signing through 1Password failed",
+      again: "2026-01-01T00:20:00+00:00",
+      waiting: [{ who: "p", what: "SSH (a push, a fetch or a connection)" }, { who: "manager", what: "reading secrets" }],
+    };
+
+    expect([await card("p"), await card("manager")]).toEqual([shown, shown]);
+    const page = await (await fetch(`http://127.0.0.1:${port}/f/p/`)).text();
+    expect(page).toContain('"onepw": {"since": "2026-01-01T00:00:00+00:00"');
+    expect(page).not.toContain("s-secret-1");
+    expect(JSON.stringify((await request("GET", "/f/p/state.json")).body)).not.toMatch(/s-secret-1|jj git push|gh pr|github\.com/u);
+    lock({ "ssh-agent": { ...SSH, cleared: { at: SINCE, by: "command", note: "jj git push" } }, "op-desktop": OP }, [held(root), held(manager, "op-desktop", "gh pr")]);
+    expect(await card("p")).toEqual({ since: "2026-01-01T00:10:00+00:00", why: "the 1Password prompt was dismissed", again: null, waiting: [{ who: "manager", what: "reading secrets" }] });
+    lock({ "ssh-agent": { ...SSH, cleared: { at: SINCE, by: "command", note: "jj git push" } } });
+    expect([await card("p"), await card("manager")]).toEqual([undefined, undefined]);
+    expect(Object.keys((await request("GET", "/f/p/state.json")).body)).not.toContain("onepw");
+  });
+
+  test("the card's POST, same-origin and the owner's, clears every locked kind as the user, tells the held fleet at once, and the card goes from the stream", async () => {
+    lock({ "ssh-agent": SSH, "op-desktop": OP });
+    const stream = await Stream.open("/f/p/events");
+    expect(asObject(data(await stream.nextOf("state"))["onepw"])?.["why"]).toBe("SSH signing through 1Password failed");
+    const answered = await post({}, { Origin: `http://127.0.0.1:${port}`, "Sec-Fetch-Site": "same-origin" }, "/f/manager/onepw/unlocked");
+    expect([answered.status, answered.body]).toEqual([200, { cleared: true, told: [{ fleet: "p", to: "coordinator", id: 1, via: "chat" }] }]);
+    expect(readChat(root).map((m) => [m.from, m.to, dated(m.text)])).toEqual([["fleet-hub", ["coordinator"], NOTICE]]);
+    expect([readChat(manager), sent]).toEqual([[], []]);
+    expect(Object.values(kinds()).map((kind) => asObject(asObject(kind)?.["cleared"])?.["by"])).toEqual(["user", "user"]);
+    expect(Object.keys(data(await stream.nextOf("state")))).not.toContain("onepw");
+    expect(data(await stream.nextOf("chat"))["from"]).toBe("fleet-hub");
+    stream.close();
+    expect(logged()).toContain(" cleared by user: answered on the page\n");
+    const again = await post({}, {}, "/f/p/onepw/unlocked");
+    expect([again.status, again.body]).toEqual([200, { cleared: false, told: [] }]);
+    expect(readChat(root).length).toBe(1);
+  });
+
+  test("a held fleet whose host's watch is dead is told in its session, through the write a wake takes", async () => {
+    const path = socket();
+    there = true;
+    lock();
+    const answered = await post({}, {}, "/f/p/onepw/unlocked");
+    expect([answered.status, answered.body]).toEqual([200, { cleared: true, told: [{ fleet: "p", to: "coordinator", id: null, via: "session" }] }]);
+    expect([sent.map((s) => [s.path, dated(s.text)]), readChat(root)]).toEqual([[[path, NOTICE]], []]);
+    expect(logged()).toContain(" told p (its session): [hub] 1Password is unlocked (");
+  });
+
+  test("a refused POST leaves the state as it is, byte for byte, clears nothing and tells nobody", async () => {
+    lock({ "ssh-agent": SSH, "op-desktop": OP });
+    socket();
+    there = true;
+    const before = readFileSync(statePath(), "utf8");
+    const self = `http://127.0.0.1:${port}`;
+
+    const refused: (readonly [string, number, () => Promise<Answer>])[] = [
+      ["a reader who may not write", 403, () => post({}, { "Tailscale-User-Login": "eve@example.com" }, "/f/p/onepw/unlocked")],
+      ["a foreign Origin", 403, () => post({}, { Origin: "https://evil.example" }, "/f/p/onepw/unlocked")],
+      ["Origin: null", 403, () => post({}, { Origin: "null" }, "/f/p/onepw/unlocked")],
+      ["Sec-Fetch-Site: cross-site", 403, () => post({}, { Origin: self, "Sec-Fetch-Site": "cross-site" }, "/f/p/onepw/unlocked")],
+      ["Sec-Fetch-Site: cross-site and no Origin", 403, () => post({}, { "Sec-Fetch-Site": "cross-site" }, "/f/p/onepw/unlocked")],
+      ["a wrong content type", 415, () => request("POST", "/f/p/onepw/unlocked", "{}", { "Content-Type": "text/plain", Origin: self })],
+      ["no content type of its own", 415, () => request("POST", "/f/p/onepw/unlocked", "{}")],
+      ["a body over the cap", 413, () => post({ note: "x".repeat(300_000) }, { Origin: self, "Sec-Fetch-Site": "same-origin" }, "/f/p/onepw/unlocked")],
+      ["a GET", 404, () => request("GET", "/f/p/onepw/unlocked")],
+      ["a fleet nobody serves", 404, () => post({}, {}, "/f/nobody/onepw/unlocked")],
+    ];
+
+    for (const [name, status, ask] of refused) {
+      const answer = await ask();
+      expect([name, answer.status, readFileSync(statePath(), "utf8") === before, logged().includes("cleared by user"), readChat(root), sent]).toEqual([name, status, true, false, [], []]);
+    }
+
+    expect(asArray((await card("p"))?.["waiting"])?.length).toBe(1);
+    expect(await hub().settleOnepw()).toBeUndefined();
+  });
+
+  test("the hub settles a kind a command cleared, once, and a hold that is not over is left alone", async () => {
+    lock();
+    expect(await hub().settleOnepw()).toBeUndefined();
+    expect(readChat(root)).toEqual([]);
+    lock({ "ssh-agent": { ...SSH, cleared: { at: SINCE, by: "command", note: "jj git push" } }, "op-desktop": OP }, [held(root), held(manager, "op-desktop", "gh pr")]);
+    expect((await hub().settleOnepw())?.told.map((t) => [t.fleet, t.to, t.via])).toEqual([["p", "coordinator", "chat"]]);
+    expect(await hub().settleOnepw()).toBeUndefined();
+    expect([readChat(root).map((m) => dated(m.text)), readChat(manager)]).toEqual([[NOTICE], []]);
+    expect((await card("p"))?.["waiting"]).toEqual([{ who: "manager", what: "reading secrets" }]);
+  });
+
+  test("the hub settles one at a time: a look while one runs is that one, and the card's POST waits for it and tells in its own", async () => {
+    socket();
+    there = true;
+    let release: (why: string | undefined) => void = () => {};
+
+    written = () => new Promise((resolve) => (release = resolve));
+    lock({ "ssh-agent": { ...SSH, cleared: { at: SINCE, by: "command", note: "jj git push" } }, "op-desktop": OP }, [held(root), held(manager, "op-desktop", "gh pr")]);
+    const first = hub().settleOnepw();
+    const second = hub().settleOnepw();
+    const answered = post({}, {}, "/f/p/onepw/unlocked");
+    await new Promise((wake) => setTimeout(wake, 150));
+    expect(sent.length).toBe(1);
+    written = () => Promise.resolve(undefined);
+    release(undefined);
+    const told = [{ fleet: "p", to: "coordinator", id: undefined, via: "session" as const, text: sent[0]?.text ?? "" }];
+    expect([await first, await second]).toEqual([{ told }, { told }]);
+    const answer = await answered;
+    expect([answer.status, answer.body]).toEqual([200, { cleared: true, told: [{ fleet: "manager", to: "manager", id: null, via: "session" }] }]);
+    expect(sent.map((s) => dated(s.text))).toEqual([NOTICE, "[hub] 1Password is unlocked (T). Held here: secrets read through the 1Password app (op, secretspec, gh, aws). Retry."]);
+    expect([readChat(root), readChat(manager)]).toEqual([[], []]);
   });
 });
 
