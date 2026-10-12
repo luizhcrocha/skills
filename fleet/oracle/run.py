@@ -55,6 +55,8 @@ START = "2026-01-05T09:00:00+00:00"  # the clock of a step that names none, befo
 STEP_TIMEOUT_S = 20
 IGNORED = {"__pycache__", "server.log"}  # never part of the observable state
 IGNORED_SUFFIXES = (".pyc", ".tmp")
+# The machine's number counter (TypeScript only): what it gives is observed in every ledger it numbers.
+IGNORED_REGISTRY = ("numbers",)
 LISTENING = (47843,)  # the ports a trace's links name as up (https://box.ts.net:47843/); the probe asks 127.0.0.1
 
 
@@ -209,7 +211,8 @@ class Session:
         for root in (self.w, self.registry):
             for path in sorted(root.rglob("*")):
                 if not path.is_file() or IGNORED & set(path.parts) or path.name.endswith(IGNORED_SUFFIXES) \
-                        or path.name.endswith(".pid"):
+                        or path.name.endswith(".pid") \
+                        or (root == self.registry and path.relative_to(root).parts[0] in IGNORED_REGISTRY):
                     continue
                 rel = self.canon(str(path))
                 found[rel] = self._read(path, rel)
@@ -336,6 +339,33 @@ def _first_path(a, b, at="") -> str | None:
 
 def _pretty(value) -> list[str]:
     return (value if isinstance(value, str) else json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True)).splitlines()
+
+
+NUMBER = re.compile(r"(?<![A-Za-z0-9_])([DAISGNPLRK])[0-9]+(?![A-Za-z0-9_])")
+
+
+def _numbers_hidden(value):
+    """`value` with every item number (D12, K3, L1) read as its letter and `#`: the machine's numbers (TypeScript
+    only) and the frozen Python twin's per-ledger ones then compare equal, and every other difference still shows."""
+    if isinstance(value, str):
+        return NUMBER.sub(r"\1#", value)
+    if isinstance(value, list):
+        return [_numbers_hidden(x) for x in value]
+    if isinstance(value, dict):
+        return {_numbers_hidden(k): _numbers_hidden(v) for k, v in value.items()}
+    return value
+
+
+# What a trace's header `twin.normalise` may name: a difference the frozen Python twin keeps on purpose (ADR 0003),
+# hidden on both sides before a replay on the twin is compared.
+TWIN_NORMALISERS = {"numbers": _numbers_hidden}
+
+
+def twin_view(results: list[dict], normalise: list[str]) -> list[dict]:
+    """`results` as a replay on the frozen Python twin is compared: each of `normalise` applied in turn."""
+    for name in normalise:
+        results = [TWIN_NORMALISERS[name](r) for r in results]
+    return results
 
 
 def divergence(a: list[dict], b: list[dict], steps: list[dict] | None = None, names=("A", "B"), context: int = 3) -> str | None:

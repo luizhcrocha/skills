@@ -1,7 +1,10 @@
 /**
  * Numbers (refs) and lookups. Every decision, link and roadblock gets a number once, on the write
- * after it is recorded: a letter for its kind and 1 + the highest number of that letter, skipping a
- * number another row of the list has as its id (open-1). A lookup takes an id first, then a number.
+ * after it is recorded: a letter for its kind and a number above the highest of that letter, skipping a
+ * number another row of the list has as its id (open-1). On a write, the machine's fleets share one
+ * counter per letter (`shared-numbers.ts`), so a number names one item on the machine; a copy numbered
+ * for reading, or a standalone fleet (no registry on the machine), takes 1 + the highest of this ledger. A lookup takes
+ * an id first, then a number.
  */
 import { byInstant } from "../clock.ts";
 import type { Decision, Ledger, Milestone } from "./model.ts";
@@ -18,7 +21,7 @@ export const PREFIX = new Map([
 ]);
 
 /** A row with an id and maybe a number. */
-interface Numbered {
+export interface Numbered {
   readonly id: string;
   ref?: string;
 }
@@ -36,40 +39,66 @@ export function findDecision(ledger: Ledger, key: string): Decision | undefined 
   return find(ledger.decisions, key);
 }
 
-function nextRef(rows: readonly Numbered[], prefix: string, row: Numbered): string {
+/** The next number of letter `prefix` above `above`, from the machine's shared counter. */
+export type NextNumber = (prefix: string, above: number) => number;
+
+/** The highest number of letter `prefix` among `refs`, 0 when none has one. */
+export function highest(refs: readonly (string | undefined)[], prefix: string): number {
   const pattern = new RegExp(`^${prefix}(\\d+)$`);
-  let n = 1;
+  let n = 0;
 
-  for (const r of rows) {
-    const m = pattern.exec(r.ref ?? "");
+  for (const ref of refs) {
+    const m = pattern.exec(ref ?? "");
 
-    if (m !== null) n = Math.max(n, Number(m[1]) + 1);
+    if (m !== null) n = Math.max(n, Number(m[1]));
   }
 
-  const ids = new Set(rows.flatMap((r) => (r === row ? [] : [r.id])));
+  return n;
+}
 
-  while (ids.has(`${prefix}${n}`)) n += 1;
+function nextRef(rows: readonly Numbered[], prefix: string, row: Numbered, next: NextNumber | undefined): string {
+  const local = highest(rows.map((r) => r.ref), prefix);
+  const take = (above: number): number => (next === undefined ? above + 1 : next(prefix, above));
+  const ids = new Set(rows.flatMap((r) => (r === row ? [] : [r.id])));
+  let n = take(local);
+
+  while (ids.has(`${prefix}${n}`)) n = take(n);
 
   return `${prefix}${n}`;
 }
 
+/** Whether a row of `ledger` waits for its number. */
+export function unnumbered(ledger: Ledger): boolean {
+  return [...(ledger.decisions ?? []), ...(ledger.links ?? []), ...ledger.roadblocks].some((r) => r.ref === undefined || r.ref === "");
+}
+
 /** Give each decision, link and roadblock without a number its number (decisions in `opened` order, as
- * instants, open-13; links and roadblocks in list order). */
-export function number(ledger: Ledger): void {
+ * instants, open-13; links and roadblocks in list order), from `next` when given, else from this ledger
+ * alone. The rows numbered. */
+export function number(ledger: Ledger, next?: NextNumber): Numbered[] {
   const decisions = ledger.decisions ?? [];
   const waiting = decisions.filter((d) => d.ref === undefined || d.ref === "");
   const byOpened = [...waiting].sort((a, b) => byInstant(a.opened, b.opened));
+  const given: Numbered[] = [];
 
-  for (const d of byOpened) d.ref = nextRef(decisions, PREFIX.get(d.kind) ?? "D", d);
+  for (const d of byOpened) {
+    d.ref = nextRef(decisions, PREFIX.get(d.kind) ?? "D", d, next);
+    given.push(d);
+  }
 
   for (const [rows, prefix] of [
     [ledger.links ?? [], "L"],
     [ledger.roadblocks, "R"],
   ] as const) {
     for (const r of rows) {
-      if (r.ref === undefined || r.ref === "") r.ref = nextRef(rows, prefix, r);
+      if (r.ref === undefined || r.ref === "") {
+        r.ref = nextRef(rows, prefix, r, next);
+        given.push(r);
+      }
     }
   }
+
+  return given;
 }
 
 /** The milestone that holds step `id`. */

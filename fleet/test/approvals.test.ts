@@ -317,9 +317,9 @@ describe("approvals answered once for every fleet", () => {
   test("every fleet takes it once", () => {
     ok("approval", "add", "K1", "--rule", "an older one", "--by", "luiz", "--ref", "manager/G1:Q1");
     expect(fleets(0, "approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1").stdout.trimEnd().split("\n")).toEqual([
-      "manager: added K1",
+      "manager: added K2",
       "acme-billing: skipped, K1 already comes from manager/G1:Q1 (active)",
-      "infra: added K1",
+      "infra: added K3",
     ]);
     expect(fleets(0, "approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1").stdout.split("skipped").length - 1).toBe(3);
     expect(approvalsAt(other).map((a) => a["by"])).toEqual(["luiz@github"]);
@@ -331,8 +331,8 @@ describe("approvals answered once for every fleet", () => {
     fleets(0, "approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1");
     expect(fleets(0, "approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "revoked on the page (#3)").stdout.trimEnd().split("\n")).toEqual([
       "manager: revoked K1",
-      "acme-billing: revoked K1",
-      "infra: revoked K1",
+      "acme-billing: revoked K2",
+      "infra: revoked K3",
     ]);
 
     for (const dir of [manager, root, other]) expect(approvalsAt(dir).map((a) => [a["status"], a["revoked_why"]])).toEqual([["revoked", "revoked on the page (#3)"]]);
@@ -395,9 +395,9 @@ describe("approvals answered once for every fleet", () => {
     ok("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2");
     expect(rows("approvals").map((a) => [a["question"], a["message"]])).toEqual([["q2", 2]]);
     expect(fleets(0, "approval", "add", "--all", "--rule", "deploy to prod", "--ref", "manager/G2:Q2").stdout.trimEnd().split("\n")).toEqual([
-      "manager: added K1",
+      "manager: added K2",
       "acme-billing: skipped, K1 already comes from manager/G2:Q2 (active)",
-      "infra: added K1",
+      "infra: added K3",
     ]);
     expect(fleets(1, "approval", "add", "--all", "--rule", "r", "--ref", "manager/G2:Q1").stderr).toContain("manager/G2:Q1 is open, not answered yet");
   });
@@ -439,17 +439,17 @@ describe("approvals answered once for every fleet", () => {
     said(manager, { id: 3, from: "user", author: "luiz@github", text: "Q2: no", decision: "g2" });
     expect(at(manager, "grill", "g2", "--answer", "Q2: no").stdout).toContain("revoked approval K1 (from manager/G2:Q2): G2:Q2 was answered again (no)");
     expect(approvalsAt(manager).map((a) => [a["status"], a["revoked_why"]])).toEqual([["revoked", "G2:Q2 was answered again (no)"]]);
-    expect(approvalsAt(root).map((a) => a["status"])).toEqual(["active"]);
-    expect(refused("decision", "n1", ...NOTICE)).toContain("approval K1 no longer stands");
+    expect(approvalsAt(root).map((a) => [a["id"], a["status"]])).toEqual([["K2", "active"]]);
+    expect(refused("decision", "n1", ...NOTICE.map((w) => (w === "K1" ? "K2" : w)))).toContain("approval K2 no longer stands");
 
     at(root, "grill", "g3", ...G2);
     appendFileSync(join(root, "chat.jsonl"), `${JSON.stringify({ id: 9, at: "2099-01-01T00:00:00+00:00", from: "user", author: "luiz@github", to: ["coordinator"], text: "Q1: yes\nQ2: yes", re: null, decision: "g3" })}\n`);
     at(root, "grill", "g3", "--answer", "Q1: yes", "--answer", "Q2: yes");
-    ok("approval", "add", "K2", "--rule", "land", "--by", "luiz", "--ref", "G1:Q1");
-    ok("approval", "add", "K3", "--rule", "deploy", "--by", "luiz", "--ref", "G1:Q2");
-    expect(at(root, "grill", "g3", "--revise", "Q1: Landing | May it land on Fridays? | yes | r").stdout).toContain("revoked approval K2 (from g3:Q1): G1:Q1 was revised");
-    expect(at(root, "grill", "g3", "--drop", "Q2: not needed").stdout).toContain("revoked approval K3 (from g3:Q2): G1:Q2 was dropped (not needed)");
-    expect(rows("approvals").map((a) => [a["id"], a["status"]])).toEqual([["K1", "active"], ["K2", "revoked"], ["K3", "revoked"]]);
+    ok("approval", "add", "next", "--rule", "land", "--by", "luiz", "--ref", "G3:Q1");
+    ok("approval", "add", "next", "--rule", "deploy", "--by", "luiz", "--ref", "G3:Q2");
+    expect(at(root, "grill", "g3", "--revise", "Q1: Landing | May it land on Fridays? | yes | r").stdout).toContain("revoked approval K4 (from g3:Q1): G3:Q1 was revised");
+    expect(at(root, "grill", "g3", "--drop", "Q2: not needed").stdout).toContain("revoked approval K5 (from g3:Q2): G3:Q2 was dropped (not needed)");
+    expect(rows("approvals").map((a) => [a["id"], a["status"]])).toEqual([["K2", "active"], ["K4", "revoked"], ["K5", "revoked"]]);
   });
 
   test("a withdrawn grilling revokes every approval it gave, and gives none", () => {
@@ -539,8 +539,8 @@ describe("approvals answered once for every fleet", () => {
     stop("infra", other);
     expect(fleets(0, "approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "revoked on the page (#3)").stdout.trimEnd().split("\n")).toEqual([
       "manager: revoked K1",
-      "acme-billing: revoked K1",
-      "infra: revoked K1",
+      "acme-billing: revoked K2",
+      "infra: revoked K3",
     ]);
     expect(approvalsAt(other).map((a) => a["status"])).toEqual(["revoked"]);
   });
@@ -550,7 +550,7 @@ describe("approvals answered once for every fleet", () => {
     stop("infra", other);
     rmSync(join(other, "state.json"));
     const r = fleets(1, "approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "revoked on the page (#3)");
-    expect(r.stdout.trimEnd().split("\n")).toEqual(["manager: revoked K1", "acme-billing: revoked K1", `infra: not reached, no ledger at ${join(other, "state.json")}`]);
+    expect(r.stdout.trimEnd().split("\n")).toEqual(["manager: revoked K1", "acme-billing: revoked K2", `infra: not reached, no ledger at ${join(other, "state.json")}`]);
     expect(r.stderr).toContain("not reached: infra; the approval is still active there");
   });
 
@@ -560,6 +560,9 @@ describe("approvals answered once for every fleet", () => {
 
     for (const [code, said] of codes) expect([code, said]).toEqual([0, expect.not.stringContaining("refused")]);
 
-    for (const dir of [manager, root, other]) expect(approvalsAt(dir).map((a) => a["id"])).toEqual(["K1"]);
+    const ids = [manager, root, other].map((dir) => approvalsAt(dir).map((a) => a["id"]));
+
+    for (const held of ids) expect(held).toHaveLength(1);
+    expect(new Set(ids.flat()).size).toBe(3);
   });
 });

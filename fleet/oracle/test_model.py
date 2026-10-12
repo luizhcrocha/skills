@@ -90,6 +90,9 @@ class Model:
         self.events = 0
         self.messages: list[dict] = []
         self.mode: str | None = None  # `set --workspaces`: None until set, then "isolated" or "shared"
+        # The TypeScript fleet (FLEET_ORACLE_IMPL) numbers from the machine's counter in $REGISTRY, which never
+        # gives a number twice (one dropped stays given); the frozen Python twin numbers from the ledger alone.
+        self.counter: dict[str, int] | None = {} if os.environ.get("FLEET_ORACLE_IMPL") else None
 
     # -- lookups ----------------------------------------------------------------------------------
     @staticmethod
@@ -494,9 +497,12 @@ class Model:
                 if not r.get("ref"):
                     p = prefix_of(r)
                     taken = [int(x["ref"][len(p):]) for x in rows.values() if re.fullmatch(p + r"\d+", x.get("ref") or "")]
-                    n = max(taken, default=0) + 1
+                    given = [] if self.counter is None else [self.counter.get(p, 0)]
+                    n = max(taken + given, default=0) + 1
                     while f"{p}{n}" in rows and f"{p}{n}" != k:  # a number skips another row's id (open-1, fixed)
                         n += 1
+                    if self.counter is not None:
+                        self.counter[p] = n
                     r["ref"] = f"{p}{n}"
 
     def validate(self) -> None:
@@ -646,6 +652,7 @@ class Model:
         try:
             m.validate()
         except Refused:
+            self.counter = m.counter  # the numbers a refused write took stay taken
             return 1, said
         self.__dict__.update(m.__dict__)
         return 0, said

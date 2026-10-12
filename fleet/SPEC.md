@@ -443,9 +443,10 @@ any other kind, `--findings` or `--changes` is refused (`--findings and --change
 `approvals[]` (created on the first). ACTION outside add, list, revoke is refused (`approval 'x' is not one
 of add, list, revoke`). `list` prints one line per approval (as `show` does, below; `no standing approvals:
 ...` when none) and writes nothing. `add` and `revoke` need ID (`approval add names the approval: ...`).
-- `add`: a known ID is refused (`approval K1 is already recorded (<status>): ...`); then an ID other than K
-  and ASCII digits (`an approval's id is K and a number (K1, K2, ...), not 'A1': the other letters number
-  decisions, links and roadblocks`);
+- `add`: a known ID is refused (`approval K1 is already recorded (<status>): ...`); then an ID other than
+  `next` or K and ASCII digits (`an approval's id is K and a number (K1, K2, ...), not 'A1': the other letters
+  number decisions, links and roadblocks`); `next` is given the machine's next K once every check below passed
+  ("Numbers (refs)");
   `new approval needs --rule --by --ref`; a blank rule or by. Then `--ref` (`approval_source` in
   decisions.py, `approvalSource` in fleet/src/ledger/approvals.ts), in this order: it reads
   `[FLEET/]DECISION[:Q<n>]` (`--ref reads [FLEET/]DECISION[:Q<n>] (D7, manager/G5:Q1), got 'x'`); FLEET,
@@ -651,12 +652,46 @@ older ledger comes out complete after one command.
 
 On every write, each decision, link and roadblock without a `ref` is given one: a letter for its
 kind (decision **D**, action **A**, input **I**, secret **S**, grill **G**, notice **N**, permission **P**
-(TypeScript only), link **L**, roadblock **R**), and 1 + the highest number of that letter already given, skipping a number that another row of
+(TypeScript only), link **L**, roadblock **R**), and a number of that letter, skipping a number that another row of
 the same list has as its id (open-1). A standing approval is numbered **K** by its own id, which `approval add` takes
-only as K and digits. Decisions are numbered in
+only as K and digits, or as `next`. Decisions are numbered in
 `opened` order (as instants, open-13; a stamp that does not parse sorts after, as text), links and
 roadblocks in list order. A number, once given,
 never changes, even when a decision's kind changes (open-7).
+
+**The machine's numbers (TypeScript only).** A number is unique across the fleets of one machine, so D29
+names one item whichever fleet, page or chat says it. The registry keeps one counter per letter,
+`REGISTRY/numbers/numbers.json` (`{"D": 512, "L": 40, ...}`, the last number given), taken under an exclusive
+`flock` of `REGISTRY/numbers/numbers.lock` while `state` numbers a write (inside the ledger's own lock), so two
+fleets numbering at once never give one number. The number given is 1 + the higher of the counter and the
+highest of that letter in the ledger being written. The counter is seeded once, when its file is missing or
+does not read as a JSON object: from the highest of each letter in the ledger of every fleet the registry
+names (an entry, served or dead; a kept entry in `names/`; a name given on the page in `overrides/`). So the
+first number starts above every number already given on the machine; after that the counter is the source
+(no ledger is scanned), and a number given is never given again, even after its ledger is gone.
+
+`approval add next` takes the next **K** the same way (`fleet fleets approval add` runs it in each fleet, so
+each fleet's copy has its own K). An explicit `approval add K<n>` keeps K<n> as given and raises the counter to
+n, so the counter never gives it again. Either way, an active approval of the ledger that already comes from
+the same `--ref` refuses the add (`<ref> already backs approval K5 (active)`), so concurrent adds still skip.
+
+Existing numbers keep their value: nothing is renumbered, so an old number in a chat, a memo or a ref
+(`manager/G9:Q2`) still names what it named; two fleets may still share a number given before the counter
+(the manager's page then shows each holder, never one). A grilling's questions (`q2`, `G9:Q2`) are numbered in
+their grilling, and the chat's message ids (`#N`) per fleet's chat: neither uses the counter.
+
+A registry that exists, or that `$FLEET_HOME` names (made when missing), and whose counter cannot be opened,
+locked or written refuses the write: `state: cannot write the number counter <path>: <why>: nothing was
+written, so no number repeats another fleet's. ...`, exit 1, the ledger as it was; `approval add next` the same.
+A `flock` that keeps failing (ENOLCK, EBADF) throws rather than run unlocked, for every lock of the fleet. Only
+a standalone fleet, with no registry on this machine (no `$FLEET_HOME`, and no `fleet-board` under
+`$XDG_STATE_HOME` or `~/.local/state`), numbers from its ledger alone (1 + the highest of that letter in it, as
+before) and warns once per command: `state: no fleet registry at <path>: numbered from this ledger alone, so a
+number may repeat another standalone fleet's.` And a fleet that the usual registry (`~/.local/state/fleet-board`)
+serves but that numbers from another, because `$FLEET_HOME` or `$XDG_STATE_HOME` points elsewhere, is warned
+on each write that numbers: `state: this fleet is served from the registry at <usual> but numbers from <used>
+...`. A copy numbered only to be read (the page, the watch, the news, the warnings) takes 1 + the highest of
+its ledger and takes nothing from the counter.
 
 Lookup: `find(rows, key)` returns the row whose id is `key`, else the one whose ref is `key`, so an
 id always wins (`d3` is an id; `D3` is a number unless a row's id is `D3`). Every command's ID and
@@ -743,7 +778,9 @@ warning names the fleet. And from `agent`: the unfinished-report warning above.
 `chat.py DIR COMMAND`. The store is `DIR/chat.jsonl`, one message per line, appended under an
 exclusive `flock`. A line that doesn't parse, or lacks `id` (int), `from` (str), `to` (list) or
 `text` (str), is skipped by every reader. A torn last line (no newline) is left alone, and the
-next append starts on a new line. Bytes that aren't UTF-8 are read with replacement.
+next append starts on a new line. Bytes that aren't UTF-8 are read with replacement. A message's id (`#N`)
+is 1 + the highest id in this fleet's chat: it stays per fleet, unlike the ledger's numbers, which are the
+machine's ([Numbers (refs)](#numbers-refs)); a message is named across fleets with its fleet (`delivered`, `via`).
 
 A message: `{id, at, from, to[], text, re (int|null), parts[]}` plus `author` (the user's tailnet
 login, set only by the server), `decision`, `quote {text ≤2000, from ≤200, at?}`, `marks` (a batch of
@@ -1289,7 +1326,12 @@ tagged with it and the replies to them (a message not from the user whose `re` n
 `{id, at, from, to, text, re, decision}`, oldest first. `questions`, on a grilling only, is its open
 questions as `{id, of, status, asked}`. With `said` and `questions` the manager's page decides whether
 a fleet's item waits on the user by the fleet's own page's rule (`awaiting` in `page/src/core.ts`), on
-the inputs that page has; `held` and `held_at` are there only on a held decision.
+the inputs that page has; `held` and `held_at` are there only on a held decision. Beside `coordinators[]`, the manager's
+page gets `stopped` (TypeScript only), only when there is one: `[{id, index}]`, each fleet the registry keeps
+but no longer serves whose ledger holds decisions, `index` its decisions' rows of the search index. With every
+served fleet's `index` (closed decisions too), it tells the page who holds a bare number: one holder is a link
+to its decision, several (a number from before the machine's numbers) are each shown (`D29 in infra · D29 in
+agent-tools`), never one picked.
 
 | Command | Output | Exit |
 | :-- | :-- | :-- |
@@ -1303,7 +1345,7 @@ the inputs that page has; `held` and `held_at` are there only on a held decision
 | `gate free TOKEN` | `free`; the holder's name in place of the token frees it too, as before tokens | 1 held by another |
 | `name DIR SESSION` | `this fleet is <id>, the session <session>: use that one name everywhere`; renames the entry | 1 not served, reserved, or taken |
 | `procs` | background processes each fleet's session started (by `/proc`, real time) | 0 |
-| `approval add --all\|--fleets A,B --rule R --ref FLEET/DECISION[:Q<n>] [--by WHO]` | one standing approval in every served fleet's ledger (`--all`, in `live()` order) or in those `--fleets` names (ids or aliases, comma-separated, in that order): the ref is checked once as `approval add` checks it (refused as there, `fleets: <why>`, before any fleet is written), then per fleet one line: `<fleet>: skipped, K2 already comes from manager/G5:Q1 (<status>)` when an approval of its ledger, active or revoked, has the same `ref` and `question` (in the source fleet's own ledger, its decision's id as `ref` counts too); else `<fleet>: added K<n>`, n one more than its highest K, by running `state DIR approval add K<n> --rule R --by WHO --ref REF -q` (its page rendered); `<fleet>: refused, <state's reason>` when that refuses, except that a refusal after which its ledger holds an approval from that ref (another `add` ran at the same time) reads `<fleet>: skipped, ...` as above and fails nothing. `--by` defaults to the answer's author, else `user` | 1 the usage, neither `--all` nor `--fleets`, a blank rule, a ref with no fleet, a ref refused, a fleet not served (before any write), or any fleet refused (after the others) |
+| `approval add --all\|--fleets A,B --rule R --ref FLEET/DECISION[:Q<n>] [--by WHO]` | one standing approval in every served fleet's ledger (`--all`, in `live()` order) or in those `--fleets` names (ids or aliases, comma-separated, in that order): the ref is checked once as `approval add` checks it (refused as there, `fleets: <why>`, before any fleet is written), then per fleet one line: `<fleet>: skipped, K2 already comes from manager/G5:Q1 (<status>)` when an approval of its ledger, active or revoked, has the same `ref` and `question` (in the source fleet's own ledger, its decision's id as `ref` counts too); else `<fleet>: added K<n>`, the machine's next K, by running `state DIR approval add next --rule R --by WHO --ref REF -q` (its page rendered; K<n> read back from its ledger); `<fleet>: refused, <state's reason>` when that refuses, except that a refusal after which its ledger holds an approval from that ref (another `add` ran at the same time) reads `<fleet>: skipped, ...` as above and fails nothing. `--by` defaults to the answer's author, else `user` | 1 the usage, neither `--all` nor `--fleets`, a blank rule, a ref with no fleet, a ref refused, a fleet not served (before any write), or any fleet refused (after the others) |
 | `approval revoke --ref FLEET/DECISION[:Q<n>] --reason R [--fleets A,B]` | per fleet the registry knows, served or stopped (`Registry.known`: the live entries, then the kept entries of fleets no longer served, by id; a `serve --stop` forgets one), whose DIR is there (or those named, by id or alias among them), each active approval from that ref (as given, or as `<fleet>/<number>` when the registry knows the fleet and it has the decision) revoked by `state DIR approval revoke K --reason R -q`: `<fleet>: revoked K3`, `<fleet>: none active from manager/G5:Q1`, or `<fleet>: not reached, no ledger at <path>` / `<fleet>: not reached, <state's reason>`; any not reached adds `fleets: not reached: <fleet>, ...; the approval is still active there` on stderr | 1 the usage, no `--reason`, a ref with no fleet, a name the registry does not know, any fleet not reached |
 | `whose FROM TO` | the files `jj diff --from FROM --to TO` moves, by owning fleet, from the manager's `DIR/owners` (`FLEET GLOB` per line, first match wins) | 1 no owners file, jj failed |
 | anything else | usage | 1 |
@@ -2340,6 +2382,7 @@ recommendation attached.
 | the plugin's hook (`fleet_listen_guard`, `fleet_chat_nudge`, `fleet_said_once`, `fleet_news`) | nothing in DIR; the session's `fleet-guard`, `fleet-nudge`, `said-once` and `fleet-news` state in the plugin's data folder |
 | `news post`, and a `state decision --kind notice` once its ledger is written, when a manager is served | `REGISTRY/news/news.jsonl` (under its `flock`) |
 | `news read` | `REGISTRY/news/read/<fleet>` when the cursor moves |
+| `state`, on a write that numbers a row or `approval add next` (TypeScript only) | `REGISTRY/numbers/numbers.json` (under `REGISTRY/numbers/numbers.lock`), when `REGISTRY` exists |
 | `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / deleted (a shared fleet's `add` writes nothing); whatever the repo's ws-add hook (or `devenv-run --prepare`) writes |
 | `fleet ws add --reuse` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; a new change in the workspace (`jj new`) |
 | `fleet ws split` | `DIR/state.json` (`events`, `updated`), `DIR/index.html`; the default workspace's `@` split in two |
@@ -2373,6 +2416,11 @@ a header, then one step per line.
   and `XDG_STATE_HOME`, `FLEET_DISCOVER=0`, `FLEET_HOME=$REGISTRY`.
 - While a replay runs, the runner listens on 127.0.0.1:47843 itself (`LISTENING` in run.py), so a
   link there reads as up on any machine; a link on any other port probes the host as it is.
+- The header's `twin` (optional), `{"why": ..., "normalise": [...]}`, says why the frozen Python twin differs
+  on the trace (a behaviour TypeScript changed on purpose since the twin froze, ADR 0003) and which of run.py's
+  `TWIN_NORMALISERS` hide that difference on both sides before a replay on the twin is compared; every other
+  difference still fails. `numbers` reads every item number (D12, K3, L1) as its letter and `#`
+  (`approvals-fleets` and `render-page`: the machine's numbers).
 
 A result file has a header line (`{"results": NAME, "trace": 1}`), then one line per step:
 
@@ -2388,7 +2436,7 @@ when the file doesn't end in a newline), `index.html` as what the fleet wrote in
 is `false`) and `state` the parsed payload of its `fleet-state` script (`fleets.view()`, with paths
 as tokens; `null` when it has none, `{"raw": …}` when it doesn't parse), other text as text,
 binary as `{"sha256": …}`. The template around the payload is not recorded: it is fleet/page's
-build, which `just test-page` checks, so a page change re-records no trace. `*.pid`, `*.tmp`, `server.log` and `__pycache__` are ignored. In every
+build, which `just test-page` checks, so a page change re-records no trace. `*.pid`, `*.tmp`, `server.log`, `__pycache__` and `$REGISTRY/numbers/` (the machine's number counter, TypeScript only: the numbers it gives are recorded in the ledgers) are ignored. In every
 string, the session's paths read back as `$DIR`, `$W`, `$REGISTRY`, `$USERHOME`, `$TMP`, the fleet
 CLI's path (`<repo>/fleet/bin/fleet`, which both implementations print) as `$FLEET`, and the
 implementation's own directory as `$SKILL` (`--subst PATH=TOKEN`); a `pid` equal to the runner's
@@ -2434,7 +2482,9 @@ model: milestones and their step order, workers (status, milestone, rounds, name
 effort, the last two by the role table read from state.py), the
 fleet's `workspace_mode` (two sequences in five start shared),
 decisions (kind, status, number, place, options, recommendation, hold), roadblocks, kept notes, links,
-the event count, and the chat's messages. The clock moves 0-25 minutes per step. Checked after
+the event count, and the chat's messages. Driving the TypeScript fleet, the model numbers from a counter
+per letter as the machine's numbers do (a number dropped, or taken by a write that was then refused, is not
+given again); driving the Python twin, from the ledger alone. The clock moves 0-25 minutes per step. Checked after
 every step:
 
 - the exit code the model predicts (0, 1, 2), with no traceback;

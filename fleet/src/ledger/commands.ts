@@ -23,7 +23,8 @@ import { workerFigures, workerTitle } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
 import { isMarkdownFile, markdownToHtml, markdownWarning } from "./body.ts";
 import { dropKey, REFUSAL_KEYS, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
-import { find, findDecision, milestoneOfStep, nextStepId } from "./numbers.ts";
+import { find, findDecision, highest, milestoneOfStep, nextStepId } from "./numbers.ts";
+import { approvalNumber, refusedFor, Unreachable } from "./shared-numbers.ts";
 import { approvalSource, comesFrom, namesOf, NoSource, refOf, sameSource } from "./approvals.ts";
 import { LINK_KINDS, linkKind, OLD_LINK_KINDS, type LinkKind } from "./links.ts";
 import { callRev, makeRefusedCall, permissionOptions } from "./permission.ts";
@@ -2417,7 +2418,7 @@ export function approval(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
     const refused = approvalAction(action);
 
     if (refused !== undefined) return yield* Effect.fail(refused);
-    const id = args.str("id");
+    let id = args.str("id");
 
     if (!given(id)) return yield* refuse(`approval ${action} names the approval: \`approval ${action} ID ...\``);
     const rows = (ledger.approvals ??= []);
@@ -2441,7 +2442,7 @@ export function approval(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
     if (a !== undefined) return yield* refuse(`approval ${a.id} is already recorded (${a.status}): revoke it, or record the new rule under a new id`);
 
-    if (!APPROVAL_ID.test(id)) {
+    if (id !== "next" && !APPROVAL_ID.test(id)) {
       return yield* refuse(`an approval's id is K and a number (K1, K2, ...), not ${pyStr(id)}: the other letters number decisions, links and roadblocks`);
     }
 
@@ -2459,6 +2460,17 @@ export function approval(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
     if (spent !== undefined) {
       return yield* refuse(`${src.label} backed approval ${spent.id}, revoked (${spent.revoked ?? "None"}): a revoked approval's answer gives no new one; ask the user again`);
     }
+
+    const standing = rows.find((x) => x.status === "active" && sameSource(x, src.ref, src.question, local));
+
+    // One source backs one active approval: two `fleets approval add` at once, the second skips the first's.
+    if (standing !== undefined) return yield* refuse(`${src.label} already backs approval ${standing.id} (active)`);
+    const taken = approvalNumber(run.machine, run.root, id, highest(rows.map((x) => x.id), "K"));
+
+    if (taken instanceof Unreachable) return yield* refuse(refusedFor(taken));
+
+    for (const warning of taken.warnings) run.warn(warning);
+    id = `K${String(taken.value)}`;
 
     const row: Approval = { id, rule, by, ref: src.ref, message: src.message, added: stamp(run), status: "active" };
 

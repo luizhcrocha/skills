@@ -780,12 +780,12 @@ function approval(machine: Machine, argv: readonly string[]): Effect.Effect<numb
           continue;
         }
 
-        const k = `K${String(Math.max(0, ...rows.flatMap((a) => (/^K[0-9]+$/u.test(a.id) ? [Number(a.id.slice(1))] : []))) + 1)}`;
-        const [took, why] = yield* stateOn(e.dir, "approval", "add", k, "--rule", rule, "--by", by, "--ref", ref);
-        const raced = took ? undefined : (approvalsAt(e.dir) ?? []).find((a) => sameSource(a, src.ref, question, local));
+        const [took, why] = yield* stateOn(e.dir, "approval", "add", "next", "--rule", rule, "--by", by, "--ref", ref);
+        const now = (approvalsAt(e.dir) ?? []).find((a) => sameSource(a, src.ref, question, local));
+        const raced = took ? undefined : now;
 
         if (raced !== undefined) say(`${e.id}: skipped, ${raced.id} already comes from ${src.label} (${raced.status})`);
-        else say(took ? `${e.id}: added ${k}` : `${e.id}: refused, ${why}`);
+        else say(took ? `${e.id}: added ${now?.id ?? "it"}` : `${e.id}: refused, ${why}`);
         refused ||= !took && raced === undefined;
       }
     } else {

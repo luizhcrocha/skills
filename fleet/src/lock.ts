@@ -16,13 +16,23 @@ function open() {
 
 let libc: ReturnType<typeof open> | undefined;
 
-/** Take an exclusive lock on the open file `fd`, waiting for it; the function returned releases it. */
+/** How many times a failing `flock` is tried (a signal interrupts a wait: EINTR) before it fails. */
+const TRIES = 100;
+
+/** `flock` failed every time it was tried (ENOLCK, EBADF, ...): the caller must not go on unlocked. */
+export class LockFailed extends Error {}
+
+/** Take an exclusive lock on the open file `fd`, waiting for it; the function returned releases it. Throws
+ * {@link LockFailed} when it cannot be taken: nothing runs unlocked. */
 export function holdExclusiveLock(fd: number): () => void {
   libc ??= open();
   const { flock } = libc.symbols;
+  let tries = 0;
 
-  for (let tries = 0; flock(fd, LOCK_EX) !== 0 && tries < 100; tries += 1) {
-    // EINTR: try again
+  while (flock(fd, LOCK_EX) !== 0) {
+    tries += 1;
+
+    if (tries >= TRIES) throw new LockFailed(`flock(LOCK_EX) failed ${String(TRIES)} times on fd ${String(fd)}`);
   }
 
   return () => {

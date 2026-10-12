@@ -1,8 +1,9 @@
 /**
  * Numbers given on a copy of a ledger read as plain JSON (Python's `decisions.number` on the page's
  * copy): the page and a manager's summaries show a row's number even when the ledger was written by
- * hand or by an older version, without decoding it into the typed model. Same rule as
- * `ledger/numbers.ts`: a letter for the kind and 1 + the highest number of that letter, skipping a
+ * hand or by an older version, without decoding it into the typed model. The rule `ledger/numbers.ts` gives a
+ * copy numbered for reading (the machine's counter is taken only by a write): a letter for the kind and 1 + the
+ * highest number of that letter, skipping a
  * number another row has as its id; decisions in `opened` order, links and roadblocks in list order.
  */
 import { asArray, asObject, asString, pyRepr, truthy, type Json, type JsonObject } from "../json.ts";

@@ -20,7 +20,8 @@ import { pageHtml, readTemplate, TEMPLATE, writePage } from "../page/render.ts";
 import { view } from "../page/view.ts";
 import * as commands from "../ledger/commands.ts";
 import { ledgerText, parseLedger, type Ledger } from "../ledger/model.ts";
-import { nextStepId, number } from "../ledger/numbers.ts";
+import { nextStepId } from "../ledger/numbers.ts";
+import { numberOnMachine, refusedFor, Unreachable } from "../ledger/shared-numbers.ts";
 import { showLines } from "../ledger/show.ts";
 import { lockLedger } from "../ledger/store.ts";
 import { AGENT_STATUSES, ASKS, SHARED_KINDS, STATUSES, STEP_STATUSES, validate, WORKSPACE_MODES } from "../ledger/validate.ts";
@@ -405,7 +406,11 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
     if (result === undefined) return 0;
     commands.measure(machine, root, result);
     commands.nameFromSessions(machine, root, result);
-    number(result);
+    const numbered = numberOnMachine(machine, root, result);
+
+    if (numbered instanceof Unreachable) return yield* Effect.fail(stateRefusal(refusedFor(numbered)));
+
+    for (const warning of numbered.warnings) out.err(`${warning}\n`);
     result.updated = stampOf(machine.now());
     const fault = validate(result);
 

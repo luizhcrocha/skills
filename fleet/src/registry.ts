@@ -47,13 +47,15 @@ export interface RegistryPlace {
   readonly home: string;
   /** Where session transcripts are (`$CLAUDE_CONFIG_DIR`), for session titles. */
   readonly config: string;
+  /** Whether `$FLEET_HOME` named it: then it is the registry even before its directory exists. */
+  readonly named?: boolean;
 }
 
 /** The registry's place from the environment. */
 export function registryPlace(env: (name: string) => string | undefined, config: string): RegistryPlace {
   const given = env("FLEET_HOME");
 
-  if (given !== undefined && given !== "") return { home: given, config };
+  if (given !== undefined && given !== "") return { home: given, config, named: true };
   const state = env("XDG_STATE_HOME");
   const base = state !== undefined && state !== "" ? state : join(env("HOME") ?? "", ".local", "state");
 
@@ -306,6 +308,24 @@ export class Registry {
       aliases: aliasesOf(next),
       raw: next,
     };
+  }
+
+  /** The DIR of every fleet the registry has an entry for (served, dead, kept, or named on the page), read
+   * without forgetting or renaming any, so it may run under another lock. */
+  ledgerDirs(): string[] {
+    const overrides = join(this.place.home, "overrides");
+
+    const raws = [
+      ...this.entryFiles().map((name) => readObject(join(this.place.home, name))),
+      ...this.keptNames().map((kept) => kept.raw),
+      ...listDir(overrides).map((name) => readObject(join(overrides, name))),
+    ];
+
+    return [...new Set(raws.flatMap((raw) => {
+      const dir = raw === undefined ? undefined : asString(raw["dir"]);
+
+      return dir === undefined || dir === "" ? [] : [dir];
+    }))];
   }
 
   /** The fleets whose server runs, oldest first; the dead are forgotten, a renamed session renames its fleet. */
