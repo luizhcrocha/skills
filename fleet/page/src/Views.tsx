@@ -8,7 +8,7 @@ import { createEffect, createMemo, createSignal } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
 import { Pill, PillAs, RefTag, usePage, When, Who, tf } from "./bits.tsx";
-import { Core, type Agent, type Coordinator, type Decision, type Preview, type PreviewServer } from "./core.ts";
+import { Core, type Agent, type Coordinator, type Decision, type Orphan, type Preview, type PreviewServer } from "./core.ts";
 import { clock, fmtDur, fmtInt, fmtShort, plural, spentWords } from "./format.ts";
 import { keyed } from "./model.ts";
 import { Rich } from "./Rich.tsx";
@@ -755,6 +755,87 @@ export function useVisibleAgents(): () => readonly Agent[] {
   });
 }
 
+/** Memory in KiB as people read it: "812 MB", "3.4 GB". */
+function memory(kib: number): string {
+  const mb = kib / 1024;
+
+  return mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : String(Math.round(mb)) + " MB";
+}
+
+/** One orphaned process tree and its Stop. Stop asks the hub, which stops it only while it is still the same
+ * orphan (its pid and start); what happened shows under the row, and the next state drops it. */
+function OrphanRow(props: { readonly o: Orphan }): JSX.Element {
+  const [said, setSaid] = createSignal("");
+  const [busy, setBusy] = createSignal(false);
+  const o = (): Orphan => props.o;
+
+  async function stop(): Promise<void> {
+    setBusy(true);
+    setSaid("");
+
+    try {
+      // The hub puts a Stop token in the manager's page when it loads; a Stop without it is refused.
+      const token = document.querySelector<HTMLMetaElement>('meta[name="fleet-stop-token"]')?.content ?? "";
+      const res = await fetch("orphans/stop", { method: "POST", headers: { "Content-Type": "application/json", "X-Fleet-Stop-Token": token }, body: JSON.stringify({ pid: o().pid, started: o().started }) });
+      // SAFETY: the hub answers {stopped, left} or {error}; anything else shows as its status.
+      const body = (await res.json().catch(() => ({}))) as { readonly error?: string; readonly stopped?: readonly number[]; readonly left?: readonly number[] };
+
+      if (!res.ok) setSaid(body.error ?? `the hub answered ${String(res.status)}`);
+      else if (body.left?.length) setSaid(`Still running after KILL: ${body.left.join(", ")}`);
+      else setSaid(`Stopped ${String(body.stopped?.length ?? 0)} ${body.stopped?.length === 1 ? "process" : "processes"}.`);
+    } catch {
+      setSaid("the hub did not answer");
+    }
+
+    setBusy(false);
+  }
+
+  return (
+    <div class="block orphan-row" data-pid={String(o().pid)}>
+      <div class="block-head">
+        <span class="link-title">PID {String(o().pid)}</span>
+        <PillAs cls="plain" text={fmtDur(o().age * 1000)} />
+        <PillAs cls="plain" text={memory(o().rss)} />
+        <PillAs cls={o().fleet ? "plain" : "stopped"} text={o().fleet || (o().session ? "session " + o().session.slice(0, 8) : "no fleet found")} />
+        <button type="button" class="btn orphan-stop" disabled={busy()} onClick={() => void stop()}>
+          {busy() ? "Stopping…" : "Stop"}
+        </button>
+      </div>
+      <p class="meta lane orphan-command" title={o().command}>
+        {o().command.length > 160 ? o().command.slice(0, 160) + "…" : o().command}
+      </p>
+      <Show when={o().workspace || o().cwd}>
+        <p class="meta lane">{o().cwd && o().workspace && o().cwd !== o().workspace ? o().cwd : o().workspace || o().cwd}</p>
+      </Show>
+      <Show when={said()}>
+        <p class="meta orphan-said" role="status">
+          {said()}
+        </p>
+      </Show>
+    </div>
+  );
+}
+
+/** On the manager's page: the test and dev processes left running by a session that went away. Nothing is
+ * stopped until Luiz clicks Stop. */
+function Orphans(): JSX.Element {
+  const { m } = usePage();
+
+  return (
+    <div class="part" id="orphans" hidden={!m.managed() || !m.state.orphans.length}>
+      <h2>
+        Orphaned processes <span class="n">{m.state.orphans.length}</span>
+      </h2>
+      <p class="muted part-note">Test runs, dev servers and headless browsers whose session went away, still holding memory. Stop sends TERM to the whole tree, then KILL.</p>
+      <div class="card" id="orphan-list">
+        <For each={m.state.orphans} keyed={(o) => String(o.pid) + "@" + String(o.started)}>
+          {(o) => <OrphanRow o={o()} />}
+        </For>
+      </div>
+    </div>
+  );
+}
+
 /** The Fleet view. */
 export function FleetView(props: { readonly rows: () => readonly Agent[] }): JSX.Element {
   const { m } = usePage();
@@ -762,6 +843,7 @@ export function FleetView(props: { readonly rows: () => readonly Agent[] }): JSX
   return (
     <section class="view" id="fleet" data-view="fleet" aria-label="Fleet" hidden={m.place().view !== "fleet"}>
       <Coordinators />
+      <Orphans />
       <Show when={m.state.preview}>{(p) => <PreviewPart preview={p()} />}</Show>
       <Workers rows={props.rows} />
       <Chart rows={props.rows} />

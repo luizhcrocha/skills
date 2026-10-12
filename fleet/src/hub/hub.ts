@@ -16,7 +16,8 @@
  * - `/f/<fleet>/preview/…` and `/f/<fleet>/preview/<worker>/…` the fleet's preview dev servers, HTTP and
  *   WebSocket (`preview-proxy.ts`); `POST /f/<fleet>/preview-workers` takes a worker in or out of the
  *   combined preview, under the chat's write policy; `POST /f/<fleet>/name` names a worker or the fleet from
- *   the page, under the same policy.
+ *   the page, under the same policy; `POST /f/<manager>/orphans/stop` stops an orphaned test or dev process
+ *   tree Luiz clicked Stop on, on the manager's page (orphans.ts), under the same policy.
  * - `/f/<fleet>@<machine>/…` a fleet of a peer hub, passed through: this hub checks a post by its own
  *   rules first, then the peer checks this machine (its owner's login) by its rules.
  *
@@ -25,6 +26,7 @@
  *
  * A request whose Host this hub does not answer to is refused (421), against DNS rebinding.
  */
+import { randomBytes } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, statSync } from "node:fs";
 import { join, normalize, relative, sep } from "node:path";
 
@@ -53,9 +55,10 @@ import { FILE_POLICY, LINKED_POLICY, servedBody } from "./body-policy.ts";
 import { indexHtml } from "./index-page.ts";
 import { LinkProbes, ProbeCache } from "./probes.ts";
 import { grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
-import { allowedOrigin, chatOriginsPath, grantor, hello, MAX_POST_BYTES, parseChatOrigins, postRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
+import { allowedOrigin, chatOriginsPath, grantor, hello, MAX_POST_BYTES, parseChatOrigins, postRefusal, STOP_TOKEN_META, stopRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
 import { previewTarget, proxiedIdentity, proxyHttp, proxySocket, type Target, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
+import { OrphanWatch } from "./orphan-watch.ts";
 import { PLUGIN_ROOT, readSkills, repoOf } from "./skills.ts";
 import { readTailnet, whois, type Tailnet } from "./tailnet.ts";
 
@@ -126,6 +129,9 @@ interface Viewed {
 }
 
 const NO_STORE = { "Cache-Control": "no-store" } as const;
+
+/** The manager's page, with its Stop token: never framed, and no handle for a page that opened it. */
+const PAGE_ISOLATION = { "Cross-Origin-Opener-Policy": "same-origin", "Content-Security-Policy": "frame-ancestors 'none'", "X-Frame-Options": "DENY" } as const;
 
 /** What a file of a fleet's DIR outside `decisions/` is served with: no origin, no script, never sniffed. */
 const FILE_HEADERS = { "Content-Security-Policy": FILE_POLICY, "X-Content-Type-Options": "nosniff" } as const;
@@ -259,6 +265,9 @@ export class Hub {
   private suffixRead = false;
   private readonly peerHubs = new Map<string, Peer>();
   private readonly served: Served;
+  private readonly orphans: OrphanWatch;
+  /** The token the manager's page carries to Stop an orphan, new with each hub process (`stopRefusal`). */
+  private readonly stopToken = randomBytes(24).toString("base64url");
   private readonly probes = new ProbeCache();
   private readonly linkProbes: LinkProbes;
   private readonly spend = new SpendReader();
@@ -275,12 +284,14 @@ export class Hub {
   constructor(options: HubOptions) {
     this.options = options;
     this.served = new Served(options.machine);
+    this.orphans = new OrphanWatch(options.machine);
     this.linkProbes = new LinkProbes(options.machine.now, options.probe);
     this.lookups = {
       up: (urls) => this.probes.up(urls),
       probe: (urls) => this.linkProbes.get(urls),
       tailnet: () => this.suffix,
       discovered: () => this.served.latest(),
+      orphans: () => this.orphans.latest(),
       spend: this.spend,
     };
     this.setHosts();
@@ -599,6 +610,8 @@ export class Hub {
 
     if (rest === "/name" && req.method === "POST") return this.rename(req, ip, root);
 
+    if (rest === "/orphans/stop" && req.method === "POST") return this.stopOrphan(req, ip, entry);
+
     if (rest === "/chat" && req.method === "OPTIONS") return this.preflight(req);
 
     if (req.method === "POST") return this.post(req, ip, root, rest);
@@ -618,6 +631,14 @@ export class Hub {
 
     if (pageRoute(rest)) {
       const page = this.page(root);
+
+      if (page !== undefined && entry.role === "manager" && req.headers.get("Sec-Fetch-Dest") === "document") {
+        // Only a top-level load of the manager's page gets the Stop token; that page can't be framed, and a page
+        // that opened it (a preview's, on this same origin) gets no handle on it.
+        const html = page.replace("</head>", `<meta name="${STOP_TOKEN_META}" content="${this.stopToken}"></head>`);
+
+        return new Response(req.method === "HEAD" ? null : html, { headers: { "Content-Type": "text/html; charset=utf-8", ...NO_STORE, ...PAGE_ISOLATION } });
+      }
 
       if (page !== undefined) return new Response(req.method === "HEAD" ? null : page, { headers: { "Content-Type": "text/html; charset=utf-8", ...NO_STORE } });
     }
@@ -769,6 +790,37 @@ export class Hub {
     if ("why" in entry) return jsonResponse(400, { error: entry.why });
 
     return jsonResponse(200, { id: entry.id, session: entry.session, path: `/f/${encodeURIComponent(entry.id)}/` });
+  }
+
+  /** `POST /f/<fleet>/orphans/stop` `{pid, started}`, on the manager's page only: Luiz's Stop on an orphaned
+   * test or dev process. Checked as a chat post is, and more (`stopRefusal`): the hub's own origin, same-origin,
+   * and the token the manager's page carries. The tree is stopped only while it is still reported, the same
+   * process (its start time), so a pid reused since the page was drawn is never hit: TERM to the tree's own
+   * processes, KILL to what is left a few seconds later. Nothing is ever stopped otherwise. */
+  private async stopOrphan(req: Request, ip: string, entry: Entry): Promise<Response> {
+    const viewer = await this.viewer(req, ip);
+    const refusal = stopRefusal(this.owner, viewer, this.hosts, new URL(req.url).host, this.stopToken, (name) => req.headers.get(name));
+
+    if (refusal !== undefined) return jsonResponse(refusal[0], { error: refusal[1] }, { Connection: "close" });
+
+    if (entry.role !== "manager") return jsonResponse(403, { error: "orphaned processes are stopped from the manager's page" });
+    const raw = await req.text();
+
+    if (Buffer.byteLength(raw) > MAX_POST_BYTES) return jsonResponse(413, { error: `a stop is at most ${MAX_POST_BYTES / 1024} KiB` });
+    const body = Option.getOrUndefined(parseObject(raw));
+    const pid = asNumber(body?.["pid"]);
+    const started = asNumber(body?.["started"]);
+
+    if (pid === undefined || started === undefined || !Number.isInteger(pid) || pid <= 1) return jsonResponse(400, { error: "send {pid, started} of a row in Orphaned processes" });
+
+    if (!this.orphans.on) return jsonResponse(409, { error: "this hub does not look at the machine's processes (FLEET_DISCOVER=0 or FLEET_ORPHANS=0)" });
+    const done = await this.orphans.stop(pid, started);
+    this.orphans.look();
+    this.views.delete(entry.dir);
+
+    if ("why" in done) return jsonResponse(409, { error: done.why });
+
+    return jsonResponse(200, { stopped: [...done.stopped], left: [...done.left] });
   }
 
   /** What `GET /f/<fleet>/skills` answers: the skills the fleet's session can run, read again after 60 s. */

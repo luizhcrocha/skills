@@ -806,6 +806,7 @@ describe("a prototype page posting from an origin the hub's config allows", () =
       ["/f/p/chat/preview", { text: "hi" }],
       ["/f/p/name", { agent: "a1", name: "Writer" }],
       ["/f/p/preview-workers", { worker: "a1", include: true }],
+      ["/f/p/orphans/stop", { pid: 4242, started: 1 }],
     ];
 
     const self = `http://127.0.0.1:${port}`;
@@ -1217,6 +1218,46 @@ describe("the index and the manager", () => {
     expect(polled.headers.get("Content-Type")).toStartWith("application/json");
     expect((asArray(polled.body["coordinators"]) ?? []).map((c) => asObject(c)?.["id"])).toEqual(["p"]);
     expect(polled.body).toEqual(streamed);
+  });
+
+  test("Stop on an orphaned process is the manager's page's alone, and a hub that does not look at processes stops nothing", async () => {
+    const manager = join(base, "m", "manager");
+    mkdirSync(manager, { recursive: true });
+    writeState(manager, [], { role: "manager", project: "all" });
+    register(manager, "manager");
+    await start();
+    const self = `http://127.0.0.1:${port}`;
+    const page = await request("GET", "/f/manager/", undefined, { "Sec-Fetch-Dest": "document" });
+    const token = /<meta name="fleet-stop-token" content="([^"]+)">/.exec(asString(page.body["text"]) ?? "")?.[1] ?? "";
+    expect(token.length).toBeGreaterThan(20);
+    expect([page.headers.get("Cross-Origin-Opener-Policy"), page.headers.get("Content-Security-Policy"), page.headers.get("X-Frame-Options")]).toEqual(["same-origin", "frame-ancestors 'none'", "DENY"]);
+    expect(asString((await request("GET", "/f/manager/", undefined, { "Sec-Fetch-Dest": "iframe" })).body["text"])).not.toContain("<meta name=\"fleet-stop-token\"");
+    expect(asString((await request("GET", "/f/manager/")).body["text"])).not.toContain("<meta name=\"fleet-stop-token\"");
+    expect(asString((await request("GET", "/f/p/", undefined, { "Sec-Fetch-Dest": "document" })).body["text"])).not.toContain("<meta name=\"fleet-stop-token\"");
+    const own = { Origin: self, "Sec-Fetch-Site": "same-origin", "X-Fleet-Stop-Token": token };
+
+    const refused: readonly (readonly [Record<string, string>, string])[] = [
+      [{}, "a Stop comes only from the manager's page on this hub"],
+      [{ "X-Fleet-Stop-Token": token }, "a Stop comes only from the manager's page on this hub"],
+      [{ Origin: self, "X-Fleet-Stop-Token": token }, "a Stop comes only from the manager's page on this hub"],
+      [{ Origin: `http://localhost:${port}`, "Sec-Fetch-Site": "same-origin", "X-Fleet-Stop-Token": token }, "a Stop comes only from the manager's page on this hub"],
+      [{ Origin: self, "Sec-Fetch-Site": "same-origin" }, "the Stop token is missing or stale: reload the manager's page"],
+      [{ ...own, "X-Fleet-Stop-Token": `${token.slice(0, -1)}x` }, "the Stop token is missing or stale: reload the manager's page"],
+    ];
+
+    for (const [headers, why] of refused) {
+      const got = await post({ pid: 4242, started: 1 }, headers, "/f/manager/orphans/stop");
+      expect([headers, got.status, got.body["error"]]).toEqual([headers, 403, why]);
+    }
+
+    const coordinator = await post({ pid: 4242, started: 1 }, own, "/f/p/orphans/stop");
+    expect([coordinator.status, coordinator.body["error"]]).toEqual([403, "orphaned processes are stopped from the manager's page"]);
+    expect((await post({ pid: "4242" }, own, "/f/manager/orphans/stop")).status).toBe(400);
+    expect((await post({ pid: 1, started: 1 }, own, "/f/manager/orphans/stop")).status).toBe(400);
+    const off = await post({ pid: 4242, started: 1 }, own, "/f/manager/orphans/stop");
+    expect([off.status, off.body["error"]]).toEqual([409, "this hub does not look at the machine's processes (FLEET_DISCOVER=0 or FLEET_ORPHANS=0)"]);
+    const polled = await request("GET", "/f/manager/state.json");
+    expect(polled.body["orphans"]).toBeUndefined();
   });
 });
 

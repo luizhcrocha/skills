@@ -18,6 +18,7 @@ import { workerActivity } from "../heartbeat.ts";
 import { activeAt, SpendReader, type Spent } from "../transcripts.ts";
 import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
+import type { Orphan } from "../orphans.ts";
 import { isRunning, lastError, logTail } from "../preview/devserver.ts";
 import { readRecord, type DevServer } from "../preview/record.ts";
 import { readPortStates, type PortState } from "../hub/preview-ports.ts";
@@ -54,6 +55,8 @@ export interface Lookups {
   /** The hub's: this machine's MagicDNS suffix, the only `*.ts.net` names a link reaches it by (`null`: none).
    * Without it any `*.ts.net` name is this machine's tailnet, as the Python twin reads it. */
   readonly tailnet?: () => string | null;
+  /** The hub's: the machine's orphaned test and dev processes (orphans.ts), shown on the manager's page. */
+  readonly orphans?: () => readonly Orphan[];
 }
 
 /** A link's last probe. */
@@ -311,6 +314,10 @@ function foundJson(found: readonly Found[]): JsonObject[] {
   return found.map((x) => ({ port: x.port, url: x.url, target: x.target, pid: x.pid, cwd: x.cwd, command: x.command, fleet: x.fleet, up: x.up }));
 }
 
+function orphanJson(o: Orphan): JsonObject {
+  return { pid: o.pid, started: o.started, command: o.command, age: o.age, rss: o.rss, cwd: o.cwd, workspace: o.workspace, session: o.session, fleet: o.fleet };
+}
+
 /** What the running hub says of a root-mode preview's public port: the https address it serves it at, or why it cannot serve it. */
 function publicState(machine: Machine, port: number | null): Pick<PortState, "url" | "error"> {
   const home = machine.registry.place.home;
@@ -431,8 +438,11 @@ export function view(machine: Machine, lookups: Lookups, given: JsonObject, root
       found: foundJson(unlisted(lookups.discovered(), links)),
     };
 
-    // The key only when there is one, so the frozen Python twin's page reads the same with none stopped.
-    return stopped.length > 0 ? { ...shown, stopped } : shown;
+    const orphans = (lookups.orphans?.() ?? []).map(orphanJson);
+    // Each key only when there is one, so the frozen Python twin's page reads the same with none stopped or orphaned.
+    const kept = stopped.length > 0 ? { ...shown, stopped } : shown;
+
+    return orphans.length > 0 ? { ...kept, orphans } : kept;
   }
 
   const mine = me === undefined ? [] : lookups.discovered().filter((x) => x.fleet === me.id);

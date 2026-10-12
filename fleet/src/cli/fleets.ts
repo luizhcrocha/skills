@@ -1,6 +1,7 @@
 /**
  * `fleet fleets …` (Python's `fleets.py` CLI): the fleets served on this machine, what waits on the user, one fleet, the manager,
- * a decision in full, the gate, background processes, whose files a landing moves, and naming a fleet.
+ * a decision in full, the gate, background processes, orphaned test and dev processes (`orphans`, TypeScript only, so
+ * not in the usage line the oracle pins), whose files a landing moves, and naming a fleet.
  */
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -29,6 +30,7 @@ import { stateCli } from "./state.ts";
 import { activeAt, spentBy } from "../transcripts.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
+import { orphansCommand } from "./orphans.ts";
 
 const USAGE =
   "usage: fleet fleets list | waiting | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET|--as NAME WHAT | free TOKEN] | procs | whose FROM TO | approval add|revoke ...";
@@ -860,6 +862,8 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<vo
   if (cmd === "gate") return gate(machine, argv.slice(1));
 
   if (argv.length === 1 && cmd === "procs") return procs(machine);
+
+  if (argv.length === 1 && cmd === "orphans") return orphansCommand(machine);
 
   if (cmd === "whose") return whose(machine, argv.slice(1));
 

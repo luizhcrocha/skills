@@ -273,6 +273,22 @@ export interface Found {
   readonly port: number;
 }
 
+/** An orphaned test or dev process tree the hub found (fleet/src/orphans.ts), on the manager's page only. */
+export interface Orphan {
+  readonly pid: number;
+  /** The root's start in epoch seconds: Stop sends it back, so the hub never hits a reused pid. */
+  readonly started: number;
+  readonly command: string;
+  /** Seconds since it started. */
+  readonly age: number;
+  /** The tree's resident memory in KiB. */
+  readonly rss: number;
+  readonly cwd: string;
+  readonly workspace: string;
+  readonly session: string;
+  readonly fleet: string;
+}
+
 /** A worker's workspace as the preview shows it: whether the merge takes it, at which commit. */
 export interface PreviewWorker {
   readonly id: string;
@@ -413,6 +429,8 @@ export interface State {
   readonly approvals: readonly Approval[];
   readonly links: readonly Link[];
   readonly found: readonly Found[];
+  /** On a manager's page, the machine's orphaned test and dev processes; empty elsewhere. */
+  readonly orphans: readonly Orphan[];
   readonly kept: readonly Kept[];
   readonly events: readonly FleetEvent[];
   readonly preview: Preview | null;
@@ -1524,6 +1542,19 @@ function parseState(value: Json | undefined): State | null {
     found: list(value["found"])
       .filter((f) => isText(f["url"]) && f["url"].startsWith('https://'))
       .map((f) => ({ url: f["url"], up: f["up"] === true, fleet: text(f["fleet"], ""), cwd: text(f["cwd"], ""), command: text(f["command"], ""), port: count(f["port"], 0) })),
+    orphans: list(value["orphans"])
+      .filter((o) => Number.isInteger(o["pid"]) && Number(o["pid"]) > 1 && Number.isFinite(o["started"]))
+      .map((o) => ({
+        pid: Number(o["pid"]),
+        started: Number(o["started"]),
+        command: text(o["command"], ""),
+        age: count(o["age"], 0),
+        rss: count(o["rss"], 0),
+        cwd: text(o["cwd"], ""),
+        workspace: text(o["workspace"], ""),
+        session: text(o["session"], ""),
+        fleet: text(o["fleet"], ""),
+      })),
     kept: withId(list(value["kept"])).map((k) => ({ ...k, text: text(k["text"], ""), at: text(k["at"], "") })),
     preview: previewOf(value["preview"]),
     events: rows("events")

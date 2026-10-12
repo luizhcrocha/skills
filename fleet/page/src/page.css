@@ -261,6 +261,7 @@
   .strip + .strip { border-top: 1px solid var(--line); }
   .strip-head { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; }
   .strip-head .who { font-size: 1.0625rem; font-weight: 700; }
+  .orphan-row .orphan-stop { margin-left: auto; min-height: 36px; }
   .strip .detail { overflow-wrap: anywhere; }
   .strip .meta { font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
   .strip .block-link { z-index: auto; }

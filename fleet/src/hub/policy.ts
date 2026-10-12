@@ -8,6 +8,7 @@
  * who `tailscale whois` says owns the machine it comes from. Only the login that owns this machine may
  * write; anyone else on the tailnet reads.
  */
+import { timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 
 import * as Option from "effect/Option";
@@ -119,6 +120,40 @@ export function allowedOrigin(hosts: ReadonlySet<string>, allowed: ReadonlySet<s
   const origin = header("Origin");
 
   return origin !== null && allowed.has(origin) && !sameOrigin(origin, hosts) ? origin : undefined;
+}
+
+/** The header a Stop on the manager's page carries: the token the hub put in that page (`STOP_TOKEN_META`). */
+export const STOP_TOKEN_HEADER = "X-Fleet-Stop-Token";
+
+/** The `<meta name>` the manager's page holds the Stop token in. */
+export const STOP_TOKEN_META = "fleet-stop-token";
+
+/** Why a Stop on an orphaned process tree is refused, as [status, error], or undefined: on top of a post's checks
+ * (`postRefusal`), it comes only from the manager's page itself. Its `Origin` is the hub's own, the one the request
+ * was sent to (`host`), its `Sec-Fetch-Site` is `same-origin` (a request with neither, a local curl, is refused),
+ * and it carries the token the hub put in that page (`expected`), which a page the hub proxies (a preview) is never
+ * served. */
+export function stopRefusal(
+  owner: string | undefined,
+  viewer: Viewer,
+  hosts: ReadonlySet<string>,
+  host: string,
+  expected: string,
+  header: (name: string) => string | null,
+): readonly [number, string] | undefined {
+  const refused = postRefusal(owner, viewer, hosts, header);
+
+  if (refused !== undefined) return refused;
+  const origin = header("Origin");
+
+  if (origin === null || !sameOrigin(origin, hosts) || /^[a-z]+:\/\/([^/?#]*)/i.exec(origin)?.[1]?.toLowerCase() !== host.toLowerCase()) return [403, "a Stop comes only from the manager's page on this hub"];
+
+  if ((header("Sec-Fetch-Site") ?? "").toLowerCase() !== "same-origin") return [403, "a Stop comes only from the manager's page on this hub"];
+  const token = header(STOP_TOKEN_HEADER) ?? "";
+
+  if (expected === "" || token.length !== expected.length || !timingSafeEqual(Buffer.from(token), Buffer.from(expected))) return [403, "the Stop token is missing or stale: reload the manager's page"];
+
+  return undefined;
 }
 
 /** Why a post is refused before its body is read, as [status, error], or undefined. `allowed` are the other
