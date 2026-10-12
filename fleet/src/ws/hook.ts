@@ -153,7 +153,8 @@ interface Ended {
 /**
  * Run the hook to its end or for `timeoutS` seconds. It runs in a process group of its own, so a timeout,
  * or a TERM, INT or HUP that `ws add` receives meanwhile, stops every process it started: SIGTERM to the
- * group, SIGKILL after {@link STOP_GRACE_MS}. Its output goes to a file, not a pipe, so a process it left
+ * group, SIGKILL after {@link STOP_GRACE_MS}. A hook that ends by itself has what it left in its group
+ * stopped the same way. Its output goes to a file, not a pipe, so a process it left
  * behind never holds the run open; the file's directory is removed however the run ends.
  */
 export async function runHook(call: HookCall, timeoutS: number, env: Readonly<Record<string, string | undefined>>): Promise<HookRun> {
@@ -201,6 +202,9 @@ export async function runHook(call: HookCall, timeoutS: number, env: Readonly<Re
     const end = await ended;
     clearTimeout(timer);
     await stopped;
+
+    // What the hook left running in its group (a server, a watcher) dies with it.
+    if (why === undefined && child.pid !== undefined && groupAlive(child.pid)) await stopGroup(child.pid);
     const seconds = Math.round((Date.now() - started) / 100) / 10;
     const output = readText(log) ?? "";
     const reason: "timeout" | NodeJS.Signals | undefined = why;

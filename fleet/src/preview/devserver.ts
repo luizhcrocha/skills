@@ -126,13 +126,40 @@ export function setupCommand(dir: string, given: string | undefined): string | u
   }
 }
 
-/** Run the install in `dir`, its output appended to `log`; why not, when it fails. */
-export function runSetup(dir: string, command: string, log: string): string | undefined {
+/** A command line, and whether it runs as the leader of a process group of its own. */
+export interface Grouped {
+  readonly argv: readonly string[];
+  readonly grouped: boolean;
+}
+
+/** `argv` run as the leader of a session of its own, so its pid is its process group's id and the whole group can
+ * be killed: `setsid` (util-linux), else perl's or python3's setsid (the Mac has no setsid command), else as is. */
+export function ownGroup(argv: readonly string[]): Grouped {
+  if (Bun.which("setsid") !== null) return { argv: ["setsid", ...argv], grouped: true };
+
+  if (Bun.which("perl") !== null) return { argv: ["perl", "-MPOSIX", "-e", "POSIX::setsid(); exec @ARGV or die", "--", ...argv], grouped: true };
+
+  if (Bun.which("python3") !== null) return { argv: ["python3", "-c", "import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])", ...argv], grouped: true };
+
+  return { argv, grouped: false };
+}
+
+/** Run the install in `dir`, its output appended to `log`; why not, when it fails. It runs as a process group of its
+ * own, killed whole when it ends (a timeout kills only the process spawnSync started, never what that started). */
+export function runSetup(dir: string, command: string, log: string, timeoutMs = 15 * 60_000): string | undefined {
   makeDirs(join(log, ".."));
   const fd = openSync(log, "a");
 
   try {
-    const done = spawnSync("/bin/sh", ["-c", command], { cwd: dir, stdio: ["ignore", fd, fd], timeout: 15 * 60_000, env: { ...process.env, CI: "1" } });
+    const run = ownGroup(["/bin/sh", "-c", command]);
+    const [program = "/bin/sh", ...args] = run.argv;
+    const done = spawnSync(program, args, { cwd: dir, stdio: ["ignore", fd, fd], timeout: timeoutMs, env: { ...process.env, CI: "1" } });
+
+    if (run.grouped && done.pid > 0) stopLeftovers(done.pid, 2000);
+
+    if (done.error !== undefined && /ETIMEDOUT/.test(done.error.message)) {
+      return `${command} ran past ${Math.round(timeoutMs / 1000)} s and was killed, with everything it started; its output is in ${log}:\n${tail(readText(log) ?? "", 15)}`;
+    }
 
     if (done.error !== undefined) return `${command} could not run: ${done.error.message}`;
 
@@ -197,6 +224,26 @@ export function isRunning(pid: number | null | undefined): boolean {
   const stat = readText(`/proc/${pid}/stat`);
 
   return stat === undefined || stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) !== "Z";
+}
+
+/** Stop what is left of process group `pgid` once its leader is gone (TERM, then KILL after `graceMs`). */
+export function stopLeftovers(pgid: number, graceMs: number): void {
+  const signal = (name: NodeJS.Signals | 0): boolean => {
+    try {
+      process.kill(-pgid, name);
+
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (!signal(0)) return;
+  signal("SIGTERM");
+  const deadline = Date.now() + graceMs;
+
+  while (signal(0) && Date.now() < deadline) Bun.sleepSync(50);
+  signal("SIGKILL");
 }
 
 /** Stop the process group `pid` leads (TERM, then KILL after `graceMs`); whether it is gone. */

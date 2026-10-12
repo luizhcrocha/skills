@@ -6,6 +6,9 @@ Run: just test-scripts  (or python3 -m unittest discover -s scripts/tests)
 import contextlib
 import io
 import os
+import shutil
+import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -165,6 +168,36 @@ class TimeLimit(unittest.TestCase):
             with contextlib.redirect_stdout(buf):
                 gates._report(recipe, code, secs, out)
             self.assertIn("hang: FAIL (timed out after 1s)", buf.getvalue())
+
+    @unittest.skipUnless(shutil.which("just"), "needs just")
+    def test_a_signal_to_the_gate_stops_every_suite_it_runs_and_their_children(self):
+        """Each suite runs in a session of its own, so the gate's own death would leave it running: the gate passes
+        SIGTERM on to every suite's group and exits 128+15."""
+        with tempfile.TemporaryDirectory() as tmp:
+            script, pidfile = self.fake_suite(Path(tmp))
+            (Path(tmp) / "justfile").write_text("hang:\n    ./suite.sh\n")
+            driver = (
+                "import sys; sys.dont_write_bytecode = True\n"
+                "from importlib.machinery import SourceFileLoader\n"
+                "from importlib.util import module_from_spec, spec_from_loader\n"
+                "from pathlib import Path\n"
+                f"loader = SourceFileLoader('gates', {str(ROOT / 'scripts' / 'gates')!r})\n"
+                "g = module_from_spec(spec_from_loader('gates', loader)); loader.exec_module(g)\n"
+                f"g.REPO = Path({tmp!r}); g.SUITES = {{'hang': ()}}; g.FULL = ('hang',); g.MEM_MB = {{'hang': 1}}\n"
+                "sys.exit(g.main(['all', '--jobs', '1']))\n")
+            gate = subprocess.Popen([sys.executable, "-c", driver], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            self.addCleanup(lambda: gate.poll() is None and gate.kill())
+            deadline = time.monotonic() + 20
+            while not pidfile.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            child = int(pidfile.read_text())
+            gate.send_signal(signal.SIGTERM)
+            self.assertEqual(gate.wait(timeout=15), 128 + signal.SIGTERM)
+            self.assertIn("SIGTERM: stopping the suites still running", gate.stdout.read().decode())
+            deadline = time.monotonic() + 5
+            while _alive(child) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(_alive(child), "the suite's background child died with the gate")
 
     def test_every_suite_has_a_limit(self):
         for recipe in (*gates.SUITES, *{d for deps in gates.SUITES.values() for d in deps}):

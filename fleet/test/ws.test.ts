@@ -552,6 +552,13 @@ describe("the ws-add hook: the repo prepares each new workspace", () => {
     expect(ran("a1")).toMatchObject({ exit: null, timed_out: true });
   }, 20_000);
 
+  test("a hook that ends by itself leaves nothing running: what it started in the background dies with its group", async () => {
+    hook('sleep 300 & echo $! > "$1/.child"; echo started');
+    const made = await wsHook("add", "a1", "--repo", repo, "--hook-timeout", "30");
+    expect(made.stdout).toContain("--- .fleet/ws-add exited 0 in ");
+    expect(alive(Number(readFileSync(join(base, "repo-a1", ".child"), "utf8")))).toBe(false);
+  });
+
   test("a hook that ends by itself before its time is not recorded as timed out", async () => {
     hook("sleep 0.2");
     const made = await wsHook("add", "a1", "--repo", repo, "--hook-timeout", "5");

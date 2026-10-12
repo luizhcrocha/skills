@@ -29,6 +29,10 @@ The caps, so that gates of several fleets on one machine cannot run it out of me
   its path printed, when it fails. The tests' jj, git and SQLite fsyncs were most of the gate's
   wall time on the btrfs disk.
 
+SIGTERM, SIGINT or SIGHUP to the gate stops every install and suite still running, process group and all
+(SIGTERM, then SIGKILL STOP_GRACE seconds on), and the gate exits 128+signal: each runs in a session of its own,
+so a kill of the gate alone would leave them running (a Bash tool's timeout, Ctrl-C, `fleet fleets gate run`).
+
 A suite that outlives its wall-clock limit is killed, process group and all, and reported as FAIL
 with "timed out after Ns" and the last lines of its output, so a hung worker fails the gate instead
 of holding it. `bun test` has no such limit of its own: its --timeout (default 5000 ms) is per test,
@@ -39,6 +43,7 @@ import argparse
 import fnmatch
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -48,7 +53,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_limits import run_limited  # noqa: E402
+from run_limits import run_limited, stop_live  # noqa: E402
 from unittest_shards import MB_PER_JOB, mem_available_mb, mem_total_mb, tmp_root  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -176,6 +181,15 @@ _print_lock = threading.Lock()
 _waiting_said: set[str] = set()  # the suites a memory wait was already printed for
 _first_wait: dict[str, float] = {}  # a suite waiting for memory with nothing else running -> when that wait began
 TIMED_OUT = 124  # timeout(1)'s exit code
+STOP_GRACE = 2.0  # seconds the suites' groups have after the gate's signal before SIGKILL
+
+
+def _stop(signum: int, _frame) -> None:
+    """SIGTERM, SIGINT or SIGHUP: pass it on to every running suite's group, kill what stays, and exit now."""
+    print(f"\ngates: {signal.Signals(signum).name}: stopping the suites still running", flush=True)
+    stop_live(signum, STOP_GRACE)
+    sys.stdout.flush()
+    os._exit(128 + signum)
 
 
 def _limit(recipe: str, override: float | None) -> float:
@@ -347,6 +361,8 @@ def main(argv: list[str]) -> int:
     pl = sub.add_parser("plan")
     pl.add_argument("paths", nargs="+")
     args = p.parse_args(argv)
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, _stop)
 
     if args.cmd == "all":
         return run(list(FULL), args.jobs, args.timeout)

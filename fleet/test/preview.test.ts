@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from
 
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
 import { view } from "../src/page/view.ts";
-import { fill, lastError } from "../src/preview/devserver.ts";
+import { fill, lastError, runSetup } from "../src/preview/devserver.ts";
 import { readRecord, type PreviewRecord } from "../src/preview/record.ts";
 import { isRunning as alive } from "../src/preview/devserver.ts";
 import { SpendReader } from "../src/transcripts.ts";
@@ -692,3 +692,18 @@ describe("the page's view", () => {
     expect(asObject(asArray(p?.["workers"])?.[0])).toMatchObject({ id: "a1", included: true, status: "running" });
   });
 });
+
+describe("the install before a dev server", () => {
+  test("ends with its whole tree: what it left running, and what a timeout would have left, die with it", () => {
+    const dir = tmp("fleet-setup-");
+    const log = join(dir, "logs", "setup.log");
+    expect(runSetup(dir, `sleep 300 & echo $! > ${dir}/left; echo installed`, log)).toBeUndefined();
+    expect(readFileSync(log, "utf8")).toContain("installed");
+    expect(alive(Number(readFileSync(join(dir, "left"), "utf8")))).toBe(false);
+
+    const why = runSetup(dir, `sleep 301 & echo $! > ${dir}/hung; sleep 302`, log, 500);
+    expect(why).toContain("ran past 1 s and was killed, with everything it started");
+    expect(alive(Number(readFileSync(join(dir, "hung"), "utf8")))).toBe(false);
+  });
+});
+
