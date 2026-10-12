@@ -39,10 +39,18 @@ fi
 
 stamp=$root/node_modules/.fleet-installed
 if [ ! -f "$stamp" ] || [ "$root/bun.lock" -nt "$stamp" ] || [ "$root/package.json" -nt "$stamp" ]; then
-  # One install at a time: a coordinator and its workers may all start on a fresh install.
+  # One install at a time: a coordinator and its workers may all start on a fresh install. The holder
+  # writes its pid in the lock; a lock whose holder is gone (killed, as a hook's timeout kills its group)
+  # is taken over rather than waited on.
   lock=$root/.install.lock
   tries=0
   until mkdir "$lock" 2>/dev/null; do
+    holder=$(cat "$lock/pid" 2>/dev/null)
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+      rm -f "$lock/pid"
+      rmdir "$lock" 2>/dev/null
+      continue
+    fi
     tries=$((tries + 1))
     if [ "$tries" -gt 600 ]; then
       echo "fleet: another install has held $lock for 60 s; remove it if no install runs" >&2
@@ -50,14 +58,17 @@ if [ ! -f "$stamp" ] || [ "$root/bun.lock" -nt "$stamp" ] || [ "$root/package.js
     fi
     sleep 0.1
   done
+  echo $$ >"$lock/pid"
   if [ ! -f "$stamp" ] || [ "$root/bun.lock" -nt "$stamp" ] || [ "$root/package.json" -nt "$stamp" ]; then
     if ! log=$(cd "$root" && bun install --frozen-lockfile 2>&1); then
+      rm -f "$lock/pid"
       rmdir "$lock"
       printf 'fleet: installing its dependencies failed (bun install --frozen-lockfile in %s):\n%s\n' "$root" "$log" >&2
       exit 1
     fi
     touch "$stamp"
   fi
+  rm -f "$lock/pid"
   rmdir "$lock"
 fi
 

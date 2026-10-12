@@ -56,10 +56,12 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
 
+LANDING_REMOTE = "origin"  # the remote a landing goes to, unless --remote says another
 SKIP_MARKERS = ("[skip ci]", "[ci skip]", "[no ci]", "[skip actions]", "[actions skip]")
 HABIT_SAMPLE = 30
 
@@ -492,7 +494,7 @@ def skip_ci_habit(repo, base, head, tracked, workflows_text):
 
 # --- the check -------------------------------------------------------------
 
-def land_check(repo, bookmark, head_rev=None, remote="origin", apply_skip_ci=False, ledger_dir=None):
+def land_check(repo, bookmark, head_rev=None, remote=LANDING_REMOTE, apply_skip_ci=False, ledger_dir=None):
     reasons = []
     remote_ref = f"{bookmark}@{remote}"
     if repo.exists(remote_ref):
@@ -731,17 +733,80 @@ def review_reasons(review):
     return [f"reviewed: {what}; the ledger records a review of every change in the stack"]
 
 
-def landing_turn():
+LANDING_DOCS = ["CLAUDE.md", "AGENTS.md", "README.md", "justfile", "Justfile", ".justfile"]
+_NAME = r"([A-Za-z0-9_][\w./-]*)"
+LANDING_SAID = [re.compile(r"jj git push\b[^\n`]*?(?:--bookmark[ =]|-b )" + _NAME),
+                re.compile(r"jj bookmark (?:set|move) " + _NAME),
+                re.compile(r"\bgit push \S+ \+?HEAD:refs/heads/" + _NAME),
+                re.compile(r"landing bookmark[^\n`]{0,40}`" + _NAME + "`", re.I)]
+
+
+def workspace_root(path):
+    """The jj workspace or git checkout holding path, or None."""
+    here = Path(path).resolve()
+    for d in (here, *here.parents):
+        if (d / ".jj").is_dir() or (d / ".git").exists():
+            return d
+    return None
+
+
+def landing_bookmarks(path):
+    """The bookmarks a push lands on in the repo holding path (the Land playbook's step 1): those its own docs
+    push or name as the landing bookmark, and the one trunk() resolves to (origin's HEAD in a plain git
+    checkout). main, master and trunk when neither says. Empty outside a repo."""
+    root = workspace_root(path)
+    if root is None:
+        return set()
+    names = set()
+    for doc in LANDING_DOCS:
+        try:
+            text = (root / doc).read_text(errors="replace")
+        except OSError:
+            continue
+        for pattern in LANDING_SAID:
+            names.update(m.group(1) for m in pattern.finditer(text))
+    trunk = None
+    if (root / ".jj").is_dir():
+        try:
+            r = Repo(str(root)).jj("--ignore-working-copy", "log", "--no-graph", "-r", "trunk()", "-T",
+                                   'remote_bookmarks.map(|b| b.name()).join(" ")', check=False)
+            trunk = r.stdout.split() if r.returncode == 0 else None
+        except OSError:
+            trunk = None
+    if not trunk:
+        try:
+            r = subprocess.run(["git", "-C", str(root), "symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"],
+                               capture_output=True, text=True, timeout=10)
+            trunk = [r.stdout.strip().split("/", 1)[1]] if r.returncode == 0 and "/" in r.stdout else None
+        except (OSError, subprocess.TimeoutExpired):
+            trunk = None
+    names.update(trunk or ([] if names else ["main", "master", "trunk"]))
+    return names
+
+
+def landing_turn(fleet=None, timeout=60):
     """`fleet turn` for the fleet this session serves: (exit code, what it said), or None when the fleet
     CLI cannot run. Exit 1 means a manager is served and the turn is another fleet's, or nobody's yet."""
-    fleet = Path(__file__).resolve().parent.parent / "fleet" / "bin" / "fleet"
+    fleet = Path(fleet) if fleet else Path(__file__).resolve().parent.parent / "fleet" / "bin" / "fleet"
     if not fleet.exists() or shutil.which("bun") is None:
         return None
     try:
-        r = subprocess.run([str(fleet), "turn"], capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired):
+        proc = subprocess.Popen([str(fleet), "turn"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                start_new_session=True)
+    except OSError:
         return None
-    return r.returncode, (r.stdout if r.returncode == 0 else r.stderr).strip()
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # the whole group: the launcher and a `bun install` it may be running; the next launcher takes over
+        # an install lock whose holder is dead (fleet/bin/fleet)
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        proc.communicate()
+        return None
+    return proc.returncode, (out if proc.returncode == 0 else err).strip()
 
 
 def with_turn(result, turn):
@@ -765,7 +830,7 @@ def main(argv=None):
     parser.add_argument("-R", "--repo", default=".")
     parser.add_argument("--bookmark", "-b", required=True)
     parser.add_argument("--head", help="the revision to land (default: the single head of the work under @)")
-    parser.add_argument("--remote", default="origin")
+    parser.add_argument("--remote", default=LANDING_REMOTE)
     parser.add_argument("--apply-skip-ci", action="store_true",
                         help="append [skip ci] to head's subject when suggest_skip_ci holds")
     parser.add_argument("--ledger", metavar="DIR", help="the fleet's dashboard directory, whose reviewed events are read")

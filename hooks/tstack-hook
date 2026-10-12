@@ -1223,11 +1223,529 @@ def fleet_agent_grant(hook):
     return "tstack: the user allowed this exact Agent call once, on the fleet page (a permission grant)."
 
 
+class Deny(str):
+    """What a PreToolUse handler returns to refuse the call: the text becomes the denial's reason."""
+
+
+# The push gate. It catches honest mistakes, not an adversary: a plain `jj git push` or `git push` is read
+# exactly; one it cannot read (inside a loop, a subshell, a substitution, eval, xargs, a script, or with a
+# variable in it) counts as unclear, which a fleet without the landing turn may not run.
+Push = namedtuple("Push", "tool args cwd unclear")
+SHELLS = {"sh", "bash", "zsh", "dash", "nu", "fish", "ksh"}
+OPENERS = {"for", "while", "until", "if", "case", "select", "function", "{"}
+CLOSERS = {"done", "fi", "esac", "}"}
+JJ_VALUED = {"-R", "--repository", "--at-operation", "--at-op", "--color", "--config", "--config-file", "--config-toml"}
+JJ_BUILTINS = {
+    "abandon", "absorb", "bisect", "bookmark", "commit", "config", "debug", "describe", "diff", "diffedit", "duplicate",
+    "edit", "evolog", "file", "fix", "gerrit", "git", "help", "interdiff", "log", "metaedit", "new", "next", "operation",
+    "op", "parallelize", "prev", "rebase", "redo", "resolve", "restore", "revert", "root", "run", "show", "sign",
+    "simplify-parents", "sparse", "split", "squash", "status", "tag", "undo", "unsign", "util", "version", "workspace"}
+GIT_VALUED = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}
+GIT_BUILTINS = {
+    "add", "am", "apply", "archive", "bisect", "blame", "branch", "cat-file", "checkout", "cherry-pick", "clean",
+    "clone", "commit", "config", "describe", "diff", "fetch", "for-each-ref", "format-patch", "fsck", "gc", "grep",
+    "help", "init", "log", "ls-files", "ls-remote", "ls-tree", "merge", "merge-base", "mv", "notes", "pull", "push",
+    "rebase", "reflog", "remote", "reset", "restore", "rev-list", "rev-parse", "revert", "rm", "shortlog", "show",
+    "show-ref", "sparse-checkout", "stash", "status", "submodule", "switch", "symbolic-ref", "tag", "update-ref",
+    "version", "worktree"}
+GIT_PUSH_VALUED = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
+PUSH_IN_TEXT = re.compile(r"\bjj\b[^\n;&|#]*?\bgit\s+push\b|\bgit(?:\s+-[Cc]\s+\S+|\s+-\S+)*\s+push\b")
+SCRIPT_SUFFIXES = (".sh", ".bash", ".zsh", ".nu", ".fish")
+UNCLEAR = ("couldn't tell which bookmarks this push moves; run it as a plain `jj git push --bookmark <b>` "
+           "(or `git push origin <ref>`)")
+SCRIPT_MAX = 256 * 1024
+TURN_TIMEOUT_S = 20
+
+
+def _strip_heredocs(text):
+    """The text without its here-documents' bodies: their words are data, not commands."""
+    lines, out, i = text.split("\n"), [], 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        i += 1
+        for dash, _, word in re.findall(r"<<(-?)\s*(['\"]?)([A-Za-z_]\w*)\2", line):
+            while i < len(lines) and (lines[i].strip() if dash else lines[i]) != word:
+                i += 1
+            i += 1
+    return "\n".join(out)
+
+
+def _segments(text):
+    """A shell line's simple commands as (words, nesting) pairs: split at ; & | and newlines, redirections
+    dropped (`2>&1`, `>file`, `<file`), nesting counting the loops, conditionals, groups and subshells it is in."""
+    import shlex
+    lex = shlex.shlex(text, posix=True, punctuation_chars="();&|<>\n")
+    lex.whitespace = " \t\r"
+    lex.whitespace_split = True
+    lex.commenters = ""
+    out, words, depth, drop, comment, cases = [], [], 0, False, False, 0
+    for token in lex:
+        if comment and token != "\n":
+            continue
+        comment = False
+        if token.startswith("#"):
+            comment = True
+            continue
+        if token and all(c in "();&|<>\n" for c in token):
+            if "<" in token or ">" in token:
+                if words and words[-1].isdigit():
+                    words.pop()
+                drop = True
+                token = re.sub(r"&?[<>]+&?", "", token)
+                if not token:
+                    continue
+            if words:
+                out.append((words, depth))
+            words = []
+            if not cases:  # a case's patterns close with ")" too
+                depth = max(0, depth + token.count("(") - token.count(")"))
+            continue
+        if drop:
+            drop = False
+            continue
+        if not words and token in OPENERS | CLOSERS | {"do", "then", "else", "elif", "!"}:
+            depth = depth + 1 if token in OPENERS else max(0, depth - 1) if token in CLOSERS else depth
+            cases += (token == "case") - (token == "esac" and cases > 0)
+            continue
+        words.append(token)
+    if words:
+        out.append((words, depth))
+    return out
+
+
+def _substitutions(text):
+    """The commands inside the line's $(...) and backticks, outside single quotes."""
+    out, i, quote = [], 0, None
+    while i < len(text):
+        c = text[i]
+        if quote == "'":
+            quote = None if c == "'" else quote
+        elif c == "\\":
+            i += 1
+        elif c == "'" and quote is None:
+            quote = "'"
+        elif c == '"':
+            quote = None if quote == '"' else '"'
+        elif c == "`":
+            j = text.find("`", i + 1)
+            j = len(text) if j == -1 else j
+            out.append(text[i + 1:j])
+            i = j
+        elif text.startswith("$(", i):
+            depth, j = 0, i + 1
+            while j < len(text):
+                depth += {"(": 1, ")": -1}.get(text[j], 0)
+                if depth == 0:
+                    break
+                j += 1
+            out.append(text[i + 2:j])
+            i = j
+        i += 1
+    return out
+
+
+def _path(cwd, given):
+    if cwd is None or "$" in given or "`" in given:
+        return None
+    return os.path.normpath(os.path.join(cwd, os.path.expanduser(given)))
+
+
+def _unwrap(words):
+    """The command a wrapper runs: past assignments, env [-i] [K=V], timeout N, nice, command, exec, nohup,
+    time, devenv-run and `nix shell|develop ... --command`. (words, whether it reads its arguments from stdin)."""
+    stdin = False
+    while words:
+        head = os.path.basename(words[0])
+        if re.match(r"^[A-Za-z_]\w*=", words[0]):
+            words = words[1:]
+        elif head == "env":
+            i = 1
+            while i < len(words) and (words[i].startswith("-") or "=" in words[i]):
+                i += 2 if words[i] in ("-u", "--unset", "-C", "--chdir", "-S") else 1
+            words = words[i:]
+        elif head == "timeout":
+            i = 1
+            while i < len(words) and words[i].startswith("-"):
+                i += 2 if words[i] in ("-s", "-k", "--signal", "--kill-after") else 1
+            words = words[i + 1:]
+        elif head == "nice":
+            words = words[3:] if len(words) > 1 and words[1] == "-n" else words[1:]
+        elif head in ("command", "exec", "nohup", "time", "builtin"):
+            words = [w for i, w in enumerate(words[1:]) if not (i == 0 and w in ("-p", "-v"))]
+        elif head == "devenv-run":
+            words = [w for w in words[1:] if w not in ("--refresh", "--")]
+        elif head == "nix" and any(w in ("--command", "-c") for w in words):
+            i = next(i for i, w in enumerate(words) if w in ("--command", "-c"))
+            words = words[i + 1:]
+        elif head == "xargs":
+            i = 1
+            while i < len(words) and words[i].startswith("-"):
+                i += 2 if words[i] in ("-n", "-I", "-L", "-P", "-d", "-a", "-E", "-s") else 1
+            words, stdin = words[i:], True
+        else:
+            break
+    return words, stdin
+
+
+def _script_pushes(path, by_shell=False):
+    """Whether the shell script at path runs a push (any file when a shell runs it, else a .sh-like file or one
+    whose #! names a shell)."""
+    try:
+        with open(path, "rb") as f:
+            text = f.read(SCRIPT_MAX).decode("utf-8", "replace")
+    except OSError:
+        return False
+    first = text.split("\n", 1)[0]
+    shell = by_shell or path.endswith(SCRIPT_SUFFIXES) or (
+        first.startswith("#!") and any(re.search(rf"\b{s}\b", first) for s in SHELLS))
+    return shell and bool(PUSH_IN_TEXT.search(text))
+
+
+class Reader:
+    """Reads a Bash command for the pushes it runs. Aliases are looked up once per name and repo."""
+
+    def __init__(self):
+        self.aliases = {}
+
+    def pushes(self, command, cwd, unclear=False, depth=0):
+        """Every `jj git push` and `git push` the line runs, each with the directory it runs in and whether it
+        is unclear: `cd` moves the directory for what follows, `sh -c '...'` and aliases are read too."""
+        text = _strip_heredocs(command)
+        out = []
+        if depth < 4:
+            for sub in _substitutions(text):
+                out += self.pushes(sub, cwd, True, depth + 1)
+        try:
+            segments = _segments(text)
+        except ValueError:
+            return out + ([Push("sh", [], cwd, True)] if PUSH_IN_TEXT.search(text) else [])
+        for words, nesting in segments:
+            inner = unclear or nesting > 0
+            words, stdin = _unwrap(words)
+            if not words:
+                continue
+            inner = inner or stdin
+            name = os.path.basename(words[0])
+            if name in ("cd", "pushd"):
+                target = words[1] if len(words) > 1 else "~"
+                cwd = None if target == "-" or nesting > 0 else _path(cwd, target)
+            elif name == "eval" and depth < 4:
+                out += self.pushes(" ".join(words[1:]), cwd, True, depth + 1)
+            elif name in SHELLS and depth < 4:
+                flag = next((i for i, w in enumerate(words[1:], 1) if re.fullmatch(r"-[a-z]*c[a-z]*", w)), None)
+                if flag is not None and flag + 1 < len(words):
+                    out += self.pushes(words[flag + 1], cwd, inner, depth + 1)
+                else:
+                    files = [w for w in words[1:] if not w.startswith("-")]
+                    if files and cwd and _script_pushes(os.path.join(cwd, files[0]), by_shell=True):
+                        out.append(Push("script", words, cwd, True))
+            elif name in ("source", ".") and len(words) > 1:
+                if cwd and _script_pushes(os.path.join(cwd, words[1]), by_shell=True):
+                    out.append(Push("script", words, cwd, True))
+            elif name in ("jj", "git"):
+                out += self.tool(name, words[1:], cwd, inner, depth)
+            elif ("/" in words[0] or words[0].endswith(SCRIPT_SUFFIXES)) and cwd and _script_pushes(_path(cwd, words[0]) or ""):
+                out.append(Push("script", words, cwd, True))
+        return out
+
+    def tool(self, name, args, cwd, unclear, depth):
+        sub, i, repo = (_jj_sub if name == "jj" else _git_sub)(args, cwd)
+        if sub is None:
+            return []
+        if name == "jj" and sub == "git" and _jj_sub(args[i + 1:], cwd)[0] == "push":
+            return [Push("jj", args, cwd, unclear or _vague(args, repo))] if "--dry-run" not in args else []
+        if name == "git" and sub == "push":
+            rest = args[i + 1:]
+            return [] if "-n" in rest or "--dry-run" in rest else [Push("git", args, cwd, unclear or _vague(args, repo))]
+        builtins = JJ_BUILTINS if name == "jj" else GIT_BUILTINS
+        if sub in builtins or sub.startswith("-") or depth >= 4 or repo is None:
+            return []
+        expansion = self.alias(name, sub, repo)
+        if expansion is None:
+            return []
+        if isinstance(expansion, str):  # a git alias run by the shell: `!...`
+            return [Push("alias", args, cwd, True)] if PUSH_IN_TEXT.search("git " + expansion) or "push" in expansion else []
+        if expansion[:2] == ["util", "exec"]:
+            return [Push("alias", args, cwd, True)] if any("push" in w for w in expansion) else []
+        return self.tool(name, args[:i] + expansion + args[i + 1:], cwd, unclear, depth + 1)
+
+    def alias(self, name, sub, repo):
+        """A jj alias as its word list, a git alias as its words (or its text when it is `!shell`), else None."""
+        key = (name, sub, repo)
+        if key not in self.aliases:
+            self.aliases[key] = _lookup_alias(name, sub, repo)
+        return self.aliases[key]
+
+
+def _lookup_alias(name, sub, repo):
+    import shlex
+    import subprocess
+    import tomllib
+    argv = ["jj", "config", "get", f"aliases.{sub}"] if name == "jj" else ["git", "config", "--get", f"alias.{sub}"]
+    try:
+        r = subprocess.run(argv, cwd=repo, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    if name == "jj":
+        try:
+            value = tomllib.loads("v = " + r.stdout.strip())["v"]
+        except (tomllib.TOMLDecodeError, KeyError):
+            return None
+        return [str(w) for w in value] if isinstance(value, list) else None
+    text = r.stdout.strip()
+    if text.startswith("!"):
+        return text[1:]
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return text
+
+
+def _jj_sub(args, cwd):
+    """(the subcommand, its index, the repo directory) of a jj command line."""
+    repo, i = cwd, 0
+    while i < len(args):
+        a = args[i]
+        if a in JJ_VALUED:
+            if a in ("-R", "--repository") and i + 1 < len(args):
+                repo = _path(cwd, args[i + 1])
+            i += 2
+            continue
+        if a.startswith("--repository="):
+            repo = _path(cwd, a.split("=", 1)[1])
+        elif a.startswith("-R") and len(a) > 2:
+            repo = _path(cwd, a[2:])
+        elif not a.startswith("-"):
+            return a, i, repo
+        i += 1
+    return None, i, repo
+
+
+def _jj_repo(args, cwd):
+    """The repo a jj command line names with -R or --repository anywhere in it, else cwd."""
+    repo = cwd
+    for i, a in enumerate(args):
+        if a in ("-R", "--repository") and i + 1 < len(args):
+            repo = _path(cwd, args[i + 1])
+        elif a.startswith("--repository="):
+            repo = _path(cwd, a.split("=", 1)[1])
+        elif a.startswith("-R") and len(a) > 2:
+            repo = _path(cwd, a[2:])
+    return repo
+
+
+def _git_sub(args, cwd):
+    repo, i = cwd, 0
+    while i < len(args) and args[i].startswith("-"):
+        if args[i] == "-C" and i + 1 < len(args):
+            repo = _path(repo, args[i + 1])
+        i += 2 if args[i] in GIT_VALUED else 1
+    return (args[i] if i < len(args) else None), i, repo
+
+
+def _vague(args, repo):
+    """A push whose words or repo the hook cannot read as written: a variable, a substitution, an unknown dir."""
+    return repo is None or any("$" in a or "`" in a for a in args)
+
+
+def _git_branch(repo, ref="HEAD"):
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", repo, "symbolic-ref", "--short", "-q", ref], capture_output=True, text=True,
+                           timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() or None
+
+
+def _git_config(repo, key):
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", repo, "config", "--get", key], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() or None
+
+
+def _git_targets(push, remote_wanted):
+    """(the branches a `git push` writes on the landing remote, or None when it cannot tell). Another remote,
+    and tags alone, write none there."""
+    _, i, repo = _git_sub(push.args, push.cwd)
+    positionals, every, tags, args, j = [], False, False, push.args[i + 1:], 0
+    while j < len(args):
+        a = args[j]
+        if a in ("--all", "--mirror", "--branches"):
+            every = True
+        elif a == "--tags":
+            tags = True
+        elif a in GIT_PUSH_VALUED:
+            j += 1
+        elif a.startswith("--repo="):
+            positionals.insert(0, a.split("=", 1)[1])
+        elif not a.startswith("-"):
+            positionals.append(a)
+        j += 1
+    branch = _git_branch(repo)
+    remote = positionals[0] if positionals else (
+        (_git_config(repo, f"branch.{branch}.pushRemote") or _git_config(repo, f"branch.{branch}.remote")) if branch else None
+    ) or _git_config(repo, "remote.pushDefault") or remote_wanted
+    if ":" in remote or "/" in remote or remote.startswith("."):
+        return None  # a URL or a path: which remote it is, the hook cannot say
+    if remote != remote_wanted:
+        return set()
+    if every:
+        return {"*"}
+    refspecs = positionals[1:]
+    if not refspecs:
+        if tags:
+            return set()
+        if _git_config(repo, f"remote.{remote}.push"):
+            return None
+        return {branch} if branch else set()  # detached: git refuses to push
+    out = set()
+    for spec in refspecs:
+        src, colon, dst = spec.lstrip("+").partition(":")
+        target = dst if colon else (branch if src == "HEAD" else src)
+        if not target or (target.startswith("refs/") and not target.startswith("refs/heads/")):
+            continue
+        out.add(target.removeprefix("refs/heads/"))
+    return out
+
+
+def _jj_targets(push, remote_wanted):
+    """(the bookmarks a `jj git push` moves on the landing remote, or None when it cannot tell), from jj's own
+    dry run of the same command; when that fails, its --remote and literal --bookmark names, and --all."""
+    import subprocess
+    args = push.args
+    try:
+        r = subprocess.run(["jj", *args, "--dry-run"], cwd=push.cwd, capture_output=True, text=True,
+                           timeout=TURN_TIMEOUT_S, env={**os.environ, "JJ_EDITOR": "true", "EDITOR": "true"})
+        said = r.stdout + r.stderr
+        if r.returncode == 0:
+            remote = re.search(r"^Changes to push to (\S+):", said, re.M)
+            if remote is None:
+                return set()  # nothing to push
+            return set(re.findall(r"^\s*bookmark: (\S+) \[", said, re.M)) if remote.group(1) == remote_wanted else set()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    remote, names, every = remote_wanted, set(), False
+    for i, a in enumerate(args):
+        value = args[i + 1] if i + 1 < len(args) else ""
+        if a == "--remote":
+            remote = value
+        elif a.startswith("--remote="):
+            remote = a.split("=", 1)[1]
+        elif a == "--all":
+            every = True
+        elif a in ("-b", "--bookmark"):
+            names.add(value)
+        elif a.startswith("--bookmark="):
+            names.add(a.split("=", 1)[1])
+    if remote != remote_wanted:
+        return set()
+    if every:
+        return {"*"}
+    names = {re.sub(r"^(exact|glob|substring|regex)(-i)?:", "", n) for n in names}
+    return names or None
+
+
+def _land_check():
+    from importlib.machinery import SourceFileLoader
+    from importlib.util import module_from_spec, spec_from_loader
+    loader = SourceFileLoader("land_check", str(ROOT / "scripts" / "land-check"))
+    module = module_from_spec(spec_from_loader("land_check", loader))
+    loader.exec_module(module)
+    return module
+
+
+def _onto_landing(lc, push):
+    """The landing bookmarks this push moves on the landing remote (land-check's), or None when unclear."""
+    import fnmatch
+    if push.unclear or push.tool not in ("jj", "git"):
+        return None
+    repo = _jj_repo(push.args, push.cwd) if push.tool == "jj" else _git_sub(push.args, push.cwd)[2]
+    if repo is None:
+        return None
+    targets = (_git_targets if push.tool == "git" else _jj_targets)(push, lc.LANDING_REMOTE)
+    if not targets:
+        return targets
+    landing = lc.landing_bookmarks(repo)
+    return sorted(b for b in landing if any(fnmatch.fnmatchcase(b, t) for t in targets))
+
+
+def land_turn_gate(hook):
+    """PreToolUse (Bash): a push to the repo's landing bookmark waits for the landing turn. The hook first works
+    out what the command pushes; only a push onto a landing bookmark on the landing remote, or one it cannot
+    read, asks land-check's turn (`fleet turn`, which finds the fleet by the session's process). In a fleet
+    whose machine serves a manager and that does not hold the turn, the push is denied; Luiz's approval to
+    push answers whether it may land, the turn when. Outside a managed fleet, and for any other push, it says
+    nothing. When the fleet CLI cannot run, the push goes through with a warning: a broken hub never blocks
+    every push."""
+    tool_input = hook.input.get("tool_input") if isinstance(hook.input.get("tool_input"), dict) else {}
+    command = tool_input.get("command") if hook.input.get("tool_name") == "Bash" else None
+    if not isinstance(command, str):
+        return None
+    pushes = Reader().pushes(command, hook.cwd)
+    if not pushes:
+        return None
+    lc = _land_check()
+    landing, unclear = set(), False
+    for push in pushes:
+        moved = _onto_landing(lc, push)
+        unclear = unclear or moved is None
+        landing.update(moved or [])
+    if not landing and not unclear:
+        return None
+    cli = hook.env.get("TSTACK_FLEET_CLI") or fleet_cli()
+    timeout = float(hook.env.get("TSTACK_TURN_TIMEOUT_S") or TURN_TIMEOUT_S)
+    turn = lc.landing_turn(cli, timeout=timeout)
+    if turn is not None and turn[0] == 0:
+        return None
+    what = (f"This push moves the landing bookmark {', '.join(sorted(landing))}" if landing
+            else f"The hook {UNCLEAR}")
+    if turn is None or turn[0] != 1 or not turn[1].startswith("turn: "):
+        why = "the fleet CLI could not run" if turn is None else f"`fleet turn` exited {turn[0]}: {turn[1][:300]}"
+        sys.stderr.write(f"tstack: {what}, and its landing turn could not be checked ({why}); letting it through.\n")
+        log(hook.data_dir, f"{hook.event} land_turn_gate failed open: {why}")
+        return None
+    said = turn[1].removeprefix("turn: ")
+    fleet = said.split(" does not hold", 1)[0] if " does not hold" in said else "this fleet"
+    onto = f"onto {', '.join(sorted(landing))}" if landing else "(a push it could not read)"
+    _log_denial(hook, lc, cli, f"Push gate: refused `{_one_line(command, 120)}`: {fleet} does not hold the landing "
+                               f"turn {onto}")
+    unclear_line = f" Also, {UNCLEAR}." if landing and unclear else ""
+    return Deny(f"{what}, and {fleet} doesn't hold the landing turn (fleet turn: {said}). Ask the manager for it as "
+                f"that says, wait for its answer, and check with `{cli} turn` before pushing again. Luiz's approval "
+                f"to push doesn't skip the queue: it answers whether this may land, the turn answers when.{unclear_line}")
+
+
+def _log_denial(hook, lc, cli, text):
+    """The denial as an important `blocked` event in the fleet's ledger (land-check's find_ledger: $FLEET_DIR,
+    else the served fleet among the session's processes; else the session's own fleet folder)."""
+    import subprocess
+    found = lc.find_ledger(None)
+    for d in [str(found.parent)] if found else fleet_dirs(hook)[:1]:
+        worker = _refused_worker(read_ledger(d) or {}, hook.input.get("agent_id"), hook.env)
+        argv = [cli, "state", d, "event", "--kind", "blocked", "--important",
+                *(_option("--agent", worker) if worker else []), text]
+        try:
+            done = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=dict(hook.env),
+                                  timeout=CLI_TIMEOUT_S, check=False)
+            if done.returncode:
+                log(hook.data_dir, f"{hook.event} land_turn_gate: {cli} state exited {done.returncode}: "
+                                   f"{(done.stderr or done.stdout).strip()}")
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log(hook.data_dir, f"{hook.event} land_turn_gate: {cli} state failed: {e}")
+
+
 HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, fleet_heartbeat],
     "Stop": [memo_nudge, fleet_listen_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
-    "PreToolUse": [fleet_agent_grant],
+    "PreToolUse": [fleet_agent_grant, land_turn_gate],
     "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_chat_nudge],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep],
     "PermissionDenied": [fleet_permission_denied],
@@ -1241,8 +1759,12 @@ def _context(event, text):
 
 
 def _allow(event, text):
-    """PreToolUse's one handler speaks only to allow a granted call."""
-    return json.dumps({"hookSpecificOutput": {"hookEventName": event, "permissionDecision": "allow",
+    """PreToolUse speaks to allow a granted call, or (a Deny) to refuse one."""
+    return _decide(event, "allow", text)
+
+
+def _decide(event, decision, text):
+    return json.dumps({"hookSpecificOutput": {"hookEventName": event, "permissionDecision": decision,
                                               "permissionDecisionReason": text}})
 
 
@@ -1257,7 +1779,8 @@ EMIT = {
 
 def dispatch(event, raw, env):
     """The text to print for this event, or "" for nothing. On Stop, a handler's Block turns the whole
-    output into the block decision, whose reason (every handler's text) Claude reads as it goes on.
+    output into the block decision, whose reason (every handler's text) Claude reads as it goes on. On
+    PreToolUse, a handler's Deny refuses the call, with the Deny texts alone as the reason.
     Under TSTACK_ROLE=tape (a tape builder's own `claude -p` call) no handler runs: no wake lands in the
     compaction prompt, and nothing is written or spawned (docs/design/tape.md, section 4)."""
     if env.get("TSTACK_ROLE") == "tape":
@@ -1266,7 +1789,7 @@ def dispatch(event, raw, env):
     if not isinstance(data, dict):
         raise ValueError("hook input is not a JSON object")
     hook = Hook(event, data, env)
-    parts = []
+    parts, denials = [], []
     blocked = False
     for handler in HANDLERS.get(event, ()):
         try:
@@ -1277,8 +1800,12 @@ def dispatch(event, raw, env):
         if text and text.strip():
             parts.append(text.strip())
             blocked = blocked or isinstance(text, Block)
+            if isinstance(text, Deny):
+                denials.append(text.strip())
     if not parts or event not in EMIT:
         return ""
+    if denials and event == "PreToolUse":
+        return _decide(event, "deny", "\n\n".join(denials))
     if blocked and event == "Stop":
         return json.dumps({"decision": "block", "reason": "\n\n".join(parts)})
     return EMIT[event](event, "\n\n".join(parts))

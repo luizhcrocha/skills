@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
@@ -401,6 +402,73 @@ class ReviewTest(RepoCase):
         result = self.check("--ledger", self.ledger())
         self.assertTrue(result["review"]["bug_hunt"])
         self.said(result, "review's bug hunt")
+
+
+class LandingBookmarkTest(RepoCase):
+    """landing_bookmarks: what the push gate (hooks/tstack-hook) reads as the landing bookmark."""
+
+    def test_trunk_names_it(self):
+        self.assertEqual(lc.landing_bookmarks(self.tmp), set())  # not a repo
+        self.assertEqual(lc.landing_bookmarks(self.repo), {"main", "master", "trunk"})  # nothing says yet
+        self.trunk(("a", {"a": "a\n"}))
+        (self.repo / "sub").mkdir()
+        self.assertEqual(lc.landing_bookmarks(self.repo / "sub"), {"master"})
+
+    def test_the_docs_name_it_too(self):
+        self.trunk(("a", {"a": "a\n"}))
+        write(self.repo, "CLAUDE.md", "Publish: `jj bookmark set nix -r @-` then `jj git push --bookmark nix`.\n"
+                                      "Never `jj bookmark set <bookmark>` by hand.\n")
+        self.assertEqual(lc.landing_bookmarks(self.repo), {"master", "nix"})
+
+
+class FleetTimeoutTest(unittest.TestCase):
+    """A `fleet turn` that does not answer in time is killed with its whole process group, and the launcher
+    takes over an install lock its killed holder left."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    @unittest.skipUnless(shutil.which("bun"), "landing_turn runs the CLI only where Bun is")
+    def test_a_hung_cli_is_killed_with_its_children(self):
+        pids = self.tmp / "pids"
+        cli = self.tmp / "fleet"
+        cli.write_text(f"#!/bin/sh\nsleep 30 &\necho $! >{pids}\nwait\n")
+        cli.chmod(0o755)
+        started = time.monotonic()
+        self.assertIsNone(lc.landing_turn(cli, timeout=1))
+        self.assertLess(time.monotonic() - started, 10)
+        child = int(pids.read_text())
+        for _ in range(50):
+            if subprocess.run(["kill", "-0", str(child)], capture_output=True).returncode != 0:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail(f"the CLI's child {child} outlived the timeout")
+
+    def test_the_launcher_takes_over_a_lock_whose_holder_is_dead(self):
+        root = self.tmp / "fleet"
+        (root / "bin").mkdir(parents=True)
+        shutil.copy(ROOT / "fleet" / "bin" / "fleet", root / "bin" / "fleet")
+        (root / "package.json").write_text('{"engines": {"bun": ">=1.4.2"}}\n')
+        (root / "bun.lock").write_text("{}\n")
+        tools = self.tmp / "tools"
+        tools.mkdir()
+        (tools / "bun").write_text('#!/bin/sh\nif [ "$1" = install ]; then mkdir -p node_modules; exit 0; fi\necho ran "$@"\n')
+        (tools / "bun").chmod(0o755)
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        (root / ".install.lock").mkdir()
+        (root / ".install.lock" / "pid").write_text(f"{dead.pid}\n")
+        started = time.monotonic()
+        r = subprocess.run([str(root / "bin" / "fleet"), "turn"], capture_output=True, text=True, timeout=30,
+                           env={**os.environ, "PATH": f"{tools}:{os.environ['PATH']}", "FLEET_NO_FORWARD": "1",
+                                "HOME": str(self.tmp)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertLess(time.monotonic() - started, 5)  # not the 60 s wait for a live holder
+        self.assertIn("ran", r.stdout)
+        self.assertFalse((root / ".install.lock").exists())
+        self.assertTrue((root / "node_modules" / ".fleet-installed").exists())
 
 
 @unittest.skipUnless(shutil.which("bun"), "needs bun for the fleet CLI")

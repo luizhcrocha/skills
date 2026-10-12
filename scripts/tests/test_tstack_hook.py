@@ -1683,6 +1683,226 @@ class AgentGrantTest(HookCase):
         self.assertEqual(self.spawn(["x"]), "")
 
 
+class PushParseTest(unittest.TestCase):
+    """Reader.pushes: the pushes a shell line runs, where each runs, and whether the hook can read it."""
+
+    def pushes(self, command, cwd="/w/home"):
+        return [(p.tool, p.cwd, p.unclear) for p in load_hook().Reader().pushes(command, cwd)]
+
+    def test_plain_pushes_are_read_through_cd_redirections_and_wrappers(self):
+        for command, tool, cwd in (("cd ../app && jj git push -b master", "jj", "/w/app"),
+                                   ("cd /r; jj -R sub git push --all", "jj", "/r"),
+                                   ("jj git push -b master 2>&1", "jj", "/w/home"),
+                                   ("jj git push -b master 2>&1 | tee /tmp/log", "jj", "/w/home"),
+                                   ("git push origin master >/tmp/out </dev/null", "git", "/w/home"),
+                                   ("git push origin master &>/dev/null", "git", "/w/home"),
+                                   ("timeout 60 jj git push -b master", "jj", "/w/home"),
+                                   ("timeout -s KILL 5m git push origin master", "git", "/w/home"),
+                                   ("env -i PATH=/bin jj git push -b master", "jj", "/w/home"),
+                                   ("/usr/bin/env FOO=1 git push origin master", "git", "/w/home"),
+                                   ("nice -n 5 command git push origin master", "git", "/w/home"),
+                                   ("bash -lc 'cd /r && jj git push'", "jj", "/r"),
+                                   ("sh -c 'git push origin master'", "git", "/w/home"),
+                                   ("nix shell nixpkgs#git --command git push origin master", "git", "/w/home"),
+                                   ("devenv-run git push origin master", "git", "/w/home"),
+                                   ("jj git -R /x push -b master", "jj", "/w/home")):
+            with self.subTest(command=command):
+                self.assertEqual(self.pushes(command), [(tool, cwd, False)])
+
+    def test_a_push_the_hook_cannot_read_is_unclear(self):
+        for command in ("for r in a b; do jj -R $r git push -b master; done",
+                        "while true; do git push; done",
+                        "if true; then git push origin master; fi",
+                        "{ jj git push; }",
+                        "(cd /x && jj git push)",
+                        "x=$(git push origin master)",
+                        'echo "$(jj git push)"',
+                        "echo `git push`",
+                        "eval 'jj git push -b master'",
+                        "echo master | xargs jj git push -b",
+                        "jj git push -b $BOOKMARK",
+                        "cd $DIR && jj git push -b master"):
+            with self.subTest(command=command):
+                found = self.pushes(command)
+                self.assertTrue(found, command)
+                self.assertTrue(all(unclear for _, _, unclear in found), found)
+
+    def test_what_is_not_a_push_is_left_alone(self):
+        for command in ("jj git fetch && jj log", "echo push", "echo 'git push origin master'", "jj git push --dry-run -b master",
+                        "git push -n origin master", "git log --grep push", "jj describe -m 'fix `jj git push` in the docs'",
+                        "jj describe -m \"$(cat <<'EOF'\nhooks: why\n\ngit push origin master was not gated\nEOF\n)\"",
+                        "git status # then git push", "unbalanced 'quote"):
+            with self.subTest(command=command):
+                self.assertEqual(self.pushes(command), [])
+
+    def test_a_shell_script_that_pushes_is_unclear(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "land.sh").write_text("#!/bin/sh\nset -e\njj git push --bookmark master\n")
+            Path(d, "tool").write_text("#!/usr/bin/env python3\n# `jj git push` is not run here\n")
+            Path(d, "notes.sh").write_text("#!/bin/sh\necho jj will not push it\n")
+            self.assertEqual(self.pushes("./land.sh", d), [("script", d, True)])
+            self.assertEqual(self.pushes("bash land.sh --fast", d), [("script", d, True)])
+            self.assertEqual(self.pushes("./tool && ./notes.sh", d), [])
+
+
+@unittest.skipUnless(shutil.which("jj") and shutil.which("git") and shutil.which("bun"), "needs jj, git and bun")
+class LandTurnGateTest(FleetCase):
+    """land_turn_gate (PreToolUse, Bash): in a fleet under a manager, a push to the landing bookmark on the landing
+    remote, or a push the hook cannot read, is denied until the manager gave the fleet the landing turn (`fleet
+    turn`, found by this test's pid, which the registry entry carries). Any other push goes through without asking
+    the fleet CLI, and so does any session outside a managed fleet."""
+
+    JJ = {"JJ_USER": "Test", "JJ_EMAIL": "test@example.com", "JJ_CONFIG": ""}
+
+    def setUp(self):
+        super().setUp()
+        self.env.update(self.JJ, XDG_CONFIG_HOME=str(self.tmp / "config"))  # where jj keeps a repo's config
+        remote = self.tmp / "remote.git"
+        fork = self.tmp / "fork.git"
+        for bare in (remote, fork):
+            subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        self.work = self.tmp / "work"
+        self.jj("git", "init", "--colocate", str(self.work), cwd=self.tmp)
+        self.jj("git", "remote", "add", "origin", str(remote))
+        self.jj("git", "remote", "add", "fork", str(fork))
+        (self.work / "a").write_text("a\n")
+        self.jj("commit", "-m", "a")
+        self.jj("bookmark", "set", "master", "-r", "@-")
+        self.jj("git", "push", "--bookmark", "master")
+        (self.work / "b").write_text("b\n")
+        self.jj("commit", "-m", "b")
+        self.jj("bookmark", "set", "master", "-r", "@-")
+        self.jj("bookmark", "set", "feat", "-r", "@-")
+        self.jj("config", "set", "--repo", "aliases.ship", '["git", "push", "--bookmark", "master"]')
+        self.jj("config", "set", "--repo", "aliases.p", '["git", "push"]')
+        subprocess.run(["git", "-C", str(self.work), "config", "alias.pub", "push origin HEAD:refs/heads/master"], check=True)
+        self.calls = self.tmp / "cli-calls"
+
+    def jj(self, *args, cwd=None):
+        subprocess.run(["jj", *args], cwd=cwd or self.work, env={**os.environ, **self.env}, check=True,
+                       capture_output=True)
+
+    def manager(self, *steps):
+        d = self.tmp / "manager"
+        d.mkdir(exist_ok=True)
+        (d / "state.json").write_text(json.dumps({
+            "project": "manager", "goal": "g", "status": "running", "now": "", "role": "manager",
+            "started": "2026-01-05T08:00:00+00:00", "agents": [], "roadblocks": [], "decisions": [], "events": [],
+            "roadmap": [{"id": "landings", "title": "Landings and deploys",
+                         "steps": [{"id": i, "title": f"{a}: push", "status": s, "agent": a} for i, s, a in steps]}]}))
+        (self.registry / "manager.json").write_text(json.dumps({
+            "id": "manager", "role": "manager", "dir": str(d), "url": "http://127.0.0.1:7420/f/manager/",
+            "pid": os.getpid(), "session": None, "since": "2026-01-05T07:00:00+00:00"}))
+
+    def hung_cli(self):
+        """A fleet CLI that records each start and never answers."""
+        cli = self.tmp / "hung-fleet"
+        cli.write_text(f"#!/bin/sh\necho \"$@\" >>{self.calls}\nexec sleep 30\n")
+        cli.chmod(0o755)
+        return {"TSTACK_FLEET_CLI": str(cli), "TSTACK_TURN_TIMEOUT_S": "1"}
+
+    def push(self, command, cwd=None, env=None):
+        payload = {**self.payload("PreToolUse"), "tool_name": "Bash", "tool_input": {"command": command},
+                   "cwd": str(cwd or self.work)}
+        r = self.hook("PreToolUse", payload, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r
+
+    def denied(self, r):
+        self.assertTrue(r.stdout, f"not denied; stderr: {r.stderr}; log: {self.log()}")
+        decision = json.loads(r.stdout)["hookSpecificOutput"]
+        self.assertEqual(decision["permissionDecision"], "deny")
+        return decision["permissionDecisionReason"]
+
+    def events(self):
+        return [e for e in json.loads((self.fleet / "state.json").read_text())["events"] if e.get("kind") == "blocked"]
+
+    def test_a_push_without_the_turn_is_denied_and_logged(self):
+        self.manager(("l1", "current", "infra"), ("l2", "pending", "p"))
+        reason = self.denied(self.push("jj git push --bookmark master"))
+        self.assertIn("landing bookmark master", reason)
+        self.assertIn("p doesn't hold the landing turn (fleet turn: p does not hold the landing turn (l1", reason)
+        self.assertIn("yours, l2, waits in the queue", reason)
+        self.assertIn("Luiz's approval to push doesn't skip the queue", reason)
+        [event] = self.events()
+        self.assertTrue(event.get("important"))
+        self.assertIn("Push gate: refused `jj git push --bookmark master`", event["text"])
+
+    def test_a_push_with_the_turn_is_allowed(self):
+        self.manager(("l1", "done", "infra"), ("l2", "current", "p"))
+        self.assertSilent(self.push("jj git push --bookmark master"))
+        self.assertSilent(self.push("for r in a; do jj git push; done"))
+        self.assertEqual(self.events(), [])
+
+    def test_a_session_outside_a_managed_fleet_is_allowed(self):
+        self.assertSilent(self.push("jj git push --bookmark master"))  # a fleet, no manager
+        self.manager(("l1", "current", "infra"))
+        (self.registry / "p.json").unlink()  # a manager, and this session serves no fleet
+        self.assertSilent(self.push("jj git push --bookmark master"))
+        self.assertSilent(self.push("eval 'jj git push'"))
+
+    def test_a_fleet_cli_that_cannot_run_fails_open_with_a_warning(self):
+        self.manager(("l1", "current", "infra"))
+        r = self.push("jj git push --bookmark master", env={"TSTACK_FLEET_CLI": str(self.tmp / "no-fleet")})
+        self.assertEqual(r.stdout, "")
+        self.assertIn("could not be checked", r.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_a_hung_fleet_cli_is_started_for_a_landing_push_only(self):
+        hung = self.hung_cli()
+        for command in ("jj git push -b feat", "git push fork master", "git push --tags", "jj log"):
+            self.assertSilent(self.push(command, env=hung))
+        self.assertFalse(self.calls.exists())  # never asked
+        started = time.monotonic()
+        r = self.push("jj git push --bookmark master", env=hung)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("could not be checked", r.stderr)
+        self.assertEqual(self.calls.read_text().split(), ["turn"])
+
+    def test_every_way_onto_the_landing_bookmark_is_gated(self):
+        self.manager(("l1", "current", "infra"))
+        elsewhere = self.tmp
+        for command, cwd in ((f"cd {self.work} && jj git push -b master", elsewhere),
+                             (f"cd {self.work}; jj git push", elsewhere),
+                             (f"jj -R {self.work} git push --bookmark master", elsewhere),
+                             ("jj git push -b master 2>&1", self.work),
+                             ("jj git push -b master 2>&1 | tee push.log", self.work),
+                             ("timeout 120 jj git push --bookmark master", self.work),
+                             ("env -i PATH=\"$PATH\" git push origin master", self.work),
+                             ("bash -lc 'jj git push --bookmark master'", self.work),
+                             ("jj ship", self.work),
+                             ("jj p -b master", self.work),
+                             ("git pub", self.work),
+                             ("git push origin HEAD:refs/heads/master", self.work),
+                             (f"git -C {self.work} push origin HEAD:master", elsewhere),
+                             ("git push origin master --tags", self.work),
+                             ("jj git push --all", self.work)):
+            with self.subTest(command=command):
+                self.assertIn("landing bookmark master", self.denied(self.push(command, cwd=cwd)))
+        self.assertEqual(len(self.events()), 15)
+
+    def test_a_push_the_hook_cannot_read_is_denied_without_the_turn(self):
+        self.manager(("l1", "current", "infra"))
+        for command in ("for b in master; do jj git push -b $b; done", "echo master | xargs jj git push -b",
+                        "eval 'git push origin master'", "jj git push -b $B", "(cd sub && jj git push)"):
+            with self.subTest(command=command):
+                reason = self.denied(self.push(command))
+                self.assertIn("couldn't tell which bookmarks this push moves; run it as a plain "
+                              "`jj git push --bookmark <b>` (or `git push origin <ref>`)", reason)
+                self.assertIn("doesn't hold the landing turn", reason)
+
+    def test_a_push_to_another_bookmark_remote_or_tags_is_allowed(self):
+        self.manager(("l1", "current", "infra"))
+        for command in ("jj git push -b feat", "jj p -b feat", "git push origin HEAD:refs/heads/feat", "jj git push -c @-",
+                        "jj git push --remote fork -b master", "git push fork master", "git push --tags",
+                        "git push origin --tags", "git push origin refs/tags/v1:refs/tags/v1",
+                        "jj git push --dry-run -b master", "jj log -r master", "jj describe -m 'about `jj git push`'"):
+            with self.subTest(command=command):
+                self.assertSilent(self.push(command))
+        self.assertEqual(self.events(), [])
+
+
 class HooksJsonTest(unittest.TestCase):
     def test_every_registered_event_is_dispatched(self):
         config = json.loads(HOOKS_JSON.read_text())
@@ -1695,14 +1915,16 @@ class HooksJsonTest(unittest.TestCase):
                 for h in group["hooks"]:
                     self.assertEqual(h["type"], "command")
                     self.assertEqual(h["command"], f'"${{CLAUDE_PLUGIN_ROOT}}/hooks/tstack-hook" {event}')
-                    # the refusal's handler starts the fleet CLI (Bun): it gets the time a start takes
-                    self.assertLessEqual(h.get("timeout", 60), 30 if event == "PermissionDenied" else 10)
+                    # the refusal's handler and the push gate start the fleet CLI (Bun): they get the time a start takes
+                    slow = event == "PermissionDenied" or group.get("matcher") == "Bash"
+                    self.assertLessEqual(h.get("timeout", 60), 30 if slow else 10)
                     # what nobody reads runs in the background: a tool call never waits on a heartbeat
                     self.assertEqual(h.get("async", False), event in (*HEARTBEAT_ONLY, "PermissionDenied"), event)
         self.assertEqual(config["hooks"]["SessionStart"][0]["matcher"], "startup|resume|clear|compact")
         for event in (*HEARTBEAT_ONLY, "PostToolUse"):
             self.assertNotIn("matcher", config["hooks"][event][0])  # every tool
-        self.assertEqual(config["hooks"]["PreToolUse"][0]["matcher"], "Agent")  # a grant's spawn alone
+        # a grant's spawn, and the push gate's Bash calls
+        self.assertEqual([g["matcher"] for g in config["hooks"]["PreToolUse"]], ["Agent", "Bash"])
         self.assertTrue(os.access(HOOK, os.X_OK))
         self.assertTrue(os.access(MEMO, os.X_OK))
         self.assertEqual((ROOT / "bin" / "memo").resolve(), MEMO.resolve())
