@@ -21,6 +21,7 @@ import { placeRoot, registeredSession } from "../hub/grants.ts";
 import { pidOfEntry } from "../registry.ts";
 import { workerFigures, workerTitle } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
+import { isMarkdownFile, markdownToHtml, markdownWarning } from "./body.ts";
 import { dropKey, REFUSAL_KEYS, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, milestoneOfStep, nextStepId } from "./numbers.ts";
 import { approvalSource, comesFrom, namesOf, NoSource, refOf, sameSource } from "./approvals.ts";
@@ -1430,8 +1431,12 @@ function setBody(run: Run, d: Decision): Step$ {
   const content = readOrWhy(source);
 
   if ("why" in content) return refuse(`cannot read the body ${source}: ${content.why}`);
+  const text = content.toString("utf8");
+  const warning = markdownWarning(source, text);
+
+  if (warning !== undefined) run.warn(warning);
   makeDirs(join(run.root, "decisions"));
-  writeBytes(target, content);
+  writeBytes(target, isMarkdownFile(source) ? Buffer.from(markdownToHtml(text), "utf8") : content);
   d.body = true;
 
   return Effect.void;

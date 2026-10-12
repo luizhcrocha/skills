@@ -241,6 +241,60 @@ describe("revise", () => {
     expect(existsSync(join(root, "decisions", "d1.html"))).toBe(false);
     expect(refused("decision", "d1", "--body", join(root, "missing.html"))).toContain("cannot read");
   });
+
+  test("a Markdown body is recorded as HTML: headings, emphasis, tables, code and lists", () => {
+    const source = join(root, "analysis.md");
+    writeFileSync(
+      source,
+      "## In short\n\n**Migrate now**: one shape.\n\n| Table | Rows |\n|---|---:|\n| invoices | 1,204 |\n\n" +
+        "```sql\nALTER TABLE invoices ADD usage int;\n```\n\n- a 20 minute lock\n- `invoice-gen` waits\n\n1. first\n2. second\n",
+    );
+    const r = run("decision", ...SCHEMA, "--body", source);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).not.toContain("reads as Markdown");
+    expect(item()["body"]).toBe(true);
+    const html = readFileSync(join(root, "decisions", "d1.html"), "utf8");
+    expect(html).toContain("<h2>In short</h2>");
+    expect(html).toContain("<strong>Migrate now</strong>");
+    expect(html).toMatch(/<table>[\s\S]*<th>Table<\/th>[\s\S]*<td>invoices<\/td>[\s\S]*<\/table>/);
+    expect(html).toContain('<pre><code class="language-sql">ALTER TABLE invoices ADD usage int;');
+    expect(html).toMatch(/<ul>\s*<li>a 20 minute lock<\/li>\s*<li><code>invoice-gen<\/code> waits<\/li>\s*<\/ul>/);
+    expect(html).toMatch(/<ol>\s*<li>first<\/li>/);
+    expect(html).not.toContain("##");
+    expect(html).not.toContain("**");
+  });
+
+  test("a body that is not .md but reads as Markdown is copied as written, with a warning naming the fix", () => {
+    const fix = "Name the file .md and it is converted to HTML";
+
+    for (const [name, text] of [
+      ["heading.html", "## In short\n\nMigrate now.\n"],
+      ["bold.txt", "**Migrate now**: one shape.\n"],
+      ["table.html", "| Table | Rows |\n| --- | --- |\n| invoices | 1,204 |\n"],
+    ] as const) {
+      const source = join(root, name);
+      writeFileSync(source, text);
+      const r = run("decision", ...SCHEMA, "--body", source);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr, name).toContain(`the body ${source} reads as Markdown`);
+      expect(r.stderr, name).toContain(fix);
+      expect(readFileSync(join(root, "decisions", "d1.html"), "utf8")).toBe(text);
+    }
+
+    const html = join(root, "plain.html");
+    writeFileSync(html, "<h2>In short</h2>\n<p><strong>Migrate</strong> | now</p>\n<pre># not a heading</pre>\n");
+    expect(run("decision", "d1", "--body", html, "--log", "as HTML").stderr).not.toContain("reads as Markdown");
+  });
+
+  test("a grilling's Markdown body is converted too", () => {
+    const body = join(root, "context.md");
+    writeFileSync(body, "# Context\n\n| a | b |\n|---|---|\n| 1 | 2 |\n");
+    const r = run("grill", "g1", "--title", "T", "--body", body, "--ask", "t | q? | r | w");
+    expect(r.code, r.stderr).toBe(0);
+    const html = readFileSync(join(root, "decisions", "g1.html"), "utf8");
+    expect(html).toContain("<h1>Context</h1>");
+    expect(html).toContain("<td>1</td>");
+  });
 });
 
 describe("readable", () => {
