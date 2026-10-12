@@ -208,3 +208,30 @@ test("a fleet's own page opens a decision named by its number as well as its id,
   flush();
   expect(root.querySelector("#decision h1")?.textContent).toContain("Claude over MCP stays read-only");
 });
+
+/** Fleet `c` of a manager's view (`coordinators`) whose index also holds decisions numbered `refs` (closed ones too). */
+function holding(c: View, refs: readonly string[]): View {
+  const own = Array.isArray(c["index"]) ? c["index"] : [];
+
+  return { ...c, index: [...own, ...refs.map((ref) => ({ group: "decisions", ref, title: "T", sub: "", hint: "decided", hash: `#decision/${ref.toLowerCase()}` }))] };
+}
+
+test("on the manager's page a bare number its own ledger lacks links to the fleet that holds it, served or kept; one several hold shows each", () => {
+  const view = managerView(NOW);
+  const fleets = Array.isArray(view["coordinators"]) ? view["coordinators"].filter((c): c is View => c !== null && Object(c) === c && !Array.isArray(c)) : [];
+  const coordinators = fleets.map((c) => (c["id"] === "infra" ? holding(c, ["D512", "D7"]) : c["id"] === "billing" ? holding(c, ["D7"]) : c));
+  const stopped = [{ id: "old-fleet", index: [{ group: "decisions", ref: "D88", title: "T", sub: "", hint: "decided", hash: "#decision/d88" }] }];
+
+  mount({ ...view, coordinators, stopped, decisions: [{ ...D27, id: "d9", ref: "D1", question: "As D512 said, as D7 said, and D88?" }] });
+  location.hash = "#decision/d9";
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+  flush();
+  const links = [...root.querySelectorAll<HTMLAnchorElement>("#decision .dv-question a.dref")];
+  expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
+    ["D512", "#decision/infra/D512"],
+    ["D7 in billing", "#decision/billing/D7"],
+    ["D7 in infra", "#decision/infra/D7"],
+    ["D88", "#decision/old-fleet/D88"],
+  ]);
+  expect(root.querySelector("#decision .dv-question .dref-choices")?.textContent).toBe("D7 in billing · D7 in infra");
+});

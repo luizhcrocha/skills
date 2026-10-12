@@ -1,15 +1,17 @@
 /**
  * A decision's number in an item's words, as a link to that decision: on hover or focus a tip says its title,
  * where it stands, its answer and when it was decided (and the question it names, for a grilling), and a tap on
- * a phone opens it. A bare number this page cannot find stays plain text. Another fleet's ("Infra's d172") always
+ * a phone opens it. A bare number this page cannot find stays plain text; on a manager's page it names the fleet
+ * that holds it, served or kept, and a number several hold is shown once for each ("D29 in infra · D29 in
+ * agent-tools"). Another fleet's ("Infra's d172") always
  * links, to `#decision/<fleet>/<id>` on the manager's page, and its tip is read when first wanted from that
  * fleet's ledger through the hub (`f/<fleet>/state.json`), kept for this page load.
  */
 import { createEffect, createMemo, createSignal } from "solid-js";
-import { Show, type JSX } from "@solidjs/web";
+import { For, Show, type JSX } from "@solidjs/web";
 
 import { usePage } from "./bits.tsx";
-import { Core, type Approval, type Decision, type Json } from "./core.ts";
+import { Core, type Approval, type Decision, type Json, type JsonRecord, type State } from "./core.ts";
 import { fullTime } from "./format.ts";
 
 let tips = 0;
@@ -50,6 +52,15 @@ function named(rows: readonly Decision[], num: string): Decision | undefined {
   const n = num.toLowerCase();
 
   return rows.find((d) => d.ref?.toLowerCase() === n) ?? rows.find((d) => d.id.toLowerCase() === n);
+}
+
+/** Who holds decision number `num` on a manager's page: this ledger (null), then each fleet whose index has it,
+ * served (its closed decisions too) or kept by the registry; each once. */
+export function holdersOf(state: State, num: string): (string | null)[] {
+  const holds = (index: readonly JsonRecord[]): boolean => index.some((x) => x["group"] === "decisions" && x["ref"] === num);
+  const fleets = [...state.coordinators, ...(state.stopped ?? [])].flatMap((c) => (holds(c.index) ? [c.id] : []));
+
+  return [...(named(state.decisions, num) ? [null] : []), ...new Set(fleets)];
 }
 
 /** A tip's words cut to about 200 characters, and closed by one full stop. */
@@ -107,8 +118,28 @@ export function DecisionRef(props: { readonly num: string; readonly fleet: strin
     props.fleet === null && /^K\d+$/u.test(props.num) ? m.state.approvals.find((a) => a.id === props.num) : undefined,
   );
 
+  /* On a manager's page a bare number names whoever holds it: a new number is the machine's
+     (fleet/src/ledger/shared-numbers.ts), so one holder; an old one several fleets hold (D29 before 1.9.36) is
+     shown with each, never one picked. */
+  const holders = createMemo((): readonly (string | null)[] => (props.fleet === null && m.state.role === "manager" ? holdersOf(m.state, props.num) : [props.fleet]));
+
+  const one = (): JSX.Element => <NumberRef num={props.num} fleet={holders()[0] ?? null} question={props.question} text={props.text} />;
+
+  const each = (): JSX.Element => (
+    <span class="dref-choices">
+      <For each={holders()}>
+        {(fleet, i) => (
+          <>
+            {i() > 0 ? " · " : ""}
+            <NumberRef num={props.num} fleet={fleet} question={props.question} text={fleet === null ? `${props.num} here` : `${props.num} in ${String(fleet)}`} />
+          </>
+        )}
+      </For>
+    </span>
+  );
+
   return (
-    <Show when={approval()} fallback={<NumberRef {...props} />}>
+    <Show when={approval()} fallback={holders().length > 1 ? each() : one()}>
       {(a) => <ApprovalRef approval={a()} text={props.text} />}
     </Show>
   );

@@ -398,6 +398,8 @@ export interface State {
   /** What the hub serves this fleet as: its id and its session's name; null off the hub. */
   readonly named: { readonly id: string; readonly session: string | null } | null;
   readonly coordinators: readonly Coordinator[];
+  /** On a manager's page, the fleets the registry keeps but no longer serves, with their decisions' index rows. */
+  readonly stopped?: readonly { readonly id: string; readonly index: readonly JsonRecord[] }[];
   /** The account whose session captured last: its email (`account`, null when not recorded), `seen`, its windows, and `others`, the same for each other account. */
   readonly usage: JsonRecord | null;
   readonly gate: { readonly fleet: string; readonly what: string; readonly since: string } | null;
@@ -1467,6 +1469,7 @@ function parseState(value: Json | undefined): State | null {
       lanes: lane(c["lanes"]),
       decisions: withId(list(c["decisions"])).map(decision),
     })),
+    stopped: withId(list(value["stopped"])).map((c) => ({ id: String(c["id"]), index: list(c["index"]) })),
     usage: isRow(value["usage"]) ? value["usage"] : null,
     gate: isRow(gate) && isText(gate["fleet"]) ? { fleet: gate["fleet"], what: text(gate["what"], ""), since: text(gate["since"], "") } : null,
     spent: spent(value["spent"]),

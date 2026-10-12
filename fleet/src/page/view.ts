@@ -412,7 +412,17 @@ export function view(machine: Machine, lookups: Lookups, given: JsonObject, root
       for (const l of linksOf(machine, lookups, theirs, resolvePath(e.dir), `f/${encodeURIComponent(e.id)}/`)) links.push({ ...l, fleet: e.id });
     }
 
-    return {
+    // The fleets the registry keeps but no longer serves that hold decisions: their numbers, so a bare one names its holder on the page.
+    const stopped = registry
+      .known()
+      .filter((e) => e.role !== "manager" && e.dir !== root && !others.some((o) => o.id === e.id))
+      .flatMap((e) => {
+        const index = searchIndex(numberState(readObject(join(e.dir, "state.json")) ?? {})).filter((x) => x["group"] === "decisions");
+
+        return index.length > 0 ? [{ id: e.id, index }] : [];
+      });
+
+    const shown = {
       ...state,
       coordinators: others.map((e) => summary(machine, lookups, e)),
       usage: readUsage(registry.place.home) ?? null,
@@ -420,6 +430,9 @@ export function view(machine: Machine, lookups: Lookups, given: JsonObject, root
       links,
       found: foundJson(unlisted(lookups.discovered(), links)),
     };
+
+    // The key only when there is one, so the frozen Python twin's page reads the same with none stopped.
+    return stopped.length > 0 ? { ...shown, stopped } : shown;
   }
 
   const mine = me === undefined ? [] : lookups.discovered().filter((x) => x.fleet === me.id);
