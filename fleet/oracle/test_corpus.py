@@ -74,6 +74,21 @@ class CorpusTest(unittest.TestCase):
         self.assertNotEqual(hide({"stdout": "added K3 to infra"}), hide({"stdout": "added K3 to acme"}))
 
 
+    def test_hiding_the_spawn_hint_keeps_every_other_line(self):
+        hide = run.TWIN_NORMALISERS["spawn-hint"]
+        said = 'recorded a1 (a1); its brief opens with: x\nSpawn with model: "opus", effort: "high" (a1\'s Agent call).\n'
+        self.assertEqual(hide({"step": 3, "stdout": said, "stderr": "Spawn with model: kept\n"}),
+                         {"step": 3, "stdout": "recorded a1 (a1); its brief opens with: x\n", "stderr": "Spawn with model: kept\n"})
+        self.assertNotEqual(hide({"stdout": said}), hide({"stdout": said.replace("recorded a1", "recorded a2")}))
+        self.assertEqual(hide({"results": 4}), {"results": 4})
+
+    def test_every_trace_that_records_a_worker_hides_the_spawn_hint_on_the_twin(self):
+        for trace in TRACES:
+            said = run.expected_of(trace).read_text(encoding="utf-8")
+            if "Spawn with model: " in said:
+                self.assertIn("spawn-hint", twin_of(trace).get("normalise", []), trace.name)
+
+
 class HermeticTest(unittest.TestCase):
     def test_a_link_on_a_listening_port_reads_up_whatever_the_host_listens_on(self):
         steps = [{"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"]},

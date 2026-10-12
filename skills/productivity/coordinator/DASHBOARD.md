@@ -40,7 +40,7 @@ agents[]     one row per worker, in spawn order (its position picks its chart co
              the model). Without --model or --effort a new row takes its skill's pair: research sonnet medium, any
              other opus high. A pair outside the role table (haiku low or high, sonnet low-high, opus
              medium-high, fable high; xhigh and max on none) is recorded with a warning, the user's to approve. Absent on a row
-             recorded before efforts were: unset, and the brief then names no effort
+             recorded before efforts were: unset, and the brief then names the effort its skill and model give
   status     queued | running | blocked | done | failed | stopped
   lane[]     files or globs the worker may edit
   milestone  milestone id

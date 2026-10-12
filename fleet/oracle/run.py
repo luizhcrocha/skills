@@ -356,9 +356,20 @@ def _numbers_hidden(value):
     return value
 
 
+SPAWN_HINT = re.compile(r"^Spawn with model: .*\n", re.M)
+
+
+def _spawn_hint_hidden(result):
+    """A step's result without the `Spawn with model: ..., effort: ...` line `state agent` prints for a new worker
+    (TypeScript only, 1.9.39): the frozen Python twin prints the `recorded` line alone."""
+    if isinstance(result, dict) and isinstance(result.get("stdout"), str):
+        return {**result, "stdout": SPAWN_HINT.sub("", result["stdout"])}
+    return result
+
+
 # What a trace's header `twin.normalise` may name: a difference the frozen Python twin keeps on purpose (ADR 0003),
 # hidden on both sides before a replay on the twin is compared.
-TWIN_NORMALISERS = {"numbers": _numbers_hidden}
+TWIN_NORMALISERS = {"numbers": _numbers_hidden, "spawn-hint": _spawn_hint_hidden}
 
 
 def twin_view(results: list[dict], normalise: list[str]) -> list[dict]:

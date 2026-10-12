@@ -66,3 +66,13 @@ export function offPolicy(id: string, model: string, effort: string | undefined)
 
   return `state: ${id} is recorded on ${model} at ${effort} effort, outside the effort policy (${pairs}): spawning it so needs the user's OK.`;
 }
+
+/** The Agent call's parameters for worker `id`, as `fleet brief` and `state agent` print them: the row's model and
+ * effort, and for a row from before efforts were recorded, the effort its skill and model give. Named in full because
+ * a spawn without `effort` inherits the session's, and a coordinator's session runs at low: the plugin's hook refuses
+ * such a spawn in a fleet (`fleet_spawn_effort`). */
+export function spawnLine(id: string, skill: string | undefined, model: string | undefined, effort: string | undefined): string {
+  const role = roleDefaults(skill ?? "none", model ?? "opus", effort);
+
+  return `Spawn with model: "${role.model}", effort: "${role.effort}" (${id}'s Agent call takes both: a fleet refuses a spawn without effort).`;
+}

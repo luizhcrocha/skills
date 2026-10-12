@@ -1,4 +1,4 @@
-{"trace": 1, "name": "chat", "about": "The chat's say, inbox, log, watch --once and wait on a fleet with two workers; the user's messages written as the page's server would; a state command warning while they wait unread; a torn line."}
+{"trace": 1, "name": "chat", "about": "The chat's say, inbox, log, watch --once and wait on a fleet with two workers; the user's messages written as the page's server would; a state command warning while they wait unread; a torn line.", "twin": {"why": "the spawn hint (TypeScript only, 1.9.39): `state agent` prints `Spawn with model: ..., effort: ...` after the `recorded` line of a new worker, where the twin prints the `recorded` line alone", "normalise": ["spawn-hint"]}}
 {"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "M", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "agent", "a1", "--task", "t", "--milestone", "m1", "--name", "notes-impl", "--no-render"]}

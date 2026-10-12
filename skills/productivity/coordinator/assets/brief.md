@@ -14,7 +14,7 @@ Your working copy is the one the `Workspace:` line of your brief names, and that
 
 ## Your context
 
-Every call you make re-reads your whole context, so its size is the cost of your work. Read what your brief names (its files, its question), not the repository around it; hand a sweep to a Reader or a Researcher (`{skill_dir}/MODELS.md`) and keep its short result. Before your context passes about 150k tokens, stop and end with your report, finished or not, with what is left in its first block: the coordinator gives the rest to a fresh worker with your handoff.
+Every call you make re-reads your whole context, so its size is the cost of your work. Read what your brief names (its files, its question), not the repository around it; hand a sweep to a Reader or a Researcher (`{skill_dir}/MODELS.md`) and keep its short result. An Agent call without `effort` is refused in a fleet, so workers never inherit the coordinator's low effort: pass the role's `model` and `effort` from that table on every spawn of your own. Before your context passes about 150k tokens, stop and end with your report, finished or not, with what is left in its first block: the coordinator gives the rest to a fresh worker with your handoff.
 
 ## Waits and rounds
 

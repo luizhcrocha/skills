@@ -1232,6 +1232,245 @@ class Allow(str):
     once. Any other PreToolUse text decides nothing."""
 
 
+class Note(str):
+    """What a PreToolUse handler returns to tell Claude something beside the call's result (additionalContext): it
+    decides nothing, so the permission check runs as it would have."""
+
+
+# The spawn gate. A coordinator's and a manager's session run at low effort (MODELS.md), and an Agent call without
+# `effort` inherits the session's: a worker spawned bare runs at low, whatever its role (measured 2026-10-12: 29 of 31
+# spawns in one fleet passed none). So in a session that serves a fleet a spawn names its model and its effort, or the
+# definition it spawns does. The pair to pass comes from the ledger's row when the call is that worker's brief, else
+# from MODELS.md's table, the one place the pairs are written. $CLAUDE_CODE_EFFORT_LEVEL outranks both the call's
+# effort and a definition's (Claude Code's sub-agents doc, "Choose an effort level"): a session that sets it is told.
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+MODELS_MD = ROOT / "skills" / "productivity" / "coordinator" / "MODELS.md"
+ROLE_PAIR = re.compile(r"\b(Fable|Opus|Sonnet|Haiku) (low|medium|high|xhigh|max)\b")
+SESSION_ROLES = ("Coordinator", "Manager")  # a session's own effort is its launch's, never a spawn's
+TYPE_ROLES = {"Explore": "Researcher"}
+BRIEF_ID = re.compile(r"\byour id is ([A-Za-z0-9][\w.-]*?)\.?(?=[\s,;:\"']|$)")  # the line `fleet brief` opens with
+FRONTMATTER_MAX = 256 * 1024
+EFFORT_ENV = "CLAUDE_CODE_EFFORT_LEVEL"
+
+
+def role_pairs():
+    """MODELS.md's role table: role -> (model, effort), the row's first pair. {} when it cannot be read."""
+    try:
+        lines = MODELS_MD.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    start = next((i for i, line in enumerate(lines) if line.startswith("| Role |")), None)
+    if start is None:
+        return {}
+    pairs = {}
+    for line in lines[start + 2:]:
+        if not line.startswith("|"):
+            break
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        found = ROLE_PAIR.search(" | ".join(cells[1:]))
+        if found and cells[0]:
+            pairs[cells[0]] = (found.group(1).lower(), found.group(2))
+    return pairs
+
+
+def _frontmatter(path):
+    """A markdown file's top-level frontmatter keys, {} without one. A byte order mark and blank lines before the
+    opening `---` are passed over; a value loses its quotes and a trailing comment."""
+    try:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
+            lines = f.read(FRONTMATTER_MAX).splitlines()
+    except OSError:
+        return {}
+    first = next((i for i, line in enumerate(lines) if line.strip()), None)
+    if first is None or lines[first].strip() != "---":
+        return {}
+    keys = {}
+    for line in lines[first + 1:]:
+        if line.strip() == "---":
+            return keys
+        found = re.match(r"^([A-Za-z_-]+):\s*(.*)$", line)
+        if found:
+            value = found.group(2).strip()
+            quoted = re.match(r"^([\"'])(.*?)\1(?:\s+#.*)?$", value)
+            keys[found.group(1)] = quoted.group(2) if quoted else re.sub(r"\s+#.*$", "", value)
+    return {}
+
+
+def _plugin_roots(hook, plugin):
+    """Where plugin `plugin` is installed: this plugin's own root, else each install path the user's
+    installed_plugins.json records for it."""
+    try:
+        own = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text()).get("name")
+    except (OSError, ValueError, AttributeError):
+        own = None
+    if plugin == (own or "tstack"):
+        return [ROOT]
+    config = Path(hook.env.get("CLAUDE_CONFIG_DIR") or Path(hook.env.get("HOME", "/tmp")) / ".claude")
+    try:
+        installed = json.loads((config / "plugins" / "installed_plugins.json").read_text()).get("plugins")
+    except (OSError, ValueError, AttributeError):
+        return []
+    roots = []
+    for key, installs in installed.items() if isinstance(installed, dict) else ():
+        if key.split("@", 1)[0] != plugin or not isinstance(installs, list):
+            continue
+        roots += [Path(i["installPath"]) for i in installs if isinstance(i, dict) and isinstance(i.get("installPath"), str)]
+    return roots
+
+
+def agent_definition(hook, kind):
+    """The frontmatter of the agent definition a `subagent_type` names, {} when none is found: `<plugin>:<name>` is
+    agents/<name>.md of that plugin, a bare name a definition of the project's or the user's .claude/agents."""
+    if not isinstance(kind, str) or not kind or len(kind) > 200 or "/" in kind or kind.startswith("."):
+        return {}
+    if ":" in kind:
+        plugin, name = kind.split(":", 1)[0], kind.rsplit(":", 1)[1]
+        folders = [root / "agents" for root in _plugin_roots(hook, plugin)]
+    else:
+        name = kind
+        project = hook.env.get("CLAUDE_PROJECT_DIR")
+        config = Path(hook.env.get("CLAUDE_CONFIG_DIR") or Path(hook.env.get("HOME", "/tmp")) / ".claude")
+        folders = [Path(p) / ".claude" / "agents" for p in (project, hook.cwd) if isinstance(p, str) and os.path.isabs(p)]
+        folders.append(config / "agents")
+    for folder in folders:
+        try:
+            files = sorted(folder.rglob("*.md"))
+        except OSError:
+            continue
+        for file in files:
+            keys = _frontmatter(file)
+            if (keys.get("name") or file.stem) == name:
+                return keys
+    return {}
+
+
+def hosted_fleets(hook):
+    """The fleets this session serves as their coordinator or manager: the one $FLEET_DIR names, else those of its
+    scratchpad the registry records under this session. None for a worker launched as a process of its own, whose
+    effort is its launch's; a subagent's call counts, since it runs in the session that serves."""
+    if hook.env.get("FLEET_WORKER") or hook.env.get("TSTACK_ROLE") == "worker":
+        return []
+    dirs = fleet_dirs(hook)
+    return dirs if hook.env.get("FLEET_DIR") else [d for d in dirs if served_by_session(hook, d)]
+
+
+def _named(word, text):
+    return bool(re.search(rf"(?<![\w-]){re.escape(word)}(?![\w-])", text))
+
+
+def _briefed_row(dirs, prompt):
+    """(DIR, row) of the worker an Agent call spawns, or None: the ledger row whose id the prompt's first line gives,
+    as `fleet brief` opens a brief (`Read DIR/brief.md first; your id is a1.`). A worker named anywhere else is not
+    taken for the one spawned: a sweep that says "ask the advisor" is not the advisor."""
+    opening = BRIEF_ID.search(next((line for line in prompt.splitlines() if line.strip()), ""))
+    if not opening:
+        return None
+    for d in dirs:
+        agents = (read_ledger(d) or {}).get("agents")
+        for row in agents if isinstance(agents, list) else ():
+            if isinstance(row, dict) and row.get("id") == opening.group(1):
+                return d, row
+    return None
+
+
+def _role_of(kind, description, pairs):
+    """The MODELS.md role an Agent call plays, and what says so: the only role its description names, else its
+    subagent_type's. (None, None) when neither says; a role the prompt mentions in passing is not the spawn's."""
+    found = [r for r in pairs if r not in SESSION_ROLES and _named(r, description)]
+    if len(found) == 1:
+        return found[0], "its description names the role"
+    if isinstance(kind, str) and TYPE_ROLES.get(kind) in pairs:
+        return TYPE_ROLES[kind], f"subagent_type {kind}"
+    return None, None
+
+
+def _pair_to_pass(dirs, tool_input):
+    """The sentence of a denial that names the model and effort to pass, from the best source there is: the ledger's
+    row of the briefed worker, else the role the call names, else MODELS.md's table."""
+    def text(key):
+        value = tool_input.get(key)
+        return value if isinstance(value, str) else ""
+
+    briefed = _briefed_row(dirs, text("prompt"))
+    if briefed is not None:
+        d, row = briefed
+        model = row["model"] if isinstance(row.get("model"), str) and row["model"] else "opus"
+        if row.get("effort") in EFFORTS:
+            return f'Pass model: "{model}", effort: "{row["effort"]}": the pair the fleet\'s ledger records for {row["id"]}.'
+        # a row from before efforts were recorded: the fleet CLI (roles.ts) is the one place that works its effort out
+        return (f'Pass model: "{model}" and the effort `{fleet_cli()} brief {d} {row["id"]}` prints on its first line: '
+                f'the ledger\'s row for {row["id"]} records no effort.')
+    pairs = role_pairs()
+    role, why = _role_of(tool_input.get("subagent_type"), text("description"), pairs)
+    if role:
+        return f'Pass model: "{pairs[role][0]}", effort: "{pairs[role][1]}": the {role} pair of MODELS.md ({why}).'
+    by_pair = {}
+    for name, pair in pairs.items():
+        if name not in SESSION_ROLES:
+            by_pair.setdefault(pair, []).append(name)
+    table = ", ".join(f"{'/'.join(names)} {model} {effort}" for (model, effort), names in by_pair.items())
+    return (f"Pass effort: per MODELS.md ({table or MODELS_MD}), and the model beside it; `{fleet_cli()} brief <dir> <id>` "
+            f"prints a recorded worker's pair.")
+
+
+def _spawn_problem(hook, tool_input):
+    """(what is wrong with an Agent call's model and effort, or None; the effort it will be spawned at, or None)."""
+    given = {k: tool_input[k].strip() if isinstance(tool_input.get(k), str) else "" for k in ("model", "effort")}
+    kind = tool_input.get("subagent_type")
+    definition = agent_definition(hook, kind) if not (given["model"] and given["effort"]) else {}
+    levels = ", ".join(EFFORTS)
+    if given["effort"] and tool_input["effort"] not in EFFORTS:
+        said = json.dumps(tool_input["effort"][:40], ensure_ascii=False)
+        return f"effort: {said} is not a level the Agent tool takes ({levels}).", None
+    defined = definition.get("effort") or ""
+    if not given["effort"] and defined and defined not in EFFORTS:
+        return (f'The definition of {_one_line(str(kind), 60)} names effort: "{_one_line(defined, 40)}", which is not a '
+                f"level ({levels}), and this Agent call names none."), None
+    missing = [k for k in ("model", "effort") if not given[k] and not definition.get(k)]
+    if not missing:
+        return None, given["effort"] or defined
+    level = hook.input.get("effort").get("level") if isinstance(hook.input.get("effort"), dict) else None
+    effort = f"{level} effort" if isinstance(level, str) and level else "effort (low, for a coordinator)"
+    if missing == ["effort"]:
+        why = f"A spawn without an effort inherits this session's {effort}, whatever the worker's role."
+    elif missing == ["model"]:
+        why = "A spawn without a model runs on its agent type's default or this session's model, whatever the worker's role."
+    else:
+        why = f"A spawn without them inherits this session's model and its {effort}, whatever the worker's role."
+    return f"This Agent call names no {' and no '.join(missing)}. {why}", None
+
+
+def fleet_spawn_effort(hook):
+    """PreToolUse (Agent): in a session that serves a fleet, a spawn carries both `model` and `effort`, or is denied
+    with the pair to pass. A definition whose frontmatter carries them (tstack:advisor, tstack:reader) passes without
+    the parameters, and so does a fork, which inherits by design. An effort the tool does not take is denied, the
+    call's or the definition's; `max`, which no role uses, is noted, and so is $CLAUDE_CODE_EFFORT_LEVEL in the
+    session's environment, which outranks every spawn's effort. Outside a fleet it says nothing. It never allows a
+    call."""
+    tool_input = hook.input.get("tool_input") if isinstance(hook.input.get("tool_input"), dict) else {}
+    if hook.input.get("tool_name") != "Agent" or not tool_input or tool_input.get("subagent_type") == "fork":
+        return None
+    dirs = hosted_fleets(hook)
+    if not dirs:
+        return None
+    forced = hook.env.get(EFFORT_ENV, "").strip()
+    overridden = (f"tstack: {EFFORT_ENV}={_one_line(forced, 20)} is set in this session's environment, and it takes "
+                  f"precedence over the effort an Agent call passes and over a definition's `effort:`, so this worker "
+                  f"runs at it whatever its role. The session's own effort belongs in the `effortLevel` setting "
+                  f"(.claude/settings.local.json), never in that variable: tell Luiz to move it and restart the "
+                  f"session.") if forced else ""
+    problem, effort = _spawn_problem(hook, tool_input)
+    if problem:
+        return Deny(f"{problem} In a fleet (this session serves one) a spawn passes both `model` and `effort`. "
+                    f"{_pair_to_pass(dirs, tool_input)} Issue the call again with them."
+                    + (f"\n\n{overridden}" if overridden else ""))
+    notes = [overridden] if overridden else []
+    if effort == "max":
+        notes.append("tstack: this spawn runs at max effort, which no role of MODELS.md uses (never max: the first token "
+                     "takes minutes and the result is no better than xhigh). Take the role's pair unless Luiz asked for max.")
+    return Note("\n\n".join(notes)) if notes else None
+
+
 # The push gate. It catches honest mistakes, not an adversary: a plain `jj git push` or `git push` is read
 # exactly; one it cannot read (inside a loop, a subshell, a substitution, eval, xargs, a script, or with a
 # variable in it) counts as unclear, which a fleet without the landing turn may not run.
@@ -2174,7 +2413,7 @@ HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, fleet_heartbeat],
     "Stop": [memo_nudge, fleet_listen_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
-    "PreToolUse": [fleet_agent_grant, land_turn_gate, suite_gate],
+    "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, land_turn_gate, suite_gate],
     "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_chat_nudge],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep],
     "PermissionDenied": [fleet_permission_denied],
@@ -2193,7 +2432,7 @@ def _decide(event, decision, text):
 
 
 EMIT = {
-    "PreToolUse": None,  # dispatch decides: a Deny refuses, an Allow allows, nothing else speaks
+    "PreToolUse": None,  # dispatch decides: a Deny refuses, an Allow allows, a Note is context, nothing else speaks
     "SessionStart": _context,
     "Stop": _context,
     "PreCompact": lambda event, text: text,
@@ -2205,7 +2444,8 @@ def dispatch(event, raw, env):
     """The text to print for this event, or "" for nothing. On Stop, a handler's Block turns the whole
     output into the block decision, whose reason (every handler's text) Claude reads as it goes on. On
     PreToolUse, a handler's Deny refuses the call, with the Deny texts alone as the reason; else an Allow (an Agent
-    call the hub granted) allows it; any other text decides nothing.
+    call the hub granted) allows it; else a Note is context beside the call's result, with no decision; any other
+    text decides nothing.
     Under TSTACK_ROLE=tape (a tape builder's own `claude -p` call) no handler runs: no wake lands in the
     compaction prompt, and nothing is written or spawned (docs/design/tape.md, section 4)."""
     if env.get("TSTACK_ROLE") == "tape":
@@ -2214,7 +2454,7 @@ def dispatch(event, raw, env):
     if not isinstance(data, dict):
         raise ValueError("hook input is not a JSON object")
     hook = Hook(event, data, env)
-    parts, denials, allows = [], [], []
+    parts, denials, allows, notes = [], [], [], []
     blocked = False
     for handler in HANDLERS.get(event, ()):
         try:
@@ -2229,12 +2469,16 @@ def dispatch(event, raw, env):
                 denials.append(text.strip())
             if isinstance(text, Allow):
                 allows.append(text.strip())
+            if isinstance(text, Note):
+                notes.append(text.strip())
     if not parts or event not in EMIT:
         return ""
     if denials and event == "PreToolUse":
         return _decide(event, "deny", "\n\n".join(denials))
     if event == "PreToolUse":
-        return _decide(event, "allow", "\n\n".join(allows)) if allows else ""
+        if allows:
+            return _decide(event, "allow", "\n\n".join(allows))
+        return _context(event, "\n\n".join(notes)) if notes else ""
     if blocked and event == "Stop":
         return json.dumps({"decision": "block", "reason": "\n\n".join(parts)})
     return EMIT[event](event, "\n\n".join(parts))

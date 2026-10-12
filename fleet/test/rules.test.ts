@@ -308,7 +308,7 @@ describe("thinking effort and the role table", () => {
     expect(ok("agent", "a1", "--status", "done").stderr).not.toContain("policy");
   });
 
-  test("a row from before efforts reads as unset: show prints -, the brief names no effort", () => {
+  test("a row from before efforts reads as unset: show prints -, the brief names the effort its skill and model give", () => {
     ok("agent", "a1", "--task", "T", "--milestone", "m1");
 
     const ledger = readJson(join(root, "state.json"));
@@ -321,7 +321,10 @@ describe("thinking effort and the role table", () => {
 
     writeFileSync(join(root, "state.json"), JSON.stringify({ ...ledger, agents }));
     expect(ok("show").stdout).toContain("  agent a1               running  none            opus   -             0 tok");
-    expect(fleet(["brief", root, "a1"], env).stderr).toContain('spawn a1 on model: "opus" (run_in_background)');
+    const briefed = fleet(["brief", root, "a1"], env).stderr;
+
+    expect(briefed).toContain('spawn a1 on model: "opus", effort: "high" (run_in_background)');
+    expect(briefed.split("\n")[0]).toBe(`Spawn with model: "opus", effort: "high" (a1's Agent call takes both: a fleet refuses a spawn without effort).`);
     expect(ok("agent", "a1", "--model", "sonnet").stderr).not.toContain("policy");
     expect(rows("agents")[0]).not.toHaveProperty("effort");
     ok("agent", "a1", "--effort", "medium");
@@ -470,9 +473,12 @@ describe("fleet brief", () => {
     expect(lines).toContain("Step: s1 (the schema), in milestone m1 (M).");
     expect(ran.stderr).toContain(`brief: a1 has a lane and no workspace: \`fleet ws ${root} add a1\``);
     expect(ran.stderr).toContain('spawn a1 on model: "sonnet", effort: "high" (run_in_background)');
+    // the first line it prints: the Agent call's parameters, on stderr so the brief on stdout still opens with its own
+    expect(ran.stderr.split("\n")[0]).toBe(`Spawn with model: "sonnet", effort: "high" (a1's Agent call takes both: a fleet refuses a spawn without effort).`);
     const missing = fleet(["brief", root, "a9"], env);
     expect(missing.code).toBe(1);
     expect(missing.stderr).toContain("brief: no worker 'a9'");
+    expect(missing.stderr).not.toContain("Spawn with");
   });
 
   test("a model-invoked skill is named for the Skill tool, and a recorded workspace is the worker's", () => {

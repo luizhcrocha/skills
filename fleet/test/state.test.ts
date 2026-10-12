@@ -171,6 +171,16 @@ describe("agents", () => {
     expect(out).toContain(join(f.root, "brief.md"));
   });
 
+  test("recording a worker prints the Agent call's model and effort, once: a known row's command says nothing more", () => {
+    const line = (id: string, model: string, effort: string): string =>
+      `Spawn with model: "${model}", effort: "${effort}" (${id}'s Agent call takes both: a fleet refuses a spawn without effort).\n`;
+
+    expect(f.ok("agent", "a1", "--task", "t", "--milestone", "m1")).toContain(line("a1", "opus", "high"));
+    expect(f.ok("agent", "r1", "--task", "t", "--milestone", "m1", "--skill", "research")).toContain(line("r1", "sonnet", "medium"));
+    expect(f.ok("agent", "w1", "--task", "t", "--milestone", "m1", "--model", "haiku", "--effort", "low")).toContain(line("w1", "haiku", "low"));
+    expect(f.ok("agent", "a1", "--task-id", "ab12cd34")).not.toContain("Spawn with");
+  });
+
   test("a name two workers share is refused naming the id first", () => {
     f.ok("agent", "a1", "--task", "t", "--milestone", "m1", "--name", "n1");
     f.ok("agent", "a2", "--task", "t", "--milestone", "m1", "--name", "n2");

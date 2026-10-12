@@ -1684,6 +1684,301 @@ class AgentGrantTest(HookCase):
         self.assertEqual(self.spawn(["x"]), "")
 
 
+class SpawnEffortTest(FleetCase):
+    """fleet_spawn_effort (PreToolUse, Agent): in a session that serves a fleet a spawn names its model and effort, or
+    is denied with the pair to pass (the ledger's row, else MODELS.md's role). It never allows a call."""
+
+    BRIEFED = "Read {dir}/brief.md first; your id is a1.\n\nTask: write the schema"
+
+    def setUp(self):
+        super().setUp()
+        self.project = self.tmp / "project"
+        (self.project / ".claude" / "agents").mkdir(parents=True)
+        self.env["CLAUDE_PROJECT_DIR"] = str(self.project)
+        self.ledger(agents=[
+            {"id": "a1", "name": "schema", "skill": "implement", "model": "sonnet", "effort": "high"},
+            {"id": "r1", "name": "r1", "skill": "research", "model": "sonnet", "effort": "medium"},
+            {"id": "old", "name": "old", "skill": "research", "model": "sonnet"}])
+
+    def spawn(self, env=None, extra=None, **tool_input):
+        tool_input = {"subagent_type": "general-purpose", "description": "do it", "prompt": "go", **tool_input}
+        tool_input = {k: v for k, v in tool_input.items() if v is not None}
+        payload = {**self.payload("PreToolUse", tool_name="Agent", tool_input=tool_input), **(extra or {})}
+        r = self.hook("PreToolUse", payload, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r
+
+    def denial(self, **tool_input):
+        r = self.spawn(**tool_input)
+        self.assertTrue(r.stdout, f"no decision; stderr: {r.stderr}; log: {self.log()}")
+        d = json.loads(r.stdout)["hookSpecificOutput"]
+        self.assertEqual((d["hookEventName"], d["permissionDecision"]), ("PreToolUse", "deny"))
+        self.assertNotIn("updatedInput", d)
+        return d["permissionDecisionReason"]
+
+    def test_a_spawn_without_effort_is_denied_with_the_ledger_rows_pair(self):
+        reason = self.denial(model="opus", prompt=self.BRIEFED.format(dir=self.fleet))
+        self.assertIn("This Agent call names no effort. A spawn without an effort inherits this session's effort", reason)
+        self.assertIn("a spawn passes both `model` and `effort`", reason)
+        self.assertIn('Pass model: "sonnet", effort: "high": the pair the fleet\'s ledger records for a1.', reason)
+        self.assertIn("Issue the call again with them.", reason)
+        for opening in ("your id is r1.", "\n\nRead /x/brief.md first; your id is r1, go\nTask: a1 waits", 'your id is r1"'):
+            with self.subTest(opening=opening):
+                self.assertIn('Pass model: "sonnet", effort: "medium": the pair the fleet\'s ledger records for r1.',
+                              self.denial(model="sonnet", prompt=opening))
+
+    def test_a_worker_is_the_one_the_briefs_opening_line_names_and_no_other(self):
+        self.ledger(agents=[{"id": "a1", "name": "hook", "skill": "tdd", "model": "opus", "effort": "high"},
+                            {"id": "r1", "name": "docs", "skill": "research", "model": "sonnet", "effort": "medium"},
+                            {"id": "advisor", "name": "advisor", "skill": "none", "model": "fable", "effort": "high"}])
+        # the review's probes (2026-10-12): a worker's id or name anywhere in the call was taken for the worker spawned
+        sweep = self.denial(subagent_type="Explore", description="sweep the logs",
+                            prompt="Find every error in the logs. If unsure, ask the advisor before asking Luiz.")
+        self.assertIn('Pass model: "sonnet", effort: "medium": the Researcher pair of MODELS.md (subagent_type Explore).', sweep)
+        self.assertNotIn("fable", sweep.split("Pass ", 1)[1].split(".", 1)[0])
+        review = self.denial(description="Reviewer: correctness", prompt="Review the diff. Check the docs too.")
+        self.assertIn('Pass model: "opus", effort: "high": the Reviewer pair of MODELS.md (its description names the role).', review)
+        for tool_input in ({"description": "r1: read the docs"}, {"description": "docs"}, {"prompt": "Where does the hook read stdin?"},
+                           {"prompt": "First line.\nRead /x/brief.md first; your id is a1."}, {"prompt": "your id is a9."}):
+            with self.subTest(tool_input=tool_input):
+                self.assertIn("Pass effort: per MODELS.md (", self.denial(model="opus", **tool_input))
+
+    def test_a_row_from_before_efforts_is_sent_to_fleet_brief_for_its_effort(self):
+        for id in ("old", "odd"):
+            self.ledger(agents=[{"id": "old", "name": "old", "skill": "research", "model": "haiku"},
+                                {"id": "odd", "name": "odd", "model": "haiku", "effort": "ultra"}])
+            reason = self.denial(model="haiku", prompt=f"your id is {id}.")
+            self.assertIn(f'Pass model: "haiku" and the effort `{self.fleet_cli} brief {self.fleet} {id}` prints on its first '
+                          f"line: the ledger's row for {id} records no effort.", reason)
+
+    def test_a_spawn_that_names_no_worker_gets_its_roles_pair_from_models_md(self):
+        for tool_input, role, pair, why in (
+                ({"description": "Implementer: the parser"}, "Implementer", ("opus", "high"), "its description names the role"),
+                ({"description": "a Verifier for PR 12", "subagent_type": "Explore"}, "Verifier", ("opus", "medium"),
+                 "its description names the role"),
+                ({"subagent_type": "Explore"}, "Researcher", ("sonnet", "medium"), "subagent_type Explore")):
+            with self.subTest(tool_input=tool_input):
+                self.assertIn(f'Pass model: "{pair[0]}", effort: "{pair[1]}": the {role} pair of MODELS.md ({why}).',
+                              self.denial(model="opus", **tool_input))
+        # two roles in the description, a role or a skill in the prompt alone, a lower-case word: the table
+        for tool_input in ({"description": "Implementer and Reviewer"}, {"prompt": "You are a Reviewer; hand sweeps to a Reader."},
+                           {"prompt": 'Skill: call the Skill tool with "tstack:research" and follow it.'},
+                           {"description": "reviewer of the diff"}):
+            with self.subTest(tool_input=tool_input):
+                reason = self.denial(model="opus", **tool_input)
+                self.assertIn("Pass effort: per MODELS.md (", reason)
+        for pair in ("Implementer/Reviewer opus high", "Researcher sonnet medium", "Reader haiku high", "Watcher haiku low",
+                     "Decider/Escalation/Advisor fable high"):
+            self.assertIn(pair, reason)
+        self.assertNotIn("Coordinator", reason)
+        self.assertIn(f"`{self.fleet_cli} brief <dir> <id>` prints a recorded worker's pair", reason)
+
+    def test_each_denial_is_worded_for_what_is_missing(self):
+        only_model = self.denial(effort="high")
+        self.assertIn("This Agent call names no model. A spawn without a model runs on its agent type's default or this "
+                      "session's model, whatever the worker's role.", only_model)
+        self.assertNotIn("without an effort", only_model)
+        self.assertIn("This Agent call names no model and no effort. A spawn without them inherits this session's model and "
+                      "its effort (low, for a coordinator), whatever the worker's role.", self.denial())
+        self.assertIn("This Agent call names no effort. A spawn without an effort inherits this session's effort (low, for a "
+                      "coordinator), whatever the worker's role.", self.denial(model="opus"))
+        r = self.spawn(model="opus", extra={"effort": {"level": "low"}})
+        self.assertIn("A spawn without an effort inherits this session's low effort, whatever the worker's role.", r.stdout)
+        self.assertIn("names no effort", self.denial(model="opus", effort="  "))
+
+    def test_a_spawn_with_both_passes(self):
+        for effort in ("low", "medium", "high", "xhigh"):
+            r = self.spawn(model="opus", effort=effort, prompt=self.BRIEFED.format(dir=self.fleet))
+            self.assertEqual((r.stdout, r.stderr), ("", ""))
+
+    def test_a_definition_whose_frontmatter_carries_them_passes(self):
+        for kind in ("tstack:advisor", "tstack:reader", "tstack:worktree-janitor"):
+            with self.subTest(kind=kind):
+                self.assertEqual(self.spawn(subagent_type=kind).stdout, "")
+        agents = self.project / ".claude" / "agents"
+        (agents / "deep").mkdir()
+        (agents / "deep" / "judge-file.md").write_text("---\nname: judge\nmodel: fable\neffort: \"high\"\n---\nJudge.\n")
+        (agents / "half.md").write_text("---\nname: half\neffort: medium\n---\nNo model.\n")
+        (agents / "bare.md").write_text("---\nname: bare\ndescription: nothing else\n---\n")
+        (agents / "body.md").write_text("no frontmatter\nmodel: opus\neffort: high\n")
+        self.assertEqual(self.spawn(subagent_type="judge").stdout, "")
+        self.assertEqual(self.spawn(subagent_type="half", model="opus").stdout, "")
+        self.assertIn("names no model.", self.denial(subagent_type="half"))
+        self.assertIn("names no effort.", self.denial(subagent_type="bare", model="opus"))
+        self.assertIn("names no model and no effort.", self.denial(subagent_type="body"))
+        for kind in ("tstack:no-such-agent", "elsewhere:reader", "judge-file", "../agents/advisor", 7, ["x"]):
+            with self.subTest(kind=kind):
+                self.assertIn("names no model and no effort.", self.denial(subagent_type=kind))
+
+    def test_frontmatter_is_read_past_a_bom_blank_lines_quotes_and_comments(self):
+        agents = self.project / ".claude" / "agents"
+        (agents / "bom.md").write_bytes(b"\xef\xbb\xbf---\nname: bom\nmodel: opus\neffort: high\n---\nbody")
+        (agents / "blank.md").write_text("\n\n---\nname: blank\nmodel: opus\neffort: high\n---\n")
+        (agents / "crlf.md").write_bytes(b"---\r\nname: crlf\r\nmodel: opus\r\neffort: high\r\n---\r\nbody")
+        (agents / "quoted.md").write_text("---\nname: \"quoted\"\nmodel: 'opus'\neffort: \"high\"  # why\n---\n")
+        (agents / "long.md").write_text("---\nname: long\ndescription: " + "x" * 20000 + "\nmodel: opus\neffort: high\n---\n")
+        (agents / "block.md").write_text("---\nname: block\ndescription: |\n  model: fake\n  effort: high\nmodel: opus\n---\n")
+        for kind in ("bom", "blank", "crlf", "quoted", "long"):
+            with self.subTest(kind=kind):
+                self.assertEqual(self.spawn(subagent_type=kind).stdout, "")
+        self.assertIn("names no effort.", self.denial(subagent_type="block"))  # an indented line is the description's
+
+    def test_a_definitions_effort_is_held_to_the_levels_as_the_calls_is(self):
+        agents = self.project / ".claude" / "agents"
+        (agents / "banana.md").write_text("---\nname: banana\nmodel: sonnet\neffort: banana\n---\n")
+        (agents / "most.md").write_text("---\nname: most\nmodel: opus\neffort: max\n---\n")
+        reason = self.denial(subagent_type="banana")
+        self.assertIn('The definition of banana names effort: "banana", which is not a level (low, medium, high, xhigh, max), '
+                      "and this Agent call names none.", reason)
+        self.assertEqual(self.spawn(subagent_type="banana", effort="medium").stdout, "")  # the call's effort overrides it
+        noted = json.loads(self.spawn(subagent_type="most").stdout)["hookSpecificOutput"]
+        self.assertEqual(set(noted), {"hookEventName", "additionalContext"})
+        self.assertIn("max effort", noted["additionalContext"])
+
+    def test_another_plugins_definition_is_read_from_where_it_is_installed(self):
+        install = self.tmp / "plugins" / "other" / "1.0.0"
+        (install / "agents").mkdir(parents=True)
+        (install / "agents" / "scout.md").write_text("---\nname: scout\nmodel: haiku\neffort: high\n---\n")
+        config = self.tmp / "home" / ".claude" / "plugins"
+        config.mkdir(parents=True)
+        self.assertIn("names no model and no effort.", self.denial(subagent_type="other:scout"))
+        (config / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {
+            "other@market": [{"scope": "user", "installPath": str(install)}], "odd@market": "x"}}))
+        self.assertEqual(self.spawn(subagent_type="other:scout").stdout, "")
+        self.assertIn("names no model and no effort.", self.denial(subagent_type="other:nobody"))
+        (config / "installed_plugins.json").write_text("{broken")
+        self.assertIn("names no model and no effort.", self.denial(subagent_type="other:scout"))
+
+    def test_a_fork_passes(self):
+        r = self.spawn(subagent_type="fork")
+        self.assertEqual((r.stdout, r.stderr), ("", ""))
+
+    def test_a_session_that_serves_no_fleet_passes(self):
+        outside = self.hook("PreToolUse", {**self.base("PreToolUse"), "tool_name": "Agent",
+                                           "tool_input": {"subagent_type": "general-purpose", "prompt": "go"}})
+        self.assertEqual((outside.returncode, outside.stdout, outside.stderr), (0, "", ""))
+        self.register(self.fleet, session="another-session")  # a ledger this session only holds
+        self.assertEqual(self.spawn().stdout, "")
+        self.register(self.fleet)
+        self.assertIn('"deny"', self.spawn().stdout)
+        for env in ({"FLEET_WORKER": "a1", "FLEET_DIR": str(self.fleet)}, {"TSTACK_ROLE": "worker"}):
+            with self.subTest(env=env):  # a worker launched as its own process runs at its launch's effort
+                self.assertEqual(self.spawn(env=env).stdout, "")
+        self.assertEqual(self.spawn(extra={"tool_name": "Bash"}).stdout, "")
+
+    def test_a_fleet_named_by_fleet_dir_and_a_workers_own_spawn_are_held_to_it(self):
+        (self.registry / "p.json").unlink()
+        self.assertEqual(self.spawn().stdout, "")
+        self.assertIn('"deny"', self.spawn(env={"FLEET_DIR": str(self.fleet)}).stdout)
+        self.register(self.fleet)
+        self.assertIn('"deny"', self.spawn(extra={"agent_id": "ab12cd34"}).stdout)  # a subagent of the session that serves
+
+    def test_an_effort_the_tool_does_not_take_is_denied(self):
+        reason = self.denial(model="opus", effort="ultra", description="Implementer: x")
+        self.assertIn('effort: "ultra" is not a level the Agent tool takes (low, medium, high, xhigh, max).', reason)
+        self.assertIn('Pass model: "opus", effort: "high": the Implementer pair of MODELS.md', reason)
+        self.assertIn('effort: "High" is not a level', self.denial(model="opus", effort="High"))
+        self.assertIn('effort: " high " is not a level', self.denial(model="opus", effort=" high "))
+
+    def test_max_is_noted_without_a_decision(self):
+        r = self.spawn(model="opus", effort="max")
+        out = json.loads(r.stdout)["hookSpecificOutput"]
+        self.assertEqual(set(out), {"hookEventName", "additionalContext"})
+        self.assertIn("max effort, which no role of MODELS.md uses", out["additionalContext"])
+        self.assertEqual(r.stderr, "")  # Claude never reads a hook's stderr on exit 0
+
+    def test_the_effort_variable_in_a_fleet_sessions_environment_is_noted_on_every_spawn(self):
+        forced = {"CLAUDE_CODE_EFFORT_LEVEL": "low"}
+        r = self.spawn(model="opus", effort="high", env=forced)
+        out = json.loads(r.stdout)["hookSpecificOutput"]
+        self.assertEqual(set(out), {"hookEventName", "additionalContext"})
+        self.assertIn("CLAUDE_CODE_EFFORT_LEVEL=low is set in this session's environment, and it takes precedence over the "
+                      "effort an Agent call passes and over a definition's `effort:`", out["additionalContext"])
+        self.assertIn("belongs in the `effortLevel` setting", out["additionalContext"])
+        self.assertIn("CLAUDE_CODE_EFFORT_LEVEL=low", self.spawn(subagent_type="tstack:reader", env=forced).stdout)
+        both = json.loads(self.spawn(model="opus", effort="max", env=forced).stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("CLAUDE_CODE_EFFORT_LEVEL=low", both)
+        self.assertIn("max effort", both)
+        denied = json.loads(self.spawn(model="opus", env=forced).stdout)["hookSpecificOutput"]
+        self.assertEqual(denied["permissionDecision"], "deny")  # still a deny, and it says the variable too
+        self.assertIn("names no effort", denied["permissionDecisionReason"])
+        self.assertIn("CLAUDE_CODE_EFFORT_LEVEL=low", denied["permissionDecisionReason"])
+        for quiet in (self.spawn(subagent_type="fork", env=forced), self.spawn(model="opus", effort="high", env={"CLAUDE_CODE_EFFORT_LEVEL": " "})):
+            self.assertEqual(quiet.stdout, "")
+        (self.registry / "p.json").unlink()  # outside a fleet: nothing
+        self.assertEqual(self.spawn(model="opus", effort="high", env=forced).stdout, "")
+
+    def test_outside_a_fleet_nothing_is_said_even_in_tuca_mode(self):
+        flag = self.data / "sessions" / "sess-1" / "tuca-mode"
+        flag.parent.mkdir(parents=True)
+        flag.write_text("")
+        (self.registry / "p.json").unlink()
+        for r in (self.spawn(model="opus"), self.spawn(), self.spawn(model="opus", effort="max"),
+                  self.spawn(model="opus", effort="ultra")):
+            self.assertEqual((r.stdout, r.stderr), ("", ""))
+        self.register(self.fleet)  # and the flag changes nothing in one
+        self.assertIn('"deny"', self.spawn(model="opus").stdout)
+
+    def test_the_hook_never_allows_a_spawn(self):
+        import inspect
+        returns = re.findall(r"^\s+return (.*)$", inspect.getsource(load_hook().fleet_spawn_effort), re.M)
+        self.assertTrue(returns)
+        self.assertTrue(all(r == "None" or r.startswith(("Deny(", "Note(")) for r in returns), returns)
+        probes = [{}, {"model": "opus"}, {"effort": "high"}, {"model": "opus", "effort": "high"},
+                  {"model": "opus", "effort": "max"}, {"model": "opus", "effort": "nope"}, {"subagent_type": "fork"},
+                  {"subagent_type": "tstack:advisor"}, {"subagent_type": "Explore"}, {"model": 7, "effort": ["high"]},
+                  {"prompt": self.BRIEFED.format(dir=self.fleet)}, {"description": None, "prompt": None}]
+        for probe in probes:
+            with self.subTest(probe=probe):
+                out = self.spawn(**probe).stdout
+                decision = json.loads(out)["hookSpecificOutput"] if out else {}
+                self.assertIn(decision.get("permissionDecision"), (None, "deny"))
+                self.assertNotIn("updatedInput", decision)
+
+    def test_a_granted_spawn_without_effort_is_still_denied(self):
+        spawn = {"subagent_type": "general-purpose", "description": "do it", "prompt": "go"}
+        rule = "Agent(" + json.dumps(spawn, sort_keys=True, ensure_ascii=False, separators=(",", ":")) + ")"
+        (self.project / ".claude" / "tstack-grants.json").write_text(json.dumps({"permissions": {"allow": [rule]}}))
+        self.assertIn("names no model and no effort.", self.denial())
+        with_both = {**spawn, "model": "opus", "effort": "high"}
+        rule = "Agent(" + json.dumps(with_both, sort_keys=True, ensure_ascii=False, separators=(",", ":")) + ")"
+        (self.project / ".claude" / "tstack-grants.json").write_text(json.dumps({"permissions": {"allow": [rule]}}))
+        self.assertIn('"allow"', self.spawn(model="opus", effort="high").stdout)  # fleet_agent_grant's, as before
+
+    def test_odd_input_never_breaks_it(self):
+        (self.fleet / "state.json").write_text('{"agents": [7, {"id": 3}, {"id": "a1", "model": 5, "skill": ["x"]}]}')
+        self.assertIn(f"Pass model: \"opus\" and the effort `{self.fleet_cli} brief {self.fleet} a1` prints",
+                      self.denial(prompt="your id is a1."))
+        (self.fleet / "state.json").write_text("{broken")
+        self.assertIn("Pass effort: per MODELS.md", self.denial())
+        for extra in ({"tool_input": ["x"]}, {"tool_input": {}}, {"tool_input": None}, {"effort": "low"}, {"cwd": 3}):
+            r = self.spawn(extra=extra)
+            self.assertEqual(r.returncode, 0)
+            self.assertNotIn('"allow"', r.stdout)
+        self.assertEqual(self.log(), "")
+
+    def test_without_models_md_the_denial_still_names_where_to_look(self):
+        root = self.tmp / "plugin"
+        (root / "hooks").mkdir(parents=True)
+        shutil.copy(HOOK, root / "hooks" / "tstack-hook")
+        r = subprocess.run([str(root / "hooks" / "tstack-hook"), "PreToolUse"], capture_output=True, text=True, timeout=30,
+                           input=json.dumps(self.payload("PreToolUse", tool_name="Agent", tool_input={"prompt": "go"})),
+                           env={**self.env, "CLAUDE_PLUGIN_ROOT": str(root)})
+        reason = json.loads(r.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn(f"Pass effort: per MODELS.md ({root}/skills/productivity/coordinator/MODELS.md)", reason)
+
+    def test_the_check_is_fast(self):
+        module = load_hook()
+        payload = self.payload("PreToolUse", tool_name="Agent", tool_input={"subagent_type": "general-purpose",
+                               "model": "opus", "prompt": self.BRIEFED.format(dir=self.fleet)})
+        hook = module.Hook("PreToolUse", payload, self.env)
+        self.assertIsInstance(module.fleet_spawn_effort(hook), module.Deny)
+        started = time.perf_counter()
+        for _ in range(50):
+            module.fleet_spawn_effort(module.Hook("PreToolUse", payload, self.env))
+        self.assertLess((time.perf_counter() - started) * 1000 / 50, 20)
+
+
 class PushParseTest(unittest.TestCase):
     """Reader.pushes: the pushes a shell line runs, where each runs, and whether the hook can read it."""
 
@@ -2141,8 +2436,8 @@ class SuiteGateTest(FleetCase):
 
 
 class PreToolUseDecisionTest(unittest.TestCase):
-    """Only fleet_agent_grant's Allow allows a call: a gate's text (land_turn_gate, suite_gate) denies or says nothing,
-    so auto mode's permission check is never skipped for a Bash command."""
+    """Only fleet_agent_grant's Allow allows a call: a gate's text (land_turn_gate, suite_gate, fleet_spawn_effort)
+    denies, notes or says nothing, so auto mode's permission check is never skipped for a Bash command or a spawn."""
 
     def setUp(self):
         self.mod = load_hook()
@@ -2161,6 +2456,13 @@ class PreToolUseDecisionTest(unittest.TestCase):
     def test_a_deny_wins_and_an_allow_comes_only_from_allow(self):
         self.assertEqual(self.decide(lambda hook: self.mod.Allow("granted")), "allow")
         self.assertEqual(self.decide(lambda hook: self.mod.Allow("granted"), lambda hook: self.mod.Deny("no")), "deny")
+
+    def test_a_note_is_context_with_no_decision_and_a_deny_or_an_allow_drops_it(self):
+        self.mod.HANDLERS["PreToolUse"] = [lambda hook: self.mod.Note("mind this")]
+        out = json.loads(self.mod.dispatch("PreToolUse", "{}", {"HOME": tempfile.gettempdir()}))
+        self.assertEqual(out, {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "mind this"}})
+        self.assertEqual(self.decide(lambda hook: self.mod.Note("mind"), lambda hook: self.mod.Deny("no")), "deny")
+        self.assertEqual(self.decide(lambda hook: self.mod.Note("mind"), lambda hook: self.mod.Allow("yes")), "allow")
 
     def test_the_gates_return_only_a_deny(self):
         import inspect

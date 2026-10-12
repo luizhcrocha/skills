@@ -141,7 +141,10 @@ renames it. Milestones are never removed.
   running, lane [], tokens 0, duration_ms 0, rounds 1, brief "", report "", `started` = `updated`
   = now; `task_id` when given; `name_by: "coordinator"` (after `task_id`) when `--name` is given. Logs `spawned` (`--log`, else `Spawned on <model> following <skill>.`).
   `--step S` marks S current with this agent (unknown S refused). Prints
-  `recorded ID (NAME); its brief opens with: Read DIR/brief.md first; your id is ID.`
+  `recorded ID (NAME); its brief opens with: Read DIR/brief.md first; your id is ID.`, then the Agent call's
+  parameters, `Spawn with model: "opus", effort: "high" (ID's Agent call takes both: a fleet refuses a spawn
+  without effort).` (TypeScript only: the frozen twin prints the first line alone, which the traces' `spawn-hint`
+  normaliser hides on a replay on it).
 - Known: status `done` → `running` adds a round. `--task-id` sets it and forgets `measured`.
   `--name N` sets the name and `name_by: "coordinator"`; `--name ""` puts the id back and drops
   `name_by`, so the worker's session names it again (below). The other fields given are set; `--tokens` or `--duration-ms` set `measured: "by hand"`, after which the
@@ -584,7 +587,8 @@ oracle's model reads state.py's), so a new table is one edit in each and re-reco
 effort only, its kind's model; given a model only, its kind's effort when that pair is approved, else the
 model's own (`alone`). A known row changes only the fields given: a
 new `--model` leaves the effort as it was. A row recorded before efforts has no `effort` key; nothing
-fills it (validation fills `model`, not `effort`), `show` prints `-`, `fleet brief` names no effort, and
+fills it (validation fills `model`, not `effort`), `show` prints `-`, `fleet brief` names the effort its skill
+and model give (a spawn always carries one, see [Rules as commands](#rules-as-commands-fleet-brief-fleet-turn)), and
 the policy judges it by its model alone. The ledger has no marker for a monitor or watcher row, so no
 kind gives one (sonnet low is approved when given).
 
@@ -2372,10 +2376,43 @@ rule's disposition are in [RULES.md](RULES.md)). Beside the refusals and warning
   workspace of the repo the command runs in), that the worker edits only its lane there, moves no history
   and describes nothing (no `jj new`, `jj edit`, `jj rebase`, `jj describe`, nor `split`, `squash`,
   `commit`, `abandon`, `restore`), and that the coordinator splits the copy by lane paths into one
-  described change per worker. On stderr, for the coordinator: a missing completion criterion, a lane
-  with no workspace (isolated only), and the model and effort to spawn it on (`model: "opus", effort:
-  "high"`; the model alone for a row with no effort) with the `--task-id` to record after. A worker
+  described change per worker. On stderr, for the coordinator: first, before the brief, the Agent call's
+  parameters (`Spawn with model: "opus", effort: "high" (a1's Agent call takes both: a fleet refuses a spawn
+  without effort).`, the line `state agent` prints for a new worker; a row with no effort takes the one its
+  skill and model give, as a new row would); then a missing completion criterion, a lane
+  with no workspace (isolated only), and the same model and effort with the `--task-id` to record after. A worker
   with no row is refused: it is recorded first. Matched by id, then by name.
+- **A spawn names its model and effort** (the plugin's hook, `fleet_spawn_effort`, PreToolUse with matcher
+  `Agent`). A coordinator's or manager's session runs at low effort, and an Agent call without `effort`
+  inherits the session's: on 2026-10-12 every worker of one fleet ran at low, 29 of its 31 spawns having
+  passed `model` alone (measured; `CLAUDE_CODE_EFFORT_LEVEL=low` was also set that day, which held the
+  other 2 at low too). In a session that serves a fleet (`$FLEET_DIR`, else a fleet folder of
+  its scratchpad that the registry records under the session's id; a subagent's own spawn counts, a worker
+  launched as its own process with `$FLEET_WORKER` or `TSTACK_ROLE=worker` does not) an Agent call with no
+  `model` or no `effort` gets `permissionDecision: deny`. The reason says what is missing and what a spawn
+  without it gets, then names the pair to pass, from the first source that has one:
+  1. the ledger's row of the worker the call briefs: the row whose id the prompt's first line gives, as
+     `fleet brief` opens a brief (`your id is a1.`). An id or a name anywhere else in the call is not taken
+     for the worker spawned. A row with no effort (from before efforts were recorded, or with one that is
+     no level) gets its model and `fleet brief DIR ID` to run for the effort: `roleDefaults` in
+     `src/ledger/roles.ts` is the one place that works it out;
+  2. the role of [MODELS.md](../skills/productivity/coordinator/MODELS.md)'s table that the call names: the
+     only role in its description, else `subagent_type: "Explore"` as a Researcher. A role or a skill the
+     prompt mentions is not the spawn's;
+  3. that table's pairs, read from the file, for the spawner to choose from.
+
+  What passes without the parameters: `subagent_type: "fork"`, which inherits by design, and a definition
+  whose frontmatter carries what the call lacks (`agents/<name>.md` of the plugin a `<plugin>:<name>` names,
+  this plugin's own or one in the user's `plugins/installed_plugins.json`; a bare name in the project's or
+  the user's `.claude/agents`; a byte order mark, blank lines before the opening `---`, quotes and a
+  trailing comment are read past). An `effort` outside low, medium, high, xhigh and max is denied the same
+  way, the call's or, when the call names none, the definition's. Two things pass with a note
+  (`additionalContext`, no decision): `max`, which no role uses, and `CLAUDE_CODE_EFFORT_LEVEL` set in the
+  session's environment, which takes precedence over a call's `effort` and a definition's `effort:`
+  (Claude Code's sub-agents doc, "Choose an effort level") and so belongs in the `effortLevel` setting; a
+  denial says the second too. The hook never allows a call here: a deny, a note, or no output. A grant of
+  the same input ([Letting a spawn through](#permission-grants)) does not lift the denial, since a deny
+  outranks an allow. Outside a fleet it says nothing: Claude never reads a hook's stderr on exit 0.
 - `fleet turn [DIR]` says whether the fleet holds the landing turn: the manager's `landings` step whose
   agent is the fleet's registry name is current. Exit 0 when it does, when no manager is served (the
   fleet lands on its own word), or, without DIR, when the session runs no served fleet; exit 1 (`turn:

@@ -116,7 +116,7 @@ A fleet's name is its session's: the registry reads it from the session's title,
 
 A fleet's advisor plays the Advisor role ([MODELS.md](../coordinator/MODELS.md)) and is restarted on the role's fallback when its model is unavailable (its row's model says which). When one fleet reports Fable unavailable, post it to the news (`--kind fyi`): their next advisor spawn goes straight to the fallback.
 
-Your own session plays the Manager role and the coordinators the Coordinator role ([MODELS.md](../coordinator/MODELS.md)): Opus at low effort, set by the launch settings (`CLAUDE_CODE_EFFORT_LEVEL`), since the turns are routing and bookkeeping and the hard calls go to an advisor or a Decider. So every agent you spawn gets its role's `model` and `effort` on the Agent call: one spawned bare inherits your low effort.
+Your own session plays the Manager role and the coordinators the Coordinator role ([MODELS.md](../coordinator/MODELS.md)): Opus at low effort, set by the `effortLevel` setting of the launch's `.claude/settings.local.json` (never by `CLAUDE_CODE_EFFORT_LEVEL`, which overrides the effort of every agent spawned too), since the turns are routing and bookkeeping and the hard calls go to an advisor or a Decider. So every agent you spawn gets its role's `model` and `effort` on the Agent call: one spawned bare would inherit your low effort, and the plugin's hook refuses it in a fleet.
 
 A fleet's notices (acts done under a standing approval the user gave, the coordinator's SKILL.md "Standing approvals") reach you as fyi news: read them with the rest, and raise one with the user only when it looks outside its approval's words.
 

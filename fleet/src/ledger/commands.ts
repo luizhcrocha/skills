@@ -29,7 +29,7 @@ import { approvalSource, comesFrom, namesOf, NoSource, refOf, sameSource } from 
 import { LINK_KINDS, linkKind, OLD_LINK_KINDS, type LinkKind } from "./links.ts";
 import { callRev, makeRefusedCall, permissionOptions } from "./permission.ts";
 import { foldersOf, permissionWords, type RefusedBy, type Spawn } from "./permission-words.ts";
-import { roleDefaults } from "./roles.ts";
+import { roleDefaults, spawnLine } from "./roles.ts";
 import { CHOICE_KINDS, ID, KINDS, nameRefusal } from "./validate.ts";
 import { closedNamed, isLive, sharedOverlap, UNFINISHED } from "./warnings.ts";
 
@@ -588,6 +588,7 @@ export function agent(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
       run.say(
         `recorded ${fresh.id} (${fresh.name}); its brief opens with: Read ${join(run.root, "brief.md")} first; your id is ${fresh.id}.`,
       );
+      run.say(spawnLine(fresh.id, fresh.skill, fresh.model, fresh.effort));
 
       return ledger;
     }

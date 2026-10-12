@@ -1,4 +1,4 @@
-{"trace": 1, "name": "workspaces", "about": "set --workspaces: a fleet whose workers share one working copy refuses a running lane that meets a live one (L7's rule), an isolated fleet only warns; show names the mode, a bad mode is a usage error, and the page renders with it"}
+{"trace": 1, "name": "workspaces", "about": "set --workspaces: a fleet whose workers share one working copy refuses a running lane that meets a live one (L7's rule), an isolated fleet only warns; show names the mode, a bad mode is a usage error, and the page renders with it", "twin": {"why": "the spawn hint (TypeScript only, 1.9.39): `state agent` prints `Spawn with model: ..., effort: ...` after the `recorded` line of a new worker, where the twin prints the `recorded` line alone", "normalise": ["spawn-hint"]}}
 {"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "Parser", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "set", "--workspaces", "shared", "--no-render"]}

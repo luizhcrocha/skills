@@ -4,7 +4,8 @@
  * the task, its completion criterion, the skill and how a worker loads it (the Skill tool, or the Read
  * tool for a user-invoked skill, read from the skill's own frontmatter), the lane, the workspace
  * `fleet ws add` recorded for it (or, in a fleet that shares one working copy, that copy) with the rules of
- * history that go with it, the step it works and its id on the chat. Refused for a worker the
+ * history that go with it, the step it works and its id on the chat. Before the brief, on stderr, the
+ * line the coordinator spawns it by: the Agent call's `model` and `effort`. Refused for a worker the
  * ledger does not have: a worker is recorded, then spawned.
  */
 import { readdirSync } from "node:fs";
@@ -18,6 +19,7 @@ import { exists, readText, resolvePath, SKILL_DIR } from "../files.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, parseObject, type JsonObject } from "../json.ts";
 import { decodeLedger, type Agent, type Ledger } from "../ledger/model.ts";
+import { roleDefaults, spawnLine } from "../ledger/roles.ts";
 import { activeWorkspaces } from "../ledger/warnings.ts";
 import { readObject } from "../registry.ts";
 import { readRecord, serverProc } from "../preview/record.ts";
@@ -188,9 +190,11 @@ function compose(root: string, ledger: Ledger, raw: JsonObject, a: Agent): Compo
 
   if (step !== undefined) brief.push(step);
   brief.push(`Chat: you are ${a.id} on the fleet's chat; brief.md says when to read your inbox and how to answer.`);
+  const role = roleDefaults(a.skill ?? "none", a.model ?? "opus", a.effort);
+
   notes.push(
     `brief: add the context only you have (decisions from the session, CONTEXT.md terms, ADRs, the user's constraints), ` +
-      `spawn ${a.id} on model: "${a.model ?? "opus"}"${a.effort === undefined || a.effort === "" ? "" : `, effort: "${a.effort}"`} (run_in_background), then \`fleet state ${root} agent ${a.id} --task-id <its agentId>\`.`,
+      `spawn ${a.id} on model: "${role.model}", effort: "${role.effort}" (run_in_background), then \`fleet state ${root} agent ${a.id} --task-id <its agentId>\`.`,
   );
 
   return { brief, notes };
@@ -216,6 +220,8 @@ function run(argv: readonly string[]): Effect.Effect<number, Refusal, Out> {
     }
 
     const { brief, notes } = compose(root, ledger, raw, a);
+
+    out.err(`${spawnLine(a.id, a.skill, a.model, a.effort)}\n`);
 
     for (const line of brief) out.out(`${line}\n`);
 
