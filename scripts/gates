@@ -182,11 +182,16 @@ def _limit(recipe: str, override: float | None) -> float:
     return override if override is not None else LIMITS.get(recipe, DEFAULT_LIMIT)
 
 
+# Git as the suites see it: no user or system config, so a throwaway repo's commit never waits on the user's
+# signing (1Password locked, an agent headless). The justfile's test recipes set the same for a suite run alone.
+HERMETIC_GIT = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+
+
 def _run(recipe: str, override: float | None = None, env: dict | None = None) -> tuple[str, int, float, str]:
     limit = _limit(recipe, override)
     # A suite runs this checkout's fleet, never the newest tstack elsewhere on the machine.
     code, timed_out, secs, out = run_limited(["just", "--no-deps", recipe], limit, cwd=REPO, nice=NICE.get(recipe, 0),
-                                             env={"FLEET_NO_FORWARD": "1", **(env or {})})
+                                             env={"FLEET_NO_FORWARD": "1", **HERMETIC_GIT, **(env or {})})
     if timed_out:
         lines = out.splitlines()[-TAIL_LINES:]
         out = (f"gates: {recipe} timed out after {limit:g}s; its process group was killed. "
