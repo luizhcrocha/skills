@@ -13,7 +13,7 @@ import { Refusal } from "../errors.ts";
 import { answeredAt, answeredGrill, decisionRow, explainCommand, failedAnswer, failureWords, unexplained } from "../health.ts";
 import { asArray, asNumber, asObject, asString, type JsonObject } from "../json.ts";
 import { readObject } from "../registry.ts";
-import { callRev } from "./permission.ts";
+import { callsLine, refusalRev } from "./permission.ts";
 import { showHidden } from "./permission-words.ts";
 import { secondsNow, type Machine } from "../world.ts";
 import { copyLedger, decodeLedger, type Ledger } from "./model.ts";
@@ -149,8 +149,8 @@ export function unrecorded(ledger: Ledger, said: readonly Message[]): string[] {
       if (unexplained(d)) {
         lines.push(
           `state: ${d.ref ?? d.id} (${d.title ?? "None"}) is a call auto mode refused, and the user cannot judge it yet. Its call is ` +
-            `${showHidden(d.refusal?.call ?? "")} (revision ${callRev(d.refusal?.rule ?? "")}): explain it now, ` +
-            `${explainCommand("fleet", "<dir>", d.ref ?? d.id, callRev(d.refusal?.rule ?? ""))}.`,
+            `${showHidden(d.refusal === undefined || d.refusal === null ? "" : callsLine(d.refusal))} (revision ${refusalRev(d.refusal)}): explain it now, ` +
+            `${explainCommand("fleet", "<dir>", d.ref ?? d.id, refusalRev(d.refusal))}.`,
         );
       }
 

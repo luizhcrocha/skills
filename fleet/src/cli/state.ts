@@ -140,6 +140,7 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
       opt.value("--resolution", { metavar: "HOW" }),
       opt.value("--tool", { hidden: true }),
       opt.value("--call", { hidden: true }),
+      opt.append("--then", { hidden: true }),
       opt.value("--cause", { hidden: true }),
       opt.value("--root", { hidden: true }),
       opt.value("--agent-id", { hidden: true }),

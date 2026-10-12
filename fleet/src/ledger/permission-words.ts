@@ -728,6 +728,8 @@ export interface RefusalFacts {
   readonly cause: string;
   readonly root: string;
   readonly agent_id: string | null;
+  /** The further commands an ask carries (permission.ts `callsOf`). */
+  readonly more?: readonly string[];
 }
 
 /** A refused spawn as the caller read it from the Agent call's input: its agent type and description (the
@@ -771,6 +773,16 @@ export function permissionWords(r: RefusalFacts, by: RefusedBy | undefined, host
     return clean({
       title: `Allow ${who} to start a ${cut(spawn.type, 40)} agent${described}?`,
       question: `Let ${who} start this exact ${cut(spawn.type, 40)} agent once? Read its input in full below before you answer.`,
+      why,
+    });
+  }
+
+  const calls = 1 + (r.more ?? []).length;
+
+  if (calls > 1) {
+    return clean({
+      title: `Allow ${who} to run ${String(calls)} commands, once each?`,
+      question: `Let ${who} run these ${String(calls)} exact calls, once each? Read each one in full below before you answer.`,
       why,
     });
   }

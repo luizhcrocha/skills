@@ -112,12 +112,16 @@ export interface RefusedCall {
   call: string;
   /** `<tool>(<call>)`: the exact rule the hub adds (permission.ts `grantFileOf` says where). */
   rule: string;
-  /** The classifier's reason, e.g. `[Git Destructive]`. */
+  /** The classifier's reason, e.g. `[Git Destructive]`; empty for a permission asked before its call ran. */
   cause: string;
   /** The session's project directory: the grant goes into `<root>/.claude/`. */
   root: string;
   /** The harness's id of the refused caller; null on the session's main thread. */
   agent_id: string | null;
+  /** The further commands an ask carries, each granted once with `call` (permission.ts `callsOf`). */
+  more?: string[];
+  /** The files the calls are bound to, `<n> <sha256> <path>` each (permission.ts `runsOf`); absent when none is. */
+  runs?: string[];
 }
 
 /** A decision, input, secret, action, grilling or permission: what waits on the user (or the manager). */
@@ -714,12 +718,16 @@ export const DECISION_KEYS = [
   "undo",
 ] as const;
 
-export const REFUSAL_KEYS = ["tool", "call", "rule", "cause", "root", "agent_id"] as const;
+export const REFUSAL_KEYS = ["tool", "call", "rule", "cause", "root", "agent_id", "more", "runs"] as const;
 
 function readRefusal(decision: string): (object: JsonObject) => Fields | RefusedCall {
   return (object) => {
     const f = new Fields(object, `decision ${decision}'s refusal`);
     const row: RefusedCall = { tool: f.str("tool"), call: f.str("call"), rule: f.str("rule"), cause: f.str("cause"), root: f.str("root"), agent_id: f.strOrNull("agent_id") };
+
+    if (object["more"] !== undefined) row.more = f.strList("more");
+
+    if (object["runs"] !== undefined) row.runs = f.strList("runs");
 
     return f.done(row, REFUSAL_KEYS);
   };

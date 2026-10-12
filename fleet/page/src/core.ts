@@ -31,6 +31,12 @@ export interface Posted {
   readonly text: string;
   /** A permission's rule as the page showed it: the hub grants that rule alone. */
   readonly rule?: string;
+  /** Every rule the page showed, in order, when the permission asks for several calls. */
+  readonly rules?: readonly string[];
+  /** The folder the page showed the grant going into: the hub grants only there. */
+  readonly root?: string;
+  /** The files the page showed the calls bound to: the hub grants only while they hash to this. */
+  readonly runs?: readonly string[];
 }
 
 /** A lookup of one text by another, for the keys a table names. */
@@ -99,7 +105,7 @@ export interface Question {
   readonly options?: readonly DecisionOption[];
 }
 
-/** The call auto mode refused, which a permission lets through once. */
+/** The call a permission lets through once: one auto mode refused, or (no cause) one asked before it ran. */
 export interface RefusedCall {
   readonly tool: string;
   readonly call: string;
@@ -107,6 +113,42 @@ export interface RefusedCall {
   readonly cause: string;
   readonly root: string;
   readonly agent_id: string | null;
+  /** The further commands an ask carries, each granted once with `call`. */
+  readonly more?: readonly string[];
+  /** The files the calls are bound to, `<n> <sha256> <path>` each (the fleet's `runsOf`). */
+  readonly runs?: readonly string[];
+}
+
+/** A file one call of a permission is bound to. */
+export interface BoundFile {
+  readonly path: string;
+  readonly sha256: string;
+}
+
+/** A permission's calls in the order asked (the fleet's `callsOf`). */
+const callsOf = (r: Pick<RefusedCall, "call" | "more">): readonly string[] => [r.call, ...(Array.isArray(r.more) ? r.more : [])];
+
+/** What a permission's allow-once sends beside its text: the rule, the folder and, for several calls, every
+ * rule, each as the page shows it. The hub grants nothing when the row has moved since. */
+function shownGrant(r: RefusedCall): Pick<Posted, "rule" | "rules" | "root" | "runs"> {
+  const calls = callsOf(r);
+  const runs = Array.isArray(r.runs) && r.runs.length > 0 ? { runs: r.runs.filter(isText) } : {};
+
+  return calls.length === 1 ? { rule: r.rule, root: r.root, ...runs } : { rule: r.rule, root: r.root, rules: calls.map((call) => `${r.tool}(${call})`), ...runs };
+}
+
+/** The files call `n` (from 1) of a permission is bound to; none when the fleet could bind it to none. */
+function boundFiles(r: Pick<RefusedCall, "runs">, n: number): readonly BoundFile[] {
+  return (Array.isArray(r.runs) ? r.runs : []).flatMap((entry) => {
+    const found = isText(entry) ? /^([1-9][0-9]*) ([0-9a-f]{64}) (\/.*)$/u.exec(entry) : null;
+
+    return found && Number(found[1]) === n ? [{ sha256: found[2] ?? "", path: found[3] ?? "" }] : [];
+  });
+}
+
+/** Everything a permission's yes would grant, as one text: the page clears a picked answer when it changes. */
+function grantShown(d: Pick<Decision, "kind" | "refusal">): string {
+  return d.kind === "permission" && d.refusal ? JSON.stringify(shownGrant(d.refusal)) : "";
 }
 
 /** A decision as the page renders it. */
@@ -1354,7 +1396,7 @@ function answerText(item: Decision, form: AnswerForm): Posted | { error: string 
     if (!option) return { error: "Pick one option." };
     const posted = withNote(option.id + ": " + String(option.label));
 
-    return item.kind === "permission" && item.refusal ? { ...posted, rule: item.refusal.rule } : posted;
+    return item.kind === "permission" && item.refusal ? { ...posted, ...shownGrant(item.refusal) } : posted;
   }
 
   if (form.failed && item.kind === "action") return note ? { text: FAILED + " " + note } : { error: "Say what happened: what you ran and what it said." };
@@ -2195,6 +2237,9 @@ export const Core = {
   isHeld,
   explained,
   plainCause,
+  callsOf,
+  boundFiles,
+  grantShown,
   isNotice,
   noticesOf,
   revokeText,

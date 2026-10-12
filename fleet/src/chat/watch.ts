@@ -15,7 +15,7 @@ import { answeredAt, answeredGrill, answerRecorded, decisionRow, explainCommand,
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger, type Decision, type Ledger } from "../ledger/model.ts";
-import { callRev } from "../ledger/permission.ts";
+import { refusalRev } from "../ledger/permission.ts";
 import { stripHidden } from "../ledger/permission-words.ts";
 import { findDecision, number } from "../ledger/numbers.ts";
 import { Refusal } from "../errors.ts";
@@ -356,7 +356,7 @@ function unexplainedPermissions(root: string, told: Map<string, Json>): string[]
     const ref = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
     lines.push(
       `! ${ref} (${oneLine(d.title)}): auto mode refused a worker's call, and the page waits for your explanation. ` +
-        `Explain it now: ${explainCommand("fleet", root, ref, callRev(d.refusal?.rule ?? ""))}.`,
+        `Explain it now: ${explainCommand("fleet", root, ref, refusalRev(d.refusal))}.`,
     );
   }
 
@@ -620,7 +620,10 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
         out.out(
           d.kind === "action" && m.text.startsWith(FAILED)
             ? `-> the user's step ${d.label} failed, and it is not done: fix it and re-present it, \`fleet state ${root} decision ${d.label} --manual ...\`, or --withdraw "why"; never --decide\n`
-            : `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide ...\`\n`,
+            : d.kind === "permission"
+              ? `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide "<allow-once or deny>" --resolution "answered on the page (#${m.id})"\`; ` +
+                "for an allow-once that prints the exact call to run, and nothing of it runs before\n"
+              : `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide ...\`\n`,
         );
 
         return;

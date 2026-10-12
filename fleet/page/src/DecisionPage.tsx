@@ -15,7 +15,7 @@ import { askParts, type AskPart } from "./ask.ts";
 import { grillAsk, grillReason } from "./grill.ts";
 import { listen, PillAs, RefTag, tf, usePage, Who } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
-import { Core, type Decision, type GrillEntry, type Json, type JsonRecord, type MarkDecision, type Question, type Queue } from "./core.ts";
+import { Core, type BoundFile, type Decision, type GrillEntry, type Json, type JsonRecord, type MarkDecision, type Question, type Queue } from "./core.ts";
 import { DecisionHistory } from "./DecisionHistory.tsx";
 import { DetailsFold } from "./DetailsFold.tsx";
 import { DecisionThread } from "./DecisionThread.tsx";
@@ -321,8 +321,22 @@ function Discuss(): JSX.Element {
 function AnswerForm(props: { readonly d: Decision; readonly class?: string; readonly children: JSX.Element }): JSX.Element {
   const { m, ui } = usePage();
   const [error, setError] = createSignal("");
+  /* What an answer would be given to: the revision, and for a permission everything its yes would grant. */
+  const shown = (): string => ui.revisionOf(props.d) + "\n" + Core.grantShown(props.d);
+  const [moved, setMoved] = createSignal(false);
   let form: HTMLFormElement | undefined;
-  const draftKey = (): string => "dv-draft:" + props.d.id + ":" + ui.revisionOf(props.d);
+  let answering = shown();
+  const draftKey = (): string => "dv-draft:" + props.d.id + ":" + shown();
+
+  /* The item changed under a picked answer (a call swapped in place, another folder, an edited script): the pick
+     was for what the user read, so it is cleared, and the page says so. A typed note stays. */
+  createEffect(shown, (now) => {
+    if (now === answering) return;
+    answering = now;
+
+    for (const el of form?.querySelectorAll<HTMLInputElement>('input[type="radio"], input[type="checkbox"]') ?? []) el.checked = false;
+    setMoved(true);
+  });
 
   const fields = (): (HTMLInputElement | HTMLTextAreaElement)[] =>
     form ? [...form.elements].filter((el): el is HTMLInputElement | HTMLTextAreaElement => (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.name !== "" && el.type !== "submit" && el.type !== "button") : [];
@@ -444,6 +458,7 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
   return (
     <form
       class={"dv-form" + (props.class ? " " + props.class : "")}
+      data-moved={moved() ? "" : undefined}
       novalidate
       ref={(el) => (form = el)}
       onInput={(e) => {
@@ -458,11 +473,40 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
       onChange={save}
       onSubmit={(e) => void submit(e)}
     >
+      <Show when={moved()}>
+        <p class="dv-moved" id="dv-moved" role="alert">
+          This changed while you had it open. Read it again: {props.d.kind === "permission" ? "the call, its folder or a file it runs is not what you saw, and your" : "your"} choice was cleared.
+        </p>
+      </Show>
       {props.children}
       <p class="chat-error" id="dv-error" role="alert" hidden={!error()}>
         {error()}
       </p>
     </form>
+  );
+}
+
+/** What a Bash call of a permission is bound to: each script it runs by an absolute path, by the file's sha256
+ * (the hub grants only while the file hashes to it, and the hook lets the call run only while it still does); or
+ * nothing, said in plain words, for a command that is found by name when it runs. */
+function CallRuns(props: { readonly files: readonly BoundFile[] }): JSX.Element {
+  return (
+    <Show
+      when={props.files.length > 0}
+      fallback={
+        <p class="call-runs" data-unbound>
+          The file's content is not bound: this grant is for the command as written, and what the command runs is found when it runs.
+        </p>
+      }
+    >
+      <For each={props.files}>
+        {(file) => (
+          <p class="call-runs" data-runs>
+            Runs this file: <code>{file.path}</code> (sha256 <code>{file.sha256.slice(0, 12)}</code>). The grant holds only while the file stays as it is now.
+          </p>
+        )}
+      </For>
+    </Show>
   );
 }
 
@@ -739,19 +783,39 @@ function Form(props: { readonly d: Decision }): JSX.Element {
               <>
                 <div class="dv-block refused">
                   <dl>
-                    <dt>Auto mode stopped it because</dt>
-                    <dd>
-                      {Core.plainCause(r().cause)} ({r().cause})
-                    </dd>
+                    <Show
+                      when={r().cause !== ""}
+                      fallback={
+                        <>
+                          <dt>Asked before running</dt>
+                          <dd>nothing has been tried: the fleet runs it only once you allow it</dd>
+                        </>
+                      }
+                    >
+                      <dt>Auto mode stopped it because</dt>
+                      <dd>
+                        {Core.plainCause(r().cause)} ({r().cause})
+                      </dd>
+                    </Show>
                     <Show
                       when={r().tool === "Agent"}
                       fallback={
-                        <>
+                        <Show
+                          when={Core.callsOf(r()).length === 1}
+                          fallback={
+                            <>
+                              <dt>Rules</dt>
+                              <dd>
+                                one exact rule for each of the {Core.callsOf(r()).length} calls below, <code>Bash(&lt;the call&gt;)</code>
+                              </dd>
+                            </>
+                          }
+                        >
                           <dt>Rule</dt>
                           <dd>
                             <code>{r().rule}</code>
                           </dd>
-                        </>
+                        </Show>
                       }
                     >
                       <dt>Let through by</dt>
@@ -764,8 +828,32 @@ function Form(props: { readonly d: Decision }): JSX.Element {
                   </dl>
                 </div>
                 <div class="dv-block exact-call" data-exact-call>
-                  <h3>{r().tool === "Agent" ? "The exact agent you allow" : "The exact call you allow"}</h3>
-                  <Show when={r().tool === "Agent"} fallback={<CodeBlock lang="sh" text={r().call} wrap />}>
+                  <h3>{r().tool === "Agent" ? "The exact agent you allow" : Core.callsOf(r()).length === 1 ? "The exact call you allow" : `The ${Core.callsOf(r()).length} exact calls you allow, once each`}</h3>
+                  <Show
+                    when={r().tool === "Agent"}
+                    fallback={
+                      <Show
+                        when={Core.callsOf(r()).length > 1}
+                        fallback={
+                          <>
+                            <CodeBlock lang="sh" text={r().call} wrap />
+                            <CallRuns files={Core.boundFiles(r(), 1)} />
+                          </>
+                        }
+                      >
+                        <ol class="exact-calls">
+                          <For each={Core.callsOf(r())}>
+                            {(call, k) => (
+                              <li>
+                                <CodeBlock lang="sh" text={call} wrap />
+                                <CallRuns files={Core.boundFiles(r(), k() + 1)} />
+                              </li>
+                            )}
+                          </For>
+                        </ol>
+                      </Show>
+                    }
+                  >
                     <CodeBlock lang="json" text={spawnInput(r().call)} wrap />
                   </Show>
                 </div>

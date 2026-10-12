@@ -614,7 +614,7 @@ decisions[]   {id, ref, kind, title, question, why, blocking, agent, options[]: 
                (open|answered|dropped), answer, asked, answered?, dropped?,
                options[]?: {id, label, consequence}}),
                held?, held_at? (the fleet works on the answer first; removed when re-presented or closed),
-               refusal? (permission, TypeScript only: {tool, call, rule, cause, root, agent_id}),
+               refusal? (permission, TypeScript only: {tool, call, rule, cause, root, agent_id, more?}),
                advised? (the advisor's view, or none:<why>), under?, undo? (a notice's)}
 approvals[]?  {id, rule, by, ref (a decision id, or FLEET/<number> in another fleet's ledger), question? (q<n>),
                message?, author?, added, status (active|revoked),
@@ -1691,7 +1691,10 @@ stay Python's (below). Auto mode refuses a worker's tool call; the plugin's hook
 it, the user answers on the page, and the hub, not an agent (Claude Code's classifier refuses an agent
 that writes its own allow rule), adds a one-time allow rule to the session's settings. The hook
 removes the rule once the call has run, or at the first tool call of the session after 30 minutes (one
-constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
+constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text). A coordinator also
+**asks** for one before it runs a call that needs the user's yes (a deploy, a production migration, a push
+that deploys): the same row, grant and removal, with no refusal to provoke (Asking, below). One yes is one
+run of each exact command shown; the next run of the same command asks again.
 
 - **Whose fleet** (`grant_dirs`): the hook records a refusal in, and counts a call against the grants of,
   every fleet of the session: those of `fleet_dirs` (Heartbeats: `$FLEET_DIR`, else the scratchpad's), and
@@ -1732,10 +1735,17 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
 
 - **An exact rule**: `Bash(<call>)`, for a call that holds none of newline (`\n`, `\r`), `*` (a rule
   reads it as a wildcard), `\` (Claude Code's rule parser reads an escape, so the rule would not match
-  the call) and `|` (no exact rule cleared a piped command, below). This one set is `whyNoRule` in
-  `src/ledger/permission.ts` and `RULE_UNSAFE_CHARS` in the hook; the CLI
+  the call) and `|` (no exact rule cleared a piped command, below), that is printable ASCII and spaces
+  alone, with no space at either end, and at most 2,000 characters (`MAX_CALL_CHARS`). The last three are
+  for the reader, not the rule: a Cyrillic `е`, a zero-width space, a no-break space, a tab and a
+  right-to-left override (which shows the command reversed) are characters the user cannot tell on the
+  card from what they imitate, a space at an end is one Claude Code trims before it matches, and a longer
+  call is not read whole (2,000 characters is about a screen and a half at 390 px). The refusal names the
+  character and where it is: `the call has a character outside printable ASCII at position <n>
+  (U+<code>), which the user cannot tell from a plain one on the card`. This one set is `whyNoRule` in
+  `src/ledger/permission.ts` and `_holdable` in the hook; the CLI
   refuses a permission for any other call, the hook opens an action with `--manual` for it, and the hub
-  grants none. **What a rule matches in a compound command**, measured in auto mode on Claude Code 2.1.296
+  grants none. The limits are for Bash calls: an Agent call is its input as JSON, a prompt included. **What a rule matches in a compound command**, measured in auto mode on Claude Code 2.1.296
   (a headless `claude -p --permission-mode auto` in a throwaway project whose stand-in scripts only append
   to a log; each call refused as `[Production Deploy]` without a rule, one run per shape but the pipe):
   - an exact rule for the whole string cleared `cd <dir> && A`, `A; B`, `A && B && C`, `VAR=x A`,
@@ -1746,6 +1756,25 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
     `A && B && C`, two cleared `A; B` and `A | tail -n 5`, and **one rule for A cleared `A; A`, which ran
     A twice**; a rule for some parts only (`echo start; A`, `B && A` with A's rule) cleared nothing;
   - a rule for `B && A` cleared neither `A` alone nor `B && A && B && A`.
+
+  **What Claude Code does to a command before it compares it with an exact rule**, read from its bundled
+  source and measured the same way on 51 variants of one stand-in command (2026-10-12): it trims the ends;
+  removes redirections (`2>&1`, `> file`, `>> file`, `2>/dev/null`, `< file`); drops a comment; and then,
+  until nothing changes, strips a leading assignment of one of 36 names (`CI`, `NODE_ENV`, `TZ`, `LANG`,
+  `NO_COLOR`, ...; the hook's `SAFE_ENV_NAMES`) whose value is `[A-Za-z0-9_./:-]+`, strips the wrappers
+  `timeout [flags] <duration>`, `time`, `nice [-n N]`, `stdbuf -oL`, `nohup`, `command [-p]`, `builtin`
+  and `noglob`, and removes the quotes and backslashes of the first word alone. So the rule for A cleared
+  `'A' ...`, `"A" ...`, ` A `, `A 2>&1`, `A > /dev/null`, `timeout 30 A`, `CI=1 A`, `timeout 30 nice
+  nohup A`, `A # c` and `A;`. It did not clear two spaces for one, a tab for a space, a quoted argument,
+  `FOO=1 A`, `env A`, `exec A`, `sudo A`, `xargs A`, `time -p A`, `./A`, `(A)`, `{ A; }`, `A && true` or
+  `A &` (each with only A's rule). The hook compares a command with a granted call the same way
+  (`_normal`), so each form the rule clears is a run of the grant and none slips past it.
+
+  **Monitor.** The Monitor tool runs its command under Bash's permission rules (Claude Code's tools
+  reference), so the hook holds it as it holds Bash. Measured the same day, in auto mode: Monitor ran the
+  stand-in deploy with **no rule at all**, four runs of four, where Bash was refused each time; the
+  classifier did not judge a Monitor command. That is outside what a grant can close, and is recorded
+  here so nobody takes a refused Bash call for a refused act.
 
   So a rule clears more than its own string, and the hook keeps a grant to its call alone (below). For an Agent spawn the call is its `tool_input` as compact JSON with sorted keys
   (`json.dumps(..., sort_keys=True, ensure_ascii=False, separators=(",", ":"))`, the hook's `_agent_call`),
@@ -1805,7 +1834,8 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   reorder text (`stripHidden`: U+202A–202E, U+2066–2069, U+200E, U+200F, U+061C, and C0 and C1 controls
   but tab); the coordinator's watch strips them from its `!` lines too. Refused: a tool
   other than Bash and Agent, a CALL no exact rule can hold (above), a relative ROOT, `--option`,
-  `--recommend` with the call's flags, a permission without `--tool --call --cause --root`, and those
+  `--recommend` with the call's flags, a permission without `--tool --call --root` (`a permission names its call: give --tool, --call and --root, with --cause (the classifier's
+  reason) for a call auto mode refused, or none for a call asked before it runs ...`), and those
   flags on any other kind. ROOT is the
   session root: a ROOT that is a worker's workspace of this fleet's work (as the hub tells it, under
   Granting) is recorded as its session's root, said on stderr (`state: --root <ws> is <name>'s
@@ -1817,8 +1847,101 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   changes nothing; a changed refusal re-presents it, clears a hold, drops the explanation (recommend,
   reason and body: they were about another call) and writes the words again. `--decide`, `--withdraw` and
   `--hold` work as for any decision. `permission` is accepted by `--kind` but left out of its listed
-  choices, and the five flags out of the usage (as argparse's `help=SUPPRESS`), so every usage text stays
-  the twin's.
+  choices, and the six flags (`--then` among them) out of the usage (as argparse's `help=SUPPRESS`), so
+  every usage text stays the twin's.
+- **Asking** (`fleet state DIR decision ID --kind permission --tool Bash --call CALL [--then CALL]... --root
+  ROOT --title "<the plain question>" --why WHY --recommend allow-once|deny --reason REASON [--body FILE]
+  [--agent WORKER] [--blocking]`, with no `--cause`): a permission asked before its call ran. The row's
+  `refusal.cause` is `""` (`permission.ts` `isAsk`), which is what tells an ask from a refusal the hook
+  recorded; a command with no `--cause` on a row the hook recorded keeps that row's cause and is no ask.
+  Measured 2026-10-12, before this: a permission opened by hand needed a `--cause` and came out as "Auto
+  mode stopped this call: it falls under the “asked before running” check", with a title the coordinator
+  could not write.
+  - **It names what it runs** (`whyNoAsk`, Bash): the user allows what they read, so an ask is refused
+    for a command substitution (`$( )`, backticks, `<( )`: `so what it runs is decided when it runs, not
+    when the user reads it`), for a script named by a relative path (`the call runs the script <path> by
+    a relative path: give its absolute path, so the file the user allows is the file that runs`) and for
+    a script that cannot be read now. A refusal the hook recorded is not held to this: the call already
+    ran into the classifier as it is.
+  - **What a call runs is bound where it can be** (`scriptsOf`, `runsOf`): in each simple command of the
+    call (split on `;`, `&&`, `||`, `&` and group parentheses outside quotes; leading assignments, shell
+    keywords and the wrappers `time`, `nice`, `nohup`, `command`, `builtin`, `noglob`, `exec`, `env`,
+    `timeout`, `stdbuf` skipped) the script is the first argument of `bash`, `sh`, `node`, `python` or
+    `python3` when that is no option, or the command itself when it is given as a path. For each one
+    that is an absolute path and can be read, the row's `refusal.runs` holds `<n> <sha256> <path>` (`n`
+    the call's number from 1). The page shows it under the call (`Runs this file: <path> (sha256 <12
+    hex>). The grant holds only while the file stays as it is now.`), the hub hashes the file again when
+    it grants and records the sha256 in the grant line, and the hook hashes it once more before the call
+    runs. A call with no such file says so on the card in plain words: `The file's content is not bound:
+    this grant is for the command as written, and what the command runs is found when it runs.` That is
+    every command found by name (`just deploy`, `pnpm run deploy`, `wrangler deploy`), an interpreter
+    given an option first (`bash -c ...`, `python -m ...`), and what a bound script itself calls. The
+    card shows the hash, not the file's lines: a script can hold what must not be copied into a ledger.
+    The same command again after its script changed is a revision (`runs` is part of what is asked).
+  - **Its words**: `--title` (the plain question, "Deploy the Worker with migration 0067?"), `--why`,
+    `--recommend` and `--reason` are the coordinator's, required in the command that opens it, and checked
+    as a decision's are (the why limit, the readability warnings); `--body` is optional. So an ask is
+    explained from its first revision, and the page never shows it as waiting for an explanation. The
+    **question** is still written from the call, as for a refusal (`Let the coordinator run this exact call
+    once? It runs \`<what>\` in <where>.`; for several, `Let <who> run these <N> exact calls, once each?
+    Read each one in full below before you answer.`), so the words never say less than the call:
+    `--question` on an ask is refused (`a permission's question is written from its call ...: --question
+    cannot be set; the plain question goes in --title, and what the user needs to judge it in --why and
+    --body`). Missing: `new decision needs --title` or `--why`, then `a permission asked before its call
+    ran carries your recommendation: give --recommend allow-once|deny and --reason, ...`.
+  - **Several calls** (`--then`, once per further call, with `--call` the first): `refusal.more`, the
+    further commands in order (`permission.ts` `callsOf`: `call`, then `more`); absent for one call. Each
+    is an exact rule of its own, granted once by the one answer. Refused (`whyNoCalls`, which the hub
+    checks again before it grants): more than `MAX_CALLS` (10) calls (`a permission asks for at most 10
+    calls, and this one has <n>: a longer sequence is a script (\`bash tasks/<name>.sh\`)`), a call no
+    exact rule can hold, named (`no permission for call 2 of 3 (\`<call>\`): <why>`), the same call twice
+    (`call 3 is call 1 again (\`<call>\`): one grant is one run, so a command asked for twice cannot be
+    granted twice`), and several calls of an Agent (`... an Agent spawn is asked for alone`). `--then`
+    without `--call`, with `--cause`, or on a row the hook recorded is refused (`--then gives the further
+    calls of a permission asked before they ran: ...`).
+  - **A call no exact rule can hold** is refused with the form one can, never sent to an action: `no
+    permission for this call: <why>. Ask for a form an exact rule can hold: put the lines in a script in
+    the repo (tasks/<name>.sh, where the user reads them) and ask for \`bash tasks/<name>.sh\`, or give the
+    commands one by one (--call for the first, --then for each next, each a Bash call of its own). An
+    action (--manual) is for a step only the user can take, not for a command the fleet can run`.
+  - **Its options**: `allow-once: Allow this call once | the fleet runs exactly the call shown above, once,
+    and nothing like it after: ...` and `deny: Deny | the fleet does not run it; your note goes to it`; for
+    several, `Allow these <N> calls, once each | the fleet runs exactly the <N> calls shown above, once
+    each, and nothing like them after: each one-time grant goes once its call ran, and any left go after 30
+    minutes` and `Deny | the fleet does not run any of them; ...`.
+  - **Revising**: the same command again with another call, list or root replaces the row's, re-presents
+    it, clears a hold and keeps the coordinator's words (its own command carries them); `--title`, `--why`
+    and the explanation may be revised without the call's flags, the explanation with `--call REV`. Opening
+    one prints `Run nothing of it until the user allows it; recording that answer (--decide) prints the
+    exact call to run.`
+  - **The revision** (`permission.ts` `refusalRev`, which every explain hint prints and `--call REV`
+    names): the first 12 hex digits of the SHA-256 of the rules, one per line; for one call that is
+    `callRev` of its rule, as before. A hint prints several calls numbered on one line (`(1) <call> (2)
+    <call>`).
+- **After the answer**: `decision P<n> --decide ANSWER --resolution HOW` on a permission prints what the
+  fleet does next. Only the user's answer grants: `--decide` with an answer that starts with `allow-once`
+  is refused unless the chat holds, from the user, for this decision, at or after its last change, an
+  answer that starts with `allow-once` (the hub stores it once it has granted; the CLI stores nothing as
+  the user): `P<n> has no allow-once answer from the user since it last changed: only their answer on the
+  fleet page grants the call, and --decide records an answer, it gives none. Wait for it ...`. Before
+  this, an agent that ran `--decide allow-once` on its own ask was told `is allowed once: run exactly
+  this call now`. For an answer that starts with `allow-once`: `P<n> is allowed once: run exactly this
+  call now, byte for byte, as a Bash call of its own:` and the call on its own line (for several, `run
+  exactly these <N> calls now, in this order, each byte for byte as a Bash call of its own:` and the calls
+  numbered), then the file the grant is in, that each grant goes when its call ran, pass or fail, or 30
+  minutes after the answer, that the next run asks again, that a call that differs by one character has
+  no grant, that the hook refuses a longer command that holds a granted call, a second run, a call out of
+  its turn and a call whose script changed since the user allowed it, for several calls that `The list
+  is a sequence: a call that fails takes the rest of the list with it, and you ask again for what is
+  left.`, and `Resume <worker>
+  (SendMessage) with exactly this.` when the row names one; for a spawn, `start exactly this agent again,
+  with the same input, no field added or changed`. For any other answer: `P<n> was not allowed: the call
+  stays stopped. Act on the user's note; no other route to the same act (another worker, a reworded
+  command, an action that asks the user to run it).` `fleet chat DIR wait P<n>` ends, for a permission,
+  with `-> the user answered P<n>: record it first, \`fleet state DIR decision P<n> --decide "<allow-once
+  or deny>" --resolution "answered on the page (#N)"\`; for an allow-once that prints the exact call to
+  run, and nothing of it runs before`. Before this the fleet was told `allow-once: Allow this call once`
+  and `record it first`, with the call nowhere in what it read.
 - **Explaining**: the hook's words say what was refused, not what it means, so the coordinator explains a
   permission in the turn it opens: `decision P<n> --call REV --why "<one or two lines>" --body FILE
   --recommend allow-once|deny --reason "<one line>" [--log "explained"]`, without the call's other
@@ -1851,11 +1974,40 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   options, "The exact call you allow" ("The exact agent you allow"): the call as an `sh` block (an Agent
   call as its input, indented JSON), monospace and wrapped; then the two options and a note; the answer
   is `allow-once: Allow this call once` or `deny: Deny`, the note on the next line, and the POST body
-  carries `rule`, the rule the page showed. The answer can be given before the explanation.
+  carries `rule`, the rule the page showed, and `root`, the folder it showed. The answer can be given
+  before the explanation. An ask shows "Asked before running: nothing has been tried: the fleet runs it
+  only once you allow it" in place of the cause. Several calls show under "The <N> exact calls you allow,
+  once each" as a numbered list, each call its own `sh` block in full, with "Rules: one exact rule for
+  each of the <N> calls below" in place of the rule; the POST body then also carries `rules`, every rule
+  in the order shown. One answer covers the whole list: there is no partial choice. Under each Bash call
+  the page says what it is bound to (the file and the first 12 hex of its sha256, or that the file's
+  content is not bound), and the POST carries `runs`, the row's entries as shown. Every call is read
+  whole: in this block a call always wraps (`white-space: pre-wrap; overflow-wrap: anywhere`), is never
+  cut, has no sideways scroll and no switch that unwraps it, at 390 px as on a desk.
+  **A pick is for what was read.** The form remembers what an answer would be given to: the row's
+  revision and, for a permission, everything its yes would grant (the rule, the rules, the folder, the
+  bound files). When that changes while the page is open, with or without a revision stamp, every
+  picked option is cleared, the block of the call is outlined, and the form says `This changed while you
+  had it open. Read it again: the call, its folder or a file it runs is not what you saw, and your
+  choice was cleared.`; a draft kept for the earlier state is not put back. Before this, a call swapped
+  in place under a picked "Allow" kept the radio checked, and Send posted the new rule.
 - **Granting** (`src/hub/grants.ts`, before `POST /chat` stores an answer that starts with
   `allow-once` to a permission): the row must be open, its `refusal` a Bash call an exact rule can hold
   whose `rule` is `Bash(<call>)`, or an Agent call that is a JSON object whose `rule` is `Agent(<call>)`, the POST's `rule` that same rule (absent or different refuses: a row
-  revised since the page rendered it needs a fresh look), and its `root` absolute, a directory, and a
+  revised since the page rendered it needs a fresh look), the POST's `root` the row's `root` as recorded,
+  a worker's workspace included
+  (absent: `the answer names no folder: the page sends the folder it showed, and the call is granted only
+  there; look at it again (reload the page)`; different: `the page showed the folder <shown>, and the
+  permission's folder is now <root>: ...`), for a row with `more` the POST's `rules` the row's rules, the
+  same ones in the same order (`the page showed <n> call(s), and the permission now asks for <m>, or for
+  other ones: ...`; a page that sends no `rules` showed one call), every call of the row one `whyNoCalls`
+  accepts and, for an ask, `whyNoAsks` too (`no grant: <why>`; a row written past the CLI is held to what
+  the CLI refuses), the files the calls run as the row's `runs` has them and as the POST's `runs` has
+  them (the hub hashes each bound file itself: a script edited after the permission was asked for
+  refuses with `a file this permission's call runs changed after it was asked for (<path>), so the yes
+  would allow another file than the one shown: ask the coordinator to record the permission again`, and
+  a page that showed other files, or none, with `the page showed other files than the ones the
+  permission's calls run now: look at it again (reload the page)`), and its `root` absolute, a directory, and a
   session root of this fleet (the ledger is writable by agents, the hub is not): the `project` or `cwd` of
   a heartbeat in `DIR/heartbeats/`, or else the working directory, read by the hub from the OS (`procs.ts`
   `cwdOf`), of the live process the registry's entry for DIR names as its `pid` (`fleet serve DIR
@@ -1884,66 +2036,139 @@ constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text).
   no session root of this fleet (no heartbeat names it, and the fleet's registered session <pid> runs
   in <cwd> | and no live session is registered for this fleet), no workspace in the ledger, and no jj
   workspace of <roots>.)`; a root that is no directory, `This permission's folder <root> doesn't exist,
-  so it can't be granted; ...`. A row whose `agent_id` is null adds to the `grant` note that only the
-  session's main thread running the call uses the grant up, and a subagent's run leaves the rule until it
-  expires, 30 minutes after the grant (the hook matches the grant's `agent_id`). Under the settings lock (below), `<root>/.claude/settings.local.json` (absent reads as
-  `{}`; one that does not parse refuses) gets the rule added to `permissions.allow`, every other key and entry kept, written
+  so it can't be granted; ...`. Under the settings lock (below), `<root>/.claude/settings.local.json` (absent reads as
+  `{}`; one that does not parse refuses) gets the rule added to `permissions.allow` (every rule of the row
+  it lacks, in one write: all of them or, when the file cannot be written or the grant recorded, none), every other key and entry kept, written
   through a temp file in its folder and a rename, two-space JSON with a final newline. A missing
   `.claude` is made, and the grant says `reload: restart` (Claude Code watches only a settings folder
   that existed when the session started), else `live`. An Agent grant goes the same way into
   `<root>/.claude/tstack-grants.json` instead, same shape (`permissions.allow`), and is always `live`:
   Claude Code never reads that file, the hook reads it at each spawn. Then one line is appended to `DIR/grants.jsonl`:
-  `{"op":"grant",decision,ref,rule,agent_id,file,at,by,reload[,workspace]}`, `agent_id` the row's `refusal.agent_id`
-  (null: the session's main thread), `by` being `tailnet:<login>` for a
+  `{"op":"grant",decision,ref,rule,agent_id,file,at,by,reload,rev,n,of[,runs][,workspace]}` (one line per rule
+  granted, in the order asked, each with the same `decision`, `at` and `rev` and its own `rule`; `n` of
+  `of` is the call's place in the list; `runs` is `[{path,sha256}]` for the files that call is bound to;
+  `rev` is the row's last change and the revision of what it asks for), `agent_id` the row's `refusal.agent_id`
+  (null: the session's main thread; kept for the record, the removal no longer reads it), `by` being `tailnet:<login>` for a
   tailnet peer that is not this machine (`tailscale whois`), else `local` (loopback, whatever header it
-  carries, or this machine's own tailnet address); then the answer is stored. A rule already in `permissions.allow` is
-  someone's own: the hub writes nothing and appends no grant line, so the hook never removes it, and the
-  answer is stored as usual. A failed check answers
+  carries, or this machine's own tailnet address); then the answer is stored. A rule already in `permissions.allow` that no grant line of this fleet names for that file is
+  someone's own: the hub appends no grant line for it, so the hook never removes it (of several rules the
+  others are granted; with none to add the hub writes nothing), and the
+  answer is stored as usual. One an earlier grant left there (its call cancelled, its 30 minutes not
+  over) is granted anew: the settings stay as they are and the new line is the grant the hook counts,
+  in its own turn and for its own 30 minutes. **One grant for each state of a permission**: an answer
+  to a decision whose `rev` already has a grant line grants nothing more (a second tap, the same request
+  sent again while the row is open and the hook has taken the rule back), and the 201 says so in its
+  `grant` note (`P<n> was already allowed once as it stands: one yes is one grant, ...`); asked again
+  (a revision), the yes is a yes to that. A failed check answers
   409 with the reason and stores nothing. A `deny` is stored as any answer.
 - **Letting a spawn through** (the plugin's hook, `fleet_agent_grant`, PreToolUse with matcher `Agent`):
   a spawn whose `Agent(<call>)` is in `permissions.allow` of `<$CLAUDE_PROJECT_DIR, else the input's
   cwd>/.claude/tstack-grants.json` gets `permissionDecision: allow`; anything else, an absent or broken
   file included, gets no output. It needs no fleet DIR, and it allows that input for any caller, as a
   settings rule does; the sweep below ends the grant.
-- **A granted call runs alone** (the plugin's hook, `fleet_grant_alone`, PreToolUse with matcher `Bash`): a
-  Bash command that holds the call of a grant no `remove` line has ended (expired or not: the rule is in the
-  settings until the sweep takes it back) inside a longer command is denied, with the call and what to do
-  (`run it by itself, and anything else in a call of its own`). Without this, one grant for A let `A; A`
-  run A twice in one call, and two grants let `A; B` and `A | B` through as one call the user never read.
-  A command that is itself a granted call is left to the permission check, though it holds a shorter
-  granted call in its text; so is a command that holds none. The handler returns a deny or nothing, never
-  an allow.
-- **Removal** (the plugin's hook, PostToolUse and PostToolUseFailure): a grant is `used` when the call
-  that just ran is its rule's call (for Agent, the spawn's input as the rule names it), whoever in the
-  fleet's sessions ran it: the rule let any caller of the session through, so one yes is one run. A Bash
-  command that holds a granted call inside more uses it up too, unless the command is itself another
-  granted call (it then uses up that one alone); `fleet_grant_alone` refuses such a command first, and a
-  grant ends with it all the same if it ran. Each rule of a permission that granted several calls is a
-  grant of its own (the same `decision`, its own `rule`): it goes when its call ran, the rest when they
-  expire. A grant is `expired` 30 minutes after its `at`. The hook takes the rule out under the settings lock, then
-  appends a `remove` line, `{"op":"remove",decision,rule,file,at,why}` (`why`: `used` or `expired`), which
-  ends the grant with the same `decision` and `rule`. The hook rewrites only an absolute
-  `<root>/.claude/settings.local.json` or `<root>/.claude/tstack-grants.json`. Two hooks sweeping at once are kept apart by a
-  `flock` on `grants.jsonl`, so a grant is closed once.
+- **Which grants stand** (hook and hub alike): the last grant line of each file and rule is a grant
+  that stands for as long as the rule is in that file's `permissions.allow`. A `remove` line is a record,
+  never the proof: any agent can append one, and one appended while the rule stood ended the grant for
+  the hook (`A; A; A` then ran three times on one yes). A settings file that cannot be read or does not
+  parse is taken to hold every rule granted into it. The cost, accepted: a rule that a grant of this
+  fleet once wrote, put back into the same file by hand, is taken for that grant and removed again; a
+  call that is to stay allowed is written as another rule (a prefix), not as the exact text once granted.
+- **A granted call runs alone, once, in its turn** (the plugin's hook, `fleet_grant_alone`, the last
+  PreToolUse handler, matcher `Bash|Monitor`; it returns a deny or nothing, never an allow). The hook
+  reads the grants of `grant_state_dirs`: the fleets of `grant_dirs`, and any of the same places that
+  holds a `grants.jsonl` with no `state.json` beside it, so moving the ledger away lifts nothing. A
+  command is split into its simple commands (`_simple_commands`: on `;`, `&&`, `||`, `&`, `|` and
+  newlines outside quotes, with what a subshell, `$( )`, backticks or `<( )` holds split the same way,
+  since it runs too; a comment and a here-document's body are no commands), each compared as Claude Code
+  compares it with a rule (above), without the shell words that only lead to it (`{`, `!`, `if`, `then`,
+  `do`, ...). A command **is** a granted call when their simple commands are the same, in order; it
+  **holds** one when it runs the call's simple commands, in order, among others. So `grep -n "just
+  deploy" README.md`, `just deploy-check` and a here-document that names the call are left alone where
+  `just deploy` is granted, and `'just' deploy; 'just' deploy` is not. A command that does not parse
+  holds a call its text holds.
+  - A command that holds a standing grant's call inside more is denied, with the call and what to do
+    (`run it by itself, and anything else in a call of its own`). Without this, one grant for A let
+    `A; A` run A twice in one call, and two grants let `A; B` and `A | B` through as one call the user
+    never read.
+  - The granted call itself is denied when its grant is 30 minutes old or more (and the hook takes the
+    rule back there and then: before, a grant three hours old still ran when its call was the first call
+    after an idle spell); when an earlier call of its list still stands (`this is call 3 of the list the
+    user allowed (P1), and call 1 has not run: ...`; a list is a sequence, and a call's turn is its
+    line's place among the grant lines of one answer); when a file it binds no longer hashes to what the
+    hub recorded, cannot be read, or its record does not read (the grant and what is left of its list
+    are then taken back, `why: revoked`); and when another call took the grant first.
+  - **Taking** a grant is how one yes stays one run when two callers reach PreToolUse before either
+    call has finished: the hook creates `DIR/grants.taken/<32 hex of sha256(decision, rule, file, at)>`
+    exclusively (`O_EXCL`) holding the call's `tool_use_id`, and a call that finds the file there, with
+    another id, is denied (`another call already took this grant: one yes is one run`). The rule stays
+    until the call's PostToolUse or the 30 minutes; a call cancelled after it took the grant fires no
+    PostToolUse, and the fleet asks again. A grant is not taken for a call another of the plugin's gates
+    refused in the same PreToolUse (the landing turn, the suite gate).
+  - A call that was allowed as part of a list one call of which failed is denied with why: `a call of
+    that list failed, so what was left of it is no longer allowed. Ask the user again with a new
+    permission for it ...`.
+  - **A record that cannot be read fails closed.** When a `grants.jsonl` is there and cannot be read,
+    or is larger than 8 MB (no record of grants is; a 300 MB one answered in 0.1 s), every exact Bash
+    rule (no `*`) in `<session root>/.claude/settings.local.json` is taken for a one-time grant: a longer
+    command that holds one is denied, and the denial names the file that cannot be read. The exact call
+    is left to the permission check, and the hub's timer (below) bounds how long its rule stands.
+- **Removal** (the plugin's hook, PostToolUse and PostToolUseFailure, for Bash, Monitor and Agent): a
+  standing grant is `used` when the call that just ran is its rule's call (for Agent, the spawn's input
+  as the rule names it), whoever in the fleet's sessions ran it: the rule let any caller of the session
+  through, so one yes is one run. A command that holds a granted call inside more uses it up too, unless
+  the command is itself another granted call (it then uses up that one alone); `fleet_grant_alone`
+  refuses such a command first, and a grant ends with it all the same if it ran. Each rule of a
+  permission that granted several calls is a grant of its own: it goes when its call ran, and **when
+  that call failed (PostToolUseFailure) the rest of its list goes with it** (`why: revoked`): what
+  comes after a failure was allowed for another state of things. An attempt out of turn, or inside a
+  longer command, is denied and revokes nothing: the fleet has only to make the right call. A grant is
+  `expired` 30 minutes after its `at`. The hook takes the rule out under the settings lock, then appends
+  a `remove` line, `{"op":"remove",decision,rule,file,at,why}` (`why`: `used`, `revoked` or `expired`),
+  and removes the grant's `grants.taken` file. It rewrites only an absolute
+  `<root>/.claude/settings.local.json` or `<root>/.claude/tstack-grants.json`. Two hooks sweeping at
+  once are kept apart by a `flock` on `grants.jsonl`, so a grant is closed once. A `grants.jsonl` that
+  cannot be read is logged and left to the hub.
+- **The hub ends a grant itself** (`expireGrants`, at start and every 15 s): a grant 30 minutes old or
+  more whose rule is still in its file is taken back under the settings lock, with a `remove` line
+  (`why: expired`, `by: hub`). It reads the grants of every fleet the registry names, served or not
+  (so a restarted hub takes up what an earlier one granted), and the ones this process wrote, which it
+  holds in memory, so its own removal does not rest on a file every agent can write. This is what ends
+  a grant whose session made no call after it, runs in the same folder without this fleet, or had its
+  record of grants edited or deleted; the hook's sweep ran only when a session of the fleet made a tool
+  call. With no hub running, the hook's sweep is all there is.
 - **The settings lock**: hub and hook both make the directory `<dir of the file>/.settings.local.json.lock`
   (an atomic `mkdir`, which Bun and Python both have; Bun has no `flock`) around the read-modify-write of
   the settings file, retry for up to 2 s, and take over a lock older than 10 s (a crashed holder's). A
   lock still held after 2 s refuses the grant (409) or leaves the removal for the next tool call.
 - **Lines**: every `grants.jsonl` line is compact JSON, one object, on both sides.
 - **What it defends**: an allow rule that lets through only the call the user saw, once, as a call of its
-  own, in the sessions whose hook finds the fleet (`grant_dirs`).
+  own, in the sessions whose hook finds the fleet (`grant_dirs`). An agent can ask and never grant: the
+  rule is written by the hub alone, on an answer its own page posted (a post from another origin that
+  carries `decision`, `rule`, `rules`, `root` or `runs` is refused), for the calls, the folder and the files that page showed.
+  A row changed after the user read it (another command, one more, another folder) grants nothing; nothing
+  in a body, a title or a chat line reaches the grant, which is read from `refusal` alone.
   The Agent grants file sits in `.claude`, a protected path whose writes by an agent auto mode routes to
   the classifier, as it does a write of `settings.local.json`; an agent told to write its own grant
   there was refused as `[Self-Modification]` (measured once, Claude Code 2.1.288). With that file in
   place, the real hook let the refused spawn through on its retry.
-  Not more: a local process can POST allow-once to the hub (stamped `local`, by decision), and heartbeats
-  and the ledger are writable by agents, as is the registry (`fleet serve DIR --pid PID`), so the root
-  check and the row make a forged grant flagrant, not impossible; the registry names a process, and the
-  hub reads where it runs, so a forged entry grants only in a directory some live process of the user's
-  runs in. A forged `op:grant` line can make the sweep remove a rule that matches it, one added by hand
-  included: the failure is fewer allowed calls, never more. The 30 minutes run only while some session of
-  the fleet makes tool calls, and a session rooted in the same folder that serves another fleet reads the
-  rule too while it stands, without the hook that keeps it to one call.
+  What it does not defend, said plainly: **the hub, the hook and every agent run as one Unix user.**
+  - A local process can POST allow-once to the hub with no `Origin` (stamped `local`, by decision):
+    the origin check stops a page of another origin, not a program on this machine.
+  - `grants.jsonl`, `grants.taken`, the ledger, the heartbeats and the registry (`fleet serve DIR --pid
+    PID`) are files an agent can write. The root check and the row make a forged grant flagrant, not
+    impossible; the registry names a process, and the hub reads where it runs, so a forged entry grants
+    only in a directory some live process of the user's runs in. A forged `remove` line ends nothing
+    while the rule stands, an unreadable record fails closed, and the hub removes at 30 minutes what it
+    granted whatever the record says; a deleted `grants.jsonl` or `grants.taken` file still lifts the
+    hook's hold on a second run until then.
+  - A forged registry entry with a forged `op:grant` line can make the hook or the hub remove a rule
+    that matches it, one added by hand in another project included: the failure is fewer allowed calls,
+    never more.
+  - What stops a process that edits these files, or the settings, directly is Claude Code's own refusal
+    to let an agent write its allow rules (`[Self-Modification]`, above), not tstack.
+  - A session rooted in the same folder that serves another fleet reads the rule too while it stands,
+    without the hook that keeps it to one call, for at most 30 minutes.
+  - A call bound to a file is bound to that file's bytes, not to what the file calls or reads.
 
 ## Heartbeats
 

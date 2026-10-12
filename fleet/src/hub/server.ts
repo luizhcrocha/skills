@@ -29,6 +29,9 @@ export { previewPortsPath, readPortStates, type PortState } from "./preview-port
 /** How often the hub looks for root-mode previews to listen for, or to let go of. */
 const PREVIEW_PORTS_MS = 1000;
 
+/** How often the hub looks for one-time grants past their 30 minutes: a rule stands at most this long after them. */
+const GRANT_EXPIRY_MS = 15_000;
+
 /** How often the hub looks whether the preview ports' certificate is due (it asks Tailscale only then). */
 const CERTIFICATE_MS = 60_000;
 
@@ -161,6 +164,22 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
 
   syncPreviews();
   const repreview = setInterval(syncPreviews, PREVIEW_PORTS_MS);
+
+  // A one-time grant ends 30 minutes after the answer whatever its session does: at start (what an earlier hub
+  // granted) and then on a timer, the hub takes the rule back itself.
+  const expire = (): void => {
+    hub.expireGrants().then(
+      (taken) => {
+        for (const rule of taken) log(`one-time grant over (30 minutes): took back ${rule}`);
+      },
+      (cause: unknown) => {
+        log(`the one-time grants' expiry: ${cause instanceof Error ? cause.message : String(cause)}`);
+      },
+    );
+  };
+
+  expire();
+  const expiring = setInterval(expire, GRANT_EXPIRY_MS);
   const self = hub.net?.self;
   let url = self === undefined ? `http://127.0.0.1:${port}/` : `http://${self.dns}:${port}/`;
   const https = options.https;
@@ -190,6 +209,7 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
     stop: async () => {
       clearInterval(rebind);
       clearInterval(repreview);
+      clearInterval(expiring);
       clearInterval(recertify);
       previews.stop();
       hub.stop();

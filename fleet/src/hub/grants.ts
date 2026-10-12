@@ -1,12 +1,13 @@
 /**
  * Permission grants (SPEC.md "Permission grants"): when the user answers a permission with allow-once, the
  * hub, not an agent (Claude Code's classifier refuses an agent that writes its own allow rule), adds the
- * row's exact rule to the session's `.claude/settings.local.json` (a Bash call) or `.claude/tstack-grants.json`
- * (an Agent call, which the plugin's PreToolUse hook lets through) and records the grant in
- * `DIR/grants.jsonl`, before the answer is stored. The plugin's hook removes the rule once the call has
- * run. The ledger is writable by every agent and the hub is not, so the row is trusted only as far as it
- * names a session of this fleet, or a worker's workspace of its work (granted at that session's root), and a
- * rule that lets that one call through.
+ * row's exact rule (each of its rules, when it asks for several calls) to the session's
+ * `.claude/settings.local.json` (a Bash call) or `.claude/tstack-grants.json` (an Agent call, which the
+ * plugin's PreToolUse hook lets through) and records each grant in `DIR/grants.jsonl`, before the answer is
+ * stored. The plugin's hook removes a rule once its call has run. The ledger is writable by every agent and
+ * the hub is not, so the row is trusted only as far as it names a session of this fleet, or a worker's
+ * workspace of its work (granted at that session's root), and rules that let exactly the calls the page
+ * showed through, in the folder it showed: the answer carries both, and a row that moved since grants nothing.
  */
 import { appendFileSync, mkdirSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
@@ -20,7 +21,8 @@ import { asArray, asObject, asString, type Json, type JsonObject } from "../json
 import { readBeats } from "../heartbeat.ts";
 import { parseLedger, type Decision } from "../ledger/model.ts";
 import { findDecision } from "../ledger/numbers.ts";
-import { ALLOW_ONCE, grantFileOf, PERMISSION_TOOLS, ruleOf, whyNoRule } from "../ledger/permission.ts";
+import { ALLOW_ONCE, callsOf, GRANT_TTL_MS, grantFileOf, isAsk, PERMISSION_TOOLS, readRun, refusalRev, ruleOf, rulesOf, runsOf, whyNoAsks, whyNoCalls } from "../ledger/permission.ts";
+import { parseInstant } from "../clock.ts";
 import { cwdOf } from "../procs.ts";
 import { alive } from "../registry.ts";
 import { jj } from "../ws/jj.ts";
@@ -33,6 +35,12 @@ export interface Answered {
   readonly text: string;
   /** The rule the page showed when the answer was given; a permission's allow-once grants that rule alone. */
   readonly rule: string | undefined;
+  /** Every rule the page showed, in order, for a permission that asks for several calls. */
+  readonly rules: readonly string[] | undefined;
+  /** The folder the page showed the grant going into (the row's root). */
+  readonly root: string | undefined;
+  /** The files the page showed the calls bound to (the row's `runs`); none when it showed none. */
+  readonly runs: readonly string[] | undefined;
   /** Who gave it: `tailnet:<login>` or `local` (policy.ts `grantor`). */
   readonly by: string;
   /** The stamp the grant records. */
@@ -70,7 +78,16 @@ class Ungranted {
 interface Asked {
   readonly id: string;
   readonly ref: string;
-  readonly rule: string;
+  /** The exact rules to add, one per call, in the order asked. */
+  readonly rules: readonly string[];
+  /** The files the row says its calls are bound to (`runs`), as the page showed them. */
+  readonly runs: readonly string[];
+  /** The files the calls are bound to as the hub reads them now (`runsOf`). */
+  readonly bound: readonly string[];
+  /** What says which state of the row an answer was given to: its last change and what it asks for. */
+  readonly rev: string;
+  /** The root as the row has it, which the page showed. */
+  readonly shown: string;
   readonly tool: string;
   /** The session root the rule goes into. */
   readonly root: string;
@@ -237,10 +254,6 @@ function unplaced(root: string, placed: Placement): string | undefined {
   );
 }
 
-const NO_AGENT_NOTE =
-  "The permission names no subagent (agent_id null), so only the session's main thread running the call uses the grant up; " +
-  "a subagent's run of it leaves the rule in place until it expires, 30 minutes after the grant.";
-
 function askedOf(dir: string, d: Decision, registered: () => Registered | undefined): Asked | Ungranted {
   const r = d.refusal ?? undefined;
 
@@ -249,7 +262,7 @@ function askedOf(dir: string, d: Decision, registered: () => Registered | undefi
   if (d.status !== "open") return new Ungranted("the permission is no longer open");
 
   if (!PERMISSION_TOOLS.includes(r.tool)) return new Ungranted(`a grant is for ${PERMISSION_TOOLS.join(" or ")} alone, and this permission is for ${r.tool}`);
-  const why = whyNoRule(r.tool, r.call);
+  const why = whyNoCalls(r.tool, callsOf(r)) ?? (r.tool === "Bash" && isAsk(r) ? whyNoAsks(callsOf(r)) : undefined);
 
   if (why !== undefined) return new Ungranted(`no grant: ${why}`);
   const exact = ruleOf(r.tool, r.call);
@@ -264,14 +277,59 @@ function askedOf(dir: string, d: Decision, registered: () => Registered | undefi
   const refused = unplaced(r.root, placed);
 
   if (refused !== undefined) return new Ungranted(refused);
-  const agentNote = r.agent_id === null ? [NO_AGENT_NOTE] : [];
-  const base = { id: d.id, ref: d.ref ?? "", rule: r.rule, tool: r.tool, agentId: r.agent_id };
+  const bound = r.tool === "Bash" ? runsOf(callsOf(r)) : [];
+  const rev = `${d.revised ?? d.opened} ${refusalRev(r)}`;
+  const base = { id: d.id, ref: d.ref ?? "", rules: rulesOf(r), runs: r.runs ?? [], bound, rev, shown: r.root, tool: r.tool, agentId: r.agent_id };
 
-  if (placed.kind !== "workspace") return { ...base, root: r.root, workspace: undefined, notes: agentNote };
+  if (placed.kind !== "workspace") return { ...base, root: r.root, workspace: undefined, notes: [] };
   const who = d.agent ?? "the worker";
   const moved = `This permission names ${placed.name}'s workspace ${r.root}; the hub granted it at the session root ${placed.root}, where ${who}'s session reads its permissions.`;
 
-  return { ...base, root: placed.root, workspace: r.root, notes: [moved, ...agentNote] };
+  return { ...base, root: placed.root, workspace: r.root, notes: [moved] };
+}
+
+/** Why the answer does not grant what the row now asks for: the page sends the rules and the folder it showed,
+ * and a row an agent changed after the user read it (another command, one more, another folder) grants nothing. */
+function movedSince(answered: Answered, asked: Asked): string | undefined {
+  const [first = ""] = asked.rules;
+  const again = "look at it again (reload the page)";
+
+  if (answered.rule === undefined) return "the answer names no rule: the page sends the rule it showed, and only that rule is granted";
+
+  if (answered.rule !== first) return `the page showed the rule ${answered.rule}, and the permission's rule is now ${first}: ${again}`;
+
+  if (answered.root === undefined) return `the answer names no folder: the page sends the folder it showed, and the call is granted only there; ${again}`;
+
+  if (answered.root !== asked.shown) return `the page showed the folder ${answered.root}, and the permission's folder is now ${asked.shown}: ${again}`;
+
+  if (asked.rules.length === 1 && answered.rules === undefined) return undefined;
+  const shown = answered.rules ?? [first];
+
+  if (shown.length !== asked.rules.length || shown.some((rule, k) => rule !== asked.rules[k])) {
+    return `the page showed ${String(shown.length)} ${shown.length === 1 ? "call" : "calls"}, and the permission now asks for ${String(asked.rules.length)}, or for other ones: ${again}`;
+  }
+
+  return undefined;
+}
+
+function alike(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((item, k) => item === b[k]);
+}
+
+/** Why the answer does not grant the files the calls run now: a call that runs a script by an absolute path is
+ * bound to the file's content. The row records each file's sha256 when the permission is asked, the page shows
+ * it and sends it back, and the hub hashes the files itself: a script edited after the card opened grants nothing. */
+function filesMoved(answered: Answered, asked: Asked): string | undefined {
+  if (!alike(asked.runs, asked.bound)) {
+    const [odd = ""] = [...asked.runs.filter((entry) => !asked.bound.includes(entry)), ...asked.bound.filter((entry) => !asked.runs.includes(entry))];
+    const path = readRun(odd)?.path;
+
+    return `a file this permission's call runs changed after it was asked for${path === undefined ? "" : ` (${path})`}, so the yes would allow another file than the one shown: ask the coordinator to record the permission again`;
+  }
+
+  if (!alike(answered.runs ?? [], asked.bound)) return "the page showed other files than the ones the permission's calls run now: look at it again (reload the page)";
+
+  return undefined;
 }
 
 function parsed(file: string): JsonObject | Ungranted {
@@ -290,19 +348,18 @@ function parsed(file: string): JsonObject | Ungranted {
   return asObject(value) ?? new Ungranted(`${file} is not a JSON object`);
 }
 
-/** `settings` with `rule` added to `permissions.allow`, every other key and entry kept; undefined when the rule
- * is there already; or why it cannot hold it. */
-function withRule(file: string, settings: JsonObject, rule: string): JsonObject | Ungranted | undefined {
+/** `settings` with the `rules` it lacks added to `permissions.allow`, every other key and entry kept, and those
+ * rules (`added`; none when all are there already); or why it cannot hold them. */
+function withRules(file: string, settings: JsonObject, rules: readonly string[]): { readonly next: JsonObject; readonly added: readonly string[] } | Ungranted {
   const permissions = settings["permissions"] === undefined ? {} : asObject(settings["permissions"]);
 
   if (permissions === undefined) return new Ungranted(`${file}: permissions is not an object`);
   const allow = permissions["allow"] === undefined ? [] : asArray(permissions["allow"]);
 
   if (allow === undefined) return new Ungranted(`${file}: permissions.allow is not a list`);
+  const added = rules.filter((rule) => !allow.includes(rule));
 
-  if (allow.includes(rule)) return undefined;
-
-  return { ...settings, permissions: { ...permissions, allow: [...allow, rule] } };
+  return { next: { ...settings, permissions: { ...permissions, allow: [...allow, ...added] } }, added };
 }
 
 /** How long the hub waits for the settings lock, and the age past which a lock is a crashed holder's. */
@@ -375,15 +432,9 @@ export async function grantAnswer(answered: Answered): Promise<GrantAnswer> {
   const asked = askedOf(answered.dir, d, answered.registered);
 
   if (asked instanceof Ungranted) return { refused: asked.reason };
+  const moved = movedSince(answered, asked) ?? filesMoved(answered, asked);
 
-  if (answered.rule !== asked.rule) {
-    return {
-      refused:
-        answered.rule === undefined
-          ? "the answer names no rule: the page sends the rule it showed, and only that rule is granted"
-          : `the page showed the rule ${answered.rule}, and the permission's rule is now ${asked.rule}: look at it again`,
-    };
-  }
+  if (moved !== undefined) return { refused: moved };
 
   const file = grantFileOf(asked.tool, asked.root);
   // The hook reads the Agent grants file at each spawn; Claude Code watches only a settings folder that existed at start.
@@ -392,7 +443,7 @@ export async function grantAnswer(answered: Answered): Promise<GrantAnswer> {
   try {
     mkdirSync(dirname(file), { recursive: true });
   } catch (cause: unknown) {
-    return { refused: `could not grant ${asked.rule} in ${file}: ${strerror(cause)}` };
+    return { refused: `could not grant ${asked.rules.join(", ")} in ${file}: ${strerror(cause)}` };
   }
 
   const lock = await lockSettings(file);
@@ -404,38 +455,67 @@ export async function grantAnswer(answered: Answered): Promise<GrantAnswer> {
 
     if (done instanceof Ungranted) return { refused: done.reason };
 
+    if (done === "again") return { granted: `${asked.ref === "" ? "This permission" : asked.ref} was already allowed once as it stands: one yes is one grant, so nothing more was granted. If its 30 minutes passed unused, the coordinator asks again.` };
+
     return done === "kept" || asked.notes.length === 0 ? NOTHING : { granted: asked.notes.join(" ") };
   } finally {
     rmdirSync(lock);
   }
 }
 
-/** The grant's read-modify-write of `file` and its line in grants.jsonl, under the settings lock: `kept` when
- * the rule was there already. */
-function written(answered: Answered, asked: Asked, file: string, reload: string): Ungranted | "kept" | "granted" {
+/** The grant's read-modify-write of `file` and its lines in grants.jsonl, one per rule added, under the settings
+ * lock: `kept` when every rule was there already. All of a permission's rules go in with one write, or none. */
+function written(answered: Answered, asked: Asked, file: string, reload: string): Ungranted | "kept" | "again" | "granted" {
+  const record = join(answered.dir, "grants.jsonl");
+
+  const recorded = grantLines(record).filter((line) => line["op"] === "grant");
+
+  // One grant for each state of a permission: the same answer sent again (a second tap, a replayed request) grants nothing.
+  if (recorded.some((line) => line["decision"] === asked.id && line["rev"] === asked.rev)) return "again";
   const settings = parsed(file);
 
   if (settings instanceof Ungranted) return settings;
-  const next = withRule(file, settings, asked.rule);
+  const held = withRules(file, settings, asked.rules);
 
-  if (next instanceof Ungranted) return next;
+  if (held instanceof Ungranted) return held;
 
-  // Someone put the rule there, and nobody but them takes it out: no grant, so the hook leaves it.
-  if (next === undefined) return "kept";
+  // A rule someone put there is theirs, and nobody but them takes it out: no grant line for it, so the hook leaves it.
+  // One an earlier grant left there (its call cancelled, its 30 minutes not over) is granted anew: the new line is
+  // the grant the hook counts, in its own turn and for its own 30 minutes.
+  const granting = asked.rules.filter((rule) => held.added.includes(rule) || recorded.some((line) => line["rule"] === rule && line["file"] === file));
+
+  if (granting.length === 0) return "kept";
   const before = readText(file);
 
   try {
-    writeAtomic(file, `${JSON.stringify(next, null, 2)}\n`);
+    if (held.added.length > 0) writeAtomic(file, `${JSON.stringify(held.next, null, 2)}\n`);
   } catch (cause: unknown) {
-    return new Ungranted(`could not grant ${asked.rule} in ${file}: ${strerror(cause)}`);
+    return new Ungranted(`could not grant ${held.added.join(", ")} in ${file}: ${strerror(cause)}`);
   }
 
   try {
-    const grant = { op: "grant", decision: asked.id, ref: asked.ref, rule: asked.rule, agent_id: asked.agentId, file, at: answered.at, by: answered.by, reload };
-    const line = asked.workspace === undefined ? grant : { ...grant, workspace: asked.workspace };
-    appendFileSync(join(answered.dir, "grants.jsonl"), `${JSON.stringify(line)}\n`, "utf8");
+    const lines = granting.map((rule) => {
+      const n = asked.rules.indexOf(rule) + 1;
+
+      const runs = asked.bound.flatMap((entry) => {
+        const run = readRun(entry);
+
+        return run?.n === n ? [{ path: run.path, sha256: run.sha256 }] : [];
+      });
+
+      const grant = { op: "grant", decision: asked.id, ref: asked.ref, rule, agent_id: asked.agentId, file, at: answered.at, by: answered.by, reload, rev: asked.rev, n, of: asked.rules.length };
+      const bound = runs.length === 0 ? grant : { ...grant, runs };
+
+      return JSON.stringify(asked.workspace === undefined ? bound : { ...bound, workspace: asked.workspace });
+    });
+
+    appendFileSync(record, `${lines.join("\n")}\n`, "utf8");
+
+    for (const rule of granting) issued.set(`${file}\n${rule}`, { dir: answered.dir, decision: asked.id, file, rule, at: answered.at });
   } catch (cause: unknown) {
     // A rule with no grant line is one the hook would never remove: take it back.
+    if (held.added.length === 0) return new Ungranted(`could not record the grant in ${record}: ${strerror(cause)}`);
+
     if (before === undefined) rmSync(file, { force: true });
     else writeAtomic(file, before);
 
@@ -443,4 +523,121 @@ function written(answered: Answered, asked: Asked, file: string, reload: string)
   }
 
   return "granted";
+}
+
+/** The lines of a grants.jsonl that read as JSON objects, in order; none when the file is not there. */
+function grantLines(record: string): JsonObject[] {
+  return (readText(record) ?? "").split("\n").flatMap((line) => {
+    try {
+      // SAFETY: JSON.parse returns JSON values only.
+      const row = asObject(JSON.parse(line) as Json);
+
+      return row === undefined ? [] : [row];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/** A grant the hub may take back: where it is recorded, and the rule in its file. */
+interface Issued {
+  readonly dir: string;
+  readonly decision: string;
+  readonly file: string;
+  readonly rule: string;
+  readonly at: string;
+}
+
+/** The grants this hub wrote and has not seen end, by file and rule. Held in memory, so the hub's own removal
+ * at 30 minutes does not rest on grants.jsonl, which every agent can write. */
+const issued = new Map<string, Issued>();
+
+/** A grant's file, when it is one a grant is written to: an absolute `<root>/.claude/settings.local.json` or
+ * `<root>/.claude/tstack-grants.json` (the hook's `_grant_file`). */
+function grantFile(value: Json | undefined): string | undefined {
+  const file = asString(value);
+
+  if (file === undefined || !isAbsolute(file) || basename(dirname(file)) !== ".claude") return undefined;
+
+  return ["settings.local.json", "tstack-grants.json"].includes(basename(file)) ? file : undefined;
+}
+
+/** The last grant of each file and rule that the grants.jsonl of `dirs` and this hub's memory name. A `remove`
+ * line ends nothing here: the rule still in its file is what says the grant stands. */
+function latestGrants(dirs: readonly string[]): Issued[] {
+  const latest = new Map<string, Issued>();
+
+  for (const dir of dirs) {
+    for (const line of grantLines(join(dir, "grants.jsonl"))) {
+      const [decision, rule, file, at] = [asString(line["decision"]), asString(line["rule"]), grantFile(line["file"]), asString(line["at"]) ?? ""];
+
+      if (line["op"] === "grant" && decision !== undefined && rule !== undefined && file !== undefined) latest.set(`${file}\n${rule}`, { dir, decision, file, rule, at });
+    }
+  }
+
+  for (const [key, grant] of issued) {
+    const known = latest.get(key);
+
+    if (known === undefined || (parseInstant(known.at) ?? 0) < (parseInstant(grant.at) ?? 0)) latest.set(key, grant);
+  }
+
+  return [...latest.values()];
+}
+
+/**
+ * Take back every grant older than 30 minutes whose rule is still in its file (SPEC.md "Permission grants",
+ * Removal): the hub's own end of a one-time grant, for a rule the hook never removed because its session made no
+ * call, runs without this fleet, or had its record of grants edited. It reads the grants of the fleets in `dirs`
+ * (so a restarted hub takes up what an earlier one granted) and the ones this process wrote. A grant with no
+ * readable stamp is expired. What it took back, as `rule in file`.
+ */
+export async function expireGrants(dirs: readonly string[], now: Date, stamp: string): Promise<string[]> {
+  const taken: string[] = [];
+
+  for (const grant of latestGrants(dirs)) {
+    const at = parseInstant(grant.at);
+    const key = `${grant.file}\n${grant.rule}`;
+
+    if (at !== undefined && now.getTime() - at < GRANT_TTL_MS) continue;
+
+    if (!holdsRule(grant.file, grant.rule)) {
+      issued.delete(key);
+      continue;
+    }
+
+    const lock = await lockSettings(grant.file);
+
+    if (lock instanceof Ungranted) continue;
+
+    try {
+      const settings = parsed(grant.file);
+      const permissions = settings instanceof Ungranted ? undefined : asObject(settings["permissions"]);
+      const allow = asArray(permissions?.["allow"]);
+
+      if (settings instanceof Ungranted || permissions === undefined || allow === undefined || !allow.includes(grant.rule)) continue;
+      writeAtomic(grant.file, `${JSON.stringify({ ...settings, permissions: { ...permissions, allow: allow.filter((rule) => rule !== grant.rule) } }, null, 2)}\n`);
+      issued.delete(key);
+      taken.push(`${grant.rule} in ${grant.file}`);
+
+      try {
+        appendFileSync(join(grant.dir, "grants.jsonl"), `${JSON.stringify({ op: "remove", decision: grant.decision, rule: grant.rule, file: grant.file, at: stamp, why: "expired", by: "hub" })}\n`, "utf8");
+      } catch {
+        // The rule is gone, which is what ends the grant; the line is its record.
+      }
+    } catch {
+      // A file that cannot be written now is tried again at the next sweep.
+    } finally {
+      rmdirSync(lock);
+    }
+  }
+
+  return taken;
+}
+
+function holdsRule(file: string, rule: string): boolean {
+  const settings = parsed(file);
+
+  if (settings instanceof Ungranted) return true;
+
+  return asArray(asObject(settings["permissions"])?.["allow"])?.includes(rule) === true;
 }

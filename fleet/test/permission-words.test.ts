@@ -204,3 +204,13 @@ describe("a spawn", () => {
     expect(permissionWords({ tool: "Agent", call: "{}", cause: "[x]", root: ROOT, agent_id: null }, undefined, "coordinator").title).toBe("Allow the coordinator to start a general-purpose agent?");
   });
 });
+
+describe("several calls on one permission", () => {
+  test("the words give the count and send the reader to each call, whatever the first one is", () => {
+    const words = permissionWords({ tool: "Bash", call: "ls", cause: "", root: ROOT, agent_id: null, more: ["rm -rf build", "git push --force origin HEAD:main"] }, undefined, "coordinator");
+    expect([words.title, words.question]).toEqual([
+      "Allow the coordinator to run 3 commands, once each?",
+      "Let the coordinator run these 3 exact calls, once each? Read each one in full below before you answer.",
+    ]);
+  });
+});

@@ -53,7 +53,7 @@ import type { Machine } from "../world.ts";
 import { FILE_POLICY, LINKED_POLICY, servedBody } from "./body-policy.ts";
 import { indexHtml } from "./index-page.ts";
 import { LinkProbes, ProbeCache } from "./probes.ts";
-import { grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
+import { expireGrants, grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
 import { allowedOrigin, chatOriginsPath, grantor, hello, MAX_POST_BYTES, parseChatOrigins, postRefusal, STOP_TOKEN_META, stopRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
 import { idleMs, noteRequest, serverStanding } from "../preview/sleep.ts";
 import { haltedPage, isPing, previewTarget, proxiedIdentity, proxyHttp, proxySocket, startingPage, type Target, type Upgrade } from "./preview-proxy.ts";
@@ -437,6 +437,14 @@ export class Hub {
 
   private entries(): Entry[] {
     return this.options.machine.registry.live();
+  }
+
+  /** Take back the one-time grants past their 30 minutes (grants.ts `expireGrants`), of every fleet the registry
+   * names, served or not: a rule outlives the session it was granted to. What was taken back. */
+  expireGrants(): Promise<string[]> {
+    const machine = this.options.machine;
+
+    return expireGrants(machine.registry.ledgerDirs(), machine.now(), stampOf(machine.now()));
   }
 
   /** This machine's fleets, as a peer hub and the index read them. */
@@ -1050,7 +1058,7 @@ export class Hub {
     if (body === undefined) return jsonResponse(400, { error: "the body is not a JSON object" });
 
     // A page of another origin sends messages; answering a decision or granting a permission is the fleet's own page's.
-    if (origin !== undefined && ((body["decision"] ?? null) !== null || (body["rule"] ?? null) !== null)) {
+    if (origin !== undefined && ["decision", "rule", "rules", "root", "runs"].some((key) => (body[key] ?? null) !== null)) {
       return jsonResponse(403, { error: "a decision is answered on the fleet's own page, not from another origin" });
     }
 
@@ -1078,6 +1086,23 @@ export class Hub {
     const rule = ruleGiven === undefined || ruleGiven === null ? undefined : asString(ruleGiven);
 
     if (ruleGiven !== undefined && ruleGiven !== null && rule === undefined) return jsonResponse(400, { error: "rule must be the rule the page showed" });
+    const rulesGiven = body["rules"] ?? null;
+    const rules = rulesGiven === null ? undefined : (asArray(rulesGiven) ?? []).flatMap((item) => (asString(item) === undefined ? [] : [asString(item) ?? ""]));
+
+    if (rulesGiven !== null && (asArray(rulesGiven) === undefined || rules?.length !== asArray(rulesGiven)?.length)) {
+      return jsonResponse(400, { error: "rules must be the rules the page showed, a list of strings" });
+    }
+
+    const runsGiven = body["runs"] ?? null;
+    const runs = runsGiven === null ? undefined : (asArray(runsGiven) ?? []).flatMap((item) => (asString(item) === undefined ? [] : [asString(item) ?? ""]));
+
+    if (runsGiven !== null && (asArray(runsGiven) === undefined || runs?.length !== asArray(runsGiven)?.length)) {
+      return jsonResponse(400, { error: "runs must be the files the page showed, a list of strings" });
+    }
+
+    const shownRoot = (body["root"] ?? null) === null ? undefined : asString(body["root"]);
+
+    if ((body["root"] ?? null) !== null && shownRoot === undefined) return jsonResponse(400, { error: "root must be the folder the page showed" });
 
     try {
       const marks = marksAlone({ marks: body["marks"], decision: body["decision"], quote: body["quote"], side: body["side"] }) ?? marksOf(body["marks"]);
@@ -1188,7 +1213,7 @@ export class Hub {
           return registeredSession(entry === undefined ? undefined : pidOfEntry(entry));
         };
 
-        granted = await grantAnswer({ dir: root, decision, text, rule, by: grantor(viewer), at: stampOf(machine.now()), registered });
+        granted = await grantAnswer({ dir: root, decision, text, rule, rules, root: shownRoot, runs, by: grantor(viewer), at: stampOf(machine.now()), registered });
 
         if ("refused" in granted) return jsonResponse(409, { error: granted.refused });
       }

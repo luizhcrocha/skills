@@ -16,18 +16,18 @@ import { Refusal, stateRefusal } from "../errors.ts";
 import { asArray, asObject, asString, pyStr, type Json, type JsonObject } from "../json.ts";
 import { FLEET_BIN, isDir, makeDirs, readOrWhy, readText, remove, resolvePath, writeBytes } from "../files.ts";
 import { fleetOf, managerOf, post as postNews, TEXT_MAX } from "../news/news.ts";
-import { explainCommand, explained, failedAnswer, failureWords } from "../health.ts";
+import { allowedByUser, explainCommand, explained, failedAnswer, failureWords } from "../health.ts";
 import { placeRoot, registeredSession } from "../hub/grants.ts";
 import { pidOfEntry } from "../registry.ts";
 import { workerFigures, workerTitle } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
 import { isMarkdownFile, markdownToHtml, markdownWarning } from "./body.ts";
-import { dropKey, REFUSAL_KEYS, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type Roadblock, type Step } from "./model.ts";
+import { dropKey, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type RefusedCall, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, highest, milestoneOfStep, nextStepId } from "./numbers.ts";
 import { approvalNumber, refusedFor, Unreachable } from "./shared-numbers.ts";
 import { approvalSource, comesFrom, namesOf, NoSource, refOf, sameSource } from "./approvals.ts";
 import { LINK_KINDS, linkKind, OLD_LINK_KINDS, type LinkKind } from "./links.ts";
-import { callRev, makeRefusedCall, permissionOptions } from "./permission.ts";
+import { ALLOW_ONCE, callsLine, callsOf, grantFileOf, isAsk, makeRefusedCall, permissionOptions, refusalRev } from "./permission.ts";
 import { foldersOf, permissionWords, type RefusedBy, type Spawn } from "./permission-words.ts";
 import { roleDefaults, spawnLine } from "./roles.ts";
 import { CHOICE_KINDS, ID, KINDS, nameRefusal } from "./validate.ts";
@@ -1208,6 +1208,15 @@ function harnessWrites(args: Args): boolean {
   return REFUSAL_FLAGS.some((k) => k !== "call" && args.str(k) !== undefined);
 }
 
+/**
+ * Whether this command asks for a permission before its call ran: it names the call's tool or root and no
+ * cause, on a new row or on one asked so. An ask's title, why and recommendation are the coordinator's, given
+ * with the call in one command; its question is still written from the call, so it never says less than it.
+ */
+function asksAhead(args: Args, before: RefusedCall | undefined): boolean {
+  return harnessWrites(args) && args.str("cause") === undefined && (before === undefined || isAsk(before));
+}
+
 /** The fields an explanation of a permission writes, each bound to the call it was written for. */
 const EXPLAINING = ["why", "recommend", "reason", "body"] as const;
 
@@ -1223,9 +1232,9 @@ function callGuard(run: Run, d: Decision): Step$ {
   const writes = EXPLAINING.filter((k) => run.args.str(k) !== undefined);
 
   if (writes.length === 0 && !run.args.flag("no_body")) return Effect.void;
-  const rev = callRev(r.rule);
+  const rev = refusalRev(r);
   const named = run.args.str("call");
-  const now = `${d.ref ?? d.id}'s call is now: ${r.call} (revision ${rev})`;
+  const now = `${d.ref ?? d.id}'s call is now: ${callsLine(r)} (revision ${rev})`;
 
   if (named === undefined) return refuse(`an explanation of a permission names the call it explains, as --call ${rev}: ${now}. Read it, then explain this call`);
 
@@ -1299,11 +1308,13 @@ function spawnOf(call: string): Spawn {
   return { type: asString(input?.["subagent_type"]) ?? "general-purpose", description };
 }
 
-/** Write a permission's title, question and why from its call, and say whether they moved. */
+/** Write a permission's title, question and why from its call, and say whether they moved. Of an ask, the
+ * question alone: its title and why are the coordinator's. */
 function writePermissionWords(run: Run, ledger: Ledger, d: Decision): string[] {
   if (d.refusal === undefined || d.refusal === null) return [];
   const words = permissionWords(d.refusal, refusedBy(run, ledger, d), ledger.role === "manager" ? "manager" : "coordinator", spawnOf(d.refusal.call));
-  const moved = (["title", "question", "why"] as const).filter((k) => d[k] !== words[k]);
+  const written = isAsk(d.refusal) ? (["question"] as const) : (["title", "question", "why"] as const);
+  const moved = written.filter((k) => d[k] !== words[k]);
 
   for (const k of moved) d[k] = words[k];
 
@@ -1375,46 +1386,108 @@ function sessionRootOf(run: Run, root: string): Effect.Effect<string, Refusal> {
   return refuse(`a permission's root is the session root (${roots}), where the subagent's session reads its permissions, not the worker's workspace ${root}`);
 }
 
-/** A permission's refused call from the flags given, over the one it had, with the two options that follow
- * from it; whether it changed. Any other kind takes none of these flags. */
+/** Whether two refusals name the same calls for the same caller, in the same root, for the same cause. */
+function sameRefusal(a: RefusedCall, b: RefusedCall): boolean {
+  const same = (["tool", "call", "rule", "cause", "root", "agent_id"] as const).every((k) => a[k] === b[k]);
+  const alike = (x: readonly string[], y: readonly string[]): boolean => x.length === y.length && x.every((item, k) => item === y[k]);
+
+  // The files too: a script that changed since the user was asked is another thing to allow.
+  return same && alike(a.more ?? [], b.more ?? []) && alike(a.runs ?? [], b.runs ?? []);
+}
+
+/** A permission's call from the flags given, over the one it had, with the two options that follow from it;
+ * whether it changed. Without `--cause` on a new row it is an ask (`asksAhead`), which may carry further calls
+ * (`--then`, once each). Any other kind takes none of these flags. */
 function setRefusal(run: Run, d: Decision): Effect.Effect<boolean, Refusal> {
   return Effect.gen(function* () {
     const args = run.args;
     const before = d.refusal ?? undefined;
+    const then = args.list("then") ?? [];
     // On a recorded call, `--call` alone names the revision an explanation is for (`callGuard`).
-    const named = REFUSAL_FLAGS.filter((k) => args.str(k) !== undefined && !(k === "call" && before !== undefined && !harnessWrites(args)));
+    const named: string[] = REFUSAL_FLAGS.filter((k) => args.str(k) !== undefined && !(k === "call" && before !== undefined && !harnessWrites(args)));
+
+    if (then.length > 0) named.push("then");
 
     if (d.kind !== "permission") {
       if (named.length === 0) return false;
 
-      return yield* refuse(`--${named.map((k) => k.replace("_", "-")).join(", --")} name the refused call of a permission (--kind permission)`);
+      return yield* refuse(`--${named.map((k) => k.replace("_", "-")).join(", --")} name the call of a permission (--kind permission)`);
     }
 
     if ((args.list("option") ?? []).length > 0) return yield* refuse("a permission's options are allow-once and deny, which the CLI sets: --option is not taken");
+    const ask = asksAhead(args, before);
 
-    if (args.str("recommend") !== undefined && named.length > 0) {
+    if (args.str("recommend") !== undefined && named.length > 0 && !ask) {
       return yield* refuse("the refused call's record takes no recommendation: explain the permission on its open row, without --tool, --call, --cause and --root");
     }
 
+    if (then.length > 0 && (!ask || args.str("call") === undefined)) {
+      return yield* refuse("--then gives the further calls of a permission asked before they ran: give it with --tool Bash, --call (the first call) and --root, and no --cause");
+    }
 
     if (named.length === 0 && before !== undefined) return false;
     const tool = args.str("tool") ?? before?.tool;
     const call = args.str("call") ?? before?.call;
-    const cause = args.str("cause") ?? before?.cause;
+    const cause = args.str("cause") ?? before?.cause ?? (ask ? "" : undefined);
     const root = args.str("root") ?? before?.root;
 
     if (tool === undefined || call === undefined || cause === undefined || root === undefined) {
-      return yield* refuse("a permission names the refused call: give --tool, --call, --cause and --root (and --agent-id for a subagent's call)");
+      return yield* refuse(
+        "a permission names its call: give --tool, --call and --root, with --cause (the classifier's reason) for a call auto mode refused, " +
+          "or none for a call asked before it runs (and --agent-id for a subagent's call)",
+      );
     }
 
     const agentId = args.str("agent_id");
-    const made = yield* makeRefusedCall({ tool, call, cause, root, agentId: agentId === undefined ? (before?.agent_id ?? null) : given(agentId) ? agentId : null });
+    // A new first call brings its own list; the same command again without --call keeps the calls it had.
+    const more = args.str("call") === undefined ? (before?.more ?? []) : then;
+    const made = yield* makeRefusedCall({ tool, call, cause, root, more, agentId: agentId === undefined ? (before?.agent_id ?? null) : given(agentId) ? agentId : null });
     const refusal = { ...made, root: yield* sessionRootOf(run, made.root) };
     d.refusal = refusal;
     d.options = permissionOptions(refusal);
 
-    return before === undefined || REFUSAL_KEYS.some((k) => before[k] !== refusal[k]);
+    return before === undefined || !sameRefusal(before, refusal);
   });
+}
+
+/** What an ask carries from its first command: the coordinator's recommendation, so the user never sees it as
+ * "waiting for the coordinator to explain". */
+function checkAsk(d: Decision): Step$ {
+  if (d.refusal === undefined || d.refusal === null || !isAsk(d.refusal) || given(d.recommend ?? undefined)) return Effect.void;
+
+  return refuse(
+    "a permission asked before its call ran carries your recommendation: give --recommend allow-once|deny and --reason, " +
+      "with --title (the plain question), --why and, for what the user needs to judge it (cost, risk, what a no means), --body FILE",
+  );
+}
+
+/** What the fleet does once a permission's answer is recorded: the exact calls to run, or that it stays stopped. */
+function afterAnswer(d: Decision, answer: string): string | undefined {
+  const r = d.refusal ?? undefined;
+
+  if (d.kind !== "permission" || r === undefined) return undefined;
+  const ref = d.ref ?? d.id;
+
+  if (!answer.trim().toLowerCase().startsWith(ALLOW_ONCE)) {
+    return `${ref} was not allowed: the call stays stopped. Act on the user's note; no other route to the same act (another worker, a reworded command, an action that asks the user to run it).`;
+  }
+
+  const who = given(d.agent ?? undefined) ? ` Resume ${d.agent ?? ""} (SendMessage) with exactly this.` : "";
+
+  if (r.tool === "Agent") return `${ref} is allowed once: start exactly this agent again, with the same input, no field added or changed.${who}`;
+  const calls = callsOf(r);
+
+  const what =
+    calls.length === 1
+      ? `run exactly this call now, byte for byte, as a Bash call of its own:\n  ${r.call}`
+      : `run exactly these ${String(calls.length)} calls now, in this order, each byte for byte as a Bash call of its own:\n${calls.map((call, k) => `  ${String(k + 1)}. ${call}`).join("\n")}`;
+
+  return (
+    `${ref} is allowed once: ${what}\n` +
+    `Each grant is an exact rule in ${grantFileOf(r.tool, r.root)}: it goes when its call ran, pass or fail, or 30 minutes after the answer, and the next run asks again. ` +
+    "A call that differs by one character has no grant, and the plugin's hook refuses a longer command that holds a granted call, a second run, a call out of its turn, " +
+    `and a call whose script changed since the user allowed it.${calls.length === 1 ? "" : " The list is a sequence: a call that fails takes the rest of the list with it, and you ask again for what is left."}${who}`
+  );
 }
 
 function setBody(run: Run, d: Decision): Step$ {
@@ -1494,6 +1567,10 @@ const FIELDS = ["kind", "title", "question", "why", "recommend", "reason", "secr
 
 /** The words a permission's record of its call writes: the CLI's, from the call, never the hook's. */
 const WORDS: ReadonlySet<string> = new Set(["title", "question", "why"]);
+
+const ASK_QUESTION =
+  "a permission's question is written from its call, so it never says less than the call does: --question cannot be set; " +
+  "the plain question goes in --title, and what the user needs to judge it in --why and --body";
 
 function placeOf(ledger: Ledger, d: Decision, run: Run): Step$ {
   const stepId = run.args.str("step");
@@ -1750,10 +1827,13 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
       const elsewhere = decide !== undefined;
       const kind = args.str("kind");
-      // A permission's title, question and why are written from its call (below).
-      yield* require(run, elsewhere ? ["title", "question"] : kind === "permission" ? ["kind"] : ["kind", "title", "question", "why"], "decision");
+      const ask = kind === "permission" && asksAhead(args, undefined);
+
+      if (ask && args.str("question") !== undefined) return yield* refuse(ASK_QUESTION);
+      // A permission's title, question and why are written from its call (below); an ask's title and why are the coordinator's.
+      yield* require(run, elsewhere ? ["title", "question"] : ask ? ["kind", "title", "why"] : kind === "permission" ? ["kind"] : ["kind", "title", "question", "why"], "decision");
       yield* checkQuestion(args.str("question"), given(kind) ? kind : "decision");
-      yield* checkWhy(args.str("why"), given(kind) ? kind : "decision");
+      yield* checkWhy(args.str("why"), ask ? "decision" : given(kind) ? kind : "decision");
 
       const fresh: Decision = {
         id,
@@ -1798,7 +1878,12 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         yield* checkKind(fresh, true);
         yield* setBody(run, fresh);
 
-        if (!harness) for (const warning of readabilityWarnings(fresh, writtenFields(args), run.root, workersOf(ledger))) run.warn(warning);
+        if (ask) {
+          yield* checkAsk(fresh);
+          yield* checkExplanation(run, fresh, true);
+        }
+
+        if (!harness || ask) for (const warning of readabilityWarnings(fresh, writtenFields(args), run.root, workersOf(ledger))) run.warn(warning);
         const advice = unadvised(run, ledger, fresh);
 
         if (advice !== undefined) run.warn(advice);
@@ -1818,7 +1903,8 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         run.say(
           `asked ${fresh.id}. Arm its answer's wake now, as a background command (run_in_background): ` +
             `${waitHint(run, fresh.id)}: it exits with the user's answer the moment it is given.` +
-            (explained(fresh) ? "" : ` Then explain it, this turn: ${explainCommand(FLEET_BIN, run.root, fresh.ref ?? fresh.id, callRev(fresh.refusal?.rule ?? ""))}.`),
+            (explained(fresh) ? "" : ` Then explain it, this turn: ${explainCommand(FLEET_BIN, run.root, fresh.ref ?? fresh.id, refusalRev(fresh.refusal))}.`) +
+            (ask ? " Run nothing of it until the user allows it; recording that answer (--decide) prints the exact call to run." : ""),
         );
       }
 
@@ -1843,10 +1929,14 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       // The hook's record of the same refusal again leaves the coordinator's words as they are; its own words
       // (title, question, why) are the CLI's to write from the call.
       const harness = kindNow === "permission" && harnessWrites(args);
-      const checkedAs = kindNow === "permission" && !harness ? "decision" : kindNow;
+      const ask = harness && asksAhead(args, d.refusal ?? undefined);
+      const askedRow = d.kind === "permission" && d.refusal !== undefined && d.refusal !== null && isAsk(d.refusal);
+      const checkedAs = kindNow === "permission" && (!harness || ask) ? "decision" : kindNow;
       const wasExplained = explained(d);
 
-      if (d.kind === "permission" && !harness) {
+      if (ask || (askedRow && !harness)) {
+        if (args.str("question") !== undefined) return yield* refuse(ASK_QUESTION);
+      } else if (d.kind === "permission" && !harness) {
         const set = (["title", "question"] as const).filter((k) => args.str(k) !== undefined);
 
         if (set.length > 0) {
@@ -1856,12 +1946,15 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         }
       }
 
+      // The words this command does not write: the hook's own, and of an ask the question alone.
+      const unwritten: ReadonlySet<string> = !harness ? new Set() : ask ? new Set(["question"]) : WORDS;
+
       yield* callGuard(run, d);
       yield* checkQuestion(question, checkedAs);
       yield* checkWhy(args.str("why"), checkedAs);
 
       const current = d;
-      const changed: string[] = FIELDS.filter((k) => args.str(k) !== undefined && !(harness && (WORDS.has(k) || args.str(k) === (current[k] ?? ""))));
+      const changed: string[] = FIELDS.filter((k) => args.str(k) !== undefined && !unwritten.has(k) && !(harness && args.str(k) === (current[k] ?? "")));
       const before = snapshot(d);
 
       if (options !== undefined && options.length > 0) changed.push("option");
@@ -1870,7 +1963,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       const row = d;
 
       for (const key of FIELDS) {
-        if (key === "step" || key === "milestone" || (harness && WORDS.has(key))) continue;
+        if (key === "step" || key === "milestone" || unwritten.has(key)) continue;
         const value = args.str(key);
 
         if (value === undefined) continue;
@@ -1902,18 +1995,21 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       if (yield* setRefusal(run, row)) {
         changed.push("refusal");
 
-        if (harness && explained(row)) {
+        // The hook's new call drops what the coordinator wrote about the old one; an ask's own command carries its words.
+        if (harness && !ask && explained(row)) {
           dropExplanation(run, row);
           changed.push("recommend");
         }
       }
 
-      if (harness && !explained(row)) changed.push(...writePermissionWords(run, ledger, row));
+      if (harness && (ask || !explained(row))) changed.push(...writePermissionWords(run, ledger, row));
       yield* checkKind(row, args.str("manual") !== undefined);
       yield* setBody(run, row);
-      yield* checkExplanation(run, row, wasExplained);
 
-      if (!harness) for (const warning of readabilityWarnings(row, writtenFields(args), run.root, workersOf(ledger))) run.warn(warning);
+      if (ask) yield* checkAsk(row);
+      yield* checkExplanation(run, row, wasExplained || ask);
+
+      if (!harness || ask) for (const warning of readabilityWarnings(row, writtenFields(args), run.root, workersOf(ledger))) run.warn(warning);
       const advice = passedOn ? unadvised(run, ledger, row) : undefined;
 
       if (advice !== undefined) run.warn(advice);
@@ -1948,7 +2044,8 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       }
     }
 
-    const failed = decide === undefined ? undefined : failedAnswer(d, readChat(run.root));
+    const said = decide === undefined ? [] : readChat(run.root);
+    const failed = decide === undefined ? undefined : failedAnswer(d, said);
 
     if (failed !== undefined) {
       return yield* refuse(
@@ -1957,8 +2054,20 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       );
     }
 
-    if (decide !== undefined) close(run, ledger, d, { status: "decided", answer: decide, resolution: resolution ?? "" });
-    else if (withdraw !== undefined) {
+    if (decide !== undefined && d.kind === "permission" && decide.trim().toLowerCase().startsWith(ALLOW_ONCE) && !allowedByUser(d, said)) {
+      return yield* refuse(
+        `${d.ref ?? d.id} has no allow-once answer from the user since it last changed: only their answer on the fleet page grants the call, ` +
+          `and --decide records an answer, it gives none. Wait for it (\`fleet chat ${run.root} wait ${d.id}\`) and run nothing of it until then; ` +
+          'or --withdraw "why" when the call is no longer needed',
+      );
+    }
+
+    if (decide !== undefined) {
+      close(run, ledger, d, { status: "decided", answer: decide, resolution: resolution ?? "" });
+      const next = afterAnswer(d, decide);
+
+      if (next !== undefined) run.say(next);
+    } else if (withdraw !== undefined) {
       close(run, ledger, d, { status: "withdrawn", answer: null, resolution: withdraw });
       revokeFrom(run, ledger, d, undefined, `${d.ref ?? d.id} was withdrawn (${withdraw})`);
     }

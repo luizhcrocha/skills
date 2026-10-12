@@ -502,6 +502,16 @@
   .icon-btn { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 8px; border: 0; background: none; color: var(--muted); cursor: pointer; flex: none; }
   .icon-btn:hover { background: var(--card-2); color: var(--text); }
   .dv-block.exact-call h3 { margin: 0 0 6px; color: var(--text); }
+  .exact-calls { margin: 0; padding-inline-start: 1.6em; display: grid; gap: 8px; }
+  .exact-calls li { min-width: 0; display: grid; gap: 4px; }
+  /* What the user allows is read whole: always wrapped, never scrolled sideways or cut, and no switch to unwrap it. */
+  .exact-call .code-pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: visible; max-height: none; }
+  .exact-call .code-wrap { display: none; }
+  .call-runs { margin: 0; font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
+  .call-runs code { font-family: var(--mono); font-size: 0.8125rem; color: var(--text); }
+  .dv-moved { margin: 0; padding: 9px 12px; border-radius: 8px; background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--text); font-size: var(--fs-s); font-weight: 600; }
+  .dv-form[data-moved] .exact-call { padding: 8px; border: 2px solid var(--warning); border-radius: 10px; }
+  .exact-calls li::marker { color: var(--muted); font-variant-numeric: tabular-nums; }
   .refused dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 10px 0 0; }
   .refused dt { font-size: var(--fs-xs); color: var(--muted); font-stretch: var(--narrow); }
   .refused dd { margin: 0; overflow-wrap: anywhere; }
