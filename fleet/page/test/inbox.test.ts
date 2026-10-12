@@ -2,11 +2,13 @@
  * The inbox's threads (src/inbox.ts), read from the chat and from what waits: the page's main thread found
  * by its opener (empty before any message), a mark's thread with the answers naming it, a no-change reason,
  * Luiz's replies and the fleet's answers to them, side chats on the decision's words, a batch's loose
- * answers; pending ones first, then newest activity; unread answers.
+ * answers; pending ones first, then newest activity; unread answers. An answer naming no mark: the one
+ * comment's when its batch has one (the shapes of the chats where it went unseen), every comment's of a batch
+ * of several, told as the whole batch's.
  */
 import { expect, test } from "bun:test";
 
-import { inboxOf, isDone, lastLine, newestFleet, replyLead, splitDone, unreadCount, type InboxSource, type Thread } from "../src/inbox.ts";
+import { inboxOf, isDone, lastLine, newestFleet, replyLead, splitDone, unreadCount, wholeWords, type InboxSource, type Thread } from "../src/inbox.ts";
 import { Core, type Json, type MarkItem, type Message } from "../src/core.ts";
 import { NONE } from "../src/autosend.ts";
 
@@ -83,10 +85,84 @@ test("a mark's thread: its words, the answers naming it, the no-change reason, L
     ["perf", "Left it: the court's words.", "it quotes the court"],
     ["You", "fine, but add a note", ""],
     ["perf", "Note added.", ""],
+    ["perf", "Thanks for the batch.", ""],
   ]);
-  expect(box.threads.find((t) => t.key === "m:1")?.turns.map((t) => t.text)).toEqual(["Replace with “brief”\nshorter", "Shortened."]);
+  expect(box.threads.find((t) => t.key === "m:1")?.turns.map((t) => t.text)).toEqual(["Replace with “brief”\nshorter", "Shortened.", "Thanks for the batch."]);
   expect(box.threads.find((t) => t._tag === "loose")?.turns.map((t) => t.text)).toEqual(["Thanks for the batch."]);
 });
+
+test("an answer to a batch of several comments that names none shows in each one's thread as the whole batch's, and answers none of them", () => {
+  const more = [...STORED, batch(90, [item(5, "comment", "tighter"), item(6, "question", "since when?"), { n: 7, kind: "general", comment: "and overall?" }]), msg({ id: 91, from: "coordinator", text: "All three by Friday.", re: 90, side: 10 })];
+  const box = inboxOf(source({ messages: more, read: { page: 91, "loose:90": 91 }, base: 89 }));
+  const of = (key: string) => box.threads.find((t) => t.key === key);
+
+  for (const key of ["m:5", "m:6"]) {
+    expect(of(key)?.turns.map((t) => [t.who, t.text, t.whole])).toEqual([
+      ["You", key === "m:5" ? "tighter" : "since when?", []],
+      ["perf", "All three by Friday.", [5, 6]],
+    ]);
+    /* It names neither comment: each stays sent, and is not unread for it (the page's thread is). */
+    expect(of(key)).toMatchObject({ status: "sent", unread: false, last: 90 });
+  }
+
+  /* An answer naming a mark is no one else's. */
+  expect(of("m:2")?.turns.map((t) => t.whole)).toEqual([[], [], [], [], [1, 2]]);
+  expect(of("m:1")?.turns.at(-1)).toMatchObject({ text: "Thanks for the batch.", whole: [1, 2] });
+  expect(box.page.turns.at(-1)).toMatchObject({ text: "All three by Friday.", whole: [] });
+  expect([[2], [1, 2], [1, 2, 4]].map(wholeWords)).toEqual(["comment 2", "comments 1 and 2", "comments 1, 2 and 4"]);
+
+  /* A batch of replies in two comments' threads: its answer naming none shows in both. */
+  const replies = inboxOf(source({ messages: [...STORED, { ...batch(92, [{ n: 8, kind: "general", comment: "sure?", on: 1 }, { n: 9, kind: "general", comment: "and here?", on: 2 }]), side: 10 }, msg({ id: 93, from: "coordinator", text: "Yes to both.", re: 92, side: 10 })] }));
+  expect(["m:1", "m:2"].map((key) => replies.threads.find((t) => t.key === key)?.turns.at(-1))).toMatchObject([
+    { text: "Yes to both.", whole: [1, 2] },
+    { text: "Yes to both.", whole: [1, 2] },
+  ]);
+});
+
+/* The two chats where Luiz's comment #1 on infra's gh-billing never showed its answer: the batch and the answer as each chat stores them (the long words cut), the answer `re` the batch, in its side chat, naming no mark. */
+const QUESTION = { text: "Every GitHub Actions run fails in seconds", prefix: "", suffix: "", hint: "the question", field: "question", blocks: [{ exact: "Every GitHub Actions run fails in seconds", prefix: "", suffix: "" }] };
+
+const asked = (hash: string, to: string) => ({
+  decision: { id: "gh-billing", ref: "A82", title: "Fix GitHub Actions billing: no workflow runs", revision: "2026-10-12T16:56:00-05:00" },
+  at: { hash },
+  to,
+  items: [{ n: 1, kind: "question", quote: QUESTION, comment: "What are we using this for? Ci is doing what? If not useful disable" }],
+});
+
+const ON_MANAGER: Message[] = [
+  msg({ id: 446, at: "2026-10-12T17:13:22-05:00", from: "user", to: ["infra"], text: "**Marks on A82**: Fix GitHub Actions billing: no workflow runs", re: null, author: "luizhcrocha@github", marks: asked("#decision/infra/gh-billing", "infra"), delivered: [{ fleet: "infra", id: 888 }] }),
+  msg({ id: 447, at: "2026-10-12T17:14:14-05:00", from: "infra", to: ["user"], text: "Two workflows. I replaced the billing action with this choice as a decision (ci-keep).", re: 446, side: 446, via: { fleet: "infra", id: 889 } }),
+];
+
+const ON_INFRA: Message[] = [
+  msg({ id: 888, at: "2026-10-12T17:13:22-05:00", from: "user", to: ["coordinator"], text: "**Marks on A82**: Fix GitHub Actions billing: no workflow runs", re: null, author: "luizhcrocha@github", marks: asked("#decision/gh-billing", "coordinator"), via: { fleet: "manager", id: 446 } }),
+  msg({ id: 889, at: "2026-10-12T17:14:14-05:00", from: "coordinator", to: ["user"], text: "Two workflows. I replaced the billing action with this choice as a decision (ci-keep).", re: 888, side: 888 }),
+];
+
+for (const [where, messages, hash, host, answer] of [
+  ["the manager's page, mirrored (`via`)", ON_MANAGER, "#decision/infra/gh-billing", "manager", 447],
+  ["the fleet's own page", ON_INFRA, "#decision/gh-billing", "coordinator", 889],
+] as const)
+  test(`an answer to a batch of one comment that names no mark is that comment's, on ${where}: in its thread, answered, unread`, () => {
+    const box = inboxOf(source({ messages, hash, host, owner: "infra" }));
+    const one = box.threads.find((t) => t.key === "m:1");
+
+    expect(one?.turns.map((t) => [t.who, t.id, t.whole])).toEqual([
+      ["You", messages[0]?.id ?? 0, []],
+      ["infra", answer, []],
+    ]);
+    expect(one).toMatchObject({ _tag: "mark", status: "answered", unread: true });
+    expect(isDone(one ?? box.page)).toBe(true);
+    /* Its own thread and the page's hold it: no thread apart for it. */
+    expect(keyed(box.threads)).toEqual(["m:1"]);
+    expect(box.page.turns.map((t) => t.id)).toEqual([messages[0]?.id ?? 0, answer]);
+
+    /* Luiz's next words in the page's thread ride a batch of one note: an answer to it naming no mark is not comment #1's. */
+    const note = { ...msg({ id: answer + 3, from: "user", text: "**Marks on A82**", marks: { ...asked(hash, host === "manager" ? "infra" : "coordinator"), items: [{ n: 2, kind: "general", comment: "Ok go with your recommendation." }] } }), side: messages[0]?.id ?? 0 };
+    const later = inboxOf(source({ messages: [...messages, note, msg({ id: answer + 4, from: host === "manager" ? "infra" : "coordinator", text: "Done.", re: answer + 3, side: messages[0]?.id ?? 0 })], hash, host, owner: "infra" }));
+    expect(later.threads.find((t) => t.key === "m:1")?.turns.length).toBe(2);
+    expect(later.page.turns.at(-1)).toMatchObject({ text: "Done." });
+  });
 
 test("side chats on the decision's words, not another decision's; a new one shows before its first message", () => {
   const box = inboxOf(source({ fresh: [{ key: "s9", quote: "R2 is faster" }] }));
@@ -164,6 +240,7 @@ test("every message batches: a reply in a comment's thread, sent as a `general` 
     ["perf", "Left it: the court's words.", false],
     ["You", "fine, but add a note", false],
     ["perf", "Note added.", false],
+    ["perf", "Thanks for the batch.", false],
     ["You", "and the totals?", false],
     ["perf", "Totals too.", false],
     ["You", "one more", true],

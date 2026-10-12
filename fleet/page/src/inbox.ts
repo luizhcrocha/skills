@@ -1,8 +1,12 @@
 /**
  * The inbox of a decision's page, as threads, with no DOM: the page's main thread (a side chat the page keeps
  * per decision, held with the decision's owner, SPEC API 5), then one thread per mark (pending or sent, with
- * the fleet's answers that name it and Luiz's replies in it) and one per side chat on the decision's words,
+ * the fleet's answers to it and Luiz's replies in it) and one per side chat on the decision's words,
  * newest activity first. Read from the chat as the page has it and from what waits to be sent.
+ *
+ * An answer to a batch that names no mark is never left out of a comment's thread: it is the one comment's
+ * when the batch has one (marks.ts `sentOf`), and with several it shows in each one's thread as the whole
+ * batch's (`whole`), answering none of them.
  */
 import type { MarkBatch, MarkItem, MarkKind, Message } from "./core.ts";
 import { sentOf } from "./marks.ts";
@@ -26,6 +30,12 @@ export interface Turn {
   readonly at: string;
   /** Why the fleet leaves the mark as it is (an answer `--no-change`); "" for none. */
   readonly keep: string;
+  /**
+   * The comments it answers at once, by number, when it is the fleet's answer to their whole batch naming
+   * none of them; empty for any other message. Such an answer leaves each comment as it was: not answered,
+   * and not unread for it.
+   */
+  readonly whole: readonly number[];
   /** A batch of comments in the page's thread, shown as its card. */
   readonly marks?: MarkBatch;
 }
@@ -99,9 +109,9 @@ export function inboxOf(src: InboxSource): Inbox {
   const ids = messages.reduce((top, m) => Math.max(top, m.id), 0);
   const who = (m: Message): string => (m.from === "user" ? "You" : m.from === src.host ? src.owner : m.from);
 
-  const turn = (m: Message, text = m.text): Turn => ({ id: m.id, key: "c" + String(m.id), mine: m.from === "user", who: who(m), text, quote: m.quote && !opensPage(m, hash) && !opensSide(m, hash) ? oneLine(m.quote.text) : "", at: m.at, keep: m.keep ?? "" });
+  const turn = (m: Message, text = m.text): Turn => ({ id: m.id, key: "c" + String(m.id), mine: m.from === "user", who: who(m), text, quote: m.quote && !opensPage(m, hash) && !opensSide(m, hash) ? oneLine(m.quote.text) : "", at: m.at, keep: m.keep ?? "", whole: [] });
 
-  const waiting = (p: PendingMsg): Turn => ({ id: null, key: p.key, mine: true, who: "You", text: p.text, quote: p.quote ? oneLine(p.quote.text) : "", at: "", keep: "" });
+  const waiting = (p: PendingMsg): Turn => ({ id: null, key: p.key, mine: true, who: "You", text: p.text, quote: p.quote ? oneLine(p.quote.text) : "", at: "", keep: "", whole: [] });
   const lastOf = (turns: readonly Turn[], waits: boolean): number => (waits ? ids + 1 : Math.max(0, ...turns.map((t) => t.id ?? 0)));
   const unreadOf = (key: string, turns: readonly Turn[]): boolean => turns.some((t) => !t.mine && t.id !== null && t.id > (src.read[key] ?? src.base));
 
@@ -157,25 +167,36 @@ export function inboxOf(src: InboxSource): Inbox {
 
   /* Luiz's replies batched in a comment's thread (`general` items on it), sent and waiting. */
   const atOf = (id: number): string => messages.find((m) => m.id === id)?.at ?? "";
-  const repliesTo = (n: number): Turn[] => sent.marks.flatMap((r) => (r.item.kind === "general" && r.item.on === n ? [{ id: r.batch, key: `g${String(r.batch)}-${String(r.item.n)}`, mine: true, who: "You", text: r.item.comment ?? "", quote: "", at: atOf(r.batch), keep: "" }] : []));
+  const repliesTo = (n: number): Turn[] => sent.marks.flatMap((r) => (r.item.kind === "general" && r.item.on === n ? [{ id: r.batch, key: `g${String(r.batch)}-${String(r.item.n)}`, mine: true, who: "You", text: r.item.comment ?? "", quote: "", at: atOf(r.batch), keep: "", whole: [] }] : []));
   const waitingTo = (n: number): PendingMsg[] => pending.msgs.filter((p) => p.to._tag === "mark" && p.to.n === n);
+
+  /* The fleet's answers to a whole batch, naming no mark, in the thread of each comment the batch is about (its comments, and the ones its replies are in). */
+  const wholeOf = new Map<number, Turn[]>();
+
+  for (const l of sent.loose) {
+    const about = [...new Set(sent.marks.flatMap((s) => (s.batch !== l.batch ? [] : s.item.kind !== "general" ? [s.item.n] : s.item.on === undefined ? [] : [s.item.on])))];
+
+    for (const n of about) wholeOf.set(n, [...(wholeOf.get(n) ?? []), ...l.answers.map((m) => ({ ...turn(m), whole: about }))]);
+  }
 
   const marks: Thread[] = sent.marks.flatMap((s): Thread[] => {
     if (s.item.kind === "general") return [];
     const n = s.item.n;
     const key = markKey(n);
-    const later = [...repliesTo(n), ...messages.filter((m) => owner.get(m.id) === n).map((m) => turn(m, m.from === "user" ? m.text.replace(LEAD, "") : m.text))].sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
+    const later = [...repliesTo(n), ...messages.filter((m) => owner.get(m.id) === n).map((m) => turn(m, m.from === "user" ? m.text.replace(LEAD, "") : m.text)), ...(wholeOf.get(n) ?? [])].sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
     const waits = waitingTo(n);
-    const turns = [{ id: s.batch, key: "b" + String(s.batch), mine: true, who: "You", text: commentOf(s.item), quote: "", at: atOf(s.batch), keep: "" }, ...later, ...waits.map(waiting)];
+    const turns = [{ id: s.batch, key: "b" + String(s.batch), mine: true, who: "You", text: commentOf(s.item), quote: "", at: atOf(s.batch), keep: "", whole: [] }, ...later, ...waits.map(waiting)];
+    /* What was said to this comment alone: the thread's place in the order and its unread dot come from it. */
+    const own = turns.filter((t) => t.whole.length === 0);
     /* A reply waiting in the thread makes it pending again, until it goes. */
     const status: MarkStatus = waits.length ? "pending" : s.answers.length ? "answered" : "sent";
     const holds = waits.length > 0 || (pending.withdrawn ?? []).includes(n);
 
-    return [{ _tag: "mark", key, item: s.item, kind: s.item.kind, status, batch: s.batch, turns, last: lastOf(turns, holds), unread: unreadOf(key, turns), waits: holds, withdrawn: gone.has(n) }];
+    return [{ _tag: "mark", key, item: s.item, kind: s.item.kind, status, batch: s.batch, turns, last: lastOf(own, holds), unread: unreadOf(key, own), waits: holds, withdrawn: gone.has(n) }];
   });
 
   for (const item of pending.items) {
-    const turns = [{ id: null, key: "d" + String(item.n), mine: true, who: "You", text: commentOf(item), quote: "", at: "", keep: "" }];
+    const turns = [{ id: null, key: "d" + String(item.n), mine: true, who: "You", text: commentOf(item), quote: "", at: "", keep: "", whole: [] }];
 
     marks.push({ _tag: "mark", key: markKey(item.n), item, kind: item.kind, status: "pending", batch: null, turns, last: ids + 1 + item.n, unread: false, waits: true, withdrawn: false });
   }
@@ -196,6 +217,9 @@ export function commentOf(item: MarkItem): string {
 
   return lines.join("\n") || (item.kind === "delete" ? "Remove these words." : "");
 }
+
+/** The comments an answer to a whole batch is about, in words: "comment 2", "comments 1, 2 and 4". */
+export const wholeWords = (ns: readonly number[]): string => (ns.length < 2 ? `comment ${ns.join("")}` : `comments ${ns.slice(0, -1).join(", ")} and ${String(ns.at(-1))}`);
 
 /** The newest fleet message of each thread, to mark it read once it is open. */
 export const newestFleet = (t: Thread): number => Math.max(0, ...t.turns.filter((x) => !x.mine && x.id !== null).map((x) => x.id ?? 0));

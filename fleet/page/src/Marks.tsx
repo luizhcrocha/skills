@@ -28,7 +28,7 @@ import { readBody } from "./bodytext.ts";
 import { CaretList } from "./CaretList.tsx";
 import { Core, type Json, type JsonRecord, type MarkDecision, type MarkItem, type MarkKind, type MarkQuote, type Quote } from "./core.ts";
 import { parseEmbedMessage, parseEvidenceSelect, parseFrameSaid } from "./embed.ts";
-import { inboxOf, lastLine, newestFleet, splitDone, unreadCount, type Thread, type Turn } from "./inbox.ts";
+import { inboxOf, lastLine, newestFleet, splitDone, unreadCount, wholeWords, type Thread, type Turn } from "./inbox.ts";
 import { KIND_WORDS, nextNumber, placeMark, QUOTED_KINDS, quoteLines, sentOf, type Claimed, type DraftStore } from "./marks.ts";
 import { plural } from "./format.ts";
 import { BatchCard, inboxOpener, inboxRequest } from "./BatchCard.tsx";
@@ -1490,6 +1490,9 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
                 </div>
               </Show>
               <div class={"mk-msg" + (x().id === null ? " pending" : "") + (editMsg() === x().key ? " editing" : "")}>
+                <Show when={x().whole.length}>
+                  <span class="mk-whole">To the whole batch: {wholeWords(x().whole)}</span>
+                </Show>
                 <Show when={x().quote}>
                   <span class="mk-msg-q">“{x().quote}”</span>
                 </Show>

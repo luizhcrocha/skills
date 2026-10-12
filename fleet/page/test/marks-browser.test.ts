@@ -19,7 +19,7 @@ import { join } from "node:path";
 import puppeteer, { type Browser, type BrowserContext, type Frame, type Page } from "puppeteer-core";
 
 import type { Json } from "../src/core.ts";
-import { coordinatorChat, managerChat, type Message } from "./fixtures.ts";
+import { coordinatorChat, managerChat, type Message, type View } from "./fixtures.ts";
 import { serveHarness, type Harness } from "./harness.ts";
 import { D30_BODY, D30_MOVED, D30_REVISED, marksManagerView, marksView } from "./marks-fixtures.ts";
 
@@ -453,6 +453,12 @@ for (const [width, height, phone] of [
     await f.waitForFunction(() => document.querySelectorAll("span[data-pin].st-answered.unread").length === 3, { polling: 100 });
     expect(await pins(f)).toEqual(["1:st-answered/unread", "2:st-answered/unread", "4:st-answered/unread"]);
     expect(await page.$eval("#mk-unread", (e) => (e instanceof HTMLElement ? e.hidden : true))).toBe(false);
+    expect(await threads(page)).toEqual(["page:", `loose:${String(id)}:`, "m:4:answered", "m:2:answered", "m:1:answered", "m:3:sent"]);
+
+    /* The answer naming no mark shows in each comment's thread as the whole batch's: comment 3, which no answer names, has it and stays sent. */
+    await openThread(page, "m:3");
+    expect(await page.$$eval("#mk-turns .turn.from-fleet .mk-msg", (ms) => ms.map((x) => [x.querySelector(".mk-whole")?.textContent ?? "", x.querySelector(".rich, .mk-msg-text")?.textContent ?? x.textContent ?? ""]))).toEqual([["To the whole batch: comments 1, 2, 3 and 4", expect.stringContaining("Thanks: D30 comes back with the changes marked.")]]);
+    expect(await page.$eval("#mk-panel h2 .pill", (e) => e.textContent)).toBe("sent");
     expect(await threads(page)).toEqual(["page:", `loose:${String(id)}:`, "m:4:answered", "m:2:answered", "m:1:answered", "m:3:sent"]);
 
     /* Hide answered: their highlights and pins leave the body, their threads fold into Answered (N); the choice is kept per viewer. */
@@ -1489,6 +1495,113 @@ test.skipIf(!found)("an action's manual step takes comments, on the fleet's page
     expect(manager.posted.at(-1)?.marks?.["at"]).toEqual({ hash: "#decision/perf/l220" });
     expect(manager.posted.at(-1)?.marks?.["items"]).toEqual([expect.objectContaining({ quote: expect.objectContaining({ field: "step", text: "secretspec run" }) })]);
     expect(fleet.posted.length).toBe(0);
+  } finally {
+    void hub.stop(true);
+  }
+});
+
+/* ------------------------------------------------------------------ an answer that names no mark */
+
+/** infra's A82 as its ledger had it when Luiz commented on its question (here among perf's decisions, the harness's fleet). */
+const A82 = { id: "gh-billing", ref: "A82", kind: "action", title: "Fix GitHub Actions billing: no workflow runs", question: "Every GitHub Actions run fails in seconds. Please fix the payment method or raise the spending limit.", why: "No workflow runs.", status: "open", blocking: false, asks: "user", opened: "2026-10-12T16:56:00-05:00", manual: "Open the billing settings.", options: [] };
+
+const A82_QUOTE = "Every GitHub Actions run fails in seconds";
+
+/** The manager's chat as it stored Luiz's comment #1 on A82 (#446: one question, delivered to the fleet) and the fleet's answer (#447: mirrored, `re` the batch, in its side chat, naming no mark), their long words cut. */
+const A82_BATCH: Message = {
+  id: 446,
+  at: "2026-10-12T17:13:22-05:00",
+  from: "user",
+  to: ["perf"],
+  text: "**Marks on A82**: Fix GitHub Actions billing: no workflow runs",
+  author: "luizhcrocha@github",
+  marks: {
+    decision: { id: "gh-billing", ref: "A82", title: A82.title, revision: "2026-10-12T16:56:00-05:00" },
+    at: { hash: "#decision/perf/gh-billing" },
+    to: "perf",
+    items: [{ n: 1, kind: "question", quote: { text: A82_QUOTE, prefix: "", suffix: "", hint: "the question", field: "question", blocks: [{ exact: A82_QUOTE, prefix: "", suffix: "" }] }, comment: "What are we using this for? Ci is doing what? If not useful disable" }],
+  },
+  delivered: [{ fleet: "perf", id: 888 }],
+};
+
+const A82_ANSWER: Message = { id: 447, at: "2026-10-12T17:14:14-05:00", from: "perf", to: ["user"], text: "Two workflows. I replaced the billing action with this choice as a decision (ci-keep).", re: 446, side: 446, via: { fleet: "perf", id: 889 } };
+
+test.skipIf(!found)("on the manager's page, the fleet's answer to a batch of one comment that names no mark shows in that comment's thread as it lands, the comment answered; it stays once the decision is withdrawn", async () => {
+  const managerView = marksManagerView(NOW);
+  const fleets = Array.isArray(managerView["coordinators"]) ? managerView["coordinators"] : [];
+  const withA82 = (a82: View): View => ({ ...managerView, coordinators: fleets.map((c) => (c !== null && Object(c) === c && !Array.isArray(c) && c["id"] === "perf" ? { ...c, decisions: [a82] } : c)) });
+  const manager = serveHarness({ template, view: withA82(A82), messages: [...managerChat(NOW), A82_BATCH] });
+  const fleet = serveHarness({ template, view: { ...marksView(NOW), decisions: [A82] }, messages: coordinatorChat(NOW) });
+
+  const hub = Bun.serve({
+    port: 0,
+    idleTimeout: 0,
+    fetch(req) {
+      const url = new URL(req.url);
+      const to = new URL(url.pathname.startsWith("/f/manager/") ? manager.url : fleet.url).origin;
+
+      return fetch(to + url.pathname + url.search, { method: req.method, headers: req.headers, body: req.body });
+    },
+  });
+
+  const context = await browser.createBrowserContext();
+  open.push({ harness: manager, context }, { harness: fleet, context });
+
+  const turns = (page: Page): Promise<string[]> => page.$$eval("#mk-turns .turn", (ts) => ts.map((t) => (t.classList.contains("from-fleet") ? "fleet: " : "you: ") + (t.querySelector(".mk-msg")?.textContent ?? "")));
+  const pill = (page: Page): Promise<string> => page.$eval("#mk-panel h2 .pill", (e) => e.textContent ?? "");
+
+  try {
+    const top = await context.newPage();
+    await top.setViewport({ width: 390, height: 844 });
+    await top.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: "reduce" }]);
+    top.on("pageerror", (e) => console.error(`pageerror on the manager's page: ${String(e)}`));
+    await top.goto(`http://127.0.0.1:${String(hub.port)}/f/manager/#decision/perf/gh-billing`, { waitUntil: "domcontentloaded" });
+    await top.waitForFunction(() => document.querySelector("#conn")?.textContent === "Live");
+    await top.waitForSelector("#mk-rail");
+    let inner: Frame | undefined;
+
+    for (let i = 0; i < 80 && !inner; i += 1) {
+      inner = top.frames().find((x) => x.url().includes("embed=1"));
+
+      if (inner && !(await inner.$('#decision [data-field="question"]').catch(() => null))) inner = undefined;
+      await sleep(100);
+    }
+
+    if (!inner) throw new Error("no fleet frame");
+
+    /* Sent, and only Luiz's words in its thread. */
+    await inner.waitForFunction(() => document.querySelector('#fd-pins .fd-pin.st-sent[data-of="question"]') !== null, { polling: 100, timeout: 4000 });
+    await openThread(top, "m:1");
+    expect([await pill(top), await turns(top)]).toEqual(["sent", ["you: What are we using this for? Ci is doing what? If not useful disable"]]);
+
+    /* The answer lands while the thread is open. */
+    manager.say(A82_ANSWER);
+    await top.waitForFunction(() => document.querySelectorAll("#mk-turns .turn.from-fleet").length === 1, { polling: 100, timeout: 4000 });
+    expect([await pill(top), await turns(top)]).toEqual(["answered", ["you: What are we using this for? Ci is doing what? If not useful disable", "fleet: " + A82_ANSWER.text]]);
+    await inner.waitForFunction(() => document.querySelector('#fd-pins .fd-pin.st-answered[data-of="question"]') !== null, { polling: 100, timeout: 4000 });
+    expect(await threads(top)).toEqual(["page:", "m:1:answered"]);
+
+    /* The fleet withdraws the decision after answering. The page says so and, set to go to the next once answered, moves on; back on the decision, the thread keeps the answer. */
+    const withdrawn = { ...A82, status: "withdrawn", closed: "2026-10-12T17:14:39-05:00", resolution: "replaced by ci-keep" };
+    fleet.setView({ ...marksView(NOW), decisions: [withdrawn] });
+    manager.setView(withA82(withdrawn));
+    await top.waitForSelector("#dv-advanced, #dv-answered");
+    await top.evaluate(() => {
+      location.hash = "#decision/perf/gh-billing";
+    });
+    await top.waitForFunction(() => location.hash === "#decision/perf/gh-billing" && document.querySelector("#mk-rail") !== null, { polling: 100 });
+    await openThread(top, "m:1");
+    expect([await pill(top), (await turns(top)).length]).toEqual(["answered", 2]);
+
+    /* A page opened after it all (a reload) reads the same from the chat. */
+    const again = await context.newPage();
+    await again.setViewport({ width: 390, height: 844 });
+    await again.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: "reduce" }]);
+    await again.goto(`http://127.0.0.1:${String(hub.port)}/f/manager/#decision/perf/gh-billing`, { waitUntil: "domcontentloaded" });
+    await again.waitForFunction(() => document.querySelector("#conn")?.textContent === "Live");
+    await again.waitForSelector("#mk-rail");
+    await openThread(again, "m:1");
+    expect([await pill(again), (await turns(again)).at(-1)]).toEqual(["answered", "fleet: " + A82_ANSWER.text]);
   } finally {
     void hub.stop(true);
   }

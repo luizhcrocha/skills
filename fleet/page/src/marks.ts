@@ -515,20 +515,30 @@ export function saveDrafts(store: DraftStore | null, key: string, items: readonl
 
 /* ------------------------------------------------------------------ what was sent, and the answers */
 
-/** A sent mark: the message that carried it, the mark, and the fleet's answers that name it. */
+/**
+ * A sent mark: the message that carried it, the mark, and the fleet's answers to it: the ones that name it,
+ * and, for the one comment of its batch, the ones that name no mark.
+ */
 export interface SentMark {
   readonly batch: number;
   readonly item: MarkItem;
   readonly answers: readonly Message[];
 }
 
-/** The marks sent on the decision at `hash`, with their answers; and the answers to a batch that name no mark. */
+/** The marks sent on the decision at `hash`, with their answers; and the answers to a batch that name no mark and are no one comment's. */
 export interface Sent {
   readonly marks: readonly SentMark[];
   readonly loose: readonly { readonly batch: number; readonly answers: readonly Message[] }[];
 }
 
-/** The decision's sent marks, read from the chat: every batch whose place is `hash`, and every answer `re` one of them. */
+/** Whether a mark has a thread to be answered in: a comment on words, or a reply in one's thread; not a note on the whole decision. */
+const threaded = (item: MarkItem): boolean => item.kind !== "general" || item.on !== undefined;
+
+/**
+ * The decision's sent marks, read from the chat: every batch whose place is `hash`, and every answer `re` one
+ * of them. An answer naming no mark (`say --re` with no `--mark`) answers the batch's one comment when it has
+ * one, so no answer is left out of the thread it was written for; with several it is the whole batch's.
+ */
 export function sentOf(messages: readonly Message[], hash: string): Sent {
   const marks: SentMark[] = [];
   const loose: { batch: number; answers: Message[] }[] = [];
@@ -536,9 +546,11 @@ export function sentOf(messages: readonly Message[], hash: string): Sent {
   for (const b of messages) {
     if (!b.marks || b.marks.at.hash !== hash) continue;
     const answers = messages.filter((a) => a.re === b.id && a.from !== "user");
+    const [first, ...rest] = b.marks.items;
+    const only = first !== undefined && rest.length === 0 && threaded(first);
 
-    for (const item of b.marks.items) marks.push({ batch: b.id, item, answers: answers.filter((a) => a.mark?.includes(item.n)) });
-    const plain = answers.filter((a) => !a.mark?.length);
+    for (const item of b.marks.items) marks.push({ batch: b.id, item, answers: answers.filter((a) => (a.mark?.length ? a.mark.includes(item.n) : only)) });
+    const plain = only ? [] : answers.filter((a) => !a.mark?.length);
 
     if (plain.length) loose.push({ batch: b.id, answers: plain });
   }

@@ -30,6 +30,10 @@ export interface Message {
   readonly marks?: JsonRecord;
   readonly mark?: readonly number[];
   readonly keep?: string;
+  /** The fleet's chat a mirrored answer, or a delivered message, came from, and its id there. */
+  readonly via?: { readonly fleet: string; readonly id: number };
+  /** Where the hub delivered the user's message: each fleet's chat, and its id there. */
+  readonly delivered?: readonly { readonly fleet: string; readonly id: number }[];
 }
 
 const MIN = 60_000;

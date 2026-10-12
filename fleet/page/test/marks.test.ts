@@ -209,7 +209,7 @@ function msg(raw: Json): Message {
   return m;
 }
 
-test("sent marks are read back from the chat, each with the answers that name it; an answer naming none goes under its batch", () => {
+test("sent marks are read back from the chat, each with the answers that name it; an answer naming none goes under its batch of several, and to the one comment of a batch of one", () => {
   const batch = (id: number, hash: string, items: readonly MarkItem[]): Message => msg({ id, at: "", from: "user", to: ["perf"], text: "…", marks: { decision: { ...D }, at: { hash }, items: items.map((i) => JSON.parse(JSON.stringify(i))) } });
   const answer = (id: number, re: number, mark: readonly number[], text: string): Message => msg(mark.length ? { id, at: "", from: "coordinator", to: ["user"], text, re, mark: [...mark] } : { id, at: "", from: "coordinator", to: ["user"], text, re });
   const general: MarkItem = { n: 3, kind: "general", comment: "ok?" };
@@ -232,6 +232,21 @@ test("sent marks are read back from the chat, each with the answers that name it
     [10, 3, [13]],
   ]);
   expect(sent.loose.map((l) => [l.batch, l.answers.map((a) => a.id)])).toEqual([[10, [14]]]);
+
+  /* A batch of one comment: an answer naming no mark is that comment's, as one naming it; so is one to a batch of one reply in a comment's thread. */
+  const reply: MarkItem = { n: 5, kind: "general", comment: "sure?", on: 4 };
+  const one = [batch(20, "#decision/perf/d30", [{ ...ROW_ITEM, n: 4 }]), answer(21, 20, [], "D1 it is."), answer(22, 20, [4], "And noted."), batch(23, "#decision/perf/d30", [reply]), answer(24, 23, [], "Sure.")];
+  const alone = sentOf(one, "#decision/perf/d30");
+
+  expect(alone.marks.map((s) => [s.batch, s.item.n, s.answers.map((a) => a.id)])).toEqual([
+    [20, 4, [21, 22]],
+    [23, 5, [24]],
+  ]);
+  expect(alone.loose).toEqual([]);
+
+  /* A batch of one note on the whole decision has no thread: its answer naming no mark stays under the batch. */
+  const note = sentOf([batch(30, "#decision/perf/d30", [general]), answer(31, 30, [], "Ok.")], "#decision/perf/d30");
+  expect([note.marks.map((s) => s.answers.length), note.loose.map((l) => l.answers.map((a) => a.id))]).toEqual([[0], [[31]]]);
   expect(nextNumber(sent, [{ n: 7, kind: "general", comment: "x" }])).toBe(8);
   expect(nextNumber(sentOf([], "#decision/d30"), [])).toBe(1);
 });

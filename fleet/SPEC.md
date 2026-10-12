@@ -1066,7 +1066,13 @@ answer may cover several marks (`--mark 1,3`, or `--mark` repeated). `--no-chang
 it answers leave the decision as it is: stored as `keep` (trimmed; `--no-change needs --mark: the marks it
 leaves as they are`, `--no-change takes why, in 1 to 4000 characters`). The Courier mirrors `mark` and
 `keep` with the answer onto the manager's page. The page shows each answer under the mark it names (with
-`keep` as "No change: <why>"); an answer with no `mark` shows under the batch.
+`keep` as "No change: <why>").
+
+**An answer that names no mark** (`--re <batch>` with no `--mark`) is never left out of a comment's thread.
+The page (`sentOf`) reads an answer with no `mark` to a batch of one mark as that mark's, in the chats as
+they are, with no migration. The one mark is a comment on words or a reply in a comment's thread (a
+`general` with `on`); the answer to a batch of one note on the whole decision (a `general` without `on`),
+which has no thread, stays under its batch. To a batch of several it stays an answer to the whole batch.
 
 **Printed lines.** A batch prints ` [N marks on <ref> <id>, revision <revision>]` (`1 mark` for one; the
 ref is the batch's, else the chat's own decision's by id, else left out) after the decision tag
@@ -1126,7 +1132,10 @@ with the decision's owner, named in words: its opener is a message of Luiz's quo
 at `{hash, anchor: "dv-page"}`, found by that place; empty with a hint before any message), then a thread
 per mark and per side chat on the decision's words, newest activity first, each with its quoted words,
 kind, status (pending, sent, answered) and last line. A thread shows the fleet's answers to its mark (an
-answer `keep`ing it says "No change: <why>"), Luiz's replies (`re` the thread's newest message, starting
+answer `keep`ing it says "No change: <why>"; an answer to its batch naming no mark too: the mark's own when
+the batch has one mark, and when it has several shown in each of its comments' threads under "To the whole
+batch: comments 1, 2 and 4", which answers none of them, is not unread for them and also keeps its own
+"Answer to your comments" thread), Luiz's replies (`re` the thread's newest message, starting
 `Mark #<n>: `, or batched as below) and the fleet's answers to them. Every message batches: each thread's
 box takes Enter (Shift+Enter a new line, an open @ or / list takes Enter first) and adds the words to the
 wait (round amber arrow; in a pending comment's thread, to its comment), and its outlined plane

@@ -1163,6 +1163,7 @@
   .mk-msg .pill { margin-left: 6px; vertical-align: 1px; font-size: 0.75rem; }
   .mk-msg-q { display: block; margin: 0 0 3px; padding-left: 8px; border-left: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); color: var(--muted); font-size: var(--fs-xs); }
   .mk-keep { display: block; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
+  .mk-whole { display: block; margin-bottom: 4px; padding-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
   .mk-edit { margin-left: 6px; padding: 0 6px; border: 0; border-radius: 4px; background: none; color: var(--accent); font: 600 0.75rem/1.6 var(--sans); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
   .mk-composer { flex: none; padding: 8px 12px 10px; background: var(--card); border-top: 1px solid var(--line); }
   .mk-box { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "chip chip" "text send"; align-items: end; row-gap: 6px; column-gap: 6px; padding: 6px 6px 6px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--bg); cursor: text; }
