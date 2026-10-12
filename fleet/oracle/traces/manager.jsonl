@@ -4,7 +4,7 @@
 {"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "M", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "agent", "a1", "--task", "the writer", "--milestone", "m1", "--lane", "src/usage/**", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "d1", "--kind", "input", "--title", "Neon key", "--question", "which branch?", "--why", "w", "--blocking", "--no-render"], "clock": "2026-01-05T09:05:00+00:00"}
-{"cli": "state", "argv": ["$DIR", "decision", "d2", "--kind", "action", "--title", "Deploy", "--question", "deploy?", "--why", "w", "--manual", "just deploy", "--asks", "manager", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "d2", "--kind", "action", "--title", "Deploy", "--question", "deploy?", "--why", "w", "--manual", "```nu\njust deploy\n```", "--asks", "manager", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "I1", "--decide", "main", "--resolution", "answered on the page (#1)", "--no-render"], "clock": "2026-01-05T09:10:00+00:00"}
 {"cli": "fleets", "argv": ["list"]}
 {"fixture": "write", "path": "$REGISTRY/manager.json", "content": "{\"id\": \"manager\", \"role\": \"manager\", \"dir\": \"$W/manager\", \"url\": \"https://box.ts.net:40001/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:00:00+00:00\"}\n"}

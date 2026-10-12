@@ -11,7 +11,7 @@
 {"cli": "state", "argv": ["$DIR", "decision", "d3", "--kind", "secret", "--title", "Stripe key", "--question", "where is it?", "--why", "w", "--secret", "STRIPE_TEST_KEY", "--manual", "secretspec set STRIPE_TEST_KEY", "--asks", "manager", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "d4", "--kind", "action", "--title", "Rotate", "--question", "rotate the token?", "--why", "w", "--no-render"]}
 {"fixture": "write", "path": "$W/evidence.html", "content": "<h2>Evidence</h2><p>as of 09:10</p>\n"}
-{"cli": "state", "argv": ["$DIR", "decision", "d4", "--kind", "action", "--title", "Rotate", "--question", "rotate the token?", "--why", "w", "--manual", "just rotate", "--body", "$W/evidence.html", "--no-render"], "clock": "2026-01-05T09:10:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "d4", "--kind", "action", "--title", "Rotate", "--question", "rotate the token?", "--why", "w", "--manual", "```nu\njust rotate\n```", "--body", "$W/evidence.html", "--no-render"], "clock": "2026-01-05T09:10:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "decision", "d1", "--question", "uuid, ulid or serial?", "--why", "still blocks", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "d1", "--question", "uuid, ulid or serial?", "--same-options", "--log", "the question widened", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "d1", "--not-blocking", "--no-render"], "clock": "2026-01-05T09:20:00+00:00"}

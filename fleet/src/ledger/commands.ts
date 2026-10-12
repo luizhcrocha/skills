@@ -878,12 +878,59 @@ export function asksApproval(manual: string): boolean {
   return APPROVAL_RE.test(text);
 }
 
+/** A manual's text outside its fenced blocks, and how many lines of those blocks are commands: neither blank
+ * nor a comment (a line that opens with `#`). */
+function outsideFences(manual: string) {
+  const lines: string[] = [];
+  let fence: string | undefined;
+  let commands = 0;
+
+  for (const line of manual.split("\n")) {
+    const mark = /^\s*(`{3,}|~{3,})/u.exec(line)?.[1];
+
+    if (fence === undefined && mark !== undefined) fence = mark;
+    else if (fence !== undefined && mark !== undefined && mark.startsWith(fence) && line.trim() === mark) fence = undefined;
+    else if (fence === undefined) lines.push(line);
+    else if (line.trim() !== "" && !line.trim().startsWith("#")) commands += 1;
+  }
+
+  return { lines, commands };
+}
+
+/** The numbers of a manual's numbered steps (`1.` or `1)` opening a line outside a fence), in the order written. */
+function numberedSteps(manual: string): number[] {
+  return outsideFences(manual).lines.flatMap((line) => {
+    const step = /^\s*(\d+)[.)]\s+\S/u.exec(line);
+
+    return step === null ? [] : [Number(step[1])];
+  });
+}
+
+const ACTION_TELLS =
+  "An action tells the user exactly what to type or click, in order: the commands in a fenced block (a line ```nu, the commands, a line ```; one command goes in a fence too), " +
+  'or numbered steps from 1 that each say what to type or click (1. In the Perf terminal, type `/exit`. 2. In the 1Password window, click "Approve".). ' +
+  "If you cannot write that, you do not know the action yet";
+
+/**
+ * Why an action's `--manual` is refused: it says what must be done and not how. It passes with a fenced block
+ * that holds at least one line that is no comment, or with a numbered list that starts at 1; nothing else, so
+ * the check reads no language and looks nothing up on the machine it runs on. Measured 2026-10-12 on the
+ * machine's fleets: of 138 actions, 75 had a fence, 5 numbered steps, and 58 neither; Luiz, on one of those:
+ * "There's no action, nothing, just something that says something must be done, not how."
+ */
+export function actionManualRefusal(manual: string): string | undefined {
+  if (outsideFences(manual).commands > 0 || numberedSteps(manual)[0] === 1) return undefined;
+
+  return `--manual says what must be done, not how: it has no fenced block with a command in it and no numbered steps from 1. ${ACTION_TELLS}`;
+}
+
 const APPROVAL_REFUSAL =
   "--manual only asks the user to answer: an approval is a decision: " +
   "`fleet state <dir> decision ID --kind decision --option 'A: yes | what yes does' --option 'B: no | what no does' --recommend A --reason R`; " +
   "an action is for steps Luiz performs outside the page (a command to run, a click in a console, a key to plug in)";
 
-/** What `d`'s kind shows has to be there; `manualGiven`: the `--manual` is this command's, so its format is checked. */
+/** What `d`'s kind shows has to be there; `manualGiven`: the `--manual` is this command's, or the row became this
+ * kind in this command, so its format is checked (a row recorded before a rule stays as it is). */
 function checkKind(d: Decision, manualGiven: boolean): Step$ {
   if (d.kind === "grill" && d.questions === undefined) {
     return refuse('a grilling is asked with the grill command: `grill ID --title T --ask "TITLE | QUESTION | RECOMMENDATION | WHY"`');
@@ -910,7 +957,8 @@ function checkKind(d: Decision, manualGiven: boolean): Step$ {
     return refuse(`${d.kind === "secret" ? "a secret" : "an action"} gives the manual route: give --manual with the steps or commands`);
   }
 
-  const unfenced = (d.kind === "secret" || d.kind === "action") && manualGiven ? unfencedLines(d.manual ?? "") : 0;
+  const numbered = d.kind === "action" && numberedSteps(d.manual ?? "").length > 0;
+  const unfenced = (d.kind === "secret" || d.kind === "action") && manualGiven && !numbered ? unfencedLines(d.manual ?? "") : 0;
 
   if (unfenced > 0) {
     return refuse(`--manual has ${unfenced} lines and no fence: put the commands in a fenced block (a line \`\`\`nu, the commands, a line \`\`\`), any prose outside it`);
@@ -921,6 +969,9 @@ function checkKind(d: Decision, manualGiven: boolean): Step$ {
   if (nu !== undefined) return refuse(nu);
 
   if (d.kind === "action" && manualGiven && asksApproval(d.manual ?? "")) return refuse(APPROVAL_REFUSAL);
+  const vague = d.kind === "action" && manualGiven ? actionManualRefusal(d.manual ?? "") : undefined;
+
+  if (vague !== undefined) return refuse(vague);
 
   if (d.kind === "action" && ((d.options ?? []).length > 0 || given(d.recommend ?? undefined))) {
     return refuse("an action is a step only the user takes, with no options to choose: a yes or no on what the fleet would do is a decision (--kind decision, with the options and --recommend)");
@@ -1961,6 +2012,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
       if (given(body)) changed.push("body");
       const row = d;
+      const kindBefore = d.kind;
 
       for (const key of FIELDS) {
         if (key === "step" || key === "milestone" || unwritten.has(key)) continue;
@@ -2003,7 +2055,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       }
 
       if (harness && (ask || !explained(row))) changed.push(...writePermissionWords(run, ledger, row));
-      yield* checkKind(row, args.str("manual") !== undefined);
+      yield* checkKind(row, args.str("manual") !== undefined || row.kind !== kindBefore);
       yield* setBody(run, row);
 
       if (ask) yield* checkAsk(row);

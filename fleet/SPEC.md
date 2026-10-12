@@ -271,7 +271,32 @@ Checked in this order:
      on this card", "reply yes", "approve this", "confirm") is refused: ``--manual only asks the user to
      answer: an approval is a decision: `fleet state <dir> decision ID --kind decision --option 'A: yes |
      what yes does' --option 'B: no | what no does' --recommend A --reason R`; an action is for steps Luiz
-     performs outside the page (a command to run, a click in a console, a key to plug in)``. An option is `KEY: label | consequence` with a key matching the
+     performs outside the page (a command to run, a click in a console, a key to plug in)``.
+     **An action's `--manual` says how, not only what** (TypeScript only, `actionManualRefusal`; new or
+     changed, a stored one is never checked again, so an old row stays readable and revisable). Luiz,
+     2026-10-12, on an action whose manual was "Remove CLAUDE_CODE_EFFORT_LEVEL from where this session is
+     launched, set "effortLevel" in .claude/settings.local.json instead, then restart the perf session":
+     "There's no action, nothing, just something that says something must be done, not how." Of the 138
+     actions in the machine's ledgers that day, 75 had a fence, 5 numbered steps, and 58 neither. It passes
+     in one of two ways, and in no other:
+     - **a fenced block with at least one line that is no comment** (neither blank nor opening with `#`),
+       with any prose around it; one command goes in a fence too;
+     - **a numbered list that starts at 1**, with no fence needed (the more-than-one-line refusal above
+       does not apply): a line that opens with `1.` or `1)` outside a fence, before any other numbered
+       line.
+
+     Refused otherwise: ``--manual says what must be done, not how: it has no fenced block with a command
+     in it and no numbered steps from 1. An action tells the user exactly what to type or click, in order:
+     the commands in a fenced block (a line ```nu, the commands, a line ```; one command goes in a fence
+     too), or numbered steps from 1 that each say what to type or click (1. In the Perf terminal, type
+     `/exit`. 2. In the 1Password window, click "Approve".). If you cannot write that, you do not know the
+     action yet``. The rule is two regular expressions: it reads no language (a step in Portuguese passes
+     as one in English does) and looks nothing up on the machine it runs on (a first version took one bare
+     command line whose first word was a program on PATH, and so passed "make sure everything works again
+     somehow" and refused `wrangler deploy --env production` where wrangler was not installed). What it
+     cannot tell is whether the steps are the right ones: a numbered list of prose passes. It is checked
+     when `--manual` is given and when a row becomes an action (`--kind action` on a secret). A secret's manual
+     is not held to it. An option is `KEY: label | consequence` with a key matching the
      id pattern; keys are unique. **permission** (TypeScript only: see [Permission
      grants](#permission-grants)) takes the refused call instead of options.
    - The row: `kind, title, question, why, blocking, agent, options[], recommend, reason, secret,

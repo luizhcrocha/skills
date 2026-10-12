@@ -1,7 +1,7 @@
 {"trace": 1, "name": "model-1", "about": "test_model.py's random sequence, seed 1, 60 steps", "seed": 1, "twin": {"why": "the spawn hint (TypeScript only, 1.9.39): `state agent` prints `Spawn with model: ..., effort: ...` after the `recorded` line of a new worker, where the twin prints the `recorded` line alone", "normalise": ["spawn-hint"]}}
 {"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "M", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
-{"cli": "state", "argv": ["$DIR", "decision", "D1", "--kind", "action", "--title", "T", "--question", "Q?", "--why", "W", "--manual", "by hand", "--supersedes", "D1", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "D1", "--kind", "action", "--title", "T", "--question", "Q?", "--why", "W", "--manual", "```nu\ncd repo; ./by-hand\n```", "--supersedes", "D1", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "agent", "A1", "--task", "T", "--milestone", "m1", "--name", "impl", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "set", "--status", "done", "--no-render"], "clock": "2026-01-05T09:02:00+00:00"}
 {"cli": "chat", "argv": ["$DIR", "inbox", "--as", "coordinator"], "clock": "2026-01-05T09:12:00+00:00"}
@@ -15,7 +15,7 @@
 {"cli": "state", "argv": ["$DIR", "agent", "A1", "--status", "stopped", "--tokens", "1860", "--no-render"], "clock": "2026-01-05T09:34:00+00:00"}
 {"cli": "chat", "argv": ["$DIR", "say", "--as", "A1", "@A2 ping"], "clock": "2026-01-05T09:44:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "agent", "A1", "--status", "stopped", "--log", "progress", "--no-render"], "clock": "2026-01-05T09:44:30+00:00"}
-{"cli": "state", "argv": ["$DIR", "decision", "d3", "--kind", "action", "--title", "T", "--question", "Q2?", "--why", "W", "--manual", "by hand", "--no-render"], "clock": "2026-01-05T09:54:30+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "d3", "--kind", "action", "--title", "T", "--question", "Q2?", "--why", "W", "--manual", "```nu\ncd repo; ./by-hand\n```", "--no-render"], "clock": "2026-01-05T09:54:30+00:00"}
 {"cli": "state", "argv": ["$DIR", "milestone", "m3", "--title", "M", "--no-render"], "clock": "2026-01-05T10:04:30+00:00"}
 {"cli": "state", "argv": ["$DIR", "step", "s3", "--milestone", "m1", "--title", "T"], "clock": "2026-01-05T10:09:30+00:00"}
 {"cli": "chat", "argv": ["$DIR", "inbox", "--as", "A1"], "clock": "2026-01-05T10:09:30+00:00"}

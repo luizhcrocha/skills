@@ -124,7 +124,7 @@ describe("open", () => {
     expect(refused("decision", "d1", "--kind", "action", ...base)).toContain("--manual");
     ok("decision", "d1", "--kind", "input", ...base);
     ok("decision", "d2", "--kind", "secret", ...base, "--secret", "NEO4J_PASSWORD", "--manual", "secretspec set NEO4J_PASSWORD");
-    ok("decision", "d3", "--kind", "action", ...base, "--manual", "tailscale up");
+    ok("decision", "d3", "--kind", "action", ...base, "--manual", "```nu\ntailscale up\n```");
   });
 
   test("an action that only asks the user to answer, approve or confirm is refused: that is a decision", () => {
@@ -138,10 +138,80 @@ describe("open", () => {
     }
 
     expect(rows("decisions")).toEqual([]);
-    const steps = ["tailscale up", "Click Deploy in the Cloudflare console", "Plug in the YubiKey and touch it", "Approve the PR on GitHub", "Run `just cut`, then answer yes"];
+    const steps = ["```nu\ncd repo; ./up\n```", '1. In the Cloudflare console, click "Deploy".', "1. Plug in the YubiKey and touch `the gold disc`.", "1. On GitHub, open https://github.com/acme/x/pull/7 and approve it.", "1. Run `just cut`, then answer yes."];
 
     for (const [k, manual] of steps.entries()) ok("decision", `a${String(k + 1)}`, ...base, "--manual", manual);
     expect(refused("decision", "a1", "--manual", "answer go")).toContain("an approval is a decision");
+  });
+
+  describe("an action's --manual says how, not only what", () => {
+    const base = ["--kind", "action", "--title", "Restart the Perf session", "--question", "Restart it?", "--why", "w"];
+    const tells = "An action tells the user exactly what to type or click, in order: the commands in a fenced block";
+    const d58 = 'Remove CLAUDE_CODE_EFFORT_LEVEL from where this session is launched, set "effortLevel" in .claude/settings.local.json instead, then restart the perf session';
+
+    test("prose that names an outcome is refused, with what is missing and the two ways to write it", () => {
+      const why = refused("decision", "d58", ...base, "--manual", d58);
+      expect(why).toBe(
+        "state: --manual says what must be done, not how: it has no fenced block with a command in it and no numbered steps from 1. " +
+          "An action tells the user exactly what to type or click, in order: the commands in a fenced block (a line ```nu, the commands, a line ```; one command goes in a fence too), " +
+          'or numbered steps from 1 that each say what to type or click (1. In the Perf terminal, type `/exit`. 2. In the 1Password window, click "Approve".). ' +
+          "If you cannot write that, you do not know the action yet\n",
+      );
+
+      // A sentence that reads like a command line is prose all the same, and so is a command with no fence.
+      for (const manual of ["by hand", "make sure everything works again somehow", "restart the perf session when the push is done", "Click Deploy in the Cloudflare console", "see the body", "wrangler deploy --env production"]) {
+        expect(refused("decision", "d58", ...base, "--manual", manual), manual).toContain(tells);
+      }
+
+      expect(rows("decisions")).toEqual([]);
+    });
+
+    test("a fenced block passes when it holds a line that is no comment, with any prose around it", () => {
+      ok("decision", "a1", ...base, "--manual", "In the Perf terminal, type /exit. Then, from the same directory, run:\n```nu\ncd ~/repos/x; claude --resume abc\n```\nThe climb keeps running.");
+      // One command, and one this machine has no program for: the check looks nothing up.
+      ok("decision", "a2", ...base, "--manual", "```nu\nno-such-program-zq deploy --env production\n```");
+      ok("decision", "a3", ...base, "--manual", "```\n# from the repo\n./deploy\n```");
+
+      for (const [k, manual] of ["Do the restart:\n```nu\n```", "Do the restart:\n```\n\n```\nand tell me", "```nu\n# restart the session, however you do that\n```", "```nu\n  # todo\n\n# and this\n```"].entries()) {
+        expect(refused("decision", `e${String(k)}`, ...base, "--manual", manual), manual).toContain("it has no fenced block with a command in it and no numbered steps from 1");
+      }
+    });
+
+    test("a numbered list from 1 passes with no fence, in any language, whatever its steps name", () => {
+      ok("decision", "a1", ...base, "--manual", 'After the push is done:\n1. In the Perf terminal, type `/exit`.\n2. In the 1Password window, click "Approve".\n3. Open https://example.test/runs and check the last one is green.');
+      ok("decision", "a2", ...base, "--manual", "1) Stop the session: type `/exit`.\n2) Start it again:\n```nu\ncd ~/repos/x; claude --resume abc\n```");
+      ok("decision", "a3", ...base, "--manual", "1. Open 1Password.");
+      ok("decision", "a4", ...base, "--manual", "1. Abra o 1Password.\n2. Clique em Aprovar na janela que aparece.");
+    });
+
+    test("a list that does not start at 1, or a number inside a sentence or a fence, is no list", () => {
+      const none = "it has no fenced block with a command in it and no numbered steps from 1";
+      expect(refused("decision", "a1", ...base, "--manual", "2. Type `/exit`.\n3. Type `claude`.")).toContain(none);
+      expect(refused("decision", "a1", ...base, "--manual", "Do step 1. Then the rest.")).toContain(none);
+      expect(refused("decision", "a1", ...base, "--manual", "```\n# 1. restart it\n```")).toContain(none);
+      expect(rows("decisions")).toEqual([]);
+    });
+
+    test("a row recorded before the rule stays readable and revisable; only a new --manual is checked", () => {
+      ok("decision", "a1", ...base, "--manual", "```nu\ncd repo; ./restart\n```");
+      const path = join(root, "state.json");
+      const ledger = readJson(path);
+      const row = asObject((asArray(ledger["decisions"]) ?? [])[0] ?? null) ?? {};
+      writeFileSync(path, JSON.stringify({ ...ledger, decisions: [{ ...row, manual: d58 }] }));
+      expect(run("show").code).toBe(0);
+      ok("decision", "a1", "--why", "nothing breaks while it waits", "--log", "the why");
+      expect(item("a1")["manual"]).toBe(d58);
+      expect(refused("decision", "a1", "--manual", "restart the perf session")).toContain(tells);
+      ok("decision", "a1", "--decide", "Done.", "--resolution", "answered on the page (#2)");
+    });
+
+    test("a secret's manual is not held to it, until the row becomes an action", () => {
+      ok("decision", "s1", "--kind", "secret", "--title", "T", "--question", "q", "--why", "w", "--secret", "K", "--manual", "From the repo, set K by hand");
+      expect(refused("decision", "s1", "--kind", "action")).toContain(tells);
+      expect(item("s1")["kind"]).toBe("secret");
+      ok("decision", "s1", "--kind", "action", "--manual", "1. Open 1Password.\n2. Copy the field `K` into the repo's .env.");
+      expect(item("s1")["kind"]).toBe("action");
+    });
   });
 
   test("a --manual of more than one line puts its commands in a fence", () => {
@@ -151,9 +221,9 @@ describe("open", () => {
     expect(refused("decision", "d1", "--kind", "secret", ...base, "--secret", "K", "--manual", "From the repo:\nsecretspec set K")).toBe(`state: ${fix}`);
     expect(rows("decisions")).toEqual([]);
     ok("decision", "d1", "--kind", "action", ...base, "--manual", "From the repo:\n\n```nu\ncd x\nmake\n```");
-    ok("decision", "d2", "--kind", "action", ...base, "--manual", "\n  tailscale up\n");
+    ok("decision", "d2", "--kind", "secret", ...base, "--secret", "K", "--manual", "\n  secretspec set K\n");
     expect(refused("decision", "d2", "--manual", "cd x\nmake")).toBe(`state: ${fix}`);
-    expect(item("d2")["manual"]).toBe("\n  tailscale up\n");
+    expect(item("d2")["manual"]).toBe("\n  secretspec set K\n");
   });
 
   test("an option is key, label and consequence", () => {
@@ -582,7 +652,7 @@ const ACTION = [
   "--why",
   "the cut feeds the next milestone",
   "--manual",
-  "just cut --roles",
+  "```nu\njust cut --roles\n```",
 ];
 
 /** The user answered, and the fleet must do something before the item can proceed: it holds it (off the
@@ -632,7 +702,7 @@ describe("hold", () => {
     hold();
     ok("decision", "a1", "--why", "it still feeds the next milestone");
     expect(item("a1")["held"]).toBe("fix the role cut first");
-    ok("decision", "a1", "--manual", "just cut --roles --fixed", "--log", "the new command");
+    ok("decision", "a1", "--manual", "```nu\njust cut --roles --fixed\n```", "--log", "the new command");
     expect(item("a1")).not.toHaveProperty("held");
     expect(item("a1")).not.toHaveProperty("held_at");
     expect([lastEvent()["kind"], item("a1")["change"]]).toEqual(["asked", "the new command"]);
@@ -742,7 +812,7 @@ describe("a failed action", () => {
   test("a revision re-presents it, and its next answer is an ordinary one", () => {
     ok("decision", ...ACTION);
     say(failed);
-    expect(later("decision", "A1", "--manual", "just cut-roles", "--log", "the recipe is cut-roles").code).toBe(0);
+    expect(later("decision", "A1", "--manual", "```nu\njust cut-roles\n```", "--log", "the recipe is cut-roles").code).toBe(0);
     expect(run("event", "x").stderr).not.toContain("and it failed");
     expect(fleet(["state", root, "show"], env).stdout).toContain("  A1 decision a1 OPEN [action] Run the role cut\n");
     say(failed, { id: 2, at: "2999-01-01T00:06:00+00:00", from: "user", text: "Done.", decision: "a1" });

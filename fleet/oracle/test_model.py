@@ -790,7 +790,7 @@ def gen(rng: random.Random, m: Model) -> dict:
         elif what == "unhold":
             c["unhold"] = True
         elif what == "represent":
-            c.update(manual="the fixed command", log="the new command")
+            c.update(manual="```nu\ncd repo; ./fixed\n```", log="the new command")
         elif what == "place":
             c["step"] = pick(step_ids + ["s9"])
         elif what == "elsewhere":
@@ -802,7 +802,7 @@ def gen(rng: random.Random, m: Model) -> dict:
                 c["options"] = ["A: a | x", "B: b | y"] if maybe(0.9) else ["A: a | x"]
                 c.update(recommend=pick(["A", "B"]) if maybe(0.9) else "C", reason="R")
             if kind in ("action", "secret") and maybe(0.9):
-                c["manual"] = "by hand"
+                c["manual"] = "```nu\ncd repo; ./by-hand\n```"  # a fenced command: an action's manual says how (SPEC.md, decision)
             if kind == "action" and maybe(0.1):
                 c["options"] = ["yes: do it | done", "no: leave it | kept"]
                 c.update(recommend="yes", reason="R")
