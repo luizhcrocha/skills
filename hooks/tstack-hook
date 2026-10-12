@@ -544,28 +544,199 @@ def _proc(pid):
 
 
 def _all_procs():
-    """Every process's (argv, cwd), to find a watch that has not written its pid file yet."""
+    """Every process's (pid, argv, cwd), to find a watch that has not written its pid file yet."""
     if os.path.isdir("/proc/self"):
         me = os.getpid()
         for name in os.listdir("/proc"):
             if name.isdigit() and int(name) != me:
                 found = _proc(int(name))
                 if found:
-                    yield found
+                    yield int(name), found[0], found[1]
         return
     import subprocess
     try:
-        out = subprocess.run(["ps", "-A", "-o", "command="], capture_output=True, text=True, timeout=3).stdout
+        out = subprocess.run(["ps", "-A", "-o", "pid=,command="], capture_output=True, text=True, timeout=3).stdout
     except (OSError, subprocess.SubprocessError):
         return
     for line in out.splitlines():
-        yield [line], ""
+        pid, _, command = line.strip().partition(" ")
+        if pid.isdigit() and command.strip():
+            yield int(pid), [command.strip()], ""
 
 
-def watch_alive(d, role):
-    """Whether a chat watch as ROLE runs for the fleet at d: the pid in DIR/watch-ROLE.pid is alive and
-    is that watch (its command line, so a reused pid does not count); else, a watch just armed that has
-    not written its pid file yet (Bun takes a moment to start), found among the running processes."""
+def _proc_stat(pid):
+    """The fields of /proc/PID/stat after the command's name (the state first, then the parent, the group,
+    the session, the terminal), or None when PID does not run."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()
+    except (OSError, IndexError):
+        return None
+
+
+def _ps_column(pid, column):
+    """One `ps` column of PID, stripped, in the C locale; "" when PID does not run."""
+    import subprocess
+    try:
+        return subprocess.run(["ps", "-o", f"{column}=", "-p", str(pid)], capture_output=True, text=True, timeout=2,
+                              env={**os.environ, "LC_ALL": "C"}).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+class ProcTree:
+    """What the rule of whose a watch is reads of the machine's processes (fleet/src/chat/watchers.ts `Tree`,
+    over procs.ts): /proc on Linux, `ps` on the Mac. A test gives a tree of its own."""
+    linux = os.path.isdir("/proc/self")
+
+    def parent(self, pid):
+        """The parent of PID, or None when PID does not run."""
+        text = (_proc_stat(pid) or [None, None])[1] if self.linux else _ps_column(pid, "ppid")
+        return int(text) if text and text.isdigit() else None
+
+    def started(self, pid):
+        """When PID started, as procs.ts `startedOf` reads it (the two must give the same text): the start
+        time in clock ticks since boot on Linux, `ps -o lstart=` on the Mac. None when PID does not run."""
+        if self.linux:
+            stat = _proc_stat(pid)
+            return stat[19] if stat and len(stat) > 19 else None
+        return _ps_column(pid, "lstart") or None
+
+    def claude(self, pid):
+        """Whether PID is a Claude Code process (procs.ts `isClaudeBinary`): it is named `claude`, or runs
+        `claude/versions/<version>` (the native install, whose name is the version)."""
+        if self.linux:
+            try:
+                with open(f"/proc/{pid}/comm") as f:
+                    name = f.read().strip()
+            except OSError:
+                name = ""
+            try:
+                exe = os.readlink(f"/proc/{pid}/exe")
+            except OSError:
+                exe = ""
+        else:
+            exe = _ps_column(pid, "comm")
+            name = os.path.basename(exe)
+        return name == "claude" or re.search(r"/claude/versions/[^/]+$", exe) is not None
+
+    def terminal(self, pid):
+        """Whether PID has a controlling terminal."""
+        if self.linux:
+            stat = _proc_stat(pid)
+            return bool(stat and len(stat) > 4 and stat[4].lstrip("-").isdigit() and int(stat[4]) != 0)
+        tty = _ps_column(pid, "tty")
+        return bool(tty) and not tty.startswith("?")
+
+
+def _session_above(pid, tree):
+    """The nearest Claude Code process above PID (at most 32 parents up): the session whose background
+    command PID is, or None."""
+    at, hops = tree.parent(pid), 0
+    while at is not None and at > 1 and hops < 32:
+        if tree.claude(at):
+            return at if tree.started(at) is not None else None
+        at, hops = tree.parent(at), hops + 1
+    return None
+
+
+def _watch_owner(d, role):
+    """The session a running watch recorded when it began (`DIR/watch-ROLE.owner.pid`, written by
+    fleet/src/chat/watchers.ts `recordOwner`): {watch, session, started}, or None."""
+    try:
+        with open(os.path.join(d, f"watch-{role}.owner.pid")) as f:
+            owner = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return owner if isinstance(owner, dict) and isinstance(owner.get("watch"), int) else None
+
+
+def _watch_orphaned(pid, owner, tree):
+    """Whether the watch PID hears for nobody, because the session that armed it is gone. The rule is
+    fleet/src/chat/watchers.ts `orphaned`, which `listening`, `fleet fleets list`, the hub's wake and the next
+    watch's takeover keep: change the two together.
+    - A watch that recorded its session (OWNER is its own record) is orphaned when that process no longer
+      runs, or another has its pid (another start time); one that recorded none (armed by a person in a
+      terminal) never is.
+    - A watch with no record of its own (armed before the record existed, or this instant) is orphaned when
+      it has no controlling terminal and no Claude Code process is above it.
+    A watch whose session runs but is not the fleet's host is no watch either: `_watch_foreign`."""
+    if owner is not None and owner.get("watch") == pid:
+        session = owner.get("session")
+        if not isinstance(session, int):
+            return False
+        started = tree.started(session)
+        return started is None or (isinstance(owner.get("started"), str) and started != owner["started"])
+    return not tree.terminal(pid) and _session_above(pid, tree) is None
+
+
+def _fleet_host(env, d, tree):
+    """The session that hosts the fleet at d, as (pid, started), when the registry names one that is there
+    now (fleet/src/host.ts `liveHost`): the entry's `pid` runs, is Claude Code, and started when the entry's
+    `started` says (None in an entry served before it was recorded, which is told by its pid alone). None
+    when the fleet is not served, the entry names a process that is not Claude Code (`serve --pid` of
+    something else), or another process has its pid. With none, no watch is foreign."""
+    real = os.path.realpath(d)
+    try:
+        paths = sorted(p for p in fleet_registry(env).glob("*.json") if p.is_file())
+    except OSError:
+        return None
+    for path in paths:
+        try:
+            entry = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) \
+                or not isinstance(entry.get("dir"), str) or os.path.realpath(entry["dir"]) != real:
+            continue
+        pid = entry.get("pid")
+        running = tree.started(pid) if isinstance(pid, int) and pid > 1 else None
+        if running is None:
+            continue
+        recorded = entry.get("started") if isinstance(entry.get("started"), str) and entry["started"] else None
+        if not tree.claude(pid) or (recorded is not None and recorded != running):
+            return None
+        return pid, recorded
+    return None
+
+
+def _is_host(host, pid, started):
+    """Whether the process PID that started at STARTED is HOST (fleet/src/host.ts `isHost`)."""
+    return host[0] == pid and (host[1] is None or started is None or host[1] == started)
+
+
+def _watch_foreign(pid, owner, host, tree):
+    """Whether the watch PID, a watch as the host's role, hears for someone who is not the fleet's host
+    (fleet/src/chat/watchers.ts `foreign`: change the two together). HOST is the session the registry names
+    (`_fleet_host`); the watch was armed by another session (a fork of the host, a second resume of its
+    transcript) or by nobody's (a terminal), so its lines wake that one while the host hears nothing. With
+    no HOST known, no watch is foreign. Whose the watch is: its own record, else the Claude Code process
+    above it."""
+    if host is None:
+        return False
+    if owner is not None and owner.get("watch") == pid:
+        session = owner.get("session")
+        if not isinstance(session, int):
+            return True
+        return not _is_host(host, session, owner["started"] if isinstance(owner.get("started"), str) else None)
+    session = _session_above(pid, tree)
+    return session is None or not _is_host(host, session, tree.started(session))
+
+
+def watch_alive(d, role, tree=None, host=None):
+    """Whether a chat watch as ROLE runs for the fleet at d, for a session that is there to hear it: the pid
+    in DIR/watch-ROLE.pid is alive and is that watch (its command line, so a reused pid does not count);
+    else, a watch just armed that has not written its pid file yet (Bun takes a moment to start), found
+    among the running processes. A watch whose session is gone (`_watch_orphaned`) hears for nobody, and one
+    armed by a session that is not HOST, the fleet's host when ROLE is the host's role (`_fleet_host`), wakes
+    that session and not the host (`_watch_foreign`): neither counts, and the watch the guard asks for takes
+    its place. The rule is fleet/src/chat/watchers.ts `liveWatch`."""
+    tree = tree or ProcTree()
+    owner = _watch_owner(d, role)
+
+    def hears(watch):
+        return not _watch_orphaned(watch, owner, tree) and not _watch_foreign(watch, owner, host, tree)
+
     try:
         with open(os.path.join(d, f"watch-{role}.pid")) as f:
             pid = int(f.read().strip())
@@ -573,9 +744,9 @@ def watch_alive(d, role):
         pid = 0
     if pid > 0:
         found = _proc(pid)
-        if found and _is_watch(found[0], found[1], d, role):
+        if found and _is_watch(found[0], found[1], d, role) and hears(pid):
             return True
-    return any(_is_watch(args, cwd, d, role) for args, cwd in _all_procs())
+    return any(_is_watch(args, cwd, d, role) and hears(other) for other, args, cwd in _all_procs())
 
 
 def watch_command(d, role):
@@ -590,12 +761,17 @@ DEAF_MANAGER = (" While something you own or relay waits on the user (a decision
 GUARD_AGAIN_S = 15
 
 
-def fleet_listen_guard(hook):
+def fleet_listen_guard(hook, tree=None):
     """Stop: a coordinator or manager does not end a turn deaf. When a fleet it hosts (running or blocked;
     a paused or done one is left alone) has no live chat watch as its role, the turn goes on with the
     command that arms it. It hosts the fleet $FLEET_DIR names, or one of its scratchpad's that the
     registry says this session serves. Never twice in a row: not when this stop already follows a stop hook's block
-    (stop_hook_active), nor within GUARD_AGAIN_S of the last block."""
+    (stop_hook_active), nor within GUARD_AGAIN_S of the last block.
+    The watch must be the host's own: the host is the session the registry entry names (`_fleet_host`), and
+    a watch another session armed counts as none (`_watch_foreign`). A session that is not that host (a
+    `--fork-session` copy, a second `claude --resume` of its transcript: the Claude Code process above this
+    hook is another one) is told nothing, since the watch would refuse it. With no live host known, or no
+    Claude Code process above the hook, the fleet is guarded by the older rules."""
     if fleet_worker(hook) or hook.input.get("stop_hook_active"):
         return None
     dirs = fleet_dirs(hook)
@@ -607,13 +783,19 @@ def fleet_listen_guard(hook):
     last = state.get("blocked_at")
     if isinstance(last, (int, float)) and 0 <= time.time() - last < GUARD_AGAIN_S:
         return None
+    tree = tree or ProcTree()
     lines = []
     for d in dirs:
         ledger = read_ledger(d)
         if ledger is None or ledger.get("status") in ("paused", "done"):
             continue
         role = fleet_role(ledger)
-        if watch_alive(d, role):
+        host = _fleet_host(hook.env, d, tree)
+        if host is not None:
+            me = _session_above(os.getpid(), tree)
+            if me is not None and not _is_host(host, me, tree.started(me)):
+                continue
+        if watch_alive(d, role, tree, host):
             continue
         lines.append(DEAF.format(command=watch_command(d, role)) + (DEAF_MANAGER if role == "manager" else ""))
     if not lines:

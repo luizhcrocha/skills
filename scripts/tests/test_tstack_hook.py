@@ -585,11 +585,13 @@ class FleetCase(HookCase):
         self.env["FLEET_HOME"] = str(self.registry)
         self.register(self.fleet)
 
-    def register(self, fleet, session="sess-1", id="p"):
-        """The hub's registry entry `fleet serve` writes for FLEET, served by SESSION."""
+    def register(self, fleet, session="sess-1", id="p", **fields):
+        """The hub's registry entry `fleet serve` writes for FLEET, served by SESSION. Its `pid` is the tests'
+        own process, which is not Claude Code: the entry names no host session unless FIELDS give one."""
         (self.registry / f"{id}.json").write_text(json.dumps({
             "id": id, "role": "coordinator", "dir": str(fleet), "url": f"http://127.0.0.1:7420/f/{id}/",
-            "pid": os.getpid(), "session": None, "session_id": session, "since": "2026-01-05T08:00:00+00:00"}))
+            "pid": os.getpid(), "session": None, "session_id": session, "since": "2026-01-05T08:00:00+00:00",
+            **fields}))
 
     def ledger(self, **fields):
         state = {"project": "p", "goal": "g", "status": "running", "now": "n", "started": "2026-01-05T08:00:00+00:00",
@@ -604,12 +606,19 @@ class FleetCase(HookCase):
     def payload(self, event, **extra):
         return {**self.base(event), "scratchpad_dir": str(self.pad), **extra}
 
-    def watch(self, fleet=None, role="coordinator", pid_file=True, once=True):
-        """A process whose command line is a chat watch's (`... chat DIR watch --as ROLE ... --once`)."""
+    def watch(self, fleet=None, role="coordinator", pid_file=True, once=True, owner=None):
+        """A process whose command line is a chat watch's (`... chat DIR watch --as ROLE ... --once`). As a
+        real watch does before it writes its pid file, it records who armed it: no session, as a watch a
+        person types in a terminal, or OWNER (the record's `session` and `started`). So whether it counts
+        never depends on who runs the tests (a terminal, an agent, a unit with neither a terminal nor a
+        `claude` above it): the rule for a watch with no record reads the process tree, and is tried on
+        trees of the tests' own (WatchOwnerTest), never on the real one."""
         fleet = fleet or self.fleet
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "chat", str(fleet), "watch",
                                  "--as", role, "--all", "--resume", *(["--once"] if once else [])])
         self.addCleanup(lambda: (proc.kill(), proc.wait()))
+        session = owner or {"session": None, "started": None}
+        (self.fleet / f"watch-{role}.owner.pid").write_text(json.dumps({"watch": proc.pid, **session}))
         if pid_file:
             (self.fleet / f"watch-{role}.pid").write_text(str(proc.pid))
         return proc
@@ -686,6 +695,29 @@ class StopGuardTest(FleetCase):
         self.watch(pid_file=False)
         self.assertSilent(self.stop())
 
+    def test_a_watch_whose_session_is_gone_does_not_count(self):
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        self.watch(owner={"session": gone.pid, "started": "1"})  # it runs, and it hears for nobody
+        self.assertIn("--resume --once`", self.blocked(self.stop()))
+
+    def test_a_watch_whose_session_runs_counts_and_one_with_its_pid_reused_does_not(self):
+        started = load_hook().ProcTree().started(os.getpid())
+        self.assertTrue(started)
+        live = self.watch(owner={"session": os.getpid(), "started": started})
+        self.assertSilent(self.stop())
+        live.kill()
+        live.wait()
+        self.fresh()
+        self.watch(owner={"session": os.getpid(), "started": "another process had this pid"})
+        self.blocked(self.stop())
+
+    def test_an_orphan_found_among_the_processes_does_not_count(self):
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        self.watch(pid_file=False, owner={"session": gone.pid, "started": "1"})
+        self.blocked(self.stop())
+
     def test_a_watch_without_once_does_not_count(self):
         self.watch(once=False)  # it never exits, so it never wakes the session
         self.assertIn("--resume --once`", self.blocked(self.stop()))
@@ -747,6 +779,290 @@ class StopGuardTest(FleetCase):
         self.assertSilent(self.stop())
         (self.fleet / "state.json").write_text("[1, 2]")
         self.assertSilent(self.stop())
+        self.assertNotIn("failed", self.log())
+
+
+class FakeTree:
+    """A process tree of a test's own, for the rule of whose a watch is: {pid: {parent, started, claude, terminal}}."""
+
+    def __init__(self, procs):
+        self.procs = procs
+
+    def parent(self, pid):
+        return self.procs[pid]["parent"] if pid in self.procs else None
+
+    def started(self, pid):
+        return self.procs[pid].get("started", f"t{pid}") if pid in self.procs else None
+
+    def claude(self, pid):
+        return bool(self.procs.get(pid, {}).get("claude"))
+
+    def terminal(self, pid):
+        return bool(self.procs.get(pid, {}).get("terminal"))
+
+
+class WatchOwnerTest(unittest.TestCase):
+    """_watch_orphaned: a watch whose session is gone hears for nobody. The same rule, on the same trees, as
+    fleet/src/chat/watchers.ts `orphaned` (fleet/test/watchers.test.ts): the two change together. The trees are
+    the shapes measured on Linux with Claude Code 2.1.293: `claude` > `zsh -c` > the watch, neither child with a
+    terminal, and the wrapper given to pid 1 when the session dies."""
+
+    WATCH = 300
+    ARMED = {50: {"parent": 1, "terminal": True}, 100: {"parent": 50, "claude": True, "terminal": True},
+             200: {"parent": 100}, 300: {"parent": 200}}
+    ORPHAN = {50: {"parent": 1, "terminal": True}, 200: {"parent": 1}, 300: {"parent": 200}}
+    TYPED = {50: {"parent": 1, "terminal": True}, 300: {"parent": 50, "terminal": True}}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.hook = load_hook()
+
+    def orphaned(self, owner, procs):
+        return self.hook._watch_orphaned(self.WATCH, owner, FakeTree(procs))
+
+    def owner(self, session, started=None):
+        return {"watch": self.WATCH, "session": session,
+                "started": started if started is not None else (None if session is None else f"t{session}")}
+
+    def test_the_session_above_a_watch(self):
+        above = self.hook._session_above
+        self.assertEqual(above(self.WATCH, FakeTree(self.ARMED)), 100)
+        self.assertIsNone(above(self.WATCH, FakeTree(self.ORPHAN)))
+        self.assertIsNone(above(self.WATCH, FakeTree(self.TYPED)))
+        self.assertIsNone(above(999, FakeTree(self.ARMED)))
+        self.assertIsNone(above(2, FakeTree({2: {"parent": 3}, 3: {"parent": 2}})))  # 32 parents, no further
+
+    def test_a_recorded_session_gone_or_its_pid_reused_is_an_orphan(self):
+        self.assertFalse(self.orphaned(self.owner(100), self.ARMED))
+        self.assertTrue(self.orphaned(self.owner(100), self.ORPHAN))
+        self.assertTrue(self.orphaned(self.owner(100, "t-earlier"), self.ARMED))
+        self.assertFalse(self.orphaned(self.owner(100), {**self.ORPHAN, 100: {"parent": 50, "claude": True}}))
+
+    def test_a_watch_that_recorded_no_session_is_never_an_orphan(self):
+        self.assertFalse(self.orphaned(self.owner(None), self.TYPED))
+        self.assertFalse(self.orphaned(self.owner(None), self.ORPHAN))
+
+    def test_a_watch_with_no_record_of_its_own_goes_by_its_tree(self):
+        self.assertFalse(self.orphaned(None, self.ARMED))
+        self.assertTrue(self.orphaned(None, self.ORPHAN))
+        self.assertFalse(self.orphaned(None, self.TYPED))
+        self.assertTrue(self.orphaned({"watch": 301, "session": 100, "started": "t100"}, self.ORPHAN))
+        self.assertFalse(self.orphaned({"watch": 301, "session": None, "started": None}, self.ARMED))
+
+    def test_this_machines_processes_read_as_the_fleet_reads_them(self):
+        tree = self.hook.ProcTree()
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            self.assertEqual(tree.parent(child.pid), os.getpid())
+            started = tree.started(child.pid)
+            self.assertTrue(started)
+            self.assertFalse(tree.claude(child.pid))
+            self.assertEqual(tree.terminal(child.pid), tree.terminal(os.getpid()))
+            bun = shutil.which("bun")
+            if bun:  # the same text for the same process: the watch records it, the hook compares it
+                script = (f'import {{ startedOf, parentOf, hasTerminal }} from "{ROOT}/fleet/src/procs.ts"; '
+                          f'console.log(JSON.stringify([startedOf({child.pid}), parentOf({child.pid}), hasTerminal({child.pid})]))')
+                seen = subprocess.run([bun, "-e", script], capture_output=True, text=True, timeout=30)
+                self.assertEqual(json.loads(seen.stdout), [started, os.getpid(), tree.terminal(child.pid)], seen.stderr)
+        finally:
+            child.kill()
+            child.wait()
+        self.assertEqual([tree.parent(child.pid), tree.started(child.pid), tree.terminal(child.pid)], [None, None, False])
+
+    def test_the_wake_and_the_guard_name_one_command(self):
+        """The hub's wake (fleet/src/wake.ts `wakeText`) arms the watch with the Stop guard's command."""
+        wake = (ROOT / "fleet" / "src" / "wake.ts").read_text()
+        self.assertEqual(self.hook.watch_command("/d", "manager"), f"{ROOT}/fleet/bin/fleet chat /d watch --as manager --all --resume --once")
+        self.assertTrue("${FLEET_BIN} chat ${dir} watch --as ${role} --all --resume --once" in wake, "the wake's command")
+        self.assertTrue("(run_in_background: true, timeout: 3300000)" in wake, "the wake's timeout")
+        self.assertIn("(`run_in_background: true`, `timeout: 3300000`)", self.hook.DEAF)
+
+
+class WatchForeignTest(unittest.TestCase):
+    """_watch_foreign: a watch as the host's role that another session armed wakes that session, and the
+    fleet's host hears nothing. The same rule as fleet/src/chat/watchers.ts `foreign` (with host.ts `isHost`):
+    the two change together. The host is session 100; session 400 is a copy of it (a fork, a second resume)."""
+
+    WATCH = 300
+    HOST = (100, "t100")
+    BY_HOST = {50: {"parent": 1, "terminal": True}, 100: {"parent": 50, "claude": True, "terminal": True},
+               400: {"parent": 50, "claude": True, "terminal": True}, 200: {"parent": 100}, 300: {"parent": 200}}
+    BY_COPY = {**BY_HOST, 200: {"parent": 400}}
+    TYPED = {**BY_HOST, 300: {"parent": 50, "terminal": True}}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.hook = load_hook()
+
+    def foreign(self, owner, procs, host=HOST):
+        return self.hook._watch_foreign(self.WATCH, owner, host, FakeTree(procs))
+
+    def owner(self, session, started=None):
+        return {"watch": self.WATCH, "session": session,
+                "started": started if started is not None else (None if session is None else f"t{session}")}
+
+    def test_no_watch_is_foreign_when_no_host_is_known(self):
+        self.assertFalse(self.foreign(self.owner(400), self.BY_COPY, host=None))
+        self.assertFalse(self.foreign(self.owner(None), self.TYPED, host=None))
+        self.assertFalse(self.foreign(None, self.BY_COPY, host=None))
+        self.assertFalse(self.foreign(None, self.TYPED, host=None))
+
+    def test_a_recorded_session_is_the_host_or_it_is_foreign(self):
+        self.assertFalse(self.foreign(self.owner(100), self.BY_HOST))
+        self.assertTrue(self.foreign(self.owner(400), self.BY_COPY))
+        self.assertTrue(self.foreign(self.owner(400), self.BY_HOST))  # the record says whose, not the tree
+
+    def test_a_watch_armed_in_a_terminal_is_foreign_once_a_host_is_known(self):
+        self.assertTrue(self.foreign(self.owner(None), self.TYPED))
+        self.assertTrue(self.foreign(self.owner(None), self.BY_HOST))
+
+    def test_a_watch_with_no_record_of_its_own_goes_by_the_session_above_it(self):
+        self.assertFalse(self.foreign(None, self.BY_HOST))
+        self.assertTrue(self.foreign(None, self.BY_COPY))
+        self.assertTrue(self.foreign(None, self.TYPED))
+        self.assertFalse(self.foreign({"watch": 301, "session": 400, "started": "t400"}, self.BY_HOST))
+        self.assertTrue(self.foreign({"watch": 301, "session": 100, "started": "t100"}, self.BY_COPY))
+
+    def test_the_hosts_pid_with_another_start_is_another_process(self):
+        self.assertTrue(self.foreign(self.owner(100, "t-earlier"), self.BY_HOST))
+        self.assertTrue(self.foreign(None, {**self.BY_HOST, 100: {"parent": 50, "claude": True, "started": "t-later"}}))
+
+    def test_a_start_that_was_not_recorded_is_told_by_the_pid_alone(self):
+        self.assertFalse(self.foreign(self.owner(100, "t-earlier"), self.BY_HOST, host=(100, None)))
+        self.assertFalse(self.foreign({"watch": self.WATCH, "session": 100, "started": None}, self.BY_HOST))
+        self.assertTrue(self.foreign(self.owner(400), self.BY_COPY, host=(100, None)))
+
+    def test_is_host(self):
+        is_host = self.hook._is_host
+        self.assertTrue(is_host((100, "t100"), 100, "t100"))
+        self.assertTrue(is_host((100, None), 100, "t-any"))
+        self.assertTrue(is_host((100, "t100"), 100, None))
+        self.assertFalse(is_host((100, "t100"), 100, "t-later"))
+        self.assertFalse(is_host((100, "t100"), 400, "t100"))
+        self.assertFalse(is_host((100, None), 400, None))
+
+
+class FleetHostTest(FleetCase):
+    """_fleet_host, and what the Stop guard and watch_alive do with it: the fleet's host is the session its
+    registry entry names, a watch another session armed is no watch, and a copy of the host is told nothing.
+    The trees are the tests' own, over this process (the hook's, here) and the watches it starts; HOST and
+    COPY are pids no process on the machine has."""
+
+    HOST = 5_000_001
+    COPY = 5_000_002
+
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_hook()
+
+    def tree(self, above=None, **procs):
+        """HOST and COPY run as Claude Code; this process is under ABOVE; PROCS are more processes."""
+        me = {os.getpid(): {"parent": above}} if above else {}
+        return FakeTree({self.HOST: {"parent": 1, "claude": True}, self.COPY: {"parent": 1, "claude": True},
+                         **me, **{int(pid): proc for pid, proc in procs.items()}})
+
+    def serve(self, pid=HOST, **fields):
+        self.register(self.fleet, pid=pid, **fields)
+
+    def host(self, tree=None):
+        return self.module._fleet_host(self.env, str(self.fleet), tree or self.tree())
+
+    def guard(self, tree):
+        shutil.rmtree(self.data / "sessions", ignore_errors=True)  # forget the last block
+        hook = self.module.Hook("Stop", self.payload("Stop", stop_hook_active=False), self.env)
+        return self.module.fleet_listen_guard(hook, tree)
+
+    def assertBlocked(self, text):
+        self.assertIsInstance(text, self.module.Block)
+        self.assertIn(f"chat {self.fleet} watch --as coordinator --all --resume --once`", text)
+
+    def test_the_host_is_the_claude_code_process_the_entry_names(self):
+        self.serve(started=f"t{self.HOST}")
+        self.assertEqual(self.host(), (self.HOST, f"t{self.HOST}"))
+        self.assertIsNone(self.host(FakeTree({self.HOST: {"parent": 1, "claude": True, "started": "t-later"}})))
+        self.assertIsNone(self.host(FakeTree({self.HOST: {"parent": 1}})))  # `serve --pid` of something else
+        self.assertIsNone(self.host(FakeTree({})))  # its process is gone
+
+    def test_an_entry_with_no_start_is_told_by_its_pid_alone(self):
+        for fields in ({}, {"started": None}, {"started": ""}):
+            self.serve(**fields)
+            self.assertEqual(self.host(), (self.HOST, None))
+            self.assertIsNone(self.host(FakeTree({self.HOST: {"parent": 1}})))
+
+    def test_no_host_without_an_entry_that_names_a_process(self):
+        self.assertIsNone(self.host(self.tree(above=1)))  # the entry names the tests' own process, not Claude Code
+        for pid in (None, 0, 1, "5000001", True):
+            self.serve(pid=pid)
+            self.assertIsNone(self.host(FakeTree({1: {"parent": 0, "claude": True}})), pid)
+        (self.registry / "p.json").write_text("{not json")
+        self.assertIsNone(self.host())
+        (self.registry / "p.json").unlink()
+        self.assertIsNone(self.host())
+        other = self.tmp / "other" / "coordinator"
+        other.mkdir(parents=True)
+        self.register(other, id="other", pid=self.HOST)  # another fleet's host
+        self.assertIsNone(self.host())
+        self.assertIsNone(self.module._fleet_host({"FLEET_HOME": str(self.tmp / "nowhere")}, str(self.fleet), self.tree()))
+
+    def test_a_watch_counts_only_when_the_host_armed_it(self):
+        host = (self.HOST, f"t{self.HOST}")
+
+        def alive(tree, host=host):
+            return self.module.watch_alive(str(self.fleet), "coordinator", tree, host)
+
+        watch = self.watch(owner={"session": self.COPY, "started": f"t{self.COPY}"})
+        self.assertFalse(alive(self.tree()))
+        self.assertTrue(alive(self.tree(), host=None))  # no host known: whose it is does not matter
+        (self.fleet / "watch-coordinator.pid").unlink()  # found among the processes: the same rule
+        self.assertFalse(alive(self.tree()))
+        (self.fleet / "watch-coordinator.owner.pid").unlink()  # no record: the session above it
+        self.assertFalse(alive(self.tree(**{str(watch.pid): {"parent": self.COPY}})))
+        self.assertTrue(alive(self.tree(**{str(watch.pid): {"parent": self.HOST}})))
+        watch.kill()
+        watch.wait()
+        self.watch(owner={"session": self.HOST, "started": f"t{self.HOST}"})
+        self.assertTrue(alive(self.tree()))
+        self.assertFalse(alive(self.tree(), host=(self.HOST, "t-later")))
+        (self.fleet / "watch-coordinator.pid").unlink()
+        self.assertTrue(alive(self.tree()))
+
+    def test_a_copy_of_the_host_is_not_told_to_arm_the_hosts_watch(self):
+        self.serve(started=f"t{self.HOST}")
+        self.assertIsNone(self.guard(self.tree(above=self.COPY)))
+        self.serve()  # an entry with no start: the pid tells the copy from the host
+        self.assertIsNone(self.guard(self.tree(above=self.COPY)))
+
+    def test_the_host_with_no_watch_is_blocked(self):
+        self.serve(started=f"t{self.HOST}")
+        self.assertBlocked(self.guard(self.tree(above=self.HOST)))
+        self.assertBlocked(self.guard(self.tree()))  # no Claude Code process above the hook: guarded as before
+
+    def test_a_copy_is_guarded_as_before_when_the_host_is_not_there(self):
+        self.serve(started="t-earlier")  # another process has the host's pid
+        self.assertBlocked(self.guard(self.tree(above=self.COPY)))
+        self.register(self.fleet)  # served with a pid that is not Claude Code
+        self.assertBlocked(self.guard(self.tree(above=self.COPY)))
+        self.watch(owner={"session": self.COPY, "started": f"t{self.COPY}"})
+        self.assertIsNone(self.guard(self.tree(above=self.COPY)))
+
+    def test_the_host_is_blocked_while_the_only_watch_is_another_sessions(self):
+        self.serve(started=f"t{self.HOST}")
+        foreign = self.watch(owner={"session": self.COPY, "started": f"t{self.COPY}"})
+        self.assertBlocked(self.guard(self.tree(above=self.HOST)))
+        foreign.kill()
+        foreign.wait()
+        typed = self.watch()  # armed in a terminal: it wakes nobody's session
+        self.assertBlocked(self.guard(self.tree(above=self.HOST)))
+        typed.kill()
+        typed.wait()
+        self.watch(owner={"session": self.HOST, "started": f"t{self.HOST}"})
+        self.assertIsNone(self.guard(self.tree(above=self.HOST)))
+
+    def test_the_real_hook_guards_a_fleet_whose_entry_names_no_claude_code_process(self):
+        started = self.module.ProcTree().started(os.getpid())
+        self.serve(pid=os.getpid(), started=started)  # whoever runs the tests, this process is not Claude Code
+        result = self.hook("Stop", self.payload("Stop", stop_hook_active=False))
+        self.assertEqual(json.loads(result.stdout)["decision"], "block", result.stderr)
         self.assertNotIn("failed", self.log())
 
 

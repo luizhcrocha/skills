@@ -9,7 +9,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 
 import { readChat, type Message } from "../chat/store.ts";
-import { listening } from "../chat/chat.ts";
+import { listening, type Listening } from "../chat/chat.ts";
 import { resolvePath } from "../files.ts";
 import { answeredAt, isoOf, silentWorkers } from "../health.ts";
 import { asArray, asNumber, asObject, asString, truthy, type Json, type JsonObject } from "../json.ts";
@@ -58,6 +58,14 @@ export interface Lookups {
   readonly tailnet?: () => string | null;
   /** The hub's: the machine's orphaned test and dev processes (orphans.ts), shown on the manager's page. */
   readonly orphans?: () => readonly Orphan[];
+  /** The hub's: what it did to wake a fleet whose host does not listen while the user's messages wait
+   * (wake.ts `deafView`); undefined for a host that listens. */
+  readonly deaf?: (entry: Entry, heard: Listening) => JsonObject | undefined;
+  /** The hub's: a fleet its last look could not read, and why (wake.ts `Wakes.blindView`); undefined while it reads. */
+  readonly blind?: (entry: Entry) => JsonObject | undefined;
+  /** The hub's: the fleet's last takeover (`fleet serve --take-over`), until the host has read a message the
+   * user wrote after it (takeover.ts `takeoverView`). */
+  readonly takeover?: (entry: Entry, heard: Listening) => JsonObject | undefined;
 }
 
 /** A link's last probe. */
@@ -193,9 +201,9 @@ export function summary(machine: Machine, lookups: Lookups, entry: Entry): JsonO
   const workers: JsonObject = Object.fromEntries(counts);
 
   const running = agents.filter((a) => LIVE.has(asString(a["status"]) ?? ""));
-  const said = readChat(entry.dir);
+  const said = saidIn(entry.dir);
   const lanes = [...new Set(running.flatMap((a) => (truthy(a["lane"]) ? (asArray(a["lane"]) ?? []) : []).map((l) => pyStr(l))))].sort();
-  const heard = listening(machine, entry.dir);
+  const heard = heardIn(machine, entry.dir);
 
   return {
     id: entry.id,
@@ -212,6 +220,8 @@ export function summary(machine: Machine, lookups: Lookups, entry: Entry): JsonO
     tokens: agents.reduce((sum, a) => sum + intOf(a["tokens"]), 0),
     spent: spentJson(lookups.spend.of(entry.dir, machine.config)),
     chat: { on: heard.on, seen: heard.seen, unread: heard.unread, since: heard.since },
+    // Only from a hub, and only for a host that does not listen: the twin's page and every trace have no such key.
+    ...deafKey(lookups, entry, heard),
     active: activeAt(entry.dir, machine.config, asString(entry.raw["session_id"])) ?? null,
     now_at: state["now_at"] ?? null,
     lanes,
@@ -386,12 +396,52 @@ export function previewView(machine: Machine, lookups: Lookups, root: string, st
   };
 }
 
+/** What only a hub says of a fleet it serves, each key only when it holds: `{deaf}` for one whose host does
+ * not listen while the user's messages wait (since when, and what the hub did to wake it), `{blind}` for one
+ * the hub's look cannot read, `{takeover}` for one that changed host and whose user was not heard since.
+ * Nothing otherwise, and nothing without a hub. */
+function deafKey(lookups: Lookups, entry: Entry | undefined, heard: Listening): JsonObject {
+  if (entry === undefined) return {};
+
+  const said: readonly (readonly [string, JsonObject | undefined])[] = [
+    ["deaf", lookups.deaf?.(entry, heard)],
+    ["blind", lookups.blind?.(entry)],
+    ["takeover", unreadable(heard) ? undefined : lookups.takeover?.(entry, heard)],
+  ];
+
+  return Object.fromEntries(said.flatMap(([key, value]) => (value === undefined ? [] : [[key, value]])));
+}
+
+/** What a chat that cannot be read is heard as: nobody reading, nothing known to wait. */
+const UNHEARD: Listening = { on: false, seen: 0, unread: 0, since: null };
+
+const unreadable = (heard: Listening): boolean => heard === UNHEARD;
+
+/** Whether the host of `dir` reads its chat ({@link listening}); {@link UNHEARD} of a chat that cannot be
+ * read, so the page of that fleet, and the manager's, still render: the hub's look says why (`blind`). */
+function heardIn(machine: Machine, dir: string): Listening {
+  try {
+    return listening(machine, dir);
+  } catch {
+    return UNHEARD;
+  }
+}
+
+/** What was said in `dir`; nothing of a chat that cannot be read. */
+function saidIn(dir: string): Message[] {
+  try {
+    return readChat(dir);
+  } catch {
+    return [];
+  }
+}
+
 /** The state of the DIR `root` as the page shows it. */
 export function view(machine: Machine, lookups: Lookups, given: JsonObject, rootGiven: string): JsonObject {
   const root = resolvePath(rootGiven);
   let state: JsonObject = numberState(given);
-  const heard = listening(machine, root);
-  state = { ...state, spent: spentJson(lookups.spend.of(root, machine.config)), chat: { on: heard.on, seen: heard.seen, unread: heard.unread, since: heard.since } };
+  const heard = heardIn(machine, root);
+  state = { ...state, spent: spentJson(lookups.spend.of(root, machine.config)), chat: { on: heard.on, seen: heard.seen, unread: heard.unread, since: heard.since }, ...deafKey(lookups, machine.registry.find(root), heard) };
   const seen = workerActivity(root, machine.config, state);
 
   // `active` is when the worker was last seen; `beat`, only when a heartbeat says it, what it last ran.

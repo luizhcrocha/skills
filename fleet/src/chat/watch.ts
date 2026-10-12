@@ -19,7 +19,9 @@ import { refusalRev } from "../ledger/permission.ts";
 import { stripHidden } from "../ledger/permission-words.ts";
 import { findDecision, number } from "../ledger/numbers.ts";
 import { Refusal } from "../errors.ts";
+import { runningHub } from "../hub/server.ts";
 import { readObject } from "../registry.ts";
+import { Wakes, wakeWorks } from "../wake.ts";
 import { activeAt } from "../transcripts.ts";
 import { secondsNow, type Machine } from "../world.ts";
 import {
@@ -39,11 +41,14 @@ import {
   rosterOf,
   stateOfDir,
   waitsHere,
+  unreadFromUser,
 } from "./chat.ts";
 import { BATCH_REMIND_S, batchReminders } from "./batches.ts";
 import { FleetNews } from "./news.ts";
 import { unreadLine } from "../news/news.ts";
-import { isWatch } from "./watchers.ts";
+import { isHost, liveHost, type Host } from "../host.ts";
+import { displacedLine } from "../takeover.ts";
+import { foreign, forgetOwner, isWatch, orphaned, ownerWords, readOwner, recordOwner, sessionAbove, type Owner } from "./watchers.ts";
 import { readChat, Tail, type Message } from "./store.ts";
 import * as Option from "effect/Option";
 
@@ -243,10 +248,17 @@ function unanswered(machine: Machine, entry: { readonly id: string; readonly dir
 
 /** For a manager's watch: the fleets that do not read their chat while the user waits, or leave the user's
  * messages unanswered, the answers they have not recorded, their silent workers; each told once (kept in the
- * manager's DIR); and the manager's own batches of marks still open, once per FLEET_BATCH_REMIND_S. */
+ * manager's DIR); and the manager's own batches of marks still open, once per FLEET_BATCH_REMIND_S.
+ *
+ * While a hub runs on the machine and its wake works for a fleet (wake.ts `wakeWorks`: its last wake was
+ * written, and its wakes are not spent), a fleet that does not read its chat is not told here: the hub wakes
+ * its session itself, and the page says so, so it is said once. With no hub, or one that cannot wake that
+ * fleet, the manager is told, as before. */
 export function fleetsUnheard(machine: Machine, me: string): string[] {
   const toldPath = join(me, "watch-manager.told");
   const told = readTold(toldPath);
+  // A hub that runs and cannot wake a fleet (its last wake failed, its wakes are spent) is no hub to that fleet.
+  const hub = runningHub(machine.registry.place.home) === undefined ? undefined : new Wakes(machine);
   const unheardS = seconds(machine.env, "FLEET_UNHEARD_S", 120);
   const unansweredS = seconds(machine.env, "FLEET_UNANSWERED_S", UNANSWERED_S);
   const lines: string[] = [];
@@ -261,7 +273,9 @@ export function fleetsUnheard(machine: Machine, me: string): string[] {
     const at = heard.since === null ? undefined : parseInstant(pyText(heard.since));
     const waited = at === undefined ? unheardS : secondsNow(machine) - at / 1000;
 
-    if (heard.on || heard.unread === 0 || told.get(e.id) === mark || waited < unheardS) {
+    const woken = hub !== undefined && heard.unread > 0 && wakeWorks(hub.of(e.dir), unreadFromUser(e.dir, heard.seen)[0]?.id, machine.now().getTime());
+
+    if (woken || heard.on || heard.unread === 0 || told.get(e.id) === mark || waited < unheardS) {
       lines.push(...unanswered(machine, e, told, unansweredS));
       continue;
     }
@@ -429,30 +443,49 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
         );
       }
 
-      yield* follow(machine, root, who, request);
+      yield* follow(machine, root, who, request, undefined, false);
 
       return;
     }
 
+    // The host's watch is the host's alone: a copy of its session (a fork, a second resume) or a terminal that
+    // armed one would be woken in its place and move its cursor, and the host would hear nothing.
+    const host = who === hostOf(root) ? liveHost(machine.registry, root) : undefined;
+    const copy = host === undefined ? undefined : notHost(root, who, host);
+
+    if (copy !== undefined) return yield* Effect.fail(new ChatError({ reason: copy }));
     const pulse = pulsePath(root, who);
     const held = intOf(readText(pulse));
 
+    // A held watch whose session is gone, or is not the fleet's host, hears for nobody the fleet knows: this one
+    // takes its place, and that one, finding the pid file no longer its own, exits with nothing more printed and
+    // nothing marked read.
     if (held !== undefined && held > 0 && held !== process.pid && isWatch(held, root, who)) {
-      return yield* Effect.fail(
-        new ChatError({
-          reason:
-            `a watch as ${who} already runs for ${root} (pid ${held}), and its lines wake the session that armed it. ` +
-            `Leave it running; if that session is gone, \`kill ${held}\` and arm the watch again.`,
-        }),
-      );
+      const owner = readOwner(root, who);
+
+      if (!orphaned(held, owner) && !foreign(held, owner, host)) {
+        return yield* Effect.fail(
+          new ChatError({
+            reason:
+              `a watch as ${who} already runs for ${root} (pid ${held}), ${ownerWords(held, owner)}. ` +
+              `Leave it running: there is nothing to stop and nothing to arm.`,
+          }),
+        );
+      }
     }
 
     const pid = String(process.pid);
+    const mine = recordOwner(root, who);
     writeText(pulse, pid);
+    let nobody = false;
 
     const end = (): void => {
+      forgetOwner(root, who);
+
       if (readText(pulse) === pid) remove(pulse);
-      touch(leftPath(root, who), secondsNow(machine));
+
+      // A watch that stood down handed nothing to anyone: it leaves no mark that the host was reading.
+      if (!nobody) touch(leftPath(root, who), secondsNow(machine));
     };
 
     const onSignal = (): void => {
@@ -465,7 +498,13 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
 
     yield* Effect.ensuring(
       Effect.gen(function* () {
-        const last = yield* follow(machine, root, who, request);
+        const last = yield* follow(machine, root, who, request, mine, host !== undefined);
+
+        if (last === NOBODY) {
+          nobody = true;
+
+          return;
+        }
 
         if (last !== undefined) writeText(cursorPath(root, who), String(last));
 
@@ -483,8 +522,42 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
   });
 }
 
-/** What `watch` prints; the id of the last message it printed when it exits (`--once`). */
-function follow(machine: Machine, root: string, who: string, request: WatchRequest): Effect.Effect<number | undefined, never, Out> {
+/**
+ * Why this process may not arm a `--once` watch as the host of the fleet at `root`, whose host is `host`: it
+ * runs under another Claude Code session, or under none. Undefined when it runs under the host.
+ */
+function notHost(root: string, who: string, host: Host): string | undefined {
+  const me = sessionAbove(process.pid);
+
+  if (me !== undefined && isHost(host, me.pid, me.started)) return undefined;
+  const whose = `this fleet's host is the Claude Code session running as pid ${String(host.pid)} (the one \`fleet serve\` recorded), and a watch as ${who} wakes that session and marks its messages read`;
+
+  return me === undefined
+    ? `${whose}. This command runs outside it: to read along, \`fleet chat ${root} watch --as ${who}\` without --once marks nothing read.`
+    : `${whose}. You are pid ${String(me.pid)}, a copy of it (a fork, or a second resume of its transcript): arm nothing, and leave its chat to it. ` +
+        `If this session is to host the fleet from now on, \`fleet serve ${root} --take-over\` first, which is recorded in the fleet's ledger and chat and shown to the user on its page.`;
+}
+
+/** What {@link follow} gives back when the watch stood down because it hears for nobody: nothing it printed
+ * is marked read, so the next watch prints it again. */
+const NOBODY = "nobody";
+
+/** How often a `--once` watch looks whether the session that armed it still runs, in seconds. */
+const OWNER_CHECK_S = 3;
+
+/** Whether another watch took the place of this `--once` one: the pid file names a pid that is not its own.
+ * A pid file that is gone, or does not read, is not that: another watch's exit removes it, and this one goes on. */
+function taken(root: string, who: string): boolean {
+  const named = intOf(readText(pulsePath(root, who)));
+
+  return named !== undefined && named > 0 && named !== process.pid;
+}
+
+/** What `watch` prints; the id of the last message it printed when it exits (`--once`), or {@link NOBODY}
+ * when it stood down: another watch took its place, the session that armed it (`mine`) is gone, or (`hosted`:
+ * a watch as the host's role, armed by the fleet's host) the fleet has another host now. Standing down is
+ * silent but for that last case: the displaced host is told in one line (takeover.ts `displacedLine`). */
+function follow(machine: Machine, root: string, who: string, request: WatchRequest, mine: Owner | undefined, hosted: boolean): Effect.Effect<number | typeof NOBODY | undefined, never, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
     let last: number | undefined;
@@ -527,16 +600,56 @@ function follow(machine: Machine, root: string, who: string, request: WatchReque
 
     // What waited already is not held back.
     if (request.once && first.length > 0) return last;
+
+    /** What this watch says when the fleet has another host now and it was the old host's (`hosted`): the
+     * line of takeover.ts `displacedLine`. Undefined while the host is the session that armed it, or unknown. */
+    const displaced = (): string | undefined => {
+      if (!hosted || mine === undefined) return undefined;
+      const entry = machine.registry.find(root);
+      const host = liveHost(machine.registry, root);
+
+      return host !== undefined && foreign(process.pid, mine, host) ? displacedLine(machine, root, host.pid, asString(entry?.raw["session_id"])) : undefined;
+    };
+
     const checkS = seconds(machine.env, "FLEET_CHECK_S", 30);
     // A new line does not end the watch at once: it settles, so one wake carries a burst of lines.
     const settle = settleOf(machine.env, request.settle);
     let checked: number | undefined;
+    let looked = performance.now() / 1000;
 
     for (;;) {
       const now = performance.now() / 1000;
 
       if (request.once && ((window !== undefined && now >= window) || settle.due(now))) return last;
       yield* Effect.sleep(POLL_MS);
+
+      // Another watch took this one's place. When that is the new host's, after a takeover, this session is told.
+      if (request.once && taken(root, who)) {
+        const line = displaced();
+
+        if (line !== undefined) out.out(`${line}\n`);
+
+        return NOBODY;
+      }
+
+      // An orphan must not print the user's next message to nobody and mark it read: it looks for its session.
+      if (mine !== undefined && mine.session !== null && performance.now() / 1000 - looked >= OWNER_CHECK_S) {
+        looked = performance.now() / 1000;
+
+        if (orphaned(process.pid, mine)) return NOBODY;
+
+        // `fleet serve --take-over` moved the fleet to another session: this watch is the old host's. Its
+        // session is told once, as the watch stands down, so the displaced host is not left waiting on a
+        // watch that went without a word.
+        const line = displaced();
+
+        if (line !== undefined) {
+          out.out(`${line}\n`);
+
+          return NOBODY;
+        }
+      }
+
       const fresh = tail.read().filter((m) => m.to.includes(who) || (request.all && m.from === "user" && waitsHere(m)));
       show(fresh);
 

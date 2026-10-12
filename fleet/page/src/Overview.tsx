@@ -9,8 +9,8 @@ import { For, Show, type JSX } from "@solidjs/web";
 
 import { Approvals } from "./Approvals.tsx";
 import { Pill, PillAs, RefTag, usePage, When, Who, tf } from "./bits.tsx";
-import { Core, type Decision, type Json, type Lookup, type Message } from "./core.ts";
-import { dayTime, fmtDur, fmtInt, fmtShort, spentWords } from "./format.ts";
+import { Core, type Deaf, type Decision, type Json, type Lookup, type Message } from "./core.ts";
+import { clock, dayTime, fmtDur, fmtInt, fmtShort, spentWords } from "./format.ts";
 import { keyed } from "./model.ts";
 import { ALL, held, narrow, scopes, type Scope } from "./scope.ts";
 
@@ -65,6 +65,59 @@ export function StatePill(props: { readonly d: Decision; readonly pending: Retur
 /** Where a decision came from, in words: its step and the worker it is for. */
 export function originText(m: ReturnType<typeof usePage>["m"], d: Decision): string {
   return [d.step || "", d.agent && m.person(d.agent) ? (m.person(d.agent)?.name ?? "") : ""].filter(Boolean).join(", ");
+}
+
+/**
+ * A fleet whose host does not listen while the user's messages wait, in the stuck band: since when, how many
+ * wait, when the hub woke its session and how that ended, in the hub's facts and the page's words
+ * (`Core.deafWords`). "Wake now" asks the hub for one wake at once; `fleet` names the fleet on a manager's
+ * page and is empty on the fleet's own. A session that is gone has nothing to wake, so no button; while the
+ * hub holds the button (`Core.wakeButton`), it is disabled and says how long is left.
+ */
+function DeafRow(props: { readonly fleet: string; readonly deaf: Deaf }): JSX.Element {
+  const { m } = usePage();
+  const [said, setSaid] = createSignal("");
+  const [busy, setBusy] = createSignal(false);
+  const denied = (): string => (m.chatWritable() ? "" : m.chatAvailable() ? m.write().reason || "Read-only here." : "This copy of the page cannot tell the hub.");
+  const stands = createMemo(() => Core.wakeButton(props.deaf, m.tick()));
+
+  async function wake(): Promise<void> {
+    if (!m.chatWritable() || busy() || stands().disabled) return;
+    setBusy(true);
+    setSaid("");
+
+    try {
+      const res = await fetch("wake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(props.fleet ? { fleet: props.fleet } : {}) });
+      // SAFETY: the hub answers {woken, fleet, at} or {error} (with `again` when it holds the wake); anything else shows as its status.
+      const body = (await res.json().catch(() => ({}))) as { readonly error?: string };
+
+      setSaid(res.ok ? "Woken now." : (body.error ?? `the hub answered ${String(res.status)}`));
+    } catch {
+      setSaid("the hub did not answer");
+    }
+
+    setBusy(false);
+  }
+
+  return (
+    <li class="deaf-row" data-deaf={props.fleet || "here"}>
+      <Show when={props.fleet}>
+        <a href={m.fleetPage(props.fleet)}>{props.fleet}</a>:{" "}
+      </Show>
+      <span class="deaf-words">{Core.deafWords(props.deaf, clock)}</span>{" "}
+      <Show when={props.deaf.end !== "gone"}>
+        <button type="button" class="btn wake-now" disabled={!m.chatWritable() || busy() || stands().disabled} title={denied() || stands().title || undefined} onClick={() => void wake()}>
+          {busy() ? "Waking…" : stands().label}
+        </button>
+      </Show>
+      <Show when={said()}>
+        {" "}
+        <span class="meta wake-said" role="status">
+          {said()}
+        </span>
+      </Show>
+    </li>
+  );
 }
 
 /** The sentence the page opens with, and what is stuck above it. */
@@ -140,13 +193,39 @@ function Lead(): JSX.Element {
                       ? `The ${who()} is not reading; tell it in its session.`
                       : `The ${who()} has it and has not acted; tell it in its session if it stays.`;
 
+                // What the hub says whole: a change of host, a fleet its look cannot read.
+                const told = (): string => {
+                  const row = r();
+
+                  return row.takeover ? Core.takeoverWords(row.takeover, clock) : row.blind ? Core.blindWords(row.blind, clock) : "";
+                };
+
                 return (
-                  <li>
-                    <Show when={href()} fallback={name()}>
-                      <a href={href()}>{name()}</a>
-                    </Show>
-                    : {r().what === "answer not recorded" ? `${Core.kindWord(r().kind)} answered, not recorded` : r().what}, {m.ago(r().since)}. {why()}
-                  </li>
+                  <Show
+                    when={r().deaf}
+                    fallback={
+                      <Show
+                        when={told()}
+                        fallback={
+                          <li>
+                            <Show when={href()} fallback={name()}>
+                              <a href={href()}>{name()}</a>
+                            </Show>
+                            : {r().what === "answer not recorded" ? `${Core.kindWord(r().kind)} answered, not recorded` : r().what}, {m.ago(r().since)}. {why()}
+                          </li>
+                        }
+                      >
+                        <li class="hub-told" data-told={r().takeover ? "takeover" : "blind"} data-fleet={r().fleet || "here"}>
+                          <Show when={r().fleet}>
+                            <a href={m.fleetPage(r().fleet)}>{r().fleet}</a>:{" "}
+                          </Show>
+                          {told()}
+                        </li>
+                      </Show>
+                    }
+                  >
+                    {(deaf) => <DeafRow fleet={r().fleet} deaf={deaf()} />}
+                  </Show>
                 );
               }}
             </For>

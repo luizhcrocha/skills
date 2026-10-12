@@ -26,7 +26,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 [The ledger](#the-ledger-statejson) · [Numbers](#numbers-refs) · [Warnings](#warnings) ·
 [chat.py](#chatpy-the-chat) · [fleets.py and the registry](#fleetspy-and-the-registry) ·
 [The other scripts](#the-other-scripts) · [The hub](#the-hub-fleet-hub) · [Heartbeats](#heartbeats) ·
-[Listening hooks](#listening-hooks) · [The news](#the-news-fleet-news) ·
+[Listening hooks](#listening-hooks) · [The hub's wake](#the-hubs-wake) · [The news](#the-news-fleet-news) ·
 [Workspaces](#workspaces-fleet-ws) · [The preview](#the-preview-fleet-preview) · [The advisor](#the-advisor-fleet-advisor) · [Files by writer](#files-by-writer) ·
 [Oracle traces](#oracle-traces) · [The model](#the-model-based-test) · [Open](#open)
 
@@ -41,7 +41,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `CLAUDE_CONFIG_DIR` | spend.py | where transcripts are (`~/.claude`): `projects/<project>/<session>.jsonl`, workers under `<session>/subagents/agent-<id>.jsonl` |
 | `FLEET_DISCOVER=0` | served.py | skip discovering the machine's served ports (tests) |
 | `FLEET_CHECK_S` | chat.py | how often a manager's or coordinator's watch looks at the fleets (default 30 s) |
-| `FLEET_UNHEARD_S` | chat.py | how long the user's message waits unread before a manager's watch tells (default 120 s) |
+| `FLEET_UNHEARD_S` | chat.py, the hub | how long the user's message waits unread before a manager's watch tells, or, while a hub runs, before the hub wakes the host's session (default 120 s). See [The hub's wake](#the-hubs-wake) |
 | `FLEET_UNANSWERED_S` | chat.py | how long the user's message to a fleet's host goes without a reply (`--re`) before a manager's watch tells, read or not (default 600 s) |
 | `FLEET_NUDGE_S` | chat.py | how long a message to a worker waits unanswered before the coordinator's watch tells (default 600 s, L1) |
 | `FLEET_WATCH_SETTLE` | chat.py | how long a `--once` watch waits after a new line for more before it exits (default 30 s; `--settle` wins) |
@@ -57,6 +57,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `FLEET_PREVIEW_AWAKE` | `fleet preview start` | the dev servers that never sleep: public ports, worker ids, `combined` (default `7501`) |
 | `FLEET_PREVIEW_SCOPE` | `fleet preview start`, the keeper | `0`: the preview's processes run without systemd user scopes of their own, stopped by their tree (the tests set it) |
 | `FLEET_NUDGE_MIN` | the plugin's hook (`fleet_chat_nudge`) | how long the user's message waits unread, or an answer unrecorded, before the session is told mid-turn (default 3 minutes). See [Listening hooks](#listening-hooks) |
+| `FLEET_CC_SOCKS` | the hub | the folder of Claude Code's session sockets, `<pid>.sock` each, that the hub's wake writes to (default `$XDG_RUNTIME_DIR/cc-socks`; the tests set a folder of their own, so no test reaches a real session). See [The hub's wake](#the-hubs-wake) |
 
 A DIR at `…/<project>/<session>/scratchpad/<name>` names a session transcript; any other DIR has
 none, and every figure read from a transcript (spend, worker tokens, liveness) is absent.
@@ -889,15 +890,19 @@ what it reads as read. Run \`fleet chat DIR watch --as WHO --all --resume --once
 background command of the session (run_in_background: true), never with \`& disown\` or its output
 redirected to /dev/null.`, exit 1). One `--once` watch per chat and role: while `watch-WHO.pid` names a
 live process that is a `--once` watch as WHO for DIR, a new one is refused before it writes anything
-(`chat: a watch as WHO already runs for DIR (pid P), and its lines wake the session that armed it. Leave
-it running; if that session is gone, \`kill P\` and arm the watch again.`, exit 1). A process is such a
+(Python: `chat: a watch as WHO already runs for DIR (pid P), and its lines wake the session that armed it. Leave
+it running; if that session is gone, \`kill P\` and arm the watch again.`, exit 1; TypeScript names whose
+it is and asks for no kill, or takes its place: [Whose watch](#whose-watch-typescript-only)). A process is such a
 watch by its command line (`/proc/<pid>/cmdline` and `cwd` on Linux, `ps` elsewhere): an argument `chat`
 (or a path ending in `chat.py`), then DIR (resolved against the process's cwd), then `watch`, and after
 them `--as WHO` (any case) and `--once`. So a pid reused by another program counts as no watch. With `--all`, a message from the user is left out for each recipient that has it in
 its own chat (`delivered`): a manager's watch does not print the user's message to coordinators the hub
 delivered it to, and prints, with its `[delivered to ...]` mark, one that also names the manager or a
 coordinator it was not delivered to. A manager's watch prints `!` lines every `FLEET_CHECK_S`: a fleet that
-doesn't read its chat while the user waits more than `FLEET_UNHEARD_S`; else, a fleet whose host has
+doesn't read its chat while the user waits more than `FLEET_UNHEARD_S` (TypeScript: only while no hub runs
+on the machine, `REGISTRY/hub/hub.json` naming a live process; while one runs, the hub wakes that fleet's
+session itself and the page says so, so the manager is not told and nothing is marked told: [The hub's
+wake](#the-hubs-wake)); else, a fleet whose host has
 left the user's messages to it unanswered (open for the host, no message but the user's with that `re`,
 not an answer to a decision since closed) for `FLEET_UNANSWERED_S`, whatever the cursor says, since a
 watch that wrote the cursor may have woken no one (`! <fleet> has not answered the user for more than 10
@@ -970,7 +975,8 @@ exits 0 (open-21, fixed).
 **Listening** (`listening(DIR)`, the page and the warnings): `on` when a `--once` watch as the host runs
 for DIR (the process its pid file names, told by its command line as above; else any such process found
 among the running ones, so a watch whose pid file another watch's exit removed, or one that has not
-written it yet, still counts), or its `.left` is younger than 10 minutes, or the host sent a message in the last 10
+written it yet, still counts; in TypeScript never a watch whose session is gone, [Whose
+watch](#whose-watch-typescript-only)), or its `.left` is younger than 10 minutes, or the host sent a message in the last 10
 minutes. `seen` is the host's cursor (0 without one). `unread` counts the user's messages after
 `seen` that no one but the user has answered with `re`, that aren't tagged with a closed
 decision (by id), and that some recipient has only here (not every one of them in `delivered`). `since` is the oldest one's `at`.
@@ -1321,11 +1327,118 @@ above run their hostile body scripts in the frame's own world (as a script past 
 policy would, reading the token from the fleet's script) and assert they ran, so the page's own checks
 are proved on their own; fleet `test/hub.test.ts` and `test_chat.py` pin the plain-text route.
 
+### Whose watch (TypeScript only)
+
+A `--once` watch wakes the session that armed it. When that session is gone (closed, or restarted: the
+resumed session is another process) the watch still runs, and it hears for nobody: it would print the
+user's next message to no one and mark it read, and it kept the resumed session's own watch refused. Such a
+watch is **orphaned**, and it counts as no watch at all. The frozen twin does not read any of this.
+
+And a watch as the host's role wakes one session, which must be the fleet's host: the session the registry
+entry names ([the registry](#fleetspy-and-the-registry): its `pid`, started at `started`). Seen on
+2026-10-12: a second session on the same fleet (a `--fork-session` background copy; a second `claude
+--resume` of the same transcript) armed the watch in the gap after the host's own exited; the host's next
+watch was refused as "armed by ... which is live", every reader counted the fleet as listening, no wake
+fired, and the copy read the user's message and moved the cursor. Such a watch is **foreign**, and it counts
+as no watch at all, as an orphan does.
+
+**Measured** (Linux, Claude Code 2.1.293, 2026-10-12; `ps -eo pid,ppid,tty,args` and `/proc/<pid>/stat`
+on the watches the sessions of this machine had armed, and on a throwaway watch with a parent of its own
+that exited):
+
+- A watch armed as a background command is the child of a `zsh -c` wrapper, and the wrapper the child of
+  the session's `claude` process (`comm` `claude`, `exe` `.../claude/versions/<version>`). The wrapper is a
+  session leader and neither it nor the watch has a controlling terminal (`TT` is `?`), though `claude` has
+  one.
+- When the parent dies, the wrapper is given to pid 1 (`systemd`) and the watch stays its child: the chain
+  `watch <- zsh -c <- parent` becomes `watch <- zsh -c <- 1`. One real orphan had exactly this chain.
+- Not measured: the Mac (`ps` is read there, as procs.ts and the hook's `_proc` do), and a desktop where
+  `systemd --user` adopts orphans (the rule does not depend on which process adopts them).
+
+**The record.** A `--once` watch writes `DIR/watch-WHO.owner.pid` before its pid file and removes it when
+it ends, if still its own: `{"watch": <its pid>, "session": <pid> | null, "started": <text> | null}`.
+`session` is the nearest Claude Code process above it (a parent named `claude`, or running
+`claude/versions/<version>`; at most 32 parents up), `started` when that process started, so a later
+process with its pid is not taken for it: the start time in clock ticks since boot (`/proc/<pid>/stat`,
+field 22) on Linux, `ps -o lstart=` in the C locale on the Mac. `null`: no such process is above it, a
+watch a person typed in a terminal. The file ends in `.pid` because it is of the processes running now,
+and the oracle leaves `*.pid` out of what it compares.
+
+**The rule** (`orphaned` in fleet/src/chat/watchers.ts; `_watch_orphaned` in hooks/tstack-hook is the same
+rule in Python, and the two change together):
+
+| The watch | Orphaned when |
+| :-- | :-- |
+| recorded its session (the record's `watch` is its pid) | that process no longer runs, or the one with its pid started at another time |
+| recorded `session: null` | never: a person armed it, and it prints to that terminal |
+| has no record of its own (armed before the record existed, by the Python twin, or this instant) | it has no controlling terminal and no Claude Code process is above it. A watch typed in a terminal has a terminal, so it is not read as orphaned though no session is above it |
+
+**The host's watch is the host's** (`foreign` in watchers.ts over host.ts `liveHost`; `_watch_foreign` and
+`_fleet_host` in the hook, the same rule). The host is known when the fleet's registry entry names a process
+that runs, is Claude Code, and started when the entry says (an entry with no `started`, served before it
+was recorded, is told by its pid). Then a `--once` watch as the host's role (`coordinator`, or `manager` in
+the manager's DIR; a worker's watch is its own) is foreign when:
+
+| The watch | Foreign when |
+| :-- | :-- |
+| recorded its session | that session is not the host (another pid, or the host's pid with another start time) |
+| recorded `session: null` (a terminal) | always: its lines print in a terminal, and the cursor it moves is the host's |
+| has no record of its own | the Claude Code process above it is not the host, or none is above it |
+
+With no host known (the fleet is not served, the entry names a process that is not Claude Code as `serve
+--pid` allows, or the machine did not answer) no watch is foreign, and only the orphan rule holds.
+
+Arming one is refused, exit 1, before anything is printed or marked read: `chat: this fleet's host is the
+Claude Code session running as pid P (the one \`fleet serve\` recorded), and a watch as WHO wakes that
+session and marks its messages read. You are pid Q, a copy of it (a fork, or a second resume of its
+transcript): arm nothing, and leave its chat to it. If this session is to host the fleet from now on,
+\`fleet serve DIR --take-over\` first, which is recorded in the fleet's ledger and chat and shown to the user
+on its page.` (from a terminal: `This command runs outside it: to read along,
+\`fleet chat DIR watch --as WHO\` without --once marks nothing read.`). The Stop guard does not ask a copy
+to arm it: a session that is not the fleet's live host is not blocked for that fleet.
+
+**Who reads it.** `listening`, so the page, `fleet fleets list` (`chat not read now`), `fleet state`'s
+`chat:` warning and the hub's wake count an orphaned watch and a foreign one as none; the Stop guard's
+`watch_alive` does too, so the host's turn goes on with the command that arms a new one.
+
+**Takeover, with no kill.** A new watch that finds `watch-WHO.pid` naming an orphaned watch or a foreign one
+writes its own record and pid and proceeds. A `--once` watch stands down, exit 0, with nothing more printed
+(but for the one line a displaced host is told, below),
+the cursor not moved (so what it printed is printed again by the next watch) and `.left` not touched, when:
+
+- at a poll, `watch-WHO.pid` names a pid that is not its own (another watch took its place; a pid file
+  that is gone or does not read is not that: another watch's exit removes it, and this one goes on); or
+- its recorded session is gone, looked at every 3 s. So an orphan stops by itself within seconds of its
+  session, whether or not a new watch comes; or
+- it was armed by the fleet's host and the registry names another host now (`fleet serve --take-over`),
+  looked at every 3 s too.
+
+The last is the one stand-down that is not silent: the displaced host's session is live, and it would
+otherwise wait on a watch that went without a word. Before it exits (still exit 0, the cursor not moved,
+`.left` not touched) the watch prints one line, `chat: this fleet's host is now session S (pid P); you were
+displaced at HH:MM by \`fleet serve --take-over\`, and this watch stands down with nothing marked read. If
+that was not intended, tell the user on the page.` `S` and `P` are the registry's (`not recorded` for a
+session id that is not plain), `HH:MM` the time of the takeover the chat records for that process
+([the hub](#the-hub-fleet-hub)), else the time the watch noticed. It prints the same line when it finds its
+pid file taken (the first case) while the registry names another host: the new host's watch armed before the
+old one looked.
+
+A held watch whose session is alive is refused as before, saying whose it is and asking for no kill:
+`chat: a watch as WHO already runs for DIR (pid P), armed by the Claude Code session running as pid S,
+which is live: its lines wake that session. Leave it running: there is nothing to stop and nothing to
+arm.` (`armed outside a Claude Code session (in a terminal) and still running: its lines print there` for
+one with no session), exit 1.
+
+A watch armed by a fleet older than this rule records nothing and does not look for its session: an orphan
+of that kind still prints one message to nobody before it ends. The next watch takes its place all the same.
+
 ## fleets.py and the registry
 
 `REGISTRY/<fleet>.json`, one per fleet being served:
-`{id, role (coordinator|manager), dir, url, pid, session, session_id, since, aliases?}`, written atomically (a `.tmp`
-then a rename). `session` is the session's title; `session_id` its Claude Code session id, which survives
+`{id, role (coordinator|manager), dir, url, pid, started?, session, session_id, since, aliases?}`, written atomically (a `.tmp`
+then a rename). `pid` and `started` (TypeScript only: when that process started, as [Whose watch](#whose-watch-typescript-only)
+reads a start time; null when it does not read) name **the fleet's host**, the one session whose chat watch
+hears for the fleet and that the hub wakes. `session` is the session's title; `session_id` its Claude Code session id, which survives
 `claude respawn` where the pid does not: `fleet serve` takes it from `$CLAUDE_CODE_SESSION_ID` (Claude Code
 sets it for every command a session runs), else from DIR's scratchpad path (`…/<project>/<session>/scratchpad/<name>`),
 else the fleet's last entry's; null when none says. The entry's `session_id` is the session serving DIR now: a resumed session (`claude -r`) has a new id
@@ -1470,6 +1583,49 @@ registers DIR (its entry lives while the Claude Code session that ran the comman
 fleet still served by serve_dashboard.py appears too, since the hub reads every fleet's files
 itself. A manager made later appears the same way, on the same address.
 
+A fleet has one host, and `fleet serve` is how a session becomes it (TypeScript only). While the process
+the entry names still runs (its pid, started when the entry says; a process of any kind, since `--pid`
+takes one), `fleet serve DIR` from another process is refused, exit 1, with the host's pid and session id:
+that process is a copy of the host (a `--fork-session` background copy, a second `claude --resume` of the
+same transcript) or another session, and serving would take the page, the watch and the wakes from a host
+that still works; the refusal names the way out and what it costs: `To move the fleet here, \`fleet serve DIR
+--take-over\`, which is recorded in the fleet's ledger and chat and shown to the user on its page.` A session
+resumed after the host ended (`claude -r`, `claude respawn`: the old process is gone) serves as before, with
+no flag.
+
+`fleet serve DIR --take-over` moves the fleet all the same, and it is never silent (fleet/src/takeover.ts):
+any session can type it, and it takes the page, the watch and the wakes from a host that still works. With
+nobody displaced (the same process, or a host that is gone) it is a plain serve and records nothing. Otherwise:
+
+- **To whoever ran it**: `took over from the session running as pid P (session S): its chat watch stands
+  down, and it is not woken for this fleet any more`, then `recorded: an event in the fleet's ledger and #N in
+  its chat; the page shows it to the user until the host has read their next message`.
+- **In the ledger**: one event under the ledger's lock, `{at, agent: null, kind: "note", important: true}`,
+  `Host changed: session S2 (pid P2, started T2) took the fleet over with \`fleet serve --take-over\` from
+  session S1 (pid P1, started T1), which was running.`
+- **In the chat**: one line from `fleet-hub` to `user` (no watch prints it: it is the user's to read), a fixed
+  template: `[hub] This fleet's host changed at <stamp>: session S2 (pid P2, started T2) took it over with
+  \`fleet serve --take-over\` from session S1 (pid P1, started T1), which was running. The page, the chat watch
+  and the hub's wakes are the new session's now. If you did not ask for this, say so here.` The message also
+  carries the facts as `takeover: {at, by: {pid, started, session}, from: {pid, started, session}}`. `started`
+  is when the process started, as a stamp (null, and `at a time the machine did not say` in the text, when the
+  machine did not say); `session` is the Claude Code session id, written only when it is at most 128 of
+  `[A-Za-z0-9._-]` (else null, `not recorded`).
+- **On the page**: a hub's view of the fleet, and its summary on the manager's page, has `takeover` (`{id, at,
+  by, from}`, `id` the chat line's) from then until the host has read a message the user wrote after it: one at
+  or before the host's cursor, or one a participant answered with `--re`. Only the chat's last takeover is
+  shown, and only a line from `fleet-hub` that carries the object is one. The page says it in the stuck band:
+  `The host changed at 14:02: session S2 (pid P2, started 13:55) took this fleet over from session S1 (pid P1,
+  started 09:12), which was running, with fleet serve --take-over. If you did not ask for that, say so in the
+  chat. This stays until the new host has read your next message.` No other view has the key (a `fleet state`
+  render, the Python twin, every trace).
+- **To the displaced session**: its watch prints one line as it stands down
+  ([Whose watch](#whose-watch-typescript-only)).
+
+Each record is tried whatever became of the other, and neither stops the takeover (a session resumed in a
+new process must get its fleet back though the ledger does not read): what could not be written is said on
+stderr, `serve: the takeover is not recorded where it should be: <why>`, and the exit is still 0.
+
 - **Where it listens**: 127.0.0.1 and this machine's Tailscale IPv4, port `--port`, else
   `$FLEET_HUB_PORT`, else 7420; never 0.0.0.0. Without Tailscale (absent, stopped) it serves
   loopback alone and binds the tailnet address once Tailscale is up (checked every 30 s). A taken
@@ -1542,7 +1698,9 @@ itself. A manager made later appears the same way, on the same address.
   name_by?}`, 400 an unknown worker or a name a mention could not tell apart, as [Names](#statepy-the-ledger-cli) words
   it), `{name}` names the fleet before every other name (200 `{id, session, path}`, the fleet's address
   after; 400 reserved or taken); an empty name gives either back to its session's; the page's state then
-  carries `named: {id, session}`, the hub's alone), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
+  carries `named: {id, session}`, the hub's alone), `POST /wake` (TypeScript only; under `POST /chat`'s write
+  policy: 403, 415, 413): Luiz's "Wake now" on a host that does not listen (200 `{woken, fleet, at}`, 409,
+  429, 502; see [The hub's wake](#the-hubs-wake)), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
   sandbox CSP and the body's policy; every other file, whatever its type, with `Content-Security-Policy: sandbox;
   script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'` and `nosniff`; dot files and paths
   out of DIR 404), and `GET /f/<fleet>/files/<path>` (TypeScript only): a file a
@@ -1684,7 +1842,7 @@ teses-positionings).
   `same-origin` is refused too, unless its `Origin` is listed. A post with neither header (`fleet tell`,
   curl on this machine) is as before. Every post that acts as the user passes these checks
   (`postRefusal`): `/chat` (a message, a decision's answer, the grant an answer carries), `/chat/preview`,
-  `/name`, `/preview-workers`, and a post to a peer's fleet, checked here before it is passed on.
+  `/name`, `/preview-workers`, `/wake`, and a post to a peer's fleet, checked here before it is passed on.
 
 ### The hub's origin: what runs on it
 
@@ -2252,7 +2410,9 @@ hook: a broken `chat.jsonl` or ledger is skipped, an error is logged.
   The manager's adds when `--fleets` goes on. A watch is alive when `DIR/watch-ROLE.pid` holds a live pid
   whose command line (`/proc/PID/cmdline`, `ps -p` on the Mac) is `... chat DIR watch --as ROLE ... --once`, DIR
   resolved against the process's cwd; failing that, any process with that command line (a watch armed
-  this instant, before Bun wrote its pid file). A watch without `--once` is not armed: it never exits, so
+  this instant, before Bun wrote its pid file). A watch whose session is gone does not count
+  ([Whose watch](#whose-watch-typescript-only): the same rule as the fleet's, `_watch_orphaned`), so the
+  watch the guard asks for takes its place. A watch without `--once` is not armed: it never exits, so
   it never wakes the session. Never twice in a row: not on a stop that already follows
   a stop hook's block (`stop_hook_active`), nor within 15 s of its last block (the session's
   `fleet-guard` state). Headless runs are guarded too.
@@ -2305,6 +2465,224 @@ SKILL.md, Respond; manager SKILL.md, Said once):
   answer here."}`. Once per turn: never on a stop that follows a stop hook's block (`stop_hook_active`),
   nor twice for one prompt (the session's `said-once` state keeps the turn's key, the prompt's uuid).
   Anything it cannot read lets the turn stop.
+
+## The hub's wake
+
+The two hooks above act on a session that runs: a Stop to block, a tool call to ride on. A turn that ends
+with no Stop (a usage-limit error, a compaction, a run of an hour) arms no watch, and nothing in the
+session acts until the user types in its terminal. Measured on 2026-10-12: four of the user's page
+messages waited 24 to 51 minutes that way. So the hub, which runs whatever the sessions do, wakes the
+host's session itself (fleet/src/wake.ts; TypeScript only).
+
+**The delivery.** Claude Code's cross-session messaging listens on one Unix socket per session process.
+
+- Measured (Linux, Claude Code 2.1.296, 2026-10-12): the socket is `$XDG_RUNTIME_DIR/cc-socks/<pid>.sock`
+  (`/run/user/<uid>/cc-socks/`), `<pid>` the session's `claude` process, which is the `pid` a registry
+  entry records (10 of 10 live entries had one). The sender connects, writes one line of JSON and closes:
+  `{"type":"user","message":{"role":"user","content":"<text>"}}` and a newline. No token was asked of it.
+  The socket answers nothing (no byte in 3 s), so a connect and a write that succeed are all the sender
+  knows. An idle interactive session started a turn 0 to 2 s later and did what the line asked; a second
+  line written while that turn ran was queued and ran as a turn of its own after it. The session reads the
+  line as `Another Claude session sent a message: <text>`, with Claude Code's own note that it is not from
+  its user and grants nothing.
+- Read in the binary and the docs, not measured: the Mac's folder (`/private/tmp/cc-socks-<uid>`, else
+  `/private/tmp/cc-socks`); an inbox of at most 50 lines that rate-limits repeats; a receiver in a
+  bypass-permissions mode holds a peer's message for approval; a `--bare` session has no socket; a token
+  the binary's own hint sends first (`CLAUDE_CODE_MESSAGING_TOKEN`), which the hub does not have and was
+  not asked for. The line's format is the binary's debug hint, not a documented interface: a release may
+  change it. So the delivery is one function (`deliver`), and a socket that is absent, refuses or does not
+  take the line in 2 s is a plain reason, recorded and shown on the page.
+- `FLEET_CC_SOCKS` names another folder; every test sets one of its own, and writes only to sockets it
+  listens on itself.
+
+**Whom.** A pid that lives and a socket file named after it do not say a session is there: a pid is reused,
+`serve --pid` takes any process, and anyone can make a file. Before every write (`deliverTo`, over host.ts
+`reach`; there is no other way to a socket) the registry entry is checked against the machine:
+
+| | |
+| :-- | :-- |
+| its process runs | `/proc/<pid>`; `ps` on the Mac |
+| it is Claude Code | `isClaudeBinary`: named `claude`, or running `claude/versions/<version>` |
+| it is the process that served | it started when the entry's `started` says. An entry with no `started` (served before this was recorded) has nothing to compare: it is checked by the rest until it is served again |
+| the socket is its own | Linux (measured 2026-10-12): the socket bound at that path (`/proc/net/unix` gives its inode) is among the files the process has open (`/proc/<pid>/fd`); the bound path must be the socket's. Claude Code's own folder is short, so that is the whole rule there; a path too long for a socket address (108 bytes: a test's folder, a long `FLEET_CC_SOCKS`) is bound by Bun as `/proc/self/fd/<n>/<name>` with `<n>` closed after, so there the file must be a socket and the name the same, which a process listening on that name in another long folder would pass. The Mac (read in lsof's manual, not measured): `lsof -a -p <pid> -U` names it |
+
+Any of them failing is a session that is **gone**, with the reason (`its process no longer runs`, `process
+P is not Claude Code`, `another process has its pid (P)`, `it has no socket`, `the socket named after it is
+not its own`), and nothing is written. An entry made with `serve --pid` is checked the same way, so one
+that names anything but a session is never written to. When the machine does not answer (on the Mac a `ps`
+or an `lsof` that fails or times out) the session is **unknown**, not gone: nothing is written and nothing
+recorded, the page says so, and the next look asks again.
+
+**When.** Every 30 s the hub looks at each fleet being served, the manager's too. It writes one wake when
+all of this holds (`mayWake`, one function of what was read: the watch and the unread messages, the record,
+the session, now):
+
+| | |
+| :-- | :-- |
+| no watch of the host runs | no live `--once` watch as the host, by its pid file and the running processes; an orphaned one is none ([Whose watch](#whose-watch-typescript-only)). This is not [`listening`](#chatpy-the-chat)'s `on`, which also counts a host as reading for 10 minutes after its watch ended or it spoke: that grace is the page's and the manager's, not the hub's. The commonest disconnection is a watch that exits on a message, a host that answers and ends its turn without arming the next, and a second message a minute later; with the grace it would be woken 10 minutes after the watch left. What the grace is for, a host busy with the message its watch just printed, the idle check below covers, and a wake that lands mid-turn costs one turn (measured) |
+| the user's messages wait | the user's messages after the host's cursor that nobody answered (`listening`'s `unread`), and the oldest of them has waited `FLEET_UNHEARD_S` (120 s) |
+| the fleet runs | its ledger's `status` is neither `paused` nor `done` |
+| the session is there | the checks of **Whom**, above. `unknown` waits for the next look. `gone` is looked at last: when everything else allows a wake, the hub records one that failed, with the reason, and writes nothing; so it is paced as a wake is, and the record says the hub cannot wake this fleet |
+| it is not at its usage limit | its transcript's last entry is not a usage-limit error whose limit can still be in force (below) |
+| it is idle | its transcript was not written for 30 s (the file's mtime, as the page's "last active" reads it), and no tool call of its turn awaits its result (below). Mid-turn the hook's nudge tells the session, and the hub waits. A session with no transcript to read counts as idle |
+| no wake waits unread | the last wake that was written was followed by a write of the transcript (its mtime is later than the wake). Until then the line sits in the session's inbox, and a second would only queue behind it and cost a turn of its own: never more than one undelivered wake for a fleet, the user's included. A session with no transcript to read has only the backoff |
+| the backoff allows it | counted over the hub's own wakes for the oldest unread message's id: the first wake at once, the second no sooner than 10 min after the first, the third no sooner than 30 min after the second, and no fourth; and, whatever the message and whoever asked, at most 3 for one fleet in an hour, the user's "Wake now" among them. Another message becoming the oldest (the session read and went deaf again) starts a new count, under the same hour. A wake that could not be written counts as one |
+
+**One at a time for a fleet.** The limits above and "Wake now"'s own are read from the record, so two
+deciders that read it before either wrote would both write. Measured before this rule (2026-10-12): 20
+simultaneous `POST wake` wrote 20 lines to the socket, and the hub's look with one click wrote 2. So whatever
+decides and writes a wake for a fleet (the look's turn at that fleet, each "Wake now") reads, decides and
+writes in that fleet's turn, one after the other (`Wakes.serial`; one fleet's turn never waits for
+another's), and the wake is recorded before it is sent, as one that was written (`Wakes.reserve`): in the
+hub's memory and in `wakes.json`, so a hub that dies in the send has not forgotten it. A line that was
+written leaves the record as it is; one that was not marks the wake as failed, with why, as the backoff
+expects (a write that throws is one); when the machine did not say whether the session is there, nothing was
+tried and the wake is taken out again. Of 20 clicks at once, one is written and the other 19 are held by it.
+
+**A fleet the look cannot read.** One fleet's broken folder is that fleet's alone: the look reads each fleet
+inside its own guard and goes on with the others. Measured before this rule (2026-10-12): a `chat.jsonl` the
+hub may not read rejected the whole look, nobody was woken on the machine, and nothing was logged. What fails
+is recorded as that fleet's failed look (`Wakes.failed`, in memory): `{since, what, why}`, `what` being `chat`
+(the messages, the cursor, the watch's files) or `session` (the ledger's status, the transcript, the usage
+reading, the machine's processes), `since` when it first failed that way, `why` the machine's words on one
+line (at most 300 characters). It is logged in one line when it is news, never at every look (`hub: wake:
+<fleet> (<DIR>): the hub cannot read its chat: <why>. Nobody is woken for it until that works; the other
+fleets are looked at as before.`), and a look that reads the fleet clears it, so a fleet that breaks again is
+logged again. A chat that is there and cannot be read is checked for by itself (`access`, and that it is a
+file): the store's readers take a file they cannot stat for an empty chat, and the look would take the fleet
+for one where nothing waits. A fleet with no chat yet has nothing to read. A transcript that cannot be read
+is not this: its session reads as one with nothing in its transcript (no usage limit, no tool call awaited),
+idle by the file's mtime, and the registry lists the fleet as before (the title it last read stands). A look
+that fails as a whole (the registry does not read) wrote nothing; it is logged when its reason is new.
+
+**In a turn, though the transcript is quiet.** A tool call writes nothing to the transcript while it runs,
+so a quiet transcript is not an idle session: a build, a subagent in the foreground or a permission prompt
+nobody answered each leave it untouched for minutes, and a wake written then is queued and costs a turn
+(measured: a line written while a turn runs is run as a turn of its own after it). The transcript says it
+(`toolAwaited`, read 2026-10-12 in Claude Code 2.1.29x transcripts): an `assistant` line carries a
+`tool_use` block with its `id`, and its result is a later `user` line with a `tool_result` naming that id;
+an interrupted call is given a result too. The session is in a call when a `tool_use` in the transcript's
+last 256 KiB has no result after it. A `user` line with no result that is not `isMeta` is a prompt: it
+begins another turn, and what was open before it does not count. A subagent's lines (`isSidechain`) are not
+the session's. A call written before the process that runs now started (the session was closed in the
+middle of it and resumed) is nobody's, and does not hold the wake.
+
+What the session's child processes show is not used, and the reason is measured (Linux, Claude Code
+2.1.29x, 2026-10-12, on a session with background subagents at work): a tool call in the foreground and a
+background command are the same child of the session's process (the same `zsh -c` wrapper sourcing the
+shell snapshot, both session leaders with no terminal, stdin `/dev/null`, output to `tasks/<id>.output`),
+so nothing tells them apart; that session had three background commands running, 3 hours to 3 days old;
+and a background subagent's tool calls are children of the same process while the session's own turn has
+ended (its transcript's last entry was the assistant's closing text, 9 minutes old, while a subagent ran a
+tool call every few seconds). A rule "a running tool child means mid-turn" would never wake a host whose
+workers are at work, which is when its chat matters most. Not covered by either check: a turn in which the
+model writes for more than 30 s with no tool call; a wake written then is the one a queue allows.
+
+**A usage-limit error**, as the transcripts of Claude Code 2.1.29x hold it (read 2026-10-12): one line with
+`"type": "assistant"`, `"isApiErrorMessage": true` and `"error": "rate_limit"` (`apiErrorStatus` 429,
+`message.model` `<synthetic>`); the session limit, the weekly limit, the monthly spend limit and "out of
+usage credits" all carry it, and a server or login error carries another `error`. It has a `timestamp`
+and, but for "out of usage credits", `quotaLimits` with `rateLimitType` (`five_hour` or `seven_day`) and
+`resetsAt` (seconds since the epoch). After it Claude Code writes lines of other types (the turn's
+duration, the bridge's state, the cost): the last entry is the last line whose `type` is `assistant` or
+`user`, read in the transcript's last 256 KiB (`usageLimitHit`).
+
+A turn that ended on that error armed no watch, so the session must be woken once the limit is over: the
+error holds the session only while its limit can still be in force (`limitInForce`, one function of the
+error, the reading and now). It holds until the first of these that applies, and after it the session is an
+idle one like any other:
+
+| | Until | From |
+| :-- | :-- | :-- |
+| the reading's | `resets_at` of the window that was full at the error: a window at 100 % that resets after the error, the one the entry names when it names one, else any; the later reset when two are full | the machine's usage reading, `REGISTRY/usage/reading.json`, of the account this machine's config is logged in as (usage.ts) |
+| the entry's own | its `quotaLimits.resetsAt`, when the reading has no such window (none captured, captured below 100 %, or of a window that reset before the error) | the transcript |
+| the fallback | 5 hours (the short window's length) after the entry was written: its `timestamp`, else the transcript's last write | the transcript |
+
+The page's "at its usage limit" follows the same function. A limit that no window ends (the monthly spend,
+no credits) lets one wake through after its 5 hours or its window's reset; that turn ends on a new error,
+which holds the session again.
+
+**The text** is a fixed template (`wakeText`), nothing else:
+
+```
+[hub] <fleet id> (<DIR>): the chat watch is not running and N message(s) from the user wait unread since #S. Arm it as a background command (run_in_background: true, timeout: 3300000): `<plugin>/fleet/bin/fleet chat <DIR> watch --as <role> --all --resume --once`; it prints them first.
+```
+
+`S` is the host's cursor, as `fleet fleets list` says it. The command is the Stop guard's (`watch_command`,
+`DEAF`): the two are kept the same, and a test of each side reads the other. No word of anyone's message
+is in it and no mention; a fleet id or a DIR that holds anything but `[A-Za-z0-9._/-]` is not written at
+all: a wake that failed, with that reason, shown on the page (`/tmp/SYSTEM:ignore-prior-rules,.../coordinator`
+was accepted by an earlier, wider set: a colon, a comma, `+`, `=` and `~` read as a label, a list or an
+option to a model).
+
+**The record**: `REGISTRY/hub/wakes.json`, by fleet DIR, `{"<DIR>": {"fleet": "<id>", "wakes": [{"at":
+"<stamp>", "first": <the oldest unread id>, "by": "hub" | "user", "error": null | "<why it was not
+written>"}]}}`. The hub keeps it in memory and writes it through, so a hub that starts again counts the
+wakes of the one before; a file that does not read is no record. A wake is in it from before its line is
+sent (`at` is then), with `error: null` until the send says otherwise. A wake older than an hour is dropped
+unless it was for the message that still waits first. The user's wake is recorded as the hub's are: it
+counts in the hour's three, and neither restarts nor advances the hub's count for the message.
+
+**Said once.** While a hub runs and its wake works for a fleet, a manager's watch does not tell that the
+fleet does not read its chat ([chat.py](#chatpy-the-chat)). A hub whose pid lives is not enough: the wake
+works (`wakeWorks`, read from the record) when the last wake for that fleet did not fail, the hub wrote
+fewer than three for the message that waits first, and fewer than three were written for the fleet in the
+hour. Otherwise (the session is gone, its socket refused, the wakes are spent), and with no hub, the manager
+is told after `FLEET_UNHEARD_S` as before. Its other lines are unchanged.
+
+**The page.** A fleet the hub serves with no watch of its host running while the user's messages wait has
+`deaf` in its view, and in its summary on the manager's page, once the oldest of them has waited
+`FLEET_UNHEARD_S` (the wake's own threshold, so the line does not flash during an ordinary exchange); a
+fleet paused or done has not. No other view has the key (a `fleet state` render, the Python twin, every
+trace):
+
+```json
+{"since": "2026-10-12T14:02:11-05:00", "unread": 2, "first": 369,
+ "woken": ["2026-10-12T14:04:30-05:00"], "end": null, "why": null, "held": null, "again": null}
+```
+
+`since` is the oldest unread message's `at`, `first` its id, `woken` each wake written for it. `end` says
+where it stands, null while the hub still wakes: `gone` (the session is not there; `why` says which check
+failed), `unknown` (the machine did not say; the hub looks again), `limit` (a usage-limit error still in
+force), `failed` (the last wake could not be written; `why` says why), `spent` (three wakes of the hub and
+no answer), `queued` (the last wake was not read yet), `busy` (a tool call of its turn awaits its result).
+`held` says why "Wake now" cannot be used now, and `again` when it can, when a time ends the hold. The page says it in the stuck band as soon as the view has it, in place of the bare "chat not
+read" line (which waits five minutes, and the 10 minutes of `listening`): `Not listening since 14:02: 2 messages wait (#369…). Woken 14:04, 14:14.`, a time of day as
+every other on the page; then, by `end`, `The session did not answer 3 wakes: at its usage limit or gone.
+Open it in a terminal.`, `The session is gone (<why>). Open it in a terminal.`, `The hub could not tell
+whether the session is there (<why>): it looks again.`, `The session is at its usage limit.
+Open it in a terminal.`, `The session could not be woken (<why>). Open it in a terminal.`, `The session has
+not read the last wake. Open it in a terminal.` or `The session is in a tool call: the hub waits for it to
+end.` On the
+manager's page each line opens with the fleet's name, a link to its page. The user's messages stay "Not
+read yet".
+
+A fleet whose last look failed has `blind` in its view, and in its summary on the manager's page, until a
+look reads it: `{"since": "2026-10-12T14:02:11-05:00", "what": "chat", "why": "EACCES: permission denied,
+access '<DIR>/chat.jsonl'"}`. The page says it in the stuck band, `The hub cannot read this fleet's chat since
+14:02 (<why>): it cannot tell whether your messages wait, and wakes nobody for it.` (`session`: `... this
+fleet's session since 14:02 (<why>): it cannot tell whether it may be woken, and wakes nobody for it.`). So
+that there is a page to say it on, the view of a fleet whose chat cannot be read still renders: its `chat` is
+`{on: false, seen: 0, unread: 0, since: null}`, it has no `deaf` and no `takeover`, and what the page's own
+reading of the session cannot read gives no `deaf` rather than an error (`GET chat` of that fleet still fails,
+500: there is no chat to give). Before, that fleet's page and the manager's answered 500. No other view has
+the key.
+
+**Wake now** is `POST /f/<fleet>/wake` with `{}`, or on the manager's page `{"fleet": "<id>"}` for a fleet
+it serves; checked as `POST /chat` is (`postRefusal`: only who may write, `application/json`, same-origin;
+403, 415, 413). It writes one wake at once, whatever the hub's backoff, the idle time, the usage limit and
+the message's age say (the user knows what the hub cannot): 200 `{woken: true, fleet, at}`. It has limits of
+its own (`nowHeld`), since each wake costs the session a turn and a click costs nothing: at most one for a
+fleet in 60 s; it counts in the hour's three with the hub's, and is refused when they are spent; and none
+while the last wake written was not read. Held by one of them it answers 429 `{error, again}` (`again`: when
+it may be used, null when only the session's reading ends the hold), nothing is written and nothing
+recorded, and the page shows the button disabled with the time left (`Wake now (in 42 s)`) or the reason.
+It does not restart the hub's count for the message, and does not advance it. Asked several times at once,
+or with the hub's look, it decides in the fleet's turn (above): one is written, the others are held by it.
+409 with nothing to wake (a
+watch of the host runs, nothing waits unread) or a session that is not there, and then nothing is recorded;
+502 when the line could not be written (recorded; the page says why); 500 when the fleet cannot be read
+(`could not wake: <why>`); 404 for a fleet the page may not name. The button is not shown for a session that is gone.
 
 ## The news (`fleet news`)
 
@@ -2789,13 +3167,14 @@ recommendation attached.
 | a `state.py` write | `DIR/state.json` (twice when rendering), `DIR/brief.md` and (manager) `DIR/standing.md` when missing, `DIR/index.html` unless `--no-render` |
 | `decision --body` / `--no-body` | `DIR/decisions/<id>.html` written / deleted |
 | `chat say` | `DIR/chat.jsonl` (created on first message) |
-| `chat watch` | `DIR/watch-WHO.pid`, `.cursor`, `.left`, `watch-coordinator.told`, `watch-manager.told`, and with `--fleets` `watch-manager.fleets.json` |
+| `chat watch` | `DIR/watch-WHO.pid`, `.cursor`, `.left`, `watch-coordinator.told`, `watch-manager.told`, and with `--fleets` `watch-manager.fleets.json`; TypeScript only, `DIR/watch-WHO.owner.pid` while a `--once` watch runs |
 | any reader of the registry (`fleets.py`, a manager's `chat.py`/`state.py`, the render) | deletes dead `REGISTRY/*.json`, renames entries after a session title |
 | `fleets.py gate take/free`, `name` | `REGISTRY/gate/gate.json` (under `REGISTRY/gate/gate.lock`), `REGISTRY/<fleet>.json` |
 | `serve_dashboard.py` | `DIR/server.json`, `DIR/server.log`, `REGISTRY/<fleet>.json` |
-| `fleet serve` | `REGISTRY/<fleet>.json` (removed with `--stop`) |
+| `fleet serve` | `REGISTRY/<fleet>.json` (removed with `--stop`); with `--take-over`, when it displaced a host that ran: `DIR/state.json` (one event, `updated`) and one line in `DIR/chat.jsonl` (TypeScript only) |
 | `fleet hub` | `REGISTRY/hub/hub.json` while it runs (it reads `REGISTRY/hub/config.json`, written by hand); `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, `<root>/.claude/settings.local.json` (and its folder) and `DIR/grants.jsonl`; on a page rename, `DIR/state.json` (a worker's `name`, `name_by`, `updated`, under the ledger's lock) or `REGISTRY/overrides/<hash>.json` and `REGISTRY/<fleet>.json` |
 | the plugin's hook (grant removal) | `<root>/.claude/settings.local.json`, `DIR/grants.jsonl` (`remove` lines) |
+| the hub (its wake timer, `POST wake`) | `REGISTRY/hub/wakes.json`; one line to the session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, which is Claude Code's, not the fleet's |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |
 | the plugin's hook (`fleet_listen_guard`, `fleet_chat_nudge`, `fleet_said_once`, `fleet_news`) | nothing in DIR; the session's `fleet-guard`, `fleet-nudge`, `said-once` and `fleet-news` state in the plugin's data folder |

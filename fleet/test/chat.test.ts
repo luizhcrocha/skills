@@ -2,7 +2,7 @@
  * The chat seam (ported from the coordinator's tests/test_chat.py, all but the dashboard server's
  * routes, which are stage 3's): the chat module, its CLI, the watch and the wait.
  */
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -13,12 +13,16 @@ import { address, append, appendAll, deafWarning, listening, marksOf, openFor, p
 import { batchReminders, openBatches, remindPeriod } from "../src/chat/batches.ts";
 import { FleetNews, firstLine } from "../src/chat/news.ts";
 import { Settle, settleOf } from "../src/chat/watch.ts";
+import { ownerPath, readOwner } from "../src/chat/watchers.ts";
+import { hubRecordPath } from "../src/hub/server.ts";
 import { readChat, type Message, type Part } from "../src/chat/store.ts";
-import { stampOf } from "../src/clock.ts";
+import { parseInstant, stampOf } from "../src/clock.ts";
 import { ChatError } from "../src/errors.ts";
 import { asArray, asNumber, asObject, asString, parseJson, type Json, type JsonObject } from "../src/json.ts";
+import { startedOf } from "../src/procs.ts";
+import { wakesPath, type Wake } from "../src/wake.ts";
 import { machineOf, type Machine } from "../src/world.ts";
-import { baseEnv, FLEET, fleet, machine, now, readJson, sleep, start, startTty, tmp, type Lines, type Environment, type Ran } from "./support.ts";
+import { baseEnv, FLEET, fleet, Lines, machine, now, readJson, sleep, start, startTty, tmp, type Environment, type Ran } from "./support.ts";
 
 interface AgentRow {
   readonly id: string;
@@ -754,13 +758,13 @@ describe("listening", () => {
   });
 
   /** A --once watch as the coordinator, once its pid file is written. */
-  async function armed(): Promise<{ readonly proc: Bun.Subprocess; readonly pid: string }> {
-    const { proc } = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], env);
+  async function armed(): Promise<{ readonly proc: Bun.Subprocess; readonly pid: string; readonly lines: Lines }> {
+    const { proc, lines } = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], env);
     procs.push(proc);
 
     for (let tries = 0; tries < 60 && !existsSync(join(root, "watch-coordinator.pid")); tries += 1) await sleep(50);
 
-    return { proc, pid: readFileSync(join(root, "watch-coordinator.pid"), "utf8") };
+    return { proc, pid: readFileSync(join(root, "watch-coordinator.pid"), "utf8"), lines };
   }
 
   test("a second watch for the same chat and role is refused while the first runs", async () => {
@@ -770,14 +774,118 @@ describe("listening", () => {
     procs.push(second);
     const ended = await Promise.race([second.exited, sleep(3000).then(() => "still running")]);
     expect(ended).toBe(1);
-    expect(await new Response(second.stderr).text()).toBe(
-      `chat: a watch as coordinator already runs for ${root} (pid ${first.pid}), and its lines wake the session that armed it. ` +
-        `Leave it running; if that session is gone, \`kill ${first.pid}\` and arm the watch again.\n`,
-    );
+    const refusal = await new Response(second.stderr).text();
+    // Whose it is, and that it is live: the session these tests run under, or none when a person runs them.
+    const whose = "(armed by the Claude Code session running as pid \\d+, which is live: its lines wake that session|armed outside a Claude Code session \\(in a terminal\\) and still running: its lines print there)";
+    expect(refusal).toMatch(new RegExp(`^chat: a watch as coordinator already runs for ${root} \\(pid ${first.pid}\\), ${whose}\\. Leave it running: there is nothing to stop and nothing to arm\\.\\n$`, "u"));
+    expect(refusal).not.toContain("kill");
     expect(readFileSync(join(root, "watch-coordinator.pid"), "utf8")).toBe(first.pid);
     expect(first.proc.exitCode).toBeNull();
     const sent = user("status?");
     expect(await first.proc.exited).toBe(0);
+    expect(listening(m, root).seen).toBe(sent.id);
+    expect(existsSync(ownerPath(root, "coordinator"))).toBe(false);
+  });
+
+  /** Make the watch `pid` an orphan: its record names a session that is gone. */
+  async function orphan(pid: number): Promise<void> {
+    const gone = Bun.spawn(["true"], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    await gone.exited;
+    expect(readOwner(root, "coordinator")?.watch).toBe(pid);
+    writeFileSync(ownerPath(root, "coordinator"), JSON.stringify({ watch: pid, session: gone.pid, started: "0" }));
+  }
+
+  test("a watch whose session is gone is not listening, and the next watch takes its place: nothing is killed, nothing is lost", async () => {
+    const first = await armed();
+    expect(listening(m, root).on).toBe(true);
+    await orphan(first.proc.pid);
+    expect(listening(m, root).on).toBe(false);
+    const second = Bun.spawn([FLEET, "chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], { env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    procs.push(second);
+
+    for (let tries = 0; tries < 100 && readFileSync(join(root, "watch-coordinator.pid"), "utf8") !== String(second.pid); tries += 1) await sleep(50);
+    expect(readFileSync(join(root, "watch-coordinator.pid"), "utf8")).toBe(String(second.pid));
+    expect(readOwner(root, "coordinator")?.watch).toBe(second.pid);
+    // The orphan finds the pid file no longer its own: it exits at its next poll, having printed and marked nothing.
+    expect(await Promise.race([first.proc.exited, sleep(3000).then(() => "still running")])).toBe(0);
+    expect(await first.lines.rest()).toBe("");
+
+    for (const file of ["cursor", "left"]) expect(existsSync(join(root, `watch-coordinator.${file}`))).toBe(false);
+    expect(readFileSync(join(root, "watch-coordinator.pid"), "utf8")).toBe(String(second.pid));
+    expect(listening(m, root).on).toBe(true);
+    const sent = user("status?");
+    expect(await second.exited).toBe(0);
+    expect(await new Response(second.stdout).text()).toBe(`#${sent.id} user -> coordinator: status?\n`);
+    expect(await new Response(second.stderr).text()).toBe("");
+    expect(listening(m, root)).toEqual({ on: true, seen: sent.id, unread: 0, since: null });
+  });
+
+  /** A watch armed as a session arms one: the child of a process named `claude` (a shell under that name,
+   * this test's own), its output in a file. The session's process, and the watch's pid once it is armed. */
+  async function armedBySession(more: Readonly<Environment> = {}): Promise<{ readonly session: Bun.Subprocess; readonly pid: number; readonly out: string }> {
+    const bin = tmp();
+    const out = join(bin, "watch.out");
+    symlinkSync(Bun.which("sh") ?? "/bin/sh", join(bin, "claude"));
+    const script = '"$0" chat "$1" watch --as coordinator --all --resume --once > "$2" 2>&1 & wait';
+    const session = Bun.spawn([join(bin, "claude"), "-c", script, FLEET, root, out], { env: { ...env, ...more }, stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    procs.push(session);
+
+    for (let tries = 0; tries < 100 && !existsSync(join(root, "watch-coordinator.pid")); tries += 1) await sleep(50);
+    const pid = Number(readFileSync(join(root, "watch-coordinator.pid"), "utf8"));
+    procs.push({ kill: () => void stop(pid) });
+
+    return { session, pid, out };
+  }
+
+  const runs = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  function stop(pid: number): void {
+    if (runs(pid)) process.kill(pid, "SIGKILL");
+  }
+
+  /** Wait until `pid` no longer runs; whether it stopped within `ms`. */
+  async function gone(pid: number, ms: number): Promise<boolean> {
+    for (let waited = 0; waited < ms && runs(pid); waited += 100) await sleep(100);
+
+    return !runs(pid);
+  }
+
+  test("a watch records the session that armed it, and stands down by itself once that session is gone", async () => {
+    const { session, pid, out } = await armedBySession();
+    expect(readOwner(root, "coordinator")).toMatchObject({ watch: pid, session: session.pid });
+    expect(listening(m, root).on).toBe(true);
+    session.kill("SIGKILL");
+    await session.exited;
+    // The watch still runs, and it is nobody's: the host is not listening from this instant.
+    expect([runs(pid), listening(m, root).on]).toEqual([true, false]);
+    expect(await gone(pid, 8000)).toBe(true);
+    expect(readFileSync(out, "utf8")).toBe("");
+
+    for (const file of ["cursor", "left", "pid", "owner.pid"]) expect(existsSync(join(root, `watch-coordinator.${file}`))).toBe(false);
+  });
+
+  test("an orphan that had printed a line marks nothing read: the next watch prints the line again", async () => {
+    const { session, pid, out } = await armedBySession({ FLEET_WATCH_SETTLE: "60", FLEET_WATCH_SETTLE_USER: "60", FLEET_WATCH_SETTLE_MAX: "60" });
+    // Once the watch polls: a message it found waiting when it began would end it at once.
+    await sleep(600);
+    const sent = user("status?");
+
+    for (let tries = 0; tries < 100 && readFileSync(out, "utf8") === ""; tries += 1) await sleep(50);
+    expect(readFileSync(out, "utf8")).toBe(`#${sent.id} user -> coordinator: status?\n`);
+    session.kill("SIGKILL");
+    await session.exited;
+    expect(await gone(pid, 8000)).toBe(true);
+    expect(listening(m, root)).toEqual({ on: false, seen: 0, unread: 1, since: sent.at ?? null });
+    const next = cli("watch", "--as", "coordinator", "--all", "--resume", "--once");
+    expect([next.code, next.stdout]).toEqual([0, `#${sent.id} user -> coordinator: status?\n`]);
     expect(listening(m, root).seen).toBe(sent.id);
   });
 
@@ -804,6 +912,250 @@ describe("listening", () => {
     expect(out.stderr).toContain("the user wrote 1 message(s) since #0 that no watch has read");
     expect(out.stderr).toContain("watch --as coordinator --all --resume");
   });
+});
+
+/** What a Claude Code session does with a fleet's chat, for a child of this test: on each `arm` it is told, it
+ * arms the host's `--once` watch as its own background command, says the watch's pid, and when the watch ends
+ * says what it printed. Run by Bun under the name `claude`, the machine reads it as Claude Code (procs.ts
+ * `isClaudeBinary` goes by the name), and the watch as its session's. */
+const SESSION = `
+const [fleet, root] = process.argv.slice(2);
+const say = (what) => console.log(JSON.stringify(what));
+
+async function arm() {
+  const watch = Bun.spawn([fleet, "chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  say({ armed: watch.pid });
+  const [stdout, stderr, code] = await Promise.all([new Response(watch.stdout).text(), new Response(watch.stderr).text(), watch.exited]);
+  say({ code, stdout, stderr });
+}
+
+say({ ready: process.pid });
+
+for await (const line of console) if (line.trim() === "arm") void arm();
+`;
+
+describe.skipIf(process.platform !== "linux")("the host's watch is the host's alone", () => {
+  /** A session of this test's: its pid, and its watches. */
+  interface Session {
+    readonly pid: number;
+    /** Arm the host's watch as this session's background command: the watch's pid. */
+    readonly arm: () => Promise<number>;
+    /** What the watch it armed did, once it ended. */
+    readonly ended: (ms?: number) => Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }>;
+  }
+
+  const files = (...names: string[]): boolean[] => names.map((name) => existsSync(join(root, `watch-coordinator.${name}`)));
+
+  const pidFile = (): string => (existsSync(join(root, "watch-coordinator.pid")) ? readFileSync(join(root, "watch-coordinator.pid"), "utf8") : "");
+
+  function stop(pid: number): void {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // ended already
+    }
+  }
+
+  /** A child of this test that the machine reads as a Claude Code session, with {@link SESSION}'s part in the chat. */
+  async function session(): Promise<Session> {
+    const bin = tmp();
+    writeFileSync(join(bin, "session.js"), SESSION);
+    symlinkSync(process.execPath, join(bin, "claude"));
+    const proc = Bun.spawn([join(bin, "claude"), join(bin, "session.js"), FLEET, root], { env, stdout: "pipe", stderr: "inherit", stdin: "pipe" });
+    procs.push(proc);
+    const lines = new Lines(proc.stdout);
+    const said = async (ms = 5000): Promise<JsonObject> => asObject(Option.getOrUndefined(parseJson(await lines.next(ms)))) ?? {};
+    expect(await said()).toEqual({ ready: proc.pid });
+
+    return {
+      pid: proc.pid,
+      arm: async () => {
+        proc.stdin.write("arm\n");
+        proc.stdin.flush();
+        const pid = asNumber((await said())["armed"]) ?? 0;
+        procs.push({ kill: () => stop(pid) });
+
+        return pid;
+      },
+      ended: async (ms = 5000) => {
+        const got = await said(ms);
+
+        return { code: asNumber(got["code"]) ?? -1, stdout: asString(got["stdout"]) ?? "", stderr: asString(got["stderr"]) ?? "" };
+      },
+    };
+  }
+
+  /** Put the fleet in the registry as hosted by `host`, as `fleet serve` run in that session does. */
+  function serveFrom(host: Session): void {
+    const entry = m.registry.register(root, "u", host.pid, now());
+    expect([entry.raw["pid"], entry.raw["started"]]).toEqual([host.pid, startedOf(host.pid) ?? "not running"]);
+  }
+
+  /** The host's watch armed from this test's process: under another session (the one that runs the tests), or under none. */
+  function outsider(): Bun.Subprocess<"ignore", "pipe", "pipe"> {
+    const proc = Bun.spawn([FLEET, "chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], { env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    procs.push(proc);
+
+    return proc;
+  }
+
+  async function until(done: () => boolean, ms = 5000): Promise<boolean> {
+    for (let waited = 0; waited < ms && !done(); waited += 50) await sleep(50);
+
+    return done();
+  }
+
+  const whose = (host: Session): string => `this fleet's host is the Claude Code session running as pid ${String(host.pid)} (the one \`fleet serve\` recorded), and a watch as coordinator wakes that session and marks its messages read`;
+
+  test("with no host there, a watch is whose it was before: a fleet not served, or served by a process that is not Claude Code, is armed from anywhere", async () => {
+    user("status?");
+    const unserved = outsider();
+    expect([await unserved.exited, await new Response(unserved.stdout).text()]).toEqual([0, "#1 user -> coordinator: status?\n"]);
+    // Served by this test's process, as `serve --pid` of any process does.
+    m.registry.register(root, "u", process.pid, now());
+    user("and now?");
+    const served = outsider();
+    expect([await served.exited, await new Response(served.stdout).text()]).toEqual([0, "#2 user -> coordinator: and now?\n"]);
+    expect(listening(m, root).seen).toBe(2);
+  }, 15000);
+
+  test("arming from outside the host is refused at arm time, naming the host's pid: no pid file is written and nothing is marked read", async () => {
+    const host = await session();
+    serveFrom(host);
+    user("status?");
+    const refused = outsider();
+    expect(await Promise.race([refused.exited, sleep(4000).then(() => "still running")])).toBe(1);
+    expect(await new Response(refused.stdout).text()).toBe("");
+    const stderr = await new Response(refused.stderr).text();
+    // Outside any session when a person runs the tests; a copy of the host, to the fleet, when a session does.
+    expect(stderr.startsWith(`chat: ${whose(host)}. `)).toBe(true);
+    expect(stderr).toMatch(/\. (This command runs outside it: to read along, `fleet chat \S+ watch --as coordinator` without --once marks nothing read\.|You are pid \d+, a copy of it \(a fork, or a second resume of its transcript\): arm nothing, and leave its chat to it\. If this session is to host the fleet from now on, `fleet serve \S+ --take-over` first, which is recorded in the fleet's ledger and chat and shown to the user on its page\.)\n$/u);
+    expect(stderr).toContain(root);
+    expect(files("pid", "owner.pid", "cursor", "left")).toEqual([false, false, false, false]);
+    expect(listening(m, root)).toEqual({ on: false, seen: 0, unread: 1, since: readChat(root)[0]?.at ?? null });
+    // The host's role only: a worker's watch is its own, whoever arms it.
+    send("coordinator", "@a1 go on");
+    const worker = Bun.spawn([FLEET, "chat", root, "watch", "--as", "a1", "--resume", "--once"], { env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    procs.push(worker);
+    expect([await worker.exited, await new Response(worker.stdout).text()]).toEqual([0, "#2 coordinator -> user, a1 (notes-impl): @a1 go on\n"]);
+  }, 15000);
+
+  test("the host's own watch arms, listens, and marks what it exits with", async () => {
+    const host = await session();
+    serveFrom(host);
+    const watch = await host.arm();
+    expect(await until(() => pidFile() === String(watch))).toBe(true);
+    expect(readOwner(root, "coordinator")).toEqual({ watch, session: host.pid, started: startedOf(host.pid) ?? "not running" });
+    expect(listening(m, root).on).toBe(true);
+    const sent = user("status?");
+    expect(await host.ended()).toEqual({ code: 0, stdout: `#${sent.id} user -> coordinator: status?\n`, stderr: "" });
+    expect(listening(m, root)).toEqual({ on: true, seen: sent.id, unread: 0, since: null });
+    expect(files("pid", "owner.pid")).toEqual([false, false]);
+  }, 15000);
+
+  test("a watch another session holds is nobody's once the fleet has a host: it is not listening, the host's watch takes its place, and it stands down without moving the cursor", async () => {
+    // Armed while the fleet was not served: nothing told it from the host's.
+    const foreign = outsider();
+    expect(await until(() => pidFile() === String(foreign.pid))).toBe(true);
+    expect(listening(m, root).on).toBe(true);
+    const host = await session();
+    serveFrom(host);
+    expect([pidFile(), listening(m, root).on]).toEqual([String(foreign.pid), false]);
+    const watch = await host.arm();
+    expect(await until(() => pidFile() === String(watch))).toBe(true);
+    expect(readOwner(root, "coordinator")).toMatchObject({ watch, session: host.pid });
+    // The foreign watch finds the pid file no longer its own: it exits at its next poll, having printed and marked nothing.
+    expect(await Promise.race([foreign.exited, sleep(4000).then(() => "still running")])).toBe(0);
+    expect([await new Response(foreign.stdout).text(), await new Response(foreign.stderr).text()]).toEqual(["", ""]);
+    expect(files("cursor", "left")).toEqual([false, false]);
+    expect([pidFile(), listening(m, root).on]).toEqual([String(watch), true]);
+    const sent = user("status?");
+    expect(await host.ended()).toEqual({ code: 0, stdout: `#${sent.id} user -> coordinator: status?\n`, stderr: "" });
+    expect(listening(m, root)).toEqual({ on: true, seen: sent.id, unread: 0, since: null });
+  }, 15000);
+
+  test("the reviewer's case: the host's watch exits on a message, a copy of the host tries to arm in the gap and is refused, and the host's next watch gets the next message", async () => {
+    const host = await session();
+    const copy = await session();
+    serveFrom(host);
+    const first = await host.arm();
+    expect(await until(() => pidFile() === String(first))).toBe(true);
+    const one = user("one");
+    expect(await host.ended()).toEqual({ code: 0, stdout: `#${one.id} user -> coordinator: one\n`, stderr: "" });
+    // The gap: the host works on #1 and has armed no watch. The copy's Stop guard tells it to arm one.
+    expect(files("pid")).toEqual([false]);
+    await copy.arm();
+    expect(await copy.ended()).toEqual({
+      code: 1,
+      stdout: "",
+      stderr:
+        `chat: ${whose(host)}. You are pid ${String(copy.pid)}, a copy of it (a fork, or a second resume of its transcript): arm nothing, and leave its chat to it. ` +
+        `If this session is to host the fleet from now on, \`fleet serve ${root} --take-over\` first, which is recorded in the fleet's ledger and chat and shown to the user on its page.\n`,
+    });
+    expect(files("pid", "owner.pid")).toEqual([false, false]);
+    const two = user("two");
+    // Nothing of the copy's moved the host's cursor: #2 is the host's to hear.
+    expect(listening(m, root)).toMatchObject({ seen: one.id, unread: 1 });
+    await host.arm();
+    expect(await host.ended()).toEqual({ code: 0, stdout: `#${two.id} user -> coordinator: two\n`, stderr: "" });
+    expect(listening(m, root)).toEqual({ on: true, seen: two.id, unread: 0, since: null });
+  }, 20000);
+
+  /** `HH:MM` of a stamp, on this machine's clock: how the displaced watch says when. */
+  const hhmm = (at: string): string => {
+    const when = new Date(parseInstant(at) ?? 0);
+
+    return `${String(when.getHours()).padStart(2, "0")}:${String(when.getMinutes()).padStart(2, "0")}`;
+  };
+
+  /** What the displaced host's watch prints as it stands down: who hosts the fleet now, and since when. */
+  const displacedBy = (next: Session, at: string, sessionId = "not recorded"): string =>
+    `chat: this fleet's host is now session ${sessionId} (pid ${String(next.pid)}); you were displaced at ${hhmm(at)} by \`fleet serve --take-over\`, and this watch stands down with nothing marked read. If that was not intended, tell the user on the page.\n`;
+
+  test("once the fleet is moved to another session, the old host's watch says so in one line and stands down by itself, and the new host's is the one that listens", async () => {
+    const host = await session();
+    const next = await session();
+    serveFrom(host);
+    const old = await host.arm();
+    expect(await until(() => pidFile() === String(old))).toBe(true);
+    expect(listening(m, root).on).toBe(true);
+    // `fleet serve DIR --take-over`, run in the other session: the registry names it, and the chat records it.
+    const taken = fleet(["serve", root, "--pid", String(next.pid), "--take-over"], { ...env, CLAUDE_CODE_SESSION_ID: "sess-next", TAILSCALE: join(root, "none") });
+    expect([taken.code, taken.stdout.includes(`took over from the session running as pid ${String(host.pid)}`)]).toEqual([0, true]);
+    const [recorded] = readChat(root);
+    expect([recorded?.from, recorded?.to]).toEqual(["fleet-hub", ["user"]]);
+    expect(listening(m, root).on).toBe(false);
+    // The line to the user is not the old host's to read: its watch prints its own, once, and marks nothing.
+    expect(await host.ended(8000)).toEqual({ code: 0, stdout: displacedBy(next, asString(recorded?.at) ?? "", "sess-next"), stderr: "" });
+    expect(files("pid", "owner.pid", "cursor", "left")).toEqual([false, false, false, false]);
+    // The old host is the copy now.
+    await host.arm();
+    expect((await host.ended()).stderr).toContain(`${whose(next)}. You are pid ${String(host.pid)}, a copy of it`);
+    const watch = await next.arm();
+    expect(await until(() => pidFile() === String(watch))).toBe(true);
+    expect(listening(m, root).on).toBe(true);
+    const sent = user("status?");
+    expect(await next.ended()).toEqual({ code: 0, stdout: `#${sent.id} user -> coordinator: status?\n`, stderr: "" });
+  }, 25000);
+
+  test("a displaced watch whose place the new host's watch took at once is told too, by the time it noticed when the chat records no takeover", async () => {
+    const host = await session();
+    const next = await session();
+    serveFrom(host);
+    const old = await host.arm();
+    expect(await until(() => pidFile() === String(old))).toBe(true);
+    // The registry moved with no record in the chat (an older fleet's serve), and the new host armed its watch
+    // before the old one looked at the registry: the old one finds the pid file is not its own.
+    serveFrom(next);
+    const before = now();
+    const watch = await next.arm();
+    expect(await until(() => pidFile() === String(watch))).toBe(true);
+    const ended = await host.ended(8000);
+    expect([ended.code, ended.stderr]).toEqual([0, ""]);
+    expect([displacedBy(next, before), displacedBy(next, now())]).toContain(ended.stdout);
+    expect(files("cursor", "left")).toEqual([false, false]);
+    expect([pidFile(), listening(m, root).on]).toEqual([String(watch), true]);
+  }, 25000);
 });
 
 describe("quotes and side chats", () => {
@@ -1483,6 +1835,115 @@ describe("the manager relays the unheard", () => {
     const answered = append(m, billing.dir, { sender: "coordinator", text: "here", re: 1 }, now());
     expect(answered).not.toBeInstanceOf(ChatError);
     expect(listening(m, billing.dir).unread).toBe(0);
+  });
+});
+
+describe("the manager's watch leaves the unheard to a hub that runs", () => {
+  test("while a hub runs the fleet is not named, the hub wakes its session itself; once no hub runs it is named, as before", async () => {
+    asManager(["billing", "billing"]);
+    const billing = m.registry.live().find((e) => e.id === "billing");
+
+    if (billing === undefined) throw new Error("billing is not served");
+    append(m, billing.dir, { sender: "user", text: "are you there?", allowUser: true }, now());
+    const record = hubRecordPath(env["FLEET_HOME"] ?? "");
+    mkdirSync(join(record, ".."), { recursive: true });
+    // A hub's record naming a live process: this test's own.
+    writeFileSync(record, JSON.stringify({ pid: process.pid, port: 7420, url: "http://127.0.0.1:7420/" }));
+    const { proc, lines } = start(["chat", root, "watch", "--as", "manager", "--all", "--once"], { ...env, FLEET_CHECK_S: "0.2", FLEET_UNHEARD_S: "0" });
+    procs.push(proc);
+    await sleep(1500);
+    expect(proc.exitCode).toBeNull();
+    expect(existsSync(join(root, "watch-manager.told"))).toBe(false);
+    rmSync(record);
+    expect((await lines.next()).startsWith("! billing does not read its chat: 1 message(s) from the user since #0")).toBe(true);
+    expect(await proc.exited).toBe(0);
+  });
+
+  /** billing, served, with one message of the user's that no watch read, while a hub's record names a live
+   * process (this test's own): its DIR, and the message's id. */
+  function deafUnderHub() {
+    asManager(["billing", "billing"]);
+    const billing = m.registry.live().find((e) => e.id === "billing");
+
+    if (billing === undefined) throw new Error("billing is not served");
+    const sent = append(m, billing.dir, { sender: "user", text: "are you there?", allowUser: true }, now());
+
+    if (sent instanceof ChatError) throw new Error(sent.reason);
+    const record = hubRecordPath(env["FLEET_HOME"] ?? "");
+    mkdirSync(join(record, ".."), { recursive: true });
+    writeFileSync(record, JSON.stringify({ pid: process.pid, port: 7420, url: "http://127.0.0.1:7420/" }));
+
+    return { dir: billing.dir, first: sent.id };
+  }
+
+  /** What the hub did for the fleet at `dir`, as it keeps it in `REGISTRY/hub/wakes.json`. */
+  function hubWoke(dir: string, wakes: readonly Wake[]): void {
+    writeFileSync(wakesPath(m), JSON.stringify({ [dir]: { fleet: "billing", wakes } }));
+  }
+
+  const ago = (minutes: number): string => stampOf(new Date(Date.now() - minutes * 60_000));
+
+  const TOLD = "! billing does not read its chat: 1 message(s) from the user since #0";
+
+  const quick = (): Environment => ({ ...env, FLEET_CHECK_S: "0.2", FLEET_UNHEARD_S: "0" });
+
+  test("a hub whose wake works is left to it; once its last wake for the fleet failed, it is no hub to that fleet and the manager is told", async () => {
+    const { dir, first } = deafUnderHub();
+    // One wake written a minute ago, and the fleet still deaf: the hub goes on waking it.
+    hubWoke(dir, [{ at: ago(1), first, by: "hub", error: null }]);
+    const { proc, lines } = start(["chat", root, "watch", "--as", "manager", "--all", "--once"], quick());
+    procs.push(proc);
+    await sleep(1200);
+    expect([proc.exitCode, existsSync(join(root, "watch-manager.told"))]).toEqual([null, false]);
+    // The session went: the hub records a wake it could not write.
+    hubWoke(dir, [
+      { at: ago(1), first, by: "hub", error: null },
+      { at: ago(0), first, by: "hub", error: "the session is gone: its process no longer runs" },
+    ]);
+    expect((await lines.next()).startsWith(TOLD)).toBe(true);
+    expect(await proc.exited).toBe(0);
+  });
+
+  test("a hub that wrote its three wakes for the message that waits first has done what it does: the manager is told", async () => {
+    const { dir, first } = deafUnderHub();
+    hubWoke(dir, [
+      { at: ago(200), first, by: "hub", error: null },
+      { at: ago(190), first, by: "hub", error: null },
+      { at: ago(160), first, by: "hub", error: null },
+    ]);
+    const { proc, lines } = start(["chat", root, "watch", "--as", "manager", "--all", "--once"], quick());
+    procs.push(proc);
+    expect((await lines.next()).startsWith(TOLD)).toBe(true);
+    expect(await proc.exited).toBe(0);
+  });
+
+  test("three wakes of the hub for an earlier message, or two for this one and the user's own, are not that: the hub still wakes", async () => {
+    const { dir, first } = deafUnderHub();
+    hubWoke(dir, [
+      { at: ago(200), first: first + 7, by: "hub", error: null },
+      { at: ago(190), first: first + 7, by: "hub", error: null },
+      { at: ago(160), first: first + 7, by: "hub", error: null },
+      { at: ago(150), first, by: "hub", error: null },
+      { at: ago(140), first, by: "hub", error: null },
+      { at: ago(130), first, by: "user", error: null },
+    ]);
+    const { proc } = start(["chat", root, "watch", "--as", "manager", "--all", "--once"], quick());
+    procs.push(proc);
+    await sleep(1200);
+    expect([proc.exitCode, existsSync(join(root, "watch-manager.told"))]).toEqual([null, false]);
+  });
+
+  test("a hub that spent the hour's three wakes on the fleet cannot wake it now: the manager is told", async () => {
+    const { dir, first } = deafUnderHub();
+    hubWoke(dir, [
+      { at: ago(50), first: first + 7, by: "hub", error: null },
+      { at: ago(40), first, by: "user", error: null },
+      { at: ago(20), first, by: "hub", error: null },
+    ]);
+    const { proc, lines } = start(["chat", root, "watch", "--as", "manager", "--all", "--once"], quick());
+    procs.push(proc);
+    expect((await lines.next()).startsWith(TOLD)).toBe(true);
+    expect(await proc.exited).toBe(0);
   });
 });
 

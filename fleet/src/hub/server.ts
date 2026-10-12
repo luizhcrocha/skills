@@ -94,7 +94,7 @@ export interface StartOptions extends HubOptions {
 
 /** Start the hub; why not when loopback's port is taken. */
 export async function startHub(options: StartOptions, log: (line: string) => void): Promise<Running | Error> {
-  const hub = new Hub(options);
+  const hub = new Hub({ log, ...options });
   await hub.start();
   const port = options.port;
 

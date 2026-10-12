@@ -789,6 +789,7 @@
   .stuck h3 { margin: 0 0 4px; font-size: var(--fs-s); color: var(--critical); }
   .stuck ul { margin: 0; padding-left: 18px; }
   .stuck li { margin: 2px 0; }
+  .stuck .wake-now { padding: 1px 8px; font-size: var(--fs-s); vertical-align: baseline; }
   .switch select { max-width: 42vw; min-height: var(--tap); padding: 0 28px 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font: inherit; font-size: var(--fs-s); font-weight: 600; text-overflow: ellipsis; }
   /* The finder in three panes under its field: the kinds as a rail, the list, the highlighted item's record. A fixed height, so nothing moves as the list or the record changes. */
   dialog.finder { width: min(1040px, calc(100vw - 32px)); margin-top: 8vh; }

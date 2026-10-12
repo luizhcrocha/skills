@@ -3,15 +3,17 @@
  * manager finds the coordinators and they it, and the `fleets` CLI. The page's view of them
  * (`fleets.view`) is the hub's, stage 3; what it summarises is checked here through `fleets list`.
  */
-import { mkdirSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { stampOf } from "../src/clock.ts";
-import { asArray, asObject, type JsonObject } from "../src/json.ts";
+import { readChat } from "../src/chat/store.ts";
+import { parseInstant, stampOf } from "../src/clock.ts";
+import { asArray, asNumber, asObject, asString, type JsonObject } from "../src/json.ts";
 import { tokenCount } from "../src/cli/fleets.ts";
 import { fleetsNamed } from "../src/cli/run.ts";
+import { startedMsOf, startedOf } from "../src/procs.ts";
 import type { Registry } from "../src/registry.ts";
 import { baseEnv, fleet, FLEET, machine, now, readJson, tmp, type Environment, type Ran } from "./support.ts";
 
@@ -711,5 +713,166 @@ describe("a fleet served again by a restarted session", () => {
     await first.end();
     registry.live();
     expect(registry.register(makeFleet("b", "custom-mcp-servers"), "u", process.pid, now(), "s-new").id).toBe("custom-mcp-servers");
+  });
+});
+
+describe("a fleet has one host: fleet serve from another process", () => {
+  const sessions: Bun.Subprocess[] = [];
+
+  afterEach(async () => {
+    for (const proc of sessions.splice(0)) {
+      proc.kill("SIGKILL");
+      await proc.exited;
+    }
+  });
+
+  /** A process of this test that lives until the test ends: a session a fleet may be served from (`--pid`). */
+  function session(): Bun.Subprocess {
+    const proc = Bun.spawn(["sleep", "60"], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    sessions.push(proc);
+
+    return proc;
+  }
+
+  const serve = (root: string, pid: number, ...more: string[]): Ran => fleet(["serve", root, "--pid", String(pid), ...more], { ...env, CLAUDE_CODE_SESSION_ID: `sess-${String(pid)}`, TAILSCALE: join(base, "none") });
+
+  /** Whether `ran` was refused for the fleet's host (a serve with no hub running says so on stderr too, and serves). */
+  const refusedFor = (ran: Ran): boolean => ran.stderr.includes("is hosted by the session running as pid");
+
+  const hostOf = (root: string): readonly [number | null, string | null, string | null] => {
+    const raw = registry.find(root)?.raw;
+
+    return [asNumber(raw?.["pid"]) ?? null, asString(raw?.["started"]) ?? null, asString(raw?.["session_id"]) ?? null];
+  };
+
+  /** The file the registry keeps `root`'s entry in. */
+  function entryPath(root: string): string {
+    const home = env["FLEET_HOME"] ?? "";
+    const found = readdirSync(home).find((name) => name.endsWith(".json") && readJson(join(home, name))["dir"] === root);
+
+    if (found === undefined) throw new Error(`${root} is not in the registry`);
+
+    return join(home, found);
+  }
+
+  test("the entry carries when its process started", () => {
+    const root = makeFleet("a", "infra");
+    const first = session();
+    const served = serve(root, first.pid);
+    expect([served.code, refusedFor(served), served.stdout.includes("took over")]).toEqual([0, false, false]);
+    expect(hostOf(root)).toEqual([first.pid, startedOf(first.pid) ?? "none", `sess-${String(first.pid)}`]);
+    expect(registry.register(makeFleet("b", "infra"), "u", process.pid, now()).raw["started"]).toBe(startedOf(process.pid) ?? "none");
+  });
+
+  test("serving from a second process while the first runs is refused: it names the host's pid and --take-over, and the entry stays the host's", () => {
+    const root = makeFleet("a", "infra");
+    const [first, second] = [session(), session()];
+    expect(serve(root, first.pid).code).toBe(0);
+    const before = readFileSync(entryPath(root), "utf8");
+    const refused = serve(root, second.pid);
+    expect([refused.code === 0, refused.stdout]).toEqual([false, ""]);
+    expect(refusedFor(refused)).toBe(true);
+    expect(refused.stderr).toBe(
+      `serve: ${root} is hosted by the session running as pid ${String(first.pid)} (infra, session sess-${String(first.pid)}), which is live: ` +
+        `this process (pid ${String(second.pid)}) is a copy of it or another session, and the fleet's page, chat watch and wakes stay that session's. ` +
+        `To move the fleet here, \`fleet serve ${root} --take-over\`, which is recorded in the fleet's ledger and chat and shown to the user on its page.\n`,
+    );
+    expect(readFileSync(entryPath(root), "utf8")).toBe(before);
+    expect(hostOf(root)[0]).toBe(first.pid);
+    // --stop is not serving: any session may take the fleet out.
+    expect(serve(root, second.pid, "--stop").code).toBe(0);
+    expect(registry.find(root)).toBeUndefined();
+  });
+
+  test("--take-over serves from the second process and is never silent: it prints whom it displaced, and records it in the ledger and in the chat, to the user", () => {
+    const root = makeFleet("a", "infra");
+    const [first, second] = [session(), session()];
+    serve(root, first.pid);
+    const url = registry.find(root)?.url ?? "";
+    expect([readJson(join(root, "state.json"))["events"], existsSync(join(root, "chat.jsonl"))]).toEqual([[], false]);
+    const taken = serve(root, second.pid, "--take-over");
+    expect([taken.code, refusedFor(taken)]).toEqual([0, false]);
+    expect(taken.stdout).toBe(
+      `${url}\ntook over from the session running as pid ${String(first.pid)} (session sess-${String(first.pid)}): its chat watch stands down, and it is not woken for this fleet any more\n` +
+        `recorded: an event in the fleet's ledger and #1 in its chat; the page shows it to the user until the host has read their next message\n`,
+    );
+    expect(hostOf(root)).toEqual([second.pid, startedOf(second.pid) ?? "none", `sess-${String(second.pid)}`]);
+    expect(registry.live().map((e) => e.id)).toEqual(["infra"]);
+    // Who displaced whom, with each process's pid and start, and when: the same facts in both places.
+    const side = (pid: number): string => `session sess-${String(pid)} (pid ${String(pid)}, started ${stampOf(new Date(startedMsOf(pid) ?? 0))})`;
+    const [said] = readChat(root);
+    const at = asString(said?.at) ?? "";
+    expect(parseInstant(at)).toBeDefined();
+    expect([said?.id, said?.from, said?.to, said?.re]).toEqual([1, "fleet-hub", ["user"], null]);
+    expect(said?.text).toBe(
+      `[hub] This fleet's host changed at ${at}: ${side(second.pid)} took it over with \`fleet serve --take-over\` from ${side(first.pid)}, which was running. ` +
+        `The page, the chat watch and the hub's wakes are the new session's now. If you did not ask for this, say so here.`,
+    );
+    const party = (pid: number): JsonObject => ({ pid, started: stampOf(new Date(startedMsOf(pid) ?? 0)), session: `sess-${String(pid)}` });
+    expect(said?.stored["takeover"]).toEqual({ at, by: party(second.pid), from: party(first.pid) });
+    expect(readJson(join(root, "state.json"))["events"]).toEqual([
+      { at, agent: null, kind: "note", text: `Host changed: ${side(second.pid)} took the fleet over with \`fleet serve --take-over\` from ${side(first.pid)}, which was running.`, important: true },
+    ]);
+    // The displaced session is now the copy: it is refused in its turn.
+    expect(serve(root, first.pid).stderr).toContain(`is hosted by the session running as pid ${String(second.pid)}`);
+    expect(hostOf(root)[0]).toBe(second.pid);
+  });
+
+  test("serving again from the same process needs no flag, and --take-over with nobody to displace says nothing of it", () => {
+    const root = makeFleet("a", "infra");
+    const first = session();
+    const once = serve(root, first.pid);
+    const again = serve(root, first.pid);
+    expect([again.code, again.stdout, again.stderr]).toEqual([0, once.stdout, once.stderr]);
+    const flagged = serve(root, first.pid, "--take-over");
+    expect([flagged.code, flagged.stdout, flagged.stderr]).toEqual([0, once.stdout, once.stderr]);
+    expect(refusedFor(once)).toBe(false);
+    const fresh = serve(makeFleet("b", "billing"), first.pid, "--take-over");
+    expect([fresh.code, fresh.stdout.includes("took over")]).toEqual([0, false]);
+    // Nobody was displaced: nothing is recorded.
+    expect([readJson(join(root, "state.json"))["events"], existsSync(join(root, "chat.jsonl"))]).toEqual([[], false]);
+  });
+
+  test("a takeover whose ledger does not read still moves the fleet: the chat has the line, and the command says what is missing", () => {
+    const root = makeFleet("a", "infra");
+    const [first, second] = [session(), session()];
+    serve(root, first.pid);
+    writeFileSync(join(root, "state.json"), "{not a ledger");
+    const taken = serve(root, second.pid, "--take-over");
+    expect(taken.code).toBe(0);
+    expect(taken.stdout).toContain("recorded: #1 in its chat; the page shows it to the user until the host has read their next message\n");
+    expect(taken.stderr).toContain(`serve: the takeover is not recorded where it should be: the ledger did not take the event: no ledger reads in ${root}\n`);
+    expect([hostOf(root)[0], readChat(root).map((x) => x.from)]).toEqual([second.pid, ["fleet-hub"]]);
+  });
+
+  test("once the first process ended, another serves with no flag", async () => {
+    const root = makeFleet("a", "infra");
+    const [first, second] = [session(), session()];
+    serve(root, first.pid);
+    first.kill("SIGKILL");
+    await first.exited;
+    const next = serve(root, second.pid);
+    expect([next.code, refusedFor(next), next.stdout.includes("took over")]).toEqual([0, false, false]);
+    expect(hostOf(root)).toEqual([second.pid, startedOf(second.pid) ?? "none", `sess-${String(second.pid)}`]);
+  });
+
+  test("a recorded process whose pid another process has now is gone: no flag; an entry with no recorded start goes by its pid", () => {
+    const root = makeFleet("a", "infra");
+    const [first, second] = [session(), session()];
+    serve(root, first.pid);
+    const path = entryPath(root);
+    const entry = readJson(path);
+    // The pid lives, and started at another time than the entry says: the session that served the fleet is gone.
+    writeFileSync(path, JSON.stringify({ ...entry, started: `${startedOf(first.pid) ?? ""}0` }));
+    const next = serve(root, second.pid);
+    expect([next.code, refusedFor(next), next.stdout.includes("took over")]).toEqual([0, false, false]);
+    expect(hostOf(root)[0]).toBe(second.pid);
+    // Served before the start was recorded: the pid that lives is the host.
+    const { started: _dropped, ...legacy } = readJson(path);
+    writeFileSync(path, JSON.stringify(legacy));
+    const refused = serve(root, first.pid);
+    expect([refused.code === 0, refused.stderr.includes(`is hosted by the session running as pid ${String(second.pid)}`)]).toEqual([false, true]);
+    expect(serve(root, first.pid, "--take-over").stdout).toContain(`took over from the session running as pid ${String(second.pid)}`);
+    expect(hostOf(root)).toEqual([first.pid, startedOf(first.pid) ?? "none", `sess-${String(first.pid)}`]);
   });
 });

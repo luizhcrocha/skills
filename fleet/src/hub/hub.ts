@@ -17,7 +17,9 @@
  *   WebSocket (`preview-proxy.ts`); `POST /f/<fleet>/preview-workers` takes a worker in or out of the
  *   combined preview, under the chat's write policy; `POST /f/<fleet>/name` names a worker or the fleet from
  *   the page, under the same policy; `POST /f/<manager>/orphans/stop` stops an orphaned test or dev process
- *   tree Luiz clicked Stop on, on the manager's page (orphans.ts), under the same policy.
+ *   tree Luiz clicked Stop on, on the manager's page (orphans.ts), under the same policy;
+ *   `POST /f/<fleet>/wake` is Luiz's "Wake now" on a fleet whose host does not listen (wake.ts), under the
+ *   same policy: one wake to the session's socket at once.
  * - `/f/<fleet>@<machine>/…` a fleet of a peer hub, passed through: this hub checks a post by its own
  *   rules first, then the peer checks this machine (its owner's login) by its rules.
  *
@@ -50,6 +52,9 @@ import { pidOfEntry, type Entry } from "../registry.ts";
 import { SpendReader } from "../transcripts.ts";
 import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
+import type { Probe } from "../host.ts";
+import { deafView, deliver, socksDir, WAKE_MS, wakeNow, wakePass, Wakes, wakesPath, type Send, type Woken } from "../wake.ts";
+import { takeoverView } from "../takeover.ts";
 import { FILE_POLICY, LINKED_POLICY, servedBody } from "./body-policy.ts";
 import { indexHtml } from "./index-page.ts";
 import { LinkProbes, ProbeCache } from "./probes.ts";
@@ -100,6 +105,13 @@ export interface HubOptions {
   readonly hosts: readonly string[];
   /** Whether a link's address answers (tests); else an HTTP probe ({@link answers}). */
   readonly probe?: (url: string) => Promise<boolean>;
+  /** How a wake is written to a session's socket (tests); else wake.ts `deliver`. */
+  readonly send?: Send;
+  /** What is asked of the machine about a session's process before a write (tests); else host.ts `PROBE`. */
+  readonly session?: Probe;
+  /** Where the hub says what it cannot do for a fleet (a look that failed), one line each; server.ts gives
+   * the log of the process. Nothing is said without it. */
+  readonly log?: (line: string) => void;
 }
 
 /** A root-mode preview the hub serves at the root of its public port: which fleet, which dev server. */
@@ -279,6 +291,13 @@ export class Hub {
   private readonly logins = new Map<string, { readonly login: string | undefined; readonly at: number }>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private courierTimer: ReturnType<typeof setInterval> | undefined;
+  private wakeTimer: ReturnType<typeof setInterval> | undefined;
+  /** What the hub did to wake each fleet's host (wake.ts), and the look that runs now, if one does. */
+  private readonly wakes: Wakes;
+  private readonly socks: string;
+  private waking: Promise<Woken[]> | undefined;
+  /** Why the last look failed as a whole, while it did: said once in the log, not at every look. */
+  private lookFault: string | undefined;
   private readonly indexWatchers = new Set<(json: string) => void>();
   private indexTimer: ReturnType<typeof setInterval> | undefined;
   private readonly courier = new Courier();
@@ -289,12 +308,17 @@ export class Hub {
     this.served = new Served(options.machine);
     this.orphans = new OrphanWatch(options.machine);
     this.linkProbes = new LinkProbes(options.machine.now, options.probe);
+    this.wakes = new Wakes(options.machine, options.log);
+    this.socks = socksDir(options.machine.env);
     this.lookups = {
       up: (urls) => this.probes.up(urls),
       probe: (urls) => this.linkProbes.get(urls),
       tailnet: () => this.suffix,
       discovered: () => this.served.latest(),
       orphans: () => this.orphans.latest(),
+      deaf: (entry, heard) => deafView(options.machine, this.wakes, this.socks, entry, heard, options.session),
+      blind: (entry) => this.wakes.blindView(entry.dir),
+      takeover: (entry, heard) => takeoverView(entry.dir, heard.seen),
       spend: this.spend,
     };
     this.setHosts();
@@ -336,6 +360,7 @@ export class Hub {
     await this.refresh();
     this.timer = setInterval(() => void this.refresh(), PEERS_MS);
     this.courierTimer = setInterval(() => this.relay(), POLL_MS);
+    this.wakeTimer = setInterval(() => void this.wakeHosts(), WAKE_MS);
   }
 
   /** Stop looking. */
@@ -343,6 +368,8 @@ export class Hub {
     if (this.timer !== undefined) clearInterval(this.timer);
 
     if (this.courierTimer !== undefined) clearInterval(this.courierTimer);
+
+    if (this.wakeTimer !== undefined) clearInterval(this.wakeTimer);
 
     if (this.indexTimer !== undefined) clearInterval(this.indexTimer);
     this.indexTimer = undefined;
@@ -356,6 +383,34 @@ export class Hub {
     } catch {
       return 0;
     }
+  }
+
+  /** Wake each served fleet's host that does not listen while the user's messages wait, when it may be woken
+   * (wake.ts `mayWake`): one line to its session's socket, recorded. Runs every WAKE_MS, one look at a time.
+   * What it wrote or tried. A fleet that cannot be read is that fleet's failed look (wake.ts `Wakes.failed`:
+   * logged once, on the page as `blind`), and the others are looked at. A look that fails as a whole (the
+   * registry does not read) wrote nothing and is logged when its reason is new; the next run tries again: it
+   * never throws into the server. */
+  async wakeHosts(): Promise<Woken[]> {
+    this.waking ??= wakePass(this.options.machine, this.wakes, this.socks, this.options.send ?? deliver, this.options.session)
+      .then((done) => {
+        this.lookFault = undefined;
+
+        return done;
+      })
+      .catch((cause: unknown) => {
+        const why = strerror(cause);
+
+        if (why !== this.lookFault) this.options.log?.(`wake: the look at the served fleets failed, and nobody was woken: ${why}`);
+        this.lookFault = why;
+
+        return [];
+      })
+      .finally(() => {
+        this.waking = undefined;
+      });
+
+    return this.waking;
   }
 
   /** Read the tailnet again, and ask each online peer for its fleets. */
@@ -463,8 +518,10 @@ export class Hub {
     const state = readBytes(join(root, "state.json"));
 
     if (state === undefined) return undefined;
-    // The preview's record changes the view too (the updater writes it): it is part of what is compared.
-    const bytes = Buffer.concat([state, readBytes(recordPath(root)) ?? Buffer.alloc(0)]);
+    // The preview's record changes the view too (the updater writes it), and so do the wakes the hub wrote:
+    // each is part of what is compared.
+    const also = [recordPath(root), wakesPath(this.options.machine)].map((path) => readBytes(path) ?? Buffer.alloc(0));
+    const bytes = Buffer.concat([state, ...also]);
     const held = this.views.get(root);
 
     if (held !== undefined && held.bytes.equals(bytes) && performance.now() - held.at < VIEW_TTL_MS) return held;
@@ -622,6 +679,8 @@ export class Hub {
     if (rest === "/name" && req.method === "POST") return this.rename(req, ip, root);
 
     if (rest === "/orphans/stop" && req.method === "POST") return this.stopOrphan(req, ip, entry);
+
+    if (rest === "/wake" && req.method === "POST") return this.wakeFleet(req, ip, entry);
 
     if (rest === "/chat" && req.method === "OPTIONS") return this.preflight(req);
 
@@ -869,6 +928,37 @@ export class Hub {
     if ("why" in done) return jsonResponse(409, { error: done.why });
 
     return jsonResponse(200, { stopped: [...done.stopped], left: [...done.left] });
+  }
+
+  /** `POST /f/<fleet>/wake` `{}`, or on the manager's page `{"fleet": "<id>"}` for one of its fleets: Luiz's
+   * "Wake now" on a host that does not listen. Checked as a chat post is. One wake is written to the session's
+   * socket at once, whatever the hub's backoff says (wake.ts `wakeNow`), under its own limits: one a minute, the
+   * hour's three with the hub's, none while the last was not read. 200 `{woken: true, fleet, at}`; 409 when
+   * there is nothing to wake or the session is not there; 429 `{error, again}` when a limit holds it; 502 when
+   * the line could not be written (recorded, and the page says so). */
+  private async wakeFleet(req: Request, ip: string, entry: Entry): Promise<Response> {
+    const viewer = await this.viewer(req, ip);
+    const refusal = postRefusal(this.owner, viewer, this.hosts, (name) => req.headers.get(name));
+
+    if (refusal !== undefined) return jsonResponse(refusal[0], { error: refusal[1] }, { Connection: "close" });
+    const raw = await req.text();
+
+    if (Buffer.byteLength(raw) > MAX_POST_BYTES) return jsonResponse(413, { error: `a wake is at most ${MAX_POST_BYTES / 1024} KiB` });
+    const named = asString(Option.getOrUndefined(parseObject(raw))?.["fleet"]);
+    const target = named === undefined || named === entry.id ? entry : entry.role === "manager" ? this.options.machine.registry.live().find((e) => e.id === named) : undefined;
+
+    if (target === undefined) return jsonResponse(404, { error: `no fleet '${named ?? ""}' is served to wake from this page` });
+
+    try {
+      const done = await wakeNow(this.options.machine, this.wakes, this.socks, target, this.options.send ?? deliver, this.options.session);
+
+      // Held by its own limits (one a minute, the hour's three, a wake not read yet): 429, with when it may be used.
+      if ("why" in done) return jsonResponse(done.held ? 429 : 409, { error: done.why, again: done.again });
+
+      return done.wake.error === null ? jsonResponse(200, { woken: true, fleet: done.fleet, at: done.wake.at }) : jsonResponse(502, { error: `could not wake ${done.fleet}: ${done.wake.error}` });
+    } catch (cause: unknown) {
+      return jsonResponse(500, { error: `could not wake: ${strerror(cause)}` });
+    }
   }
 
   /** What `GET /f/<fleet>/skills` answers: the skills the fleet's session can run, read again after 60 s. */

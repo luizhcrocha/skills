@@ -6,6 +6,7 @@
  * `tailscale` that names this machine's owner.
  */
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -21,7 +22,12 @@ import { startHub, type Running } from "../src/hub/server.ts";
 import { frontmatter } from "../src/hub/skills.ts";
 import { isTailnetIp, tailnetOf } from "../src/hub/tailnet.ts";
 import { asArray, asObject, asString, type JsonObject } from "../src/json.ts";
-import { elapsedOf, isClaudeBinary, lsofFiles, parentsOf } from "../src/procs.ts";
+import { parseInstant, stampOf } from "../src/clock.ts";
+import type { Probe } from "../src/host.ts";
+import { elapsedOf, holdsSocket, isClaudeBinary, lsofFiles, parentsOf, startedOf } from "../src/procs.ts";
+import { recordTakeover, type Party } from "../src/takeover.ts";
+import { lineOf, socketOf, wakeText } from "../src/wake.ts";
+import { machineOf, type Machine } from "../src/world.ts";
 import { baseEnv, fleet, machine, spawnFleet, tmp, type Environment } from "./support.ts";
 
 const OWNER = "luiz@example.com";
@@ -44,6 +50,9 @@ let env: Environment;
 let running: Running | undefined;
 
 let port: number;
+
+/** What the running hub logged, one line each. */
+let logged: string[] = [];
 
 const stubs: ReturnType<typeof Bun.serve>[] = [];
 
@@ -74,10 +83,21 @@ function writeState(dir: string, agents: readonly JsonObject[], more: JsonObject
   writeFileSync(join(dir, "state.json"), JSON.stringify(state));
 }
 
-async function start(options: { readonly tailscale?: string; readonly peers?: boolean } = {}): Promise<void> {
+/** How a test's hub differs from the default: its `tailscale`, whether it asks its peers, its own clock
+ * (`machine`), and what the machine says of a session's process before a wake is written (`session`). */
+interface HubSetup {
+  readonly tailscale?: string;
+  readonly peers?: boolean;
+  readonly machine?: Machine;
+  readonly session?: Probe;
+}
+
+async function start(options: HubSetup = {}): Promise<void> {
   port = freePort();
-  const m = machine(env);
-  const got = await startHub({ port, machine: m, tailscale: options.tailscale ?? join(base, "no-tailscale"), peers: options.peers ?? false, hosts: [], https: undefined }, () => {});
+  const m = options.machine ?? machine(env);
+  const asked = options.session === undefined ? {} : { session: options.session };
+  logged = [];
+  const got = await startHub({ port, machine: m, tailscale: options.tailscale ?? join(base, "no-tailscale"), peers: options.peers ?? false, hosts: [], https: undefined, ...asked }, (line) => logged.push(line));
 
   if (got instanceof Error) throw got;
   running = got;
@@ -807,6 +827,7 @@ describe("a prototype page posting from an origin the hub's config allows", () =
       ["/f/p/name", { agent: "a1", name: "Writer" }],
       ["/f/p/preview-workers", { worker: "a1", include: true }],
       ["/f/p/orphans/stop", { pid: 4242, started: 1 }],
+      ["/f/p/wake", {}],
     ];
 
     const self = `http://127.0.0.1:${port}`;
@@ -1135,6 +1156,278 @@ describe("names given on the page", () => {
     const cleared = await post({ name: "" }, {}, "/f/checkout/name");
     expect([cleared.status, cleared.body]).toEqual([200, { id: "checkout", session: null, path: "/f/checkout/" }]);
   });
+});
+
+describe("a host that does not listen: the hub's wake, the page's line, and Wake now", () => {
+  let manager: string;
+
+  let socket: string;
+
+  /** How far this hub's clock runs ahead of the machine's, in ms: a test moves it past a wake's limits. */
+  let ahead: number;
+
+  /** Whose a socket is: the machine's own answer (procs.ts `holdsSocket`) unless a test says. */
+  let owns: Probe["holds"];
+
+  /** What this hub is told of a session's process: the one the entry names (this test's own, with its real
+   * start) is taken for Claude Code, which no test process is. All else is the machine's answer. */
+  const session: Probe = {
+    running: (pid) => {
+      const started = startedOf(pid);
+
+      return started === undefined ? "gone" : { claude: true, started };
+    },
+    holds: (pid, path) => owns(pid, path),
+    startedMs: () => undefined,
+  };
+
+  const listeners: Server[] = [];
+
+  /** Listen on the session's socket as its process would: each line written to it, as it lands. */
+  function listen(): Promise<string[]> {
+    const lines: string[] = [];
+    mkdirSync(join(home, "cc-socks"), { recursive: true });
+
+    const server = createServer((conn) => {
+      const chunks: Buffer[] = [];
+      conn.on("data", (chunk: Buffer) => chunks.push(chunk));
+      conn.on("end", () => lines.push(Buffer.concat(chunks).toString("utf8")));
+    });
+
+    listeners.push(server);
+
+    return new Promise((ready) => server.listen(socket, () => ready(lines)));
+  }
+
+  async function landed(lines: readonly string[], count: number): Promise<void> {
+    for (let tries = 0; tries < 100 && lines.length < count; tries += 1) await new Promise((wake) => setTimeout(wake, 20));
+  }
+
+  const hub = (): Running["hub"] => {
+    if (running === undefined) throw new Error("no hub");
+
+    return running.hub;
+  };
+
+  const deaf = async (fleet: string): Promise<JsonObject | undefined> => asObject((await request("GET", `/f/${fleet}/state.json`)).body["deaf"]);
+
+  const ofManager = async (): Promise<JsonObject | undefined> => asObject(asObject(asArray((await request("GET", "/f/manager/state.json")).body["coordinators"])?.[0])?.["deaf"]);
+
+  const line = (unread: number): string => lineOf(String(wakeText("p", root, "coordinator", unread, 0)));
+
+  /** The stamp `ms` after the stamp `at`. */
+  const after = (at: JsonObject[string] | undefined, ms: number): string => stampOf(new Date((parseInstant(asString(at) ?? "") ?? 0) + ms));
+
+  beforeEach(async () => {
+    env = baseEnv(home, { FLEET_UNHEARD_S: "0" });
+    socket = socketOf(join(home, "cc-socks"), process.pid);
+    manager = join(base, "all", "coordinator");
+    mkdirSync(manager, { recursive: true });
+    writeState(manager, [], { role: "manager", project: "all" });
+    register(manager, "manager");
+    ahead = 0;
+    owns = holdsSocket;
+
+    const clock = machineOf(
+      () => new Date(Date.now() + ahead),
+      (name) => env[name] ?? process.env[name],
+    );
+
+    await start({ session, machine: clock });
+  });
+
+  afterEach(() => {
+    for (const server of listeners.splice(0)) server.close();
+  });
+
+  test("a deaf host's view has the key, on its page and the manager's; no view has it once the host answered", async () => {
+    const sent = await post({ text: "are you there? @coordinator" });
+    const shown = { since: sent.body["at"] ?? null, unread: 1, first: 1, woken: [], end: "gone", why: "it has no socket", held: null, again: null };
+    expect([await deaf("p"), await ofManager()]).toEqual([shown, shown]);
+    say("coordinator", "here", { re: 1 });
+    // A view is kept two seconds while the ledger does not change.
+    await new Promise((wake) => setTimeout(wake, 2100));
+    expect([await deaf("p"), await ofManager()]).toEqual([undefined, undefined]);
+    expect(Object.keys((await request("GET", "/f/p/state.json")).body)).not.toContain("deaf");
+  });
+
+  test("the hub's look writes one wake to the session's socket, the page gets its time, the message stays unread, and the next look waits", async () => {
+    const lines = await listen();
+    await post({ text: "SECRET are you there?" });
+    await post({ text: "and now?" });
+    const done = await hub().wakeHosts();
+    expect(done.map((d) => [d.fleet, d.wake.first, d.wake.by, d.wake.error])).toEqual([["p", 1, "hub", null]]);
+    await landed(lines, 1);
+    expect(lines).toEqual([line(2)]);
+    expect(lines[0]).not.toContain("SECRET");
+    const shown = await deaf("p");
+    expect([shown?.["woken"], shown?.["end"], shown?.["unread"]]).toEqual([[done[0]?.wake.at ?? ""], null, 2]);
+    expect((await ofManager())?.["woken"]).toEqual([done[0]?.wake.at ?? ""]);
+    expect(asObject((await request("GET", "/f/p/state.json")).body["chat"])).toMatchObject({ on: false, unread: 2 });
+    expect(await hub().wakeHosts()).toEqual([]);
+    expect(lines.length).toBe(1);
+    expect(readChat(root).map((m) => m.from)).toEqual(["user", "user"]);
+    expect(Object.keys(asObject(JSON.parse(readFileSync(join(home, "hub", "wakes.json"), "utf8"))) ?? {})).toEqual([root]);
+  });
+
+  test.skipIf(process.platform !== "linux")("a hub that asks the machine itself writes nothing to a process that is not Claude Code, though it listens on the socket named after it", async () => {
+    await running?.stop();
+    await start();
+    const lines = await listen();
+    await post({ text: "are you there?" });
+    const gone = `process ${String(process.pid)} is not Claude Code`;
+    expect((await hub().wakeHosts()).map((d) => [d.fleet, d.wake.by, d.wake.error])).toEqual([["p", "hub", `the session is gone: ${gone}`]]);
+    const now = await post({}, {}, "/f/p/wake");
+    expect([now.status, now.body]).toEqual([409, { error: `the session is gone (${gone}): there is nobody to write to. Open it in a terminal`, again: null }]);
+    await new Promise((wake) => setTimeout(wake, 100));
+    expect(lines).toEqual([]);
+    expect(await deaf("p")).toMatchObject({ end: "gone", why: gone, woken: [] });
+  });
+
+  test("Wake now's POST writes one wake at once, from the fleet's page and from the manager's for a fleet it names: one a minute, and three an hour with the hub's", async () => {
+    const lines = await listen();
+    await post({ text: "are you there?" });
+    const [first] = await hub().wakeHosts();
+    const own = await post({}, { Origin: `http://127.0.0.1:${port}`, "Sec-Fetch-Site": "same-origin" }, "/f/p/wake");
+    expect([own.status, own.body["woken"], own.body["fleet"]]).toEqual([200, true, "p"]);
+    // A second within the minute is held, from whichever page: 429, with when it may be used. Twenty in a row write nothing.
+    const minute = { error: "not woken: you woke it less than a minute ago", again: after(own.body["at"], 60_000) };
+
+    for (let n = 0; n < 10; n += 1) {
+      const fromManager = await post({ fleet: "p" }, {}, "/f/manager/wake");
+      const fromOwn = await post({}, {}, "/f/p/wake");
+      expect([fromManager.status, fromManager.body, fromOwn.status, fromOwn.body]).toEqual([429, minute, 429, minute]);
+    }
+
+    expect(await deaf("p")).toMatchObject({ held: "you woke it less than a minute ago", again: minute.again });
+    await new Promise((wake) => setTimeout(wake, 100));
+    expect(lines).toEqual([line(1), line(1)]);
+    ahead += 60_000;
+    const named = await post({ fleet: "p" }, {}, "/f/manager/wake");
+    expect([named.status, named.body["woken"], named.body["fleet"]]).toEqual([200, true, "p"]);
+    await landed(lines, 3);
+    expect(lines).toEqual([line(1), line(1), line(1)]);
+    // The user's wakes stand beside the hub's in the record: the page shows each, and the hub's count is not started again.
+    expect((await deaf("p"))?.["woken"]).toEqual([first?.wake.at ?? "", own.body["at"] ?? "", named.body["at"] ?? ""]);
+    // The hour's three are written, the hub's and the user's together: the next is refused, with when one is free.
+    ahead += 60_000;
+    const hour = { error: "not woken: 3 wakes in the last hour, the most a fleet is written", again: after(first?.wake.at, 3600_000) };
+    const spent = await post({}, {}, "/f/p/wake");
+    expect([spent.status, spent.body]).toEqual([429, hour]);
+    expect(await ofManager()).toMatchObject({ held: "3 wakes in the last hour, the most a fleet is written", again: hour.again, end: null });
+    expect(await hub().wakeHosts()).toEqual([]);
+    await new Promise((wake) => setTimeout(wake, 100));
+    expect(lines.length).toBe(3);
+  });
+
+  test("a POST that cannot wake says why and writes nothing: nothing waits, another page's fleet, no socket, a socket not the session's own, a socket that refuses", async () => {
+    const nothing = await post({}, {}, "/f/p/wake");
+    expect([nothing.status, nothing.body]).toEqual([409, { error: "none of your messages waits unread: there is nothing to wake", again: null }]);
+    await post({ text: "are you there?" });
+    const gone = await post({}, {}, "/f/p/wake");
+    expect([gone.status, gone.body]).toEqual([409, { error: "the session is gone (it has no socket): there is nobody to write to. Open it in a terminal", again: null }]);
+    expect((await post({ fleet: "manager" }, {}, "/f/p/wake")).status).toBe(404);
+    expect((await post({ fleet: "nobody" }, {}, "/f/manager/wake")).status).toBe(404);
+    // A file where the socket would be: the session's process is there by the registry, and the socket is nobody's.
+    mkdirSync(join(home, "cc-socks"), { recursive: true });
+    writeFileSync(socket, "");
+    const foreign = await post({}, {}, "/f/p/wake");
+    expect([foreign.status, foreign.body["error"]]).toEqual([409, "the session is gone (the socket named after it is not its own): there is nobody to write to. Open it in a terminal"]);
+    expect(existsSync(join(home, "hub", "wakes.json"))).toBe(false);
+    // The machine says the socket is the session's, and nothing answers on it.
+    owns = () => true;
+    const refused = await post({}, {}, "/f/p/wake");
+    expect([refused.status, asString(refused.body["error"])?.startsWith("could not wake p: the session's socket ")]).toEqual([502, true]);
+    const shown = await deaf("p");
+    expect([shown?.["end"], shown?.["woken"], asString(shown?.["why"])?.startsWith("the session's socket ")]).toEqual(["failed", [], true]);
+    // The machine does not say whose it is: nothing is written, nothing recorded, and it may be tried again.
+    owns = () => "unknown";
+    ahead += 61_000;
+    const unknown = await post({}, {}, "/f/p/wake");
+    expect([unknown.status, unknown.body]).toEqual([409, { error: "the machine did not say whose the session's socket is: nothing was written. Try again", again: null }]);
+    expect(asArray(asObject(asObject(JSON.parse(readFileSync(join(home, "hub", "wakes.json"), "utf8")))?.[root])?.["wakes"])?.length).toBe(1);
+  });
+
+  test("a refused POST wakes nobody", async () => {
+    const lines = await listen();
+    await post({ text: "are you there?" });
+
+    const refused: (readonly [number, Answer])[] = [
+      [403, await post({}, { Origin: "https://evil.example" }, "/f/p/wake")],
+      [403, await post({}, { Origin: "null" }, "/f/p/wake")],
+      [403, await post({}, { "Tailscale-User-Login": "eve@example.com" }, "/f/p/wake")],
+      [415, await request("POST", "/f/p/wake", "{}")],
+      [404, await request("GET", "/f/p/wake")],
+      [404, await post({}, {}, "/f/nobody/wake")],
+    ];
+
+    expect(refused.map(([status, answer]) => [status, answer.status])).toEqual(refused.map(([status]) => [status, status]));
+    await new Promise((wake) => setTimeout(wake, 100));
+    expect(lines).toEqual([]);
+    expect(existsSync(join(home, "hub", "wakes.json"))).toBe(false);
+  });
+
+  test("20 Wake now POSTs at the same instant write one line to the socket: one is answered 200, and it holds the other 19 with 429", async () => {
+    const lines = await listen();
+    await post({ text: "are you there?" });
+    const all = await Promise.all(Array.from({ length: 20 }, () => post({}, { Origin: `http://127.0.0.1:${port}`, "Sec-Fetch-Site": "same-origin" }, "/f/p/wake")));
+    await new Promise((wake) => setTimeout(wake, 300));
+    expect([all.filter((a) => a.status === 200).length, all.filter((a) => a.status === 429).length, lines]).toEqual([1, 19, [line(1)]]);
+    expect(new Set(all.filter((a) => a.status === 429).map((a) => a.body["error"]))).toEqual(new Set(["not woken: you woke it less than a minute ago"]));
+    expect(asArray(asObject(asObject(JSON.parse(readFileSync(join(home, "hub", "wakes.json"), "utf8")))?.[root])?.["wakes"])?.length).toBe(1);
+  });
+
+  test("a fleet whose chat the hub cannot read: its look is logged once, its page and the manager's still answer and say so, and no key is left once it reads", async () => {
+    const blind = async (path: string): Promise<JsonObject | undefined> => {
+      const body = (await request("GET", path)).body;
+
+      return asObject((path.includes("manager") ? asObject(asArray(body["coordinators"])?.[0]) : body)?.["blind"]);
+    };
+
+    await post({ text: "are you there?" });
+    rmSync(join(root, "chat.jsonl"));
+    mkdirSync(join(root, "chat.jsonl"));
+    expect(await hub().wakeHosts()).toEqual([]);
+    expect(await hub().wakeHosts()).toEqual([]);
+    const why = `${join(root, "chat.jsonl")} is not a file`;
+    expect(logged.filter((l) => l.startsWith("wake: "))).toEqual([`wake: p (${root}): the hub cannot read its chat: ${why}. Nobody is woken for it until that works; the other fleets are looked at as before.`]);
+    const [own, managed] = [await blind("/f/p/state.json"), await blind("/f/manager/state.json")];
+    expect(own).toMatchObject({ what: "chat", why });
+    expect([parseInstant(asString(own?.["since"]) ?? "") !== undefined, managed]).toEqual([true, own]);
+    expect((await request("GET", "/f/p/")).status).toBe(200);
+    rmSync(join(root, "chat.jsonl"), { recursive: true });
+    await hub().wakeHosts();
+    await new Promise((wake) => setTimeout(wake, 2100));
+    expect([await blind("/f/p/state.json"), await blind("/f/manager/state.json")]).toEqual([undefined, undefined]);
+  });
+
+  test("a takeover is on the fleet's page and the manager's from the moment it is recorded until the host has read the user's next message", async () => {
+    const takeover = async (path: string): Promise<JsonObject | undefined> => {
+      const body = (await request("GET", path)).body;
+
+      return asObject((path.includes("manager") ? asObject(asArray(body["coordinators"])?.[0]) : body)?.["takeover"]);
+    };
+
+    await post({ text: "status?" });
+    expect([await takeover("/f/p/state.json"), await takeover("/f/manager/state.json")]).toEqual([undefined, undefined]);
+    const by: Party = { pid: 222, started: "2026-10-12T13:55:01+00:00", session: "sess-new" };
+    const from: Party = { pid: 111, started: null, session: "sess-old" };
+    const recorded = recordTakeover(machine(env), root, by, from);
+    expect([recorded.event, recorded.message, recorded.faults]).toEqual([true, 2, []]);
+    await new Promise((wake) => setTimeout(wake, 2100));
+    const shown = await takeover("/f/p/state.json");
+    expect(shown).toMatchObject({ id: 2, by: { ...by }, from: { ...from } });
+    expect(await takeover("/f/manager/state.json")).toEqual(shown);
+    // The line is the hub's, to the user: the chat serves it as any other.
+    expect(asArray((await request("GET", "/f/p/chat?after=1")).body["messages"])?.map((x) => [asObject(x)?.["from"], asObject(x)?.["to"]])).toEqual([["fleet-hub", ["user"]]]);
+    const next = await post({ text: "who hosts this now?" });
+    await new Promise((wake) => setTimeout(wake, 2100));
+    expect(await takeover("/f/p/state.json")).toEqual(shown);
+    // The new host's watch printed it and exited: its cursor passed the message.
+    writeFileSync(join(root, "watch-coordinator.cursor"), String(next.body["id"]));
+    await new Promise((wake) => setTimeout(wake, 2100));
+    expect([await takeover("/f/p/state.json"), await takeover("/f/manager/state.json")]).toEqual([undefined, undefined]);
+  }, 15000);
 });
 
 describe("the index and the manager", () => {

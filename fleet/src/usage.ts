@@ -124,6 +124,21 @@ export function readUsage(home: string): JsonObject | undefined {
   return first === undefined ? undefined : { ...shown(first), others: rest.map(shown) };
 }
 
+/** One window of an account's reading: how full it was when last captured, and when it resets. */
+export interface WindowReading {
+  /** `five_hour` or `seven_day`. */
+  readonly window: string;
+  readonly used: number;
+  readonly resetsAtMs: number;
+}
+
+/** The windows held for `account`, or none when nothing is held for it (or it is not known). */
+export function windowsOf(home: string, account: Account | undefined): WindowReading[] {
+  const held = account === undefined ? undefined : readAccounts(home).get(account.key);
+
+  return [...(held?.windows ?? [])].map(([window, r]) => ({ window, used: asNumber(r["used_percentage"]) ?? 0, resetsAtMs: (asNumber(r["resets_at"]) ?? 0) * 1000 }));
+}
+
 /**
  * Fold a status line's `rate_limits` into `account`'s reading, at `nowS` (seconds since the epoch). A window
  * the input leaves out is kept. Another account's reading whose windows have all reset is dropped.

@@ -13,7 +13,8 @@ import { mtimeOf, readText, resolvePath } from "../files.ts";
 import { asArray, asNumber, asObject, asString, pyRepr, truthy, type Json, type JsonObject } from "../json.ts";
 import { secondsNow, type Machine } from "../world.ts";
 import { appendAllLocked, messageOf, readChat, type Message, type Part } from "./store.ts";
-import { liveWatch } from "./watchers.ts";
+import { liveHost } from "../host.ts";
+import { liveWatch, TREE } from "./watchers.ts";
 
 /** Characters of a selected excerpt a message carries. */
 export const QUOTE_MAX = 2000;
@@ -1168,13 +1169,41 @@ export interface Listening {
   readonly since: Json | null;
 }
 
+/** The user's messages to the host of DIR after `seen` (the last a `--once` watch exited with) that still
+ * wait: not answered with `--re`, not an answer to a decision since closed. Oldest first. */
+export function unreadFromUser(root: string, seen: number, messages: readonly Message[] = readChat(root)): Message[] {
+  const answered = new Set(messages.flatMap((m) => (m.from !== "user" && m.re !== null ? [pyRepr(m.re)] : [])));
+  const closed = closedDecisions(root);
+
+  return messages.filter(
+    (m) =>
+      m.id > seen &&
+      m.from === "user" &&
+      !answered.has(String(m.id)) &&
+      !(truthy(m.decision) && closed.has(pyRepr(m.decision))) &&
+      // So does one the hub delivered to every coordinator it names: each reads it in its own chat.
+      waitsHere(m),
+  );
+}
+
+/** Whether a `--once` watch as the host of DIR runs now, for the session that hosts the fleet (watchers.ts):
+ * the one its pid file names, else one found among the running processes; never one whose session is gone,
+ * nor one armed by a session that is not the host the registry names (a copy of it). No grace: a watch that
+ * just ended is none. */
+export function watchLive(machine: Machine, root: string): boolean {
+  const who = hostOf(root);
+
+  return liveWatch(root, who, intOf(readText(pulsePath(root, who))), TREE, liveHost(machine.registry, root)) !== undefined;
+}
+
 /** Whether the host of DIR reads its chat: a live `--once` watch (the one its pid file names, else one found
- * among the running processes), a watch that ended or a message it sent in the last ten minutes; the last
- * message a `--once` watch exited with; the user's messages after it that still wait. */
+ * among the running processes; never one whose session is gone, watchers.ts), a watch that ended or a message
+ * it sent in the last ten minutes; the last message a `--once` watch exited with; the user's messages after
+ * it that still wait. */
 export function listening(machine: Machine, root: string): Listening {
   const who = hostOf(root);
   const now = secondsNow(machine);
-  let on = liveWatch(root, who, intOf(readText(pulsePath(root, who)))) !== undefined;
+  let on = watchLive(machine, root);
   const messages = readChat(root);
 
   if (!on) {
@@ -1189,18 +1218,7 @@ export function listening(machine: Machine, root: string): Listening {
   }
 
   const seen = intOf(readText(cursorPath(root, who))) ?? 0;
-  const answered = new Set(messages.flatMap((m) => (m.from !== "user" && m.re !== null ? [pyRepr(m.re)] : [])));
-  const closed = closedDecisions(root);
-
-  const unread = messages.filter(
-    (m) =>
-      m.id > seen &&
-      m.from === "user" &&
-      !answered.has(String(m.id)) &&
-      !(truthy(m.decision) && closed.has(pyRepr(m.decision))) &&
-      // So does one the hub delivered to every coordinator it names: each reads it in its own chat.
-      waitsHere(m),
-  );
+  const unread = unreadFromUser(root, seen, messages);
 
   return { on, seen, unread: unread.length, since: unread[0]?.at ?? null };
 }

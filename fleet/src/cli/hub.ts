@@ -5,7 +5,7 @@
  *   (SIGTERM, SIGINT). The port is `--port`, else `$FLEET_HUB_PORT`, else 7420. Under a supervisor (systemd,
  *   launchd), or with `--reload`, it also stops when its own sources change, exiting 75 so the supervisor
  *   starts it on the new code.
- * - `fleet serve DIR [--stop] [--pid PID]`: put DIR's fleet in the registry, so the hub serves it at
+ * - `fleet serve DIR [--stop] [--pid PID] [--take-over]`: put DIR's fleet in the registry, so the hub serves it at
  *   `/f/<fleet>/`, and print its address (`--stop` takes it out). The entry lives while PID does: by
  *   default the Claude Code session that runs the command (the nearest `claude` among its parents). It
  *   records that session's id (`$CLAUDE_CODE_SESSION_ID`), by which a respawned session keeps the name.
@@ -27,7 +27,8 @@ import { codeChanged, RELOAD_EXIT, supervised } from "../hub/reload.ts";
 import { DEFAULT_PORT, runningHub, startHub } from "../hub/server.ts";
 import { readTailnetSync, tailscaleBin } from "../hub/tailnet.ts";
 import { Out } from "../io.ts";
-import { asObject, parseJson, parseObject } from "../json.ts";
+import { recordedHost, runs } from "../host.ts";
+import { asObject, asString, parseJson, parseObject } from "../json.ts";
 import { decodeLedger, ledgerText } from "../ledger/model.ts";
 import { validate } from "../ledger/validate.ts";
 import { cliLookups } from "../page/lookups.ts";
@@ -36,6 +37,7 @@ import { view } from "../page/view.ts";
 import { stopKept } from "../preview/sleep.ts";
 import { ancestry, exeOf, isClaudeBinary, nameOf } from "../procs.ts";
 import { spentBy } from "../transcripts.ts";
+import { partyOf, recordTakeover } from "../takeover.ts";
 import { accountOf, keepUsage, usageLines } from "../usage.ts";
 import { secondsNow, World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
@@ -142,10 +144,11 @@ function serve(machine: Machine, argv: readonly string[]): Effect.Effect<number,
     const [pidText, afterPid] = option(argv, "--pid");
     const [portText, afterPort] = option(afterPid, "--port");
     const stop = afterPort.includes("--stop");
-    const dirs = afterPort.filter((a) => a !== "--stop");
+    const takeOver = afterPort.includes("--take-over");
+    const dirs = afterPort.filter((a) => a !== "--stop" && a !== "--take-over");
     const dir = dirs[0];
 
-    if (dirs.length !== 1 || dir === undefined) return yield* refuse("serve", "usage: fleet serve DIR [--stop] [--pid PID] [--port N]");
+    if (dirs.length !== 1 || dir === undefined) return yield* refuse("serve", "usage: fleet serve DIR [--stop] [--pid PID] [--port N] [--take-over]");
     const root = resolvePath(dir);
 
     if (!isDir(root)) return yield* refuse("serve", `${root} is not a directory`);
@@ -169,6 +172,23 @@ function serve(machine: Machine, argv: readonly string[]): Effect.Effect<number,
     const pid = pidText === undefined ? sessionPid() : Number(pidText);
 
     if (!Number.isInteger(pid) || pid <= 1) return yield* refuse("serve", "--pid takes the pid of the process the fleet lives as long as");
+    // The fleet has one host. While the session that served it runs, another process serving it is a copy of that
+    // session (a fork, a second resume of its transcript): it would take the page, the watch and the wakes from
+    // a host that still works. Only --take-over moves the fleet, and says whom it displaced: to whoever ran it,
+    // in the fleet's ledger and chat, on the page, and to the displaced session (takeover.ts).
+    const was = registry.find(root);
+    const host = was === undefined ? undefined : recordedHost(was);
+    const displaced = host !== undefined && host.pid !== pid && runs(host) ? host : undefined;
+
+    if (displaced !== undefined && !takeOver) {
+      return yield* refuse(
+        "serve",
+        `${root} is hosted by the session running as pid ${String(displaced.pid)} (${was?.id ?? ""}, session ${asString(was?.raw["session_id"]) ?? "not recorded"}), which is live: ` +
+          `this process (pid ${String(pid)}) is a copy of it or another session, and the fleet's page, chat watch and wakes stay that session's. ` +
+          `To move the fleet here, \`fleet serve ${root} --take-over\`, which is recorded in the fleet's ledger and chat and shown to the user on its page.`,
+      );
+    }
+
     const port = portText === undefined ? undefined : portOf(portText, machine);
     const base = hubUrl(machine, port);
     const stamp = stampOf(machine.now());
@@ -178,6 +198,18 @@ function serve(machine: Machine, argv: readonly string[]): Effect.Effect<number,
     const first = registry.register(root, base, pid, stamp, session);
     const entry = registry.register(root, `${base}f/${encodeURIComponent(first.id)}/`, pid, stamp, session);
     out.out(`${entry.url}\n`);
+
+    if (displaced !== undefined) {
+      out.out(`took over from the session running as pid ${String(displaced.pid)} (session ${asString(was?.raw["session_id"]) ?? "not recorded"}): its chat watch stands down, and it is not woken for this fleet any more\n`);
+      // Never silent: the user reads it on the page, and the displaced session's watch says it as it stands down.
+      const recorded = recordTakeover(machine, root, partyOf(pid, asString(entry.raw["session_id"])), partyOf(displaced.pid, asString(was?.raw["session_id"])));
+      const where = [...(recorded.event ? ["an event in the fleet's ledger"] : []), ...(recorded.message === undefined ? [] : [`#${String(recorded.message)} in its chat`])];
+
+      if (where.length > 0) out.out(`recorded: ${where.join(" and ")}${recorded.message === undefined ? "" : "; the page shows it to the user until the host has read their next message"}\n`);
+
+      for (const fault of recorded.faults) out.err(`serve: the takeover is not recorded where it should be: ${fault}\n`);
+    }
+
     const boss = registry.manager();
 
     if (boss !== undefined && entry.role !== "manager") {

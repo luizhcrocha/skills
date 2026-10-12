@@ -7,7 +7,7 @@
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
 
-import { stampOf } from "./clock.ts";
+import { parseInstant, stampOf } from "./clock.ts";
 import { exists, isDir, listDir, mtimeOf, readText, resolvePath } from "./files.ts";
 import { asNumber, asObject, asString, parseJson, truthy, type JsonObject } from "./json.ts";
 import * as Option from "effect/Option";
@@ -56,6 +56,150 @@ export function activeAt(root: string, config: string, sessionId?: string | null
   const at = path === undefined ? undefined : mtimeOf(path);
 
   return at === undefined ? undefined : stampOf(new Date(at * 1000));
+}
+
+/** How much of a transcript's end is read for its last entry. */
+const TAIL_BYTES = 256 * 1024;
+
+/** A usage-limit error a session's turn ended on, as its transcript holds it. */
+export interface LimitHit {
+  /** When the error was written, in ms: the entry's `timestamp`, else the transcript's last write. */
+  readonly atMs: number;
+  /** The window that was full, as the entry names it (`quotaLimits.rateLimitType`: `five_hour`,
+   * `seven_day`); undefined when it names none (out of usage credits, an older Claude Code). */
+  readonly window: string | undefined;
+  /** When the entry says that window resets, in ms (`quotaLimits.resetsAt`, in seconds); undefined when it does not. */
+  readonly resetsAtMs: number | undefined;
+}
+
+/**
+ * The usage-limit error the session's last entry in the transcript at `path` is, or undefined when its
+ * last entry is anything else: the turn ended on it, and a new turn would end on it again while the limit
+ * holds (whether it still does is wake.ts `limitInForce`).
+ *
+ * The shape, read from Claude Code 2.1.29x transcripts (2026-10-12): the error is one line with
+ * `"type": "assistant"`, `"isApiErrorMessage": true` and `"error": "rate_limit"` (its `apiErrorStatus` is
+ * 429 and its `message.model` `<synthetic>`); the session limit, the weekly limit, the monthly spend limit
+ * and "out of usage credits" all carry it, and a server or login error carries another `error`. It has a
+ * `timestamp`, and, but for "out of usage credits", `quotaLimits` with `rateLimitType` (`five_hour` or
+ * `seven_day`) and `resetsAt` (seconds since the epoch). Lines whose `type` is neither `assistant` nor
+ * `user` follow it (the turn's duration, the bridge's state, the cost): they are passed over, so the last
+ * entry is the last `assistant` or `user` line. Only the last {@link TAIL_BYTES} are read; a line cut by
+ * that, and a transcript with no such line in them, is no error.
+ */
+export function usageLimitHit(path: string): LimitHit | undefined {
+  let size: number;
+
+  try {
+    size = statSync(path).size;
+  } catch {
+    return undefined;
+  }
+
+  const from = Math.max(0, size - TAIL_BYTES);
+  let lines: string[];
+
+  try {
+    lines = readRange(path, from, size).toString("utf8").split("\n");
+  } catch {
+    return undefined;
+  }
+
+  // The first line of a tail that does not start the file is cut: it is not read.
+  for (let i = lines.length - 1; i >= (from > 0 ? 1 : 0); i -= 1) {
+    const row = asObject(Option.getOrUndefined(parseJson(lines[i] ?? "")));
+    const type = row?.["type"];
+
+    if (row === undefined || (type !== "assistant" && type !== "user")) continue;
+
+    if (type !== "assistant" || row["isApiErrorMessage"] !== true || row["error"] !== "rate_limit") return undefined;
+    const quota = asObject(row["quotaLimits"]);
+    const resets = asNumber(quota?.["resetsAt"]);
+
+    return {
+      atMs: parseInstant(asString(row["timestamp"]) ?? "") ?? (mtimeOf(path) ?? 0) * 1000,
+      window: asString(quota?.["rateLimitType"]),
+      resetsAtMs: resets === undefined ? undefined : resets * 1000,
+    };
+  }
+
+  return undefined;
+}
+
+/** The `type` and the content blocks of one transcript line that is the session's own entry (`assistant` or
+ * `user`, not a subagent's side chain); undefined for any other line. */
+function entryOf(line: string): { readonly type: "assistant" | "user"; readonly row: JsonObject; readonly blocks: readonly JsonObject[] } | undefined {
+  const row = asObject(Option.getOrUndefined(parseJson(line)));
+  const type = row?.["type"];
+
+  if (row === undefined || (type !== "assistant" && type !== "user") || row["isSidechain"] === true) return undefined;
+  const content = asObject(row["message"])?.["content"];
+
+  const blocks = (Array.isArray(content) ? content : []).flatMap((b) => {
+    const block = asObject(b);
+
+    return block === undefined ? [] : [block];
+  });
+
+  return { type, row, blocks };
+}
+
+/**
+ * Whether the session's turn is in a tool call, as the transcript at `path` holds it: a `tool_use` of an
+ * `assistant` entry in its last {@link TAIL_BYTES} has no `tool_result` after it. A tool call writes nothing
+ * while it runs (a build, a subagent in the foreground, a permission prompt nobody answered), so such a
+ * session is not idle though its transcript is quiet.
+ *
+ * Read from Claude Code 2.1.29x transcripts (2026-10-12): an `assistant` line carries one content block, a
+ * `tool_use` with its `id`; its result is a later `user` line with a `tool_result` block naming that id
+ * (`tool_use_id`); an interrupted call is given a result too. A `user` line that carries no result and is
+ * not `isMeta` is a prompt: it begins another turn, and what was open before it is not this turn's. A call
+ * written before `sinceMs` (when the process that runs now started) was another process's: the session was
+ * closed in the middle of it and resumed, and nothing runs it now.
+ */
+export function toolAwaited(path: string, sinceMs: number | undefined = undefined): boolean {
+  let size: number;
+
+  try {
+    size = statSync(path).size;
+  } catch {
+    return false;
+  }
+
+  const from = Math.max(0, size - TAIL_BYTES);
+  let lines: string[];
+
+  try {
+    lines = readRange(path, from, size).toString("utf8").split("\n");
+  } catch {
+    return false;
+  }
+
+  const open = new Map<string, number | undefined>();
+
+  for (const line of lines.slice(from > 0 ? 1 : 0)) {
+    const entry = entryOf(line);
+
+    if (entry === undefined) continue;
+
+    if (entry.type === "assistant") {
+      for (const block of entry.blocks) {
+        const id = asString(block["id"]);
+
+        if (block["type"] === "tool_use" && id !== undefined) open.set(id, parseInstant(asString(entry.row["timestamp"]) ?? ""));
+      }
+
+      continue;
+    }
+
+    const results = entry.blocks.filter((b) => b["type"] === "tool_result");
+
+    for (const result of results) open.delete(asString(result["tool_use_id"]) ?? "");
+
+    if (results.length === 0 && entry.row["isMeta"] !== true) open.clear();
+  }
+
+  return [...open.values()].some((at) => sinceMs === undefined || at === undefined || at >= sinceMs);
 }
 
 const WHO = /(?:your id is|You are) ([A-Za-z][A-Za-z0-9_.-]*?)[,.\s"]/;
@@ -285,7 +429,8 @@ export class SpendReader {
 export class AiTitles {
   private readonly held = new Map<string, { offset: number; inode: bigint; title: string | undefined }>();
 
-  /** The last AI title in the transcript at `path`, or undefined when it has none. */
+  /** The last AI title in the transcript at `path`, or undefined when it has none; of one that cannot be
+   * read, the last it read. */
   latest(path: string): string | undefined {
     let stat: { readonly size: bigint; readonly ino: bigint };
 
@@ -303,7 +448,16 @@ export class AiTitles {
     if (held === undefined || size < held.offset || stat.ino !== held.inode) held = { offset: 0, inode: stat.ino, title: undefined };
 
     if (size > held.offset) {
-      const chunk = readRange(path, held.offset, size);
+      let chunk: Buffer;
+
+      try {
+        chunk = readRange(path, held.offset, size);
+      } catch {
+        // A transcript that cannot be read names nothing new: the registry reads every fleet's, and one
+        // fleet's file must not stop the others being listed.
+        return held.title;
+      }
+
       const whole = chunk.subarray(0, chunk.lastIndexOf(0x0a) + 1);
       held.offset += whole.length;
 

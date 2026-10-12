@@ -17,6 +17,7 @@ import { stampOf, parseInstant } from "./clock.ts";
 import { exists, isDir, listDir, makeDirs, readText, remove, resolvePath, writeAtomic } from "./files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject } from "./json.ts";
 import { withExclusiveLock } from "./lock.ts";
+import { startedOf } from "./procs.ts";
 import { AiTitles, sessionFolderOf, transcriptOf } from "./transcripts.ts";
 
 /** The names the chat keeps for itself. */
@@ -451,6 +452,8 @@ export class Registry {
         dir,
         url,
         pid,
+        // When that process started: with it, a later process that has its pid is not taken for the host (host.ts).
+        started: startedOf(pid) ?? null,
         session: title ?? priorSession ?? null,
         session_id: session ?? null,
         since: known === undefined ? stamp : (asString(known["since"]) ?? stamp),
