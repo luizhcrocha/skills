@@ -667,6 +667,7 @@ kept[]?       {id, text, at}
 workspace_mode? "isolated" | "shared"   `set --workspaces`; absent reads as isolated
 workspaces[]? {id (the jj workspace's name), agent (its worker now), path, repo (the default workspace's root),
                base (change id), added, status (active|pruned), pruned?,
+               preview? ("out": added out of the combined preview, `ws add --no-preview`),
                handovers[]? {from (the worker that held it before), at},
                hook? {command (".fleet/ws-add" | "devenv-run --prepare"), at, exit (null: timed out, killed,
                interrupted, or could not start), seconds, timed_out?, interrupted? (the signal `add` got),
@@ -3868,7 +3869,7 @@ makes as few as the work allows: sequential work **reuses** a lane's workspace (
 one is for parallel workers whose files could meet, risky experiments, and arena or swarm comparisons; and
 a fleet may opt into one **shared** working copy (`workspace_mode: "shared"`).
 
-- `fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] [--hook-timeout S]`: `jj workspace add <repo>-NAME -r
+- `fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] [--no-preview] [--hook-timeout S]`: `jj workspace add <repo>-NAME -r
   <BASE's commit> --name NAME`, beside the default workspace of the repo `--repo` (else the cwd) is
   in. BASE defaults to `@-` there and must name one commit. Refused: an invalid name or `default`, a
   name the ledger or jj already has, an existing directory, no jj repo. Records `{id, agent (--agent,
@@ -3880,7 +3881,14 @@ a fleet may opt into one **shared** working copy (`workspace_mode: "shared"`).
   still made: `ws: a1's workspace a1 covers b2's lane and nobody works in it (a1 done): reuse it: \`fleet
   ws DIR add b2 --reuse a1\` keeps its setup; a fresh one is for parallel work that could meet, a risky
   experiment, or a comparison`.
-- `fleet ws DIR add WORKER --reuse WORKSPACE|WORKER [-r BASE]`: hands the active workspace named
+  `--no-preview` (TypeScript only) adds the workspace out of the fleet's [combined preview](#the-preview-fleet-preview):
+  the row gains `preview: "out"`, the note ends `, out of the preview`, and `add` prints `preview: a9's
+  workspace is out of the fleet's combined preview (--no-preview); \`fleet preview DIR include a9\` takes
+  it in`. It is for a worker whose workspace holds copies of changes the preview already has (a landing, a
+  rebase, a review). Without it a worker's workspace is in the preview, as UI workers need: nothing known
+  when a workspace is added tells a landing worker from another (the four of 2026-10-13 were added on the
+  stack like any worker, and copied the changes later), so the default did not change.
+- `fleet ws DIR add WORKER --reuse WORKSPACE|WORKER [-r BASE] [--no-preview]`: hands the active workspace named
   WORKSPACE (else the one whose worker is WORKER) to WORKER. Refused: none found; it is WORKER's already;
   its worker is running, queued or blocked (`ws: workspace a1 is a1's, and a1 is running: a workspace
   changes hands once its worker is done or stopped, never while it works there`); WORKER already holds
@@ -3890,7 +3898,9 @@ a fleet may opt into one **shared** working copy (`workspace_mode: "shared"`).
   undescribed, so the next worker never amends the last one's change. The row's `agent` becomes WORKER,
   `base` the new `@`'s parent, and `handovers` gains `{from: <the last holder>, at}`; a note event
   (`Workspace a1 handed from a1 (done) to b1 at PATH, on <change>.`), the page rendered, and the same two
-  lines printed (`workspace a1 for b1 at PATH, reused from a1, on <change>`, then the brief line).
+  lines printed (`workspace a1 for b1 at PATH, reused from a1, on <change>`, then the brief line). A
+  workspace out of the preview stays out for its next holder (the row keeps `preview: "out"`; `add` says
+  `(as a1 had it)`), and `--no-preview` takes a handed one out.
 - **The ws-add hook** (TypeScript only). Once `add` has made a workspace, or `--reuse` has handed one
   over, it prepares it, so a worker does not pay the repo's setup (a saved devenv env, a uv venv: about
   70 s) on its first command. The repo's own executable `<root>/.fleet/ws-add WORKSPACE SOURCE` (root: the
@@ -4009,17 +4019,72 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
     trunk())) ~ empty()`, the stack as given above: trunk() counts because a coordinator that lands by moving a bookmark leaves the
     default workspace's @ behind; asked once per commit, stack and trunk), and stops there when no commit
     moved. Otherwise it rebases the
-    preview's @ onto the new parents in place (`rebase -r preview@ -d …`, `--ignore-working-copy`, the
-    change kept), and when the preview's @ is a commit its files are not at (a worker's snapshot rebases
+    preview's @ onto the new parents in place (`rebase -r preview@ -d 'heads(present("<workspace>"@) | …
+    | (<the stack's revset>))'`, `--ignore-working-copy`, the change kept; a merge already in place makes
+    no operation). The parents are named, never given as the commit ids the look read: jj resolves the
+    names in the operation that rebases, since a worker's own jj command may have rewritten a commit read
+    a moment before, and a rebase onto a hidden commit makes it visible again, a second copy of the
+    worker's change (`Change ID is divergent` at its next command) and a head no workspace is at (measured
+    2026-10-13). The default rule's stack goes in as `coalesce("default"@ ~ (empty() &
+    description(exact:"") & ~merges()), "default"@-)`, the same commit the read gives. For the same
+    reason `fleet ws add` and `--reuse -r` name their base by its change id, `start` adds the preview's
+    workspace at the stack's revset, and `prune` abandons the preview's merge by its change id. When a
+    worker's own jj command and the look's rebase run at once, jj keeps both results as two copies of the
+    preview's change: the look abandons the copy the preview's workspace is not at, at its next read. When the preview's @ is a commit its files are not at (a worker's snapshot rebases
     the preview's @, a descendant, in the same operation) runs `workspace update-stale` there, which
     writes only the files that changed, so the dev server's hot reload picks them up. A file the preview's
     directory had of its own (not ignored) is kept by jj in a divergent copy of the change, which is
     abandoned, and the updater says so. It stops when the record no longer names it.
-  - **Conflicts** are not blocking: jj records them in the merge and writes their markers. The files are
-    read from the commit (`self.conflicted_files()`, what `jj resolve --list` lists, with repository
-    paths), each with the included workers whose changes ahead of the stack touch it.
+  - **A conflicted merge is never served** (2026-10-13; before, jj's conflict markers were written into the
+    preview's files, and on 2026-10-13 four landing workers' workspaces left the UI fleet's :7501
+    answering 500 for four minutes). The rebase of the preview's @ writes no file, so it is the trial: a
+    merge jj marks conflicted is not kept, and `workspace update-stale` runs only on a merge read clean,
+    so the files go from one clean merge to the next. The worker whose workspace would conflict the merge is
+    **left out**, the others stay merged, and the record names it (`left_out[] {id, workspace, commit,
+    own, conflicts[] {path, workers[]}}`: the files, from the trial's `self.conflicted_files()`, each
+    with the merged workers whose changes ahead of the stack touch it; none: the stack). A worker whose
+    own @ is conflicted (a rebase it has not resolved) is left out untried (`own`). The workers the last
+    look left out are tried one at a time on top of the others; when the others conflict among
+    themselves, every worker is tried one at a time: first those the last merge held at the commit they
+    are at, then those whose commit moved, then the new ones, then those left out, each group in the
+    ledger's order, so of two workers that meet the one whose edit brought the conflict is left out. When
+    two workers' commits both moved between two looks, the one whose commit in the last merge already
+    changed a file that is conflicted now is tried first: the worker that held the file stays, the one
+    new to it is left out, whatever the ledger's order. A
+    left-out worker is tried again whenever a commit of the merge, its own or the stack moves, and is
+    back in once it merges clean; a trial that conflicted is remembered by its commits and not repeated.
+    A stack that is itself conflicted fails the look (`the stack (<commit>) is itself conflicted in
+    <files>: nothing merges clean on it, so the last good merge stands`). When a look leaves out a
+    worker the last one merged, the updater appends one line to the fleet's chat, from `fleet-hub` to the
+    fleet's host (`[hub] The preview left a3 out of its merge: its edits conflict with a1's in
+    "src/x.tsx". It keeps serving the merge without a3, and takes it back in once it merges clean
+    (...)`), unless the chat holds the same line (the same worker and reason) from the last 10 minutes: a
+    worker that goes out and back in at every save woke the host at each (40 lines in 40 flaps, measured
+    2026-10-13). The line is a fixed sentence: each file's name is in it as a JSON string of at most 120
+    characters (a name may hold a newline and `[hub] …`), five at most, then `and N more`; jj prints the
+    paths JSON-escaped, so a name with a newline is one path. `start` prints the same fact on stderr
+    (`preview: a3 is left out of the merge: ...`) with the first look's error, if any. `exclude WORKER`
+    drops its `left_out` row. A worker's own jj command that snapshots a conflicting edit between the
+    look's last read and the write rebases the preview's @ under it (markers reached the served files in
+    10 of 40 rounds, measured 2026-10-13, and stayed until the next look). A merge found conflicted,
+    before the write or after it, is now fitted again at once, in the same look, at most twice: the
+    worker that moved is then out of the merge, where its commands no longer move the preview's @. After
+    that, a merge still conflicted before its write fails the look and the files of the last clean merge
+    stay; when markers were written, the look writes the stack alone and says so (`the preview serves the
+    stack alone until the next look`), since no jj command writes an older merge's files without making
+    hidden commits visible. Each file a conflicted write touched is read as the look ends, and a look that
+    leaves jj's marker lines in one says so and writes again at the next. So markers can be in a served
+    file for the part of one look between two writes, never from one look to the next.
+    Measured on 2026-10-13: a copy of a change the merge has (`jj duplicate`, same content, another
+    change id, on the same base or on a newer stack that does not touch the same lines) merges clean,
+    then and now. The four workspaces held duplicates onto `master@origin`, 83 commits past the base of
+    the one original measured: two were conflicted themselves when taken in, and a third, clean and
+    equal to its original at first, was then edited on lines the original, still in the merge, had
+    changed.
 - **Picking**: a worker with an active workspace is in the merge unless it was taken out (`exclude
-  WORKER`): always when it is running, queued or blocked or was taken in (`include WORKER`); otherwise
+  WORKER`), its workspace was added out of the preview (`fleet ws DIR add ... --no-preview`, the row's
+  `preview: "out"`) and it was not taken in since (`ws add --no-preview` and `ws prune` take the worker's
+  id off the record's `include[]`: taking in a workspace says nothing of the next one of that name), or the last look left it out (above): always when it is running, queued or blocked or was taken in (`include WORKER`); otherwise
   (done, failed, any other status) while its changes are not in the stack, so a done worker's work shows
   until it is integrated and drops out once its @'s changes are ancestors of the stack or of trunk(), or
   its workspace is gone. The page's boxes take in and out through the hub; the page's `included` is the same rule, from
@@ -4117,17 +4182,29 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
     `stopTree` does for an orphan. Before any signal the pid's start time is read again: a pid that no
     longer has it (a reboot, a reused pid) is never signalled, and counts as gone to `status` and the hub.
     A record from before start times were kept (1.9.37) proves a server only within 3 s of its `started`
-    stamp, and a keeper or updater not at all (an updater ends by itself once the record no longer names
-    it). `stop` takes the keeper off the record first, then stops it, then stops the server the record
+    stamp, a keeper not at all, and an updater by its command line: the pid runs `<bun>
+    /…/fleet/src/main.ts preview DIR updater`, as `start` spawns it (`/proc/PID/cmdline`; `ps -o args=` on
+    the Mac), and DIR's record is this preview's and names that pid. Another program whose arguments only
+    end with `preview DIR updater` is a stranger, and `stop` never signals it. Such an updater runs the
+    merge of the version that started it, so `status` adds under its line `started before this version, so
+    it merges as that version did: \`fleet preview DIR stop\` then \`fleet preview DIR start\` to get the
+    conflict handling`. Before 2026-10-13 such an updater counted as gone, so `status` said `updater: not running` and
+    the page `not updating` while it merged (the UI fleet's, started 2026-10-09, three days before start
+    times were kept), and `start` would have started a second one beside it. An updater also ends by
+    itself once the record no longer names it. `stop` takes the keeper off the record first, then stops it, then stops the server the record
     names after: a keeper starts a server only under the record's lock while the record names it, and a
     signal ends it between ticks, never between a start and its record, so a `stop` racing a wake leaves
     nothing running. `fleet serve DIR --stop` stops the fleet's keepers and the servers they keep, since no
     request reaches them after; a server with no keeper runs on until `fleet preview DIR stop`. The orphan
     report counts the keepers among the preview's own processes.
 - `status`: the address, the stack (`stack: devloop@ (<commit>)`, or `stack: the default workspace's @
-  (<commit>)`), the dev server (pid, port, answering), the updater, each worker's workspace
-  (`[x]` merged at its commit and change, `[ ]` and why not: `running`, `taken in`, `taken out`, `done,
-  merged`, `done, already in the stack`, `done, its workspace is gone`), the conflicts, the updater's last error and
+  (<commit>)`), the dev server (pid, port, answering), the updater (`updater: pid N, every S s`, or
+  `not running`), each worker's workspace
+  (`[x]` merged at its commit and change, `[ ]` and why not: `running`, `taken in`, `taken out`, `added
+  out of the preview`, `left out: its edits conflict with a1's in <files>` (or `with the stack`, or `its
+  own @ is conflicted in <files>`; each a JSON string, five files at most, then `and N more`), `done,
+  merged`, `done, already in the stack`, `done, its workspace is gone`), the conflicts (a record an
+  earlier updater wrote, or a stack-alone merge that is itself conflicted), the updater's last error and
   the dev server's last error (below); the same for each per-worker preview.
 - `stop [--per-worker WORKER | --all]`: stops each by its scope or its tree, while it still has its
   recorded start time (*Processes* above; the updater first, then each server's keeper before the server):
@@ -4138,7 +4215,8 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   runs (`ws: kept preview: the fleet's preview is running (...)`) or when its @ holds changes of its own; otherwise it forgets it, abandons its merge
   commit, deletes the directory and the record.
 - **The record**, `DIR/preview.json`: `{fleet, workspace, path, repo, server {cmd, port, pid, pid_started, unit, base, path,
-  log, started, public, keeper, keeper_started, keeper_unit, asleep, failed {at, why, log}}, updater, updater_started, include[], exclude[], merged[] {id, workspace, commit, change}, stack,
+  log, started, public, keeper, keeper_started, keeper_unit, asleep, failed {at, why, log}}, updater, updater_started, include[], exclude[], merged[] {id, workspace, commit, change},
+  left_out[] {id, workspace, commit, own, conflicts[] {path, workers[]}}, stack,
   stack_from (the revset the last merge's stack came from, null for the default rule), stack_given
   (`start --stack`'s, for that start), commit, conflicts[] {path, workers[]}, error, updated, workers[] (per-worker servers), ports {combined,
   workers}}`. It is not a key of
@@ -4188,7 +4266,9 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   machine's certificate.
 - **The page** (the view's `preview`, only when `DIR/preview.json` exists, so no trace changes): `{url
   ("preview/", or null with only per-worker ones), address, running, up, port, log, updater, every,
-  workers[] {id, name, status, included, commit, change}, conflicts[], error, updated, per_worker[]
+  workers[] {id, name, status, included, commit, change}, conflicts[],
+  error (the updater's last error, then one sentence per worker left out: the page shows it under "The
+  updater", and that worker's box unticked), updated, per_worker[]
   {worker, url, address, running, up, port, log, public, public_url, public_error}, public, public_url,
   public_error}`, `public` the root-mode public port or null, `public_url` the `https://<MagicDNS
   name>:<public>/` the running hub serves it at (null while it serves none) and `public_error` the
@@ -4335,7 +4415,7 @@ recommendation attached.
 | `fleet ws split` | `DIR/state.json` (`events`, `updated`), `DIR/index.html`; the default workspace's `@` split in two |
 | `fleet preview start` / `stop` / `set` | `DIR/state.json` (`workspaces` with the preview's row on its first start, `preview` by `set`, `events`, `updated`), `DIR/index.html`; `DIR/preview.json` (under `DIR/preview.lock`); `DIR/preview/*.log`; the `<repo>-preview` workspace (made once); a node_modules install in a workspace that has none |
 | `fleet preview include` / `exclude`, the hub's `POST preview-workers` | `DIR/preview.json` |
-| `fleet preview`'s updater | `DIR/preview.json` when the merge changed; the preview workspace's @ (rebased) and its files (`update-stale`); jj's operation log (each worker snapshot that records an edit) |
+| `fleet preview`'s updater | `DIR/preview.json` when the merge changed; the preview workspace's @ (rebased, also for each trial of a worker that may conflict) and its files (`update-stale`, a clean merge only); jj's operation log (each worker snapshot that records an edit); `DIR/chat.jsonl` (one `[hub]` line when a worker is left out, the same worker and reason not again within 10 minutes) |
 | `fleet ws prune --apply` of the preview | its directory deleted, its merge commit abandoned, `DIR/preview.json` removed |
 
 ## Oracle traces

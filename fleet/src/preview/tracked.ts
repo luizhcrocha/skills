@@ -70,6 +70,14 @@ export function startedAt(pid: number): number | undefined {
   return Number.isNaN(ticks) ? undefined : boot + ticks / TICKS;
 }
 
+/** The arguments process `pid` runs with (its program first), or none when it is gone or they cannot be read:
+ * `/proc/PID/cmdline`, and on the Mac `ps -o args=` split at spaces (a path with a space is then several). */
+export function argsOf(pid: number): string[] {
+  if (DARWIN) return (spawnSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8" }).stdout ?? "").trim().split(/\s+/).filter((a) => a !== "");
+
+  return (readText(`/proc/${pid}/cmdline`) ?? "").split("\0").filter((a) => a !== "");
+}
+
 /** `pid`, just started (in `unit`, when given), with its start time read now. */
 export function track(pid: number, unit: string | null): Tracked {
   return { pid, started: startedAt(pid) ?? null, unit };

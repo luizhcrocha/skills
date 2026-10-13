@@ -162,6 +162,7 @@ function writeRecord(record: Partial<PreviewRecord>): void {
     include: [],
     exclude: [],
     merged: [],
+    left: [],
     stack: null,
     stackFrom: null,
     stackGiven: null,

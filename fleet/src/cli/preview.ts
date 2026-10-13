@@ -11,7 +11,8 @@
  *   its parent when that @ is empty and undescribed).
  * - `start --per-worker WORKER [--cmd C] [--port N] [--setup C] [--root]`: a dev server in that worker's
  *   own workspace, at `/f/<fleet>/preview/<worker>/`. No merge.
- * - `status`: the address, the workers and their commits, the conflicts, the dev servers' last error.
+ * - `status`: the address, the workers and their commits, the workers left out because their workspace would
+ *   conflict the merge (with the files), the dev servers' last error.
  * - `include WORKER` / `exclude WORKER`: take a worker into the merge, or out of it.
  * - `stop [--per-worker WORKER | --all]`: stop the combined preview's dev server and the updater (or that
  *   worker's server; `--all`: both and every per-worker one). The workspace stays for the next start;
@@ -46,12 +47,12 @@ import { Out } from "../io.ts";
 import { asArray, asBoolean, asObject, asString, type Json, type JsonObject } from "../json.ts";
 import { upAllSync } from "../page/probe.ts";
 import { lastError, freePort, logTail, planCommand, fill, runSetup, setupCommand, startDetached, startServer, tail } from "../preview/devserver.ts";
-import { readCopies, resolveStack, stackOf } from "../preview/merge.ts";
+import { listed, quoted, readCopies, resolveStack, stackName, stackOf } from "../preview/merge.ts";
 import { keeperProc, logDir, readRecord, serverProc, updateRecord, updaterProc, type DevServer, type PreviewRecord, type WorkerServer } from "../preview/record.ts";
 import { allocate } from "../preview/ports.ts";
 import { asleep, idleMs, kept, restartCommand, runKeeper, serverStanding, sleeps, stopServer } from "../preview/sleep.ts";
 import { runs, scopes, stopTracked, unitName, type Tracked } from "../preview/tracked.ts";
-import { candidates, everyMs, freshMemory, included, ledgerStack, lookOnce, pick, runUpdater, standing } from "../preview/updater.ts";
+import { candidates, everyMs, freshMemory, included, ledgerStack, leftLines, lookOnce, pick, runUpdater, standing } from "../preview/updater.ts";
 import { jj, why, workspaceNames, workspaceRoot } from "../ws/jj.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
@@ -63,6 +64,11 @@ const USAGE =
 
 /** The jj workspace the combined preview runs in. */
 const PREVIEW = "preview";
+
+/** What `status` says of an updater whose record has no start time: it was started before 1.9.37, and runs
+ * the merge of the version that started it for as long as it runs. */
+const OLD_UPDATER = (root: string): string =>
+  `started before this version, so it merges as that version did: \`fleet preview ${root} stop\` then \`fleet preview ${root} start\` to get the conflict handling`;
 
 /** The CLI's entry point: the updater runs it as its own process. */
 const MAIN = fileURLToPath(new URL("../main.ts", import.meta.url));
@@ -401,7 +407,8 @@ function previewWorkspace(raw: JsonObject, repoGiven: string | undefined, machin
   const stack = revset === null ? defaultStack(main) : resolveStack(main, revset);
 
   if (stack instanceof PreviewError) return stack;
-  const made = jj(main, ["workspace", "add", path, "-r", stack, "--name", PREVIEW]);
+  // By the stack's name, which jj resolves as it adds; `stack`, read above, proved it names one commit.
+  const made = jj(main, ["workspace", "add", path, "-r", stackName(revset), "--name", PREVIEW]);
 
   if (!made.ok) return no(why(made));
   const change = jj(main, ["log", "--no-graph", "-r", stack, "-T", "change_id"], true).stdout.trim();
@@ -463,6 +470,7 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
       include: now?.include ?? [],
       exclude: now?.exclude ?? [],
       merged: now?.merged ?? [],
+      left: now?.left ?? [],
       stack: now?.stack ?? null,
       stackFrom: now?.stackFrom ?? null,
       stackGiven,
@@ -534,6 +542,10 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
 
     if ((record?.conflicts.length ?? 0) > 0) out.err(`preview: the merge has conflicts: ${conflictLine(record?.conflicts ?? [])}\n`);
 
+    for (const line of leftLines(record ?? { left: [] })) out.err(`preview: ${line}; the preview serves the merge without it (\`fleet preview ${root} status\`)\n`);
+
+    if (record !== undefined && record.error !== null) out.err(`preview: the updater's first look says: ${record.error}\n`);
+
     return came === "exited" ? 1 : 0;
   });
 }
@@ -589,6 +601,7 @@ function startPerWorker(machine: Machine, root: string, raw: JsonObject, worker:
         include: [],
         exclude: [],
         merged: [],
+        left: [],
         stack: null,
         stackFrom: null,
         stackGiven: null,
@@ -625,7 +638,7 @@ function startPerWorker(machine: Machine, root: string, raw: JsonObject, worker:
 // -- status -------------------------------------------------------------------------------------
 
 function conflictLine(conflicts: readonly { readonly path: string; readonly workers: readonly string[] }[]): string {
-  return conflicts.map((c) => `${c.path} (${c.workers.length === 0 ? "the stack" : c.workers.join(", ")})`).join(", ");
+  return listed(conflicts.map((c) => `${quoted(c.path)} (${c.workers.length === 0 ? "the stack" : c.workers.join(", ")})`));
 }
 
 function serverLine(machine: Machine, root: string, worker: string | undefined, s: DevServer): string {
@@ -665,6 +678,8 @@ function status(machine: Machine, root: string, raw: JsonObject): Effect.Effect<
 
       if (record.server !== null) out.out(`  dev server: ${serverLine(machine, root, undefined, record.server)}\n${publicLine(machine, record.server) ?? ""}`);
       out.out(`  updater: ${updater ? `pid ${record.updater}, every ${everyMs(machine) / 1000} s` : "not running"}\n`);
+
+      if (updater && record.updaterStarted === null) out.out(`    ${OLD_UPDATER(root)}\n`);
       const all = candidates(raw);
 
       for (const c of all) {
@@ -736,9 +751,10 @@ function stop(machine: Machine, root: string, raw: JsonObject, worker: string | 
     }
 
     // The updater first, so it does not look again while the servers go; then each server with its keeper
-    // (`stopServer`), so none is woken while it goes.
+    // (`stopServer`), so none is woken while it goes. It is proved while the record still names it.
+    const updater = updaterProc(record);
     updateRecord(root, (now) => (now === undefined ? undefined : { ...now, updater: null, updaterStarted: null }));
-    stopTracked(updaterProc(record), { path });
+    stopTracked(updater, { path });
 
     if (record.server !== null) stopServer(root, undefined, path);
 

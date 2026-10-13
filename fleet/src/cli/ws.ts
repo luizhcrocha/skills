@@ -1,13 +1,17 @@
 /**
  * `fleet ws DIR …`: the jj workspaces a fleet's workers edit in, recorded in the ledger (`workspaces[]`).
  *
- * - `add NAME [-r BASE] [--agent ID] [--repo PATH]`: `jj workspace add <repo>-NAME -r BASE --name NAME`
+ * - `add NAME [-r BASE] [--agent ID] [--repo PATH] [--no-preview]`: `jj workspace add <repo>-NAME -r BASE --name NAME`
  *   beside the repo's default workspace (the one `--repo`, else the cwd, is in); BASE defaults to `@-`
  *   there. Records the worker (`--agent`, else NAME), the path and the base change, and prints the path
  *   for the brief. It warns when an idle workspace already covers the worker's lane: that one is reused.
- * - `add WORKER --reuse WORKSPACE|WORKER [-r BASE]`: hands a recorded workspace whose worker is no longer
+ *   `--no-preview` adds it out of the fleet's combined preview (`fleet preview`), which otherwise merges
+ *   every worker's workspace: for a worker whose workspace holds copies of changes the preview already
+ *   has (a landing, a rebase, a review). `fleet preview DIR include WORKER` takes it in.
+ * - `add WORKER --reuse WORKSPACE|WORKER [-r BASE] [--no-preview]`: hands a recorded workspace whose worker is no longer
  *   at work to the next worker of its lane, on a fresh change (on BASE when given, else on what the last
- *   holder left), and records who held it before. Its setup (dependencies, a dev shell, build caches) stays.
+ *   holder left), and records who held it before. Its setup (dependencies, a dev shell, build caches) stays,
+ *   and so does its place out of the preview when it was added out of it.
  * - After either, the repo's own executable `<repo>/.fleet/ws-add WORKSPACE SOURCE` prepares the workspace
  *   (SOURCE: the default workspace, or the workspace handed over); a devenv repo without one gets
  *   `devenv-run --prepare`. At most `--hook-timeout` seconds (100, under a Bash tool call's 120 s), then its
@@ -46,6 +50,7 @@ import { decodeLedger } from "../ledger/model.ts";
 import { readRecord, recordPath, serverProc, updateRecord, updaterProc } from "../preview/record.ts";
 import { kept, serverStanding } from "../preview/sleep.ts";
 import { runs } from "../preview/tracked.ts";
+import { forgetIncluded, OUT } from "../preview/updater.ts";
 import { validate } from "../ledger/validate.ts";
 import { cliLookups } from "../page/lookups.ts";
 import { pageHtml, readTemplate, writePage } from "../page/render.ts";
@@ -57,7 +62,7 @@ import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 
 const USAGE =
-  "usage: fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] [--hook-timeout S] | add WORKER --reuse WORKSPACE|WORKER [-r BASE] [--hook-timeout S] | " +
+  "usage: fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] [--no-preview] [--hook-timeout S] | add WORKER --reuse WORKSPACE|WORKER [-r BASE] [--no-preview] [--hook-timeout S] | " +
   "split WORKER -m MESSAGE [--repo PATH] | list | prune [--apply | --dry-run]";
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
@@ -253,6 +258,13 @@ function reportHook(machine: Machine, out: Out["Service"], root: string, made: M
   if (fault !== undefined) out.err(`ws: the hook's run is not recorded: ${fault.reason}\n`);
 }
 
+/** The flag that adds a workspace out of the fleet's combined preview. */
+const NO_PREVIEW = "--no-preview";
+
+/** The line `add` prints for a workspace that is out of the preview. */
+const OUT_LINE = (root: string, worker: string, why: string): string =>
+  `preview: ${worker}'s workspace is out of the fleet's combined preview (${why}); \`fleet preview ${root} include ${worker}\` takes it in\n`;
+
 /** The line `add` prints for the brief. */
 const BRIEF_LINE = (path: string): string =>
   `brief: your working copy is ${path}; edit, build and describe your changes there only. The coordinator rebases them onto the stack and prunes the workspace.\n`;
@@ -260,7 +272,9 @@ const BRIEF_LINE = (path: string): string =>
 function add(machine: Machine, root: string, raw: JsonObject, argv: readonly string[]): Effect.Effect<number, Refusal, Out> {
   return Effect.gen(function* () {
     if (VALUED.has(argv.at(-1) ?? "")) return yield* refuse(USAGE);
-    const [baseGiven, a] = option(argv, "-r", "--revision");
+    const noPreview = argv.includes(NO_PREVIEW);
+    const given = argv.filter((x) => x !== NO_PREVIEW);
+    const [baseGiven, a] = option(given, "-r", "--revision");
     const [agentGiven, b] = option(a, "--agent");
     const [repoGiven, c] = option(b, "--repo");
     const [reuse, d] = option(c, "--reuse");
@@ -277,10 +291,10 @@ function add(machine: Machine, root: string, raw: JsonObject, argv: readonly str
     if (reuse !== undefined) {
       if (agentGiven !== undefined || repoGiven !== undefined) return yield* refuse(`--reuse takes the worker as NAME, and the workspace knows its repo: ${USAGE}`);
 
-      return yield* handOver(machine, root, raw, name, reuse, baseGiven, timeout);
+      return yield* handOver(machine, root, raw, name, reuse, baseGiven, timeout, noPreview);
     }
 
-    return yield* addFresh(machine, root, raw, name, agentGiven ?? name, repoGiven, baseGiven ?? "@-", timeout);
+    return yield* addFresh(machine, root, raw, name, agentGiven ?? name, repoGiven, baseGiven ?? "@-", timeout, noPreview);
   });
 }
 
@@ -322,6 +336,7 @@ function addFresh(
   repoGiven: string | undefined,
   base: string,
   timeout: number,
+  noPreview: boolean,
 ): Effect.Effect<number, Refusal, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
@@ -342,13 +357,17 @@ function addFresh(
     const from = at?.[0];
 
     if (at === undefined || from === undefined || at.length !== 1) return yield* refuse(`-r ${base} names ${at?.length ?? "no"} commit(s) in ${main}; give one`);
-    const made = jj(main, ["workspace", "add", path, "-r", from.commit, "--name", name]);
+    // By the change's name, which jj resolves as it adds: the commit read above may be rewritten by now, and
+    // a workspace on a hidden commit makes it visible again, a second copy of its change.
+    const made = jj(main, ["workspace", "add", path, "-r", from.change, "--name", name]);
 
     if (!made.ok) return yield* refuse(why(made));
     const stamp = stampOf(machine.now());
     const port = freePort(machine, raw);
-    const row: JsonObject = { id: name, agent, path, repo: main, base: from.change, added: stamp, status: "active", port };
-    const fault = save(machine, root, raw, [...(asArray(raw["workspaces"]) ?? []), row], [event(machine, raw, agent, "note", `Workspace ${name} for ${agent} at ${path}, on ${described(from)}.`)]);
+    const made$: JsonObject = { id: name, agent, path, repo: main, base: from.change, added: stamp, status: "active", port };
+    const row: JsonObject = noPreview ? { ...made$, preview: OUT } : made$;
+    const note = `Workspace ${name} for ${agent} at ${path}, on ${described(from)}${noPreview ? ", out of the preview" : ""}.`;
+    const fault = save(machine, root, raw, [...(asArray(raw["workspaces"]) ?? []), row], [event(machine, raw, agent, "note", note)]);
 
     if (fault !== undefined) return yield* Effect.fail(fault);
     const stopped = yield* prepare(machine, out, root, { id: name, worker: agent, repo: main, workspace: path, source: main }, timeout);
@@ -364,6 +383,12 @@ function addFresh(
     }
 
     out.out(`workspace ${name} for ${agent} at ${path}, on ${described(from)}; its dev-server port is ${String(port)}\n`);
+
+    if (noPreview) {
+      forgetIncluded(root, agent);
+      out.out(OUT_LINE(root, agent, NO_PREVIEW));
+    }
+
     out.out(BRIEF_LINE(path));
 
     return 0;
@@ -399,6 +424,7 @@ function handOver(
   target: string,
   base: string | undefined,
   timeout: number,
+  noPreview: boolean,
 ): Effect.Effect<number, Refusal, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
@@ -436,7 +462,7 @@ function handOver(
       const onto = at?.[0];
 
       if (at === undefined || onto === undefined || at.length !== 1) return yield* refuse(`-r ${base} names ${at?.length ?? "no"} commit(s) in ${r.repo}; give one`);
-      const moved = jj(r.path, ["new", onto.commit]);
+      const moved = jj(r.path, ["new", onto.change]);
 
       if (!moved.ok) return yield* refuse(why(moved));
     } else if (!tip.empty || tip.description !== "") {
@@ -451,8 +477,13 @@ function handOver(
     if (parent === undefined || changes(r.repo, `${literal(r.id)}@-`)?.length !== 1) return yield* refuse(`workspace ${r.id}'s @ has no single parent; give -r BASE`);
     const stamp = stampOf(machine.now());
     const handovers = [...(asArray(r.row["handovers"]) ?? []), { from: r.agent, at: stamp }];
-    const workspaces = (asArray(raw["workspaces"]) ?? []).map((item) => (asObject(item) === r.row ? { ...r.row, agent: worker, base: parent.change, handovers } : item));
-    const text = `Workspace ${r.id} handed from ${r.agent} (${status ?? "no row"}) to ${worker} at ${r.path}, on ${described(parent)}.`;
+    // A workspace added out of the preview stays out for the lane's next worker, whose work is of the same
+    // kind: the row keeps its `preview`.
+    const was = r.row["preview"] === OUT;
+    const handed: JsonObject = { ...r.row, agent: worker, base: parent.change, handovers };
+    const next: JsonObject = noPreview ? { ...handed, preview: OUT } : handed;
+    const workspaces = (asArray(raw["workspaces"]) ?? []).map((item) => (asObject(item) === r.row ? next : item));
+    const text = `Workspace ${r.id} handed from ${r.agent} (${status ?? "no row"}) to ${worker} at ${r.path}, on ${described(parent)}${noPreview || was ? ", out of the preview" : ""}.`;
     const fault = save(machine, root, raw, workspaces, [event(machine, raw, worker, "note", text)]);
 
     if (fault !== undefined) return yield* Effect.fail(fault);
@@ -461,6 +492,10 @@ function handOver(
     if (stopped !== undefined) return stopped;
     noRowYet(out, root, raw, worker);
     out.out(`workspace ${r.id} for ${worker} at ${r.path}, reused from ${r.agent}, on ${described(parent)}\n`);
+
+    if (noPreview) forgetIncluded(root, worker);
+
+    if (noPreview || was) out.out(OUT_LINE(root, worker, noPreview ? NO_PREVIEW : `as ${r.agent} had it`));
     out.out(BRIEF_LINE(r.path));
 
     return 0;
@@ -815,11 +850,12 @@ function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly s
         }
       }
 
-      if (merge !== undefined) jj(r.repo, ["--ignore-working-copy", "abandon", merge.commit]);
+      if (merge !== undefined) jj(r.repo, ["--ignore-working-copy", "abandon", `change_id(${merge.change})`]);
 
       if (isDir(r.path)) rmSync(r.path, { recursive: true, force: true });
 
       if (r.preview) forgetPreview(root);
+      else forgetIncluded(root, r.agent);
       gone.add(r.id);
       events.push(
         r.preview

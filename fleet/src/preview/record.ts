@@ -21,7 +21,7 @@ import * as Option from "effect/Option";
 import { exists, readText, writeAtomic } from "../files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { withExclusiveLock } from "../lock.ts";
-import type { Tracked } from "./tracked.ts";
+import { argsOf, startedAt, type Tracked } from "./tracked.ts";
 
 /** A dev server the preview started. */
 export interface DevServer {
@@ -72,6 +72,18 @@ export interface Conflict {
   readonly workers: readonly string[];
 }
 
+/** A worker the merge leaves out, at the commit it was tried at: taking its workspace in would conflict, and
+ * the preview never serves a conflicted merge. It is tried again whenever a commit of the merge moves. */
+export interface LeftOut {
+  readonly id: string;
+  readonly workspace: string;
+  readonly commit: string;
+  /** Whether its own @ is conflicted (a rebase it has not resolved): no merge that takes it is clean. */
+  readonly own: boolean;
+  /** The files that would be conflicted, each with the merged workers whose changes touch it (none: the stack). */
+  readonly conflicts: readonly Conflict[];
+}
+
 /** A worker in the merge, at the commit it was merged at. */
 export interface Merged {
   readonly id: string;
@@ -98,6 +110,8 @@ export interface PreviewRecord {
   readonly exclude: readonly string[];
   /** What the last merge held. */
   readonly merged: readonly Merged[];
+  /** The workers the last merge left out, since taking them in would conflict. */
+  readonly left: readonly LeftOut[];
   readonly stack: string | null;
   /** The revset the last merge's stack was resolved from, or null for the default workspace's @ rule. */
   readonly stackFrom: string | null;
@@ -136,9 +150,33 @@ export function keeperProc(s: DevServer): Tracked | null {
   return s.keeper === null ? null : { pid: s.keeper, started: s.keeperStarted, unit: s.keeperUnit };
 }
 
-/** The updater as `tracked.ts` checks it. */
+/** The updater as `tracked.ts` checks it. A record from before start times were kept (1.9.37) has no
+ * `updater_started`, and its updater may run for days more: such a pid is proved by its command line instead
+ * (a fleet's main script, then `preview DIR updater`, DIR's record being this one), and tracked from the
+ * start time it has now. */
 export function updaterProc(r: PreviewRecord): Tracked | null {
-  return r.updater === null ? null : { pid: r.updater, started: r.updaterStarted, unit: null };
+  if (r.updater === null) return null;
+
+  if (r.updaterStarted !== null) return { pid: r.updater, started: r.updaterStarted, unit: null };
+
+  return { pid: r.updater, started: isUpdaterOf(r.updater, r) ? (startedAt(r.updater) ?? null) : null, unit: null };
+}
+
+/** A fleet's main script as `start` gives it to Bun for the updater: an absolute `…/fleet/src/main.ts`, of
+ * this version or of the one that started it. */
+const FLEET_MAIN = /^\/.*\/fleet\/src\/main\.ts$/;
+
+/** Whether process `pid` is the updater of the preview `r` records: it runs as `start` spawns it (`<bun>
+ * <a fleet's main script> preview DIR updater`, nothing after), and DIR's record names the same preview
+ * workspace and this pid. Another program that only ends with those three words is a stranger, and a
+ * stranger is never signalled. */
+function isUpdaterOf(pid: number, r: PreviewRecord): boolean {
+  const [main, command, dir, last] = argsOf(pid).slice(-4);
+
+  if (main === undefined || !FLEET_MAIN.test(main) || command !== "preview" || last !== "updater" || dir === undefined) return false;
+  const theirs = readRecord(dir);
+
+  return theirs !== undefined && theirs.updater === pid && theirs.fleet === r.fleet && theirs.path === r.path && theirs.repo === r.repo;
 }
 
 /** Where the record is. */
@@ -219,6 +257,15 @@ function serverOf(value: Json | undefined): DevServer | null {
   };
 }
 
+function conflictsOf(value: Json | undefined): Conflict[] {
+  return (asArray(value) ?? []).flatMap((c) => {
+    const row = asObject(c);
+    const file = asString(row?.["path"]);
+
+    return file === undefined ? [] : [{ path: file, workers: strings(row?.["workers"]) }];
+  });
+}
+
 /** The record as `text` holds it; undefined when it is not one. */
 export function parseRecord(text: string): PreviewRecord | undefined {
   const o = Option.getOrUndefined(parseObject(text));
@@ -238,11 +285,15 @@ export function parseRecord(text: string): PreviewRecord | undefined {
       : [{ id, workspace: asString(row["workspace"]) ?? id, commit: asString(row["commit"]) ?? "", change: asString(row["change"]) ?? "" }];
   });
 
-  const conflicts = (asArray(o["conflicts"]) ?? []).flatMap((c) => {
-    const row = asObject(c);
-    const file = asString(row?.["path"]);
+  const conflicts = conflictsOf(o["conflicts"]);
 
-    return file === undefined ? [] : [{ path: file, workers: strings(row?.["workers"]) }];
+  const left = (asArray(o["left_out"]) ?? []).flatMap((l) => {
+    const row = asObject(l);
+    const id = asString(row?.["id"]);
+
+    return row === undefined || id === undefined
+      ? []
+      : [{ id, workspace: asString(row["workspace"]) ?? id, commit: asString(row["commit"]) ?? "", own: row["own"] === true, conflicts: conflictsOf(row["conflicts"]) }];
   });
 
   const workers = (asArray(o["workers"]) ?? []).flatMap((w) => {
@@ -263,6 +314,7 @@ export function parseRecord(text: string): PreviewRecord | undefined {
     include: strings(o["include"]),
     exclude: strings(o["exclude"]),
     merged,
+    left,
     stack: asString(o["stack"]) ?? null,
     stackFrom: asString(o["stack_from"]) ?? null,
     stackGiven: asString(o["stack_given"]) ?? null,
@@ -315,6 +367,7 @@ export function recordJson(r: PreviewRecord): JsonObject {
     include: [...r.include],
     exclude: [...r.exclude],
     merged: r.merged.map((m) => ({ id: m.id, workspace: m.workspace, commit: m.commit, change: m.change })),
+    left_out: r.left.map((l) => ({ id: l.id, workspace: l.workspace, commit: l.commit, own: l.own, conflicts: l.conflicts.map((c) => ({ path: c.path, workers: [...c.workers] })) })),
     stack: r.stack,
     stack_from: r.stackFrom,
     stack_given: r.stackGiven,

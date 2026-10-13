@@ -26,7 +26,7 @@ import { readRecord, serverProc, updaterProc, type DevServer } from "../preview/
 import { runs } from "../preview/tracked.ts";
 import { readPortStates, type PortState } from "../hub/preview-ports.ts";
 import { runningHub } from "../hub/server.ts";
-import { candidates, everyMs, included } from "../preview/updater.ts";
+import { candidates, everyMs, included, said } from "../preview/updater.ts";
 import { filePathOf, filesRoot, linkKind, reachOf, servedRel } from "../ledger/links.ts";
 import { numberState, pyStr } from "./number.ts";
 import { splitUrl } from "./url.ts";
@@ -359,7 +359,9 @@ function serverView(machine: Machine, lookups: Lookups, s: DevServer | null): Js
 }
 
 /** The fleet's preview as the page shows it, when it has one (`DIR/preview.json`): the address, every
- * worker's workspace with whether the merge takes it, the conflicts, the dev servers' last errors. */
+ * worker's workspace with whether the merge takes it (a worker left out because its workspace would
+ * conflict it is not `included`, and `error`, which the page shows, says why in a sentence), the dev
+ * servers' last errors. */
 export function previewView(machine: Machine, lookups: Lookups, root: string, state: JsonObject, address: string | null): JsonObject | undefined {
   const record = readRecord(root);
 
@@ -387,7 +389,7 @@ export function previewView(machine: Machine, lookups: Lookups, root: string, st
     every: everyMs(machine) / 1000,
     workers,
     conflicts: record.conflicts.map((c) => ({ path: c.path, workers: [...c.workers] })),
-    error: record.error,
+    error: said(record),
     updated: record.updated,
     per_worker: record.workers.map((w) => ({
       worker: w.worker,
