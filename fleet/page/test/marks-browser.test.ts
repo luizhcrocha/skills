@@ -166,27 +166,43 @@ async function revisedFrame(page: Page, words: string): Promise<Frame> {
   throw new Error("no revised frame");
 }
 
-/** Select in the frame from the start of `from` to the end of `to` (the same words: just them), as a drag would. */
+/** Select in the frame from the start of `from` to the end of `to` (the same words: just them), as a drag would:
+ * the words may run over several text nodes (a reference in them is a link of its own, refframe.ts). */
 async function selectIn(f: Frame, from: string, to = from): Promise<void> {
   await f.evaluate(
     (a: string, b: string) => {
-      const find = (w: string) => {
-        const it = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const it = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const nodes: { n: Text; start: number }[] = [];
+      let all = "";
 
-        for (let n = it.nextNode(); n; n = it.nextNode()) {
-          const i = n instanceof Text ? n.data.indexOf(w) : -1;
+      for (let n = it.nextNode(); n; n = it.nextNode()) {
+        if (!(n instanceof Text) || n.parentElement?.closest("script, style")) continue;
+        nodes.push({ n, start: all.length });
+        all += n.data;
+      }
 
-          if (n instanceof Text && i >= 0) return { n, i };
-        }
+      /* The node and offset of place `at` of the body's words: `end` takes the node the words end in, not the next one's start. */
+      const place = (at: number, end: boolean) => {
+        const hit = nodes.findLast((x) => (end ? x.start < at : x.start <= at));
 
-        throw new Error("not found: " + w);
+        if (!hit) throw new Error("no text at " + String(at));
+
+        return { n: hit.n, i: at - hit.start };
       };
 
-      const x = find(a);
-      const y = find(b);
+      const find = (w: string): number => {
+        const i = all.indexOf(w);
+
+        if (i < 0) throw new Error("not found: " + w);
+
+        return i;
+      };
+
+      const x = place(find(a), false);
+      const y = place(find(b) + b.length, true);
       const r = document.createRange();
       r.setStart(x.n, x.i);
-      r.setEnd(y.n, y.i + b.length);
+      r.setEnd(y.n, y.i);
       getSelection()?.removeAllRanges();
       getSelection()?.addRange(r);
     },

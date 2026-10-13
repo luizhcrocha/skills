@@ -11,6 +11,7 @@ import { For, Show, type JSX } from "@solidjs/web";
 import { Approvals } from "./Approvals.tsx";
 import { Pill, PillAs, RefTag, usePage, When, Who, tf } from "./bits.tsx";
 import { Core, type Deaf, type Decision, type Json, type Lookup, type Message } from "./core.ts";
+import { Refs, RefsBeside } from "./DecisionRef.tsx";
 import { clock, dayTime, fmtDur, fmtInt, fmtShort, spentWords } from "./format.ts";
 import { keyed } from "./model.ts";
 import { ALL, held, narrow, scopes, type Scope } from "./scope.ts";
@@ -313,10 +314,12 @@ function Lead(): JSX.Element {
       <Show when={lead().detail}>
         <p class="lead-detail">{lead().detail}</p>
       </Show>
-      <p class="goal">{m.state.goal}</p>
+      <p class="goal">
+        <Refs text={m.state.goal} />
+      </p>
       <p class={"now" + (nowStale() ? " stale" : "")}>
         <b>Now</b>
-        {m.state.now}{" "}
+        <Refs text={m.state.now} />{" "}
         <span class="said">{nowStale() ? `not updated for ${m.ago(m.state.now_at || m.state.started).replace(/ ago$/u, "")}` : `said ${m.ago(m.state.now_at)}`}</span>
       </p>
       <Show when={closed().length}>
@@ -353,13 +356,13 @@ function Lead(): JSX.Element {
           </Show>
           <Show when={glance().current.shown.length}>
             <li>
-              <b>Current</b> {glance().current.shown.map((st) => `${st.id} ${st.title ?? ""}`).join("; ")}
+              <b>Current</b> <Refs text={glance().current.shown.map((st) => `${st.id} ${st.title ?? ""}`).join("; ")} />
               {more(glance().current)}
             </li>
           </Show>
           <Show when={glance().next.shown.length}>
             <li>
-              <b>Next</b> {glance().next.shown.map((st) => `${st.id} ${st.title ?? ""}`).join("; ")}
+              <b>Next</b> <Refs text={glance().next.shown.map((st) => `${st.id} ${st.title ?? ""}`).join("; ")} />
               {more(glance().next)}
             </li>
           </Show>
@@ -373,7 +376,7 @@ function Lead(): JSX.Element {
               {(x) => (
                 <li>
                   <When at={x().row.at} relative /> {x().row.agent ? m.nameOf(x().row.agent ?? "") + ": " : ""}
-                  {String(x().row.text).slice(0, 220)}
+                  <Refs text={String(x().row.text).slice(0, 220)} />
                 </li>
               )}
             </For>
@@ -460,7 +463,8 @@ function useScope() {
   };
 }
 
-/** The decisions, in three lists: each row a link to its page. */
+/** The decisions, in three lists: each row opens its page from anywhere on it (its head is the link, stretched
+ * over the row), and a reference in its words (refs.ts) is a link of its own above that. */
 function DecisionList(): JSX.Element {
   const { m, ui } = usePage();
   const { scope, bar } = useScope();
@@ -490,9 +494,17 @@ function DecisionList(): JSX.Element {
             const open = (): boolean => d().status === "open";
             const waits = (): boolean => r().bucket === "active";
 
+            /* What the row says under its head, in the fleet's words: the question, or where it stands. */
+            const detail = (): string => (open() ? (Core.isHeld(d()) ? `With the fleet: ${String(d().held)}` : d().question) : d().status === "decided" ? `Decided: ${d().answer || ""}` : `Withdrawn: ${d().resolution || ""}`);
+
+            const meta = (): string =>
+              open()
+                ? `${originText(m, d()) ? "From " + originText(m, d()) + ". " : ""}${d().why ? (d().blocking ? "Blocks: " : "Meanwhile: ") + String(d().why) + ". " : ""}Asked ${m.ago(d().opened)}${d().revised ? ", changed " + m.ago(d().revised) : ""}`
+                : `${d().status === "decided" && d().resolution ? String(d().resolution) + ". " : ""}Closed ${m.ago(d().closed)}`;
+
             return (
-              <a class={"ask " + (waits() ? "open" : open() ? "held" : "closed") + (waits() && d().blocking ? " blocking" : "")} href={Core.decisionHref(d().id)}>
-                <span class="ask-head">
+              <div class={"ask " + (waits() ? "open" : open() ? "held" : "closed") + (waits() && d().blocking ? " blocking" : "")}>
+                <a class="ask-head" href={Core.decisionHref(d().id)}>
                   <b>
                     <RefTag of={d()} />
                     {d().title}
@@ -505,14 +517,15 @@ function DecisionList(): JSX.Element {
                   <Show when={d().fleet}>
                     <PillAs cls="plain" text={"in " + String(d().fleet)} />
                   </Show>
+                </a>
+                <RefsBeside text={d().title} fleet={d().fleet} />
+                <span class="detail">
+                  <Refs text={detail()} fleet={d().fleet} />
                 </span>
-                <span class="detail">{open() ? (Core.isHeld(d()) ? `With the fleet: ${String(d().held)}` : d().question) : d().status === "decided" ? `Decided: ${d().answer || ""}` : `Withdrawn: ${d().resolution || ""}`}</span>
                 <span class="meta">
-                  {open()
-                    ? `${originText(m, d()) ? "From " + originText(m, d()) + ". " : ""}${d().why ? (d().blocking ? "Blocks: " : "Meanwhile: ") + String(d().why) + ". " : ""}Asked ${m.ago(d().opened)}${d().revised ? ", changed " + m.ago(d().revised) : ""}`
-                    : `${d().status === "decided" && d().resolution ? String(d().resolution) + ". " : ""}Closed ${m.ago(d().closed)}`}
+                  <Refs text={meta()} fleet={d().fleet} />
                 </span>
-              </a>
+              </div>
             );
           }}
         </For>

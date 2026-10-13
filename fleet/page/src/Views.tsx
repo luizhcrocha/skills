@@ -8,13 +8,15 @@ import { createEffect, createMemo, createSignal } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
 import { Pill, PillAs, RefTag, usePage, When, Who, tf } from "./bits.tsx";
-import { Core, type Agent, type Coordinator, type Decision, type Orphan, type Preview, type PreviewServer } from "./core.ts";
+import { Core, type Agent, type Coordinator, type Decision, type Orphan, type Place, type Preview, type PreviewServer } from "./core.ts";
 import { clock, fmtDur, fmtInt, fmtShort, plural, spentWords } from "./format.ts";
 import { keyed } from "./model.ts";
 import { Rich } from "./Rich.tsx";
 import { FILTERS, type Filter } from "./ui.ts";
-import { LinkFilterBar, linkFilters, LinkGroup, LinkRow } from "./Links.tsx";
-import { arrange as arrangeLinks, KIND_NAME as LINK_KIND_NAME, KINDS as LINK_KINDS } from "./links.ts";
+import { LinkFilterBar, linkFilters, LinkGroup, LinkRow, type LinkFilters } from "./Links.tsx";
+import { arrange as arrangeLinks, isActive as isActiveLink, KIND_NAME as LINK_KIND_NAME, KINDS as LINK_KINDS } from "./links.ts";
+import { Refs, RefsBeside, refsBeside } from "./DecisionRef.tsx";
+import { linkAnchor } from "./refs.ts";
 
 /** The decisions tied to a step, or to a milestone and no one step, as chips that open them. */
 function DecisionChips(props: { readonly list: readonly Decision[] }): JSX.Element {
@@ -57,10 +59,12 @@ function Roadmap(): JSX.Element {
       <div class="card" id="roadmap-list">
         <For each={m.state.roadmap} keyed={(x) => x.id} fallback={<p class="empty">No roadmap yet.</p>}>
           {(ms) => (
-            <div class="milestone">
+            <div class="milestone" id={"milestone-" + ms().id}>
               <div class="milestone-head">
                 <div class="ms-name">
-                  <h3>{ms().title}</h3>
+                  <h3>
+                    <Refs text={ms().title} />
+                  </h3>
                   <span>
                     <DecisionChips list={chipsOf().byMilestone.get(ms().id) ?? []} />
                   </span>
@@ -74,33 +78,36 @@ function Roadmap(): JSX.Element {
                   {(s) => {
                     const a = () => m.person(s().agent);
                     const chips = () => chipsOf().byStep.get(s().id) ?? [];
+                    /* A step that opens its worker is a button: the references its title names stand beside it, with its decisions' chips. */
+                    const beside = refsBeside(() => (a() ? s().title : ""));
 
-                    const inner = (): JSX.Element => (
+                    const inner = (title: JSX.Element): JSX.Element => (
                       <>
                         <span class="dot" />
-                        <span class="title">{s().title}</span>
+                        <span class="title">{title}</span>
                         <span class="by">{a()?.name ?? ""}</span>
                       </>
                     );
 
                     return (
-                      <li class={chips().length ? "with-chips" : ""}>
-                        <Show when={chips().length}>
+                      <li class={chips().length || beside.any() ? "with-chips" : ""} id={"step-" + s().id}>
+                        <Show when={chips().length || beside.any()}>
                           <span class="step-chips">
                             <DecisionChips list={chips()} />
+                            {beside.view()}
                           </span>
                         </Show>
                         <Show
                           when={a()}
                           fallback={
                             <div class={"step " + String(s().status ?? "")} title={String(s().status ?? "")}>
-                              {inner()}
+                              {inner(<Refs text={s().title} />)}
                             </div>
                           }
                         >
                           {(p) => (
                             <button type="button" class={"step " + String(s().status ?? "")} data-agent={s().agent} title={`${String(s().status ?? "")}, open ${p().name}`}>
-                              {inner()}
+                              {inner(s().title)}
                             </button>
                           )}
                         </Show>
@@ -125,26 +132,37 @@ function Roadblocks(): JSX.Element {
   return (
     <div class="part" id="roadblocks">
       <h2>Roadblocks</h2>
-      <div class="card" id="roadblock-list">
+      <div class="card" id="roadblocks-list">
         <For each={blocks()} keyed={(r) => r.id} fallback={<p class="empty">No roadblocks.</p>}>
           {(r) => {
             const ask = () => (!r().resolved && r().decision ? m.decisionById(r().decision) : undefined);
 
             return (
-              <div class={"block " + (r().resolved ? "resolved" : String(r().severity ?? ""))}>
+              <div class={"block " + (r().resolved ? "resolved" : String(r().severity ?? ""))} id={"roadblock-" + r().id}>
                 <div class="block-head">
                   <RefTag of={r()} />
-                  <Show when={m.person(r().agent)} fallback={<b>{r().title}</b>}>
+                  <Show
+                    when={m.person(r().agent)}
+                    fallback={
+                      <b>
+                        <Refs text={r().title} />
+                      </b>
+                    }
+                  >
                     <button type="button" class="block-title" data-agent={r().agent}>
                       {r().title}
                     </button>
+                    <RefsBeside text={r().title} />
                   </Show>
                   <Pill s={r().resolved ? "done" : r().severity} />
                 </div>
-                <Rich class="detail" text={r().detail ?? ""} />
+                <Rich class="detail" text={r().detail ?? ""} refs />
                 <p class="needs muted">
                   <Show when={!r().resolved} fallback="Resolved">
-                    Needs <b>{r().needs}</b>
+                    Needs{" "}
+                    <b>
+                      <Refs text={r().needs} />
+                    </b>
                   </Show>
                   , {r().agent ? m.nameOf(r().agent ?? "") : m.host()}, since {clock(r().since)}
                 </p>
@@ -175,14 +193,16 @@ export function PlanView(): JSX.Element {
         <Roadblocks />
         <div class="part" id="kept" hidden={!m.state.kept.length}>
           <h2>Held for later</h2>
-          <div class="card" id="kept-list">
+          <div class="card" id="held-list">
             <For each={m.state.kept} keyed={(k) => k.id}>
               {(k) => (
-                <div class="block">
+                <div class="block" id={"kept-" + k().id}>
                   <div class="block-head">
                     <b>{k().id}</b>
                   </div>
-                  <p class="detail">{k().text}</p>
+                  <p class="detail">
+                    <Refs text={k().text} />
+                  </p>
                   <p class="needs muted">Kept {m.ago(k().at)}</p>
                 </div>
               )}
@@ -243,7 +263,9 @@ function Coordinators(): JSX.Element {
                 </Show>
               </div>
               <Show when={c().now}>
-                <p class="detail">{c().now}</p>
+                <p class="detail">
+                  <Refs text={c().now} fleet={c().id} />
+                </p>
               </Show>
               <p class="meta">{fleetFacts(c())}</p>
               <Show when={c().active}>
@@ -380,7 +402,9 @@ function Workers(props: { readonly rows: () => readonly Agent[] }): JSX.Element 
                         <td class="c-name">
                           <Who id={a().id} extra="agent-name" />
                         </td>
-                        <td class="c-task task">{a().task}</td>
+                        <td class="c-task task">
+                          <Refs text={a().task} />
+                        </td>
                         <td class="c-skill" data-label="Skill">
                           {a().skill || "none"}
                         </td>
@@ -453,13 +477,17 @@ export function BriefAndReport(props: { readonly agent: Agent; readonly heading:
         <Show when={props.heading === "h4"} fallback={<h3>Brief and completion criterion</h3>}>
           <h4>Brief and completion criterion</h4>
         </Show>
-        <p>{props.agent.brief || "No brief recorded."}</p>
+        <p>
+          <Refs text={props.agent.brief || "No brief recorded."} />
+        </p>
       </div>
       <div>
         <Show when={props.heading === "h4"} fallback={<h3>Latest report</h3>}>
           <h4>Latest report</h4>
         </Show>
-        <p>{props.agent.report || "No report yet."}</p>
+        <p>
+          <Refs text={props.agent.report || "No report yet."} />
+        </p>
       </div>
     </div>
   );
@@ -681,7 +709,7 @@ function PreviewPart(props: { readonly preview: Preview }): JSX.Element {
                 )}
               </For>
             </ul>
-            <p class="meta">jj keeps the merge with conflict markers in these files, which may break the build. Take a worker out, or settle it between the workers.</p>
+            <p class="meta">These files conflicted when the workers' changes were merged. In a record an older updater wrote, jj kept the merge with conflict markers in them, which may break the build. Take a worker out, or settle it between the workers.</p>
           </div>
         </Show>
         <Show when={p().log}>
@@ -856,8 +884,43 @@ export function FleetView(props: { readonly rows: () => readonly Agent[] }): JSX
  * and, on the manager's page, fleet. Then what the machine serves that nobody named. */
 export function LinksView(): JSX.Element {
   const { m } = usePage();
-  const f = linkFilters();
+  const kept = linkFilters();
   const fleets = createMemo(() => [...new Set(m.state.links.map((l) => l.fleet).filter((x) => x !== ""))].sort());
+  /* The link the address names (`#link-…`, where a reference to it leads): when the viewer's filters would hide
+     it (a done one under Active, another kind's, another fleet's), every link shows, and the fold it is in is
+     open, until the viewer picks a filter. The pick ends that arrival alone (the place the page was at then):
+     following the reference again is a new one, and shows the link again. */
+  const [released, setReleased] = createSignal<Place | null>(null);
+  const wanted = createMemo(() => (m.place().anchor !== null && m.place() !== released() ? m.state.links.find((l) => linkAnchor(l) === m.place().anchor) : undefined));
+
+  const reveal = createMemo((): boolean => {
+    const l = wanted();
+    const only = fleets().includes(kept.fleet()) ? kept.fleet() : "";
+
+    return l !== undefined && !((only === "" || l.fleet === only) && (kept.kind() === "" || l.kind === kept.kind()) && (kept.showing() === "all" || (kept.showing() === "active") === isActiveLink(l)));
+  });
+
+  /** Whether the link the address names is among the inactive ones, folded under All. */
+  const folded = (): boolean => {
+    const l = wanted();
+
+    return l !== undefined && !isActiveLink(l);
+  };
+
+  const picked = <T,>(set: (v: T) => void): ((v: T) => void) => (v) => {
+    setReleased(m.place());
+    set(v);
+  };
+
+  const f: LinkFilters = {
+    showing: () => (reveal() ? "all" : kept.showing()),
+    kind: () => (reveal() ? "" : kept.kind()),
+    fleet: () => (reveal() ? "" : kept.fleet()),
+    setShowing: picked(kept.setShowing),
+    setKind: picked(kept.setKind),
+    setFleet: picked(kept.setFleet),
+  };
+
   const fleet = (): string => (fleets().includes(f.fleet()) ? f.fleet() : "");
   const arranged = createMemo(() => arrangeLinks(m.state.links, f.showing(), f.kind(), fleet()));
 
@@ -926,7 +989,7 @@ export function LinksView(): JSX.Element {
             </For>
           }
         >
-          <details class="part link-inactive" id="links-inactive">
+          <details class="part link-inactive" id="links-inactive" open={folded()}>
             <summary>
               <h2>
                 Inactive <span class="n">{arranged().inactive.reduce((n, g) => n + g[1].length, 0)}</span>
@@ -1040,7 +1103,7 @@ export function LogView(props: { readonly rows: () => readonly Agent[] }): JSX.E
                           <Who id={e().agent} />
                         </Show>
                       </span>{" "}
-                      {e().text}
+                      <Refs text={e().text} />
                       <Show when={about()}>
                         {(d) => (
                           <>

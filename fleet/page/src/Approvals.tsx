@@ -8,7 +8,7 @@ import { For, Show, type JSX } from "@solidjs/web";
 
 import { RefTag, usePage, When } from "./bits.tsx";
 import { Core, type Approval, type Decision, type Json, type JsonRecord } from "./core.ts";
-import { DecisionRef } from "./DecisionRef.tsx";
+import { DecisionRef, Refs, RefsBeside } from "./DecisionRef.tsx";
 import { Rich, UndoText } from "./Rich.tsx";
 
 /** Whether a parsed value is an object rather than null, a list or a scalar. */
@@ -38,7 +38,8 @@ function Notices(props: { readonly list: readonly Decision[] }): JSX.Element {
                   {d().title}
                 </b>
               </a>
-              <Rich class="notice-what" text={d().question} refs />
+              <RefsBeside text={d().title} />
+              <Rich class="notice-what" text={d().question} refs="every" />
               <Show when={d().undo}>
                 {(u) => (
                   <div class="notice-undo">
@@ -154,7 +155,7 @@ function Standing(props: { readonly list: readonly Approval[]; readonly notices:
             {(a) => (
               <div class="approval" id={"approval-" + a().id}>
                 <p class="approval-rule">
-                  <span class="ref">{a().id}</span> {a().rule}
+                  <span class="ref">{a().id}</span> <Refs text={a().rule} />
                 </p>
                 <span class="meta">
                   {facts(a())} · {String(doneUnder(a().id))} done under it
@@ -195,11 +196,11 @@ function Standing(props: { readonly list: readonly Approval[]; readonly notices:
               {(a) => (
                 <div class="approval revoked" id={"approval-" + a().id}>
                   <p class="approval-rule">
-                    <span class="ref">{a().id}</span> {a().rule}
+                    <span class="ref">{a().id}</span> <Refs text={a().rule} />
                   </p>
                   <span class="meta">
                     Revoked <When at={a().revoked} />
-                    {a().revoked_why ? ": " + a().revoked_why : ""}. Given {facts(a())}.
+                    <Refs text={a().revoked_why ? ": " + a().revoked_why : ""} />. Given {facts(a())}.
                   </span>
                 </div>
               )}

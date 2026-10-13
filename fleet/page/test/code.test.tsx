@@ -143,7 +143,7 @@ test("without the clipboard (plain http), Copy selects the block's code and copi
 test("each block has its own button, and copies its own text", async () => {
   open("a8");
   const blocks = [...root.querySelectorAll("figure.code")];
-  const roadblock = [...root.querySelectorAll("#roadblock-list figure.code")];
+  const roadblock = [...root.querySelectorAll("#roadblocks-list figure.code")];
 
   expect(blocks.length).toBeGreaterThan(1);
   expect(roadblock.length).toBe(1);

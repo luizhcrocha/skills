@@ -87,7 +87,7 @@ test("a held action sits in Waiting with its reason, and nothing is stuck", () =
   expect(root.querySelector("#lead .stuck")?.textContent ?? "").not.toContain("not recorded");
   bucket("waiting")?.click();
   flush();
-  const row = root.querySelector('#decision-list a[href="#decision/a1"]');
+  const row = root.querySelector('#decision-list a[href="#decision/a1"]')?.closest(".ask");
   expect(row?.querySelector(".detail")?.textContent).toBe("With the fleet: fix the role cut first");
   expect(row?.querySelector(".pill")?.textContent ?? row?.textContent).toContain("with the fleet");
 });

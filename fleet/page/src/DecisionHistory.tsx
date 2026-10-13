@@ -8,19 +8,27 @@ import { For, Show, type JSX } from "@solidjs/web";
 
 import { usePage } from "./bits.tsx";
 import type { Decision } from "./core.ts";
+import { Refs } from "./DecisionRef.tsx";
 import { clock, fullTime } from "./format.ts";
 import { fitsOneLine, historyOf, type HistoryEntry } from "./history.ts";
 import { Rich } from "./Rich.tsx";
 
-/** One moment: when, what happened, and what it said, on one line; opened to its whole text when cut. */
+/** One moment: when, what happened, and what it said, on one line; opened to its whole text when cut. What the
+ * fleet recorded links the references in it (refs.ts); an answer is Luiz's own words, shown as he wrote them. */
 function Entry(props: { readonly e: HistoryEntry; readonly n: number }): JSX.Element {
+  const fleets = (): boolean => props.e.source !== "answer";
+
   const line = (): JSX.Element => (
     <>
       <time class="dv-h-at" datetime={props.e.at} title={fullTime(props.e.at)}>
         {clock(props.e.at)}
       </time>
       <b class="dv-h-what">{props.e.what}</b>
-      <span class="dv-h-text">{props.e.text.replace(/\s+/gu, " ")}</span>
+      <span class="dv-h-text">
+        <Show when={fleets()} fallback={props.e.text.replace(/\s+/gu, " ")}>
+          <Refs text={props.e.text.replace(/\s+/gu, " ")} />
+        </Show>
+      </span>
     </>
   );
 
@@ -31,7 +39,7 @@ function Entry(props: { readonly e: HistoryEntry; readonly n: number }): JSX.Ele
         fallback={
           <details>
             <summary class="dv-h-line">{line()}</summary>
-            <Rich class="dv-h-full" text={props.e.text} />
+            <Rich class="dv-h-full" text={props.e.text} refs={fleets()} />
           </details>
         }
       >

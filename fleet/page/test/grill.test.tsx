@@ -86,7 +86,7 @@ function listed(bucket: string): string[] {
   root.querySelector<HTMLButtonElement>(`#decision-seg button[data-bucket="${bucket}"]`)?.click();
   flush();
 
-  return [...root.querySelectorAll("#decision-list a")].map((a) => a.textContent ?? "");
+  return [...root.querySelectorAll("#decision-list .ask")].map((a) => a.textContent ?? "");
 }
 
 test("on its fleet's page it is in Waiting, answered and waiting to be recorded, never decided", () => {

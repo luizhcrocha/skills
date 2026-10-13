@@ -127,7 +127,7 @@ function arrive(data: Json, source: Window | null | undefined): void {
 
 test("on the manager's page a fleet's decision opens on the manager's own page, as that fleet's page in a frame", () => {
   open("/f/manager/", managerView(NOW));
-  const row = root.querySelector<HTMLAnchorElement>("#decision-list a.ask");
+  const row = root.querySelector<HTMLAnchorElement>("#decision-list a.ask-head");
   expect(row?.getAttribute("href")).toBe("#decision/billing/d1");
   go("#decision/billing/d1");
   expect(root.querySelector("#decision")?.hasAttribute("hidden")).toBe(false);
@@ -325,7 +325,7 @@ test("a fleet's grilling waits on the user on the manager's page while its own p
       { ...INFRA_D4, id: "d5", ref: "D5", said: [said(3, "a", "d5"), { ...said(4, "which a?", null, { from: "coordinator", to: ["user"], re: 3 }), at: before(19) }] },
     ]),
   );
-  const listed = (): (string | null)[] => [...root.querySelectorAll<HTMLAnchorElement>("#decision-list a.ask")].map((a) => a.getAttribute("href"));
+  const listed = (): (string | null)[] => [...root.querySelectorAll<HTMLAnchorElement>("#decision-list a.ask-head")].map((a) => a.getAttribute("href"));
 
   expect(listed().toSorted()).toEqual(["#decision/billing/G4", "#decision/billing/G6", "#decision/d9"]);
   expect(page.m.queue().ids.toSorted()).toEqual(["billing/G4", "billing/G6", "d9"]);

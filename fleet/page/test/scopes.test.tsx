@@ -57,7 +57,7 @@ const chips = (page: HTMLElement): HTMLButtonElement[] => [...page.querySelector
 
 const pressed = (page: HTMLElement): string[] => chips(page).filter((b) => b.getAttribute("aria-pressed") === "true").map(text);
 
-const listed = (page: HTMLElement): string[] => [...page.querySelectorAll("#decision-list a.ask")].map((a) => a.getAttribute("href") ?? "");
+const listed = (page: HTMLElement): string[] => [...page.querySelectorAll("#decision-list a.ask-head")].map((a) => a.getAttribute("href") ?? "");
 
 const counts = (page: HTMLElement): string[] => [...page.querySelectorAll("#decision-seg button")].map(text);
 

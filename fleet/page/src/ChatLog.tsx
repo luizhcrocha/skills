@@ -53,7 +53,16 @@ export const firstLine = (text: string, n = 90): string => {
   return line.length > n ? line.slice(0, n - 1).trimEnd() + "…" : line;
 };
 
-/** A message's words in the page's text format, its mentions as chips in the colour of who they name. */
+/**
+ * Whether a fleet wrote a message's words, so the references in them are links: not Luiz's own (he names what
+ * he likes, and the page never rewrites his words), and not a line of the hub's, which opens with `[hub]` (a
+ * fact about the machine, which names no ledger's rows).
+ */
+const fleetWrote = (msg: Pick<Message, "from" | "text">): boolean => msg.from !== "user" && !msg.text.startsWith("[hub]");
+
+/** A message's words in the page's text format, its mentions as chips in the colour of who they name, each
+ * reference in them (refs.ts) a link when a fleet wrote them ({@link fleetWrote}): read in the sender's ledger
+ * when a fleet of a manager's page did. */
 function Words(props: { readonly msg: Message }): JSX.Element {
   const { m } = usePage();
 
@@ -62,6 +71,8 @@ function Words(props: { readonly msg: Message }): JSX.Element {
       class="msg-text"
       text={props.msg.text}
       parts={props.msg.parts}
+      refs={fleetWrote(props.msg)}
+      fleet={props.msg.from}
       mention={(p) =>
         p.mention ? (
           <span class="mention" style={`--c:${m.colourOfId(p.mention)}`} title={p.text}>

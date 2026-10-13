@@ -27,7 +27,7 @@ import { listen, tf, usePage, When } from "./bits.tsx";
 import { readBody } from "./bodytext.ts";
 import { CaretList } from "./CaretList.tsx";
 import { Core, type Json, type JsonRecord, type MarkDecision, type MarkItem, type MarkKind, type MarkQuote, type Quote } from "./core.ts";
-import { parseEmbedMessage, parseEvidenceSelect, parseFrameSaid } from "./embed.ts";
+import { parseEmbedMessage, parseEvidenceSelect, parseFrameSaid, realTap } from "./embed.ts";
 import { inboxOf, lastLine, newestFleet, splitDone, unreadCount, wholeWords, type Thread, type Turn } from "./inbox.ts";
 import { KIND_WORDS, nextNumber, placeMark, QUOTED_KINDS, quoteLines, sentOf, type Claimed, type DraftStore } from "./marks.ts";
 import { plural } from "./format.ts";
@@ -1036,9 +1036,6 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
     if (!editing()) openComposer({ n: null, kind, quote, comment: "", replacement: "" }, quote ? "" : UNCONFIRMED);
   };
 
-  /* A tap the frame tells of acts only when it was one: focus in that frame and the user's own press just now (activation the body's scripts cannot make). */
-  const tapped = (fr: HTMLIFrameElement): boolean => document.activeElement === fr && globalThis.navigator?.userActivation?.isActive === true;
-
   /*
    * The selection the frame last told of (`fleetSelect`, or the fleet's page relaying it), when, and whether
    * the user's own press in that frame was live then. The frame's answer to `annotNow` is taken only when
@@ -1081,7 +1078,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
     const selected = fromFrame ? (t.relayed ? (relayed?.kind === "select" ? relayed : null) : parseEvidenceSelect(e.data)) : null;
 
     if (fr && selected) {
-      told = { text: selected.text, at: Date.now(), real: tapped(fr) };
+      told = { text: selected.text, at: Date.now(), real: realTap(fr) };
       takeAnswer();
     }
 
@@ -1113,7 +1110,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
 
       case "tap":
         /* A tap on a mark or its pin opens its thread: only Luiz's own. */
-        if (tapped(fr) && box().threads.some((th) => th.key === said.id)) openInbox(said.id);
+        if (realTap(fr) && box().threads.some((th) => th.key === said.id)) openInbox(said.id);
 
         break;
       case "esc":
@@ -1496,7 +1493,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
                 <Show when={x().quote}>
                   <span class="mk-msg-q">“{x().quote}”</span>
                 </Show>
-                <Show when={x().marks} fallback={<Show when={x().mine} fallback={<Rich text={x().text} />}><span class="mk-msg-text">{x().text}</span></Show>}>
+                <Show when={x().marks} fallback={<Show when={x().mine} fallback={<Rich text={x().text} refs />}><span class="mk-msg-text">{x().text}</span></Show>}>
                   {(b) => <BatchCard marks={b()} />}
                 </Show>
                 <Show when={x().keep}>

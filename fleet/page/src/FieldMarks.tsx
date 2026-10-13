@@ -51,25 +51,50 @@ export function fieldOf(range: Range): HTMLElement | null {
   return a && a === at(range.endContainer) ? a : null;
 }
 
-/** The claim of `range`, inside field element `el`: its words within the field's text, with their context. */
-export function claimIn(el: HTMLElement, range: Range): FieldClaim | null {
-  const before = document.createRange();
-  before.setStart(el, 0);
-  before.setEnd(range.startContainer, range.startOffset);
-  const start = before.toString().length;
+/**
+ * The text nodes of a field's own words, in order. A reference's tip (DecisionRef.tsx `.dref-tip`) stands in
+ * the field while it shows, and is the page's words about a row, never the field's: a mark claims and is found
+ * again in the field's words alone, tip or no tip.
+ */
+function ownTexts(el: Element): Text[] {
+  const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const out: Text[] = [];
 
-  return claimOf(el.dataset["field"] ?? "", el.textContent ?? "", start, start + range.toString().length);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    if (n instanceof Text && !n.parentElement?.closest(".dref-tip")) out.push(n);
+  }
+
+  return out;
 }
 
-/** Ranges over `el`'s text from `start` to `end` (offsets in its textContent). */
+/** A field's own words ({@link ownTexts}). */
+const fieldText = (el: Element): string =>
+  ownTexts(el)
+    .map((n) => n.data)
+    .join("");
+
+/** How many of the field's own characters lie before the point (`node`, `offset`). */
+function offsetIn(el: Element, node: Node, offset: number): number {
+  const before = document.createRange();
+  before.setStart(el, 0);
+  before.setEnd(node, offset);
+
+  return ownTexts(el).reduce((n, t) => n + (t === node ? offset : before.comparePoint(t, t.length) <= 0 ? t.length : 0), 0);
+}
+
+/** The claim of `range`, inside field element `el`: its words within the field's text, with their context. */
+export function claimIn(el: HTMLElement, range: Range): FieldClaim | null {
+  return claimOf(el.dataset["field"] ?? "", fieldText(el), offsetIn(el, range.startContainer, range.startOffset), offsetIn(el, range.endContainer, range.endOffset));
+}
+
+/** Ranges over `el`'s own text ({@link fieldText}) from `start` to `end` (offsets in it). */
 function rangeIn(el: Element, start: number, end: number): Range | null {
-  const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
   const r = document.createRange();
   let at = 0;
   let begun = false;
 
-  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
-    const len = n.textContent?.length ?? 0;
+  for (const n of ownTexts(el)) {
+    const len = n.data.length;
 
     if (!begun && start < at + len) {
       r.setStart(n, start - at);
@@ -235,7 +260,7 @@ export function FieldHighlights(): JSX.Element {
         const el = document.querySelector(`#decision [data-field="${CSS.escape(p.field)}"]`);
 
         if (!el) continue;
-        const ranges = placeMark(p.blocks, el.textContent ?? "").spans.flatMap((sp) => rangeIn(el, sp.start, sp.end) ?? []);
+        const ranges = placeMark(p.blocks, fieldText(el)).spans.flatMap((sp) => rangeIn(el, sp.start, sp.end) ?? []);
         by.set(p.kind, [...(by.get(p.kind) ?? []), ...ranges]);
         const end = [...(ranges.at(-1)?.getClientRects() ?? [])].filter((r) => r.width > 0).at(-1);
 

@@ -9,6 +9,7 @@ import { For, Show, type JSX } from "@solidjs/web";
 import { ChatIcon, Mark, Pill, usePage, When, tf } from "./bits.tsx";
 import { unreadInChat } from "./chatlog.ts";
 import { Core, type NoticePrefs } from "./core.ts";
+import { Refs } from "./DecisionRef.tsx";
 import { faviconOf } from "./mark.ts";
 import { Rename } from "./Rename.tsx";
 
@@ -180,7 +181,7 @@ function Panel(): JSX.Element {
                   </span>
                   {n.who(e())}
                 </div>
-                {e().text}
+                <Refs text={e().text} />
                 {aboutLink(e().decision)}
               </span>
               <When at={e().at} relative />

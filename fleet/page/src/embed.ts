@@ -299,5 +299,11 @@ export const postOpen = (id: string): void => post({ fleetEmbed: true, open: id 
 /** The manager's finder, asked for from inside the frame. */
 export const postFinder = (): void => post({ fleetEmbed: true, finder: true });
 
+/**
+ * Whether a tap a frame tells of was one: focus in that frame and the user's own press just now (activation
+ * the frame's scripts cannot make). What a frame says is a claim; this is what the page acts on.
+ */
+export const realTap = (frame: HTMLIFrameElement): boolean => document.activeElement === frame && globalThis.navigator?.userActivation?.isActive === true;
+
 /** The manager's composer, asked for about `item` from inside the frame: in a new side chat with `side`, starting with `text`. */
 export const postAsk = (item: ItemRef, side: boolean, text: string): void => post({ fleetEmbed: true, ask: { id: item.id, ref: item.ref ?? "", title: item.title, question: item.question, side, text } });

@@ -11,7 +11,7 @@ import { listen, PageContext, usePage } from "./bits.tsx";
 import { Chat } from "./Chat.tsx";
 import { Core, type State } from "./core.ts";
 import { DecisionPage } from "./DecisionPage.tsx";
-import { postFinder, postHeight, postOpen } from "./embed.ts";
+import { postFinder, postHeight } from "./embed.ts";
 import { goLive } from "./live.ts";
 import { Masthead, Toasts } from "./Masthead.tsx";
 import { createModel, type Model } from "./model.ts";
@@ -36,14 +36,9 @@ function Embedded(props: { readonly live: boolean }): JSX.Element {
     const t = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-agent], a[href^='#']") : null;
     const hash = t?.dataset["agent"] ? "#agent-" + t.dataset["agent"] : (t?.getAttribute("href") ?? "");
 
-    if (!t || !hash.startsWith("#")) return;
-    const id = Core.decisionRoute(hash);
-
-    if (id === m.viewing()) return;
+    if (!t || !hash.startsWith("#") || Core.decisionRoute(hash) === m.viewing()) return;
     e.preventDefault();
-
-    if (id) postOpen(id);
-    else open(location.pathname + hash, "_blank", "noopener");
+    ui.follow(hash);
   });
   listen(document, "keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {

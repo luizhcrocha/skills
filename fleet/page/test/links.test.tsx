@@ -69,7 +69,7 @@ test("Active shows what needs the user first, then each kind; nothing inactive",
     ["Services", ["l6"]],
   ]);
   expect(root.querySelector('[data-showing="active"]')?.getAttribute("aria-pressed")).toBe("true");
-  expect([...root.querySelectorAll("#link-filters [data-showing] .n")].map((n) => n.textContent)).toEqual(["7", "4", "11"]);
+  expect([...root.querySelectorAll("#links-filters [data-showing] .n")].map((n) => n.textContent)).toEqual(["7", "4", "11"]);
 });
 
 test("Inactive lists the done, the closed, the down and the gone by kind; All folds them under the active", () => {
@@ -87,10 +87,10 @@ test("Inactive lists the done, the closed, the down and the gone by kind; All fo
 });
 
 test("a kind chip and the fleet selector narrow the list", () => {
-  press('#link-filters [data-kind="prototype"]');
+  press('#links-filters [data-kind="prototype"]');
   expect(groups()).toEqual([["Prototypes", ["l3"]]]);
-  press('#link-filters [data-kind="prototype"]');
-  const select = root.querySelector<HTMLSelectElement>("#link-fleet");
+  press('#links-filters [data-kind="prototype"]');
+  const select = root.querySelector<HTMLSelectElement>("#links-fleet");
   expect([...(select?.options ?? [])].map((o) => o.value)).toEqual(["", "billing", "infra"]);
 
   if (select) {

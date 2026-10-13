@@ -17,10 +17,13 @@ import { listen, PillAs, RefTag, tf, usePage, Who } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
 import { Core, type BoundFile, type Decision, type GrillEntry, type Json, type JsonRecord, type MarkDecision, type Question, type Queue } from "./core.ts";
 import { DecisionHistory } from "./DecisionHistory.tsx";
+import { heldTip, oneTarget, placeOf, Refs, RefsBeside } from "./DecisionRef.tsx";
 import { DetailsFold } from "./DetailsFold.tsx";
 import { DecisionThread } from "./DecisionThread.tsx";
-import { FRAME_MAX_PX, parseEmbedMessage, postAnswered, saidBy } from "./embed.ts";
+import { FRAME_MAX_PX, parseEmbedMessage, postAnswered, realTap, saidBy } from "./embed.ts";
 import { markCss, markScript } from "./markframe.ts";
+import { bodyRefs, REF_CSS, refScript, tappedRef, type BodyRefs, type FrameRefs, type Lead } from "./refframe.ts";
+import { isRowId, refHref } from "./refs.ts";
 import { draftsKey } from "./marks.ts";
 import { answerBody } from "./autosend.ts";
 import { FieldHighlights } from "./FieldMarks.tsx";
@@ -71,8 +74,9 @@ const bodyBase = (): URL => new URL("decisions/", location.href);
  * styles and theme, reporting its height and selection (and whether a touch made it), and painting the marks on
  * it (markframe.ts), under {@link framePolicy}. What the fleet's script posts carries `token`, which the body
  * cannot read (it is in a script's text, which no style reaches) and a document the frame is taken to does not know.
+ * With `refs`, the same script links the references the page found in the body's words (refframe.ts).
  */
-function frameDoc(html: SafeBody, token: string): string {
+function frameDoc(html: SafeBody, token: string, refs?: FrameRefs | null): string {
   const cs = getComputedStyle(document.documentElement);
   const vars = TOKENS.map((t) => `--${t}:${cs.getPropertyValue("--" + t).trim()}`).join(";");
   const base = bodyBase();
@@ -101,15 +105,19 @@ pre{background:var(--card-2);padding:10px 12px;border-radius:6px;overflow-x:auto
 img,svg,video,canvas{max-width:100%;height:auto}
 .num{font-variant-numeric:tabular-nums;font-stretch:84%;text-align:right}
 .muted{color:var(--muted)}.good{color:var(--good)}.warning{color:var(--warning)}.critical{color:var(--critical)}
+${REF_CSS}
 ${markCss(token)}
 </style></head><body>${html}
 <scr` + `ipt nonce="${nonce}">(function(){document.querySelectorAll("table").forEach(function(t){var rows=Array.prototype.slice.call(t.rows),head=t.tHead&&t.tHead.rows[0];if(!head&&rows[0]&&Array.prototype.every.call(rows[0].cells,function(c){return c.tagName==="TH"})){head=rows[0];head.classList.add("head")}if(!head)return;var h=head.cells,long=false;rows.forEach(function(r){if(r===head||r.parentNode===t.tHead)return;Array.prototype.forEach.call(r.cells,function(c,i){if(h[i])c.setAttribute("data-label",h[i].textContent.trim());if(c.textContent.length>40)long=true})});if(long)t.classList.add("cards")});var post=function(){parent.postMessage({fleetEvidence:true,fleetFrame:${tok},height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post();})();
-${markScript(token)}</scr` + `ipt></body></html>`;
+${refs ? refScript(refs, token) + "\n" : ""}${markScript(token)}</scr` + `ipt></body></html>`;
 }
 
-/** The frame's whole document for the body `html` as fetched: cut to the allowlist and checked by a second parse ({@link safeBody}; `check` stands in for it in a test), else its plain text under a notice. */
-export async function bodyDoc(html: string, token: string = freshNonce(), check?: Parameters<typeof safeBody>[2]): Promise<string> {
-  return frameDoc(await safeBody(html, bodyBase().href, check), token);
+/** The frame's whole document for the body `html` as fetched: cut to the allowlist and checked by a second parse ({@link safeBody}; `check` stands in for it in a test), else its plain text under a notice.
+ * `refs` reads the references in the body made safe, for its frame to link (refframe.ts `bodyRefs`). */
+export async function bodyDoc(html: string, token: string = freshNonce(), check?: Parameters<typeof safeBody>[2], refs?: (clean: SafeBody) => FrameRefs | null): Promise<string> {
+  const clean = await safeBody(html, bodyBase().href, check);
+
+  return frameDoc(clean, token, refs?.(clean));
 }
 
 /** What the server answers when it refuses a message. */
@@ -141,9 +149,23 @@ const [evidenceDoc, setEvidenceDoc] = createSignal<string | null>(null);
 
 /** The evidence: the fragment a worker or the coordinator wrote for this decision. */
 function Evidence(props: { readonly d: Decision | undefined; readonly title?: string }): JSX.Element {
-  const { ui } = usePage();
+  const { m, ui } = usePage();
   const key = createMemo(() => (props.d && props.d.body ? props.d.id + "|" + ui.revisionOf(props.d) : ""));
   const [holder, setHolder] = createSignal<HTMLDivElement>();
+  /* Where each reference the frame links leads on this page, by the number the frame names a tap with. */
+  let leads: readonly string[] = [];
+
+  /**
+   * Where a reference in the body's words leads: the one row it names in this ledger; null when it names none,
+   * or several. Its address of its own (a window the browser opens) is this page's without its query: in the
+   * manager's frame that is the fleet's whole page, never the bare one the frame shows (`?embed=1`).
+   */
+  const lead = (fleet: string | null, num: string): Lead | null => {
+    const t = oneTarget(m, null, fleet, num);
+    const go = t ? refHref(t, placeOf(m)) : null;
+
+    return t && go !== null ? { go, href: new URL(go.startsWith("#") ? location.pathname + go : go, location.href).href, tip: heldTip(m, t, null) } : null;
+  };
 
   createEffect(
     () => [key(), holder()] as const,
@@ -151,6 +173,7 @@ function Evidence(props: { readonly d: Decision | undefined; readonly title?: st
       const d = props.d;
       evidence.frame = null;
       evidence.token = null;
+      leads = [];
       setEvidenceDoc(null);
 
       if (!el) return;
@@ -172,11 +195,23 @@ function Evidence(props: { readonly d: Decision | undefined; readonly title?: st
       });
       void fetch(url, { cache: "no-store" })
         .then((res) => (res.ok ? res.text() : Promise.reject(new Error(String(res.status)))))
-        .then((html) => bodyDoc(html, token))
-        .then((doc) => {
+        .then(async (html) => {
+          const found: BodyRefs[] = [];
+
+          const doc = await bodyDoc(html, token, undefined, (clean) => {
+            const refs = bodyRefs(clean, m.knownFleets(), (word) => isRowId(m.book(), null, word), lead);
+            found.push(refs);
+
+            return refs.told;
+          });
+
+          return { doc, leads: found[0]?.leads ?? [] };
+        })
+        .then((made) => {
           if (key() !== k) return;
-          frame.srcdoc = doc;
-          setEvidenceDoc(doc);
+          leads = made.leads;
+          frame.srcdoc = made.doc;
+          setEvidenceDoc(made.doc);
         })
         .catch(() => {
           if (key() === k) {
@@ -201,6 +236,16 @@ function Evidence(props: { readonly d: Decision | undefined; readonly title?: st
     }
 
     if (!fromEvidence(e)) return;
+    const ref = tappedRef(data);
+
+    /* A reference tapped in the body: a claim, followed only after a real tap in that frame, and only to where this page said that reference leads. */
+    if (ref !== null) {
+      const go = leads[ref];
+
+      if (go !== undefined && realTap(frame)) ui.follow(go);
+
+      return;
+    }
 
     if (data["fleetEvidence"] !== true) return;
     const height = Number(data["height"]);
@@ -229,8 +274,10 @@ function Options(props: { readonly d: Decision; readonly pick: boolean }): JSX.E
         const inner = (): JSX.Element => (
           <>
             <span class="label" data-field={"option:" + o().id}>
-              {props.pick ? o().id + ": " : ""}
-              {o().label}
+              <span>
+                {props.pick ? o().id + ": " : ""}
+                <Refs text={o().label} />
+              </span>
               <Show when={o().id === props.d.recommend}>
                 <PillAs cls="recommended plain" text="recommended" />
               </Show>
@@ -238,7 +285,7 @@ function Options(props: { readonly d: Decision; readonly pick: boolean }): JSX.E
             <Show when={o().consequence}>
               {(c) => (
                 <div class="fd-wrap" data-field={"option:" + o().id + ":consequence"}>
-                  <Rich class="consequence" text={c()} refs />
+                  <Rich class="consequence" text={c()} refs="every" />
                 </div>
               )}
             </Show>
@@ -521,7 +568,7 @@ function GrillWhy(props: { readonly q: Question; readonly pick: string }): JSX.E
       <h4>{props.pick}</h4>
       <Show when={reason().text} fallback={<p class="gq-why muted">No reason given. Ask for one in a side chat, or with a note.</p>}>
         <div class={"gq-why" + (long() && !open() ? " folded" : "")}>
-          <Rich text={reason().text} refs />
+          <Rich text={reason().text} refs="every" />
         </div>
         <Show when={long()}>
           <button type="button" class="btn small gq-why-more" aria-expanded={tf(open())} onClick={() => setOpen(!open())}>
@@ -565,7 +612,7 @@ function GrillQuestion(props: { readonly e: GrillEntry; readonly head: JSX.Eleme
     <fieldset class={"gq" + (props.e.depth > 0 ? " follow" : "")} data-q={q().id} style={`--depth:${props.e.depth}`}>
       <legend>{props.head}</legend>
       {props.parent}
-      <Rich class="gq-ask" text={shown().lead} refs />
+      <Rich class="gq-ask" text={shown().lead} refs="every" />
       <Show when={shown().options.length} fallback={null}>
         <div class="gq-options" role={props.writable ? undefined : "list"}>
           <For each={shown().options} keyed={(o) => o.id}>
@@ -573,13 +620,15 @@ function GrillQuestion(props: { readonly e: GrillEntry; readonly head: JSX.Eleme
               const inner = (): JSX.Element => (
                 <>
                   <span class="label">
-                    {o().id + ": "}
-                    {o().label}
+                    <span>
+                      {o().id + ": "}
+                      <Refs text={o().label} />
+                    </span>
                     <Show when={o().id === shown().recommended}>
                       <PillAs cls="recommended plain" text="recommended" />
                     </Show>
                   </span>
-                  <Show when={o().consequence}>{(c) => <Rich class="consequence" text={c()} refs />}</Show>
+                  <Show when={o().consequence}>{(c) => <Rich class="consequence" text={c()} refs="every" />}</Show>
                 </>
               );
 
@@ -595,7 +644,7 @@ function GrillQuestion(props: { readonly e: GrillEntry; readonly head: JSX.Eleme
           </For>
         </div>
       </Show>
-      <Show when={shown().after}>{(a) => <Rich class="gq-after" text={a()} refs />}</Show>
+      <Show when={shown().after}>{(a) => <Rich class="gq-after" text={a()} refs="every" />}</Show>
       <GrillWhy q={q()} pick={pick()} />
       <Show when={props.e.sent}>
         <p class="gq-sent">
@@ -638,7 +687,7 @@ function Grill(props: { readonly d: Decision }): JSX.Element {
 
   const head = (e: GrillEntry): JSX.Element => (
     <>
-      <span class="gq-id">{e.q.id.toUpperCase()}</span> {e.q.title}
+      <span class="gq-id">{e.q.id.toUpperCase()}</span> <Refs text={e.q.title} />
     </>
   );
 
@@ -647,7 +696,7 @@ function Grill(props: { readonly d: Decision }): JSX.Element {
       {(of) => (
         <p class="gq-of">
           Follows up {of().toUpperCase()}
-          <Show when={props.d.questions?.find((x) => x.id === of())?.title}>{(t) => <>: {t()}</>}</Show>
+          <Show when={props.d.questions?.find((x) => x.id === of())?.title}>{(t) => <>: <Refs text={t()} /></>}</Show>
         </p>
       )}
     </Show>
@@ -710,7 +759,7 @@ function Grill(props: { readonly d: Decision }): JSX.Element {
             <For each={settled()} keyed={(e) => e.q.id}>
               {(e) => (
                 <li class={String(e().q.status)}>
-                  <b>{e().q.id.toUpperCase()}</b> {e().q.title}: {e().q.status === "dropped" ? "dropped, " + (e().q.dropped || "no longer needed") : e().q.answer}
+                  <b>{e().q.id.toUpperCase()}</b> <Refs text={`${String(e().q.title ?? "")}: ${e().q.status === "dropped" ? "dropped, " + (e().q.dropped || "no longer needed") : String(e().q.answer ?? "")}`} />
                 </li>
               )}
             </For>
@@ -1063,10 +1112,10 @@ function Origin(props: { readonly d: Decision }): JSX.Element {
 /** A part of a long question's rest: a paragraph, or its numbered items as a list. */
 function AskPartView(props: { readonly part: AskPart }): JSX.Element {
   return (
-    <Show when={props.part.kind === "list" ? props.part.items : null} fallback={<Rich text={props.part.kind === "para" ? props.part.text : ""} refs />}>
+    <Show when={props.part.kind === "list" ? props.part.items : null} fallback={<Rich text={props.part.kind === "para" ? props.part.text : ""} refs="every" />}>
       {(items) => (
         <ol>
-          <For each={items()}>{(item) => <li><Rich text={item} refs /></li>}</For>
+          <For each={items()}>{(item) => <li><Rich text={item} refs="every" /></li>}</For>
         </ol>
       )}
     </Show>
@@ -1098,7 +1147,7 @@ function Why(props: { readonly text: string; readonly blocking: boolean }): JSX.
     <div class={"dv-why" + (props.blocking ? " blocking" : "") + (long() && !open() ? " folded" : "")}>
       <h3>{whyHeading(props.text, props.blocking)}</h3>
       <div class="dv-why-text" data-field="why">
-        <Rich text={props.text} refs />
+        <Rich text={props.text} refs="every" />
       </div>
       <Show when={long()}>
         <button type="button" class="btn small dv-why-more" aria-expanded={tf(open())} onClick={() => setOpen(!open())}>
@@ -1132,7 +1181,7 @@ function Info(props: { readonly d: Decision }): JSX.Element {
         </div>
         <h1 data-field="title">
           <RefTag of={d()} />
-          {d().title}
+          <Refs text={d().title} />
         </h1>
         <Origin d={d()} />
         <p class="dv-meta">
@@ -1162,10 +1211,14 @@ function Info(props: { readonly d: Decision }): JSX.Element {
           <h3>{d().status === "decided" ? "Decided" : "Withdrawn, no answer needed"}</h3>
           <Show when={d().status === "decided"}>
             <p>
-              <b>{d().answer}</b>
+              <b>
+                <Refs text={d().answer} />
+              </b>
             </p>
           </Show>
-          <p>{d().resolution}</p>
+          <p>
+            <Refs text={d().resolution} />
+          </p>
           <span class="dv-meta">
             {clock(d().closed)}, {m.ago(d().closed)}
           </span>
@@ -1188,7 +1241,9 @@ function Info(props: { readonly d: Decision }): JSX.Element {
       <Show when={Core.isHeld(d())}>
         <div class="note held" role="status">
           <h3>With the fleet</h3>
-          <p>{d().held}</p>
+          <p>
+            <Refs text={d().held} />
+          </p>
           <span class="dv-meta">
             Held {clock(d().held_at)}, {m.ago(d().held_at)}. It comes back to you when the {m.host()} asks again.
           </span>
@@ -1204,14 +1259,16 @@ function Info(props: { readonly d: Decision }): JSX.Element {
         {(c) => (
           <div class="note changed" role="status">
             <h3>Changed since you last looked</h3>
-            <p>{c().text || `The ${m.host()} revised this decision.`}</p>
+            <p>
+              <Refs text={c().text || `The ${m.host()} revised this decision.`} />
+            </p>
             <span class="dv-meta">{clock(c().at)}</span>
           </div>
         )}
       </Show>
       <section class="dv-ask" aria-label="The question">
         <div class="fd-wrap" data-field="question">
-          <Rich class="dv-question" text={ask().lead} refs />
+          <Rich class="dv-question" text={ask().lead} refs="every" />
         </div>
         <Show when={d().kind === "grill" && open() ? d().question : null}>{(n) => <p class="dv-meta dv-count">{n()}</p>}</Show>
         <Show when={ask().more.length}>
@@ -1256,7 +1313,7 @@ function NoticeNote(props: { readonly d: Decision }): JSX.Element {
           </Show>
           <Show when={approval()?.rule}>:</Show>
         </b>{" "}
-        {approval()?.rule ?? ""}
+        <Refs text={approval()?.rule ?? ""} />
       </p>
       <span class="dv-meta">
         {clock(props.d.closed || props.d.opened)}, {m.ago(props.d.closed || props.d.opened)}. Nobody was asked: you approved acts like this once
@@ -1276,8 +1333,10 @@ function Recommendation(props: { readonly d: Decision }): JSX.Element {
         <aside class="dv-rec" aria-label="Recommended">
           <h3>Recommended</h3>
           <div class="fd-wrap" data-field="recommendation">
-            <p class="dv-rec-pick">{recommended() ? `${recommended()?.id ?? ""}: ${recommended()?.label ?? ""}` : props.d.recommend}</p>
-            <Show when={props.d.reason}>{(r) => <Rich class="dv-rec-why" text={r()} refs />}</Show>
+            <p class="dv-rec-pick">
+              <Refs text={recommended() ? `${recommended()?.id ?? ""}: ${recommended()?.label ?? ""}` : props.d.recommend} />
+            </p>
+            <Show when={props.d.reason}>{(r) => <Rich class="dv-rec-why" text={r()} refs="every" />}</Show>
           </div>
         </aside>
       </Show>
@@ -1292,8 +1351,8 @@ function Advised(props: { readonly text: string }): JSX.Element {
 
   return (
     <p class={"dv-advised" + (none() ? " muted" : "")} id="dv-advised">
-      <Show when={none()} fallback={<><b>Advisor:</b> {props.text}</>}>
-        <b>Advisor not asked:</b> {props.text.slice("none:".length).trim()}
+      <Show when={none()} fallback={<><b>Advisor:</b> <Refs text={props.text} /></>}>
+        <b>Advisor not asked:</b> <Refs text={props.text.slice("none:".length).trim()} />
       </Show>
     </p>
   );
@@ -1318,14 +1377,17 @@ function AnswerFor(props: { readonly id: string }): JSX.Element {
                     <p>
                       <a class="btn" href={l().url} target="_blank" rel="noopener">
                         {l().title}
-                      </a>
+                      </a>{" "}
+                      <RefsBeside text={l().title} />
                       <Show when={!l().up && !l().checking}>
                         {" "}
                         <span class="muted">(not answering now)</span>
                       </Show>
                     </p>
                     <Show when={l().note}>
-                      <p class="muted">{l().note}</p>
+                      <p class="muted">
+                        <Refs text={l().note} />
+                      </p>
                     </Show>
                   </>
                 )}

@@ -10,7 +10,7 @@ import { createEffect, createMemo, createSignal, flush, untrack } from "solid-js
 import { createCarets } from "./carets.ts";
 import { decisionTrail, sideSummaries } from "./chatlog.ts";
 import { Core, type Decision, type FindRow, type ItemRef, type Json, type JsonRecord, type Lookup, type Quote, type QuoteAt } from "./core.ts";
-import { postAsk } from "./embed.ts";
+import { postAsk, postOpen } from "./embed.ts";
 import { arrange, countsOf, cycleTab, itemsOf, readPrefix, tabsOf, type Item, type Section } from "./find.ts";
 import type { Model } from "./model.ts";
 import { createNotify } from "./notify.ts";
@@ -998,6 +998,32 @@ export function createUi(m: Model) {
 
   /* ------------------------------------------------------------------ the view in the address */
 
+  /**
+   * Go where `href` leads, as a tap on a link to it would: a place of this page by its hash, anywhere else
+   * in the whole tab. In the manager's frame (`?embed=1`), which shows one decision alone, another of the
+   * fleet's decisions opens on the manager's page, and any other place of the fleet's page beside.
+   */
+  function follow(href: string): void {
+    if (!href.startsWith("#")) {
+      window.open(href, "_top");
+
+      return;
+    }
+
+    if (!m.embed) {
+      location.hash = href;
+
+      return;
+    }
+
+    const id = Core.decisionRoute(href);
+
+    if (id === m.viewing()) return;
+
+    if (id) postOpen(id);
+    else window.open(location.pathname + href, "_blank", "noopener");
+  }
+
   let shown = "";
 
   /** One view at a time: the tab of the view in the address is current, and a decision's page stands in for the views while it is open. */
@@ -1064,6 +1090,7 @@ export function createUi(m: Model) {
 
   return {
     refs,
+    follow,
     notify,
     panelOpen,
     setPanelOpen,

@@ -8,6 +8,7 @@ import { createMemo, createSignal, createStore, flush, reconcile, type Accessor 
 
 import { Core, type Agent, type Coordinator, type Decision, type Json, type JsonRecord, type Message, type Place, type Prefs, type Queue, type Quote, type RosterRow, type Skill, type State } from "./core.ts";
 import { agoAt } from "./format.ts";
+import { refBook, type KnownFleet } from "./refs.ts";
 
 /** Someone the page can name: a worker, or on a manager's page a coordinator under its fleet's name. */
 export interface Person {
@@ -243,6 +244,14 @@ export function createModel(initial: State) {
     return state.coordinators.find((c) => c.id === theirs.fleet)?.decisions.find((d) => d.id === theirs.id) ?? (own?.fleet === theirs.fleet ? own : undefined);
   };
 
+  /** The rows a reference in a fleet's words may name (refs.ts): this ledger's, and on a manager's page each fleet's. */
+  const book = createMemo(() => refBook(state));
+
+  /** The fleets whose id or name may come before a number in words on this page: the registry's, as the page knows them. */
+  const knownFleets = createMemo((): readonly KnownFleet[] =>
+    state.role === "manager" ? state.coordinators.map((c) => ({ id: c.id, names: [c.name, c.session].filter((n) => n !== "") })) : (state.fleets ?? []).map((id) => ({ id, names: [] })),
+  );
+
   /* Where the manager's page and the fleets' pages live, so moving between them stays on one address: the
      manager's root, and /f/<fleet>/ under it. Null when there is no manager. */
   const hubRoot = (): string | null => (underHub || state.role === "manager" ? "/" : state.manager ? state.manager.url : null);
@@ -405,6 +414,8 @@ export function createModel(initial: State) {
     everyDecision,
     decisionAnywhere,
     decisionNamed,
+    book,
+    knownFleets,
     hubRoot,
     fleetPage,
     managerPage,

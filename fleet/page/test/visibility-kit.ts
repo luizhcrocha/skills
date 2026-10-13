@@ -122,27 +122,43 @@ export async function openD30(body: string, dark = false): Promise<{ readonly pa
   return { page, frame, harness };
 }
 
-/** Select in the frame from the start of `from` to the end of `to`, as a drag would. */
+/** Select in the frame from the start of `from` to the end of `to`, as a drag would: the words may run over
+ * several text nodes (a reference in them is a link of its own, refframe.ts). */
 async function selectIn(f: Frame, from: string, to = from): Promise<void> {
   await f.evaluate(
     (a: string, b: string) => {
-      const find = (w: string): TextAt => {
-        const it = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const it = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const nodes: TextAt[] = [];
+      let all = "";
 
-        for (let n = it.nextNode(); n; n = it.nextNode()) {
-          const i = n instanceof Text && !/^(STYLE|SCRIPT)$/u.test(n.parentNode?.nodeName ?? "") ? n.data.indexOf(w) : -1;
+      for (let n = it.nextNode(); n; n = it.nextNode()) {
+        if (!(n instanceof Text) || /^(STYLE|SCRIPT)$/u.test(n.parentNode?.nodeName ?? "")) continue;
+        nodes.push({ n, i: all.length });
+        all += n.data;
+      }
 
-          if (n instanceof Text && i >= 0) return { n, i };
-        }
+      /* The node and offset of place `at` of the body's words: `end` takes the node the words end in, not the next one's start. */
+      const place = (at: number, end: boolean): TextAt => {
+        const hit = nodes.findLast((x) => (end ? x.i < at : x.i <= at));
 
-        throw new Error("not found: " + w);
+        if (!hit) throw new Error("no text at " + String(at));
+
+        return { n: hit.n, i: at - hit.i };
       };
 
-      const x = find(a);
-      const y = find(b);
+      const find = (w: string): number => {
+        const i = all.indexOf(w);
+
+        if (i < 0) throw new Error("not found: " + w);
+
+        return i;
+      };
+
+      const x = place(find(a), false);
+      const y = place(find(b) + b.length, true);
       const r = document.createRange();
       r.setStart(x.n, x.i);
-      r.setEnd(y.n, y.i + b.length);
+      r.setEnd(y.n, y.i);
       getSelection()?.removeAllRanges();
       getSelection()?.addRange(r);
     },
@@ -151,7 +167,7 @@ async function selectIn(f: Frame, from: string, to = from): Promise<void> {
   );
 }
 
-/** Where words start: their text node and the offset in it. */
+/** Where words are: a text node and an offset (in it, or of its start in the body's words). */
 interface TextAt {
   readonly n: Text;
   readonly i: number;

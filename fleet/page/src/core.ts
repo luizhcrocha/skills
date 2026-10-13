@@ -2086,7 +2086,9 @@ export interface Place {
 
 /**
  * Where a location hash leads: the view, the decision it opens, the element to scroll to. The addresses the
- * page had as one long scroll still lead to where their section went. `fleets` as for `decisionRoute`.
+ * page had as one long scroll still lead to where their section went, and a row's own (`#agent-<id>`,
+ * `#approval-<id>`, `#roadblock-<id>`, `#step-<id>`, `#milestone-<id>`, `#kept-<id>`, `#link-<fleet>/<id>`)
+ * to that row in its view. `fleets` as for `decisionRoute`.
  */
 function viewOf(hash: string | null | undefined, fleets = false): Place {
   const decision = decisionRoute(hash, fleets);
@@ -2102,6 +2104,11 @@ function viewOf(hash: string | null | undefined, fleets = false): Place {
   if (/^agent-[A-Za-z0-9_.-]+$/u.test(name)) return { view: "fleet", decision: null, anchor: name };
 
   if (/^approval-[A-Za-z0-9_.-]+$/u.test(name)) return { view: "decisions", decision: null, anchor: name };
+
+  /* A row a reference in a fleet's words names (refs.ts): a roadblock, a plan step, a milestone, a kept note; a link, with its fleet on a manager's page. */
+  if (/^(?:roadblock|step|milestone|kept)-[A-Za-z0-9_.-]+$/u.test(name)) return { view: "plan", decision: null, anchor: name };
+
+  if (/^link-(?:[A-Za-z0-9_.@-]+\/)?[A-Za-z0-9_.-]+$/u.test(name)) return { view: "links", decision: null, anchor: name };
 
   return { view: "decisions", decision: null, anchor: null };
 }

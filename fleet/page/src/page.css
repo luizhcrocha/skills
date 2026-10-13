@@ -204,12 +204,19 @@
   .ask.open.blocking { border-left-color: var(--critical); }
   .ask.closed { color: var(--muted); }
   .ask-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+  /* A decision's row answers a tap anywhere on it: its head is the link, and the link's area stretches over the row. A reference in the row's words is a link of its own, above that area. */
+  .ask:has(> a.ask-head) { position: relative; }
+  a.ask-head { color: inherit; text-decoration: none; }
+  a.ask-head::after { content: ""; position: absolute; inset: 0; }
+  a.ask-head:focus-visible { outline: none; }
+  a.ask-head:focus-visible::after { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
   .ask-head b { font-weight: 700; font-stretch: var(--narrow); font-size: 1.0625rem; overflow-wrap: anywhere; margin-right: 2px; }
   .ask.closed .ask-head b { font-weight: 600; }
   .ask .detail { overflow-wrap: anywhere; }
   .ask .meta { font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }
   .ask > .btn { justify-self: start; margin: 6px 0 2px; }
   div.ask:hover { background: none; }
+  div.ask:has(> a.ask-head):hover { background: color-mix(in srgb, var(--card-2) 55%, transparent); }
 
   /* done under a standing approval, and the approvals: records, not links; the number and title lead to the notice's page */
   .notice, .approval { display: grid; gap: 4px; min-width: 0; padding: 13px 14px 13px 13px; border-left: 4px solid var(--good); }
@@ -649,6 +656,13 @@
   .dv-body iframe { display: block; width: 100%; height: 160px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
   .dv-body iframe.fixed { height: 70dvh; }
   .dref-wrap { position: relative; }
+  /* In a row that answers a tap anywhere (a decision's, a roadblock's), a reference stays its own link, above the row's; the one whose tip shows, above its neighbours. */
+  .ask .dref-wrap, .block .dref-wrap { z-index: 1; }
+  .dref-wrap:hover, .dref-wrap:focus-within { z-index: 6; }
+  /* The references a row's title names, beside the title that opens the row. */
+  .refs-beside { font-size: var(--fs-s); }
+  /* The row a reference led to (the address names it): outlined as a message found is. */
+  .block:target, .milestone:target, .steps li:target { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
   .dref { color: var(--accent); font-weight: 600; text-decoration: underline dotted; text-underline-offset: 2px; }
   .dref-tip { position: absolute; z-index: 5; left: 0; top: calc(100% + 6px); width: max-content; max-width: min(340px, calc(100vw - 32px)); padding: 6px 10px; border-radius: 8px; background: var(--text); color: var(--bg); font-size: var(--fs-s); font-weight: 500; line-height: 1.35; white-space: normal; pointer-events: none; }
   .dv-fold { display: grid; gap: 8px; min-width: 0; }

@@ -45,7 +45,7 @@ function outside(page: Page): Promise<string[]> {
 
     if (document.documentElement.scrollWidth > width) out.push(`the page scrolls sideways (${String(document.documentElement.scrollWidth)} > ${String(width)})`);
 
-    for (const e of document.querySelectorAll("#links-view .link-row, #links-view .kind-badge, #links-view .link-status, #link-filters")) {
+    for (const e of document.querySelectorAll("#links-view .link-row, #links-view .kind-badge, #links-view .link-status, #links-filters")) {
       const r = e.getBoundingClientRect();
 
       if (r.width > 0 && (r.left < -0.5 || r.right > width + 0.5)) out.push(`${e.className} ${e.getAttribute("data-link") ?? ""} spans ${String(r.left)}..${String(r.right)}`);

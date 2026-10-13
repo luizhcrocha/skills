@@ -9,12 +9,11 @@
 import { createMemo, createSignal, onCleanup } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
-import { tf, usePage } from "./bits.tsx";
+import { tf } from "./bits.tsx";
 import { copyText, selectAndCopy, type Copied } from "./clip.ts";
 import type { Part } from "./core.ts";
-import { DecisionRef } from "./DecisionRef.tsx";
+import { ItemRef, pieceOf, useRefs, type RefPiece } from "./DecisionRef.tsx";
 import { tokensOf } from "./highlight.ts";
-import { refRuns, type KnownFleet } from "./refs.ts";
 import { isFormatted, manualBlocks, parseText, spansOf, type Block } from "./text.ts";
 
 /** How long "Copied" shows. */
@@ -74,28 +73,28 @@ export function CodeBlock(props: { readonly lang: string; readonly text: string;
   );
 }
 
-/** A piece of a paragraph's words: plain text, a mention's part, or a decision's number. */
+/** A piece of a paragraph's words: plain text, a mention's part, or a reference to a row of a ledger. */
 interface Piece {
   readonly text: string;
   readonly part?: Part;
-  readonly ref?: { readonly num: string; readonly fleet: string | null; readonly question: number | null };
+  readonly ref?: RefPiece | undefined;
 }
 
-/** The fleets whose id or name may come before a decision's number on this page: the registry's, as the page knows them. */
-function useFleets(): () => readonly KnownFleet[] {
-  const { m } = usePage();
+/** Whether words link the references in them (refs.ts), and how they are read: "every" in a decision's own words, where every number is a link (DecisionRef.tsx). */
+export type RefsMode = boolean | "every";
 
-  return () =>
-    m.state.role === "manager" ? m.state.coordinators.map((c) => ({ id: c.id, names: [c.name, c.session].filter((n) => n !== "") })) : (m.state.fleets ?? []).map((id) => ({ id, names: [] }));
-}
+/** Words of a paragraph, with the mentions marked in them shown by `mention`; with `refs`, each reference in them (refs.ts) a link, in the words of `fleet`. */
+function Words(props: { readonly text: string; readonly parts: readonly Part[]; readonly mention: MentionView | undefined; readonly refs: RefsMode; readonly fleet: string | null | undefined }): JSX.Element {
+  /* Words that link nothing need no page around them (a code block's caption, a test's). */
+  const read = props.refs ? useRefs() : null;
 
-/** Words of a paragraph, with the mentions marked in them shown by `mention`. */
-function Words(props: { readonly text: string; readonly parts: readonly Part[]; readonly mention: MentionView | undefined; readonly refs: boolean }): JSX.Element {
-  const fleets = props.refs ? useFleets() : () => [];
+  /* Plain words, with each reference split out when the words link them. */
+  const plain = (text: string): Piece[] => {
+    if (!read) return [{ text }];
+    const drawn = read(text, props.fleet, props.refs === "every");
 
-  /* Plain words, with each decision's number split out when the item's words link them. */
-  const plain = (text: string): Piece[] =>
-    props.refs ? refRuns(text, fleets()).map((r): Piece => (r.kind === "ref" ? { text: r.text, ref: { num: r.num, fleet: r.fleet, question: r.question } } : { text: r.text })) : [{ text }];
+    return drawn.runs.map((r): Piece => ({ text: r.text, ref: pieceOf(r, drawn) }));
+  };
 
   const pieces = (): Piece[] => {
     if (!props.mention) return plain(props.text);
@@ -119,7 +118,7 @@ function Words(props: { readonly text: string; readonly parts: readonly Part[]; 
   return (
     <For each={pieces()} keyed={false}>
       {(p) => (
-        <Show when={props.mention && p().part} fallback={<Show when={p().ref} fallback={p().text}>{(r) => <DecisionRef num={r().num} fleet={r().fleet} question={r().question} text={p().text} />}</Show>}>
+        <Show when={props.mention && p().part} fallback={<Show when={p().ref} fallback={p().text}>{(r) => <ItemRef num={r().num} fleet={r().fleet} scope={r().scope} question={r().question} text={p().text} every={r().every} />}</Show>}>
           {(part) => <>{props.mention?.(part())}</>}
         </Show>
       )}
@@ -134,7 +133,7 @@ const unmark = (text: string, parts: readonly Part[]): string => text.replace(MA
 const keyOf = (b: Block, i: number): string => (b.kind === "code" ? `c${String(i)}|${b.lang}|${b.text}` : `p${String(i)}|${b.spans.map((s) => s.kind + s.text).join("\u0000")}`);
 
 /** Blocks, rendered. */
-function Blocks(props: { readonly blocks: readonly Block[]; readonly parts: readonly Part[]; readonly mention: MentionView | undefined; readonly refs: boolean }): JSX.Element {
+function Blocks(props: { readonly blocks: readonly Block[]; readonly parts: readonly Part[]; readonly mention: MentionView | undefined; readonly refs: RefsMode; readonly fleet?: string | null | undefined }): JSX.Element {
   const keyed = createMemo(() => props.blocks.map((b, i) => ({ key: keyOf(b, i), b })));
 
   return (
@@ -148,7 +147,7 @@ function Blocks(props: { readonly blocks: readonly Block[]; readonly parts: read
           <p>
             <For each={b.spans} keyed={false}>
               {(s) => (
-                <Show when={s().kind === "code"} fallback={<Words text={s().text} parts={props.parts} mention={props.mention} refs={props.refs === true} />}>
+                <Show when={s().kind === "code"} fallback={<Words text={s().text} parts={props.parts} mention={props.mention} refs={props.refs} fleet={props.fleet} />}>
                   <code class="ic">{unmark(s().text, props.parts)}</code>
                 </Show>
               )}
@@ -163,9 +162,11 @@ function Blocks(props: { readonly blocks: readonly Block[]; readonly parts: read
 /**
  * Free text in the page's format, in a `<div class={cls}>`. Text that uses no backtick is one paragraph,
  * exactly as before. A message's `parts` put its mentions back where they were, shown by `mention`. With
- * `refs`, an item's words link each decision number in them to that decision.
+ * `refs`, the words link each reference in them (refs.ts) to the row it names, every number when it is
+ * "every" ({@link RefsMode}); `fleet` says whose words they are on a manager's page (a fleet it serves; anyone
+ * else's are the page's own). Code is never a reference.
  */
-export function Rich(props: { readonly text: string; readonly class?: string; readonly parts?: readonly Part[]; readonly mention?: MentionView; readonly refs?: boolean }): JSX.Element {
+export function Rich(props: { readonly text: string; readonly class?: string; readonly parts?: readonly Part[]; readonly mention?: MentionView; readonly refs?: RefsMode; readonly fleet?: string | null | undefined }): JSX.Element {
   const parts = (): readonly Part[] => props.parts ?? [];
 
   /* A message's words with each mention as a mark the format reads as plain text. */
@@ -179,12 +180,12 @@ export function Rich(props: { readonly text: string; readonly class?: string; re
 
   return (
     <div class={"rich" + (props.class ? " " + props.class : "")}>
-      <Blocks blocks={blocks()} parts={parts()} mention={props.mention} refs={props.refs === true} />
+      <Blocks blocks={blocks()} parts={parts()} mention={props.mention} refs={props.refs ?? false} fleet={props.fleet} />
     </div>
   );
 }
 
-/** A `--manual`: in the format when it uses it, one `nu` block when its every line is a command, else as it always was. */
+/** A `--manual`: in the format when it uses it (its words' references linked, its code never), one `nu` block when its every line is a command, else as it always was. */
 export function ManualText(props: { readonly text: string }): JSX.Element {
   const blocks = createMemo(() => manualBlocks(props.text));
 
@@ -192,7 +193,7 @@ export function ManualText(props: { readonly text: string }): JSX.Element {
     <Show when={blocks()} fallback={<pre class="manual">{props.text}</pre>}>
       {(b) => (
         <div class="rich manual-rich">
-          <Blocks blocks={b()} parts={[]} mention={undefined} refs={false} />
+          <Blocks blocks={b()} parts={[]} mention={undefined} refs />
         </div>
       )}
     </Show>
@@ -207,10 +208,10 @@ export function UndoText(props: { readonly text: string }): JSX.Element {
   const blocks = createMemo(() => manualBlocks(props.text));
 
   return (
-    <Show when={blocks()} fallback={<Rich text={props.text} refs />}>
+    <Show when={blocks()} fallback={<Rich text={props.text} refs="every" />}>
       {(b) => (
         <div class="rich">
-          <Blocks blocks={b()} parts={[]} mention={undefined} refs />
+          <Blocks blocks={b()} parts={[]} mention={undefined} refs="every" />
         </div>
       )}
     </Show>

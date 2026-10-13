@@ -9,6 +9,7 @@ import { ChatIcon, CloseIcon, listen, Pill, usePage, tf } from "./bits.tsx";
 import { copyText, selectAndCopy, type Copied } from "./clip.ts";
 import { Core, type Agent, type Coordinator, type FindRow, type Json, type MarkKind, type QuoteAt } from "./core.ts";
 import { evidence, fromEvidence } from "./DecisionPage.tsx";
+import { Refs } from "./DecisionRef.tsx";
 import { parseEmbedMessage, parseEvidenceSelect, parseFieldPaints, parseFrameCommand, parseFrameSaid, postFieldDelete, postFieldTap, postMark, postSelect, REFUSAL_WORDS, type Refusal, type SelRect } from "./embed.ts";
 import { KIND_WORDS, QUOTED_KINDS, type Claimed } from "./marks.ts";
 import { claimIn, fieldDelete, fieldOf, fieldTap, setFieldPaints } from "./FieldMarks.tsx";
@@ -428,7 +429,9 @@ function AgentSheet(props: { readonly a: Agent }): JSX.Element {
         <Pill s={a().status} />
         <CloseX />
       </div>
-      <p>{a().task}</p>
+      <p>
+        <Refs text={a().task} />
+      </p>
       <dl class="facts">
         <Fact k="Skill">{a().skill || "none"}</Fact>
         <Fact k="Model">{a().model || "opus"}</Fact>
@@ -513,7 +516,9 @@ function FleetSheet(props: { readonly c: Coordinator }): JSX.Element {
         <Pill s={c().status} />
         <CloseX />
       </div>
-      <p>{c().now || c().goal}</p>
+      <p>
+        <Refs text={c().now || c().goal} fleet={c().id} />
+      </p>
       <dl class="facts">
         <Fact k="Project">{c().name}</Fact>
         <Fact k="Session">{c().session || "not named yet"}</Fact>
@@ -537,7 +542,9 @@ function FleetSheet(props: { readonly c: Coordinator }): JSX.Element {
       <Show when={c().goal}>
         <div>
           <h3>Goal</h3>
-          <p>{c().goal}</p>
+          <p>
+            <Refs text={c().goal} fleet={c().id} />
+          </p>
         </div>
       </Show>
       <div>

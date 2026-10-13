@@ -733,6 +733,47 @@ id always wins (`d3` is an id; `D3` is a number unless a row's id is `D3`). Ever
 every decision reference (`--decision`, `--supersedes`, `chat wait`, `fleets.py decision`) take
 either. Where a reference is stored or printed as an address, it's the id.
 
+**On the page (TypeScript only).** Wherever the page shows words a fleet wrote (a title, a question, a link's
+`for` and note, a Now line, the plan, a roadblock, the log, a chat message, a decision's body), a reference to
+a row is a link that opens it, by one reader (`fleet/page/src/refs.ts`, `refRuns` and `targetsOf`). A
+reference is a number (a letter of the list above and digits: `D30`, `L25`, `R17`, `K12`) or a row's own id as
+written (`d30`, `l245`, `deploy-0067`), and an id counts only when it holds a digit and a decision, link,
+roadblock, approval, plan step, milestone, worker or kept note of the ledger whose words they are has exactly
+that id, in that case: `(d30)` in perf's words is perf's d30, never another fleet's, and an id no row has
+stays text. A word is read whole: `d30x`, `éD30`, `1.9.43`, a hex id, a file name, a path, a URL, a code span
+(`` `d30` ``) and a fenced block are never links. A range or a list whose every part is a number or an id
+links each part (`D30-D32`, `D62/D65`, `D41/d69`). A closed row links as an open one.
+
+Two readings, by where the words are:
+
+| Where | A letter and one digit standing alone (`D1`, `R2`, `s3`) | A number several ledgers hold, on the manager's page |
+|---|---|---|
+| A decision's own words: its question, why, an option's consequence, the recommendation's reason, a grilling's question, a notice's question and undo (where the page linked a decision's number before 2026-10-13) | a link | a link to each holder ("D17 in infra · D17 in billing") |
+| Everywhere else, a decision's body included | text | text |
+
+Outside a decision's own words `D1`, `R2` and `S3` are a database, a bucket and a store far more often than a
+row (infra's "move off D1 onto Postgres"), so a short word standing alone is never a link there, whatever the
+ledger holds; the machine issues no one-digit number, so only rows from before its counters are named that
+way. With its fleet said before it ("pipeline's L1") a short one is a link everywhere.
+
+Never linked, whatever they name: Luiz's own words (a chat message from the user, his answer in a decision's
+history), a quote (words taken from elsewhere, shown as they were), a line of the hub's (one that opens with
+`[hub]`), and the chat's message ids (`#N`).
+
+On the manager's page the link opens the row in the fleet that wrote the words (`#decision/<fleet>/<id>`,
+`#link-<fleet>/<id>`), found in what the view already carries of each fleet (`coordinators[].index`, `links`);
+what it does not carry of another fleet (a roadblock's id, a standing approval, a milestone, a kept note)
+stays text there, and a roadblock named by its number opens that fleet's roadblocks. A word after a fleet's
+name ("perf p95") links only when that fleet's ledger, which the manager's page holds, has such a row; on a
+fleet's page, which knows another fleet only by name, only a word written as a decision's (`D40`, `G6`,
+`d172`) links, to that fleet's decision on the manager's page. Where the words are themselves a link or a
+button (a link's title, a decision's row), the reference is a link of its own beside them, never one inside
+another. In a decision's body the sandboxed frame's own script makes the links with the DOM from what the
+page told it, and a tap tells the page only which one (`{fleetFrame: token, fleetRef: n}`): the page goes
+where it said `n` leads, so the body names no address; a tap on a mark, or on the pin of a mark that ends in
+the reference, is the mark's. The link's own address (a window the browser opens) is the fleet's whole page,
+also from inside the manager's frame.
+
 ## Warnings
 
 After the handler succeeds, before validation, on stderr, in this order (not for `init`):

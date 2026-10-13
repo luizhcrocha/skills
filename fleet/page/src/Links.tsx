@@ -8,8 +8,10 @@ import { For, Show, type JSX } from "@solidjs/web";
 
 import { PillAs, RefTag, usePage } from "./bits.tsx";
 import { Core, type Link, type LinkKind } from "./core.ts";
+import { Refs, RefsBeside } from "./DecisionRef.tsx";
 import { clock } from "./format.ts";
 import { hrefOf, inactiveWhy, KIND_NAME, KINDS, placeOf, plainTitle, roundOf, type Arranged, type Showing } from "./links.ts";
+import { linkAnchor } from "./refs.ts";
 
 const ICON_PATHS: Readonly<Record<LinkKind, string>> = {
   preview: "M2.5 4.5h11v7h-11z M6 14h4 M7 7l3 1.5L7 10z",
@@ -61,7 +63,9 @@ function statusOf(l: Link): Status {
   return { dot: "down", words: l.state_since ? `down since ${clock(l.state_since)}` : l.checked ? `down · checked ${clock(l.checked)}` : "down" };
 }
 
-/** One link: its kind, its plain title, the fleet, what the user does there, whether it answers, its port or host. */
+/** One link: its kind, its plain title, the fleet, what the user does there, whether it answers, its port or host.
+ * What its fleet wrote of it (what the user does there, its note) links each reference it names (refs.ts), in that
+ * fleet's ledger; its title opens the link itself, so the references it names stand beside it. */
 export function LinkRow(props: { readonly link: Link }): JSX.Element {
   const { m } = usePage();
   const l = (): Link => props.link;
@@ -74,13 +78,14 @@ export function LinkRow(props: { readonly link: Link }): JSX.Element {
   const served = () => (own() ? m.decisionById(l().decision) : m.decisionAnywhere(`${l().fleet}/${l().decision}`));
 
   return (
-    <div class={"block link-row kind-" + l().kind + (why() ? " inactive" : "")} data-link={l().id} data-fleet={l().fleet}>
+    <div class={"block link-row kind-" + l().kind + (why() ? " inactive" : "")} id={linkAnchor(l())} data-link={l().id} data-fleet={l().fleet}>
       <div class="block-head">
         <KindBadge kind={l().kind} />
         <RefTag of={l()} />
         <a class="link-title" href={hrefOf(l())} target="_blank" rel="noopener" title={l().url}>
           {plainTitle(l().title)}
         </a>
+        <RefsBeside text={plainTitle(l().title)} fleet={l().fleet} />
         <Show when={round()}>
           <PillAs cls="plain round" text={round()} />
         </Show>
@@ -90,7 +95,7 @@ export function LinkRow(props: { readonly link: Link }): JSX.Element {
       </div>
       <Show when={l().for}>
         <p class="link-for">
-          <span class="muted">For you:</span> {l().for}
+          <span class="muted">For you:</span> <Refs text={l().for} fleet={l().fleet} />
         </p>
       </Show>
       <p class="link-status">
@@ -107,7 +112,9 @@ export function LinkRow(props: { readonly link: Link }): JSX.Element {
         <p class="meta lane">{l().url.replace(/^file:\/\//u, "")}</p>
       </Show>
       <Show when={l().note}>
-        <p class="detail">{l().note}</p>
+        <p class="detail">
+          <Refs text={l().note} fleet={l().fleet} />
+        </p>
       </Show>
       <Show when={l().decision ? served() : undefined}>
         {(d) => (
@@ -192,7 +199,7 @@ export function LinkFilterBar(props: { readonly f: LinkFilters; readonly arrange
   const countOf = (s: Showing): number => (s === "active" ? props.arranged.counts.active : s === "inactive" ? props.arranged.counts.inactive : props.arranged.counts.active + props.arranged.counts.inactive);
 
   return (
-    <div class="link-filters" id="link-filters">
+    <div class="link-filters" id="links-filters">
       <div class="seg" role="group" aria-label="Show links">
         <For each={states} keyed={(s) => s[0]}>
           {(s) => (
@@ -217,7 +224,7 @@ export function LinkFilterBar(props: { readonly f: LinkFilters; readonly arrange
       <Show when={m.managed() && props.fleets.length > 1}>
         <label class="link-fleet">
           <span class="muted">Fleet</span>
-          <select id="link-fleet" value={props.f.fleet()} onChange={(e) => props.f.setFleet(e.currentTarget.value)}>
+          <select id="links-fleet" value={props.f.fleet()} onChange={(e) => props.f.setFleet(e.currentTarget.value)}>
             <option value="">Every fleet</option>
             <For each={props.fleets} keyed={(id) => id}>
               {(id) => <option value={id()}>{id()}</option>}

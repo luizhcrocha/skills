@@ -198,6 +198,88 @@ export function linksView(now: number): View {
   };
 }
 
+/** A row of a fleet's search index, as `summary` sends it (`fleet/src/page/view.ts` `searchIndex`). */
+const indexed = (group: string, ref: string, hash: string, hint = "open"): View => ({ group, ref, title: "T " + ref, sub: "", hint, hash });
+
+/**
+ * The manager's view for the references' tests (refs.ts): a fleet `perf` whose ledger holds d30 (D130, decided)
+ * and d58, a roadblock R7, a step s3 and a worker a2, and whose link says what Luiz does there in the words of
+ * his screenshot, "read the bench design (d30): idea, model, seams". The manager's own ledger holds a d30 too
+ * (D7), infra a D30 by number (its d4) and billing no d30 at all, so an id read in the wrong ledger shows.
+ * Infra also holds a decision D1 and a roadblock R2, and its Now line names a database and a bucket by those
+ * very words.
+ */
+export function refsManagerView(now: number): View {
+  const view = managerView(now);
+  const fleets = views(view["coordinators"]);
+
+  const perf: View = {
+    ...fleets[0],
+    id: "perf",
+    name: "perf",
+    session: "Perf",
+    url: "f/perf/",
+    now: "Bench design out for review (d30); d58 waits on you, d31 does not exist.",
+    decisions: [{ id: "d58", ref: "D158", kind: "decision", title: "Which bench runs nightly, after d30", question: "As d30 chose the model, which bench runs nightly?", why: "", blocking: false, asks: "user", opened: before(now, 20), revised: null, answered: null }],
+    index: [indexed("decisions", "D130", "#decision/d30", "decided"), indexed("decisions", "D158", "#decision/d58"), indexed("roadblocks", "R7", "#roadblocks"), indexed("plan", "s3", "#plan"), indexed("workers", "a2", "#agent-a2", "running")],
+  };
+
+  return {
+    ...view,
+    now: "perf's bench design is out; my own d30 waits.",
+    coordinators: [
+      ...fleets.map((c) =>
+        c["id"] === "infra"
+          ? { ...c, now: "Move off D1 onto Postgres; Cloudflare R2 keeps the exports.", index: [indexed("decisions", "D30", "#decision/d4", "decided"), indexed("decisions", "D1", "#decision/d1"), indexed("roadblocks", "R2", "#roadblocks")] }
+          : c,
+      ),
+      perf,
+    ],
+    decisions: [{ id: "d30", ref: "D7", kind: "decision", title: "The manager's own", question: "Which fleet first?", status: "open", blocking: false, asks: "user", opened: before(now, 5), options: [] }],
+    links: [
+      { id: "bench", ref: "L25", kind: "doc", title: "Bench design, after D130", url: "https://claude.ai/artifact/bench", fleet: "perf", note: "Replaces what D130 chose; see L25.", decision: "", for: "read the bench design (d30): idea, model, seams", reach: "external", up: false },
+      { id: "old", ref: "L24", kind: "doc", title: "Bench notes", url: "https://claude.ai/artifact/old", fleet: "perf", note: "", decision: "", for: null, reach: "external", up: false, done: before(now, 30) },
+      { id: "l1", ref: "L1", kind: "tool", title: "Gold marking", url: "https://box.ts.net:4518/", fleet: "billing", note: "", decision: "", for: "mark each decision (d30)", reach: "machine", up: true },
+    ],
+  };
+}
+
+/**
+ * The same fleet `perf` on its own page: its d30 decided, d58 open and naming it, and the same link. Beside the
+ * fleet's rows of a letter and one digit (D1, R1, R2, s3, a2: a database's and a bucket's names too), it holds
+ * a roadblock R11, a step s13 and a worker a12.
+ */
+export function refsFleetView(now: number): View {
+  const view = coordinatorView(now);
+  const ask = (id: string, ref: string, extra: View): View => ({ id, ref, kind: "decision", title: "T " + ref, question: "q", status: "open", blocking: false, asks: "user", opened: before(now, 20), options: [], ...extra });
+
+  return {
+    ...view,
+    fleet: "perf",
+    fleets: ["billing", "infra", "perf"],
+    named: { id: "perf", session: "Perf" },
+    now: "Bench design out for review (d30); d58 waits on you, a12 runs the bench after a2.",
+    agents: [...views(view["agents"]), { id: "a12", name: "bench-run", status: "running", task: "Run the bench d30 chose", skill: "none", model: "sonnet", milestone: "m12", lane: [], tokens: 0, duration_ms: 0, rounds: 1, brief: "", report: "", updated: before(now, 2) }],
+    roadmap: [...views(view["roadmap"]), { id: "m12", title: "Bench", steps: [{ id: "s13", title: "Nightly bench", status: "pending" }] }],
+    roadblocks: [...views(view["roadblocks"]), { id: "r11", ref: "R11", title: "No bench key", severity: "warning", needs: "a key for the bench", since: before(now, 10), resolved: false, detail: "The bench cannot replay without it." }],
+    decisions: [
+      ...views(view["decisions"]).filter((d) => d["id"] === "d1"),
+      ask("d30", "D130", { title: "The bench's model", status: "decided", answer: "A: one seam, replayed calls", resolution: "recorded", closed: before(now, 60) }),
+      ask("d58", "D158", { title: "Which bench runs nightly, after d30", question: "As d30 chose the model, which bench runs nightly? R1 still blocks the adapter, R11 the bench.", why: "the nightly job (s13), once s3 lands", options: [{ id: "a", label: "The one d30 named", consequence: "As D130 said." }] }),
+    ],
+    events: [
+      { at: before(now, 60), kind: "decided", text: "d30 decided: one seam; deploy-0067 does not exist", decision: "d30" },
+      { at: before(now, 70), kind: "note", text: "Moved off D1 onto Postgres; Cloudflare R2 keeps the exports, S3 the rest (s3)." },
+      { at: before(now, 65), kind: "asked", text: "Which bench runs nightly, after d30: asked once R11 was known", decision: "d58" },
+    ],
+    kept: [{ id: "k1", text: "Revisit d30 once the bench runs nightly.", at: before(now, 100) }],
+    links: [
+      { id: "bench", ref: "L25", kind: "doc", title: "Bench design, after D130", url: "https://claude.ai/artifact/bench", fleet: "perf", note: "Replaces what D130 chose.", decision: "", for: "read the bench design (d30): idea, model, seams", reach: "external", up: false },
+      { id: "old", ref: "L24", kind: "doc", title: "Bench notes", url: "https://claude.ai/artifact/old", fleet: "perf", note: "", decision: "", for: null, reach: "external", up: false, done: before(now, 30) },
+    ],
+  };
+}
+
 /**
  * The manager's view with open decisions in three fleets (billing 1, infra 2, site 1) and its own that
  * names no agent, for the quick filter by agent; `closed` leaves some out ("<fleet>/<id>").
