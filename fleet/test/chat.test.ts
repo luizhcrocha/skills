@@ -1295,11 +1295,14 @@ describe("marks on a decision", () => {
     };
 
     for (const field of ["title", "question", "why", "step", "recommendation", "option:B", "option:opt_2.a-b:consequence", "history:0", "history:12", `option:${"x".repeat(60)}`]) expect(fieldOf(on(field))).toBe(field);
+
+    /* A grilling's question's own words: its title, the question, its reason, an option and its consequence. */
+    for (const field of ["q1:title", "q1:question", "q1:recommendation", "q2:option:a", "q12:option:a:consequence"]) expect(fieldOf(on(field))).toBe(field);
     expect(fieldOf(on(null))).toBeNull();
     const why = marksOf(on("why"));
     expect(Object.keys(asObject(asObject(asArray(why instanceof ChatError ? undefined : why?.["items"])?.[0])?.["quote"]) ?? {})).toEqual(["text", "prefix", "suffix", "hint", "field", "blocks"]);
 
-    for (const bad of ["body", "Title", "option:", "option:B:why", "option:a b", `option:${"x".repeat(61)}`, "history:", "history:x", "history:-1", "question "]) {
+    for (const bad of ["body", "Title", "option:", "option:B:why", "option:a b", `option:${"x".repeat(61)}`, "history:", "history:x", "history:-1", "question ", "q1", "q1:", "q0:title", "q1:why", "q1:step", "q1:history:1", "q1:q2:title", "Q1:title", "q1:option:"]) {
       expect(refusal(on(bad))).toStartWith("marks are {decision, at, items}: mark 1.quote.field is title, question");
     }
 
@@ -1735,6 +1738,17 @@ describe("the follow-through on a batch", () => {
         `(\`--re 1 --mark N --no-change "<why>" "..."\`). "Agreed, rewriting" without the revision leaves it open.`,
     ]);
     expect(batchReminders(at(59), root, told, 1800)).toEqual([]);
+
+    /* On a grilling, the revision is the grilling's: its context, or a question's own words. */
+    writeDecisions([{ ...decision(null), ref: "G30", kind: "grill" }]);
+    expect(batchReminders(at(31), root, new Map(), 1800)).toEqual([
+      `! batch #1 on G30 (Cache policy) is still open after 31 min: marks 2, 3, 4 unanswered; mark 1 answered, but G30 is not revised since. ` +
+        `Close each mark: revise the grilling (\`fleet state ${root} grill G30 --body FILE --log "..."\` for its context, ` +
+        `\`--revise "Q1: TITLE | QUESTION | RECOMMENDATION | WHY"\`, \`--option\` or \`--reason\` for a question's words) and answer it ` +
+        `(\`fleet chat ${root} say --as coordinator --re 1 --mark N "..."\`), or keep it as it is and say why ` +
+        `(\`--re 1 --mark N --no-change "<why>" "..."\`). "Agreed, rewriting" without the revision leaves it open.`,
+    ]);
+    writeDecisions([decision(null)]);
     expect(batchReminders(at(61), root, told, 1800).length).toBe(1);
     expect(batchReminders(at(62), root, told, 1800)).toEqual([]);
     answer(1, [2, 3, 4], "kept");

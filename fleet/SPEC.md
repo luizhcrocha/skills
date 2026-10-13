@@ -942,9 +942,9 @@ decision (by id), and that some recipient has only here (not every one of them i
 ### Marks on a decision (TypeScript only)
 
 The user marks words in a decision's body (its evidence frame) on the decision's page, and sends the
-marks as **one** chat message to the fleet that owns the decision. v1 covers decision bodies on a
-fleet's page and on the manager's page; a grilling's context gets marks later (Python's chat.py has
-none: ADR 0003).
+marks as **one** chat message to the fleet that owns the decision, on a fleet's page and on the manager's
+page. A grilling is marked as a decision is: its context is its body, and each of its questions has fields
+of its own (below); only a notice takes none (Python's chat.py has none: ADR 0003).
 
 **The batch** is a user message whose `text` is the readable Markdown the page built and whose `marks`
 is the same, structured:
@@ -992,8 +992,10 @@ marks: {
   - `field` (optional): the decision's own text the quote is in, when it is not the body: the page
     renders it, not the frame. One of `title`, `question`, `why`, `step` (a manual step or its command
     block), `recommendation`, `option:<id>`, `option:<id>:consequence` (id 1 to 60 characters of
-    `[A-Za-z0-9_.-]`) or `history:<n>` (n an int); its blocks have no `cell`, and its `hint` names the
-    place in words (`the question`, `option B's consequence`). Any other value is refused (`mark <n>.quote.field
+    `[A-Za-z0-9_.-]`) or `history:<n>` (n an int); or, of a grilling's question, `q<n>:` (n an int from 1)
+    before `title`, `question`, `recommendation` (its reason), `option:<id>` or `option:<id>:consequence`
+    (`q2:option:a:consequence`). Its blocks have no `cell`, and its `hint` names the
+    place in words (`the question`, `option B's consequence`, `Q2, option a's consequence`). Any other value is refused (`mark <n>.quote.field
     is title, question, ...`); the Delivery keeps it, and the printed line is as for any batch.
 
 A batch with any other shape is refused (`marks are {decision, at, items}: <what is wrong>`, a mark named
@@ -1093,6 +1095,9 @@ is not revised since. Close each mark: revise the decision (\`fleet state DIR de
 "..."\`) and answer it (\`fleet chat DIR say --as <host> --re 12 --mark N "..."\`), or keep it as it is and
 say why (\`--re 12 --mark N --no-change "<why>" "..."\`). "Agreed, rewriting" without the revision leaves it
 open.` (either part left out when it names none). The ref and title are the ledger's, else the batch's.
+On a grilling the revision named is the grilling's: `revise the grilling (\`fleet state DIR grill G30 --body
+FILE --log "..."\` for its context, \`--revise "Q1: TITLE | QUESTION | RECOMMENDATION | WHY"\`, \`--option\`
+or \`--reason\` for a question's words)`; each stamps `revised`, as a decision's revision does.
 
 **The page.** Selecting words in the body offers one row of icons in two groups, each with its tooltip:
 Copy, Reply and Side chat, then Comment, Delete, Replace and Question (on a touch screen the bar docks at
@@ -1158,7 +1163,10 @@ each line of its history. Each is an element of the page's own DOM naming its fi
 `history:<n>`), so a selection inside one field is Luiz's own and is read from the page directly: its
 block is `exact` with up to 32 characters of the field's text each side, the quote carries `field` and a
 hint in words ("the question", "option B's consequence", "manual step"), and the bar offers all seven
-actions. Such a mark is found again by its field and context; its words are highlighted in place with the
+actions. A grilling's page names its own: `title`, `question` (its title again, as the page leads with it; the
+count under it is no field) and `history:<n>`, and for each question shown `q<n>:title`, `q<n>:question`,
+`q<n>:option:<id>`, `q<n>:option:<id>:consequence` and `q<n>:recommendation` (the reason), said as "Q2, the
+question", "Q2, option a's consequence". A drag over an option's words picks no answer. Such a mark is found again by its field and context; its words are highlighted in place with the
 CSS Custom Highlight API (the page's DOM is left as Solid drew it) and its pin is a footnote number in a
 layer over the page, raised over the end of its words and kept inside its field, taking no room. On the manager's page the fleet's page framed there tells the manager of such a selection
 (`select.field`, checked against the grammar), and the manager tells it the field marks to paint

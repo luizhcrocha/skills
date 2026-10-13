@@ -152,9 +152,16 @@ export function batchReminders(machine: Machine, root: string, told: Map<string,
 
     const minutes = Math.floor((secondsNow(machine) - sentMs / 1000) / 60);
 
+    // A grilling's words are its context and each question's own, revised by `grill`.
+    const revise =
+      asString(open.decision?.["kind"]) === "grill"
+        ? `revise the grilling (\`fleet state ${root} grill ${oneLine(ref)} --body FILE --log "..."\` for its context, ` +
+          `\`--revise "Q1: TITLE | QUESTION | RECOMMENDATION | WHY"\`, \`--option\` or \`--reason\` for a question's words)`
+        : `revise the decision (\`fleet state ${root} decision ${oneLine(ref)} --body FILE --log "..."\`)`;
+
     lines.push(
       `! batch #${open.batch.id} on ${oneLine(ref)} (${oneLine(title)}) is still open after ${minutes} min: ${parts.join("; ")}. ` +
-        `Close each mark: revise the decision (\`fleet state ${root} decision ${oneLine(ref)} --body FILE --log "..."\`) and answer it ` +
+        `Close each mark: ${revise} and answer it ` +
         `(\`fleet chat ${root} say --as ${host} --re ${open.batch.id} --mark N "..."\`), or keep it as it is and say why ` +
         `(\`--re ${open.batch.id} --mark N --no-change "<why>" "..."\`). "Agreed, rewriting" without the revision leaves it open.`,
     );

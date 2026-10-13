@@ -567,7 +567,7 @@ function GrillWhy(props: { readonly q: Question; readonly pick: string }): JSX.E
     <aside class="gq-rec" aria-label={`Why ${props.pick}`}>
       <h4>{props.pick}</h4>
       <Show when={reason().text} fallback={<p class="gq-why muted">No reason given. Ask for one in a side chat, or with a note.</p>}>
-        <div class={"gq-why" + (long() && !open() ? " folded" : "")}>
+        <div class={"gq-why" + (long() && !open() ? " folded" : "")} data-field={props.q.id + ":recommendation"}>
           <Rich text={reason().text} refs="every" />
         </div>
         <Show when={long()}>
@@ -612,14 +612,16 @@ function GrillQuestion(props: { readonly e: GrillEntry; readonly head: JSX.Eleme
     <fieldset class={"gq" + (props.e.depth > 0 ? " follow" : "")} data-q={q().id} style={`--depth:${props.e.depth}`}>
       <legend>{props.head}</legend>
       {props.parent}
-      <Rich class="gq-ask" text={shown().lead} refs="every" />
+      <div class="fd-wrap" data-field={q().id + ":question"}>
+        <Rich class="gq-ask" text={shown().lead} refs="every" />
+      </div>
       <Show when={shown().options.length} fallback={null}>
         <div class="gq-options" role={props.writable ? undefined : "list"}>
           <For each={shown().options} keyed={(o) => o.id}>
             {(o) => {
               const inner = (): JSX.Element => (
                 <>
-                  <span class="label">
+                  <span class="label" data-field={q().id + ":option:" + o().id}>
                     <span>
                       {o().id + ": "}
                       <Refs text={o().label} />
@@ -628,7 +630,13 @@ function GrillQuestion(props: { readonly e: GrillEntry; readonly head: JSX.Eleme
                       <PillAs cls="recommended plain" text="recommended" />
                     </Show>
                   </span>
-                  <Show when={o().consequence}>{(c) => <Rich class="consequence" text={c()} refs="every" />}</Show>
+                  <Show when={o().consequence}>
+                    {(c) => (
+                      <div class="fd-wrap" data-field={q().id + ":option:" + o().id + ":consequence"}>
+                        <Rich class="consequence" text={c()} refs="every" />
+                      </div>
+                    )}
+                  </Show>
                 </>
               );
 
@@ -687,7 +695,10 @@ function Grill(props: { readonly d: Decision }): JSX.Element {
 
   const head = (e: GrillEntry): JSX.Element => (
     <>
-      <span class="gq-id">{e.q.id.toUpperCase()}</span> <Refs text={e.q.title} />
+      <span class="gq-id">{e.q.id.toUpperCase()}</span>{" "}
+      <span data-field={e.q.id + ":title"}>
+        <Refs text={e.q.title} />
+      </span>
     </>
   );
 
@@ -1624,7 +1635,7 @@ function MarksOn(props: { readonly id: string }): JSX.Element {
     allowed: () => {
       const d = found();
 
-      return d !== undefined && d.kind !== "grill" && !Core.isNotice(d);
+      return d !== undefined && !Core.isNotice(d);
     },
     relayed: theirs !== null,
     speaks: (e) => theirs !== null || fromEvidence(e),

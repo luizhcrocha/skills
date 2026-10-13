@@ -1,7 +1,8 @@
 /**
  * Comments on the words the dashboard itself draws on a decision's page (SPEC "Marks on a decision", the
  * page): its title, question, why, an option and its consequence, a manual step, the recommendation, a line
- * of its history. Those are the page's own DOM, so a selection there is Luiz's own, read from the page
+ * of its history, and each question of a grilling (its title, the question, an option and its consequence,
+ * the reason). Those are the page's own DOM, so a selection there is Luiz's own, read from the page
  * directly: the element it falls in names the field (`data-field`), and the words are anchored within that
  * field's text as a body's block is (`exact` with up to 32 characters each side). A mark's quote carries the
  * field (`quote.field`), its hint says it in words, and it is found again by field and context.
@@ -9,11 +10,21 @@
 import { Core, type Json, type JsonRecord, type MarkQuote } from "./core.ts";
 import { oneLine } from "./marks.ts";
 
-/** Whether `s` names a field of a decision's page: `title`, `question`, `why`, `step`, `recommendation`, `option:<id>`, `option:<id>:consequence`, `history:<n>`. */
+/**
+ * Whether `s` names a field of a decision's page: `title`, `question`, `why`, `step`, `recommendation`,
+ * `option:<id>`, `option:<id>:consequence`, `history:<n>`; or, of a grilling's question, `q<n>:title`,
+ * `q<n>:question`, `q<n>:recommendation` (its reason), `q<n>:option:<id>`, `q<n>:option:<id>:consequence`.
+ */
 export const isField = (s: string): boolean => Core.isField(s);
 
-/** A field, as a hint says where the words were: "the question", "option B's consequence", "manual step". */
+/** A grilling question's field: the question's id, and its own field. */
+const OF_QUESTION = /^(q[0-9]+):(.+)$/u;
+
+/** A field, as a hint says where the words were: "the question", "option B's consequence", "manual step", "Q2, option a". */
 export function fieldHint(field: string): string {
+  const asked = OF_QUESTION.exec(field);
+
+  if (asked) return `${(asked[1] ?? "").toUpperCase()}, ${fieldHint(asked[2] ?? "")}`;
   const [head = "", id = "", tail = ""] = field.split(":");
 
   switch (head) {

@@ -17,6 +17,13 @@ test("the fields a quote may name, and nothing else", () => {
   for (const f of ["", "body", "option:", "option:B:label", "history:0", "history:x", "step:2", "question "]) expect(isField(f)).toBe(false);
 });
 
+test("a grilling's question has fields of its own: its title, the question, its reason, an option and its consequence", () => {
+  for (const f of ["q1:title", "q1:question", "q1:recommendation", "q2:option:a", "q12:option:a:consequence"]) expect(isField(f)).toBe(true);
+
+  for (const f of ["q1", "q1:", "q0:title", "q1:why", "q1:step", "q1:history:1", "q1:q2:title", "Q1:title", "q1:option:", "q1:option:a:label"]) expect(isField(f)).toBe(false);
+  expect(["q1:title", "q1:question", "q1:recommendation", "q2:option:a", "q12:option:a:consequence"].map(fieldHint)).toEqual(["Q1, the title", "Q1, the question", "Q1, the recommendation", "Q2, option a", "Q12, option a's consequence"]);
+});
+
 test("each field said in words, as a hint", () => {
   expect(["title", "question", "why", "step", "recommendation", "option:B", "option:B:consequence", "history:2"].map(fieldHint)).toEqual(["the title", "the question", "why it needs you", "manual step", "the recommendation", "option B", "option B's consequence", "history, line 2"]);
 });

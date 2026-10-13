@@ -53,7 +53,7 @@ export interface MarkTarget {
   readonly frame: () => HTMLIFrameElement | null;
   /** The whole document the body's frame was given (its srcdoc), which the page reads itself; null while it is not known. */
   readonly body: () => string | null;
-  /** Whether marks may be made here (a decision, not a grilling). */
+  /** Whether marks may be made here (a decision or a grilling the ledger holds, not a notice). */
   readonly allowed: () => boolean;
   /** Whether `frame` is a fleet's page on the manager's (same origin, relaying), not the sandboxed body frame (origin "null"). */
   readonly relayed: boolean;

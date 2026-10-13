@@ -1968,8 +1968,8 @@ function parseMarkBlock(value: Json | undefined): MarkBlock | null {
   return { ...block, cell: cell["head"] === true ? { ...kept, head: true } : kept };
 }
 
-/** A field of a decision's page a mark's words can be in, as `quote.field` names it (fields.ts). */
-const FIELD = /^(?:title|question|why|step|recommendation|option:[A-Za-z0-9_.-]{1,40}(?::consequence)?|history:[1-9][0-9]{0,3})$/u;
+/** A field of a decision's page a mark's words can be in, as `quote.field` names it (fields.ts); `q<n>:` before one names a grilling's question's own. */
+const FIELD = /^(?:title|question|why|step|recommendation|option:[A-Za-z0-9_.-]{1,40}(?::consequence)?|history:[1-9][0-9]{0,3}|q[1-9][0-9]{0,3}:(?:title|question|recommendation|option:[A-Za-z0-9_.-]{1,40}(?::consequence)?))$/u;
 
 /** Whether `s` names a field of a decision's page. */
 const isField = (s: string): boolean => FIELD.test(s);
