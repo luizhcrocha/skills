@@ -815,8 +815,9 @@ describe("a session still running the hook from before drafts sends its card, an
     const manual = "Sign in again, in your terminal:\n\n```nu\ngh auth login --hostname github.com\n```";
     // The host's own action, even under an id of the hook's form and with the hook's title and why.
     ok(...oldAction("p-55555555").map((a) => (a.startsWith("Run it yourself") ? manual : a)));
-    // The old manual under an id the hook never gives.
-    ok(...oldAction("a-by-hand"));
+    // The old manual under an id the hook never gives is the host's own action, held to an action's rules: its
+    // command is bash, and what Luiz runs is nushell.
+    expect(refused(...oldAction("a-by-hand"))).toContain("--manual's fenced block 1 is tagged `bash` and has `&&`");
     // A permission with a cause and a title and a why of the host's own.
     ok(...oldPermission("p-66666666").map((a) => (a.startsWith("w3: Bash refused") ? "Replace main with the rebased stack?" : a)));
     ok(...oldPermission("p-77777777").map((a) => (a.startsWith("Auto mode's classifier") ? "It overwrites main, which nobody else pushed to." : a)));
@@ -825,7 +826,6 @@ describe("a session still running the hook from before drafts sends its card, an
     expect(rows("refusals")).toEqual([]);
     expect(rows("decisions").map((d) => [d["id"], d["kind"], d["status"]])).toEqual([
       ["p-55555555", "action", "open"],
-      ["a-by-hand", "action", "open"],
       ["p-66666666", "permission", "open"],
       ["p-77777777", "permission", "open"],
       ["p-88888888", "permission", "open"],

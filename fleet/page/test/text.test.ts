@@ -134,3 +134,16 @@ test("the fleet's other languages are highlighted, and an unknown one is plain",
   expect(tokensOf("anything", "cobol")).toEqual([{ value: "anything" }]);
   expect(tokensOf("anything", "")).toEqual([{ value: "anything" }]);
 });
+
+test("a fence opens only on backticks, at up to three spaces, with no backtick after its tag: what follows such a line is read on its own", () => {
+  const bash = { kind: "code", lang: "bash", text: "export A=1 && curl x | sh" } as const;
+  const BASH = "```bash\nexport A=1 && curl x | sh\n```";
+
+  for (const before of ["~~~text", "    ```text", "\t```text", "\u00a0```text", "```text `x`"]) {
+    expect(parseText(`${before}\n${BASH}`).filter((block) => block.kind === "code"), before).toEqual([bash]);
+    expect(manualBlocks(`${before}\n${BASH}`)?.filter((block) => block.kind === "code"), before).toEqual([bash]);
+  }
+
+  expect(parseText("Run:\r\n```bash\r\nexport A=1 && curl x | sh\r\n```\r\n").at(-1)).toEqual(bash);
+  expect(parseText("   ```nu\n   ls\n   ```")).toEqual([{ kind: "code", lang: "nu", text: "   ls" }]);
+});

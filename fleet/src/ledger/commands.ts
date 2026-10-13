@@ -22,6 +22,7 @@ import { placeRoot, registeredSession } from "../hub/grants.ts";
 import { pidOfEntry } from "../registry.ts";
 import { workerFigures, workerTitle } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
+import { isFormatted, manualBlocks } from "../../page/src/text.ts";
 import { isMarkdownFile, markdownToHtml, markdownWarning } from "./body.ts";
 import { dropKey, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type RefusalDraft, type RefusedCall, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, highest, milestoneOfStep, nextStepId } from "./numbers.ts";
@@ -884,28 +885,43 @@ export function asksApproval(manual: string): boolean {
   return APPROVAL_RE.test(text);
 }
 
-/** A manual's text outside its fenced blocks, and how many lines of those blocks are commands: neither blank
- * nor a comment (a line that opens with `#`). */
-function outsideFences(manual: string) {
-  const lines: string[] = [];
-  let fence: string | undefined;
-  let commands = 0;
+/** A fenced block of a `--manual`: its tag, lower-cased ("" when the fence names none), and its lines. */
+type Fence = { readonly lang: string; readonly body: readonly string[] };
 
-  for (const line of manual.split("\n")) {
-    const mark = /^\s*(`{3,}|~{3,})/u.exec(line)?.[1];
+/**
+ * A `--manual` as the page shows it. The page's own reader (`manualBlocks`, fleet/page/src/text.ts) is the one
+ * reader of the format, so what is checked here is what Luiz sees: a fence the page does not read as one (tildes,
+ * an indent of four or more, a backtick after the tag) is prose here too. `fences` are the blocks the page
+ * renders as code; `lines` its prose, line by line, inline code as its text; `inline` that inline code; `bare`
+ * the whole text when it has no backtick and its every line reads as a command, which the page shows as one nu
+ * block (its lines are then in `lines` too, for a numbered step among them).
+ */
+function manualShown(manual: string) {
+  const blocks = manualBlocks(manual);
+  const plain = manual.replace(/\r\n?/gu, "\n").split("\n");
 
-    if (fence === undefined && mark !== undefined) fence = mark;
-    else if (fence !== undefined && mark !== undefined && mark.startsWith(fence) && line.trim() === mark) fence = undefined;
-    else if (fence === undefined) lines.push(line);
-    else if (line.trim() !== "" && !line.trim().startsWith("#")) commands += 1;
-  }
+  if (blocks === null) return { fences: [], lines: plain, inline: [], bare: undefined };
 
-  return { lines, commands };
+  if (!isFormatted(manual)) return { fences: [], lines: plain, inline: [], bare: manual.trim() };
+  const fences: Fence[] = blocks.flatMap((block) => (block.kind === "code" ? [{ lang: block.lang, body: block.text.split("\n") }] : []));
+  const prose = blocks.flatMap((block) => (block.kind === "para" ? [block.spans] : []));
+
+  return {
+    fences,
+    lines: prose.flatMap((spans) => spans.map((span) => span.text).join("").split("\n")),
+    inline: prose.flatMap((spans) => spans.flatMap((span) => (span.kind === "code" ? [span.text] : []))),
+    bare: undefined,
+  };
+}
+
+/** How many lines of a fenced block are commands: neither blank nor a comment (a line that opens with `#`). */
+function commandLines(fence: Fence): number {
+  return fence.body.filter((line) => line.trim() !== "" && !line.trim().startsWith("#")).length;
 }
 
 /** The numbers of a manual's numbered steps (`1.` or `1)` opening a line outside a fence), in the order written. */
 function numberedSteps(manual: string): number[] {
-  return outsideFences(manual).lines.flatMap((line) => {
+  return manualShown(manual).lines.flatMap((line) => {
     const step = /^\s*(\d+)[.)]\s+\S/u.exec(line);
 
     return step === null ? [] : [Number(step[1])];
@@ -925,7 +941,7 @@ const ACTION_TELLS =
  * "There's no action, nothing, just something that says something must be done, not how."
  */
 export function actionManualRefusal(manual: string): string | undefined {
-  if (outsideFences(manual).commands > 0 || numberedSteps(manual)[0] === 1) return undefined;
+  if (manualShown(manual).fences.some((fence) => commandLines(fence) > 0) || numberedSteps(manual)[0] === 1) return undefined;
 
   return `--manual says what must be done, not how: it has no fenced block with a command in it and no numbered steps from 1. ${ACTION_TELLS}`;
 }
@@ -970,9 +986,9 @@ function checkKind(d: Decision, manualGiven: boolean): Step$ {
     return refuse(`--manual has ${unfenced} lines and no fence: put the commands in a fenced block (a line \`\`\`nu, the commands, a line \`\`\`), any prose outside it`);
   }
 
-  const nu = (d.kind === "secret" || d.kind === "action") && manualGiven ? nuRefusal(d.manual ?? "") : undefined;
+  const shell = (d.kind === "secret" || d.kind === "action") && manualGiven ? shellRefusal(d.manual ?? "") : undefined;
 
-  if (nu !== undefined) return refuse(nu);
+  if (shell !== undefined) return refuse(shell);
 
   if (d.kind === "action" && manualGiven && asksApproval(d.manual ?? "")) return refuse(APPROVAL_REFUSAL);
   const vague = d.kind === "action" && manualGiven ? actionManualRefusal(d.manual ?? "") : undefined;
@@ -1058,59 +1074,112 @@ const BASHISMS: readonly (readonly [string, RegExp])[] = [
   ["2>&1", /2>&1/u],
 ];
 
-const FENCE_OPEN = /^ {0,3}(`{3,})[ \t]*([^`\s]*)/u;
-
-/** The fenced blocks of a `--manual` tagged nu (or nushell), in order; an unclosed fence runs to the end. */
-function nuBlocks(manual: string): string[] {
-  const out: string[] = [];
-  const lines = manual.split("\n");
-  let i = 0;
-
-  while (i < lines.length) {
-    const m = FENCE_OPEN.exec(lines[i] ?? "");
-
-    if (m === null) {
-      i += 1;
-      continue;
-    }
-
-    const run = m[1] ?? "```";
-    const lang = (m[2] ?? "").toLowerCase();
-    const body: string[] = [];
-    i += 1;
-
-    while (i < lines.length) {
-      const t = (lines[i] ?? "").trim();
-
-      if (t.startsWith(run) && /^`+$/u.test(t)) break;
-      body.push(lines[i] ?? "");
-      i += 1;
-    }
-
-    i += 1;
-
-    if (lang === "nu" || lang === "nushell") out.push(body.join("\n"));
-  }
-
-  return out;
+/** The bash constructs of {@link BASHISMS} found in `text`, by name, in the list's order. */
+function bashisms(text: string): string[] {
+  return BASHISMS.flatMap(([name, pattern]) => (pattern.test(text) ? [name] : []));
 }
 
-/** Why `block` does not parse in nushell (`nu-check --debug`), or undefined when it parses or no nu is on PATH. */
-function nuParseError(block: string): string | undefined {
+/** The tags of a block Luiz runs in his shell. */
+const NU_TAGS: ReadonlySet<string> = new Set(["nu", "nushell"]);
+
+/**
+ * The tags of a block that is no command: what Luiz pastes into a file, a form or another program's prompt, or
+ * reads, never what he types at his shell. A settings file's content (json, jsonc for Claude's and VS Code's
+ * settings, toml, yaml, yml, ini), words for a form or the output to expect (text, txt, markdown, md), an edit to
+ * read (diff), and a statement for a database's own console (sql, cypher). Any other tag is refused: a tag the
+ * list does not know (python, ts) may be a command as well as not, and `text` holds what is neither.
+ */
+const DATA_TAGS = ["json", "jsonc", "toml", "yaml", "yml", "ini", "text", "txt", "markdown", "md", "diff", "sql", "cypher"];
+
+/** The data tags that hold words, where a command can hide: a bash construct in one is warned. The others hold a
+ * format of their own, in which one is at home (a settings rule `Bash(a && b)`, a `&&` in SQL). */
+const WORD_TAGS = ["text", "txt", "markdown", "md"];
+
+/** Nushell's form for each bash construct of {@link BASHISMS}, as a refusal says them. `;` alone for `&&`: nu's
+ * `and` is a boolean operator, and chains no commands. */
+const NU_FORMS = "(`;` for `&&`, `$env.X = ...` for `export X=...`, `(cmd)` for `$(cmd)`, `o+e>|` for `2>&1 |`)";
+
+/** `nu-check --debug` on `block`: whether it ran (not with no nu on PATH, a failure to start or a timeout),
+ * its exit status and what it printed. */
+function nuRun(block: string) {
   const done = spawnSync("nu", ["--no-config-file", "--stdin", "-c", "$in | nu-check --debug"], { input: block, encoding: "utf8", timeout: 20_000 });
 
-  if (done.error !== undefined || done.status === 0 || done.status === null) return undefined;
-  const found = [...`${done.stderr}${done.stdout}`.matchAll(/Found : (.*)/gu)];
-
-  return found.length > 0 ? (found.at(-1)?.[1] ?? "").trim() : "a parse error";
+  return { ran: done.error === undefined && done.status !== null, parses: done.status === 0, said: `${done.stderr}${done.stdout}` };
 }
 
-/** Why a `--manual` is refused when a ```nu block of it does not parse in nushell (nu on PATH): Luiz runs it in his shell. */
-function nuRefusal(manual: string): string | undefined {
-  for (const [k, block] of nuBlocks(manual).entries()) {
-    const why = nuParseError(block);
+/** nu's error for a `source` or `use` whose file is not where the check runs: no parse error of the block's. */
+const FILE_ABSENT = /nu::parser::(?:sourced_file_not_found|module_not_found)/u;
 
-    if (given(why)) return `--manual's nu block ${String(k + 1)} does not parse in nushell (nu-check --debug: ${why}): write it so it runs in Luiz's shell, or tag the block with the language it is in`;
+/** A `source` or `source-env` statement: the keyword and ONE path token, so what follows stays for nu to judge. */
+const SOURCES = /(^|[;\n{(|])([ \t]*)(?:export[ \t]+)?source(?:-env)?[ \t]+(?:"[^"\n]*"|'[^'\n]*'|[^\s;|&]+)/gu;
+
+/** A `use` or `overlay use` statement, up to its `;`, `|`, `&` or line end (`use a.nu *` takes the rest). */
+const USES = /(^|[;\n{(|])([ \t]*)(?:export[ \t]+)?(?:use|overlay[ \t]+use)[ \t]+[^;\n|&]*/gu;
+
+/**
+ * What nushell says of `block`: whether the check ran, and why the block does not parse when it ran and does
+ * not. nu resolves a `source` or `use` as it parses, in the directory of the CLI and not the one Luiz runs the
+ * block in, and reports the absent file in place of any later error. So when its error is that one (by its
+ * code, {@link FILE_ABSENT}), the block is checked again with those statements replaced by `null`: the second
+ * verdict stands, and an absent file again (a path the replacement did not reach) passes.
+ */
+function nuCheck(block: string) {
+  const first = nuRun(block);
+  const again = first.ran && !first.parses && FILE_ABSENT.test(first.said) ? nuRun(block.replace(SOURCES, "$1$2null").replace(USES, "$1$2null")) : first;
+
+  if (!again.ran || again.parses || FILE_ABSENT.test(again.said)) return { ran: again.ran, why: undefined };
+  const found = [...again.said.matchAll(/Found : (.*)/gu)];
+
+  return { ran: true, why: found.length > 0 ? (found.at(-1)?.[1] ?? "").trim() : "a parse error" };
+}
+
+/**
+ * Why a secret's or action's `--manual` is refused for the shell its commands are in: Luiz runs them in
+ * nushell (Luiz, 2026-10-13, on an action that gave him a bash line: "i use nushell... you already know this").
+ * Read as the page shows it ({@link manualShown}), in this order:
+ *  - a fenced block that holds a command is tagged nu (or nushell), or as what it is when it is no command
+ *    ({@link DATA_TAGS}); one tagged for another shell, with another tag or with none is refused;
+ *  - with no fenced block that holds a command, a bash construct anywhere in the text is refused, in backticks
+ *    or not, and a text the page shows as one nu block (no backtick, every line a command) parses in nushell;
+ *  - a nu block parses in nushell; where nu cannot judge it (not on PATH, a timeout), a known bash construct
+ *    in it is refused instead.
+ */
+function shellRefusal(manual: string): string | undefined {
+  const { fences, lines, inline, bare } = manualShown(manual);
+
+  for (const [k, fence] of fences.entries()) {
+    if (NU_TAGS.has(fence.lang) || DATA_TAGS.includes(fence.lang) || commandLines(fence) === 0) continue;
+    const first = bashisms(fence.body.join("\n"))[0];
+
+    return (
+      `--manual's fenced block ${String(k + 1)} ${fence.lang === "" ? "has no tag" : `is tagged \`${fence.lang}\``}${first === undefined ? "" : ` and has \`${first}\``}: ` +
+      `Luiz's shell is nushell, so write the commands in a \`\`\`nu block ${NU_FORMS}. ` +
+      `A block that is no command for his shell takes the tag of what it is, one of ${DATA_TAGS.join(", ")}`
+    );
+  }
+
+  if (!fences.some((fence) => NU_TAGS.has(fence.lang) && commandLines(fence) > 0)) {
+    const loose = bashisms([...lines, ...inline].join("\n"))[0];
+
+    if (loose !== undefined) return `--manual has \`${loose}\` and no fenced block that holds a command: Luiz's shell is nushell, so write the commands in a \`\`\`nu block ${NU_FORMS}`;
+    const why = bare === undefined ? undefined : nuCheck(bare).why;
+
+    if (why !== undefined) {
+      return (
+        `--manual has no fence and reads as a command, so the page shows it as one nushell block, and it does not parse in nushell (nu-check --debug: ${why}): ` +
+        `write a command in a \`\`\`nu block so it runs in Luiz's shell ${NU_FORMS}, or steps that are sentences (a capital to open each, a period to end it)`
+      );
+    }
+  }
+
+  for (const [k, fence] of fences.filter((f) => NU_TAGS.has(f.lang)).entries()) {
+    const block = fence.body.join("\n");
+    const said = nuCheck(block);
+    const found = said.ran ? [] : bashisms(block);
+
+    if (said.why !== undefined) return `--manual's nu block ${String(k + 1)} does not parse in nushell (nu-check --debug: ${said.why}): write it so it runs in Luiz's shell ${NU_FORMS}`;
+
+    if (found.length > 0) return `--manual's nu block ${String(k + 1)} has bash in it (${found.join(", ")}), and nu did not run here to parse it (not on PATH, or timed out): write it so it runs in Luiz's shell ${NU_FORMS}`;
   }
 
   return undefined;
@@ -1210,10 +1279,20 @@ function readabilityWarnings(d: Decision, fields: ReadonlySet<string>, root?: st
   }
 
   if (fields.has("manual")) {
-    const nu = nuBlocks(d.manual ?? "").join("\n");
-    const found = BASHISMS.flatMap(([name, pattern]) => (pattern.test(nu) ? [name] : []));
+    const { lines, fences, inline } = manualShown(d.manual ?? "");
+    const nushell = "Luiz's shell is nushell (`;`, `$env.X = ...`, `(...)`, `o+e>|`).";
+    const inNu = bashisms(fences.flatMap((fence) => (NU_TAGS.has(fence.lang) ? fence.body : [])).join("\n"));
+    const outside = bashisms([...lines, ...inline].join("\n"));
 
-    if (found.length > 0) out.push(`state: ${d.id}'s manual has bash in a nu block (${found.join(", ")}): Luiz's shell is nushell (\`;\` or \`and\`, \`$env.X = ...\`, \`(...)\`, \`o+e>|\`).`);
+    if (inNu.length > 0) out.push(`state: ${d.id}'s manual has bash in a nu block (${inNu.join(", ")}): ${nushell}`);
+
+    if (outside.length > 0) out.push(`state: ${d.id}'s manual has bash outside its fenced blocks (${outside.join(", ")}): ${nushell}`);
+
+    for (const fence of fences.filter((f) => WORD_TAGS.includes(f.lang))) {
+      const found = bashisms(fence.body.join("\n"));
+
+      if (found.length > 0) out.push(`state: ${d.id}'s manual has bash in a ${fence.lang} block (${found.join(", ")}): a command for Luiz goes in a \`\`\`nu block. ${nushell}`);
+    }
   }
 
   if (root !== undefined && ["question", "why", "body"].some((k) => fields.has(k))) {

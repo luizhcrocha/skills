@@ -127,6 +127,29 @@ describe("open", () => {
     ok("decision", "d3", "--kind", "action", ...base, "--manual", "```nu\ntailscale up\n```");
   });
 
+  test("a source or use of an absent file hides only its path; bash after it, and bash under a data fence, stay refused", () => {
+    const base = ["--kind", "action", "--title", "T", "--question", "q", "--why", "w"];
+
+    const nu = (body: string) => `\`\`\`nu\n${body}\n\`\`\``;
+
+    const bad = [
+      nu("source a.nu\nsource b $(rm -rf y)"),
+      nu("source a.nu\nsource b 2>/dev/null"),
+      nu("source a.nu\nsource b.sh <<EOF"),
+      nu("source x && rm -rf y"),
+      nu("use x; export A=1"),
+      "```text\nhello\n```\nexport A=1",
+      "```text\nhi\n```\nThen run foo && bar",
+    ];
+
+    for (const manual of bad) {
+      expect(refused("decision", "a1", ...base, "--manual", manual), manual).toBeDefined();
+      expect(refused("decision", "s1", "--kind", "secret", "--title", "T", "--question", "q", "--why", "w", "--secret", "K", "--manual", manual), manual).toBeDefined();
+    }
+
+    for (const [k, body] of ["source ./env.nu", "use ./mod.nu", "use a.nu *"].entries()) ok("decision", `g${String(k + 1)}`, ...base, "--manual", nu(`${body}\nlet x = 1`));
+  });
+
   test("an action that only asks the user to answer, approve or confirm is refused: that is a decision", () => {
     const base = ["--kind", "action", "--title", "T", "--question", "q", "--why", "w"];
     const asks = ["Answer Go on this card.", "answer go", "reply yes", "type go", "say ok", "approve this", "Confirm.", 'Reply "yes" here', "Answer `go` to start the deploy"];
@@ -170,7 +193,7 @@ describe("open", () => {
       ok("decision", "a1", ...base, "--manual", "In the Perf terminal, type /exit. Then, from the same directory, run:\n```nu\ncd ~/repos/x; claude --resume abc\n```\nThe climb keeps running.");
       // One command, and one this machine has no program for: the check looks nothing up.
       ok("decision", "a2", ...base, "--manual", "```nu\nno-such-program-zq deploy --env production\n```");
-      ok("decision", "a3", ...base, "--manual", "```\n# from the repo\n./deploy\n```");
+      ok("decision", "a3", ...base, "--manual", "```nu\n# from the repo\n./deploy\n```");
 
       for (const [k, manual] of ["Do the restart:\n```nu\n```", "Do the restart:\n```\n\n```\nand tell me", "```nu\n# restart the session, however you do that\n```", "```nu\n  # todo\n\n# and this\n```"].entries()) {
         expect(refused("decision", `e${String(k)}`, ...base, "--manual", manual), manual).toContain("it has no fenced block with a command in it and no numbered steps from 1");
@@ -479,25 +502,198 @@ describe("readable", () => {
     expect(lastEvent()["text"]).toBe("T: the context changed");
   });
 
-  test.skipIf(!hasNu)("a nu block that does not parse in nushell is refused", () => {
+  describe("a command for Luiz is in nushell", () => {
     const base = ["--kind", "action", "--title", "T", "--question", "q", "--why", "w"];
-    expect(refused("decision", "a1", ...base, "--manual", "Run:\n```nu\nfor f in *; do echo $f; done\n```")).toContain(
-      "--manual's nu block 1 does not parse in nushell (nu-check --debug: Missing argument to `in`.)",
-    );
-    ok("decision", "a1", ...base, "--manual", "Run:\n```nu\nls | where size > 1kb\n```\n```sh\ncd x && make\n```");
-  });
+    const forms = "(`;` for `&&`, `$env.X = ...` for `export X=...`, `(cmd)` for `$(cmd)`, `o+e>|` for `2>&1 |`)";
+    const nushell = `Luiz's shell is nushell, so write the commands in a \`\`\`nu block ${forms}. A block that is no command for his shell takes the tag of what it is, one of json, jsonc, toml, yaml, yml, ini, text, txt, markdown, md, diff, sql, cypher\n`;
+    const OLD = "From the repo:\n```bash\ncd repo && ./restart\n```";
 
-  test("bash in a nu block is warned without nu", () => {
-    const path = process.env["PATH"];
-    process.env["PATH"] = tmp();
+    /** `body` with no `nu` on PATH: the parse check cannot run. */
+    function withoutNu<A>(body: () => A): A {
+      const path = process.env["PATH"];
+      process.env["PATH"] = tmp();
 
-    try {
-      const r = run("decision", "a1", "--kind", "action", "--title", "T", "--question", "q", "--why", "w", "--manual", "```nu\nexport FOO=1\ncd x && echo $(date)\n```");
-      expect(r.code, r.stderr).toBe(0);
-      expect(r.stderr).toContain("a1's manual has bash in a nu block (&&, export X=, $(...))");
-    } finally {
-      process.env["PATH"] = path;
+      try {
+        return body();
+      } finally {
+        process.env["PATH"] = path;
+      }
     }
+
+    test("a block tagged for another shell is refused, with nushell's forms and the first bash construct found", () => {
+      expect(refused("decision", "a1", ...base, "--manual", "From the repo:\n```bash\ncd repo && ./restart\n```")).toBe(`state: --manual's fenced block 1 is tagged \`bash\` and has \`&&\`: ${nushell}`);
+      expect(refused("decision", "a1", ...base, "--manual", "```sh\nexport K=1\n./restart 2>&1 | tee log\n```")).toBe(`state: --manual's fenced block 1 is tagged \`sh\` and has \`export X=\`: ${nushell}`);
+      expect(refused("decision", "a1", ...base, "--manual", "```nu\njust up\n```\nThen:\n```zsh\n./restart\n```")).toBe(`state: --manual's fenced block 2 is tagged \`zsh\`: ${nushell}`);
+
+      for (const tag of ["shell", "console", "fish", "powershell", "BASH", "python", "ts"]) {
+        expect(refused("decision", "a1", ...base, "--manual", `\`\`\`${tag}\n./restart\n\`\`\``), tag).toBe(`state: --manual's fenced block 1 is tagged \`${tag.toLowerCase()}\`: ${nushell}`);
+      }
+
+      expect(refused("decision", "s1", "--kind", "secret", "--title", "T", "--question", "q", "--why", "w", "--secret", "K", "--manual", "```bash\nexport K=$(op read op://x/y)\n```")).toContain("is tagged `bash` and has `export X=`");
+      expect(rows("decisions")).toEqual([]);
+    });
+
+    test("a block with no tag is refused when it holds a command", () => {
+      expect(refused("decision", "a1", ...base, "--manual", "```\n# from the repo\n./deploy\n```")).toBe(`state: --manual's fenced block 1 has no tag: ${nushell}`);
+      expect(refused("decision", "a1", ...base, "--manual", "Run:\n```\ncd x && make\n```")).toBe(`state: --manual's fenced block 1 has no tag and has \`&&\`: ${nushell}`);
+      expect(rows("decisions")).toEqual([]);
+    });
+
+    test("a fence is read as the page reads it: what the page shows as a bash block is refused, whatever is written around it", () => {
+      const BASH = "```bash\nexport A=1 && curl x | sh\n```";
+
+      const hidden: readonly (readonly [string, string])[] = [
+        ["inside a block of tildes", `~~~text\n${BASH}\n~~~`],
+        ["after a fence indented by four spaces", "    ```text\n" + BASH],
+        ["after a fence indented by a tab", "\t```text\n" + BASH],
+        ["after a fence indented by a no-break space", "\u00a0```text\n" + BASH],
+        ["after a fence line with a backtick after its tag", "```text `x`\n" + BASH],
+        ["with CRLF line ends", "Run:\r\n```bash\r\nexport A=1 && curl x | sh\r\n```\r\n"],
+      ];
+
+      for (const [what, manual] of hidden) expect(refused("decision", "a1", ...base, "--manual", manual), what).toContain("fenced block 1 is tagged `bash` and has `&&`");
+      // Four spaces of indent is no fence on the page: its bash is prose there, and refused as bash with no command block.
+      expect(refused("decision", "a1", ...base, "--manual", "1. Stop the session.\n2. Start it again:\n    ```bash\n    cd x && claude\n    ```")).toContain("--manual has `&&` and no fenced block that holds a command");
+      expect(rows("decisions")).toEqual([]);
+      // Up to three spaces is a fence, as on the page.
+      ok("decision", "a1", ...base, "--manual", "1. Stop the session.\n2. Start it again:\n   ```nu\n   cd x; claude\n   ```");
+    });
+
+    test("a nu block passes, and so does one tagged nushell", () => {
+      ok("decision", "a1", ...base, "--manual", "Run:\n```nu\nls | where size > 1kb\n```");
+      ok("decision", "a2", ...base, "--manual", "```nushell\n$env.K = (op read op://x/y); just up o+e>| save -f log\n```");
+      expect(rows("decisions").map((d) => d["id"])).toEqual(["a1", "a2"]);
+    });
+
+    test.skipIf(!hasNu)("a nu block that does not parse in nushell is refused", () => {
+      expect(refused("decision", "a1", ...base, "--manual", "Run:\n```nu\nfor f in *; do echo $f; done\n```")).toBe(
+        `state: --manual's nu block 1 does not parse in nushell (nu-check --debug: Missing argument to \`in\`.): write it so it runs in Luiz's shell ${forms}\n`,
+      );
+      expect(refused("decision", "a1", ...base, "--manual", "```json\n{}\n```\n```nu\nls\n```\n```nushell\ncd x && make\n```")).toContain("--manual's nu block 2 does not parse in nushell");
+      expect(rows("decisions")).toEqual([]);
+    });
+
+    test("a block that is no command keeps its own tag", () => {
+      const tags = ["json", "jsonc", "toml", "yaml", "yml", "ini", "text", "txt", "markdown", "md", "diff", "sql", "cypher"];
+
+      for (const [k, tag] of tags.entries()) ok("decision", `a${String(k)}`, ...base, "--manual", `Paste this where the page asks:\n\`\`\`${tag}\nallow = "Bash(just up)"\n\`\`\``);
+      ok("decision", "b1", ...base, "--manual", 'Add the rule, then put this in `.claude/settings.local.json`:\n```nu\njust allow\n```\n```JSON\n{ "allow": ["Bash(a && b)"] }\n```');
+      expect(rows("decisions").length).toBe(tags.length + 1);
+    });
+
+    test("numbered steps with no fence pass; a manual with no fence that carries bash is refused, in backticks or not", () => {
+      const bare = (found: string) => `state: --manual has \`${found}\` and no fenced block that holds a command: Luiz's shell is nushell, so write the commands in a \`\`\`nu block ${forms}\n`;
+      const secret = ["--kind", "secret", "--title", "T", "--question", "q", "--why", "w", "--secret", "K"];
+      const clicks = run("decision", "a1", ...base, "--manual", '1. Open the Cloudflare console.\n2. Click "Deploy", then type `/exit` in the Perf terminal.');
+      expect(clicks.code, clicks.stderr).toBe(0);
+      expect(clicks.stderr).not.toContain("bash");
+      expect(refused("decision", "a2", ...base, "--manual", "1. In the repo, type `cd x && make`.\n2. Click Deploy.")).toBe(bare("&&"));
+      expect(refused("decision", "a2", ...base, "--manual", "1. In the repo, type `export K=1`.\n2. Then `just up`.")).toBe(bare("export X="));
+      expect(refused("decision", "a2", ...base, "--manual", "1. Type just up 2>&1 | tee log in the repo.")).toBe(bare("2>&1"));
+      expect(refused("decision", "a2", ...base, "--manual", "cd x && make")).toBe(bare("&&"));
+      // The line Luiz ran: a secret's one bare line, which the page shows as a command to copy.
+      expect(refused("decision", "s1", ...secret, "--manual", "cd x && secretspec set K")).toBe(bare("&&"));
+      expect(refused("decision", "s1", ...secret, "--manual", "export K=$(op read op://x/y)")).toBe(bare("export X="));
+      expect(refused("decision", "s1", ...secret, "--manual", "Run `secretspec set K 2>&1` from the repo")).toBe(bare("2>&1"));
+      expect(rows("decisions").map((d) => d["id"])).toEqual(["a1"]);
+      ok("decision", "s1", ...secret, "--manual", "cd x; secretspec set K");
+      expect(refused("decision", "s1", "--manual", "cd x && secretspec set K", "--log", "again")).toBe(bare("&&"));
+      expect(item("s1")["manual"]).toBe("cd x; secretspec set K");
+    });
+
+    test.skipIf(!hasNu)("a manual with no fence that the page shows as one nu block parses in nushell", () => {
+      const secret = ["--kind", "secret", "--title", "T", "--question", "q", "--why", "w", "--secret", "K"];
+      const unparsed = "--manual has no fence and reads as a command, so the page shows it as one nushell block, and it does not parse in nushell (nu-check --debug: ";
+
+      for (const line of ["secretspec set K || exit 1", "if [ -f x ]; then echo y; fi"]) expect(refused("decision", "s1", ...secret, "--manual", line), line).toContain(unparsed);
+      expect(rows("decisions")).toEqual([]);
+      ok("decision", "s1", ...secret, "--manual", "if ('x' | path exists) { secretspec set K }");
+    });
+
+    test("an empty fence does not switch off the check of the lines outside it", () => {
+      const secret = ["--kind", "secret", "--title", "T", "--question", "q", "--why", "w", "--secret", "K"];
+      const loose = "--manual has `&&` and no fenced block that holds a command";
+      expect(refused("decision", "s1", ...secret, "--manual", "cd x && secretspec set K\n```nu\n```")).toContain(loose);
+      expect(refused("decision", "s1", ...secret, "--manual", "1. Type cd x && secretspec set K in the repo.\n```nu\n# nothing\n```")).toContain(loose);
+      expect(rows("decisions")).toEqual([]);
+    });
+
+    test("bash in a block of words (text, txt, markdown, md) is warned; in a block with a format of its own it is not", () => {
+      for (const [k, tag] of ["text", "txt", "markdown", "md"].entries()) {
+        const r = run("decision", `w${String(k)}`, ...base, "--manual", "```nu\njust up\n```\nIt prints:\n```" + tag + "\ncd x && make\n```");
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.stderr, tag).toContain(`state: w${String(k)}'s manual has bash in a ${tag} block (&&): a command for Luiz goes in a \`\`\`nu block. Luiz's shell is nushell`);
+      }
+
+      const data = run("decision", "j1", ...base, "--manual", '```nu\njust allow\n```\n```json\n{ "allow": ["Bash(a && b)"] }\n```\n```sql\nselect 1 where a && b\n```');
+      expect(data.code, data.stderr).toBe(0);
+      expect(data.stderr).not.toContain("bash in a");
+    });
+
+    test.skipIf(!hasNu)("a nu block that sources or uses a file absent from where the CLI runs is not refused for it; its own parse error still is", () => {
+      ok("decision", "a1", ...base, "--manual", "```nu\nsource ./no-such-env.nu\nuse ./no-such-mod.nu\nsource-env ./no-such-env.nu; just up\n```");
+      expect(refused("decision", "a2", ...base, "--manual", "```nu\nsource ./no-such-env.nu\nfor f in *; do echo $f; done\n```")).toContain("--manual's nu block 1 does not parse in nushell (nu-check --debug: ");
+      expect(rows("decisions").map((d) => d["id"])).toEqual(["a1"]);
+    });
+
+    test("in a manual whose commands are in a nu block, bash in a step is warned, not refused", () => {
+      const typed = run("decision", "a2", ...base, "--manual", "1. In the repo, type `cd x && make`.\n2. Then `export K=1` and `echo $(date) 2>&1`.\n3. Then:\n```nu\njust up\n```");
+      expect(typed.code, typed.stderr).toBe(0);
+      expect(typed.stderr).toContain("state: a2's manual has bash outside its fenced blocks (&&, export X=, $(...), 2>&1): Luiz's shell is nushell (`;`, `$env.X = ...`, `(...)`, `o+e>|`).");
+    });
+
+    test("a revision's manual is held to the rule, and the stored one stays when it is refused", () => {
+      const first = "```nu\ncd repo; ./restart\n```";
+      ok("decision", "a1", ...base, "--manual", first);
+      expect(refused("decision", "a1", "--manual", "```bash\ncd repo && ./restart\n```", "--log", "the folder")).toContain("fenced block 1 is tagged `bash` and has `&&`");
+      expect(refused("decision", "a1", "--manual", "```\ncd repo; ./restart\n```", "--log", "the folder")).toContain("fenced block 1 has no tag");
+      expect(item("a1")["manual"]).toBe(first);
+      ok("decision", "a1", "--manual", "```nu\ncd repo/app; ./restart\n```", "--log", "the folder");
+      expect(item("a1")["manual"]).toBe("```nu\ncd repo/app; ./restart\n```");
+    });
+
+    test("an open card with a bash block from before the rule renders, is answered or withdrawn, and its next manual is nushell", () => {
+      ok("decision", "a1", ...base, "--manual", "```nu\ncd repo; ./restart\n```");
+      ok("decision", "a2", ...base, "--manual", "```nu\ncd repo; ./restart\n```");
+      const path = join(root, "state.json");
+      const ledger = readJson(path);
+      writeFileSync(path, JSON.stringify({ ...ledger, decisions: (asArray(ledger["decisions"]) ?? []).map((row) => ({ ...asObject(row), manual: OLD })) }));
+      const rendered = fleet(["state", root, "set", "--now", "later"], env);
+      expect(rendered.code, rendered.stderr).toBe(0);
+      expect(readFileSync(join(root, "index.html"), "utf8")).toContain("```bash");
+      expect(run("show").code).toBe(0);
+      ok("decision", "a1", "--why", "nothing breaks while it waits", "--log", "the why");
+      expect(item("a1")["manual"]).toBe(OLD);
+      expect(refused("decision", "a1", "--manual", OLD, "--log", "again")).toContain("fenced block 1 is tagged `bash` and has `&&`");
+      ok("decision", "a1", "--manual", "From the repo:\n```nu\ncd repo; ./restart\n```", "--log", "in nushell");
+      ok("decision", "a1", "--decide", "Done.", "--resolution", "answered on the page (#2)");
+      ok("decision", "a2", "--withdraw", "the session restarted by itself");
+      expect(rows("decisions").map((d) => [d["id"], d["status"], d["manual"]])).toEqual([
+        ["a1", "decided", "From the repo:\n```nu\ncd repo; ./restart\n```"],
+        ["a2", "withdrawn", OLD],
+      ]);
+    });
+
+    test("with no nu on PATH, bash in a nu block is refused, and a block with none of it passes unparsed", () => {
+      withoutNu(() => {
+        expect(refused("decision", "a1", ...base, "--manual", "```nu\nexport FOO=1\ncd x && echo $(date)\n```")).toBe(
+          `state: --manual's nu block 1 has bash in it (&&, export X=, $(...)), and nu did not run here to parse it (not on PATH, or timed out): write it so it runs in Luiz's shell ${forms}\n`,
+        );
+        expect(refused("decision", "a1", ...base, "--manual", "```nu\nls\n```\n```nushell\njust up 2>&1 | tee log\n```")).toContain("--manual's nu block 2 has bash in it (2>&1)");
+        expect(refused("decision", "a1", ...base, "--manual", "```bash\n./restart\n```")).toBe(`state: --manual's fenced block 1 is tagged \`bash\`: ${nushell}`);
+        expect(rows("decisions")).toEqual([]);
+        // What only the parser would catch passes: the scan knows four constructs.
+        const r = run("decision", "a1", ...base, "--manual", "```nu\nfor f in *; do echo $f; done\n```");
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.stderr).not.toContain("bash");
+      });
+    });
+
+    test.skipIf(!hasNu)("with nu on PATH the parser is the judge: bash it parses, in a string, is only warned", () => {
+      const r = run("decision", "a1", ...base, "--manual", '```nu\nprint "a && b"\n```');
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr).toContain("a1's manual has bash in a nu block (&&)");
+    });
   });
 });
 

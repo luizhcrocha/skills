@@ -291,7 +291,8 @@ Checked in this order:
      actions in the machine's ledgers that day, 75 had a fence, 5 numbered steps, and 58 neither. It passes
      in one of two ways, and in no other:
      - **a fenced block with at least one line that is no comment** (neither blank nor opening with `#`),
-       with any prose around it; one command goes in a fence too;
+       with any prose around it; one command goes in a fence too (the block is tagged `nu`: "A command
+       for Luiz is in nushell", below);
      - **a numbered list that starts at 1**, with no fence needed (the more-than-one-line refusal above
        does not apply): a line that opens with `1.` or `1)` outside a fence, before any other numbered
        line.
@@ -351,7 +352,14 @@ Checked in this order:
    given; a decision's number or id such as D40, g26 or p12 is not one unless a worker has it); `state: <id>'s why is N characters: ...` (over 200); `state:
    <id>'s consequences over 160 characters: A (212), ... ` (`--option`); `state: <id>'s manual has
    bash in a nu block (&&, export X=, $(...), 2>&1): ...` (`--manual`, the patterns found in its nu
-   blocks, in that order); when the question, why or body was given, `state: <id> refers to what the
+   blocks, in that order; with nu on PATH only what parses reaches it, such as `&&` inside a
+   string) and `state: <id>'s manual has bash outside its fenced blocks (&&, ...): Luiz's shell is
+   nushell (...)` (TypeScript only: the same patterns in its lines outside the fences, in backticks
+   or not, a numbered step's among them, in a manual that has a block with a command; one with none
+   is refused, "A command for Luiz is in nushell" below) and `state: <id>'s manual has bash in a
+   TAG block (&&, ...): a command for Luiz goes in a ```nu block. Luiz's shell is nushell (...)`
+   for each block tagged `text`, `txt`, `markdown` or `md` that carries one (words, where a
+   command can hide; the other data tags hold a format of their own, in which `&&` is at home); when the question, why or body was given, `state: <id> refers to what the
    user decided ("you decided", "your rule") with no decision number: name it in the same sentence,
    its number, when, and what was chosen (...); the page links the number.` for each phrase (you
    decided, you said, you chose, your rule, as decided, you approved; any case; each once, lower-cased,
@@ -366,13 +374,61 @@ Checked in this order:
    and its body has no `<svg`, `<table` or `<img`; then, on a known one, `state: <id> was asked again with new words and
    no --log: ...` when `--question`, `--option` or `--manual` was given with no `--log`,
    `--decide` or `--withdraw`.
-   **A nu block that does not parse**: a secret's or action's `--manual` given in this command,
-   checked after the fence rule: each fenced block tagged `nu` or `nushell` (an unclosed fence runs
-   to the end) is piped to `nu --no-config-file --stdin -c '$in | nu-check --debug'` when `nu` is
-   on PATH (20 s at most; no nu, a timeout or a failure to start skips the check). A non-zero exit
-   is refused: `--manual's nu block N does not parse in nushell (nu-check --debug: <the last
-   "Found : " line of nu's output, else "a parse error">): write it so it runs in Luiz's shell, or
-   tag the block with the language it is in`.
+   **A command for Luiz is in nushell** (TypeScript only, `shellRefusal`; Luiz, 2026-10-13, on an
+   action that gave him a bash line, which failed in his shell on `&&`: "i use nushell... you already
+   know this"). A secret's or action's `--manual` given in this command (new or revised; a stored one
+   is not checked again, so an open card from before the rule still renders and is answered or
+   withdrawn), checked after the fence rule. The manual is read by the page's own reader (`manualBlocks`,
+   fleet/page/src/text.ts, "Text on the page"), so the blocks checked are the blocks Luiz sees: a
+   fence opens on a line of three or more backticks at up to three spaces of indent, with no
+   backtick after its tag, and closes on a line of as many backticks or more and nothing else, or at
+   the end of the text; line ends are normalised (CRLF). A line of tildes, a fence indented by four
+   spaces, a tab or a no-break space, and a fence line with a backtick after its tag open nothing:
+   they are prose on the page and here, and a fence after one is read on its own. Three checks, in
+   this order:
+   - **The tag.** A block that holds a command (a line neither blank nor opening with `#`) is tagged
+     `nu` or `nushell`, or, when it is no command for his shell, with what it is, one of `json`,
+     `jsonc`, `toml`, `yaml`, `yml`, `ini` (a settings file's content), `text`, `txt`, `markdown`,
+     `md` (words for a form, the output to expect), `diff` (an edit to read), `sql`, `cypher` (a
+     statement for a database's own console). Any other tag (`bash`, `sh`, `zsh`, `shell`,
+     `console`, `fish`, `powershell`, `python`, ...) and no tag are refused, the first such block in
+     the manual: ``--manual's fenced block N <is tagged `TAG` | has no tag>[ and has `<the first of
+     &&, export X=, $(...), 2>&1 found in it>`]: Luiz's shell is nushell, so write the commands in a
+     ```nu block (`;` for `&&`, `$env.X = ...` for `export X=...`, `(cmd)` for `$(cmd)`,
+     `o+e>|` for `2>&1 |`). A block that is no command for his shell takes the tag of what it is, one
+     of json, jsonc, toml, yaml, yml, ini, text, txt, markdown, md, diff, sql, cypher``. N counts
+     every fenced block. The list is closed: a tag it does not know may be a command as well as
+     not, and `text` holds what is neither.
+   - **No block with a command.** A manual with no fenced block that holds a command (no fence, or
+     only empty or comment-only ones) whose lines outside the fences carry one of the four bash
+     patterns of the warning above (`&&`, a line or an inline code that opens with `export X=`,
+     `$(`, `2>&1`), in backticks or not, is refused: ``--manual has `<the first of them found, in
+     that order>` and no fenced block that holds a command: Luiz's shell is nushell, so write the
+     commands in a ```nu block (`;` for `&&`, `$env.X = ...` for `export X=...`, `(cmd)` for
+     `$(cmd)`, `o+e>|` for `2>&1 |`)``. A manual with no backtick whose every line reads as a
+     command (one bare line, `cd x; secretspec set K`) is shown by the page as one nu block, so it
+     is parsed as one (below): ``--manual has no fence and reads as a command, so the page shows
+     it as one nushell block, and it does not parse in nushell (nu-check --debug: <reason>): write a
+     command in a ```nu block so it runs in Luiz's shell (...), or steps that are sentences (a
+     capital to open each, a period to end it)`` (`cmd || exit 1`, `if [ -f x ]; then echo y; fi`).
+   - **The parse.** Each block tagged `nu` or `nushell` is piped to `nu --no-config-file --stdin -c
+     '$in | nu-check --debug'` (20 s at most). A non-zero exit is refused: ``--manual's nu block N
+     does not parse in nushell (nu-check --debug: <the last "Found : " line of nu's output, else "a
+     parse error">): write it so it runs in Luiz's shell (`;` for `&&`, ...)``, N counting
+     the nu blocks. nu resolves a `source`, `source-env`, `use` or `overlay use` as it parses, in
+     the CLI's directory and not the one Luiz runs the block in. A file absent there is no parse
+     error of the block's: when nu's output carries the code `nu::parser::sourced_file_not_found`
+     or `nu::parser::module_not_found`, the block is checked once more with those statements
+     replaced by `null`; the second verdict stands, and an absent file again passes. When the check cannot run (no `nu` on PATH, a failure to start, a timeout), the
+     four bash patterns of the warning above are refused in its place: ``--manual's nu block N has
+     bash in it (&&, export X=), and nu did not run here to parse it (not on PATH, or timed out):
+     write it so it runs in Luiz's shell (...)``; a block with none of them passes unparsed. With nu on PATH the parser is
+     the judge and the patterns stay a warning.
+
+   Numbered steps with no fence and none of those patterns (clicks in a console) pass as before.
+   Nushell's `and` is a boolean operator and chains no commands, so the hint gives `;` alone for
+   `&&`. A permission's `--call` is
+   not held to any of this: the fleet runs it, in bash, after the user's yes.
    **Hold** (`--hold REASON`, `--unhold`; one of `--decide`/`--withdraw`/`--hold`/`--unhold`,
    else exit 2): the user answered and the fleet must act before the item can proceed. Only on a
    known decision (`unknown decision 'X'`); a closed one refuses as in 3. `--hold` with a blank
