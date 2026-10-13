@@ -219,6 +219,14 @@ Checked in this order:
 3. A closed decision (decided or withdrawn) refuses every change (`<title> is already <status>:
    <resolution>. A closed decision stays as it is; open a new one with --supersedes ID`) except
    `--step` and/or `--milestone` alone, which set where it came from.
+2a. *TypeScript only.* **A refusal draft** ([Permission grants](#permission-grants), A refusal is a draft
+   first). `--kind refusal` is the plugin's hook's record of a call auto mode refused: it opens no decision
+   and is checked before 2 (a worker the ledger does not know is no refusal of the record). An ID that names
+   an open draft and no decision: `--withdraw WHY` drops the draft; `--decide`, `--hold` and `--unhold` are
+   refused; any other command opens the decision that asks the user under that id (4), which closes the
+   draft as asked. An ID that names a dropped draft and no decision is refused whatever the command
+   (`refusal draft <id> was dropped (<why>): it stays closed. Ask with a new id`). A command of the hook's
+   from before drafts, for a new ID, is the same record and takes this path (A hook from before drafts).
 3a. **A notice** (`--kind notice`, `--under` or `--undo` given): an act done under a standing approval
    (see **approval**), recorded closed at once. Checked in this order: a known id is refused (`<id> is
    already a <kind>: a notice is recorded once, under a new id (...)`; a closed one was refused in 3);
@@ -596,7 +604,8 @@ per step `    <id:<6> <status:<8> <title>( @agent)`; per worker
 `  agent <id:<16> <status:<8> <skill:<15> <model:<6> <effort or -:<6> <tokens:>8> tok  lane=<a,b or ->( round N)`;
 per roadblock, decision, link, approval (`  approval <id> <active | revoked <when>: <why>> [N notice(s)] <rule>
 (from <the decision's number> #<message>, by <by>, <added>)`) and kept note a line, with its number where
-it has one; then
+it has one (TypeScript only: after the decisions, a line per open refusal draft, `  refusal draft <id> OPEN,
+for the <host> [<tool>] <who>: <call> (<reason>)`); then
 `  <N> events, updated <updated>` and the cheat sheet. The cheat sheet lists each command with
 the values its flags take.
 
@@ -647,6 +656,10 @@ decisions[]   {id, ref, kind, title, question, why, blocking, agent, options[]: 
 approvals[]?  {id, rule, by, ref (a decision id, or FLEET/<number> in another fleet's ledger), question? (q<n>),
                message?, author?, added, status (active|revoked),
                revoked?, revoked_why?}
+refusals[]?   {id, tool, call, cause, root, agent_id|null, agent|null, opened, status (open|asked|dropped),
+               closed?, resolution?, told?: false}   TypeScript only: the calls auto mode refused, for the
+               host to word or drop (Permission grants, A refusal is a draft first); no decision, and no
+               number; `told: false` while the line for the host reached neither its chat nor its session
 events[]      {at, agent|null, kind, text, important?: true, decision?, findings?, changes?}   append-only
 links[]?      {id, ref, url, title, kind (preview|prototype|doc|tool|service; dev|page before them), decision, agent, note,
                for (what the user does there, or null), since, done? (when the fleet marked it done)}
@@ -843,126 +856,28 @@ After the handler succeeds, before validation, on stderr, in this order (not for
    Not for `init`. Read only when `REGISTRY/news/news.jsonl` exists, and the fleet's name is read from the
    registry's entries without pruning or renaming any.
 
-Also from `set --now`: for each `[DAISGLR]<digits>` in the text that names a closed decision,
-`state: the Now line names <ref> (<title>) is <status>: check the decision's state before saying
-it waits on anyone.` In a manager's ledger, a number after a fleet's name (`infra I2`, or the part
-of the name before its first dash: `acme I1`) is looked up in that fleet's ledger, and the
-warning names the fleet. And from `agent`: the unfinished-report warning above.
+*TypeScript only*, after 4: **the refusal drafts left open** for `FLEET_REFUSAL_REMIND_S` (900) are said
+on every command, in one line whatever their number, until the host asks each in its own words or drops it
+(`draftsLeft`): `state: refusal draft <id> has waited <N> min: nothing was asked of the user, and nothing
+will be until you ask. See it with \`fleet state DIR show\`, then ask each in your words (\`decision ID
+--kind permission ...\`) or drop it (\`decision ID --withdraw "why"\`).`, or for several `state: <K>
+refusal drafts (<id>, <id>, ...) have waited up to <N> min: ... See them with ...`. No call and no reason
+is in it: eleven drafts had printed 11.6 KB on every state command (measured 2026-10-13). Before it, **a
+draft whose line reached the host nowhere** (`told: false`) is said in full, once, by the first command
+that writes the ledger and is not the hook's own record (`decision --kind refusal`, a `--cause`, or a
+manual of the old hook's): `state: the hub could not tell you this when it happened. [hub] Auto mode
+refused ...`, and the command clears `told` ([Permission grants](#permission-grants), A refusal is a
+draft first). With 5 (`set --status done`), the open drafts are named after the open decisions: `state: the
+fleet is done with D1, refusal draft <id> still open: withdraw each with its reason ...`.
 
-## chat.py: the chat
-
-`chat.py DIR COMMAND`. The store is `DIR/chat.jsonl`, one message per line, appended under an
-exclusive `flock`. A line that doesn't parse, or lacks `id` (int), `from` (str), `to` (list) or
-`text` (str), is skipped by every reader. A torn last line (no newline) is left alone, and the
-next append starts on a new line. Bytes that aren't UTF-8 are read with replacement. A message's id (`#N`)
-is 1 + the highest id in this fleet's chat: it stays per fleet, unlike the ledger's numbers, which are the
-machine's ([Numbers (refs)](#numbers-refs)); a message is named across fleets with its fleet (`delivered`, `via`).
-
-A message: `{id, at, from, to[], text, re (int|null), parts[]}` plus `author` (the user's tailnet
-login, set only by the server), `decision`, `quote {text ≤2000, from ≤200, at?}`, `marks` (a batch of
-marks on a decision's body, TypeScript only: [Marks on a decision](#marks-on-a-decision-typescript-only)),
-`mark [N, ...]` (on an answer, the marks of the batch `re` names that it answers, TypeScript only), `keep`
-(on such an answer, why those marks leave the decision as it is, TypeScript only), `side`
-(the id of the message that opened a side chat), and, written by the hub only (its Delivery, in [The hub](#the-hub-fleet-hub)),
-`delivered [{fleet, id}]` (on the manager's message: the coordinators that have it in their own chat, and
-its id there), `via {fleet, id}` (on that copy, `{fleet: "manager", id}`, and on a coordinator's answer
-mirrored onto the manager's page, `{fleet, id}` of the answer) and `origin` (the `Origin` of a prototype
-page the user posted from, one the hub's config allows: [Posting from a prototype page](#posting-from-a-prototype-page);
-kept on a coordinator's copy). `parts` split the text into plain parts and mentions
-`{text: "@a1", mention: "a1"}` that join back to the text exactly. `re` and `parts` default to
-null and one plain part when read.
-
-A quote's `at` is where its text was selected, as the page that sent it opens it again: `{hash,
-anchor?, message?}`, `hash` the location hash of the place (`#decision/d1`, `#decision/<fleet>/d1` on
-the manager's page, `#plan`, `#agent-a2`), `anchor` the id of the element there that holds the text
-(`dv-info`, `dv-body` for the evidence), `message` the id of the chat message it was selected in, as a
-string. Each is a string of at most 200 characters with no control characters, the hash starting with
-`#` and the message all digits; an empty or null field is left out, other keys are dropped, and any other
-`at` is refused (`a quote's place is {hash, anchor?, message?}: ...`). A quote without `at` is as before.
-The hub adds `page` on a coordinator's copy of the manager's message (Delivery, below).
-
-**Participants.** The host is `manager` in a manager's DIR, else `coordinator`. The roster is
-every `agents[]` row, whatever its status, and in a manager's DIR each coordinator being served,
-under its fleet name. `--as WHO` resolves, case-insensitively, the host, then ids, then names.
-`user` is refused (`only the dashboard server speaks as the user; use --as <host> or your own
-id`), and so is anyone unknown.
-
-**Addressing** (`address`, shared with the server; the cases in
-`SKILL/tests/recipients.json` are the contract): each `@token` ([A-Za-z0-9_.-]+) that resolves
-is a mention; one that doesn't is retried without trailing dots and dashes (`@a1.` ends a
-sentence). Recipients are the mentions, then the sender of the message `re` answers. A message
-from the user goes to them, or to the host when there are none; a message from anyone else goes
-to `user` plus them. Nobody is their own recipient. An unknown `re` is refused, and so is empty
-text. On the manager's page (the hub's `address`) a side chat belongs to fleets: to the live
-coordinator whose item its first message quotes (`quote.at`: `#decision/<fleet>/<id>`, or a chat message
-from that fleet; never `#agent-<x>`, a worker's row there), and to each live coordinator that first message
-cites. A name is a fleet's id exactly, or an alias exactly one live fleet has; an ambiguous one names no
-owner. A message
-of the user's in an owned side chat (`side`, or a `re` to one of its messages) goes to the owners plus
-its own mentions and the sender of its `re` (a Reply cites), and to no one else: not the host unless cited. A side chat
-no fleet owns follows the rule above.
-
-**Open.** A message is open for each recipient until that recipient sends a message with `re` =
-its id.
-
-| Command | Does | Output | Exit |
-| :-- | :-- | :-- | :-- |
-| `say --as WHO [--re N] [--decision D] [--mark N[,N...] [--no-change WHY]] TEXT` | appends (`--mark` and `--no-change`, TypeScript only: the answer's `mark` and `keep`, [Marks on a decision](#marks-on-a-decision-typescript-only); with no `--mark`, `--re` to a batch of one mark answers that mark) | the stored line; when `--re` names a batch of several marks and no `--mark` is given, one stderr line naming its marks and the flag; when WHO is the host, with no `--re`, while the user's messages to the host are open (not answered with `--re`, nor answers to a decision since closed), one stderr line `chat: open from the user: #93 14:42, #95 14:48( (and K earlier)) — add \`--re N\` if this answers one` (the last five); the message is sent all the same | 1 refused |
-| `inbox --as WHO` | the messages open for WHO (`user` allowed) | one line each, oldest first | 1 unknown WHO |
-| `log [--after N]` | every message with id > N | one line each | 0 |
-| `watch --as WHO [--after N \| --resume] [--all] [--once] [--settle SECONDS] [--fleets [--batch SECONDS]]` | prints what is open for WHO with id > N (with `--all`, every open message from the user too), then each new message to WHO (or from the user) as it lands; with `--fleets` (the manager's) also what the user does on the other fleets' pages | one line each | 0 on SIGTERM or `--once`; 1 `--fleets` not as the manager; 1 stdout is /dev/null; 1 `--once` while another watch as WHO runs for DIR; 1 without `--once` when stdout is not a terminal |
-| `wait DECISION...` | waits for the user's answer to one of these open decisions | the answer's line, then `-> the user answered <ref>: record it first, ...`; for an action answered `Failed: ...`, `-> the user's step <ref> failed, and it is not done: fix it and re-present it, ...`, or --withdraw "why"; never --decide` | 1 unknown decision |
-
-A printed line: `#<id> <from>( (<name or author>)) -> <to, each with its name>( [<ref> <decision>])( [<n> mark(s) on <ref> <id>, revision <revision>])( [side chat #N])( [delivered to <fleet> #<id>, ...])( [via <fleet> #<id>])( [from <origin>])( (quoting <from>: "<quote>"))`
-`: <text>( [re #N(, mark N|, marks N, M, ...)(, no change: <why>)])` (the marks parts TypeScript only). Line breaks print as ` ⏎ `, a tab as a space, and other control characters
-are dropped, so a message is always one line.
-
-`watch`: a `--once` watch holds its pid in `DIR/watch-WHO.pid` while it runs (removed at exit if still
-its own), writes `watch-WHO.cursor`, the id of the last message it printed, only when it exits on its own
-(`--resume` starts after it; a watch stopped by a signal leaves it), and touches `watch-WHO.left` when it
-ends. What a `--once` watch exited with was handed to the session it woke: that is what "read" means.
-Without `--once` the watch never exits, so in a background command it would read the chat and wake no
-one: it is refused unless stdout is a terminal (`chat: a watch without --once needs a terminal: in a
-background command it never exits, so nothing wakes the session. Arm \`fleet chat DIR watch --as WHO
---all --resume --once\` instead.`, exit 1, after the `--fleets` check), and on a terminal, a person
-reading it, it writes none of the three files. Any watch whose stdout is /dev/null (fstat(1) has the
-device and inode of /dev/null: `>/dev/null 2>&1 & disown`) is refused first, after the `--fleets` check
-and before it writes anything: what it prints wakes no one, yet it would move the cursor, so the user's
-message would count as read (`chat: a watch whose output goes to /dev/null wakes nobody, yet it would mark
-what it reads as read. Run \`fleet chat DIR watch --as WHO --all --resume --once( --fleets)\` as a
-background command of the session (run_in_background: true), never with \`& disown\` or its output
-redirected to /dev/null.`, exit 1). One `--once` watch per chat and role: while `watch-WHO.pid` names a
-live process that is a `--once` watch as WHO for DIR, a new one is refused before it writes anything
-(Python: `chat: a watch as WHO already runs for DIR (pid P), and its lines wake the session that armed it. Leave
-it running; if that session is gone, \`kill P\` and arm the watch again.`, exit 1; TypeScript names whose
-it is and asks for no kill, or takes its place: [Whose watch](#whose-watch-typescript-only)). A process is such a
-watch by its command line (`/proc/<pid>/cmdline` and `cwd` on Linux, `ps` elsewhere): an argument `chat`
-(or a path ending in `chat.py`), then DIR (resolved against the process's cwd), then `watch`, and after
-them `--as WHO` (any case) and `--once`. So a pid reused by another program counts as no watch. With `--all`, a message from the user is left out for each recipient that has it in
-its own chat (`delivered`): a manager's watch does not print the user's message to coordinators the hub
-delivered it to, and prints, with its `[delivered to ...]` mark, one that also names the manager or a
-coordinator it was not delivered to. A manager's watch prints `!` lines every `FLEET_CHECK_S`: a fleet that
-doesn't read its chat while the user waits more than `FLEET_UNHEARD_S` (TypeScript: only while no hub runs
-on the machine, `REGISTRY/hub/hub.json` naming a live process; while one runs, the hub wakes that fleet's
-session itself and the page says so, so the manager is not told and nothing is marked told: [The hub's
-wake](#the-hubs-wake)); else, a fleet whose host has
-left the user's messages to it unanswered (open for the host, no message but the user's with that `re`,
-not an answer to a decision since closed) for `FLEET_UNANSWERED_S`, whatever the cursor says, since a
-watch that wrote the cursor may have woken no one (`! <fleet> has not answered the user for more than 10
-min: #93 at 14:42 "<text, 120 chars>", .... SendMessage its session (<session>) to answer it with \`fleet
-chat DIR say --as <host> --re N ...\`, and to arm its watch as a background command, \`fleet chat DIR watch
---as <host> --all --resume --once\`; \`fleet chat DIR log --after <first - 1>\` shows them.`, each message
-told once as `unanswered:<fleet>:<id>`); an answer a fleet has had
-that long without recording it, a running worker silent for 20 minutes. Each is told once
-(`watch-manager.told`). A coordinator's watch prints its own silent workers, and each message to
-one of its workers that the worker has not answered (no message of its own with that `re`) for
-`FLEET_NUDGE_S`: `! worker a1 (notes-impl) has not answered #12 from user for 10 min: "<text, 120
-chars>". Forward it (SendMessage a1).` (L1: workers read their inbox at checkpoints; only a message
-left this long is forwarded), and each grilling answered and waiting to be recorded: `! G6 (<title>):
 every question is answered and the grilling is still open. Record it now: \`fleet state <dir> decision
 G6 --decide "..." --resolution "grilling finished"\`, or withdraw it with its reason.` (once per round:
 the mark is its `revised`, else `opened`). Each told once (`watch-coordinator.told`). Both a coordinator's
-watch and a manager's also remind of each batch of marks to the host still open, once per
+watch and a manager's also remind, once, of each refusal draft of their own ledger left open for
+`FLEET_REFUSAL_REMIND_S` (`! refusal draft <id> ... has waited 15 min: ...`, [Permission
+grants](#permission-grants), A refusal is a draft first), say at once and once the whole line of a draft
+the host could not be told of when it opened (`! the hub could not tell you this when it happened. [hub]
+...`, mark `refusal-line:<id>:<opened>`), and remind of each batch of marks to the host still open, once per
 `FLEET_BATCH_REMIND_S` ([Marks on a decision](#marks-on-a-decision-typescript-only), Follow-through).
 
 **When a `--once` watch exits.** What was open when it started exits at once, and so do the `!` lines of
@@ -1917,11 +1832,14 @@ cookies and same-origin calls to their own API).
 ## Permission grants
 
 TypeScript only: `state.py` has no `permission` kind, no trace has one, and the oracle's usage texts
-stay Python's (below). Auto mode refuses a worker's tool call; the plugin's hook opens a permission for
-it, the user answers on the page, and the hub, not an agent (Claude Code's classifier refuses an agent
+stay Python's (below). Auto mode refuses a tool call; the plugin's hook records it as a **refusal draft**
+for the fleet's host and tells the host at once, and nothing opens for the user (A refusal is a draft first,
+below). The host asks in its own words, with a permission for the one command that needs the yes, or drops
+the draft; the user answers on the page, and the hub, not an agent (Claude Code's classifier refuses an agent
 that writes its own allow rule), adds a one-time allow rule to the session's settings. The hook
 removes the rule once the call has run, or at the first tool call of the session after 30 minutes (one
-constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text). A coordinator also
+constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text). A refused Agent spawn alone
+opens its permission at once, as it did. A coordinator also
 **asks** for one before it runs a call that needs the user's yes (a deploy, a production migration, a push
 that deploys): the same row, grant and removal, with no refusal to provoke (Asking, below). One yes is one
 run of each exact command shown; the next run of the same command asks again.
@@ -1934,12 +1852,13 @@ run of each exact command shown; the next run of the same command asks again.
   from 10-03 to 10-09, were all still in its session's settings with no `remove` line, and none of its
   refusals had opened an item.
 - **What the hook records** (`fleet_permission_denied`, on `PermissionDenied`, which auto mode fires with
-  `tool_name`, `tool_input`, `reason` and, in a subagent, `agent_id`): a Bash command an exact rule can
-  hold, and an Agent spawn with any input, open a `permission`; a Bash command no exact rule can hold
-  opens an `action` whose `--manual` is the command in a `bash` block (the call is bash as the harness saw
-  it; in a `nu` block the CLI checked it as nushell and refused the item for its `&&` or `2>&1`, so nothing
-  opened: four of the eight failures in the hook's log on 2026-10-12); a refused call of any other tool
-  opens an `action` whose `--manual` is its input as JSON, to make by hand. What a grant can clear,
+  `tool_name`, `tool_input`, `reason` and, in a subagent, `agent_id`): an Agent spawn with any input
+  opens a `permission` (Opening, below); every other refused call (a Bash command, whether or not an exact
+  rule can hold it, a call of any other tool, an Agent call with no input) is recorded as a refusal draft
+  for the host (A refusal is a draft first, below). The hook writes no title, no question, no why and no
+  manual. Until 2026-10-13 a refused Bash command an exact rule can hold opened a `permission` for the user,
+  one no rule can hold an `action` whose `--manual` was the whole command in a `bash` block for the user to
+  run by hand, and a call of any other tool an `action` whose `--manual` was its input as JSON. What a grant can clear,
   measured in auto mode on Claude Code 2.1.287 and 2.1.288 (a headless `claude -p --permission-mode auto`
   in a throwaway project, the spawn refused as `[Production Reads]`): an exact `Bash(<call>)` allow rule
   in the session root's `.claude/settings.local.json` clears a refused Bash call, live, for the session's
@@ -1962,6 +1881,205 @@ run of each exact command shown; the next run of the same command asks again.
   remembered. When the memory cannot be kept or read (an unwritable data dir, a broken file), the item
   opens: a refusal shown twice costs less than one never shown. Measured 2026-10-12: two Artifact calls
   refused as `Classifier unavailable` each ran on their repeat and had opened two actions for the user.
+- **A refusal is a draft first.** Luiz, 2026-10-13, on a card the hook had opened by itself, blocking,
+  before the coordinator saw it: "why didn't you inform what the command does?" Its title was `subagent
+  a90fde8c5abcc9bd3: Bash refused, cd /home/…/custom-mcp-servers-a268 && jj edi…` (the harness's agent id, a
+  command cut mid-word), its manual the worker's whole five-part command in bash for him to run, of which
+  auto mode had refused one part (`jj abandon`), and the command was not needed: the coordinator withdrew
+  the card. The hook knows what was refused. What the command does and to what, why the worker needs it and
+  what a no means are the host's to say, and whether to ask at all is the host's to judge. So a refusal is
+  the host's to word before it is the user's to answer.
+  - **The record** (`fleet state DIR decision ID --kind refusal --tool TOOL --call CALL --cause REASON --root
+    ROOT [--agent-id AID] [--agent WORKER]`; `refusal` is accepted by `--kind` and left out of its listed
+    choices, as `permission` is). It opens no decision. It appends `{id, tool, call, cause, root, agent_id,
+    agent, opened, status: "open"}` to the ledger's `refusals[]`: `call` is a Bash command as the harness
+    saw it, or any other tool's input as JSON with sorted keys, cut by the hook at 4,000 characters
+    (`CALL_KEPT`) with `… (N more characters, cut by the hook)` after it; `agent` is the worker row the hook
+    named, else the row whose `task_id` is AID, else null (a worker the ledger does not know refuses
+    nothing); `agent_id` is null for the session's main thread, whose own refused call takes the same path.
+    One event, kind `note`: `Auto mode refused a <tool> call of <who> (<reason, 120 characters>): refusal
+    draft <id>, for the <host> to word or drop. Nothing was asked of the user.` It prints `drafted <id>:
+    <who>'s <tool> call, for the <host>. Nothing was asked of the user.` Refused: a TOOL that is no tool's
+    name (letters, digits, `_`, `.`, `:`, `-`, at most 120; the hook sends `unnamed` for one), a blank CALL, a
+    relative ROOT, one of the four flags missing (`new refusal draft needs --cause`), an id outside the id
+    pattern.
+  - **Why a list of its own.** A draft is in `refusals[]` and never in `decisions[]`, so nothing that lists
+    what waits on the user can hold one: `fleets list` and `fleets waiting`, the page's lists and its
+    notifications, the manager's view and search, `chat wait`, the hub's check of an answer (`unknown
+    decision '<id>'`, 400), the news, the numbers (a draft takes none: its decision takes its P or A when
+    the host asks). About fifty places read `decisions[]`, the page among them, and the page reads every
+    `asks` but `manager` as the user's: a draft kept there under a new `asks` or `status` would reach the
+    user through the first reader not told about it. The key is absent while a ledger has had no draft, no
+    oracle trace has it, and the Python twin keeps it as it keeps any key it does not know.
+  - **One draft per caller and call.** The id is the hook's `p-<8 hex of sha1(caller, call)>`
+    (`_permission_id`), the caller being AID or `main`. The same refusal again while its draft is open
+    records nothing and tells no one (`refusal draft <id> is open already: nothing was recorded, and its
+    host was told when it opened.`, or `... and its host will see it at its next state command or watch.`
+    for one marked `told: false`), and so does one whose decision of the same id is open, of this shape or
+    the older one (`<ref> is open and already asks about this call: nothing was recorded.`). Once that is
+    closed (the draft dropped, the decision decided or withdrawn; the decision's status counts when both
+    exist) the hook takes the first of `-2`, `-3`, … that is absent or open, and the CLI refuses a closed id
+    (`... A refusal of the same call again is recorded under a new id`).
+  - **The host is told at once** (`src/chat/hub-line.ts` `tellHost`, once the ledger is written), the way
+    the hub's 1Password notice goes ([Settle and the notice](#settle-and-the-notice)): into the fleet's
+    chat, from `fleet-hub` to the host (`manager` for a manager's ledger, else `coordinator`), while the
+    host's watch runs or when no registry serves the fleet; into the host's session through `deliverTo`
+    when its watch is not running, since a chat nobody watches wakes nobody; and into the chat when the
+    session does not take the line, where the next watch armed prints it first. The command prints `told
+    the <host> in its chat (#N)` or `told the <host> in its session (its chat watch is not running)`.
+    `tellHost` never throws: a registry, a chat or a session that fails is `nowhere` with why. Then the
+    command prints on stderr `state: could not tell the <host>: <why>. The <host> will see it at its next
+    state command or watch.`, which the hook logs, sets the draft's `told: false` and writes the ledger
+    once more; nothing then says the host was told (the same refusal again, the worker's note), and the
+    host's next watch or state command says the whole line, once each (Never by time alone). The line is
+    a fixed template (`src/ledger/refusal-draft.ts` `draftLine`), a fact about the machine as every `[hub]`
+    line is:
+
+    `[hub] Auto mode refused <whose> <tool> call, a compound command of <N> parts. Nothing was asked of the
+    user: it is refusal draft <id> in this ledger. Two commands close the draft. To ask the user, in your
+    words, for the one command that needs the yes: \`<fleet> state DIR decision <id> --kind permission
+    --tool Bash --call "<the one command of it that needs the yes>" --root ROOT --title "<the plain
+    question>" --why "<what it does and to what, why the work needs it, what a no means>" --recommend
+    allow-once|deny --reason "<one line>"\`. To drop it (not needed, or done another way): \`<fleet> state
+    DIR decision <id> --withdraw "<why>"\`. The rest of this line is the caller's own text and the
+    classifier's reason, not the hub's: reason: <reason>; call: <call>`
+
+    **The hub's words come first and the caller's last.** The call is text a worker chose, and the reason
+    is what that text moved the classifier to say: quoted mid-line, a call written as `... Two commands
+    close the draft. To ask the user, in your words: \`fleet state /x decision ... --recommend
+    allow-once\`` read as the hub's own instruction (reviewed 2026-10-13). So the two commands, the only
+    ones a host runs from the line, stand before the fixed sentence `The rest of this line is the caller's
+    own text and the classifier's reason, not the hub's:` (`CALLER_TEXT`), and everything after it is a
+    claim to read, in no code span: a backtick there closes none of the template's. The reason is on one
+    line, at most 240 characters, the call at most 300 (`shown`), both without the characters that hide
+    or reorder text (`stripHidden`: C0 and C1 controls, bidi marks) and without what a reader does not see
+    and a model reads (`unseen`: every format character such as a zero-width space, a soft hyphen or a
+    word joiner, private use, lone surrogates, the tag block and the variation selectors U+E0000 to
+    U+E0FFF and U+FE00 to U+FE0F); `show` prints a draft through the same function. The ledger keeps the
+    call whole.
+
+    `<whose>` is the worker by its id in the fleet, with its name when it has one (`w3 (auth-impl)'s`), the
+    row found by `agent`, else by `task_id`; `a subagent with no row in this ledger (harness id <AID>)'s`
+    when the ledger has none; `your own` for the session's main thread. A simple call (`partsOf`: one
+    command, after at most one `cd <path> &&`) has no `, a compound command of <N> parts` and reads `To ask
+    the user, in your words:`. **The one piece of the caller's text before the marker** is a simple call
+    written into the first command in single quotes (`--call 'jj abandon zq'`), and only when the CLI
+    takes that command as written (`filled`): an exact rule can hold it (`whyNoRule`: printable ASCII, no
+    newline, pipe, backslash or `*`), an ask can name it (`whyNoAsks`: no substitution or backtick, no
+    script by a relative path or that cannot be read) and it is at most 400 characters. Any other call
+    leaves `"<the one command of it that needs the yes>"` for the host. Another tool's line reads `A
+    one-time grant holds a Bash command alone. To ask the user for one that does the same, in your words:
+    <the command, --call "<a Bash command that does the same>">; a step only the user can take is an action
+    with the exact steps (--kind action, --manual).` and ends `...; input: <input>`. DIR and ROOT are
+    written plain, or in single quotes when they hold more than letters, digits and `._/@:+-`.
+  - **Asking** is the host's own command under the draft's id: `fleet state DIR decision <id> --kind
+    permission --tool Bash --call CALL [--then CALL]... [--root ROOT] --title "<the plain question>" --why
+    WHY --recommend allow-once|deny --reason REASON [--body FILE] [--blocking]`. The permission it opens is
+    worded as an ask is (Asking, below): `--title`, `--why`, `--recommend` and `--reason` are required (`a
+    permission you word from a refusal draft carries your recommendation: ...`), the question is written
+    from the call and `--question` is refused, the call is held to `whyNoCalls` and to `whyNoAsks` (it is
+    the host's text, which never ran into the classifier), and a call no exact rule can hold is refused
+    with the form one can. What it keeps is the draft's: `refusal.agent_id`, the row's `agent` and, unless
+    given, the root. **The classifier's reason stays with the commands it was about** (`partOfRefused`):
+    `refusal.cause` is the draft's cause only while every simple command of `--call` and of each `--then`
+    is, word for word, one of the simple commands of the refused Bash call (permission.ts
+    `simpleCommands`, the grant rule's own splitter, which for the refused call also ends a command at a
+    pipe and at a newline); the page then shows "Auto mode stopped it because" and the options say the
+    worker runs it. Any other command is still asked (the host may need a different one to the same end),
+    with `cause: ""`: the card reads "Asked before running" and shows no reason, the command says `<id>
+    asks for a command that is not one of the commands of the call auto mode refused (refusal draft <id>):
+    its card says it was asked before running and shows no classifier's reason, which was about the other
+    call.`, and the `asked` event alone keeps the reason (`... (worded from refusal draft <id>; it asks
+    for a command the refused call did not hold, and of that call auto mode said: <reason, 240>)`). Before
+    this the card showed the classifier's reason for `jj abandon` beside `git push --force` (reviewed
+    2026-10-13). A draft of another tool's call gives no reason to a Bash command. `--cause` is refused (`<id> is a refusal draft, and its
+    cause is the classifier's reason the hook recorded: leave out --cause, ...`). The draft becomes `asked`
+    (`closed`, `resolution: "asked as a permission of the same id"`), and the row takes its number then.
+    From there it is a permission as any other: only the user's answer on the page grants, and recording it
+    prints the exact call. Its words stay the host's (`askedDraft`): `--title`, `--why` and the explanation
+    are revised as an ask's are, and the same command with another call and no `--cause` replaces the call
+    and keeps the words; the cause follows the new commands by the same rule, both ways. **A step only the user can take** (it needs their terminal: a login,
+    a 1Password approval, `sudo`) is an `action` under the same id, its `--manual` written by the host in
+    nushell and checked as any action's is; any decision opened under an open draft's id closes the draft
+    as asked (`asked as an action of the same id`). The hook writes no manual.
+  - **Dropping**: `decision <id> --withdraw WHY` on an open draft sets `dropped`, `closed` and `resolution`,
+    logs `Refusal draft <id> (<who>'s <tool> call) dropped: <why>` (kind `resolved`) and prints `dropped
+    refusal draft <id>: nothing was asked of the user.` A blank WHY is refused. `--decide`, `--hold` and
+    `--unhold` on an open draft are refused with both commands (`<id> is a refusal draft: nothing was asked
+    of the user yet, so there is no answer to record or hold. ...`). **A dropped draft stays dropped**: any
+    `decision` command under its id that finds no decision is refused (`refusal draft <id> was dropped
+    (<why>): it stays closed. Ask with a new id`), so no card reads as the answer to a draft the host
+    closed, and the hook's next refusal of the same call takes `-2`.
+  - **Never by time alone.** A draft left open for `FLEET_REFUSAL_REMIND_S` (900, `DRAFT_REMIND_S`) is said
+    once by the host's watch, a coordinator's with its other `!` lines and a manager's for its own ledger
+    (mark `refusal:<id>:<opened>` in the watch's told file): `! refusal draft <id> (<whose> <tool> call, a
+    compound command of <N> parts) has waited <N> min: nothing was asked of the user, and nothing will be
+    until you ask. To ask the user, ...: <the command>. To drop it (not needed, or done another way): <the
+    command>. The rest of this line is the caller's own text and the classifier's reason, not the hub's:
+    reason: <reason>; call: <call>`, in the line's order. From then on every state command warns in one
+    line for all of them (`draftsLeft`, [Warnings](#warnings): how many, their ids, `fleet state DIR
+    show`), and `set --status done` names each open draft with the open decisions (`leftOpen`). A draft
+    marked `told: false` is said in full before any of that: by the watch at once (`! the hub could not
+    tell you this when it happened. [hub] ...`, mark `refusal-line:<id>:<opened>`), and by the host's next
+    state command that writes the ledger, which clears the mark. `show` lists each open draft after the
+    decisions: `  refusal draft <id> OPEN, for the <host> [<tool>] <who>: <call, 120 characters> (<reason,
+    80>)`. The page shows no count of them yet: the ledger's `refusals` is in its payload, and nothing on
+    it reads the key.
+  - **The refused worker is told at its next tool call.** A PermissionDenied hook returns `retry` and
+    nothing else that Claude Code reads (its hooks reference), so the denial's text is the harness's and no
+    hook can add to it. When the CLI recorded a new draft, the hook keeps a note for its caller, one file
+    per caller and draft (`sessions/<session>.refusal-notes/<16 hex of sha1(caller)>.<draft id>` under the
+    plugin's data dir), so two refusals at once both stay owed. The caller is a subagent by the harness's
+    id, or `main` for a worker that runs as its own session (`FLEET_WORKER` set, no `agent_id`); a host's
+    own main thread is owed none (it hears the host's line). `fleet_refusal_note` (PostToolUse) gives every
+    note still owed to the caller as one text, once, beside the result of its next tool call, each file
+    taken by a rename so two calls that end at once read it once: `Fleet: auto mode refused your <tool>
+    call (<reason, 120 characters>). The plugin's hook told the <host> at once, as refusal draft <id>. The
+    <host> decides whether the user is asked, and nothing was asked yet. Do not repeat or reword the call,
+    and take no other route to the same act. Report \`blocked: <what you needed it for>\` to the <host>
+    (SendMessage), then go on with the work that does not need it. For a refused call this replaces your
+    brief's "then end with your report": end with your report when nothing else is left.` Several drafts
+    read `Fleet: auto mode refused <K> of your calls. ... as refusal drafts <id>, <id>. ... Do not repeat
+    or reword them, ...`, their ids alone. When the CLI answered `could not tell the <host>` the note
+    says so in place of "told": `It is refusal draft <id>: the plugin's hook could not tell the <host> at
+    once, and the <host> will see it at its next state command or watch.` (and of several, which were told
+    and which were not). The last sentence is for a worker whose brief says to report "blocked" and then
+    end with its report (`assets/brief.md`, which 29 oracle traces embed and stays as it is): one refused
+    call does not end the work that needs none. A note 30 minutes old is dropped unsaid. Neither a refused
+    spawn (the user is asked at once) nor a refusal already drafted is owed one.
+  - **A hook from before drafts.** A session keeps the hook it started with until it restarts, and the
+    hook of 1.9.44 and before sends the new CLI its old command, which opened the card this section is
+    about. `decision` takes that command as the record it is and drafts it (`oldHookRecord`), when all of
+    this holds: no decision has the id; the id is of the hook's form (`p-<8 hex>`, with `-2`, `-3`, ...);
+    the tool is not Agent; and either (a) `--kind action` whose `--title` is `<who>: <tool> refused, ...`,
+    whose `--why` is `Auto mode's classifier refused it (<reason>), and only you can let it through.` and
+    whose `--manual` is `Run it yourself in bash, in the project (<ROOT>):` and the call in a `bash`
+    fence, or `The <tool> call as the harness saw it, for you to make yourself:` and its input in a `json`
+    fence; or (b) `--kind permission` with `--tool`, `--call`, `--cause` and `--root`, a `--title` and a
+    `--why` each absent or in those fixed forms, and no `--recommend`, `--reason` or `--body`. The draft's
+    call is the fenced text (JSON on one line), its cause the reason in the why, its root the manual's
+    (for another tool's action the command's own `CLAUDE_PROJECT_DIR`, without which it is not matched),
+    its `agent_id` the one in a `subagent <AID>` title. The id is the hook's own next one (`freeHookId`:
+    the first of ID, ID-2, ... whose decision, else draft, is absent or open), since that hook reads the
+    decisions alone and gives a dropped draft's id again. A host's own action (a manual and a title of
+    its words), a permission with a title or a why of its own, any id not of the hook's form and a
+    refused spawn are none of these and open as before. A card such a hook opened before this stays a
+    decision: it renders, is answered and closes as any other, and nothing migrates it.
+  - **Known limits.** `refusals[]` is never pruned: asked and dropped drafts stay in the ledger. A draft
+    marked `told: false` may be said twice, once by the watch and once by the next state command, since
+    the watch marks its own told file and does not write the ledger; and the hook's `event --kind blocked`
+    (the push gate) is a state command that writes, so it can take the one full line on its stderr, after
+    which `show` and the one-line warning still name the draft. The cause rule reads the refused call with
+    the grant rule's splitter, which knows quotes and not backslashes, substitutions or `sh -c` bodies: a
+    command inside one of those is not found, so its card carries no reason, never a wrong one.
+  - **Agent spawns stay as they were.** No Bash command stands in for a spawn, the call is the spawn's
+    whole input, and the card already asks one plain thing the user can allow with one tap, which only a
+    hook's allow clears (`fleet_agent_grant`, the one place a hook returns `allow`). Its title is the CLI's
+    (`Allow <who> to start a <type> agent, described by the worker as “<description>”?`), `<who>` being the
+    worker's name, or its id in the fleet when it has no name of its own, never the harness's id.
+  - **A card opened before this** (a `permission` with the CLI's words, or an `action` whose manual is the
+    command in a `bash` block) stays a decision as it is: it renders, is explained, answered, decided and
+    withdrawn as before, and the same refusal again leaves it alone. Nothing is migrated.
 
 - **An exact rule**: `Bash(<call>)`, for a call that holds none of newline (`\n`, `\r`), `*` (a rule
   reads it as a wildcard), `\` (Claude Code's rule parser reads an escape, so the rule would not match
@@ -1973,9 +2091,9 @@ run of each exact command shown; the next run of the same command asks again.
   call is not read whole (2,000 characters is about a screen and a half at 390 px). The refusal names the
   character and where it is: `the call has a character outside printable ASCII at position <n>
   (U+<code>), which the user cannot tell from a plain one on the card`. This one set is `whyNoRule` in
-  `src/ledger/permission.ts` and `_holdable` in the hook; the CLI
-  refuses a permission for any other call, the hook opens an action with `--manual` for it, and the hub
-  grants none. The limits are for Bash calls: an Agent call is its input as JSON, a prompt included. **What a rule matches in a compound command**, measured in auto mode on Claude Code 2.1.296
+  `src/ledger/permission.ts`; the CLI
+  refuses a permission for any other call and the hub grants none (the hook asks nothing of a call: it
+  records every refused Bash command as a draft, whatever a rule can hold). The limits are for Bash calls: an Agent call is its input as JSON, a prompt included. **What a rule matches in a compound command**, measured in auto mode on Claude Code 2.1.296
   (a headless `claude -p --permission-mode auto` in a throwaway project whose stand-in scripts only append
   to a log; each call refused as `[Production Deploy]` without a rule, one run per shape but the pipe):
   - an exact rule for the whole string cleared `cd <dir> && A`, `A; B`, `A && B && C`, `VAR=x A`,
@@ -2012,8 +2130,9 @@ run of each exact command shown; the next run of the same command asks again.
   and the rule `Agent(<call>)`, which only the plugin's hook matches; the CLI and the hub refuse an Agent
   call that is no JSON object.
 - **Opening** (`fleet state DIR decision ID --kind permission --tool Bash|Agent --call CALL --cause CAUSE
-  --root ROOT [--agent-id AID] [--agent WORKER] [--blocking]`; the hook also passes `--title`, `--question`
-  and `--why`, which are ignored): the row gets `refusal: {tool, call, rule, cause, root, agent_id}` with
+  --root ROOT [--agent-id AID] [--agent WORKER] [--blocking]`: the hook's record of a refused Agent spawn,
+  and a refused Bash call recorded by hand; a `--title`, `--question` or `--why` given with it is ignored):
+  the row gets `refusal: {tool, call, rule, cause, root, agent_id}` with
   `rule` = `TOOL(CALL)` and `agent_id` null without `--agent-id`, and the two options the CLI sets:
   `allow-once: Allow this call once | the worker runs exactly the call shown above, once, and nothing like
   it after: the one-time grant goes once it is used, or after 30 minutes` (for Agent: `starts exactly the
@@ -2021,7 +2140,8 @@ run of each exact command shown; the next run of the same command asks again.
   `deny: Deny | the worker stays stopped; your note goes to it`; the rule and the file it goes into show
   with the call on the page. The CLI writes the title, question and why from the call
   (`src/ledger/permission-words.ts`), as it writes the options:
-  - **who**: the worker's `name` (never the harness's agent id): the `--agent` row, else the agents row whose
+  - **who**: the worker's `name`, or its id in the fleet when it has no name of its own (never the harness's
+    agent id): the `--agent` row, else the agents row whose
     `task_id` is AID, else the worker whose workspace the call changes into (a `workspaces[]` row by `path`,
     or `<dirname(ROOT)>/<basename(ROOT)>-<worker id>`, as the fleet names them); else `a worker` for a
     subagent, `the coordinator` (`the manager` for a manager's ledger) for the main thread.
@@ -2173,8 +2293,9 @@ run of each exact command shown; the next run of the same command asks again.
   or deny>" --resolution "answered on the page (#N)"\`; for an allow-once that prints the exact call to
   run, and nothing of it runs before`. Before this the fleet was told `allow-once: Allow this call once`
   and `record it first`, with the call nowhere in what it read.
-- **Explaining**: the hook's words say what was refused, not what it means, so the coordinator explains a
-  permission in the turn it opens: `decision P<n> --call REV --why "<one or two lines>" --body FILE
+- **Explaining**: a permission recorded with its cause (a refused Agent spawn, a Bash call recorded by
+  hand, a card from before drafts) says what was refused, not what it means, so the coordinator explains it
+  in the turn it opens (one worded from a draft carries its explanation from its first command): `decision P<n> --call REV --why "<one or two lines>" --body FILE
   --recommend allow-once|deny --reason "<one line>" [--log "explained"]`, without the call's other
   flags. No one sets a permission's title or question: `--title` or `--question` on one is refused (`a
   permission's title and question are written from its call, so they never say less than it does: …`),
@@ -4191,6 +4312,7 @@ recommendation attached.
 | `fleet serve` | `REGISTRY/<fleet>.json` (removed with `--stop`); with `--take-over`, when it displaced a host that ran: `DIR/state.json` (one event, `updated`) and one line in `DIR/chat.jsonl` (TypeScript only) |
 | `fleet hub` | `REGISTRY/hub/hub.json` while it runs (it reads `REGISTRY/hub/config.json`, written by hand); `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, `<root>/.claude/settings.local.json` (and its folder) and `DIR/grants.jsonl`; on a page rename, `DIR/state.json` (a worker's `name`, `name_by`, `updated`, under the ledger's lock) or `REGISTRY/overrides/<hash>.json` and `REGISTRY/<fleet>.json` |
 | the plugin's hook (grant removal) | `<root>/.claude/settings.local.json`, `DIR/grants.jsonl` (`remove` lines) |
+| the plugin's hook (`fleet_permission_denied`), through `fleet state DIR decision ID --kind refusal\|permission` | `DIR/state.json` (`refusals`, or for a spawn `decisions`; `events`, `updated`), `DIR/index.html`; for a draft one line in `DIR/chat.jsonl` from `fleet-hub`, or one line to the host's session's socket when its watch is not running; the session's `transient-refusals` and `refusal-notes` folders in the plugin's data folder |
 | the hub (its wake timer, `POST wake`) | `REGISTRY/hub/wakes.json`; one line to the session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, which is Claude Code's, not the fleet's |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |

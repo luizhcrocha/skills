@@ -200,6 +200,13 @@ describe("a spawn", () => {
     expect(words.title).toBe("Allow w1 to start a general-purpose agent, described by the worker as “Read-only harmless lookup”?");
   });
 
+  test("the article is the one its type takes: an Explore agent, a general-purpose agent", () => {
+    const title = (type: string): string => permissionWords({ tool: "Agent", call: "{}", cause: "[x]", root: ROOT, agent_id: null }, undefined, "coordinator", { type, description: "" }).title;
+    expect(title("Explore")).toBe("Allow the coordinator to start an Explore agent?");
+    expect(title("advisor")).toBe("Allow the coordinator to start an advisor agent?");
+    expect(title("Plan")).toBe("Allow the coordinator to start a Plan agent?");
+  });
+
   test("without a description, names only its type", () => {
     expect(permissionWords({ tool: "Agent", call: "{}", cause: "[x]", root: ROOT, agent_id: null }, undefined, "coordinator").title).toBe("Allow the coordinator to start a general-purpose agent?");
   });

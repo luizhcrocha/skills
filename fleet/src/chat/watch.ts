@@ -16,6 +16,8 @@ import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger, type Decision, type Ledger } from "../ledger/model.ts";
 import { refusalRev } from "../ledger/permission.ts";
+import { draftLine, draftReminder } from "../ledger/refusal-draft.ts";
+import { staleDrafts, untoldDrafts } from "../ledger/warnings.ts";
 import { stripHidden } from "../ledger/permission-words.ts";
 import { findDecision, number } from "../ledger/numbers.ts";
 import { Refusal } from "../errors.ts";
@@ -296,6 +298,8 @@ export function fleetsUnheard(machine: Machine, me: string): string[] {
     );
   }
 
+  // The manager's own refusal drafts: a call of its session, or of a worker of its own.
+  lines.push(...draftReminders(machine, me, told));
   lines.push(...batchReminders(machine, me, told, seconds(machine.env, "FLEET_BATCH_REMIND_S", BATCH_REMIND_S)));
 
   if (lines.length > 0) writeTold(toldPath, told);
@@ -356,7 +360,8 @@ function answeredGrillings(root: string, told: Map<string, Json>): string[] {
 }
 
 /** The `!` lines for the permissions of `root` the coordinator has not explained and the user has not
- * answered: the hook opened each from a refused call, and the page shows it as waiting for the explanation.
+ * answered: the hook opened each from a refused spawn (before refusal drafts, from any refused call), and the
+ * page shows it as waiting for the explanation.
  * Told once per round (its last change), as a grilling answered is. */
 function unexplainedPermissions(root: string, told: Map<string, Json>): string[] {
   const lines: string[] = [];
@@ -377,9 +382,39 @@ function unexplainedPermissions(root: string, told: Map<string, Json>): string[]
   return lines;
 }
 
+/** The `!` line for each refusal draft of `root` its host has neither asked nor dropped for FLEET_REFUSAL_REMIND_S
+ * (fifteen minutes): the hook told the host when it opened, and nothing reaches the user from it by time alone.
+ * Each draft is told once. Before that, a draft whose line reached the host nowhere when it opened (`told:
+ * false`) is said in full, at once and once. */
+export function draftReminders(machine: Machine, root: string, told: Map<string, Json>): string[] {
+  const ledger = numberedLedger(root);
+  const lines: string[] = [];
+
+  if (ledger === undefined) return lines;
+
+  for (const draft of untoldDrafts(ledger)) {
+    const mark = `refusal-line:${draft.id}:${draft.opened}`;
+
+    if (told.has(mark) && told.get(mark) !== false) continue;
+    told.set(mark, true);
+    lines.push(`! the hub could not tell you this when it happened. ${draftLine("fleet", root, ledger, draft)}`);
+  }
+
+  for (const { draft, minutes } of staleDrafts(machine, ledger)) {
+    const mark = `refusal:${draft.id}:${draft.opened}`;
+
+    if (told.has(mark) && told.get(mark) !== false) continue;
+    told.set(mark, true);
+    lines.push(`! ${draftReminder("fleet", root, ledger, draft, minutes)}`);
+  }
+
+  return lines;
+}
+
 /** For a coordinator's watch: its own silent workers, the messages its workers left unanswered for
- * FLEET_NUDGE_S (ten minutes), its grillings answered and not recorded, its permissions not explained, each
- * told once across watches, and its batches of marks still open, once per FLEET_BATCH_REMIND_S. */
+ * FLEET_NUDGE_S (ten minutes), its grillings answered and not recorded, its permissions not explained, its
+ * refusal drafts left open for fifteen minutes, each told once across watches, and its batches of marks still
+ * open, once per FLEET_BATCH_REMIND_S. */
 export function ownSilent(machine: Machine, root: string): string[] {
   const toldPath = join(root, "watch-coordinator.told");
   const told = readTold(toldPath);
@@ -389,6 +424,7 @@ export function ownSilent(machine: Machine, root: string): string[] {
     ...nudgeLines(machine, root, told, seconds(machine.env, "FLEET_NUDGE_S", NUDGE_S)),
     ...answeredGrillings(root, told),
     ...unexplainedPermissions(root, told),
+    ...draftReminders(machine, root, told),
     ...batchReminders(machine, root, told, seconds(machine.env, "FLEET_BATCH_REMIND_S", BATCH_REMIND_S)),
   ];
 

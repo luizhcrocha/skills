@@ -36,6 +36,12 @@ export const KINDS = [...SHARED_KINDS, "permission"] as const;
 /** A decision's statuses. */
 export const DECISION_STATUSES = ["open", "decided", "withdrawn"] as const;
 
+/** A refusal draft's statuses: open for the host, asked of the user by a decision of its id, or dropped. */
+export const DRAFT_STATUSES = ["open", "asked", "dropped"] as const;
+
+/** The `--kind` the plugin's hook records a refused call with: a draft in `refusals`, never a decision. */
+export const DRAFT_KIND = "refusal";
+
 /** A grilling question's statuses. */
 export const QUESTION_STATUSES = ["open", "answered", "dropped"] as const;
 
@@ -217,7 +223,25 @@ function validateDecisions(ledger: Ledger): Refusal | undefined {
     }
   }
 
-  return validateApprovals(ledger, ids);
+  return validateDrafts(ledger) ?? validateApprovals(ledger, ids);
+}
+
+/** refusals[] (the calls auto mode refused, for the host to word or drop). */
+function validateDrafts(ledger: Ledger): Refusal | undefined {
+  const drafts = new Set<string>();
+
+  for (const r of ledger.refusals ?? []) {
+    if (!ID.test(r.id)) return invalid(`refusal id ${pyStr(r.id)} should be letters, digits, '_', '.', or '-'`);
+
+    if (drafts.has(r.id)) return invalid(`duplicate refusal id '${r.id}'`);
+
+    if (!has(DRAFT_STATUSES, r.status)) return invalid(`refusal ${r.id} status '${r.status}' not in ${list(DRAFT_STATUSES)}`);
+
+    if (r.tool === "" || r.call === "" || r.root === "" || r.opened === "") return invalid(`refusal ${r.id} needs tool, call, root and opened`);
+    drafts.add(r.id);
+  }
+
+  return undefined;
 }
 
 /** approvals[] (the standing approvals the user gave once) and the notices done under them. */

@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import { deafWarning } from "../chat/chat.ts";
+import { tellHost, toldWords } from "../chat/hub-line.ts";
 import { unreadLine } from "../news/news.ts";
 import { stampOf } from "../clock.ts";
 import { Refusal, stateRefusal, UsageError } from "../errors.ts";
@@ -24,10 +25,11 @@ import { nextStepId } from "../ledger/numbers.ts";
 import { numberOnMachine, refusedFor, Unreachable } from "../ledger/shared-numbers.ts";
 import { showLines } from "../ledger/show.ts";
 import { lockLedger } from "../ledger/store.ts";
-import { AGENT_STATUSES, ASKS, SHARED_KINDS, STATUSES, STEP_STATUSES, validate, WORKSPACE_MODES } from "../ledger/validate.ts";
+import { AGENT_STATUSES, ASKS, DRAFT_KIND, SHARED_KINDS, STATUSES, STEP_STATUSES, validate, WORKSPACE_MODES } from "../ledger/validate.ts";
 import { readChat } from "../chat/store.ts";
 import { EFFORTS, offPolicy } from "../ledger/roles.ts";
-import { activeWorkspaces, idleWorkspaces, leftOpen, overlapping, staleNow, staleRows, unpruned, unrecorded } from "../ledger/warnings.ts";
+import { activeWorkspaces, draftsLeft, idleWorkspaces, leftOpen, overlapping, staleNow, staleRows, unpruned, unrecorded, untoldDrafts } from "../ledger/warnings.ts";
+import { draftLine } from "../ledger/refusal-draft.ts";
 import { readObject } from "../registry.ts";
 import { pruneOutlook } from "./ws.ts";
 import { World, type Machine } from "../world.ts";
@@ -110,7 +112,7 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
     name: "decision",
     positionals: ID,
     options: [
-      opt.value("--kind", { choices: SHARED_KINDS, unlisted: ["permission"] }),
+      opt.value("--kind", { choices: SHARED_KINDS, unlisted: ["permission", DRAFT_KIND] }),
       opt.value("--title"),
       opt.value("--question"),
       opt.value("--why"),
@@ -345,6 +347,7 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
     // What the command says waits until the ledger it gives back is checked: a refused write says nothing (open-2).
     const said: string[] = [];
     const later: (() => string | undefined)[] = [];
+    const lines: { readonly text: string; readonly missed: (() => void) | undefined }[] = [];
 
     const run: commands.Run = {
       machine,
@@ -354,6 +357,7 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
       say: (line) => said.push(`${line}\n`),
       warn: (line) => out.err(`${line}\n`),
       after: (task) => later.push(task),
+      tell: (text, missed) => lines.push({ text, missed }),
     };
 
     const nextStep = cmd === "step" && args.str("id") === "next" && ledger !== undefined ? nextStepId(ledger, args.str("milestone") ?? "") : undefined;
@@ -371,12 +375,18 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
     const seen = result ?? ledger;
     const settingDone = cmd === "set" && args.str("status") === "done";
     const running = cmd === "agent" && commands.startsLane(args);
+    // A draft whose line reached the host nowhere is said in full by its next command that writes the ledger,
+    // once. The hook's own records (a refusal, a refused spawn) are no command of the host's.
+    const hooks = cmd === "decision" && commands.hooksRecord(args);
+    const untold = seen === undefined || result === undefined || cmd === "init" || hooks ? [] : untoldDrafts(seen);
 
     const warnings = [
       cmd === "init" ? undefined : deafWarning(machine, root),
       seen === undefined ? undefined : staleRows(seen),
       seen === undefined || cmd === "init" || (cmd === "set" && args.str("now") !== undefined) ? undefined : staleNow(machine, seen),
       ...(seen === undefined || cmd === "init" ? [] : unrecorded(seen, readChat(root))),
+      ...(seen === undefined ? [] : untold.map((draft) => `state: the hub could not tell you this when it happened. ${draftLine("fleet", root, seen, draft)}`)),
+      seen === undefined || cmd === "init" ? undefined : draftsLeft(machine, seen, root),
       seen === undefined ? undefined : leftOpen(seen, settingDone),
       seen === undefined || !running ? undefined : overlapping(seen, args.str("id") ?? ""),
       seen === undefined || cmd !== "agent" ? undefined : gaveRole(seen, args.str("id") ?? "", args.str("model"), args.str("effort")),
@@ -387,6 +397,8 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
     ];
 
     for (const warning of warnings) if (warning !== undefined) run.warn(warning);
+
+    for (const draft of untold) delete draft.told;
 
     const flush = (): void => {
       for (const line of said) out.out(line);
@@ -424,6 +436,26 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
 
       if (line !== undefined) out.out(`${line}\n`);
     }
+
+    // A line for the host goes once the ledger holds what it is about; a chat a watch reads takes it at once.
+    let missed = false;
+
+    for (const { text, missed: mark } of lines) {
+      const sent = tellHost(machine, root, text);
+      const told = sent instanceof Promise ? yield* Effect.promise(() => sent) : sent;
+
+      if (told.via !== "nowhere") {
+        out.out(`${toldWords(told)}\n`);
+        continue;
+      }
+
+      out.err(`state: ${toldWords(told)}. The ${told.to} will see it at its next state command or watch.\n`);
+      mark?.();
+      missed = missed || mark !== undefined;
+    }
+
+    // What a line that reached nobody left in the ledger (a draft's `told: false`) is written with it.
+    if (missed) writeText(path, ledgerText(result));
 
     ensureBrief(root, result);
 

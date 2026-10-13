@@ -647,6 +647,12 @@ function simpleOf(command: string): Simple | undefined {
   return { gist: command.slice(from).replace(/\s+/gu, " ").trim(), cd, words: words.slice(skip < words.length ? skip : 0) };
 }
 
+/** How many commands a Bash call runs, as a permission's words count them: 1 for a simple call (one command,
+ * after at most one `cd <path> &&`), else its parts. */
+export function partsOf(call: string): number {
+  return simpleOf(call) === undefined ? Math.max(1, scan(call).parts) : 1;
+}
+
 /** The folders a Bash call changes into before what it runs, as written, at every level (`sh -c '…'`
  * too): the session's workspace in `cd /repo-m1; …` tells which worker made it. */
 export function foldersOf(call: string): readonly string[] {
@@ -770,8 +776,11 @@ export function permissionWords(r: RefusalFacts, by: RefusedBy | undefined, host
     const said = cut(stripHidden(spawn.description), 60);
     const described = said === "" ? "" : `, described by ${describer} as “${said}”`;
 
+    // "an Explore agent", "a general-purpose agent".
+    const a = /^[aeiou]/iu.test(spawn.type.trim()) ? "an" : "a";
+
     return clean({
-      title: `Allow ${who} to start a ${cut(spawn.type, 40)} agent${described}?`,
+      title: `Allow ${who} to start ${a} ${cut(spawn.type, 40)} agent${described}?`,
       question: `Let ${who} start this exact ${cut(spawn.type, 40)} agent once? Read its input in full below before you answer.`,
       why,
     });

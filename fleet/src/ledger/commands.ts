@@ -8,12 +8,13 @@ import { spawnSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import { readChat } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
 import type { Args } from "../cli/args.ts";
 import { Refusal, stateRefusal } from "../errors.ts";
-import { asArray, asObject, asString, pyStr, type Json, type JsonObject } from "../json.ts";
+import { asArray, asObject, asString, parseJson, pyStr, type Json, type JsonObject } from "../json.ts";
 import { FLEET_BIN, isDir, makeDirs, readOrWhy, readText, remove, resolvePath, writeBytes } from "../files.ts";
 import { fleetOf, managerOf, post as postNews, TEXT_MAX } from "../news/news.ts";
 import { allowedByUser, explainCommand, explained, failedAnswer, failureWords } from "../health.ts";
@@ -22,15 +23,16 @@ import { pidOfEntry } from "../registry.ts";
 import { workerFigures, workerTitle } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
 import { isMarkdownFile, markdownToHtml, markdownWarning } from "./body.ts";
-import { dropKey, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type RefusedCall, type Roadblock, type Step } from "./model.ts";
+import { dropKey, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type RefusalDraft, type RefusedCall, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, highest, milestoneOfStep, nextStepId } from "./numbers.ts";
 import { approvalNumber, refusedFor, Unreachable } from "./shared-numbers.ts";
 import { approvalSource, comesFrom, namesOf, NoSource, refOf, sameSource } from "./approvals.ts";
 import { LINK_KINDS, linkKind, OLD_LINK_KINDS, type LinkKind } from "./links.ts";
 import { ALLOW_ONCE, callsLine, callsOf, grantFileOf, isAsk, makeRefusedCall, permissionOptions, refusalRev } from "./permission.ts";
 import { foldersOf, permissionWords, type RefusedBy, type Spawn } from "./permission-words.ts";
+import { askedDraft, callerOf, draftCommands, draftLine, openDraft, partOfRefused, shown } from "./refusal-draft.ts";
 import { roleDefaults, spawnLine } from "./roles.ts";
-import { CHOICE_KINDS, ID, KINDS, nameRefusal } from "./validate.ts";
+import { CHOICE_KINDS, DRAFT_KIND, ID, KINDS, nameRefusal } from "./validate.ts";
 import { closedNamed, isLive, sharedOverlap, UNFINISHED } from "./warnings.ts";
 
 /** One run of one ledger command. */
@@ -46,6 +48,10 @@ export interface Run {
   readonly warn: (line: string) => void;
   /** Do `task` once the ledger is written (a notice's news item), printing the line it gives back: never for a refused command. */
   readonly after: (task: () => string | undefined) => void;
+  /** Tell the fleet's host `text` once the ledger is written, as the hub tells it (chat/hub-line.ts `tellHost`):
+   * in its chat while its watch runs, else in its session. Never for a refused command. `missed` runs when the
+   * line reached neither, on the ledger the command gave back, which is then written once more. */
+  readonly tell: (text: string, missed?: () => void) => void;
 }
 
 type Step$ = Effect.Effect<void, Refusal>;
@@ -1263,9 +1269,10 @@ function harnessWrites(args: Args): boolean {
  * Whether this command asks for a permission before its call ran: it names the call's tool or root and no
  * cause, on a new row or on one asked so. An ask's title, why and recommendation are the coordinator's, given
  * with the call in one command; its question is still written from the call, so it never says less than it.
+ * A row the host worded from a refusal draft (`worded`) is revised the same way: its words are the host's too.
  */
-function asksAhead(args: Args, before: RefusedCall | undefined): boolean {
-  return harnessWrites(args) && args.str("cause") === undefined && (before === undefined || isAsk(before));
+function asksAhead(args: Args, before: RefusedCall | undefined, worded = false): boolean {
+  return harnessWrites(args) && args.str("cause") === undefined && (before === undefined || isAsk(before) || worded);
 }
 
 /** The fields an explanation of a permission writes, each bound to the call it was written for. */
@@ -1340,7 +1347,8 @@ function refusedBy(run: Run, ledger: Ledger, d: Decision): RefusedBy | undefined
     }
   }
 
-  return row === undefined ? undefined : { name: row.name === row.id ? "" : row.name, lane: row.lane };
+  // A row with no name of its own is named by its id in the fleet: never the harness's agent id, and never "a worker" for a row the ledger has.
+  return row === undefined ? undefined : { name: row.name.trim() === "" ? row.id : row.name, lane: row.lane };
 }
 
 /** A refused Agent call's type and description, from its input (a JSON object the CLI checked). */
@@ -1359,12 +1367,12 @@ function spawnOf(call: string): Spawn {
   return { type: asString(input?.["subagent_type"]) ?? "general-purpose", description };
 }
 
-/** Write a permission's title, question and why from its call, and say whether they moved. Of an ask, the
- * question alone: its title and why are the coordinator's. */
-function writePermissionWords(run: Run, ledger: Ledger, d: Decision): string[] {
+/** Write a permission's title, question and why from its call, and say whether they moved. Of an ask, and of a
+ * row the host worded from a refusal draft (`worded`), the question alone: its title and why are the host's. */
+function writePermissionWords(run: Run, ledger: Ledger, d: Decision, worded = false): string[] {
   if (d.refusal === undefined || d.refusal === null) return [];
   const words = permissionWords(d.refusal, refusedBy(run, ledger, d), ledger.role === "manager" ? "manager" : "coordinator", spawnOf(d.refusal.call));
-  const written = isAsk(d.refusal) ? (["question"] as const) : (["title", "question", "why"] as const);
+  const written = isAsk(d.refusal) || worded ? (["question"] as const) : (["title", "question", "why"] as const);
   const moved = written.filter((k) => d[k] !== words[k]);
 
   for (const k of moved) d[k] = words[k];
@@ -1448,8 +1456,11 @@ function sameRefusal(a: RefusedCall, b: RefusedCall): boolean {
 
 /** A permission's call from the flags given, over the one it had, with the two options that follow from it;
  * whether it changed. Without `--cause` on a new row it is an ask (`asksAhead`), which may carry further calls
- * (`--then`, once each). Any other kind takes none of these flags. */
-function setRefusal(run: Run, d: Decision): Effect.Effect<boolean, Refusal> {
+ * (`--then`, once each). Any other kind takes none of these flags. A row worded from a refusal draft (`draft`)
+ * carries the classifier's reason only while every command it asks for is one the classifier saw refused
+ * (`partOfRefused`): beside any other command the reason would be about a call the user is not asked for,
+ * so the row carries none and reads as asked before running. */
+function setRefusal(run: Run, d: Decision, draft?: RefusalDraft, worded = false): Effect.Effect<boolean, Refusal> {
   return Effect.gen(function* () {
     const args = run.args;
     const before = d.refusal ?? undefined;
@@ -1466,7 +1477,7 @@ function setRefusal(run: Run, d: Decision): Effect.Effect<boolean, Refusal> {
     }
 
     if ((args.list("option") ?? []).length > 0) return yield* refuse("a permission's options are allow-once and deny, which the CLI sets: --option is not taken");
-    const ask = asksAhead(args, before);
+    const ask = asksAhead(args, before, worded) || (draft !== undefined && args.str("cause") === undefined);
 
     if (args.str("recommend") !== undefined && named.length > 0 && !ask) {
       return yield* refuse("the refused call's record takes no recommendation: explain the permission on its open row, without --tool, --call, --cause and --root");
@@ -1479,8 +1490,12 @@ function setRefusal(run: Run, d: Decision): Effect.Effect<boolean, Refusal> {
     if (named.length === 0 && before !== undefined) return false;
     const tool = args.str("tool") ?? before?.tool;
     const call = args.str("call") ?? before?.call;
-    const cause = args.str("cause") ?? before?.cause ?? (ask ? "" : undefined);
-    const root = args.str("root") ?? before?.root;
+    // A new first call brings its own list; the same command again without --call keeps the calls it had.
+    const more = args.str("call") === undefined ? (before?.more ?? []) : then;
+    // A draft's cause is the classifier's reason the hook recorded, and it stays with the commands it was about.
+    const ofDraft = draft === undefined || call === undefined ? undefined : args.str("call") === undefined && before !== undefined ? before.cause : partOfRefused(draft, [call, ...more]) ? draft.cause : "";
+    const cause = args.str("cause") ?? ofDraft ?? before?.cause ?? (ask ? "" : undefined);
+    const root = args.str("root") ?? before?.root ?? draft?.root;
 
     if (tool === undefined || call === undefined || cause === undefined || root === undefined) {
       return yield* refuse(
@@ -1490,12 +1505,17 @@ function setRefusal(run: Run, d: Decision): Effect.Effect<boolean, Refusal> {
     }
 
     const agentId = args.str("agent_id");
-    // A new first call brings its own list; the same command again without --call keeps the calls it had.
-    const more = args.str("call") === undefined ? (before?.more ?? []) : then;
-    const made = yield* makeRefusedCall({ tool, call, cause, root, more, agentId: agentId === undefined ? (before?.agent_id ?? null) : given(agentId) ? agentId : null });
+    const made = yield* makeRefusedCall({ tool, call, cause, root, more, ahead: ask, agentId: agentId === undefined ? (before?.agent_id ?? draft?.agent_id ?? null) : given(agentId) ? agentId : null });
     const refusal = { ...made, root: yield* sessionRootOf(run, made.root) };
     d.refusal = refusal;
     d.options = permissionOptions(refusal);
+
+    if (draft !== undefined && args.str("cause") === undefined && isAsk(refusal) && (before === undefined || !isAsk(before))) {
+      run.say(
+        `${d.ref ?? d.id} asks for a command that is not one of the commands of the call auto mode refused (refusal draft ${draft.id}): ` +
+          "its card says it was asked before running and shows no classifier's reason, which was about the other call.",
+      );
+    }
 
     return before === undefined || !sameRefusal(before, refusal);
   });
@@ -1503,11 +1523,11 @@ function setRefusal(run: Run, d: Decision): Effect.Effect<boolean, Refusal> {
 
 /** What an ask carries from its first command: the coordinator's recommendation, so the user never sees it as
  * "waiting for the coordinator to explain". */
-function checkAsk(d: Decision): Step$ {
-  if (d.refusal === undefined || d.refusal === null || !isAsk(d.refusal) || given(d.recommend ?? undefined)) return Effect.void;
+function checkAsk(d: Decision, worded = false): Step$ {
+  if (d.refusal === undefined || d.refusal === null || !(isAsk(d.refusal) || worded) || given(d.recommend ?? undefined)) return Effect.void;
 
   return refuse(
-    "a permission asked before its call ran carries your recommendation: give --recommend allow-once|deny and --reason, " +
+    `a permission ${worded ? "you word from a refusal draft" : "asked before its call ran"} carries your recommendation: give --recommend allow-once|deny and --reason, ` +
       "with --title (the plain question), --why and, for what the user needs to judge it (cost, risk, what a no means), --body FILE",
   );
 }
@@ -1813,6 +1833,190 @@ function notice(ledger: Ledger, run: Run, known: Decision | undefined): Effect.E
   });
 }
 
+/** What a tool's name may hold, as the harness gives it (`Bash`, `Write`, `mcp__server__tool`). */
+const TOOL_NAME = /^[A-Za-z0-9_.:-]{1,120}$/u;
+
+/**
+ * `decision ID --kind refusal --tool T --call C --cause WHY --root ROOT [--agent-id AID] [--agent W]`: the
+ * plugin's hook's record of a call auto mode refused. It opens no decision: the call becomes a draft in
+ * `refusals`, for the fleet's host, who is told at once in one fixed line and asks the user in its own words
+ * under the same id, or drops it. The same refusal again, while its draft or the decision that asked it is
+ * open, records nothing and tells no one twice.
+ */
+function draftRefusal(ledger: Ledger, run: Run, known: Decision | undefined, old?: Recorded): Effect.Effect<Ledger, Refusal> {
+  return Effect.gen(function* () {
+    const args = run.args;
+    const id = old?.id ?? args.str("id") ?? "";
+
+    if (known !== undefined) {
+      if (known.status !== "open") return yield* refuse(`${closedBecause(known)}. A refusal of the same call again is recorded under a new id`);
+      run.say(`${known.ref ?? known.id} is open and already asks about this call: nothing was recorded.`);
+
+      return ledger;
+    }
+
+    const before = (ledger.refusals ?? []).find((r) => r.id === id);
+
+    if (before?.status === "open") {
+      run.say(`refusal draft ${id} is open already: nothing was recorded, and its host ${before.told === false ? "will see it at its next state command or watch" : "was told when it opened"}.`);
+
+      return ledger;
+    }
+
+    if (before !== undefined) return yield* refuse(`refusal draft ${id} is already ${before.status}: ${before.resolution ?? "no reason recorded"}. A refusal of the same call again is recorded under a new id`);
+
+    if (!ID.test(id)) return yield* refuse(`decision id ${pyStr(id)} should be letters, digits, '_', '.', or '-'`);
+
+    if (old === undefined) yield* require(run, ["tool", "call", "cause", "root"], "refusal draft");
+    const tool = old?.tool ?? args.str("tool") ?? "";
+    const call = old?.call ?? args.str("call") ?? "";
+    const root = old?.root ?? args.str("root") ?? "";
+
+    if (!TOOL_NAME.test(tool)) return yield* refuse(`--tool is the tool's name as the harness gives it (letters, digits, '_', '.', ':' or '-'), got ${pyStr(tool)}`);
+
+    if (call.trim() === "") return yield* refuse("--call is the refused call: a Bash command as the harness saw it, or the tool's input as JSON");
+
+    if (!isAbsolute(root)) return yield* refuse(`--root is the session's project directory, an absolute path, got ${root}`);
+    const agentId = old === undefined ? args.str("agent_id") : old.agentId;
+    const named = old === undefined ? args.str("agent") : old.agent;
+    const row = (given(named) ? ledger.agents.find((a) => a.id === named) : undefined) ?? (given(agentId) ? ledger.agents.find((a) => a.task_id === agentId) : undefined);
+
+    const draft: RefusalDraft = {
+      id,
+      tool,
+      call,
+      cause: old?.cause ?? args.str("cause") ?? "",
+      root,
+      agent_id: given(agentId) ? (agentId ?? null) : null,
+      agent: row?.id ?? null,
+      opened: stamp(run),
+      status: "open",
+    };
+
+    (ledger.refusals ??= []).push(draft);
+    const who = callerOf(ledger, draft);
+    const host = ledger.role === "manager" ? "manager" : "coordinator";
+    log(run, ledger, { kind: "note", text: `Auto mode refused a ${tool} call of ${who} (${shown(draft.cause, 120)}): refusal draft ${id}, for the ${host} to word or drop. Nothing was asked of the user.`, agent: draft.agent ?? null });
+    run.say(`drafted ${id}: ${who}'s ${tool} call, for the ${host}. Nothing was asked of the user.`);
+    // A line that reaches neither the host's chat nor its session leaves the draft untold: its next watch or
+    // state command says the line, once.
+    run.tell(draftLine(FLEET_BIN, run.root, ledger, draft), () => {
+      draft.told = false;
+    });
+
+    return ledger;
+  });
+}
+
+/** What a record of a refused call gives, read from the words of a hook that wrote them as a card's. */
+interface Recorded {
+  readonly id: string;
+  readonly tool: string;
+  readonly call: string;
+  readonly cause: string;
+  readonly root: string;
+  readonly agentId: string | undefined;
+  readonly agent: string | undefined;
+}
+
+/** The id the plugin's hook gives a refused call (`_permission_id`): `p-<8 hex of sha1(caller, call)>`, then
+ * `-2`, `-3` and on. */
+const HOOK_ID = /^(p-[0-9a-f]{8})(?:-([1-9][0-9]*))?$/u;
+
+/** The words the hook wrote for a refused call before refusal drafts (tstack 1.9.44 and before), each a fixed
+ * form: the title `<who>: <tool> refused, <call>`, the why, and the manual of a Bash call no rule could hold
+ * or of another tool's call, its text in a fence. */
+const OLD_TITLE = /^(.{1,200}?): ([A-Za-z0-9_.:-]{1,120}) refused, /su;
+
+const OLD_WHY = /^Auto mode's classifier refused it \((.*)\), and only you can let it through\.$/su;
+
+const OLD_BASH = /^Run it yourself in bash, in the project \((\/[^\n]*)\):\n\n(`{3,})bash\n(.*)\n\2$/su;
+
+const OLD_OTHER = /^The ([A-Za-z0-9_.:-]{1,120}) call as the harness saw it, for you to make yourself:\n\n(`{3,})json\n(.*)\n\2$/su;
+
+const OLD_MANUAL = /^(?:Run it yourself in bash, in the project \(|The [A-Za-z0-9_.:-]{1,120} call as the harness saw it, for you to make yourself:)/u;
+
+/** JSON on one line, as the hook records another tool's input now; text that is no JSON as it is. */
+function compactJson(text: string): string {
+  return Option.match(parseJson(text), { onNone: () => text, onSome: (value) => JSON.stringify(value) });
+}
+
+/**
+ * The refused call in a command of the hook's from before refusal drafts, which a session keeps sending until
+ * it restarts: undefined for any other command. Matched, all of: a new id of the hook's own form
+ * ({@link HOOK_ID}); a call of any tool but Agent (a refused spawn opens its permission as before); and one of
+ *  - `--kind action` with the hook's fixed title, why and manual ({@link OLD_TITLE}, {@link OLD_WHY}, and
+ *    {@link OLD_BASH} or {@link OLD_OTHER}): the call is the manual's fenced text, the root the one the manual
+ *    names (for another tool's call, the hook's own `CLAUDE_PROJECT_DIR`, without which it is not matched);
+ *  - `--kind permission` with `--tool`, `--call`, `--cause` and `--root`, whose `--title` and `--why` are
+ *    absent or in the hook's fixed forms, and no `--recommend`, `--reason` or `--body`: a card the host words
+ *    names no cause, and a title or a why of its own is no form of the hook's.
+ * A host's own action has a manual and a title of its own words, so it is never one of these.
+ */
+function oldHookRecord(run: Run): Recorded | undefined {
+  const args = run.args;
+  const id = args.str("id") ?? "";
+  const kind = args.str("kind");
+
+  if (!HOOK_ID.test(id) || (kind !== "permission" && kind !== "action")) return undefined;
+  const title = OLD_TITLE.exec(args.str("title") ?? "");
+  const why = OLD_WHY.exec(args.str("why") ?? "");
+  const agent = args.str("agent");
+
+  if (kind === "permission") {
+    const [tool, call, cause, root] = [args.str("tool"), args.str("call"), args.str("cause"), args.str("root")];
+    const hosts = (args.str("title") !== undefined && title?.[2] !== tool) || (args.str("why") !== undefined && why === null) || ["recommend", "reason", "body"].some((k) => args.str(k) !== undefined);
+
+    return tool === undefined || tool === "Agent" || call === undefined || cause === undefined || root === undefined || hosts ? undefined : { id, tool, call, cause, root, agentId: args.str("agent_id"), agent };
+  }
+
+  if (title === null || why === null) return undefined;
+  const manual = args.str("manual") ?? "";
+  const agentId = /^subagent ([A-Za-z0-9_.:-]{1,120})$/u.exec(title[1] ?? "")?.[1];
+  const bash = OLD_BASH.exec(manual);
+
+  if (bash !== null) return title[2] === "Bash" ? { id, tool: "Bash", call: bash[3] ?? "", cause: why[1] ?? "", root: bash[1] ?? "", agentId, agent } : undefined;
+  const other = OLD_OTHER.exec(manual);
+  const project = run.machine.env("CLAUDE_PROJECT_DIR");
+
+  if (other === null || other[1] !== title[2] || project === undefined || !isAbsolute(project)) return undefined;
+
+  return { id, tool: other[1] ?? "", call: compactJson(other[3] ?? ""), cause: why[1] ?? "", root: project, agentId, agent };
+}
+
+/** Whether a `decision` command is the plugin's hook's record of a refused call, in any form it has had: the
+ * host's own commands never name a cause, and its manuals never open as the hook's did. */
+export function hooksRecord(args: Args): boolean {
+  return args.str("kind") === DRAFT_KIND || args.str("cause") !== undefined || OLD_MANUAL.test(args.str("manual") ?? "");
+}
+
+/** The id a record takes when the one the hook gave is a draft already closed: the hook's own rule
+ * (`_permission_id`), the first of ID, ID-2, ID-3 and on whose decision, else whose draft, is absent or open. A
+ * hook from before drafts reads the decisions alone, so it gives a dropped draft's id again. */
+function freeHookId(ledger: Ledger, id: string): string {
+  const found = HOOK_ID.exec(id);
+  const base = found?.[1] ?? id;
+
+  for (let n = Number(found?.[2] ?? "1"); ; n += 1) {
+    const candidate = n === 1 ? base : `${base}-${String(n)}`;
+    const status = findDecision(ledger, candidate)?.status ?? (ledger.refusals ?? []).find((r) => r.id === candidate)?.status ?? "open";
+
+    if (status === "open") return candidate;
+  }
+}
+
+/** `decision ID --withdraw WHY` on a refusal draft: the host drops it, with why (not needed, done another way). */
+function dropDraft(ledger: Ledger, run: Run, draft: RefusalDraft, why: string): Effect.Effect<Ledger, Refusal> {
+  if (why.trim() === "") return refuse(`--withdraw says why refusal draft ${draft.id} is dropped (not needed, done another way)`);
+  draft.status = "dropped";
+  draft.closed = stamp(run);
+  draft.resolution = why;
+  log(run, ledger, { kind: "resolved", text: `Refusal draft ${draft.id} (${callerOf(ledger, draft)}'s ${draft.tool} call) dropped: ${why}`, agent: draft.agent ?? null });
+  run.say(`dropped refusal draft ${draft.id}: nothing was asked of the user.`);
+
+  return Effect.succeed(ledger);
+}
+
 /** `decision`: open, revise, place, decide or withdraw a decision; one decided elsewhere is recorded closed. */
 export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
   return Effect.gen(function* () {
@@ -1831,11 +2035,36 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       return yield* refuse('--decide says what was chosen and --resolution how it came ("answered on the page (#14)", "said in the session")');
     }
 
+    if (args.str("kind") === DRAFT_KIND) return yield* draftRefusal(ledger, run, d);
+    // A session still running the hook from before refusal drafts sends its card: the same record, so a draft.
+    const old = d === undefined ? oldHookRecord(run) : undefined;
+
+    if (old !== undefined) {
+      const free = freeHookId(ledger, old.id);
+
+      return yield* draftRefusal(ledger, run, findDecision(ledger, free), { ...old, id: free });
+    }
+
     const agent = args.str("agent");
 
     if (given(agent) && !known(ledger, agent)) return yield* refuse(`unknown agent '${agent}'`);
     const options = args.list("option");
     const body = args.str("body");
+    // A refusal draft of this id: the host words it under the same id (below), or drops it.
+    const drafted = d === undefined ? openDraft(ledger, id) : undefined;
+
+    if (drafted !== undefined && withdraw !== undefined) return yield* dropDraft(ledger, run, drafted, withdraw);
+    // A dropped draft stays dropped: a decision under its id would read as its answer, and the hook's next
+    // refusal of the same call takes the next id.
+    const dropped = d === undefined ? (ledger.refusals ?? []).find((r) => r.id === id && r.status === "dropped") : undefined;
+
+    if (dropped !== undefined) return yield* refuse(`refusal draft ${id} was dropped (${dropped.resolution ?? "no reason recorded"}): it stays closed. Ask with a new id`);
+
+    if (drafted !== undefined && (decide !== undefined || hold !== undefined || unhold)) {
+      const { ask, drop } = draftCommands(FLEET_BIN, run.root, drafted);
+
+      return yield* refuse(`${id} is a refusal draft: nothing was asked of the user yet, so there is no answer to record or hold. Ask it in your words (${ask}), or drop it (${drop})`);
+    }
 
     if (d === undefined && (hold !== undefined || unhold)) return yield* refuse(`unknown decision '${id}'`);
 
@@ -1878,7 +2107,14 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
       const elsewhere = decide !== undefined;
       const kind = args.str("kind");
-      const ask = kind === "permission" && asksAhead(args, undefined);
+
+      if (drafted !== undefined && kind === "permission" && args.str("cause") !== undefined) {
+        return yield* refuse(`${id} is a refusal draft, and its cause is the classifier's reason the hook recorded: leave out --cause, and give the call, the title, the why and your recommendation`);
+      }
+
+      // Worded from a draft, a permission is the host's as an ask is: its title, why and recommendation in this command.
+      const worded = drafted !== undefined && kind === "permission";
+      const ask = kind === "permission" && (worded || asksAhead(args, undefined));
 
       if (ask && args.str("question") !== undefined) return yield* refuse(ASK_QUESTION);
       // A permission's title, question and why are written from its call (below); an ask's title and why are the coordinator's.
@@ -1893,7 +2129,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         question: args.str("question") ?? "",
         why: args.str("why") ?? null,
         blocking: args.flag("blocking"),
-        agent: given(agent) ? agent : null,
+        agent: given(agent) ? agent : (drafted?.agent ?? null),
         options: yield* parseOptions(options ?? []),
         recommend: args.str("recommend") ?? null,
         reason: args.str("reason") ?? null,
@@ -1920,17 +2156,17 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
       yield* placeOf(ledger, fresh, run);
 
-      yield* setRefusal(run, fresh);
-      const harness = fresh.kind === "permission" && harnessWrites(args);
+      yield* setRefusal(run, fresh, worded ? drafted : undefined);
+      const harness = fresh.kind === "permission" && (worded || harnessWrites(args));
 
-      if (harness) writePermissionWords(run, ledger, fresh);
+      if (harness) writePermissionWords(run, ledger, fresh, worded);
 
       if (!elsewhere) {
         yield* checkKind(fresh, true);
         yield* setBody(run, fresh);
 
         if (ask) {
-          yield* checkAsk(fresh);
+          yield* checkAsk(fresh, worded);
           yield* checkExplanation(run, fresh, true);
         }
 
@@ -1939,9 +2175,13 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
         if (advice !== undefined) run.warn(advice);
         const forManager = fresh.asks === "manager";
+        // The classifier's reason was about another call than the one asked for: the record keeps it, the card does not.
+        const elseRefused = worded && drafted !== undefined && fresh.refusal !== undefined && fresh.refusal !== null && isAsk(fresh.refusal);
         log(run, ledger, {
           kind: "asked",
-          text: `${forManager ? "For the manager: " : ""}${fresh.title ?? "None"}: ${fresh.question ?? "None"}`,
+          text:
+            `${forManager ? "For the manager: " : ""}${fresh.title ?? "None"}: ${fresh.question ?? "None"}` +
+            (elseRefused ? ` (worded from refusal draft ${drafted.id}; it asks for a command the refused call did not hold, and of that call auto mode said: ${shown(drafted.cause, 240)})` : ""),
           agent: fresh.agent ?? null,
           important: (fresh.blocking ?? false) && !forManager,
           decision: fresh.id,
@@ -1949,6 +2189,12 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       }
 
       rows.push(fresh);
+
+      if (drafted !== undefined) {
+        drafted.status = "asked";
+        drafted.closed = stamp(run);
+        drafted.resolution = `asked as ${fresh.kind === "permission" ? "a permission" : `a${/^[aeiou]/u.test(fresh.kind) ? "n" : ""} ${fresh.kind}`} of the same id`;
+      }
 
       if (!elsewhere) {
         run.say(
@@ -1980,8 +2226,11 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       // The hook's record of the same refusal again leaves the coordinator's words as they are; its own words
       // (title, question, why) are the CLI's to write from the call.
       const harness = kindNow === "permission" && harnessWrites(args);
-      const ask = harness && asksAhead(args, d.refusal ?? undefined);
-      const askedRow = d.kind === "permission" && d.refusal !== undefined && d.refusal !== null && isAsk(d.refusal);
+      // A permission the host worded from a refusal draft keeps the classifier's cause, and its words stay the host's.
+      const from = d.kind === "permission" && d.refusal !== undefined && d.refusal !== null ? askedDraft(ledger, d.id) : undefined;
+      const worded = from !== undefined;
+      const ask = harness && asksAhead(args, d.refusal ?? undefined, worded);
+      const askedRow = d.kind === "permission" && d.refusal !== undefined && d.refusal !== null && (isAsk(d.refusal) || worded);
       const checkedAs = kindNow === "permission" && (!harness || ask) ? "decision" : kindNow;
       const wasExplained = explained(d);
 
@@ -2044,7 +2293,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         changed.push("asks");
       }
 
-      if (yield* setRefusal(run, row)) {
+      if (yield* setRefusal(run, row, from, worded)) {
         changed.push("refusal");
 
         // The hook's new call drops what the coordinator wrote about the old one; an ask's own command carries its words.
@@ -2054,11 +2303,11 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         }
       }
 
-      if (harness && (ask || !explained(row))) changed.push(...writePermissionWords(run, ledger, row));
+      if (harness && (ask || !explained(row))) changed.push(...writePermissionWords(run, ledger, row, ask && worded));
       yield* checkKind(row, args.str("manual") !== undefined || row.kind !== kindBefore);
       yield* setBody(run, row);
 
-      if (ask) yield* checkAsk(row);
+      if (ask) yield* checkAsk(row, worded);
       yield* checkExplanation(run, row, wasExplained || ask);
 
       if (!harness || ask) for (const warning of readabilityWarnings(row, writtenFields(args), run.root, workersOf(ledger))) run.warn(warning);

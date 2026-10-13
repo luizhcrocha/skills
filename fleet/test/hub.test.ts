@@ -2355,6 +2355,28 @@ describe("a permission's answer grants the call once", () => {
     expect(readdirSync(join(session, ".claude"))).toEqual(["settings.local.json"]);
   });
 
+  test("a refusal draft is no decision: an answer to its id grants nothing, and the permission its host words from it is granted as any other", async () => {
+    // What the hook records now: the whole compound command the worker ran, for the host and not for the user.
+    const draft = { id: "p-1a2b3c4d", tool: "Bash", call: `cd ${session} && jj edit kx && ${CALL} && jj st`, cause: "[Git Destructive]", root: session, agent_id: "agent-7f", agent: "a1", opened: "2026-01-01T00:00:00+00:00", status: "open" };
+    writeState(root, [{ id: "a1", name: "notes-impl" }], { decisions: [], refusals: [draft] });
+    await start();
+    const early = await post(allow);
+    expect([early.status, early.body["error"], grants(), existsSync(settings), readChat(root)]).toEqual([400, "unknown decision 'p-1a2b3c4d'", [], false, []]);
+    const state = await request("GET", "/f/p/state.json");
+    expect([state.status, asArray(state.body["decisions"]) ?? []]).toEqual([200, []]);
+
+    const asked = fleet(
+      ["state", root, "decision", "p-1a2b3c4d", "--kind", "permission", "--tool", "Bash", "--call", CALL, "--root", session, "--title", "Replace main with the rebased stack?", "--why", "It overwrites main on the remote. A no leaves the stack unpushed.", "--recommend", "allow-once", "--reason", "the stack passed the gate", "--no-render"],
+      env,
+    );
+
+    expect(asked.code, asked.stderr).toBe(0);
+    const sent = await post(allow);
+    expect([sent.status, sent.body["decision"]]).toEqual([201, "p-1a2b3c4d"]);
+    expect(grants().map((g) => [g["op"], g["rule"], g["agent_id"], g["file"]])).toEqual([["grant", RULE, "agent-7f", settings]]);
+    expect(readFileSync(settings, "utf8")).toBe(`${JSON.stringify({ permissions: { allow: [RULE] } }, null, 2)}\n`);
+  });
+
   test("an answer whose ride-along batch is refused grants nothing", async () => {
     await start();
     const bad = await post({ ...allow, batch: { text: "1 mark", marks: { decision: { id: "p-1a2b3c4d", title: "t", revision: "r" }, at: { hash: "#decision/p-1a2b3c4d" }, items: [] } } });

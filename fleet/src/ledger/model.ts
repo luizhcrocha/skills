@@ -221,6 +221,34 @@ export interface Link {
   ref?: string;
 }
 
+/** A tool call auto mode refused, recorded by the plugin's hook for the fleet's host and not for the user
+ * (SPEC.md "Permission grants", A refusal is a draft first): the host asks the user with a decision of its own
+ * words under the same id, or drops it. It is no decision: nothing that lists what waits on the user reads it. */
+export interface RefusalDraft {
+  id: string;
+  /** The tool as the harness named it. */
+  tool: string;
+  /** A Bash command as the harness saw it; any other tool's input as JSON. The hook cuts one past its limit. */
+  call: string;
+  /** The classifier's reason. */
+  cause: string;
+  /** The session's project directory. */
+  root: string;
+  /** The harness's id of the subagent that made the call; null for the session's main thread. */
+  agent_id: string | null;
+  /** The worker row the call came from, when the ledger has one. */
+  agent?: string | null;
+  opened: string;
+  /** `open`, `asked` (a decision of the same id put it to the user) or `dropped`. */
+  status: string;
+  closed?: string | null;
+  /** Why it was dropped, or what asked it. */
+  resolution?: string | null;
+  /** `false` while the line that tells the host of it reached neither its chat nor its session: the host's
+   * next watch or state command says the line, once. Absent when the host was told. */
+  told?: boolean;
+}
+
 /** What must outlive a compaction. */
 export interface Kept {
   id: string;
@@ -246,6 +274,8 @@ export interface Ledger {
   links?: Link[];
   kept?: Kept[];
   approvals?: Approval[];
+  /** The calls auto mode refused that the host has yet to word or drop, and the ones it did; absent when none was. */
+  refusals?: RefusalDraft[];
   /** How the fleet's workers share the repository: `shared` (one working copy) or `isolated` (a jj workspace
    * each, the default when absent). `set --workspaces` writes it. */
   workspace_mode?: string;
@@ -258,7 +288,7 @@ interface Origin {
 }
 
 /** Any row of the ledger, the ledger included. */
-export type Row = Step | Milestone | Agent | Roadblock | Choice | Question | RefusedCall | Decision | LedgerEvent | Link | Kept | Approval | Ledger;
+export type Row = Step | Milestone | Agent | Roadblock | Choice | Question | RefusedCall | Decision | LedgerEvent | Link | Kept | Approval | RefusalDraft | Ledger;
 
 const origins = new WeakMap<Row, Origin>();
 
@@ -850,6 +880,27 @@ function readApproval(object: JsonObject): Fields | Approval {
   return f.done(row, APPROVAL_KEYS);
 }
 
+const DRAFT_KEYS = ["id", "tool", "call", "cause", "root", "agent_id", "agent", "opened", "status", "closed", "resolution", "told"] as const;
+
+function readDraft(object: JsonObject): Fields | RefusalDraft {
+  const f = new Fields(object, `refusal ${asString(object["id"]) ?? "?"}`);
+
+  const row: RefusalDraft = {
+    id: f.str("id"),
+    tool: f.str("tool"),
+    call: f.str("call"),
+    cause: f.str("cause"),
+    root: f.str("root"),
+    agent_id: f.strOrNull("agent_id"),
+    opened: f.str("opened"),
+    status: f.str("status"),
+  };
+
+  present(row, { agent: f.nullStr("agent"), closed: f.nullStr("closed"), resolution: f.nullStr("resolution"), told: f.optBool("told") });
+
+  return f.done(row, DRAFT_KEYS);
+}
+
 /** The keys of a ledger, in the order a new one has them. */
 export const LEDGER_KEYS = [
   "role",
@@ -869,6 +920,7 @@ export const LEDGER_KEYS = [
   "kept",
   "workspace_mode",
   "approvals",
+  "refusals",
 ] as const;
 
 const REQUIRED: ReadonlyArray<readonly [string, "str" | "list"]> = [
@@ -917,6 +969,7 @@ export function decodeLedger(object: JsonObject): Ledger | Refusal {
     kept: f.rows("kept", readKept),
     workspace_mode: f.optStr("workspace_mode"),
     approvals: f.rows("approvals", readApproval),
+    refusals: f.rows("refusals", readDraft),
   });
   const done = f.done(row, LEDGER_KEYS);
 
@@ -997,6 +1050,7 @@ export function encodeLedger(ledger: Ledger): Encoded {
       links: ledger.links?.map((l) => encodeRow(l, { ...l })),
       kept: ledger.kept?.map((k) => encodeRow(k, { ...k })),
       approvals: ledger.approvals?.map(encodeApproval),
+      refusals: ledger.refusals?.map((r) => encodeRow(r, { ...r })),
     },
   );
 }

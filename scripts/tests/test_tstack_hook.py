@@ -1510,6 +1510,11 @@ with open(os.environ["STAND_IN_LOG"], "a") as f:
 if os.environ.get("STAND_IN_FAIL"):
     sys.stderr.write("refused: " + os.environ["STAND_IN_FAIL"] + "\\n")
     sys.exit(2)
+# As the CLI answers a refusal it recorded as a new draft; STAND_IN_KNOWN is the same refusal again.
+if "refusal" in sys.argv and not os.environ.get("STAND_IN_KNOWN"):
+    sys.stdout.write("drafted " + sys.argv[4] + ": a worker's call, for the coordinator. Nothing was asked of the user.\\n")
+if os.environ.get("STAND_IN_UNTOLD"):
+    sys.stderr.write("state: could not tell the coordinator: " + os.environ["STAND_IN_UNTOLD"] + "\\n")
 """
 
 
@@ -1577,22 +1582,31 @@ class RefusalCase(FleetCase):
 
 
 class PermissionDeniedTest(RefusalCase):
-    """fleet_permission_denied: a refused call opens the permission item (or an action) through the fleet CLI."""
+    """fleet_permission_denied: a refused call is recorded through the fleet CLI as a refusal draft for the fleet's
+    host, with no words of the hook's and nothing for the user; an Agent spawn opens its permission, as before."""
 
-    def test_a_workers_bash_refusal_opens_a_permission(self):
+    WORDS = ("--title", "--question", "--why", "--manual", "--option", "--recommend", "--blocking", "--asks")
+
+    def test_a_workers_bash_refusal_is_a_draft_for_the_host_and_nothing_for_the_user(self):
         self.refuse(agent_id="ab12cd34")
         positionals, opts = self.only()
         self.assertEqual(positionals, ["state", str(self.fleet), "decision", self.expected_id("ab12cd34", self.PUSH)])
-        self.assertEqual(opts["--kind"], "permission")
+        self.assertEqual(opts["--kind"], "refusal")
         self.assertEqual((opts["--tool"], opts["--call"], opts["--cause"], opts["--root"]),
                          ("Bash", self.PUSH, "[Git Destructive]", str(self.project)))
-        self.assertEqual((opts["--agent-id"], opts["--agent"], opts["--blocking"]), ("ab12cd34", "a2", True))
-        self.assertIn("a2", opts["--title"])
-        self.assertIn(self.PUSH, opts["--title"])
-        self.assertNotIn("\n", opts["--question"])
-        self.assertTrue(opts["--question"].endswith("?"), opts["--question"])
-        self.assertIn("[Git Destructive]", opts["--why"])
-        for absent in ("--manual", "--option", "--recommend"):
+        self.assertEqual((opts["--agent-id"], opts["--agent"]), ("ab12cd34", "a2"))
+        for absent in self.WORDS:  # the hook writes no title, no question, no why and no manual: the host words it
+            self.assertNotIn(absent, opts)
+
+    def test_the_real_case_is_recorded_whole_and_not_handed_to_the_user(self):
+        # card p-db7f9e47 (2026-10-13): a five-part compound, one part refused, opened on the user's page by the hook
+        # with a raw harness id in its title and the whole command as a bash manual to run by hand.
+        command = "cd /home/l/custom-mcp-servers-a268 && jj edit kx && jj abandon zq && jj new && jj st"
+        self.ledger(agents=[{"id": "w3", "name": "auth-impl", "task_id": "a90fde8c5abcc9bd3"}])
+        self.refuse(command=command, agent_id="a90fde8c5abcc9bd3", reason="[Irreversible Local Destruction] jj abandon")
+        _, opts = self.only()
+        self.assertEqual((opts["--kind"], opts["--call"], opts["--agent"]), ("refusal", command, "w3"))
+        for absent in self.WORDS:
             self.assertNotIn(absent, opts)
 
     def test_the_root_falls_back_to_the_inputs_cwd(self):
@@ -1612,7 +1626,7 @@ class PermissionDeniedTest(RefusalCase):
         self.assertNotIn("--agent", main)
         self.assertNotIn("--agent-id", main)
         self.assertEqual(self.recorded()[2][0][3], self.expected_id("main", self.PUSH))
-        self.assertIn("coordinator", main["--title"])
+        self.assertEqual(main["--kind"], "refusal")  # the host's own call takes the same path
 
     def test_the_same_caller_and_call_keep_one_id(self):
         self.refuse(agent_id="ab12cd34")
@@ -1638,25 +1652,35 @@ class PermissionDeniedTest(RefusalCase):
         for _, opts in self.recorded():
             self.assertNotIn("--supersedes", opts)
 
-    def test_a_call_no_exact_rule_can_hold_opens_an_action(self):
-        # A pipe too: no exact rule cleared a piped command (measured on Claude Code 2.1.296, four runs of four).
+    def test_a_draft_keeps_its_id_while_it_or_the_decision_that_asked_it_is_open(self):
+        base = self.expected_id("ab12cd34", self.PUSH)
+        agents = [{"id": "a2", "name": "a2", "task_id": "ab12cd34"}]
+        states = (
+            ({"refusals": [{"id": base, "status": "open"}]}, base),  # the draft, again: the CLI records nothing
+            ({"refusals": [{"id": base, "status": "dropped"}]}, f"{base}-2"),  # dropped: a new one
+            ({"refusals": [{"id": base, "status": "asked"}], "decisions": [{"id": base, "status": "open"}]}, base),
+            ({"refusals": [{"id": base, "status": "asked"}], "decisions": [{"id": base, "status": "decided"}]}, f"{base}-2"),
+            ({"refusals": [{"id": base, "status": "asked"}]}, f"{base}-2"),  # asked, its decision gone: closed
+            ({"refusals": [{"id": base, "status": "dropped"}, {"id": f"{base}-2", "status": "open"}]}, f"{base}-2"),
+            ({"refusals": "none", "decisions": [{"id": base, "status": "open"}]}, base),  # a card of the old shape
+        )
+        for fields, _ in states:
+            self.ledger(agents=agents, **fields)
+            self.refuse(agent_id="ab12cd34")
+        self.assertEqual([c[0][3] for c in self.recorded()], [expected for _, expected in states])
+
+    def test_a_call_no_exact_rule_can_hold_is_a_draft_as_the_harness_saw_it(self):
+        # Before: an action for the user, the whole command in a bash block to run by hand (four of them on 2026-10-12).
         for command in ("git push --force \\\n  origin HEAD:main", "rm -rf build/*", "printf 'a\\tb'", "echo a\rb",
-                        "tasks/deploy-worker --env production | tail -n 5",
-                        # What the user cannot read on the card as it runs: a look-alike letter, a hidden character,
-                        # a no-break space, a tab, a call past 2,000 characters, a space at its end.
-                        "bash tasks/d\u0435ploy.sh", "bash tasks/de\u200bploy.sh", "bash tasks/check.sh\u00a0--env production",
+                        "tasks/deploy-worker --env production | tail -n 5", "bash tasks/d\u0435ploy.sh",
                         "bash tasks/check.sh\t--env production", "bash tasks/check.sh " + "x" * 2000, "bash tasks/check.sh "):
             self.calls.unlink(missing_ok=True)
             self.refuse(agent_id="ab12cd34", command=command)
             positionals, opts = self.only()
-            self.assertEqual(opts["--kind"], "action")
+            self.assertEqual((opts["--kind"], opts["--tool"], opts["--call"]), ("refusal", "Bash", command))
             self.assertEqual(positionals[3], self.expected_id("ab12cd34", command))
-            # A bash fence: the call is bash, and a `nu` fence made the CLI refuse the item for its `&&` or `2>&1`.
-            self.assertEqual(opts["--manual"].split("```bash\n", 1)[1], command + "\n```")
-            self.assertIn("in bash", opts["--manual"])
-            self.assertEqual((opts["--agent"], opts["--blocking"]), ("a2", True))
-            self.assertIn("[Git Destructive]", opts["--why"])
-            for absent in ("--tool", "--call", "--cause", "--root", "--agent-id"):
+            self.assertEqual((opts["--agent"], opts["--cause"], opts["--root"]), ("a2", "[Git Destructive]", str(self.project)))
+            for absent in self.WORDS:
                 self.assertNotIn(absent, opts)
 
     def test_a_fleet_outside_the_scratchpad_is_found_by_the_registry(self):
@@ -1669,39 +1693,47 @@ class PermissionDeniedTest(RefusalCase):
         self.refuse()
         positionals, opts = self.only()
         self.assertEqual(positionals[:3], ["state", str(elsewhere), "decision"])
-        self.assertEqual(opts["--kind"], "permission")
+        self.assertEqual(opts["--kind"], "refusal")
         self.calls.unlink()
         self.register(elsewhere, session="another-session", id="infra")
         self.refuse()
         self.assertEqual(self.recorded(), [])
 
-    def test_another_tools_refusal_opens_an_action_with_its_input(self):
+    def test_another_tools_refusal_is_a_draft_with_its_input(self):
         written = {"file_path": "/x/.claude/settings.local.json", "content": "```\n{}\n```"}
         self.refuse(tool="Write", tool_input=written, agent_id="ab12cd34")
-        _, opts = self.only()
-        self.assertEqual(opts["--kind"], "action")
-        self.assertIn("Write", opts["--title"])
-        fence = "````"
-        body = opts["--manual"].split(fence + "json\n", 1)[1].rsplit("\n" + fence, 1)[0]
-        self.assertEqual(json.loads(body), written)
+        positionals, opts = self.only()
+        self.assertEqual((opts["--kind"], opts["--tool"]), ("refusal", "Write"))
+        self.assertEqual(json.loads(opts["--call"]), written)
+        self.assertEqual(positionals[3], self.expected_id("ab12cd34", "Write\n" + json.dumps(written, sort_keys=True)))
+        for absent in self.WORDS:
+            self.assertNotIn(absent, opts)
+
+    def test_a_long_input_is_cut_in_the_draft_and_the_id_is_of_the_whole(self):
+        written = {"file_path": "/x/report.html", "content": "x" * 20000}
+        self.refuse(tool="Write", tool_input=written)
+        positionals, opts = self.only()
+        whole = json.dumps(written, sort_keys=True, ensure_ascii=False)
+        self.assertEqual(opts["--call"], f"{whole[:4000]}… ({len(whole) - 4000} more characters, cut by the hook)")
+        self.assertEqual(positionals[3], self.expected_id("main", "Write\n" + json.dumps(written, sort_keys=True)))
 
     def test_an_agent_spawn_refusal_opens_a_permission_for_its_exact_input(self):
-        self.refuse(tool="Agent", tool_input=self.SPAWN)
+        self.refuse(tool="Agent", tool_input=self.SPAWN, agent_id="ab12cd34")
         positionals, opts = self.only()
         call = json.dumps(self.SPAWN, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-        self.assertEqual(positionals[3], self.expected_id("main", call))
+        self.assertEqual(positionals[3], self.expected_id("ab12cd34", call))
         self.assertEqual(opts["--kind"], "permission")
         self.assertEqual((opts["--tool"], opts["--call"], opts["--cause"], opts["--root"]),
                          ("Agent", call, "[Git Destructive]", str(self.project)))
-        self.assertIn("general-purpose: prod client count", opts["--title"])
-        self.assertNotIn("--agent-id", opts)
-        self.assertNotIn("--manual", opts)
+        # The worker by its id in the fleet, which the CLI words the title from; never the harness's id in a title.
+        self.assertEqual((opts["--agent"], opts["--agent-id"], opts["--blocking"]), ("a2", "ab12cd34", True))
+        for absent in ("--title", "--question", "--why", "--manual"):
+            self.assertNotIn(absent, opts)
 
-    def test_an_agent_call_with_no_input_opens_an_action(self):
+    def test_an_agent_call_with_no_input_is_a_draft(self):
         self.refuse(tool="Agent", tool_input={})
         _, opts = self.only()
-        self.assertEqual(opts["--kind"], "action")
-        self.assertNotIn("--tool", opts)
+        self.assertEqual((opts["--kind"], opts["--tool"], opts["--call"]), ("refusal", "Agent", "{}"))
 
     def test_a_value_that_looks_like_a_flag_stays_a_value(self):
         self.refuse(agent_id="ab12cd34", command="-rf")
@@ -1731,14 +1763,124 @@ class PermissionDeniedTest(RefusalCase):
         self.refuse(agent_id="ab12cd34", env={"TSTACK_FLEET_CLI": str(self.tmp / "no-such-cli")})
         self.assertIn("no-such-cli", self.log())
 
+    def test_a_host_that_could_not_be_told_is_logged(self):
+        self.refuse(agent_id="ab12cd34", env={"STAND_IN_UNTOLD": "the session is gone; its chat: EACCES"})
+        self.assertIn(f"{self.expected_id('ab12cd34', self.PUSH)} is in {self.fleet}'s ledger, and state: could not tell the "
+                      "coordinator: the session is gone; its chat: EACCES", self.log())
+
     def test_odd_input_never_breaks_it(self):
         for extra in ({"tool_input": ["x"]}, {"tool_input": {"command": 7}}, {"tool_name": None},
-                      {"agent_id": 5}, {"reason": None}, {"cwd": 3}):
+                      {"agent_id": 5}, {"reason": None}, {"cwd": 3}, {"tool_name": "a tool; rm -rf /"}):
             self.assertSilent(self.hook("PermissionDenied", {**self.payload("PermissionDenied", tool_name="Bash",
                                         tool_input={"command": "ls"}, reason="r"), **extra}))
+        self.assertEqual(self.recorded()[-1][1]["--tool"], "unnamed")  # a tool's name that is no name
         (self.fleet / "state.json").write_text('{"agents": "none"}')
         self.refuse(agent_id="ab12cd34")
         self.assertNotIn("--agent", self.recorded()[-1][1])
+
+
+class RefusalNoteTest(RefusalCase):
+    """The refused worker is told what happened at its next tool call: PermissionDenied reads only `retry` from a
+    hook, so the denial's own text cannot say that its host was told and that it goes on with other work."""
+
+    REST = ("The coordinator decides whether the user is asked, and nothing was asked yet. Do not repeat or reword {it}, "
+            "and take no other route to the same act. Report `blocked: <what you needed it for>` to the coordinator "
+            "(SendMessage), then go on with the work that does not need it. For a refused call this replaces your brief's "
+            "\"then end with your report\": end with your report when nothing else is left.")
+    NOTE = ("Fleet: auto mode refused your Bash call ([Git Destructive]). The plugin's hook told the coordinator at once, as "
+            "refusal draft {id}. " + REST.format(it="the call"))
+
+    def after(self, agent_id="ab12cd34", env=None, **extra):
+        payload = self.payload("PostToolUse", tool_name="Read", tool_input={"file_path": "/x/a.py"}, tool_use_id="toolu_11",
+                               tool_response={"ok": True}, **({"agent_id": agent_id} if agent_id else {}), **extra)
+        r = self.hook("PostToolUse", payload, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout else None
+
+    def test_the_worker_reads_it_once_beside_its_next_tool_call(self):
+        self.refuse(agent_id="ab12cd34")
+        self.assertIsNone(self.after(agent_id="ee55ee55"))  # another worker's call
+        self.assertIsNone(self.after(agent_id=None))  # the host hears its chat, not this note
+        self.assertEqual(self.after(), self.NOTE.format(id=self.expected_id("ab12cd34", self.PUSH)))
+        self.assertIsNone(self.after())
+        self.assertFalse((self.data / "sessions" / "sess-1.refusal-notes").exists())
+
+    def test_two_refusals_leave_one_note_that_names_every_draft_owed(self):
+        self.refuse(agent_id="ab12cd34", env={"FLEET_NOW": "2026-01-05T09:00:00+00:00"})
+        self.refuse(agent_id="ab12cd34", command="rm -rf build", reason="[Destructive]", env={"FLEET_NOW": "2026-01-05T09:00:05+00:00"})
+        self.refuse(agent_id="ee55ee55", command="rm -rf dist")  # another worker's: its own note
+        first, second = self.expected_id("ab12cd34", self.PUSH), self.expected_id("ab12cd34", "rm -rf build")
+        self.assertEqual(self.after(env={"FLEET_NOW": "2026-01-05T09:01:00+00:00"}),
+                         "Fleet: auto mode refused 2 of your calls. The plugin's hook told the coordinator at once, as "
+                         f"refusal drafts {first}, {second}. " + self.REST.format(it="them"))
+        self.assertIsNone(self.after())
+        self.assertIn(self.expected_id("ee55ee55", "rm -rf dist"), self.after(agent_id="ee55ee55"))
+        self.assertFalse((self.data / "sessions" / "sess-1.refusal-notes").exists())
+
+    def test_two_refusals_at_once_both_stay_owed(self):
+        from concurrent.futures import ThreadPoolExecutor
+        commands = [f"rm -rf build{n}" for n in range(6)]
+        with ThreadPoolExecutor(6) as pool:
+            list(pool.map(lambda c: self.refuse(agent_id="ab12cd34", command=c), commands))
+        note = self.after()
+        for command in commands:
+            self.assertIn(self.expected_id("ab12cd34", command), note)
+
+    def test_a_host_that_could_not_be_told_is_not_said_to_have_been(self):
+        self.refuse(agent_id="ab12cd34", env={"STAND_IN_UNTOLD": "its chat could not be written"})
+        draft = self.expected_id("ab12cd34", self.PUSH)
+        note = self.after()
+        self.assertEqual(note, f"Fleet: auto mode refused your Bash call ([Git Destructive]). It is refusal draft {draft}: the "
+                               "plugin's hook could not tell the coordinator at once, and the coordinator will see it at its "
+                               "next state command or watch. " + self.REST.format(it="the call"))
+        self.assertNotIn("told the coordinator at once", note)
+        # One told and one not: each is said as it went.
+        self.refuse(agent_id="ab12cd34", env={"FLEET_NOW": "2026-01-05T09:00:00+00:00"})
+        self.refuse(agent_id="ab12cd34", command="rm -rf build",
+                    env={"STAND_IN_UNTOLD": "x", "FLEET_NOW": "2026-01-05T09:00:05+00:00"})
+        other = self.expected_id("ab12cd34", "rm -rf build")
+        self.assertIn(f"The plugin's hook told the coordinator at once of refusal draft {draft}; of refusal draft {other} it "
+                      "could not, and the coordinator will see it at its next state command or watch.",
+                      self.after(env={"FLEET_NOW": "2026-01-05T09:01:00+00:00"}))
+
+    def test_a_worker_that_runs_as_its_own_session_reads_its_note(self):
+        worker = {"FLEET_WORKER": "a2", "FLEET_DIR": str(self.fleet)}
+        self.refuse(env=worker)  # no agent_id: the call is its session's main thread
+        _, opts = self.only()
+        self.assertEqual((opts.get("--agent-id"), opts["--agent"]), (None, "a2"))
+        self.assertIsNone(self.after(agent_id="ab12cd34", env=worker))  # a subagent of its own made no such call
+        self.assertEqual(self.after(agent_id=None, env=worker), self.NOTE.format(id=self.expected_id("main", self.PUSH)))
+        self.assertIsNone(self.after(agent_id=None, env=worker))
+
+    def test_a_managers_worker_is_told_of_the_manager(self):
+        self.ledger(role="manager", agents=[{"id": "a2", "name": "a2", "task_id": "ab12cd34"}])
+        self.refuse(agent_id="ab12cd34")
+        self.assertIn("told the manager at once", self.after())
+
+    def test_the_same_refusal_again_a_spawn_and_the_hosts_own_call_owe_none(self):
+        self.refuse(agent_id="ab12cd34", env={"STAND_IN_KNOWN": "1"})  # the draft was open: the worker was told then
+        self.refuse(agent_id="ab12cd34", tool="Agent", tool_input=self.SPAWN)  # a spawn asks the user at once
+        self.refuse()
+        self.assertIsNone(self.after())
+        self.assertIsNone(self.after(agent_id=None))
+        self.refuse(agent_id="ab12cd34", env={"STAND_IN_FAIL": "x"})  # nothing was recorded: nothing to tell
+        self.assertIsNone(self.after())
+
+    def test_a_note_half_an_hour_old_is_dropped_and_a_broken_one_is_silent(self):
+        self.refuse(agent_id="ab12cd34", env={"FLEET_NOW": "2026-01-05T09:00:00+00:00"})
+        self.assertIsNone(self.after(env={"FLEET_NOW": "2026-01-05T09:30:00+00:00"}))
+        self.refuse(agent_id="ab12cd34", command="ls -la")
+        (note,) = (self.data / "sessions" / "sess-1.refusal-notes").iterdir()
+        note.write_text("{broken")
+        self.assertIsNone(self.after())
+        self.assertNotIn("Traceback", self.log())
+
+    def test_two_tool_calls_that_end_at_once_read_it_once(self):
+        from concurrent.futures import ThreadPoolExecutor
+        self.refuse(agent_id="ab12cd34")
+        with ThreadPoolExecutor(6) as pool:
+            notes = list(pool.map(lambda _: self.after(), range(6)))
+        self.assertEqual(len([n for n in notes if n]), 1)
 
 
 class TransientRefusalTest(RefusalCase):
@@ -1781,16 +1923,14 @@ class TransientRefusalTest(RefusalCase):
         positionals, opts = self.only()
         call = "Artifact\n" + json.dumps(self.PAGE, sort_keys=True)
         self.assertEqual(positionals, ["state", str(self.fleet), "decision", self.expected_id("main", call)])
-        self.assertEqual(opts["--kind"], "action")
-        self.assertIn("Artifact refused", opts["--title"])
-        self.assertIn("Classifier unavailable", opts["--why"])
-        self.assertEqual(json.loads(opts["--manual"].split("```json\n", 1)[1].rsplit("\n```", 1)[0]), self.PAGE)
+        self.assertEqual((opts["--kind"], opts["--tool"], opts["--cause"]), ("refusal", "Artifact", "Classifier unavailable"))
+        self.assertEqual(json.loads(opts["--call"]), self.PAGE)
         self.transient()  # and a third revises the same open row
         self.assertEqual([c[0][3] for c in self.recorded()], [self.expected_id("main", call)] * 2)
 
     def test_a_refusal_that_judges_the_call_opens_at_once(self):
         self.refuse(tool="Artifact", tool_input=self.PAGE, reason="[Data Exfiltration] publishes a private file")
-        self.assertEqual(self.only()[1]["--kind"], "action")
+        self.assertEqual(self.only()[1]["--kind"], "refusal")
         self.assertIsNone(self.remembered())
 
     def test_a_verdict_whose_prose_holds_the_outage_words_is_a_verdict(self):
@@ -1813,7 +1953,9 @@ class TransientRefusalTest(RefusalCase):
         self.transient(tool="Bash", tool_input={"command": self.PUSH}, agent_id="ab12cd34")
         positionals, opts = self.only()
         self.assertEqual((positionals[3], opts["--kind"], opts["--cause"]),
-                         (self.expected_id("ab12cd34", self.PUSH), "permission", self.UNAVAILABLE))
+                         (self.expected_id("ab12cd34", self.PUSH), "refusal", self.UNAVAILABLE))
+        self.transient(tool="Agent", tool_input=self.SPAWN)  # the spawn's repeat opens its permission, as before
+        self.assertEqual(self.recorded()[-1][1]["--kind"], "permission")
 
     def test_another_call_or_another_caller_is_not_the_repeat(self):
         self.transient()

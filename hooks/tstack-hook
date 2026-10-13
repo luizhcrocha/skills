@@ -1195,38 +1195,36 @@ CLI_TIMEOUT_S = 25
 GRANT_TTL_S = 30 * 60
 SETTINGS_LOCK_WAIT_S = 2.0
 SETTINGS_LOCK_STALE_S = 10.0
-RULE_UNSAFE_CHARS = "\n\r*\\|"
 SETTINGS_LOCK_SHARED_WITH_HUB = ".settings.local.json.lock"
 # Auto mode drops Agent allow rules from the settings, so the hub writes an Agent grant here instead and
 # fleet_agent_grant lets the exact spawn through; permission.ts's grantFileOf names the same file.
 AGENT_GRANTS = "tstack-grants.json"
 GRANT_FILES = ("settings.local.json", AGENT_GRANTS)
 
-CALL_MAX_CHARS = 2000
+Refused = namedtuple("Refused", "tool call spawn kept agent_id reason root")
+
+# What a refusal draft keeps of a refused call: a Bash command past it is no call a permission can hold (2,000
+# characters), and another tool's input (a Write's whole file) is the host's to read in the session, not the ledger's.
+CALL_KEPT = 4000
 
 
-def _holdable(call):
-    """Whether an exact allow rule can hold a Bash call, and the user can read it whole on the card: permission.ts's
-    whyNoRule refuses the same calls (a newline, `*`, a backslash, a pipe, a character outside printable ASCII, more
-    than CALL_MAX_CHARS characters, a space at either end)."""
-    return (bool(call) and len(call) <= CALL_MAX_CHARS and call == call.strip(" ")
-            and not any(c in RULE_UNSAFE_CHARS or not " " <= c <= "~" for c in call))
-
-
-Refused = namedtuple("Refused", "tool call manual_unless_grantable agent_id reason root")
+def _statuses(ledger, key):
+    listed = ledger.get(key) if isinstance(ledger.get(key), list) else []
+    return {x["id"]: x.get("status") for x in listed if isinstance(x, dict) and isinstance(x.get("id"), str)}
 
 
 def _permission_id(ledger, agent_id, call):
-    """The refusal's decision id: p-<8 hex of sha1(caller, call)>, so a second refusal of the same call by
-    the same caller revises its open row; when that row is closed, the first of -2, -3 ... absent or open."""
+    """The refusal's id: p-<8 hex of sha1(caller, call)>, so a second refusal of the same call by the same caller
+    is its open draft, or the open decision that asked it, again; when that is closed (the decision decided or
+    withdrawn, the draft dropped), the first of -2, -3 ... absent or open. A decision and the draft it came from
+    share the id, and the decision's status is the one that counts."""
     import hashlib
     base = "p-" + hashlib.sha1(f"{agent_id or 'main'}\n{call}".encode()).hexdigest()[:8]
-    listed = ledger.get("decisions") if isinstance(ledger.get("decisions"), list) else []
-    status = {x["id"]: x.get("status") for x in listed if isinstance(x, dict) and isinstance(x.get("id"), str)}
+    decisions, drafts = _statuses(ledger, "decisions"), _statuses(ledger, "refusals")
     n = 1
     while True:
         candidate = base if n == 1 else f"{base}-{n}"
-        if status.get(candidate, "open") == "open":
+        if decisions.get(candidate, drafts.get(candidate, "open")) == "open":
             return candidate
         n += 1
 
@@ -1239,12 +1237,6 @@ def _refused_worker(ledger, agent_id, env):
         if agent_id and isinstance(row, dict) and row.get("task_id") == agent_id and isinstance(row.get("id"), str):
             return row["id"]
     return env.get("FLEET_WORKER") or None
-
-
-def _fenced(lang, text):
-    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
-    fence = "`" * max(3, longest + 1)
-    return f"{fence}{lang}\n{text}\n{fence}"
 
 
 def _agent_call(tool_input):
@@ -1362,7 +1354,116 @@ def fleet_refusal_forgotten(hook):
     return None
 
 
+REFUSAL_NOTES = "refusal-notes"
+REFUSAL_NOTE_S = 30 * 60
+# What a refused worker reads beside its next tool call. The last sentence is for a worker whose brief says to
+# report "blocked" and then end with its report: one refused call does not end the work that needs none.
+REFUSAL_NOTE = ("Fleet: auto mode refused {what}. {heard}. The {host} decides whether the user is asked, and nothing was "
+                "asked yet. Do not repeat or reword {it}, and take no other route to the same act. Report `blocked: <what "
+                "you needed it for>` to the {host} (SendMessage), then go on with the work that does not need it. For a "
+                "refused call this replaces your brief's \"then end with your report\": end with your report when "
+                "nothing else is left.")
+
+
+def _refusal_notes(hook):
+    """Where a session keeps what it owes a refused caller: one file per caller and draft, the notes it reads at its
+    next tool call. PermissionDenied reads only `retry` from a hook, so the denial's own text cannot say it."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", hook.session_id) or "unknown"
+    return hook.data_dir / "sessions" / f"{safe}.{REFUSAL_NOTES}"
+
+
+def _noted_caller(hook, agent_id):
+    """Whose note a refusal is: a subagent by the harness's id; `main` for a worker that runs as its own session
+    ($FLEET_WORKER); None for a host's main thread, which hears the host's line itself."""
+    if isinstance(agent_id, str) and agent_id:
+        return agent_id
+    return "main" if hook.env.get("FLEET_WORKER") else None
+
+
+def _owe_note(hook, r, d, draft_id, told):
+    """Remember the note for the caller whose call was refused: one file per draft, so two refusals at once (the
+    event runs async) both stay owed. `told` is whether the CLI reached the host with its line."""
+    caller = _noted_caller(hook, r.agent_id)
+    if not caller or not hook.session_id:
+        return
+    folder = _refusal_notes(hook)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{_refusal_key(caller, '')}.{re.sub(r'[^A-Za-z0-9_.-]', '_', draft_id)}"
+        tmp = path.with_name(f".{path.name}.{os.getpid()}")
+        tmp.write_text(json.dumps({"at": fleet_now(hook.env), "tool": r.tool, "reason": _one_line(r.reason, 120),
+                                   "id": draft_id, "host": fleet_role(read_ledger(d)), "told": bool(told)}))
+        os.replace(tmp, path)
+    except OSError as e:
+        log(hook.data_dir, f"{hook.event} fleet_permission_denied: the note for the refused worker cannot be kept ({e})")
+
+
+def _listed(ids):
+    return f"refusal draft {ids[0]}" if len(ids) == 1 else f"refusal drafts {', '.join(ids)}"
+
+
+def _refusal_note(notes):
+    """The one note for every draft still owed to a caller: one call by its tool and reason, several by their ids
+    alone. It says the host was told only of the drafts the CLI did tell it of."""
+    host = "manager" if notes[-1].get("host") == "manager" else "coordinator"
+    ids = [_one_line(n.get("id") or "", 60) for n in notes]
+    heard = [i for i, n in zip(ids, notes) if n.get("told") is not False]
+    unheard = [i for i in ids if i not in heard]
+    one = len(notes) == 1
+    later = f"the {host} will see {'it' if len(unheard) == 1 else 'them'} at its next state command or watch"
+    if not unheard:
+        heard_words = f"The plugin's hook told the {host} at once, as {_listed(ids)}"
+    elif not heard:
+        heard_words = f"{'It is' if one else 'They are'} {_listed(ids)}: the plugin's hook could not tell the {host} at once, and {later}"
+    else:
+        heard_words = (f"The plugin's hook told the {host} at once of {_listed(heard)}; of {_listed(unheard)} it could "
+                       f"not, and {later}")
+    what = (f"your {_one_line(notes[0].get('tool') or 'tool', 80)} call ({_one_line(notes[0].get('reason') or '', 120)})"
+            if one else f"{len(notes)} of your calls")
+    return REFUSAL_NOTE.format(what=what, heard=heard_words, host=host, it="the call" if one else "them")
+
+
+def fleet_refusal_note(hook):
+    """PostToolUse: a caller whose call auto mode refused reads, beside the result of its next tool call, what
+    happened to the refusal: its host was told (or will see it), nothing was asked of the user, it reports `blocked:`
+    and goes on. Every draft still owed to it is in the one note. Told once; one stat when the session owes none."""
+    caller = _noted_caller(hook, hook.input.get("agent_id"))
+    if not hook.session_id or not caller:
+        return None
+    folder = _refusal_notes(hook)
+    if not folder.is_dir():
+        return None
+    prefix = f"{_refusal_key(caller, '')}."
+    notes = []
+    try:
+        owed = sorted(p for p in folder.iterdir() if p.name.startswith(prefix))
+    except OSError:
+        return None
+    for path in owed:
+        taken = path.with_name(f".{path.name}.read.{os.getpid()}")
+        try:
+            os.replace(path, taken)  # atomic: of two tool calls that end at once, one reads the note
+            note = json.loads(taken.read_text())
+            taken.unlink()
+        except (OSError, ValueError):
+            continue
+        if isinstance(note, dict) and isinstance(note.get("at"), (int, float)) \
+                and fleet_now(hook.env) - note["at"] < REFUSAL_NOTE_S:
+            notes.append(note)
+    try:
+        folder.rmdir()
+    except OSError:  # it still owes others
+        pass
+    if not notes:
+        return None
+    return _refusal_note(sorted(notes, key=lambda n: n["at"]))
+
+
 def fleet_permission_denied(hook):
+    """PermissionDenied: a call auto mode refused is recorded in every fleet of the session. A Bash command and a
+    call of any other tool become a refusal draft for the fleet's host (fleet/SPEC.md, Permission grants): the CLI
+    records it and tells the host at once, and nothing is opened for the user until the host asks in its own words.
+    An Agent spawn opens its permission as before: the user allows that exact spawn once from the page."""
     dirs = grant_dirs(hook)
     if not dirs:
         return None
@@ -1378,16 +1479,14 @@ def fleet_permission_denied(hook):
         log(hook.data_dir, f"{hook.event} fleet_permission_denied: a transient refusal of {tool} ({_one_line(reason, 120)}); "
                            f"nothing opened unless the same call is refused again")
         return None
-    if tool == "Bash" and isinstance(tool_input.get("command"), str):
-        grantable = _holdable(call)
-        # The call is bash as the harness saw it: a `nu` fence would be checked as nushell, and refused for its `&&`.
-        manual = None if grantable else f"Run it yourself in bash, in the project ({root}):\n\n{_fenced('bash', call)}"
-    elif tool == "Agent" and tool_input:
-        manual = None
+    spawn = tool == "Agent" and bool(tool_input)
+    if spawn or (tool == "Bash" and isinstance(tool_input.get("command"), str)):
+        kept = call
     else:
-        shown = json.dumps(tool_input, indent=2, ensure_ascii=False)
-        manual = f"The {tool} call as the harness saw it, for you to make yourself:\n\n{_fenced('json', shown)}"
-    refused = Refused(tool, call, manual, agent_id, reason, root)
+        kept = json.dumps(tool_input, sort_keys=True, ensure_ascii=False)
+    if not spawn and len(kept) > CALL_KEPT:
+        kept = f"{kept[:CALL_KEPT]}… ({len(kept) - CALL_KEPT} more characters, cut by the hook)"
+    refused = Refused(tool, call, spawn, kept, agent_id, reason, root)
     for d in dirs:
         try:
             _open_refusal(hook, d, refused)
@@ -1401,32 +1500,26 @@ def _open_refusal(hook, d, r):
     cli = hook.env.get("TSTACK_FLEET_CLI") or fleet_cli()
     ledger = read_ledger(d) or {}
     worker = _refused_worker(ledger, r.agent_id, hook.env)
-    grantable = r.manual_unless_grantable is None
-    who = worker or (f"subagent {r.agent_id}" if r.agent_id else fleet_role(ledger))
-    shown = r.call if r.tool == "Bash" else r.tool
-    if r.tool == "Agent" and grantable:
-        spawn = json.loads(r.call)
-        shown = f'{spawn.get("subagent_type") or "general-purpose"}: {spawn.get("description") or spawn.get("prompt")}'
-    argv = [cli, "state", d, "decision", _permission_id(ledger, r.agent_id, r.call),
-            *_option("--kind", "permission" if grantable else "action"),
-            *_option("--title", f"{who}: {r.tool} refused, {_one_line(shown, 70)}"),
-            *_option("--question", f"Let {who} run this exact call once?" if grantable
-                     else f"The harness refused {who}'s {r.tool} call; will you make it yourself?"),
-            *_option("--why", f"Auto mode's classifier refused it ({r.reason}), and only you can let it through."),
-            "--blocking"]
-    if grantable:
-        argv += [*_option("--tool", r.tool), *_option("--call", r.call), *_option("--cause", r.reason),
-                 *_option("--root", r.root)]
-        if r.agent_id:
-            argv += _option("--agent-id", r.agent_id)
-    else:
-        argv += _option("--manual", r.manual_unless_grantable)
+    refusal_id = _permission_id(ledger, r.agent_id, r.call)
+    # The words are the CLI's (a spawn's title, from its input) or the host's (a draft has none): the hook writes none.
+    argv = [cli, "state", d, "decision", refusal_id, *_option("--kind", "permission" if r.spawn else "refusal"),
+            *_option("--tool", r.tool if re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", r.tool) else "unnamed"),
+            *_option("--call", r.kept or "{}"), *_option("--cause", r.reason), *_option("--root", r.root)]
+    if r.spawn:
+        argv.append("--blocking")
+    if r.agent_id:
+        argv += _option("--agent-id", r.agent_id)
     if worker:
         argv += _option("--agent", worker)
     done = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=dict(hook.env), check=False,
                           timeout=CLI_TIMEOUT_S)
     if done.returncode:
         raise RuntimeError(f"{cli} state exited {done.returncode}: {(done.stderr or done.stdout).strip()}")
+    untold = "could not tell the " in done.stderr
+    if untold:
+        log(hook.data_dir, f"{hook.event} fleet_permission_denied: {refusal_id} is in {d}'s ledger, and {done.stderr.strip()}")
+    if not r.spawn and done.stdout.startswith(f"drafted {refusal_id}:"):
+        _owe_note(hook, r, d, refusal_id, told=not untold)
 
 
 def _grant_file(value):
@@ -3387,7 +3480,7 @@ HANDLERS = {
     "PreCompact": [memo_precompact],
     "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, land_turn_gate, suite_gate, onepw_hold, fleet_monitor_watch,
                    fleet_grant_alone],
-    "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_chat_nudge, onepw_watch],
+    "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_refusal_note, fleet_chat_nudge, onepw_watch],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep, onepw_watch],
     "PermissionDenied": [fleet_permission_denied],
     "SubagentStart": [fleet_heartbeat],

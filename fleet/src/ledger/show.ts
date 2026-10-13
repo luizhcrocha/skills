@@ -6,6 +6,7 @@ import { answeredGrill, failedAnswer, failureWords } from "../health.ts";
 import { pyRepr } from "../json.ts";
 import { approvalLine, EVENT_KINDS, MODELS, NEEDS, SEVERITIES, SKILLS } from "./commands.ts";
 import { linkKind } from "./links.ts";
+import { callerOf, openDrafts, shown } from "./refusal-draft.ts";
 import type { Ledger } from "./model.ts";
 import { EFFORTS } from "./roles.ts";
 import { AGENT_STATUSES, ASKS, SHARED_KINDS, STATUSES, STEP_STATUSES, WORKSPACE_MODES } from "./validate.ts";
@@ -102,6 +103,11 @@ export function showLines(ledger: Ledger, said: readonly Message[] = []): string
     const answer = d.answer ?? "";
     const outcome = answer !== "" ? answer : (d.resolution ?? "");
     lines.push(`  ${d.ref ?? ""} decision ${d.id} ${status} [${d.kind}] ${d.title ?? "None"}${outcome === "" ? "" : `: ${outcome}`}`);
+  }
+
+  // The calls auto mode refused that the host has yet to word or drop: no decision, so nothing above lists them.
+  for (const r of openDrafts(ledger)) {
+    lines.push(`  refusal draft ${r.id} OPEN, for the ${ledger.role === "manager" ? "manager" : "coordinator"} [${r.tool}] ${callerOf(ledger, r)}: ${shown(r.call, 120)} (${shown(r.cause, 80)})`);
   }
 
   for (const l of ledger.links ?? []) {

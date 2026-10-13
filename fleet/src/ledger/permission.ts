@@ -1,8 +1,9 @@
 /**
  * A permission (TypeScript's alone, SPEC.md "Permission grants"): a tool call the user may let through once.
- * The plugin's hook opens one for a call the harness refused in auto mode, with the call as the harness saw
- * it; a coordinator opens one before it runs a call the user must say yes to (an ask: no cause, and up to
- * MAX_CALLS exact commands, each granted once). This module makes the row's refusal and its two options, and
+ * The plugin's hook opens one for an Agent spawn the harness refused in auto mode, with the call as the
+ * harness saw it; a host words one from the refusal draft of any other refused call (refusal-draft.ts: the
+ * classifier's cause, the host's words); a coordinator opens one before it runs a call the user must say yes
+ * to (an ask: no cause, and up to MAX_CALLS exact commands, each granted once). This module makes the row's refusal and its two options, and
  * holds the one rule both the CLI and the hub check a call against: an exact allow rule, `Bash(<call>)`, and
  * only for a call it can express; or, for a spawn, `Agent(<its input as JSON>)`, which the plugin's
  * PreToolUse hook matches (auto mode drops Agent allow rules from the settings, and a hook's allow is what
@@ -31,7 +32,7 @@ const GRANT_TTL_MIN = 30;
 export const GRANT_TTL_MS = GRANT_TTL_MIN * 60_000;
 
 /** The longest Bash call a permission holds: the user reads it whole, wrapped, on a phone (about a screen and a
- * half at 390 px); a longer one is a script. The hook's CALL_MAX_CHARS is the same. */
+ * half at 390 px); a longer one is a script. */
 export const MAX_CALL_CHARS = 2000;
 
 /** The most exact commands one permission asks for: a deploy sequence (build, migrate, deploy, check), read
@@ -78,8 +79,8 @@ export function isAsk(r: Pick<RefusedCall, "cause">): boolean {
 }
 
 /** Why no exact rule can let `tool`'s `call` through and be read by the user as what runs, or undefined when
- * one can. An Agent call is its input as a JSON object, which the hook alone matches. For Bash the hook's
- * `_holdable` refuses the same calls: a newline ends a rule, a `*` would match more than the call, a backslash
+ * one can. An Agent call is its input as a JSON object, which the hook alone matches. For Bash: a newline
+ * ends a rule, a `*` would match more than the call, a backslash
  * starts an escape in Claude Code's rule parser, so the rule would not match the call, and no exact rule cleared
  * a piped command (measured on Claude Code 2.1.296, four runs of four; `&&`, `;`, an assignment, `$( )` and
  * `2>&1` cleared). A character outside printable ASCII is one the user cannot tell from what it imitates (a
@@ -126,8 +127,9 @@ const INTERPRETERS: readonly string[] = ["bash", "sh", "node", "python", "python
 const LEADERS: readonly string[] = ["{", "!", "if", "then", "else", "elif", "do", "while", "until", "time", "nice", "nohup", "command", "builtin", "noglob", "exec", "env", "timeout", "stdbuf"];
 
 /** The words of each simple command of a Bash call a permission can hold (no backslash, pipe or newline): split
- * on `;`, `&&`, `||`, `&` and the parentheses of a group outside quotes, each word without its quotes. */
-function simpleCommands(call: string): string[][] {
+ * on `;`, `&&`, `||`, `&` and the parentheses of a group outside quotes, each word without its quotes. With
+ * `anyCall`, for a call as the harness saw it, a pipe and a newline end a command too. */
+export function simpleCommands(call: string, anyCall = false): string[][] {
   const commands: string[][] = [];
   let words: string[] = [];
   let word: string | undefined;
@@ -153,6 +155,7 @@ function simpleCommands(call: string): string[][] {
       quote = c;
       word ??= "";
     } else if (c === " " || c === "\t") endWord();
+    else if (anyCall && (c === "|" || c === "\n" || c === "\r")) endCommand();
     else if (c === ";" || c === "(" || c === ")" || (c === "&" && call[at - 1] !== ">" && call[at - 1] !== "<" && call[at + 1] !== ">")) endCommand();
     else word = (word ?? "") + c;
   }
@@ -258,6 +261,9 @@ export interface RefusedGiven {
   readonly agentId: string | null;
   /** The further calls an ask carries, each granted once with the first (`--then`); none for one call. */
   readonly more?: readonly string[];
+  /** The host wrote the call itself, from a refusal draft: with a cause, it is still held to what an ask is
+   * (`whyNoAsks`), since the user allows what they read and this text never ran into the classifier. */
+  readonly ahead?: boolean;
 }
 
 /** Why the calls of a permission cannot be asked for together, or undefined: each one an exact rule can hold,
@@ -302,7 +308,7 @@ export function makeRefusedCall(given: RefusedGiven): Effect.Effect<RefusedCall,
   if (!PERMISSION_TOOLS.includes(given.tool)) return Effect.fail(stateRefusal(`a permission handles ${PERMISSION_TOOLS.join(" and ")} alone, got --tool ${given.tool}`));
   const more = given.more ?? [];
   const calls = [given.call, ...more];
-  const why = whyNoCalls(given.tool, calls) ?? (given.tool === "Bash" && given.cause === "" ? whyNoAsks(calls) : undefined);
+  const why = whyNoCalls(given.tool, calls) ?? (given.tool === "Bash" && (given.cause === "" || given.ahead === true) ? whyNoAsks(calls) : undefined);
 
   if (why !== undefined) return Effect.fail(stateRefusal(given.tool === "Bash" && why.startsWith("no permission for ") ? `${why}. ${SUPPORTED_FORM}` : why));
 

@@ -16,7 +16,8 @@ import { readObject } from "../registry.ts";
 import { callsLine, refusalRev } from "./permission.ts";
 import { showHidden } from "./permission-words.ts";
 import { secondsNow, type Machine } from "../world.ts";
-import { copyLedger, decodeLedger, type Ledger } from "./model.ts";
+import { copyLedger, decodeLedger, type Ledger, type RefusalDraft } from "./model.ts";
+import { DRAFT_REMIND_S, openDrafts } from "./refusal-draft.ts";
 import { lanesMeet } from "./lanes.ts";
 import { findDecision, number } from "./numbers.ts";
 
@@ -168,15 +169,59 @@ export function unrecorded(ledger: Ledger, said: readonly Message[]): string[] {
   return lines;
 }
 
-/** When the fleet is set done with decisions still open: each is withdrawn with its reason, or named in
- * the last message as left open on purpose. */
-export function leftOpen(ledger: Ledger, settingDone: boolean): string | undefined {
-  const still = settingDone ? (ledger.decisions ?? []).filter((d) => d.status === "open").map((d) => (d.ref !== undefined && d.ref !== "" ? d.ref : d.id)) : [];
+/** The seconds a refusal draft may stay open before it is pointed out: FLEET_REFUSAL_REMIND_S, else {@link DRAFT_REMIND_S}. */
+export function draftRemindS(env: (name: string) => string | undefined): number {
+  const given = Number(env("FLEET_REFUSAL_REMIND_S"));
 
-  if (still.length === 0) return undefined;
+  return env("FLEET_REFUSAL_REMIND_S") === undefined || Number.isNaN(given) ? DRAFT_REMIND_S : given;
+}
+
+/** The refusal drafts of `ledger` the host has left open for {@link draftRemindS}, each with the minutes it waited. */
+export function staleDrafts(machine: Machine, ledger: Ledger): { readonly draft: RefusalDraft; readonly minutes: number }[] {
+  const now = secondsNow(machine);
+  const after = draftRemindS(machine.env);
+
+  return openDrafts(ledger).flatMap((draft) => {
+    const at = parseInstant(draft.opened);
+    const waited = at === undefined ? undefined : now - at / 1000;
+
+    return waited === undefined || waited < after ? [] : [{ draft, minutes: Math.floor(waited / 60) }];
+  });
+}
+
+/** The refusal drafts left open that long, in one line whatever their number: nothing reaches the user from one
+ * by time alone, so every state command says how many wait, their ids and where to read them, until the host
+ * asks each in its own words or drops it. `show` lists each with its call; the watch's reminder carries the
+ * two commands. */
+export function draftsLeft(machine: Machine, ledger: Ledger, dir: string): string | undefined {
+  const stale = staleDrafts(machine, ledger);
+  const [first] = stale;
+
+  if (first === undefined) return undefined;
+  const longest = Math.max(...stale.map((s) => s.minutes));
+  const what = stale.length === 1 ? `refusal draft ${first.draft.id} has waited ${String(longest)} min` : `${String(stale.length)} refusal drafts (${stale.map((s) => s.draft.id).join(", ")}) have waited up to ${String(longest)} min`;
 
   return (
-    `state: the fleet is done with ${still.join(", ")} still open: withdraw each with its reason ` +
+    `state: ${what}: nothing was asked of the user, and nothing will be until you ask. See ${stale.length === 1 ? "it" : "them"} with \`fleet state ${dir} show\`, ` +
+    `then ask each in your words (\`decision ID --kind permission ...\`) or drop it (\`decision ID --withdraw "why"\`).`
+  );
+}
+
+/** The open refusal drafts whose line reached neither the host's chat nor its session (`told: false`). */
+export function untoldDrafts(ledger: Ledger): RefusalDraft[] {
+  return openDrafts(ledger).filter((r) => r.told === false);
+}
+
+/** When the fleet is set done with decisions or refusal drafts still open: each decision is withdrawn with its
+ * reason, each draft asked or dropped, or named in the last message as left open on purpose. */
+export function leftOpen(ledger: Ledger, settingDone: boolean): string | undefined {
+  const still = settingDone ? (ledger.decisions ?? []).filter((d) => d.status === "open").map((d) => (d.ref !== undefined && d.ref !== "" ? d.ref : d.id)) : [];
+  const drafts = settingDone ? openDrafts(ledger).map((r) => `refusal draft ${r.id}`) : [];
+
+  if (still.length === 0 && drafts.length === 0) return undefined;
+
+  return (
+    `state: the fleet is done with ${[...still, ...drafts].join(", ")} still open: withdraw each with its reason ` +
     `(\`decision ID --withdraw "why"\`), or name it in your last message as left open on purpose.`
   );
 }
