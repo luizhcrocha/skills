@@ -14,6 +14,7 @@ import { listening, type Listening } from "../chat/chat.ts";
 import { resolvePath } from "../files.ts";
 import { answeredAt, isoOf, silentWorkers } from "../health.ts";
 import { asArray, asNumber, asObject, asString, truthy, type Json, type JsonObject } from "../json.ts";
+import { gateOf } from "../gate.ts";
 import { readObject, type Entry } from "../registry.ts";
 import { workerActivity } from "../heartbeat.ts";
 import { activeAt, SpendReader, type Spent } from "../transcripts.ts";
@@ -497,7 +498,7 @@ function ledgerView(machine: Machine, lookups: Lookups, given: JsonObject, rootG
       ...state,
       coordinators: others.map((e) => summary(machine, lookups, e)),
       usage: readUsage(registry.place.home) ?? null,
-      gate: registry.gate(machine.now()) ?? null,
+      gate: gateOf(registry).head(machine.now()) ?? null,
       links,
       found: foundJson(unlisted(lookups.discovered(), links)),
     };

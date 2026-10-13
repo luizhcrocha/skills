@@ -546,6 +546,65 @@ describe("the gate", () => {
     expect(timedOut.code).toBe(1);
     expect(timedOut.stderr).toContain("held by w2 (no fleet)");
   });
+
+  test("takes with --mem share the budget: two quarters of the RAM hold at once, and a third is refused with both", () => {
+    const a = cliAt("2026-10-05T12:00:00+00:00", "gate", "take", "infra", "build A", "--mem", "25%");
+    expect(a.code).toBe(0);
+    expect(cliAt("2026-10-05T12:01:00+00:00", "gate", "take", "--as", "w1", "build B", "--mem", "25%", "--for", "30").code).toBe(0);
+
+    for (const mem of [["--mem", "25%"], []]) {
+      const refused = cliAt("2026-10-05T12:02:00+00:00", "gate", "take", "ui", "build C", ...mem);
+      expect(refused.code).toBe(1);
+      expect(refused.stderr).toMatch(
+        /^fleets: held by infra since 2026-10-05T12:00:00\+00:00, until 2026-10-05T13:00:00\+00:00, cap [\d.]+[MG]: build A; held by w1 \(no fleet\) since 2026-10-05T12:01:00\+00:00, until 2026-10-05T12:31:00\+00:00, cap [\d.]+[MG]: build B; take it when `fleet fleets gate` says free\n$/,
+      );
+    }
+
+    const lines = cliAt("2026-10-05T12:02:00+00:00", "gate").stdout.split("\n");
+    expect(lines[0]).toMatch(/^held by infra since \S+, until \S+, cap [\d.]+[MG]: build A$/);
+    expect(lines[1]).toMatch(/^held by w1 \(no fleet\) since \S+, until \S+, cap [\d.]+[MG]: build B$/);
+    expect(lines[2]).toMatch(/^budget ([\d.]+[MG]) \(50%\): \1 held, 0B free$/);
+    expect(lines.slice(3)).toEqual([""]);
+
+    // An older fleet reads one hold there, by nobody it can free: held until the last hold's until.
+    expect(readJson(join(base, "registry", "gate", "gate.json"))).toMatchObject({ kind: "session", since: "2026-10-05T12:00:00+00:00", until: "2026-10-05T13:00:00+00:00", v: 2 });
+    expect(cliAt("2026-10-05T12:03:00+00:00", "gate", "free", "nobody").stderr).toBe("fleets: held by infra, w1, not nobody\n");
+    expect(cliAt("2026-10-05T12:03:00+00:00", "gate", "free", tokenOf(a)).stdout).toBe("free\n");
+    expect(cliAt("2026-10-05T12:04:00+00:00", "gate").stdout).toMatch(/^held by w1 \(no fleet\) .*\nbudget \S+ \(50%\): (\S+) held, \1 free\n$/);
+    expect(cliAt("2026-10-05T12:04:00+00:00", "gate", "take", "ui", "build C", "--mem", "25%").code).toBe(0);
+    expect(cliAt("2026-10-05T12:31:00+00:00", "gate").stdout).toMatch(/^held by ui since /);
+  });
+
+  test("a --mem over the budget or unreadable is refused, and $FLEET_GATE_MEMORY_BUDGET sets the budget", () => {
+    expect(cli("gate", "take", "infra", "build", "--mem", "60%").stderr).toMatch(/^fleets: --mem 60% \(\S+\) is more than the budget of all holds together, 50% \(\S+\)\n$/);
+    expect(cli("gate", "take", "infra", "build", "--mem", "lots").stderr).toBe("fleets: cannot read --mem 'lots': give a share of the RAM (25%) or a size (24G), 64M at least\n");
+    expect(cli("gate", "take", "infra", "build", "--mem").stderr).toContain("usage: fleet fleets gate");
+    expect(cli("gate").stdout).toBe("free\n");
+    expect(fleet(["fleets", "gate", "take", "infra", "build", "--mem", "60%"], { ...env, FLEET_GATE_MEMORY_BUDGET: "75%" }).code).toBe(0);
+    expect(JSON.parse(fleet(["fleets", "gate", "--json"], { ...env, FLEET_GATE_MEMORY_BUDGET: "2G" }).stdout)).toMatchObject({
+      budget: { spec: "2G", bytes: 2 * 1024 ** 3 },
+      holders: [{ name: "infra", kind: "fleet", what: "build" }],
+      queue: [],
+      day: null,
+    });
+  });
+
+  test("six takes of a quarter at once: exactly two win, whatever the order", async () => {
+    for (let round = 0; round < 5; round += 1) {
+      const takers = Array.from({ length: 6 }, (_, i) =>
+        Bun.spawn([FLEET, "fleets", "gate", "take", "--as", `t${String(i)}-${String(round)}`, "race", "--mem", "25%"], { env, stdout: "pipe", stderr: "pipe" }),
+      );
+
+      const codes = await Promise.all(takers.map(async (p) => p.exited));
+      expect(codes.filter((c) => c === 0).length).toBe(2);
+      const said = await Promise.all(takers.map(async (p) => new Response(p.stdout).text()));
+      const tokens = said.flatMap((text) => /fleet fleets gate free (\S+)`/.exec(text)?.[1] ?? []);
+      expect(tokens.length).toBe(2);
+
+      for (const token of tokens) expect(cli("gate", "free", token).code).toBe(0);
+      expect(cli("gate").stdout).toBe("free\n");
+    }
+  });
 });
 
 describe("a fleet served again by a restarted session", () => {

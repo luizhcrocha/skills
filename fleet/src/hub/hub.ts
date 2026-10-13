@@ -51,6 +51,7 @@ import { pick, readLedger } from "../preview/updater.ts";
 import { readRecord, recordPath, type DevServer } from "../preview/record.ts";
 import { PreviewError } from "../errors.ts";
 import { summary, view, type Lookups } from "../page/view.ts";
+import { gateOf } from "../gate.ts";
 import { pidOfEntry, type Entry } from "../registry.ts";
 import { SpendReader } from "../transcripts.ts";
 import { readUsage } from "../usage.ts";
@@ -586,7 +587,7 @@ export class Hub {
     return {
       machines: [{ name: here, here: true, fleets: local }, ...peers],
       usage: readUsage(registry.place.home) ?? null,
-      gate: registry.gate(this.options.machine.now()) ?? null,
+      gate: gateOf(registry).head(this.options.machine.now()) ?? null,
       found: this.served.latest().map((x) => ({ ...x })),
     };
   }

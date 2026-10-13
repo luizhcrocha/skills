@@ -13,19 +13,21 @@ import { listening, oneLine, type Listening } from "../chat/chat.ts";
 import { linkKind } from "../ledger/links.ts";
 import { firstLine } from "../chat/news.ts";
 import { readChat } from "../chat/store.ts";
+import { parseInstant } from "../clock.ts";
 import { Refusal } from "../errors.ts";
 import { exists, isDir, readText, resolvePath } from "../files.ts";
 import { answeredAt, silentWorkers } from "../health.ts";
 import { Out, recordingOut } from "../io.ts";
-import { asArray, asNumber, asObject, asString, pyRepr, truthy, type Json, type JsonObject } from "../json.ts";
+import { asArray, asNumber, asObject, asString, dumps, pyRepr, truthy, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { decodeLedger } from "../ledger/model.ts";
 import { find, number } from "../ledger/numbers.ts";
+import { budgetOf, capBytes, endOf, gateOf, holdText, memTotal, plain, roomOf, sizeText, type Ask, type Budget, type Day, type GateHolder, type Standing, type Waiting } from "../gate.ts";
 import { gateRun, RUN_USAGE, runArgs } from "../gate-run.ts";
 import { processes } from "../procs.ts";
 import { approvalSource, NoSource, parseSource, sameSource } from "../ledger/approvals.ts";
 import { parseLedger, type Approval } from "../ledger/model.ts";
 import { findDecision } from "../ledger/numbers.ts";
-import { stateOf, type Entry, type GateHolder } from "../registry.ts";
+import { stateOf, type Entry } from "../registry.ts";
 import { stateCli } from "./state.ts";
 import { activeAt, spentBy } from "../transcripts.ts";
 import { World, type Machine } from "../world.ts";
@@ -458,17 +460,11 @@ function decision(machine: Machine, fleet: string, id: string): Effect.Effect<vo
   });
 }
 
-function heldText(held: JsonObject): string {
-  const who = held["kind"] === "session" ? `${str(held["fleet"])} (no fleet)` : str(held["fleet"]);
-  const until = truthy(held["until"]) ? `, until ${str(held["until"])}` : "";
-
-  return `held by ${who} since ${str(held["since"])}${until}: ${str(held["what"])}`;
-}
-
-// The usage lines are the oracle traces' (and the Python twin's) byte for byte: `gate run` prints its own (RUN_USAGE).
+// The usage lines are the oracle traces' (and the Python twin's) byte for byte: `gate run` prints its own (RUN_USAGE),
+// and `gate --json` and `gate take --mem` are SPEC's.
 const GATE_USAGE = "usage: fleet fleets gate | gate take FLEET|--as NAME WHAT [--for MINUTES] [--wait SECONDS] | gate free TOKEN";
 
-/** How long a hold lasts when `--for` does not say: a dead holder frees the slot after this. */
+/** How long a hold lasts when `--for` does not say: a dead holder frees its part of the gate after this. */
 const HOLD_MINUTES = 60;
 
 interface Take {
@@ -476,42 +472,94 @@ interface Take {
   readonly what: string;
   readonly minutes: number;
   readonly waitS: number;
+  /** The part of the budget it asks for (`--mem`); undefined is all of it. */
+  readonly mem: string | undefined;
 }
 
-/** `gate take`'s arguments: `FLEET WHAT` or `--as NAME WHAT`, then `--for MINUTES` and `--wait SECONDS`. */
+/** `gate take`'s arguments: `FLEET WHAT` or `--as NAME WHAT`, then `--for MINUTES`, `--wait SECONDS` and `--mem SIZE|PERCENT`. */
 function takeArgs(argv: readonly string[]): Take | undefined {
   const words: string[] = [];
   let as: string | undefined;
   let minutes = HOLD_MINUTES;
   let waitS = 0;
+  let mem: string | undefined;
 
   for (let i = 0; i < argv.length; i += 1) {
     const word = argv[i] ?? "";
     const value = argv[i + 1];
 
-    if (word === "--as" || word === "--for" || word === "--wait") {
+    if (word === "--as" || word === "--for" || word === "--wait" || word === "--mem") {
       if (value === undefined) return undefined;
       i += 1;
 
       if (word === "--as") as = value.trim();
       else if (word === "--for") minutes = /^[0-9]+$/.test(value) ? Number(value) : 0;
-      else waitS = /^[0-9]+$/.test(value) ? Number(value) : -1;
+      else if (word === "--wait") waitS = /^[0-9]+$/.test(value) ? Number(value) : -1;
+      else mem = value.trim();
     } else {
       words.push(word);
     }
   }
 
-  if (minutes <= 0 || waitS < 0 || as === "") return undefined;
+  if (minutes <= 0 || waitS < 0 || as === "" || mem === "") return undefined;
 
-  if (as !== undefined) return words.length === 1 ? { holder: { name: as, kind: "session" }, what: words[0] ?? "", minutes, waitS } : undefined;
+  if (as !== undefined) return words.length === 1 ? { holder: { name: as, kind: "session" }, what: words[0] ?? "", minutes, waitS, mem } : undefined;
 
-  return words.length === 2 ? { holder: { name: words[0] ?? "", kind: "fleet" }, what: words[1] ?? "", minutes, waitS } : undefined;
+  return words.length === 2 ? { holder: { name: words[0] ?? "", kind: "fleet" }, what: words[1] ?? "", minutes, waitS, mem } : undefined;
+}
+
+/** Seconds from the stamp `since` to `now`. */
+function secondsSince(since: string, now: Date): number {
+  return Math.max(0, Math.round((now.getTime() - (parseInstant(since) ?? now.getTime())) / 1000));
+}
+
+function capText(cap: number | undefined): string {
+  return cap === undefined ? "the whole budget" : sizeText(cap);
+}
+
+/** `fleet fleets gate`: `free`, or a line per hold; then the budget when a hold takes a part of it, the queue in
+ * order, and the last day's runs in a line when there were any. */
+function gateLines(standing: Standing, budget: Budget | undefined, day: Day | undefined, now: Date): string[] {
+  const { holders, queue } = standing;
+  // The room all holds share: the smallest budget any holder read, and this caller's.
+  const room = budget === undefined ? undefined : roomOf(budget.bytes, holders);
+  const held = holders.reduce((sum, h) => sum + (h.cap ?? room ?? 0), 0);
+
+  return [
+    ...(holders.length === 0 ? ["free"] : holders.map(holdText)),
+    ...(budget !== undefined && room !== undefined && holders.some((h) => h.cap !== undefined)
+      ? [`budget ${sizeText(room)}${room === budget.bytes ? ` (${budget.spec})` : ""}: ${sizeText(held)} held, ${sizeText(Math.max(0, room - held))} free`]
+      : []),
+    ...queue.map((w, i) => `queue ${String(i + 1)}: ${w.kind === "session" ? `${plain(w.name)} (no fleet)` : plain(w.name)}, ${capText(w.cap)}, waiting ${String(secondsSince(w.since, now))}s: ${plain(w.what)}`),
+    ...(day === undefined ? [] : [
+      `last 24 h: ${String(day.runs)} runs, wait median ${String(day.medianWait)}s, p90 ${String(day.p90Wait)}s, memory peak max ${day.maxPeak === undefined ? "unknown" : sizeText(day.maxPeak)}` +
+        `${day.gaveUp > 0 ? `, ${String(day.gaveUp)} gave up waiting` : ""}${day.capped > 0 ? `, ${String(day.capped)} hit the cap` : ""}`,
+    ]),
+  ];
+}
+
+/** `fleet fleets gate --json`: the same, for a page or a script. Sizes are bytes, waits seconds. */
+function gateJson(standing: Standing, budget: Budget | undefined, day: Day | undefined, now: Date): JsonOut {
+  return {
+    budget: budget === undefined ? null : { spec: budget.spec, bytes: budget.bytes },
+    holders: standing.holders.map((h) => ({ name: h.name, kind: h.kind, what: h.what, since: h.since, until: h.until ?? null, cap: h.cap ?? null, budget: h.budget ?? null, pid: h.pid ?? null, runner: h.runner ?? null, unit: h.unit ?? h.runnerUnit ?? null })),
+    queue: standing.queue.map((w, i) => ({ place: i + 1, name: w.name, kind: w.kind, what: w.what, cap: w.cap ?? null, since: w.since, waited: secondsSince(w.since, now), pid: w.pid })),
+    day: day === undefined ? null : { runs: day.runs, gave_up: day.gaveUp, median_wait: day.medianWait, p90_wait: day.p90Wait, max_peak: day.maxPeak ?? null, capped: day.capped },
+  };
+}
+
+/** Why a take waits or is refused, in words: each hold, then who is before it in the queue. */
+function waitingText(waiting: Waiting): string {
+  const ahead = waiting.ahead.length === 0 ? [] : [`${String(waiting.ahead.length)} before it in the queue (${waiting.ahead.map((w) => plain(w.name)).join(", ")})`];
+
+  return [...waiting.holders.map(holdText), ...ahead].join("; ");
 }
 
 function gate(machine: Machine, argv: readonly string[]): Effect.Effect<void | number, Refusal, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
     const registry = machine.registry;
+    const slot = gateOf(registry);
     const [what, key] = argv;
 
     if (what === "run") {
@@ -522,9 +570,13 @@ function gate(machine: Machine, argv: readonly string[]): Effect.Effect<void | n
       return yield* Effect.promise(() => gateRun(machine, ask, (line) => out.err(`${line}\n`)));
     }
 
-    if (argv.length === 0) {
-      const held = registry.gate(machine.now());
-      out.out(`${held === undefined ? "free" : heldText(held)}\n`);
+    if (argv.length === 0 || (argv.length === 1 && what === "--json")) {
+      const now = machine.now();
+      const standing = slot.standing(now);
+      const budget = budgetOf(machine.env);
+      const day = slot.day(now);
+
+      out.out(what === "--json" ? `${dumps(gateJson(standing, budget, day, now))}\n` : `${gateLines(standing, budget, day, now).join("\n")}\n`);
     } else if (what === "take") {
       const take = takeArgs(argv.slice(1));
 
@@ -534,22 +586,52 @@ function gate(machine: Machine, argv: readonly string[]): Effect.Effect<void | n
         return yield* fail(`no fleet '${take.holder.name}' is being served`);
       }
 
-      const deadline = Date.now() + take.waitS * 1000;
-      let result = registry.takeGate(take.holder, take.what, machine.now(), take.minutes);
+      const budget = budgetOf(machine.env);
 
-      while ("held" in result && Date.now() < deadline) {
-        Bun.sleepSync(Math.min(1000, Math.max(0, deadline - Date.now())));
-        result = registry.takeGate(take.holder, take.what, machine.now(), take.minutes);
+      if (budget === undefined) return yield* fail(`cannot read the budget $FLEET_GATE_MEMORY_BUDGET='${machine.env("FLEET_GATE_MEMORY_BUDGET") ?? ""}': give a share of the RAM (50%) or a size (24G), 64M at least`);
+      const cap = take.mem === undefined ? undefined : capBytes(take.mem, memTotal());
+
+      if (take.mem !== undefined && cap === undefined) return yield* fail(`cannot read --mem '${take.mem}': give a share of the RAM (25%) or a size (24G), 64M at least`);
+
+      if (cap !== undefined && cap > budget.bytes) {
+        return yield* fail(`--mem ${take.mem ?? ""} (${sizeText(cap)}) is more than the budget of all holds together, ${budget.spec} (${sizeText(budget.bytes)})`);
       }
 
-      if ("held" in result) return yield* fail(`${heldText(result.held)}; take it when \`fleet fleets gate\` says free`);
-      const token = str(result.took["token"]);
-      out.out(`${take.holder.name} holds the gate: ${take.what}\n`);
-      out.out(`token ${token}, until ${str(result.took["until"])}: free it with \`fleet fleets gate free ${token}\`\n`);
-    } else if (what === "free" && key !== undefined && argv.length === 2) {
-      const result = registry.freeGate(key, machine.now());
+      const ask: Ask = { holder: take.holder, what: take.what, seconds: take.minutes * 60, cap, budget: budget.bytes, pid: process.pid, runs: false, waitS: take.waitS };
+      const deadline = Date.now() + take.waitS * 1000;
+      let result = slot.ask(ask, machine.now());
 
-      if ("held" in result) return yield* fail(`held by ${str(result.held["fleet"])}, not ${key}`);
+      while ("waiting" in result && Date.now() < deadline) {
+        Bun.sleepSync(Math.min(1000, Math.max(0, deadline - Date.now())));
+        result = slot.ask(ask, machine.now());
+      }
+
+      if ("waiting" in result) {
+        slot.leave(process.pid, machine.now());
+
+        return yield* fail(`${waitingText(result.waiting)}; take it when \`fleet fleets gate\` says free`);
+      }
+
+      const token = result.took.token ?? "";
+      out.out(`${plain(take.holder.name)} holds the gate: ${plain(take.what)}\n`);
+      out.out(`token ${token}, until ${result.took.until ?? ""}: free it with \`fleet fleets gate free ${token}\`\n`);
+    } else if (what === "free" && key !== undefined && argv.length === 2) {
+      const result = slot.free(key, machine.now());
+
+      if ("held" in result) return yield* fail(`held by ${result.held.map((h) => plain(h.name)).join(", ")}, not ${key}`);
+
+      if ("running" in result) {
+        // The run still holds its memory: its hold, or the one taken by hand it runs under, goes when the run does.
+        // A scope is stopped by its name, whoever has its runner's pid by now; a run without one by its runner.
+        const ends = result.running.flatMap((h) => endOf(h) ?? []);
+
+        return yield* fail(
+          `${result.running.map((h) => `${plain(h.name)}'s gate run (pid ${String(h.pid ?? h.runner)}) is still going: ${plain(h.what)}`).join("; ")}; ` +
+            `a run's hold is freed when the run ends. ` +
+            (ends.length === 0 ? "It is ending: ask again in a moment" : `To end it, with every process it started: \`${ends.join("; ")}\``),
+        );
+      }
+
       out.out("free\n");
     } else {
       return yield* fail(GATE_USAGE);
