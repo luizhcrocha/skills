@@ -2477,6 +2477,375 @@ class GrantAloneTest(GrantCase):
             self.assertTrue(out is None or out["permissionDecision"] == "deny", out)
 
 
+class MonitorWatchTest(GrantCase):
+    """fleet_monitor_watch (PreToolUse, Monitor): auto mode judges a Bash command and not a Monitor one, so in a session
+    that works for a fleet a Monitor command passes only as a watch (the fleet CLI watching, or commands that only read,
+    wait or print, with nothing decided when it runs) or as the exact call of a standing one-time grant. Anything else
+    is denied; outside a fleet, and for Bash, the rule says nothing. It never allows."""
+
+    NOW = "2026-01-05T09:05:00+00:00"
+    DEPLOY = "just deploy"  # a stand-in: no test runs a command, the hook only reads it
+
+    def setUp(self):
+        super().setUp()
+        self.env["CLAUDE_PROJECT_DIR"] = str(self.settings.parent.parent)
+        self.mod = load_hook(onepw=False)
+
+    def before(self, command=None, tool="Monitor", payload=None, **tool_input):
+        if command is not None:
+            tool_input["command"] = command
+        payload = payload or self.payload("PreToolUse")
+        r = self.hook("PreToolUse", {**payload, "tool_name": tool, "tool_input": tool_input},
+                      env={"FLEET_NOW": self.NOW, "TZ": "UTC"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)["hookSpecificOutput"] if r.stdout else None
+
+    def denied(self, command=None, **extra):
+        out = self.before(command, **extra)
+        self.assertIsNotNone(out, command)
+        self.assertEqual(out["permissionDecision"], "deny", command)
+        return out["permissionDecisionReason"]
+
+    def problem(self, command, **env):
+        """Why the hook takes the command for no watch (None for a watch), read in this process."""
+        hook = self.mod.Hook("PreToolUse", self.payload("PreToolUse"), {**self.env, **env})
+        return self.mod._monitor()["watch_problem"](hook, command.replace("{fleet}", self.fleet_cli))
+
+    def assertWatches(self, *commands, **env):
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertIsNone(self.problem(command, **env))
+
+    def assertNoWatch(self, *commands, **env):
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertIsInstance(self.problem(command, **env), str)
+
+    def test_a_log_or_a_file_watched_for_a_condition_passes(self):
+        """brief.md, tuca-mode's SKILL.md and autonomous-run.md: "to watch a log or a file for a condition, use the
+        Monitor tool"; the forms are the Monitor tool's own examples."""
+        self.assertWatches(
+            'tail -f /var/log/app.log | grep --line-buffered "ERROR"',
+            'tail -f run.log | grep -E --line-buffered "elapsed_steps=|Traceback|Error|FAILED|assert|Killed|OOM"',
+            "tail -F run.log",
+            "tail -n 0 -f /tmp/dev.log 2>&1 | grep --line-buffered -i 'ready in'",
+            "inotifywait -m --format '%e %f' /watched/dir",
+            'until grep -q "Ready in" dev.log; do sleep 0.5; done',
+            "while true; do test -f /tmp/done && break; sleep 2; done; echo done",
+            "while true\ndo\n  sleep 1\n  if [ -f /tmp/x ]; then echo found; break; fi\ndone",
+            "until [ -s /tmp/out.json ]; do sleep 1; done; cat /tmp/out.json | jq -r '.status'",
+            'while pgrep -x vitest > /dev/null; do sleep 5; done; echo "exit $?"',
+            "timeout 600 stdbuf -oL tail -f /tmp/x.log | grep --line-buffered 'x$'",
+            "'tail' -f x", "LC_ALL=C grep -c x f", "cd /repo && tail -f logs/*.log",
+            "tail -f x >&2", "tail -f x &> /tmp/y", "ls -la /tmp | wc -l", "date +%s; stat -c %Y /tmp/x",
+            "grep -c ERROR logs/*.log /tmp/run-?.log ./*.log", "until [ -e /tmp/build-*.done ]; do sleep 1; done",
+            'while [ "$?" -ne 0 ]; do sleep 1; done', "[[ $? -eq 0 ]] && echo ok", "test 3 -gt -1", "[[ x == a* ]]",
+            "printf '%s\\n' ready", "printf -- -v")
+
+    def test_the_fleet_clis_watch_commands_pass(self):
+        """The coordinator's and the manager's skills arm these as background Bash commands; as a Monitor they pass too."""
+        self.assertWatches(
+            "{fleet} chat " + str(self.fleet) + " watch --as coordinator --all --resume --once",
+            "{fleet} chat /x/manager watch --as manager --all --resume --once --fleets",
+            "{fleet} chat /x/coordinator wait D1 P2",
+            '{fleet} fleets gate take p "the full suite" --for 30 --wait 600',
+            "{fleet} fleets gate",
+            "until {fleet} turn; do sleep 30; done",
+            "until {fleet} fleets gate | grep -q '^free'; do sleep 5; done")
+        cached = Path(self.env["HOME"]) / ".claude/plugins/cache/tstack/tstack/9.9.9/fleet/bin/fleet"
+        cached.parent.mkdir(parents=True)
+        cached.write_text("#!/bin/sh\n")
+        link = self.tmp / "fleet-link"
+        link.symlink_to(self.fleet_cli)
+        checkout = self.tmp / "checkout"
+        self.assertWatches(f"{cached} chat /x watch --as coordinator --once", f"{link} chat /x wait D1",
+                           f"{checkout}/fleet/bin/fleet turn", CLAUDE_CODE_PLUGIN_DIRS=f"/nowhere:{checkout}")
+
+    def test_ci_history_services_and_a_local_server_pass(self):
+        self.assertWatches(
+            "gh run watch 123 --exit-status", "gh pr checks 12 --watch", "gh run list --limit 5 --json status",
+            "while true; do gh pr checks 12 --json name,bucket --jq '.[] | select(.bucket != \"pending\")'; sleep 30; done",
+            "until gh run view 123 --json status --jq .status | grep -q completed; do sleep 30; done",
+            "jj log -r 'master@origin' --no-graph -T 'commit_id.short() ++ \"\\n\"'", "jj -R /repo --no-pager st",
+            "jj op log --limit 3", "cd /repo && git log --oneline -1", "git -C /repo --no-pager status --short",
+            "journalctl --user -u fleet-hub -f | grep --line-buffered -i error", "systemctl --user is-active fleet-hub",
+            "systemctl --user --no-pager -n 20 status fleet-hub",
+            "until curl -sf -o /dev/null http://localhost:3000/health; do sleep 1; done",
+            'curl -s -o /dev/null -w "%{http_code}\\n" --max-time 2 127.0.0.1:8080',
+            "curl -sf --max-time=5 --connect-timeout=1 --retry=2 --retry-delay=1 --output=/dev/null localhost:3000",
+            "curl --silent --header='Accept: text/plain' --user-agent=watch '--write-out=%{http_code}' http://localhost/",
+            "curl -sS -H 'Accept: application/json' 'http://[::1]:7420/api/fleets' > /tmp/fleets.json; jq . /tmp/fleets.json")
+
+    def test_a_deploy_like_command_is_denied_with_what_to_do(self):
+        reason = self.denied(self.DEPLOY)
+        self.assertIn("`just` is not a command a watch runs", reason)
+        for told in ("Bash call", "run_in_background", "permission", "tail", "chat DIR watch"):
+            self.assertIn(told, reason)
+        self.assertNoWatch(
+            "wrangler deploy", "npx wrangler deploy --env production", "bash tasks/deploy.sh", "./deploy.sh",
+            "kubectl apply -f prod.yaml", "git push origin main", "jj git push --bookmark master", "gh workflow run deploy.yml",
+            "gh pr merge 12", "gh api repos/o/r/dispatches -f event_type=deploy", "ssh prod uptime", "make deploy",
+            "python3 watch.py", "node watch-for-events.js", "systemctl --user restart fleet-hub", "rm -rf /tmp/x",
+            "curl -X POST https://api.example.com/deploy", "curl https://api.example.com/deploy/srv-1?key=2",
+            "curl -s https://example.com/health", "terraform apply", "pnpm run deploy")
+
+    def test_what_is_decided_when_it_runs_is_denied(self):
+        d = self.DEPLOY
+        self.assertNoWatch(
+            f"echo $({d})", f"tail -f `{d}`", f'echo "$({d})"', f'echo "`{d}`"', f"cat <({d})", "tail -f $LOG",
+            'tail -f "${LOG}"', "X=1; echo ${X}", "while true; do s=$(gh pr checks 1); echo $s; sleep 30; done",
+            f"echo $'a\\'b'; {d} #'", "echo $((1 << 2))", "tail$IFS-f x", f"{{just,deploy}}", "tail -f /tmp/{a,b}.log",
+            f"cat <<EOF\n{d}\nEOF", f"cat <<'EOF'\nx\nEOF\n{d}", "jj log *", "gh pr checks 12 --jq .[]", "t*l -f x",
+            "echo x \\\n; ls", "tail -f 'x", 'tail -f "x', "tail -f x\x1b[0m", "x" * 4001)
+
+    def test_a_shell_an_interpreter_or_a_wrapper_around_a_command_is_denied(self):
+        d = self.DEPLOY
+        self.assertNoWatch(
+            f"bash -c '{d}'", f"sh -c '{d}'", f"bash -lc 'tail -f x; {d}'", f"eval {d}", f"eval 'tail -f x'", f"env {d}",
+            f"exec {d}", f"sudo tail -f x", f"command {d}", f"timeout 30 {d}", f"nohup {d}", f"nice -n 5 {d}", f"time {d}",
+            f"stdbuf -oL {d}", "python3 -c 'import os'", "node -e '1'", "source /tmp/x.sh", ". /tmp/x.sh", "trap 'ls' EXIT",
+            "alias tail=just; tail deploy", "xargs -a /tmp/x just", "find . -name x -exec just deploy ;",
+            "awk 'BEGIN{system(\"just deploy\")}'", "sed -n 'w /etc/x' f", "sort -o /etc/x f", "tee /etc/x", "watch -n 5 ls")
+
+    def test_a_pipe_into_a_shell_or_a_writer_is_denied(self):
+        self.assertNoWatch(
+            "cat /tmp/x.sh | sh", "curl -s localhost:3000/x.sh | bash", "echo deploy | xargs just", "tail -f log | tee /etc/x",
+            "tail -f log | awk '{system(\"x\")}'", "grep x f | sed -e 's/a/b/w /tmp/x'", "tail -f log | python3 -",
+            "tail -f log |& sh", "echo 'just deploy' | bash -s")
+
+    def test_a_watch_chained_to_another_command_is_denied(self):
+        d = self.DEPLOY
+        self.assertNoWatch(
+            "tail -f x; rm -rf y", f"tail -f x && {d}", f"tail -f x || {d}", f"sleep 1 & {d}", f"tail -f x\n{d}",
+            f"while true; do {d}; sleep 5; done", f"until {d}; do sleep 1; done", f"if {d}; then echo ok; fi",
+            f"if true; then echo ok; else {d}; fi", f"({d})", f"{{ {d}; }}", f"! {d}", f"tail() {{ {d}; }}; tail -f x",
+            f"echo \\ #; {d}", f"echo x # c\n{d}", f"tail -f x | grep y; {d}", f"for i in 1 2; do {d}; done",
+            f"case x in x) {d};; esac", f"coproc {d}")
+
+    def test_quoting_tricks_on_the_first_word_are_denied(self):
+        self.assertNoWatch(
+            "'just' deploy", '"just" deploy', "j'us't deploy", "\\just deploy", "ju\\st deploy", "'tail -f' x",
+            '"tail" -f x; "just" deploy', "$'just' deploy", '"$(echo just)" deploy', "tаil -f x",  # a Cyrillic а
+            "PATH=/tmp/evil tail -f x", "PATH=/tmp/evil:$PATH tail -f x", "FOO=1 tail -f x", "./tail -f x", "bin/tail -f x",
+            "/tmp/evil/tail -f x", "~/bin/tail -f x", "tail\u00a0-f x", "'' just deploy", "> /tmp/x just deploy",
+            "'do' tail -f x", '"while" true', "'timeout' 5 tail -f x", "L'A'NG=C tail -f x")
+        self.assertWatches("t'ai'l -f x", '"tail" -f x', "ta\\il -f x")  # the shell runs tail, and so reads the hook
+
+    def test_a_look_alike_of_the_fleet_cli_is_denied(self):
+        watch = "chat /x watch --as coordinator --all --resume --once"
+        other = self.tmp / "other" / "fleet" / "bin" / "fleet"
+        other.parent.mkdir(parents=True)
+        other.write_text("#!/bin/sh\njust deploy\n")
+        self.assertNoWatch(
+            f"/tmp/fleet/bin/fleet {watch}", f"{other} {watch}", f"fleet {watch}", f"fleet/bin/fleet {watch}",
+            f"{{fleet}}-evil {watch}", f"{{fleet}}/../../../other/fleet/bin/fleet {watch}",
+            f"{self.env['HOME']}/.claude/plugins/cache/other/tstack/1.0.0/fleet/bin/fleet {watch}")
+        for words in ("fleets gate run p --wait 60 -- just deploy", "fleets gate free 1a2b3c4d", "fleets gate x",
+                      "chat /x say --as coordinator hi", "chat --as watch", "chat /x", "state /x decision d1 --decide yes",
+                      "serve /x", "hub", "ws prune --apply", "news post x", "", "--help"):
+            with self.subTest(words=words):
+                self.assertIn("watch commands", self.problem(f"{{fleet}} {words}"))
+
+    def test_an_option_that_writes_or_runs_and_a_subcommand_that_acts_are_denied(self):
+        self.assertNoWatch(
+            "jj log -p --tool /tmp/evil", "jj --config ui.pager=x log", "jj log --config-file=/tmp/x", "jj git push",
+            "jj --at-op log undo", "jj --no-such-global st undo", "jj op restore x", "jj describe -m x",
+            "git -c core.pager=x log", "git -ccore.fsmonitor=x status", "git log --output=/etc/x", "git log --outp=x",
+            "git log --ext-diff -p", "git --exec-path=/tmp/x log", "git --no-pager push", "git commit -m x",
+            "gh pr checks 1 --web", "gh run view 1 -w", "gh pr -R o/r merge 1", "gh run rerun 1", "gh pr list",
+            "journalctl --user --vacuum-time=1s", "journalctl --rotate", "journalctl --vac=1s", "journalctl --cursor-file /etc/x",
+            "inotifywait -m -o /etc/x d", "inotifywait -mdo /etc/x d", "pgrep --signal KILL x",
+            "systemctl --user --kill-whom status stop x.service", "systemctl --user stop x", "systemctl daemon-reload",
+            "curl -d x localhost", "curl -sXPOST localhost", "curl -X POST localhost", "curl -o /tmp/x localhost",
+            "curl -K /tmp/cfg localhost", "curl -L localhost", "curl -T /etc/passwd localhost",
+            "curl --output=/tmp/x localhost", "curl --output= localhost", "curl --write-out=@/tmp/fmt localhost",
+            "curl '--write-out=%output{/tmp/x}' localhost", "curl --request=POST localhost", "curl --silent=1 localhost",
+            "curl --data=x localhost", "curl --max-time=2 https://example.com", "curl --max-time",
+            "curl localhost --next -X POST https://example.com", "curl file:///etc/passwd", "curl gopher://localhost:6379/_x",
+            "curl http://localhost@example.com/", "curl 'http://localhost\\@example.com/'", "curl http://localhost.example.com/",
+            "curl http://2130706433/", "curl -w '%output{/tmp/x}' localhost", "curl -w @/tmp/fmt localhost", "curl -m")
+
+    def test_date_prints_the_clock_and_never_sets_it(self):
+        """`date -s "2020-01-01"` and `date --set=...` passed (review, 2026-10-13): date took any argument."""
+        self.assertWatches(
+            "date", "date +%s", "date -u +%Y-%m-%dT%H:%M:%SZ", "date -d '1 hour ago' +%s", "date -d'last sunday' +%s",
+            "date --date=now -Iseconds", "date --date now -Is", "date -r /tmp/x +%s", "date --reference=/tmp/x",
+            "date --rfc-3339 seconds", "date --rfc-3339=ns", "date --iso-8601=seconds -u", "date -Ru", "date -ud now",
+            "TZ=UTC date --utc --rfc-email")
+        for command in ('date -s "2020-01-01"', "date --set=2020-01-01", "date --set 2020-01-01", "date --se=2020-01-01",
+                        "date --s 2020-01-01", "date -us 2020-01-01", "date -s2020-01-01", "date 010100002020",
+                        "date -u 010100002020", "date -ud now 010100002020", "date +%s 010100002020", "date --utc=x",
+                        "date -f /tmp/dates", "date -j 010100002020", "date -- 010100002020", "date -"):
+            with self.subTest(command=command):
+                self.assertIn("can set the clock", self.problem(command))
+        self.assertNoWatch("date -r /tmp/* +%s", "date +%s?")
+
+    def test_a_word_the_shell_evaluates_a_second_time_is_denied(self):
+        """Measured on bash 5.3.9 (and `printf -v` on zsh 5.9): each of the first six ran the `touch` inside its quotes.
+        The lexer reads a quoted `$( )` as text, and the test or printf then evaluates the word again."""
+        ran = ("[[ 'a[$(touch M)]' -eq 0 ]]", "[[ 0 -lt 'a[`touch M`]' ]]", ": 'a[$(touch M)]'; [[ _ -eq 0 ]]",
+               "[[ 'a[$(touch M)]' =~ .* ]]; [[ BASH_REMATCH -eq 0 ]]", "test -v 'a[$(touch M)]'",
+               "printf -v 'a[$(touch M)]' x")
+        self.assertNoWatch(
+            *ran, "[ -v 'a[$(touch M)]' ]", "[[ -v 'a[$(touch M)]' ]]", "printf -v x 'a[\\x24(touch M)]'; [[ x -eq 0 ]]",
+            "printf -vx y", "[[ x -ne 0 ]]", "[ PATH=0 -eq 0 ]", "[[ 1 '-ge' x ]]", "test 1 -eq", "[ -eq 1 ]", "[[ 1 -le 1+1 ]]",
+            "[ 0x10 -gt 1 ]", "until [[ 'a[$(just deploy)]' -eq 0 ]]; do sleep 1; done", "[ -e *.done ]", "[ -e -*.done ]",
+            "[ /tmp/x* -eq 0 ]", "printf '%s\\n' /tmp/*.log")
+        self.assertIn("arithmetic", self.problem(ran[0]))
+        self.assertIn("`-v`", self.problem(ran[4]))
+        self.assertIn("`printf -v`", self.problem(ran[5]))
+
+    def test_grep_takes_no_option_of_ugrep_that_runs_a_program(self):
+        """The grep of a Claude Code shell is its bundled ugrep, whose --filter ran a command (measured on 7.8.4)."""
+        self.assertWatches("grep -rn --include='*.py' --color=never --count --files-with-matches --file=/tmp/p x src",
+                           "grep --version", "grep -E 'a|b' --context=2 --perl-regexp f")
+        for command in ("grep --filter='*:just deploy' x f", "grep --filt=x x f", "grep x f --pager=less", "grep --view=vi x f",
+                        "grep ---/tmp/cfg x f", "grep --config=/tmp/cfg x f", "grep --save-config=/etc/x", "grep --format-open=x x f",
+                        "tail -f log | grep --line-buffered --filter=x E"):
+            with self.subTest(command=command):
+                self.assertIn("can write a file or run a program", self.problem(command))
+        self.assertNoWatch("grep x *.log", "grep x -*", "grep x [a]*", "grep x ?.log", "grep x ~/*.log")
+
+    def test_a_file_is_written_only_in_a_temp_folder(self):
+        outside = "/etc/tstack-test/outside.txt"  # never written: the hook only reads the command
+        link = self.pad / "link"
+        link.symlink_to(outside)
+        self.assertWatches(f"echo x > {self.pad}/seen.txt", "echo x >> /tmp/seen.txt", "tail -f x 2>/dev/null",
+                           "grep -c x f 2> /tmp/err > /tmp/out", "grep x < /etc/hostname", "grep x <<< 'a x'",
+                           f"echo x > {self.tmp}/t/seen", TMPDIR=str(self.tmp / "t"))
+        self.assertNoWatch("tail -f x > ~/out", "echo x > /etc/passwd", "echo x > out.txt", "echo x >> /home/u/.bashrc",
+                           "echo x > /tmp/../etc/x", f"echo x > {link}", f"echo x > {outside}", "echo x >| .env",
+                           "echo x &> seen", "echo x >& seen", "echo x > /tmp/*", "echo x <> /tmp/x", "echo x > $HOME/x",
+                           "tail -f x >", "echo x > /tmp", f"echo x > {self.fleet}/grants.jsonl",
+                           f"echo x >> {self.fleet}/state.json", "echo x > /tmp/project/.claude/settings.local.json",
+                           f"echo x > {self.pad}/.claude/x", "cat < /dev/tcp/example.com/80", "echo x > /dev/tcp/127.0.0.1/80")
+
+    def test_a_granted_command_passes_once(self):
+        call = self.DEPLOY
+        self.write_settings({"permissions": {"allow": [f"Bash({call})"]}})
+        self.grant(rule=f"Bash({call})")
+        self.assertIn("P1", self.denied(f"{call}; {call}"))
+        self.assertIsNone(self.before(call))
+        self.assertTrue((self.fleet / "grants.taken").is_dir())  # fleet_grant_alone took it for this call
+        self.run_tool(call, tool="Monitor")
+        self.assertNotIn(f"Bash({call})", self.allow())
+        self.assertIn("no watch", self.denied(call))
+
+    def test_a_grant_counts_only_with_its_rule_in_this_sessions_settings(self):
+        """The record of grants is a file an agent can write: alone it lets nothing through a Monitor."""
+        call = self.DEPLOY
+        self.grant(rule=f"Bash({call})")  # no rule in the settings
+        self.assertIn("no watch", self.denied(call))
+        elsewhere = self.tmp / "elsewhere" / ".claude" / "settings.local.json"
+        elsewhere.parent.mkdir(parents=True)
+        elsewhere.write_text(json.dumps({"permissions": {"allow": [f"Bash({call})"]}}))
+        self.grant(rule=f"Bash({call})", file=elsewhere)
+        self.assertIn("no watch", self.denied(call))
+        elsewhere.write_text("{not json")  # a file that does not read is taken to hold the rule, for Bash: not here
+        self.assertIn("no watch", self.denied(call))
+        self.grants.unlink()
+        self.grant(rule=f"Bash({call})")
+        self.settings.write_text("{not json")
+        self.assertIn("no watch", self.denied(call))
+        self.write_settings({"permissions": {"allow": [f"Bash({call})"]}})
+        self.assertIn("no watch", self.denied(f"{call} --env production"))
+        self.assertIsNone(self.before(call))
+
+    def test_a_websocket_is_watched_on_this_machine_only(self):
+        self.assertIsNone(self.before(ws={"url": "ws://localhost:9000/events"}))
+        self.assertIsNone(self.before(ws={"url": "wss://127.0.0.1/stream", "protocols": ["v1"]}))
+        for ws in ({"url": "wss://events.example.com/stream"}, {"url": "ws://localhost@example.com/"}, {"url": "localhost:9"},
+                   {"url": 7}, {}, "ws://localhost"):
+            self.assertIn("WebSocket", self.denied(ws=ws), ws)
+        self.assertIn("`just`", self.denied(self.DEPLOY, ws={"url": "ws://localhost:9"}))
+
+    def test_a_session_that_works_for_no_fleet_is_untouched(self):
+        alone = {**self.base("PreToolUse"), "session_id": "sess-2"}  # no scratchpad, and the registry names sess-1
+        for tool_input in ({"command": self.DEPLOY}, {"command": "bash -c 'x'"}, {"ws": {"url": "wss://example.com"}}):
+            self.assertIsNone(self.before(payload=alone, **tool_input))
+        self.register(self.tmp / "gone", session="sess-2", id="q")  # an entry whose fleet holds no ledger
+        self.assertIsNone(self.before(self.DEPLOY, payload=alone))
+        worker = {**alone, "agent_id": "ab12cd34", "scratchpad_dir": str(self.pad)}  # a subagent of the fleet's session
+        self.assertIn("no watch", self.denied(self.DEPLOY, payload=worker))
+        served = self.tmp / "served"
+        served.mkdir()
+        (served / "state.json").write_text("{}")
+        self.register(served, session="sess-2", id="q")  # a fleet outside the scratchpad, found by the registry
+        self.assertIn("no watch", self.denied(self.DEPLOY, payload=alone))
+
+    def test_bash_and_every_other_tool_are_left_to_the_permission_check(self):
+        for tool in ("Bash", "Read", "Write", "TaskStop"):
+            self.assertIsNone(self.before(self.DEPLOY, tool=tool), tool)
+        self.assertIsNone(self.before("tail -f /tmp/x.log"))
+        for tool_input in ({}, {"command": ""}, {"command": "  \n"}, {"command": 7}, {"description": "x"}):
+            self.assertIsNone(self.before(**tool_input), tool_input)
+
+    def dispatch(self, mod, tool, **tool_input):
+        payload = {**self.payload("PreToolUse"), "tool_name": tool, "tool_input": tool_input}
+        return mod.dispatch("PreToolUse", json.dumps(payload), self.env)
+
+    def test_the_hooks_own_error_fails_open_and_a_command_it_cannot_read_is_denied(self):
+        mod = load_hook(onepw=False)
+
+        def broken(*_):
+            raise RuntimeError("the fleet lookup exploded")
+        saved, mod.grant_state_dirs = mod.grant_state_dirs, broken
+        self.assertEqual(self.dispatch(mod, "Monitor", command=self.DEPLOY), "")
+        self.assertIn("PreToolUse fleet_monitor_watch failed", self.log())
+        self.assertIn("the fleet lookup exploded", self.log())
+        mod.grant_state_dirs = saved
+        mod._monitor()["_watch_piece"] = broken
+        out = json.loads(self.dispatch(mod, "Monitor", command="tail -f /tmp/x.log"))["hookSpecificOutput"]
+        self.assertEqual(out["permissionDecision"], "deny")
+        self.assertIn("the hook could not read it", out["permissionDecisionReason"])
+        self.assertIn("fleet_monitor_watch could not read a command", self.log())
+
+    def test_only_a_fleets_monitor_call_loads_the_code_and_it_never_allows(self):
+        import inspect
+        mod = load_hook(onepw=False)
+        self.assertEqual(self.dispatch(mod, "Bash", command=self.DEPLOY), "")
+        alone = {**self.base("PreToolUse"), "session_id": "sess-2", "tool_name": "Monitor",
+                 "tool_input": {"command": self.DEPLOY}}
+        self.assertEqual(mod.dispatch("PreToolUse", json.dumps(alone), self.env), "")
+        self.assertNotIn("monitor_denial", vars(mod))
+        self.assertIn('"deny"', self.dispatch(mod, "Monitor", command=self.DEPLOY))
+        self.assertIn("monitor_denial", vars(mod))
+        self.assertNotIn("Allow", HOOK.with_name("tstack-hook-monitor.py").read_text())
+        returns = re.findall(r"^\s+return (.*)$", inspect.getsource(mod.fleet_monitor_watch), re.M)
+        self.assertEqual(returns, ["None", '_monitor()["monitor_denial"](hook)'])
+        self.assertEqual(mod.HANDLERS["PreToolUse"][-2:], [mod.fleet_monitor_watch, mod.fleet_grant_alone])
+
+    def test_every_command_a_watch_may_run_is_listed_once_with_its_limits(self):
+        part = self.mod._monitor()
+        reads = part["WATCH_READS"]
+        for name in ("sh", "bash", "zsh", "env", "eval", "exec", "xargs", "awk", "sed", "find", "tee", "sort", "python3", "node",
+                     "timeout", "nohup", "nice", "command", "sudo", "kill", "pkill", "rm", "just", "ssh", "rg", "source", "for"):
+            self.assertNotIn(name, reads)
+        for name, spec in reads.items():
+            self.assertNotIn("/", name)
+            self.assertLessEqual(set(spec), {"subs", "globals", "valued", "no", "check", "paths"}, name)
+        self.assertEqual({name for name, spec in reads.items() if spec},
+                         {"test", "[", "[[", "printf", "date", "grep", "pgrep", "inotifywait", "journalctl", "systemctl", "jj",
+                          "git", "gh", "curl"})
+        self.assertEqual({name for name, spec in reads.items() if spec.get("paths")}, {"test", "[", "[[", "grep"})
+        for name in ("systemctl", "jj", "git", "gh", "curl", "date"):  # a second match could be a subcommand or a URL
+            self.assertIn("one more argument", self.problem(f"{name} x*"), name)
+        said = self.denied(self.DEPLOY)
+        for name in reads:
+            self.assertIn(name, said)
+
+    def test_a_hash_after_an_escaped_character_is_no_comment(self):
+        """_simple_commands took `\\ #` for a comment and dropped what followed, for the grants too."""
+        split = self.mod._simple_commands
+        self.assertEqual(split("echo \\ #; just deploy"), ["echo \\ #", "just deploy"])
+        self.assertEqual(split(r"echo a\;#b; ls"), [r"echo a\;#b", "ls"])
+        self.assertEqual(split("echo done # ; just deploy"), ["echo done"])
+        self.assertEqual(split("echo a #b\nls"), ["echo a", "ls"])
+        self.grant(rule="Bash(just deploy)")
+        self.write_settings({"permissions": {"allow": ["Bash(just deploy)"]}})
+        self.assertIn("P1", self.denied("echo \\ #; just deploy", tool="Bash"))
+
+
 class AgentGrantTest(HookCase):
     """fleet_agent_grant (PreToolUse, Agent): auto mode ignores Agent allow rules, so a granted spawn is let
     through by the hook, from <root>/.claude/tstack-grants.json, for its exact input alone."""

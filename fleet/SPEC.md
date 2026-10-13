@@ -1962,8 +1962,9 @@ run of each exact command shown; the next run of the same command asks again.
   **Monitor.** The Monitor tool runs its command under Bash's permission rules (Claude Code's tools
   reference), so the hook holds it as it holds Bash. Measured the same day, in auto mode: Monitor ran the
   stand-in deploy with **no rule at all**, four runs of four, where Bash was refused each time; the
-  classifier did not judge a Monitor command. That is outside what a grant can close, and is recorded
-  here so nobody takes a refused Bash call for a refused act.
+  classifier did not judge a Monitor command. No grant can close that, so a refused Bash call was no
+  refused act; in a fleet's session the hook now denies a Monitor command that is not a watch
+  ([Monitor only watches](#monitor-only-watches)).
 
   So a rule clears more than its own string, and the hook keeps a grant to its call alone (below). For an Agent spawn the call is its `tool_input` as compact JSON with sorted keys
   (`json.dumps(..., sort_keys=True, ensure_ascii=False, separators=(",", ":"))`, the hook's `_agent_call`),
@@ -2358,6 +2359,186 @@ run of each exact command shown; the next run of the same command asks again.
   - A session rooted in the same folder that serves another fleet reads the rule too while it stands,
     without the hook that keeps it to one call, for at most 30 minutes.
   - A call bound to a file is bound to that file's bytes, not to what the file calls or reads.
+
+## Monitor only watches
+
+The plugin's hook, `fleet_monitor_watch` (PreToolUse, matcher `Bash|Monitor`, the handler before
+`fleet_grant_alone`); its code is `hooks/tstack-hook-monitor.py`, which the hook executes into itself only
+for a Monitor call in a fleet's session, as it does the 1Password part. No ledger field, no CLI command, no
+trace: the twin has nothing of it.
+
+**Why.** Auto mode judges a Bash command with its classifier and does not judge a Monitor command.
+Measured 2026-10-12 on Claude Code 2.1.296, in a headless `claude -p --permission-mode auto` whose
+stand-in deploy only appends to a log: refused 10 of 10 as a Bash call, it ran 4 of 4 as a Monitor command
+with no allow rule. So an act the user never allowed could happen in a fleet by going to Monitor, first or
+after a refusal. The rule denies by default, and not only what Bash refused earlier: an agent can go to
+Monitor first.
+
+**Where.** In a session that works for a fleet: `grant_state_dirs` (Permission grants, Whose fleet) is not
+empty, so a coordinator, a manager, their subagents and a worker launched with `$FLEET_DIR` alike. A
+session that works for no fleet is untouched, and so is every tool but Monitor. The hook returns a deny or
+nothing; it never allows.
+
+**A watch.** A Monitor `command` passes when every simple command it runs (`_simple_commands`, each
+stripped as Claude Code strips it before it matches a rule, `_normal`: redirections, the safe environment
+names of `SAFE_ENV_NAMES`, `timeout N`, `time`, `nice`, `stdbuf -oL`, `nohup`, `command`, `builtin`) is one
+of:
+
+- **the fleet CLI watching** (`FLEET_WATCHES`): `fleet chat DIR watch ...`, `fleet chat DIR wait ...`,
+  `fleet fleets gate` (alone), `fleet fleets gate take ...` and `fleet turn [DIR]`. The CLI is named by an
+  absolute path that resolves to this plugin's `fleet/bin/fleet` or to one it hands over to (a checkout in
+  `$CLAUDE_CODE_PLUGIN_DIRS`, the marketplace clone, a cached version under
+  `~/.claude/plugins/cache/tstack/tstack/`): a session keeps the plugin folder it started with and the CLI
+  prints the newest one's path. `fleets gate run -- COMMAND` runs a command and `gate free` ends another's
+  hold: neither passes. No skill tells a session to run a fleet command in Monitor (the watch and the
+  `wait` are background Bash commands); these pass so that a session that does is not stopped.
+- **a command that only reads, waits or prints** (`WATCH_READS`, the one table), by its bare name (a path
+  is another program):
+  `:`, `true`, `false`, `echo`, `break`, `continue`, `exit`, `cd`, `sleep`, `cat`, `head`, `tail`, `wc`,
+  `ls`, `stat`, `ps`, `jq` with any argument;
+  `test`, `[`, `[[` with a number or `$?` on each side of a numeric comparison (`-eq`, `-ne`, `-lt`, `-le`,
+  `-gt`, `-ge`) and without `-v`; `printf` without `-v` (A word evaluated twice, below);
+  `date` to print the clock: a `+FORMAT`, `-u`, `-R`, `-I[FMT]`, `-d`/`--date`, `-r`/`--reference`,
+  `--iso-8601`, `--rfc-email`, `--rfc-3339`, `--debug`, `--resolution`, and nothing else, because `-s`,
+  `--set` and an operand that is no `+FORMAT` (`date 010100002020`) set it;
+  `grep` without ugrep's options that run a program or write a file (`--filter`, `--pager`, `--view`,
+  `--config`, `---FILE`, `--save-config`, `--format-open`): the `grep` of a Claude Code shell is a function
+  that runs its bundled ugrep (7.8) and hands these options to the system's grep, which has none of them,
+  and the hook does not rest on that (measured: ugrep's `--filter='*:touch M'` ran touch);
+  `pgrep` without `--signal`; `inotifywait` without `-o`, `-d`, `-s` (an output file, a daemon, syslog);
+  `journalctl` without the options that change the journal (`--vacuum-*`, `--rotate`, `--flush`, `--sync`,
+  `--relinquish-var`, `--smart-relinquish-var`, `--setup-keys`, `--update-catalog`, `--cursor-file`);
+  `systemctl` for `status`, `is-active`, `is-failed`, `show`; `jj` for `log`, `st`, `status`, `op log`,
+  without `--config*` and `--tool`; `git` for `log`, `status`, without `-c`, `--config-env`,
+  `--exec-path`, `--output`, `--ext-diff`; `gh` for `run view|list|watch` and `pr view|checks`, without
+  `--web`; `curl` as a GET to this machine alone (`http` or `https` to `localhost`, `127.0.0.1`, `[::1]`),
+  with only `-s -S -f -k -I -i -v`, `-m`/`--max-time`, `--connect-timeout`, `--retry*`, `-H`, `-A`, `-w`
+  (no `@file`, no `%output{}`) and `-o /dev/null`; a long option's value is the next word or follows an
+  `=` (`--output=/dev/null`, `--max-time=5`), with the same checks.
+  A subcommand stands right after the tool and the global options the table knows: an option it does not
+  know could take the subcommand's place as its value (`systemctl --kill-whom status stop x`), so it is
+  denied. A refused option counts by its prefix too (git and the GNU tools take a unique prefix) and inside
+  a cluster of short ones (`-qo`). An unquoted `*`, `?` or `[` among the words of a tool that has limits
+  is denied: it could expand into a refused option, or into one more word that stands where a subcommand
+  or a URL does (`systemctl --state r* status x` is `systemctl --state r1 restart status x` beside files
+  `r1` and `restart`). For `grep` and the tests, whose other words are files and strings, a pattern passes
+  when it starts with a letter, a digit, `/` or `.` (`logs/*.log`, `/tmp/build-*.done`): what it expands
+  into starts the same way, and so is no option.
+- **a shell word alone** (`do`, `then`, `else`, `done`, `fi`, `{`, `}`), the leaders `_normal` strips
+  (`while`, `until`, `if`, `!`).
+
+What joins them changes nothing: a pipe, `;`, `&&`, `||`, `&`, a newline, `while`/`until`/`if`. A list of
+commands that only read only reads, so `tail -f log | grep --line-buffered E`, `until grep -q Ready
+dev.log; do sleep 1; done` and `while true; do gh pr checks 12; sleep 30; done` pass as they are.
+
+**No watch**, each denied with what the hook found: a `$` that bash expands (a variable, `$( )`, `$(( ))`,
+`${ }`, `$'...'`; `$?` alone passes), a backtick, a subshell or a function (`( )`), a here-document, a
+process substitution, an unquoted brace (`{a,b}`), a line continued with a backslash, a control character,
+a text over 4,000 characters, a text that does not parse, an assignment before a command other than the
+safe names, `for`/`case`/`select`/`function`, and any word in command position that is not in the table:
+an interpreter or a shell (`bash -c`, `sh`, `python3`, `node`), `eval`, `exec`, `env`, `xargs`, `sudo`,
+`awk` and `sed` (`system()`, `w file`), `sort`, `tee`, `find`, `rg` (`--pre`), and every command that
+acts. A redirection may read any file and copy a descriptor (`2>&1`); it writes only to `/dev/null`,
+`/dev/stdout`, `/dev/stderr`, or to a file named by its absolute path whose resolved path is under `/tmp`,
+`$TMPDIR` or the scratchpad, and never into a fleet's own folder or a `.claude` folder, nor to
+`/dev/tcp`. The lexer (`_watch_lex`) reads each simple command a second time for what `_normal` does not
+say (which characters stood unquoted, where a redirection writes); a command the two read differently is
+no watch. A text the hook's own code fails on is denied and logged: what cannot be read does not run
+unjudged. An error anywhere else in the handler (finding the fleet, reading the grants) fails open, as
+every hook does.
+
+**A word evaluated twice.** The shell evaluates some words of a test a second time, and then expands what
+the quotes kept from the lexer. Measured 2026-10-13 on bash 5.3.9, each of these ran `touch M`:
+`[[ 'a[$(touch M)]' -eq 0 ]]` (in `[[` each side of a numeric comparison is arithmetic, and arithmetic
+expands a subscript); `: 'a[$(touch M)]'; [[ _ -eq 0 ]]` (arithmetic reads a name's value as an
+expression, and `$_` is the last word of the command before); `-v 'a[$(touch M)]'` in `[[`, `[` and
+`test`; `printf -v 'a[$(touch M)]' x`, on zsh 5.9 too. So in a watch each side of a numeric comparison is
+a number or `$?` (`[ "$?" -eq 0 ]` passes, `[[ x -eq 0 ]]` does not), and `-v` is denied in a test and in
+`printf`: a watch sets no variable to test or to fill. `break`, `continue`, `exit`, `cd`, `echo`, `sleep`
+and a `printf` argument were measured the same way on both shells and ran nothing.
+
+**The user's yes still works.** A command that a one-time grant names exactly (`_is_call`, as a rule
+matches it) passes while the grant's rule is in this session root's `settings.local.json`, read now;
+`fleet_grant_alone` then holds it to one run, in its turn, within its 30 minutes, and the sweep takes the
+rule back when the Monitor call has run. The record of grants alone lifts nothing here: for Bash a forged
+`grants.jsonl` line allows nothing because Claude Code still wants the rule, but for Monitor the hook is
+the only check, so it wants the rule in the one file Claude Code keeps an agent from writing. A grant
+whose settings file does not read passes nothing through Monitor (for Bash it is taken to stand, which
+only ever denies).
+
+**A WebSocket source** (`ws`, no command) runs no shell. It passes to this machine (`ws` or `wss` to
+`localhost`, `127.0.0.1`, `[::1]`) and is denied to any other host, as curl is: a GET to another host can
+be the act itself (a deploy hook that fires on GET), and auto mode judges it only as a Bash call.
+
+**Measured live** (2026-10-13, Claude Code 2.1.296): a headless session, `claude -p --model sonnet
+--effort low --permission-mode auto --plugin-dir CHECKOUT`, with a scratch ledger in `$FLEET_DIR`, a
+scratch `$FLEET_HOME`, and a second PreToolUse hook passed by `--settings` that only wrote its input to a
+file. The model made three Monitor calls.
+
+- The input of Monitor's PreToolUse hook had the keys `session_id`, `transcript_path`, `cwd`,
+  `prompt_id`, `permission_mode`, `effort`, `hook_event_name`, `tool_name`, `tool_use_id` and
+  `tool_input`, and `tool_input` had `command`, `description` and `timeout_ms`. The tool's schema has a
+  fourth field, `ws` (`url`, `protocols`), and takes no other.
+- `scratchpad_dir` was not there: that session had no scratchpad. Claude Code's code sets it in the input
+  of every hook when the session has one; a Monitor call in a session with a scratchpad was not
+  measured. The fleet was found by `$FLEET_DIR`.
+- `touch MARKER` was denied: the tool's result was an error that begins `PreToolUse:Monitor hook error:`
+  and carries the hook's text in full, the session listed the call among its permission denials, and no
+  file was made.
+- `until test -e FILE; do sleep 1; done; echo ready > /tmp/.../ran.txt; echo ready` ran: the file was
+  written and the model got the event `ready`.
+- The command ran as `zsh -c 'source SNAPSHOT ... && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL ...'`
+  under the Claude Code process, the shell of a Bash call, and `grep --version` there answered
+  `ugrep 7.8.4`.
+- `--plugin-dir` took the place of the installed plugin of the same name: one tstack hook ran.
+
+**The denial** says what was found, then: run it as a Bash call (`run_in_background: true` for a long
+one), where it is judged; ask for a permission when it needs the user's yes (a worker says `blocked:` to
+its coordinator), and a call allowed once passes here too; then the fleet commands and the names of the
+table.
+
+**Cost.** A call of another tool ends at one comparison; a Monitor call outside a fleet at the fleet
+lookup every Bash call already makes. The part is read and compiled only for a Monitor call in a fleet's
+session.
+
+**What it does not close**, said plainly:
+
+- **Reads are not judged.** `cat`, `grep`, `jq`, `gh`, `jj`, `journalctl` read whatever the user can
+  read, a secret or production data included, and what a Monitor prints lands in the conversation. The
+  rule stops acts, not reads.
+- **A program an agent put where a read-only name finds it.** The names are found on `PATH`: a `tail` an
+  agent wrote into a directory ahead of the real one runs as `tail`. The tools read their configuration:
+  a repo's git config can make `git status` run a program (`core.fsmonitor`), a jj config a diff tool
+  under `jj log -p`, a `~/.curlrc` add a method and a URL to every curl. Writing those files is a Bash,
+  Write or Edit call, which auto mode judges; the hook does not look at them.
+- **A local server that acts on a GET**, and one that an agent started: `curl localhost:PORT/deploy` is a
+  read to the hook. `-L` is not allowed, so a local redirect to another host is not followed.
+- **The table is a judgement of each tool as it is today** (jj 0.41, git 2.54, gh 2.102, curl 8.22,
+  systemd 260, procps-ng 4, coreutils 9.11, jq 1.8, ugrep 7.8, bash 5.3, zsh 5.9). A tool that gains an
+  option that writes or runs is allowed with it until the table says otherwise. The options are refused
+  by name, except curl's and date's, which are allowed by name.
+- **The shell is the session's, with its aliases and functions.** A Monitor command runs as a Bash one
+  does (Measured live, below): in the user's zsh or bash, after a snapshot of its configuration. An alias
+  or a function there that bears a read-only name (`ls` for another lister, `gh` through a credential
+  helper) runs in its place. The hook does not read the snapshot. The words evaluated twice were measured
+  on bash 5.3 and zsh 5.9, and no other shell.
+- **Files under `/tmp` and the scratchpad** can be written by a redirection, a file another process
+  reads included. Nothing in a watch can run one.
+- **The fleet CLI's watch commands pass with any arguments after them** (`chat DIR watch ...`,
+  `chat DIR wait ...`, `fleets gate take ...`, `turn ...`): the hook reads the command's name, not its
+  flags. Today none of their flags runs a command; a flag that did would pass until `FLEET_WATCHES` says
+  otherwise.
+- **The fleet test is the hook's.** A session whose fleet the hook does not find (no `$FLEET_DIR`, no
+  ledger in its scratchpad, no registry entry under its session id) is untouched, and so is every session
+  outside a fleet: there Monitor is as Claude Code ships it.
+- **Other tools auto mode may not judge** are not looked for: this closes the one measured.
+- **One Unix user** (Permission grants, What it defends): an agent that edits the hook, the plugin cache
+  or the settings directly is stopped by Claude Code's own refusals, not by this rule.
+
+What it costs a fleet: a Monitor that keeps state between rounds (`last=$(date ...)`, a `for`, `comm`
+against the round before) is denied, and so is `awk`, `sed`, `node watch.js`. A stream of events from such
+a script needs the user's yes for its exact call (a script in the repo, asked as `bash <absolute path>`),
+or runs as a background Bash command that exits on the event.
 
 ## Heartbeats
 

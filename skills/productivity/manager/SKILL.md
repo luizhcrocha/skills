@@ -123,7 +123,7 @@ Your own session plays the Manager role and the coordinators the Coordinator rol
 
 A fleet's notices (acts done under a standing approval the user gave, the coordinator's SKILL.md "Standing approvals") reach you as fyi news: read them with the rest, and raise one with the user only when it looks outside its approval's words.
 
-A monitor agent you spawn (app metrics, runs, executions, reporting back to you) is a Watcher ([MODELS.md](../coordinator/MODELS.md)); when the watch is a command, a background Bash loop does it without a model. When a new default model comes out, the fleets move their agents to it (the coordinator's SKILL.md, "A new default model"); yours too.
+A monitor agent you spawn (app metrics, runs, executions, reporting back to you) is a Watcher ([MODELS.md](../coordinator/MODELS.md)); when the watch is a command, a background Bash loop does it without a model. In a fleet's session the Monitor tool only watches (read-only commands and the fleet CLI's own watch; the hook denies the rest, the coordinator's SKILL.md, "The user's word"): a command that acts is a Bash call, where auto mode judges it. When a new default model comes out, the fleets move their agents to it (the coordinator's SKILL.md, "A new default model"); yours too.
 
 ## The user steps away
 

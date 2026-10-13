@@ -1556,6 +1556,7 @@ def _simple_commands(text):
     def scan(i, close):
         start = i
         heredocs = []
+        escaped = -1  # the index after the last backslash escape: a `#` there is in a word, not a comment
 
         def cut(j):
             piece = text[start:j].strip()
@@ -1569,6 +1570,7 @@ def _simple_commands(text):
                 return i + 1
             if c == "\\":
                 i += 2
+                escaped = i
             elif c == "'":
                 j = text.find("'", i + 1)
                 if j < 0:
@@ -1580,7 +1582,7 @@ def _simple_commands(text):
                 i = scan(i + 1, "`")
             elif c == "(":
                 i = scan(i + 1, ")")
-            elif c == "#" and (i == 0 or text[i - 1] in " \t\n;&|("):
+            elif c == "#" and i != escaped and (i == 0 or text[i - 1] in " \t\n;&|("):
                 cut(i)
                 j = text.find("\n", i)
                 i = start = n if j < 0 else j
@@ -2089,6 +2091,18 @@ def fleet_grant_alone(hook):
         if denial:
             return denial
     return None
+
+
+def fleet_monitor_watch(hook):
+    """PreToolUse (Monitor): in a session that works for a fleet, the Monitor tool only watches. Auto mode judges a
+    Bash command and does not judge a Monitor one (measured on 2.1.296: a stand-in deploy refused 10 of 10 as a Bash
+    call ran 4 of 4 through Monitor with no rule), so an act could go to Monitor first and never be judged. A Monitor
+    command is denied unless every command it runs is the fleet CLI watching or one that only reads, waits or prints,
+    or a standing one-time grant names it exactly (hooks/tstack-hook-monitor.py, read only for such a call). Outside a
+    fleet, and for every other tool, it says nothing. It never allows a call."""
+    if hook.input.get("tool_name") != "Monitor" or not grant_state_dirs(hook):
+        return None
+    return _monitor()["monitor_denial"](hook)
 
 
 class Deny(str):
@@ -3286,24 +3300,39 @@ ONEPW_TOOLS = frozenset(("jj", "git", "ssh", "op", "secretspec", "gh", "aws"))
 ONEPW_TEXTS = ("sign_and_send_pubkey: signing failed", "[ERROR] ")
 
 
-def _onepw():
-    """This module's namespace with the 1Password part in it, read from the file beside the hook the first time."""
+# The hook's parts: files beside it that it executes into this module only for a call that needs them, each known as
+# read by a name it defines.
+PARTS = {"onepw_use": "tstack-hook-onepw.py", "monitor_denial": "tstack-hook-monitor.py"}
+
+
+def _part(defines):
+    """This module's namespace with the part that defines this name in it, read from its file the first time."""
     names = globals()
-    if "onepw_use" not in names:
-        path = Path(__file__).resolve().with_name("tstack-hook-onepw.py")
+    if defines not in names:
+        path = Path(__file__).resolve().with_name(PARTS[defines])
         exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), names)
     return names
 
 
+def _onepw():
+    """This module's namespace with the 1Password part in it."""
+    return _part("onepw_use")
+
+
+def _monitor():
+    """This module's namespace with the Monitor part in it (fleet_monitor_watch)."""
+    return _part("monitor_denial")
+
+
 def __getattr__(name):
-    """A name of the 1Password part asked of this module from outside, by a test or a script that loads the hook: the
-    part is read first. Inside the hook nothing comes here: its handlers read the part themselves."""
-    if name.startswith("__") or "onepw_use" in globals():
+    """A name of a part asked of this module from outside, by a test or a script that loads the hook: the parts not
+    read yet are read first. Inside the hook nothing comes here: its handlers read their part themselves."""
+    if name.startswith("__") or all(defines in globals() for defines in PARTS):
         raise AttributeError(name)
-    try:
-        return _onepw()[name]
-    except KeyError:
-        raise AttributeError(name) from None
+    for defines in PARTS:
+        if name in _part(defines):
+            return globals()[name]
+    raise AttributeError(name)
 
 
 def _onepw_command(hook):
@@ -3356,7 +3385,8 @@ HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, fleet_heartbeat],
     "Stop": [memo_nudge, fleet_listen_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
-    "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, land_turn_gate, suite_gate, onepw_hold, fleet_grant_alone],
+    "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, land_turn_gate, suite_gate, onepw_hold, fleet_monitor_watch,
+                   fleet_grant_alone],
     "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_chat_nudge, onepw_watch],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep, onepw_watch],
     "PermissionDenied": [fleet_permission_denied],
