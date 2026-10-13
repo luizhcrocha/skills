@@ -4,21 +4,25 @@
  *
  * A `--once` watch exits with the message it prints, and the session it wakes must arm the next one. A turn
  * that ends with no Stop (a usage-limit error, a compaction, a long run) arms none, and the Stop guard has
- * nothing to act on: the user's next messages wait unread. The hub looks every {@link WAKE_MS}: when no
- * watch of a served fleet's host runs (an orphaned one is none; a watch that just ended is none either: the
- * ten minutes `listening` gives a host are not the hub's), the user's messages wait unread, the oldest has
- * waited `FLEET_UNHEARD_S` and the session is idle, it writes one line to the session's socket ({@link deliver}),
- * a fixed template that says only "arm the watch" ({@link wakeText}). Whether it may is {@link mayWake}, one
- * pure function of what was read; what it did is kept per fleet in memory and in `REGISTRY/hub/wakes.json`
- * ({@link Wakes}), so a hub that restarts does not wake again at once.
+ * nothing to act on: the user's next messages wait unread. The hub looks when it takes a message of the
+ * user's, and every {@link WAKE_MS}: when no watch of a served fleet's host runs (an orphaned one is none; a
+ * watch that ended is none either: the ten minutes `listening` gives a host are not the hub's), the user's
+ * messages wait unread and the session is not in a turn, it writes one line to the session's socket
+ * ({@link deliver}), a fixed template that says only "arm the watch" ({@link wakeText}). No time is waited
+ * for when the transcript says the turn is finished: a session that is idle and deaf is woken at the look
+ * that finds it so. Whether it may is {@link mayWake}, one pure function of what was read; what it did is
+ * kept per fleet in memory and in `REGISTRY/hub/wakes.json` ({@link Wakes}), so a hub that restarts does not
+ * wake again at once.
  *
  * Whom it writes to is checked before every write ({@link deliverTo}, host.ts `reach`): the registry entry's
  * process runs, is Claude Code, started when the entry says, and holds the socket named after it. A live pid
- * and a socket file are not that. Idle is more than a quiet transcript: a tool call writes nothing while it
- * runs, so a session whose last `tool_use` has no result is in a turn (transcripts.ts `toolAwaited`). And one
- * wake at a time: no second is written until the session wrote its transcript after the first. That holds
- * under concurrency: whatever decides and writes a wake for a fleet (the hub's look, the user's "Wake now")
- * runs one at a time for that fleet ({@link Wakes.serial}), and records the wake before it is sent
+ * and a socket file are not that. Whether the session is in a turn is read in its transcript (transcripts.ts
+ * `turnOf`), not guessed from how long it was quiet: a turn Claude Code closed is over at once, and a tool
+ * call that awaits its result is a turn however quiet the transcript. Only where the transcript does not
+ * tell is the quiet time asked ({@link IDLE_S}). And one wake at a time: no second is written until the
+ * session wrote its transcript after the first, or {@link UNREAD_S} passed ({@link queued}). That holds under
+ * concurrency: whatever decides and writes a wake for a fleet (the hub's look, the user's "Wake now") runs
+ * one at a time for that fleet ({@link Wakes.serial}), and records the wake before it is sent
  * ({@link Wakes.reserve}), so whoever looks next counts it. A fleet the look cannot read (its chat, or what
  * it reads of its session) is that fleet's failed look ({@link Blind}): logged once, shown on the page, and
  * the look goes on with the others.
@@ -38,36 +42,52 @@ import { accessSync, constants, statSync } from "node:fs";
 import { createConnection } from "node:net";
 import { join } from "node:path";
 
-import { cursorPath, hostOf, intOf, pyText, unreadFromUser, watchLive, type Listening } from "./chat/chat.ts";
+import { cursorPath, hostOf, intOf, leftPath, pyText, unreadFromUser, watchLive, type Listening } from "./chat/chat.ts";
 import { storePath } from "./chat/store.ts";
-import { parseInstant, stampOf } from "./clock.ts";
+import { parseInstant, stampMsOf, stampOf } from "./clock.ts";
 import { exists, FLEET_BIN, makeDirs, mtimeOf, readText, writeAtomic } from "./files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type JsonObject } from "./json.ts";
 import { PROBE, reach, recordedHost, type Presence, type Probe } from "./host.ts";
 import { stripHidden } from "./ledger/permission-words.ts";
 import { readObject, type Entry } from "./registry.ts";
-import { servingTranscriptOf, toolAwaited, usageLimitHit, type LimitHit } from "./transcripts.ts";
+import { servingTranscriptOf, turnOf, usageLimitHit, type LimitHit, type Turn } from "./transcripts.ts";
 import { accountOf, windowsOf, type WindowReading } from "./usage.ts";
 import type { Machine } from "./world.ts";
 
 import * as Option from "effect/Option";
 
-/** How often the hub looks for a host to wake. */
-export const WAKE_MS = 30_000;
+/** How often the hub looks for a host to wake, besides the look it takes with each message of the user's. One
+ * look over ten served fleets took 76 ms (measured 2026-10-13, this machine: 57 ms of it finding each fleet's
+ * watch among the processes), so 0.8 % of the hub's time at this period. */
+export const WAKE_MS = 10_000;
 
-/** How long the user's oldest unread message waits before the first wake, unless `FLEET_UNHEARD_S` says: the
- * time a manager's watch waits before it tells, when no hub runs. */
+/** How long the user's oldest unread message waits before the page says its host does not listen, unless
+ * `FLEET_UNHEARD_S` says: the time a manager's watch waits before it tells, when no hub runs. The wake does
+ * not wait for it. */
 export const UNHEARD_S = 120;
 
-/** A session whose transcript was written this recently is in a turn: the plugin's mid-turn nudge tells it,
- * and the hub waits. */
+/** How long the transcript of a session whose turn is `open` must be quiet before the session counts as idle.
+ * The model writes nothing while it thinks: its first line came later than this after 179 of 34138 prompts,
+ * results and notifications (measured 2026-10-13), and a wake written then queues and costs one turn. */
 export const IDLE_S = 30;
+
+/** How long after the host's watch ended the hub leaves its session alone: Claude Code tells the session that
+ * its background command ended, and the turn that begins is not in the transcript yet. Measured 2026-10-13
+ * (Claude Code 2.1.296): the notification was written 3 to 11 ms after the command's last act (3 of 3), and
+ * the turn's first line a median 30 ms after that. */
+export const HANDOVER_S = 5;
 
 /** How long after the user's "Wake now" the next one may come. */
 export const NOW_S = 60;
 
 /** How long after a wake the next one for the same unread message may come: after the first, after the second. */
 export const AGAIN_S = [10 * 60, 30 * 60] as const;
+
+/** How long a wake that was written holds the next while the session has not written its transcript: after
+ * it the wake is taken for lost. The socket answers nothing, so a line the session dropped, a process that
+ * hangs and a session started again without a word look the same as a line that waits; a hold with no end
+ * would leave the user's messages unread with nobody told. The first step of {@link AGAIN_S}. */
+export const UNREAD_S = AGAIN_S[0];
 
 /** The most wakes for one unread message, and the most for one fleet in an hour. */
 export const WAKES_MAX = 3;
@@ -92,8 +112,8 @@ export interface Heard {
   readonly unread: number;
   /** The id of the oldest unread message: with the fleet, the key a wake is counted under. */
   readonly first: number | undefined;
-  /** When it was written, in ms; undefined when its stamp does not read (then it has waited long enough). */
-  readonly sinceMs: number | undefined;
+  /** When the host's last watch ended, in ms; undefined when none left a mark (none ran, or it was killed). */
+  readonly leftMs: number | undefined;
 }
 
 /** The session that hosts a fleet, as the hub reads it. */
@@ -109,14 +129,15 @@ export interface Session {
   readonly writtenMs: number | undefined;
   /** Whether its last entry is a usage-limit error whose limit can still be in force ({@link limitInForce}). */
   readonly limited: boolean;
-  /** Whether a tool call of its turn awaits its result (transcripts.ts `toolAwaited`): it is in a turn,
-   * however quiet its transcript. */
-  readonly inCall: boolean;
+  /** Where its turn stands in its transcript (transcripts.ts `turnOf`); `open` when it has none to read. */
+  readonly turn: Turn;
 }
 
 /** One wake written, or tried. */
 export interface Wake {
-  /** When, as a stamp. */
+  /** When, as a stamp to the millisecond (clock.ts `stampMsOf`): it is compared with the transcript's last
+   * write ({@link queued}), and the two are often in one second. A record written before 2026-10-13 has it
+   * to the second, and reads as the start of that second. */
   readonly at: string;
   /** The oldest unread message it was for. */
   readonly first: number;
@@ -134,7 +155,7 @@ export interface WakeRecord {
 }
 
 /** Why the hub does not wake a fleet now. */
-export type Why = "listening" | "nothing unread" | "paused" | "done" | "unknown" | "gone" | "limit" | "young" | "busy" | "queued" | "backoff" | "spent" | "cap";
+export type Why = "listening" | "nothing unread" | "paused" | "done" | "unknown" | "gone" | "limit" | "handover" | "busy" | "queued" | "backoff" | "spent" | "cap";
 
 export type Verdict = { readonly wake: true } | { readonly wake: false; readonly why: Why };
 
@@ -142,34 +163,63 @@ const no = (why: Why): Verdict => ({ wake: false, why });
 
 const msOf = (wake: Wake): number => parseInstant(wake.at) ?? 0;
 
-/** The last wake that was written, when the session has not written its transcript since: it sits in the
- * session's inbox, unread, and another would only queue behind it and cost a turn of its own. Undefined when
- * the session wrote after it, when no wake was written, and for a session with no transcript to read. */
-export function queued(record: WakeRecord | undefined, session: Session): Wake | undefined {
+/**
+ * The last wake that was written, while it holds the next: the session has not written its transcript since,
+ * so the line sits in its inbox, unread, and another would only queue behind it and cost a turn of its own.
+ * Undefined when the session wrote after it, when no wake was written, and for a session with no transcript
+ * to read. And undefined when nothing can read it any more: the session is gone (the inbox died with its
+ * process), or the wake is {@link UNREAD_S} old at `nowMs` (taken for lost; the backoff and the hour's cap
+ * pace what follows). So the hold always ends.
+ *
+ * Both instants are to the millisecond, the transcript's cut to it as the wake's stamp is: a wake follows the
+ * close of a turn within the second (the hub looks when the user writes), and the turn a wake begins may end
+ * within the wake's own second (a usage-limit or a login error). A write in the wake's own millisecond is
+ * taken for the earlier of the two. A wake of an old record, stamped to the second, reads as the start of its
+ * second: a write later in that second counts as after it, as before stamps had the fraction, which errs to
+ * one wake too many and never to a hold.
+ */
+export function queued(record: WakeRecord | undefined, session: Session, nowMs: number): Wake | undefined {
   const last = (record?.wakes ?? []).findLast((w) => w.error === null);
 
-  return last !== undefined && session.writtenMs !== undefined && session.writtenMs <= msOf(last) ? last : undefined;
+  if (last === undefined || session.writtenMs === undefined || session.there.is === "gone") return undefined;
+
+  return Math.floor(session.writtenMs) <= msOf(last) && nowMs - msOf(last) < UNREAD_S * 1000 ? last : undefined;
 }
 
 /** How many wakes were written or tried for the fleet in the hour before `nowMs`, the user's among them. */
 const inHour = (wakes: readonly Wake[], nowMs: number): Wake[] => wakes.filter((w) => nowMs - msOf(w) < HOUR_MS);
 
 /**
+ * Whether the session is in a turn. A turn its transcript says is finished is none, however lately it was
+ * written; a tool call that awaits its result is one, however long ago. Where the transcript does not tell
+ * (`open`: the model thinks or writes, or the turn ended with no mark), it is one until the transcript was
+ * quiet for {@link IDLE_S}. A session with no transcript to read is in none, and neither is one that is gone:
+ * a dead process runs no call, whatever its transcript ends in.
+ */
+export function inTurn(session: Session): boolean {
+  if (session.turn === "finished" || session.there.is === "gone") return false;
+
+  return session.turn === "call" || (session.idleS !== undefined && session.idleS < IDLE_S);
+}
+
+/**
  * Whether the hub may wake a fleet's host now.
  *
  * Never: a host whose watch runs, nothing unread, a fleet paused or done, a session whose last entry is a
  * usage-limit error still in force. Not now: the machine did not say whether the session is there
- * (`unknown`: the next look asks again); the oldest unread message has waited less than `unheardS`; the
- * session is in a turn (`busy`: its transcript was written less than {@link IDLE_S} ago, or a tool call of
- * its turn awaits its result); the last wake written was not read yet ({@link queued}). Then the backoff,
- * counted over the hub's own wakes for the oldest unread message: the first at once, the second no sooner
- * than 10 min after it, the third no sooner than 30 min after that, and no fourth; and whatever the message
- * and whoever asked, at most {@link WAKES_MAX} in an hour. A wake that could not be written counts as one, so
- * a socket that refuses is not tried every look. Last, a session that is not there (`gone`): {@link wakePass}
- * records that as a wake that failed, so it is paced as one, and whoever reads the record knows the hub
- * cannot wake this fleet.
+ * (`unknown`: the next look asks again); the host's watch ended less than {@link HANDOVER_S} ago (`handover`:
+ * the session is being told, and takes a turn; a mark further in the future than that holds nothing); the
+ * session is in a turn ({@link inTurn}: `busy`); the last wake written still holds ({@link queued}: not read
+ * yet, for at most {@link UNREAD_S}). Neither of the two holds for a session that is gone. How
+ * long the message has waited is not asked: a session whose turn is finished is woken at once. Then the
+ * backoff, counted over the hub's own wakes for the oldest unread message: the first at once, the second no
+ * sooner than 10 min after it, the third no sooner than 30 min after that, and no fourth; and whatever the
+ * message and whoever asked, at most {@link WAKES_MAX} in an hour. A wake that could not be written counts as
+ * one, so a socket that refuses is not tried every look. Last, a session that is not there (`gone`):
+ * {@link wakePass} records that as a wake that failed, so it is paced as one, and whoever reads the record
+ * knows the hub cannot wake this fleet.
  */
-export function mayWake(heard: Heard, record: WakeRecord | undefined, session: Session, nowMs: number, unheardS: number): Verdict {
+export function mayWake(heard: Heard, record: WakeRecord | undefined, session: Session, nowMs: number): Verdict {
   if (heard.on) return no("listening");
 
   if (heard.unread === 0 || heard.first === undefined) return no("nothing unread");
@@ -180,11 +230,11 @@ export function mayWake(heard: Heard, record: WakeRecord | undefined, session: S
 
   if (session.limited) return no("limit");
 
-  if (heard.sinceMs !== undefined && nowMs - heard.sinceMs < unheardS * 1000) return no("young");
+  if (heard.leftMs !== undefined && Math.abs(nowMs - heard.leftMs) < HANDOVER_S * 1000) return no("handover");
 
-  if (session.inCall || (session.idleS !== undefined && session.idleS < IDLE_S)) return no("busy");
+  if (inTurn(session)) return no("busy");
 
-  if (queued(record, session) !== undefined) return no("queued");
+  if (queued(record, session, nowMs) !== undefined) return no("queued");
   const wakes = record?.wakes ?? [];
   const mine = wakes.filter((w) => w.first === heard.first && w.by === "hub");
   const last = mine.at(-1);
@@ -216,18 +266,19 @@ export function wakeWorks(record: WakeRecord | undefined, first: number | undefi
   return inHour(wakes, nowMs).length < WAKES_MAX;
 }
 
-/** Why the user's "Wake now" is held, and until when if a time ends it. */
+/** Why the user's "Wake now" is held, and until when: every hold ends with time. */
 export interface Held {
   readonly why: string;
-  /** When it may be used again, in ms; undefined when no time ends the hold (the session must read first). */
-  readonly againMs: number | undefined;
+  /** When it may be used again at the latest, in ms. A wake that is read frees it sooner. */
+  readonly againMs: number;
 }
 
 /**
  * Why the user's "Wake now" is held for a fleet, or undefined when it may be used: one in {@link NOW_S}; at
  * most {@link WAKES_MAX} wakes in an hour, the hub's and the user's together; and none while the last wake
- * written was not read ({@link queued}). The button skips what the hub waits for (the backoff, the idle
- * time, the usage limit, the message's age), never these: each wake costs the session a turn.
+ * written was not read ({@link queued}), which is until the session writes its transcript, and at the latest
+ * {@link UNREAD_S} after that wake. The button skips what the hub waits for (the backoff, the turn, the watch
+ * that just ended, the usage limit), never these: each wake costs the session a turn.
  */
 export function nowHeld(record: WakeRecord | undefined, session: Session, nowMs: number): Held | undefined {
   const wakes = record?.wakes ?? [];
@@ -238,7 +289,9 @@ export function nowHeld(record: WakeRecord | undefined, session: Session, nowMs:
 
   if (recent.length >= WAKES_MAX) return { why: `${String(WAKES_MAX)} wakes in the last hour, the most a fleet is written`, againMs: msOf(recent[recent.length - WAKES_MAX] ?? recent[0] ?? { at: "", first: 0, by: "hub", error: null }) + HOUR_MS };
 
-  return queued(record, session) === undefined ? undefined : { why: "the session has not read the last wake yet: another would queue behind it", againMs: undefined };
+  const unread = queued(record, session, nowMs);
+
+  return unread === undefined ? undefined : { why: "the session has not read the last wake yet: another would queue behind it", againMs: msOf(unread) + UNREAD_S * 1000 };
 }
 
 /**
@@ -376,7 +429,7 @@ export function sessionOf(machine: Machine, entry: Entry, socks: string, probe: 
     idleS: written === undefined ? undefined : machine.now().getTime() / 1000 - written,
     writtenMs: written === undefined ? undefined : written * 1000,
     limited: hit !== undefined && limitInForce(hit, windowsOf(machine.registry.place.home, accountOf(machine.env)), machine.now().getTime()),
-    inCall: transcript !== undefined && toolAwaited(transcript, startedMs === undefined ? undefined : startedMs - 1000),
+    turn: transcript === undefined ? "open" : turnOf(transcript, startedMs === undefined ? undefined : startedMs - 1000),
   };
 }
 
@@ -603,6 +656,8 @@ interface Deaf {
   /** The oldest unread message: its id, and when it was written. */
   readonly first: number;
   readonly since: string;
+  /** When the host's last watch ended, in ms (the mark it leaves, chat.ts `leftPath`); undefined without one. */
+  readonly leftMs: number | undefined;
 }
 
 /**
@@ -610,7 +665,8 @@ interface Deaf {
  * that. The hub's own reading, not `listening`'s: that one counts a host as reading for ten minutes after its
  * watch ended or it spoke, which would keep the commonest disconnection (the watch exits on a message, the
  * host answers and ends its turn without arming the next) unwoken for those ten minutes. What that grace is
- * for, a host busy with the message its watch just printed, the idle check covers.
+ * for, a host busy with the message its watch just printed, the turn covers ({@link inTurn}), and the moment
+ * before that turn is in the transcript {@link HANDOVER_S} does.
  */
 function deafAt(machine: Machine, dir: string): Deaf | "watching" | "nothing unread" {
   if (watchLive(machine, dir)) return "watching";
@@ -618,7 +674,10 @@ function deafAt(machine: Machine, dir: string): Deaf | "watching" | "nothing unr
   const unread = unreadFromUser(dir, seen);
   const first = unread[0];
 
-  return first === undefined ? "nothing unread" : { seen, unread: unread.length, first: first.id, since: pyText(first.at) };
+  if (first === undefined) return "nothing unread";
+  const left = mtimeOf(leftPath(dir, hostOf(dir)));
+
+  return { seen, unread: unread.length, first: first.id, since: pyText(first.at), leftMs: left === undefined ? undefined : left * 1000 };
 }
 
 const isDeaf = (read: Deaf | string): read is Deaf => read !== String(read);
@@ -647,7 +706,7 @@ export interface Reach {
  */
 async function wakeOne(machine: Machine, wakes: Wakes, to: Reach, entry: Entry, deaf: Deaf, by: Wake["by"]): Promise<Woken | undefined> {
   const text = wakeText(entry.id, entry.dir, hostOf(entry.dir), deaf.unread, deaf.seen);
-  const wake: Wake = { at: stampOf(machine.now()), first: deaf.first, by, error: null };
+  const wake: Wake = { at: stampMsOf(machine.now()), first: deaf.first, by, error: null };
 
   if (text instanceof Error) {
     const failed: Wake = { ...wake, error: text.message };
@@ -668,7 +727,7 @@ async function wakeOne(machine: Machine, wakes: Wakes, to: Reach, entry: Entry, 
   return { fleet: entry.id, dir: entry.dir, wake: done.written ? reserved.wake : reserved.fail(done.why) };
 }
 
-/** `FLEET_UNHEARD_S` as a manager's watch reads it: a number, else {@link UNHEARD_S}. */
+/** `FLEET_UNHEARD_S` as a manager's watch reads it: a number, else {@link UNHEARD_S}. The page's, not the wake's. */
 function unheardSeconds(env: (name: string) => string | undefined): number {
   const given = Number(env("FLEET_UNHEARD_S"));
 
@@ -735,7 +794,6 @@ function readFleet(machine: Machine, wakes: Wakes, to: Reach, entry: Entry): Rea
  * a fleet that cannot be read is left out, with its failed look recorded, and the others are looked at.
  */
 export async function wakePass(machine: Machine, wakes: Wakes, socks: string, send: Send = deliver, probe: Probe = PROBE): Promise<Woken[]> {
-  const unheardS = unheardSeconds(machine.env);
   const to: Reach = { socks, send, probe };
   const done: Woken[] = [];
 
@@ -744,8 +802,8 @@ export async function wakePass(machine: Machine, wakes: Wakes, socks: string, se
       const read = readFleet(machine, wakes, to, entry);
 
       if (read === undefined) return undefined;
-      const heard: Heard = { on: false, unread: read.deaf.unread, first: read.deaf.first, sinceMs: parseInstant(read.deaf.since) };
-      const verdict = mayWake(heard, wakes.of(entry.dir), read.session, read.nowMs, unheardS);
+      const heard: Heard = { on: false, unread: read.deaf.unread, first: read.deaf.first, leftMs: read.deaf.leftMs };
+      const verdict = mayWake(heard, wakes.of(entry.dir), read.session, read.nowMs);
 
       // `gone` is the last of the reasons: all else allowed a wake, and there is nobody to write it to.
       return !verdict.wake && verdict.why !== "gone" ? undefined : wakeOne(machine, wakes, to, entry, read.deaf, "hub");
@@ -757,9 +815,13 @@ export async function wakePass(machine: Machine, wakes: Wakes, socks: string, se
   return done;
 }
 
+/** When a hold ends, as a stamp: the first whole second at or after `ms`, so that nobody who reads it asks a
+ * fraction of a second early. */
+const untilStamp = (ms: number): string => stampOf(new Date(Math.ceil(ms / 1000) * 1000));
+
 /** Why the user's "Wake now" wrote nothing: `held` when a limit of its own holds it ({@link nowHeld}; `again`
- * is when it may be used, a stamp, when a time ends the hold), else there is nothing to wake or nobody to
- * write to. */
+ * is when it may be used at the latest, a stamp), else there is nothing to wake or nobody to write to (`again`
+ * is null). */
 export interface NotWoken {
   readonly why: string;
   readonly held: boolean;
@@ -767,14 +829,15 @@ export interface NotWoken {
 }
 
 /**
- * The user's "Wake now" for `entry`'s fleet: one wake at once, whatever the hub's backoff, the idle time, the
- * usage limit and the message's age say (the user knows what the hub cannot). Its own limits hold
+ * The user's "Wake now" for `entry`'s fleet: one wake at once, whatever the hub's backoff, the session's turn,
+ * the watch that just ended and the usage limit say (the user knows what the hub cannot). Its own limits hold
  * ({@link nowHeld}): one a minute, the hour's {@link WAKES_MAX} with the hub's, none while the last was not
- * read. It is recorded as the hub's are and counts in the hour's; it neither restarts nor advances the hub's
- * count for the message. A `why` when it is held, when there is nothing to wake (a watch runs, nothing waits
- * unread) or when the session is not there; then nothing is written and nothing recorded. It reads, decides and
- * writes in the fleet's turn ({@link Wakes.serial}): of any number asked at once, and the hub's look with
- * them, one is written and the others are held by it. It rejects when the fleet cannot be read.
+ * read ({@link UNREAD_S} at most). It is recorded as the hub's are and counts in the hour's; it neither
+ * restarts nor advances the hub's count for the message. A `why` when it is held, when there is nothing to
+ * wake (a watch runs, nothing waits unread) or when the session is not there; then nothing is written and
+ * nothing recorded. It reads, decides and writes in the fleet's turn ({@link Wakes.serial}): of any number
+ * asked at once, and the hub's look with them, one is written and the others are held by it. It rejects when
+ * the fleet cannot be read.
  */
 export function wakeNow(machine: Machine, wakes: Wakes, socks: string, entry: Entry, send: Send = deliver, probe: Probe = PROBE): Promise<Woken | NotWoken> {
   const not = (why: string, held = false, again: string | null = null): NotWoken => ({ why, held, again });
@@ -788,7 +851,7 @@ export function wakeNow(machine: Machine, wakes: Wakes, socks: string, entry: En
     const session = sessionOf(machine, entry, socks, probe);
     const held = nowHeld(wakes.of(entry.dir), session, machine.now().getTime());
 
-    if (held !== undefined) return not(`not woken: ${held.why}`, true, held.againMs === undefined ? null : stampOf(new Date(held.againMs)));
+    if (held !== undefined) return not(`not woken: ${held.why}`, true, untilStamp(held.againMs));
 
     if (session.there.is === "gone") return not(`the session is gone (${session.there.why}): there is nobody to write to. Open it in a terminal`);
     const woken = session.there.is === "unknown" ? undefined : await wakeOne(machine, wakes, { socks, send, probe }, entry, deaf, "user");
@@ -799,16 +862,19 @@ export function wakeNow(machine: Machine, wakes: Wakes, socks: string, entry: En
 
 /**
  * What the page shows of a fleet whose host has no watch running while the user's messages wait, once the
- * oldest has waited `FLEET_UNHEARD_S` (the wake's own threshold, so the line does not flash during an
- * ordinary exchange); undefined otherwise, and for a fleet paused or done, which the hub leaves alone. Since
+ * oldest has waited `FLEET_UNHEARD_S` (so the line does not flash during an ordinary exchange: a second
+ * message to a host at work on the first, or the seconds a wake takes to be answered), and sooner when the
+ * hub cannot wake the session (a wake for the message failed, its three are spent, a usage limit is in
+ * force); undefined otherwise, and for a fleet paused or done, which the hub leaves alone. Since
  * when and how many, the oldest's id, when it was woken for it, and where it stands (`end`, null while the
  * hub still wakes): `gone` (the session is not there, with `why`), `unknown` (the machine did not say; the
  * hub asks again), `limit` (a usage-limit error still in force), `failed` (the last wake could not be
  * written, with `why`), `spent` ({@link WAKES_MAX} wakes of the hub and no answer), `queued` (the last wake
- * was not read yet), `busy` (a tool call of its turn awaits its result). And the user's "Wake now": `held`
- * says why it cannot be used now, `again` when it can when a time ends the hold ({@link nowHeld}). `heard`
- * is what the view already read: with nothing unread there, nothing more is read. It never throws into the
- * page: of a fleet that cannot be read it says nothing, and {@link Wakes.blindView} says why.
+ * was not read yet, and is less than {@link UNREAD_S} old), `busy` (a tool call of its turn awaits its
+ * result). And the user's "Wake now": `held` says why it cannot be used now, `again` when it can at the latest
+ * ({@link nowHeld}). `heard` is what the view already read: with nothing unread there, nothing more is read.
+ * It never throws into the page: of a fleet that cannot be read it says nothing, and {@link Wakes.blindView}
+ * says why.
  */
 export function deafView(machine: Machine, wakes: Wakes, socks: string, entry: Entry, heard: Listening, probe: Probe = PROBE): JsonObject | undefined {
   try {
@@ -825,8 +891,6 @@ function deafRead(machine: Machine, wakes: Wakes, socks: string, entry: Entry, h
   if (!isDeaf(deaf)) return undefined;
   const sinceMs = parseInstant(deaf.since);
   const nowMs = machine.now().getTime();
-
-  if (sinceMs !== undefined && nowMs - sinceMs < unheardSeconds(machine.env) * 1000) return undefined;
   const session = sessionOf(machine, entry, socks, probe);
 
   if (session.status === "paused" || session.status === "done") return undefined;
@@ -844,11 +908,17 @@ function deafRead(machine: Machine, wakes: Wakes, socks: string, entry: Entry, h
           ? "failed"
           : spent
             ? "spent"
-            : queued(record, session) !== undefined
+            : queued(record, session, nowMs) !== undefined
               ? "queued"
-              : session.inCall
+              : session.turn === "call"
                 ? "busy"
                 : null;
+
+  // A session that is not there has a failed wake only once nothing else held the hub (`gone` is the last of
+  // its reasons): until then, as in a handover or a backoff, it is not said to be gone while the message is young.
+  const cannot = end === "limit" || failed !== null || spent;
+
+  if (!cannot && sinceMs !== undefined && nowMs - sinceMs < unheardSeconds(machine.env) * 1000) return undefined;
 
   const held = nowHeld(record, session, nowMs);
 
@@ -860,6 +930,6 @@ function deafRead(machine: Machine, wakes: Wakes, socks: string, entry: Entry, h
     end,
     why: session.there.is !== "there" ? session.there.why : end === "failed" ? failed : null,
     held: held?.why ?? null,
-    again: held?.againMs === undefined ? null : stampOf(new Date(held.againMs)),
+    again: held === undefined ? null : untilStamp(held.againMs),
   };
 }

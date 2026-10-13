@@ -415,11 +415,11 @@ export class Hub {
   }
 
   /** Wake each served fleet's host that does not listen while the user's messages wait, when it may be woken
-   * (wake.ts `mayWake`): one line to its session's socket, recorded. Runs every WAKE_MS, one look at a time.
-   * What it wrote or tried. A fleet that cannot be read is that fleet's failed look (wake.ts `Wakes.failed`:
-   * logged once, on the page as `blind`), and the others are looked at. A look that fails as a whole (the
-   * registry does not read) wrote nothing and is logged when its reason is new; the next run tries again: it
-   * never throws into the server. */
+   * (wake.ts `mayWake`): one line to its session's socket, recorded. Runs every WAKE_MS and with each message
+   * of the user's the hub takes ({@link wakeSoon}), one look at a time. What it wrote or tried. A fleet that
+   * cannot be read is that fleet's failed look (wake.ts `Wakes.failed`: logged once, on the page as `blind`),
+   * and the others are looked at. A look that fails as a whole (the registry does not read) wrote nothing and
+   * is logged when its reason is new; the next run tries again: it never throws into the server. */
   async wakeHosts(): Promise<Woken[]> {
     this.waking ??= wakePass(this.options.machine, this.wakes, this.socks, this.options.send ?? deliver, this.options.session)
       .then((done) => {
@@ -987,6 +987,15 @@ export class Hub {
     }
   }
 
+  /** Look now for a host to wake: the hub took a message of the user's, and a host that is idle and deaf is
+   * woken for it at once, not at the timer's next look. A look that runs now may have passed the message's
+   * fleet already, so another follows it. It never throws into the server ({@link wakeHosts}). */
+  private wakeSoon(): void {
+    const running = this.waking;
+
+    void (running === undefined ? this.wakeHosts() : running.then(() => this.wakeHosts()));
+  }
+
   /** `POST /f/<fleet>/wake` `{}`, or on the manager's page `{"fleet": "<id>"}` for one of its fleets: Luiz's
    * "Wake now" on a host that does not listen. Checked as a chat post is. One wake is written to the session's
    * socket at once, whatever the hub's backoff says (wake.ts `wakeNow`), under its own limits: one a minute, the
@@ -1372,6 +1381,9 @@ export class Hub {
       const message = written.at(-1);
 
       if (message === undefined) return jsonResponse(500, { error: "could not store the message: nothing was written" });
+      // The message is in the chat, and in each coordinator's it was delivered to: a host of theirs that has
+      // no watch running is woken now.
+      this.wakeSoon();
       const batch = riding === undefined ? {} : { batch: written[0]?.stored ?? null };
 
       const note = "granted" in granted ? granted.granted : undefined;

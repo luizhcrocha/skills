@@ -42,7 +42,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `CLAUDE_CONFIG_DIR` | spend.py | where transcripts are (`~/.claude`): `projects/<project>/<session>.jsonl`, workers under `<session>/subagents/agent-<id>.jsonl` |
 | `FLEET_DISCOVER=0` | served.py | skip discovering the machine's served ports (tests) |
 | `FLEET_CHECK_S` | chat.py | how often a manager's or coordinator's watch looks at the fleets (default 30 s) |
-| `FLEET_UNHEARD_S` | chat.py, the hub | how long the user's message waits unread before a manager's watch tells, or, while a hub runs, before the hub wakes the host's session (default 120 s). See [The hub's wake](#the-hubs-wake) |
+| `FLEET_UNHEARD_S` | chat.py, the hub | how long the user's message waits unread before a manager's watch tells, or, while a hub runs, before the page says the host does not listen (default 120 s). The hub's wake does not wait for it (since 2026-10-13). See [The hub's wake](#the-hubs-wake) |
 | `FLEET_UNANSWERED_S` | chat.py | how long the user's message to a fleet's host goes without a reply (`--re`) before a manager's watch tells, read or not (default 600 s) |
 | `FLEET_NUDGE_S` | chat.py | how long a message to a worker waits unanswered before the coordinator's watch tells (default 600 s, L1) |
 | `FLEET_WATCH_SETTLE` | chat.py | how long a `--once` watch waits after a new line for more before it exits (default 30 s; `--settle` wins) |
@@ -2519,20 +2519,56 @@ that names anything but a session is never written to. When the machine does not
 or an `lsof` that fails or times out) the session is **unknown**, not gone: nothing is written and nothing
 recorded, the page says so, and the next look asks again.
 
-**When.** Every 30 s the hub looks at each fleet being served, the manager's too. It writes one wake when
-all of this holds (`mayWake`, one function of what was read: the watch and the unread messages, the record,
-the session, now):
+**When.** The hub looks at each fleet being served, the manager's too, when it takes a message of the
+user's (`POST chat`, once the message is in the chat and in each coordinator's it was delivered to; a look
+that runs then is followed by another, since it may have passed the message's fleet already) and every
+10 s (`WAKE_MS`), which is what finds a turn that ended with no watch armed, a limit that was lifted and a
+message written with `fleet chat say`. No time is waited for: a session that is idle and deaf is woken at
+the look that finds it so, which for a message from the page is the one taken with it. Luiz, 2026-10-13:
+"makes no sense to have to wait 2m." Before, the oldest unread message had to wait `FLEET_UNHEARD_S`
+(120 s), the transcript had to be 30 s quiet and the hub looked every 30 s: 2 to 2.5 minutes for a session
+that was plainly idle. One look over ten served fleets took 76 ms (measured 2026-10-13: 57 ms of it finding
+each fleet's watch among the processes; a deaf fleet adds about 4 ms for its session), so 0.8 % of the
+hub's time at 10 s. It writes one wake when all of this holds (`mayWake`, one function of what was read:
+the watch and the unread messages, the record, the session, now):
 
 | | |
 | :-- | :-- |
-| no watch of the host runs | no live `--once` watch as the host, by its pid file and the running processes; an orphaned one is none ([Whose watch](#whose-watch-typescript-only)). This is not [`listening`](#chatpy-the-chat)'s `on`, which also counts a host as reading for 10 minutes after its watch ended or it spoke: that grace is the page's and the manager's, not the hub's. The commonest disconnection is a watch that exits on a message, a host that answers and ends its turn without arming the next, and a second message a minute later; with the grace it would be woken 10 minutes after the watch left. What the grace is for, a host busy with the message its watch just printed, the idle check below covers, and a wake that lands mid-turn costs one turn (measured) |
-| the user's messages wait | the user's messages after the host's cursor that nobody answered (`listening`'s `unread`), and the oldest of them has waited `FLEET_UNHEARD_S` (120 s) |
+| no watch of the host runs | no live `--once` watch as the host, by its pid file and the running processes; an orphaned one is none ([Whose watch](#whose-watch-typescript-only)). This is not [`listening`](#chatpy-the-chat)'s `on`, which also counts a host as reading for 10 minutes after its watch ended or it spoke: that grace is the page's and the manager's, not the hub's. The commonest disconnection is a watch that exits on a message, a host that answers and ends its turn without arming the next, and a second message a minute later; with the grace it would be woken 10 minutes after the watch left. What the grace is for, a host busy with the message its watch just printed, the two rows on its watch and its turn below cover, and a wake that lands mid-turn costs one turn (measured) |
+| the user's messages wait | the user's messages after the host's cursor that nobody answered (`listening`'s `unread`). How long they have waited is not asked |
+| its watch did not just end | the mark a watch leaves when it ends (`watch-<role>.left`) is 5 s old or more (`HANDOVER_S`). A watch touches it when it exits and when a signal stops it; two leave none: a watch that was killed (SIGKILL), and one that stood down because it hears for nobody ([Whose watch](#whose-watch-typescript-only)), which handed nothing to anyone. A watch that exits is a background command that ended: Claude Code tells the session, and the turn that begins is not in the transcript yet. Measured (2026-10-13, Claude Code 2.1.296): the notification was written 3, 4 and 11 ms after the command's last act, and the turn's first line a median 30 ms after that. The ordinary path needs no more: a watch writes its cursor before it ends, so the message it printed is not unread; this row is for the user's next message, written in those milliseconds |
 | the fleet runs | its ledger's `status` is neither `paused` nor `done` |
 | the session is there | the checks of **Whom**, above. `unknown` waits for the next look. `gone` is looked at last: when everything else allows a wake, the hub records one that failed, with the reason, and writes nothing; so it is paced as a wake is, and the record says the hub cannot wake this fleet |
 | it is not at its usage limit | its transcript's last entry is not a usage-limit error whose limit can still be in force (below) |
-| it is idle | its transcript was not written for 30 s (the file's mtime, as the page's "last active" reads it), and no tool call of its turn awaits its result (below). Mid-turn the hook's nudge tells the session, and the hub waits. A session with no transcript to read counts as idle |
-| no wake waits unread | the last wake that was written was followed by a write of the transcript (its mtime is later than the wake). Until then the line sits in the session's inbox, and a second would only queue behind it and cost a turn of its own: never more than one undelivered wake for a fleet, the user's included. A session with no transcript to read has only the backoff |
+| it is not in a turn | its transcript says the turn is finished; or says neither that nor that a tool call awaits its result, and was not written for 30 s (`inTurn`; below). Mid-turn the hook's nudge tells the session, and the hub waits. A session with no transcript to read is in none, and neither is one that is gone: a dead process runs no call, whatever its transcript ends in (a session killed in the middle of a tool call leaves a `tool_use` with no result for good), so `gone` is reached and its failed wake recorded |
+| no wake waits unread | the last wake that was written was followed by a write of the transcript, or is 10 minutes old, or its session is gone (**A wake that waits**, below). Until then the line sits in the session's inbox, and a second would only queue behind it and cost a turn of its own, the user's included. A session with no transcript to read has only the backoff |
 | the backoff allows it | counted over the hub's own wakes for the oldest unread message's id: the first wake at once, the second no sooner than 10 min after the first, the third no sooner than 30 min after the second, and no fourth; and, whatever the message and whoever asked, at most 3 for one fleet in an hour, the user's "Wake now" among them. Another message becoming the oldest (the session read and went deaf again) starts a new count, under the same hour. A wake that could not be written counts as one |
+
+**A wake that waits** holds the next one (`queued`), and the hold always ends. A wake was read when the
+transcript was written after it: the transcript's mtime, cut to the millisecond, is later than the wake's
+stamp, which is to the millisecond too (`stampMsOf`; a write in the wake's own millisecond is taken for the
+earlier of the two). The two are often in one second, both ways. A wake follows a turn's close within it,
+since the hub looks when the user writes. And the turn a wake begins may end within it: measured
+2026-10-13, the whole turn was in one clock second for 8 of 140 turns that ended on a usage-limit error
+and for 7 of 13 that ended on a failed login. A stamp to the second misreads one of the two, whichever
+way a write in the wake's own second is taken: for after it, and a second wake queues behind a first that
+followed a close; for before it, and a wake whose turn ended in its own second reads as unread with no
+end (no later wake, "Wake now" refused, the manager not told).
+
+The hold ends by the first of three:
+
+| | |
+| :-- | :-- |
+| the session writes its transcript | the wake was read; or the session was at work when the line landed, and takes it when its turn ends |
+| its process is gone | the inbox died with it. Nothing holds the hub then but the backoff, and `gone` records the failed wake |
+| the wake is 10 minutes old (`UNREAD_S`, the backoff's first step) | it is taken for lost. The socket answers nothing, so a line the session dropped (its inbox's rate limit, a peer's message held for approval, a release that changed the line's format), a process that hangs and a session started again in another process without a word all look the same as a line that waits. With no end to the hold, the user's messages stayed unread and nobody was told |
+
+After the 10 minutes the backoff and the hour's cap pace what follows. For a session that never writes:
+the hub's second wake at 10 minutes, its third 30 minutes after that, then `spent`, which the page says
+and a manager's watch tells (**Said once**, below). What it can cost: if the line did wait (the user woke
+by hand a session in a long call), the next wake queues behind it, one turn, within the hour's three. A
+wake recorded before stamps had the fraction (to the second) reads as the start of its second: a write
+later in that second counts as after it, which errs to one wake too many, never to a hold.
 
 **One at a time for a fleet.** The limits above and "Wake now"'s own are read from the record, so two
 deciders that read it before either wrote would both write. Measured before this rule (2026-10-12): 20
@@ -2561,17 +2597,51 @@ is not this: its session reads as one with nothing in its transcript (no usage l
 idle by the file's mtime, and the registry lists the fleet as before (the title it last read stands). A look
 that fails as a whole (the registry does not read) wrote nothing; it is logged when its reason is new.
 
-**In a turn, though the transcript is quiet.** A tool call writes nothing to the transcript while it runs,
-so a quiet transcript is not an idle session: a build, a subagent in the foreground or a permission prompt
-nobody answered each leave it untouched for minutes, and a wake written then is queued and costs a turn
-(measured: a line written while a turn runs is run as a turn of its own after it). The transcript says it
-(`toolAwaited`, read 2026-10-12 in Claude Code 2.1.29x transcripts): an `assistant` line carries a
-`tool_use` block with its `id`, and its result is a later `user` line with a `tool_result` naming that id;
-an interrupted call is given a result too. The session is in a call when a `tool_use` in the transcript's
-last 256 KiB has no result after it. A `user` line with no result that is not `isMeta` is a prompt: it
-begins another turn, and what was open before it does not count. A subagent's lines (`isSidechain`) are not
-the session's. A call written before the process that runs now started (the session was closed in the
-middle of it and resumed) is nobody's, and does not hold the wake.
+**The session's turn** is read in its transcript, not guessed from how long it was quiet (`turnOf`, over the
+transcript's last 256 KiB; read 2026-10-13 in transcripts of Claude Code 2.1.286 to 2.1.296: the ten fleet
+hosts', and the 23 interactive sessions of the last six days). It stands in one of three ways:
+
+| | The transcript says | The hub |
+| :-- | :-- | :-- |
+| `finished` | Claude Code closed the turn: a line `"type": "system"`, `"subtype": "turn_duration"`, and no `user` or `assistant` line of the session's after it | wakes at once: the session waits for a prompt, however lately the transcript was written |
+| `call` | a `tool_use` of an `assistant` line has no `tool_result` after it | waits, however quiet the transcript: a tool call writes nothing while it runs (a build, a subagent in the foreground, a permission prompt nobody answered), and a wake written then is queued and costs a turn |
+| `open` | neither: the model has a prompt, a result or a notification to answer and has written nothing yet, or it writes; or the turn ended with no mark (an interrupt, a local command), or the end that is read holds no line of the session's | waits until the transcript was not written for 30 s (`IDLE_S`, the file's mtime), then takes it for idle |
+
+What was measured, and why each line is read as it is:
+
+- The close is written after the Stop hooks ran (`stop_hook_summary` stands before it), a median 0.1 s
+  after the assistant's last line (99 % within 2.5 s), and after an API error as well (88 of 88: a usage
+  limit, a server error, a failed login). A Stop hook that blocks writes none, and the turn goes on: so a
+  session whose Stop guard is arming the watch is in a turn, and one whose turn is closed with no watch
+  armed is deaf. In the ten hosts' transcripts the line after each of 7283 closes was a `user` line; over
+  all 23 sessions an `assistant` line followed a close once in about 9700.
+- The assistant's `stop_reason` does not say it. Every line of one message carries the message's own
+  (`tool_use` on the thinking block before a call), and `end_turn` is written before the Stop hooks ran.
+- A turn begins with a `user` line, written when it begins: a prompt, a `<task-notification>` (a background
+  command ended), or an `isMeta` line (4076 of the 7283). The model's first line came a median 3.8 s after
+  a prompt, a result or a notification (34138 of them), later than 30 s after 179 (0.5 %), later than 120 s
+  after 45; nothing of the session's is written meanwhile. So the 30 s of `open` hold a session that
+  thinks, and one that thinks longer is the 0.5 %: a wake written then is queued, and costs a turn. That
+  is not all of the exposure (**Not covered**, below).
+- A tool call: an `assistant` line carries a `tool_use` block with its `id`, and its result is a later
+  `user` line with a `tool_result` naming that id; an interrupted call is given a result too. A `user`
+  line with no result that is not `isMeta` is a prompt: it begins another turn, and what was open before
+  it does not count.
+- A compaction's summary is a `user` line (`isCompactSummary`) and no prompt: it begins no turn and ends
+  none, and the turn stands where it stood. One of the ten hosts had been compacted 55 minutes after its
+  last close, with nothing after.
+- `queue-operation` lines say nothing of the session's turn: a subagent's background command is enqueued
+  in the session's transcript too (measured).
+- A subagent's lines (`isSidechain`) are not the session's. A call written before the process that runs
+  now started (the session was closed in the middle of it and resumed) is nobody's, and does not hold the
+  wake.
+- A headless session (`entrypoint` `sdk-cli`: `claude -p`, the Agent SDK) writes no close: its turn never
+  reads as finished, and the 30 s decide. The ten hosts were interactive (`cli`) and all read `finished`
+  while idle.
+- The transcript's mtime moves without a line of the session's (6 of the 10 hosts' files were
+  written within the same 3 s with their last line 6 to 25 minutes old; by what was not found), so the 30 s of `open` can be
+  started again by such a write, and "the last wake was read" (below) can be satisfied by one. A finished
+  turn asks no mtime.
 
 What the session's child processes show is not used, and the reason is measured (Linux, Claude Code
 2.1.29x, 2026-10-12, on a session with background subagents at work): a tool call in the foreground and a
@@ -2581,8 +2651,20 @@ so nothing tells them apart; that session had three background commands running,
 and a background subagent's tool calls are children of the same process while the session's own turn has
 ended (its transcript's last entry was the assistant's closing text, 9 minutes old, while a subagent ran a
 tool call every few seconds). A rule "a running tool child means mid-turn" would never wake a host whose
-workers are at work, which is when its chat matters most. Not covered by either check: a turn in which the
-model writes for more than 30 s with no tool call; a wake written then is the one a queue allows.
+workers are at work, which is when its chat matters most.
+
+**Not covered**, and what it costs. An `open` turn is taken for idle once its transcript was quiet for 30 s,
+and a session at work is quiet that long more often than the 0.5 % above says: that figure counts only the
+wait before the model's first line. Measured 2026-10-13 over 163 transcripts: 2.3 % of turns hold a stretch
+of more than 30 s with nothing written and no call awaited, 308 such stretches, and 95 of them follow an
+`assistant` line, not a prompt or a result: the model thinks, then writes a long text or a tool call's
+input, and nothing is in the transcript until the block is whole. Since no time is waited for, the
+message's age shields nothing: a second message to a host at work on the first is exposed from its first
+second, to whichever look falls in such a stretch (before, it had to wait 120 s first). The other gap is
+a watch that left no mark (killed, or stood down) in the milliseconds before its session is told. A wake
+written in either is queued behind the turn and costs the session one turn of its own (measured: a line
+written while a turn runs runs as a turn of its own). The cap bounds it: at most 3 wakes for a fleet in
+an hour, and for one message the backoff's 10 and 30 minutes between them.
 
 **A usage-limit error**, as the transcripts of Claude Code 2.1.29x hold it (read 2026-10-12): one line with
 `"type": "assistant"`, `"isApiErrorMessage": true` and `"error": "rate_limit"` (`apiErrorStatus` 429,
@@ -2625,7 +2707,10 @@ option to a model).
 "<stamp>", "first": <the oldest unread id>, "by": "hub" | "user", "error": null | "<why it was not
 written>"}]}}`. The hub keeps it in memory and writes it through, so a hub that starts again counts the
 wakes of the one before; a file that does not read is no record. A wake is in it from before its line is
-sent (`at` is then), with `error: null` until the send says otherwise. A wake older than an hour is dropped
+sent (`at` is then), with `error: null` until the send says otherwise. `at` is to the millisecond
+(`2026-10-12T14:04:30.250-05:00`), unlike the fleet's other stamps: it is compared with the transcript's
+last write, often within one second (**A wake that waits**, above). A record of before has it to the
+second, and both read (`parseInstant`). A wake older than an hour is dropped
 unless it was for the message that still waits first. The user's wake is recorded as the hub's are: it
 counts in the hour's three, and neither restarts nor advances the hub's count for the message.
 
@@ -2638,21 +2723,24 @@ is told after `FLEET_UNHEARD_S` as before. Its other lines are unchanged.
 
 **The page.** A fleet the hub serves with no watch of its host running while the user's messages wait has
 `deaf` in its view, and in its summary on the manager's page, once the oldest of them has waited
-`FLEET_UNHEARD_S` (the wake's own threshold, so the line does not flash during an ordinary exchange); a
-fleet paused or done has not. No other view has the key (a `fleet state` render, the Python twin, every
+`FLEET_UNHEARD_S` (120 s), so the line does not flash during an ordinary exchange: a second message to a
+host at work on the first, or the seconds a wake takes to be answered. It has it sooner, as soon as the hub
+cannot wake the session: a wake for that message failed (a session that is gone is one, once nothing else
+held the hub), its three are spent, or a usage limit is in force. A fleet paused or done has not. No other view has the key (a `fleet state` render, the Python twin, every
 trace):
 
 ```json
 {"since": "2026-10-12T14:02:11-05:00", "unread": 2, "first": 369,
- "woken": ["2026-10-12T14:04:30-05:00"], "end": null, "why": null, "held": null, "again": null}
+ "woken": ["2026-10-12T14:04:30.250-05:00"], "end": null, "why": null, "held": null, "again": null}
 ```
 
 `since` is the oldest unread message's `at`, `first` its id, `woken` each wake written for it. `end` says
 where it stands, null while the hub still wakes: `gone` (the session is not there; `why` says which check
 failed), `unknown` (the machine did not say; the hub looks again), `limit` (a usage-limit error still in
 force), `failed` (the last wake could not be written; `why` says why), `spent` (three wakes of the hub and
-no answer), `queued` (the last wake was not read yet), `busy` (a tool call of its turn awaits its result).
-`held` says why "Wake now" cannot be used now, and `again` when it can, when a time ends the hold. The page says it in the stuck band as soon as the view has it, in place of the bare "chat not
+no answer), `queued` (the last wake was not read yet, and is less than 10 minutes old), `busy` (a tool call
+of its turn awaits its result). `held` says why "Wake now" cannot be used now, and `again` when it can at
+the latest, a stamp to the second: every hold ends with time. The page says it in the stuck band as soon as the view has it, in place of the bare "chat not
 read" line (which waits five minutes, and the 10 minutes of `listening`): `Not listening since 14:02: 2 messages wait (#369…). Woken 14:04, 14:14.`, a time of day as
 every other on the page; then, by `end`, `The session did not answer 3 wakes: at its usage limit or gone.
 Open it in a terminal.`, `The session is gone (<why>). Open it in a terminal.`, `The hub could not tell
@@ -2676,12 +2764,13 @@ the key.
 
 **Wake now** is `POST /f/<fleet>/wake` with `{}`, or on the manager's page `{"fleet": "<id>"}` for a fleet
 it serves; checked as `POST /chat` is (`postRefusal`: only who may write, `application/json`, same-origin;
-403, 415, 413). It writes one wake at once, whatever the hub's backoff, the idle time, the usage limit and
-the message's age say (the user knows what the hub cannot): 200 `{woken: true, fleet, at}`. It has limits of
+403, 415, 413). It writes one wake at once, whatever the hub's backoff, the session's turn, the watch
+that just ended and the usage limit say (the user knows what the hub cannot): 200 `{woken: true, fleet, at}`. It has limits of
 its own (`nowHeld`), since each wake costs the session a turn and a click costs nothing: at most one for a
 fleet in 60 s; it counts in the hour's three with the hub's, and is refused when they are spent; and none
-while the last wake written was not read. Held by one of them it answers 429 `{error, again}` (`again`: when
-it may be used, null when only the session's reading ends the hold), nothing is written and nothing
+while the last wake written was not read, which is 10 minutes at most (`UNREAD_S`, above). Held by one of
+them it answers 429 `{error, again}` (`again`: when it may be used at the latest; a wake that is read frees
+it sooner), nothing is written and nothing
 recorded, and the page shows the button disabled with the time left (`Wake now (in 42 s)`) or the reason.
 It does not restart the hub's count for the message, and does not advance it. Asked several times at once,
 or with the hub's look, it decides in the fleet's turn (above): one is written, the others are held by it.

@@ -2,7 +2,7 @@
  * The hub's wake (src/wake.ts): the line a session's socket takes, written to a socket this test listens on;
  * when the hub may wake (`mayWake`, with its own clock: no timer, no socket); each reason it does not; the
  * template; the record a restarted hub reads; the usage-limit entry of a transcript and how long it holds
- * (`limitInForce`); a tool call that awaits its result (`toolAwaited`); one look of the hub over
+ * (`limitInForce`); where a session's turn stands in its transcript (`turnOf`); one look of the hub over
  * a registry of its own, with a `send` that writes nowhere; the user's "Wake now" and its own limits.
  *
  * Whom a wake is written to is asked of the machine through one seam (host.ts `Probe`). Most tests give
@@ -22,13 +22,15 @@ import { FLEET_BIN } from "../src/files.ts";
 import { PROBE, type Presence, type Probe } from "../src/host.ts";
 import { runningOf, startedOf } from "../src/procs.ts";
 import type { Entry } from "../src/registry.ts";
-import { toolAwaited, usageLimitHit, type LimitHit } from "../src/transcripts.ts";
+import { turnOf, usageLimitHit, type LimitHit, type Turn } from "../src/transcripts.ts";
 import {
   AGAIN_S,
   deafView as deafViewWith,
   deliver,
   deliverTo,
+  HANDOVER_S,
   IDLE_S,
+  inTurn,
   LIMIT_S,
   limitInForce,
   lineOf,
@@ -38,7 +40,7 @@ import {
   queued,
   socketOf,
   socksDir,
-  UNHEARD_S,
+  UNREAD_S,
   wakeNow as wakeNowWith,
   wakePass as wakePassWith,
   Wakes,
@@ -55,8 +57,8 @@ import {
   type WakeRecord,
   type Woken,
 } from "../src/wake.ts";
-import { listening, type Listening } from "../src/chat/chat.ts";
-import { stampOf } from "../src/clock.ts";
+import { leftPath, listening, type Listening } from "../src/chat/chat.ts";
+import { parseInstant, stampMsOf, stampOf } from "../src/clock.ts";
 import { asArray, type JsonObject } from "../src/json.ts";
 import type { WindowReading } from "../src/usage.ts";
 import { machineOf, type Machine } from "../src/world.ts";
@@ -181,16 +183,16 @@ function recorder(answer: string | undefined = undefined) {
   return { sent, send };
 }
 
-const wake = (agoMs: number, first = 7, more: Partial<Wake> = {}): Wake => ({ at: stampOf(new Date(T0 - agoMs)), first, by: "hub", error: null, ...more });
+const wake = (agoMs: number, first = 7, more: Partial<Wake> = {}): Wake => ({ at: stampMsOf(new Date(T0 - agoMs)), first, by: "hub", error: null, ...more });
 
 const record = (...wakes: Wake[]): WakeRecord => ({ fleet: "p", wakes });
 
-const HEARD: Heard = { on: false, unread: 2, first: 7, sinceMs: T0 - 5 * MIN };
+const HEARD: Heard = { on: false, unread: 2, first: 7, leftMs: undefined };
 
 const HERE: Presence = { is: "there" };
 
 /** An idle session that is there: it last wrote its transcript a minute ago, so every earlier wake was read. */
-const IDLE: Session = { status: "running", there: HERE, idleS: 60, writtenMs: T0 - MIN, limited: false, inCall: false };
+const IDLE: Session = { status: "running", there: HERE, idleS: 60, writtenMs: T0 - MIN, limited: false, turn: "open" };
 
 /** A session's turn in its transcript: a tool call (stamped `agoMs` before the test's now), and its result. */
 const toolUse = (id: string, agoMs = 0): JsonObject => ({ type: "assistant", timestamp: new Date(nowMs - agoMs).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id, name: "Bash", input: {} }] } });
@@ -198,6 +200,21 @@ const toolUse = (id: string, agoMs = 0): JsonObject => ({ type: "assistant", tim
 const toolResult = (id: string): JsonObject => ({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } });
 
 const PROMPT: JsonObject = { type: "user", message: { role: "user", content: "go" } };
+
+/** The assistant's last word in a turn, and the line Claude Code closes the turn with. */
+const SAID: JsonObject = { type: "assistant", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "done" }] } };
+
+const CLOSED: JsonObject = { type: "system", subtype: "turn_duration", durationMs: 4200 };
+
+/** A background command of the session ended (its chat watch), and Claude Code told the session: a turn begins. */
+const NOTIFIED: JsonObject = { type: "user", message: { role: "user", content: "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>" } };
+
+/** The mark a watch as the host of `dir` leaves when it ends, `seconds` before the test's now. */
+function left(dir: string, seconds: number): void {
+  const path = leftPath(dir, "coordinator");
+  writeFileSync(path, "");
+  idle(path, seconds);
+}
 
 /** `rows` as the transcript at `path`, last written `seconds` before the test's now. */
 function transcribe(path: string, rows: readonly JsonObject[], seconds: number): void {
@@ -249,8 +266,9 @@ describe("the delivery", () => {
 
   test("a socket nobody listens on refuses, as a plain reason", async () => {
     const path = join(base, "stale.sock");
-    // Bound and never listened on: the file is there, and a connection to it is refused.
-    const bound = Bun.spawnSync(["python3", "-c", "import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])", path]);
+    // Bound and never listened on: the file is there, and a connection to it is refused. Bound by its name from
+    // inside the folder: a socket address holds 108 bytes, and the tests' folder may be longer than that.
+    const bound = Bun.spawnSync(["python3", "-c", "import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])", "stale.sock"], { cwd: base });
     expect([bound.exitCode, existsSync(path)]).toEqual([0, true]);
     expect(await deliver(path, "x")).toBe("the session's socket refused the connection");
   });
@@ -265,48 +283,80 @@ describe("the delivery", () => {
 });
 
 describe("when the hub may wake", () => {
-  const may = (heard: Heard = HEARD, held?: WakeRecord, session: Session = IDLE, at = T0, unheardS = UNHEARD_S): string => {
-    const verdict = mayWake(heard, held, session, at, unheardS);
+  const may = (heard: Heard = HEARD, held?: WakeRecord, session: Session = IDLE, at = T0): string => {
+    const verdict = mayWake(heard, held, session, at);
 
     return verdict.wake ? "wake" : verdict.why;
   };
 
-  test("the oldest unread message has waited FLEET_UNHEARD_S, 120 s unless it says", () => {
-    expect(UNHEARD_S).toBe(120);
-    expect(may({ ...HEARD, sinceMs: T0 - 119_000 })).toBe("young");
-    expect(may({ ...HEARD, sinceMs: T0 - 120_000 })).toBe("wake");
-    expect(may({ ...HEARD, sinceMs: T0 - 30_000 }, undefined, IDLE, T0, 30)).toBe("wake");
-    expect(may({ ...HEARD, sinceMs: undefined })).toBe("wake");
+  test("a session whose turn is finished is woken at once: no time is waited for, the message's age is not asked", () => {
+    const finished = (idleS: number): Session => ({ ...IDLE, turn: "finished", idleS, writtenMs: T0 - idleS * 1000 });
+    expect(may(HEARD, undefined, finished(0))).toBe("wake");
+    expect(may(HEARD, undefined, finished(29))).toBe("wake");
+    expect(may(HEARD, undefined, finished(3600))).toBe("wake");
+    expect(inTurn(finished(0))).toBe(false);
   });
 
-  test("the session is idle: its transcript was not written for 30 s; one with no transcript is woken", () => {
+  test("a turn the transcript does not close is one until it was quiet for 30 s; a session with no transcript is woken", () => {
     expect(IDLE_S).toBe(30);
+    // The model thinks after a prompt, a result or a notification, and has written nothing yet.
+    expect(may(HEARD, undefined, { ...IDLE, idleS: 0 })).toBe("busy");
     expect(may(HEARD, undefined, { ...IDLE, idleS: 29 })).toBe("busy");
     expect(may(HEARD, undefined, { ...IDLE, idleS: 30 })).toBe("wake");
     expect(may(HEARD, undefined, { ...IDLE, idleS: undefined, writtenMs: undefined })).toBe("wake");
   });
 
+  test("the host's watch ended less than 5 s ago: its session is being told, and is left alone", () => {
+    expect(HANDOVER_S).toBe(5);
+    const finished: Session = { ...IDLE, turn: "finished" };
+    expect(may({ ...HEARD, leftMs: T0 - 4999 }, undefined, finished)).toBe("handover");
+    expect(may({ ...HEARD, leftMs: T0 - 5000 }, undefined, finished)).toBe("wake");
+    expect(may({ ...HEARD, leftMs: T0 - 60 * MIN }, undefined, finished)).toBe("wake");
+    // A watch that left no mark (none ran, or it was killed) holds nothing; nor does a mark of a clock that is ahead.
+    expect(may({ ...HEARD, leftMs: undefined }, undefined, finished)).toBe("wake");
+    expect(may({ ...HEARD, leftMs: T0 + 60 * MIN }, undefined, finished)).toBe("wake");
+  });
+
   test("a session in a tool call is in a turn, however quiet its transcript", () => {
     const quiet: Session = { ...IDLE, idleS: 3600, writtenMs: T0 - 60 * MIN };
-    expect(may(HEARD, undefined, { ...quiet, inCall: true })).toBe("busy");
+    expect(may(HEARD, undefined, { ...quiet, turn: "call" })).toBe("busy");
     expect(may(HEARD, undefined, quiet)).toBe("wake");
     // The call counts before the backoff and the wake not read: nothing is written into a turn.
-    expect(may(HEARD, record(wake(20 * MIN)), { ...quiet, inCall: true })).toBe("busy");
+    expect(may(HEARD, record(wake(20 * MIN)), { ...quiet, turn: "call" })).toBe("busy");
   });
 
   test("one wake at a time: no second until the session wrote its transcript after the first", () => {
     const at = (writtenMs: number | undefined): Session => ({ ...IDLE, idleS: writtenMs === undefined ? undefined : (T0 - writtenMs) / 1000, writtenMs });
-    const first = record(wake(20 * MIN));
+    // The user's wake, five minutes ago: the hub's own for the message would be held by its backoff as well.
+    const first = record(wake(5 * MIN, 7, { by: "user" }));
     // Not read: the transcript was last written before the wake, or in its very millisecond.
     expect(may(HEARD, first, at(T0 - 30 * MIN))).toBe("queued");
-    expect(may(HEARD, first, at(T0 - 20 * MIN))).toBe("queued");
-    // Read: written after it, and the backoff's 10 minutes passed.
-    expect(may(HEARD, first, at(T0 - 20 * MIN + 1))).toBe("wake");
-    // The user's wake waits in the inbox as the hub's does, whatever message it was for.
-    expect(may(HEARD, record(wake(5 * MIN, 3, { by: "user" })), at(T0 - 30 * MIN))).toBe("queued");
+    expect(may(HEARD, first, at(T0 - 5 * MIN))).toBe("queued");
+    // Read: written a millisecond after it, though in the wake's own second.
+    expect(may(HEARD, first, at(T0 - 5 * MIN + 1))).toBe("wake");
+    // The hub's own wake waits in the inbox the same way, whatever message it was for.
+    expect(may(HEARD, record(wake(5 * MIN, 3)), at(T0 - 30 * MIN))).toBe("queued");
     // A wake that could not be written sits in no inbox; a session with no transcript cannot be read either way.
     expect(may(HEARD, record(wake(20 * MIN, 7, { error: "refused" })), at(T0 - 30 * MIN))).toBe("wake");
-    expect(may(HEARD, first, at(undefined))).toBe("wake");
+    expect(may(HEARD, record(wake(20 * MIN)), at(undefined))).toBe("wake");
+  });
+
+  test("a wake nobody read holds the next for 10 minutes, then it is taken for lost and the backoff decides: a second, a third, and the wakes are spent", () => {
+    expect(UNREAD_S).toBe(600);
+    // The session never wrote its transcript again: a line it dropped, a process that hangs.
+    const silent: Session = { ...IDLE, idleS: 3600, writtenMs: T0 - 60 * MIN };
+    expect(may(HEARD, record(wake(10 * MIN - 1)), silent)).toBe("queued");
+    expect(may(HEARD, record(wake(10 * MIN)), silent)).toBe("wake");
+    // The second holds for its own 10 minutes, then the backoff's 30 from it.
+    expect(may(HEARD, record(wake(15 * MIN), wake(5 * MIN)), silent)).toBe("queued");
+    expect(may(HEARD, record(wake(30 * MIN), wake(20 * MIN)), silent)).toBe("backoff");
+    expect(may(HEARD, record(wake(40 * MIN), wake(30 * MIN)), silent)).toBe("wake");
+    // The third is the last: the record says the hub's wake does not work, and a manager's watch tells.
+    const three = record(wake(41 * MIN), wake(31 * MIN), wake(MIN));
+    expect([may(HEARD, three, silent), may(HEARD, record(wake(50 * MIN), wake(40 * MIN), wake(10 * MIN)), silent)]).toEqual(["queued", "spent"]);
+    expect(wakeWorks(three, 7, T0)).toBe(false);
+    // The user's wake for another message is taken for lost as the hub's is.
+    expect(may(HEARD, record(wake(10 * MIN, 3, { by: "user" })), silent)).toBe("wake");
   });
 
   test("the hub's count is of its own wakes: the user's neither restarts nor advances it, and counts in the hour's", () => {
@@ -351,7 +401,7 @@ describe("when the hub may wake", () => {
     const gone: Presence = { is: "gone", why: "its process no longer runs" };
     const unknown: Presence = { is: "unknown", why: "the machine did not say whether the session's process runs" };
     expect(may({ ...HEARD, on: true })).toBe("listening");
-    expect(may({ ...HEARD, unread: 0, first: undefined, sinceMs: undefined })).toBe("nothing unread");
+    expect(may({ ...HEARD, unread: 0, first: undefined })).toBe("nothing unread");
     expect(may(HEARD, undefined, { ...IDLE, status: "paused" })).toBe("paused");
     expect(may(HEARD, undefined, { ...IDLE, status: "done" })).toBe("done");
     expect(may(HEARD, undefined, { ...IDLE, there: gone })).toBe("gone");
@@ -367,11 +417,17 @@ describe("when the hub may wake", () => {
     expect(may(HEARD, record(failed(10 * MIN)), gone)).toBe("gone");
     expect(may(HEARD, record(failed(200 * MIN), failed(190 * MIN), failed(160 * MIN)), gone)).toBe("spent");
     expect(may(HEARD, record(failed(50 * MIN), wake(40 * MIN, 3), wake(20 * MIN, 5)), gone)).toBe("cap");
-    expect(may({ ...HEARD, sinceMs: T0 - 1000 }, undefined, gone)).toBe("young");
+    expect(may({ ...HEARD, leftMs: T0 - 1000 }, undefined, gone)).toBe("handover");
+    // A dead process is in no turn and reads no wake: a call its transcript ends in, or a wake written before
+    // it died, does not keep the hub from recording that it is gone.
+    expect(may(HEARD, undefined, { ...gone, turn: "call" })).toBe("gone");
+    expect(may(HEARD, undefined, { ...gone, idleS: 1, writtenMs: T0 - 1000 })).toBe("gone");
+    expect(may(HEARD, record(wake(5 * MIN, 3, { by: "user" })), { ...gone, turn: "call", writtenMs: T0 - 30 * MIN })).toBe("gone");
+    expect([inTurn({ ...gone, turn: "call" }), inTurn({ ...IDLE, turn: "call" })]).toEqual([false, true]);
     expect(may(HEARD, undefined, { ...gone, status: "paused" })).toBe("paused");
     expect(may(HEARD, undefined, { ...gone, limited: true })).toBe("limit");
     // The machine not answering is asked again at the next look, before anything else is weighed.
-    expect(may({ ...HEARD, sinceMs: T0 - 1000 }, undefined, { ...IDLE, there: { is: "unknown", why: "?" }, limited: true, inCall: true })).toBe("unknown");
+    expect(may({ ...HEARD, leftMs: T0 - 1000 }, undefined, { ...IDLE, there: { is: "unknown", why: "?" }, limited: true, turn: "call" })).toBe("unknown");
   });
 });
 
@@ -381,16 +437,55 @@ describe("the last wake, while it was not read", () => {
   test("the last wake that was written, until the transcript is written after it", () => {
     const last = wake(5 * MIN, 7, { by: "user" });
     const held = record(wake(20 * MIN), last, wake(MIN, 7, { error: "refused" }));
-    expect(queued(held, at(T0 - 6 * MIN))).toEqual(last);
-    expect(queued(held, at(T0 - 5 * MIN))).toEqual(last);
-    expect(queued(held, at(T0 - 5 * MIN + 1))).toBeUndefined();
+    expect(queued(held, at(T0 - 6 * MIN), T0)).toEqual(last);
+    expect(queued(held, at(T0 - 5 * MIN), T0)).toEqual(last);
+    expect(queued(held, at(T0 - 5 * MIN + 1), T0)).toBeUndefined();
+  });
+
+  test("a wake and a write in one clock second are told apart both ways, to the millisecond", () => {
+    // The wake at 0.400 s of its second.
+    const last = wake(5 * MIN - 400);
+    expect(parseInstant(last.at)).toBe(T0 - 5 * MIN + 400);
+    // The turn the wake began closed 0.2 s after it, in the wake's own second (a usage limit, a failed login): read.
+    expect(queued(record(last), at(T0 - 5 * MIN + 600), T0)).toBeUndefined();
+    // The turn closed 0.3 s before the wake, which followed it within the second: not read.
+    expect(queued(record(last), at(T0 - 5 * MIN + 100), T0)).toEqual(last);
+    // A file's time has fractions of a millisecond and a stamp has none: within the wake's millisecond it is the earlier.
+    expect(queued(record(last), at(T0 - 5 * MIN + 400.9), T0)).toEqual(last);
+    expect(queued(record(last), at(T0 - 5 * MIN + 401.1), T0)).toBeUndefined();
+  });
+
+  test("a wake of an old record, stamped to the second, reads as the start of its second: a write later in it counts as after", () => {
+    const old: Wake = { at: stampOf(new Date(T0 - 5 * MIN + 400)), first: 7, by: "hub", error: null };
+    expect([old.at.length, parseInstant(old.at)]).toEqual([25, T0 - 5 * MIN]);
+    expect(queued(record(old), at(T0 - 5 * MIN + 600), T0)).toBeUndefined();
+    expect(queued(record(old), at(T0 - 5 * MIN + 100), T0)).toBeUndefined();
+    expect(queued(record(old), at(T0 - 5 * MIN), T0)).toEqual(old);
+    expect(queued(record(old), at(T0 - 6 * MIN), T0)).toEqual(old);
+  });
+
+  test("the hold ends: 10 minutes after the wake, and for a session that is gone", () => {
+    const last = wake(5 * MIN);
+    expect(queued(record(last), at(T0 - 6 * MIN), T0 + 5 * MIN - 1)).toEqual(last);
+    expect(queued(record(last), at(T0 - 6 * MIN), T0 + 5 * MIN)).toBeUndefined();
+    expect(queued(record(last), { ...at(T0 - 6 * MIN), there: { is: "gone", why: "its process no longer runs" } }, T0)).toBeUndefined();
+    // The machine not saying is not a session gone.
+    expect(queued(record(last), { ...at(T0 - 6 * MIN), there: { is: "unknown", why: "?" } }, T0)).toEqual(last);
   });
 
   test("none with no record, no wake that was written, or no transcript to read", () => {
-    expect(queued(undefined, at(T0 - 60 * MIN))).toBeUndefined();
-    expect(queued(record(), at(T0 - 60 * MIN))).toBeUndefined();
-    expect(queued(record(wake(MIN, 7, { error: "refused" })), at(T0 - 60 * MIN))).toBeUndefined();
-    expect(queued(record(wake(MIN)), at(undefined))).toBeUndefined();
+    expect(queued(undefined, at(T0 - 60 * MIN), T0)).toBeUndefined();
+    expect(queued(record(), at(T0 - 60 * MIN), T0)).toBeUndefined();
+    expect(queued(record(wake(MIN, 7, { error: "refused" })), at(T0 - 60 * MIN), T0)).toBeUndefined();
+    expect(queued(record(wake(MIN)), at(undefined), T0)).toBeUndefined();
+  });
+
+  test("a stamp to the millisecond is the second's stamp with the fraction, and reads back to the instant", () => {
+    const instant = new Date(T0 + 7);
+    const whole = stampOf(instant);
+    expect(whole).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$/u);
+    expect([stampMsOf(instant), stampMsOf(new Date(T0))]).toEqual([`${whole.slice(0, 19)}.007${whole.slice(19)}`, `${whole.slice(0, 19)}.000${whole.slice(19)}`]);
+    expect([parseInstant(stampMsOf(instant)), parseInstant(stampMsOf(new Date(T0 + 999))), parseInstant(whole)]).toEqual([T0 + 7, T0 + 999, T0]);
   });
 });
 
@@ -418,12 +513,13 @@ describe("when the user's Wake now is held", () => {
     expect(nowHeld(record(wake(55 * MIN, 3), wake(50 * MIN, 3), user(40 * MIN), wake(20 * MIN, 5)), IDLE, T0)?.againMs).toBe(T0 + 10 * MIN);
   });
 
-  test("none while the last wake was not read: no time ends that hold", () => {
-    expect(nowHeld(record(wake(5 * MIN)), unread(T0 - 6 * MIN), T0)).toEqual({ why: "the session has not read the last wake yet: another would queue behind it", againMs: undefined });
-    expect(nowHeld(record(user(5 * MIN)), unread(T0 - 6 * MIN), T0)?.againMs).toBeUndefined();
+  test("none while the last wake was not read: held until the session writes, and 10 minutes after that wake at the latest", () => {
+    expect(nowHeld(record(wake(5 * MIN)), unread(T0 - 6 * MIN), T0)).toEqual({ why: "the session has not read the last wake yet: another would queue behind it", againMs: T0 + 5 * MIN });
+    expect(nowHeld(record(user(5 * MIN)), unread(T0 - 6 * MIN), T0)?.againMs).toBe(T0 + 5 * MIN);
+    expect(nowHeld(record(wake(5 * MIN)), unread(T0 - 6 * MIN), T0 + 5 * MIN)).toBeUndefined();
     expect(nowHeld(record(wake(5 * MIN)), unread(T0 - 4 * MIN), T0)).toBeUndefined();
     // What the hub waits for does not hold it: a session at work, in a call, at its limit, or gone.
-    expect(nowHeld(record(wake(5 * MIN)), { ...IDLE, idleS: 1, writtenMs: T0 - 1000, inCall: true, limited: true, there: { is: "gone", why: "x" } }, T0)).toBeUndefined();
+    expect(nowHeld(record(wake(5 * MIN)), { ...IDLE, idleS: 1, writtenMs: T0 - 1000, turn: "call", limited: true, there: { is: "gone", why: "x" } }, T0)).toBeUndefined();
   });
 });
 
@@ -550,7 +646,7 @@ describe("the session's last entry", () => {
   });
 });
 
-describe("a tool call that awaits its result", () => {
+describe("where a session's turn stands in its transcript", () => {
   const AT = "2026-10-12T13:00:00.000Z";
 
   const use = (id: string, more: JsonObject = {}): JsonObject => ({ type: "assistant", timestamp: AT, message: { role: "assistant", content: [{ type: "tool_use", id, name: "Bash", input: {} }] }, ...more });
@@ -559,19 +655,74 @@ describe("a tool call that awaits its result", () => {
 
   const prompt = (more: JsonObject = {}): JsonObject => ({ type: "user", timestamp: AT, message: { role: "user", content: "go on" }, ...more });
 
-  const awaited = (rows: readonly JsonObject[], sinceMs: number | undefined = undefined): boolean => {
+  const said = (text: string, more: JsonObject = {}): JsonObject => ({ type: "assistant", timestamp: AT, message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text }] }, ...more });
+
+  /** The lines Claude Code 2.1.29x writes when a turn ends: the Stop hooks' summary, then the close. */
+  const HOOKS: JsonObject = { type: "system", subtype: "stop_hook_summary", timestamp: AT, hookCount: 1, preventedContinuation: false };
+
+  const CLOSE: JsonObject = { type: "system", subtype: "turn_duration", timestamp: AT, durationMs: 4200, messageCount: 3 };
+
+  const turn = (rows: readonly JsonObject[], sinceMs: number | undefined = undefined): Turn => {
     const path = join(base, "t.jsonl");
     writeFileSync(path, rows.map((r) => `${JSON.stringify(r)}\n`).join(""));
 
-    return toolAwaited(path, sinceMs);
+    return turnOf(path, sinceMs);
   };
+
+  const awaited = (rows: readonly JsonObject[], sinceMs: number | undefined = undefined): boolean => turn(rows, sinceMs) === "call";
+
+  test("a turn Claude Code closed is finished, whatever it writes after that is not the session's", () => {
+    expect(turn([prompt(), said("done"), HOOKS, CLOSE])).toBe("finished");
+    expect(turn([prompt(), use("a"), result("a"), said("done"), HOOKS, CLOSE, { type: "last-prompt" }, { type: "cost-state" }, { type: "system", subtype: "away_summary", timestamp: AT }])).toBe("finished");
+    // A queued notification is in the session's transcript for a subagent's command too: it begins nothing.
+    expect(turn([prompt(), said("done"), HOOKS, CLOSE, { type: "queue-operation", operation: "enqueue", timestamp: AT }, { type: "attachment", attachment: { type: "total_tokens_reminder" } }])).toBe("finished");
+    // A turn that ended on an API error is closed the same way.
+    expect(turn([prompt(), said("limit", { isApiErrorMessage: true, error: "rate_limit" }), CLOSE])).toBe("finished");
+    // Nothing awaits once the turn is closed.
+    expect(turn([prompt(), use("a"), CLOSE])).toBe("finished");
+  });
+
+  test("the assistant's last word does not close a turn: a Stop hook may block, and the turn goes on", () => {
+    expect(turn([prompt(), said("done")])).toBe("open");
+    expect(turn([prompt(), said("done"), HOOKS])).toBe("open");
+    expect(turn([prompt(), said("done"), HOOKS, use("a")])).toBe("call");
+    expect(turn([prompt(), said("done"), HOOKS, use("a"), result("a"), said("armed"), HOOKS, CLOSE])).toBe("finished");
+  });
+
+  test("a prompt, a notification, a meta line or a result after the close is a turn begun: the model has written nothing yet", () => {
+    const closed = [prompt(), said("done"), HOOKS, CLOSE];
+    expect(turn([...closed, prompt()])).toBe("open");
+    expect(turn([...closed, prompt({ message: { role: "user", content: "<task-notification>\n<task-id>b1</task-id>\n</task-notification>" } })])).toBe("open");
+    expect(turn([...closed, prompt({ isMeta: true })])).toBe("open");
+    expect(turn([...closed, prompt(), use("a"), result("a")])).toBe("open");
+    expect(turn([...closed, prompt(), { type: "assistant", timestamp: AT, message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "thinking", thinking: "" }] } }])).toBe("open");
+    expect(turn([...closed, prompt(), use("a")])).toBe("call");
+    expect(turn([prompt()])).toBe("open");
+  });
+
+  test("a compaction's summary begins no turn and ends none: the turn stands where it stood", () => {
+    const summary = prompt({ isCompactSummary: true, isVisibleInTranscriptOnly: true });
+    const boundary: JsonObject = { type: "system", subtype: "compact_boundary", timestamp: AT };
+    // Compacted between two turns: the session still waits for a prompt.
+    expect(turn([prompt(), said("done"), HOOKS, CLOSE, boundary, summary])).toBe("finished");
+    // Compacted in a turn: the model goes on.
+    expect(turn([prompt(), use("a"), result("a"), boundary, summary])).toBe("open");
+    expect(turn([prompt(), said("done"), HOOKS, CLOSE, boundary, summary, prompt()])).toBe("open");
+  });
+
+  test("a subagent's close is not the session's, and a headless session writes none", () => {
+    expect(turn([prompt(), use("a"), { ...CLOSE, isSidechain: true }])).toBe("call");
+    expect(turn([prompt(), said("done"), { ...CLOSE, isSidechain: true }])).toBe("open");
+    expect(turn([prompt(), said("done"), HOOKS, { type: "last-prompt" }, { type: "cost-state" }])).toBe("open");
+    expect(turn([prompt(), said("done"), HOOKS, CLOSE, said("more", { isSidechain: true })])).toBe("finished");
+  });
 
   test("a tool_use with no tool_result after it is awaited; with its result it is not", () => {
     expect(awaited([prompt(), use("a")])).toBe(true);
     expect(awaited([prompt(), use("a"), result("a")])).toBe(false);
     expect(awaited([prompt(), use("a"), result("a"), use("b")])).toBe(true);
     // What Claude Code writes around a turn is no entry of the session's.
-    expect(awaited([prompt(), use("a"), { type: "system", subtype: "turn_duration" }, { type: "last-prompt" }])).toBe(true);
+    expect(awaited([prompt(), use("a"), { type: "system", subtype: "stop_hook_summary" }, { type: "last-prompt" }])).toBe(true);
     expect(awaited([prompt(), { type: "assistant", timestamp: AT, message: { role: "assistant", content: [{ type: "text", text: "done" }] } }])).toBe(false);
     expect(awaited([prompt()])).toBe(false);
     expect(awaited([])).toBe(false);
@@ -609,15 +760,19 @@ describe("a tool call that awaits its result", () => {
     expect(awaited([prompt(), use("a", { timestamp: null })], at + 1)).toBe(true);
   });
 
-  test("a transcript that is missing, or does not read as entries, awaits nothing; only its end is read", () => {
-    expect(toolAwaited(join(base, "none.jsonl"))).toBe(false);
+  test("a transcript that is missing, or does not read as entries, is open: nothing awaits and nothing is finished; only its end is read", () => {
+    expect(turnOf(join(base, "none.jsonl"))).toBe("open");
     const path = join(base, "torn.jsonl");
     writeFileSync(path, "not json\n{\n");
-    expect(toolAwaited(path)).toBe(false);
+    expect(turnOf(path)).toBe("open");
+    expect(turn([])).toBe("open");
     const big = prompt({ message: { role: "user", content: [{ type: "tool_result", tool_use_id: "z", content: "x".repeat(300 * 1024) }] } });
     // The call fell out of the end that is read: it is not seen, and its result closes nothing.
     expect(awaited([use("a"), big])).toBe(false);
     expect(awaited([big, use("a")])).toBe(true);
+    // So did the close: the end that is read holds no line of the session's, and says nothing.
+    expect(turn([prompt(), said("done"), CLOSE, big])).toBe("open");
+    expect(turn([big, said("done"), CLOSE])).toBe("finished");
   });
 });
 
@@ -667,8 +822,8 @@ describe("how long a usage limit holds", () => {
 });
 
 describe("one look of the hub", () => {
-  test("a deaf host whose message waited is written one wake, on its session's socket, and not again until that one was read and the backoff passed", async () => {
-    const { dir, transcript } = served("p");
+  test("a deaf host whose message waited is written one wake, on its session's socket, and not again until the backoff passed, read or not", async () => {
+    const { dir } = served("p");
     user(dir, 1, 5 * MIN, "SECRET words of the user @coordinator");
     user(dir, 2, 4 * MIN);
     socket();
@@ -680,15 +835,207 @@ describe("one look of the hub", () => {
     expect(sent[0]?.text).not.toContain("SECRET");
     expect(sent[0]?.text).not.toContain("@");
     expect(await wakePass(m, wakes, socks, send)).toEqual([]);
-    // The backoff's 10 minutes passed and the session never wrote its transcript: the first wake was not read, and no second is written behind it.
-    nowMs += 10 * MIN;
+    // The session never wrote its transcript: the wake was not read, and no second is written behind it yet.
+    nowMs += 10 * MIN - 1000;
     expect(await wakePass(m, wakes, socks, send)).toEqual([]);
     expect(sent.length).toBe(1);
-    // It read the wake (its transcript was written after it) and armed no watch: now the second comes.
-    idle(transcript, 5 * 60);
+    // Ten minutes old and still not read, it is taken for lost: the second comes, as it does for a session that
+    // read the first and armed no watch.
+    nowMs += 1000;
     expect((await wakePass(m, wakes, socks, send)).map((d) => [d.wake.first, d.wake.by, d.wake.error])).toEqual([[1, "hub", null]]);
     expect(sent.length).toBe(2);
     expect(wakes.of(dir)?.wakes.length).toBe(2);
+  });
+
+  test("an idle session with no watch is woken at the look that finds the user's message: its age and the quiet time are not waited for", async () => {
+    const { dir, transcript } = served("p");
+    socket();
+    // The turn ended a second ago with no watch armed (a usage-limit error, a compaction, a long run), and the user writes now.
+    transcribe(transcript, [PROMPT, SAID, CLOSED], 1);
+    user(dir, 1, 0);
+    const wakes = new Wakes(m);
+    const { sent, send } = recorder();
+    expect((await wakePass(m, wakes, socks, send)).map((d) => [d.wake.first, d.wake.by, d.wake.error])).toEqual([[1, "hub", null]]);
+    expect(sent.length).toBe(1);
+    // The page says nothing of a wake that is being answered; it does once the message has waited.
+    expect(deafView(m, wakes, socks, entryOf("p"), listening(m, dir))).toBeUndefined();
+  });
+
+  test("a wake written in the second its session's turn closed is not taken for read: no other is written behind it", async () => {
+    const { dir, transcript } = served("p");
+    socket();
+    // The turn closed 400 ms ago, in this clock second, and the hub looks with the user's message.
+    nowMs = T0 + 900;
+    transcribe(transcript, [PROMPT, SAID, CLOSED], 0.4);
+    user(dir, 1, 0);
+    const wakes = new Wakes(m);
+    const { sent, send } = recorder();
+    expect((await wakePass(m, wakes, socks, send)).map((d) => [d.wake.at, d.wake.error])).toEqual([[stampMsOf(new Date(T0 + 900)), null]]);
+    // Not written since the wake: held, until the session writes or the wake is 10 minutes old.
+    expect(await wakeNow(m, wakes, socks, entryOf("p"), send)).toEqual({ why: "not woken: the session has not read the last wake yet: another would queue behind it", held: true, again: stampOf(new Date(T0 + 10 * MIN + 1000)) });
+    expect(deafView(m, wakes, socks, entryOf("p"), listening(m, dir))).toBeUndefined();
+    nowMs = T0 + 3 * MIN;
+    expect(deafView(m, wakes, socks, entryOf("p"), listening(m, dir))).toMatchObject({ end: "queued", again: stampOf(new Date(T0 + 10 * MIN + 1000)) });
+    expect(await wakePass(m, wakes, socks, send)).toEqual([]);
+    expect(sent.length).toBe(1);
+  });
+
+  test("a wake whose turn ends in the wake's own second was read: the page does not say it waits, and the next comes when the backoff allows", async () => {
+    const { dir, transcript } = served("p");
+    socket();
+    transcribe(transcript, [PROMPT, SAID, CLOSED], 3600);
+    user(dir, 1, 1000);
+    nowMs = T0 + 200;
+    const wakes = new Wakes(m);
+    const { sent, send } = recorder();
+    expect((await wakePass(m, wakes, socks, send)).map((d) => parseInstant(d.wake.at))).toEqual([T0 + 200]);
+    // The session takes the wake, its turn ends on a login error and Claude Code closes it: 0.6 s into the second
+    // the wake was written in, and nothing is written after. No usage limit holds it, and no watch was armed.
+    const error: JsonObject = { type: "assistant", isApiErrorMessage: true, error: "authentication_failed", message: { role: "assistant", model: "<synthetic>", content: [{ type: "text", text: "e" }] } };
+    nowMs = T0 + 600;
+    transcribe(transcript, [PROMPT, SAID, CLOSED, PROMPT, error, CLOSED], 0);
+    expect(queued(wakes.of(dir), { status: "running", there: HERE, idleS: 0, writtenMs: T0 + 600, limited: false, turn: "finished" }, nowMs)).toBeUndefined();
+    // The page does not say the wake waits unread, and holds no button for it.
+    nowMs = T0 + 3 * MIN;
+    expect(deafView(m, wakes, socks, entryOf("p"), listening(m, dir))).toMatchObject({ woken: [stampMsOf(new Date(T0 + 200))], end: null, held: null, again: null });
+    const looks: number[] = [];
+
+    for (const at of [MIN, 10 * MIN, 10 * MIN + 200, 40 * MIN, 40 * MIN + 200]) {
+      nowMs = T0 + at;
+      looks.push((await wakePass(m, wakes, socks, send)).length);
+    }
+
+    // The second at the backoff's 10 minutes from the first, the third 30 minutes after it: as for any wake that was read.
+    expect(looks).toEqual([0, 0, 1, 0, 1]);
+    expect(wakes.of(dir)?.wakes.map((w) => [w.by, w.error])).toEqual([["hub", null], ["hub", null], ["hub", null]]);
+    // Three and no watch armed: the page says so, and a manager's watch tells.
+    expect(deafView(m, wakes, socks, entryOf("p"), listening(m, dir))).toMatchObject({ end: "spent" });
+    expect(wakeWorks(wakes.of(dir), 1, nowMs)).toBe(false);
+    expect(sent.length).toBe(3);
+  });
+
+  test("the user's Wake now after a wake whose turn ended in the wake's own second is not held by it", async () => {
+    const { dir, transcript } = served("p");
+    socket();
+    transcribe(transcript, [PROMPT, SAID, CLOSED], 3600);
+    user(dir, 1, 1000);
+    nowMs = T0 + 200;
+    const wakes = new Wakes(m);
+    const { sent, send } = recorder();
+    await wakePass(m, wakes, socks, send);
+    nowMs = T0 + 600;
+    transcribe(transcript, [PROMPT, SAID, CLOSED, PROMPT, SAID, CLOSED], 0);
+    nowMs = T0 + MIN;
+    const now = await wakeNow(m, wakes, socks, entryOf("p"), send);
+    expect("wake" in now ? [now.wake.by, now.wake.error] : now.why).toEqual(["user", null]);
+    expect(sent.length).toBe(2);
+  });
+
+  test("a wake nobody reads does not hold for good: the hub writes its second after 10 minutes, its third 30 minutes later, and then says its wakes are spent", async () => {
+    const { dir, transcript } = served("p");
+    socket();
+    // The session never writes its transcript again: it dropped the line, or its process hangs.
+    transcribe(transcript, [PROMPT, SAID, CLOSED], 3600);
+    user(dir, 1, 0);
+    const wakes = new Wakes(m);
+    const { sent, send } = recorder();
+    const looks: number[] = [];
+
+    for (const at of [0, 5 * MIN, 10 * MIN - 1000, 10 * MIN, 20 * MIN, 40 * MIN - 1000, 40 * MIN, 300 * MIN]) {
+      nowMs = T0 + at;
+      looks.push((await wakePass(m, wakes, socks, send)).length);
+
+      if (at === 5 * MIN) {
+        // Held meanwhile, and the page and the button say until when.
+        expect(await wakeNow(m, wakes, socks, entryOf("p"), send)).toEqual({ why: "not woken: the session has not read the last wake yet: another would queue behind it", held: true, again: stampOf(new Date(T0 + 10 * MIN)) });
+        expect(deafView(m, wakes, socks, entryOf("p"), listening(m, dir))).toMatchObject({ end: "queued", again: stampOf(new Date(T0 + 10 * MIN)) });
+        expect(wakeWorks(wakes.of(dir), 1, nowMs)).toBe(true);
+      }
+    }
+
+    expect(looks).toEqual([1, 0, 0, 1, 0, 0, 1, 0]);
+    expect(sent.length).toBe(3);
+    expect(deafView(m, wakes, socks, entryOf("p"), listening(m, dir))).toMatchObject({ end: "spent" });
+    expect(wakeWorks(wakes.of(dir), 1, nowMs)).toBe(false);
+  });
+
+  test("a session in a turn is not woken: the model thinks after a notification and has written nothing, then works; it is woken once the turn is closed with no watch armed", async () => {
+    const { dir, transcript } = served("p");
+    socket();
+    user(dir, 1, 0);
+    const wakes = new Wakes(m);
+    const { sent, send } = recorder();
+
+    const look = async (rows: readonly JsonObject[], seconds: number): Promise<(string | null)[]> => {
+      transcribe(transcript, [PROMPT, SAID, CLOSED, ...rows], seconds);
+
+      return (await wakePass(m, wakes, socks, send)).map((d) => d.wake.error);
+    };
+
+    // A notification began a turn two seconds ago: the model has written nothing yet.
+    expect(await look([NOTIFIED], 2)).toEqual([]);
+    // It works: a call awaits its result for twenty minutes, the result is in, the model thinks again.
+    expect(await look([NOTIFIED, toolUse("toolu_1")], 20 * 60)).toEqual([]);
+    expect(await look([NOTIFIED, toolUse("toolu_1"), toolResult("toolu_1")], 3)).toEqual([]);
+    // The assistant's last word is not the close: the Stop hooks run, and the guard may block to arm the watch.
+    expect(await look([NOTIFIED, toolUse("toolu_1"), toolResult("toolu_1"), SAID], 0)).toEqual([]);
+    expect(sent).toEqual([]);
+    // Closed this instant, and no watch armed: the session is idle and deaf.
+    expect(await look([NOTIFIED, toolUse("toolu_1"), toolResult("toolu_1"), SAID, CLOSED], 0)).toEqual([null]);
+    expect(sent.length).toBe(1);
+  });
+
+  test("a watch that exits with the user's message leaves nothing to wake for; a message right behind it waits for the turn the exit begins", async () => {
+    nowMs = Date.now();
+    const { dir, transcript } = served("p");
+    socket();
+    transcribe(transcript, [PROMPT, SAID, CLOSED], 600);
+    user(dir, 1, 0);
+    // The host's watch as it runs, the ordinary path: it prints the message, moves the cursor, leaves its mark
+    // and exits. (Its registry is its own: this test's entry names the test, which did not arm it.)
+    const watch = Bun.spawn([FLEET_BIN, "chat", dir, "watch", "--as", "coordinator", "--all", "--resume", "--once"], { env: { ...env, FLEET_HOME: join(base, "the-watch-s") }, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    children.push(watch);
+    const printed = await new Response(watch.stdout).text();
+    expect([await watch.exited, printed.includes("are you there?")]).toEqual([0, true]);
+    nowMs = Date.now();
+    const wakes = new Wakes(m);
+    const { sent, send } = recorder();
+    // No watch runs, the session's turn of before is closed, and the message is the session's: nothing is unread.
+    expect(listening(m, dir)).toMatchObject({ seen: 1, unread: 0 });
+    expect(await wakePass(m, wakes, socks, send)).toEqual([]);
+    // The user writes again before the session's turn is in its transcript: the hub leaves it to the notification.
+    user(dir, 2, 0);
+    expect(listening(m, dir)).toMatchObject({ seen: 1, unread: 1 });
+    expect(await wakePass(m, wakes, socks, send)).toEqual([]);
+    // The turn the exit began is in the transcript (the notification, written with the exit) when the handover is over.
+    nowMs += HANDOVER_S * 1000;
+    transcribe(transcript, [PROMPT, SAID, CLOSED, NOTIFIED], HANDOVER_S);
+    expect(await wakePass(m, wakes, socks, send)).toEqual([]);
+    // In it the session arms the watch again, which prints the second message: the hub wrote nothing at all.
+    nowMs += 20_000;
+    transcribe(transcript, [PROMPT, SAID, CLOSED, NOTIFIED, toolUse("toolu_1"), toolResult("toolu_1"), SAID, CLOSED], 0);
+    watching(dir);
+    expect(await wakePass(m, wakes, socks, send)).toEqual([]);
+    expect(sent).toEqual([]);
+    expect(wakes.of(dir)).toBeUndefined();
+  });
+
+  test("the handover is the watch's mark alone: 5 s after it ended an idle session is woken, and at once when the watch left none", async () => {
+    const { dir, transcript } = served("p");
+    socket();
+    transcribe(transcript, [PROMPT, SAID, CLOSED], 600);
+    user(dir, 1, 0);
+    const { sent, send } = recorder();
+    left(dir, HANDOVER_S - 1);
+    expect(await wakePass(m, new Wakes(m), socks, send)).toEqual([]);
+    // The notification never began a turn (the session was told nothing, or ended it at once): the hub wakes it.
+    left(dir, HANDOVER_S);
+    expect((await wakePass(m, new Wakes(m), socks, send)).map((d) => d.wake.error)).toEqual([null]);
+    // A watch that was killed leaves no mark.
+    rmSync(leftPath(dir, "coordinator"));
+    writeFileSync(wakesPath(m), "{}");
+    expect((await wakePass(m, new Wakes(m), socks, send)).map((d) => d.wake.error)).toEqual([null]);
+    expect(sent.length).toBe(2);
   });
 
   test("a session in a tool call is not woken though its transcript is an hour quiet; it is once the result is written and 30 s passed", async () => {
@@ -760,6 +1107,31 @@ describe("one look of the hub", () => {
     expect(new Wakes(m).of(dir)?.wakes.map((w) => [w.by, w.first, w.error])).toEqual(tried.map((error) => ["hub", 1, error]));
     // Whoever reads the record knows the hub cannot wake this fleet.
     expect(wakeWorks(wakes.of(dir), 1, nowMs)).toBe(false);
+  });
+
+  test("a session whose process died in a tool call is gone, not in a turn: its failed wake is recorded at the look that finds it, and a wake written before it died holds nothing", async () => {
+    const { dir, transcript } = served("p");
+    user(dir, 1, 5 * MIN);
+    socket();
+    // The transcript ends in a call that will get no result.
+    transcribe(transcript, [PROMPT, toolUse("toolu_1", MIN)], 60);
+    const wakes = new Wakes(m);
+    const { sent, send } = recorder();
+    // While its process runs the session is in a turn; the user wakes it by hand, and that line waits in its inbox.
+    expect(await wakePass(m, wakes, socks, send)).toEqual([]);
+    const byHand = await wakeNow(m, wakes, socks, entryOf("p"), send);
+    expect("wake" in byHand ? byHand.wake.error : byHand.why).toBeNull();
+    expect([sent.length, wakeWorks(wakes.of(dir), 1, nowMs)]).toEqual([1, true]);
+    // The process dies in the call: the transcript still ends in it, and the wake was never read.
+    probe = { ...THERE, running: () => "gone" };
+    nowMs += 2 * MIN;
+    expect((await wakePass(m, wakes, socks, send)).map((d) => [d.wake.by, d.wake.error])).toEqual([["hub", "the session is gone: its process no longer runs"]]);
+    // Whoever reads the record knows the hub cannot wake this fleet, and the page says the session is gone.
+    expect(wakeWorks(wakes.of(dir), 1, nowMs)).toBe(false);
+    expect(deafView(m, wakes, socks, entryOf("p"), listening(m, dir))).toMatchObject({ end: "gone", why: "its process no longer runs" });
+    const again = await wakeNow(m, wakes, socks, entryOf("p"), send);
+    expect("why" in again ? again.why : "").toBe("the session is gone (its process no longer runs): there is nobody to write to. Open it in a terminal");
+    expect(sent.length).toBe(1);
   });
 
   test("a socket that is missing, or not the session's own, is a session gone: recorded, never written to", async () => {
@@ -852,15 +1224,13 @@ describe("one look of the hub", () => {
     expect(sent.map((s) => s.text)).toEqual([String(wakeText("manager", dir, "manager", 1, 0))]);
   });
 
-  test("nothing is written while the message is young, the session works, it listens, or nothing waits", async () => {
+  test("nothing is written while nothing waits, the session works, or it listens", async () => {
     const { dir, transcript } = served("p");
     socket();
     const { sent, send } = recorder();
     const wakes = new Wakes(m);
     await wakePass(m, wakes, socks, send);
     user(dir, 1, 60_000);
-    await wakePass(m, wakes, socks, send);
-    nowMs += 2 * MIN;
     idle(transcript, 5);
     await wakePass(m, wakes, socks, send);
     idle(transcript, 3600);
@@ -875,7 +1245,7 @@ describe("one look of the hub", () => {
     expect((await wakePass(m, wakes, socks, send)).length).toBe(1);
   });
 
-  test("the ten minutes a host counts as reading are not the hub's: a watch that left a minute ago and a host that spoke a minute ago are woken at 120 s", async () => {
+  test("the ten minutes a host counts as reading are not the hub's: a watch that left a minute ago and a host that spoke a minute ago are woken at once", async () => {
     const { dir } = served("p");
     user(dir, 1, 5 * MIN);
     // The watch printed #1 and ended; the host answered it and ended its turn without arming the next.
@@ -889,14 +1259,16 @@ describe("one look of the hub", () => {
     const wakes = new Wakes(m);
     const { sent, send } = recorder();
     expect(listening(m, dir)).toMatchObject({ on: true, seen: 1, unread: 1 });
-    expect(await wakePass(m, wakes, socks, send)).toEqual([]);
-    expect(deafView(m, wakes, socks, entryOf("p"), listening(m, dir))).toBeUndefined();
-    nowMs += 1000;
-    expect(listening(m, dir).on).toBe(true);
+    const woken = stampMsOf(new Date(nowMs));
     const done = await wakePass(m, wakes, socks, send);
     expect(done.map((d) => [d.fleet, d.wake.first, d.wake.error])).toEqual([["p", 2, null]]);
     expect(sent.map((x) => x.text)).toEqual([String(wakeText("p", dir, "coordinator", 1, 1))]);
-    expect(deafView(m, wakes, socks, entryOf("p"), listening(m, dir))).toMatchObject({ unread: 1, first: 2, woken: [stampOf(new Date(nowMs))], end: "queued" });
+    // The page says it once the message has waited FLEET_UNHEARD_S, with the wake of before.
+    expect(deafView(m, wakes, socks, entryOf("p"), listening(m, dir))).toBeUndefined();
+    nowMs += 1000;
+    expect(listening(m, dir).on).toBe(true);
+    expect(await wakePass(m, wakes, socks, send)).toEqual([]);
+    expect(deafView(m, wakes, socks, entryOf("p"), listening(m, dir))).toMatchObject({ unread: 1, first: 2, woken: [woken], end: "queued" });
   });
 
   test("nothing is written or recorded for a fleet paused or done, or a session at its usage limit, there or gone", async () => {
@@ -956,7 +1328,7 @@ describe("one look of the hub", () => {
     const done = await wakePass(m, new Wakes(m), socks, refused.send);
     expect(done.map((d) => d.wake.error)).toEqual(["the session's socket refused the connection"]);
     expect(wakesPath(m)).toBe(join(home, "hub", "wakes.json"));
-    expect(JSON.parse(readFileSync(wakesPath(m), "utf8"))).toEqual({ [dir]: { fleet: "p", wakes: [{ at: stampOf(new Date(nowMs)), first: 1, by: "hub", error: "the session's socket refused the connection" }] } });
+    expect(JSON.parse(readFileSync(wakesPath(m), "utf8"))).toEqual({ [dir]: { fleet: "p", wakes: [{ at: stampMsOf(new Date(nowMs)), first: 1, by: "hub", error: "the session's socket refused the connection" }] } });
     const again = new Wakes(m);
     expect(again.of(dir)?.wakes.length).toBe(1);
     const { sent, send } = recorder();
@@ -1049,22 +1421,28 @@ describe("the user's Wake now", () => {
     expect(sent.length).toBe(2);
   });
 
-  test("it is held while the last wake was not read, the hub's or the user's, and no time ends that", async () => {
+  test("it is held while the last wake was not read, the hub's or the user's: until the session writes, and 10 minutes after that wake at the latest", async () => {
     const { dir, transcript } = served("p");
     user(dir, 1, 5 * MIN);
     socket();
     const wakes = new Wakes(m);
     const { sent, send } = recorder();
-    const unread: NotWoken = { why: "not woken: the session has not read the last wake yet: another would queue behind it", held: true, again: null };
+    const unread = (untilMs: number): NotWoken => ({ why: "not woken: the session has not read the last wake yet: another would queue behind it", held: true, again: stampOf(new Date(untilMs)) });
     await wakePass(m, wakes, socks, send);
     nowMs += 5 * MIN;
-    expect(await wakeNow(m, wakes, socks, entryOf("p"), send)).toEqual(unread);
+    expect(await wakeNow(m, wakes, socks, entryOf("p"), send)).toEqual(unread(T0 + 10 * MIN));
+    // The session wrote its transcript: the hub's wake was read.
     idle(transcript, 60);
     expect(why(await wakeNow(m, wakes, socks, entryOf("p"), send))).toEqual(["user", null]);
     nowMs += 5 * MIN;
-    expect(await wakeNow(m, wakes, socks, entryOf("p"), send)).toEqual(unread);
-    expect(sent.length).toBe(2);
-    expect(wakes.of(dir)?.wakes.length).toBe(2);
+    expect(await wakeNow(m, wakes, socks, entryOf("p"), send)).toEqual(unread(T0 + 15 * MIN));
+    // Nothing more is written by the session: the user's wake is taken for lost when it is 10 minutes old.
+    nowMs = T0 + 15 * MIN - 1;
+    expect(await wakeNow(m, wakes, socks, entryOf("p"), send)).toEqual(unread(T0 + 15 * MIN));
+    nowMs = T0 + 15 * MIN;
+    expect(why(await wakeNow(m, wakes, socks, entryOf("p"), send))).toEqual(["user", null]);
+    expect(sent.length).toBe(3);
+    expect(wakes.of(dir)?.wakes.map((w) => w.by)).toEqual(["hub", "user", "user"]);
   });
 
   test("it counts in the hour's three with the hub's, and is refused when they are spent, with when one is free", async () => {
@@ -1369,12 +1747,44 @@ describe("what the page is given", () => {
     const shown = { since, unread: 2, first: 4, woken: [], end: null, why: null, held: null, again: null };
     expect(view(wakes)).toEqual(shown);
     await wakePass(m, wakes, socks, recorder().send);
-    const woken = [stampOf(new Date(nowMs))];
-    // Written, and not read yet: the hub writes no other, and neither does Wake now.
-    expect(view(wakes)).toEqual({ ...shown, woken, end: "queued", held: UNREAD });
+    const woken = [stampMsOf(new Date(nowMs))];
+    // Written, and not read yet: the hub writes no other, and neither does Wake now, for 10 minutes at most.
+    expect(view(wakes)).toEqual({ ...shown, woken, end: "queued", held: UNREAD, again: stampOf(new Date(nowMs + UNREAD_S * 1000)) });
     nowMs += MIN;
     idle(transcript, 30);
     expect(view(wakes)).toEqual({ ...shown, woken });
+  });
+
+  test("a message that has not waited FLEET_UNHEARD_S is said at once only when the hub cannot wake its host: a wake failed, or a usage limit holds", async () => {
+    const { dir, transcript } = served("p");
+    user(dir, 1, 10_000);
+    const wakes = new Wakes(m);
+    // A host at work on the message before, in a call or thinking: an ordinary exchange, and nothing is said.
+    socket();
+    transcribe(transcript, [PROMPT, SAID, CLOSED, NOTIFIED, toolUse("toolu_1")], 8);
+    expect(await wakePass(m, wakes, socks, recorder().send)).toEqual([]);
+    expect(view(wakes)).toBeUndefined();
+    // Nor of a session that is not there while the hub has not tried: its watch ended a second ago, and the hub
+    // leaves the handover alone.
+    rmSync(socketOf(socks, process.pid));
+    left(dir, 1);
+    expect(await wakePass(m, wakes, socks, recorder().send)).toEqual([]);
+    expect(view(wakes)).toBeUndefined();
+    // The handover over, the hub tries at once, call or no call (a session that is gone is in none), and there is
+    // nobody to write to: said with the message ten seconds old.
+    left(dir, HANDOVER_S);
+    expect((await wakePass(m, wakes, socks, recorder().send)).map((d) => d.wake.error)).toEqual(["the session is gone: it has no socket"]);
+    expect(view(wakes)).toMatchObject({ since: stampOf(new Date(nowMs - 10_000)), first: 1, woken: [], end: "gone", why: "it has no socket" });
+    // A usage limit in force is said at once too: no look wakes that session.
+    socket();
+    writeFileSync(wakesPath(m), "{}");
+    writeFileSync(transcript, `${JSON.stringify({ type: "assistant", isApiErrorMessage: true, error: "rate_limit", timestamp: new Date(nowMs - 60_000).toISOString() })}\n`);
+    expect(view(new Wakes(m))).toMatchObject({ end: "limit", woken: [] });
+    // And a call the hub waits out is said once the message has waited.
+    transcribe(transcript, [PROMPT, toolUse("toolu_1")], 8);
+    expect(view(new Wakes(m))).toBeUndefined();
+    nowMs += 110_000;
+    expect(view(new Wakes(m))).toMatchObject({ end: "busy", woken: [] });
   });
 
   test("how it ended: gone or not known with why, at its limit, could not be woken, three wakes unanswered; nothing for a fleet paused", async () => {
@@ -1422,7 +1832,7 @@ describe("what the page is given", () => {
     await wakeNow(m, wakes, socks, entryOf("p"), send);
     expect([view(wakes)?.["held"], view(wakes)?.["again"], view(wakes)?.["end"]]).toEqual(["you woke it less than a minute ago", stampOf(new Date(T0 + 60_000)), "queued"]);
     nowMs += MIN;
-    expect([view(wakes)?.["held"], view(wakes)?.["again"]]).toEqual([UNREAD, null]);
+    expect([view(wakes)?.["held"], view(wakes)?.["again"]]).toEqual([UNREAD, stampOf(new Date(T0 + 10 * MIN))]);
     idle(transcript, 30);
     expect([view(wakes)?.["held"], view(wakes)?.["again"], view(wakes)?.["end"]]).toEqual([null, null, null]);
 

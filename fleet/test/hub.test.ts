@@ -90,12 +90,23 @@ interface HubSetup {
   readonly peers?: boolean;
   readonly machine?: Machine;
   readonly session?: Probe;
+  readonly send?: Send;
+}
+
+/** What of a setup the hub is given only when the test gives it. */
+interface Asked {
+  session?: Probe;
+  send?: Send;
 }
 
 async function start(options: HubSetup = {}): Promise<void> {
   port = freePort();
   const m = options.machine ?? machine(env);
-  const asked = options.session === undefined ? {} : { session: options.session };
+  const asked: Asked = {};
+
+  if (options.session !== undefined) asked.session = options.session;
+
+  if (options.send !== undefined) asked.send = options.send;
   logged = [];
   const got = await startHub({ port, machine: m, tailscale: options.tailscale ?? join(base, "no-tailscale"), peers: options.peers ?? false, hosts: [], https: undefined, ...asked }, (line) => logged.push(line));
 
@@ -1401,8 +1412,9 @@ describe("a host that does not listen: the hub's wake, the page's line, and Wake
     return new Promise((ready) => server.listen(socket, () => ready(lines)));
   }
 
+  /** Wait until `count` lines landed on the session's socket, 5 s at most. */
   async function landed(lines: readonly string[], count: number): Promise<void> {
-    for (let tries = 0; tries < 100 && lines.length < count; tries += 1) await new Promise((wake) => setTimeout(wake, 20));
+    for (let tries = 0; tries < 250 && lines.length < count; tries += 1) await new Promise((wake) => setTimeout(wake, 20));
   }
 
   const hub = (): Running["hub"] => {
@@ -1417,8 +1429,20 @@ describe("a host that does not listen: the hub's wake, the page's line, and Wake
 
   const line = (unread: number): string => lineOf(String(wakeText("p", root, "coordinator", unread, 0)));
 
-  /** The stamp `ms` after the stamp `at`. */
-  const after = (at: JsonObject[string] | undefined, ms: number): string => stampOf(new Date((parseInstant(asString(at) ?? "") ?? 0) + ms));
+  /** What the hub recorded of the wakes for fleet p, once the look it took with the last message is over. */
+  const recorded = async (): Promise<JsonObject[]> => {
+    await hub().wakeHosts();
+    const text = existsSync(join(home, "hub", "wakes.json")) ? readFileSync(join(home, "hub", "wakes.json"), "utf8") : "{}";
+
+    return (asArray(asObject(asObject(JSON.parse(text))?.[root])?.["wakes"]) ?? []).flatMap((w) => {
+      const wake = asObject(w);
+
+      return wake === undefined ? [] : [wake];
+    });
+  };
+
+  /** When a hold that ends `ms` after the stamp `at` is over, as the hub says it: the first whole second at or after. */
+  const after = (at: JsonObject[string] | undefined, ms: number): string => stampOf(new Date(Math.ceil(((parseInstant(asString(at) ?? "") ?? 0) + ms) / 1000) * 1000));
 
   beforeEach(async () => {
     env = baseEnv(home, { FLEET_UNHEARD_S: "0" });
@@ -1453,18 +1477,23 @@ describe("a host that does not listen: the hub's wake, the page's line, and Wake
     expect(Object.keys((await request("GET", "/f/p/state.json")).body)).not.toContain("deaf");
   });
 
-  test("the hub's look writes one wake to the session's socket, the page gets its time, the message stays unread, and the next look waits", async () => {
+  test("the user's message to a deaf host wakes it at once, with no look of the timer: one wake on the session's socket, the page gets its time, the message stays unread, and the next looks wait", async () => {
     const lines = await listen();
+    const started = performance.now();
     await post({ text: "SECRET are you there?" });
-    await post({ text: "and now?" });
-    const done = await hub().wakeHosts();
-    expect(done.map((d) => [d.fleet, d.wake.first, d.wake.by, d.wake.error])).toEqual([["p", 1, "hub", null]]);
     await landed(lines, 1);
-    expect(lines).toEqual([line(2)]);
+    // Not the timer's look (every 10 s): the one the hub took with the message. Half the timer's period, so a
+    // machine busy with the other suites does not fail it.
+    expect(performance.now() - started).toBeLessThan(5000);
+    expect(lines).toEqual([line(1)]);
     expect(lines[0]).not.toContain("SECRET");
+    // A second message is looked at too, and the wake of before was not answered: nothing more is written.
+    await post({ text: "and now?" });
+    const done = await recorded();
+    expect(done.map((w) => [w["first"], w["by"], w["error"]])).toEqual([[1, "hub", null]]);
     const shown = await deaf("p");
-    expect([shown?.["woken"], shown?.["end"], shown?.["unread"]]).toEqual([[done[0]?.wake.at ?? ""], null, 2]);
-    expect((await ofManager())?.["woken"]).toEqual([done[0]?.wake.at ?? ""]);
+    expect([shown?.["woken"], shown?.["end"], shown?.["unread"]]).toEqual([[done[0]?.["at"] ?? ""], null, 2]);
+    expect((await ofManager())?.["woken"]).toEqual([done[0]?.["at"] ?? ""]);
     expect(asObject((await request("GET", "/f/p/state.json")).body["chat"])).toMatchObject({ on: false, unread: 2 });
     expect(await hub().wakeHosts()).toEqual([]);
     expect(lines.length).toBe(1);
@@ -1478,7 +1507,7 @@ describe("a host that does not listen: the hub's wake, the page's line, and Wake
     const lines = await listen();
     await post({ text: "are you there?" });
     const gone = `process ${String(process.pid)} is not Claude Code`;
-    expect((await hub().wakeHosts()).map((d) => [d.fleet, d.wake.by, d.wake.error])).toEqual([["p", "hub", `the session is gone: ${gone}`]]);
+    expect((await recorded()).map((w) => [w["by"], w["error"]])).toEqual([["hub", `the session is gone: ${gone}`]]);
     const now = await post({}, {}, "/f/p/wake");
     expect([now.status, now.body]).toEqual([409, { error: `the session is gone (${gone}): there is nobody to write to. Open it in a terminal`, again: null }]);
     await new Promise((wake) => setTimeout(wake, 100));
@@ -1489,7 +1518,8 @@ describe("a host that does not listen: the hub's wake, the page's line, and Wake
   test("Wake now's POST writes one wake at once, from the fleet's page and from the manager's for a fleet it names: one a minute, and three an hour with the hub's", async () => {
     const lines = await listen();
     await post({ text: "are you there?" });
-    const [first] = await hub().wakeHosts();
+    const [first] = await recorded();
+    expect([first?.["by"], first?.["error"]]).toEqual(["hub", null]);
     const own = await post({}, { Origin: `http://127.0.0.1:${port}`, "Sec-Fetch-Site": "same-origin" }, "/f/p/wake");
     expect([own.status, own.body["woken"], own.body["fleet"]]).toEqual([200, true, "p"]);
     // A second within the minute is held, from whichever page: 429, with when it may be used. Twenty in a row write nothing.
@@ -1510,10 +1540,10 @@ describe("a host that does not listen: the hub's wake, the page's line, and Wake
     await landed(lines, 3);
     expect(lines).toEqual([line(1), line(1), line(1)]);
     // The user's wakes stand beside the hub's in the record: the page shows each, and the hub's count is not started again.
-    expect((await deaf("p"))?.["woken"]).toEqual([first?.wake.at ?? "", own.body["at"] ?? "", named.body["at"] ?? ""]);
+    expect((await deaf("p"))?.["woken"]).toEqual([first?.["at"] ?? "", own.body["at"] ?? "", named.body["at"] ?? ""]);
     // The hour's three are written, the hub's and the user's together: the next is refused, with when one is free.
     ahead += 60_000;
-    const hour = { error: "not woken: 3 wakes in the last hour, the most a fleet is written", again: after(first?.wake.at, 3600_000) };
+    const hour = { error: "not woken: 3 wakes in the last hour, the most a fleet is written", again: after(first?.["at"], 3600_000) };
     const spent = await post({}, {}, "/f/p/wake");
     expect([spent.status, spent.body]).toEqual([429, hour]);
     expect(await ofManager()).toMatchObject({ held: "3 wakes in the last hour, the most a fleet is written", again: hour.again, end: null });
@@ -1525,7 +1555,11 @@ describe("a host that does not listen: the hub's wake, the page's line, and Wake
   test("a POST that cannot wake says why and writes nothing: nothing waits, another page's fleet, no socket, a socket not the session's own, a socket that refuses", async () => {
     const nothing = await post({}, {}, "/f/p/wake");
     expect([nothing.status, nothing.body]).toEqual([409, { error: "none of your messages waits unread: there is nothing to wake", again: null }]);
+    expect(existsSync(join(home, "hub", "wakes.json"))).toBe(false);
     await post({ text: "are you there?" });
+    // The hub looked with the message, and found nobody to write to: its own failed wake, the one in the record.
+    const own = [["hub", "the session is gone: it has no socket"]];
+    expect((await recorded()).map((w) => [w["by"], w["error"]])).toEqual(own);
     const gone = await post({}, {}, "/f/p/wake");
     expect([gone.status, gone.body]).toEqual([409, { error: "the session is gone (it has no socket): there is nobody to write to. Open it in a terminal", again: null }]);
     expect((await post({ fleet: "manager" }, {}, "/f/p/wake")).status).toBe(404);
@@ -1535,7 +1569,7 @@ describe("a host that does not listen: the hub's wake, the page's line, and Wake
     writeFileSync(socket, "");
     const foreign = await post({}, {}, "/f/p/wake");
     expect([foreign.status, foreign.body["error"]]).toEqual([409, "the session is gone (the socket named after it is not its own): there is nobody to write to. Open it in a terminal"]);
-    expect(existsSync(join(home, "hub", "wakes.json"))).toBe(false);
+    expect((await recorded()).map((w) => [w["by"], w["error"]])).toEqual(own);
     // The machine says the socket is the session's, and nothing answers on it.
     owns = () => true;
     const refused = await post({}, {}, "/f/p/wake");
@@ -1547,12 +1581,14 @@ describe("a host that does not listen: the hub's wake, the page's line, and Wake
     ahead += 61_000;
     const unknown = await post({}, {}, "/f/p/wake");
     expect([unknown.status, unknown.body]).toEqual([409, { error: "the machine did not say whose the session's socket is: nothing was written. Try again", again: null }]);
-    expect(asArray(asObject(asObject(JSON.parse(readFileSync(join(home, "hub", "wakes.json"), "utf8")))?.[root])?.["wakes"])?.length).toBe(1);
+    expect((await recorded()).map((w) => w["by"])).toEqual(["hub", "user"]);
   });
 
   test("a refused POST wakes nobody", async () => {
     const lines = await listen();
     await post({ text: "are you there?" });
+    // The hub's own wake for the message, and no other.
+    await landed(lines, 1);
 
     const refused: (readonly [number, Answer])[] = [
       [403, await post({}, { Origin: "https://evil.example" }, "/f/p/wake")],
@@ -1565,8 +1601,8 @@ describe("a host that does not listen: the hub's wake, the page's line, and Wake
 
     expect(refused.map(([status, answer]) => [status, answer.status])).toEqual(refused.map(([status]) => [status, status]));
     await new Promise((wake) => setTimeout(wake, 100));
-    expect(lines).toEqual([]);
-    expect(existsSync(join(home, "hub", "wakes.json"))).toBe(false);
+    expect(lines).toEqual([line(1)]);
+    expect((await recorded()).map((w) => w["by"])).toEqual(["hub"]);
   });
 
   test("20 Wake now POSTs at the same instant write one line to the socket: one is answered 200, and it holds the other 19 with 429", async () => {
@@ -1574,9 +1610,47 @@ describe("a host that does not listen: the hub's wake, the page's line, and Wake
     await post({ text: "are you there?" });
     const all = await Promise.all(Array.from({ length: 20 }, () => post({}, { Origin: `http://127.0.0.1:${port}`, "Sec-Fetch-Site": "same-origin" }, "/f/p/wake")));
     await new Promise((wake) => setTimeout(wake, 300));
-    expect([all.filter((a) => a.status === 200).length, all.filter((a) => a.status === 429).length, lines]).toEqual([1, 19, [line(1)]]);
+    // The hub's own wake for the message, then one of the twenty.
+    expect([all.filter((a) => a.status === 200).length, all.filter((a) => a.status === 429).length, lines]).toEqual([1, 19, [line(1), line(1)]]);
     expect(new Set(all.filter((a) => a.status === 429).map((a) => a.body["error"]))).toEqual(new Set(["not woken: you woke it less than a minute ago"]));
-    expect(asArray(asObject(asObject(JSON.parse(readFileSync(join(home, "hub", "wakes.json"), "utf8")))?.[root])?.["wakes"])?.length).toBe(1);
+    expect((await recorded()).map((w) => w["by"])).toEqual(["hub", "user"]);
+  });
+
+  test("a message the hub takes while a look runs is looked at when that look is over, not at the timer's next", async () => {
+    await running?.stop();
+    const sent: string[] = [];
+    let release: () => void = () => {};
+
+    // The first write waits for the test; the ones after it are written at once.
+    const send: Send = (_path, text) => {
+      sent.push(text);
+
+      return sent.length > 1 ? Promise.resolve(undefined) : new Promise((resolve) => (release = () => resolve(undefined)));
+    };
+
+    // The socket named after the sessions' process, which the machine says is its own: both fleets' host is there.
+    mkdirSync(join(home, "cc-socks"), { recursive: true });
+    writeFileSync(socket, "");
+    owns = () => true;
+    await start({ session, machine: machineOf(() => new Date(), (name) => env[name] ?? process.env[name]), send });
+
+    // The look goes over the fleets in the registry's order: the message to the last of them holds it in its write.
+    const [early, late] = machine(env)
+      .registry.live()
+      .map((e) => e.id);
+
+    await post({ text: "are you there?" }, {}, `/f/${late ?? ""}/chat`);
+
+    for (let tries = 0; tries < 100 && sent.length < 1; tries += 1) await new Promise((wake) => setTimeout(wake, 20));
+    expect(sent.length).toBe(1);
+    // The fleet the look already passed gets a message: only another look finds it.
+    await post({ text: "and you?" }, {}, `/f/${early ?? ""}/chat`);
+    await new Promise((wake) => setTimeout(wake, 100));
+    expect(sent.length).toBe(1);
+    release();
+
+    for (let tries = 0; tries < 100 && sent.length < 2; tries += 1) await new Promise((wake) => setTimeout(wake, 20));
+    expect(sent.map((text) => text.split(" ")[1])).toEqual([late ?? "", early ?? ""]);
   });
 
   test("a fleet whose chat the hub cannot read: its look is logged once, its page and the manager's still answer and say so, and no key is left once it reads", async () => {

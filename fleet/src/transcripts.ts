@@ -126,13 +126,12 @@ export function usageLimitHit(path: string): LimitHit | undefined {
   return undefined;
 }
 
-/** The `type` and the content blocks of one transcript line that is the session's own entry (`assistant` or
- * `user`, not a subagent's side chain); undefined for any other line. */
-function entryOf(line: string): { readonly type: "assistant" | "user"; readonly row: JsonObject; readonly blocks: readonly JsonObject[] } | undefined {
-  const row = asObject(Option.getOrUndefined(parseJson(line)));
-  const type = row?.["type"];
+/** The `type` and the content blocks of one transcript row that is an entry (`assistant` or `user`); undefined
+ * for any other row. */
+function entryOf(row: JsonObject): { readonly type: "assistant" | "user"; readonly blocks: readonly JsonObject[] } | undefined {
+  const type = row["type"];
 
-  if (row === undefined || (type !== "assistant" && type !== "user") || row["isSidechain"] === true) return undefined;
+  if (type !== "assistant" && type !== "user") return undefined;
   const content = asObject(row["message"])?.["content"];
 
   const blocks = (Array.isArray(content) ? content : []).flatMap((b) => {
@@ -141,29 +140,60 @@ function entryOf(line: string): { readonly type: "assistant" | "user"; readonly 
     return block === undefined ? [] : [block];
   });
 
-  return { type, row, blocks };
+  return { type, blocks };
 }
 
+/** Where a session's turn stands, as its transcript holds it ({@link turnOf}). */
+export type Turn = "finished" | "call" | "open";
+
 /**
- * Whether the session's turn is in a tool call, as the transcript at `path` holds it: a `tool_use` of an
- * `assistant` entry in its last {@link TAIL_BYTES} has no `tool_result` after it. A tool call writes nothing
- * while it runs (a build, a subagent in the foreground, a permission prompt nobody answered), so such a
- * session is not idle though its transcript is quiet.
+ * Where the session's turn stands, as the last {@link TAIL_BYTES} of the transcript at `path` hold it:
  *
- * Read from Claude Code 2.1.29x transcripts (2026-10-12): an `assistant` line carries one content block, a
- * `tool_use` with its `id`; its result is a later `user` line with a `tool_result` block naming that id
- * (`tool_use_id`); an interrupted call is given a result too. A `user` line that carries no result and is
- * not `isMeta` is a prompt: it begins another turn, and what was open before it is not this turn's. A call
- * written before `sinceMs` (when the process that runs now started) was another process's: the session was
- * closed in the middle of it and resumed, and nothing runs it now.
+ * - `finished`: Claude Code closed the turn, and nothing of the session's was written since. The session waits
+ *   for a prompt.
+ * - `call`: a tool call of the turn awaits its result. A tool call writes nothing while it runs (a build, a
+ *   subagent in the foreground, a permission prompt nobody answered), so the session is in a turn however
+ *   quiet its transcript.
+ * - `open`: anything else. The model has a prompt, a notification or a result to answer and has written
+ *   nothing yet, or it writes; or the turn ended with no mark of it (an interrupt, a local command, a
+ *   compaction), or the tail holds no line of the session's. The transcript does not tell these apart: the
+ *   caller waits for it to go quiet.
+ *
+ * Read from Claude Code 2.1.286 to 2.1.296 transcripts of interactive sessions (2026-10-13):
+ *
+ * - The close is one line, `"type": "system"`, `"subtype": "turn_duration"`, written after the Stop hooks ran
+ *   (`stop_hook_summary` stands before it), a median 0.1 s after the assistant's last line (`message.stop_reason`
+ *   `end_turn`), and after an API error too (a usage limit, a server error). A Stop hook that blocks writes
+ *   none: the turn goes on. In ten hosts' transcripts the line after each of 7283 closes was a `user` line;
+ *   over 23 interactive sessions an `assistant` line followed once in about 9700. A headless session
+ *   (`entrypoint` `sdk-cli`) writes none, so its turn never reads as finished.
+ * - `stop_reason` does not say it: every line of a message carries the message's own (`tool_use` on the
+ *   thinking block before a call), and `end_turn` stands before the Stop hooks ran.
+ * - A turn begins with a `user` line: a prompt, a `<task-notification>`, or an `isMeta` line (4076 of the
+ *   7283 lines that followed a close). The line is written when the turn begins; the model's first line
+ *   comes a median 3.8 s later, more than 30 s later in 179 of 34138, and nothing of the session's is
+ *   written meanwhile.
+ * - A tool call: an `assistant` line carries one content block, a `tool_use` with its `id`; its result is a
+ *   later `user` line with a `tool_result` block naming that id (`tool_use_id`); an interrupted call is given a
+ *   result too. A `user` line that carries no result and is not `isMeta` is a prompt: what was open before it
+ *   is not this turn's.
+ * - A compaction writes its summary as a `user` line (`isCompactSummary`), in a turn or between two: one of the
+ *   ten hosts had been compacted 55 minutes after its last close, with nothing after. It begins no turn and
+ *   ends none.
+ * - `queue-operation` lines say nothing of the session's turn: a subagent's background command is enqueued in
+ *   the session's transcript too.
+ *
+ * A subagent's lines (`isSidechain`) are not the session's. A call written before `sinceMs` (when the process
+ * that runs now started) was another process's: the session was closed in the middle of it and resumed, and
+ * nothing runs it now. A transcript that cannot be read is `open`.
  */
-export function toolAwaited(path: string, sinceMs: number | undefined = undefined): boolean {
+export function turnOf(path: string, sinceMs: number | undefined = undefined): Turn {
   let size: number;
 
   try {
     size = statSync(path).size;
   } catch {
-    return false;
+    return "open";
   }
 
   const from = Math.max(0, size - TAIL_BYTES);
@@ -172,21 +202,36 @@ export function toolAwaited(path: string, sinceMs: number | undefined = undefine
   try {
     lines = readRange(path, from, size).toString("utf8").split("\n");
   } catch {
-    return false;
+    return "open";
   }
 
-  const open = new Map<string, number | undefined>();
+  const awaited = new Map<string, number | undefined>();
+  let finished = false;
 
+  // The first line of a tail that does not start the file is cut: it is not read.
   for (const line of lines.slice(from > 0 ? 1 : 0)) {
-    const entry = entryOf(line);
+    const row = asObject(Option.getOrUndefined(parseJson(line)));
 
-    if (entry === undefined) continue;
+    if (row === undefined || row["isSidechain"] === true) continue;
+
+    if (row["type"] === "system" && row["subtype"] === "turn_duration") {
+      finished = true;
+      awaited.clear();
+
+      continue;
+    }
+
+    const entry = entryOf(row);
+
+    // A compaction's summary is a `user` line and no prompt: the turn stands where it stood.
+    if (entry === undefined || row["isCompactSummary"] === true) continue;
+    finished = false;
 
     if (entry.type === "assistant") {
       for (const block of entry.blocks) {
         const id = asString(block["id"]);
 
-        if (block["type"] === "tool_use" && id !== undefined) open.set(id, parseInstant(asString(entry.row["timestamp"]) ?? ""));
+        if (block["type"] === "tool_use" && id !== undefined) awaited.set(id, parseInstant(asString(row["timestamp"]) ?? ""));
       }
 
       continue;
@@ -194,12 +239,14 @@ export function toolAwaited(path: string, sinceMs: number | undefined = undefine
 
     const results = entry.blocks.filter((b) => b["type"] === "tool_result");
 
-    for (const result of results) open.delete(asString(result["tool_use_id"]) ?? "");
+    for (const result of results) awaited.delete(asString(result["tool_use_id"]) ?? "");
 
-    if (results.length === 0 && entry.row["isMeta"] !== true) open.clear();
+    if (results.length === 0 && row["isMeta"] !== true) awaited.clear();
   }
 
-  return [...open.values()].some((at) => sinceMs === undefined || at === undefined || at >= sinceMs);
+  if (finished) return "finished";
+
+  return [...awaited.values()].some((at) => sinceMs === undefined || at === undefined || at >= sinceMs) ? "call" : "open";
 }
 
 const WHO = /(?:your id is|You are) ([A-Za-z][A-Za-z0-9_.-]*?)[,.\s"]/;
