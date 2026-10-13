@@ -97,18 +97,22 @@ OP_ERROR = re.compile(r"(?:^|Provider operation failed: )\[ERROR\] \d{4}/\d\d/\d
 ONEPW_WHY = {"signing": "SSH signing through 1Password failed", "dismissed": "the 1Password prompt was dismissed",
              "timeout": "the 1Password prompt timed out", "app": "the 1Password app did not answer"}
 ONEPW_BROKEN = ("not JSON", "no kinds", "an unknown kind", "a kind's since", "a kind's cleared", "waiting", "told")
-ONEPW_HELD = ("1Password is locked for {kind}: Luiz was asked at {at} (the card \"Unlock 1Password\" on the fleet's "
-              "page). Don't retry `{what}` before {next}: one command of this kind is let through then, to test the "
-              "lock. Don't open a card or ask him again. Do other work that does not need it, or end the turn if "
-              "nothing else is left{ending}")
-ONEPW_SEEN = ("1Password is locked for {kind} ({why}): recorded once for the machine at {at}, and Luiz is asked on the "
-              "fleet's page (the card \"Unlock 1Password\"). Don't retry `{what}` and don't open a card or ask him "
-              "again. Do other work that does not need it, or end the turn if nothing else is left{ending}")
-ONEPW_TOLD = "; the hub tells this fleet when it is unlocked."
-ONEPW_UNTOLD = (". This fleet is not in the registry, so it will not be told when it is unlocked: check `{cli} onepw` "
-                "before you retry.")
-ONEPW_UNKEPT = (". This fleet could not be added to those the hub tells, so it will not be told when it is unlocked: "
-                "check `{cli} onepw` before you retry.")
+# The words of a hold lead with who tells the fleet. They once led with "Don't retry `{what}` before {next}", and a
+# fleet summed that up as "I wait for that time" (Luiz, 2026-10-13): the refusal itself puts the fleet on the waiting
+# list, the hub tells it, and {next} is only when the hook lets one command through to test the lock.
+ONEPW_HELD = ("1Password is locked for {kind}. {told} Do not poll, do not open a card and do not ask Luiz: he was "
+              "asked at {at}, by the card \"Unlock 1Password\" on the fleet's page. Go on with work that needs no "
+              "1Password, or end the turn if nothing else is left. The hook lets one command of this kind through at "
+              "{next}, from any fleet, to test the lock: that is its own test, not a time to wait for.")
+ONEPW_SEEN = ("1Password is locked for {kind} ({why}). {told} Do not poll, do not open a card and do not ask Luiz: the "
+              "lock was recorded once for the machine at {at}, and he is asked by the card \"Unlock 1Password\" on the "
+              "fleet's page. Go on with work that needs no 1Password, or end the turn if nothing else is left.")
+ONEPW_TOLD = ("This fleet is on the waiting list: the hub tells it when 1Password is unlocked, in its chat, or in its "
+              "session when its watch is not running. Retry `{what}` then, not before.")
+ONEPW_UNTOLD = ("This fleet is not in the registry, so it will not be told when 1Password is unlocked: check "
+                "`{cli} onepw` before you retry `{what}`.")
+ONEPW_UNKEPT = ("This fleet could not be put on the waiting list, so it will not be told when 1Password is unlocked: "
+                "check `{cli} onepw` before you retry `{what}`.")
 
 
 def _first_line(path):
@@ -653,13 +657,14 @@ def _onepw_where(rows):
     return _onepw_word(rows[0]["fleet"]) if rows[0]["fleet"] else "a session"
 
 
-def _onepw_ending(rows, state):
-    """How a denial and a note end: who tells this fleet. Nobody when it is in no registry, or when `state` holds no
-    row of it for this kind (no room was left, or the row could not be written)."""
+def _onepw_told(rows, state, what):
+    """The second sentence of a denial and of a note: who tells this fleet, and so when it retries `what`. Nobody when
+    it is in no registry, or when `state` holds no row of it for this kind (no room was left, or the row could not be
+    written)."""
     if not rows[0]["dir"]:
-        return ONEPW_UNTOLD.format(cli=fleet_cli())
+        return ONEPW_UNTOLD.format(cli=fleet_cli(), what=what)
     kept = {_onepw_key(w) for w in (state or {}).get("waiting", ())}
-    return ONEPW_TOLD if _onepw_key(rows[0]) in kept else ONEPW_UNKEPT.format(cli=fleet_cli())
+    return (ONEPW_TOLD if _onepw_key(rows[0]) in kept else ONEPW_UNKEPT).format(cli=fleet_cli(), what=what)
 
 
 def _onepw_clock(at):
@@ -747,7 +752,7 @@ def _onepw_hold(hook):
     since = _instant(held["since"])
     opens = max(now, min(_onepw_window(held, now), since + _onepw_lapse(hook.env)))
     return Deny(ONEPW_HELD.format(kind=ONEPW_KINDS[use.kind], at=_onepw_clock(since), next=_onepw_clock(opens),
-                                  what=use.what, ending=_onepw_ending(rows, seen["state"])))
+                                  told=_onepw_told(rows, seen["state"], use.what)))
 
 
 def _onepw_record(hook, use, why):
@@ -808,8 +813,8 @@ def _onepw_watch(hook):
         entry, state, rows = _onepw_record(hook, use, why)
         if hook.event != "PostToolUse":
             return None
-        return ONEPW_SEEN.format(kind=ONEPW_KINDS[use.kind], why=ONEPW_WHY[why], what=use.what,
-                                 at=_onepw_clock(_instant(entry["since"])), ending=_onepw_ending(rows, state))
+        return ONEPW_SEEN.format(kind=ONEPW_KINDS[use.kind], why=ONEPW_WHY[why],
+                                 at=_onepw_clock(_instant(entry["since"])), told=_onepw_told(rows, state, use.what))
     background = hook.input["tool_input"].get("run_in_background") or "backgroundTaskId" in response
     if hook.event != "PostToolUse" or not response or background:
         return None

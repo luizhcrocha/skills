@@ -3354,19 +3354,26 @@ line, with the kind's fixed words, the local `HH:MM` of the kind's `since`, the 
 the local `HH:MM` the kind's next probe window opens at (its lapse when that comes first; never before now):
 
 ```
-1Password is locked for <kind's words>: Luiz was asked at HH:MM (the card "Unlock 1Password" on the fleet's page). Don't retry `<what>` before <next>: one command of this kind is let through then, to test the lock. Don't open a card or ask him again. Do other work that does not need it, or end the turn if nothing else is left<ending>
+1Password is locked for <kind's words>. <told> Do not poll, do not open a card and do not ask Luiz: he was asked at HH:MM, by the card "Unlock 1Password" on the fleet's page. Go on with work that needs no 1Password, or end the turn if nothing else is left. The hook lets one command of this kind through at <next>, from any fleet, to test the lock: that is its own test, not a time to wait for.
 ```
 
-`<ending>` is one of three, the first that fits:
+`<told>` says who tells the fleet, and so when it retries. It is one of three, the first that fits:
 
-| The session's fleet | `<ending>` |
+| The session's fleet | `<told>` |
 | :-- | :-- |
-| is in no registry (its row has no `dir`) | ``. This fleet is not in the registry, so it will not be told when it is unlocked: check `<cli> onepw` before you retry.`` |
-| has a row of this kind in the state | `; the hub tells this fleet when it is unlocked.` |
-| has none: no room was left (`ONEPW_WAITING_MAX`), or the state could not be written | ``. This fleet could not be added to those the hub tells, so it will not be told when it is unlocked: check `<cli> onepw` before you retry.`` |
+| is in no registry (its row has no `dir`) | ``This fleet is not in the registry, so it will not be told when 1Password is unlocked: check `<cli> onepw` before you retry `<what>`.`` |
+| has a row of this kind in the state | ``This fleet is on the waiting list: the hub tells it when 1Password is unlocked, in its chat, or in its session when its watch is not running. Retry `<what>` then, not before.`` |
+| has none: no room was left (`ONEPW_WAITING_MAX`), or the state could not be written | ``This fleet could not be put on the waiting list, so it will not be told when 1Password is unlocked: check `<cli> onepw` before you retry `<what>`.`` |
 
 `<cli>` is the plugin's fleet CLI by its path, `<plugin root>/fleet/bin/fleet`, as the hook names it in the
 news line.
+
+The order is the rule. The words once began "Don't retry `<what>` before `<next>`", and a fleet summed its
+hold up as "I wait for that time" (Luiz, 2026-10-13). That is the wrong reading: the refusal itself puts the
+fleet on the waiting list (its row in `waiting`), the hub tells it when 1Password is unlocked
+([Settle and the notice](#settle-and-the-notice)), and `<next>` is only when the hook lets one command through to test the lock
+([The probe window](#the-probe-window)). So who tells the fleet comes first, what not to do second, and the
+window's time last, as a fact about the hook.
 
 **Clear** (`onepw_watch`, PostToolUse only, any session, of a fleet or not). A command clears its kind when
 all hold:
@@ -3386,10 +3393,10 @@ as it is. The log line is `cleared: <k> by a command (<what>) in session <id>`, 
 the same characters replaced, or `unknown`.
 
 **The note.** On PostToolUse a detection returns one note to the session, as the event's
-`additionalContext`, with the same three endings as the denial:
+`additionalContext`, with the same three `<told>` as the denial:
 
 ```
-1Password is locked for <kind's words> (<why>): recorded once for the machine at HH:MM, and Luiz is asked on the fleet's page (the card "Unlock 1Password"). Don't retry `<what>` and don't open a card or ask him again. Do other work that does not need it, or end the turn if nothing else is left<ending>
+1Password is locked for <kind's words> (<why>). <told> Do not poll, do not open a card and do not ask Luiz: the lock was recorded once for the machine at HH:MM, and he is asked by the card "Unlock 1Password" on the fleet's page. Go on with work that needs no 1Password, or end the turn if nothing else is left.
 ```
 
 On PostToolUseFailure nothing is returned: the event is registered asynchronous, so the session reads no

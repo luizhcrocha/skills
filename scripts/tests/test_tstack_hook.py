@@ -4124,10 +4124,11 @@ class OnepwTest(FleetCase):
         said = json.loads(r.stdout)["hookSpecificOutput"]
         self.assertEqual(said["hookEventName"], "PostToolUse")
         self.assertEqual(said["additionalContext"], (
-            f"1Password is locked for {SSH_KIND} (SSH signing through 1Password failed): recorded once for the machine "
-            "at 09:00, and Luiz is asked on the fleet's page (the card \"Unlock 1Password\"). Don't retry `jj git push` "
-            "and don't open a card or ask him again. Do other work that does not need it, or end the turn if nothing "
-            "else is left; the hub tells this fleet when it is unlocked."))
+            f"1Password is locked for {SSH_KIND} (SSH signing through 1Password failed). This fleet is on the waiting "
+            "list: the hub tells it when 1Password is unlocked, in its chat, or in its session when its watch is not "
+            "running. Retry `jj git push` then, not before. Do not poll, do not open a card and do not ask Luiz: the "
+            "lock was recorded once for the machine at 09:00, and he is asked by the card \"Unlock 1Password\" on the "
+            "fleet's page. Go on with work that needs no 1Password, or end the turn if nothing else is left."))
         self.assertEqual(self.onepw_log(), f"{self.NOW} locked: SSH signing through 1Password failed (ssh-agent in p)\n")
 
     def test_each_kind_of_failure_locks_and_the_failure_event_says_nothing(self):
@@ -4315,34 +4316,42 @@ class OnepwTest(FleetCase):
         self.assertEqual([w["what"] for w in self.state()["waiting"]], ["git fetch"])  # the fleet waits once per kind
         self.assertFalse(self.held("git fetch", repo="none"))
 
-    def test_the_denial_ends_on_who_tells_the_fleet(self):
+    HELD_REST = (" Do not poll, do not open a card and do not ask Luiz: he was asked at 09:00, by the card \"Unlock "
+                 "1Password\" on the fleet's page. Go on with work that needs no 1Password, or end the turn if nothing "
+                 "else is left. The hook lets one command of this kind through at 09:15, from any fleet, to test the "
+                 "lock: that is its own test, not a time to wait for.")
+    SEEN_REST = (" Do not poll, do not open a card and do not ask Luiz: the lock was recorded once for the machine at "
+                 "09:00, and he is asked by the card \"Unlock 1Password\" on the fleet's page. Go on with work that needs "
+                 "no 1Password, or end the turn if nothing else is left.")
+
+    def test_the_denial_leads_with_who_tells_the_fleet(self):
+        """A fleet read "Don't retry `X` before 09:15" as "I wait for that time" (Luiz, 2026-10-13): the refusal puts it
+        on the waiting list and the hub tells it, so that comes first, and the test window's time last."""
         self.lock()
         got = self.asks("secretspec run -- node deploy.js", env={"FLEET_NOW": "2026-01-05T09:10:00+00:00"})
         self.assertEqual(got["permissionDecision"], "deny")
         self.assertEqual(got["permissionDecisionReason"], (
-            f"1Password is locked for {OP_KIND}: Luiz was asked at 09:00 (the card \"Unlock 1Password\" on the fleet's "
-            "page). Don't retry `secretspec run` before 09:15: one command of this kind is let through then, to test "
-            "the lock. Don't open a card or ask him again. Do other work that does not need it, or end the turn if "
-            "nothing else is left; the hub tells this fleet when it is unlocked."))
+            f"1Password is locked for {OP_KIND}. This fleet is on the waiting list: the hub tells it when 1Password is "
+            "unlocked, in its chat, or in its session when its watch is not running. Retry `secretspec run` then, not "
+            "before." + self.HELD_REST))
+        said = got["permissionDecisionReason"]
+        self.assertLess(said.index("waiting list"), said.index("Do not poll"))
+        self.assertLess(said.index("Do not poll"), said.index("09:15"))
+        self.assertNotIn("before 09:15", said)
         self.assertEqual([(w["fleet"], w["what"], w["seen"]) for w in self.state()["waiting"]],
                          [("p", "git fetch", "failed"), ("p", "op read", "failed")])  # the fleet already waits for both
         (self.registry / "p.json").unlink()
         got = self.asks("jj git push --bookmark main")
         self.assertEqual(got["permissionDecisionReason"], (
-            f"1Password is locked for {SSH_KIND}: Luiz was asked at 09:00 (the card \"Unlock 1Password\" on the fleet's "
-            "page). Don't retry `jj git push` before 09:15: one command of this kind is let through then, to test the "
-            "lock. Don't open a card or ask him again. Do other work that does not need it, or end the turn if nothing "
-            "else is left. This fleet is not in the registry, so it will not be told when it is unlocked: check "
-            f"`{self.fleet_cli} onepw` before you retry."))
+            f"1Password is locked for {SSH_KIND}. This fleet is not in the registry, so it will not be told when "
+            f"1Password is unlocked: check `{self.fleet_cli} onepw` before you retry `jj git push`." + self.HELD_REST))
         self.assertEqual([(w["dir"], w["fleet"], w["what"], w["seen"]) for w in self.state()["waiting"]][2:],
                          [(None, None, "jj git push", "held")])
         said = json.loads(self.failed("gh pr list", OP_TIMEOUT, event="PostToolUse").stdout)["hookSpecificOutput"]
         self.assertEqual(said["additionalContext"], (
-            f"1Password is locked for {OP_KIND} (the 1Password prompt timed out): recorded once for the machine at "
-            "09:00, and Luiz is asked on the fleet's page (the card \"Unlock 1Password\"). Don't retry `gh pr` and "
-            "don't open a card or ask him again. Do other work that does not need it, or end the turn if nothing else "
-            "is left. This fleet is not in the registry, so it will not be told when it is unlocked: check "
-            f"`{self.fleet_cli} onepw` before you retry."))
+            f"1Password is locked for {OP_KIND} (the 1Password prompt timed out). This fleet is not in the registry, so "
+            f"it will not be told when 1Password is unlocked: check `{self.fleet_cli} onepw` before you retry `gh pr`."
+            + self.SEEN_REST))
         self.assertIn(f"{self.NOW} held: jj git push in a session\n", self.onepw_log())
         self.assertIn("another waits: op-desktop in a session\n", self.onepw_log())
 
@@ -4364,7 +4373,9 @@ class OnepwTest(FleetCase):
             self.assertTrue(self.held(f"gh {sub} list", agent_id=f"agent-{n}"))
         payload, fleet = self.other_fleet()
         got = self.asks("gh pr list", payload=payload)
-        self.assertTrue(got["permissionDecisionReason"].endswith("; the hub tells this fleet when it is unlocked."))
+        self.assertIn(". This fleet is on the waiting list: the hub tells it when 1Password is unlocked, in its chat, "
+                      "or in its session when its watch is not running. Retry `gh pr` then, not before. ",
+                      got["permissionDecisionReason"])
         self.assertEqual([(w["dir"], w["kind"]) for w in self.state()["waiting"]],
                          [(str(self.fleet), "op-desktop"), (str(fleet), "op-desktop")])
 
@@ -4378,12 +4389,12 @@ class OnepwTest(FleetCase):
         for said in (self.asks("gh pr list", payload=payload)["permissionDecisionReason"],
                      json.loads(self.failed("gh pr list", OP_TIMEOUT, event="PostToolUse", payload=payload).stdout)[
                          "hookSpecificOutput"]["additionalContext"]):
-            self.assertTrue(said.endswith(
-                "nothing else is left. This fleet could not be added to those the hub tells, so it will not be told "
-                f"when it is unlocked: check `{self.fleet_cli} onepw` before you retry."), said)
+            self.assertIn(
+                ". This fleet could not be put on the waiting list, so it will not be told when 1Password is unlocked: "
+                f"check `{self.fleet_cli} onepw` before you retry `gh pr`. Do not poll, ", said)
+            self.assertNotIn("the hub tells it", said)
         self.assertEqual(len(self.state()["waiting"]), load_hook().ONEPW_WAITING_MAX)
-        self.assertTrue(self.asks("gh pr list")["permissionDecisionReason"].endswith("; the hub tells this fleet when it "
-                                                                                    "is unlocked."))
+        self.assertIn(". This fleet is on the waiting list: the hub tells it ", self.asks("gh pr list")["permissionDecisionReason"])
 
     def test_the_hook_never_allows(self):
         import inspect
@@ -4516,8 +4527,10 @@ class OnepwTest(FleetCase):
     def test_a_probe_window_lets_one_held_command_through_and_the_denial_says_when(self):
         self.lock()
         payload, _ = self.other_fleet()
-        self.assertIn("Don't retry `jj git fetch` before 09:15: one command of this kind is let through then, to test "
-                      "the lock. ", self.reason("jj git fetch", env=self.at("09:14:59")))
+        said = self.reason("jj git fetch", env=self.at("09:14:59"))
+        self.assertIn("Retry `jj git fetch` then, not before. ", said)
+        self.assertTrue(said.endswith(" The hook lets one command of this kind through at 09:15, from any fleet, to test "
+                                      "the lock: that is its own test, not a time to wait for."), said)
         before = self.state()
         for command, more in (("git status", {}), ("ssh nixbox uptime", {}), ("jj git push --dry-run", {}),
                               ("timeout 60 jj git push", {}), ("jj git fetch", {"payload": self.outsider()})):
@@ -4530,16 +4543,16 @@ class OnepwTest(FleetCase):
             "2026-01-05T09:15:00+00:00 probe: jj git push in q is let through to test ssh-agent\n"))
         for clock, command, more in (("09:15:00", "jj git push --bookmark main", {"payload": payload}),
                                      ("09:15:01", "git fetch", {"repo": "ssh"}), ("09:29:59", "ssh github.com", {})):
-            self.assertIn(" before 09:30: ", self.reason(command, env=self.at(clock), **more))
+            self.assertIn(" through at 09:30, ", self.reason(command, env=self.at(clock), **more))
         self.assertIsNone(self.asks("git fetch", repo="ssh", env=self.at("09:30:00")))
         self.assertEqual(self.kinds()["ssh-agent"]["probe"], "2026-01-05T09:30:00+00:00")
         # each kind has its own window
         self.assertNotIn("probe", self.kinds()["op-desktop"])
         self.assertIsNone(self.asks("gh pr list", env=self.at("09:30:00")))
-        self.assertIn(" before 09:45: ", self.reason("secretspec check", env=self.at("09:30:01")))
+        self.assertIn(" through at 09:45, ", self.reason("secretspec check", env=self.at("09:30:01")))
         # a window that would open after the lapse: the hold ends first
         self.assertIsNone(self.asks("jj git fetch", env=self.at("10:50:00")))
-        self.assertIn(" before 11:00: ", self.reason("jj git fetch", env=self.at("10:50:01")))
+        self.assertIn(" through at 11:00, ", self.reason("jj git fetch", env=self.at("10:50:01")))
 
     def test_of_many_held_commands_at_once_one_takes_the_window(self):
         from concurrent.futures import ThreadPoolExecutor
@@ -4560,7 +4573,7 @@ class OnepwTest(FleetCase):
         self.failed("git fetch", SSH_SIGNING + NO_ACCESS, code=128, repo="ssh", env=self.at("09:16:05"))
         self.assertEqual(self.kinds()["ssh-agent"], {"since": self.NOW, "why": "SSH signing through 1Password failed",
                                                      "hosts": ["github.com"], "probe": "2026-01-05T09:16:00+00:00"})
-        self.assertIn(" before 09:31: ", self.reason("git fetch", repo="ssh", env=self.at("09:30:59")))
+        self.assertIn(" through at 09:31, ", self.reason("git fetch", repo="ssh", env=self.at("09:30:59")))
         # anything else changes nothing: an exit 0 that proves no read (jj git push), a failure of another cause
         self.assertFalse(self.held("jj git push --bookmark main", env=self.at("09:31:00")))
         before = self.locked.read_text()
@@ -4581,7 +4594,7 @@ class OnepwTest(FleetCase):
         self.ran("op read op://v/i/f", payload=self.outsider(), env=self.at("09:14:00"))
         self.failed("gh pr list", OP_TIMEOUT, env=self.at("09:20:00"))
         self.assertEqual(self.kinds()["op-desktop"]["again"], "2026-01-05T09:20:00+00:00")
-        self.assertIn(" before 09:35: ", self.reason("gh pr list", env=self.at("09:34:59")))
+        self.assertIn(" through at 09:35, ", self.reason("gh pr list", env=self.at("09:34:59")))
         self.assertFalse(self.held("gh pr list", env=self.at("09:35:00")))
 
     def hold(self, mod, command="gh pr list", denied=False, **env):
@@ -4595,7 +4608,7 @@ class OnepwTest(FleetCase):
         self.lock("op-desktop")
         got = self.hold(mod, denied=True, **self.at("09:20:00"))
         self.assertIsInstance(got, mod.Deny)
-        self.assertRegex(got, r" before \d\d:20: ")  # the window is open: the next call that is not refused takes it
+        self.assertRegex(got, r" through at \d\d:20, ")  # the window is open: the next call that is not refused takes it
         self.assertNotIn("probe", self.kinds()["op-desktop"])
         self.assertIsNone(self.hold(mod, **self.at("09:20:00")))
         self.assertEqual(mod._instant(self.kinds()["op-desktop"]["probe"]), mod._instant("2026-01-05T09:20:00+00:00"))
@@ -4683,9 +4696,9 @@ class OnepwTest(FleetCase):
         self.assertTrue(self.held("gh pr list"))  # held on what was read: its fleet waits already, nothing to write
         self.assertEqual(self.log(), "")
         other = self.other_fleet()[0]
-        self.assertTrue(self.reason("gh pr list", payload=other).endswith(  # held, and its row could not be written
-            "This fleet could not be added to those the hub tells, so it will not be told when it is unlocked: check "
-            f"`{self.fleet_cli} onepw` before you retry."))
+        self.assertIn(  # held, and its row could not be written
+            ". This fleet could not be put on the waiting list, so it will not be told when 1Password is unlocked: check "
+            f"`{self.fleet_cli} onepw` before you retry `gh pr`. ", self.reason("gh pr list", payload=other))
         self.assertIn("onepw_hold: could not record the hold", self.log())
         r = self.failed("gh pr list", OP_DISMISSED, event="PostToolUse", payload=other)
         self.assertEqual(r.stdout, "")
