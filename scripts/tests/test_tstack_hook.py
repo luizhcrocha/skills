@@ -3481,6 +3481,16 @@ class LandTurnGateTest(FleetCase):
         self.assertTrue(event.get("important"))
         self.assertIn("Push gate: refused `jj git push --bookmark master`", event["text"])
 
+    def test_a_moved_fleets_push_denial_is_logged_through_fleet_run(self):
+        MovedFleet.move(self)
+        self.manager(("l1", "current", "infra"), ("l2", "pending", "p"))
+        self.denied(self.push("jj git push --bookmark master"))
+        self.assertEqual(self.events(), [])
+        [run] = MovedFleet.programs(self)
+        [op] = run["ops"]
+        self.assertEqual((op["record"], op["set"]["kind"], op["set"]["important"]), ({"kind": "event"}, "blocked", True))
+        self.assertIn("Push gate: refused `jj git push --bookmark master`", op["set"]["text"])
+
     def test_a_push_with_the_turn_is_allowed(self):
         self.manager(("l1", "done", "infra"), ("l2", "current", "p"))
         self.assertSilent(self.push("jj git push --bookmark master"))
@@ -5051,6 +5061,433 @@ class LatencyTest(HookCase):
             print(f"\n  {event} hook: median {statistics.median(times):.0f} ms, best {min(times):.0f} ms",
                   end="", file=sys.stderr)
             self.assertLess(min(times), 150, f"{event} hook is slow even at its best (a loaded machine inflates the rest): {times}")
+
+
+
+# A stand-in for fleet-run (fleet slice 3, decision 55): the program on stdin runs against the prelude's intents
+# (lane (a)'s preludeSource, cut to the ones the hook calls) and a `records` that answers each op FAKE_RUN_TAG; the
+# ops it made go to FAKE_RUN_LOG; FAKE_RUN_EXIT 3 answers queued, 4 is the host service down.
+FAKE_RUN = """#!/usr/bin/env node
+const fs = require("fs");
+const program = fs.readFileSync(0, "utf8");
+const ops = [];
+const now = () => "2026-10-14T12:00:00Z";
+const draft = (kind, key, set, extra) => {
+  const op = { record: key === undefined ? { kind } : { kind, key }, ...extra };
+  if (set !== undefined) op.set = set;
+  ops.push(op);
+  return op;
+};
+const decision = { open: (id, fields) => draft("decision", id, { status: "open", opened: now(), ...fields }) };
+const event = (kind, text, options = {}) => draft("event", undefined, { at: now(), kind, text, ...options });
+const tag = process.env.FAKE_RUN_TAG || "applied";
+const records = { apply: (made) => made.map((op, i) => ({ _tag: op.record.kind === process.env.FAKE_RUN_REFUSE_KIND ? "refused" : tag, id: "op" + i, kind: op.record.kind,
+  key: op.record.key ?? "e1", issue: "a refused op" })), read: () => [] };
+const code = Number(process.env.FAKE_RUN_EXIT || 0);
+if (code === 4) { process.stderr.write("fleet-host is not running on this machine\\n"); process.exit(4); }
+const resent = process.argv.includes("--id");
+if (code === 5 && !(resent && process.env.FAKE_RUN_RESENT_EXIT === "0")) {
+  fs.appendFileSync(process.env.FAKE_RUN_LOG, JSON.stringify({ argv: process.argv.slice(2), dir: process.env.FLEET_DIR, unknown: true }) + "\\n");
+  process.stdout.write(JSON.stringify({ id: "01K7C2Z9M4V8Q3R5T6W7X8Y9Z0", status: "unknown" }) + "\\n");
+  process.exit(5);
+}
+const result = new Function("records", "ops", "decision", "event", program)(records, ops, decision, event);
+fs.appendFileSync(process.env.FAKE_RUN_LOG, JSON.stringify({ argv: process.argv.slice(2), dir: process.env.FLEET_DIR,
+  session: process.env.FLEET_SESSION ?? null, ops }) + "\\n");
+const outcome = code === 3 ? { id: "01K", status: "queued", queued: { since: now() }, offline: { since: now(), queued: 1 } }
+  : { id: "01K", status: "completed", result, ops: result };
+process.stdout.write(JSON.stringify(outcome) + "\\n");
+process.exit(code);
+"""
+
+
+class MovedFleet:
+    """A fleet folder the host service exports from the cloud: cloud.json beside state.json, and fleet-run faked."""
+
+    def move(self, folder=None):
+        ((folder or self.fleet) / "cloud.json").write_text(json.dumps({"fleet": "p", "cloud": "https://fleet.example",
+                                                           "since": "2026-10-14T12:00:00Z", "host": "office"}))
+        self.runs = self.tmp / "fleet-run-calls.jsonl"
+        run = self.tmp / "fleet-run"
+        run.write_text(FAKE_RUN)
+        run.chmod(0o755)
+        self.env.update({"TSTACK_FLEET_RUN": str(run), "FAKE_RUN_LOG": str(self.runs)})
+
+    def programs(self):
+        return [json.loads(line) for line in self.runs.read_text().splitlines()] if self.runs.exists() else []
+
+
+class MovedRefusalTest(MovedFleet, RefusalCase):
+    """fleet_permission_denied on a moved fleet: the card goes through fleet-run as one program, never the old CLI;
+    on an unmoved fleet nothing changes."""
+
+    def setUp(self):
+        super().setUp()
+        self.move()
+
+    def test_a_spawn_refusal_opens_its_permission_card_through_fleet_run(self):
+        self.refuse(tool="Agent", tool_input=self.SPAWN, agent_id="ab12cd34")
+        self.assertEqual(self.recorded(), [])
+        [run] = self.programs()
+        self.assertEqual(run["dir"], str(self.fleet))
+        [op] = run["ops"]
+        call = json.dumps(self.SPAWN, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        self.assertEqual(op["record"], {"kind": "decision", "key": self.expected_id("ab12cd34", call)})
+        card = op["set"]
+        self.assertEqual((card["kind"], card["status"], card["blocking"], card["agent"]), ("permission", "open", True, "a2"))
+        self.assertEqual(card["refusal"], {"tool": "Agent", "call": call, "rule": f"Agent({call})",
+                                           "cause": "[Git Destructive]", "root": str(self.project), "agent_id": "ab12cd34"})
+        self.assertEqual([o["id"] for o in card["options"]], ["allow-once", "deny"])
+        self.assertEqual(card["title"], "Allow a2 to start a general-purpose agent, described by the worker as "
+                                        "“prod client count”?")
+
+    def test_an_open_spawn_card_is_not_opened_again(self):
+        call = json.dumps(self.SPAWN, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        self.ledger(agents=[{"id": "a2", "name": "a2", "task_id": "ab12cd34"}],
+                    decisions=[{"id": self.expected_id("ab12cd34", call), "kind": "permission", "status": "open"}])
+        self.refuse(tool="Agent", tool_input=self.SPAWN, agent_id="ab12cd34")
+        self.assertEqual(self.programs(), [])
+
+    def test_a_bash_refusal_opens_its_permission_card_with_its_call_and_root(self):
+        """H1, decision 51 revised: a moved team has no refusal drafts, so the hook asks the user itself, as it does
+        for a spawn; the card carries the exact call and its root, which the host's grant needs."""
+        self.refuse(agent_id="ab12cd34")
+        self.assertEqual(self.recorded(), [])
+        [run] = self.programs()
+        [op] = run["ops"]
+        refusal_id = self.expected_id("ab12cd34", self.PUSH)
+        self.assertEqual(op["record"], {"kind": "decision", "key": refusal_id})
+        card = op["set"]
+        self.assertEqual((card["kind"], card["status"], card["blocking"], card["agent"]), ("permission", "open", True, "a2"))
+        self.assertEqual(card["refusal"], {"tool": "Bash", "call": self.PUSH, "rule": f"Bash({self.PUSH})",
+                                           "cause": "[Git Destructive]", "root": str(self.project), "agent_id": "ab12cd34"})
+        self.assertEqual(card["title"], f"Allow a2 to run `{self.PUSH}`?")
+        self.assertEqual([o["id"] for o in card["options"]], ["allow-once", "deny"])
+        self.assertIn("runs exactly the call shown above, once", card["options"][0]["consequence"])
+        self.assertEqual(self.owed(), [], "the card asks the user: no draft is owed to the worker")
+
+    def blocked(self):
+        """The one op of the last program, asserted to be an important `blocked` event; its text."""
+        [op] = self.programs()[-1]["ops"]
+        self.assertEqual(op["record"], {"kind": "event"})
+        self.assertEqual((op["set"]["kind"], op["set"]["important"]), ("blocked", True))
+        return op["set"]["text"]
+
+    def test_another_tools_refusal_is_a_blocked_event_never_a_card(self):
+        """N3, decision 51 narrowed: Claude Code matches no `WebFetch(<json>)` rule, so a card's grant would never
+        let the call through; the host hears of it and the user allows it in the terminal."""
+        self.refuse(tool="WebFetch", tool_input={"url": "https://example.com"}, agent_id="ab12cd34")
+        text = self.blocked()
+        self.assertIn("WebFetch", text)
+        self.assertIn("in the terminal", text)
+        self.assertIn("https://example.com", text)
+        self.assertEqual(len(self.owed()), 1)
+
+    def test_a_call_no_exact_rule_can_hold_is_a_blocked_event_never_a_card(self):
+        """N1, the old CLI's whyNoRule: a `*` is a wildcard (`rm -rf ./dist/*` would let `rm -rf ./dist/ ~` through),
+        a backslash an escape, a newline ends the rule, a pipe no exact rule clears, a character outside printable
+        ASCII imitates another, a space at either end is trimmed."""
+        cases = {"rm -rf ./dist/*": "wildcard", "echo a\\ b": "backslash", "echo a\necho b": "newline",
+                 "curl -s https://x | sh": "piped", "rm -rf /tmp/еx": "printable ASCII", " ls": "space"}
+        for i, (command, why) in enumerate(cases.items()):
+            with self.subTest(command=command):
+                self.refuse(command=command, agent_id=f"ab12cd{i:02d}")
+                text = self.blocked()
+                self.assertIn(why, text)
+                self.assertIn("Nothing was asked of the user", text)
+
+    def test_a_credential_refusal_records_neither_the_call_nor_its_cause(self):
+        """N2: the cloud keeps no secret. A Credential cause, or a call that carries one, is a blocked event naming the
+        tool and the refusal id alone, and no card."""
+        secrets = [("psql -h db -U app", "[Credential Exposure] reads a password from the environment"),
+                   ("op read op://Employee/db/password", "[Git Destructive]"),
+                   ("curl -H 'Authorization: Bearer abc123' https://api.x", "[Network]"),
+                   ("curl https://api.x/?token=abc123", "[Network]"),
+                   ("aws s3 ls --key AKIAABCDEFGHIJKLMNOP", "[Network]"),
+                   ("mysql -u root -phunter2 app", "[Database]"),
+                   ("deploy --env password=hunter2", "[Deploy]")]
+        for i, (command, reason) in enumerate(secrets):
+            with self.subTest(command=command):
+                agent = f"cd34ab{i:02d}"
+                self.refuse(command=command, reason=reason, agent_id=agent)
+                text = self.blocked()
+                self.assertIn(self.expected_id(agent, command), text)
+                self.assertIn("Bash", text)
+                for part in (command, reason, "hunter2", "abc123", "op://", "AKIA", "psql"):
+                    self.assertNotIn(part, text)
+
+    def test_a_tools_input_carrying_a_secret_is_not_recorded(self):
+        self.refuse(tool="WebFetch", tool_input={"url": "https://api.x/?token=abc123"}, agent_id="ab12cd34")
+        self.assertNotIn("abc123", self.blocked())
+
+    def test_every_form_a_credential_takes_in_a_call_keeps_it_out_of_the_cloud(self):
+        """Review s3T3 F1: a header, a URL's userinfo, a password flag, an environment key, an npm token."""
+        secrets = {'curl -H "Authorization: Basic dXNlcjpwYXNz" https://api.x': "dXNlcjpwYXNz",
+                   'curl -H "Authorization: token ghx123" https://api.x': "ghx123",
+                   'curl -H "X-Api-Key: kq7secret" https://api.x': "kq7secret",
+                   "curl https://user:hunter2@example.com/repo.git": "hunter2",
+                   "git clone https://x-access-token:gq9secret@github.com/a/b": "gq9secret",
+                   "psql postgres://app:hunter2@db/app": "hunter2",
+                   "tool --password hunter2": "hunter2",
+                   "sshpass -p hunter2 ssh host": "hunter2",
+                   "curl -u admin:hunter2 https://x": "hunter2",
+                   "AWS_SECRET_ACCESS_KEY=wJalrXUtn aws s3 ls": "wJalrXUtn",
+                   "npm config set //registry.npmjs.org/:_authToken npm_zz9secret": "zz9secret",
+                   "docker login -u u -p hunter2": "hunter2"}
+        for i, (command, secret) in enumerate(secrets.items()):
+            with self.subTest(command=command):
+                self.refuse(command=command, reason="[Network]", agent_id=f"cd34ab{i:02d}")
+                text = self.blocked()
+                self.assertIn("It may carry a credential", text)
+                self.assertNotIn(secret, text)
+
+    def test_a_call_naming_no_credential_still_opens_its_card(self):
+        for i, command in enumerate(("ls ./disk-usage", "secretspec run -- node server.js")):
+            with self.subTest(command=command):
+                self.refuse(command=command, agent_id=f"ab12cd{i:02d}")
+                self.assertEqual(self.programs()[-1]["ops"][0]["record"]["kind"], "decision")
+
+    def test_another_tools_blocked_event_names_its_path_or_url_never_its_content(self):
+        """Review s3T3 F2: a Write's content (a config with a password) never goes to the cloud; a URL loses its
+        userinfo."""
+        self.refuse(tool="Write", tool_input={"file_path": "/r/c.yml", "content": "db:\n  pass: hunter2\n"},
+                    reason="writes config", agent_id="ab12cd34")
+        text = self.blocked()
+        self.assertIn("Write", text)
+        self.assertIn("/r/c.yml", text)
+        self.assertNotIn("hunter2", text)
+        self.assertNotIn("content", text)
+        self.refuse(tool="WebFetch", tool_input={"url": "https://example.com/a?b=1", "prompt": "summarize kq7prompt"},
+                    agent_id="ee55ee55")
+        text = self.blocked()
+        self.assertIn("https://example.com/a", text)
+        self.assertNotIn("b=1", text)
+        self.assertNotIn("kq7prompt", text)
+
+    def test_a_urls_query_and_fragment_stay_out_of_the_blocked_event(self):
+        """Re-review R1: a presigned S3 URL or an Azure SAS carries its signature in the query."""
+        for i, url in enumerate(("https://b.s3.amazonaws.com/k?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+                                 "&X-Amz-Credential=kq7cred&X-Amz-Signature=kq7sig",
+                                 "https://acct.blob.core.windows.net/c/f?sv=2024-01-01&sig=kq7sas#kq7frag")):
+            with self.subTest(url=url):
+                self.refuse(tool="WebFetch", tool_input={"url": url}, agent_id=f"ab12cd{i:02d}")
+                text = self.blocked()
+                self.assertIn(url.partition("?")[0], text)
+                self.assertNotIn("kq7", text)
+
+    def test_a_cause_carrying_a_secret_is_not_recorded(self):
+        """Review s3T3 F3: auto mode's reason goes into the blocked text, so it is checked as the call is."""
+        self.refuse(command="ls -la", reason="[Exposure] the output holds sk-ant-api03-kq7", agent_id="ab12cd34")
+        text = self.blocked()
+        self.assertIn("It may carry a credential", text)
+        self.assertNotIn("kq7", text)
+
+    def test_a_spawn_naming_a_1password_reference_still_opens_its_card(self):
+        """Review s3T3 F5: a reference is no secret; only a Bash call that reads one is held back."""
+        spawn = {**self.SPAWN, "prompt": "run secretspec; the key is at op://Employee/k/password"}
+        self.refuse(tool="Agent", tool_input=spawn, agent_id="ab12cd34")
+        [run] = self.programs()
+        self.assertEqual(run["ops"][0]["record"]["kind"], "decision")
+
+    def test_a_missing_fleet_run_still_leaves_the_workers_note(self):
+        """Review s3T3 F6: a missing or non-executable TSTACK_FLEET_RUN is an OSError, not a lost note."""
+        self.refuse(agent_id="ab12cd34", env={"TSTACK_FLEET_RUN": str(self.tmp / "no-such-fleet-run")})
+        self.assertEqual(len(self.owed()), 1)
+        self.assertIn("no-such-fleet-run", self.log())
+
+    def test_a_spawn_over_the_clouds_record_limit_is_a_blocked_event_cut_short(self):
+        """N6: a card holds the spawn's input twice (call and rule) in one record of at most 256 KiB."""
+        spawn = {**self.SPAWN, "prompt": "count the clients " * 10_000}
+        self.refuse(tool="Agent", tool_input=spawn, agent_id="ab12cd34")
+        text = self.blocked()
+        self.assertLess(len(text), 1200)
+        self.assertIn("cut by the hook", text)
+
+    def test_a_service_that_cannot_take_the_refusal_still_leaves_the_workers_note(self):
+        """N5: exit 2, 4, or 5 twice drops the refusal; the refused worker still learns the host was not told."""
+        for i, code in enumerate(("2", "4")):
+            with self.subTest(exit=code):
+                self.refuse(agent_id=f"ab12cd{i:02d}", env={"FAKE_RUN_EXIT": code})
+        self.refuse(agent_id="ee55ee55", env={"FAKE_RUN_EXIT": "5"})
+        self.assertEqual(len(self.owed()), 3)
+        self.assertIn("exited 4", self.log())
+
+    def test_a_call_too_long_for_a_card_is_a_blocked_event_for_the_host(self):
+        long = "echo " + "x" * 2100
+        self.refuse(command=long, agent_id="ab12cd34")
+        [run] = self.programs()
+        [op] = run["ops"]
+        self.assertEqual(op["record"], {"kind": "event"})
+        self.assertEqual((op["set"]["kind"], op["set"]["important"], op["set"]["agent"]), ("blocked", True, "a2"))
+        self.assertIn("Nothing was asked of the user", op["set"]["text"])
+        self.assertLess(len(op["set"]["text"]), 1200, "the event names the call by its first few hundred characters")
+        self.assertEqual(len(self.owed()), 1)
+
+    def test_a_card_the_fleet_refused_becomes_a_blocked_event(self):
+        self.refuse(agent_id="ab12cd34", env={"FAKE_RUN_REFUSE_KIND": "decision"})
+        card, event = self.programs()
+        self.assertEqual(card["ops"][0]["record"]["kind"], "decision")
+        self.assertEqual((event["ops"][0]["record"], event["ops"][0]["set"]["kind"]), ({"kind": "event"}, "blocked"))
+        self.assertIn("was not applied, so the host is told with a blocked event", self.log())
+        self.assertEqual(len(self.owed()), 1)
+
+    def test_an_open_card_for_the_same_call_is_not_opened_again(self):
+        self.ledger(agents=[{"id": "a2", "name": "a2", "task_id": "ab12cd34"}],
+                    decisions=[{"id": self.expected_id("ab12cd34", self.PUSH), "kind": "permission", "status": "open"}])
+        self.refuse(agent_id="ab12cd34")
+        self.assertEqual(self.programs(), [])
+
+    def owed(self):
+        folder = self.data / "sessions" / "sess-1.refusal-notes"
+        return sorted(folder.iterdir()) if folder.is_dir() else []
+
+    def test_a_queued_program_is_recorded_and_a_down_service_is_logged(self):
+        self.refuse(tool="Agent", tool_input=self.SPAWN, agent_id="ab12cd34", env={"FAKE_RUN_EXIT": "3"})
+        self.assertEqual(len(self.programs()), 1)
+        self.assertNotIn("failed", self.log())
+        self.refuse(tool="Agent", tool_input=self.SPAWN, agent_id="ee55ee55", env={"FAKE_RUN_EXIT": "4"})
+        self.assertIn("fleet-host is not running on this machine", self.log())
+
+    def test_an_unknown_outcome_is_sent_again_once_under_its_id(self):
+        """Exit 5 (round H): the program reached the service and no answer came back; the same id runs at most once."""
+        self.refuse(agent_id="ab12cd34", env={"FAKE_RUN_EXIT": "5", "FAKE_RUN_RESENT_EXIT": "0"})
+        first, again = self.programs()
+        self.assertEqual((first["argv"], first.get("unknown")), ([], True))
+        self.assertEqual(again["argv"], ["--id", "01K7C2Z9M4V8Q3R5T6W7X8Y9Z0"])
+        self.assertEqual(again["ops"][0]["record"]["kind"], "decision")
+        self.refuse(agent_id="ee55ee55", env={"FAKE_RUN_EXIT": "5"})
+        self.assertEqual(len(self.programs()), 4)
+        self.assertIn("exited 5", self.log())
+
+    def test_an_op_the_fleet_refused_is_logged(self):
+        self.refuse(agent_id="ab12cd34", env={"FAKE_RUN_TAG": "refused"})
+        self.assertIn("a refused op", self.log())
+
+    def test_an_unmoved_fleet_keeps_the_cli(self):
+        (self.fleet / "cloud.json").unlink()
+        self.refuse(tool="Agent", tool_input=self.SPAWN, agent_id="ab12cd34")
+        self.assertEqual(self.programs(), [])
+        self.assertEqual(self.only()[1]["--kind"], "permission")
+
+    def test_the_program_is_sent_as_this_session(self):
+        self.refuse(agent_id="ab12cd34", env={"FLEET_SESSION": "a-stale-session"})
+        [run] = self.programs()
+        self.assertEqual(run["session"], "sess-1")
+
+    def home(self, name):
+        """A fleet's folder in the ledgers' fixed home, $XDG_STATE_HOME/fleet/NAME, holding the scratchpad's ledger."""
+        self.env["XDG_STATE_HOME"] = str(self.tmp / "state")
+        folder = self.tmp / "state" / "fleet" / name
+        folder.mkdir(parents=True)
+        (folder / "state.json").write_text((self.fleet / "state.json").read_text())
+        return folder
+
+    def test_a_moved_fleet_in_the_ledger_home_is_found_by_the_session_that_served_it(self):
+        """The cut-over's `fleet serve --stop` removes the registry entry: the session that served the folder still
+        writes to it, and to no other moved folder of the home."""
+        infra, ops = self.home("infra"), self.home("ops")
+        (self.fleet / "state.json").unlink()
+        self.move(ops)
+        self.register(infra, id="infra")
+        self.refuse(agent_id="ab12cd34")
+        self.assertEqual(self.only()[0][:2], ["state", str(infra)])
+        self.move(infra)
+        (self.registry / "infra.json").unlink()
+        self.refuse(agent_id="ee55ee55")
+        self.assertEqual([run["dir"] for run in self.programs()], [str(infra)])
+
+    def test_a_moved_fleet_in_the_ledger_home_another_session_served_is_never_written(self):
+        infra = self.home("infra")
+        (self.fleet / "state.json").unlink()
+        self.move(infra)
+        self.register(infra, session="another-session", id="infra")
+        self.refuse(agent_id="ab12cd34")
+        (self.registry / "infra.json").unlink()
+        self.refuse(agent_id="ee55ee55")
+        self.assertEqual((self.programs(), self.recorded()), ([], []))
+
+
+class MovedNudgeTest(MovedFleet, FleetCase):
+    """fleet_chat_nudge on a moved fleet: an answer left unrecorded is recorded with a program, not the CLI."""
+
+    tool = ChatNudgeTest.tool
+
+    def setUp(self):
+        super().setUp()
+        self.move()
+
+    def test_an_answer_not_recorded_is_told_as_a_program(self):
+        self.ledger(decisions=[{"id": "x7", "ref": "A7", "kind": "action", "title": "Delete five finished workspaces?",
+                                "status": "open", "opened": "2026-01-05T08:00:00+00:00"}])
+        self.say(1, "2026-01-05T08:10:00+00:00", "yes", decision="x7")
+        (self.fleet / "watch-coordinator.cursor").write_text("1")
+        self.assertEqual(self.tool("2026-01-05T08:22:00+00:00"),
+                         'Fleet: #1 from the user answers A7 (Delete five finished workspaces?), not recorded for 12 min: '
+                         f'"yes". Record it and answer #1 in one program on the stdin of `{self.env["TSTACK_FLEET_RUN"]}`: '
+                         '`decision.decide("x7", "...", "answered on the page (#1)"); say("...", { re: 1 }); '
+                         'return records.apply(ops);`.')
+
+    def test_a_grilling_answered_and_not_recorded_is_told_as_a_program(self):
+        question = {"id": "q1", "title": "T", "status": "answered", "asked": "2026-01-05T08:00:00+00:00"}
+        self.ledger(decisions=[{"id": "g6", "ref": "G6", "kind": "grill", "title": "Search", "status": "open",
+                                "opened": "2026-01-05T08:00:00+00:00", "questions": [question]}])
+        self.say(1, "2026-01-05T08:10:00+00:00", "Q1: ok", decision="g6")
+        (self.fleet / "watch-coordinator.cursor").write_text("1")
+        self.assertEqual(self.tool("2026-01-05T08:14:00+00:00"),
+                         "Fleet: G6 (Search): every question is answered and the grilling is still open, not recorded for "
+                         f'4 min. Record it now with one program on the stdin of `{self.env["TSTACK_FLEET_RUN"]}`: '
+                         '`decision.decide("g6", "...", "grilling finished"); return records.apply(ops);`.')
+
+
+class MovedWritesTest(MovedFleet, FleetCase):
+    """fleet_moved_writes (decision 48): on a moved fleet the old CLI's writers are denied, its readers are not."""
+
+    SENTENCE = "this team records through programs: fleet-run"
+
+    def bash(self, command):
+        payload = {**self.payload("PreToolUse"), "tool_name": "Bash", "tool_input": {"command": command}}
+        r = self.hook("PreToolUse", payload)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r
+
+    def writes(self):
+        d, cli = self.fleet, self.fleet_cli
+        return [f"{cli} state {d} agent w2 --status running", f"{cli} state {d} event --kind note 'x'",
+                f'cd /tmp && {cli} chat {d} say "done" --re 4', f"FLEET={cli}; $FLEET state {d} decision D9 --kind x",
+                f"{cli} ws {d} add w3", f"{cli} ws {d} split w2 -m 'w2: done'", f"{cli} ws {d} prune --apply",
+                f"{cli} preview {d} start", f"{cli} preview {d} set --cmd 'bun dev'", f"{cli} preview {d} stop",
+                f"{cli} preview {d} include w2", f"{cli} render {d}/state.json {d}/index.html"]
+
+    def test_the_writers_are_denied_on_a_moved_fleet(self):
+        self.move()
+        for command in self.writes():
+            out = self.bash(command).stdout
+            self.assertTrue(out, command)
+            decision = json.loads(out)["hookSpecificOutput"]
+            self.assertEqual(decision["permissionDecision"], "deny")
+            self.assertTrue(decision["permissionDecisionReason"].startswith(self.SENTENCE), command)
+
+    def test_the_readers_stay_allowed_on_a_moved_fleet(self):
+        self.move()
+        d, cli = self.fleet, self.fleet_cli
+        for command in (f"{cli} state {d} show", f"{cli} chat {d} watch --as coordinator --once", f"{cli} brief {d} w2",
+                        f"{cli} state {d}", f"{cli} ws {d} list", f"{cli} ws {d} prune", f"{cli} preview {d} status"):
+            self.assertNotIn(self.SENTENCE, self.bash(command).stdout, command)
+
+    def test_a_relative_dir_is_resolved_against_the_commands_own_cd(self):
+        """F6: `cd DIR; fleet state . …` names the moved folder by the line's cd, not the session's cwd."""
+        self.move()
+        d, cli = self.fleet, self.fleet_cli
+        for command in (f"cd {d}; {cli} state . event --kind note x", f"cd {d.parent} && {cli} chat {d.name} say hi",
+                        f"cd {d.parent}\n{cli} state ./{d.name} set --now y", f"pushd {d} >/dev/null && fleet state . step s1"):
+            out = self.bash(command).stdout
+            self.assertTrue(out, command)
+            self.assertTrue(json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"].startswith(self.SENTENCE), command)
+        self.assertNotIn(self.SENTENCE, self.bash(f"cd {d}; cd /; {cli} state . event --kind note x").stdout)
+
+    def test_the_writers_stay_allowed_on_an_unmoved_fleet(self):
+        for command in self.writes():
+            self.assertNotIn(self.SENTENCE, self.bash(command).stdout, command)
 
 
 if __name__ == "__main__":

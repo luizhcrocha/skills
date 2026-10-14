@@ -460,7 +460,36 @@ def grant_state_dirs(hook):
     return hook._grant_state_dirs
 
 
+def fleet_ledger_home(env):
+    """The fixed home of the fleets' ledgers (fleet slice 3; the Skills ledger is its `skills`): $XDG_STATE_HOME/fleet,
+    else ~/.local/state/fleet."""
+    return Path(env.get("XDG_STATE_HOME") or Path(env.get("HOME", "/tmp")) / ".local" / "state") / "fleet"
+
+
 def _served_dirs(hook):
+    """The DIR of each registry entry whose session_id is this session's, then each folder of the ledgers' home that
+    the registry once gave this session and that has since moved (cloud.json): the cut-over's `fleet serve --stop`
+    removes the entry, so the session remembers the home's folders it served. A folder is never taken by its name or
+    its marker alone: a session writes to no fleet the registry did not give it."""
+    found = _registry_dirs(hook)
+    if not hook.session_id:
+        return found
+    home = os.path.realpath(fleet_ledger_home(hook.env))
+    state = hook.load_state("ledger-home")
+    known = [n for n in state.get("served") or [] if isinstance(n, str)] if isinstance(state.get("served"), list) else []
+    served = {os.path.basename(r) for r in map(os.path.realpath, found) if os.path.dirname(r) == home}
+    if not served <= set(known):
+        known = sorted(set(known) | served)
+        hook.save_state("ledger-home", {"served": known})
+    seen = {os.path.realpath(d) for d in found}
+    for name in known:
+        d = os.path.join(home, name)
+        if name not in ("", ".", "..") and "/" not in name and d not in seen and moved(d):
+            found.append(d)
+    return found
+
+
+def _registry_dirs(hook):
     """The DIR of each registry entry whose session_id is this session's."""
     if not hook.session_id:
         return []
@@ -482,6 +511,150 @@ def _served_dirs(hook):
 
 def fleet_cli():
     return f"{ROOT}/fleet/bin/fleet"
+
+
+# A moved team (fleet slice 3, decisions 46, 48, 51): the host service exports DIR/state.json and DIR/chat.jsonl from
+# the cloud and marks the folder with DIR/cloud.json. Its ledger is written by programs, through `fleet-run` with the
+# program on stdin and FLEET_DIR naming the folder (exit 0 completed, 2 error, 3 queued, 4 the service is not running,
+# 5 sent with its outcome unknown: `--id <id>` sends it again); the old CLI only reads it, and refuses to write it.
+MOVED_MARKER = "cloud.json"
+MOVED_DENIAL = "this team records through programs: fleet-run"
+FLEET_RUN_QUEUED = 3
+FLEET_RUN_UNKNOWN = 5
+
+
+def _json_object(text):
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def fleet_run_cli(env):
+    return env.get("TSTACK_FLEET_RUN") or f"{ROOT}/fleet/bin/fleet-run"
+
+
+def moved(d):
+    """Whether the fleet at d records through programs: the host service's marker is in its folder."""
+    return os.path.isfile(os.path.join(d, MOVED_MARKER))
+
+
+def fleet_program(*calls):
+    """A program of prelude calls (each a JS expression) that applies the ops they made."""
+    return "".join(f"{c};\n" for c in calls) + "return records.apply(ops);\n"
+
+
+def answer_program(decision_id, resolution, re=None):
+    """The one-line program a nudge tells the coordinator to send: the card decided ("..." is its answer to fill in),
+    and with re, a chat line answering the user's message #re."""
+    said = f' say("...", {{ re: {int(re)} }});' if re is not None else ""
+    return f'decision.decide({_js(decision_id)}, "...", {_js(resolution)});{said} return records.apply(ops);'
+
+
+def blocked_program(text, worker):
+    """An important `blocked` event for the fleet's host, of worker when the ledger knows the caller."""
+    options = {"important": True, **({"agent": worker} if worker else {})}
+    return fleet_program(f"event(\"blocked\", {_js(text)}, {_js(options)})")
+
+
+def _js(value):
+    """A value as a JS literal: JSON, ASCII-escaped so no line separator ends a string."""
+    return json.dumps(value, ensure_ascii=True)
+
+
+class Unapplied(RuntimeError):
+    """The fleet ran the hook's program and did not apply an op of it (refused, or a clash)."""
+
+
+def fleet_run(hook, d, program):
+    """Run a program against the moved fleet at d. Its outcome, completed or queued (a card waits for the link);
+    RuntimeError when the service is down or the program failed, Unapplied when the fleet did not apply an op, and
+    subprocess.TimeoutExpired past CLI_TIMEOUT_S. That is 25 s, and the client waits 120 s for the service: the client
+    is the fleet repo's (apps/client/fleet-run.ts) and reads no timeout from its environment, so the hook kills it
+    first, accepted. A program the service still runs after the kill may land: the caller treats it as not told."""
+    import subprocess
+    cli = fleet_run_cli(hook.env)
+    # The client sends $FLEET_SESSION as the program's `from`: this hook's session, never one left in the environment.
+    env = {**hook.env, "FLEET_DIR": d, **({"FLEET_SESSION": hook.session_id} if hook.session_id else {})}
+    done = subprocess.run([cli], input=program, capture_output=True, text=True, env=env,
+                          cwd=d, check=False, timeout=CLI_TIMEOUT_S)
+    if done.returncode == FLEET_RUN_UNKNOWN:
+        # Sent, and no answer came back: the same program again under its id runs at most once (round H).
+        sent = _json_object(done.stdout)
+        if isinstance(sent.get("id"), str) and re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{26}", sent["id"]):
+            done = subprocess.run([cli, "--id", sent["id"]], input=program, capture_output=True, text=True, env=env,
+                                  cwd=d, check=False, timeout=CLI_TIMEOUT_S)
+    if done.returncode not in (0, FLEET_RUN_QUEUED):
+        raise RuntimeError(f"{cli} exited {done.returncode}: {(done.stderr or done.stdout).strip()[:500]}")
+    try:
+        outcome = json.loads(done.stdout)
+    except ValueError:
+        raise RuntimeError(f"{cli} printed no outcome: {done.stdout.strip()[:300]}") from None
+    results = outcome.get("ops") if isinstance(outcome, dict) else None
+    unapplied = [r for r in results or [] if isinstance(r, dict) and r.get("_tag") not in ("applied", "duplicate")]
+    if unapplied:
+        raise Unapplied(f"{cli}: the fleet did not apply the hook's op: {json.dumps(unapplied[0])[:500]}")
+    return outcome
+
+
+def fleet_moved_writes(hook):
+    """PreToolUse (Bash): the old CLI's writers are refused for a moved fleet (decision 48): `fleet state DIR VERB`
+    for every verb but `show`, `fleet chat DIR say`, `fleet ws DIR add|split|prune --apply` (each writes the
+    workspaces row), `fleet preview DIR VERB` for every verb but `status`, and `fleet render DIR/state.json OUT` (it
+    stamps the ledger), when DIR holds cloud.json. Its readers stay allowed (`state show`, `chat watch` and `wait`,
+    `brief`, `turn`, `ws list`, a dry-run `ws prune`, `preview status`). A relative DIR is resolved against the line's own `cd`, else the
+    session's cwd; a DIR named by a variable is not resolved here: the old CLI refuses that folder itself."""
+    tool_input = hook.input.get("tool_input") if isinstance(hook.input.get("tool_input"), dict) else {}
+    command = tool_input.get("command") if hook.input.get("tool_name") == "Bash" else None
+    if not isinstance(command, str) or "fleet" not in command.lower() or not re.search(r"state|say|ws|preview|render", command):
+        return None
+    for words, cwd in _moved_write_candidates(command, hook.cwd):
+        for i in range(len(words) - 3):
+            sub, d, verb = words[i + 1], words[i + 2], words[i + 3]
+            if "fleet" not in os.path.basename(words[i]).lower():
+                continue
+            if not ((sub == "state" and verb != "show" and not verb.startswith("-")) or (sub == "chat" and verb == "say")
+                    or (sub == "ws" and (verb in ("add", "split") or (verb == "prune" and "--apply" in words[i + 4:])))
+                    or (sub == "preview" and verb != "status" and not verb.startswith("-")) or sub == "render"):
+                continue
+            path = os.path.expanduser(os.path.dirname(d) if sub == "render" else d)
+            if not os.path.isabs(path):
+                if cwd is None:
+                    continue
+                path = os.path.join(cwd, path)
+            if moved(path):
+                run = fleet_run_cli(hook.env)
+                return Deny(f"{MOVED_DENIAL}. The fleet at {d} has moved to the cloud ({MOVED_MARKER}): its host service "
+                            f"writes state.json and chat.jsonl, so `fleet {sub} … {verb}` is refused there; its reads (`state "
+                            f"show`, `chat watch`) are not. Record with one program: `FLEET_DIR={d} {run} <<'EOF'` … `EOF`; `{run} --types` "
+                            f"prints what a program calls, and the coordinator skill's PROGRAMS.md has the worked calls.")
+    return None
+
+
+def _moved_write_candidates(command, cwd):
+    """Each simple command of the line as (words, the directory it runs in): `cd` and `pushd` move the directory for
+    what follows; one inside a loop or group, `cd -`, or a target with a variable leaves it unknown (None). A word
+    holding a shell command (`bash -c '...'`) is split into the same words, run where its segment runs."""
+    import shlex
+    try:
+        segments = _segments(_strip_heredocs(command))
+    except ValueError:
+        try:
+            return [(_tokens(shlex.split(command)), cwd)]
+        except ValueError:
+            return [(command.split(), cwd)]
+    out = []
+    for words, nesting in segments:
+        words, _ = _unwrap(words)
+        if not words:
+            continue
+        if os.path.basename(words[0]) in ("cd", "pushd"):
+            target = words[1] if len(words) > 1 else "~"
+            cwd = None if target == "-" or nesting > 0 else _path(cwd, target)
+            continue
+        out.append((_tokens(words), cwd))
+    return out
 
 
 def _tokens(args, depth=0):
@@ -1155,11 +1328,14 @@ def fleet_chat_nudge(hook):
                     if not dec or dec.get("status") != "open":
                         continue
                     ref = dec.get("ref") or dec.get("id")
+                    # A moved team records with a program; decide() names the card by its key, the row's id.
+                    run = f"one program on the stdin of `{fleet_run_cli(hook.env)}`: "
                     if _answered_grill(dec):
+                        how = (f'with {run}`{answer_program(dec.get("id"), "grilling finished")}`.' if moved(d) else
+                               f'(`{fleet_cli()} state {d} decision {ref} --decide "..." --resolution "grilling finished"`).')
                         lines.append(
                             f'Fleet: {ref} ({_one_line(dec.get("title") or "", 60)}): every question is answered and the '
-                            f'grilling is still open, not recorded for {minutes} min. Record it now (`{fleet_cli()} state {d} '
-                            f'decision {ref} --decide "..." --resolution "grilling finished"`).')
+                            f'grilling is still open, not recorded for {minutes} min. Record it now {how}')
                         told.append(int(k))
                         continue
                     since = _instant(dec.get("revised") or dec.get("opened"))
@@ -1170,11 +1346,13 @@ def fleet_chat_nudge(hook):
                     questions = dec.get("questions") if isinstance(dec.get("questions"), list) else []
                     if any(isinstance(q, dict) and (_instant(q.get("answered")) or 0) >= _instant(p["at"]) for q in questions):
                         continue  # a grilling's question answered or dropped after it: recorded
+                    how = (f'Record it and answer #{k} in {run}`{answer_program(dec.get("id"), f"answered on the page (#{k})", int(k))}`.'
+                           if moved(d) else
+                           f'Record it now (`{fleet_cli()} state {d} decision {ref} --decide "..." --resolution '
+                           f'"answered on the page (#{k})"`), then answer #{k} with --re.')
                     lines.append(
                         f'Fleet: #{k} from the user answers {ref} ({_one_line(dec.get("title") or "", 60)}), '
-                        f'not recorded for {minutes} min: "{said}". Record it now (`{fleet_cli()} state {d} '
-                        f'decision {ref} --decide "..." --resolution "answered on the page (#{k})"`), then '
-                        f"answer #{k} with --re.")
+                        f'not recorded for {minutes} min: "{said}". {how}')
                 else:
                     to = p.get("to") if isinstance(p.get("to"), list) else []
                     if (to and role not in to) or int(k) <= cursor:
@@ -1501,6 +1679,8 @@ def _open_refusal(hook, d, r):
     ledger = read_ledger(d) or {}
     worker = _refused_worker(ledger, r.agent_id, hook.env)
     refusal_id = _permission_id(ledger, r.agent_id, r.call)
+    if moved(d):
+        return _open_refusal_program(hook, d, r, ledger, worker, refusal_id)
     # The words are the CLI's (a spawn's title, from its input) or the host's (a draft has none): the hook writes none.
     argv = [cli, "state", d, "decision", refusal_id, *_option("--kind", "permission" if r.spawn else "refusal"),
             *_option("--tool", r.tool if re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", r.tool) else "unnamed"),
@@ -1520,6 +1700,227 @@ def _open_refusal(hook, d, r):
         log(hook.data_dir, f"{hook.event} fleet_permission_denied: {refusal_id} is in {d}'s ledger, and {done.stderr.strip()}")
     if not r.spawn and done.stdout.startswith(f"drafted {refusal_id}:"):
         _owe_note(hook, r, d, refusal_id, told=not untold)
+
+
+def _open_refusal_program(hook, d, r, ledger, worker, refusal_id):
+    """A refusal on a moved fleet, as one program (decision 51, revised for H1, narrowed by review s3fix). The mirror
+    has no refusal drafts, so the hook asks the user itself: a permission card with the exact call, its rule and its
+    root, which the host needs to apply an allow-once grant. Narrowed against decision 51: only a Bash call an exact
+    rule can hold (the old CLI's whyNoRule) and an Agent spawn get a card. Another tool's call (WebFetch, Write…)
+    gets none, since Claude Code matches no `Tool(<json>)` rule and the grant would never let it through: the user
+    allows it in the terminal. A call no card can hold, one that may carry a credential (whose text and cause stay
+    out of the cloud), or a card the fleet refused, is an important `blocked` event for the host instead; nothing is
+    asked of the user for it, and the host hears of it from the ledger, not a chat line, so the refused worker's note
+    says the host was not told at once. When fleet-run cannot take the refusal at all (it exits 2, 4 or 5 twice,
+    outlasts CLI_TIMEOUT_S, or cannot be started), the note is owed the same way, and the failure is raised for the log."""
+    import subprocess
+    host = fleet_role(ledger)
+    if _statuses(ledger, "decisions").get(refusal_id) == "open":
+        return
+    try:
+        card = refusal_card_program(refusal_id, r, worker, host)
+        if card is not None:
+            try:
+                fleet_run(hook, d, card)
+                return
+            except Unapplied as e:
+                log(hook.data_dir, f"{hook.event} fleet_permission_denied: {refusal_id}'s card was not applied, so the "
+                                   f"host is told with a blocked event: {e}")
+        fleet_run(hook, d, blocked_program(refusal_blocked_text(refusal_id, r, worker, host, card is not None), worker))
+    except (RuntimeError, subprocess.TimeoutExpired, OSError):
+        _owe_note(hook, r, d, refusal_id, told=False)
+        raise
+    _owe_note(hook, r, d, refusal_id, told=False)
+
+
+CARD_CALL_MAX = 2000  # the CLI's MAX_CALL_CHARS (fleet/src/ledger/permission.ts): a longer call is no rule a grant holds
+# The cloud's RECORD_LIMIT_BYTES is 256 KiB (fleet repo, packages/ledger/src/wire.ts), and a spawn's card holds its
+# input twice (call and rule): a larger one is answered 413, so it is a blocked event instead.
+SPAWN_CARD_MAX_BYTES = 120 * 1024
+BLOCKED_CALL_MAX = 300  # a blocked event names the call by its start: the host reads it whole from the worker
+# A call that may carry a credential (N2): its text never goes to the cloud. Over-matching costs a card, not a secret.
+# A header (Bearer, Authorization:, X-Api-Key:), a key named like one (`token=`, `AWS_SECRET_ACCESS_KEY=`, `pass: x`),
+# a vendor token's prefix, an AWS key id, a PEM block, a URL's userinfo (`https://u:pw@host`), a password flag
+# (`--password x`, `curl -u admin:pw`, `mysql -ppw`, `sshpass -p`, `docker login -p`), npm's `_authToken`.
+SECRET_IN_CALL = re.compile(r"\bBearer\s|\bAuthorization:|\bAKIA[0-9A-Z]{12}|-----BEGIN|_authToken\b"
+                            r"|[\w-]*(?:api[_-]?key|token|secret|access[_-]?key|password|passwd|pwd|authtoken)[\w-]*\s*[:=]"
+                            r"|\b(?:sk-|ghp_|gho_|ghs_|github_pat_|glpat-|npm_|xox[abposr]-)[A-Za-z0-9]"
+                            r"|://[^/\s:@]+:[^/\s@]+@|--pass(?:word)?\b|\s-u\s*\S+:\S"
+                            r"|\b(?:mysql|mysqldump|mysqladmin|mariadb)\b[^;&|\n]*\s-p\S"
+                            r"|\b(?:sshpass|docker\s+login)\b[^;&|\n]*\s-p\b", re.I)
+# A 1Password reference read by a Bash call (`op read op://…`). A spawn's prompt or a tool's input may name one
+# without reading it, and a reference is no secret: there it costs no card.
+OP_REFERENCE = re.compile(r"op://")
+
+
+def _carries_secret(r):
+    """Whether a refusal may carry a credential: auto mode named it a Credential one, or its call or its cause holds
+    what reads as one (SECRET_IN_CALL), or it is a Bash call reading a 1Password reference."""
+    return bool(re.search(r"credential", r.reason, re.I) or any(SECRET_IN_CALL.search(t) for t in (r.call, r.kept, r.reason))
+                or (r.tool == "Bash" and OP_REFERENCE.search(r.call)))
+
+
+def why_no_rule(tool, call):
+    """Why no exact rule can let tool's call through and be read by the user as what runs, or None when one can: the
+    old CLI's whyNoRule (fleet/src/ledger/permission.ts), in its words. An Agent call is its input as a JSON object;
+    for Bash a newline ends a rule, a `*` is a wildcard, a backslash an escape, no exact rule clears a pipe, a
+    character outside printable ASCII imitates another, a space at either end is trimmed, and a call past
+    CARD_CALL_MAX is not read whole."""
+    if tool == "Agent":
+        try:
+            return None if isinstance(json.loads(call), dict) else "an Agent call is its tool input, a JSON object"
+        except ValueError:
+            return "an Agent call is its tool input, a JSON object"
+    if not call.strip():
+        return "the call is empty"
+    if "\n" in call or "\r" in call:
+        return "the call has a newline, which an exact allow rule cannot hold"
+    if "*" in call:
+        return "the call has a *, which an allow rule reads as a wildcard"
+    if "\\" in call:
+        return "the call has a backslash, which an allow rule reads as an escape"
+    if "|" in call:
+        return "the call has a |, and no exact allow rule clears a piped command"
+    odd = next((i for i, c in enumerate(call) if c < " " or c > "~"), None)
+    if odd is not None:
+        return (f"the call has a character outside printable ASCII at position {odd + 1} (U+{ord(call[odd]):04X}), "
+                "which the user cannot tell from a plain one on the card")
+    if call != call.strip():
+        return "the call starts or ends with a space, which is no part of the command"
+    if len(call) > CARD_CALL_MAX:
+        return (f"the call is {len(call)} characters, and a permission's call is at most {CARD_CALL_MAX}, so the user "
+                "reads it whole")
+    return None
+
+
+def _why_no_card(r):
+    """Why the hook opens no card for a refused call on a moved fleet, or None when it opens one."""
+    if _carries_secret(r):
+        return "the call may carry a credential"
+    if r.spawn:
+        size = len(r.call.encode())
+        if size > SPAWN_CARD_MAX_BYTES:
+            return f"the spawn's input is {size} bytes, more than one card of the cloud holds"
+        return why_no_rule("Agent", r.call)
+    if r.tool != "Bash":
+        return (f"Claude Code matches no allow rule of a {_one_line(r.tool, 60)} call's input, so a card's grant would "
+                "never let it through: the user allows it in the terminal")
+    return why_no_rule("Bash", r.call)
+
+
+def refusal_card_program(refusal_id, r, worker, host):
+    """The program that opens a refused call's permission card under refusal_id, or None when no card can hold the
+    call (_why_no_card): the whole call is its rule."""
+    if _why_no_card(r) is not None:
+        return None
+    card = _spawn_card(r, worker, host) if r.spawn else _call_card(r, worker, host)
+    return fleet_program(f"decision.open({_js(refusal_id)}, {_js(card)})")
+
+
+def refusal_blocked_text(refusal_id, r, worker, host, carded=False):
+    """The `blocked` event's text for a refusal no card holds (carded: the fleet refused the card the hook sent). A
+    call that may carry a credential is named by its tool and refusal id alone; a Bash call or a spawn by its first
+    BLOCKED_CALL_MAX characters; another tool's by its file_path or url alone (_named_target)."""
+    tool = r.tool if re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", r.tool) else "unnamed"
+    who = worker or f"the {host}"
+    if _carries_secret(r):
+        return (f"Auto mode refused a {tool} call of {who}: refusal {refusal_id}. It may carry a credential, so the "
+                f"hook records neither the call nor its cause, and opens no card. Nothing was asked of the user: the "
+                f"{host} asks the worker what it needed, and the user allows it in the terminal or not at all.")
+    why = "the fleet did not apply its card" if carded else _why_no_card(r)
+    kept = (r.kept or "{}") if r.spawn or r.tool == "Bash" else _named_target(r.call)
+    if len(kept) > BLOCKED_CALL_MAX:
+        kept = f"{kept[:BLOCKED_CALL_MAX]}… ({len(kept) - BLOCKED_CALL_MAX} more characters, cut by the hook)"
+    return (f"Auto mode refused a {tool} call of {who} ({_one_line(r.reason, 120)}): refusal {refusal_id}. No card "
+            f"was opened: {why}. Nothing was asked of the user: the {host} asks the worker for a form an exact rule "
+            f"can hold, words a permission card itself, or drops it. The call, from {r.root}: {kept}")
+
+
+def _named_target(call):
+    """What a blocked event names of another tool's call: its file_path or its url (userinfo, query and fragment
+    dropped: a presigned or SAS URL signs in its query), never the rest of its input (a Write's content, a WebFetch's prompt), which stays the host's to read in the session."""
+    from urllib.parse import urlsplit, urlunsplit
+    _, _, given = call.partition("\n")
+    try:
+        tool_input = json.loads(given)
+    except ValueError:
+        return "(its input is not recorded)"
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    path, url = tool_input.get("file_path"), tool_input.get("url")
+    if isinstance(path, str) and path:
+        return path
+    if isinstance(url, str) and url:
+        try:
+            parts = urlsplit(url)
+            return urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2], query="", fragment=""))
+        except ValueError:
+            return "(a url that does not parse)"
+    return "(its input is not recorded)"
+
+
+def _who(r, worker, host):
+    """Who a card names as the caller, as the CLI's whoRefused does: the worker, else a subagent the ledger does not
+    know as "a worker", else the host's main thread."""
+    return worker or ("a worker" if r.agent_id else f"the {host}")
+
+
+def _refusal_of(r, call):
+    """A permission card's refused call: the exact call, its rule, the cause, and the root it ran in (round A's
+    RefusedCall keeps call and root in the cloud)."""
+    return {"tool": r.tool, "call": call, "rule": f"{r.tool}({call})", "cause": r.reason, "root": r.root,
+            "agent_id": r.agent_id}
+
+
+def _allow_options(what):
+    return [{"id": "allow-once", "label": "Allow this call once",
+             "consequence": f"the worker {what}, once, and nothing like it after: the one-time grant goes once it is "
+                            "used, or after 30 minutes"},
+            {"id": "deny", "label": "Deny", "consequence": "the worker stays stopped; your note goes to it"}]
+
+
+def _call_card(r, worker, host):
+    """A refused Bash command's permission card, in the CLI's words where they are short to give (permissionWords): a
+    one-line command shows whole in the title, a compound one by its parts. Only for a call an exact rule can hold
+    (refusal_card_program checks)."""
+    call = r.call
+    who = _who(r, worker, host)
+    try:
+        parts = len(_segments(call))
+    except ValueError:
+        parts = 2
+    if parts <= 1 and not re.search(r"[;&<>`]|\$\(", call):
+        gist = _one_line(call, 100)
+        cut = "" if gist == call else " (cut, see the exact call)"
+        title = f"Allow {who} to run `{gist}`{cut}?"
+        question = f"Let {who} run this exact call once? It runs `{gist}`{cut}."
+    else:
+        count = f"{max(parts, 1)} {'part' if parts == 1 else 'parts'}"
+        title = f"Allow {who} to run a compound command ({count})?"
+        question = (f"Let {who} run this exact call once? It is a compound command of {count}: read the exact call "
+                    "in full below before you answer.")
+    return {"kind": "permission", "title": title, "question": question,
+            "why": f"Auto mode stopped this call: {r.reason}. Only you can let it through.",
+            "blocking": True, "agent": worker, "options": _allow_options("runs exactly the call shown above"),
+            "refusal": _refusal_of(r, call)}
+
+
+def _spawn_card(r, worker, host):
+    """A refused spawn's permission card, worded as the CLI words one (permission-words.ts, permissionOptions)."""
+    try:
+        spawn = json.loads(r.call)
+    except ValueError:
+        spawn = {}
+    spawn = spawn if isinstance(spawn, dict) else {}
+    kind = _one_line(spawn.get("subagent_type") or "general-purpose", 40)
+    said = _one_line(spawn.get("description") or "", 60)
+    who = _who(r, worker, host)
+    described = f", described by {'the worker' if worker or r.agent_id else who} as “{said}”" if said else ""
+    a = "an" if kind[:1].lower() in "aeiou" else "a"
+    return {"kind": "permission", "title": f"Allow {who} to start {a} {kind} agent{described}?",
+            "question": f"Let {who} start this exact {kind} agent once? Read its input in full below before you answer.",
+            "why": f"Auto mode stopped this call: {r.reason}. Only you can let it through.",
+            "blocking": True, "agent": worker, "options": _allow_options("starts exactly the agent shown above"),
+            "refusal": _refusal_of(r, r.call)}
 
 
 def _grant_file(value):
@@ -2948,6 +3349,12 @@ def _log_denial(hook, lc, cli, text):
     found = lc.find_ledger(None)
     for d in [str(found.parent)] if found else fleet_dirs(hook)[:1]:
         worker = _refused_worker(read_ledger(d) or {}, hook.input.get("agent_id"), hook.env)
+        if moved(d):
+            try:
+                fleet_run(hook, d, blocked_program(text, worker))
+            except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+                log(hook.data_dir, f"{hook.event} land_turn_gate: fleet-run failed: {e}")
+            continue
         argv = [cli, "state", d, "event", "--kind", "blocked", "--important",
                 *(_option("--agent", worker) if worker else []), text]
         try:
@@ -3532,7 +3939,7 @@ HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, fleet_heartbeat],
     "Stop": [memo_nudge, fleet_listen_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
-    "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, land_turn_gate, suite_gate, onepw_hold, fleet_monitor_watch,
+    "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, fleet_moved_writes, land_turn_gate, suite_gate, onepw_hold, fleet_monitor_watch,
                    fleet_grant_alone],
     "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_refusal_note, fleet_chat_nudge, onepw_watch],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep, onepw_watch],
