@@ -3639,6 +3639,67 @@ class SuiteParseTest(unittest.TestCase):
                 self.assertTrue(all(unclear for _, unclear in found), found)
         self.assertEqual(self.suites("./lint.sh"), [])
 
+    def shim(self, path, target):
+        """A shell shim the way pnpm and nix write one: it names the package it runs, a test runner's name included."""
+        shim = self.pkg / path
+        shim.parent.mkdir(parents=True, exist_ok=True)
+        shim.write_text(f'#!/bin/sh\nbasedir=$(dirname "$0")\n'
+                        f'exec node "$basedir/../.pnpm/vite-plus@0.2.9_@vitest+browser@4.1.10/node_modules/{target}" "$@"\n')
+
+    def test_a_runner_called_by_its_path_is_read_as_that_runner(self):
+        self.shim("node_modules/.bin/vp", "vite-plus/bin/vp")
+        self.shim("node_modules/.bin/vitest", "vitest/vitest.mjs")
+        (self.pkg / ".venv" / "bin").mkdir(parents=True)
+        (self.pkg / ".venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        (self.pkg / ".venv" / "bin" / "pytest").write_text(
+            '#! /nix/store/abc-bash-5.2/bin/bash -e\nexec -a "$0" "/nix/store/def-pytest/bin/.pytest-wrapped" "$@"\n')
+        for command in ("node_modules/.bin/vp test --run --maxWorkers=8 src/mcp/identity.test.ts",
+                        "./node_modules/.bin/vp test src/a.test.ts", "node_modules/.bin/vitest run src/a.test.ts",
+                        "node_modules/.bin/vitest -t parses", ".venv/bin/pytest tests/test_a.py", ".venv/bin/pytest -k foo",
+                        "node_modules/.bin/vp build"):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [])
+        for command in ("node_modules/.bin/vp test --run", "node_modules/.bin/vitest run", ".venv/bin/pytest"):
+            with self.subTest(command=command):
+                found = self.suites(command)
+                self.assertTrue(found, command)
+                self.assertFalse(any(unclear for _, unclear in found), found)
+
+    def test_a_script_by_its_path_that_runs_a_suite_is_still_unclear(self):
+        for path, body in (("tools/check", "pnpm test"), ("go", "go test ./..."), ("scripts/gates", "pnpm test"),
+                           ("bin/cargo", "cargo test"), ("bin/just", "just test"), ("tools/node", "node --test")):
+            (self.pkg / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.pkg / path).write_text(f"#!/bin/sh\nset -e\n{body}\n")
+        for command in ("tools/check", f"{self.pkg}/tools/check --fast", "./go test", "scripts/gates", "./bin/cargo",
+                        "bin/just", "tools/node"):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [(command, True)])
+
+    def test_vp_exec_is_read_through_to_the_command_it_runs(self):
+        for command in ("vp exec vitest run", "vp exec -F api vitest", "vp exec --filter=api pytest", "vp exec -r vitest"):
+            with self.subTest(command=command):
+                found = self.suites(command)
+                self.assertTrue(found, command)
+                self.assertFalse(any(unclear for _, unclear in found), found)
+        for command in ("vp exec vitest run src/a.test.ts", "vp exec -F api vitest -t parses", "vp exec tsc -b", "vp exec"):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [])
+        self.assertTrue(self.suites("vp exec -c 'pnpm test'"))
+
+    def test_runners_names_every_command_the_reader_reads_by_name(self):
+        import ast
+        tree = ast.parse(HOOK.read_text())
+        reader = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SuiteReader")
+        command = next(n for n in reader.body if isinstance(n, ast.FunctionDef) and n.name == "command")
+        names = set()
+        for node in ast.walk(command):
+            if isinstance(node, ast.Compare) and isinstance(node.left, ast.Name) and node.left.id == "name":
+                for right in node.comparators:
+                    values = right.elts if isinstance(right, (ast.Tuple, ast.Set, ast.List)) else [right]
+                    names |= {v.value for v in values if isinstance(v, ast.Constant) and isinstance(v.value, str)}
+        self.assertTrue({"vp", "pytest", "pnpm", "go"} <= names, names)
+        self.assertEqual(self.mod.RUNNERS, names)
+
 
 class SuiteGateTest(FleetCase):
     """suite_gate (PreToolUse, Bash): in a managed fleet's session a full suite runs through the gate slot (`fleet fleets

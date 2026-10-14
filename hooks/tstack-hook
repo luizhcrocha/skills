@@ -3002,6 +3002,18 @@ CARGO_TEST_VALUED = {"--manifest-path", "--features", "-F", "--target", "--targe
 JUST_VALUED = {"-f", "--justfile", "-d", "--working-directory", "--set", "--shell", "--shell-arg", "--dotenv-filename",
                "--dotenv-path", "--color", "--command-color", "--chooser", "--list-heading", "--list-prefix"}
 TEST_FILE = re.compile(r"(\.|_)(test|spec)\.[cm]?[jt]sx?$|^test_.*\.py$|_test\.py$|\.py$")
+# The commands SuiteReader.command reads by name (pinned by a test). Called by the path of an installed runner's shim
+# (_installed), its verdict stands: the shim's text names the runner, it is not a script to read for tests.
+RUNNERS = {"npx", "bunx", "pnpx", "uvx", "uv", "poetry", "pipenv", "hatch", "pdm", "rye", "gates", "pnpm", "npm",
+           "yarn", "bun", "vitest", "vp", "pytest", "py.test", "cargo", "go", "just", "node"}
+VP_EXEC_VALUED = {"-F", "--filter", "--resume-from"}
+
+
+def _installed(path):
+    """Whether path is where a package manager puts a runner: under node_modules, in /nix/store, or in a venv's bin."""
+    p = Path(path)
+    return "node_modules" in p.parts or os.path.realpath(path).startswith("/nix/store/") \
+        or (p.parent.name == "bin" and (p.parent.parent / "pyvenv.cfg").is_file())
 
 
 def _opts(args, valued):
@@ -3095,6 +3107,8 @@ class SuiteReader:
                 if found:
                     out.append(Suite(found, unclear or stdin or nesting > 0))
                 elif ("/" in words[0] or words[0].endswith(SCRIPT_SUFFIXES)) and cwd \
+                        and not ((name in RUNNERS or re.fullmatch(r"python[\d.]*", name))
+                                 and _installed(_path(cwd, words[0]) or words[0])) \
                         and self._script_tests(_path(cwd, words[0]) or ""):
                     out.append(Suite(" ".join(words), True))
         return out
@@ -3137,6 +3151,15 @@ class SuiteReader:
                 return self._vitest(args[args.index("test") + 1:], shown)
             if pos[:1] == ["run"] and len(pos) > 1:
                 return self._script(pos[1], args[args.index(pos[1]) + 1:], cwd, depth, shown, recursive=False)
+            if pos[:1] == ["exec"]:
+                rest, i = args[args.index("exec") + 1:], 0
+                while i < len(rest) and rest[i].startswith("-") and rest[i] != "--":
+                    i += 2 if rest[i] in VP_EXEC_VALUED else 1
+                shell = any(a in ("-c", "--shell-mode") for a in rest[:i])
+                rest = rest[i + 1:] if rest[i:i + 1] == ["--"] else rest[i:]
+                if shell and depth < 4:
+                    return shown if self.suites(" ".join(rest), cwd, False, depth + 1) else None
+                return self.command(rest, cwd, depth) if rest else None
             return None
         if name in ("pytest", "py.test"):
             pos, opts = _opts([a for a in args if a not in PYTEST_FLAGS], PYTEST_VALUED - PYTEST_FLAGS)
