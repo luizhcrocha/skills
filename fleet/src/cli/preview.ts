@@ -42,7 +42,7 @@ import { stampOf } from "../clock.ts";
 import { readPortStates, runningHub } from "../hub/server.ts";
 import { readTailnetSync, tailscaleBin, type Tailnet } from "../hub/tailnet.ts";
 import { PreviewError, Refusal } from "../errors.ts";
-import { exists, isDir, readText, resolvePath } from "../files.ts";
+import { exists, isDir, movedRefusal, readText, resolvePath } from "../files.ts";
 import { Out } from "../io.ts";
 import { asArray, asBoolean, asObject, asString, type Json, type JsonObject } from "../json.ts";
 import { upAllSync } from "../page/probe.ts";
@@ -830,6 +830,10 @@ function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
 
     if (dir === undefined || command === undefined) return yield* refuse(USAGE);
     const root = resolvePath(dir);
+    // Every verb but status writes the ledger (decision 48): refused before a workspace or a dev server is made.
+    const moved = command === "status" ? undefined : movedRefusal(root);
+
+    if (moved !== undefined) return yield* refuse(moved);
     const raw = load(root);
 
     if (raw instanceof Refusal) return yield* refuse(raw.reason);

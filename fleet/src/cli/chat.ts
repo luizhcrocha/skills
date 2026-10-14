@@ -12,7 +12,7 @@ import { readChat } from "../chat/store.ts";
 import { wait, watch } from "../chat/watch.ts";
 import { stampOf } from "../clock.ts";
 import { ChatError, UsageError } from "../errors.ts";
-import { resolvePath } from "../files.ts";
+import { movedRefusal, resolvePath } from "../files.ts";
 import { Out } from "../io.ts";
 import { World, type Machine } from "../world.ts";
 import { opt, parseCommand, usageWidth, type CommandSpec } from "./args.ts";
@@ -141,6 +141,9 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<vo
     const who = args.str("who") ?? "";
 
     if (cmd === "say") {
+      const moved = movedRefusal(root);
+
+      if (moved !== undefined) return yield* Effect.fail(new ChatError({ reason: moved }));
       const given = args.str("text") ?? "";
       // A text whose bytes are not UTF-8 is refused where Python refuses it, after its sender and `re`.
       const text = argIsUtf8(given) ? given : "\uD800";

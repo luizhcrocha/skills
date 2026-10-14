@@ -40,7 +40,7 @@ import * as Option from "effect/Option";
 
 import { stampOf } from "../clock.ts";
 import { Refusal } from "../errors.ts";
-import { exists, isDir, readText, remove, resolvePath, writeText } from "../files.ts";
+import { exists, isDir, movedRefusal, readText, remove, resolvePath, writeText } from "../files.ts";
 import { workerActivity } from "../heartbeat.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
@@ -141,8 +141,12 @@ export function load(root: string): JsonObject | Refusal {
   return ledger instanceof Refusal ? ledger : (raw ?? {});
 }
 
-/** Write the ledger with `workspaces` (when given) and these events, stamped, and render the page. */
+/** Write the ledger with `workspaces` (when given) and these events, stamped, and render the page; refused for a moved
+ * team's folder (decision 48), whichever writer calls it (ws, the workspace hook's report, every preview writer). */
 export function save(machine: Machine, root: string, raw: JsonObject, workspaces: readonly Json[] | undefined, events: readonly JsonObject[]): Refusal | undefined {
+  const moved = movedRefusal(root);
+
+  if (moved !== undefined) return new Refusal({ speaker: "ws", reason: moved });
   const stamp = stampOf(machine.now());
   const kept: JsonObject = workspaces === undefined ? raw : { ...raw, workspaces: [...workspaces] };
   const next: JsonObject = { ...kept, events: [...(asArray(raw["events"]) ?? []), ...events], updated: stamp };
@@ -892,6 +896,10 @@ function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
 
     if (dir === undefined || command === undefined) return yield* refuse(USAGE);
     const root = resolvePath(dir);
+    const writes = command === "add" || command === "split" || (command === "prune" && rest.includes("--apply"));
+    const moved = writes ? movedRefusal(root) : undefined;
+
+    if (moved !== undefined) return yield* refuse(moved);
     const raw = load(root);
 
     if (raw instanceof Refusal) return yield* Effect.fail(raw);

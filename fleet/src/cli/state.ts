@@ -13,7 +13,7 @@ import { tellHost, toldWords } from "../chat/hub-line.ts";
 import { unreadLine } from "../news/news.ts";
 import { stampOf } from "../clock.ts";
 import { Refusal, stateRefusal, UsageError } from "../errors.ts";
-import { exists, FLEET_BIN, makeDirs, readText, resolvePath, SKILL_DIR, writeText } from "../files.ts";
+import { exists, FLEET_BIN, makeDirs, movedRefusal, readText, resolvePath, SKILL_DIR, writeText } from "../files.ts";
 import { Out } from "../io.ts";
 import { parseObject } from "../json.ts";
 import { cliLookups } from "../page/lookups.ts";
@@ -318,6 +318,9 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<nu
     if (parsed === "help" || parsed instanceof UsageError) return yield* Effect.fail(parsed);
     const { spec, dir, args } = parsed;
     const root = resolvePath(dir);
+    const moved = spec.name === "show" ? undefined : movedRefusal(root);
+
+    if (moved !== undefined) return yield* Effect.fail(stateRefusal(moved));
     makeDirs(root);
 
     // The ledger is read, changed and written under its lock: the hub's rename writes it too.

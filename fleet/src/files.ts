@@ -23,6 +23,20 @@ export const SKILL_DIR = resolvePath(fileURLToPath(new URL("../../skills/product
 /** This CLI's own path, `<plugin>/fleet/bin/fleet`, as every printed command names it. */
 export const FLEET_BIN = join(resolve(SKILL_DIR, "..", "..", ".."), "fleet", "bin", "fleet");
 
+/** The marker a moved team's folder holds (fleet slice 3): the host service exports state.json and chat.jsonl from
+ * the cloud into it, and its ledger is written by programs through fleet-run. */
+export const MOVED_MARKER = "cloud.json";
+
+/** Why the old CLI may not write the ledger at `root`, when its folder holds {@link MOVED_MARKER} (decision 48):
+ * the export would overwrite the write, and the cloud would never hear of it. */
+export function movedRefusal(root: string): string | undefined {
+  const marker = join(root, MOVED_MARKER);
+
+  if (!existsSync(marker)) return undefined;
+
+  return `this team records through programs: fleet-run. ${marker} says this fleet has moved to the cloud: its host service writes state.json and chat.jsonl here, so the old CLI only reads them. Record with one program on the stdin of fleet-run (the coordinator skill's PROGRAMS.md)`;
+}
+
 /** `path` made absolute with its symlinks followed, as far as it exists. */
 export function resolvePath(path: string): string {
   const absolute = resolve(path);

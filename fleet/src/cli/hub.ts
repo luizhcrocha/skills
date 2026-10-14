@@ -21,7 +21,7 @@ import * as Option from "effect/Option";
 
 import { stampOf } from "../clock.ts";
 import { Refusal } from "../errors.ts";
-import { isDir, readText, resolvePath, writeText } from "../files.ts";
+import { isDir, movedRefusal, readText, resolvePath, writeText } from "../files.ts";
 import { discover } from "../hub/served.ts";
 import { codeChanged, RELOAD_EXIT, supervised } from "../hub/reload.ts";
 import { DEFAULT_PORT, runningHub, startHub } from "../hub/server.ts";
@@ -235,6 +235,10 @@ function render(machine: Machine, argv: readonly string[]): Effect.Effect<number
     if (paths.length !== 2 || statePath === undefined || outPath === undefined) {
       return yield* refuse("render_dashboard", "usage: fleet render STATE_JSON OUT_HTML [--fragment]");
     }
+
+    const moved = movedRefusal(dirname(resolvePath(statePath)));
+
+    if (moved !== undefined) return yield* refuse("render_dashboard", moved);
 
     const text = readText(statePath);
     const object = text === undefined ? undefined : Option.getOrUndefined(parseObject(text));

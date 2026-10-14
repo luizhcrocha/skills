@@ -77,6 +77,12 @@ given. Every ID argument also takes the row's number (D3, L2, R1) where rows hav
 2. `--no-render` and `-q` are removed from argv wherever they appear, values included (open-11).
 3. argparse: an unknown command, a missing required option, or a value outside its choices exits
    **2** with usage on stderr, and nothing runs.
+3a. *TypeScript only.* **A moved team** (fleet slice 3, decision 48): when `DIR/cloud.json` exists, every
+   command but `show` is refused, `this team records through programs: fleet-run. DIR/cloud.json says this
+   fleet has moved to the cloud: …`, before DIR is made or the ledger read. `chat DIR say` is refused the same
+   way, and so are `ws DIR add`, `split` and `prune --apply`, every `preview DIR` command but `status`,
+   `render DIR/state.json` (it stamps the ledger), and any other writer through `ws`'s `save` (the workspace
+   hook's report); the chat's readers, `ws list`, a dry-run `ws prune` and `preview status` stay. The host service exports that folder's ledger from the cloud.
 4. `DIR` is created (mkdir -p), even when the command then fails (open-17).
 5. `state.json` is read. Missing, with any command but `init`: refused, `no state.json in DIR; run \`init\` first`.
 6. The command's handler runs on the ledger in memory. A refusal exits **1** with
