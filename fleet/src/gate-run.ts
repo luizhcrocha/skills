@@ -9,8 +9,8 @@
  * dies with it, frees its hold, keeps one line about the run (gate.ts's `runs.jsonl`: the wait, the time, the
  * scope's memory peak) and exits with the command's code. A scope that still has processes after its stop keeps its
  * hold, and the run says so. Where there is no systemd user manager (the Mac), the command runs in a process group
- * of its own, killed whole at its end, without a memory cap, and it says so: it is then counted as the whole budget,
- * so it does not run under a part of the budget taken by hand.
+ * of its own, killed whole at its end, without a memory cap, and it says so: it is then counted as the whole budget.
+ * A run never goes under a hold taken by hand, its own name's included: it waits for that hold as for any other.
  *
  * The runner's own death is covered twice: the hold carries the runner's pid, so it lapses when the runner is
  * gone, and a small watchdog, outside the runner's process group, stops the scope (or kills the group) when the
@@ -22,7 +22,6 @@ import { constants } from "node:os";
 import { stampOf } from "./clock.ts";
 import { readText } from "./files.ts";
 import { budgetOf, capBytes, DEFAULT_CAP, gateOf, holdText, memTotal, plain, scopeLives, sizeText, type GateHolder, type RunRecord, type Waiting } from "./gate.ts";
-import { parseInstant } from "./clock.ts";
 import type { Machine } from "./world.ts";
 
 /** How long a run holds the slot when `--for` does not say; the command is stopped when it runs out. */
@@ -231,9 +230,7 @@ export interface Say {
 
 /** Run `ask` through the gate; the exit code (the command's, 124 when its time ran out, 128+N on signal N, 75 when
  * the gate had no room for it within `--wait` and nothing ran, 2 when its cap or the budget cannot be read or the
- * cap is more than the budget, or when no scope can cap it and its name holds only a part of the budget by hand).
- * One run per hold: under a hold its own name took by hand, a run marks itself the hold's runner, and a second run
- * waits for the first. */
+ * cap is more than the budget). */
 export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<number> {
   const gate = gateOf(machine.registry);
   const holder: GateHolder = { name: ask.name, kind: machine.registry.live().some((e) => e.id === ask.name) ? "fleet" : "session" };
@@ -274,7 +271,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
   const scoped = scope.scoped;
   let warned = scoped;
 
-  // Said once, when it is known what the run does about it: it asks for the whole budget, or runs under one held by hand.
+  // Said once, when the run asks the gate: without a scope it asks for the whole budget.
   const warn = (does: string): void => {
     if (!warned && !scope.scoped) say(`gate run: warning: ${scope.why}, so nothing caps the command's memory: ${does}`);
     warned = true;
@@ -293,68 +290,36 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     }
   };
 
-  let cap = scoped ? wanted : budget.bytes;
-  let askedAs = scoped ? spec : "all (no scope)";
-  let limitS = ask.timeoutS;
+  const cap = scoped ? wanted : budget.bytes;
+  const askedAs = scoped ? spec : "all (no scope)";
+  const limitS = ask.timeoutS;
   let token: string | undefined;
   let unit = `fleet-gate-${randomBytes(4).toString("hex")}-${process.pid}`;
-  let joined = false;
   let saidWait = false;
+  let wasByHand = false;
 
   for (;;) {
     const now = machine.now();
-    // A run cannot outlive the hold it runs under: one about to lapse is not joined, and the run waits as any other.
-    const under = gate.join(ask.name, process.pid, now, STOP_GRACE_S + 1, scoped ? unit : undefined);
-    let why: string;
 
-    if (under !== undefined && "joined" in under) {
-      const room = under.joined.cap ?? Math.min(budget.bytes, under.joined.budget ?? budget.bytes);
-      const lapses = parseInstant(under.joined.until ?? "");
+    // A hold taken by hand is its taker's alone, its own name's included: the run waits for it as any other.
+    warn("this run asks for the whole budget, one run at a time");
+    const result = gate.ask({ holder, what, seconds: ask.minutes * 60 + HOLD_GRACE_S, cap: scoped ? wanted : undefined, budget: budget.bytes, pid: process.pid, runs: true, waitS: ask.waitS }, now);
 
-      gate.leave(process.pid, now);
-
-      // A part of the budget is kept by the scope's cap alone: without one the run would be counted as that part and use any amount.
-      if (!scope.scoped && under.joined.cap !== undefined && under.joined.cap < budget.bytes) {
-        gate.unjoin(process.pid, now);
-        say(`gate run: ${scope.why}, so no memory cap can be enforced here, and ${plain(ask.name)} holds by hand only ${sizeText(under.joined.cap)} of the budget (${budget.spec}, ${sizeText(budget.bytes)}): ` +
-          `the command would run under that part with nothing keeping it to it. Nothing ran (exit 2). Free that hold and take the whole budget (\`gate take\` without --mem), or run it where a systemd user scope can cap it`);
-
-        return 2;
-      }
-
-      if (given !== undefined && parsed > room) {
-        gate.unjoin(process.pid, now);
-        say(over(room, `the hold ${plain(ask.name)} took by hand`));
-
-        return 2;
-      }
-
-      // A hold taken by hand covers one run at a time, with all the memory the hold has, for as long as the hold lasts.
-      joined = true;
-      warn(`it runs under the whole budget ${plain(ask.name)} holds by hand`);
-      cap = given === undefined ? room : parsed;
-      askedAs = given ?? "the hold's";
-      limitS = lapses === undefined ? ask.timeoutS : Math.max(1, Math.min(ask.timeoutS, Math.floor((lapses - now.getTime()) / 1000) - STOP_GRACE_S));
-      say(`gate run: ${plain(ask.name)} already holds the gate (${plain(under.joined.what)}); running under that hold, which its taker frees` +
-        (limitS < ask.timeoutS ? `; the command is stopped after ${limitS}s, before the hold lapses (${under.joined.until ?? ""})` : ""));
+    if ("took" in result) {
+      token = result.took.token;
+      unit = result.took.unit ?? unit;
+      say(`gate run: ${plain(ask.name)} holds the gate (token ${token ?? "?"}, until ${result.took.until ?? "?"})${saidWait ? `, after ${String(waited())}s of waiting` : ""}`);
       break;
     }
 
-    if (under === undefined) {
-      warn("this run asks for the whole budget, one run at a time");
-      const result = gate.ask({ holder, what, seconds: ask.minutes * 60 + HOLD_GRACE_S, cap: scoped ? wanted : undefined, budget: budget.bytes, pid: process.pid, runs: true, waitS: ask.waitS }, now);
+    const byHand = result.waiting.holders.some((h) => h.pid === undefined && plain(h.name) === plain(ask.name));
 
-      if ("took" in result) {
-        token = result.took.token;
-        unit = result.took.unit ?? unit;
-        say(`gate run: ${plain(ask.name)} holds the gate (token ${token ?? "?"}, until ${result.took.until ?? "?"})${saidWait ? `, after ${String(waited())}s of waiting` : ""}`);
-        break;
-      }
+    const byHandText = `${plain(ask.name)} holds the gate by hand, and a gate run never runs under a hold taken by hand: free it with its token first (\`fleet fleets gate free <token>\`)`;
+    const why = waitText(result.waiting) + (byHand ? `; ${byHandText}` : "");
 
-      why = waitText(result.waiting);
-    } else {
-      why = `${plain(ask.name)}'s hold already has a gate run (pid ${String(under.busy.runner)}) since ${under.busy.since}: ${plain(under.busy.what)}`;
-    }
+    // The first wait line says it; a hold by hand of its own name taken while it waits gets a line of its own.
+    if (saidWait && byHand && !wasByHand) say(`gate run: ${byHandText}; still waiting`);
+    wasByHand = byHand;
 
     if (Date.now() >= deadline) {
       gate.leave(process.pid, machine.now());
@@ -378,7 +343,6 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
   const free = (): void => {
     if (!freed) {
       if (token !== undefined) gate.free(token, machine.now(), process.pid);
-      else if (joined) gate.unjoin(process.pid, machine.now());
     }
 
     freed = true;
@@ -521,8 +485,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
       const who = holder.kind === "fleet" ? quoted([ask.name]) : `--as ${quoted([ask.name])}`;
       const kept = `${ask.waitS > 0 ? ` --wait ${ask.waitS}` : ""}${ask.minutes === RUN_MINUTES ? "" : ` --for ${ask.minutes}`}${ask.timeoutS === ask.minutes * 60 ? "" : ` --timeout ${ask.timeoutS}`}`;
 
-      const next = joined ? "It had all the memory of the hold it ran under: the command needs fewer processes at once"
-        : cap < budget.bytes ? `Run it again with the whole budget: \`fleet fleets gate run ${who}${kept} --mem ${budget.spec} -- ${quoted(ask.command)}\``
+      const next = cap < budget.bytes ? `Run it again with the whole budget: \`fleet fleets gate run ${who}${kept} --mem ${budget.spec} -- ${quoted(ask.command)}\``
         : `It had the whole budget (${budget.spec}, ${sizeText(budget.bytes)}): the command needs fewer processes at once`;
 
       say(`gate run: the memory cap (MemoryMax=${sizeText(cap)}) killed ${killed} process(es). ${next}`);

@@ -621,12 +621,12 @@ function gate(machine: Machine, argv: readonly string[]): Effect.Effect<void | n
       if ("held" in result) return yield* fail(`held by ${result.held.map((h) => plain(h.name)).join(", ")}, not ${key}`);
 
       if ("running" in result) {
-        // The run still holds its memory: its hold, or the one taken by hand it runs under, goes when the run does.
-        // A scope is stopped by its name, whoever has its runner's pid by now; a run without one by its runner.
+        // The run still holds its memory: its hold goes when the run does. A scope is stopped by its name, whoever has
+        // its runner's pid by now; a run without one by its runner.
         const ends = result.running.flatMap((h) => endOf(h) ?? []);
 
         return yield* fail(
-          `${result.running.map((h) => `${plain(h.name)}'s gate run (pid ${String(h.pid ?? h.runner)}) is still going: ${plain(h.what)}`).join("; ")}; ` +
+          `${result.running.map((h) => `${plain(h.name)}'s gate run (pid ${String(h.pid)}) is still going: ${plain(h.what)}`).join("; ")}; ` +
             `a run's hold is freed when the run ends. ` +
             (ends.length === 0 ? "It is ending: ask again in a moment" : `To end it, with every process it started: \`${ends.join("; ")}\``),
         );

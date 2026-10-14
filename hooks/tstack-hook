@@ -3359,6 +3359,30 @@ def _gate_hold(env):
     return f"{held.get('fleet')}: {held.get('what')}"
 
 
+def _hand_tokens(env, name):
+    """The tokens of the holds `name` took by hand (`gate take`) that have not lapsed: a `gate run` never goes under
+    one, its own name's included, so a run of that name waits on them. gate.json is one hold, or with `v: 2` a summary
+    that carries them in `holds`."""
+    from datetime import datetime
+    try:
+        held = json.loads((fleet_registry(env) / "gate" / "gate.json").read_text())
+    except (OSError, ValueError):
+        return []
+    holds = held.get("holds") if isinstance(held, dict) and isinstance(held.get("holds"), list) else [held]
+    tokens = []
+    for hold in holds:
+        if not isinstance(hold, dict) or hold.get("pid") is not None or hold.get("fleet") != name \
+                or not isinstance(hold.get("token"), str):
+            continue
+        try:
+            until = datetime.fromisoformat(hold["until"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (datetime.now(until.tzinfo) if until.tzinfo else datetime.now()) < until:
+            tokens.append(hold["token"])
+    return tokens
+
+
 def suite_gate(hook):
     """PreToolUse (Bash): a full test suite in a managed fleet's session runs through the gate slot, in a memory-capped
     scope (`fleet fleets gate run`). The call is denied with the exact command to run instead, so Claude issues it and
@@ -3393,6 +3417,13 @@ def suite_gate(hook):
     held = _gate_hold(hook.env)
     slot = (f"The slot is held now ({_one_line(held, 120)}), so it waits for it (up to {SUITE_WAIT_S // 60} min). "
             if held else "")
+    tokens = _hand_tokens(hook.env, fleet)
+    if tokens:
+        # Not refused on the name alone: a fleet's sessions share it, and the hold may be another session's.
+        frees = "; ".join(f"{shlex.quote(cli)} fleets gate free {t}" for t in tokens)
+        slot += (f"Fleet {fleet} holds the slot by hand (token {', '.join(tokens)}), and a gate run never runs under a "
+                 f"hold taken by hand, its own fleet's included: when that hold is this session's, free it first with "
+                 f"`{frees}`; else the run waits for it like any other. ")
     unclear = (" The hook couldn't tell all that this line runs around the test runner." if any(s.unclear for s in found)
                else "")
     return Deny(f"`{_one_line(what, 80)}` runs a full test suite, and in fleet {fleet} (this machine serves a manager) a "

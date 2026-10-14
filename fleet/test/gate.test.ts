@@ -88,6 +88,14 @@ function file(): JsonObject {
   return readJson(join(dir, "gate.json"));
 }
 
+/** Add `more` to the first hold the gate keeps (with a cap, gate.json carries it in `holds`), as an older fleet's run wrote its mark. */
+function mark(more: JsonObject): void {
+  const kept = file();
+  const [first, ...rest] = asArray(kept["holds"]) ?? [];
+
+  writeFileSync(join(dir, "gate.json"), JSON.stringify({ ...kept, holds: [{ ...asObject(first), ...more }, ...rest] }));
+}
+
 /** Whether a fleet from before the budget (1.9.44) reads `held` as a live hold at `now`: its whole test. */
 function olderFleetReadsHeld(held: JsonObject, now: Date): boolean {
   const until = Date.parse(asString(held["until"]) ?? "");
@@ -335,75 +343,51 @@ describe("a holder that is gone", () => {
     expect(gate.standing(at(1)).holders).toEqual([]);
   });
 
-  test("one run at a time under a hold taken by hand, and a dead runner's mark counts for nothing", async () => {
-    gate.ask({ holder: { name: "w", kind: "session" }, what: "by hand", seconds: 3600, cap: undefined, budget: BUDGET, pid: asker(), runs: false, waitS: 0 }, at(0));
-    const [r1, r2] = [asker(), asker()];
-    const first = gate.join("w", r1, at(1), 6);
-    expect(first !== undefined && "joined" in first && first.joined.runner).toBe(r1);
-    const second = gate.join("w", r2, at(2), 6);
-    expect(second !== undefined && "busy" in second && second.busy.runner).toBe(r1);
-    expect(gate.join("other", r2, at(2), 6)).toBeUndefined();
-
-    await die(r1);
-    const third = gate.join("w", r2, at(3), 6);
-    expect(third !== undefined && "joined" in third).toBe(true);
-    gate.unjoin(r2, at(4));
-    expect(file()).not.toHaveProperty("runner");
-    expect(file()).not.toHaveProperty("runner_started");
-    expect(names(gate.standing(at(4)).holders)).toEqual(["w"]);
-  });
-
-  test("a hold taken by hand is not freed under its run: the release names the runner, and the hold stays counted", async () => {
+  test("a hold taken by hand is its taker's: a run of its own name waits for it, and its token frees it", () => {
     const hand = take("w", undefined).took;
-    const r1 = asker();
-    expect(gate.join("w", r1, at(1), 6)).toHaveProperty("joined");
-
-    for (const key of ["w", hand?.token ?? ""]) {
-      const refused = gate.free(key, at(2));
-      expect("running" in refused && refused.running.map((h) => h.runner)).toEqual([r1]);
-    }
-
-    expect(names(gate.standing(at(2)).holders)).toEqual(["w"]);
-    expect(ask("big", asker(), BUDGET, 3, 0).took).toBeUndefined();
-
-    await die(r1);
-    expect(gate.free(hand?.token ?? "", at(4))).toEqual({ freed: true });
-    expect(gate.standing(at(4)).holders).toEqual([]);
+    expect(ask("w", asker(), QUARTER, 1, 0).took).toBeUndefined();
+    expect(gate.free(hand?.token ?? "", at(2))).toEqual({ freed: true });
+    expect(gate.standing(at(2)).holders).toEqual([]);
   });
 
-  test("a fleet's hold by hand lives under its run though the fleet's entry goes, and lapses with the fleet once the run is done", async () => {
-    served = ["infra"];
-    take("infra", QUARTER, 0, "fleet");
+  test("a hold by hand an older fleet's run goes under is freed by its token, and the run's memory stays counted until the run ends", async () => {
+    const hand = take("w", QUARTER).took;
     const r1 = asker();
-    expect(gate.join("infra", r1, at(1), 6)).toHaveProperty("joined");
+    mark({ runner: r1, runner_unit: "fleet-gate-0a1b2c3d-1" });
+    expect(gate.free(hand?.token ?? "", at(1))).toEqual({ freed: true });
 
-    served = ["infra-lead"];
-    expect(names(gate.standing(at(2)).holders)).toEqual(["infra"]);
+    const [run] = gate.standing(at(1)).holders;
+    expect(run).toMatchObject({ name: "w", pid: r1, unit: "fleet-gate-0a1b2c3d-1", cap: QUARTER, budget: BUDGET, until: hand?.until ?? "", runner: undefined });
     expect(ask("big", asker(), BUDGET, 2, 0).took).toBeUndefined();
 
     await die(r1);
     expect(gate.standing(at(3)).holders).toEqual([]);
   });
 
-  test("a run under a hold by hand records its scope on the hold, and leaves nothing of itself when it is done", () => {
-    take("w", QUARTER);
+  test("a runner's mark an older fleet's run left keeps a fleet's hold by hand while that run goes, and not after", async () => {
+    served = ["infra"];
+    take("infra", QUARTER, 0, "fleet");
     const r1 = asker();
-    const unit = `fleet-gate-0a1b2c3d-${String(r1)}`;
-    const under = gate.join("w", r1, at(1), 6, unit);
-    expect(under !== undefined && "joined" in under && under.joined.runnerUnit).toBe(unit);
-    expect(asObject(asArray(file()["holds"])?.[0])).toMatchObject({ runner: r1, runner_unit: unit });
+    mark({ runner: r1 });
+    served = ["infra-lead"];
+    expect(names(gate.standing(at(1)).holders)).toEqual(["infra"]);
+    expect(ask("big", asker(), BUDGET, 1, 0).took).toBeUndefined();
 
-    gate.unjoin(r1, at(2));
-    expect(Object.keys(asObject(asArray(file()["holds"])?.[0]) ?? {}).filter((key) => key.startsWith("runner"))).toEqual([]);
+    await die(r1);
+    expect(gate.standing(at(2)).holders).toEqual([]);
+
+    // A mark whose pid a later process has is no run's.
+    served = ["infra"];
+    take("infra", QUARTER, 3, "fleet");
+    mark({ runner: asker(), runner_started: "1" });
+    served = ["infra-lead"];
+    expect(gate.standing(at(4)).holders).toEqual([]);
   });
 
-  test("a name with a line break is, to a run and to a release, the name it was kept under", () => {
+  test("a name with a line break is, to a release, the name it was kept under", () => {
     expect(take("a\nb", undefined).took?.name).toBe("a b");
-    const r1 = asker();
-    expect(gate.join("a\nb", r1, at(1), 6)).toHaveProperty("joined");
-    gate.unjoin(r1, at(2));
-    expect(gate.free("a\nb", at(3))).toEqual({ freed: true });
-    expect(gate.standing(at(3)).holders).toEqual([]);
+    expect(gate.free("a\nb", at(1))).toEqual({ freed: true });
+    expect(gate.standing(at(1)).holders).toEqual([]);
   });
 
   test("a run is ended by its scope's name when it has one, else by its runner while that pid is still the runner's", () => {
@@ -418,22 +402,6 @@ describe("a holder that is gone", () => {
     expect(bare === undefined ? "" : endOf({ ...bare, raw: { ...bare.raw, started: "1" } })).toBeUndefined();
   });
 
-  test("a runner's mark whose pid a later process has is taken over", () => {
-    take("w", undefined);
-    const [r1, r2] = [asker(), asker()];
-    gate.join("w", r1, at(1), 6);
-    writeFileSync(join(dir, "gate.json"), JSON.stringify({ ...file(), runner_started: "1" }));
-    const next = gate.join("w", r2, at(2), 6);
-    expect(next !== undefined && "joined" in next && next.joined.runner).toBe(r2);
-  });
-
-  test("a hold about to lapse is not one to run under: a run cannot outlive it", () => {
-    take("w", undefined);
-    expect(gate.join("w", asker(), at(3594), 6)).toBeDefined();
-    gate.unjoin(gate.standing(at(3594)).holders[0]?.runner ?? 0, at(3594));
-    expect(gate.join("w", asker(), at(3595), 6)).toBeUndefined();
-    expect(names(gate.standing(at(3595)).holders)).toEqual(["w"]);
-  });
 });
 
 describe("gate.json and the fleets before the budget", () => {

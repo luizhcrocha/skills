@@ -16,8 +16,9 @@
  *
  * What keeps the memory within the budget whoever asks: each hold records the budget its taker read, and an ask is
  * admitted against the smallest of its own and the holds'; a run's hold lives as long as its runner, whatever the
- * registry says of its fleet, and only its runner frees it; a hold taken by hand is a run's for as long as a run
- * goes under it.
+ * registry says of its fleet, and only its runner frees it. A hold taken by hand is its taker's alone: no `gate run`
+ * goes under it, its own name's included (that name is often a fleet's, shared by its sessions), and its token always
+ * frees it. A `runner` mark an older fleet's run left on one keeps the hold live while that run goes.
  */
 import { createHash } from "node:crypto";
 import { appendFileSync, closeSync, openSync, readFileSync } from "node:fs";
@@ -142,7 +143,7 @@ export interface Hold extends GateHolder {
   /** The systemd user scope its run's command is in (`<unit>.scope`), when the run has one: the hold lives while
    * that scope does, though its runner is gone. */
   readonly unit: string | undefined;
-  /** The `gate run` running under it, when it was taken by hand. */
+  /** The `gate run` an older fleet ran under it, when it was taken by hand: that fleet's mark (`runner`). */
   readonly runner: number | undefined;
   /** The systemd user scope that run's command is in, when it has one: the run goes for as long as the scope does. */
   readonly runnerUnit: string | undefined;
@@ -279,11 +280,6 @@ function plus(raw: JsonObject, key: string, value: Json | undefined): JsonObject
   return value === undefined ? raw : { ...raw, [key]: value };
 }
 
-/** A hold taken by hand as it is with no run under it: `raw` without a runner's mark. */
-function unmarked(raw: JsonObject): JsonObject {
-  return Object.fromEntries(Object.entries(raw).filter(([key]) => key !== "runner" && key !== "runner_started" && key !== "runner_unit"));
-}
-
 function waiterJson(w: Waiter): JsonObject {
   return plus(plus({ fleet: w.name, kind: w.kind, what: w.what, since: w.since, until: w.until, pid: w.pid }, "cap", w.cap), "started", w.started);
 }
@@ -300,21 +296,29 @@ export function scopeLives(unit: string): boolean {
   return exists(`/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/app.slice/${unit}.scope`);
 }
 
-/** Whether a `gate run` goes under `hold`, one taken by hand: its runner is that process still, or its scope is there. */
+/** Whether the `gate run` of an older fleet whose mark `hold`, one taken by hand, carries still goes: its runner is
+ * that process still, or its scope is there. */
 function runnerLives(hold: Hold): boolean {
   return (hold.runner !== undefined && running(hold.runner, asString(hold.raw["runner_started"]))) || (hold.runnerUnit !== undefined && scopeLives(hold.runnerUnit));
 }
 
-/** The command that ends the run of `hold` (its own, or the one under a hold taken by hand), every process it
- * started with it: its scope stopped by name when it has one, else its runner killed while that pid is still the
- * process that took the hold (a later process with its pid is not). Undefined when there is nothing left to stop. */
+/** The hold of the run whose mark `hold`, one taken by hand, carries: the run's runner, its start and its scope, with
+ * the part of the budget, the budget and the `until` of the hold it went under. Its taker's token frees `hold` while
+ * the run still holds that memory, so this hold keeps it counted until the run ends; it lapses then (the older
+ * fleet's runner frees by its mark, which this hold no longer carries). */
+function runOf(hold: Hold): Hold {
+  const { runner, runner_started: started, runner_unit: unit, ...rest } = hold.raw;
+
+  return holdOf(plus(plus(plus(rest, "pid", runner), "started", started), "unit", unit));
+}
+
+/** The command that ends the run of `hold`, every process it started with it: its scope stopped by name when it has
+ * one, else its runner killed while that pid is still the process that took the hold (a later process with its pid is
+ * not). Undefined when there is nothing left to stop. */
 export function endOf(hold: Hold): string | undefined {
-  const unit = hold.unit ?? hold.runnerUnit;
+  if (hold.unit !== undefined) return `systemctl --user stop ${hold.unit}.scope`;
 
-  if (unit !== undefined) return `systemctl --user stop ${unit}.scope`;
-  const pid = hold.pid ?? hold.runner;
-
-  return pid !== undefined && running(pid, asString(hold.raw[hold.pid === undefined ? "runner_started" : "started"])) ? `kill ${String(pid)}` : undefined;
+  return hold.pid !== undefined && running(hold.pid, asString(hold.raw["started"])) ? `kill ${String(hold.pid)}` : undefined;
 }
 
 function short(text: string): string {
@@ -430,7 +434,8 @@ export class Gate {
     // runner and the watchdog may be killed, while the suite still holds its memory.
     if (hold.pid !== undefined) return running(hold.pid, asString(hold.raw["started"])) || (hold.unit !== undefined && scopeLives(hold.unit));
 
-    // So does a hold taken by hand, for as long as a run goes under it.
+    // A fleet's hold taken by hand lapses with its fleet's entry, except while a run an older fleet's `gate run` marked
+    // on it goes: that run still holds the hold's memory.
     return hold.kind === "session" || runnerLives(hold) || this.served().includes(hold.name);
   }
 
@@ -558,59 +563,26 @@ export class Gate {
     });
   }
 
-  /** `gate run` as `name` runs under a hold `name` took by hand, as runner `pid`: one run per hold. `joined` is that
-   * hold; `busy` the hold whose run is still going; undefined when `name` holds nothing by hand that still lasts
-   * `leastS` seconds (a run cannot outlive the hold it runs under). A dead runner's mark, or one whose pid a later
-   * process has, is taken over once its scope is gone too. `unit` is the scope the run's command will be in: the
-   * hold keeps it, so the run is counted while that scope lives, whatever becomes of its runner. */
-  join(name: string, pid: number, now: Date, leastS: number, unit?: string): { readonly joined: Hold } | { readonly busy: Hold } | undefined {
-    return this.locked(() => {
-      const { holders } = this.settled(now);
-
-      const mine = holders.filter((h) => {
-        const until = parseInstant(h.until ?? "");
-
-        return plain(h.name) === plain(name) && h.pid === undefined && (until === undefined || until - now.getTime() >= leastS * 1000);
-      });
-
-      const open = mine.find((h) => h.runner === pid || !runnerLives(h));
-      const [busy] = mine;
-
-      if (open === undefined) return busy === undefined ? undefined : { busy };
-      const joined = holdOf(plus(plus({ ...unmarked(open.raw), runner: pid }, "runner_started", startedOf(pid)), "runner_unit", unit));
-
-      this.keepHolds(holders.map((h) => (h === open ? joined : h)));
-
-      return { joined };
-    });
-  }
-
-  /** Runner `pid` leaves the hold it joined: the hold stays its taker's, open to the next run. */
-  unjoin(pid: number, now: Date): void {
-    this.locked(() => {
-      const { holders } = this.settled(now);
-
-      if (!holders.some((h) => h.runner === pid)) return;
-
-      this.keepHolds(holders.map((h) => (h.runner === pid ? holdOf(unmarked(h.raw)) : h)));
-    });
-  }
-
   /** Free the holds `key` names, by token or (as before tokens) by holder's name. A run's hold is freed only by
-   * its runner (`runner`, its pid), and a hold taken by hand by nobody while a run goes under it: the run still
-   * holds its memory, so the release is refused with the holds that are `running`, to stop the run instead. Refused
-   * with the holders (`held`) when none of the holds is `key`'s. */
+   * its runner (`runner`, its pid): the run still holds its memory, so the release is refused with the holds that
+   * are `running`, to stop the run instead. A hold taken by hand is always freed; one an older fleet's run still goes
+   * under is freed into that run's hold, so its memory stays counted until the run ends. Refused with the holders
+   * (`held`) when none of the holds is `key`'s. */
   free(key: string, now: Date, runner?: number): { readonly freed: true } | { readonly held: readonly Hold[] } | { readonly running: readonly Hold[] } {
     return this.locked(() => {
       const { holders } = this.settled(now);
       const named = holders.filter((h) => h.token === key || plain(h.name) === plain(key));
-      const going = named.filter((h) => (h.pid === undefined ? runnerLives(h) : h.pid !== runner));
+      const going = named.filter((h) => h.pid !== undefined && h.pid !== runner);
 
       if (holders.length > 0 && named.length === 0) return { held: holders };
 
       if (named.length > 0 && going.length === named.length) return { running: going };
 
-      this.keepHolds(holders.filter((h) => !named.includes(h) || going.includes(h)));
+      this.keepHolds(holders.flatMap((h) => {
+        if (!named.includes(h) || going.includes(h)) return [h];
+
+        return h.pid === undefined && runnerLives(h) ? [runOf(h)] : [];
+      }));
 
       return { freed: true };
     });

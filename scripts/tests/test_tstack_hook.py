@@ -3801,6 +3801,31 @@ class SuiteGateTest(FleetCase):
         d = self.decision(self.run_bash("pnpm test"))
         self.assertIn("The slot is held now (infra: browser suite), so it waits for it (up to 30 min)", d["permissionDecisionReason"])
 
+    def test_a_hold_its_own_fleet_took_by_hand_is_named_with_the_free_the_run_waits_on(self):
+        # A gate run never goes under a hold taken by hand, its own fleet's included: without the free it waits on it.
+        self.manager()
+        (self.registry / "gate").mkdir()
+        hand = {"fleet": "p", "kind": "fleet", "what": "a build", "since": "2026-01-05T08:00:00+00:00",
+                "until": "2999-01-01T00:00:00+00:00", "token": "abcd1234"}
+        run = {"fleet": "p", "kind": "fleet", "what": "gate run: pnpm test", "since": "2026-01-05T08:00:00+00:00",
+               "until": "2999-01-01T00:00:00+00:00", "token": "feed0001", "pid": os.getpid(), "cap": 8 * 2 ** 30}
+        other = {**hand, "fleet": "infra", "token": "beef0002", "cap": 8 * 2 ** 30}
+        summary = {"fleet": "p (8G) + infra (8G)", "kind": "session", "what": "two holds",
+                   "since": "2026-01-05T08:00:00+00:00", "until": "2999-01-01T00:00:00+00:00", "v": 2}
+        for held, freed in ((hand, "abcd1234"), ({**summary, "holds": [{**hand, "cap": 8 * 2 ** 30}, other]}, "abcd1234"),
+                            ({**summary, "holds": [run, other]}, None), (other, None)):
+            with self.subTest(held=held):
+                (self.registry / "gate" / "gate.json").write_text(json.dumps(held))
+                reason = self.decision(self.run_bash("pnpm test"))["permissionDecisionReason"]
+                self.assertIn(f"Run it as: `{self.gate_run('pnpm test')}`", reason)
+                if freed is None:
+                    self.assertNotIn("fleets gate free", reason)
+                else:
+                    self.assertIn(f"Fleet p holds the slot by hand (token {freed}), and a gate run never runs under a "
+                                  f"hold taken by hand, its own fleet's included: when that hold is this session's, "
+                                  f"free it first with `{self.fleet_cli} fleets gate free {freed}`; else the run waits "
+                                  f"for it like any other. ", reason)
+
     def test_a_gate_run_hold_whose_runner_is_gone_is_free(self):
         self.manager()
         (self.registry / "gate").mkdir()

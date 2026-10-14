@@ -226,49 +226,15 @@ describe("gate run and the slot", () => {
     expect(await new Response(runner.stdout).text()).toBe("ran\n");
   });
 
-  test("a hold its own name took by hand covers the run, and stays its taker's", () => {
+  test("a run never goes under a hold taken by hand, its own name's included: it waits as anyone does", () => {
     expect(gate(["take", "--as", "w1", "just test"]).code).toBe(0);
     const done = gate(["run", "--as", "w1", "--wait", "0", "--", "sh", "-c", "echo ran"]);
-    expect(done.code).toBe(0);
-    expect(done.stdout).toBe("ran\n");
-    expect(done.stderr).toContain("running under that hold");
-    expect(gate([]).stdout).toContain("held by w1");
-    // The run had the hold's memory, all of the budget, and its record says so.
-    expect(records()[0]).toMatchObject({ name: "w1", asked: "the hold's", cap: budgetBytes() });
-  });
-
-  test("one run per hold: a second run under the same hand-taken hold waits, then runs once the first is done", async () => {
-    expect(gate(["take", "--as", "w1", "just test"]).code).toBe(0);
-    const dir = tmp("fleet-gate-join-");
-    const first = Bun.spawn([FLEET, "fleets", "gate", "run", "--as", "w1", "--", "sh", "-c", `touch ${dir}/first; sleep 3; touch ${dir}/first-done`], { env, stdout: "pipe", stderr: "pipe" });
-
-    try {
-      expect(await until(() => existsSync(join(dir, "first")), 10000)).toBe(true);
-      const refused = gate(["run", "--as", "w1", "--wait", "0", "--", "sh", "-c", "echo ran"]);
-      expect(refused.code).toBe(75);
-      expect(refused.stdout).toBe("");
-      expect(refused.stderr).toContain("w1's hold already has a gate run");
-      expect(refused.stderr).toContain("without running the command (exit 75)");
-
-      const second = Bun.spawn([FLEET, "fleets", "gate", "run", "--as", "w1", "--wait", "30", "--", "sh", "-c", `test -e ${dir}/first-done && echo ran`], { env, stdout: "pipe", stderr: "pipe" });
-      expect(await first.exited).toBe(0);
-      expect(await second.exited).toBe(0);
-      expect(await new Response(second.stdout).text()).toBe("ran\n");
-      expect(gate([]).stdout).toContain("held by w1");
-      expect(JSON.parse(readFileSync(holdFile(), "utf8"))).not.toHaveProperty("runner");
-    } finally {
-      first.kill("SIGTERM");
-      await first.exited;
-    }
-  });
-
-  test("a dead runner's mark on a hand-taken hold does not block the next run", () => {
-    expect(gate(["take", "--as", "w1", "just test"]).code).toBe(0);
-    const held = readFileSync(holdFile(), "utf8").trim();
-    writeFileSync(holdFile(), `${held.slice(0, -1)}, "runner": ${String(2 ** 22 + 7)}}`);
-    const done = gate(["run", "--as", "w1", "--wait", "0", "--", "sh", "-c", "echo ran"]);
-    expect(done.code).toBe(0);
-    expect(done.stdout).toBe("ran\n");
+    expect(done.code).toBe(75);
+    expect(done.stdout).toBe("");
+    expect(done.stderr).toContain("the gate is held by w1");
+    expect(done.stderr).toContain("w1 holds the gate by hand, and a gate run never runs under a hold taken by hand: free it with its token first");
+    expect(holds()[0]).not.toHaveProperty("runner");
+    expect(records()[0]).toMatchObject({ name: "w1", code: 75, ran: null });
   });
 
   test("a run past its time says so with its exit code", () => {
@@ -468,25 +434,6 @@ describe("what keeps the memory within the budget", () => {
     }
   });
 
-  test("a run under a hold taken by hand is stopped before the hold lapses, and one about to lapse is not run under", () => {
-    const lapsesIn = (seconds: number): void => {
-      writeFileSync(holdFile(), JSON.stringify({ ...holds()[0], until: new Date(Date.now() + seconds * 1000).toISOString() }));
-    };
-
-    expect(gate(["take", "--as", "h", "a build"]).code).toBe(0);
-    lapsesIn(9);
-    const began = Date.now();
-    const done = gate(["run", "--as", "h", "--", "sleep", "14"], { FLEET_GATE_SCOPE: "0" });
-    expect(done.code).toBe(124);
-    expect(done.stderr).toMatch(/running under that hold, which its taker frees; the command is stopped after [1-4]s, before the hold lapses/);
-    expect(Date.now() - began).toBeLessThan(9000);
-
-    lapsesIn(4);
-    const late = gate(["run", "--as", "h", "--wait", "0", "--", "sh", "-c", "echo ran"], { FLEET_GATE_SCOPE: "0" });
-    expect(late.code).toBe(75);
-    expect(late.stdout).toBe("");
-  });
-
   test("a release does not drop the hold of a run that is still going: it says how to end the run", async () => {
     const one = running(["--as", "a", "--", "sleep", "30"], scope);
 
@@ -510,48 +457,27 @@ describe("what keeps the memory within the budget", () => {
     expect(first()).toBe("free");
   });
 
-  test("a hold taken by hand is not freed while a run goes under it: the release names the run", async () => {
+  test("a hold taken by hand stays its taker's: a run of the same name waits, and the token frees the hold", async () => {
     const token = /^token ([0-9a-f]+),/m.exec(gate(["take", "--as", "a", "by hand"]).stdout)?.[1] ?? "";
-    const one = running(["--as", "a", "--", "sleep", "30"], scope);
+    const dir = tmp("fleet-gate-same-name-");
+    const one = Bun.spawn([FLEET, "fleets", "gate", "run", "--as", "a", "--wait", "30", "--", "sh", "-c", `touch ${dir}/ran; echo ran`], { env: { ...env, ...scope }, stdout: "pipe", stderr: "pipe" });
 
     try {
-      expect(await until(() => asNumber(holds()[0]?.["runner"]) !== undefined, 10000)).toBe(true);
+      expect(await until(() => standing().queue.length === 1, 10000)).toBe(true);
+      expect(holds()[0]).not.toHaveProperty("runner");
+      expect(existsSync(join(dir, "ran"))).toBe(false);
 
-      for (const key of ["a", token]) {
-        const refused = gate(["free", key]);
-        expect(refused.code).toBe(1);
-        expect(refused.stderr).toMatch(/^fleets: a's gate run \(pid \d+\) is still going: by hand; a run's hold is freed when the run ends\. /);
-      }
-
-      expect(first()).toContain("held by a (no fleet)");
-      expect(gate(["run", "--as", "b", "--mem", "50%", "--wait", "0", "--", "sh", "-c", "echo ran"], scope).code).toBe(75);
+      const freed = gate(["free", token]);
+      expect(freed.stderr).toBe("");
+      expect(freed.stdout).toBe("free\n");
+      expect(await one.exited).toBe(0);
+      expect(await new Response(one.stdout).text()).toBe("ran\n");
     } finally {
-      await stopAll([one]);
+      one.kill("SIGTERM");
+      await one.exited;
     }
 
-    expect(gate(["free", token]).stdout).toBe("free\n");
     expect(first()).toBe("free");
-  });
-
-  test("without a scope a run is not taken under a part of the budget held by hand: nothing would cap it", () => {
-    const bare = { FLEET_GATE_SCOPE: "0" };
-    expect(gate(["take", "--as", "c", "--mem", "25%", "by hand"]).code).toBe(0);
-    const refused = gate(["run", "--as", "c", "--", "sh", "-c", "echo ran"], bare);
-    expect(refused.code).toBe(2);
-    expect(refused.stdout).toBe("");
-    expect(refused.stderr).toContain("no memory cap can be enforced here");
-    expect(refused.stderr).not.toContain("one run at a time");
-    expect(holds()[0]).not.toHaveProperty("runner");
-    expect(existsSync(join(home, "gate", "runs.jsonl"))).toBe(false);
-
-    // The whole budget held by hand covers it: one run at a time is then true of the hold itself.
-    expect(gate(["free", "c"]).stdout).toBe("free\n");
-    expect(gate(["take", "--as", "c", "by hand"]).code).toBe(0);
-    const whole = gate(["run", "--as", "c", "--", "sh", "-c", "echo ran"], bare);
-    expect(whole.code).toBe(0);
-    expect(whole.stdout).toBe("ran\n");
-    expect(whole.stderr).toContain("warning: $FLEET_GATE_SCOPE is 0, so nothing caps the command's memory: it runs under the whole budget c holds by hand");
-    expect(whole.stderr).not.toContain("this run asks for the whole budget");
   });
 
   test.skipIf(!SCOPE)("a scope that does not stop keeps its hold: the run says so, and the gate still counts it", async () => {
