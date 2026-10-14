@@ -4370,6 +4370,79 @@ recommendation attached.
   survives a restart: the new advisor reads `chat log` for its earlier rulings. The asker is named
   without `@`, so the record is not opened in the asker's inbox.
 
+## The team (`fleet team`)
+
+A repo's standing agents (coordinators and the manager) run as tabs of one herdr session. TypeScript only.
+`fleet team [-h] {start,stop,attach,list} [--force] [NAME ...|all]`, run in the repo or below it (the repo is the
+nearest folder up holding `.fleet/agents`). No NAME is every agent for `start` and `list`; `stop` names them or
+says `all`; `attach` takes none.
+
+- **An agent's file.** `.fleet/agents/<name>.json`, one per agent, in the Anthropic Agents SDK's agent fields
+  (`name`, `description`, `model: {id, effort}`, `system`, `tools`, `multiagent`, `metadata`) and a `fleet`
+  block: `role` (manager or coordinator, required), `opening` (the first prompt), `remote_control` (default
+  true), `machine` (default `local`), `ledger` (absolute or `~/`). The role gives the rest: `opening`
+  `/tstack:coordinator` or `/tstack:manager`, model `opus` at `low` effort, description `The <name> <role>`.
+  `name`, when given, is the file's name, which herdr's agent names bound (`[a-z][a-z0-9_-]{0,31}`). `tools`,
+  `multiagent` and `metadata` are kept for a cloud launcher and not applied: a local agent's tools are Claude
+  Code's settings and the plugin's permission cards. An unknown field, a bad value or a bad file refuses the
+  whole team with one sentence naming the file and the field (`ui.json: model.effort is 'huge'; it is one of
+  low, medium, high, xhigh, max`). `.fleet/team.json` may name the session (`{"session": "skills"}`); else it
+  is the repo's folder. Either is refused unless it is a plain name (`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`: no
+  path, no leading `-`).
+- **start.** Opens the session, or reuses it running (herdr has no `session create`: a session that does not
+  run is started headless, `herdr --session <name> server`, detached, without the caller's `CLAUDE_CODE_*`,
+  `CLAUDECODE` and `HERDR_*`). Each agent gets a tab labelled with its name, in the repo, running a new
+  conversation (never a resume): `claude --name <name> --model <id> --effort <effort> [--remote-control <name>]
+  [--append-system-prompt-file <file>]` through `herdr agent start <name> --kind claude`, which returns once
+  Claude Code is ready; then `herdr agent prompt` sends the opening and `Your ledger is <path>.` The system
+  prompt goes in `REGISTRY/team/<session>/<name>.system.md`, not on the line: herdr types the line quoted for
+  sh, and the pane's nushell does not read sh's `'\''`; an argument holding `'` or a line break is refused.
+  An agent whose start blocks on a prompt in its pane (herdr: `is blocked during startup`; in a folder Claude
+  Code has not trusted yet, its trust question) keeps its tab, marked `"opening": "unsent"` in marks.json, and
+  `start` refuses with how to go on: `fleet team attach`, answer it (nothing answers it for the user), then
+  `fleet team start <name>` again, which sends the opening once the agent is ready, or says it still waits.
+  The refusal names it a startup prompt (trust, an MCP server's approval, ...).
+  Any other failed start closes its tab.
+  A server that does not answer within 10 s is stopped with its process group. An agent already running in
+  the session is reported and left: in the tab this command started (`ui: already running in session skills,
+  tab w1:t2; left as it is`), or as an agent of its name or a tab labelled with it that `fleet team` did not
+  start (said so); a session `start` brings up is looked at again, since herdr may restore tabs into it. One
+  running elsewhere is refused, saying where: another
+  session with an agent of its name or a tab labelled with it, or a fleet the registry serves by its
+  name or from its ledger. HOME unset is refused. `machine` other than `local` is refused: an agent
+  away from this machine needs a launcher on that machine, which is not built.
+- **The ledger.** The file's `fleet.ledger` is used where it is. Else the registry's fleet of the agent's name
+  (its id, an old id or its session's name; served or kept) gives it, where it is; registry entries of its name
+  in different folders are refused, naming them. Else it is `~/.local/state/fleet/<name>`, where a coordinator
+  that has none makes it. A ledger is never moved: its folder may hold the team's `cloud.json`, and its host
+  runs from it.
+- **Yours.** `REGISTRY/team/<session>/marks.json` holds what `fleet team` started, by the launcher's handles:
+  the session when it started it (herdr: its server's pid and start time) and each agent's tab (herdr: the tab
+  id). `stop` and the session's end act only on what is marked and still holds: a tab is its agent's while it
+  is labelled with the agent's name and runs an agent of that name (only `agent start` names one, so a shell
+  tab restored in its place after a reboot is not), and the session is the one started while that server
+  still runs as `herdr --session <name> server`. A mark that no longer holds is dropped; `start` drops the
+  session's when it reuses another instance. `start` and `stop` hold `REGISTRY/team/<session>/team.lock`
+  (`flock`) throughout.
+- **stop.** Waits, at most 10 minutes, until the agent is ready (`herdr agent wait --until idle --until done
+  --timeout 600000`), then closes its tab; `--force` closes at once, and a wait that gives up says so. An agent
+  waiting on a prompt (its opening unsent, or `asking`) is closed at once, without the wait, which would hold
+  the team's lock for the 10 minutes (`ui: stopped: tab w1:t1 closed at once: it waited on a prompt`). An
+  agent not marked is refused (`ui: fleet team did not start it in session skills; left as it is`); a
+  session that cannot be read is refused and the mark kept. When the last marked tab is closed, the session
+  was started by `fleet team` and no tab is left in it, the session is stopped (`herdr session stop`);
+  `herdr server stop` never runs.
+- **list.** One line per agent: `running here: session S, tab T, <status>` (status `ready`, `working`,
+  `asking` or `unknown`: herdr's idle and done, working, blocked, other), `running here, not started by fleet
+  team: <where>`, `running elsewhere: <where>`, or `not running`.
+- **attach.** `herdr session attach <session>`.
+- **The seam.** `team/launcher.ts`: sessions, open-or-reuse (the started session's handle), whether a handle
+  still names the running session, a tab for an agent (cwd, label, the agent's definition; the tab's handle),
+  a prompt, the tabs and agents with their status, a bounded settle, close, end (by handle), attach. Handles
+  are the adapter's, opaque to `fleet team`; the command line, the system prompt file and the multiplexer's
+  words stay in the adapter. herdr (`team/herdr.ts`, commands both 0.9.3 and 0.9.5 have) is the one real
+  adapter; the tests use a fake. Rex and Managed Agents would each be one more adapter file; none is built.
+
 ## Files by writer
 
 | Writer | Files |
@@ -4393,6 +4466,7 @@ recommendation attached.
 | the plugin's hook (`onepw_watch`, `onepw_hold`) | `REGISTRY/onepw/locked.json` (under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken` (a state that did not read, set aside), `REGISTRY/onepw/onepw.log` |
 | `fleet secrets unlocked` outside Claude Code | `REGISTRY/onepw/locked.json` (`cleared`, `lapsed` and `told` set, rows dropped, kinds pruned, and the file removed when nothing is left; under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken`, `REGISTRY/onepw/onepw.log`, and for each held fleet the notice: its `DIR/chat.jsonl` (under the store's lock), or one line to its session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, when its host's watch is dead |
 | `state`, on a write that numbers a row or `approval add next` (TypeScript only) | `REGISTRY/numbers/numbers.json` (under `REGISTRY/numbers/numbers.lock`), when `REGISTRY` exists |
+| `fleet team start` / `stop` | `REGISTRY/team/<session>/marks.json`, `REGISTRY/team/<session>/<agent>.system.md` |
 | `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / moved to the trash with its note, `TRASH/<repo>/<entry>` and `<entry>.json` (a shared fleet's `add` writes nothing); whatever the repo's hooks (`.fleet/ws-pre-add`, `.fleet/ws-add` or `devenv-run --prepare`, `.fleet/ws-pre-remove`) write |
 | `fleet ws restore` / `gc` | the entry's folder moved back and a jj workspace added there (`jj workspace add`, `jj sparse reset`), its note removed / each entry past the age deleted, folder and note |
 | `fleet ws add --reuse` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; a new change in the workspace (`jj new`) |

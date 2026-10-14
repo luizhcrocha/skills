@@ -2,6 +2,8 @@
  * An exclusive `flock(2)` on an open file, the lock Python's `fcntl.flock` takes: the chat's appenders,
  * Python's and these, take the same one, so ids stay sequential while both write one store.
  */
+import { closeSync, openSync } from "node:fs";
+
 import { dlopen, FFIType } from "bun:ffi";
 
 const LOCK_EX = 2;
@@ -48,5 +50,17 @@ export function withExclusiveLock<T>(fd: number, body: () => T): T {
     return body();
   } finally {
     release();
+  }
+}
+
+/** Run `body` with `path` open (with `flags`) and exclusively locked; released and closed after. Throws what
+ * `openSync` throws, or {@link LockFailed}. */
+export function withLockAt<T>(path: string, flags: "r+" | "a+" | "a", body: () => T): T {
+  const fd = openSync(path, flags);
+
+  try {
+    return withExclusiveLock(fd, body);
+  } finally {
+    closeSync(fd);
   }
 }

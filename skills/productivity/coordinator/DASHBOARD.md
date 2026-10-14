@@ -171,6 +171,15 @@ A moved team (its folder holds `cloud.json`) skips this section and records thro
 
 A ledger made with `init --role manager` is a manager's. Its page is sent every coordinator being served, its chat is hosted by `manager` and mentions the coordinators by their fleet's name (their workers stay in their own fleet's chat), its steps name the coordinator whose turn it is, and its directory holds `standing.md`. A coordinator's page shows the way to the manager while one is being served. The user's message on the manager's page to a coordinator being served (`@<fleet>`) is delivered into that fleet's own chat, as the user's to `coordinator`, tagged `[via manager #N]` (`via` in the message); the manager's message records it (`[delivered to <fleet> #id]`) and the manager's watch leaves it out. The coordinator answers it in its own chat with `--re`, and that answer shows on the manager's page as the reply to #N. A fleet not served is not addressed: the message goes to the manager, which forwards it. What a coordinator does with a manager is in [SKILL.md](SKILL.md#with-a-manager).
 
+**The team.** A repo's standing coordinators and its manager are files, `.fleet/agents/<name>.json`: the Agents SDK's fields (`name`, `description`, `model: {id, effort}`, `system`, `tools`, `multiagent`, `metadata`) and a `fleet` block (`role`, `opening`, `remote_control`, `machine`, `ledger`). The role gives the rest, so `{"fleet": {"role": "coordinator"}}` is a whole file. `fleet team`, run in the repo, starts them as tabs of one herdr session (the repo's folder, or `.fleet/team.json`'s `session`):
+
+| Command | What it does |
+| :-- | :-- |
+| `start [NAME ...]` | a tab per agent running a new `claude` named after it, then its opening naming its ledger (its file's `fleet.ledger`, else the registry's for its name where it is, else `~/.local/state/fleet/<name>`); an agent already running here is left, one running elsewhere is refused, saying where |
+| `stop NAME ...\|all [--force]` | closes the agent's tab once it is ready, waiting at most 10 minutes (`--force`: at once); only tabs `fleet team` started that still run their agent |
+| `list [NAME ...]` | each agent: running here, elsewhere (where), or not running |
+| `attach` | `herdr session attach` to the team's session |
+
 **The news.** What a session tells the fleets that needs nobody to act now (a release note, an FYI, a rule change) is posted, never sent as a message: a message wakes the session it reaches, and each wake re-reads its whole context. `fleet news`:
 
 | Command | What it does |
