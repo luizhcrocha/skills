@@ -205,6 +205,18 @@ export function readOrWhy(path: string): Buffer | { readonly why: string } {
   }
 }
 
+/** Write `text` to `path` as {@link writeAtomic} does, its folder made first; why it could not, naming `path`. */
+export function writeOrWhy(path: string, text: string): { readonly why: string } | undefined {
+  try {
+    makeDirs(dirname(path));
+    writeAtomic(path, text);
+
+    return undefined;
+  } catch (cause: unknown) {
+    return { why: `${path} could not be written: ${strerror(cause)}` };
+  }
+}
+
 /** Write `bytes` to `path`. */
 export function writeBytes(path: string, bytes: Buffer): void {
   writeFileSync(path, bytes);
