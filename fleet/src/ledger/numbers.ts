@@ -20,6 +20,23 @@ export const PREFIX = new Map([
   ["permission", "P"],
 ]);
 
+/** Whether `id` reads as an item number (a counter's letter and digits, as D217 or K3): a page links it as
+ * one, so a new row may take it only as its own number. */
+export function readsAsNumber(id: string): boolean {
+  return /^[DAISGNPLRK][0-9]+$/u.test(id);
+}
+
+/** Why a new row under `id`, which reads as a number, is refused: its number is `ref`. */
+export function misnumbered(id: string, ref: string): string {
+  return `${id} reads as a card number, and this card's number will be ${ref}: use a word id (s3-tool), or ${ref}`;
+}
+
+/** The ids of the rows a write numbers (decisions, links, roadblocks): those a ledger held before a command keep
+ * their id, whatever it reads as. */
+export function numberedIds(ledger: Ledger): Set<string> {
+  return new Set([...(ledger.decisions ?? []), ...(ledger.links ?? []), ...ledger.roadblocks].map((r) => r.id));
+}
+
 /** A row with an id and maybe a number. */
 export interface Numbered {
   readonly id: string;

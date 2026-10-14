@@ -5,7 +5,8 @@ The traces are recorded from the TypeScript fleet (ADR 0003). With FLEET_ORACLE_
 fleet still does what the corpus recorded. Without it, it replays on the frozen Python twin and checks
 that it still behaves as the TypeScript fleet did, until the twin is deleted; a trace whose header has `twin`
 (why the twin differs: a behaviour TypeScript changed on purpose since, and `normalise`, what run.py's
-TWIN_NORMALISERS hide on both sides) is compared on the twin with that difference hidden. After an intended change
+TWIN_NORMALISERS hide on both sides) is compared on the twin with that difference hidden, and, with `until`
+(a step number), only on the steps before it: from that step on the twin's ledger is another. After an intended change
 of behaviour, `just record-traces fleet/oracle/traces/NAME.jsonl` records the trace again from the
 TypeScript fleet; review the diff of its .expected.jsonl like code.
 """
@@ -44,6 +45,9 @@ def replayed(trace: Path) -> str | None:
     got = json.loads(json.dumps(run.replay(steps, *impl()), ensure_ascii=False))
     expected = run.read_lines(run.expected_of(trace))
     normalise = [] if impl()[0] is not None else twin_of(trace).get("normalise", [])
+    until = None if impl()[0] is not None else twin_of(trace).get("until")
+    if until is not None:
+        expected, got = ([r for r in rs if "results" in r or r.get("step", 0) < until] for rs in (expected, got))
     found = run.divergence(run.twin_view(expected, normalise), run.twin_view(got, normalise), run.split(steps)[1], names=("expected", "got"))
     return f"{trace.name}:\n{found}" if found else None
 
@@ -67,6 +71,8 @@ class CorpusTest(unittest.TestCase):
             self.assertTrue(str(twin.get("why", "")).strip(), f"{trace.name}: `twin.why` says why the Python twin differs")
             self.assertTrue(twin.get("normalise"), f"{trace.name}: `twin.normalise` names what is hidden")
             self.assertLessEqual(set(twin["normalise"]), set(run.TWIN_NORMALISERS), f"{trace.name}: an unknown normaliser")
+            until = twin.get("until")
+            self.assertTrue(until is None or (isinstance(until, int) and until > 1), f"{trace.name}: `twin.until` is a step number")
 
     def test_hiding_numbers_keeps_every_other_difference(self):
         hide = run.TWIN_NORMALISERS["numbers"]

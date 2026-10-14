@@ -8,9 +8,14 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
+import * as Option from "effect/Option";
+
+import { Refusal } from "../src/errors.ts";
 import { asArray, asObject, asString, type JsonObject } from "../src/json.ts";
+import { parseLedger } from "../src/ledger/model.ts";
+import { numberOnMachine } from "../src/ledger/shared-numbers.ts";
 import { holdExclusiveLock, LockFailed } from "../src/lock.ts";
-import { baseEnv, FLEET, fleet, readJson, tmp, type Environment, type Ran } from "./support.ts";
+import { baseEnv, FLEET, fleet, machine, readJson, tmp, type Environment, type Ran } from "./support.ts";
 
 const CHOICE = ["--kind", "decision", "--title", "T", "--why", "w", "--question", "Q?", "--option", "A: yes | y", "--option", "B: no | n", "--recommend", "A", "--reason", "r", "--advised", "none:test"];
 
@@ -37,6 +42,11 @@ function rows(dir: string, key: string): JsonObject[] {
 
 function refs(dir: string, key = "decisions"): (string | undefined)[] {
   return rows(dir, key).map((r) => asString(r["ref"]));
+}
+
+/** `row` as an old ledger kept it, without a number. */
+function unnumbered(row: JsonObject): JsonObject {
+  return Object.fromEntries(Object.entries(row).filter(([key]) => key !== "ref"));
 }
 
 /** Serve `dir` as fleet `name` in the registry. */
@@ -136,6 +146,90 @@ describe("the machine's numbers", () => {
     expect(at(join(base, "a"), "approval", "add", "next", "--rule", "r", "--by", "luiz", "--ref", "b/D2").stderr).toContain("b/D2 (T) is open");
   });
 
+  test("a new card's id that reads as another card's number is refused, and nothing is written", () => {
+    const dir = join(base, "a");
+    mkdirSync(join(home, "numbers"), { recursive: true });
+    writeFileSync(join(home, "numbers", "numbers.json"), JSON.stringify({ D: 220 }));
+    const before = readFileSync(join(dir, "state.json"), "utf8");
+    const result = at(dir, "decision", "D217", ...CHOICE);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("D217 reads as a card number, and this card's number will be D221: use a word id (s3-tool), or D221");
+    expect(readFileSync(join(dir, "state.json"), "utf8")).toBe(before);
+    expect(readJson(join(home, "numbers", "numbers.json"))).toEqual({ D: 220 });
+  });
+
+  test("a new card's id equal to the number it will be given, or a word, is taken", () => {
+    const dir = join(base, "a");
+    mkdirSync(join(home, "numbers"), { recursive: true });
+    writeFileSync(join(home, "numbers", "numbers.json"), JSON.stringify({ D: 220 }));
+    ok(dir, "decision", "D221", ...CHOICE);
+    ok(dir, "decision", "s3-tool", ...CHOICE);
+    expect(rows(dir, "decisions").map((d) => [d["id"], d["ref"]])).toEqual([
+      ["D221", "D221"],
+      ["s3-tool", "D222"],
+    ]);
+  });
+
+  test("a card already recorded under a number-shaped id is still changed and decided by it", () => {
+    const dir = join(base, "a");
+    mkdirSync(join(home, "numbers"), { recursive: true });
+    writeFileSync(join(home, "numbers", "numbers.json"), JSON.stringify({ D: 220 }));
+    ok(dir, "decision", "d1", ...CHOICE);
+    // A card opened before the rule, under a hand-picked id that is not its number.
+    const state = readJson(join(dir, "state.json"));
+    writeFileSync(join(dir, "state.json"), JSON.stringify({ ...state, decisions: rows(dir, "decisions").map((d) => ({ ...d, id: "D217" })) }));
+    ok(dir, "decision", "D217", "--title", "T2");
+    ok(dir, "decision", "D217", "--decide", "A", "--resolution", "said in the session");
+    expect(rows(dir, "decisions").map((d) => [d["id"], d["ref"], d["title"], d["status"]])).toEqual([["D217", "D221", "T2", "decided"]]);
+  });
+
+  test("an old ledger's row under a number-like id and without a number is numbered on the next write, not refused", () => {
+    const dir = join(base, "a");
+    ok(dir, "decision", "d1", ...CHOICE);
+    const old = rows(dir, "decisions").map((d) => ({ ...unnumbered(d), id: "D7" }));
+    writeFileSync(join(dir, "state.json"), JSON.stringify({ ...readJson(join(dir, "state.json")), decisions: old }));
+    ok(dir, "event", "--kind", "note", "x");
+    expect(rows(dir, "decisions").map((d) => [d["id"], d["ref"]])).toEqual([["D7", "D2"]]);
+  });
+
+  test("a number-like id is refused after the command's own checks, which say the real reason first", () => {
+    const dir = join(base, "a");
+    expect(at(dir, "decision", "D9", ...CHOICE, "--supersedes", "nope").stderr).toContain("unknown decision 'nope'");
+    expect(at(dir, "decision", "D9", "--under", "K3", "--title", "T", "--question", "q", "--undo", "u").stderr).toContain("--under and --undo record a notice: give --kind notice");
+    const withdrawn = at(dir, "decision", "D9", "--withdraw", "not needed");
+    expect(withdrawn.code).not.toBe(0);
+    expect(withdrawn.stderr).not.toContain("reads as a card number");
+  });
+
+  test("a notice under a number-like id is refused unless it is its own number, after the notice's own checks", () => {
+    const a = join(base, "a");
+    ok(a, "decision", "d1", ...CHOICE);
+    writeFileSync(join(a, "chat.jsonl"), `${JSON.stringify({ id: 1, at: "2099-01-01T00:00:00+00:00", from: "user", author: "luiz@github", to: ["coordinator"], text: "A", re: null, decision: "d1" })}\n`);
+    ok(a, "decision", "d1", "--decide", "A", "--resolution", "yes");
+    ok(a, "approval", "add", "next", "--rule", "land", "--by", "luiz", "--ref", "D1");
+    const notice = (id: string, under = "K1"): string[] => ["decision", id, "--kind", "notice", "--under", under, "--title", "T", "--question", "Landed the branch", "--undo", "revert it"];
+    expect(at(a, ...notice("N7", "K9")).stderr).toContain("unknown approval 'K9'");
+    expect(at(a, ...notice("N7")).stderr).toContain("N7 reads as a card number, and this card's number will be N1: use a word id (s3-tool), or N1");
+    ok(a, ...notice("N1"));
+    expect(rows(a, "decisions").map((d) => [d["id"], d["ref"]])).toEqual([
+      ["d1", "D1"],
+      ["N1", "N1"],
+    ]);
+  });
+
+  test("a number another fleet takes between the check and the write refuses the write, and the counter keeps its number", () => {
+    const a = join(base, "a");
+    ok(a, "decision", "d1", ...CHOICE);
+    // This write's check said D2, so the new row is D2; fleet b takes D2 before this write is numbered.
+    const opened = { ...unnumbered(rows(a, "decisions")[0] ?? {}), id: "D2" };
+    ok(join(base, "b"), "decision", "d1", ...CHOICE);
+    const ledger = Option.getOrThrow(parseLedger(JSON.stringify({ ...readJson(join(a, "state.json")), decisions: [...rows(a, "decisions"), opened] })));
+
+    if (ledger instanceof Refusal) throw new Error(ledger.message);
+    expect(numberOnMachine(machine(env), a, ledger, new Set())).toMatchObject({ why: "D2 reads as a card number, and this card's number will be D3: use a word id (s3-tool), or D3" });
+    expect(readJson(join(home, "numbers", "numbers.json"))).toEqual({ D: 2 });
+  });
+
   test("approval add next takes the machine's next K, and the same source twice is refused", () => {
     const a = join(base, "a");
     // Another fleet's K4 from before the counter: its seed starts above it.
@@ -213,6 +307,19 @@ describe("a registry that cannot be reached", () => {
     expect(r.stderr).toContain(`no fleet registry at ${join(base, "no-state", "fleet-board")}`);
     // A write that numbers nothing says nothing of it.
     expect(ok(dir, "event", "--kind", "note", "x").stderr).not.toContain("numbered from this ledger alone");
+  });
+
+  test("a standalone fleet refuses a link under another number-like id where it is numbered, and nothing is written", () => {
+    env = baseEnv(home, { XDG_STATE_HOME: join(base, "no-state") });
+    delete env["FLEET_HOME"];
+    const dir = join(base, "lone");
+    ok(dir, "init", "--project", "lone", "--goal", "g");
+    const before = readFileSync(join(dir, "state.json"), "utf8");
+    const link = (id: string): string[] => ["link", id, "--url", "https://example.com/", "--title", "T", "--kind", "page"];
+    expect(at(dir, ...link("L5")).stderr).toContain("L5 reads as a card number, and this card's number will be L1: use a word id (s3-tool), or L1");
+    expect(readFileSync(join(dir, "state.json"), "utf8")).toBe(before);
+    ok(dir, ...link("L1"));
+    expect(refs(dir, "links")).toEqual(["L1"]);
   });
 
   test("a registry FLEET_HOME names is made when missing, never skipped", () => {

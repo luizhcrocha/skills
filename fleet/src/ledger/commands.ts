@@ -25,8 +25,8 @@ import type { Machine } from "../world.ts";
 import { isFormatted, manualBlocks } from "../../page/src/text.ts";
 import { isMarkdownFile, markdownToHtml, markdownWarning } from "./body.ts";
 import { dropKey, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type RefusalDraft, type RefusedCall, type Roadblock, type Step } from "./model.ts";
-import { find, findDecision, highest, milestoneOfStep, nextStepId } from "./numbers.ts";
-import { approvalNumber, refusedFor, Unreachable } from "./shared-numbers.ts";
+import { find, findDecision, highest, milestoneOfStep, misnumbered, nextStepId, PREFIX, readsAsNumber } from "./numbers.ts";
+import { approvalNumber, nextDecisionRef, refusedFor, Unreachable } from "./shared-numbers.ts";
 import { approvalSource, comesFrom, namesOf, NoSource, refOf, sameSource } from "./approvals.ts";
 import { LINK_KINDS, linkKind, OLD_LINK_KINDS, type LinkKind } from "./links.ts";
 import { ALLOW_ONCE, callsLine, callsOf, grantFileOf, isAsk, makeRefusedCall, permissionOptions, refusalRev } from "./permission.ts";
@@ -1868,6 +1868,7 @@ function notice(ledger: Ledger, run: Run, known: Decision | undefined): Effect.E
     if (undo.trim() === "") return yield* refuse("--undo says how to undo what was done; an act that cannot be undone is not routine: ask the user (a decision)");
     yield* checkQuestion(args.str("question"), "notice");
     yield* checkWhy(args.str("why"), "notice");
+    yield* checkNumberId(run, ledger, id, "notice");
     const at = stamp(run);
     const agent = args.str("agent");
 
@@ -2096,6 +2097,20 @@ function dropDraft(ledger: Ledger, run: Run, draft: RefusalDraft, why: string): 
   return Effect.succeed(ledger);
 }
 
+/** A new decision's id that reads as an item number (D217) is taken only when it is the number this card is
+ * given: a page links a decision by its id, and D217 there names another fleet's card. Read early, so nothing
+ * of the command is done; `numberOnMachine` checks again where the number is taken. */
+function checkNumberId(run: Run, ledger: Ledger, id: string, kind: string): Effect.Effect<void, Refusal> {
+  return Effect.gen(function* () {
+    if (!readsAsNumber(id)) return;
+    const ref = nextDecisionRef(run.machine, ledger, PREFIX.get(kind) ?? "D");
+
+    if (ref instanceof Unreachable) return yield* refuse(refusedFor(ref));
+
+    if (ref !== id) return yield* refuse(misnumbered(id, ref));
+  });
+}
+
 /** `decision`: open, revise, place, decide or withdraw a decision; one decided elsewhere is recorded closed. */
 export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
   return Effect.gen(function* () {
@@ -2200,6 +2215,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       yield* require(run, elsewhere ? ["title", "question"] : ask ? ["kind", "title", "why"] : kind === "permission" ? ["kind"] : ["kind", "title", "question", "why"], "decision");
       yield* checkQuestion(args.str("question"), given(kind) ? kind : "decision");
       yield* checkWhy(args.str("why"), ask ? "decision" : given(kind) ? kind : "decision");
+      yield* checkNumberId(run, ledger, id, given(kind) ? kind : "decision");
 
       const fresh: Decision = {
         id,

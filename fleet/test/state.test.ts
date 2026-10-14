@@ -441,7 +441,10 @@ describe("numbers", () => {
 
   test("a number skips an id that reads as it (open-1)", () => {
     const opt = ["--option", "a: A | x", "--option", "b: B | y", "--recommend", "a", "--reason", "r"];
-    f.ok("decision", "D2", "--kind", "input", "--title", "T", "--question", "q", "--why", "w");
+    // A row recorded under D2 before a new id that reads as a number was refused.
+    f.ok("decision", "k", "--kind", "input", "--title", "T", "--question", "q", "--why", "w");
+    const state = f.state();
+    writeFileSync(join(f.root, "state.json"), JSON.stringify({ ...state, decisions: f.rows("decisions").map((d) => ({ ...d, id: "D2" })) }));
     f.ok("decision", "x", "--kind", "decision", "--title", "X", "--question", "q", "--why", "w", ...opt);
     f.ok("decision", "y", "--kind", "decision", "--title", "Y", "--question", "q", "--why", "w", ...opt);
     expect(f.rows("decisions").map((d) => [d["id"], d["ref"]])).toEqual([

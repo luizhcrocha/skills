@@ -21,7 +21,7 @@ import { withExclusiveLock } from "../lock.ts";
 import { readObject, Registry, registryPlace } from "../registry.ts";
 import type { Machine } from "../world.ts";
 import type { Ledger } from "./model.ts";
-import { number, unnumbered, type NextNumber, type Numbered } from "./numbers.ts";
+import { highest, misnumbered, number, readsAsNumber, unnumbered, type NextNumber, type Numbered } from "./numbers.ts";
 
 /** The registry exists but its counter could not be taken: why. The write is refused. */
 export class Unreachable {
@@ -41,14 +41,33 @@ class Standalone {
   }
 }
 
+/** A new row's id reads as a number that is not the one it was given: the write is refused, nothing taken. */
+export class Misnumbered {
+  readonly why: string;
+
+  constructor(why: string) {
+    this.why = why;
+  }
+}
+
+/** What a body of {@link withCounter} returns to leave the counter as it was: `value` without taking anything. */
+class Unkept<T> {
+  readonly value: T;
+
+  constructor(value: T) {
+    this.value = value;
+  }
+}
+
 /** What a command that took numbers prints (on stderr), or why it is refused. */
 export type Taken<T> = { readonly value: T; readonly warnings: readonly string[] } | Unreachable;
 
-/** The counter's two ways in: the next number of a letter above the asking ledger's highest, and a number
- * given by hand that the counter must stay at or above. */
+/** The counter's ways in: the next number of a letter above the asking ledger's highest, a number given by hand
+ * that the counter must stay at or above, and the last number of a letter given, read without taking one. */
 interface Counter {
   readonly next: NextNumber;
   readonly reserve: (prefix: string, n: number) => void;
+  readonly current: (prefix: string) => number;
 }
 
 /** The highest number of each letter among the rows of `state` (a ledger as JSON), into `into`. */
@@ -100,8 +119,8 @@ function stored(path: string): Map<string, number> | undefined {
   return counters;
 }
 
-/** Run `body` with the machine's counter, under its lock, and keep what it took. */
-function withCounter<T>(registry: Registry, body: (counter: Counter) => T): T | Unreachable | Standalone {
+/** Run `body` with the machine's counter, under its lock, and keep what it took, unless it returns {@link Unkept}. */
+function withCounter<T>(registry: Registry, body: (counter: Counter) => T | Unkept<T>): T | Unreachable | Standalone {
   const home = registry.place.home;
 
   if (registry.place.named !== true && !isDir(home)) return new Standalone(`no fleet registry at ${home}`);
@@ -137,7 +156,9 @@ function withCounter<T>(registry: Registry, body: (counter: Counter) => T): T | 
         changed = true;
       };
 
-      const result = body({ next, reserve });
+      const result = body({ next, reserve, current: (prefix) => counters.get(prefix) ?? 0 });
+
+      if (result instanceof Unkept) return result.value;
 
       if (!changed) return result;
 
@@ -180,23 +201,40 @@ function elsewhere(machine: Machine, root: string): string | undefined {
 }
 
 /** Number every row of `ledger` (the fleet at `root`) that has none, from the machine's counter; a standalone
- * fleet from its own ledger, warned. {@link Unreachable} when the registry's counter cannot be taken: the
- * rows are left without a number and the caller refuses the write. */
-export function numberOnMachine(machine: Machine, root: string, ledger: Ledger): Taken<undefined> {
+ * fleet from its own ledger, warned. {@link Unreachable} when the registry's counter cannot be taken, and
+ * {@link Misnumbered} when a new row (its id not in `kept`, the ids the ledger held before the command) has an
+ * id that reads as a number other than the one it is given, checked where the number is taken, so a number
+ * another fleet took since the command looked is caught: either way the rows are left without a number, the
+ * counter as it was, and the caller refuses the write. */
+export function numberOnMachine(machine: Machine, root: string, ledger: Ledger, kept: ReadonlySet<string>): Taken<undefined> | Misnumbered {
   if (!unnumbered(ledger)) return { value: undefined, warnings: [] };
   let given: Numbered[] = [];
 
-  const took = withCounter(machine.registry, ({ next }) => {
+  const wrong = (rows: readonly Numbered[]): Misnumbered | undefined => {
+    const row = rows.find((r) => !kept.has(r.id) && readsAsNumber(r.id) && r.ref !== r.id);
+
+    return row === undefined ? undefined : new Misnumbered(misnumbered(row.id, row.ref ?? ""));
+  };
+
+  const took = withCounter(machine.registry, ({ next }): Misnumbered | undefined | Unkept<Misnumbered | undefined> => {
     given = number(ledger, next);
+    const refused = wrong(given);
+
+    return refused === undefined ? undefined : new Unkept(refused);
   });
 
   if (took instanceof Standalone) {
-    number(ledger);
+    given = number(ledger);
+    const refused = wrong(given);
 
-    return { value: undefined, warnings: [alone(took)] };
+    if (refused === undefined) return { value: undefined, warnings: [alone(took)] };
+
+    for (const row of given) delete row.ref;
+
+    return refused;
   }
 
-  if (took instanceof Unreachable) {
+  if (took instanceof Unreachable || took instanceof Misnumbered) {
     for (const row of given) delete row.ref;
 
     return took;
@@ -205,6 +243,31 @@ export function numberOnMachine(machine: Machine, root: string, ledger: Ledger):
   const warning = elsewhere(machine, root);
 
   return { value: undefined, warnings: warning === undefined ? [] : [warning] };
+}
+
+/** The number a new decision of letter `prefix` would be given on this write, read from
+ * the machine's counter without taking it; a standalone fleet's from its own ledger. {@link Unreachable}
+ * when the registry's counter cannot be read. */
+export function nextDecisionRef(machine: Machine, ledger: Ledger, prefix: string): string | Unreachable {
+  const rows = ledger.decisions ?? [];
+  const local = highest(rows.map((r) => r.ref), prefix);
+  const ids = new Set(rows.map((r) => r.id));
+
+  const after = (counted: number): string => {
+    let n = Math.max(counted, local) + 1;
+
+    while (ids.has(`${prefix}${String(n)}`)) n += 1;
+
+    return `${prefix}${String(n)}`;
+  };
+
+  const peeked = withCounter(machine.registry, ({ current }) => new Unkept(current(prefix)));
+
+  if (peeked instanceof Standalone) return after(0);
+
+  if (peeked instanceof Unreachable) return peeked;
+
+  return after(peeked);
 }
 
 /** An approval's K: for `next`, the machine's next above `above` (the ledger's highest); else `given` (K and a

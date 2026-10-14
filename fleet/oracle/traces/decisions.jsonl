@@ -29,7 +29,7 @@
 {"cli": "state", "argv": ["$DIR", "decision", "bad id", "--kind", "input", "--title", "T", "--question", "q", "--why", "w", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "d7", "--kind", "input", "--title", "T", "--question", "q", "--why", "w", "--agent", "ghost", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "g2", "--kind", "grill", "--title", "t", "--question", "q", "--why", "w", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "decision", "D4", "--kind", "input", "--title", "Looks like a number", "--question", "q", "--why", "w", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "I2", "--kind", "input", "--title", "Its own number", "--question", "q", "--why", "w", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "d8", "--kind", "decision", "--title", "Later", "--question", "q", "--why", "w", "--option", "A: uuid | random", "--option", "B: ulid | sortable", "--recommend", "B", "--reason", "sorts by time", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "d8", "--kind", "decision", "--title", "Later", "--question", "q", "--why", "w", "--option", "A: uuid | random", "--option", "B: ulid | sortable", "--recommend", "B", "--reason", "sorts by time", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "show", "--no-render"], "clock": "2026-01-05T10:00:00+00:00"}

@@ -48,6 +48,12 @@ GRACE_S = 10 * 60
 PREFIX = {"decision": "D", "action": "A", "input": "I", "secret": "S", "grill": "G"}
 REF = re.compile(r"\b([DAISGLR]\d+)\b")
 MENTION = re.compile(r"@([A-Za-z0-9_.-]+)")
+NUMBER_LIKE = re.compile(r"[DAISGNPLRK][0-9]+")  # an id a page would link as an item number
+
+
+def misnumbered(rid: str, ref: str) -> str:
+    """Why the TypeScript fleet refuses a new row under `rid`, which reads as a number: its number is `ref`."""
+    return f"{rid} reads as a card number, and this card's number will be {ref}: use a word id (s3-tool), or {ref}"
 
 MILESTONES = ["m1", "m2", "m3"]
 STEPS = ["s1", "s2", "s3", "s4", "s5"]
@@ -74,6 +80,14 @@ NOW_TEXTS = ["building", "waits on D1", "A1 next", "checking I1 and D2", "quiet"
 
 class Refused(Exception):
     """The model's prediction that the CLI refuses the command (exit 1)."""
+
+
+class RefusedSaying(Refused):
+    """A refusal whose reason the model predicts word for word, on stderr."""
+
+    def __init__(self, said: str):
+        super().__init__(said)
+        self.said = said
 
 
 class Model:
@@ -352,6 +366,10 @@ class Model:
             needed = ("title", "question") if elsewhere else ("kind", "title", "question", "why")
             if any(k not in c for k in needed):
                 raise Refused("new decision needs its fields")
+            if self.counter is not None and NUMBER_LIKE.fullmatch(c["id"]):  # the TypeScript fleet's rule; the twin has none
+                given = self.next_ref(PREFIX.get(c.get("kind") or "decision", "D"))
+                if given != c["id"]:
+                    raise RefusedSaying(misnumbered(c["id"], given))
             did = c["id"]
             d = {"kind": c.get("kind") or "decision", "status": "open", "answer": None, "step": None, "milestone": None,
                  "options": [o.split(":")[0] for o in c.get("options", [])], "agent": c.get("agent") or None,
@@ -490,7 +508,17 @@ class Model:
         pass
 
     # -- what every write does after its command: numbers, then the checks -------------------------
-    def number(self) -> None:
+    def next_ref(self, p: str) -> str:
+        """The number a new decision of letter `p` is given on this write, as `number` gives it."""
+        taken = [int(x["ref"][len(p):]) for x in self.decisions.values() if re.fullmatch(p + r"\d+", x.get("ref") or "")]
+        n = max(taken + ([] if self.counter is None else [self.counter.get(p, 0)]), default=0) + 1
+        while f"{p}{n}" in self.decisions:
+            n += 1
+        return f"{p}{n}"
+
+    def number(self) -> list[tuple[str, str]]:
+        """Number every row without a number; the (id, number) of each row numbered."""
+        numbered = []
         for rows, prefix_of in ((self.decisions, lambda d: PREFIX.get(d["kind"], "D")), (self.roadblocks, lambda r: "R"),
                                 (self.links or {}, lambda r: "L")):
             for k, r in rows.items():
@@ -504,6 +532,8 @@ class Model:
                     if self.counter is not None:
                         self.counter[p] = n
                     r["ref"] = f"{p}{n}"
+                    numbered.append((k, r["ref"]))
+        return numbered
 
     def validate(self) -> None:
         taken = set()
@@ -638,6 +668,8 @@ class Model:
         m = copy.deepcopy(self)
         try:
             m.do(c)
+        except RefusedSaying as e:
+            return 1, {"refusal": e.said}
         except Refused:
             return 1, {}
         if c["cmd"] in ("say", "inbox", "user_says"):
@@ -648,7 +680,11 @@ class Model:
         m.__dict__.pop("unadvised", None)
         if c["cmd"] == "show":
             return 0, said
-        m.number()
+        numbered = m.number()
+        kept = {k for rows in (self.decisions, self.roadblocks, self.links or {}) for k in rows}
+        wrong = next(((k, ref) for k, ref in numbered if k not in kept and NUMBER_LIKE.fullmatch(k) and ref != k), None)
+        if self.counter is not None and wrong is not None:  # the TypeScript fleet's rule where the number is taken: nothing taken
+            return 1, {**said, "refusal": misnumbered(*wrong)}
         try:
             m.validate()
         except Refused:
@@ -774,6 +810,9 @@ def gen(rng: random.Random, m: Model) -> dict:
     if cmd == "decision":
         did = pick(dec_ids)
         exists = Model.find(m.decisions, did) is not None
+        if not exists and NUMBER_LIKE.fullmatch(did) and maybe(0.85):
+            did = pick([x for x in DECISIONS if not NUMBER_LIKE.fullmatch(x)])  # mostly a word; a number-like id now and then
+            exists = Model.find(m.decisions, did) is not None
         what = pick(["decide", "withdraw", "revise", "place", "hold", "hold", "unhold", "represent"]) if exists and maybe(0.8) \
             else pick(["open"] * 4 + ["elsewhere"] + (["hold"] if maybe(0.2) else []))
         c = {"cmd": "decision", "id": did}

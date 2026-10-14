@@ -21,8 +21,8 @@ import { pageHtml, readTemplate, TEMPLATE, writePage } from "../page/render.ts";
 import { view } from "../page/view.ts";
 import * as commands from "../ledger/commands.ts";
 import { ledgerText, parseLedger, type Ledger } from "../ledger/model.ts";
-import { nextStepId } from "../ledger/numbers.ts";
-import { numberOnMachine, refusedFor, Unreachable } from "../ledger/shared-numbers.ts";
+import { nextStepId, numberedIds } from "../ledger/numbers.ts";
+import { Misnumbered, numberOnMachine, refusedFor, Unreachable } from "../ledger/shared-numbers.ts";
 import { showLines } from "../ledger/show.ts";
 import { lockLedger } from "../ledger/store.ts";
 import { AGENT_STATUSES, ASKS, DRAFT_KIND, SHARED_KINDS, STATUSES, STEP_STATUSES, validate, WORKSPACE_MODES } from "../ledger/validate.ts";
@@ -361,6 +361,7 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
     };
 
     const nextStep = cmd === "step" && args.str("id") === "next" && ledger !== undefined ? nextStepId(ledger, args.str("milestone") ?? "") : undefined;
+    const kept = ledger === undefined ? new Set<string>() : numberedIds(ledger);
     let result: Ledger | undefined;
     const listing = cmd === "approval" && args.str("action") === "list";
 
@@ -419,9 +420,11 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
     if (result === undefined) return 0;
     commands.measure(machine, root, result);
     commands.nameFromSessions(machine, root, result);
-    const numbered = numberOnMachine(machine, root, result);
+    const numbered = numberOnMachine(machine, root, result, kept);
 
     if (numbered instanceof Unreachable) return yield* Effect.fail(stateRefusal(refusedFor(numbered)));
+
+    if (numbered instanceof Misnumbered) return yield* Effect.fail(stateRefusal(numbered.why));
 
     for (const warning of numbered.warnings) out.err(`${warning}\n`);
     result.updated = stampOf(machine.now());

@@ -762,7 +762,13 @@ the same list has as its id (open-1). A standing approval is numbered **K** by i
 only as K and digits, or as `next`. Decisions are numbered in
 `opened` order (as instants, open-13; a stamp that does not parse sorts after, as text), links and
 roadblocks in list order. A number, once given,
-never changes, even when a decision's kind changes (open-7).
+never changes, even when a decision's kind changes (open-7). A new row whose id reads as a number (a
+counter's letter and digits: D217, I4, L3) is refused unless the id is the number it is given on this
+write: the page links a card by its id, and D217 there names another fleet's card (`D217 reads as a card
+number, and this card's number will be D221: use a word id (s3-tool), or D221`). `decision` says so once
+its own checks pass, before it does anything; the write checks again where it takes the number, so a
+number another fleet took in between refuses the write, and the counter is left as it was. A row the
+ledger held before the command keeps its id, numbered or not.
 
 **The machine's numbers (TypeScript only).** A number is unique across the fleets of one machine, so D29
 names one item whichever fleet, page or chat says it. The registry keeps one counter per letter,
@@ -4522,7 +4528,9 @@ a header, then one step per line.
 - The header's `twin` (optional), `{"why": ..., "normalise": [...]}`, says why the frozen Python twin differs
   on the trace (a behaviour TypeScript changed on purpose since the twin froze, ADR 0003) and which of run.py's
   `TWIN_NORMALISERS` hide that difference on both sides before a replay on the twin is compared; every other
-  difference still fails. `numbers` reads every item number (D12, K3, L1) as its letter and `#`
+  difference still fails. `until` (optional, a step number) compares the twin only on the steps before
+  it, for a step where TypeScript refuses what the twin takes, after which the two ledgers part. `numbers`
+  reads every item number (D12, K3, L1) as its letter and `#`
   (`approvals-fleets` and `render-page`: the machine's numbers).
 
 A result file has a header line (`{"results": NAME, "trace": 1}`), then one line per step:
