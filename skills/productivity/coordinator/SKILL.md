@@ -12,6 +12,8 @@ You still own the outcome. A coordinator who spawns and forgets is worse than no
 
 **The fleet CLI** is `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet`, written `fleet` below and in [DASHBOARD.md](DASHBOARD.md); it is not on PATH, so run it by that path (when the variable shows unexpanded, the plugin's root is three directories above this skill's). `fleet state <dashboard-dir> …` is the ledger, `fleet chat` the chat, `fleet fleets` the machine's fleets, and `fleet ws`, `fleet preview`, `fleet brief`, `fleet advisor`, `fleet turn` and `fleet serve` are named where they are used. Its first run installs its dependencies (Bun is the one requirement). The Python scripts in this skill's `scripts/` are a frozen twin, kept until they are deleted: never run them in place of `fleet`.
 
+**A moved team records through programs.** When your dashboard folder holds `cloud.json`, the team's ledger lives in the cloud and the machine's host service writes `state.json` and `chat.jsonl` from it. Then read [PROGRAMS.md](PROGRAMS.md) instead of DASHBOARD.md's "The state CLI": every `fleet state <dashboard-dir> <verb>` and `fleet chat <dashboard-dir> say` below becomes a call in one program sent with `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet-run`, a turn's writes in one program, and the hook and the CLI itself refuse the CLI's writes there. The reads, the chat watch, `fleet brief`, `fleet ws`, `fleet preview` and the gate slot stay as written. With no `cloud.json`, everything below holds as written.
+
 ## Do it yourself only with a named exemption
 
 Do a piece of work yourself when one of these holds, and say which one when you do:
