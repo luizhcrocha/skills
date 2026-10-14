@@ -62,6 +62,9 @@ class Scope(unittest.TestCase):
     def test_the_bun_file_runner_runs_the_ts_fleets_own_checks(self):
         self.assertEqual(suites("scripts/bun_files.py"), ["test-scripts", gates.FLEET_TS[0]])
 
+    def test_the_fleet_run_shim_runs_its_test_in_test_scripts(self):
+        self.assertEqual(suites("fleet/bin/fleet-run"), ["test-scripts"])
+
     def test_scripts_run_test_scripts(self):
         self.assertEqual(suites("scripts/land-check", "scripts/tests/test_gates.py"), ["test-scripts"])
 

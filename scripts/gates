@@ -137,6 +137,7 @@ SCOPE = (
     ("fleet/src/ledger/link-kind.ts", ("test-page", "test-coordinator-page", *FLEET_TS, "test-fleet"),
      "the link kinds the page bundles as well as the fleet"),
     ("fleet/oracle/*", ("test-fleet", *FLEET_TS[1:]), "the oracle runs against both fleets"),
+    ("fleet/bin/fleet-run", ("test-scripts",), "the shim that runs the fleet repo's client, tested in scripts/tests"),
     ("fleet/*", (*FLEET_TS, "test-fleet"), "the TypeScript fleet, and the oracle against both"),
     ("lint/*", ("test-lint-ts", "test-fleet-ts-own", "test-page", "test-scripts"),
      "the lint packs every TypeScript suite runs, and the registry test-scripts checks"),

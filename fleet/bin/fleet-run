@@ -1,0 +1,41 @@
+#!/bin/sh
+# fleet-run: the one command a moved team records through (its folder holds cloud.json; the coordinator skill's
+# PROGRAMS.md). The program on stdin goes to this machine's host service through the fleet repo's client,
+# apps/client/fleet-run.ts, one Node 24 file with no dependencies. Exit 0 completed, 2 error, 3 queued, 4 the service
+# is not running, 5 sent with its outcome unknown (resend with --id <id>); 4 too when the client is missing: then
+# nothing on this machine can reach the service either; 127 when there is no node on PATH.
+#
+# Which client (M4): $FLEET_RUN_CLIENT, a pinned file a host's install ships, when set (an absolute path: the hook runs
+# this from the dashboard folder, where a relative one names another file, so it is refused, exit 2); else the client
+# of the checkout the host service itself runs from (the dotfiles' fleet-host unit runs ~/repos/luizhcrocha/fleet),
+# $FLEET_REPO, so the client and the service it calls are one revision. That checkout moves only by a landed change and
+# a restart of fleet-host, in that order; agents edit the fleet in their own jj workspaces, never in it. Nothing sets
+# FLEET_RUN_CLIENT yet: the coordinator skill's PROGRAMS.md says the same.
+repo=${FLEET_REPO:-$HOME/repos/luizhcrocha/fleet}
+if [ -n "${FLEET_RUN_CLIENT:-}" ]; then
+  case $FLEET_RUN_CLIENT in
+    /*) ;;
+    *)
+      echo "fleet-run: FLEET_RUN_CLIENT must be an absolute path, and it is $FLEET_RUN_CLIENT" >&2
+      exit 2
+      ;;
+  esac
+  client=$FLEET_RUN_CLIENT
+  how="FLEET_RUN_CLIENT names $client"
+else
+  client=$repo/apps/client/fleet-run.ts
+  how="set FLEET_REPO to the fleet checkout, or FLEET_RUN_CLIENT to the client"
+fi
+
+if [ ! -f "$client" ]; then
+  echo "fleet-run: fleet-host is not running on this machine" >&2
+  echo "fleet-run: no client at $client: $how" >&2
+  exit 4
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "fleet-run: needs Node 24 on PATH, and there is none" >&2
+  exit 127
+fi
+
+exec node "$client" "$@"
