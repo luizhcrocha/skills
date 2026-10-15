@@ -8,11 +8,11 @@
  * Entries are written atomically, in Python's format (indent 2, ASCII escapes).
  */
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import * as Option from "effect/Option";
 
-import { isDir, listDir, makeDirs, readText, remove, resolvePath, writeAtomic } from "./files.ts";
+import { exists, isDir, listDir, makeDirs, MOVED_MARKER, readText, remove, resolvePath, writeAtomic } from "./files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject } from "./json.ts";
 import { startedOf } from "./procs.ts";
 import { AiTitles, sessionFolderOf, transcriptOf } from "./transcripts.ts";
@@ -46,6 +46,8 @@ export interface Entry {
   readonly aliases: readonly string[];
   /** The entry as written, with what this model does not read. */
   readonly raw: JsonObject;
+  /** Set on a team moved to the cloud (fleet slice 3), which no server here serves: read from its folder, never written. */
+  readonly moved?: true;
 }
 
 /** Where the registry is and what it reads beside it. */
@@ -174,6 +176,33 @@ function entryOf(raw: JsonObject, live = true): Entry | undefined {
     aliases: aliasesOf(raw),
     raw,
   };
+}
+
+/** The team moved to the cloud whose folder is `dir`, when it holds {@link MOVED_MARKER}: named by the marker's
+ * `fleet` (else the folder), its page `<cloud>/<fleet>` as the cloud's page routes it (`/$fleet`) ({@link cloudPageOf}). */
+function movedEntry(dir: string): Entry | undefined {
+  if (!exists(join(dir, MOVED_MARKER))) return undefined;
+  const marker = readObject(join(dir, MOVED_MARKER));
+  const id = trimmed(marker?.["fleet"]) ?? basename(dir);
+  const url = cloudPageOf(marker?.["cloud"], id);
+  const role = roleOf(readObject(join(dir, "state.json")));
+  const since = asString(marker?.["since"]) ?? "";
+
+  return { id, dir, role, url, session: null, since, aliases: [], raw: { id, dir, role, url, since, moved: true }, moved: true };
+}
+
+/** Team `id`'s page under the marker's `cloud`, or "" (no page) unless `cloud` is an https address with no user,
+ * query or fragment: the marker sits in a folder any process of the user writes, and its page becomes a link and a
+ * redirect on the hub's origin, where a `javascript:` address would run as the hub. */
+function cloudPageOf(cloud: Json | undefined, id: string): string {
+  const text = trimmed(cloud);
+
+  if (text === undefined || !URL.canParse(text)) return "";
+  const u = new URL(text);
+
+  if (u.protocol !== "https:" || u.username !== "" || u.password !== "" || u.search !== "" || u.hash !== "") return "";
+
+  return `${u.origin}${u.pathname.replace(/\/+$/, "")}/${encodeURIComponent(id)}`;
 }
 
 /** `value` as a string without its outer spaces, or undefined when it is not one or is blank. */
@@ -383,6 +412,46 @@ export class Registry {
       .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
     return [...live, ...stopped];
+  }
+
+  /** What this machine shows: the fleets whose server runs ({@link live}), then the teams moved to the cloud that
+   * none of them covers ({@link moved}). For reading and listing only: writers keep to {@link live}, so a moved
+   * team's ledger stays refused. */
+  shown(): Entry[] {
+    const live = this.live();
+
+    return [...live, ...this.moved(live)];
+  }
+
+  /** The teams moved to the cloud, by id, less those `live` covers: one served from the same folder, or named as one
+   * of `live` is named now or was before (an alias). Of two moved folders naming one team, the first by path is kept.
+   * A moved team's folder is the registry home's sibling `fleet/<team>`
+   * (`~/.local/state/fleet/<team>`), where its host service exports state.json and chat.jsonl and {@link MOVED_MARKER}
+   * says it moved: that marker is the one record of the move, so `fleet serve --stop` leaves nothing here to keep. */
+  moved(live: readonly Entry[]): Entry[] {
+    const served = new Set(live.map((e) => e.dir));
+    const taken = new Set(live.flatMap((e) => [e.id, ...e.aliases]));
+    const root = join(dirname(this.place.home), "fleet");
+    const order = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+    const found = listDir(root)
+      .flatMap((name) => {
+        const entry = movedEntry(resolvePath(join(root, name)));
+
+        return entry === undefined || served.has(entry.dir) ? [] : [entry];
+      })
+      .sort((a, b) => order(a.id, b.id) || order(a.dir, b.dir));
+
+    const moved: Entry[] = [];
+
+    for (const entry of found) {
+      if (taken.has(entry.id)) continue;
+
+      taken.add(entry.id);
+      moved.push(entry);
+    }
+
+    return moved;
   }
 
   /** The live fleet served from `root`. */

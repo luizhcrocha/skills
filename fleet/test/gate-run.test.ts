@@ -4,7 +4,7 @@
  * surface), with its own registry; the scope tests need a systemd user manager and are skipped where there is
  * none (the Mac). gate.test.ts has the admission rules themselves.
  */
-import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -24,7 +24,8 @@ const SCOPE = scopeAvailable((name) => process.env[name]);
 setDefaultTimeout(30_000);
 
 beforeEach(() => {
-  home = tmp("fleet-gate-run-");
+  home = join(tmp("fleet-gate-run-"), "registry");
+  mkdirSync(home);
   // This checkout's fleet, whatever newer one the machine has, and no cap, budget or weight from the session's own environment.
   env = baseEnv(home, { FLEET_NO_FORWARD: "1" });
 

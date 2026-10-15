@@ -143,6 +143,7 @@ interface WaitingLine {
 interface FleetView {
   readonly id: string;
   readonly role: string;
+  readonly moved: boolean;
   readonly status: string;
   readonly session: string | null;
   readonly active: string | undefined;
@@ -174,6 +175,7 @@ function fleetView(machine: Machine, e: Entry): FleetView {
   return {
     id: e.id,
     role: e.role,
+    moved: e.moved === true,
     status: raw !== undefined && truthy(raw["status"]) ? str(raw["status"]) : "unknown",
     session: e.session,
     active: activeAt(e.dir, machine.config, asString(e.raw["session_id"])),
@@ -264,7 +266,7 @@ function waitingLines(waiting: readonly WaitingLine[]): string[] {
 
 function render(v: FleetView): string[] {
   const identity = [
-    `${v.id}  (${v.role}, ${v.status})`,
+    `${v.id}  (${v.role}, ${v.status}${v.moved ? ", moved to the cloud" : ""})`,
     `  session  ${v.session ?? "(not named yet)"}${v.active === undefined ? "" : `, last active ${v.active.slice(0, 16).replace("T", " ")}`}`,
     `  page     ${v.url}`,
     `  ledger   ${v.dir}`,
@@ -287,7 +289,7 @@ function render(v: FleetView): string[] {
 function list(machine: Machine): Effect.Effect<void, never, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
-    const entries = machine.registry.live();
+    const entries = machine.registry.shown();
 
     if (entries.length === 0) out.out("no fleet is being served on this machine\n");
     const blocks = entries.map((e) => render(fleetView(machine, e)).join("\n"));
@@ -303,7 +305,7 @@ function waiting(machine: Machine): Effect.Effect<void, never, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
     const say = (line: string): void => out.out(`${line}\n`);
-    const entries = machine.registry.live();
+    const entries = machine.registry.shown();
 
     if (entries.length === 0) {
       say("no fleet is being served on this machine");
@@ -345,7 +347,7 @@ function show(machine: Machine, fleet: string): Effect.Effect<void, Refusal, Out
   return Effect.gen(function* () {
     const out = yield* Out;
     const say = (line: string): void => out.out(`${line}\n`);
-    const entry = machine.registry.live().find((e) => e.id === fleet);
+    const entry = machine.registry.shown().find((e) => e.id === fleet);
 
     if (entry === undefined) return yield* fail(`no fleet '${fleet}' is being served; \`fleet fleets list\` names the ones that are`);
     const state = numbered(stateOf(entry) ?? {});
@@ -418,7 +420,7 @@ function decision(machine: Machine, fleet: string, id: string): Effect.Effect<vo
   return Effect.gen(function* () {
     const out = yield* Out;
     const say = (line: string): void => out.out(`${line}\n`);
-    const entry = machine.registry.live().find((e) => e.id === fleet);
+    const entry = machine.registry.shown().find((e) => e.id === fleet);
 
     if (entry === undefined) return yield* fail(`no fleet '${fleet}' is being served; \`fleet fleets list\` names the ones that are`);
     const decisions = rows(stateOf(entry) ?? {}, "decisions").map((d) => ({ d, id: str(d["id"]), ref: asString(d["ref"]) ?? "" }));

@@ -353,6 +353,28 @@ describe("a fleet's chat through the hub", () => {
     expect([moved.status, moved.headers.get("Location")]).toEqual([301, "/f/p/?x=1"]);
   });
 
+  test("a moved team's address sends a reader to its cloud page, and a write there is still refused", async () => {
+    const moved = join(base, "fleet", "skills");
+    mkdirSync(moved, { recursive: true });
+    writeFileSync(join(moved, "state.json"), JSON.stringify({ project: "skills", decisions: [] }));
+    writeFileSync(join(moved, "cloud.json"), JSON.stringify({ fleet: "skills", cloud: "https://fleet.example.dev/" }));
+    const read = await request("GET", "/f/skills/?x=1");
+    expect([read.status, read.headers.get("Location")]).toEqual([302, "https://fleet.example.dev/skills"]);
+    expect((await post({ text: "hi" }, {}, "/f/skills/chat")).status).toBe(404);
+  });
+
+  test("a moved team whose cloud is not an https address is not redirected to", async () => {
+    const moved = join(base, "fleet", "skills");
+    mkdirSync(moved, { recursive: true });
+    writeFileSync(join(moved, "state.json"), JSON.stringify({ project: "skills", decisions: [] }));
+
+    for (const cloud of ["javascript:alert(document.domain)//", "http://fleet.example.dev"]) {
+      writeFileSync(join(moved, "cloud.json"), JSON.stringify({ fleet: "skills", cloud }));
+      const read = await request("GET", "/f/skills/");
+      expect([cloud, read.status, read.headers.get("Location")]).toEqual([cloud, 404, null]);
+    }
+  });
+
   test("a fleet renamed with `fleets name` is still found at its old address", async () => {
     expect(fleet(["fleets", "name", root, "infra-coordinator-2"], env).code).toBe(0);
     const old = await request("GET", "/f/p/?x=1");

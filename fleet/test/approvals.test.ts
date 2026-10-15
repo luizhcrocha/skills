@@ -80,7 +80,8 @@ function approved(): void {
 
 beforeEach(() => {
   root = join(tmp(), "c");
-  home = tmp();
+  home = join(tmp(), "registry");
+  mkdirSync(home);
   env = baseEnv(home);
   ok("init", "--project", "acme billing", "--goal", "g");
   ok("milestone", "m1", "--title", "M");

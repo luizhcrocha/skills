@@ -10,11 +10,11 @@ import * as Option from "effect/Option";
 
 import { Refusal } from "../errors.ts";
 import { readText, writeText } from "../files.ts";
-import { asArray, asNumber, asObject, asString, dumps, parseJson, pyRepr, truthy, type Json, type JsonObject, type JsonOut } from "../json.ts";
+import { asArray, asNumber, asObject, asString, dumps, parseJson, parseObject, pyRepr, truthy, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { decodeLedger } from "../ledger/model.ts";
 import { number } from "../ledger/numbers.ts";
 import type { Machine } from "../world.ts";
-import { fromManager, oneLine, pyText, stateOfDir } from "./chat.ts";
+import { fromManager, oneLine, pyText } from "./chat.ts";
 import { Tail } from "./store.ts";
 
 const BREAKS = new Set(["\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", " ", " "]);
@@ -158,7 +158,12 @@ export class FleetNews {
     const held = this.states.get(root);
 
     if (held !== undefined && held.key === key) return held.rows;
-    const rows = numberedRows(stateOfDir(root));
+    const text = readText(join(root, "state.json"));
+    const state = text === undefined ? {} : Option.getOrUndefined(parseObject(text));
+
+    // A state.json caught mid-export: what was read before stands, or its decisions would be told again once it parses.
+    if (state === undefined) return held?.rows ?? [];
+    const rows = numberedRows(state);
     this.states.set(root, { key, rows });
 
     return rows;
@@ -168,7 +173,7 @@ export class FleetNews {
   read(): string[] {
     const lines: string[] = [];
 
-    for (const e of this.machine.registry.live()) {
+    for (const e of this.machine.registry.shown()) {
       const root = e.dir;
 
       if (e.role === "manager" || root === this.me) continue;

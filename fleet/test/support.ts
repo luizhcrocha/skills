@@ -5,7 +5,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import * as Option from "effect/Option";
@@ -66,6 +66,8 @@ export interface Environment {
  * real session. */
 export function baseEnv(home: string, more: Readonly<Environment> = {}): Environment {
   const env: Environment = {};
+  // The registry reads the moved teams in its parent's `fleet/`: a home straight in the shared temp dir would read every test's.
+  const registry = dirname(home) === realpathSync(tmpdir()) ? join(home, "fleet-board") : home;
 
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
   delete env["FLEET_NOW"];
@@ -74,7 +76,7 @@ export function baseEnv(home: string, more: Readonly<Environment> = {}): Environ
 
   // A --once watch exits with its first batch, as before it settled; a settle test gives its own. A preview's
   // processes stay in the test's own process tree (and the gate's scope), not in systemd user scopes of their own.
-  return { ...env, FLEET_HOME: home, FLEET_DISCOVER: "0", FLEET_WATCH_SETTLE: "0", FLEET_PREVIEW_SCOPE: "0", FLEET_CC_SOCKS: join(home, "cc-socks"), ...more };
+  return { ...env, FLEET_HOME: registry, FLEET_DISCOVER: "0", FLEET_WATCH_SETTLE: "0", FLEET_PREVIEW_SCOPE: "0", FLEET_CC_SOCKS: join(home, "cc-socks"), ...more };
 }
 
 /** Run `fleet ARGS` in this process, through the CLI's own interface, with `env` as its environment. */

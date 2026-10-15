@@ -476,7 +476,7 @@ function ledgerView(machine: Machine, lookups: Lookups, given: JsonObject, rootG
   const links: JsonObject[] = linksOf(machine, lookups, state, root).map((l) => ({ ...l, fleet: me?.id ?? null }));
 
   if (state["role"] === "manager") {
-    const others = registry.live().filter((e) => e.role !== "manager" && e.dir !== root);
+    const others = registry.shown().filter((e) => e.role !== "manager" && e.dir !== root);
 
     for (const e of others) {
       const theirs = numberState(readObject(join(e.dir, "state.json")) ?? {});

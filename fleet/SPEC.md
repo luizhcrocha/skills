@@ -84,6 +84,12 @@ given. Every ID argument also takes the row's number (D3, L2, R1) where rows hav
    way, and so are `ws DIR add`, `split` and `prune --apply`, every `preview DIR` command but `status`,
    `render DIR/state.json` (it stamps the ledger), and any other writer through `ws`'s `save` (the workspace
    hook's report); the chat's readers, `ws list`, a dry-run `ws prune` and `preview status` stay. The host service exports that folder's ledger from the cloud.
+   A moved team stays in the machine's view after `fleet serve --stop` takes it off the hub: every folder beside the
+   registry home (`~/.local/state/fleet/<team>`, the home's sibling `fleet`) that holds `cloud.json` is listed after
+   the served fleets by `fleets list` (`(coordinator, <status>, moved to the cloud)`), `fleets waiting`, `fleets show`,
+   `fleets decision`, the manager's page and the manager's `watch --fleets`, read from the exported `state.json` and
+   `chat.jsonl`. Its page is `<cloud>/<fleet>` (cloud.json's `cloud` and `fleet`), and the hub sends a `GET /f/<fleet>/`
+   there (302); every write to it stays refused.
 4. `DIR` is created (mkdir -p), even when the command then fails (open-17).
 5. `state.json` is read. Missing, with any command but `init`: refused, `no state.json in DIR; run \`init\` first`.
 6. The command's handler runs on the ledger in memory. A refusal exits **1** with
