@@ -6,13 +6,13 @@
  * holds no token. Skipped when no Chromium (FLEET_CHROMIUM, or chromium on the PATH) or no puppeteer-core
  * (fleet/page's, installed by `just test-page`).
  */
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 
 import { readChat } from "../src/chat/store.ts";
-import { startHub, type Running } from "../src/hub/server.ts";
+import { startHub, type Running, type StartOptions } from "../src/hub/server.ts";
 import { asObject, type JsonObject } from "../src/json.ts";
 import { baseEnv, machine, tmp } from "./support.ts";
 
@@ -64,6 +64,11 @@ let session = "";
 let target = "";
 
 let origin = "";
+
+/** How the hub was started, and its environment: `restart` starts another on the same registry, HOME and port. */
+let options: StartOptions | undefined;
+
+let environment: Readonly<Record<string, string>> = {};
 
 function permission(id: string, ref: string): JsonObject {
   return {
@@ -145,6 +150,7 @@ beforeEach(async () => {
   writeFileSync(target, `${JSON.stringify({ autoMode: { allow: ["$defaults"] } }, null, 2)}\n`);
   symlinkSync(target, join(home, ".claude", "settings.json"));
   const env = baseEnv(join(base, "registry"), { HOME: home });
+  environment = env;
 
   for (const [dir, id] of [
     [root, "p"],
@@ -158,7 +164,8 @@ beforeEach(async () => {
   const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") });
   const port = probe.port ?? 0;
   await probe.stop(true);
-  const got = await startHub({ port, machine: machine(env), tailscale: join(base, "no-tailscale"), peers: false, hosts: [], https: undefined }, () => {});
+  options = { port, machine: machine(env), tailscale: join(base, "no-tailscale"), peers: false, hosts: [], https: undefined };
+  const got = await startHub(options, () => {});
 
   if (got instanceof Error) throw got;
   running = got;
@@ -170,11 +177,38 @@ afterEach(async () => {
   running = undefined;
 });
 
+/** The hub stopped and a new one started on the same registry, HOME and port, as a landing restarts it. */
+async function restart(): Promise<void> {
+  if (options === undefined || running === undefined) throw new Error("no hub");
+  await running.stop();
+  running = undefined;
+  const got = await startHub({ ...options, machine: machine(environment) }, () => {});
+
+  if (got instanceof Error) throw got;
+  running = got;
+}
+
+/** Fleet p's own page open on its card `id`, once its answer form is there. */
+async function fleetOn(id: string): Promise<Page> {
+  if (browser === undefined) throw new Error("no browser");
+  const page = await browser.newPage();
+  await page.goto(`${origin}/f/p/#decision/${id}`);
+  await page.waitForFunction('document.querySelector(\'#dv-answer form input[name="choice"]\') !== null', { timeout: 10_000 });
+
+  return page;
+}
+
 /** The manager's page open on fleet p's card `id`, and the frame that shows it once its answer form is there. */
 async function managerOn(id: string): Promise<{ readonly page: Page; readonly frame: Frame }> {
   if (browser === undefined) throw new Error("no browser");
   const page = await browser.newPage();
   await page.goto(`${origin}/f/manager/#decision/p/${id}`);
+
+  return { page, frame: await cardFrame(page) };
+}
+
+/** The frame the manager's page shows fleet p's card in, once its answer form is there. */
+async function cardFrame(page: Page): Promise<Frame> {
   await page.waitForFunction('document.querySelector("#dv-embed") !== null', { timeout: 10_000 });
 
   for (let i = 0; i < 100; i += 1) {
@@ -183,7 +217,7 @@ async function managerOn(id: string): Promise<{ readonly page: Page; readonly fr
     if (frame !== undefined) {
       await frame.waitForFunction('document.querySelector(\'#dv-answer form input[name="choice"]\') !== null', { timeout: 10_000 });
 
-      return { page, frame };
+      return frame;
     }
 
     await Bun.sleep(100);
@@ -192,17 +226,26 @@ async function managerOn(id: string): Promise<{ readonly page: Page; readonly fr
   throw new Error("the card's frame never loaded");
 }
 
-/** Pick `choice` on the frame's answer form and send it; the error the form shows once the post settled ("" for none). */
-async function answer(frame: Frame, choice: string): Promise<string> {
+/** Pick `choice` on the frame's answer form, type `note` when given, and send it; the error the form shows once the
+ * post settled ("" for none), without its Reload button. */
+async function answer(frame: Frame, choice: string, note?: string): Promise<string> {
   await frame.waitForFunction(`document.querySelector('#dv-answer form input[name="choice"][value="${choice}"]') !== null`, { timeout: 10_000 });
   await frame.evaluate(`(() => {
     const pick = document.querySelector('#dv-answer input[name="choice"][value="${choice}"]');
     pick.checked = true;
     pick.dispatchEvent(new Event("change", { bubbles: true }));
+    const note = ${JSON.stringify(note ?? null)};
+    if (note !== null) {
+      const box = document.querySelector('#dv-answer textarea[name="note"]');
+      box.value = note;
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    }
     document.querySelector("#dv-answer form").requestSubmit();
     return true;
   })()`);
-  const error = async (): Promise<string> => String(await frame.evaluate('document.querySelector("#dv-error")?.textContent ?? ""'));
+
+  const error = async (): Promise<string> =>
+    String(await frame.evaluate('(() => { const e = document.querySelector("#dv-error")?.cloneNode(true); e?.querySelector("button")?.remove(); return e?.textContent?.trim() ?? ""; })()'));
 
   for (let i = 0; i < 100 && (await error()) === "" && readChat(root).length === 0; i += 1) await Bun.sleep(100);
 
@@ -241,5 +284,65 @@ test.skipIf(!found)("a token the hub never issued, in the page the frame is show
   await page.evaluate('(document.querySelector(\'meta[name="fleet-page-token"]\').content = "forged-" + "x".repeat(25), true)');
   expect(await answer(frame, "allow-once")).toBe("the page token is missing or stale: reload the fleet's page and answer again");
   expect([readChat(root), grants(), existsSync(join(session, ".claude", "settings.local.json"))]).toEqual([[], [], false]);
+  await page.close();
+}, 60_000);
+
+test.skipIf(!found)("Allow once on a fleet's page opened before the hub restarted grants: the token outlives the hub", async () => {
+  const page = await fleetOn("p-1a2b3c4d");
+  await restart();
+  expect(await answer(page, "allow-once")).toBe("");
+  expect(grants().map((g) => [g["op"], g["decision"], g["rule"]])).toEqual([["grant", "p-1a2b3c4d", RULE]]);
+  await page.close();
+}, 60_000);
+
+test.skipIf(!found)("Allow once in the manager's frame opened before the hub restarted grants", async () => {
+  const { page, frame } = await managerOn("p-1a2b3c4d");
+  await restart();
+  expect(await answer(frame, "allow-once")).toBe("");
+  expect(grants().map((g) => [g["op"], g["decision"], g["rule"]])).toEqual([["grant", "p-1a2b3c4d", RULE]]);
+  await page.close();
+}, 60_000);
+
+const STALE = "the page token is missing or stale: reload the fleet's page and answer again";
+
+/** The hub restarted with its token file gone: every page open before holds a token it no longer knows. */
+async function restartForgetting(): Promise<void> {
+  rmSync(join(base, "registry", "hub", "tokens.json"));
+  await restart();
+}
+
+/** The answer form's pick and note in `frame`. */
+async function draftIn(frame: Frame): Promise<string> {
+  return String(await frame.evaluate('(() => (document.querySelector(\'#dv-answer input[name="choice"]:checked\')?.value ?? "") + "|" + (document.querySelector(\'#dv-answer textarea[name="note"]\')?.value ?? ""))()'));
+}
+
+test.skipIf(!found)("a stale page token on a fleet's page: the answer and note are kept, Reload reloads the page, and the draft is there after", async () => {
+  const page = await fleetOn("p-1a2b3c4d");
+  await restartForgetting();
+  expect(await answer(page, "allow-once", "only this push")).toBe(STALE);
+  expect(await page.evaluate('document.querySelector("#dv-reload")?.textContent ?? ""')).toBe("Reload");
+  expect(await draftIn(page)).toBe("allow-once|only this push");
+  await page.evaluate("(window.beforeReload = true)");
+  await page.evaluate('(document.querySelector("#dv-reload").click(), true)');
+  await page.waitForFunction('window.beforeReload === undefined && document.querySelector(\'#dv-answer input[name="choice"]:checked\') !== null', { timeout: 10_000 });
+  expect(await draftIn(page)).toBe("allow-once|only this push");
+  expect(await page.evaluate('document.querySelector("#dv-reload") === null')).toBe(true);
+  expect(await answer(page, "allow-once", "only this push")).toBe("");
+  expect(grants().map((g) => [g["op"], g["decision"]])).toEqual([["grant", "p-1a2b3c4d"]]);
+  await page.close();
+}, 60_000);
+
+test.skipIf(!found)("a stale page token in the manager's frame: Reload reloads the manager's page, and the frame's draft is there after", async () => {
+  const { page, frame } = await managerOn("p-1a2b3c4d");
+  await restartForgetting();
+  expect(await answer(frame, "allow-once", "only this push")).toBe(STALE);
+  await page.evaluate("(window.beforeReload = true)");
+  await frame.evaluate('(document.querySelector("#dv-reload").click(), true)');
+  await page.waitForFunction("window.beforeReload === undefined", { timeout: 10_000 });
+  const again = await cardFrame(page);
+  await again.waitForFunction('document.querySelector(\'#dv-answer input[name="choice"]:checked\') !== null', { timeout: 10_000 });
+  expect(await draftIn(again)).toBe("allow-once|only this push");
+  expect(await answer(again, "allow-once", "only this push")).toBe("");
+  expect(grants().map((g) => [g["op"], g["decision"]])).toEqual([["grant", "p-1a2b3c4d"]]);
   await page.close();
 }, 60_000);

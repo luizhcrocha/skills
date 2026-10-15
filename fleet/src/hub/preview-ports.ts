@@ -19,7 +19,7 @@ import { join } from "node:path";
 
 import * as Option from "effect/Option";
 
-import { makeDirs, readText, remove, writeAtomic } from "../files.ts";
+import { makePrivateDir, readText, remove, writeAtomic } from "../files.ts";
 import { asArray, asBoolean, asNumber, asObject, asString, dumps, parseObject } from "../json.ts";
 import type { Rooted } from "./hub.ts";
 import { NoCertificate, type Named } from "./preview-tls.ts";
@@ -230,7 +230,7 @@ export class PreviewPorts {
     const text = `${dumps({ pid: process.pid, ports }, { indent: 2 })}\n`;
 
     if (text === this.written) return;
-    makeDirs(join(this.home, "hub"));
+    makePrivateDir(join(this.home, "hub"));
     writeAtomic(previewPortsPath(this.home), text);
     this.written = text;
   }

@@ -11,7 +11,7 @@
 import { join } from "node:path";
 
 import { stampOf } from "../clock.ts";
-import { makeDirs, readText, remove, writeAtomic } from "../files.ts";
+import { makePrivateDir, readText, remove, writeAtomic } from "../files.ts";
 import { asNumber, asObject, asString, dumps, parseObject } from "../json.ts";
 import { commandOf } from "../procs.ts";
 import { alive } from "../registry.ts";
@@ -129,6 +129,8 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
   }
 
   servers.push(bound);
+  // Only now: a hub that lost the port never rotates the tokens the one that holds it serves.
+  hub.openTokens();
 
   let tailnetBound: string | undefined;
 
@@ -194,7 +196,7 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
     }
   }
 
-  makeDirs(join(home, "hub"));
+  makePrivateDir(join(home, "hub"));
   writeAtomic(
     hubRecordPath(home),
     `${dumps({ pid: process.pid, port, url, https: https ?? null, supervised: options.supervised === true, since: stampOf(options.machine.now()) }, { indent: 2 })}\n`,

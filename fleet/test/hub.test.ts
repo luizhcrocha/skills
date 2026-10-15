@@ -2376,18 +2376,21 @@ describe("a permission's answer grants the call once", () => {
     for (const text of ["allow-once: Allow this call once", "allow-kind: Allow once and save this kind", "add-rule: Add this rule", "  Allow-Once"]) {
       const json = JSON.stringify({ ...allow, text });
 
-      const cases: readonly (readonly [Record<string, string>, string])[] = [
-        [{}, refused],
-        [{ Origin: self }, refused],
-        [{ "Sec-Fetch-Site": "same-origin" }, refused],
-        [{ Origin: self, "Sec-Fetch-Site": "same-origin" }, stale],
-        [{ ...own, "X-Fleet-Page-Token": "x" }, stale],
-        [{ "X-Fleet-Page-Token": own["X-Fleet-Page-Token"] ?? "" }, refused],
+      // Only a token sent and not accepted offers the page a Reload: a missing one is not a page the hub served.
+      const cases: readonly (readonly [Record<string, string>, string, boolean | undefined])[] = [
+        [{}, refused, undefined],
+        [{ Origin: self }, refused, undefined],
+        [{ "Sec-Fetch-Site": "same-origin" }, refused, undefined],
+        [{ Origin: self, "Sec-Fetch-Site": "same-origin" }, stale, undefined],
+        [{ ...own, "X-Fleet-Page-Token": "" }, stale, undefined],
+        [{ ...own, "X-Fleet-Page-Token": "x" }, stale, true],
+        [{ ...own, "X-Fleet-Page-Token": "x".repeat(32) }, stale, true],
+        [{ "X-Fleet-Page-Token": own["X-Fleet-Page-Token"] ?? "" }, refused, undefined],
       ];
 
-      for (const [headers, error] of cases) {
+      for (const [headers, error, reload] of cases) {
         const got = await request("POST", "/f/p/chat", json, { "Content-Type": "application/json", ...headers });
-        expect([got.status, got.body["error"]], JSON.stringify(headers)).toEqual([403, error]);
+        expect([got.status, got.body["error"], got.body["reload"]], JSON.stringify(headers)).toEqual([403, error, reload]);
       }
     }
 

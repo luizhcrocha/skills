@@ -31,9 +31,8 @@
  *
  * A request whose Host this hub does not answer to is refused (421), against DNS rebinding.
  */
-import { randomBytes } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, statSync } from "node:fs";
-import { join, normalize, relative, sep } from "node:path";
+import { dirname, join, normalize, relative, sep } from "node:path";
 
 import type { Building } from "../building.ts";
 import { address, appendAll, hostOf, marksAlone, marksOf, ownerOfBatch, prepare, stateOfDir, storeRefusal, type Draft, type Prepared } from "../chat/chat.ts";
@@ -66,10 +65,11 @@ import { FILE_POLICY, LINKED_POLICY, servedBody } from "./body-policy.ts";
 import { indexHtml } from "./index-page.ts";
 import { LinkProbes, ProbeCache } from "./probes.ts";
 import { answerAsOffered, expireGrants, grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
-import { allowedOrigin, chatOriginsPath, grantor, grantRefusal, hello, MAX_POST_BYTES, PAGE_TOKEN_META, parseChatOrigins, postRefusal, STOP_TOKEN_META, stopRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
+import { allowedOrigin, chatOriginsPath, grantor, grantRefusal, hello, MAX_POST_BYTES, PAGE_TOKEN_META, PAGE_TOKEN_HEADER, parseChatOrigins, postRefusal, STALE_PAGE_TOKEN, STOP_TOKEN_META, stopRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
 import { idleMs, noteRequest, serverStanding } from "../preview/sleep.ts";
 import { haltedPage, isPing, previewTarget, proxiedIdentity, proxyHttp, proxySocket, startingPage, type Target, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
+import { HubTokens, tokensPath } from "./tokens.ts";
 import { OrphanWatch } from "./orphan-watch.ts";
 import { PLUGIN_ROOT, readSkills, repoOf } from "./skills.ts";
 import { readTailnet, whois, type Tailnet } from "./tailnet.ts";
@@ -289,10 +289,11 @@ export class Hub {
   private readonly peerHubs = new Map<string, Peer>();
   private readonly served: Served;
   private readonly orphans: OrphanWatch;
-  /** The token the manager's page carries to Stop an orphan, new with each hub process (`stopRefusal`). */
-  private readonly stopToken = randomBytes(24).toString("base64url");
-  /** The token every fleet's page carries to answer a permission with a grant, new with each hub process (`grantRefusal`). */
-  private readonly pageToken = randomBytes(24).toString("base64url");
+  /** The token every fleet's page carries to answer a permission with a grant (`grantRefusal`), and the one the
+   * manager's page carries to Stop an orphan (`stopRefusal`): kept in the hub's state dir, so they outlive a restart,
+   * and rotated (tokens.ts). Opened once the hub holds its port (`openTokens`), so a hub that lost the port to another
+   * never rotates the tokens the other one serves. */
+  private held: HubTokens | undefined;
   private readonly probes = new ProbeCache();
   private readonly linkProbes: LinkProbes;
   private readonly spend = new SpendReader();
@@ -372,6 +373,23 @@ export class Hub {
   }
 
   /** Read the tailnet and ask the peer hubs, now and then every 30 s. */
+  /** Open the page and Stop tokens (tokens.ts): `startHub` calls it once the hub holds its port, and before that no
+   * request reaches the hub, so the first use opens them at the latest. */
+  openTokens(): HubTokens {
+    this.held ??= HubTokens.open(tokensPath(this.options.machine.registry.place.home), () => this.options.machine.now().getTime(), { log: this.options.log });
+
+    return this.held;
+  }
+
+  /** Whether `path` is in the hub's own state dir (`REGISTRY/hub`: its page and Stop tokens, its record, its config),
+   * real paths compared: never a fleet's file, even when a fleet's DIR or files root holds the registry. */
+  private inHubState(path: string): boolean {
+    const state = resolvePath(dirname(tokensPath(this.options.machine.registry.place.home)));
+    const real = resolvePath(path);
+
+    return real === state || real.startsWith(`${state}/`);
+  }
+
   async start(): Promise<void> {
     await this.refresh();
     this.timer = setInterval(() => void this.refresh(), PEERS_MS);
@@ -747,8 +765,8 @@ export class Hub {
         // Only a top-level load of a fleet's page gets the page token (a grant's), and only the manager's the Stop
         // token; such a page can't be framed, and a page that opened it (a preview's, on this same origin) gets no
         // handle on it.
-        const stop = entry.role === "manager" ? `<meta name="${STOP_TOKEN_META}" content="${this.stopToken}">` : "";
-        const html = page.replace("</head>", `<meta name="${PAGE_TOKEN_META}" content="${this.pageToken}">${stop}</head>`);
+        const stop = entry.role === "manager" ? `<meta name="${STOP_TOKEN_META}" content="${this.openTokens().current("stop")}">` : "";
+        const html = page.replace("</head>", `<meta name="${PAGE_TOKEN_META}" content="${this.openTokens().current("page")}">${stop}</head>`);
 
         return new Response(req.method === "HEAD" ? null : html, { headers: { "Content-Type": "text/html; charset=utf-8", ...NO_STORE, ...PAGE_ISOLATION } });
       }
@@ -949,7 +967,7 @@ export class Hub {
    * processes, KILL to what is left a few seconds later. Nothing is ever stopped otherwise. */
   private async stopOrphan(req: Request, ip: string, entry: Entry): Promise<Response> {
     const viewer = await this.viewer(req, ip);
-    const refusal = stopRefusal(this.owner, viewer, this.hosts, new URL(req.url).host, this.stopToken, (name) => req.headers.get(name));
+    const refusal = stopRefusal(this.owner, viewer, this.hosts, new URL(req.url).host, this.openTokens().accepted("stop"), (name) => req.headers.get(name));
 
     if (refusal !== undefined) return jsonResponse(refusal[0], { error: refusal[1] }, { Connection: "close" });
 
@@ -1077,7 +1095,7 @@ export class Hub {
     const resolved = resolvePath(target);
     const inside = (p: string): boolean => p.startsWith(`${base}/`);
 
-    if (!inside(target) || !inside(resolved) || decoded.split("/").some((part) => part.startsWith("."))) {
+    if (!inside(target) || !inside(resolved) || decoded.split("/").some((part) => part.startsWith(".")) || this.inHubState(resolved)) {
       return jsonResponse(404, { error: "not found" });
     }
 
@@ -1095,8 +1113,8 @@ export class Hub {
   /** A file a link of the fleet at `root` names (`file://…`), read-only, at `files/<path under its files root>`:
    * only under the fleet's files root (its DIR, or its session's scratchpad or state dir: `filesRoot`), only a
    * file a link names, never a hidden part or a step out (`..`), in the path asked or in the one a symlink leads
-   * to (`notes.md -> .env` is not found), never through a symlink that leads out, never a FIFO or a device (checked
-   * when it is opened). Anything else is not found; a file over {@link LINKED_FILE_MAX} is 413. It is streamed, so
+   * to (`notes.md -> .env` is not found), never through a symlink that leads out, never the hub's own state dir (its
+   * tokens), never a FIFO or a device (checked when it is opened). Anything else is not found; a file over {@link LINKED_FILE_MAX} is 413. It is streamed, so
    * a big file never holds the hub, and sent sandboxed, as a decision's body is: its scripts never run as the hub. */
   private linkedFile(req: Request, root: string, rest: string): Response {
     const missing = jsonResponse(404, { error: "not found" });
@@ -1115,6 +1133,8 @@ export class Hub {
     const target = resolvePath(join(base, ...parts));
 
     if (!target.startsWith(`${base}/`) || relative(base, target).split(sep).some((p) => p.startsWith(".")) || !isRegularFile(target)) return missing;
+
+    if (this.inHubState(target)) return missing;
     const ledger = Option.getOrUndefined(parseObject(readText(join(root, "state.json")) ?? "")) ?? {};
 
     const named = (asArray(ledger["links"]) ?? []).some((l) => {
@@ -1233,9 +1253,13 @@ export class Hub {
     // An answer that grants, or adds a rule card's entry, comes only from the fleet's own page: a local process's post
     // is not the user's yes.
     if ((body["decision"] ?? null) !== null && (allows(asString(body["text"]) ?? "") || addsRule(asString(body["text"]) ?? ""))) {
-      const refused = grantRefusal(this.hosts, new URL(req.url).host, this.pageToken, (name) => req.headers.get(name));
+      const refused = grantRefusal(this.hosts, new URL(req.url).host, this.openTokens().accepted("page"), (name) => req.headers.get(name));
 
-      if (refused !== undefined) return jsonResponse(refused[0], { error: refused[1] });
+      // A Reload is offered only to a page that sent a token the hub no longer accepts: one that sent none is not a
+      // page the hub served.
+      const sent = (req.headers.get(PAGE_TOKEN_HEADER) ?? "") !== "";
+
+      if (refused !== undefined) return jsonResponse(refused[0], refused[1] === STALE_PAGE_TOKEN && sent ? { error: refused[1], reload: true } : { error: refused[1] });
     }
 
     return this.chatPost(root, rest, body, viewer, origin);

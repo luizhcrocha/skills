@@ -1694,7 +1694,17 @@ stderr, `serve: the takeover is not recorded where it should be: <why>`, and the
   `$FLEET_HUB_PORT`, else 7420; never 0.0.0.0. Without Tailscale (absent, stopped) it serves
   loopback alone and binds the tailnet address once Tailscale is up (checked every 30 s). A taken
   loopback port exits 1. `REGISTRY/hub/hub.json` holds `{pid, port, url, https, since}` while it
-  runs. `--https PORT` also runs `tailscale serve --bg --https=PORT http://127.0.0.1:<port>` (and
+  runs. `REGISTRY/hub/tokens.json` (0600, written through a temp file and a rename, never served nor
+  logged) holds the page token a grant needs and the manager's Stop token, `{page, stop}` each
+  `{token, created, previous?: {token, retired}}`, so a page opened before a restart still answers: made
+  at the first start, reused after, replaced whole when it is a symlink, not 0600, another user's,
+  unreadable or malformed; read once the hub holds its port, so a hub that lost the port never rotates
+  them. `REGISTRY/hub` is made 0700, and neither a fleet's files nor its links ever serve what it holds.
+  A token older than 24 h is replaced at start, on a page load or on an answer's check, and the one it
+  replaced is accepted 24 h from when it was due: refused from 48 h after it was made, however long the
+  hub was idle. A clock set back never rotates a token. A grant that sends a token the hub does not
+  accept is 403 with `reload: true`, and the page shows a Reload that keeps the answer's draft; one that
+  sends none is 403 without it. `--https PORT` also runs `tailscale serve --bg --https=PORT http://127.0.0.1:<port>` (and
   turns it off on exit): the page's browser alerts need a secure page.
 - **The public ports of root-mode previews**: for each [root-mode preview](#the-preview-fleet-preview)
   whose record names a public port and a started dev server (a pid recorded), the hub also serves that
@@ -4536,7 +4546,7 @@ recommendation attached.
 | `fleets.py gate take/free`, `name` | `REGISTRY/gate/gate.json` (under `REGISTRY/gate/gate.lock`; the TypeScript fleet also `queue.json` and, from `gate run`, `runs.jsonl`), `REGISTRY/<fleet>.json` |
 | `serve_dashboard.py` | `DIR/server.json`, `DIR/server.log`, `REGISTRY/<fleet>.json` |
 | `fleet serve` | `REGISTRY/<fleet>.json` (removed with `--stop`); with `--take-over`, when it displaced a host that ran: `DIR/state.json` (one event, `updated`) and one line in `DIR/chat.jsonl` (TypeScript only) |
-| `fleet hub` | `REGISTRY/hub/hub.json` while it runs (it reads `REGISTRY/hub/config.json`, written by hand); `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, `<root>/.claude/settings.local.json` (and its folder) and `DIR/grants.jsonl`; on a page rename, `DIR/state.json` (a worker's `name`, `name_by`, `updated`, under the ledger's lock) or `REGISTRY/overrides/<hash>.json` and `REGISTRY/<fleet>.json` |
+| `fleet hub` | `REGISTRY/hub/hub.json` while it runs (it reads `REGISTRY/hub/config.json`, written by hand); `REGISTRY/hub/tokens.json` at start and when a token rotates; `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, `<root>/.claude/settings.local.json` (and its folder) and `DIR/grants.jsonl`; on a page rename, `DIR/state.json` (a worker's `name`, `name_by`, `updated`, under the ledger's lock) or `REGISTRY/overrides/<hash>.json` and `REGISTRY/<fleet>.json` |
 | the plugin's hook (grant removal) | `<root>/.claude/settings.local.json`, `DIR/grants.jsonl` (`remove` lines) |
 | the plugin's hook (`fleet_permission_denied`), through `fleet state DIR decision ID --kind refusal\|permission` | `DIR/state.json` (`refusals`, or for a spawn `decisions`; `events`, `updated`), `DIR/index.html`; for a draft one line in `DIR/chat.jsonl` from `fleet-hub`, or one line to the host's session's socket when its watch is not running; the session's `transient-refusals` and `refusal-notes` folders in the plugin's data folder |
 | the hub (its wake timer, `POST wake`) | `REGISTRY/hub/wakes.json`; one line to the session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, which is Claude Code's, not the fleet's |

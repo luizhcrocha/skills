@@ -136,18 +136,26 @@ export const PAGE_TOKEN_META = "fleet-page-token";
 
 /** Why a post is not the hub's own page's, as [status, error], or undefined: its `Origin` is the hub's own, the one
  * the request was sent to (`host`), its `Sec-Fetch-Site` is `same-origin` (a request with neither, a local curl or
- * an agent's fetch, is refused), and it carries the token the hub put in that page at its top-level load
- * (`expected`, in `tokenHeader`), which a page the hub proxies (a preview) is never served. `away` and `stale` are
+ * an agent's fetch, is refused), and it carries a token the hub put in that page at its top-level load
+ * (one of `expected`, the current token and the one it replaced while in its grace, tokens.ts; in `tokenHeader`),
+ * which a page the hub proxies (a preview) is never served. `away` and `stale` are
  * the errors for a post from elsewhere and for a missing or wrong token. */
-function ownPageRefusal(hosts: ReadonlySet<string>, host: string, expected: string, tokenHeader: string, header: (name: string) => string | null, away: string, stale: string): readonly [number, string] | undefined {
+function ownPageRefusal(hosts: ReadonlySet<string>, host: string, expected: readonly string[], tokenHeader: string, header: (name: string) => string | null, away: string, stale: string): readonly [number, string] | undefined {
   const origin = header("Origin");
 
   if (origin === null || !sameOrigin(origin, hosts) || /^[a-z]+:\/\/([^/?#]*)/i.exec(origin)?.[1]?.toLowerCase() !== host.toLowerCase()) return [403, away];
 
   if ((header("Sec-Fetch-Site") ?? "").toLowerCase() !== "same-origin") return [403, away];
-  const token = header(tokenHeader) ?? "";
+  const token = Buffer.from(header(tokenHeader) ?? "");
+  let matched = false;
 
-  if (expected === "" || token.length !== expected.length || !timingSafeEqual(Buffer.from(token), Buffer.from(expected))) return [403, stale];
+  // Each accepted token compared, timing-safe, whatever an earlier one gave.
+  for (const one of expected) {
+    const want = Buffer.from(one);
+    matched = (one !== "" && token.length === want.length && timingSafeEqual(token, want)) || matched;
+  }
+
+  if (!matched) return [403, stale];
 
   return undefined;
 }
@@ -160,7 +168,7 @@ export function stopRefusal(
   viewer: Viewer,
   hosts: ReadonlySet<string>,
   host: string,
-  expected: string,
+  expected: readonly string[],
   header: (name: string) => string | null,
 ): readonly [number, string] | undefined {
   const refused = postRefusal(owner, viewer, hosts, header);
@@ -175,9 +183,14 @@ export function stopRefusal(
  * token every fleet's page is served at its top-level load; the fleet's page in the manager's frame sends the
  * manager page's). A process on this machine that posts to the hub (an agent's fetch or curl) is not the user
  * answering, and a post a peer hub passes on carries no token. */
-export function grantRefusal(hosts: ReadonlySet<string>, host: string, expected: string, header: (name: string) => string | null): readonly [number, string] | undefined {
-  return ownPageRefusal(hosts, host, expected, PAGE_TOKEN_HEADER, header, "a grant comes only from the fleet's own page on this hub: answer it there", "the page token is missing or stale: reload the fleet's page and answer again");
+export function grantRefusal(hosts: ReadonlySet<string>, host: string, expected: readonly string[], header: (name: string) => string | null): readonly [number, string] | undefined {
+  return ownPageRefusal(hosts, host, expected, PAGE_TOKEN_HEADER, header, "a grant comes only from the fleet's own page on this hub: answer it there", STALE_PAGE_TOKEN);
 }
+
+/** What `grantRefusal` says of an answer from the hub's own page with a token it does not accept (a page loaded
+ * before the token file was replaced, or past a rotation's grace): when the post sent a token, the hub's answer adds
+ * `reload: true`, and the page offers a Reload that keeps the draft. */
+export const STALE_PAGE_TOKEN = "the page token is missing or stale: reload the fleet's page and answer again";
 
 /** Why a post is refused before its body is read, as [status, error], or undefined. `allowed` are the other
  * origins it may come from (a chat post's, from the hub's config); none for every other post. Every post that

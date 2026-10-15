@@ -40,12 +40,12 @@
  */
 import { accessSync, constants, statSync } from "node:fs";
 import { createConnection } from "node:net";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { cursorPath, hostOf, intOf, leftPath, pyText, unreadFromUser, watchLive, type Listening } from "./chat/chat.ts";
 import { storePath } from "./chat/store.ts";
 import { parseInstant, stampMsOf, stampOf } from "./clock.ts";
-import { exists, FLEET_BIN, makeDirs, mtimeOf, readText, writeAtomic } from "./files.ts";
+import { exists, FLEET_BIN, makePrivateDir, mtimeOf, readText, writeAtomic } from "./files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type JsonObject } from "./json.ts";
 import { PROBE, reach, recordedHost, type Presence, type Probe } from "./host.ts";
 import { stripHidden } from "./ledger/permission-words.ts";
@@ -640,7 +640,7 @@ export class Wakes {
 
   private save(): void {
     try {
-      makeDirs(join(this.path, ".."));
+      makePrivateDir(dirname(this.path));
       writeAtomic(this.path, `${dumps(Object.fromEntries([...this.held].map(([dir, r]) => [dir, { fleet: r.fleet, wakes: r.wakes.map((w) => ({ ...w })) }])), { indent: 2 })}\n`);
     } catch {
       // the file is for the next hub: this one keeps counting in memory

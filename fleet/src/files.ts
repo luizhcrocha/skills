@@ -81,6 +81,13 @@ export function makeDirs(path: string): void {
   mkdirSync(path, { recursive: true });
 }
 
+/** Make `path` 0700 when it is not there (its parents as `makeDirs` does): the hub's state dir, which holds its
+ * page and Stop tokens. One already there is left as it is. */
+export function makePrivateDir(path: string): void {
+  makeDirs(dirname(path));
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+}
+
 /** Remove `path` when it is there. */
 export function remove(path: string): void {
   try {

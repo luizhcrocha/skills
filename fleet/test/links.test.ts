@@ -5,7 +5,7 @@
  * the fleet's files root and refuses everything else.
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -377,6 +377,46 @@ describe("the hub's links: probes and files", () => {
       expect([path, res.status === 200 || text.includes("outside") || text.includes("hidden")]).toEqual([path, false]);
     }
   });
+  test("the hub's token file is never served, even linked from a fleet whose files root holds the registry", async () => {
+    await running?.stop();
+    const scratch = join(base, "session", "scratchpad");
+    const m = machine({ ...env, FLEET_HOME: scratch });
+    m.registry.register(root, "u", process.pid, "2026-01-01T00:00:00+00:00");
+    const got = await startHub({ port, machine: m, tailscale: join(base, "no-tailscale"), peers: false, hosts: [], https: undefined }, () => {});
+
+    if (got instanceof Error) throw got;
+    running = got;
+    const tokens = join(scratch, "hub", "tokens.json");
+    writeLinks([{ id: "l1", url: `file://${tokens}`, title: "Tokens", kind: "doc" }]);
+    const res = await get("/f/p/files/hub/tokens.json");
+    const text = await res.text();
+
+    const token = /"token": "([^"]+)"/u.exec(readFileSync(tokens, "utf8"))?.[1] ?? "";
+
+    expect([res.status, token.length, text.includes(token)]).toEqual([404, 32, false]);
+  });
+
+  test("the hub's state dir is never served as a fleet's file, even when the registry is the fleet's DIR", async () => {
+    await running?.stop();
+    const m = machine({ ...env, FLEET_HOME: root });
+    m.registry.register(root, "u", process.pid, "2026-01-01T00:00:00+00:00");
+    const got = await startHub({ port, machine: m, tailscale: join(base, "no-tailscale"), peers: false, hosts: [], https: undefined }, () => {});
+
+    if (got instanceof Error) throw got;
+    running = got;
+    const token = /"token": "([^"]+)"/u.exec(readFileSync(join(root, "hub", "tokens.json"), "utf8"))?.[1] ?? "";
+    symlinkSync(join(root, "hub"), join(root, "state-of-hub"));
+    const shown: (readonly [string, number, boolean])[] = [];
+
+    for (const path of ["/f/p/hub/tokens.json", "/f/p/hub/hub.json", "/f/p/state-of-hub/tokens.json", "/f/p/hub%2Ftokens.json"]) {
+      const res = await get(path);
+      const text = await res.text();
+      shown.push([path, res.status, text.includes(token)]);
+    }
+
+    expect([token.length, ...shown]).toEqual([32, ...shown.map<readonly [string, number, boolean]>(([path]) => [path, 404, false])]);
+  });
+
   test("a link's symlink to a hidden file or into a hidden directory, a FIFO and a device are not found", async () => {
     const scratch = join(base, "session", "scratchpad");
     writeFileSync(join(scratch, ".env"), "SECRET=1\n");

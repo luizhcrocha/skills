@@ -124,6 +124,22 @@ export async function bodyDoc(html: string, token: string = freshNonce(), check?
 /** What the server answers when it refuses a message. */
 interface ServerError extends JsonRecord {
   readonly error?: string;
+  /** The hub did not accept the page's token (it was replaced since the page loaded): a reload gets the current one. */
+  readonly reload?: boolean;
+}
+
+/** Reload the page the user sees: the top-level one when this page is in a frame of the same origin (the manager's,
+ * which holds the token this frame posts with), else this one. The answer's draft is kept in this browser. */
+function reloadTop(): void {
+  let top: Window = window;
+
+  try {
+    if (window.top !== null && window.top !== window && window.top.location.origin === window.location.origin) top = window.top;
+  } catch {
+    // a top of another origin: reload this page
+  }
+
+  top.location.reload();
 }
 
 /** Where the evidence frame is kept, and the token its document's script posts with. */
@@ -391,6 +407,7 @@ function Discuss(): JSX.Element {
 function AnswerForm(props: { readonly d: Decision; readonly class?: string; readonly children: JSX.Element }): JSX.Element {
   const { m, ui } = usePage();
   const [error, setError] = createSignal("");
+  const [stale, setStale] = createSignal(false);
   /* What an answer would be given to: the revision, and for a permission everything its yes would grant. */
   const shown = (): string => ui.revisionOf(props.d) + "\n" + Core.grantShown(props.d);
   const [moved, setMoved] = createSignal(false);
@@ -497,6 +514,7 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
     }
 
     setError("");
+    setStale(false);
     const buttons = [...form.querySelectorAll("button")];
     buttons.forEach((b) => {
       b.disabled = true;
@@ -516,6 +534,7 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
 
       if (res.status !== 201) {
         setError(body?.error || `The server refused the answer (${res.status}). It is kept here.`);
+        setStale(body?.reload === true);
 
         return;
       }
@@ -565,6 +584,20 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
       {props.children}
       <p class="chat-error" id="dv-error" role="alert" hidden={!error()}>
         {error()}
+        <Show when={stale()}>
+          {" "}
+          <button
+            type="button"
+            id="dv-reload"
+            class="btn small dv-reload"
+            onClick={() => {
+              save();
+              reloadTop();
+            }}
+          >
+            Reload
+          </button>
+        </Show>
       </p>
     </form>
   );
