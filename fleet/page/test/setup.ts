@@ -6,6 +6,7 @@
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { transform } from "@solidjs/compiler";
 import { plugin } from "bun";
+import { afterEach } from "bun:test";
 
 /* The server side of a test (the harness, puppeteer) keeps Bun's own network and streams. */
 const own = { fetch, Response, Request, Headers, ReadableStream, WritableStream, TransformStream, AbortController, AbortSignal, TextEncoder, TextDecoder, URL, URLSearchParams, WebSocket };
@@ -13,6 +14,12 @@ const own = { fetch, Response, Request, Headers, ReadableStream, WritableStream,
 GlobalRegistrator.register({ url: "http://127.0.0.1:9/f/billing/", width: 1280, height: 900 });
 
 Object.assign(globalThis, own);
+
+/* A test that stubs `fetch` (a page's hub) leaves it to its own test: a later file's harness and puppeteer reach
+ * their servers through Bun's own. */
+afterEach(() => {
+  globalThis.fetch = own.fetch;
+});
 
 /* happy-dom 20 writes a number set as textContent as nothing; a browser writes its digits. */
 const text = Object.getOwnPropertyDescriptor(Node.prototype, "textContent");

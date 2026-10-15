@@ -39,9 +39,11 @@ export function explained(d: Pick<Decision, "kind" | "recommend">): boolean {
   return d.kind !== "permission" || (d.recommend ?? "") !== "";
 }
 
-/** Whether `d` is an open permission the coordinator has not explained yet. */
-export function unexplained(d: Pick<Decision, "kind" | "status" | "recommend">): boolean {
-  return d.status === "open" && !explained(d);
+/** Whether `d` is an open permission the coordinator has not explained yet. On a team that has `moved` to the
+ * cloud none is: a program may not set a permission's recommend (the cloud's fold refuses it), the CLI that
+ * would refuses to write there, and the cloud's page never shows a permission as waiting for an explanation. */
+export function unexplained(d: Pick<Decision, "kind" | "status" | "recommend">, moved: boolean): boolean {
+  return !moved && d.status === "open" && !explained(d);
 }
 
 /** The command that explains permission `ref` of the fleet in `dir`, run with `bin`, for its call of revision

@@ -2519,7 +2519,9 @@ run of each exact command shown; the next run of the same command asks again.
   \u{…}> (revision <rev>): explain it now, ...` while one is open, unexplained and
   unanswered; the coordinator's watch says it once per revision (`! P<n> (<title>): auto mode refused a
   worker's call, and the page waits for your explanation. Explain it now: ...`), which wakes it within
-  `FLEET_CHECK_S` of the hook opening it.
+  `FLEET_CHECK_S` of the hook opening it. On a moved team (`DIR/cloud.json`) neither says it: a program may
+  not set a permission's recommend (the cloud's fold refuses it), the CLI refuses the command there, and the
+  cloud's page never shows a permission as waiting for an explanation.
 - **Answering**: the page shows, while the permission is open and unexplained, "Waiting for the
   coordinator to explain this request" under the ask; the explanation replaces it (the why, the body,
   the recommendation and its reason, as on a decision). The form shows "Auto mode stopped it because" and

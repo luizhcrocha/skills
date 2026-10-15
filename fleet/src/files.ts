@@ -29,14 +29,17 @@ export const FLEET_BIN = join(resolve(SKILL_DIR, "..", "..", ".."), "fleet", "bi
  * the cloud into it, and its ledger is written by programs through fleet-run. */
 export const MOVED_MARKER = "cloud.json";
 
+/** Whether the team whose folder is `root` has moved to the cloud: the folder holds {@link MOVED_MARKER}. */
+export function isMoved(root: string): boolean {
+  return existsSync(join(root, MOVED_MARKER));
+}
+
 /** Why the old CLI may not write the ledger at `root`, when its folder holds {@link MOVED_MARKER} (decision 48):
  * the export would overwrite the write, and the cloud would never hear of it. */
 export function movedRefusal(root: string): string | undefined {
-  const marker = join(root, MOVED_MARKER);
+  if (!isMoved(root)) return undefined;
 
-  if (!existsSync(marker)) return undefined;
-
-  return `this team records through programs: fleet-run. ${marker} says this fleet has moved to the cloud: its host service writes state.json and chat.jsonl here, so the old CLI only reads them. Record with one program on the stdin of fleet-run (the coordinator skill's PROGRAMS.md)`;
+  return `this team records through programs: fleet-run. ${join(root, MOVED_MARKER)} says this fleet has moved to the cloud: its host service writes state.json and chat.jsonl here, so the old CLI only reads them. Record with one program on the stdin of fleet-run (the coordinator skill's PROGRAMS.md)`;
 }
 
 /** `path` made absolute with its symlinks followed, as far as it exists. */

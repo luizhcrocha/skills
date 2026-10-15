@@ -3,7 +3,7 @@
  * the old CLI's writers refuse it, so a call the hook did not catch (a variable, a relative DIR, a script) cannot
  * write a ledger the export overwrites. Its readers stay.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, test } from "bun:test";
@@ -175,5 +175,34 @@ describe("the coordinator's --once watch on a moved team", () => {
     const answer = { id: 105, from: "user", to: ["coordinator"], text: `go ahead ${"x".repeat(shrunk)}`, decision: "s4-smoke" };
 
     expect(await woken(() => writeFileSync(join(root, "chat.jsonl"), `${exported(104)}${JSON.stringify(answer)}\n`))).toContain("#105 user -> coordinator [s4-smoke]: go ahead");
+  });
+});
+
+describe("a permission on a moved team", () => {
+  /** A permission the hook opened before the move, with no recommendation, as the cloud's export keeps it. */
+  function openedBeforeMove(): void {
+    rmSync(join(root, "cloud.json"));
+    const opened = fleet(["state", root, "decision", "p1", "--kind", "permission", "--title", "t", "--question", "q", "--why", "w", "--tool", "Bash", "--call", "make deploy", "--cause", "[Real-World Transactions]", "--root", root, "--blocking", "--no-render"], env);
+    expect(opened.code, opened.stderr).toBe(0);
+    writeFileSync(join(root, "cloud.json"), JSON.stringify({ fleet: "skills" }));
+  }
+
+  test("the coordinator's --once watch asks for no explanation, which a program could not give", async () => {
+    openedBeforeMove();
+    const watch = start(["chat", root, "watch", "--as", "coordinator", "--resume", "--once"], { ...env, FLEET_CHECK_S: "0.2" });
+    await sleep(1500);
+    const exited = watch.proc.exitCode;
+    watch.proc.kill();
+
+    expect(exited).toBeNull();
+  }, 20_000);
+
+  test("`state DIR show` names no `--recommend` command, which the CLI refuses there", () => {
+    openedBeforeMove();
+    const shown = fleet(["state", root, "show"], env);
+
+    expect(shown.code, shown.stderr).toBe(0);
+    expect(shown.stderr).not.toContain("explain it now");
+    expect(shown.stderr).not.toContain("--recommend");
   });
 });

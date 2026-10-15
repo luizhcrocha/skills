@@ -109,8 +109,9 @@ export function closedNamed(machine: Machine, ledger: Ledger, text: string): str
 /** For each answer the user gave on the page that the ledger has not recorded: the page shows it as sent
  * and the fleet has not acted on it, so it is recorded before any other work. A grilling with every
  * question answered is said so until it is decided or withdrawn, whatever the chat said after the last
- * answer (a reply to it, a recap, amendments). */
-export function unrecorded(ledger: Ledger, said: readonly Message[]): string[] {
+ * answer (a reply to it, a recap, amendments). A permission not explained is asked for, unless the team has
+ * `moved` to the cloud, where no program can explain it (health's `unexplained`). */
+export function unrecorded(ledger: Ledger, said: readonly Message[], moved: boolean): string[] {
   const numbered = copyLedger(ledger);
   number(numbered);
   const lines: string[] = [];
@@ -147,7 +148,7 @@ export function unrecorded(ledger: Ledger, said: readonly Message[]): string[] {
     const at = answeredAt(decisionRow(d), said);
 
     if (at === undefined) {
-      if (unexplained(d)) {
+      if (unexplained(d, moved)) {
         lines.push(
           `state: ${d.ref ?? d.id} (${d.title ?? "None"}) is a call auto mode refused, and the user cannot judge it yet. Its call is ` +
             `${showHidden(d.refusal === undefined || d.refusal === null ? "" : callsLine(d.refusal))} (revision ${refusalRev(d.refusal)}): explain it now, ` +

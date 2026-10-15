@@ -10,7 +10,7 @@ import * as Effect from "effect/Effect";
 
 import { parseInstant } from "../clock.ts";
 import { ChatError } from "../errors.ts";
-import { readText, remove, resolvePath, writeText } from "../files.ts";
+import { isMoved, readText, remove, resolvePath, writeText } from "../files.ts";
 import { answeredAt, answeredGrill, answerRecorded, decisionRow, explainCommand, FAILED, silentWorkers, unexplained } from "../health.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
@@ -361,16 +361,17 @@ function answeredGrillings(root: string, told: Map<string, Json>): string[] {
 
 /** The `!` lines for the permissions of `root` the coordinator has not explained and the user has not
  * answered: the hook opened each from a refused spawn (before refusal drafts, from any refused call), and the
- * page shows it as waiting for the explanation.
+ * page shows it as waiting for the explanation. A moved team has none (health's `unexplained`).
  * Told once per round (its last change), as a grilling answered is. */
 function unexplainedPermissions(root: string, told: Map<string, Json>): string[] {
   const lines: string[] = [];
   const said = readChat(root);
+  const moved = isMoved(root);
 
   for (const d of numberedLedger(root)?.decisions ?? []) {
     const mark = `explain:${d.id}:${d.revised !== undefined && d.revised !== null && d.revised !== "" ? d.revised : d.opened}`;
 
-    if (!unexplained(d) || answeredAt(decisionRow(d), said) !== undefined || (told.has(mark) && told.get(mark) !== false)) continue;
+    if (!unexplained(d, moved) || answeredAt(decisionRow(d), said) !== undefined || (told.has(mark) && told.get(mark) !== false)) continue;
     told.set(mark, true);
     const ref = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
     lines.push(

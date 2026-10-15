@@ -13,7 +13,7 @@ import { tellHost, toldWords } from "../chat/hub-line.ts";
 import { unreadLine } from "../news/news.ts";
 import { stampOf } from "../clock.ts";
 import { Refusal, stateRefusal, UsageError } from "../errors.ts";
-import { exists, FLEET_BIN, makeDirs, movedRefusal, readText, resolvePath, SKILL_DIR, writeText } from "../files.ts";
+import { exists, FLEET_BIN, isMoved, makeDirs, movedRefusal, readText, resolvePath, SKILL_DIR, writeText } from "../files.ts";
 import { Out } from "../io.ts";
 import { parseObject } from "../json.ts";
 import { cliLookups } from "../page/lookups.ts";
@@ -394,7 +394,7 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
       cmd === "init" ? undefined : deafWarning(machine, root),
       seen === undefined ? undefined : staleRows(seen),
       seen === undefined || cmd === "init" || (cmd === "set" && args.str("now") !== undefined) ? undefined : staleNow(machine, seen),
-      ...(seen === undefined || cmd === "init" ? [] : unrecorded(seen, readChat(root))),
+      ...(seen === undefined || cmd === "init" ? [] : unrecorded(seen, readChat(root), isMoved(root))),
       ...(seen === undefined ? [] : untold.map((draft) => `state: the hub could not tell you this when it happened. ${draftLine("fleet", root, seen, draft)}`)),
       seen === undefined || cmd === "init" ? undefined : draftsLeft(machine, seen, root),
       seen === undefined ? undefined : leftOpen(seen, settingDone),
