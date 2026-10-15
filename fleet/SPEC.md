@@ -4373,7 +4373,7 @@ recommendation attached.
 ## The team (`fleet team`)
 
 A repo's standing agents (coordinators and the manager) run as tabs of one herdr session. TypeScript only.
-`fleet team [-h] {start,stop,attach,list} [--force] [NAME ...|all]`, run in the repo or below it (the repo is the
+`fleet team [-h] {start,stop,attach,list} [--force] [--trust] [NAME ...|all]`, run in the repo or below it (the repo is the
 nearest folder up holding `.fleet/agents`). No NAME is every agent for `start` and `list`; `stop` names them or
 says `all`; `attach` takes none.
 
@@ -4411,6 +4411,26 @@ says `all`; `attach` takes none.
   session with an agent of its name or a tab labelled with it, or a fleet the registry serves by its
   name or from its ledger. HOME unset is refused. `machine` other than `local` is refused: an agent
   away from this machine needs a launcher on that machine, which is not built.
+- **Trust.** Before the first agent it starts (never when every agent runs already), `start` makes sure Claude
+  Code trusts the repo (`team/trust.ts`), so no agent stops on its trust question. Claude Code has no flag, setting or variable for it; the documented route is
+  `projects["<root>"].hasTrustDialogAccepted = true` in its `.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json`
+  when that is set, else `~/.claude.json`), keyed on the git root: the nearest folder up from the repo holding
+  `.git`, else the repo itself. A `.git` file is a worktree's, keyed on its main checkout (realpath'd), only
+  when it names `<main>/.git/worktrees/<name>`, that folder's `gitdir` points back at it and `<main>/.git` is a
+  folder; else (a submodule, a planted file) its own folder. A root already trusted is neither asked about nor
+  written. Else, on a terminal, `start` asks on stderr `trust <root> for Claude Code? Its agents read, edit and
+  run files there. [y/N]`; a yes (`y`, `yes`) writes the key, anything else refuses (`<root> not trusted for
+  Claude Code; nothing started`). `--trust` writes it without asking; no terminal and no `--trust` refuses
+  (`Claude Code does not trust <root> yet, and there is no terminal to ask on: \`fleet team start --trust\`
+  trusts it`); a read of the answer that fails (EAGAIN) is a no. A root that is `/`, HOME or a folder above
+  it, compared by realpath, is refused: Claude Code never keeps trust in HOME, and one above it would trust all
+  below. The write reads the file again after the answer, sets that one key (making the project's entry when
+  missing), writes `<file>.fleet-trust.<pid>.<uuid>.tmp` (`wx`, fsynced) with the file's mode, and renames it
+  over the file (over a symlink's target) once the file's inode, size and mtime are still those it read; a
+  file changed meanwhile is read and written again, once, then refused (`changed while fleet team wrote it,
+  twice; nothing written: start again`). A missing file, one that is not a JSON object, or a `projects` that is not an
+  object of objects is refused and left as it is. Nothing else of the file is ever said. `start` then says
+  `trusted <root> for Claude Code in <file>`. An agent blocked at its start anyway keeps the fallback above.
 - **The ledger.** The file's `fleet.ledger` is used where it is. Else the registry's fleet of the agent's name
   (its id, an old id or its session's name; served or kept) gives it, where it is; registry entries of its name
   in different folders are refused, naming them. Else it is `~/.local/state/fleet/<name>`, where a coordinator
@@ -4466,7 +4486,7 @@ says `all`; `attach` takes none.
 | the plugin's hook (`onepw_watch`, `onepw_hold`) | `REGISTRY/onepw/locked.json` (under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken` (a state that did not read, set aside), `REGISTRY/onepw/onepw.log` |
 | `fleet secrets unlocked` outside Claude Code | `REGISTRY/onepw/locked.json` (`cleared`, `lapsed` and `told` set, rows dropped, kinds pruned, and the file removed when nothing is left; under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken`, `REGISTRY/onepw/onepw.log`, and for each held fleet the notice: its `DIR/chat.jsonl` (under the store's lock), or one line to its session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, when its host's watch is dead |
 | `state`, on a write that numbers a row or `approval add next` (TypeScript only) | `REGISTRY/numbers/numbers.json` (under `REGISTRY/numbers/numbers.lock`), when `REGISTRY` exists |
-| `fleet team start` / `stop` | `REGISTRY/team/<session>/marks.json`, `REGISTRY/team/<session>/<agent>.system.md` |
+| `fleet team start` / `stop` | `REGISTRY/team/<session>/marks.json`, `REGISTRY/team/<session>/<agent>.system.md`; on the owner's yes or `--trust`, `projects["<root>"].hasTrustDialogAccepted` in Claude Code's `.claude.json` |
 | `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / moved to the trash with its note, `TRASH/<repo>/<entry>` and `<entry>.json` (a shared fleet's `add` writes nothing); whatever the repo's hooks (`.fleet/ws-pre-add`, `.fleet/ws-add` or `devenv-run --prepare`, `.fleet/ws-pre-remove`) write |
 | `fleet ws restore` / `gc` | the entry's folder moved back and a jj workspace added there (`jj workspace add`, `jj sparse reset`), its note removed / each entry past the age deleted, folder and note |
 | `fleet ws add --reuse` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; a new change in the workspace (`jj new`) |

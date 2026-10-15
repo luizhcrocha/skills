@@ -4,7 +4,7 @@
  * repo. Nothing here touches herdr, a live ledger or the live registry.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
@@ -13,7 +13,9 @@ import * as Layer from "effect/Layer";
 
 import { teamWith } from "../src/cli/team.ts";
 import type { Why } from "../src/team/agents.ts";
+import type { Asker } from "../src/team/trust.ts";
 import { recordingOut } from "../src/io.ts";
+import type { Json } from "../src/json.ts";
 import { World } from "../src/world.ts";
 import { baseEnv, machine, tmp, type Environment, type Ran } from "./support.ts";
 import { FakeLauncher } from "./team-launcher-fake.ts";
@@ -24,6 +26,8 @@ interface Place {
   readonly env: Environment;
   readonly home: string;
   readonly registry: string;
+  /** Claude Code's `.claude.json`, in the test's own CLAUDE_CONFIG_DIR. */
+  readonly claude: string;
 }
 
 function place(agents: Readonly<Record<string, string>> = { ui: '{"fleet": {"role": "coordinator"}}' }): Place {
@@ -36,13 +40,21 @@ function place(agents: Readonly<Record<string, string>> = { ui: '{"fleet": {"rol
 
   for (const [name, text] of Object.entries(agents)) writeFileSync(join(repo, ".fleet", "agents", `${name}.json`), text);
 
-  return { repo, home, registry, session: basename(repo), env: baseEnv(registry, { HOME: home, CLAUDE_CONFIG_DIR: tmp("fleet-team-config-") }) };
+  const config = tmp("fleet-team-config-");
+  const claude = join(config, ".claude.json");
+  writeFileSync(claude, JSON.stringify({ projects: { [repo]: { hasTrustDialogAccepted: true } } }));
+
+  return { repo, home, registry, claude, session: basename(repo), env: baseEnv(registry, { HOME: home, CLAUDE_CONFIG_DIR: config }) };
 }
 
 function team(at: Place, launcher: FakeLauncher, ...argv: string[]): Ran {
+  return teamAsking(at, launcher, undefined, ...argv);
+}
+
+function teamAsking(at: Place, launcher: FakeLauncher, ask: Asker | undefined, ...argv: string[]): Ran {
   const { layer, recorded } = recordingOut();
   const world = Layer.succeed(World, machine(at.env));
-  const code = Effect.runSync(teamWith(argv, () => launcher, at.repo).pipe(Effect.provide(Layer.mergeAll(world, layer))));
+  const code = Effect.runSync(teamWith(argv, () => launcher, at.repo, ask).pipe(Effect.provide(Layer.mergeAll(world, layer))));
 
   return { code, stdout: recorded.stdout.join(""), stderr: recorded.stderr.join("") };
 }
@@ -369,5 +381,161 @@ describe("safety", () => {
 
       expect(team(at, new FakeLauncher(), "list").stderr).toBe(`team: team.json: session '${name}' is not a session name: letters, digits, ., _ and -, starting with a letter or digit, at most 64; .fleet/team.json's "session" names another\n`);
     }
+  });
+});
+
+describe("trust", () => {
+  const SETTINGS = { numStartups: 7, oauthAccount: { emailAddress: "someone@example.com" }, projects: { "/elsewhere": { allowedTools: ["Bash"], hasTrustDialogAccepted: false } } };
+
+  /** A place whose repo Claude Code does not trust yet, its config holding other content, mode 0600. */
+  function untrusted(): Place {
+    const at = place();
+    writeFileSync(at.claude, `${JSON.stringify(SETTINGS, null, 2)}\n`);
+    chmodSync(at.claude, 0o600);
+
+    return at;
+  }
+
+  function asker(answer: boolean): Asker & { readonly asked: string[] } {
+    const asked: string[] = [];
+
+    return Object.assign((question: string) => {
+      asked.push(question);
+
+      return answer;
+    }, { asked });
+  }
+
+  const config = (at: Place): Json => JSON.parse(readFileSync(at.claude, "utf8"));
+
+  test("an untrusted repo asks the owner; a yes sets only its key, keeps the rest and the file's mode, then starts", () => {
+    const at = untrusted();
+    const ask = asker(true);
+    const herdr = new FakeLauncher();
+    const ran = teamAsking(at, herdr, ask, "start");
+
+    expect(ask.asked).toEqual([`trust ${at.repo} for Claude Code? Its agents read, edit and run files there. [y/N] `]);
+    expect(ran.code).toBe(0);
+    expect(ran.stdout.split("\n")[0]).toBe(`trusted ${at.repo} for Claude Code in ${at.claude}`);
+    expect(config(at)).toEqual({ ...SETTINGS, projects: { ...SETTINGS.projects, [at.repo]: { hasTrustDialogAccepted: true } } });
+    expect(statSync(at.claude).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dirname(at.claude))).toEqual([".claude.json"]);
+    expect(herdr.calls).toContain(`tab ${at.session} ui`);
+  });
+
+  test("a no refuses and starts nothing, the file left as it was", () => {
+    const at = untrusted();
+    const before = readFileSync(at.claude, "utf8");
+    const herdr = new FakeLauncher();
+
+    expect(teamAsking(at, herdr, asker(false), "start")).toEqual({ code: 1, stdout: "", stderr: `team: ${at.repo} not trusted for Claude Code; nothing started\n` });
+    expect(herdr.calls).toEqual([]);
+    expect(readFileSync(at.claude, "utf8")).toBe(before);
+  });
+
+  test("an untrusted repo whose agents all run already asks nothing and starts nothing", () => {
+    const at = untrusted();
+    const before = readFileSync(at.claude, "utf8");
+    const ask = asker(true);
+    const herdr = new FakeLauncher().seed(at.session, [{ handle: "w1:t9", label: "ui" }]);
+    const ran = teamAsking(at, herdr, ask, "start");
+
+    expect(ask.asked).toEqual([]);
+    expect(ran.code).toBe(0);
+    expect(herdr.calls.some((c) => c.startsWith("tab "))).toBe(false);
+    expect(readFileSync(at.claude, "utf8")).toBe(before);
+  });
+
+  test("with no terminal and no --trust, start refuses naming --trust; --trust writes the key without asking", () => {
+    const at = untrusted();
+    const herdr = new FakeLauncher();
+
+    expect(team(at, herdr, "start")).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: `team: Claude Code does not trust ${at.repo} yet, and there is no terminal to ask on: \`fleet team start --trust\` trusts it\n`,
+    });
+    expect(herdr.calls).toEqual([]);
+
+    const ask = asker(false);
+    const ran = teamAsking(at, herdr, ask, "start", "--trust");
+
+    expect(ask.asked).toEqual([]);
+    expect(ran.code).toBe(0);
+    expect(config(at)).toEqual({ ...SETTINGS, projects: { ...SETTINGS.projects, [at.repo]: { hasTrustDialogAccepted: true } } });
+  });
+
+  test("a trusted repo is neither asked about nor written", () => {
+    const at = place();
+    const before = readFileSync(at.claude, "utf8");
+    const ask = asker(false);
+
+    expect(teamAsking(at, new FakeLauncher(), ask, "start", "--trust").code).toBe(0);
+    expect(ask.asked).toEqual([]);
+    expect(readFileSync(at.claude, "utf8")).toBe(before);
+  });
+
+  test("the key is the git root above the agents' folder, and another start's temp file is left alone", () => {
+    const at = untrusted();
+    const below = join(at.repo, "sub");
+    mkdirSync(join(below, ".fleet", "agents"), { recursive: true });
+    writeFileSync(join(below, ".fleet", "agents", "ui.json"), '{"fleet": {"role": "coordinator"}}');
+    mkdirSync(join(at.repo, ".git"));
+    writeFileSync(`${at.claude}.fleet-trust.tmp`, "another start's");
+    const { layer } = recordingOut();
+    const code = Effect.runSync(teamWith(["start", "--trust"], () => new FakeLauncher(), below, undefined).pipe(Effect.provide(Layer.mergeAll(Layer.succeed(World, machine(at.env)), layer))));
+
+    expect(code).toBe(0);
+    expect(config(at)).toEqual({ ...SETTINGS, projects: { ...SETTINGS.projects, [at.repo]: { hasTrustDialogAccepted: true } } });
+    expect(readdirSync(dirname(at.claude)).toSorted()).toEqual([".claude.json", ".claude.json.fleet-trust.tmp"]);
+    expect(readFileSync(`${at.claude}.fleet-trust.tmp`, "utf8")).toBe("another start's");
+  });
+
+  test("the file is read again after the answer: what a session wrote meanwhile is kept", () => {
+    const at = untrusted();
+
+    const ask: Asker = () => {
+      writeFileSync(at.claude, JSON.stringify({ ...SETTINGS, numStartups: 8 }));
+
+      return true;
+    };
+
+    expect(teamAsking(at, new FakeLauncher(), ask, "start").code).toBe(0);
+    expect(config(at)).toEqual({ ...SETTINGS, numStartups: 8, projects: { ...SETTINGS.projects, [at.repo]: { hasTrustDialogAccepted: true } } });
+  });
+
+  test("a missing or unparsable config is refused, never created or clobbered, its content never said", () => {
+    const at = untrusted();
+    writeFileSync(at.claude, '{"oauthAccount": "secret-ish", ');
+    const ran = team(at, new FakeLauncher(), "start", "--trust");
+
+    expect(ran).toEqual({ code: 1, stdout: "", stderr: `team: Claude Code's config ${at.claude} is not a JSON object; fleet team leaves it as it is\n` });
+    expect(readFileSync(at.claude, "utf8")).toBe('{"oauthAccount": "secret-ish", ');
+
+    const gone = { ...at, env: { ...at.env, CLAUDE_CONFIG_DIR: join(at.home, "nowhere") } };
+
+    expect(team(gone, new FakeLauncher(), "start", "--trust")).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: `team: Claude Code's config ${join(at.home, "nowhere", ".claude.json")} could not be read (No such file or directory); fleet team does not create it: run claude once, then start again\n`,
+    });
+    expect(existsSync(join(at.home, "nowhere"))).toBe(false);
+  });
+
+  test("a repo that is the home folder, HOME given through a symlink, is refused: Claude Code never keeps trust there", () => {
+    const at = untrusted();
+    const home = join(tmp("fleet-team-link-"), "home");
+    symlinkSync(at.repo, home);
+    const ran = team({ ...at, env: { ...at.env, HOME: home } }, new FakeLauncher(), "start", "--trust");
+
+    expect(ran).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: `team: ${at.repo} is the home folder or a folder above it: Claude Code never keeps trust in the home folder, and trusting a folder above it would trust all below; start the team from a repository below it\n`,
+    });
+  });
+
+  test("--trust is start's alone", () => {
+    expect(team(place(), new FakeLauncher(), "list", "--trust")).toMatchObject({ code: 2, stderr: expect.stringContaining("unrecognized arguments: --trust") });
   });
 });

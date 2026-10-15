@@ -149,12 +149,16 @@ function runningHere(ground: Ground, marks: Marks, here: Look | undefined, agent
   return stranger === undefined ? undefined : `${agent.name}: already running: session ${session} ${stranger}, not started by fleet team; left as it is`;
 }
 
-/** Start `agents`: each in a tab of the team's session, unless it runs already. */
-export function startTeam(ground: Ground, agents: readonly Agent[]): Said {
-  return withTeamLock(ground, () => startLocked(ground, agents));
+/** What must hold before the first agent starts (Claude Code trusting the repo): a line to say, or why not. */
+export type BeforeStart = () => { readonly line: string | undefined } | Why;
+
+/** Start `agents`: each in a tab of the team's session, unless it runs already. `before` runs once, when the
+ * first agent is about to start; its refusal starts none. */
+export function startTeam(ground: Ground, agents: readonly Agent[], before: BeforeStart): Said {
+  return withTeamLock(ground, () => startLocked(ground, agents, before));
 }
 
-function startLocked(ground: Ground, agents: readonly Agent[]): Said {
+function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeStart): Said {
   const session = ground.team.session;
   const lines: string[] = [];
   const refused: string[] = [];
@@ -232,6 +236,11 @@ function startLocked(ground: Ground, agents: readonly Agent[]): Said {
     }
 
     if (!opened) {
+      const ready = before();
+
+      if ("why" in ready) return { lines, refused: [...refused, ready.why] };
+
+      if (ready.line !== undefined) lines.push(ready.line);
       const open = ground.launcher.open(session, ground.team.repo);
 
       if ("why" in open) return { lines, refused: [...refused, open.why] };

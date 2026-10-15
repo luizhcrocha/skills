@@ -1,9 +1,11 @@
 /**
- * `fleet team {start,stop,attach,list} [--force] [NAME ...|all]`: the repo's standing agents
+ * `fleet team {start,stop,attach,list} [--force] [--trust] [NAME ...|all]`: the repo's standing agents
  * (`.fleet/agents/<name>.json`, team/agents.ts) as tabs of one herdr session (team/team.ts). The repo is the
  * nearest folder up from here holding `.fleet/agents`. No NAME is every agent, for start and list; stop names
- * them, or `all`. attach takes none. TypeScript only.
+ * them, or `all`. attach takes none. start first makes sure Claude Code trusts the repo (team/trust.ts), asking
+ * on the terminal unless `--trust`. TypeScript only.
  */
+import { readSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import * as Effect from "effect/Effect";
@@ -14,17 +16,21 @@ import { Out } from "../io.ts";
 import { readTeam, type Agent, type Team, type Why } from "../team/agents.ts";
 import { herdrLauncher } from "../team/herdr.ts";
 import type { Launcher } from "../team/launcher.ts";
-import { listTeam, startTeam, stopTeam, type Ground, type Said } from "../team/team.ts";
+import { listTeam, startTeam, stopTeam, type BeforeStart, type Ground, type Said } from "../team/team.ts";
+import { claudeConfigOf, ensureTrusted, trustRootOf, type Asker, type Consent } from "../team/trust.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf, printUsage } from "./exit.ts";
 
-const USAGE = "usage: fleet team [-h] {start,stop,attach,list} [--force] [NAME ...|all]\n";
+const USAGE = "usage: fleet team [-h] {start,stop,attach,list} [--force] [--trust] [NAME ...|all]\n";
 
 const HELP = `${USAGE}
 A repo's standing agents (.fleet/agents/<name>.json) as tabs of one herdr session, named after the repo's
 folder or .fleet/team.json's "session". Run it in the repo or below it.
-    start [NAME ...]       a tab per agent running a new claude, then its opening naming its ledger; one
-                           already running here is left, one running elsewhere is refused, saying where
+    start [NAME ...] [--trust]
+                           a tab per agent running a new claude, then its opening naming its ledger; one
+                           already running here is left, one running elsewhere is refused, saying where.
+                           A repo Claude Code does not trust yet is asked about first, then trusted in its
+                           .claude.json (--trust: without asking; no terminal and no --trust: refused)
     stop NAME ...|all [--force]
                            close the agent's tab once it is ready, waiting at most 10 min (--force: at
                            once); only tabs fleet team started that still run their agent
@@ -74,7 +80,7 @@ function said(result: Said): Effect.Effect<number, never, Out> {
   });
 }
 
-function run(machine: Machine, argv: readonly string[], launcherAt: (state: string) => Launcher, cwd: string): Effect.Effect<number, Refusal | UsageError, Out> {
+function run(machine: Machine, argv: readonly string[], launcherAt: (state: string) => Launcher, cwd: string, ask: Asker | undefined): Effect.Effect<number, Refusal | UsageError, Out> {
   return Effect.gen(function* () {
     if (argv.includes("-h") || argv.includes("--help")) return yield* printUsage(HELP);
     const [first, ...rest] = argv;
@@ -84,12 +90,15 @@ function run(machine: Machine, argv: readonly string[], launcherAt: (state: stri
 
     if (command === undefined) return yield* usage(`argument cmd: invalid choice: '${first}' (choose from ${COMMANDS.map((c) => `'${c}'`).join(", ")})`);
     const force = rest.includes("--force");
-    const names = rest.filter((a) => a !== "--force");
+    const trust = rest.includes("--trust");
+    const names = rest.filter((a) => a !== "--force" && a !== "--trust");
     const option = names.find((a) => a.startsWith("-"));
 
     if (option !== undefined) return yield* usage(`unrecognized arguments: ${option}`);
 
     if (force && command !== "stop") return yield* usage("unrecognized arguments: --force");
+
+    if (trust && command !== "start") return yield* usage("unrecognized arguments: --trust");
 
     if (command === "stop" && names.length === 0) return yield* usage("stop names the agents to stop, or all");
 
@@ -118,7 +127,17 @@ function run(machine: Machine, argv: readonly string[], launcherAt: (state: stri
       home,
     };
 
-    if (command === "start") return yield* said(startTeam(ground, agents));
+    if (command === "start") {
+      const consent: Consent = trust ? { _tag: "Given" } : ask === undefined ? { _tag: "None" } : { _tag: "Ask", ask };
+
+      const before: BeforeStart = () => {
+        const trusted = ensureTrusted({ root: trustRootOf(team.repo), config: claudeConfigOf(machine.env, home), home, consent });
+
+        return "why" in trusted ? trusted : { line: trusted._tag === "Written" ? trusted.line : undefined };
+      };
+
+      return yield* said(startTeam(ground, agents, before));
+    }
 
     if (command === "stop") return yield* said(stopTeam(ground, agents, force));
 
@@ -127,16 +146,41 @@ function run(machine: Machine, argv: readonly string[], launcherAt: (state: stri
 }
 
 /** `fleet team` with `argv` (after `team`) over the launcher `launcherAt` builds for the team's folder, the repo
- * found from `cwd`; the exit code. */
-export function teamWith(argv: readonly string[], launcherAt: (state: string) => Launcher, cwd: string): Effect.Effect<number, never, Out | World> {
+ * found from `cwd`; `ask` puts start's trust question to the owner, undefined when there is no terminal. The exit
+ * code. */
+export function teamWith(argv: readonly string[], launcherAt: (state: string) => Launcher, cwd: string, ask: Asker | undefined): Effect.Effect<number, never, Out | World> {
   return Effect.gen(function* () {
     const machine = yield* World;
 
-    return yield* run(machine, argv, launcherAt, cwd).pipe(Effect.catch(exitOf));
+    return yield* run(machine, argv, launcherAt, cwd, ask).pipe(Effect.catch(exitOf));
   });
 }
 
-/** `fleet team` with `argv` (after `team`), over herdr, from the process's directory. */
+/** An {@link Asker} that writes its question with `write` and reads one line of answer a byte at a time with
+ * `read` (the bytes it read): true for y or yes; a read that fails (EAGAIN on a non-blocking terminal) is a no. */
+export function askerOn(write: (text: string) => void, read: (byte: Buffer) => number): Asker {
+  return (question) => {
+    write(question);
+    const byte = Buffer.alloc(1);
+    let line = "";
+
+    try {
+      while (read(byte) === 1 && byte[0] !== 0x0a) line += byte.toString("utf8");
+    } catch {
+      return false;
+    }
+
+    return /^\s*y(es)?\s*$/i.test(line);
+  };
+}
+
+/** The owner's terminal: the question on stderr, the answer from stdin. */
+const askOnTerminal = askerOn(
+  (text) => process.stderr.write(text),
+  (byte) => readSync(0, byte, 0, 1, null),
+);
+
+/** `fleet team` with `argv` (after `team`), over herdr, from the process's directory, asking on its terminal. */
 export function teamCli(argv: readonly string[]): Effect.Effect<number, never, Out | World> {
-  return teamWith(argv, (state) => herdrLauncher({ state }), process.cwd());
+  return teamWith(argv, (state) => herdrLauncher({ state }), process.cwd(), process.stdin.isTTY ? askOnTerminal : undefined);
 }
