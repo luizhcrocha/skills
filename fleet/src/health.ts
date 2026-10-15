@@ -70,13 +70,15 @@ export function failedAnswer(d: Pick<Decision, "id" | "kind" | "status" | "opene
 }
 
 /** Whether the user allowed permission `d` on the page since it last changed: their latest answer to it, stored
- * by the hub (the CLI stores no message as the user) once it had granted the call, begins with `allow-once`.
+ * by the hub (the CLI stores no message as the user) once it had granted the call, begins with `allow-once` or
+ * `allow-kind`.
  * Only that answer grants; a fleet that records one the user never gave is refused (`decision --decide`). */
 export function allowedByUser(d: Pick<Decision, "id" | "opened" | "revised">, said: readonly Message[]): boolean {
   const since = d.revised !== undefined && d.revised !== null && d.revised !== "" ? d.revised : d.opened;
   const last = said.filter((m) => m.from === "user" && m.decision === d.id && atOrAfter(str(m.at), since)).at(-1);
+  const text = last?.text.trim().toLowerCase() ?? "";
 
-  return last?.text.trim().toLowerCase().startsWith("allow-once") === true;
+  return text.startsWith("allow-once") || text.startsWith("allow-kind");
 }
 
 /** The first words of a failed answer: its note's first line, cut at 60 characters. */

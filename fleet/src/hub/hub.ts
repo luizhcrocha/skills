@@ -46,6 +46,8 @@ import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, t
 import { answerRefusal } from "../ledger/answers.ts";
 import { renameAgent } from "../ledger/rename.ts";
 import { filePathOf, filesRoot } from "../ledger/links.ts";
+import { allows } from "../ledger/permission.ts";
+import { addsRule } from "../ledger/rule-card.ts";
 import { pageHtml, readTemplate } from "../page/render.ts";
 import { pick, readLedger } from "../preview/updater.ts";
 import { readRecord, recordPath, type DevServer } from "../preview/record.ts";
@@ -63,8 +65,8 @@ import { takeoverView } from "../takeover.ts";
 import { FILE_POLICY, LINKED_POLICY, servedBody } from "./body-policy.ts";
 import { indexHtml } from "./index-page.ts";
 import { LinkProbes, ProbeCache } from "./probes.ts";
-import { expireGrants, grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
-import { allowedOrigin, chatOriginsPath, grantor, hello, MAX_POST_BYTES, parseChatOrigins, postRefusal, STOP_TOKEN_META, stopRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
+import { answerAsOffered, expireGrants, grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
+import { allowedOrigin, chatOriginsPath, grantor, grantRefusal, hello, MAX_POST_BYTES, PAGE_TOKEN_META, parseChatOrigins, postRefusal, STOP_TOKEN_META, stopRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
 import { idleMs, noteRequest, serverStanding } from "../preview/sleep.ts";
 import { haltedPage, isPing, previewTarget, proxiedIdentity, proxyHttp, proxySocket, startingPage, type Target, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
@@ -289,6 +291,8 @@ export class Hub {
   private readonly orphans: OrphanWatch;
   /** The token the manager's page carries to Stop an orphan, new with each hub process (`stopRefusal`). */
   private readonly stopToken = randomBytes(24).toString("base64url");
+  /** The token every fleet's page carries to answer a permission with a grant, new with each hub process (`grantRefusal`). */
+  private readonly pageToken = randomBytes(24).toString("base64url");
   private readonly probes = new ProbeCache();
   private readonly linkProbes: LinkProbes;
   private readonly spend = new SpendReader();
@@ -739,10 +743,12 @@ export class Hub {
     if (pageRoute(rest)) {
       const page = this.page(root);
 
-      if (page !== undefined && entry.role === "manager" && req.headers.get("Sec-Fetch-Dest") === "document") {
-        // Only a top-level load of the manager's page gets the Stop token; that page can't be framed, and a page
-        // that opened it (a preview's, on this same origin) gets no handle on it.
-        const html = page.replace("</head>", `<meta name="${STOP_TOKEN_META}" content="${this.stopToken}"></head>`);
+      if (page !== undefined && req.headers.get("Sec-Fetch-Dest") === "document") {
+        // Only a top-level load of a fleet's page gets the page token (a grant's), and only the manager's the Stop
+        // token; such a page can't be framed, and a page that opened it (a preview's, on this same origin) gets no
+        // handle on it.
+        const stop = entry.role === "manager" ? `<meta name="${STOP_TOKEN_META}" content="${this.stopToken}">` : "";
+        const html = page.replace("</head>", `<meta name="${PAGE_TOKEN_META}" content="${this.pageToken}">${stop}</head>`);
 
         return new Response(req.method === "HEAD" ? null : html, { headers: { "Content-Type": "text/html; charset=utf-8", ...NO_STORE, ...PAGE_ISOLATION } });
       }
@@ -1220,8 +1226,16 @@ export class Hub {
     if (body === undefined) return jsonResponse(400, { error: "the body is not a JSON object" });
 
     // A page of another origin sends messages; answering a decision or granting a permission is the fleet's own page's.
-    if (origin !== undefined && ["decision", "rule", "rules", "root", "runs"].some((key) => (body[key] ?? null) !== null)) {
+    if (origin !== undefined && ["decision", "rule", "rules", "root", "runs", "rule_text"].some((key) => (body[key] ?? null) !== null)) {
       return jsonResponse(403, { error: "a decision is answered on the fleet's own page, not from another origin" });
+    }
+
+    // An answer that grants, or adds a rule card's entry, comes only from the fleet's own page: a local process's post
+    // is not the user's yes.
+    if ((body["decision"] ?? null) !== null && (allows(asString(body["text"]) ?? "") || addsRule(asString(body["text"]) ?? ""))) {
+      const refused = grantRefusal(this.hosts, new URL(req.url).host, this.pageToken, (name) => req.headers.get(name));
+
+      if (refused !== undefined) return jsonResponse(refused[0], { error: refused[1] });
     }
 
     return this.chatPost(root, rest, body, viewer, origin);
@@ -1229,12 +1243,12 @@ export class Hub {
 
   private async chatPost(root: string, rest: string, body: JsonObject, viewer: Viewer, origin: string | undefined): Promise<Response> {
     const machine = this.options.machine;
-    const text = asString(body["text"]);
+    const given = asString(body["text"]);
     const reGiven = body["re"];
     const hasRe = reGiven !== undefined && reGiven !== null;
     const reNumber = asNumber(reGiven);
 
-    if (text === undefined || (hasRe && (reNumber === undefined || !Number.isInteger(reNumber)))) {
+    if (given === undefined || (hasRe && (reNumber === undefined || !Number.isInteger(reNumber)))) {
       return jsonResponse(400, { error: "text must be a string and re a message id" });
     }
 
@@ -1244,6 +1258,7 @@ export class Hub {
     const decision = decisionGiven === undefined || decisionGiven === null ? undefined : asString(decisionGiven);
 
     if (decisionGiven !== undefined && decisionGiven !== null && decision === undefined) return jsonResponse(400, { error: "decision must be a decision id" });
+    const text = decision === undefined ? given : answerAsOffered(root, decision, given);
     const ruleGiven = body["rule"];
     const rule = ruleGiven === undefined || ruleGiven === null ? undefined : asString(ruleGiven);
 
@@ -1263,6 +1278,9 @@ export class Hub {
     }
 
     const shownRoot = (body["root"] ?? null) === null ? undefined : asString(body["root"]);
+    const ruleText = (body["rule_text"] ?? null) === null ? undefined : asString(body["rule_text"]);
+
+    if ((body["rule_text"] ?? null) !== null && ruleText === undefined) return jsonResponse(400, { error: "rule_text must be the rule card's entry the page showed" });
 
     if ((body["root"] ?? null) !== null && shownRoot === undefined) return jsonResponse(400, { error: "root must be the folder the page showed" });
 
@@ -1375,7 +1393,7 @@ export class Hub {
           return registeredSession(entry === undefined ? undefined : pidOfEntry(entry));
         };
 
-        granted = await grantAnswer({ dir: root, decision, text, rule, rules, root: shownRoot, runs, by: grantor(viewer), at: stampOf(machine.now()), registered });
+        granted = await grantAnswer({ dir: root, decision, text, rule, rules, root: shownRoot, runs, by: grantor(viewer), at: stampOf(machine.now()), registered, home: machine.env("HOME"), ruleText });
 
         if ("refused" in granted) return jsonResponse(409, { error: granted.refused });
       }

@@ -113,7 +113,7 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
     name: "decision",
     positionals: ID,
     options: [
-      opt.value("--kind", { choices: SHARED_KINDS, unlisted: ["permission", DRAFT_KIND] }),
+      opt.value("--kind", { choices: SHARED_KINDS, unlisted: ["permission", "rule", DRAFT_KIND] }),
       opt.value("--title"),
       opt.value("--question"),
       opt.value("--why"),
@@ -147,6 +147,9 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
       opt.value("--cause", { hidden: true }),
       opt.value("--root", { hidden: true }),
       opt.value("--agent-id", { hidden: true }),
+      { ...opt.flag("--once"), hidden: true },
+      opt.value("--hand", { metavar: "WHY", hidden: true }),
+      opt.value("--rule-file", { metavar: "FILE", hidden: true }),
     ],
     exclusive: [
       ["blocking", "not_blocking"],

@@ -122,6 +122,8 @@ export interface RefusedCall {
   more?: string[];
   /** The files the calls are bound to, `<n> <sha256> <path>` each (permission.ts `runsOf`); absent when none is. */
   runs?: string[];
+  /** The opener's word that this kind of call is never saved: no allow-kind option (permission.ts `offersKind`); absent when not given. */
+  once?: boolean;
 }
 
 /** A decision, input, secret, action, grilling or permission: what waits on the user (or the manager). */
@@ -140,6 +142,8 @@ export interface Decision {
   reason?: string | null;
   secret?: string | null;
   manual?: string | null;
+  /** Why only Luiz can take an action's step (`--hand`), shown on the card as "Why only you"; absent when not given. */
+  hand?: string;
   body?: boolean;
   page?: boolean;
   supersedes?: string | null;
@@ -161,6 +165,10 @@ export interface Decision {
   held_at?: string | null;
   /** The refused call a permission lets through. */
   refusal?: RefusedCall | null;
+  /** A permission the user answered with allow-kind: the coordinator owes a rule card for its kind. */
+  kind_requested?: boolean;
+  /** A rule card's autoMode.allow entry, exactly as Add this rule writes it (`--rule-file`). */
+  rule?: string;
   /** The fleet's advisor's view in one line, or `none:<why no advisor was asked>`. */
   advised?: string | null;
   /** A notice's standing approval: the act was done under it. */
@@ -725,6 +733,8 @@ export const DECISION_KEYS = [
   "reason",
   "secret",
   "manual",
+  "hand",
+  "rule",
   "body",
   "page",
   "supersedes",
@@ -743,12 +753,13 @@ export const DECISION_KEYS = [
   "held",
   "held_at",
   "refusal",
+  "kind_requested",
   "advised",
   "under",
   "undo",
 ] as const;
 
-export const REFUSAL_KEYS = ["tool", "call", "rule", "cause", "root", "agent_id", "more", "runs"] as const;
+export const REFUSAL_KEYS = ["tool", "call", "rule", "cause", "root", "agent_id", "more", "runs", "once"] as const;
 
 function readRefusal(decision: string): (object: JsonObject) => Fields | RefusedCall {
   return (object) => {
@@ -758,6 +769,9 @@ function readRefusal(decision: string): (object: JsonObject) => Fields | Refused
     if (object["more"] !== undefined) row.more = f.strList("more");
 
     if (object["runs"] !== undefined) row.runs = f.strList("runs");
+    const once = f.optBool("once");
+
+    if (once !== undefined) row.once = once;
 
     return f.done(row, REFUSAL_KEYS);
   };
@@ -786,6 +800,7 @@ function readDecision(object: JsonObject): Fields | Decision {
     reason: f.nullStr("reason"),
     secret: f.nullStr("secret"),
     manual: f.nullStr("manual"),
+    hand: f.optStr("hand"),
     body: f.optBool("body"),
     page: f.optBool("page"),
     supersedes: f.nullStr("supersedes"),
@@ -802,6 +817,8 @@ function readDecision(object: JsonObject): Fields | Decision {
     held: f.nullStr("held"),
     held_at: f.nullStr("held_at"),
     refusal: f.row("refusal", readRefusal(id)),
+    kind_requested: f.optBool("kind_requested"),
+    rule: f.optStr("rule"),
     advised: f.nullStr("advised"),
     under: f.optStr("under"),
     undo: f.optStr("undo"),

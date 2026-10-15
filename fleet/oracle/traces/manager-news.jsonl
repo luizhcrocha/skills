@@ -8,8 +8,8 @@
 {"fixture": "write", "path": "$REGISTRY/infra.json", "content": "{\"id\": \"infra\", \"role\": \"coordinator\", \"dir\": \"$W/infra\", \"url\": \"http://box:7420/f/infra/\", \"pid\": $PID, \"session\": null, \"since\": \"2026-01-05T08:40:00+00:00\"}\n"}
 {"cli": "fleets", "argv": ["waiting"]}
 {"cli": "state", "argv": ["$DIR", "decision", "d1", "--kind", "input", "--title", "Neon key", "--question", "which branch?", "--why", "w", "--blocking", "--no-render"], "clock": "2026-01-05T09:05:00+00:00"}
-{"cli": "state", "argv": ["$W/infra", "decision", "rerun", "--kind", "action", "--title", "Re-run CA1014", "--question", "re-run it now?", "--why", "w", "--manual", "```nu\njust rerun\n```", "--no-render"]}
-{"cli": "state", "argv": ["$W/infra", "decision", "upload", "--kind", "action", "--title", "Small test upload", "--question", "upload?", "--why", "w", "--manual", "```nu\njust upload\n```", "--asks", "manager", "--no-render"]}
+{"cli": "state", "argv": ["$W/infra", "decision", "rerun", "--kind", "action", "--title", "Re-run CA1014", "--question", "re-run it now?", "--why", "w", "--manual", "1. Unlock 1Password when it asks.\n2. Paste this where the dashboard asks:\n```text\nrerun\n```", "--no-render"]}
+{"cli": "state", "argv": ["$W/infra", "decision", "upload", "--kind", "action", "--title", "Small test upload", "--question", "upload?", "--why", "w", "--manual", "1. Unlock 1Password when it asks.\n2. Paste this where the dashboard asks:\n```text\nupload\n```", "--asks", "manager", "--no-render"]}
 {"cli": "state", "argv": ["$W/manager", "decision", "order", "--kind", "decision", "--title", "Who lands first", "--question", "acme or infra?", "--why", "w", "--option", "acme: acme first | infra waits", "--option", "infra: infra first | acme waits", "--recommend", "infra", "--reason", "smaller", "--no-render"]}
 {"cli": "fleets", "argv": ["waiting"]}
 {"fixture": "append", "path": "$W/manager/chat.jsonl", "content": {"id": 1, "at": "2026-01-05T09:06:00+00:00", "from": "user", "to": ["manager"], "text": "status?", "re": null}}

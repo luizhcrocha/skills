@@ -5,6 +5,7 @@
  * printed only once the ledger it gives back is checked (open-2).
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
 import * as Effect from "effect/Effect";
@@ -14,7 +15,7 @@ import { readChat } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
 import type { Args } from "../cli/args.ts";
 import { Refusal, stateRefusal } from "../errors.ts";
-import { asArray, asObject, asString, parseJson, pyStr, type Json, type JsonObject } from "../json.ts";
+import { asArray, asObject, asString, parseJson, parseObject, pyStr, type Json, type JsonObject } from "../json.ts";
 import { FLEET_BIN, isDir, makeDirs, readOrWhy, readText, remove, resolvePath, writeBytes } from "../files.ts";
 import { fleetOf, managerOf, post as postNews, TEXT_MAX } from "../news/news.ts";
 import { allowedByUser, explainCommand, explained, failedAnswer, failureWords } from "../health.ts";
@@ -29,10 +30,11 @@ import { find, findDecision, highest, milestoneOfStep, misnumbered, nextStepId, 
 import { approvalNumber, nextDecisionRef, refusedFor, Unreachable } from "./shared-numbers.ts";
 import { approvalSource, comesFrom, namesOf, NoSource, refOf, sameSource } from "./approvals.ts";
 import { LINK_KINDS, linkKind, OLD_LINK_KINDS, type LinkKind } from "./links.ts";
-import { ALLOW_ONCE, callsLine, callsOf, grantFileOf, isAsk, makeRefusedCall, permissionOptions, refusalRev } from "./permission.ts";
+import { allows, asksKind, callsLine, callsOf, grantFileOf, isAsk, makeRefusedCall, offersKind, permissionOptions, refusalRev } from "./permission.ts";
 import { foldersOf, permissionWords, type RefusedBy, type Spawn } from "./permission-words.ts";
 import { askedDraft, callerOf, draftCommands, draftLine, openDraft, partOfRefused, shown } from "./refusal-draft.ts";
 import { roleDefaults, spawnLine } from "./roles.ts";
+import { addsRule, RULE_KIND, RULE_OPTIONS, whyNoRule } from "./rule-card.ts";
 import { CHOICE_KINDS, DRAFT_KIND, ID, KINDS, nameRefusal } from "./validate.ts";
 import { closedNamed, isLive, sharedOverlap, UNFINISHED } from "./warnings.ts";
 
@@ -946,6 +948,64 @@ export function actionManualRefusal(manual: string): string | undefined {
   return `--manual says what must be done, not how: it has no fenced block with a command in it and no numbered steps from 1. ${ACTION_TELLS}`;
 }
 
+/** The tags of a fenced block that holds shell commands; "" is a fence that names none. */
+const SHELL_TAGS: readonly string[] = ["", "nu", "nushell", "sh", "bash", "zsh", "fish", "shell", "console", "shell-session", "pwsh", "powershell", "ps1"];
+
+/** The programs a command in a manual starts with (outside a shell fence: an inline span, a numbered step, a fence
+ * of another tag). A word list is never complete; a path to a program (`./x`, `../x`, `~/x`) counts too. */
+const MANUAL_PROGRAMS: ReadonlySet<string> = new Set([
+  "just", "make", "pnpm", "npm", "npx", "yarn", "bun", "bunx", "node", "deno", "git", "jj", "gh", "wrangler", "nix", "devenv", "devenv-run", "direnv",
+  "bash", "sh", "zsh", "fish", "nu", "cd", "source", "curl", "wget", "http", "python", "python3", "uv", "uvx", "pip", "op", "secretspec", "systemctl",
+  "fleet", "tstack", "claude", "vp", "cargo", "go", "docker", "podman", "kubectl", "ssh", "scp", "rsync", "sudo", "doas", "rm", "mv", "cp", "mkdir",
+  "chmod", "ln", "cat", "ls", "echo", "export", "psql", "aws", "gcloud", "vercel", "fly", "home-manager", "nixos-rebuild", "brew", "tailscale",
+]);
+
+/** Whether a line or a span of a manual reads as a shell command: its first word, past a prompt (`$ `), is a program
+ * of MANUAL_PROGRAMS or a path to one. */
+function readsAsCommand(text: string): string | undefined {
+  const line = text.trim().replace(/^[$%>]\s+/u, "");
+  const [first = ""] = line.split(/\s+/u);
+
+  return MANUAL_PROGRAMS.has(first) || /^(?:\.\.?|~)\//u.test(first) ? line : undefined;
+}
+
+/** The first shell command a manual holds anywhere, or undefined: a line of a shell fence that is no comment, a line
+ * of any other fence, an inline code span, or a numbered step, that reads as a command (`readsAsCommand`). */
+export function manualCommand(manual: string): string | undefined {
+  const shown = manualShown(manual);
+
+  for (const fence of shown.fences) {
+    const lines = fence.body.filter((line) => line.trim() !== "" && !line.trim().startsWith("#"));
+    const found = SHELL_TAGS.includes(fence.lang) ? lines[0]?.trim().replace(/^[$%>]\s+/u, "") : lines.map(readsAsCommand).find((line) => line !== undefined);
+
+    if (found !== undefined) return found;
+  }
+
+  if (shown.bare !== undefined) return shown.bare.split("\n")[0]?.trim();
+  const steps = shown.lines.flatMap((line) => /^\s*\d+[.)]\s+(.*)$/u.exec(line)?.[1] ?? []);
+
+  return [...shown.inline, ...steps].map(readsAsCommand).find((line) => line !== undefined);
+}
+
+/**
+ * Why an action's `--manual` is a "run this" card the fleet could run itself (Luiz's decision run-it-cards a, #109,
+ * 2026-10-15: "we need to keep stopping work to ask repeatedly for permissions and run this"): it holds a shell
+ * command anywhere (`manualCommand`). Such a command is asked for as a permission, which runs it without him
+ * copying it; only `--hand`, which says why only Luiz can take the step, keeps the action.
+ */
+export function runnableManualRefusal(manual: string): string | undefined {
+  const command = manualCommand(manual);
+
+  if (command === undefined) return undefined;
+
+  return (
+    `--manual holds the command \`${command}\`, and the fleet runs commands itself: no "run this" card for Luiz. Ask for a permission instead, and run the call once he allows it: ` +
+    `\`fleet state <dir> decision ID --kind permission --tool Bash --call ${pyStr(command)} --root $CLAUDE_PROJECT_DIR --title "<the plain question>" --why W --recommend allow-once --reason R\` ` +
+    "(the call as your Bash tool sends it; --then for each next command). " +
+    'Only for a step he alone can take (a 1Password approval, a browser click, a hardware key, his own terminal login), keep the action and say why with --hand "<why only Luiz can do this>": the card shows it as "Why only you"'
+  );
+}
+
 const APPROVAL_REFUSAL =
   "--manual only asks the user to answer: an approval is a decision: " +
   "`fleet state <dir> decision ID --kind decision --option 'A: yes | what yes does' --option 'B: no | what no does' --recommend A --reason R`; " +
@@ -953,7 +1013,11 @@ const APPROVAL_REFUSAL =
 
 /** What `d`'s kind shows has to be there; `manualGiven`: the `--manual` is this command's, or the row became this
  * kind in this command, so its format is checked (a row recorded before a rule stays as it is). */
-function checkKind(d: Decision, manualGiven: boolean): Step$ {
+function checkKind(d: Decision, manualGiven: boolean, hand: string | undefined, rule?: string): Step$ {
+  const ruled = checkRule(d, rule);
+
+  if (ruled !== undefined) return refuse(ruled);
+
   if (d.kind === "grill" && d.questions === undefined) {
     return refuse('a grilling is asked with the grill command: `grill ID --title T --ask "TITLE | QUESTION | RECOMMENDATION | WHY"`');
   }
@@ -995,11 +1059,66 @@ function checkKind(d: Decision, manualGiven: boolean): Step$ {
 
   if (vague !== undefined) return refuse(vague);
 
+  if (given(hand) && d.kind !== "action") return refuse("--hand says why only Luiz can take an action's step: it goes with --kind action");
+
+  if (given(hand) && d.kind === "action") d.hand = hand;
+  const runnable = d.kind === "action" && manualGiven && !given(d.hand) ? runnableManualRefusal(d.manual ?? "") : undefined;
+
+  if (runnable !== undefined) return refuse(runnable);
+
   if (d.kind === "action" && ((d.options ?? []).length > 0 || given(d.recommend ?? undefined))) {
     return refuse("an action is a step only the user takes, with no options to choose: a yes or no on what the fleet would do is a decision (--kind decision, with the options and --recommend)");
   }
 
   return Effect.void;
+}
+
+/** Why a rule card (`--kind rule`) cannot be asked as it stands, or undefined; on the way its rule (`--rule-file`,
+ * read whole) and its two options go on the row. The rule is checked by `whyNoRule` whenever it is given. */
+function checkRule(d: Decision, rule: string | undefined): string | undefined {
+  if (rule !== undefined && d.kind !== RULE_KIND) return "--rule-file gives a rule card's autoMode.allow entry: it goes with --kind rule";
+
+  if (d.kind !== RULE_KIND) return undefined;
+  const bad = rule === undefined ? undefined : whyNoRule(rule);
+
+  if (bad !== undefined) return `--rule-file: ${bad}`;
+
+  if (rule !== undefined) d.rule = rule;
+
+  if (!given(d.rule)) return "a rule card gives the exact autoMode.allow entry it adds: --rule-file FILE";
+
+  if (!given(d.why ?? undefined)) return "a rule card says where the rule came from: --why with the card numbers it came from and the review's verdict";
+
+  if (given(d.recommend ?? undefined) || ((d.options ?? []).length > 0 && (d.options ?? []).map((o) => o.id).join(" ") !== RULE_OPTIONS.map((o) => o.id).join(" "))) {
+    return "a rule card's options are add-rule and deny, which the CLI sets: --option and --recommend are not taken";
+  }
+
+  d.options = RULE_OPTIONS.map((o) => ({ ...o }));
+
+  return undefined;
+}
+
+/** Whether the fleet's grants.jsonl holds the hub's line for rule card `d`'s Add this rule: `op: "rule"`, the card's id,
+ * and the sha256 of the rule the card holds now. */
+function ruleAdded(dir: string, d: Decision): boolean {
+  const sha256 = createHash("sha256").update(d.rule ?? "", "utf8").digest("hex");
+
+  return (readText(join(dir, "grants.jsonl")) ?? "").split("\n").some((line) => {
+    const row = Option.getOrUndefined(parseObject(line));
+
+    return row?.["op"] === "rule" && row["decision"] === d.id && row["sha256"] === sha256;
+  });
+}
+
+/** The rule `--rule-file` names, read whole, a CRLF file's line ends read as LF (a `\r` left is refused); undefined
+ * when it is not given. */
+function ruleFileArg(run: Run): Effect.Effect<string | undefined, Refusal> {
+  const source = run.args.str("rule_file");
+
+  if (source === undefined) return Effect.succeed(undefined);
+  const content = readOrWhy(source);
+
+  return "why" in content ? refuse(`cannot read the rule ${source}: ${content.why}`) : Effect.succeed(content.toString("utf8").replaceAll("\r\n", "\n").replace(/\n+$/u, ""));
 }
 
 /** Characters: the ask alone, one or two sentences (fleet/SPEC.md, decision); 95% of the asks recorded fit. */
@@ -1530,7 +1649,7 @@ function sameRefusal(a: RefusedCall, b: RefusedCall): boolean {
   const alike = (x: readonly string[], y: readonly string[]): boolean => x.length === y.length && x.every((item, k) => item === y[k]);
 
   // The files too: a script that changed since the user was asked is another thing to allow.
-  return same && alike(a.more ?? [], b.more ?? []) && alike(a.runs ?? [], b.runs ?? []);
+  return same && alike(a.more ?? [], b.more ?? []) && alike(a.runs ?? [], b.runs ?? []) && a.once === b.once;
 }
 
 /** A permission's call from the flags given, over the one it had, with the two options that follow from it;
@@ -1548,6 +1667,9 @@ function setRefusal(run: Run, d: Decision, draft?: RefusalDraft, worded = false)
     const named: string[] = REFUSAL_FLAGS.filter((k) => args.str(k) !== undefined && !(k === "call" && before !== undefined && !harnessWrites(args)));
 
     if (then.length > 0) named.push("then");
+    const once = args.flag("once");
+
+    if (once && d.kind !== "permission") return yield* refuse("--once marks a permission (--kind permission) as one whose kind is never saved: no Allow once and save this kind");
 
     if (d.kind !== "permission") {
       if (named.length === 0) return false;
@@ -1555,7 +1677,7 @@ function setRefusal(run: Run, d: Decision, draft?: RefusalDraft, worded = false)
       return yield* refuse(`--${named.map((k) => k.replace("_", "-")).join(", --")} name the call of a permission (--kind permission)`);
     }
 
-    if ((args.list("option") ?? []).length > 0) return yield* refuse("a permission's options are allow-once and deny, which the CLI sets: --option is not taken");
+    if ((args.list("option") ?? []).length > 0) return yield* refuse("a permission's options are allow-once, allow-kind (on a Bash card not given --once) and deny, which the CLI sets: --option is not taken");
     const ask = asksAhead(args, before, worded) || (draft !== undefined && args.str("cause") === undefined);
 
     if (args.str("recommend") !== undefined && named.length > 0 && !ask) {
@@ -1566,7 +1688,15 @@ function setRefusal(run: Run, d: Decision, draft?: RefusalDraft, worded = false)
       return yield* refuse("--then gives the further calls of a permission asked before they ran: give it with --tool Bash, --call (the first call) and --root, and no --cause");
     }
 
-    if (named.length === 0 && before !== undefined) return false;
+    if (named.length === 0 && before !== undefined) {
+      if (!once || before.once === true) return false;
+      // The opener's word that this card's kind is never saved: Allow once and save this kind is no longer offered.
+      d.refusal = { ...before, once: true };
+      d.options = permissionOptions(d.refusal);
+
+      return true;
+    }
+
     const tool = args.str("tool") ?? before?.tool;
     const call = args.str("call") ?? before?.call;
     // A new first call brings its own list; the same command again without --call keeps the calls it had.
@@ -1585,7 +1715,9 @@ function setRefusal(run: Run, d: Decision, draft?: RefusalDraft, worded = false)
 
     const agentId = args.str("agent_id");
     const made = yield* makeRefusedCall({ tool, call, cause, root, more, ahead: ask, agentId: agentId === undefined ? (before?.agent_id ?? draft?.agent_id ?? null) : given(agentId) ? agentId : null });
-    const refusal = { ...made, root: yield* sessionRootOf(run, made.root) };
+    const refusal: RefusedCall = { ...made, root: yield* sessionRootOf(run, made.root) };
+
+    if (once || before?.once === true) refusal.once = true;
     d.refusal = refusal;
     d.options = permissionOptions(refusal);
 
@@ -1618,7 +1750,7 @@ function afterAnswer(d: Decision, answer: string): string | undefined {
   if (d.kind !== "permission" || r === undefined) return undefined;
   const ref = d.ref ?? d.id;
 
-  if (!answer.trim().toLowerCase().startsWith(ALLOW_ONCE)) {
+  if (!allows(answer)) {
     return `${ref} was not allowed: the call stays stopped. Act on the user's note; no other route to the same act (another worker, a reworded command, an action that asks the user to run it).`;
   }
 
@@ -1636,9 +1768,18 @@ function afterAnswer(d: Decision, answer: string): string | undefined {
     `${ref} is allowed once: ${what}\n` +
     `Each grant is an exact rule in ${grantFileOf(r.tool, r.root)}: it goes when its call ran, pass or fail, or 30 minutes after the answer, and the next run asks again. ` +
     "A call that differs by one character has no grant, and the plugin's hook refuses a longer command that holds a granted call, a second run, a call out of its turn, " +
-    `and a call whose script changed since the user allowed it.${calls.length === 1 ? "" : " The list is a sequence: a call that fails takes the rest of the list with it, and you ask again for what is left."}${who}`
+    `and a call whose script changed since the user allowed it.${calls.length === 1 ? "" : " The list is a sequence: a call that fails takes the rest of the list with it, and you ask again for what is left."}${who}` +
+    (asksKind(answer) ? `\n${KIND_ASK}` : "")
   );
 }
+
+/** What an allow-kind answer asks of the coordinator once the call ran (SKILL.md "Allow once and save this kind"). */
+const KIND_ASK =
+  "The user also asked to save this kind of command: read the autoMode.allow entries in ~/.claude/settings.json first, then draft ONE rule for the kind in their style " +
+  '(what is allowed, bounded by literal paths and subcommands, then "Not covered: ..."), get a fresh Opus review that attacks its bounds ' +
+  "(a write passing as the kind, a secret printed, code that can change under the rule), apply its fixes, and open a rule card: " +
+  '`fleet state <dir> decision ID --kind rule --rule-file FILE --title T --question "<what this lets every agent do without asking>" --why "<the card numbers it came from, and what the review concluded>"`. ' +
+  "Nothing is added until the user taps Add this rule on that card.";
 
 function setBody(run: Run, d: Decision): Step$ {
   const target = join(run.root, "decisions", `${d.id}.html`);
@@ -1713,7 +1854,7 @@ function revokeFrom(run: Run, ledger: Ledger, d: Decision, question: string | un
   }
 }
 
-const FIELDS = ["kind", "title", "question", "why", "recommend", "reason", "secret", "manual", "agent", "step", "milestone", "advised"] as const;
+const FIELDS = ["kind", "title", "question", "why", "recommend", "reason", "secret", "manual", "agent", "step", "milestone", "advised", "rule"] as const;
 
 /** The words a permission's record of its call writes: the CLI's, from the call, never the hook's. */
 const WORDS: ReadonlySet<string> = new Set(["title", "question", "why"]);
@@ -2257,7 +2398,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       if (harness) writePermissionWords(run, ledger, fresh, worded);
 
       if (!elsewhere) {
-        yield* checkKind(fresh, true);
+        yield* checkKind(fresh, true, args.str("hand"), yield* ruleFileArg(run));
         yield* setBody(run, fresh);
 
         if (ask) {
@@ -2359,7 +2500,8 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       const kindBefore = d.kind;
 
       for (const key of FIELDS) {
-        if (key === "step" || key === "milestone" || unwritten.has(key)) continue;
+        // A rule card's rule comes from --rule-file alone, checked by checkKind.
+        if (key === "step" || key === "milestone" || key === "rule" || unwritten.has(key)) continue;
         const value = args.str(key);
 
         if (value === undefined) continue;
@@ -2399,7 +2541,11 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       }
 
       if (harness && (ask || !explained(row))) changed.push(...writePermissionWords(run, ledger, row, ask && worded));
-      yield* checkKind(row, args.str("manual") !== undefined || row.kind !== kindBefore);
+      const ruleText = yield* ruleFileArg(run);
+      yield* checkKind(row, args.str("manual") !== undefined || row.kind !== kindBefore, args.str("hand"), ruleText);
+
+      // A new rule is the card asked anew: what Add this rule writes moved under the user.
+      if (ruleText !== undefined) changed.push("rule");
       yield* setBody(run, row);
 
       if (ask) yield* checkAsk(row, worded);
@@ -2410,7 +2556,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
       if (advice !== undefined) run.warn(advice);
 
-      if (["question", "option", "manual"].some((k) => changed.includes(k)) && !given(args.str("log")) && decide === undefined && withdraw === undefined) {
+      if (["question", "option", "manual", "rule"].some((k) => changed.includes(k)) && !given(args.str("log")) && decide === undefined && withdraw === undefined) {
         run.warn(`state: ${row.id} was asked again with new words and no --log: say what changed in one line (--log "..."); the page's history shows it, and the user should not have to compare two versions.`);
       }
 
@@ -2427,7 +2573,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         });
 
         // Re-presented with new words: back on the user's list.
-        if (["question", "option", "manual", "refusal"].some((k) => changed.includes(k))) unheld(row);
+        if (["question", "option", "manual", "refusal", "rule"].some((k) => changed.includes(k))) unheld(row);
       }
 
       if (hold !== undefined) {
@@ -2450,15 +2596,30 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       );
     }
 
-    if (decide !== undefined && d.kind === "permission" && decide.trim().toLowerCase().startsWith(ALLOW_ONCE) && !allowedByUser(d, said)) {
+    if (decide !== undefined && d.kind === "permission" && allows(decide) && !allowedByUser(d, said)) {
       return yield* refuse(
-        `${d.ref ?? d.id} has no allow-once answer from the user since it last changed: only their answer on the fleet page grants the call, ` +
+        `${d.ref ?? d.id} has no allow-once or allow-kind answer from the user since it last changed: only their answer on the fleet page grants the call, ` +
           `and --decide records an answer, it gives none. Wait for it (\`fleet chat ${run.root} wait ${d.id}\`) and run nothing of it until then; ` +
           'or --withdraw "why" when the call is no longer needed',
       );
     }
 
+    if (decide !== undefined && d.kind === "permission" && asksKind(decide) && (d.refusal === undefined || d.refusal === null || !offersKind(d.refusal))) {
+      return yield* refuse(
+        `${d.ref ?? d.id} does not offer allow-kind (its opener held it to once, or it is an Agent spawn): the page grants such an answer as allow-once, ` +
+          "so record it as one: --decide allow-once",
+      );
+    }
+
+    if (decide !== undefined && d.kind === RULE_KIND && addsRule(decide) && !ruleAdded(run.root, d)) {
+      return yield* refuse(
+        `${d.ref ?? d.id} has no record that the hub added its rule: grants.jsonl holds no rule line for it with the sha256 of the rule it holds now. ` +
+          `Only the user's Add this rule on the fleet page adds it; wait for it (\`fleet chat ${run.root} wait ${d.id}\`), or --withdraw "why"`,
+      );
+    }
+
     if (decide !== undefined) {
+      if (d.kind === "permission" && asksKind(decide)) d.kind_requested = true;
       close(run, ledger, d, { status: "decided", answer: decide, resolution: resolution ?? "" });
       const next = afterAnswer(d, decide);
 

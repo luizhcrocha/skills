@@ -85,7 +85,7 @@ describe("the machine's numbers", () => {
   test("each letter has its own counter, shared by every fleet", () => {
     ok(join(base, "a"), "decision", "d1", ...CHOICE);
     ok(join(base, "b"), "decision", "d1", ...CHOICE);
-    ok(join(base, "b"), "decision", "a1", "--kind", "action", "--title", "T", "--why", "w", "--question", "Run it", "--manual", "```nu\ncd staging; ./migrate\n```");
+    ok(join(base, "b"), "decision", "a1", "--kind", "action", "--title", "T", "--why", "w", "--question", "Run it", "--manual", "```nu\ncd staging; ./migrate\n```", "--hand", "the migration asks for his hardware key");
     ok(join(base, "a"), "link", "l1", "--url", "https://example.com/", "--title", "T", "--kind", "page");
     ok(join(base, "b"), "link", "l1", "--url", "https://example.com/", "--title", "T", "--kind", "page");
     expect([refs(join(base, "a")), refs(join(base, "b"))]).toEqual([["D1"], ["D2", "A1"]]);

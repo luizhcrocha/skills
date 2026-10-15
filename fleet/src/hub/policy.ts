@@ -128,11 +128,33 @@ export const STOP_TOKEN_HEADER = "X-Fleet-Stop-Token";
 /** The `<meta name>` the manager's page holds the Stop token in. */
 export const STOP_TOKEN_META = "fleet-stop-token";
 
+/** The header a post that grants carries: the page token the hub put in every fleet's page (`PAGE_TOKEN_META`). */
+export const PAGE_TOKEN_HEADER = "X-Fleet-Page-Token";
+
+/** The `<meta name>` a fleet's page holds its page token in. */
+export const PAGE_TOKEN_META = "fleet-page-token";
+
+/** Why a post is not the hub's own page's, as [status, error], or undefined: its `Origin` is the hub's own, the one
+ * the request was sent to (`host`), its `Sec-Fetch-Site` is `same-origin` (a request with neither, a local curl or
+ * an agent's fetch, is refused), and it carries the token the hub put in that page at its top-level load
+ * (`expected`, in `tokenHeader`), which a page the hub proxies (a preview) is never served. `away` and `stale` are
+ * the errors for a post from elsewhere and for a missing or wrong token. */
+function ownPageRefusal(hosts: ReadonlySet<string>, host: string, expected: string, tokenHeader: string, header: (name: string) => string | null, away: string, stale: string): readonly [number, string] | undefined {
+  const origin = header("Origin");
+
+  if (origin === null || !sameOrigin(origin, hosts) || /^[a-z]+:\/\/([^/?#]*)/i.exec(origin)?.[1]?.toLowerCase() !== host.toLowerCase()) return [403, away];
+
+  if ((header("Sec-Fetch-Site") ?? "").toLowerCase() !== "same-origin") return [403, away];
+  const token = header(tokenHeader) ?? "";
+
+  if (expected === "" || token.length !== expected.length || !timingSafeEqual(Buffer.from(token), Buffer.from(expected))) return [403, stale];
+
+  return undefined;
+}
+
 /** Why a Stop on an orphaned process tree is refused, as [status, error], or undefined: on top of a post's checks
- * (`postRefusal`), it comes only from the manager's page itself. Its `Origin` is the hub's own, the one the request
- * was sent to (`host`), its `Sec-Fetch-Site` is `same-origin` (a request with neither, a local curl, is refused),
- * and it carries the token the hub put in that page (`expected`), which a page the hub proxies (a preview) is never
- * served. */
+ * (`postRefusal`), it comes only from the manager's page itself (`ownPageRefusal`, with the Stop token only that page
+ * is served). */
 export function stopRefusal(
   owner: string | undefined,
   viewer: Viewer,
@@ -144,16 +166,16 @@ export function stopRefusal(
   const refused = postRefusal(owner, viewer, hosts, header);
 
   if (refused !== undefined) return refused;
-  const origin = header("Origin");
 
-  if (origin === null || !sameOrigin(origin, hosts) || /^[a-z]+:\/\/([^/?#]*)/i.exec(origin)?.[1]?.toLowerCase() !== host.toLowerCase()) return [403, "a Stop comes only from the manager's page on this hub"];
+  return ownPageRefusal(hosts, host, expected, STOP_TOKEN_HEADER, header, "a Stop comes only from the manager's page on this hub", "the Stop token is missing or stale: reload the manager's page");
+}
 
-  if ((header("Sec-Fetch-Site") ?? "").toLowerCase() !== "same-origin") return [403, "a Stop comes only from the manager's page on this hub"];
-  const token = header(STOP_TOKEN_HEADER) ?? "";
-
-  if (expected === "" || token.length !== expected.length || !timingSafeEqual(Buffer.from(token), Buffer.from(expected))) return [403, "the Stop token is missing or stale: reload the manager's page"];
-
-  return undefined;
+/** Why an answer that grants (allow-once, allow-kind) or adds a rule (add-rule) is refused, as [status, error], or undefined: on top of the
+ * post's checks, it comes only from the fleet's own page on this hub, as a Stop does (`ownPageRefusal`, with the
+ * page token every fleet's page is served). A process on this machine that posts to the hub (an agent's fetch or
+ * curl) is not the user answering. */
+export function grantRefusal(hosts: ReadonlySet<string>, host: string, expected: string, header: (name: string) => string | null): readonly [number, string] | undefined {
+  return ownPageRefusal(hosts, host, expected, PAGE_TOKEN_HEADER, header, "a grant comes only from the fleet's own page on this hub: answer it there", "the page token is missing or stale: reload the fleet's page and answer again");
 }
 
 /** Why a post is refused before its body is read, as [status, error], or undefined. `allowed` are the other

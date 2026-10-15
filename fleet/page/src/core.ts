@@ -9,6 +9,7 @@
  */
 import { parseCardHash } from "../../src/ledger/card-address.ts";
 import { linkKind, type LinkKind } from "../../src/ledger/link-kind.ts";
+import { ALLOW_KIND, ALLOW_KIND_LABEL, allowKindWords, offersKind } from "../../src/ledger/allow-kind.ts";
 import { plainCause } from "../../src/ledger/permission-words.ts";
 
 export type { LinkKind };
@@ -38,6 +39,8 @@ export interface Posted {
   readonly root?: string;
   /** The files the page showed the calls bound to: the hub grants only while they hash to this. */
   readonly runs?: readonly string[];
+  /** A rule card's entry as the page showed it: the hub adds it only while the card still holds it. */
+  readonly rule_text?: string;
 }
 
 /** A lookup of one text by another, for the keys a table names. */
@@ -118,6 +121,8 @@ export interface RefusedCall {
   readonly more?: readonly string[];
   /** The files the calls are bound to, `<n> <sha256> <path>` each (the fleet's `runsOf`). */
   readonly runs?: readonly string[];
+  /** The opener's word that the calls are allowed once at a time, never always. */
+  readonly once?: boolean;
 }
 
 /** A file one call of a permission is bound to. */
@@ -147,9 +152,34 @@ function boundFiles(r: Pick<RefusedCall, "runs">, n: number): readonly BoundFile
   });
 }
 
-/** Everything a permission's yes would grant, as one text: the page clears a picked answer when it changes. */
-function grantShown(d: Pick<Decision, "kind" | "refusal">): string {
-  return d.kind === "permission" && d.refusal ? JSON.stringify(shownGrant(d.refusal)) : "";
+/** The id of the option an earlier change offered beside allow-once; a row that still has it shows it no longer. */
+const OLD_ALWAYS = "allow-always";
+
+/**
+ * The options the page offers for `d`: a decision's as it has them. A permission's "Allow once and save this kind"
+ * shows on a Bash card its opener did not hold to once (the fleet's `offersKind`, which the CLI checks too): dropped
+ * from a row that has it when it does not, and added after Allow once to a row recorded before it existed.
+ */
+function shownOptions(d: Pick<Decision, "kind" | "refusal" | "options">): readonly DecisionOption[] {
+  const options = d.options || [];
+
+  if (d.kind !== "permission") return options;
+  const others = options.filter((o) => o.id !== ALLOW_KIND && o.id !== OLD_ALWAYS);
+  const r = d.refusal;
+
+  if (!r || !offersKind({ tool: r.tool, once: r.once === true })) return others;
+  const kind: DecisionOption = { id: ALLOW_KIND, label: ALLOW_KIND_LABEL, consequence: allowKindWords(callsOf(r).length) };
+  const at = others.findIndex((o) => o.id === "allow-once");
+
+  return [...others.slice(0, at + 1), kind, ...others.slice(at + 1)];
+}
+
+/** Everything a yes would grant, as one text: a permission's calls, folder and files, a rule card's rule. The page
+ * clears a picked answer when it changes. */
+function grantShown(d: Pick<Decision, "kind" | "refusal" | "rule">): string {
+  if (d.kind === "permission" && d.refusal) return JSON.stringify(shownGrant(d.refusal));
+
+  return d.kind === "rule" ? JSON.stringify([["rule", d.rule ?? ""]]) : "";
 }
 
 /** A decision as the page renders it. */
@@ -180,6 +210,10 @@ export interface Decision {
   readonly supersedes?: string;
   readonly secret?: string;
   readonly manual?: string;
+  /** Why only the user can take an action's step, as its opener wrote it (`--hand`). */
+  readonly hand?: string;
+  /** A rule card's autoMode.allow entry, shown whole and verbatim. */
+  readonly rule?: string;
   readonly body?: boolean | string;
   readonly page?: boolean;
   /** On a manager's page, the fleet that holds the decision. */
@@ -1447,6 +1481,9 @@ export interface AnswerForm {
   readonly done?: boolean;
   /** An action the viewer ran and that failed: the note says what happened. */
   readonly failed?: boolean;
+  /** A rule card's rule as the page showed it when the option was picked: Add this rule sends it, and the hub adds
+   * it only while the row still holds it. */
+  readonly rule?: string | undefined;
 }
 
 /** Why `body`, the JSON a composer would post, is too big to send under the server's limit `max` (from the
@@ -1472,12 +1509,23 @@ function answerText(item: Decision, form: AnswerForm): Posted | { error: string 
 
   if (item.kind === "decision" || item.kind === "permission") {
     if (form.choice === "none" && item.kind === "decision") return note ? { text: "None of these: " + note } : { error: "Say what you want instead." };
-    const option = (item.options || []).find((o) => o.id === form.choice);
+    const option = shownOptions(item).find((o) => o.id === form.choice);
 
     if (!option) return { error: "Pick one option." };
     const posted = withNote(option.id + ": " + String(option.label));
 
     return item.kind === "permission" && item.refusal ? { ...posted, ...shownGrant(item.refusal) } : posted;
+  }
+
+  if (item.kind === "rule") {
+    const option = (item.options || []).find((o) => o.id === form.choice);
+
+    if (!option) return { error: "Pick one option." };
+    const posted = withNote(option.id + ": " + String(option.label));
+
+    if (option.id !== "add-rule") return posted;
+
+    return isText(form.rule) && form.rule !== "" ? { ...posted, rule_text: form.rule } : { error: "Pick Add this rule again, once you have read the rule above." };
   }
 
   if (form.failed && item.kind === "action") return note ? { text: FAILED + " " + note } : { error: "Say what happened: what you ran and what it said." };
@@ -2257,6 +2305,7 @@ const KIND_NAMES: readonly (readonly [string, string, string])[] = [
   ["secret", "secret", "secrets"],
   ["grill", "grilling", "grillings"],
   ["permission", "permission", "permissions"],
+  ["rule", "rule", "rules"],
   ["notice", "notice", "notices"],
 ];
 
@@ -2459,6 +2508,7 @@ export const Core = {
   plainCause,
   callsOf,
   boundFiles,
+  shownOptions,
   grantShown,
   isNotice,
   noticesOf,

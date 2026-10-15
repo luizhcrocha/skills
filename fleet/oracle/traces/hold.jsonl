@@ -1,7 +1,7 @@
 {"trace": 1, "name": "hold", "about": "An answered item the fleet must work on first: `decision --hold` records the answer (the unrecorded-answer warning stops), keeps the item open off the user's list, and is cleared by a revision of the question, options or manual (re-presented), by --unhold, and by closing; what it refuses; a later answer is news again; the page rendered with a held item."}
 {"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "M", "--no-render"]}
-{"cli": "state", "argv": ["$DIR", "decision", "a1", "--kind", "action", "--title", "Run the role cut", "--question", "Run the pipeline role cut?", "--why", "it feeds the next milestone", "--manual", "```nu\njust cut --roles\n```", "--no-render"]}
+{"cli": "state", "argv": ["$DIR", "decision", "a1", "--kind", "action", "--title", "Run the role cut", "--question", "Run the pipeline role cut?", "--why", "it feeds the next milestone", "--manual", "1. Unlock 1Password when it asks.\n2. Paste this where the dashboard asks:\n```text\ncut --roles\n```", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "d1", "--kind", "decision", "--title", "Lock window", "--question", "lock now or tonight?", "--why", "w", "--option", "A: now | a short lock", "--option", "B: tonight | no lock by day", "--recommend", "B", "--reason", "nobody works then", "--no-render"]}
 {"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 1, "at": "2026-01-05T09:05:00+00:00", "from": "user", "to": ["coordinator"], "text": "it needs a code change first", "re": null, "decision": "a1"}, "clock": "2026-01-05T09:05:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "event", "the user answered the role cut", "--no-render"], "clock": "2026-01-05T09:06:00+00:00"}
@@ -12,7 +12,7 @@
 {"cli": "state", "argv": ["$DIR", "decision", "a1", "--unhold", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "decision", "a1", "--hold", "fix the role cut first", "--no-render"], "clock": "2026-01-05T09:08:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "decision", "a1", "--why", "it still feeds the next milestone", "--no-render"], "clock": "2026-01-05T09:10:00+00:00"}
-{"cli": "state", "argv": ["$DIR", "decision", "a1", "--manual", "```nu\njust cut --roles --fixed\n```", "--log", "the role cut is fixed: run this", "--no-render"], "clock": "2026-01-05T09:20:00+00:00"}
+{"cli": "state", "argv": ["$DIR", "decision", "a1", "--manual", "1. Unlock 1Password when it asks.\n2. Paste this where the dashboard asks:\n```text\ncut --roles --fixed\n```", "--log", "the role cut is fixed: run this", "--no-render"], "clock": "2026-01-05T09:20:00+00:00"}
 {"fixture": "append", "path": "$DIR/chat.jsonl", "content": {"id": 2, "at": "2026-01-05T09:25:00+00:00", "from": "user", "to": ["coordinator"], "text": "ran it", "re": null, "decision": "a1"}, "clock": "2026-01-05T09:25:00+00:00"}
 {"cli": "chat", "argv": ["$DIR", "wait", "A1"]}
 {"cli": "state", "argv": ["$DIR", "decision", "zz", "--hold", "x", "--no-render"]}

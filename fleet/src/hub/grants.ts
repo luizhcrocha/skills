@@ -8,6 +8,8 @@
  * the hub is not, so the row is trusted only as far as it names a session of this fleet, or a worker's
  * workspace of its work (granted at that session's root), and rules that let exactly the calls the page
  * showed through, in the folder it showed: the answer carries both, and a row that moved since grants nothing.
+ * An allow-kind answer grants exactly as allow-once does. A rule card's Add this rule appends its reviewed entry to
+ * `autoMode.allow` of the user's settings instead (`addRuleAnswer`, user-settings.ts), and no take-back touches it.
  *
  * The threat model of the take-back, plainly: the hub, the hook and every agent run as one Unix user, and
  * `DIR/grants.jsonl` is a file any agent can write, so a `remove` line there is a record, never the proof that
@@ -27,19 +29,22 @@
  * nothing to what it can do. What stays, accepted: a forged `grant` line in grants.jsonl can still make a
  * sweep remove a rule that matches it, the owner's included; the failure is fewer allowed calls, never more.
  */
-import { appendFileSync, mkdirSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, mkdirSync, rmSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 
 import { isDir, readText, resolvePath, strerror } from "../files.ts";
 import * as Option from "effect/Option";
 
 import { Refusal } from "../errors.ts";
 import { asArray, asObject, asString, type Json, type JsonObject } from "../json.ts";
+import { addsRule, RULE_KIND, whyNoRule } from "../ledger/rule-card.ts";
+import { lockSettings, parsed, releaseLock, Ungranted, withRules, writeAtomic } from "./settings-file.ts";
+import { addAutoModeRule, userSettingsFile } from "./user-settings.ts";
 import { readBeats } from "../heartbeat.ts";
 import { parseLedger, type Decision } from "../ledger/model.ts";
 import { findDecision } from "../ledger/numbers.ts";
-import { ALLOW_ONCE, callsOf, GRANT_TTL_MS, grantFileOf, isAsk, PERMISSION_TOOLS, readRun, refusalRev, ruleOf, rulesOf, runsOf, whyNoAsks, whyNoCalls } from "../ledger/permission.ts";
+import { ALLOW_ONCE, allows, asksKind, callsOf, GRANT_TTL_MS, offersKind, permissionOptions, grantFileOf, isAsk, PERMISSION_TOOLS, readRun, refusalRev, ruleOf, rulesOf, runsOf, whyNoAsks, whyNoCalls } from "../ledger/permission.ts";
 import { parseInstant } from "../clock.ts";
 import { cwdOf } from "../procs.ts";
 import { alive } from "../registry.ts";
@@ -66,6 +71,10 @@ export interface Answered {
   /** Looks up the fleet's registered session as the OS shows it ({@link registeredSession}); called only for an
    * allow-once whose root no heartbeat names. */
   readonly registered: () => Registered | undefined;
+  /** The hub's HOME, whose user settings a rule card's Add this rule writes (user-settings.ts `userSettingsFile`). */
+  readonly home: string | undefined;
+  /** The rule card's entry as the page showed it; Add this rule writes it only when the row still holds it. */
+  readonly ruleText?: string | undefined;
 }
 
 /** The process the registry says the fleet lives as long as (`fleet serve DIR --pid`), and its working directory. */
@@ -81,15 +90,6 @@ export function registeredSession(pid: number | undefined): Registered | undefin
   if (pid === undefined || pid <= 1 || !alive(pid)) return undefined;
 
   return { pid, cwd: cwdOf(pid) };
-}
-
-/** Why a permission's allow-once cannot be granted. */
-class Ungranted {
-  readonly reason: string;
-
-  constructor(reason: string) {
-    this.reason = reason;
-  }
 }
 
 /** The trusted grant a permission row asks for. */
@@ -350,84 +350,8 @@ function filesMoved(answered: Answered, asked: Asked): string | undefined {
   return undefined;
 }
 
-function parsed(file: string): JsonObject | Ungranted {
-  const text = readText(file);
-
-  if (text === undefined) return {};
-  let value: Json;
-
-  try {
-    // SAFETY: JSON.parse returns JSON values only.
-    value = JSON.parse(text) as Json;
-  } catch (cause: unknown) {
-    return new Ungranted(`${file} does not parse: ${strerror(cause)}`);
-  }
-
-  return asObject(value) ?? new Ungranted(`${file} is not a JSON object`);
-}
-
-/** `settings` with the `rules` it lacks added to `permissions.allow`, every other key and entry kept, and those
- * rules (`added`; none when all are there already); or why it cannot hold them. */
-function withRules(file: string, settings: JsonObject, rules: readonly string[]): { readonly next: JsonObject; readonly added: readonly string[] } | Ungranted {
-  const permissions = settings["permissions"] === undefined ? {} : asObject(settings["permissions"]);
-
-  if (permissions === undefined) return new Ungranted(`${file}: permissions is not an object`);
-  const allow = permissions["allow"] === undefined ? [] : asArray(permissions["allow"]);
-
-  if (allow === undefined) return new Ungranted(`${file}: permissions.allow is not a list`);
-  const added = rules.filter((rule) => !allow.includes(rule));
-
-  return { next: { ...settings, permissions: { ...permissions, allow: [...allow, ...added] } }, added };
-}
-
-/** How long the hub waits for the settings lock, and the age past which a lock is a crashed holder's. */
-const LOCK_WAIT_MS = 2000;
-
-const LOCK_STALE_MS = 10_000;
-
-function hasCode(cause: unknown, code: string): boolean {
-  return cause instanceof Error && "code" in cause && cause.code === code;
-}
-
-/**
- * Take the lock the plugin's hook takes too around a settings file's read-modify-write: the directory
- * `.settings.local.json.lock` beside it, made atomically (Bun has no flock). One older than LOCK_STALE_MS is
- * taken over. The lock's path, or why it could not be had.
- */
-async function lockSettings(file: string): Promise<string | Ungranted> {
-  const lock = join(dirname(file), ".settings.local.json.lock");
-  const deadline = performance.now() + LOCK_WAIT_MS;
-
-  for (;;) {
-    try {
-      mkdirSync(lock);
-
-      return lock;
-    } catch (cause: unknown) {
-      if (!hasCode(cause, "EEXIST")) return new Ungranted(`could not lock ${file}: ${strerror(cause)}`);
-    }
-
-    try {
-      if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
-        rmdirSync(lock);
-        continue;
-      }
-    } catch (cause: unknown) {
-      if (hasCode(cause, "ENOENT")) continue;
-
-      return new Ungranted(`could not lock ${file}: ${strerror(cause)}`);
-    }
-
-    if (performance.now() >= deadline) return new Ungranted(`${lock} is held: another grant or the plugin hook is writing ${file}; answer again`);
-    await sleep(20);
-  }
-}
-
-function writeAtomic(file: string, text: string): void {
-  const scratch = join(dirname(file), `.${process.pid}.settings.local.json.tmp`);
-  writeFileSync(scratch, text, "utf8");
-  renameSync(scratch, file);
-}
+/** The lock the plugin's hook takes too around a write of a session root's `.claude/` grant files. */
+const SETTINGS_LOCK = ".settings.local.json.lock";
 
 /** What an answer to a decision does to its permission: refused (the answer is then refused and nothing is
  * stored), or let through, with what the answer says about the grant when there is something to say. */
@@ -436,24 +360,29 @@ export type GrantAnswer = { readonly refused: string } | { readonly granted: str
 const NOTHING: GrantAnswer = { granted: undefined };
 
 /**
- * Grant the call a permission's allow-once answer lets through. Nothing is granted, and nothing said, for an
- * answer to another kind, one that is not allow-once, or a rule someone already put there.
+ * Grant the call a permission's allow-once or allow-kind answer lets through (the two grant alike), or add a rule
+ * card's entry on its Add this rule (`addRuleAnswer`). Nothing is granted, and nothing said, for an answer to
+ * another kind, one that allows nothing, or a rule someone already put there.
  */
 export async function grantAnswer(answered: Answered): Promise<GrantAnswer> {
-  if (!answered.text.startsWith(ALLOW_ONCE)) return NOTHING;
+  const adds = addsRule(answered.text);
+
+  if (!allows(answered.text) && !adds) return NOTHING;
   const ledger = Option.getOrUndefined(parseLedger(readText(join(answered.dir, "state.json")) ?? ""));
 
   if (ledger === undefined || ledger instanceof Refusal) return { refused: "the ledger cannot be read, so the permission cannot be checked" };
   const d = findDecision(ledger, answered.decision);
 
-  if (d === undefined || d.kind !== "permission") return NOTHING;
+  if (adds && d?.kind === RULE_KIND) return addRuleAnswer(answered, d);
+
+  if (adds || d === undefined || d.kind !== "permission") return NOTHING;
   const asked = askedOf(answered.dir, d, answered.registered);
 
   if (asked instanceof Ungranted) return { refused: asked.reason };
   const moved = movedSince(answered, asked) ?? filesMoved(answered, asked);
 
   if (moved !== undefined) return { refused: moved };
-
+  const notes = asked.notes;
   const file = grantFileOf(asked.tool, asked.root);
   // The hook reads the Agent grants file at each spawn; Claude Code watches only a settings folder that existed at start.
   const reload = asked.tool === "Agent" || isDir(dirname(file)) ? "live" : "restart";
@@ -464,7 +393,7 @@ export async function grantAnswer(answered: Answered): Promise<GrantAnswer> {
     return { refused: `could not grant ${asked.rules.join(", ")} in ${file}: ${strerror(cause)}` };
   }
 
-  const lock = await lockSettings(file);
+  const lock = await lockSettings(file, SETTINGS_LOCK);
 
   if (lock instanceof Ungranted) return { refused: lock.reason };
 
@@ -473,11 +402,11 @@ export async function grantAnswer(answered: Answered): Promise<GrantAnswer> {
 
     if (done instanceof Ungranted) return { refused: done.reason };
 
-    if (done === "again") return { granted: `${asked.ref === "" ? "This permission" : asked.ref} was already allowed once as it stands: one yes is one grant, so nothing more was granted. If its 30 minutes passed unused, the coordinator asks again.` };
+    if (done === "again") return { granted: `${refOf(asked)} was already allowed once as it stands: one yes is one grant, so nothing more was granted. If its 30 minutes passed unused, the coordinator asks again.` };
 
-    return done === "kept" || asked.notes.length === 0 ? NOTHING : { granted: asked.notes.join(" ") };
+    return done === "kept" || notes.length === 0 ? NOTHING : { granted: notes.join(" ") };
   } finally {
-    rmdirSync(lock);
+    releaseLock(lock);
   }
 }
 
@@ -517,12 +446,7 @@ function written(answered: Answered, asked: Asked, file: string, reload: string)
     const lines = granting.map((rule) => {
       const n = asked.rules.indexOf(rule) + 1;
 
-      const runs = asked.bound.flatMap((entry) => {
-        const run = readRun(entry);
-
-        return run?.n === n ? [{ path: run.path, sha256: run.sha256 }] : [];
-      });
-
+      const runs = runsOfCall(asked, n);
       const grant = { op: "grant", decision: asked.id, ref: asked.ref, rule, agent_id: asked.agentId, file, at: answered.at, by: answered.by, reload, rev: asked.rev, n, of: asked.rules.length };
       const bound = runs.length === 0 ? grant : { ...grant, runs };
 
@@ -543,6 +467,76 @@ function written(answered: Answered, asked: Asked, file: string, reload: string)
   }
 
   return "granted";
+}
+
+function refOf(asked: Asked): string {
+  return asked.ref === "" ? "This permission" : asked.ref;
+}
+
+/** The files call `n` (from 1) of a permission is bound to, as the hub read them when it granted. */
+function runsOfCall(asked: Asked, n: number): { readonly path: string; readonly sha256: string }[] {
+  return asked.bound.flatMap((entry) => {
+    const run = readRun(entry);
+
+    return run?.n === n ? [{ path: run.path, sha256: run.sha256 }] : [];
+  });
+}
+
+/**
+ * The answer `text` to `decision` as the hub stores it: an allow-kind to a permission that does not offer it (its
+ * opener held it to once, or an Agent spawn: `offersKind`) is the allow-once it grants, so the coordinator hears no
+ * ask for a rule. Any other answer is as given.
+ */
+export function answerAsOffered(dir: string, decision: string, text: string): string {
+  if (!asksKind(text)) return text;
+  const ledger = Option.getOrUndefined(parseLedger(readText(join(dir, "state.json")) ?? ""));
+  const d = ledger === undefined || ledger instanceof Refusal ? undefined : findDecision(ledger, decision);
+  const r = d?.kind === "permission" ? d.refusal : undefined;
+
+  if (r === undefined || r === null || offersKind(r)) return text;
+  const once = permissionOptions(r).find((o) => o.id === ALLOW_ONCE);
+  const rest = text.indexOf("\n");
+
+  return `${ALLOW_ONCE}: ${once?.label ?? "Allow this call once"}${rest < 0 ? "" : text.slice(rest)}`;
+}
+
+/**
+ * A rule card's Add this rule (Luiz's decision always-scope a, #115): the card's entry appended to `autoMode.allow` of
+ * the user's settings, the real file behind `$HOME/.claude/settings.json`, with `"$defaults"` kept first and every
+ * other entry kept, an identical entry skipped; and a line `{op: "rule", decision, file, sha256, at, by}` in the
+ * fleet's grants.jsonl. The entry is the row's, and only while it is still the one the page showed. Nothing ever
+ * removes an entry: Luiz edits his settings himself.
+ */
+async function addRuleAnswer(answered: Answered, d: Decision): Promise<GrantAnswer> {
+  const rule = d.rule ?? "";
+  const ref = d.ref ?? d.id;
+
+  if (d.status !== "open") return { refused: `${ref} is ${d.status}: nothing is added` };
+  const bad = whyNoRule(rule);
+
+  if (bad !== undefined) return { refused: `${ref}'s rule cannot be added: ${bad}` };
+
+  if (answered.ruleText !== rule) return { refused: `the page showed another rule than the one ${ref} holds now: reload the page, read it, and answer again` };
+  const file = userSettingsFile(answered.home);
+
+  if (file instanceof Ungranted) return { refused: `could not add ${ref}'s rule: ${file.reason}` };
+  const record = join(answered.dir, "grants.jsonl");
+  const sha256 = createHash("sha256").update(rule, "utf8").digest("hex");
+
+  const added = await addAutoModeRule(file, rule, () => {
+    try {
+      appendFileSync(record, `${JSON.stringify({ op: "rule", decision: d.id, file, sha256, at: answered.at, by: answered.by })}\n`, "utf8");
+
+      return undefined;
+    } catch (cause: unknown) {
+      return new Ungranted(`could not record the rule in ${record}: ${strerror(cause)}`);
+    }
+  });
+
+  if (added instanceof Ungranted) return { refused: added.reason };
+  const kept = added ? "" : " It was there already: nothing was added.";
+
+  return { granted: `Added to your settings: every session reads it at once. It sits in your dotfiles checkout: commit and push it from there.${kept}` };
 }
 
 /** The lines of a grants.jsonl that read as JSON objects, in order; none when the file is not there. */
@@ -638,6 +632,8 @@ function latestGrants(dirs: readonly string[]): Issued[] {
     for (const line of grantLines(join(dir, "grants.jsonl"))) {
       const [decision, rule, file, at] = [asString(line["decision"]), asString(line["rule"]), grantFile(line["file"]), asString(line["at"]) ?? ""];
 
+      // A rule line (a rule card's Add this rule) names the user's settings.json, which grantFile never takes, so no
+      // sweep takes it back; a line that says `lasting` of a session's grant file is the one-time grant it is.
       if (line["op"] !== "grant" || decision === undefined || rule === undefined || file === undefined) continue;
       const grant = { dir, decision, file, rule, at };
 
@@ -680,7 +676,7 @@ export async function expireGrants(dirs: readonly string[], now: Date, stamp: st
       continue;
     }
 
-    const lock = await lockSettings(grant.file);
+    const lock = await lockSettings(grant.file, SETTINGS_LOCK);
 
     if (lock instanceof Ungranted) continue;
 
@@ -720,7 +716,7 @@ export async function expireGrants(dirs: readonly string[], now: Date, stamp: st
     } catch {
       // A file that cannot be written now is tried again at the next sweep.
     } finally {
-      rmdirSync(lock);
+      releaseLock(lock);
     }
   }
 

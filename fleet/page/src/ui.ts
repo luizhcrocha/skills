@@ -10,6 +10,7 @@ import { createEffect, createMemo, createSignal, flush, untrack } from "solid-js
 import { createCarets } from "./carets.ts";
 import { decisionTrail, sideSummaries } from "./chatlog.ts";
 import { Core, type Decision, type FindRow, type ItemRef, type Json, type JsonRecord, type Lookup, type Quote, type QuoteAt } from "./core.ts";
+import { chatHeaders } from "./chat-headers.ts";
 import { postAsk, postOpen } from "./embed.ts";
 import { arrange, countsOf, cycleTab, itemsOf, readPrefix, tabsOf, type Item, type Section } from "./find.ts";
 import type { Model } from "./model.ts";
@@ -477,7 +478,7 @@ export function createUi(m: Model) {
     try {
       /* What waits on the decision shown goes first, in the same flush: its owner wakes once. */
       await outbox.current?.();
-      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: json });
+      const res = await fetch("chat", { method: "POST", headers: chatHeaders(), body: json });
       let data: Json = null;
 
       try {

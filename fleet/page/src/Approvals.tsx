@@ -8,6 +8,7 @@ import { For, Show, type JSX } from "@solidjs/web";
 
 import { RefTag, usePage, When } from "./bits.tsx";
 import { Core, type Approval, type Decision, type Json, type JsonRecord } from "./core.ts";
+import { chatHeaders } from "./chat-headers.ts";
 import { DecisionRef, Refs, RefsBeside } from "./DecisionRef.tsx";
 import { Rich, UndoText } from "./Rich.tsx";
 
@@ -115,7 +116,7 @@ function Standing(props: { readonly list: readonly Approval[]; readonly notices:
     flush();
 
     try {
-      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: json });
+      const res = await fetch("chat", { method: "POST", headers: chatHeaders(), body: json });
       let body: Json = null;
 
       try {

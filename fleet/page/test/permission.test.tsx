@@ -56,7 +56,7 @@ let dispose: () => void;
 
 let root: HTMLElement;
 
-const posted: { text: string; decision?: string; rule?: string; rules?: string[]; root?: string; runs?: string[] }[] = [];
+const posted: { text: string; decision?: string; rule?: string; rules?: string[]; root?: string; runs?: string[]; rule_text?: string }[] = [];
 
 /** What the hub answers a post with: 201 and the message, or a status and its error. */
 interface HubAnswer {
@@ -66,11 +66,15 @@ interface HubAnswer {
 
 let answer: HubAnswer = { status: 201 };
 
+/** The page token each post to chat carried (the hub's `grantRefusal` needs it on an answer that grants). */
+const tokens: (string | null)[] = [];
+
 beforeEach(() => {
   Object.assign(globalThis, { FleetCore: Core });
   localStorage.clear();
   location.hash = "";
   posted.length = 0;
+  tokens.length = 0;
   answer = { status: 201 };
   // SAFETY: the stub answers the calls the page makes with `fetch`: the skills list, a post to chat, else not found.
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -81,6 +85,7 @@ beforeEach(() => {
     if (url === "chat") {
       const body: { text: string; decision?: string; rule?: string; rules?: string[]; root?: string; runs?: string[] } = JSON.parse(String(init?.body));
       posted.push(body);
+      tokens.push(new Headers(init?.headers).get("X-Fleet-Page-Token"));
 
       return answer.status === 201
         ? new Response(JSON.stringify({ id: 99, at: new Date(NOW).toISOString(), from: "user", to: ["coordinator"], text: body.text, decision: body.decision }), { status: 201 })
@@ -118,7 +123,11 @@ const form = (): HTMLFormElement | null => root.querySelector<HTMLFormElement>("
 async function send(choice: string | undefined, note = ""): Promise<void> {
   const pick = choice === undefined ? null : root.querySelector<HTMLInputElement>(`#dv-answer input[name="choice"][value="${choice}"]`);
 
-  if (pick) pick.checked = true;
+  if (pick) {
+    pick.checked = true;
+    pick.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
   const field = root.querySelector<HTMLTextAreaElement>('#dv-answer textarea[name="note"]');
 
   if (field) field.value = note;
@@ -132,7 +141,7 @@ const exact = (): Element | null => root.querySelector("#dv-answer [data-exact-c
 test("the refused call shows with its cause in plain words, the rule and the file it goes into", () => {
   const facts = [...root.querySelectorAll("#dv-answer .refused dl > *")].map((e) => e.textContent);
   expect(facts).toEqual(["Auto mode stopped it because", "it can erase work in git: history or changes not yet saved ([Git Destructive])", "Rule", RULE, "Goes into", FILE]);
-  expect([...root.querySelectorAll('#dv-answer input[name="choice"]')].map((i) => i.getAttribute("value"))).toEqual(["allow-once", "deny"]);
+  expect([...root.querySelectorAll('#dv-answer input[name="choice"]')].map((i) => i.getAttribute("value"))).toEqual(["allow-once", "allow-kind", "deny"]);
   expect(root.querySelector('#dv-answer textarea[name="note"]')).not.toBeNull();
 });
 
@@ -171,6 +180,20 @@ test("an answer is the option as it reads, with the note after it; none picked a
   expect([posted, root.querySelector("#dv-error")?.textContent]).toEqual([[], "Pick one option."]);
   await send("deny", "not on main; push a branch");
   expect(posted).toEqual([{ text: "deny: Deny\nnot on main; push a branch", decision: "p-1a2b3c4d", rule: RULE, root: ROOT }]);
+});
+
+test("an answer carries the page token the hub put in the page, which a grant needs", async () => {
+  const meta = document.createElement("meta");
+  meta.name = "fleet-page-token";
+  meta.content = "tok-123";
+  document.head.append(meta);
+
+  try {
+    await send("allow-once");
+    expect([posted.map((p) => p.text), tokens]).toEqual([["allow-once: Allow this call once"], ["tok-123"]]);
+  } finally {
+    meta.remove();
+  }
 });
 
 test("the hub's refusal to grant shows on the form", async () => {
@@ -338,5 +361,108 @@ describe("what a call runs", () => {
     expect(css).toContain(".exact-call .code-pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: visible; max-height: none; }");
     expect(css).toContain(".exact-call .code-wrap { display: none; }");
     expect(css).toContain(".call-runs { margin: 0; font-size: var(--fs-s); color: var(--muted); overflow-wrap: anywhere; }");
+  });
+});
+
+describe("Allow once and save this kind", () => {
+  const choices = (): (string | null)[] => [...root.querySelectorAll('#dv-answer input[name="choice"]')].map((i) => i.getAttribute("value"));
+
+  function again(item: View): void {
+    dispose();
+    root.remove();
+    show(item);
+  }
+
+  test("a Bash card shows it after Allow once, with its plain line under it, and the answer grants the one call as allow-once does", async () => {
+    again(PERMISSION);
+    expect(choices()).toEqual(["allow-once", "allow-kind", "deny"]);
+    const label = root.querySelector('#dv-answer label.option:has(input[value="allow-kind"])');
+    expect(label?.querySelector(".label")?.textContent).toBe("allow-kind: Allow once and save this kind");
+    expect(label?.querySelector(".consequence")?.textContent).toBe("allows this call now; then I draft a rule for this kind of command for you to add");
+    await send("allow-kind");
+    expect(posted).toEqual([{ text: "allow-kind: Allow once and save this kind", decision: "p-1a2b3c4d", rule: REFUSAL.rule, root: ROOT }]);
+  });
+
+  test("a card its opener marked once never shows it, nor an Agent spawn; an old row's Allow always shows no more", () => {
+    again({ ...PERMISSION, refusal: { ...REFUSAL, once: true } });
+    expect(choices()).toEqual(["allow-once", "deny"]);
+
+    again({ ...PERMISSION, refusal: { ...REFUSAL, tool: "Agent", call: '{"prompt":"x"}', rule: "Agent" } });
+    expect(choices()).toEqual(["allow-once", "deny"]);
+
+    const listed = [
+      { id: "allow-once", label: "Allow this call once", consequence: "once" },
+      { id: "allow-always", label: "Allow always", consequence: "x" },
+      { id: "deny", label: "Deny", consequence: "stopped" },
+    ];
+
+    again({ ...PERMISSION, options: listed, refusal: { ...REFUSAL, once: true } });
+    expect(choices()).toEqual(["allow-once", "deny"]);
+  });
+});
+
+describe("a rule card", () => {
+  const ENTRY = "Removing a finished jj workspace: `jj workspace forget <name>` in a repo under /home/u/repos.\n  The folder stays.\nNot covered: the default workspace, `jj abandon`, deleting the folder.";
+
+  const RULE_CARD: View = {
+    ...PERMISSION,
+    ref: "D7",
+    kind: "rule",
+    title: "Save workspace forgets",
+    question: "Let every agent forget a finished workspace without asking?",
+    why: "from P12; the review found no write it lets through",
+    refusal: null,
+    rule: ENTRY,
+    options: [
+      { id: "add-rule", label: "Add this rule", consequence: "adds the rule above to autoMode.allow in your ~/.claude/settings.json; every session reads it at once" },
+      { id: "deny", label: "Not now", consequence: "nothing is added; your note goes to the coordinator" },
+    ],
+  };
+
+  function again(item: View): void {
+    dispose();
+    root.remove();
+    show(item);
+  }
+
+  test("shows the rule whole and verbatim in a monospace block that keeps its line breaks, and Add this rule sends the text it showed", async () => {
+    again(RULE_CARD);
+    const pre = root.querySelector<HTMLElement>('#dv-answer pre.rule-text[data-field="rule"]');
+    expect(pre?.textContent).toBe(ENTRY);
+    const css = await Bun.file(new URL("../src/page.css", import.meta.url)).text();
+    expect(css).toMatch(/pre\.rule-text \{[^}]*font-family: var\(--mono\);[^}]*white-space: pre-wrap;/u);
+    expect([...root.querySelectorAll('#dv-answer input[name="choice"]')].map((i) => i.getAttribute("value"))).toEqual(["add-rule", "deny"]);
+    await send("add-rule");
+    expect(posted).toEqual([{ text: "add-rule: Add this rule", decision: "p-1a2b3c4d", rule_text: ENTRY }]);
+  });
+
+  test("a rule swapped in place under a picked Add this rule clears the pick and says so; picked again, it sends the rule now shown", async () => {
+    const SWAPPED = "Any jj command at all in /home/u/repos.\nNot covered: commands outside that folder.";
+    again(RULE_CARD);
+    pick("add-rule");
+    await becomes({ ...RULE_CARD, rule: SWAPPED });
+    expect(root.querySelector('#dv-answer pre.rule-text[data-field="rule"]')?.textContent).toBe(SWAPPED);
+    expect(picked()).toEqual([]);
+    expect(root.querySelector("#dv-moved")?.textContent).toContain("your choice was cleared");
+    form()?.requestSubmit();
+    await new Promise((r) => setTimeout(r, 0));
+    flush();
+    expect([posted, root.querySelector("#dv-error")?.textContent]).toEqual([[], "Pick one option."]);
+    await send("add-rule");
+    expect(posted).toEqual([{ text: "add-rule: Add this rule", decision: "p-1a2b3c4d", rule_text: SWAPPED }]);
+  });
+
+  test("Add this rule sends the rule the page showed when it was picked, not the row's now", () => {
+    const now = Core.parseState({ ...coordinatorView(NOW), decisions: [{ ...RULE_CARD, rule: "Another rule.\nNot covered: anything else at all." }], roadblocks: [] })?.decisions[0];
+
+    if (!now) throw new Error("the fixture is not a state");
+    expect(Core.answerText(now, { choice: "add-rule", rule: ENTRY })).toEqual({ text: "add-rule: Add this rule", rule_text: ENTRY });
+    expect(Core.answerText(now, { choice: "add-rule" })).toEqual({ error: "Pick Add this rule again, once you have read the rule above." });
+  });
+
+  test("Not now sends no rule", async () => {
+    again(RULE_CARD);
+    await send("deny");
+    expect(posted).toEqual([{ text: "deny: Not now", decision: "p-1a2b3c4d" }]);
   });
 });

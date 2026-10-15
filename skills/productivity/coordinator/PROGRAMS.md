@@ -73,17 +73,30 @@ declare function worker(id: string, fields: { name?: string; task?: string; skil
 /** Add a step to milestone, or move the step with that id (its status in place). */
 declare function step(milestone: string, id: string, title: string, status: "blocked" | "current" | "done" | "pending", agent?: string): LogDraft;
 declare function milestone(id: string, title: string): LogDraft;
-/** A card's fields: kind is decision, input, secret, action, grill, notice or permission; title and question are required. */
-type Card = { kind: string; title: string; question: string; options?: { id: string; label: string; consequence: string }[]; recommend?: string; reason?: string; why?: string; blocking?: boolean; agent?: string; asks?: "user" | "manager" } | PermissionCard;
+/** A card's fields: kind is decision, input, secret, action, grill, notice, permission or rule; title and question are required. */
+type Card = { kind: string; title: string; question: string; options?: { id: string; label: string; consequence: string }[]; recommend?: string; reason?: string; why?: string; blocking?: boolean; agent?: string; asks?: "user" | "manager" } | PermissionCard | RuleCard;
 /**
  * A permission card: the owner allows the exact calls once each, and the office host writes one exact rule per call
  * into root's .claude/settings.local.json (an Agent's into .claude/tstack-grants.json); each rule goes once its call
  * ran, any left after 30 minutes. tool is Bash or Agent; call is the exact command (an Agent's, its tool input as
  * JSON), with no *, |, backslash or newline, at most 2000 characters; then holds the further Bash commands, granted
  * with it, at most 10 calls in all; root is the absolute folder of the session that runs them, which must be a
- * workspace of this fleet or a --root of the office host. The card's options are set for you: allow-once and deny.
+ * workspace of this fleet or a --root of the office host. The card's options are set for you: allow-once,
+ * allow-kind ("Allow once and save this kind": it grants exactly as allow-once does, and marks the card
+ * kind_requested; not on an Agent spawn, not with once: true), and deny. An allow-kind answer asks you for a
+ * RuleCard (below). A command the fleet can run is a permission, never an action card for the owner to run.
  */
-type PermissionCard = { kind: "permission"; title: string; question: string; tool: "Bash" | "Agent"; call: string; then?: string[]; root: string; why?: string; blocking?: boolean; agent?: string };
+type PermissionCard = { kind: "permission"; title: string; question: string; tool: "Bash" | "Agent"; call: string; then?: string[]; root: string; why?: string; blocking?: boolean; agent?: string; once?: boolean };
+/**
+ * A rule card, after an allow-kind answer: rule is ONE autoMode.allow entry for that kind of command, drafted in the
+ * style of the entries already in ~/.claude/settings.json (what is allowed, bounded by literal paths and
+ * subcommands, then "Not covered: ..."), reviewed by a fresh Opus agent that attacks its bounds, its fixes applied.
+ * question says in one plain line what it lets every agent do without asking; why names the cards it came from and
+ * the review's verdict. The page shows rule verbatim; the options are set for you: add-rule ("Add this rule": the
+ * office host appends it to autoMode.allow in the owner's real ~/.claude/settings.json) and deny ("Not now"). The
+ * fold refuses the rules the CLI refuses (SKILL.md, "Allow once and save this kind"; the two repos share rule-card.cases.json).
+ */
+type RuleCard = { kind: "rule"; title: string; question: string; rule: string; why: string; blocking?: boolean; agent?: string };
 declare const decision: {
   /** Open a card the cloud numbers by its kind's letter (D219, P40, ...): the applied result's key is its id. */
   open(fields: Card): LogDraft;

@@ -829,7 +829,7 @@ def gen(rng: random.Random, m: Model) -> dict:
         elif what == "unhold":
             c["unhold"] = True
         elif what == "represent":
-            c.update(manual="```nu\ncd repo; ./fixed\n```", log="the new command")
+            c.update(manual="1. Unlock 1Password when it asks.\n2. Paste this where the dashboard asks:\n```text\nfixed\n```", log="the new step")
         elif what == "place":
             c["step"] = pick(step_ids + ["s9"])
         elif what == "elsewhere":
@@ -841,7 +841,7 @@ def gen(rng: random.Random, m: Model) -> dict:
                 c["options"] = ["A: a | x", "B: b | y"] if maybe(0.9) else ["A: a | x"]
                 c.update(recommend=pick(["A", "B"]) if maybe(0.9) else "C", reason="R")
             if kind in ("action", "secret") and maybe(0.9):
-                c["manual"] = "```nu\ncd repo; ./by-hand\n```"  # a fenced command: an action's manual says how (SPEC.md, decision)
+                c["manual"] = "1. Unlock 1Password when it asks.\n2. Paste this where the dashboard asks:\n```text\nby-hand\n```"  # hand steps and a value to paste: an action's manual says how, and only Luiz can take it (SPEC.md, decision; the TypeScript fleet refuses a manual that holds a command, unless --hand says why only Luiz can run it)
             if kind == "action" and maybe(0.1):
                 c["options"] = ["yes: do it | done", "no: leave it | kept"]
                 c.update(recommend="yes", reason="R")

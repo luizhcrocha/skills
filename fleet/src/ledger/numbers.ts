@@ -18,6 +18,7 @@ export const PREFIX = new Map([
   ["grill", "G"],
   ["notice", "N"],
   ["permission", "P"],
+  ["rule", "D"],
 ]);
 
 /** Whether `id` reads as an item number (a counter's letter and digits, as D217 or K3): a page links it as

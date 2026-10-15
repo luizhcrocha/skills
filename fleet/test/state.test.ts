@@ -419,7 +419,7 @@ describe("numbers", () => {
   test("each kind is numbered in order and a number finds its row", () => {
     const opt = ["--option", "a: A | x", "--option", "b: B | y", "--recommend", "a", "--reason", "r"];
     f.ok("decision", "d-deploy", "--kind", "decision", "--title", "Deploy", "--question", "q", "--why", "w", ...opt);
-    f.ok("decision", "d-key", "--kind", "action", "--title", "Rotate", "--question", "q", "--why", "w", "--manual", "```nu\ncd repo; ./rotate\n```");
+    f.ok("decision", "d-key", "--kind", "action", "--title", "Rotate", "--question", "q", "--why", "w", "--manual", "```nu\ncd repo; ./rotate\n```", "--hand", "the rotation asks for his hardware key");
     f.ok("decision", "d-when", "--kind", "decision", "--title", "When", "--question", "q", "--why", "w", ...opt);
     f.ok("link", "rev", "--url", "https://b.ts.net:1/", "--title", "Review", "--kind", "page");
     expect(f.rows("decisions").map((d) => d["ref"])).toEqual(["D1", "A1", "D2"]);
@@ -494,7 +494,7 @@ describe("origin", () => {
     f = new Fleet().setUp();
     f.ok("step", "l19", "--milestone", "m2", "--title", "Watchdog");
     f.ok("agent", "b41", "--task", "t", "--milestone", "m1");
-    f.ok("decision", "d-a", "--kind", "action", "--title", "Unblock", "--question", "q", "--why", "w", "--manual", "```nu\ncd repo; ./unblock\n```", "--step", "l19");
+    f.ok("decision", "d-a", "--kind", "action", "--title", "Unblock", "--question", "q", "--why", "w", "--manual", "```nu\ncd repo; ./unblock\n```", "--step", "l19", "--hand", "it runs in his own terminal");
     f.ok("decision", "d-b", "--kind", "input", "--title", "Which", "--question", "q", "--why", "w", "--agent", "b41");
     const d = new Map(f.rows("decisions").map((x) => [x["id"], x]));
     expect([d.get("d-a")?.["step"], d.get("d-a")?.["milestone"]]).toEqual(["l19", "m2"]);
@@ -563,7 +563,7 @@ describe("manager", () => {
 
     for (const args of [
       ["event", "--kind", "integrated", "--agent", "billing", "l2 landed as 1d5b1b1a"],
-      ["decision", "d1", "--kind", "action", "--title", "Deploy billing", "--question", "q", "--why", "w", "--manual", "```nu\njust deploy billing\n```", "--agent", "billing"],
+      ["decision", "d1", "--kind", "action", "--title", "Deploy billing", "--question", "q", "--why", "w", "--manual", "1. Touch the hardware key when the deploy asks.\n```nu\njust deploy billing\n```", "--agent", "billing", "--hand", "the deploy asks for his hardware key"],
     ]) {
       const result = m.run(...args);
       expect(result.code, result.stderr).toBe(0);

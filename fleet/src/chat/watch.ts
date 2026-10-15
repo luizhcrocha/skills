@@ -770,8 +770,8 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
           d.kind === "action" && m.text.startsWith(FAILED)
             ? `-> the user's step ${d.label} failed, and it is not done: fix it and re-present it, \`fleet state ${root} decision ${d.label} --manual ...\`, or --withdraw "why"; never --decide\n`
             : d.kind === "permission"
-              ? `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide "<allow-once or deny>" --resolution "answered on the page (#${m.id})"\`; ` +
-                "for an allow-once that prints the exact call to run, and nothing of it runs before\n"
+              ? `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide "<allow-once, allow-kind or deny>" --resolution "answered on the page (#${m.id})"\`; ` +
+                "for an allow-once or allow-kind that prints the exact call to run, and nothing of it runs before; an allow-kind then asks you for a rule card (the --decide output says how)\n"
               : `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide ...\`\n`,
         );
 

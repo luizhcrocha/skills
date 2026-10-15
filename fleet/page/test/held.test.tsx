@@ -124,3 +124,16 @@ test("what waits is named by kind: one of each of two kinds, and things for thre
   flush();
   expect(headline()).toBe("3 things wait on you.");
 });
+
+test("an action the fleet could not take itself says why only you, as its opener wrote it (--hand)", () => {
+  page.m.takeState(JSON.stringify(viewWith({ ...ACTION, manual: "```nu\njust cut --roles\n```", hand: "it runs in his own terminal, logged in as him" })));
+  location.hash = "#decision/a1";
+  page.ui.route();
+  flush();
+  const why = root.querySelector('#decision [data-field="hand"]');
+  expect(why?.closest(".dv-block")?.querySelector("h3")?.textContent).toBe("Why only you");
+  expect(why?.textContent).toBe("it runs in his own terminal, logged in as him");
+  page.m.takeState(JSON.stringify(viewWith(ACTION)));
+  flush();
+  expect(root.querySelector('#decision [data-field="hand"]')).toBeNull();
+});

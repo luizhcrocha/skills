@@ -27,6 +27,7 @@ import { listen, tf, usePage, When } from "./bits.tsx";
 import { readBody } from "./bodytext.ts";
 import { CaretList } from "./CaretList.tsx";
 import { Core, type Json, type JsonRecord, type MarkDecision, type MarkItem, type MarkKind, type MarkQuote, type Quote } from "./core.ts";
+import { chatHeaders } from "./chat-headers.ts";
 import { parseEmbedMessage, parseEvidenceSelect, parseFrameSaid, realTap } from "./embed.ts";
 import { inboxOf, lastLine, newestFleet, splitDone, unreadCount, wholeWords, type Thread, type Turn } from "./inbox.ts";
 import { KIND_WORDS, nextNumber, placeMark, QUOTED_KINDS, quoteLines, sentOf, type Claimed, type DraftStore } from "./marks.ts";
@@ -548,7 +549,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
     if (over) return { error: over };
 
     try {
-      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: json });
+      const res = await fetch("chat", { method: "POST", headers: chatHeaders(), body: json });
       let data: Json = null;
 
       try {
@@ -659,7 +660,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
     const plain: Promise<void>[] = [];
 
     for (const x of exitPosts(planSend(p, tg))) {
-      const req = fetch("chat", { method: "POST", keepalive: x.keepalive, headers: { "Content-Type": "application/json" }, body: x.json });
+      const req = fetch("chat", { method: "POST", keepalive: x.keepalive, headers: chatHeaders(), body: x.json });
 
       if (x.keepalive) {
         keep(without(pending(), x.post.carries));

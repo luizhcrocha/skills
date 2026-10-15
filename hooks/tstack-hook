@@ -2072,6 +2072,8 @@ def _latest_grants(hook, raw):
             continue
         if not isinstance(entry, dict) or not isinstance(entry.get("decision"), str) or not isinstance(entry.get("rule"), str):
             continue
+        # A line that names the user's settings.json (where a rule card's entry goes) is one _grant_file never takes:
+        # nothing here takes it back. A line that says `lasting` of a session's grant file is the one-time grant it is.
         file = _grant_file(entry.get("file"))
         if file is None:
             continue

@@ -5,7 +5,7 @@
  * Every test starts a real hub on a free loopback port, with a registry of its own and a fake
  * `tailscale` that names this machine's owner.
  */
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 
@@ -144,8 +144,23 @@ async function request(method: string, path: string, body?: string, headers: Rec
   return { status: res.status, body: parsed, headers: res.headers };
 }
 
-function post(payload: string | JsonObject, headers: Record<string, string> = {}, path = "/f/p/chat"): Promise<Answer> {
-  return request("POST", path, payload instanceof Object ? JSON.stringify(payload) : payload, { "Content-Type": "application/json", ...headers });
+/** What the fleet's own page sends with a post that grants: its origin, same-origin, and the page token the hub put
+ * in that page at its top-level load (`grantRefusal`). */
+async function pageHeaders(path: string): Promise<Record<string, string>> {
+  const page = await request("GET", path.replace(/chat(?:\/preview)?$/u, ""), undefined, { "Sec-Fetch-Dest": "document" });
+  const token = /<meta name="fleet-page-token" content="([^"]+)">/u.exec(asString(page.body["text"]) ?? "")?.[1] ?? "";
+
+  return { Origin: `http://127.0.0.1:${String(port)}`, "Sec-Fetch-Site": "same-origin", "X-Fleet-Page-Token": token };
+}
+
+/** A post as the page sends it; an answer that grants (allow-once, allow-kind) or adds a rule (add-rule) carries the
+ * page's headers, as the fleet's own page does. */
+async function post(payload: string | JsonObject, headers: Record<string, string> = {}, path = "/f/p/chat"): Promise<Answer> {
+  const body = payload instanceof Object ? payload : {};
+  const grants = asString(body["decision"]) !== undefined && /^(?:allow-|add-rule)/iu.test((asString(body["text"]) ?? "").trim());
+  const page = grants ? await pageHeaders(path) : {};
+
+  return request("POST", path, payload instanceof Object ? JSON.stringify(payload) : payload, { "Content-Type": "application/json", ...page, ...headers });
 }
 
 /** An open stream, read one event at a time. */
@@ -2350,6 +2365,37 @@ describe("a permission's answer grants the call once", () => {
     withRows(permission());
   });
 
+  test("a grant comes only from the fleet's own page: a loopback post with no Origin, Sec-Fetch-Site or page token grants nothing", async () => {
+    await start();
+    const self = `http://127.0.0.1:${String(port)}`;
+    const own = await pageHeaders("/f/p/chat");
+    expect((own["X-Fleet-Page-Token"] ?? "").length).toBeGreaterThan(20);
+    const refused = "a grant comes only from the fleet's own page on this hub: answer it there";
+    const stale = "the page token is missing or stale: reload the fleet's page and answer again";
+
+    for (const text of ["allow-once: Allow this call once", "allow-kind: Allow once and save this kind", "add-rule: Add this rule", "  Allow-Once"]) {
+      const json = JSON.stringify({ ...allow, text });
+
+      const cases: readonly (readonly [Record<string, string>, string])[] = [
+        [{}, refused],
+        [{ Origin: self }, refused],
+        [{ "Sec-Fetch-Site": "same-origin" }, refused],
+        [{ Origin: self, "Sec-Fetch-Site": "same-origin" }, stale],
+        [{ ...own, "X-Fleet-Page-Token": "x" }, stale],
+        [{ "X-Fleet-Page-Token": own["X-Fleet-Page-Token"] ?? "" }, refused],
+      ];
+
+      for (const [headers, error] of cases) {
+        const got = await request("POST", "/f/p/chat", json, { "Content-Type": "application/json", ...headers });
+        expect([got.status, got.body["error"]], JSON.stringify(headers)).toEqual([403, error]);
+      }
+    }
+
+    expect([existsSync(settings), grants(), readChat(root)]).toEqual([false, [], []]);
+    // A deny grants nothing and needs no token.
+    expect((await request("POST", "/f/p/chat", JSON.stringify({ ...allow, text: "deny: Deny" }), { "Content-Type": "application/json" })).status).toBe(201);
+  });
+
   test("allow-once adds the exact rule to the session's settings, keeps the rest, records the grant, then stores the answer", async () => {
     writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)"], deny: ["Bash(rm -rf /)"] }, model: "opus" }));
     await start();
@@ -2586,6 +2632,109 @@ describe("a permission's answer grants the call once", () => {
     expect(grants().map((g) => [g["op"], g["decision"]])).toEqual([["grant", "p-old"], ["remove", "p-old"]]);
   });
 
+  test("allow-kind grants exactly as allow-once does: the one call, once, in the session's settings", async () => {
+    await start();
+    const sent = await post({ ...allow, text: "allow-kind: Allow once and save this kind" });
+    expect([sent.status, sent.body["grant"]]).toEqual([201, undefined]);
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
+    expect(grants().map((g) => [g["op"], g["rule"], g["file"], g["lasting"]])).toEqual([["grant", RULE, settings, undefined]]);
+  });
+
+  test("allow-kind on a card that does not offer it (held to once, or an Agent spawn) is stored and granted as allow-once", async () => {
+    withRows(permission({ refusal: { tool: "Bash", call: CALL, rule: RULE, cause: "[Git Destructive]", root: session, agent_id: "agent-7f", once: true } }));
+    await start();
+    const sent = await post({ ...allow, text: "allow-kind: Allow once and save this kind\nthanks" });
+    expect([sent.status, sent.body["text"]]).toEqual([201, "allow-once: Allow this call once\nthanks"]);
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
+    const stored = readFileSync(join(root, "chat.jsonl"), "utf8").trim().split("\n").map((l) => asObject(JSON.parse(l)) ?? {});
+    expect(stored.at(-1)?.["text"]).toBe("allow-once: Allow this call once\nthanks");
+  });
+
+  describe("a rule card's Add this rule appends its entry to autoMode.allow in the user's settings", () => {
+    const ENTRY = "Removing a finished jj workspace: `jj workspace forget <name>` in a repo under /home/u/repos.\nNot covered: the default workspace, `jj abandon`, deleting the folder.";
+    const ADDED = "Added to your settings: every session reads it at once. It sits in your dotfiles checkout: commit and push it from there.";
+    let home: string;
+    let target: string;
+
+    const ruleCard = (over: JsonObject = {}): JsonObject => ({
+      id: "r-forget",
+      ref: "D7",
+      kind: "rule",
+      title: "Save workspace forgets",
+      question: "Let every agent forget a finished workspace without asking?",
+      why: "from P12; the review found no write it lets through",
+      status: "open",
+      resolution: null,
+      opened: "2026-01-01T00:00:00+00:00",
+      rule: ENTRY,
+      options: [
+        { id: "add-rule", label: "Add this rule", consequence: "c" },
+        { id: "deny", label: "Not now", consequence: "c" },
+      ],
+      ...over,
+    });
+
+    const add = { text: "add-rule: Add this rule", decision: "r-forget", rule_text: ENTRY };
+
+    const settingsOf = (): JsonObject => asObject(JSON.parse(readFileSync(target, "utf8"))) ?? {};
+
+    beforeEach(() => {
+      // A temp HOME whose settings.json is a link into a dotfiles checkout, as on Luiz's machines: never the real one.
+      home = join(base, "home");
+      target = join(base, "dotfiles", "claude", "settings.json");
+      mkdirSync(join(home, ".claude"), { recursive: true });
+      mkdirSync(join(base, "dotfiles", "claude"), { recursive: true });
+      writeFileSync(target, `${JSON.stringify({ model: "opus", autoMode: { allow: ["$defaults", "K18"], soft_deny: ["x"] } }, null, 2)}\n`);
+      symlinkSync(target, join(home, ".claude", "settings.json"));
+      env = { ...env, HOME: home };
+      withRows(ruleCard());
+    });
+
+    test("appends the entry after the others, $defaults first, logs a rule line, and no sweep takes it back", async () => {
+      await start();
+      const sent = await post(add);
+      expect([sent.status, sent.body["grant"]]).toEqual([201, ADDED]);
+      expect(settingsOf()).toEqual({ model: "opus", autoMode: { allow: ["$defaults", "K18", ENTRY], soft_deny: ["x"] } });
+      expect(lstatSync(join(home, ".claude", "settings.json")).isSymbolicLink()).toBe(true);
+      const sha256 = new Bun.CryptoHasher("sha256").update(ENTRY).digest("hex");
+      const [line, ...more] = grants();
+      expect(more).toEqual([]);
+      expect(Object.keys(line ?? {})).toEqual(["op", "decision", "file", "sha256", "at", "by"]);
+      expect([line?.["op"], line?.["decision"], line?.["file"], line?.["sha256"]]).toEqual(["rule", "r-forget", target, sha256]);
+      await running?.hub.expireGrants();
+      expect(settingsOf()).toEqual({ model: "opus", autoMode: { allow: ["$defaults", "K18", ENTRY], soft_deny: ["x"] } });
+    });
+
+    test("an identical entry is not added again", async () => {
+      writeFileSync(target, `${JSON.stringify({ autoMode: { allow: ["$defaults", ENTRY] } }, null, 2)}\n`);
+      await start();
+      const sent = await post(add);
+      expect([sent.status, sent.body["grant"]]).toEqual([201, `${ADDED} It was there already: nothing was added.`]);
+      expect(settingsOf()).toEqual({ autoMode: { allow: ["$defaults", ENTRY] } });
+    });
+
+    test("Not now writes nothing; a rule the page did not show, or a header-less loopback post, adds nothing", async () => {
+      await start();
+      const deny = await post({ text: "deny: Not now", decision: "r-forget" });
+      expect(deny.status).toBe(201);
+      const changed = await post({ ...add, rule_text: "something else" });
+      expect([changed.status, changed.body["error"]]).toEqual([409, "the page showed another rule than the one D7 holds now: reload the page, read it, and answer again"]);
+      const bare = await request("POST", "/f/p/chat", JSON.stringify(add), { "Content-Type": "application/json" });
+      expect([bare.status, bare.body["error"]]).toEqual([403, "a grant comes only from the fleet's own page on this hub: answer it there"]);
+      expect(settingsOf()).toEqual({ model: "opus", autoMode: { allow: ["$defaults", "K18"], soft_deny: ["x"] } });
+      expect(grants()).toEqual([]);
+    });
+
+    test("a rule card whose entry is a bad shape adds nothing", async () => {
+      withRows(ruleCard({ rule: "`jj workspace forget *`" }));
+      await start();
+      const sent = await post({ ...add, rule_text: "`jj workspace forget *`" });
+      expect(sent.status).toBe(409);
+      expect(String(sent.body["error"])).toContain("D7's rule cannot be added");
+      expect(settingsOf()).toEqual({ model: "opus", autoMode: { allow: ["$defaults", "K18"], soft_deny: ["x"] } });
+    });
+  });
+
   describe("a call that runs a script is bound to the file", () => {
     let script: string;
     const sha = (): string => new Bun.CryptoHasher("sha256").update(readFileSync(script)).digest("hex");
@@ -2656,6 +2805,13 @@ describe("a permission's answer grants the call once", () => {
       expect(await expire("2026-01-01T00:31:00+00:00")).toEqual([]);
       expect(grants().length).toBe(2);
       expect(existsSync(join(session, ".claude", ".settings.local.json.lock"))).toBe(false);
+    });
+
+    test("a line that says lasting of a session's settings is a one-time grant all the same: any agent can append it", async () => {
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE] } }));
+      writeFileSync(join(root, "grants.jsonl"), grantLine({ lasting: true }));
+      expect(await expire("2026-01-01T00:30:00+00:00")).toEqual([`${RULE} in ${settings}`]);
+      expect(allowed()).toBe(JSON.stringify([]));
     });
 
     test("a remove line an agent appended ends nothing: the rule in the file is what stands", async () => {
@@ -2900,7 +3056,7 @@ describe("a permission's answer grants the call once", () => {
       await dead.exited;
       expect(registeredSession(dead.pid)).toBeUndefined();
       expect(registeredSession(process.pid)).toEqual({ pid: process.pid, cwd: process.cwd() });
-      const answered = { dir: root, decision: "p-1a2b3c4d", text: allow.text, rule: RULE, rules: undefined, runs: undefined, root: session, by: "local", at: "2026-01-01T00:00:00+00:00" };
+      const answered = { dir: root, decision: "p-1a2b3c4d", text: allow.text, rule: RULE, rules: undefined, runs: undefined, root: session, by: "local", at: "2026-01-01T00:00:00+00:00", home: undefined };
       expect(registeredSession(1)).toBeUndefined();
       expect(await grantAnswer({ ...answered, registered: () => registeredSession(dead.pid) })).toEqual({
         refused:

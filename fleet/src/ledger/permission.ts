@@ -17,13 +17,28 @@ import * as Effect from "effect/Effect";
 
 import { stateRefusal, type Refusal } from "../errors.ts";
 import { asObject, type Json } from "../json.ts";
+import { ALLOW_KIND, ALLOW_KIND_LABEL, allowKindWords, offersKind } from "./allow-kind.ts";
 import type { Choice, RefusedCall } from "./model.ts";
+
+export { ALLOW_KIND, ALLOW_KIND_LABEL, allowKindWords, offersKind } from "./allow-kind.ts";
 
 /** The tools a permission handles: a shell command, and a subagent's spawn. */
 export const PERMISSION_TOOLS: readonly string[] = ["Bash", "Agent"];
 
 /** The option that grants the call once. */
 export const ALLOW_ONCE = "allow-once";
+
+/** Whether an answer to a permission lets its calls through, once: it begins with allow-once or allow-kind. */
+export function allows(answer: string): boolean {
+  const text = answer.trim().toLowerCase();
+
+  return text.startsWith(ALLOW_ONCE) || text.startsWith(ALLOW_KIND);
+}
+
+/** Whether an answer to a permission asks for a rule for its kind: it begins with allow-kind. */
+export function asksKind(answer: string): boolean {
+  return answer.trim().toLowerCase().startsWith(ALLOW_KIND);
+}
 
 /** How long a grant the call has not used stays; the hook's GRANT_TTL_S is the same. */
 const GRANT_TTL_MIN = 30;
@@ -147,7 +162,9 @@ export function simpleCommands(call: string, anyCall = false): string[][] {
     words = [];
   };
 
-  for (const [at, c] of [...call].entries()) {
+  const chars = Array.from(call);
+
+  for (const [at, c] of chars.entries()) {
     if (quote !== "") {
       if (c === quote) quote = "";
       else word = (word ?? "") + c;
@@ -156,7 +173,7 @@ export function simpleCommands(call: string, anyCall = false): string[][] {
       word ??= "";
     } else if (c === " " || c === "\t") endWord();
     else if (anyCall && (c === "|" || c === "\n" || c === "\r")) endCommand();
-    else if (c === ";" || c === "(" || c === ")" || (c === "&" && call[at - 1] !== ">" && call[at - 1] !== "<" && call[at + 1] !== ">")) endCommand();
+    else if (c === ";" || c === "(" || c === ")" || (c === "&" && chars[at - 1] !== ">" && chars[at - 1] !== "<" && chars[at + 1] !== ">")) endCommand();
     else word = (word ?? "") + c;
   }
 
@@ -323,12 +340,14 @@ export function makeRefusedCall(given: RefusedGiven): Effect.Effect<RefusedCall,
   return Effect.succeed(row);
 }
 
-/** A permission's two options, which the CLI sets itself, each saying what it means for the user; the rule
- * and the file it goes into show with the call on the page. */
+/** A permission's options, which the CLI sets itself, each saying what it means for the user: allow-once, then
+ * allow-kind on a Bash card its opener did not hold to once (`offersKind`), then deny. The rule and the file it
+ * goes into show with the call on the page. */
 export function permissionOptions(refusal: RefusedCall): Choice[] {
   const count = callsOf(refusal).length;
   const who = isAsk(refusal) ? "the fleet" : "the worker";
   const stopped = isAsk(refusal) ? "the fleet does not run it; your note goes to it" : "the worker stays stopped; your note goes to it";
+  const kind: Choice[] = offersKind(refusal) ? [{ id: ALLOW_KIND, label: ALLOW_KIND_LABEL, consequence: allowKindWords(count) }] : [];
 
   if (count > 1) {
     return [
@@ -337,6 +356,7 @@ export function permissionOptions(refusal: RefusedCall): Choice[] {
         label: `Allow these ${String(count)} calls, once each`,
         consequence: `${who} runs exactly the ${String(count)} calls shown above, once each, and nothing like them after: each one-time grant goes once its call ran, and any left go after ${String(GRANT_TTL_MIN)} minutes`,
       },
+      ...kind,
       { id: "deny", label: "Deny", consequence: stopped.replace("run it", "run any of them") },
     ];
   }
@@ -349,6 +369,7 @@ export function permissionOptions(refusal: RefusedCall): Choice[] {
       label: "Allow this call once",
       consequence: `${who} ${what}, and nothing like it after: the one-time grant goes once it is used, or after ${String(GRANT_TTL_MIN)} minutes`,
     },
+    ...kind,
     { id: "deny", label: "Deny", consequence: stopped },
   ];
 }

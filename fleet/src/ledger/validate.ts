@@ -30,8 +30,8 @@ export const ELSEWHERE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 /** A standing approval's statuses. */
 export const APPROVAL_STATUSES = ["active", "revoked"] as const;
 
-/** The kinds of decision; `permission` is TypeScript's alone (SPEC.md, Permission grants). */
-export const KINDS = [...SHARED_KINDS, "permission"] as const;
+/** The kinds of decision; `permission` and `rule` are TypeScript's alone (SPEC.md, Permission grants). */
+export const KINDS = [...SHARED_KINDS, "permission", "rule"] as const;
 
 /** A decision's statuses. */
 export const DECISION_STATUSES = ["open", "decided", "withdrawn"] as const;

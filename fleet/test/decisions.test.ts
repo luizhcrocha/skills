@@ -16,6 +16,9 @@ import { answerRefusal } from "../src/ledger/answers.ts";
 import { callRev } from "../src/ledger/permission.ts";
 import { baseEnv, fleet, readJson, tmp, type Environment, type Ran } from "./support.ts";
 
+/** What an action whose manual holds only commands says: why only Luiz can run them (`--hand`). */
+const HAND = ["--hand", "it runs in his own terminal, logged in as him"];
+
 const SCHEMA = [
   "d1",
   "--kind",
@@ -124,7 +127,7 @@ describe("open", () => {
     expect(refused("decision", "d1", "--kind", "action", ...base)).toContain("--manual");
     ok("decision", "d1", "--kind", "input", ...base);
     ok("decision", "d2", "--kind", "secret", ...base, "--secret", "NEO4J_PASSWORD", "--manual", "secretspec set NEO4J_PASSWORD");
-    ok("decision", "d3", "--kind", "action", ...base, "--manual", "```nu\ntailscale up\n```");
+    ok("decision", "d3", "--kind", "action", ...base, "--manual", "```nu\ntailscale up\n```", ...HAND);
   });
 
   test("a source or use of an absent file hides only its path; bash after it, and bash under a data fence, stay refused", () => {
@@ -147,7 +150,7 @@ describe("open", () => {
       expect(refused("decision", "s1", "--kind", "secret", "--title", "T", "--question", "q", "--why", "w", "--secret", "K", "--manual", manual), manual).toBeDefined();
     }
 
-    for (const [k, body] of ["source ./env.nu", "use ./mod.nu", "use a.nu *"].entries()) ok("decision", `g${String(k + 1)}`, ...base, "--manual", nu(`${body}\nlet x = 1`));
+    for (const [k, body] of ["source ./env.nu", "use ./mod.nu", "use a.nu *"].entries()) ok("decision", `g${String(k + 1)}`, ...base, "--manual", nu(`${body}\nlet x = 1`), ...HAND);
   });
 
   test("an action that only asks the user to answer, approve or confirm is refused: that is a decision", () => {
@@ -163,7 +166,7 @@ describe("open", () => {
     expect(rows("decisions")).toEqual([]);
     const steps = ["```nu\ncd repo; ./up\n```", '1. In the Cloudflare console, click "Deploy".', "1. Plug in the YubiKey and touch `the gold disc`.", "1. On GitHub, open https://github.com/acme/x/pull/7 and approve it.", "1. Run `just cut`, then answer yes."];
 
-    for (const [k, manual] of steps.entries()) ok("decision", `a${String(k + 1)}`, ...base, "--manual", manual);
+    for (const [k, manual] of steps.entries()) ok("decision", `a${String(k + 1)}`, ...base, "--manual", manual, ...HAND);
     expect(refused("decision", "a1", "--manual", "answer go")).toContain("an approval is a decision");
   });
 
@@ -190,10 +193,10 @@ describe("open", () => {
     });
 
     test("a fenced block passes when it holds a line that is no comment, with any prose around it", () => {
-      ok("decision", "a1", ...base, "--manual", "In the Perf terminal, type /exit. Then, from the same directory, run:\n```nu\ncd ~/repos/x; claude --resume abc\n```\nThe climb keeps running.");
+      ok("decision", "a1", ...base, "--manual", "In the Perf terminal, type /exit. Then, from the same directory, run:\n```nu\ncd ~/repos/x; claude --resume abc\n```\nThe climb keeps running.", ...HAND);
       // One command, and one this machine has no program for: the check looks nothing up.
-      ok("decision", "a2", ...base, "--manual", "```nu\nno-such-program-zq deploy --env production\n```");
-      ok("decision", "a3", ...base, "--manual", "```nu\n# from the repo\n./deploy\n```");
+      ok("decision", "a2", ...base, "--manual", "```nu\nno-such-program-zq deploy --env production\n```", ...HAND);
+      ok("decision", "a3", ...base, "--manual", "```nu\n# from the repo\n./deploy\n```", ...HAND);
 
       for (const [k, manual] of ["Do the restart:\n```nu\n```", "Do the restart:\n```\n\n```\nand tell me", "```nu\n# restart the session, however you do that\n```", "```nu\n  # todo\n\n# and this\n```"].entries()) {
         expect(refused("decision", `e${String(k)}`, ...base, "--manual", manual), manual).toContain("it has no fenced block with a command in it and no numbered steps from 1");
@@ -202,7 +205,7 @@ describe("open", () => {
 
     test("a numbered list from 1 passes with no fence, in any language, whatever its steps name", () => {
       ok("decision", "a1", ...base, "--manual", 'After the push is done:\n1. In the Perf terminal, type `/exit`.\n2. In the 1Password window, click "Approve".\n3. Open https://example.test/runs and check the last one is green.');
-      ok("decision", "a2", ...base, "--manual", "1) Stop the session: type `/exit`.\n2) Start it again:\n```nu\ncd ~/repos/x; claude --resume abc\n```");
+      ok("decision", "a2", ...base, "--manual", "1) Stop the session: type `/exit`.\n2) Start it again:\n```nu\ncd ~/repos/x; claude --resume abc\n```", ...HAND);
       ok("decision", "a3", ...base, "--manual", "1. Open 1Password.");
       ok("decision", "a4", ...base, "--manual", "1. Abra o 1Password.\n2. Clique em Aprovar na janela que aparece.");
     });
@@ -216,7 +219,7 @@ describe("open", () => {
     });
 
     test("a row recorded before the rule stays readable and revisable; only a new --manual is checked", () => {
-      ok("decision", "a1", ...base, "--manual", "```nu\ncd repo; ./restart\n```");
+      ok("decision", "a1", ...base, "--manual", "```nu\ncd repo; ./restart\n```", ...HAND);
       const path = join(root, "state.json");
       const ledger = readJson(path);
       const row = asObject((asArray(ledger["decisions"]) ?? [])[0] ?? null) ?? {};
@@ -237,13 +240,49 @@ describe("open", () => {
     });
   });
 
+  test("an action whose manual holds a command anywhere is refused for a permission, unless --hand says why only Luiz can run it, which the row keeps", () => {
+    const base = ["--kind", "action", "--title", "T", "--question", "q", "--why", "w"];
+    const runs = 'and the fleet runs commands itself: no "run this" card for Luiz.';
+    const why = refused("decision", "a1", ...base, "--manual", "```nu\njust deploy\njust smoke\n```");
+    expect(why).toContain(`--manual holds the command \`just deploy\`, ${runs}`);
+    expect(why).toContain("`fleet state <dir> decision ID --kind permission --tool Bash --call 'just deploy' --root $CLAUDE_PROJECT_DIR");
+    expect(why).toContain('--hand "<why only Luiz can do this>"');
+    expect(why).not.toContain("numbered step");
+
+    for (const manual of [
+      "1. Approve the 1Password prompt.\n2. Then run:\n```nu\njust deploy\n```",
+      "1. Run `just deploy` from the repo.",
+      "1. Open a terminal in the repo.\n2. just deploy, then wait for it.",
+      "From the repo, run `pnpm run release`, then check the page.\n\n1. Open the page.",
+      "1. Paste it:\n```text\nwrangler deploy\n```",
+      "1. In a terminal:\n```txt\n$ git push origin main\n```",
+      "Then, from the repo:\n```nu\njust deploy\n```\nand:\n```nushell\n# then\njust smoke\n```",
+    ]) {
+      expect(refused("decision", "a1", ...base, "--manual", manual), manual).toContain(runs);
+    }
+
+    expect(refused("decision", "a1", ...base, "--manual", "```nu\njust deploy\n```", "--hand", "")).toContain(runs);
+    expect(rows("decisions")).toEqual([]);
+    ok("decision", "a1", ...base, "--manual", "```nu\njust deploy\n```", "--hand", "the deploy asks for his hardware key");
+    expect(item("a1")["hand"]).toBe("the deploy asks for his hardware key");
+    // A revision of the manual keeps the --hand the row has.
+    ok("decision", "a1", "--manual", "```nu\njust deploy --again\n```", "--log", "again");
+    // Hand steps with no command need no --hand; a value to paste is no command.
+    ok("decision", "a2", ...base, "--manual", '1. Unlock 1Password when it asks.\n2. In the Cloudflare console, click "Deploy".');
+    ok("decision", "a3", ...base, "--manual", "1. Paste this where the page asks:\n```toml\nallow = 1\n```");
+    expect([item("a2")["hand"], item("a3")["hand"]]).toEqual([undefined, undefined]);
+    expect(refused("decision", "a2", "--manual", "```nu\njust deploy --again\n```", "--log", "again")).toContain(runs);
+    expect(refused("decision", "d9", "--kind", "input", "--title", "T", "--question", "q", "--why", "w", "--hand", "x")).toContain("--hand says why only Luiz can take an action's step");
+    expect(rows("decisions").map((d) => d["id"])).toEqual(["a1", "a2", "a3"]);
+  });
+
   test("a --manual of more than one line puts its commands in a fence", () => {
     const base = ["--title", "T", "--question", "q", "--why", "w"];
     const fix = "--manual has 2 lines and no fence: put the commands in a fenced block (a line ```nu, the commands, a line ```), any prose outside it\n";
     expect(refused("decision", "d1", "--kind", "action", ...base, "--manual", "cd x\n\nmake")).toBe(`state: ${fix}`);
     expect(refused("decision", "d1", "--kind", "secret", ...base, "--secret", "K", "--manual", "From the repo:\nsecretspec set K")).toBe(`state: ${fix}`);
     expect(rows("decisions")).toEqual([]);
-    ok("decision", "d1", "--kind", "action", ...base, "--manual", "From the repo:\n\n```nu\ncd x\nmake\n```");
+    ok("decision", "d1", "--kind", "action", ...base, "--manual", "From the repo:\n\n```nu\ncd x\nmake\n```", ...HAND);
     ok("decision", "d2", "--kind", "secret", ...base, "--secret", "K", "--manual", "\n  secretspec set K\n");
     expect(refused("decision", "d2", "--manual", "cd x\nmake")).toBe(`state: ${fix}`);
     expect(item("d2")["manual"]).toBe("\n  secretspec set K\n");
@@ -556,12 +595,12 @@ describe("readable", () => {
       expect(refused("decision", "a1", ...base, "--manual", "1. Stop the session.\n2. Start it again:\n    ```bash\n    cd x && claude\n    ```")).toContain("--manual has `&&` and no fenced block that holds a command");
       expect(rows("decisions")).toEqual([]);
       // Up to three spaces is a fence, as on the page.
-      ok("decision", "a1", ...base, "--manual", "1. Stop the session.\n2. Start it again:\n   ```nu\n   cd x; claude\n   ```");
+      ok("decision", "a1", ...base, "--manual", "1. Stop the session.\n2. Start it again:\n   ```nu\n   cd x; claude\n   ```", ...HAND);
     });
 
     test("a nu block passes, and so does one tagged nushell", () => {
-      ok("decision", "a1", ...base, "--manual", "Run:\n```nu\nls | where size > 1kb\n```");
-      ok("decision", "a2", ...base, "--manual", "```nushell\n$env.K = (op read op://x/y); just up o+e>| save -f log\n```");
+      ok("decision", "a1", ...base, "--manual", "Run:\n```nu\nls | where size > 1kb\n```", ...HAND);
+      ok("decision", "a2", ...base, "--manual", "```nushell\n$env.K = (op read op://x/y); just up o+e>| save -f log\n```", ...HAND);
       expect(rows("decisions").map((d) => d["id"])).toEqual(["a1", "a2"]);
     });
 
@@ -577,7 +616,7 @@ describe("readable", () => {
       const tags = ["json", "jsonc", "toml", "yaml", "yml", "ini", "text", "txt", "markdown", "md", "diff", "sql", "cypher"];
 
       for (const [k, tag] of tags.entries()) ok("decision", `a${String(k)}`, ...base, "--manual", `Paste this where the page asks:\n\`\`\`${tag}\nallow = "Bash(just up)"\n\`\`\``);
-      ok("decision", "b1", ...base, "--manual", 'Add the rule, then put this in `.claude/settings.local.json`:\n```nu\njust allow\n```\n```JSON\n{ "allow": ["Bash(a && b)"] }\n```');
+      ok("decision", "b1", ...base, "--manual", 'Add the rule, then put this in `.claude/settings.local.json`:\n```nu\njust allow\n```\n```JSON\n{ "allow": ["Bash(a && b)"] }\n```', ...HAND);
       expect(rows("decisions").length).toBe(tags.length + 1);
     });
 
@@ -620,41 +659,41 @@ describe("readable", () => {
 
     test("bash in a block of words (text, txt, markdown, md) is warned; in a block with a format of its own it is not", () => {
       for (const [k, tag] of ["text", "txt", "markdown", "md"].entries()) {
-        const r = run("decision", `w${String(k)}`, ...base, "--manual", "```nu\njust up\n```\nIt prints:\n```" + tag + "\ncd x && make\n```");
+        const r = run("decision", `w${String(k)}`, ...base, "--manual", "```nu\njust up\n```\nIt prints:\n```" + tag + "\ncd x && make\n```", ...HAND);
         expect(r.code, r.stderr).toBe(0);
         expect(r.stderr, tag).toContain(`state: w${String(k)}'s manual has bash in a ${tag} block (&&): a command for Luiz goes in a \`\`\`nu block. Luiz's shell is nushell`);
       }
 
-      const data = run("decision", "j1", ...base, "--manual", '```nu\njust allow\n```\n```json\n{ "allow": ["Bash(a && b)"] }\n```\n```sql\nselect 1 where a && b\n```');
+      const data = run("decision", "j1", ...base, "--manual", '```nu\njust allow\n```\n```json\n{ "allow": ["Bash(a && b)"] }\n```\n```sql\nselect 1 where a && b\n```', ...HAND);
       expect(data.code, data.stderr).toBe(0);
       expect(data.stderr).not.toContain("bash in a");
     });
 
     test.skipIf(!hasNu)("a nu block that sources or uses a file absent from where the CLI runs is not refused for it; its own parse error still is", () => {
-      ok("decision", "a1", ...base, "--manual", "```nu\nsource ./no-such-env.nu\nuse ./no-such-mod.nu\nsource-env ./no-such-env.nu; just up\n```");
+      ok("decision", "a1", ...base, "--manual", "```nu\nsource ./no-such-env.nu\nuse ./no-such-mod.nu\nsource-env ./no-such-env.nu; just up\n```", ...HAND);
       expect(refused("decision", "a2", ...base, "--manual", "```nu\nsource ./no-such-env.nu\nfor f in *; do echo $f; done\n```")).toContain("--manual's nu block 1 does not parse in nushell (nu-check --debug: ");
       expect(rows("decisions").map((d) => d["id"])).toEqual(["a1"]);
     });
 
     test("in a manual whose commands are in a nu block, bash in a step is warned, not refused", () => {
-      const typed = run("decision", "a2", ...base, "--manual", "1. In the repo, type `cd x && make`.\n2. Then `export K=1` and `echo $(date) 2>&1`.\n3. Then:\n```nu\njust up\n```");
+      const typed = run("decision", "a2", ...base, "--manual", "1. In the repo, type `cd x && make`.\n2. Then `export K=1` and `echo $(date) 2>&1`.\n3. Then:\n```nu\njust up\n```", ...HAND);
       expect(typed.code, typed.stderr).toBe(0);
       expect(typed.stderr).toContain("state: a2's manual has bash outside its fenced blocks (&&, export X=, $(...), 2>&1): Luiz's shell is nushell (`;`, `$env.X = ...`, `(...)`, `o+e>|`).");
     });
 
     test("a revision's manual is held to the rule, and the stored one stays when it is refused", () => {
       const first = "```nu\ncd repo; ./restart\n```";
-      ok("decision", "a1", ...base, "--manual", first);
+      ok("decision", "a1", ...base, "--manual", first, ...HAND);
       expect(refused("decision", "a1", "--manual", "```bash\ncd repo && ./restart\n```", "--log", "the folder")).toContain("fenced block 1 is tagged `bash` and has `&&`");
       expect(refused("decision", "a1", "--manual", "```\ncd repo; ./restart\n```", "--log", "the folder")).toContain("fenced block 1 has no tag");
       expect(item("a1")["manual"]).toBe(first);
-      ok("decision", "a1", "--manual", "```nu\ncd repo/app; ./restart\n```", "--log", "the folder");
+      ok("decision", "a1", "--manual", "```nu\ncd repo/app; ./restart\n```", "--log", "the folder", ...HAND);
       expect(item("a1")["manual"]).toBe("```nu\ncd repo/app; ./restart\n```");
     });
 
     test("an open card with a bash block from before the rule renders, is answered or withdrawn, and its next manual is nushell", () => {
-      ok("decision", "a1", ...base, "--manual", "```nu\ncd repo; ./restart\n```");
-      ok("decision", "a2", ...base, "--manual", "```nu\ncd repo; ./restart\n```");
+      ok("decision", "a1", ...base, "--manual", "```nu\ncd repo; ./restart\n```", ...HAND);
+      ok("decision", "a2", ...base, "--manual", "```nu\ncd repo; ./restart\n```", ...HAND);
       const path = join(root, "state.json");
       const ledger = readJson(path);
       writeFileSync(path, JSON.stringify({ ...ledger, decisions: (asArray(ledger["decisions"]) ?? []).map((row) => ({ ...asObject(row), manual: OLD })) }));
@@ -665,7 +704,7 @@ describe("readable", () => {
       ok("decision", "a1", "--why", "nothing breaks while it waits", "--log", "the why");
       expect(item("a1")["manual"]).toBe(OLD);
       expect(refused("decision", "a1", "--manual", OLD, "--log", "again")).toContain("fenced block 1 is tagged `bash` and has `&&`");
-      ok("decision", "a1", "--manual", "From the repo:\n```nu\ncd repo; ./restart\n```", "--log", "in nushell");
+      ok("decision", "a1", "--manual", "From the repo:\n```nu\ncd repo; ./restart\n```", "--log", "in nushell", ...HAND);
       ok("decision", "a1", "--decide", "Done.", "--resolution", "answered on the page (#2)");
       ok("decision", "a2", "--withdraw", "the session restarted by itself");
       expect(rows("decisions").map((d) => [d["id"], d["status"], d["manual"]])).toEqual([
@@ -683,14 +722,14 @@ describe("readable", () => {
         expect(refused("decision", "a1", ...base, "--manual", "```bash\n./restart\n```")).toBe(`state: --manual's fenced block 1 is tagged \`bash\`: ${nushell}`);
         expect(rows("decisions")).toEqual([]);
         // What only the parser would catch passes: the scan knows four constructs.
-        const r = run("decision", "a1", ...base, "--manual", "```nu\nfor f in *; do echo $f; done\n```");
+        const r = run("decision", "a1", ...base, "--manual", "```nu\nfor f in *; do echo $f; done\n```", ...HAND);
         expect(r.code, r.stderr).toBe(0);
         expect(r.stderr).not.toContain("bash");
       });
     });
 
     test.skipIf(!hasNu)("with nu on PATH the parser is the judge: bash it parses, in a string, is only warned", () => {
-      const r = run("decision", "a1", ...base, "--manual", '```nu\nprint "a && b"\n```');
+      const r = run("decision", "a1", ...base, "--manual", '```nu\nprint "a && b"\n```', ...HAND);
       expect(r.code, r.stderr).toBe(0);
       expect(r.stderr).toContain("a1's manual has bash in a nu block (&&)");
     });
@@ -849,6 +888,7 @@ const ACTION = [
   "the cut feeds the next milestone",
   "--manual",
   "```nu\njust cut --roles\n```",
+  ...HAND,
 ];
 
 /** The user answered, and the fleet must do something before the item can proceed: it holds it (off the
@@ -898,7 +938,7 @@ describe("hold", () => {
     hold();
     ok("decision", "a1", "--why", "it still feeds the next milestone");
     expect(item("a1")["held"]).toBe("fix the role cut first");
-    ok("decision", "a1", "--manual", "```nu\njust cut --roles --fixed\n```", "--log", "the new command");
+    ok("decision", "a1", "--manual", "```nu\njust cut --roles --fixed\n```", "--log", "the new command", ...HAND);
     expect(item("a1")).not.toHaveProperty("held");
     expect(item("a1")).not.toHaveProperty("held_at");
     expect([lastEvent()["kind"], item("a1")["change"]]).toEqual(["asked", "the new command"]);
@@ -1008,7 +1048,7 @@ describe("a failed action", () => {
   test("a revision re-presents it, and its next answer is an ordinary one", () => {
     ok("decision", ...ACTION);
     say(failed);
-    expect(later("decision", "A1", "--manual", "```nu\njust cut-roles\n```", "--log", "the recipe is cut-roles").code).toBe(0);
+    expect(later("decision", "A1", "--manual", "```nu\njust cut-roles\n```", "--log", "the recipe is cut-roles", ...HAND).code).toBe(0);
     expect(run("event", "x").stderr).not.toContain("and it failed");
     expect(fleet(["state", root, "show"], env).stdout).toContain("  A1 decision a1 OPEN [action] Run the role cut\n");
     say(failed, { id: 2, at: "2999-01-01T00:06:00+00:00", from: "user", text: "Done.", decision: "a1" });
@@ -1126,6 +1166,7 @@ describe("permission", () => {
         label: "Allow this call once",
         consequence: "the worker runs exactly the call shown above, once, and nothing like it after: the one-time grant goes once it is used, or after 30 minutes",
       },
+      { id: "allow-kind", label: "Allow once and save this kind", consequence: "allows this call now; then I draft a rule for this kind of command for you to add" },
       { id: "deny", label: "Deny", consequence: "the worker stays stopped; your note goes to it" },
     ]);
   });
@@ -1309,6 +1350,7 @@ describe("permission", () => {
       expect(d["refusal"]).toEqual({ tool: "Bash", call: DEPLOY, rule: `Bash(${DEPLOY})`, cause: "", root: "/work/repo", agent_id: null, runs: [`1 ${sha("deploy-worker")} ${TASKS}/deploy-worker`] });
       expect(asArray(d["options"])?.map((o) => asObject(o)?.["consequence"])).toEqual([
         "the fleet runs exactly the call shown above, once, and nothing like it after: the one-time grant goes once it is used, or after 30 minutes",
+        "allows this call now; then I draft a rule for this kind of command for you to add",
         "the fleet does not run it; your note goes to it",
       ]);
       expect(said).not.toContain("Then explain it");
@@ -1324,7 +1366,7 @@ describe("permission", () => {
       // Each call that runs a script by its path is bound to the file; a command found by name is bound to none.
       expect(r?.["runs"]).toEqual([`1 ${sha("deploy-worker")} ${TASKS}/deploy-worker`, `2 ${sha("migrate-db.sh")} ${TASKS}/migrate-db.sh`, `4 ${sha("smoke")} ${TASKS}/smoke`]);
       expect(d["question"]).toBe("Let the coordinator run these 4 exact calls, once each? Read each one in full below before you answer.");
-      expect(asArray(d["options"])?.map((o) => asObject(o)?.["label"])).toEqual(["Allow these 4 calls, once each", "Deny"]);
+      expect(asArray(d["options"])?.map((o) => asObject(o)?.["label"])).toEqual(["Allow these 4 calls, once each", "Allow once and save this kind", "Deny"]);
     });
 
     test("a script that changed since the ask is another thing to allow: the same command again is a revision", () => {
@@ -1340,18 +1382,43 @@ describe("permission", () => {
     test("only the user's answer on the page grants: --decide allow-once with none is refused", () => {
       ok(...ask("one"));
       const none = refused("decision", "one", "--decide", "allow-once: Allow this call once", "--resolution", "answered on the page (#1)");
-      expect(none).toContain("P1 has no allow-once answer from the user since it last changed: only their answer on the fleet page grants the call");
+      expect(none).toContain("P1 has no allow-once or allow-kind answer from the user since it last changed: only their answer on the fleet page grants the call");
       expect(none).toContain("wait one");
       expect(item("one")["status"]).toBe("open");
       // A no, a note, or a yes given to the call as it was before a revision is no yes to this one.
       userAnswers("one", "deny: Deny\nnot today", "2999-01-01T00:00:00+00:00");
-      expect(refused("decision", "one", "--decide", "allow-once", "--resolution", "r")).toContain("has no allow-once answer");
+      expect(refused("decision", "one", "--decide", "allow-once", "--resolution", "r")).toContain("has no allow-once or allow-kind answer");
       userAnswers("other", "allow-once: Allow this call once", "2999-01-01T00:01:00+00:00");
-      expect(refused("decision", "one", "--decide", "allow-once", "--resolution", "r")).toContain("has no allow-once answer");
+      expect(refused("decision", "one", "--decide", "allow-once", "--resolution", "r")).toContain("has no allow-once or allow-kind answer");
       userAnswers("one", "allow-once: Allow this call once", "2000-01-01T00:00:00+00:00");
-      expect(refused("decision", "one", "--decide", "allow-once", "--resolution", "r")).toContain("has no allow-once answer");
+      expect(refused("decision", "one", "--decide", "allow-once", "--resolution", "r")).toContain("has no allow-once or allow-kind answer");
       userAnswers("one", "allow-once: Allow this call once", "2999-01-01T00:02:00+00:00");
       expect(ok("decision", "one", "--decide", "allow-once", "--resolution", "answered on the page (#5)")).toContain("P1 is allowed once");
+    });
+
+    test("a Bash card offers allow-kind after allow-once, --once takes it away, and recording it grants once, marks the card and asks for a rule card", () => {
+      const options = (id: string): unknown[] => (asArray(item(id)["options"]) ?? []).map((o) => asObject(o)?.["id"]);
+      ok(...ask("check"));
+      expect(options("check")).toEqual(["allow-once", "allow-kind", "deny"]);
+      expect(asObject(asArray(item("check")["options"])?.[1] ?? null)).toEqual({ id: "allow-kind", label: "Allow once and save this kind", consequence: "allows this call now; then I draft a rule for this kind of command for you to add" });
+      ok(...ask("three", "--then", MIGRATE));
+      expect(asObject(asArray(item("three")["options"])?.[1] ?? null)?.["consequence"]).toBe("allows these calls now; then I draft a rule for this kind of command for you to add");
+      ok(...ask("marked", "--once"));
+      expect([options("marked"), asObject(item("marked")["refusal"] ?? null)?.["once"]]).toEqual([["allow-once", "deny"], true]);
+      ok("decision", "check", "--once", "--log", "this check spends money");
+      expect(options("check")).toEqual(["allow-once", "deny"]);
+      expect(refused("decision", "a9", "--kind", "input", "--title", "T", "--question", "q", "--why", "w", "--once")).toContain("--once marks a permission");
+      ok(...ask("again"));
+      userAnswers("again", "allow-kind: Allow once and save this kind");
+      const kind = ok("decision", "again", "--decide", "allow-kind: Allow once and save this kind", "--resolution", "answered on the page (#9)");
+      expect(kind).toContain(`is allowed once: run exactly this call now, byte for byte, as a Bash call of its own:\n  ${DEPLOY}\n`);
+      expect(kind).toContain("/work/repo/.claude/settings.local.json");
+      expect(kind).toContain("--kind rule --rule-file FILE");
+      expect(item("again")["kind_requested"]).toBe(true);
+      expect(item("three")["kind_requested"]).toBeUndefined();
+      userAnswers("marked", "allow-once: Allow this call once");
+      expect(refused("decision", "marked", "--decide", "allow-kind", "--resolution", "r")).toContain("does not offer allow-kind");
+      expect([item("marked")["status"], item("marked")["kind_requested"]]).toEqual(["open", undefined]);
     });
 
     test("recording the yes prints the exact calls to run; a no says it stays stopped", () => {
@@ -1591,6 +1658,77 @@ describe("permission", () => {
       ok(...p2("p6", "cd /work/repo-m2 && make test"));
       expect(item("p6")["title"]).toBe("Allow safeetis to run `make test` in /work/repo-m2?");
     });
+  });
+});
+
+describe("rule card", () => {
+  const RULE = "Removing a finished jj workspace of this fleet: `jj workspace forget <name>` in a repo under /home/u/repos.\nNot covered: the default workspace, `jj abandon`, deleting the folder.";
+
+  function ruleFile(text: string): string {
+    const file = join(mkdtempSync(join(tmpdir(), "fleet-rule-")), "rule.txt");
+    writeFileSync(file, text);
+
+    return file;
+  }
+
+  const card = (id: string, file: string, ...more: string[]): string[] => [
+    "decision", id, "--kind", "rule", "--rule-file", file, "--title", "Save workspace forgets", "--question", "Let every agent forget a finished workspace without asking?", "--why", "from P12 and P15; the review found no write it lets through", ...more,
+  ];
+
+  test("opens with the rule verbatim, its two options set by the CLI, and a decision's number", () => {
+    ok(...card("forget-rule", ruleFile(`${RULE}\n`)));
+    const d = item("forget-rule");
+    expect([d["kind"], d["rule"]]).toEqual(["rule", RULE]);
+    expect((asArray(d["options"]) ?? []).map((o) => [asObject(o)?.["id"], asObject(o)?.["label"]])).toEqual([["add-rule", "Add this rule"], ["deny", "Not now"]]);
+    expect(String(d["ref"])).toMatch(/^D[0-9]+$/u);
+  });
+
+  test("refuses a rule over 6000 characters, a * glob that spans spaces, and one that does not say what it does not cover", () => {
+    expect(refused(...card("long", ruleFile(`${"a".repeat(6000)}\nNot covered: x`)))).toContain("at most 6000");
+    expect(refused(...card("glob", ruleFile("`jj workspace forget *` anywhere.\nNot covered: the default workspace")))).toContain("spans spaces");
+    expect(refused(...card("bare", ruleFile("`jj workspace forget <name>` in a repo under /home/u/repos.")))).toContain("Not covered:");
+    expect(item("glob")["id"]).toBeUndefined();
+    ok(...card("path-glob", ruleFile("Reading logs at /tmp/fleet-*.log with `tail`.\nNot covered: any write or deletion")));
+    expect(refused(...card("hidden", ruleFile(`${RULE}\u202e`)))).toContain("would not show as itself");
+    expect(refused(...card("thin", ruleFile("`jj workspace forget <name>` in /home/u/repos.\nNot covered: none")))).toContain("names too little");
+  });
+
+  test("--decide add-rule is refused until grants.jsonl records the rule the card holds, added by the hub", () => {
+    ok(...card("added", ruleFile(RULE)));
+    const sha = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
+    const line = (decision: string, text: string): void => appendFileSync(join(root, "grants.jsonl"), `${JSON.stringify({ op: "rule", decision, file: "/h/.claude/settings.json", sha256: sha(text), at: "t", by: "local" })}\n`);
+    expect(refused("decision", "added", "--decide", "add-rule: Add this rule", "--resolution", "r")).toContain("no record that the hub added");
+    line("other", RULE);
+    line("added", `${RULE} and more`);
+    expect(refused("decision", "added", "--decide", "add-rule", "--resolution", "r")).toContain("no record that the hub added");
+    line("added", RULE);
+    ok("decision", "added", "--decide", "add-rule: Add this rule", "--resolution", "answered on the page (#4)");
+    expect(item("added")["status"]).toBe("decided");
+    ok(...card("later", ruleFile(RULE)));
+    ok("decision", "later", "--decide", "deny: Not now", "--resolution", "r");
+  });
+
+  test("a rule file written with CRLF line ends is read with LF ones", () => {
+    ok(...card("crlf", ruleFile(`${RULE.replaceAll("\n", "\r\n")}\r\n`)));
+    expect(item("crlf")["rule"]).toBe(RULE);
+  });
+
+  test("a new rule is a revision: the row is stamped revised, the event names the rule, and a held card comes back to the user", () => {
+    ok(...card("swap", ruleFile(RULE)));
+    ok("decision", "swap", "--hold", "the review first");
+    const other = "Forgetting any jj workspace: `jj workspace forget <name>` in /home/u/repos.\nNot covered: deleting the folder.";
+    ok("decision", "swap", "--rule-file", ruleFile(other), "--log", "the rule now takes any workspace");
+    const d = item("swap");
+    expect([d["rule"], Date.parse(String(d["revised"])) > 0, d["change"], d["held"] ?? null]).toEqual([other, true, "the rule now takes any workspace", null]);
+    ok("decision", "swap", "--rule-file", ruleFile(RULE));
+    expect(String(lastEvent()["text"])).toBe("Save workspace forgets changed: rule");
+  });
+
+  test("a rule card needs its rule and its why, takes no options, and --rule-file goes with it alone", () => {
+    expect(refused("decision", "r1", "--kind", "rule", "--title", "T", "--question", "Q?", "--why", "w")).toContain("--rule-file FILE");
+    expect(refused(...card("r2", ruleFile(RULE)).filter((a, k, all) => a !== "--why" && all[k - 1] !== "--why"))).toContain("--why");
+    expect(refused(...card("r3", ruleFile(RULE), "--recommend", "add-rule"))).toContain("options are add-rule and deny");
+    expect(refused("decision", "d9", "--kind", "input", "--title", "T", "--question", "Q?", "--why", "w", "--rule-file", ruleFile(RULE))).toContain("goes with --kind rule");
   });
 });
 

@@ -2774,6 +2774,24 @@ class GrantAloneTest(GrantCase):
             self.assertTrue(out is None or out["permissionDecision"] == "deny", out)
 
 
+class LastingGrantTest(GrantCase):
+    """A grant line that says `lasting: true` is a one-time grant like any other: any agent can append to grants.jsonl,
+    and nothing the fleet writes now is lasting (a rule card's entry goes into autoMode.allow of the user's settings,
+    with an `op: "rule"` line the sweep never reads)."""
+
+    CALL, NOW = GrantAloneTest.CALL, GrantAloneTest.NOW
+    before, denied = GrantAloneTest.before, GrantAloneTest.denied
+
+    def test_a_forged_lasting_line_that_names_the_session_settings_is_taken_back_as_a_one_time_grant(self):
+        with open(self.grants, "a") as f:
+            f.write(json.dumps({"op": "grant", "decision": "p-9", "ref": "P9", "rule": self.RULE, "agent_id": None,
+                                "file": str(self.settings), "at": "2026-01-05T09:00:00+00:00", "by": "local",
+                                "reload": "live", "lasting": True}) + "\n")
+        self.run_tool(self.CALL)
+        self.assertNotIn(self.RULE, self.allow())
+        self.assertEqual([line["op"] for line in self.lines()], ["grant", "remove"])
+
+
 class MonitorWatchTest(GrantCase):
     """fleet_monitor_watch (PreToolUse, Monitor): auto mode judges a Bash command and not a Monitor one, so in a session
     that works for a fleet a Monitor command passes only as a watch (the fleet CLI watching, or commands that only read,

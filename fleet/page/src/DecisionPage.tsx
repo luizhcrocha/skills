@@ -16,6 +16,7 @@ import { grillAsk, grillReason } from "./grill.ts";
 import { listen, PillAs, RefTag, tf, usePage, Who } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
 import { Core, type BoundFile, type Decision, type GrillEntry, type Json, type JsonRecord, type MarkDecision, type Question, type Queue } from "./core.ts";
+import { chatHeaders } from "./chat-headers.ts";
 import { DecisionHistory } from "./DecisionHistory.tsx";
 import { heldTip, oneTarget, placeOf, Refs, RefsBeside } from "./DecisionRef.tsx";
 import { DetailsFold } from "./DetailsFold.tsx";
@@ -267,7 +268,7 @@ function Evidence(props: { readonly d: Decision | undefined; readonly title?: st
 /** An option of a decision: to pick in the form, or to show once decided. */
 function Options(props: { readonly d: Decision; readonly pick: boolean }): JSX.Element {
   return (
-    <For each={props.d.options} keyed={(o) => o.id}>
+    <For each={Core.shownOptions(props.d)} keyed={(o) => o.id}>
       {(o) => {
         const chosen = (): boolean => !props.pick && props.d.status === "decided" && String(props.d.answer || "").startsWith(o().id + ":");
 
@@ -313,17 +314,39 @@ function Options(props: { readonly d: Decision; readonly pick: boolean }): JSX.E
   );
 }
 
-/** What to do by hand, when the decision says. */
-function Manual(props: { readonly d: Decision; readonly title: string }): JSX.Element {
+/** A rule card's autoMode.allow entry, whole and verbatim, in a monospace block that keeps its line breaks. */
+function RuleText(props: { readonly d: Decision }): JSX.Element {
   return (
-    <Show when={props.d.manual}>
+    <Show when={props.d.rule}>
       <div class="dv-block">
-        <h3>{props.title}</h3>
-        <div class="fd-wrap" data-field="step">
-          <ManualText text={props.d.manual ?? ""} />
-        </div>
+        <h3>The rule you add to autoMode.allow</h3>
+        <pre class="rule-text" data-field="rule">
+          {props.d.rule}
+        </pre>
       </div>
     </Show>
+  );
+}
+
+/** What to do by hand, when the decision says, and why only the user can (an action's `--hand`). */
+function Manual(props: { readonly d: Decision; readonly title: string }): JSX.Element {
+  return (
+    <>
+      <Show when={props.d.manual}>
+        <div class="dv-block">
+          <h3>{props.title}</h3>
+          <div class="fd-wrap" data-field="step">
+            <ManualText text={props.d.manual ?? ""} />
+          </div>
+        </div>
+      </Show>
+      <Show when={props.d.hand}>
+        <div class="dv-block">
+          <h3>Why only you</h3>
+          <p data-field="hand">{props.d.hand}</p>
+        </div>
+      </Show>
+    </>
   );
 }
 
@@ -373,13 +396,19 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
   const [moved, setMoved] = createSignal(false);
   let form: HTMLFormElement | undefined;
   let answering = shown();
+  /* A rule card's rule as rendered with `answering`, and as it was when an option was picked: the answer sends that
+     text, never the row's at the time of sending. */
+  let rendered = props.d.rule;
+  let picked: string | undefined;
   const draftKey = (): string => "dv-draft:" + props.d.id + ":" + shown();
 
-  /* The item changed under a picked answer (a call swapped in place, another folder, an edited script): the pick
-     was for what the user read, so it is cleared, and the page says so. A typed note stays. */
+  /* The item changed under a picked answer (a call swapped in place, another folder, an edited script, another
+     rule): the pick was for what the user read, so it is cleared, and the page says so. A typed note stays. */
   createEffect(shown, (now) => {
     if (now === answering) return;
     answering = now;
+    rendered = props.d.rule;
+    picked = undefined;
 
     for (const el of form?.querySelectorAll<HTMLInputElement>('input[type="radio"], input[type="checkbox"]') ?? []) el.checked = false;
     setMoved(true);
@@ -411,8 +440,12 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
 
       if (v === undefined) continue;
 
-      if (el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox")) el.checked = el.value === v;
-      else el.value = String(v);
+      if (el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox")) {
+        el.checked = el.value === v;
+
+        // The draft is keyed by what was shown, so a pick put back was made on the rule rendered now.
+        if (el.checked && el.name === "choice") picked = rendered;
+      } else el.value = String(v);
     }
   });
 
@@ -441,6 +474,7 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
             value: text("value"),
             done: e.submitter instanceof HTMLButtonElement ? e.submitter.name === "done" : d.kind === "action",
             failed: e.submitter instanceof HTMLButtonElement && e.submitter.name === "failed",
+            rule: picked,
           });
 
     if ("error" in out) {
@@ -471,7 +505,7 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
     let stored: Json = null;
 
     try {
-      const res = await fetch("chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: json });
+      const res = await fetch("chat", { method: "POST", headers: chatHeaders(), body: json });
       let body: ServerError | null = null;
 
       try {
@@ -517,7 +551,10 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
         if (own && e.target instanceof HTMLTextAreaElement && e.target.value.trim() && (later?.checked ?? true)) own.checked = true;
         save();
       }}
-      onChange={save}
+      onChange={(e) => {
+        if (e.target instanceof HTMLInputElement && e.target.name === "choice" && e.target.checked) picked = rendered;
+        save();
+      }}
       onSubmit={(e) => void submit(e)}
     >
       <Show when={moved()}>
@@ -836,6 +873,22 @@ function Form(props: { readonly d: Decision }): JSX.Element {
           </div>
         </AnswerForm>
       </Match>
+      <Match when={kind() === "rule"}>
+        <AnswerForm d={props.d}>
+          <RuleText d={props.d} />
+          <fieldset>
+            <legend>Your answer</legend>
+            <Options d={props.d} pick />
+          </fieldset>
+          {note("Note for the coordinator, if you want to add one")}
+          <div class="sheet-actions">
+            <button type="submit" class="btn primary">
+              Send my answer
+            </button>
+            <Discuss />
+          </div>
+        </AnswerForm>
+      </Match>
       <Match when={kind() === "permission"}>
         <AnswerForm d={props.d}>
           <Show when={props.d.refusal}>
@@ -997,7 +1050,10 @@ function Answer(props: { readonly d: Decision }): JSX.Element {
   });
 
   const shown = (): JSX.Element => (
-    <Show when={(props.d.kind === "decision" || props.d.kind === "permission") && props.d.options.length}>
+    <Show when={(props.d.kind === "decision" || props.d.kind === "permission" || props.d.kind === "rule") && props.d.options.length}>
+      <Show when={props.d.kind === "rule"}>
+        <RuleText d={props.d} />
+      </Show>
       <div class="dv-block">
         <h3>Options</h3>
         <div class="options">
