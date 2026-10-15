@@ -74,7 +74,16 @@ declare function worker(id: string, fields: { name?: string; task?: string; skil
 declare function step(milestone: string, id: string, title: string, status: "blocked" | "current" | "done" | "pending", agent?: string): LogDraft;
 declare function milestone(id: string, title: string): LogDraft;
 /** A card's fields: kind is decision, input, secret, action, grill, notice or permission; title and question are required. */
-type Card = { kind: string; title: string; question: string; options?: { id: string; label: string; consequence: string }[]; recommend?: string; reason?: string; why?: string; blocking?: boolean; agent?: string; asks?: "user" | "manager" };
+type Card = { kind: string; title: string; question: string; options?: { id: string; label: string; consequence: string }[]; recommend?: string; reason?: string; why?: string; blocking?: boolean; agent?: string; asks?: "user" | "manager" } | PermissionCard;
+/**
+ * A permission card: the owner allows the exact calls once each, and the office host writes one exact rule per call
+ * into root's .claude/settings.local.json (an Agent's into .claude/tstack-grants.json); each rule goes once its call
+ * ran, any left after 30 minutes. tool is Bash or Agent; call is the exact command (an Agent's, its tool input as
+ * JSON), with no *, |, backslash or newline, at most 2000 characters; then holds the further Bash commands, granted
+ * with it, at most 10 calls in all; root is the absolute folder of the session that runs them, which must be a
+ * workspace of this fleet or a --root of the office host. The card's options are set for you: allow-once and deny.
+ */
+type PermissionCard = { kind: "permission"; title: string; question: string; tool: "Bash" | "Agent"; call: string; then?: string[]; root: string; why?: string; blocking?: boolean; agent?: string };
 declare const decision: {
   /** Open a card the cloud numbers by its kind's letter (D219, P40, ...): the applied result's key is its id. */
   open(fields: Card): LogDraft;
@@ -92,10 +101,11 @@ declare function say(text: string, options?: { re?: number; decision?: string; t
 
 A new worker needs `task`, `milestone`, `model` and `effort` (MODELS.md); the fleet refuses one without them, as the
 CLI did. Its `status` is optional: a new worker starts `running`, as the CLI's `agent` did. The CLI's verbs map to these: `agent` to `worker`, `step` to `step`, `decision` to `decision.open` and
-`decision.decide`, `event` to `event`, `keep` to `keep`, `milestone` to `milestone`, `set` to `set`, and
+`decision.decide` (a `--kind permission` to `decision.open` with `kind: "permission"`, `tool`, `call`, `then` and
+`root`), `event` to `event`, `keep` to `keep`, `milestone` to `milestone`, `set` to `set`, and
 `chat … say` to `say`.
 
-## Six worked calls
+## Seven worked calls
 
 Each is the body of one `FLEET_DIR=<dir> fleet-run <<'EOF' … EOF`. The test `scripts/tests/test_fleet_programs.py`
 runs them, in this order, through the fleet's real prelude and fold.
@@ -129,6 +139,21 @@ decision.decide("D219", "do", "A Durable Object per session: logout must be imme
 event("decision", "D219: sessions live in a Durable Object", { decision: "D219" });
 return records.apply(ops);
 ```
+
+A yes asked before an exact command the fleet runs (a deploy, a push that deploys), as `decision --kind permission`
+did. The cloud numbers it with a P and sets its options, `allow-once` and `deny`; once the owner allows it on the
+page, the office host writes the exact rule into `root`'s `.claude/settings.local.json`, and the rule goes once the
+call ran, or after 30 minutes. `root` is your session's root (`$CLAUDE_PROJECT_DIR`), never a worker's workspace:
+
+```ts
+decision.open({ kind: "permission", title: "May the coordinator deploy the page Worker?",
+  question: "Let the coordinator run this exact call once?", tool: "Bash",
+  call: "bash /home/luizrocha/repos/acme/scripts/deploy.sh", root: "/home/luizrocha/repos/acme",
+  why: "It ships the reviewed login form to production.", blocking: true });
+return records.apply(ops);
+```
+
+After the yes, run the call as a Bash call of its own, unchanged, once.
 
 An event, and a note kept for the next session:
 
