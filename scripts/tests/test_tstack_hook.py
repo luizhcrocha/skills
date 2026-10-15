@@ -5692,6 +5692,164 @@ class MovedNudgeTest(MovedFleet, FleetCase):
         self.assertIn("#1 from the user answers A7", self.tool("2026-01-05T08:22:00+00:00") or "")
 
 
+class IdleGuardTest(MovedFleet, FleetCase):
+    """fleet_idle_guard: a coordinator does not end a turn idle while work waits in its ledger and no lane runs, a
+    gate run, a reviewer or a watcher being no lane."""
+
+    STEPS = [{"id": "m1", "title": "Export", "steps": [
+        {"id": "s1", "title": "Read the mirror", "status": "done"},
+        {"id": "s2", "title": "Wire the export", "status": "pending"},
+        {"id": "s3", "title": "Prune the orphans", "status": "pending"}]}]
+
+    def setUp(self):
+        super().setUp()
+        self.watch()  # the listen guard has nothing to say
+
+    def stop(self):
+        return self.hook("Stop", self.payload("Stop", stop_hook_active=False))
+
+    def fresh(self):
+        shutil.rmtree(self.data / "sessions", ignore_errors=True)  # forget what the guard told
+
+    def blocked(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)
+        self.assertEqual(out["decision"], "block")
+        return out["reason"]
+
+    def worker(self, id, status="running", model="opus", effort="high", skill="implement", **fields):
+        return {"id": id, "name": id, "task": f"the task of {id}", "skill": skill, "model": model, "effort": effort,
+                "status": status, "lane": [], "milestone": "m1", **fields}
+
+    def test_queued_work_with_no_lane_running_blocks_once_naming_the_first_three(self):
+        self.ledger(roadmap=self.STEPS, agents=[self.worker("a4", status="queued"), self.worker("a1", status="done")],
+                    kept=[{"id": "k1", "text": "Follow-up: the export drops a worker's lane", "at": "2026-01-05T08:00:00+00:00"},
+                          {"id": "k2", "text": "w2's workspace holds the old matcher", "at": "2026-01-05T08:00:00+00:00"}])
+        reason = self.blocked(self.stop())
+        self.assertEqual(reason, "Work is queued and no lane is running: s2 (Wire the export), s3 (Prune the orphans), "
+                                 "a4 (the task of a4), and 1 more. Start the independent ones now, or say why they wait "
+                                 f'(`{self.fleet_cli} state {self.fleet} set --now "..."`).')
+
+    def test_only_a_kept_item_that_opens_with_a_follow_up_marker_counts(self):
+        for n, text in enumerate(("w2's workspace holds the old matcher", "Done: the fix for the CRLF bug landed",
+                                  "The mirror retries later while the hub's answer is pending")):
+            with self.subTest(text=text):
+                self.ledger(kept=[{"id": f"k{n}", "text": text, "at": "2026-01-05T08:00:00+00:00"}])
+                self.assertSilent(self.stop())
+        for n, text in enumerate(("Follow-up: the page test leaks its fetch stub", "  todo the export drops a lane",
+                                  "Backlog: prune the orphans", "queued: a second mirror")):
+            with self.subTest(text=text):
+                self.ledger(kept=[{"id": f"f{n}", "text": text, "at": "2026-01-05T08:00:00+00:00"}])
+                self.assertIn(f"f{n} ({text.strip()})", self.blocked(self.stop()))
+
+    def test_one_implementer_running_passes(self):
+        self.ledger(roadmap=self.STEPS, agents=[self.worker("a2")])
+        self.assertSilent(self.stop())
+
+    def test_only_a_reviewer_a_watcher_or_the_advisor_running_blocks(self):
+        for running in ([self.worker("r1", skill="tstack:review")], [self.worker("r2", skill="none", name="the reviewer")],
+                        [self.worker("w9", model="haiku", effort="low", skill="none")],
+                        [self.worker("advisor", model="fable", skill="none")]):
+            with self.subTest(running=running[0]["id"]):
+                self.ledger(roadmap=self.STEPS, agents=running)
+                self.assertIn("Work is queued and no lane is running: s2", self.blocked(self.stop()))
+
+    def test_a_now_line_that_says_why_the_work_waits_passes(self):
+        for now in ("Waiting on Luiz's answer to D12 before s2.", "Paused: Luiz is away until Monday.",
+                    "s2 and s3 hold until the gate run lands."):
+            with self.subTest(now=now):
+                self.ledger(roadmap=self.STEPS, now=now)
+                self.assertSilent(self.stop())
+
+    def test_a_now_line_that_names_an_open_card_or_roadblock_passes(self):
+        cards = [{"id": "D12", "ref": "D12", "kind": "decision", "status": "open", "blocking": True},
+                 {"id": "G33", "ref": "G33", "kind": "grill", "status": "open", "blocking": False}]
+        blocks = [{"id": "R4", "ref": "R4", "title": "The hub is down", "resolved": None}]
+        for now in ("Awaiting Luiz on D12.", "Needs G33 answered before S5.", "R4 stops s2 and s3."):
+            with self.subTest(now=now):
+                self.fresh()
+                self.ledger(roadmap=self.STEPS, decisions=cards, roadblocks=blocks, now=now)
+                self.assertSilent(self.stop())
+
+    def test_a_now_line_that_names_no_open_card_and_no_wait_blocks(self):
+        """A bare mention of a step or a closed card, or a word such as holds, is no reason; naming an open card or
+        roadblock by its ref is one, whatever the rest of the line says (The gate on S3 passes only while S3 is open)."""
+        closed = [{"id": "D12", "ref": "D12", "kind": "decision", "status": "decided", "blocking": True},
+                  {"id": "R4", "ref": "R4", "title": "The hub is down", "resolved": "2026-01-05T09:00:00+00:00"}]
+        for now in ("Needs D12 answered before s2.", "R4 stops s2 and s3.", "S4 holds the export.",
+                    "The gate on S3 is running."):
+            with self.subTest(now=now):
+                self.fresh()
+                self.ledger(roadmap=self.STEPS, decisions=closed[:1], roadblocks=closed[1:], now=now)
+                self.blocked(self.stop())
+        self.ledger(roadmap=self.STEPS, now="The gate on S3 is running.",
+                    decisions=[{"id": "S3", "ref": "S3", "kind": "secret", "status": "open", "blocking": True}])
+        self.assertSilent(self.stop())
+
+    def test_an_open_blocking_decision_alone_does_not_pass(self):
+        self.ledger(roadmap=self.STEPS, now="Wiring the export.",
+                    decisions=[{"id": "D12", "ref": "D12", "kind": "decision", "status": "open", "blocking": True}])
+        self.blocked(self.stop())
+
+    def test_a_now_line_that_stops_saying_why_re_arms_the_guard(self):
+        self.ledger(roadmap=self.STEPS, now="Waiting on Luiz's answer before s2.")
+        self.assertSilent(self.stop())
+        self.ledger(roadmap=self.STEPS, now="Wiring the export.")
+        self.assertIn("no lane is running: s2", self.blocked(self.stop()))
+
+    def beat(self, task_id, age_s):
+        beat = self.fleet / "heartbeats" / f"sess-1.{task_id}.json"
+        beat.parent.mkdir(exist_ok=True)
+        beat.write_text(json.dumps({"session": "sess-1", "agent": task_id}))
+        at = time.time() - age_s
+        os.utime(beat, (at, at))
+
+    def test_a_running_worker_whose_heartbeat_went_silent_is_no_lane(self):
+        """Silent as fleet/src/health.ts's silentWorkers says: no heartbeat for 20 minutes. A row with no heartbeat
+        file (no task_id, a worker launched as its own session) is a lane: nothing says it went silent."""
+        self.ledger(roadmap=self.STEPS, agents=[self.worker("a2", task_id="ab12"), self.worker("a3")])
+        self.beat("ab12", 19 * 60)
+        self.assertSilent(self.stop())
+        self.ledger(roadmap=self.STEPS, agents=[self.worker("a2", task_id="ab12")])
+        self.assertSilent(self.stop())
+        self.beat("ab12", 21 * 60)
+        self.assertIn("no lane is running: s2", self.blocked(self.stop()))
+
+    def test_a_moved_teams_heartbeats_are_not_read(self):
+        """The hook beats into the scratchpad's fleets only, never a moved team's home folder: a beat there is from
+        before the move, so it says nothing of the worker now."""
+        self.move()
+        self.ledger(roadmap=self.STEPS, agents=[self.worker("a2", task_id="ab12")])
+        self.beat("ab12", 60 * 60)
+        self.assertSilent(self.stop())
+
+    def test_a_paused_fleet_or_a_manager_is_left_alone(self):
+        self.ledger(roadmap=self.STEPS, status="paused")
+        self.assertSilent(self.stop())
+        self.ledger(roadmap=self.STEPS, role="manager")
+        self.watch(role="manager")
+        self.assertSilent(self.stop())
+
+    def test_told_once_per_state_and_again_when_the_queued_or_running_set_changes(self):
+        self.ledger(roadmap=self.STEPS)
+        self.blocked(self.stop())
+        self.assertSilent(self.stop())
+        self.ledger(roadmap=self.STEPS, agents=[self.worker("a5", status="queued")])
+        self.assertIn("a5 (the task of a5)", self.blocked(self.stop()))
+        self.assertSilent(self.stop())
+        self.ledger(roadmap=self.STEPS, agents=[self.worker("a5", status="queued"), self.worker("r1", skill="review")])
+        self.blocked(self.stop())
+
+    def test_a_moved_fleet_is_told_the_program_form(self):
+        self.move()
+        self.ledger(roadmap=self.STEPS)
+        reason = self.blocked(self.stop())
+        self.assertIn("say why they wait (one program on the stdin of "
+                      f'`{self.env["TSTACK_FLEET_RUN"]}`: `set("now", "..."); return records.apply(ops);`).', reason)
+        self.assertNotIn("set --now", reason)
+        self.assertEqual(self.programs(), [])
+
+
 class ChatSinceRewriteTest(unittest.TestCase):
     """_chat_since: a chat.jsonl rewritten whole (a moved fleet's export) so that the stored offset no longer ends a
     line is read again from its tail, not from the middle of a line."""

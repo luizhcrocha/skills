@@ -1057,6 +1057,120 @@ def fleet_listen_guard(hook, tree=None):
     return "\n".join(WAITING.format(id=i) for i in waiting) or None
 
 
+IDLE = "Work is queued and no lane is running: {items}. Start the independent ones now, or say why they wait ({how})."
+IDLE_SHOWN = 3
+# A kept item that opens with a follow-up marker is work still to do; one that only mentions a bug, or says what
+# landed, is not.
+FOLLOW_UP = re.compile(r"^\s*(?:follow[- ]?ups?|todo|backlog|queued)\b", re.I)
+# A Now line that says why the work waits: on someone, a pause, a hold. Naming an open card or roadblock by its
+# ref (D12, G33, R4) is a reason too (_gives_why).
+WAITS_WHY = re.compile(r"\b(?:a?wait(?:s|ing|ed)?|until|paused?|on hold|blocked (?:on|by))\b", re.I)
+REF = re.compile(r"\b[A-Z]\d+\b")
+# fleet/src/health.ts SILENT_S: a worker not seen for this long is silent (silentWorkers).
+SILENT_S = 20 * 60
+REVIEW_SKILLS = ("review", "interrogate", "code-review")
+
+
+def _no_lane(row):
+    """Whether a running worker row is no lane of the queued work: the fleet's advisor (`fleet advisor`'s row), a
+    reviewer (its skill, or the role in its name) or a watcher (MODELS.md's Watcher pair, haiku at low). A gate run is
+    no row of the ledger (`fleet fleets gate run` is a background command), so it never counts as a lane; a worker
+    spawned only to run one is a lane unless it is recorded on the Watcher pair."""
+    skill = row.get("skill") if isinstance(row.get("skill"), str) else ""
+    name = row.get("name") if isinstance(row.get("name"), str) else ""
+    return (row.get("id") == "advisor" or skill.rsplit(":", 1)[-1] in REVIEW_SKILLS or _named("reviewer", name.lower())
+            or (row.get("model") == "haiku" and row.get("effort") == "low"))
+
+
+def _silent(hook, d, row, now):
+    """Whether a running row's worker went silent: its heartbeat file, DIR/heartbeats/<session>.<task_id>.json as
+    fleet_heartbeat names a subagent's, is older than SILENT_S. Stat only. A row with no task_id or no file, or a
+    moved team's (the hook beats into the scratchpad's fleets, never a moved one's home folder), is not known silent."""
+    task = row.get("task_id")
+    if not isinstance(task, str) or not task or not hook.session_id or moved(d):
+        return False
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{hook.session_id}.{task}")
+    try:
+        return now - os.stat(os.path.join(d, "heartbeats", f"{name}.json")).st_mtime > SILENT_S
+    except OSError:
+        return False
+
+
+def _gives_why(ledger):
+    """Whether the Now line says why the work waits: a wait word (WAITS_WHY), or the ref of an open card or an
+    unresolved roadblock. An open card the line does not name is no reason: a blocking decision alone passes nothing."""
+    now = str(ledger.get("now") or "")
+    if WAITS_WHY.search(now):
+        return True
+    named = set(REF.findall(now))
+    if not named:
+        return False
+
+    def refs(key, still_open):
+        rows = ledger.get(key) if isinstance(ledger.get(key), list) else []
+        return {r.get("ref") for r in rows if isinstance(r, dict) and still_open(r)}
+    return bool(named & (refs("decisions", lambda r: r.get("status") == "open")
+                         | refs("roadblocks", lambda r: not r.get("resolved"))))
+
+
+def _queued_work(ledger):
+    """(id, title) of the work a fleet's ledger holds waiting: its pending steps in roadmap order, its queued workers
+    (the advisor's row aside), then its kept items that read as a follow-up."""
+    def rows(value):
+        return [r for r in value if isinstance(r, dict) and isinstance(r.get("id"), str)] if isinstance(value, list) else []
+    steps = [(s["id"], s.get("title") or "") for m in rows(ledger.get("roadmap")) for s in rows(m.get("steps"))
+             if s.get("status") == "pending"]
+    queued = [(a["id"], a.get("task") or a.get("name") or "") for a in rows(ledger.get("agents"))
+              if a.get("status") == "queued" and a["id"] != "advisor"]
+    kept = [(k["id"], k.get("text") or "") for k in rows(ledger.get("kept"))
+            if isinstance(k.get("text"), str) and FOLLOW_UP.search(k["text"])]
+    return steps + queued + kept
+
+
+def fleet_idle_guard(hook):
+    """Stop: a coordinator does not end its turn idle while work waits. When a fleet it hosts (running or blocked) holds
+    queued work (_queued_work) and runs no lane (every running worker is _no_lane), the turn goes on with the first
+    IDLE_SHOWN items, unless the Now line says why they wait (_gives_why). A running worker gone silent (_silent) is
+    no lane. Told once per state: the queued ids, the running ids (a silent one marked) and whether the Now line gave
+    a reason are kept, and nothing is said again until one of them changes. The fleets are the listen guard's, a
+    moved one's export among them; a moved team is told the program form of `set --now`. Reads and stats files
+    only: no process is started."""
+    if fleet_worker(hook) or hook.input.get("stop_hook_active"):
+        return None
+    dirs = fleet_dirs(hook)
+    if not hook.env.get("FLEET_DIR"):
+        dirs = [d for d in dirs if served_by_session(hook, d)]
+        dirs += _moved_served_dirs(hook, dirs)
+    if not dirs:
+        return None
+    state = hook.load_state("fleet-idle") if hook.session_id else {}
+    told = state.get("told") if isinstance(state.get("told"), dict) else {}
+    lines, seen, clock = [], dict(told), time.time()
+    for d in dirs:
+        ledger = read_ledger(d)
+        if ledger is None or ledger.get("status") in ("paused", "done") or fleet_role(ledger) != "coordinator":
+            continue
+        work = _queued_work(ledger)
+        agents = [a for a in ledger.get("agents") or [] if isinstance(a, dict) and a.get("status") == "running"]
+        lanes = [a for a in agents if not _no_lane(a)]
+        silent = {id(a) for a in lanes if _silent(hook, d, a, clock)}
+        why = _gives_why(ledger)
+        mark = " | ".join((" ".join(sorted(i for i, _ in work)),
+                           " ".join(sorted(str(a.get("id")) + ("~silent" if id(a) in silent else "") for a in agents)),
+                           "why" if why else ""))
+        seen[d] = mark
+        if told.get(d) == mark or not work or len(silent) < len(lanes) or why:
+            continue
+        items = ", ".join(f"{i} ({_one_line(t, 60)})" for i, t in work[:IDLE_SHOWN])
+        more = len(work) - IDLE_SHOWN
+        how = (f'one program on the stdin of `{fleet_run_cli(hook.env)}`: `set("now", "..."); return records.apply(ops);`'
+               if moved(d) else f'`{fleet_cli()} state {d} set --now "..."`')
+        lines.append(IDLE.format(items=items + (f", and {more} more" if more > 0 else ""), how=how))
+    if hook.session_id and seen != told:
+        hook.save_state("fleet-idle", {**state, "told": seen})
+    return Block("\n".join(lines)) if lines else None
+
+
 NEWS_LINE = "Fleet news: {count} unread for {fleet}, never a wake. Read them when convenient: `{cli} news read --as {fleet}`."
 
 
@@ -4134,7 +4248,7 @@ def onepw_watch(hook):
 
 HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, fleet_heartbeat],
-    "Stop": [memo_nudge, fleet_listen_guard, fleet_said_once, fleet_news, fleet_heartbeat],
+    "Stop": [memo_nudge, fleet_listen_guard, fleet_idle_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
     "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, fleet_moved_writes, land_turn_gate, suite_gate, onepw_hold, fleet_monitor_watch,
                    fleet_grant_alone],

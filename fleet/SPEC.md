@@ -3044,6 +3044,26 @@ A handler of SessionStart and Stop tells the host of the machine's news ([The ne
   unread; a Stop once per new item (the session's `fleet-news` state keeps the last item told per fleet).
   No process: it reads the registry's entries, the log and the cursor itself.
 
+A Stop handler of the same dispatcher keeps a coordinator at work while work waits (coordinator SKILL.md, Track):
+
+- **The idle guard** (`fleet_idle_guard`, Stop). For each fleet the Stop guard's membership finds (a moved one
+  among them) whose ledger's role is coordinator and whose status is not paused or done: when it holds queued work
+  (its pending steps in roadmap order, its queued workers but the advisor's row, then its `kept` items whose text
+  opens with a follow-up marker: follow-up, todo, backlog or queued; a kept item that only mentions a bug is none)
+  and every running worker is no lane (the advisor's row, a reviewer by its skill `review`, `interrogate` or
+  `code-review` or the word reviewer in its name, a watcher by MODELS.md's Watcher pair, haiku at low, or a worker
+  gone silent: its heartbeat `DIR/heartbeats/<session>.<task_id>.json` older than `SILENT_S`, 20 minutes, as
+  `silentWorkers` says; a row with no task_id or no heartbeat, or a moved team's, whose home folder gets no
+  heartbeats, is a lane; a gate run is no ledger row), and its Now line does not say why the work waits (a wait
+  word: wait, await, until, pause, on hold, blocked on or by; or the ref of an open card or unresolved roadblock,
+  D12, G33, R4: an open card the line does not name is no reason), the stop is blocked with `Work is
+  queued and no lane is running: <the first three, id (title)>[, and N more]. Start the independent ones now, or
+  say why they wait (<the set --now command, or for a moved team its program>).` The session's `fleet-idle`
+  state keeps, per fleet, the queued ids, the running ids (a silent one marked) and whether the Now line gave a
+  reason, as the last Stop saw them: nothing is said again until one of them changes. Not on `stop_hook_active`,
+  nor for a worker. No process: it reads the ledgers and stats the heartbeats. Measured on a ledger of 200 steps,
+  200 workers and 100 kept items: 0.54 ms median in process.
+
 A third Stop handler of the same dispatcher holds the host to "Said once, on the page" (coordinator
 SKILL.md, Respond; manager SKILL.md, Said once):
 
@@ -4642,7 +4662,7 @@ recommendation attached.
 | the hub (its wake timer, `POST wake`) | `REGISTRY/hub/wakes.json`; one line to the session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, which is Claude Code's, not the fleet's |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |
-| the plugin's hook (`fleet_listen_guard`, `fleet_chat_nudge`, `fleet_said_once`, `fleet_news`) | nothing in DIR; the session's `fleet-guard`, `fleet-nudge`, `said-once` and `fleet-news` state in the plugin's data folder |
+| the plugin's hook (`fleet_listen_guard`, `fleet_idle_guard`, `fleet_chat_nudge`, `fleet_said_once`, `fleet_news`) | nothing in DIR; the session's `fleet-guard`, `fleet-idle`, `fleet-nudge`, `said-once` and `fleet-news` state in the plugin's data folder |
 | `news post`, and a `state decision --kind notice` once its ledger is written, when a manager is served | `REGISTRY/news/news.jsonl` (under its `flock`) |
 | `news read` | `REGISTRY/news/read/<fleet>` when the cursor moves |
 | the plugin's hook (`onepw_watch`, `onepw_hold`) | `REGISTRY/onepw/locked.json` (under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken` (a state that did not read, set aside), `REGISTRY/onepw/onepw.log` |
