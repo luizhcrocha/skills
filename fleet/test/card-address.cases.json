@@ -1,0 +1,176 @@
+{
+  "about": "A decision card's address: cases both grammars must read the same. One file, two copies: tstack fleet/test/card-address.cases.json (fleet/src/ledger/card-address.ts) and the fleet repo's apps/page/src/views/card-link.cases.json (card-link.ts). Change both together.",
+  "slug": [
+    ["Pick the database", "pick-the-database"],
+    ["Decisão: usar o Postgres?", "decisao-usar-o-postgres"],
+    ["  D219's   follow-up (v2)  ", "d219-s-follow-up-v2"],
+    ["one two three four five six seven eight", "one-two-three-four-five-six"],
+    [
+      "internationalization localization containerization orchestration",
+      "internationalization-localization"
+    ],
+    [
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    ],
+    ["", ""],
+    ["—?!", ""],
+    ["日本語", ""],
+    [null, ""]
+  ],
+  "hash": [
+    {
+      "card": {
+        "id": "shares-503",
+        "ref": "D219",
+        "title": "Share the cache"
+      },
+      "fleet": "ui",
+      "hash": "#decision/ui/d219-share-the-cache"
+    },
+    {
+      "card": {
+        "id": "shares-503",
+        "ref": "D219",
+        "title": "Share the cache"
+      },
+      "fleet": null,
+      "hash": "#decision/d219-share-the-cache"
+    },
+    {
+      "card": {
+        "id": "shares-503",
+        "ref": "D219",
+        "title": "Share the cache"
+      },
+      "fleet": "",
+      "hash": "#decision/d219-share-the-cache"
+    },
+    {
+      "card": {
+        "id": "x",
+        "ref": "P64",
+        "title": "Grant gh"
+      },
+      "fleet": "ui@box",
+      "hash": "#decision/ui%40box/p64-grant-gh"
+    },
+    {
+      "card": {
+        "id": "x",
+        "ref": "A78",
+        "title": "Decisão: deploy à prod?"
+      },
+      "fleet": "ui@box",
+      "hash": "#decision/ui%40box/a78-decisao-deploy-a-prod"
+    },
+    {
+      "card": {
+        "id": "shares-503",
+        "title": "Share"
+      },
+      "fleet": "ui",
+      "hash": "#decision/ui/shares-503"
+    },
+    {
+      "card": {
+        "id": "shares-503",
+        "ref": "",
+        "title": "Share"
+      },
+      "fleet": null,
+      "hash": "#decision/shares-503"
+    },
+    {
+      "card": {
+        "id": "d3",
+        "ref": "D7",
+        "title": "?"
+      },
+      "fleet": "ui",
+      "hash": "#decision/ui/d3"
+    },
+    {
+      "card": {
+        "id": "k1",
+        "ref": "K1",
+        "title": "Not a card's number"
+      },
+      "fleet": null,
+      "hash": "#decision/k1"
+    }
+  ],
+  "parse": [
+    [
+      "#decision/d219-share",
+      {
+        "fleet": null,
+        "card": "d219-share"
+      }
+    ],
+    [
+      "#decision/ui/d219-share",
+      {
+        "fleet": "ui",
+        "card": "d219-share"
+      }
+    ],
+    [
+      "#decision/ui%40box/shares-503",
+      {
+        "fleet": "ui@box",
+        "card": "shares-503"
+      }
+    ],
+    [
+      "#decision/D219",
+      {
+        "fleet": null,
+        "card": "D219"
+      }
+    ],
+    ["", null],
+    ["#decisions", null],
+    ["#decision/", null],
+    ["#decision/a/b/c", null],
+    ["#decision//b", null],
+    ["#decision/a b", null],
+    ["#decision/a@b", null],
+    ["#decision/a%2/b", null],
+    ["#decision/a/b%2Fc", null]
+  ],
+  "find": {
+    "rows": [
+      {
+        "id": "d3",
+        "ref": "D7",
+        "title": "Old id that reads as a number"
+      },
+      {
+        "id": "pick-db",
+        "ref": "D3",
+        "title": "Pick the database"
+      },
+      {
+        "id": "shares-503",
+        "ref": "D219",
+        "title": "Share the cache"
+      },
+      {
+        "id": "grant",
+        "ref": "P64",
+        "title": "Grant gh"
+      }
+    ],
+    "cases": [
+      ["d3", "d3"],
+      ["shares-503", "shares-503"],
+      ["d219-a-title-since-changed", "shares-503"],
+      ["D219", "shares-503"],
+      ["d3-pick-the-database", "pick-db"],
+      ["p64-grant-gh", "grant"],
+      ["d999-gone", null],
+      ["pick", null]
+    ]
+  }
+}

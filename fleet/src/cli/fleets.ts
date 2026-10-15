@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import { listening, oneLine, type Listening } from "../chat/chat.ts";
+import { cardHash } from "../ledger/card-address.ts";
 import { linkKind } from "../ledger/links.ts";
 import { firstLine } from "../chat/news.ts";
 import { readChat } from "../chat/store.ts";
@@ -458,7 +459,13 @@ function decision(machine: Machine, fleet: string, id: string): Effect.Effect<vo
     }
 
     if (truthy(d["body"])) say(`    evidence: ${join(entry.dir, "decisions", `${str(d["id"])}.html`)}`);
-    say(`    page: ${entry.url}#decision/${str(d["id"])}`);
+
+    // A moved team's page is the cloud's, which reads `#decision/<id>` until it ships the number-and-slug address.
+    const hash = entry.moved === true
+      ? `#decision/${encodeURIComponent(str(d["id"]))}`
+      : cardHash({ id: str(d["id"]), ref: asString(d["ref"]), title: asString(d["title"]) }, entry.id);
+
+    say(`    page: ${entry.url}${hash}`);
   });
 }
 

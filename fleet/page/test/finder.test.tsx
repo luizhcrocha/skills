@@ -247,12 +247,12 @@ test("Enter opens the row here; Ctrl/⌘+Enter opens it in a new tab", () => {
   finder();
   type("D1");
   key("Enter", { ctrlKey: true });
-  expect(opened).toEqual(["/f/billing/#decision/d1"]);
-  expect(location.hash).not.toBe("#decision/d1");
+  expect(opened).toEqual(["/f/billing/#decision/billing/d1-rounding-rule-for-totals"]);
+  expect(location.hash).not.toBe("#decision/billing/d1-rounding-rule-for-totals");
   finder();
   type("D1");
   key("Enter");
-  expect(location.hash).toBe("#decision/d1");
+  expect(location.hash).toBe("#decision/billing/d1-rounding-rule-for-totals");
 });
 
 test("on the manager's page, Ctrl/⌘+Enter on a fleet's decision opens that fleet's own page", () => {
@@ -261,7 +261,7 @@ test("on the manager's page, Ctrl/⌘+Enter on a fleet's decision opens that fle
   finder();
   type("rounding");
   key("Enter", { metaKey: true });
-  expect(opened).toEqual([page.m.fleetPage("billing") + "#decision/d1"]);
+  expect(opened).toEqual([page.m.fleetPage("billing") + "#decision/billing/d1-rounding-rule-for-totals"]);
 });
 
 test("Escape clears the words and the tab, then closes", () => {
@@ -350,12 +350,12 @@ test("the pane's buttons do the row's two actions: Open here, New tab as Ctrl/�
   finder();
   type("D1");
   act("second");
-  expect(opened).toEqual(["/f/billing/#decision/d1"]);
-  expect(location.hash).not.toBe("#decision/d1");
+  expect(opened).toEqual(["/f/billing/#decision/billing/d1-rounding-rule-for-totals"]);
+  expect(location.hash).not.toBe("#decision/billing/d1-rounding-rule-for-totals");
   finder();
   type("D1");
   act("open");
-  expect(location.hash).toBe("#decision/d1");
+  expect(location.hash).toBe("#decision/billing/d1-rounding-rule-for-totals");
   expect(page.ui.refs.finder?.open).toBe(false);
 });
 
@@ -365,7 +365,7 @@ test("a key that ends an IME composition is the composition's: Enter commits the
   const at = active();
   key("Enter", { isComposing: true });
   expect(page.ui.refs.finder?.open).toBe(true);
-  expect(location.hash).not.toBe("#decision/d1");
+  expect(location.hash).not.toBe("#decision/billing/d1-rounding-rule-for-totals");
   key("ArrowDown", { isComposing: true });
   expect(active()).toBe(at);
   key("Tab", { isComposing: true });
@@ -373,5 +373,5 @@ test("a key that ends an IME composition is the composition's: Enter commits the
   key("Escape", { isComposing: true });
   expect(field().value).toBe("D1");
   key("Enter");
-  expect(location.hash).toBe("#decision/d1");
+  expect(location.hash).toBe("#decision/billing/d1-rounding-rule-for-totals");
 });

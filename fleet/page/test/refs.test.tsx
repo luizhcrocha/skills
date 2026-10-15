@@ -180,18 +180,18 @@ describe("targetsOf and refHref", () => {
     const view = { ...coordinatorView(NOW), approvals: [{ id: "K1", rule: "r", by: "luiz", ref: "d1", message: 1, added: at(9), status: "active" }] };
     const to = (num: string): (string | null)[] => leads(view, FLEET_PLACE, null, num);
 
-    expect([to("D1"), to("d1"), to("A1"), to("a7")]).toEqual([["#decision/d1"], ["#decision/d1"], ["#decision/a7"], ["#decision/a7"]]);
+    expect([to("D1"), to("d1"), to("A1"), to("a7")]).toEqual([["#decision/billing/d1-rounding-rule-for-totals"], ["#decision/billing/d1-rounding-rule-for-totals"], ["#decision/billing/a1-enable-test-mode-webhooks"], ["#decision/billing/a1-enable-test-mode-webhooks"]]);
     expect([to("L1"), to("l1"), to("R2"), to("r2"), to("K1")]).toEqual([["#link-billing/l1"], ["#link-billing/l1"], ["#roadblock-r2"], ["#roadblock-r2"], ["#approval-K1"]]);
     expect([to("s3"), to("m2"), to("a2"), to("k1")]).toEqual([["#step-s3"], ["#milestone-m2"], ["#agent-a2"], ["#kept-k1"]]);
     expect([to("d99"), to("D99"), to("K9"), to("D1x"), to("billing")]).toEqual([[], [], [], [], []]);
     /* Its own fleet named ("billing's d1") is its own ledger; another's is that fleet's decision on the manager's page. */
-    expect(leads(view, FLEET_PLACE, null, "D1", "billing")).toEqual(["#decision/d1"]);
+    expect(leads(view, FLEET_PLACE, null, "D1", "billing")).toEqual(["#decision/billing/d1-rounding-rule-for-totals"]);
     expect(leads(view, FLEET_PLACE, null, "d172", "infra")).toEqual(["/f/manager/#decision/infra/d172"]);
   });
 
   test("a word after a fleet's name that names no row stays text: where the page holds that ledger it knows, where it does not only a decision's number or id links", () => {
     /* The manager's page holds perf's ledger: "perf p95" and a decision perf never had name nothing. */
-    expect(leads(refsManagerView(NOW), MANAGER_PLACE, null, "d30", "perf")).toEqual(["#decision/perf/d30"]);
+    expect(leads(refsManagerView(NOW), MANAGER_PLACE, null, "d30", "perf")).toEqual(["#decision/perf/d130-t-d130"]);
     expect([leads(refsManagerView(NOW), MANAGER_PLACE, null, "p95", "perf"), leads(refsManagerView(NOW), MANAGER_PLACE, null, "d31", "perf")]).toEqual([[], []]);
     /* A fleet's page knows another fleet only by name: a percentile, a worker and a link are no decision of it. */
     const to = (num: string): (string | null)[] => leads(coordinatorView(NOW), FLEET_PLACE, null, num, "infra");
@@ -203,10 +203,10 @@ describe("targetsOf and refHref", () => {
   test("on the manager's page an id is looked up only in the fleet whose words they are, and leads to that fleet's row", () => {
     const view = refsManagerView(NOW);
 
-    expect(leads(view, MANAGER_PLACE, "perf", "d30")).toEqual(["#decision/perf/d30"]);
-    expect(leads(view, MANAGER_PLACE, "perf", "d58")).toEqual(["#decision/perf/d58"]);
+    expect(leads(view, MANAGER_PLACE, "perf", "d30")).toEqual(["#decision/perf/d130-t-d130"]);
+    expect(leads(view, MANAGER_PLACE, "perf", "d58")).toEqual(["#decision/perf/d158-t-d158"]);
     /* The manager's own words name its own d30; billing has none, and infra's is another row. */
-    expect(leads(view, MANAGER_PLACE, null, "d30")).toEqual(["#decision/d30"]);
+    expect(leads(view, MANAGER_PLACE, null, "d30")).toEqual(["#decision/d7-the-manager-s-own"]);
     expect(leads(view, MANAGER_PLACE, "billing", "d30")).toEqual([]);
     expect(leads(view, MANAGER_PLACE, "infra", "d30")).toEqual([]);
     expect(leads(view, MANAGER_PLACE, "perf", "d31")).toEqual([]);
@@ -215,15 +215,15 @@ describe("targetsOf and refHref", () => {
   test("on the manager's page a number is its fleet's first, then whoever holds it; a fleet's link is in the Links view, its roadblock, step and worker on its own page", () => {
     const view = refsManagerView(NOW);
 
-    expect(leads(view, MANAGER_PLACE, "perf", "D130")).toEqual(["#decision/perf/d30"]);
-    expect(leads(view, MANAGER_PLACE, null, "D130")).toEqual(["#decision/perf/d30"]);
-    expect(leads(view, MANAGER_PLACE, "billing", "D130")).toEqual(["#decision/perf/d30"]);
-    expect(leads(view, MANAGER_PLACE, "infra", "D30")).toEqual(["#decision/infra/d4"]);
+    expect(leads(view, MANAGER_PLACE, "perf", "D130")).toEqual(["#decision/perf/d130-t-d130"]);
+    expect(leads(view, MANAGER_PLACE, null, "D130")).toEqual(["#decision/perf/d130-t-d130"]);
+    expect(leads(view, MANAGER_PLACE, "billing", "D130")).toEqual(["#decision/perf/d130-t-d130"]);
+    expect(leads(view, MANAGER_PLACE, "infra", "D30")).toEqual(["#decision/infra/d30-t-d30"]);
     expect(leads(view, MANAGER_PLACE, "perf", "L25")).toEqual(["#link-perf/bench"]);
     expect(leads(view, MANAGER_PLACE, "perf", "R7")).toEqual(["/f/perf/#roadblocks"]);
     expect(leads(view, MANAGER_PLACE, "perf", "s3")).toEqual(["/f/perf/#step-s3"]);
     expect(leads(view, MANAGER_PLACE, "perf", "a2")).toEqual(["/f/perf/#agent-a2"]);
-    expect(leads(view, MANAGER_PLACE, null, "D1").toSorted()).toEqual(["#decision/billing/d1", "#decision/infra/d1"]);
+    expect(leads(view, MANAGER_PLACE, null, "D1").toSorted()).toEqual(["#decision/billing/d1-rounding-rule-for-totals", "#decision/infra/d1-t-d1"]);
   });
 
   test("the addresses a reference leads to are ones the page routes", () => {
@@ -308,7 +308,7 @@ function mount(view: View): void {
 test("a decision's number in the question, why, option and reason links to it; one not found stays text", () => {
   mount({ ...coordinatorView(NOW), decisions: [D18, D26], roadblocks: [] });
   const links = [...root.querySelectorAll<HTMLAnchorElement>("#decision a.dref")];
-  expect(links.map((a) => a.getAttribute("href"))).toEqual(["#decision/d18", "#decision/d18", "#decision/d18", "#decision/d18"]);
+  expect(links.map((a) => a.getAttribute("href"))).toEqual(["#decision/billing/d18-claude-over-mcp-stays-read-only", "#decision/billing/d18-claude-over-mcp-stays-read-only", "#decision/billing/d18-claude-over-mcp-stays-read-only", "#decision/billing/d18-claude-over-mcp-stays-read-only"]);
   expect(root.querySelector("#decision .dv-why")?.textContent).toContain("D99");
   expect([...root.querySelectorAll("#decision a.dref")].some((a) => a.textContent === "D99")).toBe(false);
 });
@@ -392,7 +392,7 @@ test("on the manager's page it links to the fleet's decision there, which the fl
   window.dispatchEvent(new HashChangeEvent("hashchange"));
   flush();
   const link = root.querySelector<HTMLAnchorElement>("#decision .dv-question a.dref");
-  expect(link?.getAttribute("href")).toBe("#decision/infra/d172");
+  expect(link?.getAttribute("href")).toBe("#decision/infra/g72-where-the-case-chat-runs");
   expect(link?.getAttribute("target")).toBeNull();
   location.hash = "#decision/infra/d172";
   window.dispatchEvent(new HashChangeEvent("hashchange"));
@@ -426,13 +426,13 @@ test("on the manager's page a bare number its own ledger lacks links to the flee
   flush();
   const links = [...root.querySelectorAll<HTMLAnchorElement>("#decision .dv-question a.dref")];
   expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
-    ["D512", "#decision/infra/d512"],
-    ["D17 in billing", "#decision/billing/d17"],
-    ["D17 in infra", "#decision/infra/d17"],
-    ["D88", "#decision/old-fleet/d88"],
+    ["D512", "#decision/infra/d512-t"],
+    ["D17 in billing", "#decision/billing/d17-t"],
+    ["D17 in infra", "#decision/infra/d17-t"],
+    ["D88", "#decision/old-fleet/d88-t"],
   ]);
   expect(root.querySelector("#decision .dv-question .dref-choices")?.textContent).toBe("D17 in billing · D17 in infra");
   /* The title is running words: no row of choices in the middle of it. */
   expect(root.querySelector("#decision h1")?.textContent).toBe("D1 After D512 and D17");
-  expect([...root.querySelectorAll<HTMLAnchorElement>("#decision h1 a.dref")].map((a) => [a.textContent, a.getAttribute("href")])).toEqual([["D512", "#decision/infra/d512"]]);
+  expect([...root.querySelectorAll<HTMLAnchorElement>("#decision h1 a.dref")].map((a) => [a.textContent, a.getAttribute("href")])).toEqual([["D512", "#decision/infra/d512-t"]]);
 });

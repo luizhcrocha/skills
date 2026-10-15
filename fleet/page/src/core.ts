@@ -7,6 +7,7 @@
  * rule alone (fleet/src/chat): the page renders the `parts` and `to` the server resolved. A link's kind is
  * the fleet's own rule set (fleet/src/ledger/link-kind.ts), bundled in, not a copy.
  */
+import { parseCardHash } from "../../src/ledger/card-address.ts";
 import { linkKind, type LinkKind } from "../../src/ledger/link-kind.ts";
 import { plainCause } from "../../src/ledger/permission-words.ts";
 
@@ -1309,32 +1310,23 @@ function grillAnswerText(item: Decision, picks: readonly GrillPick[]): { text: s
   return lines.length ? { text: lines.join("\n") } : { error: "Answer at least one question." };
 }
 
-/** A segment of a decision's address, decoded, when it is one `rule` allows. */
-function segment(text: string, rule: RegExp): string | null {
-  try {
-    const v = decodeURIComponent(text);
-
-    return rule.test(v) ? v : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
- * The decision a location hash names ("#decision/d1"), or null. On a manager's page (`fleets`) it may name
- * another fleet's as "#decision/<fleet>/<id>"; a fleet's id may hold the "@" of a peer's.
+ * The decision a location hash names (card-address.ts): "#decision/d1" or "#decision/d219-pick-the-database"
+ * as written, a card of this page's own ledger, to resolve by id, else by number (the model's `cardKey`). On a
+ * manager's page (`fleets` true) it may name another fleet's as "#decision/<fleet>/<card>", read as
+ * "<fleet>/<card>"; a fleet's id may hold the "@" of a peer's. On a fleet's page `fleets` is its own name, if
+ * it knows one: "#decision/<that name>/<card>" is its own card.
  */
-function decisionRoute(hash: string | null | undefined, fleets = false): string | null {
-  const m = /^#decision\/([^/]+)(?:\/([^/]+))?$/u.exec(String(hash ?? ""));
+function decisionRoute(hash: string | null | undefined, fleets: boolean | string = false): string | null {
+  const at = parseCardHash(hash);
 
-  if (!m) return null;
-  const [, first = "", second] = m;
+  if (!at) return null;
 
-  if (second === undefined) return segment(first, /^[A-Za-z0-9_.-]+$/u);
-  const fleet = fleets ? segment(first, /^[A-Za-z0-9_.@-]+$/u) : null;
-  const id = segment(second, /^[A-Za-z0-9_.-]+$/u);
+  if (at.fleet === null) return at.card;
 
-  return fleet && id ? fleet + "/" + id : null;
+  if (fleets === true) return at.fleet + "/" + at.card;
+
+  return fleets !== false && fleets !== "" && at.fleet === fleets ? at.card : null;
 }
 
 /** The address of a decision's page: each segment encoded, so "<fleet>/<id>" stays a route. */
@@ -2090,7 +2082,7 @@ export interface Place {
  * `#approval-<id>`, `#roadblock-<id>`, `#step-<id>`, `#milestone-<id>`, `#kept-<id>`, `#link-<fleet>/<id>`)
  * to that row in its view. `fleets` as for `decisionRoute`.
  */
-function viewOf(hash: string | null | undefined, fleets = false): Place {
+function viewOf(hash: string | null | undefined, fleets: boolean | string = false): Place {
   const decision = decisionRoute(hash, fleets);
   const name = String(hash ?? "").replace(/^#/u, "");
   const moved = MOVED[name];

@@ -128,7 +128,7 @@ function arrive(data: Json, source: Window | null | undefined): void {
 test("on the manager's page a fleet's decision opens on the manager's own page, as that fleet's page in a frame", () => {
   open("/f/manager/", managerView(NOW));
   const row = root.querySelector<HTMLAnchorElement>("#decision-list a.ask-head");
-  expect(row?.getAttribute("href")).toBe("#decision/billing/d1");
+  expect(row?.getAttribute("href")).toBe("#decision/billing/d1-rounding-rule-for-totals");
   go("#decision/billing/d1");
   expect(root.querySelector("#decision")?.hasAttribute("hidden")).toBe(false);
   expect(frame()?.getAttribute("src")).toBe("/f/billing/?embed=1#decision/d1");
@@ -151,11 +151,11 @@ test("previous and next walk what waits on the user, in the list's order, the ma
   open("/f/manager/", managerView(NOW));
   go("#decision/billing/d1");
   const next = root.querySelector<HTMLAnchorElement>('#dv-queue a[data-queue="next"]');
-  expect(next?.getAttribute("href")).toBe("#decision/d9");
+  expect(next?.getAttribute("href")).toBe("#decision/d1-which-fleet-gets-the-gate-first");
   expect(root.querySelector('#dv-queue a[data-queue="prev"]')).toBeNull();
   go("#decision/d9");
   expect(queueLine()).toBe("2 of 2 waiting on you");
-  expect(root.querySelector('#dv-queue a[data-queue="prev"]')?.getAttribute("href")).toBe("#decision/billing/d1");
+  expect(root.querySelector('#dv-queue a[data-queue="prev"]')?.getAttribute("href")).toBe("#decision/billing/d1-rounding-rule-for-totals");
   expect(root.querySelector("#dv-embed")).toBeNull();
   expect(root.querySelector("#dv-info h1")?.textContent).toBe("D1 Which fleet gets the gate first");
 });
@@ -169,13 +169,13 @@ test("an answer sent in the frame goes on to the next, says which was answered, 
   arrive({ fleetEmbed: true, answered: "d1" }, frame()?.contentWindow);
   expect(root.querySelector("#dv-answered")).toBeNull();
   await settle();
-  expect(location.hash).toBe("#decision/d9");
+  expect(location.hash).toBe("#decision/d1-which-fleet-gets-the-gate-first");
   expect(page.m.viewing()).toBe("d9");
   expect(root.querySelector("#dv-advanced")?.textContent).toBe("Answered D1 Rounding rule for totals in billing.");
   expect(root.querySelector("#dv-advanced")?.getAttribute("role")).toBe("status");
   expect(root.querySelector("#dv-answered")).toBeNull();
   expect(document.activeElement).toBe(root.querySelector("#decision"));
-  expect(queueHref("prev")).toBe("#decision/billing/d1");
+  expect(queueHref("prev")).toBe("#decision/billing/d1-rounding-rule-for-totals");
   go("#decision/billing/d1");
   expect(root.querySelector("#dv-advanced")).toBeNull();
 });
@@ -222,10 +222,10 @@ test("a fleet's decision that leaves the queue on the next state goes on to the 
   page.m.takeState(billingAnswered(view));
   flush();
   await settle();
-  expect(location.hash).toBe("#decision/d9");
+  expect(location.hash).toBe("#decision/d1-which-fleet-gets-the-gate-first");
   expect(root.querySelector("#dv-advanced")?.textContent).toBe("Answered D1 Rounding rule for totals in billing.");
   expect(document.activeElement).toBe(root.querySelector("#decision"));
-  expect(queueHref("prev")).toBe("#decision/billing/d1");
+  expect(queueHref("prev")).toBe("#decision/billing/d1-rounding-rule-for-totals");
 });
 
 test("turned off, a fleet's decision that leaves the queue on the next state is answered too", async () => {
@@ -272,7 +272,7 @@ test("a fleet's decision answered and then gone from the next state keeps Next o
   arrive({ fleetEmbed: true, answered: "d4" }, frame()?.contentWindow);
   page.m.takeState(JSON.stringify(withFleet(view, "infra", [])));
   flush();
-  expect([queueHref("prev"), queueHref("next")]).toEqual(["#decision/billing/d1", "#decision/d9"]);
+  expect([queueHref("prev"), queueHref("next")]).toEqual(["#decision/billing/d1-rounding-rule-for-totals", "#decision/d1-which-fleet-gets-the-gate-first"]);
   expect(root.querySelector("#dv-answered")?.textContent).toBe("Answered. Next: D1 Which fleet gets the gate first");
   expect(frame()?.getAttribute("src")).toBe("/f/infra/?embed=1#decision/d4");
 });
@@ -292,18 +292,18 @@ test("the manager's own decision, answered and then decided, keeps Next on the o
   expect(root.querySelector("#dv-answered")?.textContent).toBe("Answered. Next: D2 Name the release");
   page.m.takeState(JSON.stringify({ ...view, decisions: [{ ...own[0], status: "decided", answer: "a: Billing", closed: before(0) }, d8] }));
   flush();
-  expect([queueHref("prev"), queueHref("next")]).toEqual(["#decision/billing/d1", "#decision/d8"]);
+  expect([queueHref("prev"), queueHref("next")]).toEqual(["#decision/billing/d1-rounding-rule-for-totals", "#decision/d2-name-the-release"]);
   expect(root.querySelector("#dv-answered")?.textContent).toBe("Answered. Next: D2 Name the release");
 });
 
 test("on the manager's page the Stuck box and the finder open a fleet's decision on the manager's own page", () => {
   const d1: View = { id: "d1", ref: "D1", kind: "decision", title: "Rounding rule for totals", question: "Per line or on the total?", why: "", blocking: true, asks: "user", opened: before(40), revised: null, answered: before(10) };
   open("/f/manager/", withFleet(managerView(NOW), "billing", [d1]));
-  expect([...root.querySelectorAll<HTMLAnchorElement>("#lead .stuck a")].map((a) => a.getAttribute("href"))).toContain("#decision/billing/d1");
+  expect([...root.querySelectorAll<HTMLAnchorElement>("#lead .stuck a")].map((a) => a.getAttribute("href"))).toContain("#decision/billing/d1-rounding-rule-for-totals");
   page.ui.go({ key: "d:billing/d1", pill: "", group: "decisions", ref: "D1", title: "Rounding rule for totals", sub: "", hint: "billing, open", go: { kind: "decision", id: "billing/d1" } }, false);
   page.ui.route();
   flush();
-  expect(location.hash).toBe("#decision/billing/d1");
+  expect(location.hash).toBe("#decision/billing/d1-rounding-rule-for-totals");
   expect(frame()?.getAttribute("src")).toBe("/f/billing/?embed=1#decision/d1");
 });
 
@@ -327,19 +327,91 @@ test("a fleet's grilling waits on the user on the manager's page while its own p
   );
   const listed = (): (string | null)[] => [...root.querySelectorAll<HTMLAnchorElement>("#decision-list a.ask-head")].map((a) => a.getAttribute("href"));
 
-  expect(listed().toSorted()).toEqual(["#decision/billing/G4", "#decision/billing/G6", "#decision/d9"]);
+  expect(listed().toSorted()).toEqual(["#decision/billing/g4-grilling-g4", "#decision/billing/g6-grilling-g6", "#decision/d1-which-fleet-gets-the-gate-first"]);
   expect(page.m.queue().ids.toSorted()).toEqual(["billing/G4", "billing/G6", "d9"]);
   root.querySelector<HTMLButtonElement>('[data-bucket="waiting"]')?.click();
   flush();
-  expect(listed().toSorted()).toEqual(["#decision/billing/G3", "#decision/billing/G5", "#decision/billing/d5"]);
+  expect(listed().toSorted()).toEqual(["#decision/billing/d5-pin-the-nix-channel", "#decision/billing/g3-grilling-g3", "#decision/billing/g5-grilling-g5"]);
 });
 
-test("on a fleet's own page a <fleet>/<id> address names no decision, as before", () => {
+test("on a fleet's own page an address with its own name opens its card; another fleet's names none", () => {
   open("/f/billing/", coordinatorView(NOW));
   go("#decision/billing/d1");
+  expect(page.m.viewing()).toBe("d1");
+  go("#decision/infra/d1");
   expect(page.m.viewing()).toBeNull();
   expect(root.querySelector("#app")?.hasAttribute("hidden")).toBe(false);
   expect(root.querySelector("#decision")?.hasAttribute("hidden")).toBe(true);
+});
+
+test("on a fleet's own page with no manager, an address with the name the hub serves it as opens its card", () => {
+  const { manager: _manager, fleet: _fleet, fleets: _fleets, ...alone } = coordinatorView(NOW);
+
+  open("/f/billing/#decision/billing/d1", { ...alone, named: { id: "billing", session: "billing" } });
+  expect(page.m.viewing()).toBe("d1");
+  go("#decisions");
+  go("#decision/billing/d1");
+  expect(page.m.viewing()).toBe("d1");
+  go("#decision/infra/d1");
+  expect(page.m.viewing()).toBeNull();
+});
+
+test("on the manager's page an old id opens its own card, not an open one whose number it reads as", () => {
+  const view = managerView(NOW);
+
+  // SAFETY: the fixture's coordinators are records, as managerView writes them.
+  const coordinators = (view["coordinators"] as View[]).map((c) =>
+    c["id"] === "billing"
+      ? { ...c, decisions: [{ ...INFRA_D4, id: "x7", ref: "D5", title: "Open card numbered D5" }], index: [{ group: "decisions", ref: "D2", title: "Closed card of id d5", sub: "", hint: "decided", hash: "#decision/d5" }] }
+      : c,
+  );
+
+  open("/f/manager/", { ...view, coordinators });
+  go("#decision/billing/d5");
+  expect(page.m.viewing()).toBe("billing/d5");
+  go("#decisions");
+  go("#decision/billing/d5-open-card-numbered-d5");
+  expect(page.m.viewing()).toBe("billing/x7");
+});
+
+test("a card's address by number opens it, whatever its slug says; an id's, from before numbers, still opens its own", () => {
+  open("/f/billing/", coordinatorView(NOW));
+  const d = page.m.decisionById("d1");
+  const num = String(d?.ref).toLowerCase();
+
+  expect(num).toMatch(/^[a-z]\d+$/u);
+  expect(page.m.cardHref("d1")).toMatch(new RegExp(`^#decision/billing/${num}-[a-z0-9-]+$`, "u"));
+  go(page.m.cardHref("d1"));
+  expect(page.m.viewing()).toBe("d1");
+  go("#decision/");
+  go(`#decision/billing/${num}-a-title-since-changed`);
+  expect(page.m.viewing()).toBe("d1");
+  go("#decision/");
+  go(`#decision/${num.toUpperCase()}`);
+  expect(page.m.viewing()).toBe("d1");
+  go("#decision/");
+  go("#decision/d1");
+  expect(page.m.viewing()).toBe("d1");
+  expect(root.querySelector("#decision")?.hasAttribute("hidden")).toBe(false);
+});
+
+test("on the manager's page a fleet's card opens by its number and slug, as by its id", () => {
+  open("/f/manager/", managerView(NOW));
+  const theirs = page.m.everyDecision().find((x) => x.id.includes("/") && /^[DAISGNP]\d+$/u.test(x.ref ?? ""));
+
+  expect(theirs).toBeDefined();
+  const id = String(theirs?.id);
+  const [fleet] = id.split("/");
+
+  expect(page.m.cardHref(id).startsWith(`#decision/${String(fleet)}/${String(theirs?.ref).toLowerCase()}-`)).toBe(true);
+  go(page.m.cardHref(id));
+  expect(page.m.viewing()).toBe(id);
+  go("#decisions");
+  go(`#decision/${String(fleet)}/${String(theirs?.ref).toLowerCase()}-stale`);
+  expect(page.m.viewing()).toBe(id);
+  go("#decisions");
+  go("#decision/" + id);
+  expect(page.m.viewing()).toBe(id);
 });
 
 test("the manager's own decision answered on its page says nothing else waits when it was the last", async () => {
@@ -587,7 +659,7 @@ test("embedded, another decision's link asks the manager to open it, and Ctrl+K 
   open("/f/billing/?embed=1#decision/d1", { ...view, decisions: decisions.map((d) => (d["id"] === "d1" ? { ...d, supersedes: "a7" } : d)) });
   page.ui.route();
   flush();
-  const link = root.querySelector<HTMLAnchorElement>('#dv-info a[href="#decision/a7"]');
+  const link = root.querySelector<HTMLAnchorElement>('#dv-info a[href="#decision/billing/a1-enable-test-mode-webhooks"]');
   expect(link).not.toBeNull();
   link?.click();
   flush();

@@ -90,6 +90,16 @@ describe("a moved team no server here serves", () => {
     expect(ran.stdout).toMatch(/^skills \S+ \[action\] Approve the 1Password prompt {2}since 2026-10-15 13:05$/m);
   });
 
+  test("`fleets decision` links a moved team's card by its id, the address the cloud page reads", () => {
+    writeFileSync(join(root, "state.json"), JSON.stringify(ledger({ decisions: [
+      { id: "s4-smoke", ref: "A81", kind: "action", title: "Rerun the CPU smoke test", question: "Run it", status: "open", asks: "user", opened: "2026-10-15T13:05:00+00:00" },
+    ] })));
+    const ran = fleet(["fleets", "decision", "skills", "s4-smoke"], env);
+
+    expect(ran.stdout).toContain(`page: ${PAGE}#decision/s4-smoke\n`);
+    expect(ran.stdout).not.toContain("#decision/skills/");
+  });
+
   test("`fleets show` reads its ledger and its unread message from the user", () => {
     const ran = fleet(["fleets", "show", "skills"], env);
 

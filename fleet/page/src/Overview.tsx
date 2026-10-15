@@ -249,7 +249,7 @@ function Lead(): JSX.Element {
                 const href = (): string => {
                   const row = r();
 
-                  return row.agent ? "#agent-" + encodeURIComponent(row.agent) : row.id ? Core.decisionHref(row.fleet ? row.fleet + "/" + row.id : row.id) : row.fleet ? m.fleetPage(row.fleet) : "";
+                  return row.agent ? "#agent-" + encodeURIComponent(row.agent) : row.id ? m.cardHref(row.fleet ? row.fleet + "/" + row.id : row.id) : row.fleet ? m.fleetPage(row.fleet) : "";
                 };
 
                 const name = (): JSX.Element => (
@@ -504,7 +504,7 @@ function DecisionList(): JSX.Element {
 
             return (
               <div class={"ask " + (waits() ? "open" : open() ? "held" : "closed") + (waits() && d().blocking ? " blocking" : "")}>
-                <a class="ask-head" href={Core.decisionHref(d().id)}>
+                <a class="ask-head" href={m.cardHref(d())}>
                   <b>
                     <RefTag of={d()} />
                     {d().title}

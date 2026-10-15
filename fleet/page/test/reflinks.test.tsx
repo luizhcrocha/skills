@@ -74,12 +74,12 @@ const ROW = '#links-view .link-row[data-link="bench"]';
 test("the screenshot's row on the fleet's own page: d30 in what Luiz does there links to that decision, closed or not", () => {
   mount(refsFleetView(NOW), "#links");
   expect(text(`${ROW} .link-for`)).toBe("For you: read the bench design (d30): idea, model, seams");
-  expect(linked(`${ROW} .link-for`)).toEqual([["d30", "#decision/d30"]]);
-  expect(linked(`${ROW} .detail`)).toEqual([["D130", "#decision/d30"]]);
+  expect(linked(`${ROW} .link-for`)).toEqual([["d30", "#decision/perf/d130-the-bench-s-model"]]);
+  expect(linked(`${ROW} .detail`)).toEqual([["D130", "#decision/perf/d130-the-bench-s-model"]]);
   /* The title opens the link itself: the reference it names stands beside it, a link of its own. */
   expect(root.querySelector(`${ROW} .link-title`)?.getAttribute("href")).toBe("https://claude.ai/artifact/bench");
   expect(root.querySelector(`${ROW} .link-title a`)).toBeNull();
-  expect(linked(`${ROW} .block-head .refs-beside`)).toEqual([["D130", "#decision/d30"]]);
+  expect(linked(`${ROW} .block-head .refs-beside`)).toEqual([["D130", "#decision/perf/d130-the-bench-s-model"]]);
   expect(root.querySelector(ROW)?.id).toBe("link-perf/bench");
   go("#decision/d30");
   expect(root.querySelector("#decision h1")?.textContent).toContain("The bench's model");
@@ -88,9 +88,9 @@ test("the screenshot's row on the fleet's own page: d30 in what Luiz does there 
 test("the same row on the manager's page: the id is perf's, so the link opens perf's d30, never the manager's own d30", () => {
   mount(refsManagerView(NOW), "#links");
   expect(text(`${ROW} .link-for`)).toBe("For you: read the bench design (d30): idea, model, seams");
-  expect(linked(`${ROW} .link-for`)).toEqual([["d30", "#decision/perf/d30"]]);
+  expect(linked(`${ROW} .link-for`)).toEqual([["d30", "#decision/perf/d130-t-d130"]]);
   expect(linked(`${ROW} .detail`)).toEqual([
-    ["D130", "#decision/perf/d30"],
+    ["D130", "#decision/perf/d130-t-d130"],
     ["L25", "#link-perf/bench"],
   ]);
   /* Billing wrote "(d30)" too and has no such row: its words stay text. */
@@ -150,15 +150,15 @@ test("a row whose id is a word the page uses in an element's id (list, filters, 
 
 test("a decision's row opens its page from anywhere on it, and a reference in its words is a link of its own beside that", () => {
   mount(refsFleetView(NOW), "#decisions");
-  const row = root.querySelector('#decision-list a.ask-head[href="#decision/d58"]')?.closest(".ask");
+  const row = root.querySelector('#decision-list a.ask-head[href="#decision/perf/d158-which-bench-runs-nightly-after-d30"]')?.closest(".ask");
   expect(row?.querySelector("a.ask-head b")?.textContent).toBe("D158 Which bench runs nightly, after d30");
   /* In a row's words a short word standing alone stays text, though the ledger holds a roadblock R1 and a step s3. */
   expect([...(row?.querySelectorAll<HTMLAnchorElement>(".detail a.dref") ?? [])].map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
-    ["d30", "#decision/d30"],
+    ["d30", "#decision/perf/d130-the-bench-s-model"],
     ["R11", "#roadblock-r11"],
   ]);
   expect([...(row?.querySelectorAll<HTMLAnchorElement>(".meta a.dref") ?? [])].map((a) => a.getAttribute("href"))).toEqual(["#step-s13"]);
-  expect([...(row?.querySelectorAll<HTMLAnchorElement>(":scope > .refs-beside a.dref") ?? [])].map((a) => a.getAttribute("href"))).toEqual(["#decision/d30"]);
+  expect([...(row?.querySelectorAll<HTMLAnchorElement>(":scope > .refs-beside a.dref") ?? [])].map((a) => a.getAttribute("href"))).toEqual(["#decision/perf/d130-the-bench-s-model"]);
   expect(row?.querySelector(".detail")?.textContent).toBe("As d30 chose the model, which bench runs nightly? R1 still blocks the adapter, R11 the bench.");
   expect(nested()).toBe(0);
 });
@@ -171,8 +171,8 @@ test("a database, a bucket and a store named by a letter and a digit stay text i
   page.ui.addMessage({ id: 1, at: new Date(NOW).toISOString(), from: "coordinator", to: ["user"], text: "Move off D1 onto Postgres; d30 and D130 said so, Cloudflare R2 stays." }, false);
   flush();
   expect(linked('#chat-log .msg[data-id="1"]')).toEqual([
-    ["d30", "#decision/d30"],
-    ["D130", "#decision/d30"],
+    ["d30", "#decision/perf/d130-the-bench-s-model"],
+    ["D130", "#decision/perf/d130-the-bench-s-model"],
   ]);
   dispose?.();
   root.remove();
@@ -186,22 +186,22 @@ test("a database, a bucket and a store named by a letter and a digit stay text i
 test("the Now line, the plan, the workers and the log link what they name; a worker's id opens that worker", () => {
   mount(refsFleetView(NOW), "#decisions");
   expect(linked("#lead .now")).toEqual([
-    ["d30", "#decision/d30"],
-    ["d58", "#decision/d58"],
+    ["d30", "#decision/perf/d130-the-bench-s-model"],
+    ["d58", "#decision/perf/d158-which-bench-runs-nightly-after-d30"],
     ["a12", "#agent-a12"],
   ]);
   expect(root.querySelector('#lead .now a.dref[data-ref="a12"]')?.getAttribute("data-agent")).toBe("a12");
   expect(nested()).toBe(0);
   go("#plan");
-  expect(linked("#kept-k1")).toEqual([["d30", "#decision/d30"]]);
+  expect(linked("#kept-k1")).toEqual([["d30", "#decision/perf/d130-the-bench-s-model"]]);
   expect(root.querySelector("#roadblock-r1 .block-title")?.textContent).toBe("No restricted Stripe key");
   expect([root.querySelector("#step-s3")?.tagName, root.querySelector("#milestone-m2")?.className]).toEqual(["LI", "milestone"]);
   expect(nested()).toBe(0);
   go("#log");
   expect(linked("#log")).toEqual([
-    ["d30", "#decision/d30"],
+    ["d30", "#decision/perf/d130-the-bench-s-model"],
     ["R11", "#roadblock-r11"],
-    ["d30", "#decision/d30"],
+    ["d30", "#decision/perf/d130-the-bench-s-model"],
   ]);
   expect(text("#log")).toContain("d30 decided: one seam; deploy-0067 does not exist");
   go("#fleet");
@@ -212,19 +212,19 @@ test("on the manager's page a fleet's Now line and its messages are read in that
   mount(refsManagerView(NOW), "#fleet");
   const strip = [...root.querySelectorAll("#coordinator-list .strip")].find((s) => s.querySelector(".who")?.textContent === "perf");
   expect([...(strip?.querySelectorAll<HTMLAnchorElement>(".detail a.dref") ?? [])].map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
-    ["d30", "#decision/perf/d30"],
-    ["d58", "#decision/perf/d58"],
+    ["d30", "#decision/perf/d130-t-d130"],
+    ["d58", "#decision/perf/d158-t-d158"],
   ]);
   go("#decisions");
-  expect(linked("#lead .now")).toEqual([["d30", "#decision/d30"]]);
+  expect(linked("#lead .now")).toEqual([["d30", "#decision/d7-the-manager-s-own"]]);
   /* Perf's open decision in the manager's list: its question names perf's d30. */
-  const row = root.querySelector('#decision-list a.ask-head[href="#decision/perf/d58"]')?.closest(".ask");
-  expect([...(row?.querySelectorAll<HTMLAnchorElement>(".detail a.dref") ?? [])].map((a) => a.getAttribute("href"))).toEqual(["#decision/perf/d30"]);
+  const row = root.querySelector('#decision-list a.ask-head[href="#decision/perf/d158-which-bench-runs-nightly-after-d30"]')?.closest(".ask");
+  expect([...(row?.querySelectorAll<HTMLAnchorElement>(".detail a.dref") ?? [])].map((a) => a.getAttribute("href"))).toEqual(["#decision/perf/d130-t-d130"]);
   page.ui.addMessage({ id: 1, at: new Date(NOW).toISOString(), from: "perf", to: ["user"], text: "d30 is recorded; `d30` in code is not a link." }, false);
   page.ui.addMessage({ id: 2, at: new Date(NOW).toISOString(), from: "manager", to: ["user"], text: "My d30 still waits on you." }, false);
   flush();
-  expect(linked('#chat-log .msg[data-id="1"]')).toEqual([["d30", "#decision/perf/d30"]]);
-  expect(linked('#chat-log .msg[data-id="2"]')).toEqual([["d30", "#decision/d30"]]);
+  expect(linked('#chat-log .msg[data-id="1"]')).toEqual([["d30", "#decision/perf/d130-t-d130"]]);
+  expect(linked('#chat-log .msg[data-id="2"]')).toEqual([["d30", "#decision/d7-the-manager-s-own"]]);
   expect(nested()).toBe(0);
 });
 
@@ -241,7 +241,7 @@ test("Luiz's own words, a quote and a line of the hub's link nothing; what a fle
   expect([1, 2, 3, 5].map((id) => linked(`#chat-log .msg[data-id="${String(id)}"]`))).toEqual([[], [], [], []]);
   expect(text('#chat-log .msg[data-id="4"] .msg-quote')).toContain("Bench design out for review (d30)");
   expect(linked('#chat-log .msg[data-id="4"] .msg-quote')).toEqual([]);
-  expect(linked('#chat-log .msg[data-id="4"]')).toEqual([["d30", "#decision/d30"]]);
+  expect(linked('#chat-log .msg[data-id="4"]')).toEqual([["d30", "#decision/perf/d130-the-bench-s-model"]]);
   /* The same answer in the decision's history is his words still; the fleet's entry beside it links. */
   go("#decision/d58");
   expect(text("#decision .dv-h.answer")).toContain("A: as d30 said");
@@ -251,12 +251,12 @@ test("Luiz's own words, a quote and a line of the hub's link nothing; what a fle
 
 test("a decision's own page links its title, an option's label, its history; its body's frame is told only the references this ledger holds", () => {
   mount(refsFleetView(NOW), "#decision/d58");
-  expect(linked("#decision h1")).toEqual([["d30", "#decision/d30"]]);
+  expect(linked("#decision h1")).toEqual([["d30", "#decision/perf/d130-the-bench-s-model"]]);
   expect(root.querySelector("#decision h1")?.textContent).toBe("D158 Which bench runs nightly, after d30");
-  expect(linked("#decision .option .label")).toEqual([["d30", "#decision/d30"]]);
+  expect(linked("#decision .option .label")).toEqual([["d30", "#decision/perf/d130-the-bench-s-model"]]);
   /* The question is the decision's own words, where a one-digit number always linked: R1 is the roadblock here. */
   expect(linked("#decision .dv-question")).toEqual([
-    ["d30", "#decision/d30"],
+    ["d30", "#decision/perf/d130-the-bench-s-model"],
     ["R1", "#roadblock-r1"],
     ["R11", "#roadblock-r11"],
   ]);

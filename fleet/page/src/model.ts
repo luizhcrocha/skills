@@ -7,6 +7,7 @@
 import { createMemo, createSignal, createStore, flush, reconcile, type Accessor } from "solid-js";
 
 import { Core, type Agent, type Coordinator, type Decision, type Json, type JsonRecord, type Message, type Place, type Prefs, type Queue, type Quote, type RosterRow, type Skill, type State } from "./core.ts";
+import { cardHash, findCard } from "../../src/ledger/card-address.ts";
 import { agoAt } from "./format.ts";
 import { refBook, type KnownFleet } from "./refs.ts";
 
@@ -111,6 +112,10 @@ export function fleetDecision(d: Decision, fleet: string): Decision {
 
 /** The page's model. */
 export type Model = ReturnType<typeof createModel>;
+
+/** How a page of `s` reads a card's address (`Core.decisionRoute`): any fleet's on a manager's page, else its own
+ * name's: the registry's when a manager serves it, else the one the hub serves it as (`named`). */
+const scopeOfState = (s: Pick<State, "role" | "fleet" | "named">): boolean | string => (s.role === "manager" ? true : (s.fleet ?? s.named?.id ?? ""));
 
 /** The model of a page that opened with `initial`. */
 export function createModel(initial: State) {
@@ -247,6 +252,47 @@ export function createModel(initial: State) {
   /** The rows a reference in a fleet's words may name (refs.ts): this ledger's, and on a manager's page each fleet's. */
   const book = createMemo(() => refBook(state));
 
+  /** How this page reads a card's address (`Core.decisionRoute`): any fleet's on a manager's page, else its own name's. */
+  const routeScope = (): boolean | string => scopeOfState(state);
+
+  /**
+   * The decision a route names (`Core.decisionRoute`: "<card>", "<fleet>/<card>"), as this page addresses it
+   * ("d1", "<fleet>/d1"): by id, else by the number it starts with (card-address.ts `findCard`), among this
+   * ledger's and, on a manager's page, a fleet's as the page holds them (its open ones and its index's: an exact id
+   * in either wins over a number in either, so an old id never opens another card). One
+   * the page cannot find stays as it was named, for the decision's page to say so or its fleet's to find.
+   */
+  const cardKey = (key: string | null | undefined): string | null => {
+    if (!key) return null;
+    const theirs = Core.parseFleetDecision(key);
+
+    if (!theirs || theirs.fleet === state.fleet) return findCard(state.decisions, theirs?.id ?? key)?.id ?? theirs?.id ?? key;
+    const c = state.coordinators.find((x) => x.id === theirs.fleet);
+    const rows = book().fleets.get(theirs.fleet) ?? book().stopped.get(theirs.fleet);
+    const indexed = [...(rows?.byId.values() ?? [])].flatMap((t) => (t.kind === "decision" ? [{ id: t.id, ref: t.num }] : []));
+    const found = findCard([...(c?.decisions ?? []), ...indexed], theirs.id);
+
+    return found ? theirs.fleet + "/" + found.id : key;
+  };
+
+  /**
+   * The address a link to decision `d` gives (card-address.ts `cardHash`): by its number and a slug of its title,
+   * with its fleet: another fleet's on a manager's page, this page's own name on a fleet's page that knows it.
+   * `d` is a decision as this page addresses it ("<fleet>/<id>" for a fleet's), or its id; one the page does not
+   * hold keeps the id's address.
+   */
+  const cardHref = (d: string | Pick<Decision, "id" | "ref" | "title">): string => {
+    const id = d instanceof Object ? d.id : d;
+    const held = d instanceof Object ? d : decisionAnywhere(d);
+    const theirs = Core.parseFleetDecision(id);
+
+    if (!held) return Core.decisionHref(id);
+
+    if (theirs) return cardHash({ id: theirs.id, ref: held.ref, title: held.title }, theirs.fleet);
+
+    return cardHash(held, state.role === "manager" ? null : (state.fleet ?? null));
+  };
+
   /** The fleets whose id or name may come before a number in words on this page: the registry's, as the page knows them. */
   const knownFleets = createMemo((): readonly KnownFleet[] =>
     state.role === "manager" ? state.coordinators.map((c) => ({ id: c.id, names: [c.name, c.session].filter((n) => n !== "") })) : (state.fleets ?? []).map((id) => ({ id, names: [] })),
@@ -336,8 +382,9 @@ export function createModel(initial: State) {
 
   /* ------------------------------------------------------------------ the view */
 
-  const [place, setPlace] = createSignal<Place>(Core.viewOf(location.hash, initial.role === "manager"));
-  const viewing = (): string | null => place().decision;
+  const [place, setPlace] = createSignal<Place>(Core.viewOf(location.hash, scopeOfState(initial)));
+  /** The decision shown, as this page addresses it, whichever way its address named it. */
+  const viewing = (): string | null => cardKey(place().decision);
   /** The queue as it was while the decision shown last waited on the viewer. */
   const [waited, setWaited] = createSignal<readonly string[]>([]);
   const queue = createMemo((): Queue => Core.queueOf(everyDecision(), chat.list, viewing(), waited()));
@@ -415,6 +462,9 @@ export function createModel(initial: State) {
     decisionAnywhere,
     decisionNamed,
     book,
+    routeScope,
+    cardKey,
+    cardHref,
     knownFleets,
     hubRoot,
     fleetPage,

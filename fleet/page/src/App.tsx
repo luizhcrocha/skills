@@ -36,7 +36,7 @@ function Embedded(props: { readonly live: boolean }): JSX.Element {
     const t = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-agent], a[href^='#']") : null;
     const hash = t?.dataset["agent"] ? "#agent-" + t.dataset["agent"] : (t?.getAttribute("href") ?? "");
 
-    if (!t || !hash.startsWith("#") || Core.decisionRoute(hash) === m.viewing()) return;
+    if (!t || !hash.startsWith("#") || m.cardKey(Core.decisionRoute(hash, m.routeScope())) === m.viewing()) return;
     e.preventDefault();
     ui.follow(hash);
   });

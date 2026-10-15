@@ -135,14 +135,14 @@ test("notices sit under the decisions, newest first, and change nothing that wai
   for (const b of root.querySelectorAll<HTMLButtonElement>("#decision-seg button")) {
     b.click();
     flush();
-    expect(root.querySelector('#decision-list a[href^="#decision/n"]')).toBeNull();
+    expect(root.querySelector('#decision-list a[href^="#decision/billing/n"]')).toBeNull();
   }
 
   expect(text("#notices h2")).toBe("Done under your approvals");
   const rows = [...root.querySelectorAll("#notice-list .notice")];
   expect(rows.map((r) => r.querySelector(".notice-head")?.textContent)).toEqual(["N2 Landed stack 2", "N1 Landed stack 1"]);
   const first = rows[0];
-  expect(first?.querySelector(".notice-head")?.getAttribute("href")).toBe("#decision/n2");
+  expect(first?.querySelector(".notice-head")?.getAttribute("href")).toBe("#decision/billing/n2-landed-stack-2");
   expect(first?.querySelector(".notice-what")?.textContent).toBe("Landed the invoice-gen stack 2 on master.");
   expect(first?.querySelector(".notice-what code.ic")?.textContent).toBe("invoice-gen");
   expect(first?.querySelector(".notice-undo > b")?.textContent).toBe("Undo:");
@@ -178,7 +178,7 @@ test("the approvals: the rule, where it was given, what was done under it, and R
   expect(row?.querySelector(".approval-rule")?.textContent).toBe(`K1 ${RULE}`);
   const meta = row?.querySelector(".meta")?.textContent ?? "";
   expect(meta).toMatch(/^from D1 \(#14\), .+, by luiz · 2 done under it$/u);
-  expect(row?.querySelector(".meta a.dref")?.getAttribute("href")).toBe("#decision/d1");
+  expect(row?.querySelector(".meta a.dref")?.getAttribute("href")).toBe("#decision/billing/d1-rounding-rule-for-totals");
   expect(root.querySelectorAll("#approval-list .approval")).toHaveLength(1);
 
   const fold = root.querySelector<HTMLDetailsElement>("#approvals-revoked");

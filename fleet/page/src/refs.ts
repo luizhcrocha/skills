@@ -15,6 +15,7 @@
  * ledger's rows, and on a manager's page each fleet's as its summary carries them. An id is looked up only in
  * the ledger of the fleet whose words they are; a reference that names no row stays plain text.
  */
+import { cardHash } from "../../src/ledger/card-address.ts";
 import { Core, type Coordinator, type JsonRecord, type State } from "./core.ts";
 
 /** A run of words: plain text, or a row's number or id, the fleet named before it, and a question named after it. */
@@ -207,7 +208,7 @@ export function ownRows(state: State): RefRows {
   const steps = state.roadmap.flatMap((ms) => ms.steps);
 
   return rowsOf([
-    ...ok(state.decisions).map((d): RefTarget => ({ kind: "decision", fleet: null, id: d.id, num: d.ref ?? "", title: d.title, state: d.status, hash: Core.decisionHref(d.id) })),
+    ...ok(state.decisions).map((d): RefTarget => ({ kind: "decision", fleet: null, id: d.id, num: d.ref ?? "", title: d.title, state: d.status, hash: cardHash(d, state.role === "manager" ? null : state.fleet) })),
     ...linkRows(state, null),
     ...ok(state.roadblocks).map((r): RefTarget => ({ kind: "roadblock", fleet: null, id: r.id, num: r.ref ?? "", title: r.title, state: r.resolved ? "resolved" : "open", hash: "#roadblock-" + r.id })),
     ...ok(state.approvals).map((a): RefTarget => ({ kind: "approval", fleet: null, id: a.id, num: a.id, title: a.rule, state: a.status, hash: "#approval-" + a.id })),
@@ -230,7 +231,9 @@ function indexDecisions(fleet: string, index: readonly JsonRecord[]): RefTarget[
   return index.flatMap((x): RefTarget[] => {
     const id = /^#decision\/(.+)$/u.exec(field(x, "hash"))?.[1] ?? "";
 
-    return x["group"] === "decisions" && ID.test(id) ? [{ kind: "decision", fleet, id, num: field(x, "ref"), title: field(x, "title"), state: field(x, "hint"), hash: Core.decisionHref(id) }] : [];
+    const row = { id, ref: field(x, "ref"), title: field(x, "title") };
+
+    return x["group"] === "decisions" && ID.test(id) ? [{ kind: "decision", fleet, id, num: row.ref, title: row.title, state: field(x, "hint"), hash: cardHash(row, fleet) }] : [];
   });
 }
 
@@ -345,14 +348,14 @@ export interface RefPlace {
 /**
  * The address a reference to `t` opens from this page: a row of this page's ledger, and a link (the manager's
  * Links view lists every fleet's), at its own place here; another fleet's decision on the manager's page
- * (`#decision/<fleet>/<id>`, from a fleet's page through the manager's address); another fleet's roadblock,
+ * (`#decision/<fleet>/<card>`, card-address.ts, from a fleet's page through the manager's address); another fleet's roadblock,
  * step or worker on that fleet's own page. Null when this page cannot reach it.
  */
 export function refHref(t: RefTarget, place: RefPlace): string | null {
   if (t.fleet === null || t.kind === "link") return t.hash;
 
   if (t.kind !== "decision") return place.fleetPage ? place.fleetPage(t.fleet) + t.hash : null;
-  const there = Core.decisionHref(t.fleet + "/" + t.id);
+  const there = cardHash({ id: t.id, ref: t.num, title: t.title }, t.fleet);
 
   if (place.manager) return there;
 

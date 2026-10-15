@@ -454,6 +454,14 @@ describe("numbers", () => {
     ]);
   });
 
+  test("a new decision whose id reads as a card's address is recorded, with a warning; a plain id, or a row's own, is not warned", () => {
+    const said = f.run("decision", "a1-deploy", "--kind", "input", "--title", "T", "--question", "q", "--why", "w");
+    expect([said.code, said.stderr.includes("decision a1-deploy's id reads as a card's address")]).toEqual([0, true]);
+    expect(f.rows("decisions").map((d) => d["id"])).toEqual(["a1-deploy"]);
+    expect(f.run("decision", "a1-deploy", "--title", "Renamed", "--log", "clearer").stderr).not.toContain("reads as a card's address");
+    expect(f.run("decision", "d7", "--kind", "input", "--title", "U", "--question", "q", "--why", "w").stderr).not.toContain("reads as a card's address");
+  });
+
   test("a number given for a decision is kept as its id", () => {
     f.ok("decision", "key", "--kind", "input", "--title", "Key", "--question", "q", "--why", "w");
     f.ok("roadblock", "r1", "--title", "T", "--detail", "D", "--severity", "serious", "--needs", "user", "--decision", "I1");

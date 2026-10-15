@@ -22,6 +22,7 @@ export const approvalHref = (id: string): string => "#approval-" + id;
 
 /** The notices, newest first: each its number and title (to its page), what was done, how to undo it, and under what. */
 function Notices(props: { readonly list: readonly Decision[] }): JSX.Element {
+  const { m } = usePage();
   const [all, setAll] = createSignal(false);
   const shown = createMemo(() => (all() ? props.list : props.list.slice(0, NOTICES_SHOWN)));
 
@@ -32,7 +33,7 @@ function Notices(props: { readonly list: readonly Decision[] }): JSX.Element {
         <For each={shown()} keyed={(d) => d.id} fallback={<p class="empty">Nothing done under them yet.</p>}>
           {(d) => (
             <article class="notice" data-notice={d().id}>
-              <a class="notice-head" href={Core.decisionHref(d().id)}>
+              <a class="notice-head" href={m.cardHref(d())}>
                 <b>
                   <RefTag of={d()} />
                   {d().title}

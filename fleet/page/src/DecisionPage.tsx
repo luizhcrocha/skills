@@ -1205,7 +1205,7 @@ function Info(props: { readonly d: Decision }): JSX.Element {
             {(b) => (
               <>
                 . Replaces{" "}
-                <a href={Core.decisionHref(b().id)}>
+                <a href={m.cardHref(b())}>
                   <RefTag of={b()} />
                   {b().title}
                 </a>
@@ -1241,7 +1241,7 @@ function Info(props: { readonly d: Decision }): JSX.Element {
             <h3>Replaced</h3>
             <p>
               A newer decision takes its place:{" "}
-              <a href={Core.decisionHref(s().id)}>
+              <a href={m.cardHref(s())}>
                 <RefTag of={s()} />
                 {s().title}
               </a>
@@ -1448,7 +1448,7 @@ function QueueNav(): JSX.Element {
   const step = (id: string | null, label: string, rel: string): JSX.Element => (
     <Show when={id} fallback={<span class="btn small" aria-disabled="true">{label}</span>}>
       {(to) => (
-        <a class="btn small" rel={rel} data-queue={rel} href={Core.decisionHref(to())} ref={rel === "next" ? setNext : undefined}>
+        <a class="btn small" rel={rel} data-queue={rel} href={m.cardHref(to())} ref={rel === "next" ? setNext : undefined}>
           {label}
         </a>
       )}
@@ -1509,7 +1509,7 @@ function FleetFrame(props: { readonly fleet: string; readonly id: string }): JSX
 
     if (said?.kind === "answered" && props.fleet + "/" + said.id === m.viewing()) ui.setAnswered(m.viewing());
 
-    if (said?.kind === "open") location.hash = Core.decisionHref(props.fleet + "/" + said.id);
+    if (said?.kind === "open") location.hash = m.cardHref(props.fleet + "/" + said.id);
 
     if (said?.kind === "finder") ui.openFinder();
 
@@ -1520,7 +1520,7 @@ function FleetFrame(props: { readonly fleet: string; readonly id: string }): JSX
     <>
       <p class="dv-meta dv-fleet">
         <PillAs cls="plain" text={"in " + props.fleet} />{" "}
-        <a href={m.fleetPage(props.fleet) + Core.decisionHref(props.id)}>Open on {props.fleet}'s page</a>
+        <a href={m.fleetPage(props.fleet) + m.cardHref(props.fleet + "/" + props.id)}>Open on {props.fleet}'s page</a>
       </p>
       <iframe
         class="dv-embed"

@@ -94,7 +94,7 @@ function Panel(): JSX.Element {
     return d ? (
       <>
         {" "}
-        <a href={Core.decisionHref(d.id)}>Open {d.ref || ""}</a>
+        <a href={m.cardHref(d)}>Open {d.ref || ""}</a>
       </>
     ) : null;
   };

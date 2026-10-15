@@ -21,6 +21,7 @@ import { pageHtml, readTemplate, TEMPLATE, writePage } from "../page/render.ts";
 import { view } from "../page/view.ts";
 import * as commands from "../ledger/commands.ts";
 import { ledgerText, parseLedger, type Ledger } from "../ledger/model.ts";
+import { cardNumberOf, readsAsAddress } from "../ledger/card-address.ts";
 import { nextStepId, numberedIds } from "../ledger/numbers.ts";
 import { Misnumbered, numberOnMachine, refusedFor, Unreachable } from "../ledger/shared-numbers.ts";
 import { showLines } from "../ledger/show.ts";
@@ -365,6 +366,8 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
 
     const nextStep = cmd === "step" && args.str("id") === "next" && ledger !== undefined ? nextStepId(ledger, args.str("milestone") ?? "") : undefined;
     const kept = ledger === undefined ? new Set<string>() : numberedIds(ledger);
+    const given = args.str("id") ?? "";
+    const addressLike = cmd === "decision" && ledger !== undefined && readsAsAddress(given) && !(ledger.decisions ?? []).some((d) => d.id === given);
     let result: Ledger | undefined;
     const listing = cmd === "approval" && args.str("action") === "list";
 
@@ -398,6 +401,7 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
       seen === undefined ? undefined : idleWorkspaces(seen, activeWorkspaces(readObject(path))),
       ...(settingDone ? pruneOutlook(root, readObject(path) ?? {}) : []),
       cmd === "init" ? undefined : unreadLine(machine, root),
+      addressLike ? `state: decision ${given}'s id reads as a card's address: #decision/${given} opens it, not card ${String(cardNumberOf(given))}. Recorded; a plainer id leaves that address to its card.` : undefined,
     ];
 
     for (const warning of warnings) if (warning !== undefined) run.warn(warning);

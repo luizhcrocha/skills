@@ -94,7 +94,7 @@ test("on its fleet's page it is in Waiting, answered and waiting to be recorded,
   expect(listed("active").some((t) => t.includes("Search"))).toBe(false);
   expect(listed("done").some((t) => t.includes("Search"))).toBe(false);
   expect(listed("waiting").some((t) => t.includes("Search"))).toBe(true);
-  expect(root.querySelector('#decision-list a[href="#decision/g6"] .pill')?.textContent).toBe(PILL);
+  expect(root.querySelector('#decision-list a[href="#decision/billing/g6-search"] .pill')?.textContent).toBe(PILL);
 });
 
 test("its own page says every question is answered and the fleet has yet to record it", () => {
@@ -126,5 +126,5 @@ test("on the manager's page, a fleet's grilling with nothing left to answer read
   mount({ ...view, coordinators: coordinators.map((c) => (c["id"] === "billing" ? { ...c, decisions: [grilling] } : c)) });
   expect(listed("active").some((t) => t.includes("Search"))).toBe(false);
   listed("waiting");
-  expect(root.querySelector('#decision-list a[href="#decision/billing/g6"] .pill')?.textContent).toBe(PILL);
+  expect(root.querySelector('#decision-list a[href="#decision/billing/g6-search"] .pill')?.textContent).toBe(PILL);
 });

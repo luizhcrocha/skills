@@ -212,7 +212,7 @@ function Marker(props: { readonly message: Message; readonly decision: string })
 
   return (
     <li class={`dmark from-${mine() ? "user" : "fleet"}`} data-id={String(props.message.id)}>
-      <a href={Core.decisionHref(props.decision)} title={d()?.title ?? ""}>
+      <a href={m.cardHref(props.decision)} title={d()?.title ?? ""}>
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 3.5 20.5 12 12 20.5 3.5 12z" />
         </svg>

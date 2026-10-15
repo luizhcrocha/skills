@@ -110,7 +110,7 @@ const listed = (name: string): Element | null => {
   bucket(name)?.click();
   flush();
 
-  return root.querySelector('#decision-list a[href="#decision/a1"]');
+  return root.querySelector('#decision-list a[href="#decision/billing/a1-run-the-pipeline-role-cut"]');
 };
 
 test("the form offers Done and Failed, its note empty", () => {

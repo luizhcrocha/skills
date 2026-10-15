@@ -88,6 +88,14 @@ class CorpusTest(unittest.TestCase):
         self.assertNotEqual(hide({"stdout": said}), hide({"stdout": said.replace("recorded a1", "recorded a2")}))
         self.assertEqual(hide({"results": 4}), {"results": 4})
 
+    def test_hiding_the_card_address_keeps_every_other_line(self):
+        hide = run.TWIN_NORMALISERS["card-address"]
+        said = "acme A1 [action] Deploy\n    page: https://box.ts.net:1/#decision/acme/a1-deploy\n"
+        self.assertEqual(hide({"stdout": said}), hide({"stdout": said.replace("acme/a1-deploy", "d2")}))
+        self.assertNotEqual(hide({"stdout": said}), hide({"stdout": said.replace("box.ts.net:1", "box.ts.net:2")}))
+        self.assertNotEqual(hide({"stdout": said}), hide({"stdout": said.replace("[action]", "[decision]")}))
+        self.assertEqual(hide({"results": 4}), {"results": 4})
+
     def test_every_trace_that_records_a_worker_hides_the_spawn_hint_on_the_twin(self):
         for trace in TRACES:
             said = run.expected_of(trace).read_text(encoding="utf-8")

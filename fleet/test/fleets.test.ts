@@ -333,12 +333,12 @@ describe("the CLI", () => {
       "B: Before | two windows",
       "recommended: A, one window is what the user asked for",
       `evidence: ${join(a, "decisions", "d7.html")}`,
-      "page: https://box.ts.net:1/#decision/d7",
+      "page: https://box.ts.net:1/#decision/billing/d4-order-of-the-two-migrations",
     ]) {
       expect(out).toContain(line);
     }
 
-    expect(cli("decision", "billing", "D4").stdout).toContain("page: https://box.ts.net:1/#decision/d7");
+    expect(cli("decision", "billing", "D4").stdout).toContain("page: https://box.ts.net:1/#decision/billing/d4-order-of-the-two-migrations");
 
     for (const [args, word] of [
       [["decision", "billing", "d9"], "no decision 'd9'"],

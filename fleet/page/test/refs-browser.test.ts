@@ -117,7 +117,7 @@ test.skipIf(!found)("on a phone, the Links row's d30 is a link in its words; a t
 
   const before = await read();
   expect(before.words).toBe("For you: read the bench design (d30): idea, model, seams");
-  expect([before.href, before.sideways, before.nested]).toEqual(["#decision/perf/d30", false, 0]);
+  expect([before.href, before.sideways, before.nested]).toEqual(["#decision/perf/d130-t-d130", false, 0]);
   /* Focus shows its tip: the words and the link stay where they were. */
   await page.focus(`${row} .link-for a.dref`);
   await page.waitForSelector(`${row} .link-for .dref-tip`);
@@ -126,7 +126,7 @@ test.skipIf(!found)("on a phone, the Links row's d30 is a link in its words; a t
   /* Its tip says what the page holds of it, then what perf's ledger says (read through the hub). */
   await page.waitForFunction((sel: string) => document.querySelector(`${sel} .link-for .dref-tip`)?.textContent?.startsWith("D130 The bench's model, in perf: decided ") === true, {}, row);
   await page.tap(`${row} .link-for a.dref`);
-  await page.waitForFunction(() => location.hash === "#decision/perf/d30");
+  await page.waitForFunction(() => location.hash === "#decision/perf/d130-t-d130");
   await page.waitForFunction(() => document.querySelector<HTMLIFrameElement>("#dv-embed")?.getAttribute("src")?.endsWith("f/perf/?embed=1#decision/d30") === true);
   const embedded = await (await page.waitForSelector("#dv-embed"))?.contentFrame();
   await embedded?.waitForFunction(() => document.querySelector("#decision h1")?.textContent?.includes("The bench's model") === true);
@@ -137,9 +137,9 @@ test.skipIf(!found)("a decision's row opens its page from anywhere on it; the re
   const page = await browser.newPage();
   await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
   await page.goto(at("/f/perf/#decisions"), { waitUntil: "domcontentloaded" });
-  const row = '#decision-list .ask:has(> a.ask-head[href="#decision/d58"])';
+  const row = '#decision-list .ask:has(> a.ask-head[href="#decision/perf/d158-which-bench-runs-nightly-after-d30"])';
   await page.waitForSelector(`${row} .detail a.dref`);
-  expect(await page.$eval(`${row} .detail a.dref`, (a) => [a.textContent, a.getAttribute("href")])).toEqual(["d30", "#decision/d30"]);
+  expect(await page.$eval(`${row} .detail a.dref`, (a) => [a.textContent, a.getAttribute("href")])).toEqual(["d30", "#decision/perf/d130-the-bench-s-model"]);
 
   /* A tap on the row's words that are no reference (its last line) opens the row's decision: the head's link lies over them. */
   const meta = await page.$eval(`${row} .meta`, (e) => {
@@ -153,12 +153,12 @@ test.skipIf(!found)("a decision's row opens its page from anywhere on it; the re
 
   expect(meta.hit).toBe("a.ask-head");
   await page.touchscreen.tap(meta.x, meta.y);
-  await page.waitForFunction(() => location.hash === "#decision/d58");
+  await page.waitForFunction(() => location.hash === "#decision/perf/d158-which-bench-runs-nightly-after-d30");
   await page.goBack();
   await page.waitForFunction(() => location.hash === "#decisions");
   await page.$eval(`${row} .detail a.dref`, (e) => e.scrollIntoView({ block: "center" }));
   await page.tap(`${row} .detail a.dref`);
-  await page.waitForFunction(() => location.hash === "#decision/d30");
+  await page.waitForFunction(() => location.hash === "#decision/perf/d130-the-bench-s-model");
   await page.close();
 });
 
@@ -181,15 +181,15 @@ test.skipIf(!found)("in a decision's body a reference is a link the frame's own 
   ).toEqual({
     words: "As d30 chose the model (D130), the nightly bench replays saved calls; d31 is no row, and d30 is code.",
     made: [
-      ["d30", "/f/perf/#decision/d30", "_blank", "noopener noreferrer", "D130 The bench's model: de"],
-      ["D130", "/f/perf/#decision/d30", "_blank", "noopener noreferrer", "D130 The bench's model: de"],
+      ["d30", "/f/perf/#decision/perf/d130-the-bench-s-model", "_blank", "noopener noreferrer", "D130 The bench's model: de"],
+      ["D130", "/f/perf/#decision/perf/d130-the-bench-s-model", "_blank", "noopener noreferrer", "D130 The bench's model: de"],
     ],
     code: 0,
     own: 0,
   });
   /* The frame may not take the page anywhere: its script says which reference was tapped, and the page goes. */
   await f.click("a.dref");
-  await page.waitForFunction(() => location.hash === "#decision/d30");
+  await page.waitForFunction(() => location.hash === "#decision/perf/d130-the-bench-s-model");
   expect(await page.$eval("#decision h1", (h) => h.textContent)).toContain("The bench's model");
   expect(errors).toEqual([]);
   await page.close();
@@ -226,8 +226,8 @@ test.skipIf(!found)("a tap on the pin of a mark that ends in a body's reference 
   await page.mouse.click(frame.x + pin.x, frame.y + pin.y);
   expect(await page.waitForFunction(() => location.hash !== "#decision/d58", { timeout: 1500 }).then(() => "left", () => "stayed")).toBe("stayed");
   /* The words of the reference beside the mark still lead where they did. */
-  await f.click('a.dref[href$="#decision/d30"]:not(:has(mark))');
-  await page.waitForFunction(() => location.hash === "#decision/d30");
+  await f.click('a.dref[href$="#decision/perf/d130-the-bench-s-model"]:not(:has(mark))');
+  await page.waitForFunction(() => location.hash === "#decision/perf/d130-the-bench-s-model");
   await page.close();
 });
 
@@ -242,7 +242,7 @@ test.skipIf(!found)("inside the manager's frame, a tap on a body's reference ope
 
   /* The link's own address (a window the browser opens for a modified click) is the fleet's whole page, never the bare one the manager's frame shows. */
   expect(await embedded.evaluate(() => location.search)).toBe("?embed=1");
-  expect(await f.evaluate(() => [...document.querySelectorAll<HTMLAnchorElement>("a.dref")].map((a) => a.href.replace(/^https?:\/\/[^/]+/u, "")))).toEqual(["/f/perf/#decision/d30", "/f/perf/#decision/d30"]);
+  expect(await f.evaluate(() => [...document.querySelectorAll<HTMLAnchorElement>("a.dref")].map((a) => a.href.replace(/^https?:\/\/[^/]+/u, "")))).toEqual(["/f/perf/#decision/perf/d130-the-bench-s-model", "/f/perf/#decision/perf/d130-the-bench-s-model"]);
   await f.click("a.dref");
   await page.waitForFunction(() => location.hash === "#decision/perf/d30");
   /* A reference in the fleet's own words there (its title names d30) opens on the manager's page too. */

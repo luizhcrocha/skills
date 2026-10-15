@@ -136,7 +136,7 @@ test("decision activity is left out by default, a marker each when asked for, an
   const answer = log().querySelector<HTMLElement>('.dmark[data-id="8"]');
   const ack = log().querySelector<HTMLElement>('.dmark[data-id="9"]');
 
-  expect(answer?.querySelector("a")?.getAttribute("href")).toBe("#decision/d18");
+  expect(answer?.querySelector("a")?.getAttribute("href")).toBe("#decision/billing/d18-load-check-on-the-full-ledger");
   expect(answer?.querySelector(".dmark-line")?.textContent).toBe("You answered D18 · None of these: Re-run after the cost improvements work is done");
   expect(ack?.querySelector(".dmark-line")?.textContent).toBe("coordinator on D18: Recorded D18: the load check waits for the cost work, and I re-run it the day that lands.");
   expect(answer?.querySelector("article")).toBeNull();
@@ -195,7 +195,7 @@ test("the Chat tab counts unread decision activity only while the chat shows it"
 test("the finder leads to a decision's page for activity the chat leaves out", () => {
   page.ui.go({ key: "c:9", pill: "", group: "Chat", ref: "#9", title: "", sub: "", hint: "", go: { kind: "message", id: 9, side: null } }, false);
   flush();
-  expect(location.hash).toBe("#decision/d18");
+  expect(location.hash).toBe("#decision/billing/d18-load-check-on-the-full-ledger");
 });
 
 test("a new message is appended in place: every row keeps its node, the draft and the open reply stay", () => {

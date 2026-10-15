@@ -90,21 +90,21 @@ test("a chip narrows the list and its lists' counts; the tab's badge and the lea
   chip(page, "infra").click();
   flush();
   expect(pressed(page)).toEqual(["infra 2"]);
-  expect(listed(page)).toEqual(["#decision/infra/d4", "#decision/infra/d5"]);
+  expect(listed(page)).toEqual(["#decision/infra/d4-pin-the-nix-channel", "#decision/infra/d5-drop-the-old-runner"]);
   expect(counts(page)).toEqual(["Waits on you 2", "Waiting 0", "Done 0"]);
   expect(text(page.querySelector("#nav-decisions"))).toBe(badge);
   expect(text(page.querySelector(".lead-line"))).toBe(lead);
 
   chip(page, "no agent").click();
   flush();
-  expect(listed(page)).toEqual(["#decision/d9"]);
+  expect(listed(page)).toEqual(["#decision/d1-which-fleet-gets-the-gate-first"]);
 });
 
 test("a second click on the pressed chip, or Escape in the toolbar, shows every agent's again", () => {
   const { page } = mount(managerScopesView(NOW));
   chip(page, "site").click();
   flush();
-  expect(listed(page)).toEqual(["#decision/site/d2"]);
+  expect(listed(page)).toEqual(["#decision/site/d2-hero-copy"]);
   chip(page, "site").click();
   flush();
   expect(pressed(page)).toEqual(["All 5"]);
@@ -145,7 +145,7 @@ test("the scope is kept per browser and comes back on the next load", () => {
 
   const { page } = mount(managerScopesView(NOW), "fleet:infra");
   expect(pressed(page)).toEqual(["infra 2"]);
-  expect(listed(page)).toEqual(["#decision/infra/d4", "#decision/infra/d5"]);
+  expect(listed(page)).toEqual(["#decision/infra/d4-pin-the-nix-channel", "#decision/infra/d5-drop-the-old-runner"]);
 });
 
 test("a stored scope whose agent has nothing open, or that was never one, is all", () => {
@@ -159,7 +159,7 @@ test("once the scope's last open decision is closed its chip goes and the list i
   const { page, m } = mount(managerScopesView(NOW));
   chip(page, "site").click();
   flush();
-  expect(listed(page)).toEqual(["#decision/site/d2"]);
+  expect(listed(page)).toEqual(["#decision/site/d2-hero-copy"]);
 
   m.applyState(stateOf(managerScopesView(NOW, ["site/d2"])));
   flush();

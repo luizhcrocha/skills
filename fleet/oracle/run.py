@@ -367,9 +367,21 @@ def _spawn_hint_hidden(result):
     return result
 
 
+# `fleets decision`'s page line: TypeScript (1.9.55) gives the card's address by number and slug
+# (`#decision/<fleet>/d2-deploy`, fleet/src/ledger/card-address.ts), the twin the id's (`#decision/d2`).
+CARD_PAGE = re.compile(r"^(    page: \S*?#decision/)\S+$", re.M)
+
+
+def _card_address_hidden(result):
+    """A step's result with the address after `page: ...#decision/` hidden: the frozen Python twin prints the id's."""
+    if isinstance(result, dict) and isinstance(result.get("stdout"), str):
+        return {**result, "stdout": CARD_PAGE.sub(r"\1…", result["stdout"])}
+    return result
+
+
 # What a trace's header `twin.normalise` may name: a difference the frozen Python twin keeps on purpose (ADR 0003),
 # hidden on both sides before a replay on the twin is compared.
-TWIN_NORMALISERS = {"numbers": _numbers_hidden, "spawn-hint": _spawn_hint_hidden}
+TWIN_NORMALISERS = {"numbers": _numbers_hidden, "spawn-hint": _spawn_hint_hidden, "card-address": _card_address_hidden}
 
 
 def twin_view(results: list[dict], normalise: list[str]) -> list[dict]:

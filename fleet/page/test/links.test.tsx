@@ -110,7 +110,7 @@ test("a row: its kind, its plain title, the fleet, what the user does there, whe
   expect(l1?.querySelector(".link-for")?.textContent).toBe("For you: mark each decision");
   expect(l1?.querySelector(".status-words")?.textContent).toMatch(/^up · checked \d\d:\d\d/u);
   expect(l1?.querySelector(".link-place")?.textContent).toBe(":4518 tool");
-  expect(l1?.querySelector(".block-link")?.getAttribute("href")).toBe("#decision/billing/d1");
+  expect(l1?.querySelector(".block-link")?.getAttribute("href")).toBe("#decision/billing/d1-rounding-rule-for-totals");
   expect(row("l3")?.querySelector(".round")?.textContent).toBe("round 14");
   expect(row("l4")?.querySelector(".link-title")?.getAttribute("href")).toBe("f/infra/files/auth-review.md");
   expect(row("l11")?.querySelector(".status-words")?.textContent).toBe("only on this machine");

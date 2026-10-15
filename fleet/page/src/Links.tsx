@@ -7,7 +7,7 @@ import { createSignal } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
 import { PillAs, RefTag, usePage } from "./bits.tsx";
-import { Core, type Link, type LinkKind } from "./core.ts";
+import type { Link, LinkKind } from "./core.ts";
 import { Refs, RefsBeside } from "./DecisionRef.tsx";
 import { clock } from "./format.ts";
 import { hrefOf, inactiveWhy, KIND_NAME, KINDS, placeOf, plainTitle, roundOf, type Arranged, type Showing } from "./links.ts";
@@ -118,7 +118,7 @@ export function LinkRow(props: { readonly link: Link }): JSX.Element {
       </Show>
       <Show when={l().decision ? served() : undefined}>
         {(d) => (
-          <a class="block-link" href={Core.decisionHref(own() ? d().id : `${l().fleet}/${l().decision}`)}>
+          <a class="block-link" href={m.cardHref(own() ? d().id : `${l().fleet}/${l().decision}`)}>
             For {d().ref ? d().ref + ": " : ""}
             {d().title}
           </a>

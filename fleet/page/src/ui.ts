@@ -802,10 +802,10 @@ export function createUi(m: Model) {
 
     if (newTab && g.kind === "decision") {
       const theirs = Core.parseFleetDecision(g.id);
-      elsewhere(theirs ? m.fleetPage(theirs.fleet) + Core.decisionHref(theirs.id) : location.pathname + Core.decisionHref(g.id));
+      elsewhere(theirs ? m.fleetPage(theirs.fleet) + m.cardHref(g.id) : location.pathname + m.cardHref(g.id));
     } else if (newTab && g.kind === "worker") elsewhere(location.pathname + "#agent-" + g.id);
     else if (newTab && g.kind === "view") elsewhere(location.pathname + g.hash);
-    else if (g.kind === "decision") location.hash = Core.decisionHref(g.id);
+    else if (g.kind === "decision") location.hash = m.cardHref(g.id);
     else if (g.kind === "url" && g.url) {
       if (newTab || /^https?:/u.test(g.url)) window.open(g.url, "_blank", "noopener");
       else location.href = g.url;
@@ -820,7 +820,7 @@ export function createUi(m: Model) {
       const about = decisionTrail(m.messages()).get(g.id);
 
       if (about !== undefined && !m.decisionActivity()) {
-        location.hash = Core.decisionHref(about);
+        location.hash = m.cardHref(about);
 
         return;
       }
@@ -889,7 +889,7 @@ export function createUi(m: Model) {
       route();
     } else if (overlay) closeChat();
     flush();
-    const place = Core.viewOf(at.hash, m.managed());
+    const place = Core.viewOf(at.hash, m.routeScope());
     const frame = place.decision && Core.parseFleetDecision(place.decision) ? refs.decision?.querySelector<HTMLIFrameElement>("#dv-embed") : null;
 
     if (!frame) {
@@ -951,7 +951,7 @@ export function createUi(m: Model) {
 
     if (!id || id !== m.viewing() || !next || !m.advance()) return;
     setAdvancedFrom(id);
-    location.hash = Core.decisionHref(next);
+    location.hash = m.cardHref(next);
   });
 
   /* Opening a decision's page records the revision seen; a revision since the last look is said. */
@@ -1016,7 +1016,7 @@ export function createUi(m: Model) {
       return;
     }
 
-    const id = Core.decisionRoute(href);
+    const id = m.cardKey(Core.decisionRoute(href, m.routeScope()));
 
     if (id === m.viewing()) return;
 
@@ -1028,8 +1028,8 @@ export function createUi(m: Model) {
 
   /** One view at a time: the tab of the view in the address is current, and a decision's page stands in for the views while it is open. */
   function route(): void {
-    const at = Core.viewOf(location.hash, m.managed());
-    const id = at.decision;
+    const at = Core.viewOf(location.hash, m.routeScope());
+    const id = m.cardKey(at.decision);
     const was = m.viewing();
     const place = id ? "decision/" + id : at.view;
 
