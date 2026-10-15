@@ -70,7 +70,7 @@ import { LinkProbes, ProbeCache } from "./probes.ts";
 import { answerAsOffered, expireGrants, grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
 import { allowedOrigin, chatOriginsPath, grantor, grantRefusal, hello, MAX_POST_BYTES, PAGE_TOKEN_META, PAGE_TOKEN_HEADER, parseChatOrigins, postRefusal, STALE_PAGE_TOKEN, STOP_TOKEN_META, stopRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
 import { idleMs, noteRequest, serverStanding } from "../preview/sleep.ts";
-import { haltedPage, isPing, previewTarget, proxiedIdentity, proxyHttp, proxySocket, startingPage, type Target, type Upgrade } from "./preview-proxy.ts";
+import { haltedPage, isOriginWide, isPing, previewTarget, proxiedIdentity, proxyHttp, proxySocket, startingPage, type Target, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
 import { HubTokens, tokensPath } from "./tokens.ts";
 import { OrphanWatch } from "./orphan-watch.ts";
@@ -627,6 +627,12 @@ export class Hub {
     if (!this.hosts.has(host)) return jsonResponse(421, { error: "unknown host" }, { Connection: "close" });
     const url = new URL(req.url);
     const path = collapse(url.pathname);
+
+    // A preview runs on this origin, and a service worker it registers from a script here (a file of a fleet's DIR)
+    // would see every page in that script's folder, the page token included. Only a preview's own path serves one.
+    if (req.headers.get("Service-Worker") !== null && !/^\/f\/[^/]+\/preview\//u.test(path)) {
+      return jsonResponse(403, { error: "a service worker is registered only under a preview's path" });
+    }
 
     if (path === "/" || path === "/index.html") return this.index(req);
 
@@ -1506,7 +1512,7 @@ export class Hub {
       const passed = new Headers();
 
       upstream.headers.forEach((value, key) => {
-        if (!["connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding", "date", "server"].includes(key.toLowerCase())) passed.set(key, value);
+        if (!["connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding", "date", "server"].includes(key.toLowerCase()) && !isOriginWide(key)) passed.set(key, value);
       });
 
       // A peer's file comes to this hub's origin: one the peer sent with no sandbox (a hub from before it had one) gets this hub's.

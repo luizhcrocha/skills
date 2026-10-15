@@ -287,6 +287,43 @@ describe("the preview through the hub", () => {
   });
 });
 
+/** A stand-in dev server whose every answer carries `headers` and `X-Kept: yes`; its port. */
+function sending(headers: Readonly<Record<string, string>>): number {
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("<!doctype html>", { headers: { ...headers, "X-Kept": "yes", "Content-Type": "text/html" } }) });
+  stubs.push(server);
+
+  return server.port ?? 0;
+}
+
+describe("a preview's answer on the hub's origin", () => {
+  for (const [name, value] of [
+    ["cross-origin-OPENER-policy", "same-origin"],
+    ["Cross-Origin-Embedder-Policy", "require-corp"],
+    ["SERVICE-WORKER-ALLOWED", "/"],
+  ] as const) {
+    test(`drops the dev server's ${name}: ${value}, which would reach the hub's pages and their token`, async () => {
+      writeRecord({ server: server(sending({ [name]: value }), "/f/shop/preview/") });
+      const res = await fetch(at("/preview/sw.js"));
+      expect([res.status, res.headers.get("X-Kept"), res.headers.get(name)]).toEqual([200, "yes", null]);
+    });
+  }
+
+  test("a service worker's script is refused on every path but a preview's: a file of the fleet's DIR, its page, the index", async () => {
+    writeFileSync(join(dir, "sw.js"), "self.addEventListener('fetch', () => {});");
+    writeRecord({ server: server(stub("combined"), "/f/shop/preview/") });
+    const worker = { "Service-Worker": "script" };
+    expect((await fetch(at("/sw.js"))).status).toBe(200);
+    const refused = await fetch(at("/sw.js"), { headers: worker });
+    expect([refused.status, await refused.json()]).toEqual([403, { error: "a service worker is registered only under a preview's path" }]);
+    expect((await fetch(at("/"), { headers: worker })).status).toBe(403);
+    expect((await fetch(`http://127.0.0.1:${hubPort}/`, { headers: worker })).status).toBe(403);
+    const preview = await fetch(at("/preview/sw.js"), { headers: worker });
+    expect([preview.status, await preview.text()]).toEqual([200, "combined GET /f/shop/preview/sw.js"]);
+    // A peer's preview is passed through too: here no peer answers, so it is that 404, not this 403.
+    expect((await fetch(`http://127.0.0.1:${hubPort}/f/shop@nowhere/preview/sw.js`, { headers: worker })).status).toBe(404);
+  });
+});
+
 /** Forged identity: what any client may put on a request. */
 const FORGED = { "Tailscale-User-Login": "mallory@example.com", "Tailscale-User-Name": "Mallory", "Tailscale-User-Profile-Pic": "http://x/m.png", "X-Forwarded-For": "1.2.3.4" };
 
@@ -716,6 +753,14 @@ describe("a preview at the root of a public port of its own", () => {
     pem = second;
     expect(await (await get(rootAt("127.0.0.1", "/x", other))).text()).toBe("a1 GET /x");
     expect((await fetch(`http://127.0.0.1:${hubPort}/api/fleets`)).status).toBe(200);
+  });
+
+  test("an answer on its own port keeps the dev server's COOP and COEP, which only the hub's origin drops", async () => {
+    writeRecord({ server: server(sending({ "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp" }), "/", publicPort) });
+    const running = await hubOnTailnet();
+    running.syncPreviews();
+    const page = await get(rootAt("127.0.0.1", "/"));
+    expect([page.status, page.headers.get("Cross-Origin-Opener-Policy"), page.headers.get("Cross-Origin-Embedder-Policy")]).toEqual([200, "same-origin", "require-corp"]);
   });
 
   test("a public port another process holds is reported in the preview's status, and the hub keeps running", async () => {

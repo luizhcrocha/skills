@@ -3,7 +3,8 @@
  * hub: the manager's page shows the card as that fleet's own page in a frame (`?embed=1`), which the hub serves
  * without the page token (only a top-level load gets one), so the frame sends the token of the page it is shown in.
  * Allow once, Allow once and save this kind, and Add this rule each go through; the frame's own document still
- * holds no token. Skipped when no Chromium (FLEET_CHROMIUM, or chromium on the PATH) or no puppeteer-core
+ * holds no token. A forged token in the manager's page is the one the frame sends, and is refused; a page of another
+ * origin that frames a fleet's page has no token to give, so the frame's answer goes without one. Skipped when no Chromium (FLEET_CHROMIUM, or chromium on the PATH) or no puppeteer-core
  * (fleet/page's, installed by `just test-page`).
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -12,6 +13,8 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 
 import { readChat } from "../src/chat/store.ts";
+import { recordJson, type PreviewRecord } from "../src/preview/record.ts";
+import { startedAt } from "../src/preview/tracked.ts";
 import { startHub, type Running, type StartOptions } from "../src/hub/server.ts";
 import { asObject, type JsonObject } from "../src/json.ts";
 import { baseEnv, machine, tmp } from "./support.ts";
@@ -24,14 +27,31 @@ interface Frame {
   waitForFunction(expression: string, options?: { readonly timeout?: number }): Promise<object>;
 }
 
+/** The part of a puppeteer-core request and response this test reads. */
+interface HttpRequest {
+  url(): string;
+  method(): string;
+  /** Its headers, names lowercased. */
+  headers(): Readonly<Record<string, string>>;
+}
+
+interface HttpResponse {
+  request(): HttpRequest;
+  status(): number;
+}
+
 interface Page extends Frame {
   goto(url: string): Promise<object | null>;
   frames(): Frame[];
+  on(event: "request", handler: (request: HttpRequest) => void): void;
+  on(event: "response", handler: (response: HttpResponse) => void): void;
   close(): Promise<void>;
 }
 
 interface Browser {
   newPage(): Promise<Page>;
+  /** A context of its own, with no service worker or storage of any other. */
+  createBrowserContext(): Promise<{ newPage(): Promise<Page>; close(): Promise<void> }>;
   close(): Promise<void>;
 }
 
@@ -48,6 +68,17 @@ const found = chromium !== "" && existsSync(chromium) && existsSync(PUPPETEER);
 const CALL = "git push --force origin HEAD:main";
 
 const RULE = `Bash(${CALL})`;
+
+const FORGED = `forged-${"x".repeat(25)}`;
+
+const STALE = "the page token is missing or stale: reload the fleet's page and answer again";
+
+/** A service worker that would show every page in its scope as "SW SAW: " and the page's HTML, token and all. */
+const SPY = `self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (e) => e.waitUntil(clients.claim()));
+self.addEventListener("fetch", (e) => {
+  if (e.request.mode === "navigate") e.respondWith(fetch(e.request).then((r) => r.text()).then((t) => new Response("SW SAW: " + t, { headers: { "Content-Type": "text/plain" } })));
+});`;
 
 const ENTRY = "Removing a finished jj workspace: `jj workspace forget <name>` in a repo under /home/u/repos.\nNot covered: the default workspace, `jj abandon`, deleting the folder.";
 
@@ -198,19 +229,53 @@ async function fleetOn(id: string): Promise<Page> {
   return page;
 }
 
-/** The manager's page open on fleet p's card `id`, and the frame that shows it once its answer form is there. */
-async function managerOn(id: string): Promise<{ readonly page: Page; readonly frame: Frame }> {
-  if (browser === undefined) throw new Error("no browser");
-  const page = await browser.newPage();
-  await page.goto(`${origin}/f/manager/#decision/p/${id}`);
-
-  return { page, frame: await cardFrame(page) };
+/** A post to fleet p's chat as the browser sent it: its page token header (null for none) and the hub's status, once answered. */
+interface Post {
+  readonly token: string | null;
+  status: number | null;
 }
 
-/** The frame the manager's page shows fleet p's card in, once its answer form is there. */
-async function cardFrame(page: Page): Promise<Frame> {
+/** Every post to fleet p's chat that `page` or one of its frames sends from now on. */
+function chatPosts(page: Page): Post[] {
+  const posts: Post[] = [];
+  const sent = new Map<HttpRequest, Post>();
+
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || new URL(request.url()).pathname !== "/f/p/chat") return;
+    const post: Post = { token: request.headers()["x-fleet-page-token"] ?? null, status: null };
+    sent.set(request, post);
+    posts.push(post);
+  });
+
+  page.on("response", (response) => {
+    const post = sent.get(response.request());
+
+    if (post !== undefined) post.status = response.status();
+  });
+
+  return posts;
+}
+
+/** `posts` once each has its answer, or as they are after 5 s. */
+async function answered(posts: Post[]): Promise<Post[]> {
+  for (let i = 0; i < 50 && posts.some((p) => p.status === null); i += 1) await Bun.sleep(100);
+
+  return posts;
+}
+
+/** The manager's page open on fleet p's card `id`, and the frame that shows it once its answer form is there. */
+async function managerOn(id: string): Promise<{ readonly page: Page; readonly frame: Frame; readonly posts: Post[] }> {
+  if (browser === undefined) throw new Error("no browser");
+  const page = await browser.newPage();
+  const posts = chatPosts(page);
+  await page.goto(`${origin}/f/manager/#decision/p/${id}`);
   await page.waitForFunction('document.querySelector("#dv-embed") !== null', { timeout: 10_000 });
 
+  return { page, frame: await cardFrame(page), posts };
+}
+
+/** The frame of `page` that shows fleet p's page (`?embed=1`), once its answer form is there. */
+async function cardFrame(page: Page): Promise<Frame> {
   for (let i = 0; i < 100; i += 1) {
     const frame = page.frames().find((f) => f.url().includes("/f/p/?embed=1"));
 
@@ -224,6 +289,13 @@ async function cardFrame(page: Page): Promise<Frame> {
   }
 
   throw new Error("the card's frame never loaded");
+}
+
+/** Fleet p's combined preview, served by the dev server on `port` at /f/p/preview/. */
+function previewAt(port: number): PreviewRecord {
+  const server = { cmd: "stub", port, pid: process.pid, pidStarted: startedAt(process.pid) ?? null, unit: null, base: "/f/p/preview/", path: root, log: join(root, "x.log"), started: "", public: null, keeper: null, keeperStarted: null, keeperUnit: null, asleep: null, failed: null };
+
+  return { fleet: "p", workspace: "preview", path: root, repo: root, server, updater: null, updaterStarted: null, include: [], exclude: [], merged: [], left: [], stack: null, stackFrom: null, stackGiven: null, commit: null, conflicts: [], error: null, updated: null, workers: [], ports: { combined: null, workers: {} } };
 }
 
 /** Pick `choice` on the frame's answer form, type `note` when given, and send it; the error the form shows once the
@@ -279,10 +351,11 @@ test.skipIf(!found)("Add this rule on the manager's page, in another fleet's fra
   await page.close();
 }, 60_000);
 
-test.skipIf(!found)("a token the hub never issued, in the page the frame is shown in, grants nothing", async () => {
-  const { page, frame } = await managerOn("p-1a2b3c4d");
-  await page.evaluate('(document.querySelector(\'meta[name="fleet-page-token"]\').content = "forged-" + "x".repeat(25), true)');
-  expect(await answer(frame, "allow-once")).toBe("the page token is missing or stale: reload the fleet's page and answer again");
+test.skipIf(!found)("a token the hub never issued, in the page the frame is shown in, is the one the frame sends, and grants nothing", async () => {
+  const { page, frame, posts } = await managerOn("p-1a2b3c4d");
+  await page.evaluate(`(document.querySelector('meta[name="fleet-page-token"]').content = ${JSON.stringify(FORGED)}, true)`);
+  expect(await answer(frame, "allow-once")).toBe(STALE);
+  expect(await answered(posts)).toEqual([{ token: FORGED, status: 403 }]);
   expect([readChat(root), grants(), existsSync(join(session, ".claude", "settings.local.json"))]).toEqual([[], [], false]);
   await page.close();
 }, 60_000);
@@ -302,8 +375,6 @@ test.skipIf(!found)("Allow once in the manager's frame opened before the hub res
   expect(grants().map((g) => [g["op"], g["decision"], g["rule"]])).toEqual([["grant", "p-1a2b3c4d", RULE]]);
   await page.close();
 }, 60_000);
-
-const STALE = "the page token is missing or stale: reload the fleet's page and answer again";
 
 /** The hub restarted with its token file gone: every page open before holds a token it no longer knows. */
 async function restartForgetting(): Promise<void> {
@@ -363,4 +434,52 @@ test.skipIf(!found)("an image picked on the manager's page, in another fleet's f
   expect(path).toMatch(/^attachments\/[0-9a-f]{16}\.png$/u);
   expect(existsSync(join(root, path))).toBe(true);
   await page.close();
+}, 60_000);
+
+test.skipIf(!found)("a page on another port that frames a fleet's page reads no token from it: the frame's answer goes without one and is refused", async () => {
+  if (browser === undefined) throw new Error("no browser");
+  const html = `<!doctype html><meta charset="utf-8"><iframe src="${origin}/f/p/?embed=1#decision/p-1a2b3c4d" width="800" height="600"></iframe>`;
+  const other = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } }) });
+
+  try {
+    const page = await browser.newPage();
+    const posts = chatPosts(page);
+    await page.goto(`http://127.0.0.1:${String(other.port)}/`);
+    const frame = await cardFrame(page);
+    expect(await answer(frame, "allow-once")).toBe(STALE);
+    expect(await answered(posts)).toEqual([{ token: null, status: 403 }]);
+    expect([readChat(root), grants(), existsSync(join(session, ".claude", "settings.local.json"))]).toEqual([[], [], false]);
+    await page.close();
+  } finally {
+    await other.stop(true);
+  }
+}, 60_000);
+
+test.skipIf(!found)("a preview cannot register a file of the fleet's DIR as a service worker over the fleet's page, so no worker sees its token", async () => {
+  if (browser === undefined) throw new Error("no browser");
+  writeFileSync(join(root, "sw.js"), SPY);
+  const dev = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("<!doctype html><p>the preview</p>", { headers: { "Content-Type": "text/html" } }) });
+  writeFileSync(join(root, "preview.json"), JSON.stringify(recordJson(previewAt(dev.port ?? 0))));
+  const context = await browser.createBrowserContext();
+
+  try {
+    const preview = await context.newPage();
+    await preview.goto(`${origin}/f/p/preview/`);
+    expect(await preview.evaluate("document.body.innerText")).toBe("the preview");
+
+    const registered = String(
+      await preview.evaluate(`navigator.serviceWorker.register("/f/p/sw.js", { scope: "/f/p/" }).then(
+        async (r) => { await navigator.serviceWorker.ready; return "registered " + r.scope; },
+        (e) => "refused: " + e.message)`),
+    );
+
+    expect([registered.startsWith("refused: "), registered.includes("403")], registered).toEqual([true, true]);
+    const page = await context.newPage();
+    await page.goto(`${origin}/f/p/`);
+    const seen = await page.evaluate(`JSON.stringify([document.documentElement.outerHTML.includes("SW SAW"), navigator.serviceWorker.controller === null, (document.querySelector('meta[name="fleet-page-token"]')?.content ?? "").length > 20])`);
+    expect(JSON.parse(String(seen))).toEqual([false, true, true]);
+  } finally {
+    await context.close();
+    await dev.stop(true);
+  }
 }, 60_000);

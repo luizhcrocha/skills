@@ -159,6 +159,18 @@ export function isPingFrame(data: string | ArrayBuffer | Uint8Array): boolean {
 /** Headers that belong to one connection, never passed on. */
 const HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "trailer", "host", "content-length", "accept-encoding"]);
 
+/** A dev server's response headers that would act on the hub's origin beyond the preview, never passed back there: its
+ * COOP would match the hub's pages' (`PAGE_ISOLATION`), so a preview that opens one keeps a handle on it and reads
+ * its page token; COEP goes with it; and `Service-Worker-Allowed` would let it register a service worker over the
+ * whole origin, which sees every page the hub serves with its token. A root-mode preview, on a port and origin of
+ * its own, keeps them. */
+const ORIGIN_WIDE = new Set(["cross-origin-opener-policy", "cross-origin-embedder-policy", "service-worker-allowed"]);
+
+/** Whether a response header is one that acts on the whole origin (`ORIGIN_WIDE`), which no preview sets on the hub's. */
+export function isOriginWide(key: string): boolean {
+  return ORIGIN_WIDE.has(key.toLowerCase());
+}
+
 /** Whether a request header says who the request is from, which only `proxiedIdentity` sets. */
 export function isIdentity(key: string): boolean {
   const k = key.toLowerCase();
@@ -193,7 +205,8 @@ export function proxiedIdentity(ip: string, viewer: Viewer, sent: Headers): Head
 }
 
 /** Ask the dev server for `target` as the browser asked the hub for it, with `identity` (`proxiedIdentity`)
- * for who asked; its answer, passed back. */
+ * for who asked; its answer, passed back, on the hub's origin (a prefix other than `/`) without the headers that act
+ * on the whole origin (`ORIGIN_WIDE`). */
 export async function proxyHttp(req: Request, target: Target, search: string, identity: Headers): Promise<Response> {
   const headers = new Headers();
 
@@ -211,9 +224,12 @@ export async function proxyHttp(req: Request, target: Target, search: string, id
   try {
     const upstream = await fetch(`http://127.0.0.1:${target.server.port}${target.path}${search}`, init);
     const passed = new Headers();
+    const hubs = target.prefix !== "/";
 
     upstream.headers.forEach((value, key) => {
-      if (!HOP.has(key.toLowerCase()) && key.toLowerCase() !== "content-encoding") passed.append(key, value);
+      const k = key.toLowerCase();
+
+      if (!HOP.has(k) && !(hubs && ORIGIN_WIDE.has(k)) && k !== "content-encoding") passed.append(key, value);
     });
 
     const location = passed.get("Location");

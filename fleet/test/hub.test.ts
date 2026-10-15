@@ -2546,6 +2546,24 @@ describe("the user's word to a coordinator on the manager's page", () => {
 });
 
 describe("a peer hub's fleets", () => {
+  test("a peer's answer comes to this hub's origin without COOP, COEP or Service-Worker-Allowed", async () => {
+    await start();
+    const headers = { "Content-Type": "text/html", "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Service-Worker-Allowed": "/", "X-Kept": "yes" };
+
+    const stub = Bun.serve({
+      hostname: "127.0.0.2",
+      port,
+      fetch: (req) =>
+        new URL(req.url).pathname === "/api/fleets" ? Response.json({ name: "stub", fleets: [{ id: "infra", status: "running", now: "n", decisions: [] }] }) : new Response("<!doctype html>", { headers }),
+    });
+
+    stubs.push(stub);
+    expect(await running?.hub.addPeer("stub", "127.0.0.2")).toBe(true);
+    const res = await fetch(`http://127.0.0.1:${port}/f/infra@stub/preview/sw.js`);
+    const got = ["X-Kept", "Cross-Origin-Opener-Policy", "Cross-Origin-Embedder-Policy", "Service-Worker-Allowed"].map((h) => res.headers.get(h));
+    expect([res.status, ...got]).toEqual([200, "yes", null, null, null]);
+  });
+
   test("show on the index and are passed through, posts checked here first", async () => {
     const seen: { method: string; path: string; body: string; type: string | null }[] = [];
     await start();
@@ -2712,6 +2730,8 @@ describe("a permission's answer grants the call once", () => {
         [{ ...own, "X-Fleet-Page-Token": "x" }, stale, true],
         [{ ...own, "X-Fleet-Page-Token": "x".repeat(32) }, stale, true],
         [{ "X-Fleet-Page-Token": own["X-Fleet-Page-Token"] ?? "" }, refused, undefined],
+        [{ ...own, Origin: `http://127.0.0.1:${String(port + 1)}` }, "cross-origin post refused", undefined],
+        [{ ...own, "Sec-Fetch-Site": "same-site" }, "cross-origin post refused", undefined],
       ];
 
       for (const [headers, error, reload] of cases) {
