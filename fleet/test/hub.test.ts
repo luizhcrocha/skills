@@ -1848,7 +1848,7 @@ describe("the index and the manager", () => {
       [{ Origin: self, "X-Fleet-Stop-Token": token }, "a Stop comes only from the manager's page on this hub"],
       [{ Origin: `http://localhost:${port}`, "Sec-Fetch-Site": "same-origin", "X-Fleet-Stop-Token": token }, "a Stop comes only from the manager's page on this hub"],
       [{ Origin: self, "Sec-Fetch-Site": "same-origin" }, "the Stop token is missing or stale: reload the manager's page"],
-      [{ ...own, "X-Fleet-Stop-Token": `${token.slice(0, -1)}x` }, "the Stop token is missing or stale: reload the manager's page"],
+      [{ ...own, "X-Fleet-Stop-Token": `${token.slice(0, -1)}${token.endsWith("x") ? "y" : "x"}` }, "the Stop token is missing or stale: reload the manager's page"],
     ];
 
     for (const [headers, why] of refused) {
