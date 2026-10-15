@@ -405,7 +405,7 @@ class ReviewTest(RepoCase):
 
 
 class LandingBookmarkTest(RepoCase):
-    """landing_bookmarks: what the push gate (hooks/tstack-hook) reads as the landing bookmark."""
+    """landing_bookmarks: what the push gate (hooks/tstack-hook.py) reads as the landing bookmark."""
 
     def test_trunk_names_it(self):
         self.assertEqual(lc.landing_bookmarks(self.tmp), set())  # not a repo

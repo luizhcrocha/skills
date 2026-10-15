@@ -7,7 +7,7 @@
  * that armed it, so a watch whose session is gone hears for nobody. It is orphaned ({@link orphaned}), and
  * then it is no live watch to `listening`, to `fleet fleets list`, to the hub's wake, or to the next watch,
  * which takes its place (watch.ts). The plugin's Stop guard keeps the same rule (`_watch_orphaned` in
- * hooks/tstack-hook): change the two together.
+ * hooks/tstack-hook.py): change the two together.
  *
  * And a watch as the host's role armed by a session that is not the fleet's host (host.ts: the session the
  * registry entry names) wakes a copy of the host, or a terminal, while the host hears nothing: it is

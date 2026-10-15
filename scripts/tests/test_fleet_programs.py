@@ -56,7 +56,7 @@ def assert_applied(test, outcomes):
 
 
 def load_hook():
-    loader = SourceFileLoader("tstack_hook_programs", str(ROOT / "hooks" / "tstack-hook"))
+    loader = SourceFileLoader("tstack_hook_programs", str(ROOT / "hooks" / "tstack-hook.py"))
     module = module_from_spec(spec_from_loader(loader.name, loader))
     loader.exec_module(module)
     return module

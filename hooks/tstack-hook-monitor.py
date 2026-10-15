@@ -1,4 +1,4 @@
-"""Monitor only watches: the part of hooks/tstack-hook that reads a Monitor command for whether it is a watch
+"""Monitor only watches: the part of hooks/tstack-hook.py that reads a Monitor command for whether it is a watch
 (fleet/SPEC.md, "Monitor only watches").
 
 It is no module of its own. The hook executes this file into its own namespace (`_monitor`), and only for a Monitor

@@ -1,4 +1,5 @@
-"""Tests for hooks/tstack-hook, the plugin's one hook dispatcher, and hooks/hooks.json.
+"""Tests for hooks/tstack-hook.py, the plugin's one hook dispatcher, its launcher hooks/tstack-hook, and
+hooks/hooks.json.
 
 Run: just test-scripts  (or python3 -m unittest discover -s scripts/tests)
 
@@ -9,6 +10,7 @@ wrong, the dispatcher exits 0 with nothing on stdout and logs to hook.log.
 import json
 import os
 import re
+import resource
 import shlex
 import shutil
 import statistics
@@ -21,10 +23,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "hooks" / "tstack-hook"
+SOURCE = HOOK.with_name("tstack-hook.py")  # the dispatcher's code, which the launcher HOOK loads
 HOOKS_JSON = ROOT / "hooks" / "hooks.json"
 MEMO = ROOT / "scripts" / "memo"
 TUCA = ROOT / "bin" / "tuca-mode"
 HEARTBEAT_ONLY = ("PostToolUseFailure", "SubagentStart", "SubagentStop")
+# A hook run's CPU budget (assertCheap): its best of 7 runs, at most HOOK_CPU_RATIO times START's, a bare start with the
+# dispatcher's imports, run in turn with it. The wall clock it replaced (150 ms) failed whenever the machine was loaded;
+# CPU time moves less, but it moves (the hook's best 34 ms at load 25, up to 91 at load 60 to 110), and START moves
+# with it. 2026-10-15, 32 cores, load 22 to 114, the four timed cases: 1.15x to 1.83x in 40 runs; with a 50 ms CPU burn
+# planted in main(), 2.24x to 3.63x in 32. Without the launcher, compiling on every call: 120 to 152 ms at load 100.
+# START runs the python3 the hook's own `#!/usr/bin/env python3` finds on the test env's PATH.
+START = ["-c", "import collections, json, os, pathlib, re, sys, time, traceback"]
+HOOK_CPU_RATIO = 2.1
 
 
 def tool_use(name, **tool_input):
@@ -61,6 +72,24 @@ class HookCase(unittest.TestCase):
         stdin = raw if raw is not None else json.dumps(payload or {})
         return subprocess.run([str(HOOK), event], input=stdin, capture_output=True, text=True,
                               env={**self.env, **(env or {})}, timeout=30)
+
+    def assertCheap(self, label, event, payload):
+        """The hook's best of 7 runs costs under HOOK_CPU_RATIO times the CPU of a bare start, the best of 7 runs of
+        START taken in turn with them: CPU time of the process and the children it waited for, user plus system."""
+        def cpu(run):
+            before = resource.getrusage(resource.RUSAGE_CHILDREN)
+            run()
+            after = resource.getrusage(resource.RUSAGE_CHILDREN)
+            return (after.ru_utime + after.ru_stime - before.ru_utime - before.ru_stime) * 1000
+        python = shutil.which("python3", path=self.env["PATH"])
+        hook, start = [], []
+        for _ in range(7):
+            start.append(cpu(lambda: subprocess.run([python, *START], capture_output=True, env=self.env, timeout=30)))
+            hook.append(cpu(lambda: self.hook(event, payload)))
+        ratio = min(hook) / min(start)
+        print(f"\n  {label} hook: best {min(hook):.0f} ms CPU, {ratio:.2f}x a bare start's {min(start):.0f} ms",
+              end="", file=sys.stderr)
+        self.assertLess(ratio, HOOK_CPU_RATIO, f"{label} hook costs too much CPU at its best: {hook}; START {start}")
 
     def base(self, event, **extra):
         return {"session_id": "sess-1", "transcript_path": str(self.transcript), "cwd": str(self.repo),
@@ -171,14 +200,7 @@ class JJHintsTest(HookCase):
         (self.jjrepo / "a" / "b" / "c").mkdir(parents=True)
         payload = {**self.base("SessionStart", source="startup"), "cwd": str(self.jjrepo / "a" / "b" / "c")}
         self.hook("SessionStart", payload)
-        times = []
-        for _ in range(7):
-            started = time.perf_counter()
-            self.hook("SessionStart", payload)
-            times.append((time.perf_counter() - started) * 1000)
-        print(f"\n  SessionStart (jj hints) hook: median {statistics.median(times):.0f} ms, best {min(times):.0f} ms",
-              end="", file=sys.stderr)
-        self.assertLess(min(times), 150, times)
+        self.assertCheap("SessionStart (jj hints)", "SessionStart", payload)
 
 
 class TucaModeTest(HookCase):
@@ -267,14 +289,7 @@ class TucaModeTest(HookCase):
         self.flag("on", "sess-1")
         payload = self.base("SessionStart", source="compact")
         self.hook("SessionStart", payload)
-        times = []
-        for _ in range(7):
-            started = time.perf_counter()
-            self.hook("SessionStart", payload)
-            times.append((time.perf_counter() - started) * 1000)
-        print(f"\n  SessionStart (tuca-mode) hook: median {statistics.median(times):.0f} ms, best {min(times):.0f} ms",
-              end="", file=sys.stderr)
-        self.assertLess(min(times), 150, times)
+        self.assertCheap("SessionStart (tuca-mode)", "SessionStart", payload)
 
 
 class StopTest(HookCase):
@@ -419,11 +434,11 @@ class NeverBreakTest(HookCase):
 
 
 def load_hook(onepw=True):
-    """hooks/tstack-hook as a module, to time a handler without the interpreter's start-up; with its 1Password part
+    """hooks/tstack-hook.py as a module, to time a handler without the interpreter's start-up; with its 1Password part
     (hooks/tstack-hook-onepw.py, which the hook reads only for a call that needs it) unless `onepw` is False."""
     from importlib.machinery import SourceFileLoader
     from importlib.util import module_from_spec, spec_from_loader
-    loader = SourceFileLoader("tstack_hook_under_test", str(HOOK))
+    loader = SourceFileLoader("tstack_hook_under_test", str(SOURCE))
     module = module_from_spec(spec_from_loader("tstack_hook_under_test", loader))
     loader.exec_module(module)
     if onepw:
@@ -3491,6 +3506,7 @@ class SpawnEffortTest(FleetCase):
         root = self.tmp / "plugin"
         (root / "hooks").mkdir(parents=True)
         shutil.copy(HOOK, root / "hooks" / "tstack-hook")
+        shutil.copy(SOURCE, root / "hooks" / "tstack-hook.py")
         r = subprocess.run([str(root / "hooks" / "tstack-hook"), "PreToolUse"], capture_output=True, text=True, timeout=30,
                            input=json.dumps(self.payload("PreToolUse", tool_name="Agent", tool_input={"prompt": "go"})),
                            env={**self.env, "CLAUDE_PLUGIN_ROOT": str(root)})
@@ -3871,7 +3887,7 @@ class SuiteParseTest(unittest.TestCase):
 
     def test_runners_names_every_command_the_reader_reads_by_name(self):
         import ast
-        tree = ast.parse(HOOK.read_text())
+        tree = ast.parse(SOURCE.read_text())
         reader = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SuiteReader")
         command = next(n for n in reader.body if isinstance(n, ast.FunctionDef) and n.name == "command")
         names = set()
@@ -5193,7 +5209,7 @@ class HooksJsonTest(unittest.TestCase):
     def test_every_registered_event_is_dispatched(self):
         config = json.loads(HOOKS_JSON.read_text())
         self.assertEqual(set(config), {"hooks"})
-        source = HOOK.read_text()
+        source = SOURCE.read_text()
         handled = set(re.findall(r'^\s+"(\w+)": \[', source.split("HANDLERS = {", 1)[1].split("}", 1)[0], re.M))
         self.assertEqual(set(config["hooks"]), handled)
         for event, groups in config["hooks"].items():
@@ -5226,14 +5242,58 @@ class LatencyTest(HookCase):
         for event in ("SessionStart", "Stop"):
             payload = self.base(event, source="startup")
             self.hook(event, payload)  # warm the index
-            times = []
-            for _ in range(7):
-                started = time.perf_counter()
-                self.hook(event, payload)
-                times.append((time.perf_counter() - started) * 1000)
-            print(f"\n  {event} hook: median {statistics.median(times):.0f} ms, best {min(times):.0f} ms",
-                  end="", file=sys.stderr)
-            self.assertLess(min(times), 150, f"{event} hook is slow even at its best (a loaded machine inflates the rest): {times}")
+            self.assertCheap(event, event, payload)
+
+
+class LauncherTest(HookCase):
+    """hooks/tstack-hook loads hooks/tstack-hook.py as a module, so Python keeps its bytecode in hooks/__pycache__."""
+
+    def plugin(self, code=True):
+        root = self.tmp / "plugin"
+        (root / "hooks").mkdir(parents=True)
+        shutil.copy(HOOK, root / "hooks" / "tstack-hook")
+        if code:
+            shutil.copy(SOURCE, root / "hooks" / "tstack-hook.py")
+        return root
+
+    def wake(self, root):
+        self.memo("note", "fact", "the launcher ran it")
+        return subprocess.run([str(root / "hooks" / "tstack-hook"), "SessionStart"], capture_output=True, text=True,
+                              input=json.dumps(self.base("SessionStart", source="startup")), env=self.env, timeout=30)
+
+    def test_the_bytecode_is_kept_next_to_the_code(self):
+        root = self.plugin()
+        self.assertIn("the launcher ran it", self.wake(root).stdout)
+        self.assertEqual([p.name.split(".")[0] for p in (root / "hooks" / "__pycache__").iterdir()], ["tstack-hook"])
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes through a read-only folder")
+    def test_a_read_only_plugin_compiles_as_before(self):
+        root = self.plugin()
+        (root / "hooks").chmod(0o555)
+        self.addCleanup((root / "hooks").chmod, 0o755)
+        r = self.wake(root)
+        self.assertIn("the launcher ran it", r.stdout)
+        self.assertEqual(r.stderr, "")
+        self.assertFalse((root / "hooks" / "__pycache__").exists())
+
+    def test_a_cut_short_bytecode_runs_from_source_and_is_rewritten(self):
+        root = self.plugin()
+        self.wake(root)
+        (pyc,) = (root / "hooks" / "__pycache__").iterdir()
+        pyc.write_bytes(pyc.read_bytes()[:40])  # its header holds, its code is cut: marshal's EOFError
+        for _ in range(2):
+            r = self.wake(root)
+            self.assertEqual((r.returncode, r.stderr), (0, ""))
+            self.assertIn("the launcher ran it", r.stdout)
+        self.assertGreater(pyc.stat().st_size, 40)
+        self.assertEqual(self.log(), "")
+
+    def test_a_launcher_without_its_code_logs_and_says_so(self):
+        r = self.wake(self.plugin(code=False))
+        self.assertEqual((r.returncode, r.stdout), (1, ""))  # 1: an error the user sees that blocks nothing; never 2
+        self.assertEqual(r.stderr, f"tstack-hook: dispatcher failed to load, see {self.data / 'hook.log'}\n")
+        self.assertIn("launcher failed to load the dispatcher", self.log())
+        self.assertIn("tstack-hook.py", self.log())
 
 
 

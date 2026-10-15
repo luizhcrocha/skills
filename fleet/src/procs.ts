@@ -144,7 +144,7 @@ export function parentOf(pid: number): number | undefined {
 /** When `pid` started, as the system says it: the same text for the same process whoever reads it, and another
  * for a later process with the same pid. Linux: the start time in clock ticks since boot (/proc/PID/stat,
  * field 22); the Mac: `ps -o lstart=`. Undefined when `pid` does not run. The plugin's hook reads it the
- * same way (`_proc_started` in hooks/tstack-hook). */
+ * same way (`_proc_started` in hooks/tstack-hook.py). */
 export function startedOf(pid: number): string | undefined {
   const started = DARWIN ? psColumn(pid, "lstart") : (statOf(pid)?.[19] ?? "");
 

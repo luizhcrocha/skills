@@ -315,7 +315,7 @@ export function limitInForce(hit: LimitHit, reading: readonly WindowReading[], n
 /**
  * The wake's text: a fixed template from the hub, with the fleet's id, its DIR, how many of the user's
  * messages wait and since which, and the command that arms the watch, the one the Stop guard names
- * (`watch_command` and `DEAF` in hooks/tstack-hook: keep the two the same). No word of anyone's message, no
+ * (`watch_command` and `DEAF` in hooks/tstack-hook.py: keep the two the same). No word of anyone's message, no
  * mention, nothing to do but arm the watch. An Error when the id or the DIR cannot be written plainly.
  */
 export function wakeText(fleet: string, dir: string, role: string, unread: number, seen: number): string | Error {

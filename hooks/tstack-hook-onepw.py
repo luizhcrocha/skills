@@ -1,10 +1,10 @@
-"""1Password locked: the part of hooks/tstack-hook that reads a command for its use of 1Password, and detects, holds
+"""1Password locked: the part of hooks/tstack-hook.py that reads a command for its use of 1Password, and detects, holds
 and clears a lock (fleet/SPEC.md, "1Password locked").
 
 It is no module of its own. The hook executes this file into its own namespace (`_onepw`), and only for a Bash call
 that can matter here: its first word can be one of the tools, and a state is on disk or the output holds one of
-1Password's failure texts (`onepw_hold`, `onepw_watch` in the hook). Every other call pays for none of it: the hook is
-a script, compiled from source on each call, and this part was most of what the feature added to that. So the names
+1Password's failure texts (`onepw_hold`, `onepw_watch` in the hook). Every other call pays for none of it: the hook was
+a script then, compiled from source on each call, and this part was most of what the feature added to that. So the names
 this file uses and does not define (`fleet_dirs`, `fleet_now`, `_jj_sub`, `Deny`, `re`, `os`, ...) are the hook's.
 """
 

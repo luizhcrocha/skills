@@ -1,5 +1,5 @@
 /**
- * Heartbeats: the plugin's hook (`hooks/tstack-hook`, `fleet_heartbeat`) writes one small JSON file per
+ * Heartbeats: the plugin's hook (`hooks/tstack-hook.py`, `fleet_heartbeat`) writes one small JSON file per
  * session, and per subagent, in `DIR/heartbeats/` at every tool call, session start and stop, and
  * subagent start and stop. Read here for when each worker was last seen and what it last ran; a worker
  * with no heartbeat falls back to its transcript's time ({@link lastActivity}).

@@ -561,7 +561,7 @@ describe("the wake's text", () => {
   });
 
   test("the command is the Stop guard's: the same arguments, the same timeout", () => {
-    const hook = readFileSync(join(import.meta.dir, "../../hooks/tstack-hook"), "utf8");
+    const hook = readFileSync(join(import.meta.dir, "../../hooks/tstack-hook.py"), "utf8");
     expect(hook).toContain('return f"{fleet_cli()} chat {d} watch --as {role} --all --resume --once"');
     expect(hook).toContain("background command (`run_in_background: true`, `timeout: 3300000`)");
     expect(hook).toContain('return f"{ROOT}/fleet/bin/fleet"');

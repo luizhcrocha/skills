@@ -1415,7 +1415,7 @@ field 22) on Linux, `ps -o lstart=` in the C locale on the Mac. `null`: no such 
 watch a person typed in a terminal. The file ends in `.pid` because it is of the processes running now,
 and the oracle leaves `*.pid` out of what it compares.
 
-**The rule** (`orphaned` in fleet/src/chat/watchers.ts; `_watch_orphaned` in hooks/tstack-hook is the same
+**The rule** (`orphaned` in fleet/src/chat/watchers.ts; `_watch_orphaned` in hooks/tstack-hook.py is the same
 rule in Python, and the two change together):
 
 | The watch | Orphaned when |
@@ -2940,7 +2940,7 @@ or runs as a background Bash command that exits on the event.
 
 ## Heartbeats
 
-The per-tool-call heartbeat stays in the plugin's Python hook dispatcher (D13): `hooks/tstack-hook`'s
+The per-tool-call heartbeat stays in the plugin's Python hook dispatcher (D13): `hooks/tstack-hook.py`'s
 `fleet_heartbeat` runs on PostToolUseFailure, SubagentStart and SubagentStop (registered `async`, so no
 tool call waits on it) and, inside the synchronous dispatcher, on SessionStart, Stop and PostToolUse
 (synchronous since the chat nudge reads its output: see [Listening hooks](#listening-hooks)).
@@ -2978,7 +2978,7 @@ tool call waits on it) and, inside the synchronous dispatcher, on SessionStart, 
 
 A host deaf to its chat leaves the user's messages unread and answers unrecorded: the watch exits with
 the news it prints, and a session that forgets to arm it again, or works a long turn of its own, hears
-nothing. Two handlers of the same dispatcher (`hooks/tstack-hook`) make listening mechanical, for the
+nothing. Two handlers of the same dispatcher (`hooks/tstack-hook.py`) make listening mechanical, for the
 coordinator and the manager only. Membership is the heartbeat's (`$FLEET_DIR`, else the scratchpad's
 folders holding a `state.json`); the role is the ledger's (`role: "manager"`, else coordinator). A worker
 (a subagent's `agent_id`, `FLEET_WORKER`, `TSTACK_ROLE=worker`) is out of both. Neither ever fails the
@@ -3727,7 +3727,7 @@ that is over holds nothing; it stays in the file until it is pruned
 
 ### What the hook does
 
-Two handlers of the plugin's dispatcher (`hooks/tstack-hook`), on Bash only: `onepw_watch` on PostToolUse
+Two handlers of the plugin's dispatcher (`hooks/tstack-hook.py`), on Bash only: `onepw_watch` on PostToolUse
 and PostToolUseFailure (detect, clear), `onepw_hold` on PreToolUse (hold; it runs after the land turn's gate
 and the suite gate, and before the grant's). Their code is a file beside the hook,
 `hooks/tstack-hook-onepw.py`, which the hook executes into itself only for a call that can matter
