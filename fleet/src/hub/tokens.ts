@@ -9,7 +9,8 @@
  * A token older than {@link TOKEN_ROTATE_MS} is replaced when the hub starts, when a page is served and when an answer
  * is checked; the one it replaced is still accepted for {@link TOKEN_GRACE_MS} from when it was due (so never past
  * 48 h after it was made, however long the hub was idle), a page open at the rotation still answers, and new pages
- * always get the current one. A clock set back never rotates a token: its age counts from 0.
+ * always get the current one. A clock set back never rotates a token: its age counts from 0. A token made more than
+ * 24 h ahead of the clock is replaced, as a due one is, with its grace from now.
  */
 import { randomBytes } from "node:crypto";
 import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
@@ -193,7 +194,9 @@ export class HubTokens {
 
   /** Each token older than {@link TOKEN_ROTATE_MS} replaced, the old one kept for its grace, which runs from when it
    * was due (`created` + {@link TOKEN_ROTATE_MS}), not from when it was checked; and the file written when one was. A
-   * token made later than now (a clock set back) is 0 old: a step back never rotates. */
+   * token made later than now (a clock set back) is 0 old: a step back never rotates, unless the token was made more
+   * than {@link TOKEN_ROTATE_MS} ahead of now, which would otherwise hold it for as long as the clock takes to catch up;
+   * that one is replaced, and kept {@link TOKEN_GRACE_MS} from now. */
   private rotate(): void {
     const at = this.now();
     let changed = false;
@@ -202,7 +205,7 @@ export class HubTokens {
     for (const kind of KINDS) {
       const held = this.tokens[kind];
 
-      if (Math.max(0, at - held.created) > TOKEN_ROTATE_MS) {
+      if (Math.max(0, at - held.created) > TOKEN_ROTATE_MS || held.created - at > TOKEN_ROTATE_MS) {
         const retired = Math.min(at, held.created + TOKEN_ROTATE_MS);
 
         next[kind] = at - retired < TOKEN_GRACE_MS ? { ...fresh(at), previous: { token: held.token, retired } } : fresh(at);

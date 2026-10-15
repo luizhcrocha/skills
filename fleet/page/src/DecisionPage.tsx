@@ -16,7 +16,7 @@ import { grillAsk, grillReason } from "./grill.ts";
 import { listen, PillAs, RefTag, tf, usePage, Who } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
 import { Core, type BoundFile, type Decision, type GrillEntry, type Json, type JsonRecord, type MarkDecision, type Question, type Queue } from "./core.ts";
-import { chatHeaders } from "./chat-headers.ts";
+import { chatHeaders, reloadTop } from "./chat-headers.ts";
 import { DecisionHistory } from "./DecisionHistory.tsx";
 import { heldTip, oneTarget, placeOf, Refs, RefsBeside } from "./DecisionRef.tsx";
 import { DetailsFold } from "./DetailsFold.tsx";
@@ -130,19 +130,6 @@ interface ServerError extends JsonRecord {
   readonly reload?: boolean;
 }
 
-/** Reload the page the user sees: the top-level one when this page is in a frame of the same origin (the manager's,
- * which holds the token this frame posts with), else this one. The answer's draft is kept in this browser. */
-function reloadTop(): void {
-  let top: Window = window;
-
-  try {
-    if (window.top !== null && window.top !== window && window.top.location.origin === window.location.origin) top = window.top;
-  } catch {
-    // a top of another origin: reload this page
-  }
-
-  top.location.reload();
-}
 
 /** Where the evidence frame is kept, and the token its document's script posts with. */
 export interface EvidenceFrame {
@@ -597,7 +584,7 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
       {props.children}
       <div class="attach-row">
         <AttachButton a={pictures} />
-        <AttachTray a={pictures} />
+        <AttachTray a={pictures} beforeReload={save} />
       </div>
       <p class="chat-error" id="dv-error" role="alert" hidden={!error()}>
         {error()}

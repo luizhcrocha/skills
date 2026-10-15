@@ -210,9 +210,15 @@ afterEach(async () => {
 
 /** The hub stopped and a new one started on the same registry, HOME and port, as a landing restarts it. */
 async function restart(): Promise<void> {
-  if (options === undefined || running === undefined) throw new Error("no hub");
+  if (running === undefined) throw new Error("no hub");
   await running.stop();
   running = undefined;
+  await startAgain();
+}
+
+/** A hub started on the registry, HOME and port the first one had. */
+async function startAgain(): Promise<void> {
+  if (options === undefined) throw new Error("no hub");
   const got = await startHub({ ...options, machine: machine(environment) }, () => {});
 
   if (got instanceof Error) throw got;
@@ -455,7 +461,7 @@ test.skipIf(!found)("a page on another port that frames a fleet's page reads no 
   }
 }, 60_000);
 
-test.skipIf(!found)("a preview cannot register a file of the fleet's DIR as a service worker over the fleet's page, so no worker sees its token", async () => {
+test.skipIf(!found)("a preview that registers a file of the fleet's DIR as a service worker over the fleet's page gets the hub's kill switch, so no worker sees its token", async () => {
   if (browser === undefined) throw new Error("no browser");
   writeFileSync(join(root, "sw.js"), SPY);
   const dev = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("<!doctype html><p>the preview</p>", { headers: { "Content-Type": "text/html" } }) });
@@ -466,14 +472,8 @@ test.skipIf(!found)("a preview cannot register a file of the fleet's DIR as a se
     const preview = await context.newPage();
     await preview.goto(`${origin}/f/p/preview/`);
     expect(await preview.evaluate("document.body.innerText")).toBe("the preview");
-
-    const registered = String(
-      await preview.evaluate(`navigator.serviceWorker.register("/f/p/sw.js", { scope: "/f/p/" }).then(
-        async (r) => { await navigator.serviceWorker.ready; return "registered " + r.scope; },
-        (e) => "refused: " + e.message)`),
-    );
-
-    expect([registered.startsWith("refused: "), registered.includes("403")], registered).toEqual([true, true]);
+    await preview.evaluate(`navigator.serviceWorker.register("/f/p/sw.js", { scope: "/f/p/" }).then(() => true, () => false)`);
+    expect(await settled(preview, "navigator.serviceWorker.getRegistrations().then((r) => r.length === 0)")).toBe(true);
     const page = await context.newPage();
     await page.goto(`${origin}/f/p/`);
     const seen = await page.evaluate(`JSON.stringify([document.documentElement.outerHTML.includes("SW SAW"), navigator.serviceWorker.controller === null, (document.querySelector('meta[name="fleet-page-token"]')?.content ?? "").length > 20])`);
@@ -481,5 +481,156 @@ test.skipIf(!found)("a preview cannot register a file of the fleet's DIR as a se
   } finally {
     await context.close();
     await dev.stop(true);
+  }
+}, 60_000);
+
+/** Whether `expression` is true in `page` within 20 s; a navigation under way (a worker reloading the page) is
+ * waited out. */
+async function settled(page: Frame, expression: string): Promise<boolean> {
+  for (let i = 0; i < 200; i += 1) {
+    try {
+      if ((await page.evaluate(expression)) === true) return true;
+    } catch {
+      // the page is navigating
+    }
+
+    await Bun.sleep(100);
+  }
+
+  return false;
+}
+
+/** `act` run while a hub from before 1.9.61 holds the hub's port: a stand-in that answers each path of `served` with
+ * its body, type and headers, whatever the request asks (a service worker's script included), and 404 else; the hub
+ * started again after, on the same registry and port. */
+async function onOldHub(served: Readonly<Record<string, readonly [string, string, Record<string, string>?]>>, act: () => Promise<void>): Promise<void> {
+  if (options === undefined || running === undefined) throw new Error("no hub");
+  await running.stop();
+  running = undefined;
+
+  const old = Bun.serve({
+    hostname: "127.0.0.1",
+    port: options.port,
+    fetch: (req) => {
+      const one = served[new URL(req.url).pathname];
+
+      return one === undefined ? new Response("", { status: 404 }) : new Response(one[0], { headers: { "Content-Type": one[1], "Cache-Control": "no-store", ...one[2] } });
+    },
+  });
+
+  try {
+    await act();
+  } finally {
+    await old.stop(true);
+    await startAgain();
+  }
+}
+
+test.skipIf(!found)("a worker a hub from before 1.9.61 let register over a fleet's page is killed at its next update check: the page loads again, its token there, no worker", async () => {
+  if (browser === undefined) throw new Error("no browser");
+  const context = await browser.createBrowserContext();
+
+  try {
+    const page = await context.newPage();
+    await onOldHub({ "/f/p/": ["<!doctype html><p>old</p>", "text/html"], "/f/p/sw.js": [SPY, "text/javascript"] }, async () => {
+      await page.goto(`${origin}/f/p/`);
+      expect(await page.evaluate(`navigator.serviceWorker.register("/f/p/sw.js", { scope: "/f/p/" }).then(async () => { await navigator.serviceWorker.ready; return "ok"; })`)).toBe("ok");
+    });
+
+    await page.goto(`${origin}/f/p/`);
+    const healed = `navigator.serviceWorker.controller === null && !document.documentElement.outerHTML.includes("SW SAW") && (document.querySelector('meta[name="fleet-page-token"]')?.content ?? "").length > 20`;
+    expect(await settled(page, healed)).toBe(true);
+    expect(await settled(page, "navigator.serviceWorker.getRegistrations().then((r) => r.length === 0)")).toBe(true);
+  } finally {
+    await context.close();
+  }
+}, 60_000);
+
+test.skipIf(!found)("a fleet's page unregisters a worker whose scope reaches past a preview's path, which its update cannot replace, and keeps a preview's own", async () => {
+  if (browser === undefined) throw new Error("no browser");
+  const context = await browser.createBrowserContext();
+  const quiet = 'self.addEventListener("install", () => self.skipWaiting());';
+
+  try {
+    const page = await context.newPage();
+    await onOldHub(
+      {
+        "/f/p/preview/": ["<!doctype html><p>old preview</p>", "text/html"],
+        "/f/p/preview/wide.js": [quiet, "text/javascript", { "Service-Worker-Allowed": "/" }],
+        "/f/p/preview/own.js": [quiet, "text/javascript"],
+      },
+      async () => {
+        await page.goto(`${origin}/f/p/preview/`);
+
+        const scopes = await page.evaluate(`Promise.all([
+          navigator.serviceWorker.register("/f/p/preview/wide.js", { scope: "/f/" }),
+          navigator.serviceWorker.register("/f/p/preview/own.js", { scope: "/f/p/preview/" }),
+        ]).then(() => navigator.serviceWorker.getRegistrations()).then((r) => r.map((x) => new URL(x.scope).pathname).sort().join(" "))`);
+
+        expect(scopes).toBe("/f/ /f/p/preview/");
+      },
+    );
+
+    await page.goto(`${origin}/f/p/`);
+    const left = 'navigator.serviceWorker.getRegistrations().then((r) => r.map((x) => new URL(x.scope).pathname).join(" ") === "/f/p/preview/")';
+    expect(await settled(page, left)).toBe(true);
+  } finally {
+    await context.close();
+  }
+}, 60_000);
+
+test.skipIf(!found)("a worker a preview registered over the origin before 1.9.61, with Service-Worker-Allowed: /, is killed at its next update while the preview still sends that header", async () => {
+  if (browser === undefined) throw new Error("no browser");
+  const quiet = 'self.addEventListener("install", () => self.skipWaiting());';
+  const allowed = { "Service-Worker-Allowed": "/" };
+  const html = "<!doctype html><p>the preview</p>";
+
+  const dev = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: (req) =>
+      new URL(req.url).pathname === "/f/p/preview/wide.js" ? new Response(quiet, { headers: { "Content-Type": "text/javascript", ...allowed } }) : new Response(html, { headers: { "Content-Type": "text/html" } }),
+  });
+
+  writeFileSync(join(root, "preview.json"), JSON.stringify(recordJson(previewAt(dev.port ?? 0))));
+  const context = await browser.createBrowserContext();
+
+  try {
+    const page = await context.newPage();
+    await onOldHub({ "/f/p/preview/": [html, "text/html"], "/f/p/preview/wide.js": [quiet, "text/javascript", allowed] }, async () => {
+      await page.goto(`${origin}/f/p/preview/`);
+      expect(await page.evaluate(`navigator.serviceWorker.register("/f/p/preview/wide.js", { scope: "/f/" }).then(async () => { await navigator.serviceWorker.ready; return "ok"; })`)).toBe("ok");
+    });
+
+    await page.goto(`${origin}/f/p/preview/`);
+    await page.evaluate('navigator.serviceWorker.getRegistration("/f/").then((r) => r?.update()).then(() => true, () => false)');
+    expect(await settled(page, "navigator.serviceWorker.getRegistrations().then((r) => r.length === 0)")).toBe(true);
+  } finally {
+    await context.close();
+    await dev.stop(true);
+  }
+}, 60_000);
+
+test.skipIf(!found)("a fleet's page whose controller is a worker it unregisters loads again once, and that load has no worker and stays", async () => {
+  if (browser === undefined) throw new Error("no browser");
+  const claiming = 'self.addEventListener("install", () => self.skipWaiting());\nself.addEventListener("activate", (e) => e.waitUntil(clients.claim()));';
+  const context = await browser.createBrowserContext();
+
+  try {
+    const page = await context.newPage();
+    await onOldHub({ "/f/p/preview/": ["<!doctype html><p>old preview</p>", "text/html"], "/f/p/preview/wide.js": [claiming, "text/javascript", { "Service-Worker-Allowed": "/" }] }, async () => {
+      await page.goto(`${origin}/f/p/preview/`);
+      expect(await page.evaluate(`navigator.serviceWorker.register("/f/p/preview/wide.js", { scope: "/f/" }).then(async () => { await navigator.serviceWorker.ready; return "ok"; })`)).toBe("ok");
+    });
+
+    await page.goto(`${origin}/f/p/`);
+    const fresh = `navigator.serviceWorker.controller === null && performance.getEntriesByType("navigation")[0]?.type === "reload" && (document.querySelector('meta[name="fleet-page-token"]')?.content ?? "").length > 20`;
+    expect(await settled(page, fresh)).toBe(true);
+    await page.evaluate("(window.stayed = true)");
+    await Bun.sleep(1500);
+    expect(await page.evaluate("window.stayed === true && navigator.serviceWorker.controller === null")).toBe(true);
+    expect(await page.evaluate("navigator.serviceWorker.getRegistrations().then((r) => r.length)")).toBe(0);
+  } finally {
+    await context.close();
   }
 }, 60_000);

@@ -776,7 +776,7 @@
   .composer { position: relative; flex: none; padding: 8px 12px max(12px, env(safe-area-inset-bottom, 0px)); background: var(--card); }
   .chat-error { margin: 0 4px 8px; padding: 9px 12px; border-radius: 8px; background: var(--critical-soft); color: var(--critical); font-size: var(--fs-s); }
   .dv .chat-error { margin: 0; }
-  .dv .chat-error .dv-reload { margin-left: 8px; vertical-align: middle; }
+  .dv .chat-error .dv-reload, .attach-error .dv-reload { margin-left: 8px; vertical-align: middle; }
   /* The composer: one rounded surface holding the reply chip, the field (one line to eight, then it
      scrolls) and the round send button at its bottom right. The focus ring is the surface's. */
   .box { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "chip chip chip" "text attach send"; align-items: end; row-gap: 6px; column-gap: 6px; padding: 6px 6px 6px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--bg); cursor: text; }

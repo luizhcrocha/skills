@@ -11,6 +11,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { makePrivateDir } from "../src/files.ts";
 import { grantRefusal, PAGE_TOKEN_HEADER, STALE_PAGE_TOKEN } from "../src/hub/policy.ts";
 import { startHub } from "../src/hub/server.ts";
 import { HubTokens, TOKEN_GRACE_MS, TOKEN_ROTATE_MS, tokensPath } from "../src/hub/tokens.ts";
@@ -75,6 +76,22 @@ describe("the token file", () => {
   test("the hub's state dir it makes is 0700", () => {
     open();
     expect(statSync(join(home, "hub")).mode & 0o777).toBe(0o700);
+  });
+
+  test("a hub state dir already there with another mode is made 0700", () => {
+    mkdirSync(join(home, "hub"), { mode: 0o755 });
+    chmodSync(join(home, "hub"), 0o755);
+    open();
+    expect(statSync(join(home, "hub")).mode & 0o777).toBe(0o700);
+  });
+
+  test("a symlink where the hub's state dir goes is left as it is: the directory it points at keeps its mode", () => {
+    const elsewhere = join(home, "elsewhere");
+    mkdirSync(elsewhere, { mode: 0o755 });
+    chmodSync(elsewhere, 0o755);
+    symlinkSync(elsewhere, join(home, "hub"));
+    makePrivateDir(join(home, "hub"));
+    expect([lstatSync(join(home, "hub")).isSymbolicLink(), statSync(elsewhere).mode & 0o777]).toEqual([true, 0o755]);
   });
 
   test("a second start reuses it: an open page's token still answers", () => {
@@ -219,6 +236,20 @@ describe("rotation", () => {
     at -= 1000;
     expect(tokens.accepted("page")).toEqual([page]);
     expect(open().accepted("page")).toEqual([page]);
+  });
+
+  test("a token made more than 24 h ahead of the clock is replaced, and answers 24 h more; one 23 h ahead is kept", () => {
+    mkdirSync(join(home, "hub"));
+    writeFileSync(path, planted(PAGE, STOP, 25 * HOUR), { mode: 0o600 });
+    const tokens = open();
+    expect(tokens.current("page")).not.toBe(PAGE);
+    expect(tokens.accepted("page")).toEqual([tokens.current("page"), PAGE]);
+    expect(readFileSync(path, "utf8")).toContain(tokens.current("page"));
+    at = 24 * HOUR;
+    expect(tokens.accepted("page")).not.toContain(PAGE);
+    at = 0;
+    writeFileSync(path, planted(PAGE, STOP, 23 * HOUR), { mode: 0o600 });
+    expect(open().accepted("page")).toEqual([PAGE]);
   });
 
   test("a token made at 0 h and first checked at 100 h is refused: its grace ran from 24 h, when it was due", () => {

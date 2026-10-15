@@ -47,6 +47,9 @@ export interface Target {
   readonly prefix: string;
   /** The per-worker preview's worker, undefined for the combined one: whose last request the hub notes. */
   readonly worker: string | undefined;
+  /** Whether it is served on the hub's own origin (`/f/<fleet>/preview/`), beside the pages that hold the page token,
+   * rather than on a root-mode preview's port and origin of its own: on it, `proxyHttp` drops `ORIGIN_WIDE`. */
+  readonly onHubOrigin: boolean;
 }
 
 /** A dev server asleep or still waking (`preview/sleep.ts`): the request wakes it and is answered "starting". */
@@ -88,7 +91,7 @@ export function previewTarget(record: PreviewRecord | undefined, fleet: string, 
     return [502, own === undefined ? "the preview's dev server is not running: `fleet preview DIR start`" : `${own.worker}'s preview is not running: \`fleet preview DIR start --per-worker ${own.worker}\``];
   }
 
-  return { server, path: (server.base === "/" ? "/" : server.base) + rest, prefix, worker: own?.worker };
+  return { server, path: (server.base === "/" ? "/" : server.base) + rest, prefix, worker: own?.worker, onHubOrigin: true };
 }
 
 /** Whether a request is only Vite's client asking whether its server is back (after its HMR socket closed):
@@ -161,10 +164,28 @@ const HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-e
 
 /** A dev server's response headers that would act on the hub's origin beyond the preview, never passed back there: its
  * COOP would match the hub's pages' (`PAGE_ISOLATION`), so a preview that opens one keeps a handle on it and reads
- * its page token; COEP goes with it; and `Service-Worker-Allowed` would let it register a service worker over the
- * whole origin, which sees every page the hub serves with its token. A root-mode preview, on a port and origin of
- * its own, keeps them. */
-const ORIGIN_WIDE = new Set(["cross-origin-opener-policy", "cross-origin-embedder-policy", "service-worker-allowed"]);
+ * its page token; COEP goes with it; `Service-Worker-Allowed` would let it register a service worker over the
+ * whole origin, which sees every page the hub serves with its token; `Clear-Site-Data` would wipe the origin's
+ * storage, the page's drafts included; and `NEL`, `Report-To` and `Reporting-Endpoints` would have the browser
+ * report the origin's other pages' failures to the preview's endpoint. A root-mode preview, on a port and origin
+ * of its own, keeps them. */
+const ORIGIN_WIDE = new Set(["cross-origin-opener-policy", "cross-origin-embedder-policy", "service-worker-allowed", "clear-site-data", "nel", "report-to", "reporting-endpoints"]);
+
+/** What the hub answers a service worker's script with where no worker of the hub's origin may be: a worker that
+ * unregisters itself and reloads the pages it controls. A worker registered there before the hub refused one is
+ * replaced by it at its next update check, and the pages come back from the hub. A fresh registration of it controls
+ * no page, so it reloads none. */
+const KILL_SWITCH = `self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => {
+  const pages = () => self.clients.matchAll({ type: "window" });
+  event.waitUntil(self.registration.unregister().then(pages).then((all) => Promise.all(all.map((page) => page.navigate(page.url)))));
+});
+`;
+
+/** The kill switch (`KILL_SWITCH`) as the answer to `req`, never stored, with `headers` besides. */
+export function killSwitch(req: Request, headers: Readonly<Record<string, string>> = {}): Response {
+  return new Response(req.method === "HEAD" ? null : KILL_SWITCH, { headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store", ...headers } });
+}
 
 /** Whether a response header is one that acts on the whole origin (`ORIGIN_WIDE`), which no preview sets on the hub's. */
 export function isOriginWide(key: string): boolean {
@@ -205,7 +226,7 @@ export function proxiedIdentity(ip: string, viewer: Viewer, sent: Headers): Head
 }
 
 /** Ask the dev server for `target` as the browser asked the hub for it, with `identity` (`proxiedIdentity`)
- * for who asked; its answer, passed back, on the hub's origin (a prefix other than `/`) without the headers that act
+ * for who asked; its answer, passed back, on the hub's origin (`Target.onHubOrigin`) without the headers that act
  * on the whole origin (`ORIGIN_WIDE`). */
 export async function proxyHttp(req: Request, target: Target, search: string, identity: Headers): Promise<Response> {
   const headers = new Headers();
@@ -223,13 +244,23 @@ export async function proxyHttp(req: Request, target: Target, search: string, id
 
   try {
     const upstream = await fetch(`http://127.0.0.1:${target.server.port}${target.path}${search}`, init);
+
+    // A worker's script that asks for a scope past the preview's path: on the hub's origin it would see the pages
+    // that hold the page token, so it is the kill switch, allowed over the whole origin so that it replaces one the
+    // preview registered there before the hub dropped the header (its update would fail the scope check, and the
+    // browser would keep it). The body is the hub's own, so the wide scope gives the preview nothing.
+    if (target.onHubOrigin && req.headers.get("Service-Worker") === "script" && upstream.headers.has("Service-Worker-Allowed")) {
+      await upstream.body?.cancel();
+
+      return killSwitch(req, { "Service-Worker-Allowed": "/" });
+    }
+
     const passed = new Headers();
-    const hubs = target.prefix !== "/";
 
     upstream.headers.forEach((value, key) => {
       const k = key.toLowerCase();
 
-      if (!HOP.has(k) && !(hubs && ORIGIN_WIDE.has(k)) && k !== "content-encoding") passed.append(key, value);
+      if (!HOP.has(k) && !(target.onHubOrigin && ORIGIN_WIDE.has(k)) && k !== "content-encoding") passed.append(key, value);
     });
 
     const location = passed.get("Location");

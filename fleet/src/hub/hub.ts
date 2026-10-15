@@ -70,7 +70,7 @@ import { LinkProbes, ProbeCache } from "./probes.ts";
 import { answerAsOffered, expireGrants, grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
 import { allowedOrigin, chatOriginsPath, grantor, grantRefusal, hello, MAX_POST_BYTES, PAGE_TOKEN_META, PAGE_TOKEN_HEADER, parseChatOrigins, postRefusal, STALE_PAGE_TOKEN, STOP_TOKEN_META, stopRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
 import { idleMs, noteRequest, serverStanding } from "../preview/sleep.ts";
-import { haltedPage, isOriginWide, isPing, previewTarget, proxiedIdentity, proxyHttp, proxySocket, startingPage, type Target, type Upgrade } from "./preview-proxy.ts";
+import { haltedPage, isOriginWide, isPing, killSwitch, previewTarget, proxiedIdentity, proxyHttp, proxySocket, startingPage, type Target, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
 import { HubTokens, tokensPath } from "./tokens.ts";
 import { OrphanWatch } from "./orphan-watch.ts";
@@ -161,6 +161,15 @@ const PAGE_ISOLATION = { "Cross-Origin-Opener-Policy": "same-origin", "Content-S
 
 /** What a file of a fleet's DIR outside `decisions/` is served with: no origin, no script, never sniffed. */
 const FILE_HEADERS = { "Content-Security-Policy": FILE_POLICY, "X-Content-Type-Options": "nosniff" } as const;
+
+/** A preview's path, combined or a worker's, on this hub or a peer's: the only one that serves a service worker. */
+const PREVIEW_PATH = /^\/f\/[^/]+\/preview\//u;
+
+/** The body of a `grantRefusal` (a grant's or an upload's): `reload: true` with it only for a page that sent a token
+ * the hub no longer accepts; one that sent none is not a page the hub served. */
+function refusalBody(error: string, req: Request): JsonObject {
+  return error === STALE_PAGE_TOKEN && (req.headers.get(PAGE_TOKEN_HEADER) ?? "") !== "" ? { error, reload: true } : { error };
+}
 
 function isRegularFile(path: string): boolean {
   try {
@@ -630,8 +639,17 @@ export class Hub {
 
     // A preview runs on this origin, and a service worker it registers from a script here (a file of a fleet's DIR)
     // would see every page in that script's folder, the page token included. Only a preview's own path serves one.
-    if (req.headers.get("Service-Worker") !== null && !/^\/f\/[^/]+\/preview\//u.test(path)) {
-      return jsonResponse(403, { error: "a service worker is registered only under a preview's path" });
+    // Elsewhere a worker's script is the kill switch, which ends a worker registered before this rule at its next
+    // update check; any other worker's request is refused. On a preview's path, a script that asks for a scope past
+    // it (`Service-Worker-Allowed`) is the kill switch too (`proxyHttp`).
+    if (!PREVIEW_PATH.test(path)) {
+      const worker = req.headers.get("Service-Worker");
+
+      if (worker === "script") return killSwitch(req);
+
+      if (worker !== null || req.headers.get("Sec-Fetch-Dest") === "serviceworker") {
+        return jsonResponse(403, { error: "a service worker is registered only under a preview's path" });
+      }
     }
 
     if (path === "/" || path === "/index.html") return this.index(req);
@@ -916,7 +934,7 @@ export class Hub {
 
     const url = new URL(req.url);
 
-    return this.pass(req, ip, slot.dir, { server, path: url.pathname, prefix: "/", worker: slot.worker }, url.search, keepOpen, upgrade);
+    return this.pass(req, ip, slot.dir, { server, path: url.pathname, prefix: "/", worker: slot.worker, onHubOrigin: false }, url.search, keepOpen, upgrade);
   }
 
   /** `POST /f/<fleet>/preview-workers` `{worker, include}`: a worker taken into the combined preview or out
@@ -1113,7 +1131,10 @@ export class Hub {
     const bytes = readBytes(resolved);
 
     if (bytes === undefined) return jsonResponse(404, { error: "not found" });
-    const type = Bun.file(resolved).type;
+    // A script of DIR's is text: nothing a fleet's agents write runs on this origin, as a page's script or a worker.
+    // Decided by the type the file would be served with, so every name a script has (.cjs, .jsx, .ts, …) is text.
+    const named = Bun.file(resolved).type;
+    const type = /javascript|ecmascript/iu.test(named) ? "text/plain; charset=utf-8" : named;
     const content = req.method === "HEAD" ? null : bytes;
 
     if (resolved.startsWith(`${join(base, "decisions")}/`)) return servedBody(content, type, NO_STORE);
@@ -1240,7 +1261,10 @@ export class Hub {
     const denied = writerRefusal(this.owner, viewer);
 
     if (denied !== undefined) return jsonResponse(403, { error: denied }, { Connection: "close" });
-    const refused = grantRefusal(this.hosts, new URL(req.url).host, this.openTokens().accepted("page"), header) ?? uploadRefusal(header);
+    const notOwn = grantRefusal(this.hosts, new URL(req.url).host, this.openTokens().accepted("page"), header);
+
+    if (notOwn !== undefined) return jsonResponse(notOwn[0], refusalBody(notOwn[1], req), { Connection: "close" });
+    const refused = uploadRefusal(header);
 
     if (refused !== undefined) return jsonResponse(refused[0], { error: refused[1] }, { Connection: "close" });
     const stored = storeImage(root, header("Content-Type"), Buffer.from(await req.arrayBuffer()));
@@ -1283,11 +1307,7 @@ export class Hub {
     if ((body["decision"] ?? null) !== null && (allows(asString(body["text"]) ?? "") || addsRule(asString(body["text"]) ?? ""))) {
       const refused = grantRefusal(this.hosts, new URL(req.url).host, this.openTokens().accepted("page"), (name) => req.headers.get(name));
 
-      // A Reload is offered only to a page that sent a token the hub no longer accepts: one that sent none is not a
-      // page the hub served.
-      const sent = (req.headers.get(PAGE_TOKEN_HEADER) ?? "") !== "";
-
-      if (refused !== undefined) return jsonResponse(refused[0], refused[1] === STALE_PAGE_TOKEN && sent ? { error: refused[1], reload: true } : { error: refused[1] });
+      if (refused !== undefined) return jsonResponse(refused[0], refusalBody(refused[1], req));
     }
 
     return this.chatPost(root, rest, body, viewer, origin);

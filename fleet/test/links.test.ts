@@ -377,6 +377,15 @@ describe("the hub's links: probes and files", () => {
       expect([path, res.status === 200 || text.includes("outside") || text.includes("hidden")]).toEqual([path, false]);
     }
   });
+  test("a linked prototype's script keeps its JavaScript type on the files route (only the fleet's own route serves DIR's scripts as text)", async () => {
+    const scratch = join(base, "session", "scratchpad");
+    writeFileSync(join(scratch, "app.js"), "document.title = 'x';\n");
+    writeLinks([{ id: "l1", url: `file://${join(scratch, "app.js")}`, title: "App", kind: "doc" }]);
+    expect((await shownLinks()).map((l) => l["file"])).toEqual(["files/app.js"]);
+    const linked = await get("/f/p/files/app.js");
+    expect([linked.status, linked.headers.get("Content-Type")?.startsWith("text/javascript")]).toEqual([200, true]);
+  });
+
   test("the hub's token file is never served, even linked from a fleet whose files root holds the registry", async () => {
     await running?.stop();
     const scratch = join(base, "session", "scratchpad");

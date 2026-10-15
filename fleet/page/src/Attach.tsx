@@ -6,9 +6,11 @@
 import { For, Show, type JSX } from "@solidjs/web";
 
 import { IMAGE_TYPES, onPeerFleet, type Attachments } from "./attach.ts";
+import { reloadTop } from "./chat-headers.ts";
 
-/** The images waiting to go with a field's message, and why the last one was not taken. */
-export function AttachTray(props: { readonly a: Attachments; readonly id?: string }): JSX.Element {
+/** The images waiting to go with a field's message, and why the last one was not taken; for a page token the hub no
+ * longer accepts, the Reload a decision's answer has, which runs `beforeReload` (a form that saves its draft) first. */
+export function AttachTray(props: { readonly a: Attachments; readonly id?: string; readonly beforeReload?: () => void }): JSX.Element {
   return (
     <div class="attach-tray" id={props.id} hidden={!props.a.paths().length && !props.a.busy() && !props.a.error()}>
       <ul aria-label="Images to send">
@@ -30,6 +32,19 @@ export function AttachTray(props: { readonly a: Attachments; readonly id?: strin
       </ul>
       <p class="attach-error" role="alert" hidden={!props.a.error()}>
         {props.a.error()}
+        <Show when={props.a.stale()}>
+          {" "}
+          <button
+            type="button"
+            class="btn small dv-reload"
+            onClick={() => {
+              props.beforeReload?.();
+              reloadTop();
+            }}
+          >
+            Reload
+          </button>
+        </Show>
       </p>
     </div>
   );

@@ -1706,11 +1706,12 @@ stderr, `serve: the takeover is not recorded where it should be: <why>`, and the
   `{token, created, previous?: {token, retired}}`, so a page opened before a restart still answers: made
   at the first start, reused after, replaced whole when it is a symlink, not 0600, another user's,
   unreadable or malformed; read once the hub holds its port, so a hub that lost the port never rotates
-  them. `REGISTRY/hub` is made 0700, and neither a fleet's files nor its links ever serve what it holds.
+  them. `REGISTRY/hub` is made 0700 (set 0700 when it is there already), and neither a fleet's files nor its links ever serve what it holds.
   A token older than 24 h is replaced at start, on a page load or on an answer's check, and the one it
   replaced is accepted 24 h from when it was due: refused from 48 h after it was made, however long the
-  hub was idle. A clock set back never rotates a token. A grant that sends a token the hub does not
-  accept is 403 with `reload: true`, and the page shows a Reload that keeps the answer's draft; one that
+  hub was idle. A clock set back never rotates a token, unless the token was made more than 24 h ahead
+  of it: that one is replaced, and accepted 24 h from then. A grant or an image's upload that sends a token the hub does not
+  accept is 403 with `reload: true`, and the page shows a Reload, under the answer or the image's field, that keeps the draft; one that
   sends none is 403 without it. `--https PORT` also runs `tailscale serve --bg --https=PORT http://127.0.0.1:<port>` (and
   turns it off on exit): the page's browser alerts need a secure page.
 - **The public ports of root-mode previews**: for each [root-mode preview](#the-preview-fleet-preview)
@@ -1787,8 +1788,9 @@ stderr, `serve: the takeover is not recorded where it should be: <why>`, and the
   Luiz's "Wake now" on a host that does not listen (200 `{woken, fleet, at}`, 409, 502; see [The hub's
   wake](#the-hubs-wake)), `POST /attachments` (TypeScript only; see [Images in the chat](#images-in-the-chat-typescript-only)), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
   sandbox CSP and the body's policy; every other file, whatever its type, with `Content-Security-Policy: sandbox;
-  script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'` and `nosniff`; dot files and paths
-  out of DIR 404), and `GET /f/<fleet>/files/<path>` (TypeScript only): a file a
+  script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'` and `nosniff`, a file whose type is
+  JavaScript (`.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx`, …, by the type it would be served with) as
+  `text/plain; charset=utf-8`; dot files and paths out of DIR 404), and `GET /f/<fleet>/files/<path>` (TypeScript only): a file a
   `file://` link of that fleet names, read-only, at its path under the fleet's files root: DIR's parent when that
   is a session's `scratchpad` or a directory of its own under the state home (`$XDG_STATE_HOME`, else
   `~/.local/state`, not the state home itself), else DIR. Served with the sandbox CSP (`sandbox allow-scripts
@@ -2008,6 +2010,26 @@ proposal, not built, for Luiz to decide: serve every preview from its own port's
 and make `/f/<fleet>/preview/` a redirect to it. The cost is a port per preview (and per per-worker preview)
 and `tailscale serve` on each; a sandbox header on the path instead would break the apps (their storage,
 cookies and same-origin calls to their own API).
+
+**Service workers.** A service worker of the hub's origin whose scope holds a fleet's page sees that page's
+top-level load, the page token included, and every grant it posts. What is closed: a worker's script is served
+only on a preview's path (`/f/<fleet>/preview/…`, as the hub routes a nested `/f/<a>/f/<b>/…`). Elsewhere a
+`Service-Worker: script` request gets the hub's kill switch, a worker that unregisters itself and reloads the pages
+it controls, so one registered there before 1.9.61 (a file of a fleet's DIR) is replaced and gone at its next
+update check; any other worker's request (another `Service-Worker` value, `Sec-Fetch-Dest: serviceworker` without
+it) is 403, and a DIR file whose type is JavaScript is `text/plain`. On a preview's path the dev server's
+`Service-Worker-Allowed` is never passed back on the hub's origin, and a worker's script it sends that header with is
+the kill switch, sent with `Service-Worker-Allowed: /`: a worker the preview registered over the origin before
+1.9.61 is replaced and gone at its next update check, and the wide scope gives the preview nothing, since the body
+is the hub's own. The trade-off: a preview app that sends that header gets no service worker on the hub's origin,
+even one scoped within its path; a root-mode preview, on an origin of its own, keeps its worker and the header. As
+a backstop, the fleet's page unregisters at each load every registration whose scope is not under a preview's path,
+and loads again once (a sessionStorage mark stops a loop) when its controller was one of them; a worker that
+controls the page can serve it without that code, so the hub's answers above are the defence. What is left: a
+worker a preview registered over the origin before 1.9.61, whose dev server no longer sends the header, fails its
+update check and stays, ended only by that backstop. A worker of a fleet's DIR killed this way saw the page token
+current until the kill switch replaced it, and that token is accepted up to 48 h after it was made: the hub
+does not rotate it when it serves the kill switch.
 
 ## Permission grants
 
@@ -2713,6 +2735,8 @@ run of each exact command shown; the next run of the same command asks again.
   What it does not defend, said plainly: **the hub, the hook and every agent run as one Unix user.**
   - A local process can POST allow-once to the hub with no `Origin` (stamped `local`, by decision):
     the origin check stops a page of another origin, not a program on this machine.
+  - The page token stops a browser page, not a local process: one can GET the fleet's page with a forged
+    `Sec-Fetch-Dest: document` and read the token from it.
   - `grants.jsonl`, `grants.taken`, the ledger, the heartbeats and the registry (`fleet serve DIR --pid
     PID`) are files an agent can write. The root check and the row make a forged grant flagrant, not
     impossible; the registry names a process, and the hub reads where it runs, so a forged entry grants

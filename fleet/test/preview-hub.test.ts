@@ -16,7 +16,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:te
 import { readRecord, recordJson, type DevServer, type PreviewRecord } from "../src/preview/record.ts";
 import { startedAt } from "../src/preview/tracked.ts";
 import { viewerOf } from "../src/hub/policy.ts";
-import { previewSockets, proxiedIdentity, type SocketData } from "../src/hub/preview-proxy.ts";
+import { previewSockets, previewTarget, proxiedIdentity, proxyHttp, type SocketData } from "../src/hub/preview-proxy.ts";
 import type { Certificate, CertificateSource } from "../src/hub/preview-tls.ts";
 import { servePreviewPort } from "../src/hub/preview-serve.ts";
 import { hubRecordPath, previewPortsPath, startHub, type Running } from "../src/hub/server.ts";
@@ -150,8 +150,9 @@ function server(port: number, base$: string, public$: number | null = null): Dev
   };
 }
 
-function writeRecord(record: Partial<PreviewRecord>): void {
-  const full: PreviewRecord = {
+/** Fleet shop's preview record, `given` over a stopped one's. */
+function record(given: Partial<PreviewRecord>): PreviewRecord {
+  return {
     fleet: "shop",
     workspace: "preview",
     path: dir,
@@ -172,10 +173,12 @@ function writeRecord(record: Partial<PreviewRecord>): void {
     updated: null,
     workers: [],
     ports: { combined: null, workers: {} },
-    ...record,
+    ...given,
   };
+}
 
-  writeFileSync(join(dir, "preview.json"), JSON.stringify(recordJson(full)));
+function writeRecord(given: Partial<PreviewRecord>): void {
+  writeFileSync(join(dir, "preview.json"), JSON.stringify(recordJson(record(given))));
 }
 
 const at = (path: string): string => `http://127.0.0.1:${hubPort}/f/shop${path}`;
@@ -300,27 +303,124 @@ describe("a preview's answer on the hub's origin", () => {
     ["cross-origin-OPENER-policy", "same-origin"],
     ["Cross-Origin-Embedder-Policy", "require-corp"],
     ["SERVICE-WORKER-ALLOWED", "/"],
+    ["Clear-Site-Data", '"cookies", "storage"'],
+    ["NEL", '{"report_to":"x","max_age":86400}'],
+    ["Report-To", '{"group":"x","max_age":86400,"endpoints":[{"url":"http://127.0.0.1:1/r"}]}'],
+    ["Reporting-Endpoints", 'x="http://127.0.0.1:1/r"'],
   ] as const) {
-    test(`drops the dev server's ${name}: ${value}, which would reach the hub's pages and their token`, async () => {
+    test(`drops the dev server's ${name}: ${value}, which would act on the hub's whole origin`, async () => {
       writeRecord({ server: server(sending({ [name]: value }), "/f/shop/preview/") });
       const res = await fetch(at("/preview/sw.js"));
       expect([res.status, res.headers.get("X-Kept"), res.headers.get(name)]).toEqual([200, "yes", null]);
     });
   }
 
-  test("a service worker's script is refused on every path but a preview's: a file of the fleet's DIR, its page, the index", async () => {
+  test("a target says whether it is on the hub's origin, and that, not its prefix, decides what is dropped", async () => {
+    const port = sending({ "Cross-Origin-Opener-Policy": "same-origin" });
+    const target = previewTarget(record({ server: server(port, "/f/shop/preview/") }), "shop", "x");
+    expect("onHubOrigin" in target && target.onHubOrigin).toBe(true);
+    const own = server(port, "/");
+    const asked = new Request("http://127.0.0.1/x");
+
+    for (const [prefix, onHubOrigin, coop] of [
+      ["/f/shop/preview/", false, "same-origin"],
+      ["/", true, null],
+    ] as const) {
+      const res = await proxyHttp(asked, { server: own, path: "/x", prefix, worker: undefined, onHubOrigin }, "", new Headers());
+      expect([res.status, res.headers.get("Cross-Origin-Opener-Policy")], prefix).toEqual([200, coop]);
+    }
+  });
+
+  test("a service worker's script outside a preview's path is the hub's kill switch, never a file of the fleet's DIR: its page, the index, a DIR file", async () => {
     writeFileSync(join(dir, "sw.js"), "self.addEventListener('fetch', () => {});");
     writeRecord({ server: server(stub("combined"), "/f/shop/preview/") });
     const worker = { "Service-Worker": "script" };
     expect((await fetch(at("/sw.js"))).status).toBe(200);
-    const refused = await fetch(at("/sw.js"), { headers: worker });
-    expect([refused.status, await refused.json()]).toEqual([403, { error: "a service worker is registered only under a preview's path" }]);
-    expect((await fetch(at("/"), { headers: worker })).status).toBe(403);
-    expect((await fetch(`http://127.0.0.1:${hubPort}/`, { headers: worker })).status).toBe(403);
+
+    for (const url of [at("/sw.js"), at("/"), `http://127.0.0.1:${hubPort}/`]) {
+      const killed = await fetch(url, { headers: worker });
+      const text = await killed.text();
+      expect([killed.status, killed.headers.get("Content-Type"), text.includes("self.registration.unregister()"), text.includes("addEventListener('fetch'")], url).toEqual([
+        200,
+        "text/javascript; charset=utf-8",
+        true,
+        false,
+      ]);
+    }
+
     const preview = await fetch(at("/preview/sw.js"), { headers: worker });
     expect([preview.status, await preview.text()]).toEqual([200, "combined GET /f/shop/preview/sw.js"]);
-    // A peer's preview is passed through too: here no peer answers, so it is that 404, not this 403.
+    // A peer's preview is passed through too: here no peer answers, so it is that 404, not the kill switch.
     expect((await fetch(`http://127.0.0.1:${hubPort}/f/shop@nowhere/preview/sw.js`, { headers: worker })).status).toBe(404);
+  });
+
+  test("every other service worker's request outside a preview's path is refused: another Service-Worker value, or Sec-Fetch-Dest: serviceworker without it", async () => {
+    writeFileSync(join(dir, "sw.js"), "self.addEventListener('fetch', () => {});");
+    writeRecord({ server: server(stub("combined"), "/f/shop/preview/") });
+    const refusal = { error: "a service worker is registered only under a preview's path" };
+
+    for (const headers of [{ "Service-Worker": "module" }, { "Sec-Fetch-Dest": "serviceworker" }]) {
+      const refused = await fetch(at("/sw.js"), { headers });
+      expect([refused.status, await refused.json()], JSON.stringify(headers)).toEqual([403, refusal]);
+    }
+
+    const preview = await fetch(at("/preview/sw.js"), { headers: { "Sec-Fetch-Dest": "serviceworker" } });
+    expect([preview.status, await preview.text()]).toEqual([200, "combined GET /f/shop/preview/sw.js"]);
+  });
+
+  test("a worker's script request as a browser sends it, Service-Worker: script with Sec-Fetch-Dest: serviceworker, gets the kill switch, not the 403", async () => {
+    writeFileSync(join(dir, "sw.js"), "self.addEventListener('fetch', () => {});");
+    const got = await fetch(at("/sw.js"), { headers: { "Service-Worker": "script", "Sec-Fetch-Dest": "serviceworker" } });
+    const text = await got.text();
+    expect([got.status, got.headers.get("Content-Type"), text.includes("self.registration.unregister()"), text.includes("addEventListener('fetch'")]).toEqual([200, "text/javascript; charset=utf-8", true, false]);
+  });
+
+  test("a DIR file named preview.js is no preview's path: its service worker request gets the kill switch, not the file", async () => {
+    writeFileSync(join(dir, "preview.js"), "self.addEventListener('fetch', () => {});");
+    writeRecord({ server: server(stub("combined"), "/f/shop/preview/") });
+    const got = await fetch(at("/preview.js"), { headers: { "Service-Worker": "script" } });
+    const text = await got.text();
+    expect([got.status, text.includes("self.registration.unregister()"), text.includes("addEventListener('fetch'")]).toEqual([200, true, false]);
+  });
+
+  for (const ext of ["js", "mjs", "cjs", "jsx", "ts", "tsx", "mts", "cts", "es", "JS"]) {
+    test(`a fleet DIR's .${ext} file, a JavaScript type by its name, is served as text/plain, so no browser runs it as a script or a worker`, async () => {
+      writeFileSync(join(dir, `app.${ext}`), "alert(1);");
+      const got = await fetch(at(`/app.${ext}`));
+      expect([got.status, got.headers.get("Content-Type"), got.headers.get("X-Content-Type-Options"), await got.text()]).toEqual([200, "text/plain; charset=utf-8", "nosniff", "alert(1);"]);
+    });
+  }
+
+  test("a preview's worker script sent with Service-Worker-Allowed is the hub's kill switch, allowed over the origin, so a worker it registered there before 1.9.61 ends at its update", async () => {
+    writeRecord({ server: server(sending({ "Service-Worker-Allowed": "/" }), "/f/shop/preview/") });
+
+    for (const headers of [{ "Service-Worker": "script" }, { "Service-Worker": "script", "Sec-Fetch-Dest": "serviceworker" }]) {
+      const got = await fetch(at("/preview/sw.js"), { headers });
+      const text = await got.text();
+      expect([got.status, got.headers.get("Content-Type"), got.headers.get("Service-Worker-Allowed"), got.headers.get("X-Kept"), text.includes("self.registration.unregister()")], JSON.stringify(headers)).toEqual([
+        200,
+        "text/javascript; charset=utf-8",
+        "/",
+        null,
+        true,
+      ]);
+    }
+
+    const head = await fetch(at("/preview/sw.js"), { method: "HEAD", headers: { "Service-Worker": "script" } });
+    expect([head.status, head.headers.get("Service-Worker-Allowed"), await head.text()]).toEqual([200, "/", ""]);
+    // Not a worker's script: the preview's answer, without the header.
+    const page = await fetch(at("/preview/sw.js"));
+    expect([page.headers.get("X-Kept"), page.headers.get("Service-Worker-Allowed"), await page.text()]).toEqual(["yes", null, "<!doctype html>"]);
+  });
+
+  test("a preview's worker script without Service-Worker-Allowed is its own, and a root-mode preview keeps a script that sends it", async () => {
+    writeRecord({ server: server(sending({}), "/f/shop/preview/") });
+    const own = await fetch(at("/preview/sw.js"), { headers: { "Service-Worker": "script" } });
+    expect([own.headers.get("X-Kept"), await own.text()]).toEqual(["yes", "<!doctype html>"]);
+    const port = sending({ "Service-Worker-Allowed": "/" });
+    const asked = new Request("http://127.0.0.1/sw.js", { headers: { "Service-Worker": "script" } });
+    const res = await proxyHttp(asked, { server: server(port, "/"), path: "/sw.js", prefix: "/", worker: undefined, onHubOrigin: false }, "", new Headers());
+    expect([res.headers.get("Service-Worker-Allowed"), res.headers.get("X-Kept"), await res.text()]).toEqual(["/", "yes", "<!doctype html>"]);
   });
 });
 

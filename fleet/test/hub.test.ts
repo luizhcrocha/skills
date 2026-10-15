@@ -495,17 +495,20 @@ describe("an image pasted into the chat", () => {
     const refused = "a grant comes only from the fleet's own page on this hub: answer it there";
     const stale = "the page token is missing or stale: reload the fleet's page and answer again";
 
-    const cases: readonly (readonly [Record<string, string>, string])[] = [
-      [{}, refused],
-      [{ Origin: self }, refused],
-      [{ Origin: "http://evil.example", "Sec-Fetch-Site": "cross-site", "X-Fleet-Page-Token": own["X-Fleet-Page-Token"] ?? "" }, refused],
-      [{ Origin: self, "Sec-Fetch-Site": "same-origin" }, stale],
-      [{ ...own, "X-Fleet-Page-Token": "x" }, stale],
+    // As a grant's: only a token sent and not accepted offers the page a Reload.
+    const cases: readonly (readonly [Record<string, string>, string, boolean | undefined])[] = [
+      [{}, refused, undefined],
+      [{ Origin: self }, refused, undefined],
+      [{ Origin: "http://evil.example", "Sec-Fetch-Site": "cross-site", "X-Fleet-Page-Token": own["X-Fleet-Page-Token"] ?? "" }, refused, undefined],
+      [{ Origin: self, "Sec-Fetch-Site": "same-origin" }, stale, undefined],
+      [{ ...own, "X-Fleet-Page-Token": "" }, stale, undefined],
+      [{ ...own, "X-Fleet-Page-Token": "x" }, stale, true],
+      [{ ...own, "X-Fleet-Page-Token": "x".repeat(32) }, stale, true],
     ];
 
-    for (const [headers, error] of cases) {
+    for (const [headers, error, reload] of cases) {
       const got = await upload(png("gate"), "image/png", headers);
-      expect([got.status, got.body["error"]], JSON.stringify(headers)).toEqual([403, error]);
+      expect([got.status, got.body["error"], got.body["reload"]], JSON.stringify(headers)).toEqual([403, error, reload]);
     }
 
     expect(existsSync(join(root, "attachments"))).toBe(false);

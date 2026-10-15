@@ -23,3 +23,18 @@ export function chatHeaders(): Record<string, string> {
 
   return token === "" ? { "Content-Type": "application/json" } : { "Content-Type": "application/json", "X-Fleet-Page-Token": token };
 }
+
+/** Reload the page the user sees, for the token the hub holds now: the top-level one when this page is in a frame of
+ * the same origin (the manager's, which holds the token this frame posts with), else this one. A draft is kept in
+ * this browser across it. */
+export function reloadTop(): void {
+  let top: Window = window;
+
+  try {
+    if (window.top !== null && window.top !== window && window.top.location.origin === window.location.origin) top = window.top;
+  } catch {
+    // a top of another origin: reload this page
+  }
+
+  top.location.reload();
+}

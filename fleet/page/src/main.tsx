@@ -6,6 +6,7 @@ import { render } from "@solidjs/web";
 
 import { App } from "./App.tsx";
 import { Core, type Json, type State } from "./core.ts";
+import { dropStrayWorkers } from "./workers.ts";
 
 /** The state embedded in the page, or null. */
 function embedded(): State | null {
@@ -16,6 +17,8 @@ function embedded(): State | null {
     return null;
   }
 }
+
+void dropStrayWorkers();
 
 const root = document.getElementById("page");
 

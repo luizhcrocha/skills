@@ -4,7 +4,9 @@
  * tail kept). Every failure the fleet tolerates is a value here, never a throw.
  */
 import {
+  chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -81,11 +83,13 @@ export function makeDirs(path: string): void {
   mkdirSync(path, { recursive: true });
 }
 
-/** Make `path` 0700 when it is not there (its parents as `makeDirs` does): the hub's state dir, which holds its
- * page and Stop tokens. One already there is left as it is. */
+/** Make `path` a 0700 directory (its parents as `makeDirs` does): the hub's state dir, which holds its page and Stop
+ * tokens. One already there is set to 0700 too; a symlink there is left as it is, never followed to chmod another. */
 export function makePrivateDir(path: string): void {
   makeDirs(dirname(path));
   mkdirSync(path, { recursive: true, mode: 0o700 });
+
+  if (lstatSync(path).isDirectory()) chmodSync(path, 0o700);
 }
 
 /** Remove `path` when it is there. */

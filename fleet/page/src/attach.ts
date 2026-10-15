@@ -61,8 +61,9 @@ export function imageRefusal(file: File): string {
   return "";
 }
 
-/** Upload `file` to the hub: its path there, or why not. */
-export async function uploadImage(file: File): Promise<{ readonly path: string } | { readonly error: string }> {
+/** Upload `file` to the hub: its path there, or why not, with `reload` when the hub no longer accepts the page's token
+ * (it was replaced since the page loaded), which a reload gets afresh. */
+export async function uploadImage(file: File): Promise<{ readonly path: string } | { readonly error: string; readonly reload: boolean }> {
   const token = pageToken();
   const headers: Record<string, string> = token === "" ? { "Content-Type": file.type } : { "Content-Type": file.type, "X-Fleet-Page-Token": token };
 
@@ -81,9 +82,9 @@ export async function uploadImage(file: File): Promise<{ readonly path: string }
 
     if (res.status === 201 && isText(path)) return { path };
 
-    return { error: isText(error) ? error : `The server refused the image (${String(res.status)}).` };
+    return { error: isText(error) ? error : `The server refused the image (${String(res.status)}).`, reload: isRecord(data) && data["reload"] === true };
   } catch {
-    return { error: "Could not reach the dashboard's server to send the image." };
+    return { error: "Could not reach the dashboard's server to send the image.", reload: false };
   }
 }
 
@@ -114,6 +115,8 @@ export interface Attachments {
   readonly busy: () => number;
   /** Why the last image was not taken, or "". */
   readonly error: () => string;
+  /** Whether it was not taken for a page token the hub no longer accepts: a reload of the page gets the current one. */
+  readonly stale: () => boolean;
   /** Take `files`: checked, then uploaded. */
   readonly add: (files: readonly File[]) => void;
   readonly remove: (path: string) => void;
@@ -131,12 +134,14 @@ export function createAttachments(taken: () => number = () => 0): Attachments {
   const [paths, setPaths] = createSignal<readonly string[]>([]);
   const [busy, setBusy] = createSignal(0);
   const [error, setError] = createSignal("");
+  const [stale, setStale] = createSignal(false);
   /* Bumped by `clear` and `seed`: an upload started before lands nowhere (the field is another thread's now). */
   let generation = 0;
 
   function add(files: readonly File[]): void {
     if (onPeerFleet()) return;
     setError("");
+    setStale(false);
     /* Counted here: a signal set in this loop reads as it was until the next flush. */
     let held = paths().length + busy();
 
@@ -156,8 +161,10 @@ export function createAttachments(taken: () => number = () => 0): Attachments {
         if (mine !== generation) return;
         setBusy((n) => n - 1);
 
-        if ("error" in got) setError(got.error);
-        else if (!paths().includes(got.path)) setPaths((p) => [...p, got.path]);
+        if ("error" in got) {
+          setError(got.error);
+          setStale(got.reload);
+        } else if (!paths().includes(got.path)) setPaths((p) => [...p, got.path]);
       });
     }
   }
@@ -167,12 +174,14 @@ export function createAttachments(taken: () => number = () => 0): Attachments {
     setBusy(0);
     setPaths([...new Set(given)]);
     setError("");
+    setStale(false);
   };
 
   return {
     paths,
     busy,
     error,
+    stale,
     add,
     remove: (path) => setPaths((p) => p.filter((x) => x !== path)),
     clear: () => restart([]),

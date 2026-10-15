@@ -41,6 +41,11 @@ let uploads = 0;
 
 let held: Promise<void> | null = null;
 
+/** Whether the stub hub refuses an upload for a stale page token, as it does after it replaced the token. */
+let stale = false;
+
+const STALE = "the page token is missing or stale: reload the fleet's page and answer again";
+
 /** A chat post's body, as the stub hub reads it. */
 interface ChatBody {
   readonly text?: Json;
@@ -65,6 +70,7 @@ beforeEach(() => {
   sent = [];
   uploads = 0;
   held = null;
+  stale = false;
   chatReply = null;
   chats = 0;
   document.head.querySelector('meta[name="fleet-page-token"]')?.remove();
@@ -81,6 +87,8 @@ beforeEach(() => {
       const i = uploads++;
 
       if (held) await held;
+
+      if (stale) return new Response(JSON.stringify({ error: STALE, reload: true }), { status: 403 });
 
       return new Response(JSON.stringify({ path: pathOf(i) }), { status: 201 });
     }
@@ -211,6 +219,69 @@ test("an image pasted into a decision's answer note rides with the answer", asyn
   const post = sent.find((s) => s.url === "chat");
   const body: { readonly images?: Json } = JSON.parse(String(post?.body));
   expect(body.images).toEqual([PATH]);
+});
+
+/** Count the page's reloads while `act` runs, instead of reloading the test's window. */
+async function reloadsIn(act: () => Promise<void>): Promise<number> {
+  let reloads = 0;
+  Object.defineProperty(location, "reload", { value: () => void (reloads += 1), configurable: true });
+
+  try {
+    await act();
+  } finally {
+    Reflect.deleteProperty(location, "reload");
+  }
+
+  return reloads;
+}
+
+test("an image refused for a stale page token shows the answer form's Reload under the composer, which keeps the draft and loads the page again", async () => {
+  stale = true;
+  const say = root.querySelector<HTMLTextAreaElement>("#say");
+
+  if (!say) throw new Error("no composer");
+  say.value = "look at this";
+  say.dispatchEvent(new Event("input", { bubbles: true }));
+  paste(say, [png()]);
+  await settle();
+  expect(root.querySelector("#say-images .attach-error")?.firstChild?.textContent).toBe(STALE);
+  const button = root.querySelector<HTMLButtonElement>("#say-images .attach-error button.dv-reload");
+  expect(button?.textContent).toBe("Reload");
+  expect(await reloadsIn(async () => button?.click())).toBe(1);
+  expect(localStorage.getItem("fleet:/f/billing/chat-draft")).toBe(JSON.stringify("look at this"));
+
+  // Another image, taken, clears the refusal and its Reload.
+  stale = false;
+  paste(say, [png()]);
+  await settle();
+  expect([root.querySelector("#say-images .attach-error")?.hasAttribute("hidden"), root.querySelector("#say-images .dv-reload")]).toEqual([true, null]);
+});
+
+test("an image refused for a stale page token in a decision's answer: its Reload saves the answer's draft first", async () => {
+  stale = true;
+  location.hash = "#decision/d1";
+  page.ui.route();
+  flush();
+  const note = root.querySelector<HTMLTextAreaElement>('#dv-answer textarea[name="note"]');
+
+  if (!note) throw new Error("no answer note");
+  note.value = "the second screen";
+  paste(note, [png()]);
+  await settle();
+  const button = note.closest("form")?.querySelector<HTMLButtonElement>(".attach-tray .dv-reload");
+  expect(button?.textContent).toBe("Reload");
+  expect(await reloadsIn(async () => button?.click())).toBe(1);
+  const draft = Object.keys(localStorage).find((k) => k.startsWith("fleet:/f/billing/dv-draft:d1:"));
+  expect(JSON.parse(localStorage.getItem(draft ?? "") ?? "{}")).toMatchObject({ note: "the second screen" });
+});
+
+test("an image refused for another reason shows no Reload", async () => {
+  const say = root.querySelector<HTMLTextAreaElement>("#say");
+
+  if (!say) throw new Error("no composer");
+  paste(say, [new File(["<svg/>"], "a.svg", { type: "image/svg+xml" })]);
+  await settle();
+  expect([root.querySelector("#say-images .attach-error")?.textContent, root.querySelector("#say-images .dv-reload")]).toEqual(["Only a PNG, JPEG, WebP or GIF image can be attached.", null]);
 });
 
 /** Open the decision's inbox on thread `key`, as a tap on its row does. */
