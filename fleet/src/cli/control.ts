@@ -26,7 +26,9 @@ import { Out } from "../io.ts";
 import { recordedHost, runs } from "../host.ts";
 import { asObject, asString, parseJson, parseObject } from "../json.ts";
 import { decodeLedger, ledgerText } from "../ledger/model.ts";
+import { withLedgerLock } from "../ledger/store.ts";
 import { validate } from "../ledger/validate.ts";
+import { LockFailed } from "../lock.ts";
 import { cliLookups } from "../page/lookups.ts";
 import { pageHtml, readTemplate, writePage } from "../page/render.ts";
 import { view } from "../page/view.ts";
@@ -41,6 +43,17 @@ import { load, pruneOutlook } from "./ws.ts";
 
 function refuse(speaker: "serve" | "render_dashboard" | "usage" | "spend", reason: string): Effect.Effect<never, Refusal> {
   return Effect.fail(new Refusal({ speaker, reason }));
+}
+
+/** `body` run under the ledger's lock of `root`; a refusal when the lock cannot be taken. */
+function stampUnderLock<T>(root: string, body: () => T | Refusal): T | Refusal {
+  try {
+    return withLedgerLock(root, body);
+  } catch (cause: unknown) {
+    if (cause instanceof LockFailed) return new Refusal({ speaker: "render_dashboard", reason: `the ledger's lock could not be taken: ${cause.message}` });
+
+    throw cause;
+  }
 }
 
 /** The value after `flag` in `argv`, and `argv` without the two. */
@@ -178,26 +191,33 @@ function render(machine: Machine, argv: readonly string[]): Effect.Effect<number
 
     if (moved !== undefined) return yield* refuse("render_dashboard", moved);
 
-    const text = readText(statePath);
-    const object = text === undefined ? undefined : Option.getOrUndefined(parseObject(text));
+    const stamped = stampUnderLock(dirname(resolvePath(statePath)), (): { readonly text: string; readonly agents: number; readonly updated: string } | Refusal => {
+      const text = readText(statePath);
+      const object = text === undefined ? undefined : Option.getOrUndefined(parseObject(text));
 
-    if (object === undefined) return yield* refuse("render_dashboard", `cannot read state: ${statePath}`);
-    const ledger = decodeLedger(object);
+      if (object === undefined) return new Refusal({ speaker: "render_dashboard", reason: `cannot read state: ${statePath}` });
+      const ledger = decodeLedger(object);
 
-    if (ledger instanceof Refusal) return yield* Effect.fail(ledger);
-    const fault = validate(ledger);
+      if (ledger instanceof Refusal) return ledger;
+      const fault = validate(ledger);
 
-    if (fault !== undefined) return yield* Effect.fail(fault);
-    ledger.updated = stampOf(machine.now());
-    const written = ledgerText(ledger);
-    writeText(statePath, written);
+      if (fault !== undefined) return fault;
+      ledger.updated = stampOf(machine.now());
+      const written = ledgerText(ledger);
+      writeText(statePath, written);
+
+      return { text: written, agents: ledger.agents.length, updated: ledger.updated };
+    });
+
+    if (stamped instanceof Refusal) return yield* Effect.fail(stamped);
+    const written = stamped.text;
     const template = readTemplate();
     const shown = view(machine, cliLookups(), Option.getOrElse(parseObject(written), () => ({})), dirname(resolvePath(statePath)));
     const html = template === undefined ? new Error("cannot read the template") : pageHtml(template, shown, argv.includes("--fragment"));
 
     if (html instanceof Error) return yield* refuse("render_dashboard", html.message);
     writePage(outPath, html);
-    out.out(`rendered ${outPath} (${ledger.agents.length} agents, updated ${ledger.updated})\n`);
+    out.out(`rendered ${outPath} (${String(stamped.agents)} agents, updated ${stamped.updated})\n`);
 
     return 0;
   });

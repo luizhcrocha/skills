@@ -61,6 +61,7 @@ import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, t
 import { laneMatches, lanesMeet } from "../ledger/lanes.ts";
 import { activeWorkspaces } from "../ledger/warnings.ts";
 import { decodeLedger } from "../ledger/model.ts";
+import { withLedgerLock } from "../ledger/store.ts";
 import { readRecord, recordPath, serverProc, updateRecord, updaterProc } from "../preview/record.ts";
 import { kept, serverStanding } from "../preview/sleep.ts";
 import { runs } from "../preview/tracked.ts";
@@ -173,8 +174,10 @@ export function load(root: string): JsonObject | Refusal {
   return ledger instanceof Refusal ? ledger : (raw ?? {});
 }
 
-/** Write the ledger with `workspaces` (when given) and these events, stamped, and render the page; refused for a moved
- * team's folder (decision 48), whichever writer calls it (ws, the workspace hook's report, every preview writer). */
+/** Write the ledger with `workspaces` (when given) and these events, stamped, and render the page, under the
+ * ledger's lock, so two writes of state.json never interleave; refused for a moved team's folder (decision 48), whichever writer calls it (ws, the workspace
+ * hook's report, every preview writer). `raw` is the ledger as the caller read it: a change another writer made
+ * since is overwritten. */
 export function save(machine: Machine, root: string, raw: JsonObject, workspaces: readonly Json[] | undefined, events: readonly JsonObject[]): Refusal | undefined {
   const moved = movedRefusal(root);
 
@@ -187,12 +190,14 @@ export function save(machine: Machine, root: string, raw: JsonObject, workspaces
   const fault = ledger instanceof Refusal ? ledger : validate(ledger);
 
   if (fault !== undefined) return fault;
-  // SAFETY: a JsonObject is a JsonOut: the same JSON, read-only.
-  writeText(join(root, "state.json"), `${dumps(next as JsonOut, { indent: 2, ensureAscii: false })}\n`);
-  const template = readTemplate();
-  const html = template === undefined ? undefined : pageHtml(template, view(machine, cliLookups(), next, root), false);
+  withLedgerLock(root, () => {
+    // SAFETY: a JsonObject is a JsonOut: the same JSON, read-only.
+    writeText(join(root, "state.json"), `${dumps(next as JsonOut, { indent: 2, ensureAscii: false })}\n`);
+    const template = readTemplate();
+    const html = template === undefined ? undefined : pageHtml(template, view(machine, cliLookups(), next, root), false);
 
-  if (html !== undefined && !(html instanceof Error)) writePage(join(root, "index.html"), html);
+    if (html !== undefined && !(html instanceof Error)) writePage(join(root, "index.html"), html);
+  });
 
   return undefined;
 }

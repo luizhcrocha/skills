@@ -217,7 +217,10 @@ renames it. Milestones are never removed.
 - **The lock.** `fleet state` reads, changes and writes `state.json` (and renders) under an exclusive
   `flock` of `DIR/state.json` itself; `init`, with no ledger yet, takes none. `state.json` is written in place, so the lock
   outlives each write and no lock file joins DIR (*TypeScript only; Python's state.py takes none*).
-  `fleet ws` and `fleet preview` write the ledger without it.
+  `fleet render` reads, stamps and writes under it too, and a `fleet ws` or `fleet preview` write (`save`)
+  holds it for the write and the page only: those commands read the ledger before running jj and hooks that
+  can take minutes, so a change another writer made in between is overwritten, but two writes never
+  interleave.
 
 **roadblock** `ID [--title T --detail D --severity warning|serious|critical --needs user|coordinator|worker] [--agent A] [--decision D] [--resolved | --open] [--important]`
 - `--agent`, when given, must be known (`unknown agent 'A'`, checked first; a manager's ledger takes

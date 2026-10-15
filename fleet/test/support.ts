@@ -3,7 +3,7 @@
  * the test surface, as the Python tests ran the scripts), and a machine for the module interfaces.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -270,4 +270,38 @@ export function startTty(args: readonly string[], env: Readonly<Environment>): S
 /** Sleep `ms`. */
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Whether {@link untilOpens} can see a race happen here: it reads /proc, which only Linux has. A race test
+ * skips elsewhere rather than run without its race. */
+export const RACES_SEEN = process.platform === "linux" && existsSync("/proc/self/fd");
+
+/** Wait until process `pid` has `path` open, read from /proc, then a little longer, so a lock it takes next is
+ * being waited on: a race made to happen, not hoped for. Throws when the open is not seen within `within` ms,
+ * or cannot be seen here (no /proc: see {@link RACES_SEEN}), so a race test never passes without its race. */
+export function untilOpens(pid: number, path: string, within = 10_000): void {
+  if (!RACES_SEEN) throw new Error(`untilOpens reads /proc, which ${process.platform} does not have`);
+  const fds = `/proc/${String(pid)}/fd`;
+  const deadline = Date.now() + within;
+
+  const holds = (): boolean => {
+    try {
+      return readdirSync(fds).some((fd) => {
+        try {
+          return readlinkSync(join(fds, fd)) === path;
+        } catch {
+          return false;
+        }
+      });
+    } catch {
+      return false;
+    }
+  };
+
+  while (!holds()) {
+    if (Date.now() >= deadline) throw new Error(`process ${String(pid)} never opened ${path} within ${String(within)} ms`);
+    Bun.sleepSync(10);
+  }
+
+  Bun.sleepSync(100);
 }
