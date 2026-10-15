@@ -672,9 +672,10 @@ def _tokens(args, depth=0):
     return out
 
 
-def _is_watch(args, cwd, d, role):
+def _is_watch(args, cwd, d, role, unresolved=True):
     """Whether this command line runs `fleet chat D watch --as ROLE --once` for the fleet at d. A watch
-    without --once never exits, so as a background command it never wakes the session: not armed."""
+    without --once never exits, so as a background command it never wakes the session: not armed. A relative
+    D with no cwd to resolve it is taken for d when `unresolved`."""
     words = _tokens(args)
     for i in range(len(words) - 2):
         if words[i] != "chat" or words[i + 2] != "watch":
@@ -687,7 +688,9 @@ def _is_watch(args, cwd, d, role):
         given = os.path.expanduser(words[i + 1])
         if not os.path.isabs(given):
             if not cwd:  # no way to resolve it: the pid file or the command named the fleet
-                return True
+                if unresolved:
+                    return True
+                continue
             given = os.path.join(cwd, given)
         if os.path.realpath(given) == os.path.realpath(d):
             return True
@@ -932,6 +935,46 @@ DEAF_MANAGER = (" While something you own or relay waits on the user (a decision
                 "you asked them, a landing waiting on their go), add `--fleets` (manager SKILL.md, Waiting on "
                 "the user).")
 GUARD_AGAIN_S = 15
+WAITING = "Your chat watch waits on the user's allow ({id}): do not arm it again."
+REFUSAL_REMIND_S = 1800
+
+
+def _watch_ran(d, role):
+    """When a watch as ROLE last ran for the fleet at d, or None: the later of its pid file's mtime and its
+    `.left` stamp, since a `--once` watch removes its pid file on exit and touches `.left` (chat.ts leftPath)."""
+    times = []
+    for name in (f"watch-{role}.pid", f"watch-{role}.left"):
+        try:
+            times.append(os.stat(os.path.join(d, name)).st_mtime)
+        except OSError:
+            pass
+    return max(times, default=None)
+
+
+def _watch_refused(ledger, d, role):
+    """The id of the permission the fleet's watch command waits on, or None: an open refusal draft of it, or an open
+    decision that put it to the user and has no answer yet, opened since the watch last began. A refused call is
+    never retried, so a guard that asks for it again at every turn's end loops (measured 2026-10-15: a coordinator's
+    watch, refused by auto mode, blocked each Stop). An answered decision lets the watch run; a draft or decision
+    older than the watch's last run was left open by a watch armed another way; neither excuses a deaf turn."""
+    ran = _watch_ran(d, role)
+
+    def waits(tool, calls, root, opened):
+        if ran is not None and not (isinstance(opened, (int, float)) and opened >= ran):
+            return False
+        root = root if isinstance(root, str) and os.path.isabs(root) else None
+        return tool == "Bash" and any(isinstance(c, str) and _is_watch([c], root, d, role, unresolved=False) for c in calls)
+    for row in ledger.get("decisions") if isinstance(ledger.get("decisions"), list) else []:
+        open_ = isinstance(row, dict) and row.get("status") == "open" and row.get("answer") in (None, "")
+        r = row.get("refusal") if open_ else None
+        if isinstance(r, dict) and waits(r.get("tool"), [r.get("call"), *(r.get("more") or [])], r.get("root"),
+                                         _instant(row.get("revised") or row.get("opened"))):
+            return row.get("id")
+    for row in ledger.get("refusals") if isinstance(ledger.get("refusals"), list) else []:
+        if isinstance(row, dict) and row.get("status") == "open" and waits(row.get("tool"), [row.get("call")],
+                                                                           row.get("root"), _instant(row.get("opened"))):
+            return row.get("id")
+    return None
 
 
 def fleet_listen_guard(hook, tree=None):
@@ -957,7 +1000,14 @@ def fleet_listen_guard(hook, tree=None):
     if isinstance(last, (int, float)) and 0 <= time.time() - last < GUARD_AGAIN_S:
         return None
     tree = tree or ProcTree()
-    lines = []
+    now = time.time()
+    try:
+        remind = float(hook.env.get("FLEET_REFUSAL_REMIND_S") or REFUSAL_REMIND_S)
+    except ValueError:
+        remind = REFUSAL_REMIND_S
+    told = state.get("told_waiting") if isinstance(state.get("told_waiting"), dict) else {}
+    told = {k: v for k, v in told.items() if isinstance(v, (int, float))}
+    lines, waiting = [], []
     for d in dirs:
         ledger = read_ledger(d)
         if ledger is None or ledger.get("status") in ("paused", "done"):
@@ -970,12 +1020,23 @@ def fleet_listen_guard(hook, tree=None):
                 continue
         if watch_alive(d, role, tree, host):
             continue
+        refused = _watch_refused(ledger, d, role)
+        if refused is not None:
+            at = told.get(refused)
+            if not isinstance(at, (int, float)):
+                waiting.append(refused)
+                continue
+            if 0 <= now - at < remind:
+                continue
+            told[refused] = now  # the note has lapsed: block once, then quiet for another FLEET_REFUSAL_REMIND_S
         lines.append(DEAF.format(command=watch_command(d, role)) + (DEAF_MANAGER if role == "manager" else ""))
-    if not lines:
-        return None
-    if hook.session_id:
-        hook.save_state("fleet-guard", {"blocked_at": time.time()})
-    return Block("\n".join(lines))
+    if hook.session_id and (lines or waiting):
+        told = {**told, **{i: now for i in waiting}}
+        hook.save_state("fleet-guard", {**state, **({"blocked_at": now} if lines else {}),
+                                        "told_waiting": dict(sorted(told.items(), key=lambda kv: kv[1])[-20:])})
+    if lines:
+        return Block("\n".join(lines))
+    return "\n".join(WAITING.format(id=i) for i in waiting) or None
 
 
 NEWS_LINE = "Fleet news: {count} unread for {fleet}, never a wake. Read them when convenient: `{cli} news read --as {fleet}`."

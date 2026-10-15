@@ -57,6 +57,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `FLEET_PREVIEW_IDLE_S` | `fleet preview start`, the keeper, the hub | how long a dev server may go with no request before it sleeps (default 1800 s; `0` turns sleep off) |
 | `FLEET_PREVIEW_AWAKE` | `fleet preview start` | the dev servers that never sleep: public ports, worker ids, `combined` (default `7501`) |
 | `FLEET_PREVIEW_SCOPE` | `fleet preview start`, the keeper | `0`: the preview's processes run without systemd user scopes of their own, stopped by their tree (the tests set it) |
+| `FLEET_REFUSAL_REMIND_S` | the plugin's hook (`fleet_listen_guard`) | how long the Stop guard stays quiet about a refused chat watch after it said so, before it blocks with the command again (default 1800 s). See [Listening hooks](#listening-hooks) |
 | `FLEET_NUDGE_MIN` | the plugin's hook (`fleet_chat_nudge`) | how long the user's message waits unread, or an answer unrecorded, before the session is told mid-turn (default 3 minutes). See [Listening hooks](#listening-hooks) |
 | `FLEET_CC_SOCKS` | the hub | the folder of Claude Code's session sockets, `<pid>.sock` each, that the hub's wake writes to (default `$XDG_RUNTIME_DIR/cc-socks`; the tests set a folder of their own, so no test reaches a real session). See [The hub's wake](#the-hubs-wake) |
 | `FLEET_ONEPW_LAPSE_S` | the plugin's hook (`onepw_watch`, `onepw_hold`), the hub, `fleet onepw` | how long a kind of 1Password lock holds with no answer before it lapses (default 7200 s; unset, empty or no number is the default; 0 or less means nothing ever holds). See [1Password locked](#1password-locked-fleet-onepw) |
@@ -2861,7 +2862,16 @@ hook: a broken `chat.jsonl` or ledger is skipped, an error is logged.
   watch the guard asks for takes its place. A watch without `--once` is not armed: it never exits, so
   it never wakes the session. Never twice in a row: not on a stop that already follows
   a stop hook's block (`stop_hook_active`), nor within 15 s of its last block (the session's
-  `fleet-guard` state). Headless runs are guarded too.
+  `fleet-guard` state). Headless runs are guarded too. A watch command the permission check refused
+  is never retried: while the ledger holds an open refusal draft of it, or an open decision with no
+  `answer` yet whose refusal is it, either opened (a decision's `revised`, else `opened`) since the
+  watch last began (the mtime of `DIR/watch-<role>.pid`), the guard does not block, and says once per
+  id, as context, `Your chat watch waits on the user's allow (p-…): do not arm it again.` An answered
+  decision lets the watch run, and a draft older than the watch's last run was left open by a watch
+  armed another way: neither excuses a deaf turn. The excuse lapses `FLEET_REFUSAL_REMIND_S` after the
+  note (default 1800 s): the guard then blocks once with the command, and is quiet for as long again.
+  A refusal with no absolute `root` excuses only a watch command that names its fleet by an absolute
+  path.
 - **The mid-turn nudge** (`fleet_chat_nudge`, PostToolUse). At most once a minute per session (on the
   fleet's clock, `FLEET_NOW`), it reads `chat.jsonl` from the byte offset it stopped at (a session's
   first look reads only the last 64 KiB; a torn last line waits), keeps the user's messages not yet

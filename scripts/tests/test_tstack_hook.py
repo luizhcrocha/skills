@@ -725,6 +725,69 @@ class StopGuardTest(FleetCase):
         self.watch(once=False)  # it never exits, so it never wakes the session
         self.assertIn("--resume --once`", self.blocked(self.stop()))
 
+    def refused_watch(self, status="open", fleet=None):
+        """The draft auto mode's refusal of the guard's own watch command opened: the host may not retry it."""
+        call = f"{self.fleet_cli} chat {fleet or self.fleet} watch --as coordinator --all --resume --once"
+        return {"id": "p-1a2b3c4d", "tool": "Bash", "call": call, "cause": "auto mode refused it",
+                "root": str(self.repo), "agent_id": None, "opened": "2026-01-05T08:10:00+00:00", "status": status}
+
+    def test_a_watch_waiting_on_the_users_allow_is_said_once_and_never_blocks(self):
+        self.ledger(refusals=[self.refused_watch()])
+        result = self.stop()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)
+        self.assertNotIn("decision", out)
+        self.assertEqual(out["hookSpecificOutput"]["additionalContext"],
+                         "Your chat watch waits on the user's allow (p-1a2b3c4d): do not arm it again.")
+        self.assertSilent(self.stop())  # once, not at every turn's end
+
+    def test_a_watch_whose_permission_is_put_to_the_user_does_not_block(self):
+        draft = self.refused_watch(status="asked")
+        refusal = {k: draft[k] for k in ("tool", "call", "cause", "root", "agent_id")}
+        self.ledger(refusals=[draft], decisions=[{"id": "p-1a2b3c4d", "kind": "permission", "status": "open",
+                                                  "refusal": refusal}])
+        out = json.loads(self.stop().stdout)
+        self.assertNotIn("decision", out)
+        self.assertIn("(p-1a2b3c4d)", out["hookSpecificOutput"]["additionalContext"])
+
+    def test_a_watch_whose_permission_the_user_answered_blocks_again(self):
+        """The user's answer is given and the decision waits on the host to record it: the watch may run now."""
+        draft = self.refused_watch(status="asked")
+        refusal = {k: draft[k] for k in ("tool", "call", "cause", "root", "agent_id")}
+        self.ledger(refusals=[draft], decisions=[{"id": "p-1a2b3c4d", "kind": "permission", "status": "open",
+                                                  "answer": "A: allow once", "refusal": refusal}])
+        self.assertIn("watch --as coordinator --all --resume --once`", self.blocked(self.stop()))
+
+    def test_a_refusal_older_than_the_watchs_last_run_blocks_again(self):
+        """A watch that ran after the refusal (armed another way, since gone) left the draft open: no excuse."""
+        self.ledger(refusals=[self.refused_watch()])
+        (self.fleet / "watch-coordinator.pid").write_text("0")
+        self.blocked(self.stop())
+
+    def test_a_refusal_older_than_a_once_watch_that_exited_blocks_again(self):
+        """A `--once` watch removes its pid file on exit and leaves its `.left` stamp."""
+        self.ledger(refusals=[self.refused_watch()])
+        (self.fleet / "watch-coordinator.left").write_text("")
+        self.blocked(self.stop())
+
+    def test_the_note_lapses_and_the_guard_blocks_again(self):
+        self.ledger(refusals=[self.refused_watch()])
+        env = {"FLEET_REFUSAL_REMIND_S": "0"}
+        self.assertIn("(p-1a2b3c4d)", json.loads(self.stop(env=env).stdout)["hookSpecificOutput"]["additionalContext"])
+        self.blocked(self.stop(env=env))
+
+    def test_a_refusal_with_no_root_and_a_relative_fleet_path_excuses_no_fleet(self):
+        draft = self.refused_watch(fleet="../other")
+        self.ledger(refusals=[{**draft, "root": None}])
+        self.blocked(self.stop())
+
+    def test_a_dropped_draft_or_another_fleets_watch_still_blocks(self):
+        self.ledger(refusals=[self.refused_watch(status="dropped")])
+        self.blocked(self.stop())
+        self.fresh()
+        self.ledger(refusals=[self.refused_watch(fleet=self.tmp / "other")])
+        self.blocked(self.stop())
+
     def test_a_dead_reused_or_foreign_pid_does_not_count(self):
         pid_file = self.fleet / "watch-coordinator.pid"
         dead = subprocess.Popen([sys.executable, "-c", "pass"])
