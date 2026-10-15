@@ -2131,6 +2131,8 @@ class GrantCase(FleetCase):
         self.write_settings({"permissions": {"allow": ["Bash(ls)", self.RULE, "Bash(üñí)"], "deny": ["Bash(rm)"]},
                              "env": {"A": "1"}})
         self.grants = self.fleet / "grants.jsonl"
+        # The root's record of the grants taken back (`ended`), in .claude/hooks/ under the sandbox's write-deny too.
+        self.record = self.settings.parent / "hooks" / "tstack-grants-ended.json"
 
     def write_settings(self, value):
         self.settings.write_text(json.dumps(value))
@@ -2170,7 +2172,9 @@ class GrantRemovalTest(GrantCase):
         self.assertTrue(text.endswith("}\n"))
         self.assertIn('\n  "permissions": {\n    "allow": [\n      "Bash(ls)"', text)
         self.assertIn("üñí", text)
-        self.assertEqual(sorted(p.name for p in self.settings.parent.iterdir()), ["settings.local.json"])
+        # No scratch file left; the take-back's record in .claude/hooks/.
+        self.assertEqual(sorted(p.name for p in self.settings.parent.iterdir()), ["hooks", "settings.local.json"])
+        self.assertEqual([p.name for p in self.record.parent.iterdir()], ["tstack-grants-ended.json"])
         self.assertEqual(self.lines()[-1], {"op": "remove", "decision": "p-1a2b3c4d", "rule": self.RULE,
                                             "file": str(self.settings), "at": "2026-01-05T09:05:00+00:00",
                                             "why": "used"})
@@ -2199,23 +2203,23 @@ class GrantRemovalTest(GrantCase):
 
     def test_whoever_runs_the_call_uses_the_grant_up(self):
         """The rule lets any caller of the session through, so one yes is one run, whoever made it."""
-        for granted_to, ran_by in (("ab12cd34", None), ("ab12cd34", "ee55ee55"), (None, "ab12cd34"), ("ab12cd34", "ab12cd34")):
+        for n, (granted_to, ran_by) in enumerate((("ab12cd34", None), ("ab12cd34", "ee55ee55"), (None, "ab12cd34"), ("ab12cd34", "ab12cd34"))):
             with self.subTest(granted_to=granted_to, ran_by=ran_by):
                 self.grants.unlink(missing_ok=True)
                 self.write_settings({"permissions": {"allow": [self.RULE]}})
-                self.grant(agent_id=granted_to)
+                self.grant(agent_id=granted_to, at=f"2026-01-05T09:00:{n:02d}+00:00")
                 self.run_tool("git push --force origin HEAD:main", agent_id=ran_by)
                 self.assertNotIn(self.RULE, self.allow())
                 self.assertEqual(self.lines()[-1]["why"], "used")
 
     def test_a_command_that_holds_the_granted_call_uses_it_up(self):
         """Claude Code lets a compound through when each part has a rule (measured: `A; A` ran A twice on one rule)."""
-        for command in ("git push --force origin HEAD:main; git push --force origin HEAD:main",
-                        "git push --force origin HEAD:main 2>&1", "cd /x && git push --force origin HEAD:main"):
+        for n, command in enumerate(("git push --force origin HEAD:main; git push --force origin HEAD:main",
+                                     "git push --force origin HEAD:main 2>&1", "cd /x && git push --force origin HEAD:main")):
             with self.subTest(command=command):
                 self.grants.unlink(missing_ok=True)
                 self.write_settings({"permissions": {"allow": [self.RULE]}})
-                self.grant()
+                self.grant(at=f"2026-01-05T09:00:{n:02d}+00:00")
                 self.run_tool(command)
                 self.assertNotIn(self.RULE, self.allow())
                 self.assertEqual(self.lines()[-1]["why"], "used")
@@ -2264,11 +2268,14 @@ class GrantRemovalTest(GrantCase):
         other = {**spawn, "prompt": "count rows!"}
         for tool_input in (other, {"command": "count rows"}):
             payload = self.payload("PostToolUse", tool_name="Agent", tool_input=tool_input)
-            self.assertSilent(self.hook("PostToolUse", payload, env={"FLEET_NOW": "2026-01-05T09:05:00+00:00"}))
+            self.assertSilent(self.hook("PostToolUse", payload, env={"FLEET_NOW": "2026-01-05T09:05:00+00:00", "TZ": "UTC"}))
         self.assertEqual(json.loads(grants_file.read_text())["permissions"]["allow"], [rule])
         payload = self.payload("PostToolUse", tool_name="Agent", tool_input=dict(reversed(list(spawn.items()))))
-        self.assertSilent(self.hook("PostToolUse", payload, env={"FLEET_NOW": "2026-01-05T09:05:00+00:00"}))
-        self.assertEqual(json.loads(grants_file.read_text())["permissions"]["allow"], [])
+        self.assertSilent(self.hook("PostToolUse", payload, env={"FLEET_NOW": "2026-01-05T09:05:00+00:00", "TZ": "UTC"}))
+        self.assertEqual(json.loads(grants_file.read_text()), {"permissions": {"allow": []}})
+        self.assertEqual(json.loads(self.record.read_text()),
+                         {"ended": [{"decision": "p-1a2b3c4d", "rule": rule, "granted": "2026-01-05T09:00:00+00:00",
+                                     "at": "2026-01-05T09:05:00+00:00"}]})
         self.assertEqual((self.lines()[-1]["why"], self.lines()[-1]["file"]), ("used", str(grants_file)))
         self.assertIn(self.RULE, self.allow())
 
@@ -2304,16 +2311,74 @@ class GrantRemovalTest(GrantCase):
         self.assertNotIn(self.RULE, self.allow())
         self.assertFalse(lock.exists())
 
-    def test_a_rule_put_back_while_its_grant_is_on_record_is_still_that_grant(self):
-        """A remove line is a record any agent can append, so the rule in the file is what says the grant stands:
-        the same exact rule put back by hand is taken for the grant, and goes again."""
+    def test_a_rule_the_owner_adds_after_its_grant_was_taken_back_is_kept(self):
+        """Measured 2026-10-15: a lasting rule, byte-identical to a one-time grant used and taken back the evening
+        before, was taken for that grant and removed at the next sweep. A take-back is put on record in the root's
+        .claude/hooks/tstack-grants-ended.json, under the same protection as the settings, so the grant is over whatever its
+        file holds: the rule there again is the owner's, and no sweep, used or expired, takes it."""
         self.grant()
         self.run_tool("git push --force origin HEAD:main")
+        self.assertEqual(json.loads(self.record.read_text()),
+                         {"ended": [{"decision": "p-1a2b3c4d", "rule": self.RULE, "granted": "2026-01-05T09:00:00+00:00",
+                                     "at": "2026-01-05T09:05:00+00:00"}]})
         self.write_settings({"permissions": {"allow": [self.RULE]}})
         self.run_tool("ls", now="2026-01-05T10:00:00+00:00")
+        self.run_tool("git push --force origin HEAD:main", now="2026-01-05T10:01:00+00:00")
+        self.assertEqual(self.allow(), [self.RULE])
+        self.assertEqual([(line["op"], line.get("why")) for line in self.lines()], [("grant", None), ("remove", "used")])
+
+    def test_a_grant_line_that_copies_an_ended_grant_shields_no_later_grant(self):
+        """The record of grants is any agent's to write: a grant line that copies a grant already taken back (its
+        decision, rule and stamp) is over with it, and the later grant of the rule is the one that stands and goes
+        with its call."""
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main")
+        self.grant(decision="p-99999999", at="2026-01-05T09:10:00+00:00")
+        self.write_settings({"permissions": {"allow": [self.RULE]}})
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main", now="2026-01-05T09:12:00+00:00")
         self.assertEqual(self.allow(), [])
-        self.assertEqual([(line["op"], line.get("why")) for line in self.lines()],
-                         [("grant", None), ("remove", "used"), ("remove", "expired")])
+        self.assertEqual((self.lines()[-1]["op"], self.lines()[-1]["decision"]), ("remove", "p-99999999"))
+        self.assertEqual([e["decision"] for e in json.loads(self.record.read_text())["ended"]], ["p-1a2b3c4d", "p-99999999"])
+
+    def test_the_same_decision_granted_again_after_its_take_back_is_swept_again(self):
+        """Decision ids repeat (the caller and the call hashed; a revised decision keeps its id): a second allow-once
+        of the same call is a grant of its own, on no record until its own take-back, and goes with its call."""
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main")
+        self.assertNotIn(self.RULE, self.allow())
+        self.write_settings({"permissions": {"allow": [self.RULE]}})
+        self.grant(at="2026-01-05T09:20:00+00:00")
+        self.run_tool("git push --force origin HEAD:main", now="2026-01-05T09:21:00+00:00")
+        self.assertEqual(self.allow(), [])
+        self.assertEqual([(line["op"], line["decision"]) for line in self.lines()],
+                         [("grant", "p-1a2b3c4d"), ("remove", "p-1a2b3c4d"), ("grant", "p-1a2b3c4d"), ("remove", "p-1a2b3c4d")])
+        self.assertEqual([e["granted"] for e in json.loads(self.record.read_text())["ended"]],
+                         ["2026-01-05T09:00:00+00:00", "2026-01-05T09:20:00+00:00"])
+
+    def test_a_record_that_does_not_parse_leaves_the_take_back_done_and_logged(self):
+        self.record.parent.mkdir()
+        self.record.write_text("{")
+        self.grant()
+        payload = self.payload("PostToolUse", tool_name="Bash", tool_input={"command": "git push --force origin HEAD:main"})
+        r = self.hook("PostToolUse", payload, env={"FLEET_NOW": "2026-01-05T09:05:00+00:00", "TZ": "UTC"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn(self.RULE, self.allow())
+        self.assertEqual(self.lines()[-1]["why"], "used")
+        self.assertEqual(self.record.read_text(), "{")
+        self.assertIn("is not on record", self.log())
+
+    def test_the_record_of_take_backs_keeps_the_newest(self):
+        old = [{"decision": f"p-{n:08x}", "rule": "Bash(x)", "granted": "2026-01-01T00:00:00+00:00",
+                "at": "2026-01-01T00:00:00+00:00"} for n in range(4096)]
+        self.record.parent.mkdir()
+        self.record.write_text(json.dumps({"note": "kept", "ended": old}))
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main")
+        record = json.loads(self.record.read_text())
+        self.assertEqual(record["note"], "kept")
+        self.assertEqual((len(record["ended"]), record["ended"][0], record["ended"][-1]["decision"]),
+                         (4096, old[1], "p-1a2b3c4d"))
 
     def test_a_forged_remove_line_ends_nothing(self):
         self.grant()
@@ -2329,13 +2394,13 @@ class GrantRemovalTest(GrantCase):
     def test_what_claude_code_takes_for_the_granted_call_uses_it_up(self):
         """Claude Code 2.1.296 clears these on the rule for the call (measured), so each one is a run of it."""
         call = "git push --force origin HEAD:main"
-        for command in (f"'git' push --force origin HEAD:main", f'"git" push --force origin HEAD:main', f" {call} ",
+        for n, command in enumerate((f"'git' push --force origin HEAD:main", f'"git" push --force origin HEAD:main', f" {call} ",
                         f"{call} 2>&1", f"{call} > /dev/null", f"timeout 30 {call}", f"CI=1 nohup {call}", f"{call} # now",
-                        f"command -p {call};"):
+                        f"command -p {call};")):
             with self.subTest(command=command):
                 self.grants.unlink(missing_ok=True)
                 self.write_settings({"permissions": {"allow": [self.RULE]}})
-                self.grant()
+                self.grant(at=f"2026-01-05T09:00:{n:02d}+00:00")
                 self.run_tool(command)
                 self.assertNotIn(self.RULE, self.allow())
 
@@ -2633,7 +2698,7 @@ class GrantAloneTest(GrantCase):
         script.unlink()
         self.assertIn("cannot be read", self.denied(call))
         self.grants.unlink()
-        call = self.grant_bound(self.script(), runs=["tasks/deploy.sh"])
+        call = self.grant_bound(self.script(), runs=["tasks/deploy.sh"], at="2026-01-05T09:00:01+00:00")
         self.assertIn("does not read", self.denied(call))
 
     def test_grants_that_cannot_be_read_make_every_exact_rule_a_grant(self):

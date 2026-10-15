@@ -2552,6 +2552,18 @@ describe("a permission's answer grants the call once", () => {
     expect(grants().map((g) => [g["decision"], g["rule"]])).toEqual([["p-old", RULE], ["p-1a2b3c4d", RULE]]);
   });
 
+  test("a rule the owner keeps that an earlier grant, since taken back, once named is theirs: not granted anew", async () => {
+    writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE] } }));
+    const old = new Date(Date.now() - 3_600_000).toISOString();
+    writeFileSync(join(root, "grants.jsonl"), `${JSON.stringify({ op: "grant", decision: "p-old", ref: "P0", rule: RULE, file: settings, at: old })}\n${JSON.stringify({ op: "remove", decision: "p-old", rule: RULE, file: settings, at: old, why: "used" })}\n`);
+    mkdirSync(join(session, ".claude", "hooks"), { recursive: true });
+    writeFileSync(join(session, ".claude", "hooks", "tstack-grants-ended.json"), JSON.stringify({ ended: [{ decision: "p-old", rule: RULE, granted: old, at: old }] }));
+    await start();
+    expect((await post(allow)).status).toBe(201);
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
+    expect(grants().map((g) => [g["op"], g["decision"]])).toEqual([["grant", "p-old"], ["remove", "p-old"]]);
+  });
+
   describe("a call that runs a script is bound to the file", () => {
     let script: string;
     const sha = (): string => new Bun.CryptoHasher("sha256").update(readFileSync(script)).digest("hex");
@@ -2600,6 +2612,13 @@ describe("a permission's answer grants the call once", () => {
     const at = "2026-01-01T00:00:00+00:00";
     const grantLine = (over: JsonObject = {}): string => `${JSON.stringify({ op: "grant", decision: "p-1a2b3c4d", ref: "P1", rule: RULE, file: settings, at, ...over })}\n`;
     const expire = (now: string): Promise<string[]> => expireGrants([root], new Date(now), now);
+
+    const record = (): string => {
+      mkdirSync(join(session, ".claude", "hooks"), { recursive: true });
+
+      return join(session, ".claude", "hooks", "tstack-grants-ended.json");
+    };
+
     const allowed = (): string => JSON.stringify(asObject(asObject(JSON.parse(readFileSync(settings, "utf8")))?.["permissions"])?.["allow"] ?? null);
 
     test("not before; then the rule goes, the rest stays, and the removal is recorded", async () => {
@@ -2610,6 +2629,8 @@ describe("a permission's answer grants the call once", () => {
       expect(await expire("2026-01-01T00:30:00+00:00")).toEqual([`${RULE} in ${settings}`]);
       expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: ["Bash(ls)"], deny: ["Bash(rm)"] }, model: "opus" });
       expect(grants().at(-1)).toEqual({ op: "remove", decision: "p-1a2b3c4d", rule: RULE, file: settings, at: "2026-01-01T00:30:00+00:00", why: "expired", by: "hub" });
+      // The take-back on record beside the settings, where an agent can no more write than the rules themselves.
+      expect(JSON.parse(readFileSync(record(), "utf8"))).toEqual({ ended: [{ decision: "p-1a2b3c4d", rule: RULE, granted: at, at: "2026-01-01T00:30:00+00:00" }] });
       expect(await expire("2026-01-01T00:31:00+00:00")).toEqual([]);
       expect(grants().length).toBe(2);
       expect(existsSync(join(session, ".claude", ".settings.local.json.lock"))).toBe(false);
@@ -2620,6 +2641,39 @@ describe("a permission's answer grants the call once", () => {
       writeFileSync(join(root, "grants.jsonl"), grantLine() + JSON.stringify({ op: "remove", decision: "p-1a2b3c4d", rule: RULE, file: settings, at, why: "used" }) + "\n");
       expect(await expire("2026-01-01T03:05:00+00:00")).toEqual([`${RULE} in ${settings}`]);
       expect(allowed()).toBe(JSON.stringify([]));
+    });
+
+    test("a rule the owner added again after the hook took the grant back is left: the take-back is on record in .claude", async () => {
+      // Measured 2026-10-15: the chat watch's lasting rule, byte-identical to a grant used the evening before, went at 08:24.
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE] } }));
+      writeFileSync(join(root, "grants.jsonl"), grantLine() + JSON.stringify({ op: "remove", decision: "p-1a2b3c4d", rule: RULE, file: settings, at, why: "used" }) + "\n");
+      writeFileSync(record(), JSON.stringify({ ended: [{ decision: "p-1a2b3c4d", rule: RULE, granted: at, at }] }));
+      expect(await expire("2026-01-01T03:05:00+00:00")).toEqual([]);
+      expect(allowed()).toBe(JSON.stringify([RULE]));
+      expect(grants().length).toBe(2);
+    });
+
+    test("the same decision granted again after its take-back is a grant of its own, and expires", async () => {
+      // Decision ids repeat: the hook's _permission_id hashes the caller and the call, and a revision keeps the id.
+      const again = "2026-01-01T01:00:00+00:00";
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE] } }));
+      writeFileSync(join(root, "grants.jsonl"), grantLine() + JSON.stringify({ op: "remove", decision: "p-1a2b3c4d", rule: RULE, file: settings, at, why: "used" }) + "\n" + grantLine({ at: again }));
+      writeFileSync(record(), JSON.stringify({ ended: [{ decision: "p-1a2b3c4d", rule: RULE, granted: at, at }] }));
+      expect(await expire("2026-01-01T01:30:00+00:00")).toEqual([`${RULE} in ${settings}`]);
+      expect(allowed()).toBe(JSON.stringify([]));
+      expect(JSON.parse(readFileSync(record(), "utf8"))["ended"].map((e: JsonObject) => e["granted"])).toEqual([at, again]);
+    });
+
+    test("a grant this hub wrote, taken back by the hook and then added again by the owner, is left", async () => {
+      await start();
+      expect((await post(allow)).status).toBe(201);
+      const granted = String(grants()[0]?.["at"]);
+      // The hook's take-back: the rule out, the grant on record as ended; then the owner's own rule, to last.
+      writeFileSync(record(), JSON.stringify({ ended: [{ decision: "p-1a2b3c4d", rule: RULE, granted, at: granted }] }));
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE] } }));
+      // Not this file: the hub's memory may still hold grants of earlier tests' files, which this sweep ends.
+      expect(await expireGrants([root], new Date(Date.parse(granted) + 30 * 60_000), "t")).not.toContain(`${RULE} in ${settings}`);
+      expect(allowed()).toBe(JSON.stringify([RULE]));
     });
 
     test("a later grant of the same rule has its own 30 minutes; a rule nobody granted, or another file, is left", async () => {

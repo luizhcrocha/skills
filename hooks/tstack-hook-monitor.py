@@ -499,7 +499,7 @@ def _watch_granted(hook, command):
     settings = os.path.realpath(os.path.join(root, ".claude", "settings.local.json"))
     for d in grant_state_dirs(hook):
         raw, _ = _read_grants(d)
-        for grant in _latest_grants(raw) if raw else ():
+        for grant in _latest_grants(hook, raw) if raw else ():
             call = _bash_call(grant["rule"])
             if call is None or os.path.realpath(grant["file"]) != settings or not _is_call(command, call):
                 continue

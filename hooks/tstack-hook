@@ -41,6 +41,7 @@ class Hook:
         self._grant_dirs = None
         self._grant_state_dirs = None
         self._allows = {}
+        self._ended = {}
         # Set once a PreToolUse handler has refused the call: fleet_grant_alone, the last one, then takes no grant for it.
         self.denied = False
         cwd = data.get("cwd")
@@ -1435,10 +1436,31 @@ GRANT_TTL_S = 30 * 60
 SETTINGS_LOCK_WAIT_S = 2.0
 SETTINGS_LOCK_STALE_S = 10.0
 SETTINGS_LOCK_SHARED_WITH_HUB = ".settings.local.json.lock"
-# Auto mode drops Agent allow rules from the settings, so the hub writes an Agent grant here instead and
-# fleet_agent_grant lets the exact spawn through; permission.ts's grantFileOf names the same file.
+# tstack's own file beside the settings, <root>/.claude/tstack-grants.json (permission.ts's grantFileOf names it too),
+# holds the Agent grants (`permissions.allow`): auto mode drops Agent allow rules from the settings, so the hub writes
+# an Agent grant here instead and fleet_agent_grant lets the exact spawn through.
+# The record of take-backs, <root>/.claude/hooks/tstack-grants-ended.json: `ended`, the grants taken back,
+# `{decision, rule, granted, at}` each (`granted`: the grant line's `at`), newest last, the newest ENDED_KEPT kept. A
+# grant on it is over whatever its file holds, so a rule the owner adds after the take-back, byte-identical to the
+# one once granted, is the owner's and no sweep removes it (measured 2026-10-15: the chat watch's lasting rule went at
+# the next sweep, twice). A grant is one grant line, not its decision: decision ids repeat (_permission_id hashes the
+# caller and the call; a revised decision keeps its id), so a later grant of the same id and rule is not on record
+# until it too is taken back.
+# The threat model, plainly: the hub, the hook and every agent run as one Unix user, and grants.jsonl is in the
+# fleet's DIR, a file any agent can write, so a `remove` line there is a record, never the proof. What an agent
+# cannot write is the record's place. Claude Code's permission check protects all of `.claude/`, any file name, but
+# for a few listed exceptions (worktrees, plans, agent memory): writes are prompted, routed to the classifier in auto
+# mode (which refused an agent writing its own allow rule as `[Self-Modification]`), and allow rules do not
+# pre-approve them (code.claude.com/docs/en/permission-modes, "Protected paths"). The sandbox's write-deny is
+# narrower: the settings files and the skills, agents, commands and hooks directories (code.claude.com/docs/en/
+# sandboxing, "Protected paths"), so the record sits in `.claude/hooks/`, under both, as the allow rules do: an agent
+# that could forge a take-back there could as well write the lasting rule, so the record adds nothing to what it can
+# do. What stays, accepted: a forged `grant` line in grants.jsonl can still make the sweep remove a rule that matches
+# it, the owner's included; the failure is fewer allowed calls, never more.
 AGENT_GRANTS = "tstack-grants.json"
+ENDED_RECORD = "tstack-grants-ended.json"
 GRANT_FILES = ("settings.local.json", AGENT_GRANTS)
+ENDED_KEPT = 4096
 
 Refused = namedtuple("Refused", "tool call spawn kept agent_id reason root")
 
@@ -2012,10 +2034,13 @@ def _read_grants(d):
         return None, f"{path} cannot be read ({e.strerror})"
 
 
-def _latest_grants(raw):
+def _latest_grants(hook, raw):
     """The last grant line of each (file, rule) of a grants.jsonl, each with `ended`: the why of a `remove` line that
-    follows it for the same decision, None when none does. A remove line is a record, never the proof: any agent can
-    append one, so whether a grant still stands is read from its settings file (_stands)."""
+    follows it for the same decision, None when none does; and `over`: whether the grant is on its root's record of
+    take-backs (_ended_of). A remove line is a record, never the proof: any agent can append one, so whether a grant
+    still stands is read from its settings file (_stands) and from the record beside it, which an agent cannot
+    write. A grant line on that record never displaces a live one, so a line that borrows an ended decision's id
+    shields no later grant of the rule; it is kept where it is the last, for the why of its ending."""
     latest, lists = {}, {}
     for line in raw[:raw.rfind(b"\n") + 1].splitlines():
         try:
@@ -2031,7 +2056,9 @@ def _latest_grants(raw):
         if entry.get("op") == "grant":
             # A list's calls are granted in the order asked, one line each: a line's place in its list is its turn.
             turn = lists[_list_of(entry)] = lists.get(_list_of(entry), 0) + 1
-            latest[key] = dict(entry, ended=None, turn=turn)
+            over = _ended_key(entry) in _ended_of(hook, file)
+            if not over or key not in latest or latest[key]["over"]:
+                latest[key] = dict(entry, ended=None, turn=turn, over=over)
         elif entry.get("op") == "remove" and key in latest and latest[key]["decision"] == entry["decision"]:
             latest[key]["ended"] = entry["why"] if isinstance(entry.get("why"), str) else "removed"
     return list(latest.values())
@@ -2058,10 +2085,54 @@ def _allow_of(hook, file):
     return hook._allows[file]
 
 
+def _record_file(file):
+    """The record of take-backs for a grant file: the root's .claude/hooks/tstack-grants-ended.json."""
+    return os.path.join(os.path.dirname(file), "hooks", ENDED_RECORD)
+
+
+def _ended_key(grant):
+    """What names one grant on the record of take-backs: its decision, rule and the `at` of its grant line."""
+    granted = grant.get("at")
+    return grant["decision"], grant["rule"], granted if isinstance(granted, str) else ""
+
+
+def _ended_in(record):
+    """The _ended_key of each take-back in a record's `ended`."""
+    ended = record.get("ended") if isinstance(record, dict) else None
+    if not isinstance(ended, list):
+        return frozenset()
+    return frozenset((e["decision"], e["rule"], e["granted"]) for e in ended
+                     if isinstance(e, dict) and all(isinstance(e.get(k), str) for k in ("decision", "rule", "granted")))
+
+
+def _read_ended(file):
+    """The take-backs on record beside `file` (_ended_in); none when the record is not there, cannot be read or does
+    not parse (the sweep then errs toward fewer allowed calls, as everywhere)."""
+    try:
+        with open(_record_file(file), encoding="utf-8") as f:
+            return _ended_in(json.load(f))
+    except (OSError, ValueError):
+        return frozenset()
+
+
+def _ended_of(hook, file):
+    """The take-backs on record for a grant file's root, read once per hook."""
+    root = os.path.dirname(file)
+    if root not in hook._ended:
+        hook._ended[root] = _read_ended(file)
+    return hook._ended[root]
+
+
 def _stands(hook, grant):
-    """Whether the grant's rule is still in its file: the one fact that says a one-time grant is not over."""
+    """Whether the grant's rule is still in its file."""
     allow = _allow_of(hook, grant["file"])
     return allow is None or grant["rule"] in allow
+
+
+def _live(hook, grant):
+    """Whether the grant stands: its rule in its file, and no take-back of it on record. A rule in the file past a
+    take-back on record is the owner's, whoever wrote it there, and no grant."""
+    return not grant["over"] and _stands(hook, grant)
 
 
 def _bash_call(rule):
@@ -2361,7 +2432,7 @@ def _due_grants(hook, raw, used, now, failed=False, void=None):
     """(grant, why) for each standing grant to end now: `used` (its call ran), `revoked` (a call of its list failed,
     or the list is `void`: a list is a sequence, and what comes after a failure was allowed for another state of
     things), `expired` (30 minutes old, or with no readable stamp)."""
-    standing = [g for g in _latest_grants(raw) if _stands(hook, g)]
+    standing = [g for g in _latest_grants(hook, raw) if _live(hook, g)]
     spent = _spent(standing, used)
     lost = {_list_of(g) for g in spent if failed} | ({void} if void else set())
     due = []
@@ -2396,36 +2467,69 @@ def _lock_settings(file):
         time.sleep(0.02)
 
 
-def _take_back(file, rule):
+def _take_back(file, rule, ended):
+    """_take_back_locked under the settings lock: what it could not record, None when nothing."""
     try:
         lock = _lock_settings(file)
     except FileNotFoundError:
-        return
+        return None
     try:
-        _take_back_locked(file, rule)
+        return _take_back_locked(file, rule, ended)
     finally:
         os.rmdir(lock)
 
 
-def _take_back_locked(file, rule):
+def _loaded(file):
+    """A JSON file's object; None when the file is not there. ValueError, naming the file, when it does not parse."""
     try:
         with open(file, encoding="utf-8") as f:
             text = f.read()
     except FileNotFoundError:
-        return
+        return None
     try:
-        settings = json.loads(text)
+        return json.loads(text)
     except ValueError as e:
         raise ValueError(f"{file} does not parse: {e}") from None
+
+
+def _write_json(file, value):
+    tmp = os.path.join(os.path.dirname(file), f".{os.path.basename(file)}.{os.getpid()}")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
+    os.replace(tmp, file)
+
+
+def _with_ended(record, ended):
+    kept = record.get("ended") if isinstance(record.get("ended"), list) else []
+    record["ended"] = (kept + [ended])[-ENDED_KEPT:]
+
+
+def _take_back_locked(file, rule, ended):
+    """Take `rule` out of `file`, then put the grant on the root's record of take-backs (`ended`: its decision, rule,
+    granted and the stamp). A grant already on the record, read again under the lock, is over: the rule there is the
+    owner's, and stays. The settings first: a record that cannot be written leaves fewer allowed calls, never more;
+    one that does not parse is left as it is (the hub's expireGrants), and what was not recorded is returned."""
+    settings = _loaded(file)
     permissions = settings.get("permissions") if isinstance(settings, dict) else None
     allow = permissions.get("allow") if isinstance(permissions, dict) else None
     if not isinstance(allow, list) or rule not in allow:
-        return
+        return None
+    record_file = _record_file(file)
+    try:
+        record = _loaded(record_file)
+    except ValueError as e:
+        record, unrecorded = None, f"{e}: the take-back of {ended['decision']} is not on record"
+    else:
+        record, unrecorded = record if isinstance(record, dict) else {}, None
+        if _ended_key({**ended, "at": ended["granted"]}) in _ended_in(record):
+            return None
     permissions["allow"] = [r for r in allow if r != rule]
-    tmp = os.path.join(os.path.dirname(file), f".settings.local.json.{os.getpid()}")
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
-    os.replace(tmp, file)
+    _write_json(file, settings)
+    if record is not None:
+        _with_ended(record, ended)
+        os.makedirs(os.path.dirname(record_file), exist_ok=True)
+        _write_json(record_file, record)
+    return unrecorded
 
 
 def _shell_command(hook):
@@ -2464,16 +2568,21 @@ def _close_due_grants_exclusively(hook, d, used, now, failed=False, void=None):
         if len(raw) > GRANT_STATE_MAX_BYTES:
             return
         hook._allows.clear()
+        hook._ended.clear()
         lead = b"\n" if raw and not raw.endswith(b"\n") else b""
         for grant, why in _due_grants(hook, raw, used, now, failed, void):
+            at = fleet_stamp(hook.env)
             try:
-                _take_back(grant["file"], grant["rule"])
+                decision, rule, granted = _ended_key(grant)
+                unrecorded = _take_back(grant["file"], rule, {"decision": decision, "rule": rule, "granted": granted, "at": at})
             except Exception:  # this grant stays open for the next call; the others go on
                 log(hook.data_dir, f"{hook.event} fleet_grant_sweep failed for {grant['decision']}\n"
                                    f"{traceback.format_exc()}")
                 continue
+            if unrecorded:
+                log(hook.data_dir, f"{hook.event} fleet_grant_sweep: {unrecorded}")
             removal = {"op": "remove", "decision": grant["decision"], "rule": grant["rule"], "file": grant["file"],
-                       "at": fleet_stamp(hook.env), "why": why}
+                       "at": at, "why": why}
             f.write(lead + json.dumps(removal, ensure_ascii=False, separators=(",", ":")).encode() + b"\n")
             f.flush()
             lead = b""
@@ -2482,6 +2591,7 @@ def _close_due_grants_exclusively(hook, d, used, now, failed=False, void=None):
             except OSError:
                 pass
         hook._allows.clear()
+        hook._ended.clear()
 
 
 def fleet_agent_grant(hook):
@@ -2580,8 +2690,8 @@ def _alone_by_settings(hook, command, unread):
 
 
 def _alone_by_grants(hook, d, raw, command, now):
-    grants = [g for g in _latest_grants(raw) if _bash_call(g["rule"]) is not None]
-    standing = [g for g in grants if _stands(hook, g)]
+    grants = [g for g in _latest_grants(hook, raw) if _bash_call(g["rule"]) is not None]
+    standing = [g for g in grants if _live(hook, g)]
     mine = [g for g in standing if _is_call(command, _bash_call(g["rule"]))]
     if not mine:
         for grant in standing:

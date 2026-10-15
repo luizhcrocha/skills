@@ -2517,12 +2517,35 @@ run of each exact command shown; the next run of the same command asks again.
   file included, gets no output. It needs no fleet DIR, and it allows that input for any caller, as a
   settings rule does; the sweep below ends the grant.
 - **Which grants stand** (hook and hub alike): the last grant line of each file and rule is a grant
-  that stands for as long as the rule is in that file's `permissions.allow`. A `remove` line is a record,
-  never the proof: any agent can append one, and one appended while the rule stood ended the grant for
-  the hook (`A; A; A` then ran three times on one yes). A settings file that cannot be read or does not
-  parse is taken to hold every rule granted into it. The cost, accepted: a rule that a grant of this
-  fleet once wrote, put back into the same file by hand, is taken for that grant and removed again; a
-  call that is to stay allowed is written as another rule (a prefix), not as the exact text once granted.
+  that stands for as long as the rule is in that file's `permissions.allow` and the grant is not on the
+  root's record of take-backs. A `remove` line is a record, never the proof: any agent can append one,
+  and one appended while the rule stood ended the grant for the hook (`A; A; A` then ran three times on
+  one yes). The proof is the record of take-backs, `ended` in
+  `<root>/.claude/hooks/tstack-grants-ended.json` (`{decision, rule, granted, at}` each: `granted` the
+  grant line's `at`, `at` the take-back's; newest last, the newest 4096 kept), written by whichever
+  sweep took the rule back. A grant there is one grant line, not its decision: decision ids repeat
+  (`p-` and the hash of the caller and the call; a revised decision keeps its id), so a second allow-once
+  of the same call is a grant of its own, on no record until its own take-back. Why there: Claude
+  Code's permission check protects all of `.claude/`, any file name, but for a few listed exceptions
+  (worktrees, plan files, agent memory): its writes are prompted, or in auto mode routed to the
+  classifier, and `permissions.allow` rules do not pre-approve them
+  ([Protected paths](https://code.claude.com/docs/en/permission-modes#protected-paths)). The sandbox's
+  write-deny is narrower: "the `.claude` settings files, the `.claude/skills`, `.claude/agents`,
+  `.claude/commands`, and `.claude/hooks` directories"
+  ([Sandboxing, Protected paths](https://code.claude.com/docs/en/sandboxing#protected-paths)), so a
+  sandboxed command could write `.claude/tstack-grants.json` but not `.claude/hooks/`. The record sits
+  under both, as the rules themselves do, so an agent can no more forge a take-back there than write
+  the rule itself. Each sweep reads the record again under the settings lock before it takes a rule
+  out, so a take-back the other sweep put there meanwhile holds. A grant on that record is over
+  whatever its file holds: a rule the owner adds after the take-back, byte-identical to the one once
+  granted, is the owner's, and no sweep removes it (measured 2026-10-15: without the record, the chat
+  watch's lasting rule, added at 08:16:39 and identical to a grant used the evening before, went at
+  08:16:41 by the hook and at 08:24:28 by the hub, and agent-tools' the same way). A grant line that
+  copies an ended grant (its decision, rule and `at`) never displaces a live grant of the rule, so it
+  shields nothing. Once, on the change to this record: a rule identical to a grant used or expired
+  before the record existed is on no record, so the next sweep removes it once more; the owner adds it
+  again after that, and it stays. A settings file that cannot be read or does not parse is taken to hold every rule granted into it; a
+  record that cannot be read or does not parse holds no take-back (fewer allowed calls, never more).
 - **A granted call runs alone, once, in its turn** (the plugin's hook, `fleet_grant_alone`, the last
   PreToolUse handler, matcher `Bash|Monitor`; it returns a deny or nothing, never an allow). The hook
   reads the grants of `grant_state_dirs`: the fleets of `grant_dirs`, and any of the same places that
@@ -2572,14 +2595,18 @@ run of each exact command shown; the next run of the same command asks again.
   that call failed (PostToolUseFailure) the rest of its list goes with it** (`why: revoked`): what
   comes after a failure was allowed for another state of things. An attempt out of turn, or inside a
   longer command, is denied and revokes nothing: the fleet has only to make the right call. A grant is
-  `expired` 30 minutes after its `at`. The hook takes the rule out under the settings lock, then appends
-  a `remove` line, `{"op":"remove",decision,rule,file,at,why}` (`why`: `used`, `revoked` or `expired`),
-  and removes the grant's `grants.taken` file. It rewrites only an absolute
-  `<root>/.claude/settings.local.json` or `<root>/.claude/tstack-grants.json`. Two hooks sweeping at
+  `expired` 30 minutes after its `at`. The hook takes the rule out under the settings lock, puts the
+  take-back on the root's record (`ended` in `<root>/.claude/hooks/tstack-grants-ended.json`, the
+  settings first so a record write that fails leaves fewer allowed calls, never more; a record that
+  does not parse is left as it is and the take-back logged), then appends a `remove` line,
+  `{"op":"remove",decision,rule,file,at,why}` (`why`: `used`, `revoked` or `expired`), and removes the
+  grant's `grants.taken` file. It rewrites only an absolute `<root>/.claude/settings.local.json` or
+  `<root>/.claude/tstack-grants.json`. Two hooks sweeping at
   once are kept apart by a `flock` on `grants.jsonl`, so a grant is closed once. A `grants.jsonl` that
   cannot be read is logged and left to the hub.
 - **The hub ends a grant itself** (`expireGrants`, at start and every 15 s): a grant 30 minutes old or
-  more whose rule is still in its file is taken back under the settings lock, with a `remove` line
+  more whose rule is still in its file, and that is not on the root's record of take-backs, is taken
+  back under the settings lock, put on that record, with a `remove` line
   (`why: expired`, `by: hub`). It reads the grants of every fleet the registry names, served or not
   (so a restarted hub takes up what an earlier one granted), and the ones this process wrote, which it
   holds in memory, so its own removal does not rest on a file every agent can write. This is what ends
@@ -2608,14 +2635,19 @@ run of each exact command shown; the next run of the same command asks again.
     PID`) are files an agent can write. The root check and the row make a forged grant flagrant, not
     impossible; the registry names a process, and the hub reads where it runs, so a forged entry grants
     only in a directory some live process of the user's runs in. A forged `remove` line ends nothing
-    while the rule stands, an unreadable record fails closed, and the hub removes at 30 minutes what it
-    granted whatever the record says; a deleted `grants.jsonl` or `grants.taken` file still lifts the
-    hook's hold on a second run until then.
+    while the rule stands and no take-back is on the root's record (in `.claude/`, which an agent
+    cannot write), an unreadable record of grants fails closed, and the hub removes at 30 minutes what
+    it granted whatever the record says; a deleted `grants.jsonl` or `grants.taken` file still lifts
+    the hook's hold on a second run until then.
   - A forged registry entry with a forged `op:grant` line can make the hook or the hub remove a rule
     that matches it, one added by hand in another project included: the failure is fewer allowed calls,
     never more.
   - What stops a process that edits these files, or the settings, directly is Claude Code's own refusal
-    to let an agent write its allow rules (`[Self-Modification]`, above), not tstack.
+    to let an agent write its allow rules (`[Self-Modification]`, above), not tstack: `.claude/` is a
+    protected path, whose writes are never auto-approved (prompted, or routed to the classifier) and
+    which no `permissions.allow` rule pre-approves (code.claude.com/docs/en/permission-modes, Protected
+    paths). The record of take-backs rests on the same refusal, and adds nothing to what an agent that
+    got past it could do: it could as well write the lasting rule.
   - A session rooted in the same folder that serves another fleet reads the rule too while it stands,
     without the hook that keeps it to one call, for at most 30 minutes.
   - A call bound to a file is bound to that file's bytes, not to what the file calls or reads.
