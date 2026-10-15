@@ -12,7 +12,7 @@ import * as Option from "effect/Option";
 import { save } from "../src/cli/ws.ts";
 import { parseObject } from "../src/json.ts";
 import { machineOf } from "../src/world.ts";
-import { baseEnv, fleet, tmp, type Environment } from "./support.ts";
+import { baseEnv, fleet, sleep, start, tmp, type Environment } from "./support.ts";
 
 const SENTENCE = "this team records through programs: fleet-run";
 
@@ -133,5 +133,47 @@ describe("a folder holding cloud.json", () => {
 
     expect(fault?.reason).toContain(SENTENCE);
     expect(readFileSync(path, "utf8")).toBe(before);
+  });
+});
+
+describe("the coordinator's --once watch on a moved team", () => {
+  /** Lines in the old chat store's shape (`re` and `parts` written out, a hub's `origin`), as the folder held them before the move. */
+  function before(count: number): string {
+    return Array.from({ length: count }, (_, i) => `${JSON.stringify({ id: i + 1, at: "2026-10-15T08:00:00+00:00", from: "coordinator", to: ["user"], text: `m${i + 1}`, re: null, parts: [{ text: `m${i + 1}` }], origin: "http://127.0.0.1:7420" })}\n`).join("");
+  }
+
+  /** The same lines as the host's export writes them (chatFileText: one compact line, no default fields). */
+  function exported(count: number): string {
+    return Array.from({ length: count }, (_, i) => `${JSON.stringify({ id: i + 1, at: "2026-10-15T08:00:00+00:00", from: "coordinator", to: ["user"], text: `m${i + 1}` })}\n`).join("");
+  }
+
+  async function woken(write: () => void): Promise<string> {
+    writeFileSync(join(root, "chat.jsonl"), before(104));
+    writeFileSync(join(root, "watch-coordinator.cursor"), "104");
+    const { proc, lines } = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], env);
+    await sleep(800);
+    expect(proc.exitCode).toBeNull();
+    write();
+    const done = await Promise.race([proc.exited, sleep(5000).then(() => "still waiting" as const)]);
+
+    if (done === "still waiting") proc.kill();
+    expect(done).toBe(0);
+
+    return lines.rest();
+  }
+
+  test("wakes on the user's answer the export appends", async () => {
+    const answer = { id: 105, from: "user", to: ["coordinator"], text: "go ahead", decision: "s4-smoke" };
+
+    expect(await woken(() => writeFileSync(join(root, "chat.jsonl"), `${JSON.stringify(answer)}\n`, { flag: "a" }))).toContain("#105 user -> coordinator [s4-smoke]: go ahead");
+  });
+
+  test("wakes on the user's answer when the export rewrites chat.jsonl whole, longer than the watch had read", async () => {
+    // export.ts rewrites the file in place when its last line is not the fleet's: the lines before the answer get
+    // shorter, the answer is long, and the file ends past the offset the watch had read to.
+    const shrunk = before(104).length - exported(104).length;
+    const answer = { id: 105, from: "user", to: ["coordinator"], text: `go ahead ${"x".repeat(shrunk)}`, decision: "s4-smoke" };
+
+    expect(await woken(() => writeFileSync(join(root, "chat.jsonl"), `${exported(104)}${JSON.stringify(answer)}\n`))).toContain("#105 user -> coordinator [s4-smoke]: go ahead");
   });
 });

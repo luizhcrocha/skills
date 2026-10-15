@@ -3,7 +3,7 @@
  * does not parse as a message is skipped by every reader, a torn last line is left alone (the next
  * append starts on a new line), and bytes that are not UTF-8 are read with replacement.
  */
-import { closeSync, fstatSync, openSync, readSync, statSync, writeSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
 import * as Option from "effect/Option";
@@ -107,10 +107,17 @@ export function parseStore(data: Buffer): Message[] {
   return messages;
 }
 
+/** How many bytes before its offset a {@link Tail} keeps, to tell an append from a rewrite. */
+const SEAM = 256;
+
 /** Reads the store incrementally: each `read()` returns the messages appended since the last one, a line
- * only once its newline is there. */
+ * only once its newline is there. A store rewritten whole (a moved team's export, review O7, rewrites it in
+ * place when its last line is not the fleet's) is read again from its start, its ids above the last returned:
+ * read on from the old offset, the rewrite's bytes there fall mid-line and the line holding them is lost. */
 export class Tail {
   private offset = 0;
+  /** The last bytes read, which end at `offset`: still there, the store was only appended to. */
+  private seam = Buffer.alloc(0);
   private after: number;
   readonly root: string;
 
@@ -121,28 +128,37 @@ export class Tail {
 
   read(): Message[] {
     const path = storePath(this.root);
-    let size: number;
+    let fd: number;
 
     try {
-      size = statSync(path).size;
+      fd = openSync(path, "r");
     } catch {
       return [];
     }
 
-    if (size < this.offset) this.offset = 0;
-
-    if (size === this.offset) return [];
-    const chunk = Buffer.alloc(size - this.offset);
-    const fd = openSync(path, "r");
+    let complete: Buffer;
 
     try {
+      const size = fstatSync(fd).size;
+      const seen = Buffer.alloc(this.seam.length);
+
+      if (size >= this.offset && seen.length > 0) readSync(fd, seen, 0, seen.length, this.offset - seen.length);
+
+      if (size < this.offset || !seen.equals(this.seam)) {
+        this.offset = 0;
+        this.seam = Buffer.alloc(0);
+      }
+
+      if (size === this.offset) return [];
+      const chunk = Buffer.alloc(size - this.offset);
       readSync(fd, chunk, 0, chunk.length, this.offset);
+      complete = chunk.subarray(0, chunk.lastIndexOf(0x0a) + 1);
     } finally {
       closeSync(fd);
     }
 
-    const complete = chunk.subarray(0, chunk.lastIndexOf(0x0a) + 1);
     this.offset += complete.length;
+    this.seam = Buffer.from(Buffer.concat([this.seam, complete.subarray(-SEAM)]).subarray(-SEAM));
     const out: Message[] = [];
 
     for (const m of parseStore(complete)) {
