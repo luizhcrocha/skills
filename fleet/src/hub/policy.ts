@@ -171,9 +171,10 @@ export function stopRefusal(
 }
 
 /** Why an answer that grants (allow-once, allow-kind) or adds a rule (add-rule) is refused, as [status, error], or undefined: on top of the
- * post's checks, it comes only from the fleet's own page on this hub, as a Stop does (`ownPageRefusal`, with the
- * page token every fleet's page is served). A process on this machine that posts to the hub (an agent's fetch or
- * curl) is not the user answering. */
+ * post's checks, it comes only from a fleet's page on this hub, as a Stop does (`ownPageRefusal`, with the page
+ * token every fleet's page is served at its top-level load; the fleet's page in the manager's frame sends the
+ * manager page's). A process on this machine that posts to the hub (an agent's fetch or curl) is not the user
+ * answering, and a post a peer hub passes on carries no token. */
 export function grantRefusal(hosts: ReadonlySet<string>, host: string, expected: string, header: (name: string) => string | null): readonly [number, string] | undefined {
   return ownPageRefusal(hosts, host, expected, PAGE_TOKEN_HEADER, header, "a grant comes only from the fleet's own page on this hub: answer it there", "the page token is missing or stale: reload the fleet's page and answer again");
 }
