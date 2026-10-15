@@ -7,6 +7,7 @@
 import { createEffect, createMemo, createSignal, untrack } from "solid-js";
 import { Show, type JSX } from "@solidjs/web";
 
+import { AttachButton, AttachTray } from "./Attach.tsx";
 import { CloseIcon, usePage, tf } from "./bits.tsx";
 import { CaretList } from "./CaretList.tsx";
 import { Log, useSender } from "./ChatLog.tsx";
@@ -159,6 +160,9 @@ function Composer(): JSX.Element {
             queueMicrotask(() => ui.fit());
           }}
           onKeyDown={(e) => ui.onKey(e)}
+          onPaste={(e) => {
+            if (m.chatWritable()) ui.pictures.onPaste(e);
+          }}
           onInput={() => ui.afterEdit()}
           onClick={() => ui.updateList()}
           onKeyUp={(e) => {
@@ -169,12 +173,22 @@ function Composer(): JSX.Element {
             if (!m.docked() && m.phone()) setTimeout(() => ui.toBottom(), 250);
           }}
         />
-        <button type="button" class="send" id="send" aria-label="Send" title="Send" disabled={!m.draft().trim() || m.sending() || !m.chatWritable()} onClick={() => void ui.send()}>
+        <AttachButton a={ui.pictures} id="say-attach" disabled={!m.chatWritable()} />
+        <button
+          type="button"
+          class="send"
+          id="send"
+          aria-label="Send"
+          title="Send"
+          disabled={(!m.draft().trim() && !ui.pictures.paths().length) || ui.pictures.busy() > 0 || m.sending() || !m.chatWritable()}
+          onClick={() => void ui.send()}
+        >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" />
           </svg>
         </button>
       </div>
+      <AttachTray a={ui.pictures} id="say-images" />
       <p class="to" id="to" hidden={!toShown()}>
         {toShown()}
       </p>

@@ -33,3 +33,10 @@ test("the side chat a batch opened is titled by the batch and about its decision
   expect(s?.decision).toBe("infra/l220");
   expect(s?.unread).toBe(1);
 });
+
+test("a batch's mark keeps the images pasted with it, only paths of the fleet's own attachments", () => {
+  const png = "attachments/0123456789abcdef.png";
+  const given = marks(2);
+  const items = given.items.map((i, k) => (k === 0 ? { ...i, images: [png, "../state.json", "https://x.example/a.png"] } : i));
+  expect(Core.parseMarks({ ...given, items })?.items.map((i) => i.images)).toEqual([[png], undefined]);
+});

@@ -15,6 +15,7 @@ import { secondsNow, type Machine } from "../world.ts";
 import { appendAllLocked, messageOf, readChat, type Message, type Part } from "./store.ts";
 import { liveHost } from "../host.ts";
 import { liveWatch, TREE } from "./watchers.ts";
+import { allStored, imageNotes, imagePathsOf, imagesOf, IMAGES_REFUSED, markImageNotes, markImages, MAX_IMAGES } from "./attachments.ts";
 
 /** Characters of a selected excerpt a message carries. */
 export const QUOTE_MAX = 2000;
@@ -223,13 +224,18 @@ function markOf(value: Json, at: number, seen: Set<number>): JsonObject | ChatEr
     mark.push(["quote", quote]);
   }
 
+  const images = given["images"] === undefined || given["images"] === null ? [] : imagePathsOf(given["images"]);
+
+  if (images === undefined) return marksRefused(`${where}.images is a list of at most ${MAX_IMAGES} attachments/<hash>.<png|jpg|webp|gif> paths`);
+
   for (const key of ["comment", "replacement"]) {
     const text = textOf(given, key, where);
 
     if (text instanceof ChatError) return text;
 
     if (text !== undefined && [...text].length > MARK_TEXT_MAX) return marksRefused(`${where}.${key} is longer than ${MARK_TEXT_MAX} characters`);
-    const needed = key === "comment" ? kind === "comment" || kind === "question" || kind === "general" : kind === "replace";
+    // A comment, a question or a general mark says something: its words, or an image in their place.
+    const needed = key === "comment" ? (kind === "comment" || kind === "question" || kind === "general") && images.length === 0 : kind === "replace";
 
     if (needed && (text === undefined || text.trim() === "")) return marksRefused(`${where} is a ${kind} mark: it needs its ${key}`);
 
@@ -237,6 +243,8 @@ function markOf(value: Json, at: number, seen: Set<number>): JsonObject | ChatEr
 
     if (text !== undefined && text.trim() !== "") mark.push([key, text]);
   }
+
+  if (images.length > 0) mark.push(["images", images]);
 
   if (given["on"] !== undefined && given["on"] !== null) {
     const on = asNumber(given["on"]);
@@ -723,7 +731,9 @@ interface StoredMessage {
   marks?: JsonObject;
   mark?: number[];
   keep?: string;
+  images?: string[];
   side?: Json;
+  opens?: string;
   origin?: string;
 }
 
@@ -742,8 +752,13 @@ export interface Draft {
   readonly mark?: readonly number[];
   /** Why the marks this message answers (`mark`) leave the decision as it is (`say --no-change`). */
   readonly keep?: string;
+  /** The images pasted with it, as the page names them (`attachments/<hash>.<ext>`; `imagesOf` checks them). */
+  readonly images?: Json;
   /** "new" opens a side chat; a number continues one. */
   readonly side?: number | "new";
+  /** With `side: "new"`, the page's key for the side chat it opens (`opensOf` checks it): a later post with the
+   * same key on the same decision joins that side chat instead of opening another. */
+  readonly opens?: Json;
   /** The page of another origin the user posted from (the hub's config allows it), as its `Origin`. */
   readonly origin?: string;
   /** Called under the store's lock with the message about to be stored and what the store holds: the
@@ -759,6 +774,30 @@ export interface Prepared {
   readonly answering: readonly number[] | undefined;
   readonly keep: string | undefined;
   readonly quote: JsonObject | undefined;
+  readonly images: readonly string[];
+  readonly opens: string | undefined;
+}
+
+/** What a side chat's open key may be: short, of letters, digits, `-` and `_`. */
+const OPEN_KEY = /^[A-Za-z0-9_-]{1,64}$/u;
+
+/** A draft's open key, checked (undefined when it has none), or why it is refused. */
+function opensOf(draft: Draft): string | undefined | ChatError {
+  if (draft.opens === undefined || draft.opens === null) return undefined;
+
+  if (draft.side !== "new") return new ChatError({ reason: "opens goes with side new: it names the side chat the post opens" });
+  const key = asString(draft.opens);
+
+  return key !== undefined && OPEN_KEY.test(key) ? key : new ChatError({ reason: "opens is the page's key for the side chat it opens: 1 to 64 of A-Z, a-z, 0-9, - and _" });
+}
+
+/** The page a quote was taken on (`at.hash`), which a side chat's open key is kept per. */
+const quotedPage = (quote: Json | undefined): string | undefined => asString(asObject(asObject(quote)?.["at"])?.["hash"]);
+
+/** The side chat a post with open key `key` on the page `quote` was taken on joins: the one a post with that key
+ * there opened, or undefined when none did. */
+function openedBy(known: readonly Message[], key: string, quote: Json | undefined): number | undefined {
+  return known.find((m) => m.side === m.id && m.stored["opens"] === key && quotedPage(m.quote) === quotedPage(quote))?.id;
 }
 
 /** Check a draft and resolve whom it reaches, before anything is written: what `append` refuses outside the
@@ -768,16 +807,25 @@ export function prepare(machine: Machine, root: string, draft: Draft): Prepared 
 
   if (resolved instanceof ChatError) return resolved;
 
-  if (draft.text.trim() === "") return new ChatError({ reason: "the message has no text" });
+  const images = imagesOf(root, draft.images);
+
+  if (images === undefined) return new ChatError({ reason: IMAGES_REFUSED });
+
+  if (draft.text.trim() === "" && images.length === 0) return new ChatError({ reason: "the message has no text" });
 
   if (!draft.text.isWellFormed()) return new ChatError({ reason: "the text is not valid UTF-8" });
   const marks = marksAlone(draft) ?? marksOf(draft.marks);
 
   if (marks instanceof ChatError) return marks;
+
+  if (!allStored(root, markImages(marks).map(([, p]) => p))) return new ChatError({ reason: IMAGES_REFUSED });
   const answering = draft.mark === undefined || draft.mark.length === 0 ? undefined : [...new Set(draft.mark)];
   const keep = draft.keep?.trim();
 
   if (keep !== undefined && (keep === "" || [...keep].length > MARK_TEXT_MAX)) return new ChatError({ reason: `--no-change takes why, in 1 to ${MARK_TEXT_MAX} characters` });
+  const opens = opensOf(draft);
+
+  if (opens instanceof ChatError) return opens;
   let quote: JsonObject | undefined;
 
   if (draft.quote !== undefined) {
@@ -793,7 +841,7 @@ export function prepare(machine: Machine, root: string, draft: Draft): Prepared 
     if (place !== undefined) quote = { ...quote, at: place };
   }
 
-  return { draft, resolved, marks, answering, keep, quote };
+  return { draft, resolved, marks, answering, keep, quote, images, opens };
 }
 
 /** The mark an answer from `sender` to `parent` answers when it names none (no `--mark`): the batch's one mark,
@@ -833,8 +881,10 @@ function composed(p: Prepared, known: readonly Message[], nextId: number, at: st
   }
 
   let side: Json | undefined;
+  /* A post with the open key of a side chat already opened on its page joins it, as a message of it: no quote. */
+  const joins = p.opens === undefined || draft.side !== "new" ? undefined : openedBy(known, p.opens, p.quote);
 
-  if (draft.side === "new") side = nextId;
+  if (draft.side === "new") side = joins ?? nextId;
   else if (draft.side !== undefined) {
     const wanted = draft.side;
 
@@ -859,13 +909,17 @@ function composed(p: Prepared, known: readonly Message[], nextId: number, at: st
 
   if (draft.decision !== undefined && draft.decision !== "") message.decision = draft.decision;
 
-  if (p.quote !== undefined) message.quote = p.quote;
+  if (p.quote !== undefined && joins === undefined) message.quote = p.quote;
+
+  if (p.opens !== undefined && joins === undefined) message.opens = p.opens;
 
   if (p.marks !== undefined) message.marks = p.marks;
 
   if (answering !== undefined) message.mark = [...answering];
 
   if (p.keep !== undefined) message.keep = p.keep;
+
+  if (p.images.length > 0) message.images = [...p.images];
 
   if (side !== undefined && truthy(side)) message.side = side;
 
@@ -1096,7 +1150,7 @@ export function renderLines(machine: Machine, root: string, messages: readonly M
       line += ` (quoting${from}: "${oneLine(quoted)}")`;
     }
 
-    line += `: ${oneLine(m.text)}`;
+    line += `: ${[oneLine(m.text), ...imageNotes(root, m.stored["images"]), ...markImageNotes(root, m.stored["marks"])].filter((s) => s !== "").join(" ")}`;
 
     if (m.re !== null) line += ` [re #${oneLine(m.re)}${answered(m)}]`;
 

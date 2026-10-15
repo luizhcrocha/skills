@@ -22,7 +22,9 @@
  *   is locked (onepw.ts), under the same policy: it clears every locked kind and tells the held fleets, each
  *   in its chat, or in its session when its host's watch is dead;
  *   `POST /f/<fleet>/wake` is Luiz's "Wake now" on a fleet whose host does not listen (wake.ts), under the
- *   same policy: one wake to the session's socket at once.
+ *   same policy: one wake to the session's socket at once;
+ *   `POST /f/<fleet>/attachments` stores an image pasted on the fleet's page (attachments.ts), from that page
+ *   only, as a grant is (`grantRefusal`).
  * - `/f/<fleet>@<machine>/…` a fleet of a peer hub, passed through: this hub checks a post by its own
  *   rules first, then the peer checks this machine (its owner's login) by its rules.
  *
@@ -36,6 +38,7 @@ import { dirname, join, normalize, relative, sep } from "node:path";
 
 import type { Building } from "../building.ts";
 import { address, appendAll, hostOf, marksAlone, marksOf, ownerOfBatch, prepare, stateOfDir, storeRefusal, type Draft, type Prepared } from "../chat/chat.ts";
+import { storeImage, uploadRefusal } from "../chat/attachments.ts";
 import { Courier, deliveries } from "../chat/relay.ts";
 import { readChat, Tail } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
@@ -743,6 +746,8 @@ export class Hub {
 
     if (rest === "/chat" && req.method === "OPTIONS") return this.preflight(req);
 
+    if (rest === "/attachments" && req.method === "POST") return this.attach(req, ip, root);
+
     if (req.method === "POST") return this.post(req, ip, root, rest);
 
     if (req.method !== "GET" && req.method !== "HEAD") return jsonResponse(405, { error: "not allowed" });
@@ -1220,6 +1225,23 @@ export class Hub {
     });
   }
 
+  /** `POST /f/<fleet>/attachments`, the image's bytes as the body and its type as `Content-Type`: an image pasted
+   * on the fleet's page, stored under its DIR (`storeImage`), answered `{path}` for the message that will carry it.
+   * Only the fleet's own page uploads, as only it grants (`grantRefusal`: its origin, same-origin, its page token). */
+  private async attach(req: Request, ip: string, root: string): Promise<Response> {
+    const header = (name: string): string | null => req.headers.get(name);
+    const viewer = await this.viewer(req, ip);
+    const denied = writerRefusal(this.owner, viewer);
+
+    if (denied !== undefined) return jsonResponse(403, { error: denied }, { Connection: "close" });
+    const refused = grantRefusal(this.hosts, new URL(req.url).host, this.openTokens().accepted("page"), header) ?? uploadRefusal(header);
+
+    if (refused !== undefined) return jsonResponse(refused[0], { error: refused[1] }, { Connection: "close" });
+    const stored = storeImage(root, header("Content-Type"), Buffer.from(await req.arrayBuffer()));
+
+    return "path" in stored ? jsonResponse(201, { path: stored.path }) : jsonResponse(stored.refused[0], { error: stored.refused[1] });
+  }
+
   private async post(req: Request, ip: string, root: string, rest: string): Promise<Response> {
     if (rest !== "/chat" && rest !== "/chat/preview") return jsonResponse(404, { error: "not found" });
     const header = (name: string): string | null => req.headers.get(name);
@@ -1375,6 +1397,7 @@ export class Hub {
                 author: asString(stored["author"]),
                 quote: stored["quote"],
                 marks: stored["marks"],
+                images: stored["images"],
                 origin: asString(stored["origin"]),
               });
 
@@ -1397,7 +1420,13 @@ export class Hub {
 
       if (side !== undefined) draft.side = side;
 
+      if (body["opens"] !== undefined) draft.opens = body["opens"];
+
       if (origin !== undefined) draft.origin = origin;
+
+      const images = body["images"] ?? null;
+
+      if (images !== null) draft.images = images;
       const alongside = decision === undefined ? delivering(text, re) : undefined;
 
       if (alongside !== undefined) draft.alongside = alongside;

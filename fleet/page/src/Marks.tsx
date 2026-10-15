@@ -22,7 +22,9 @@
 import { createEffect, createMemo, createSignal, flush, onCleanup, onSettled } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
-import { autoStep, clock, countOf, exitPosts, IDLE, leftOf, loadPending, perRecipient, planSend, QUIET_MS, QUIET_WORDS, REASON_WORDS, batched, owing, refKey, savePending, sentWords, without, type Auto, type AutoEvent, type ChatPost, type Pending, type PendingMsg, type Post, type SendReason, type SendTarget, type ThreadRef } from "./autosend.ts";
+import { createAttachments } from "./attach.ts";
+import { AttachButton, AttachTray, Pictures } from "./Attach.tsx";
+import { afterStored, autoStep, clock, countOf, exitPosts, IDLE, joinSent, leftOf, loadPending, NONE, perRecipient, planSend, QUIET_MS, QUIET_WORDS, REASON_WORDS, batched, owing, refKey, savePending, sentPart, sentWords, without, type Auto, type AutoEvent, type ChatPost, type Pending, type PendingMsg, type Post, type SendReason, type SendTarget, type ThreadRef } from "./autosend.ts";
 import { listen, tf, usePage, When } from "./bits.tsx";
 import { readBody } from "./bodytext.ts";
 import { CaretList } from "./CaretList.tsx";
@@ -125,6 +127,9 @@ const squash = (s: string): string => s.replace(/[\s­​-‍⁠﻿]+/gu, "").to
 const isRecord = (v: Json | undefined): v is JsonRecord => v !== null && v !== undefined && Object(v) === v && !Array.isArray(v);
 
 /** What the composer says of a selection the body's text does not confirm. */
+/** Why a comment or a message waits for its image. */
+const STILL_SENDING = "An image is still being sent; add this once it shows.";
+
 const UNCONFIRMED = "Could not confirm this selection in the decision's text. Select the words again.";
 
 /** The mark the composer is open on: a new one (`n` null) or a pending one, its kind as picked. */
@@ -134,6 +139,8 @@ interface Editing {
   readonly quote: MarkQuote | null;
   readonly comment: string;
   readonly replacement: string;
+  /** The images saved with the comment, when an existing one is opened to edit. */
+  readonly images?: readonly string[];
 }
 
 /** The last send, as the hover card says it. */
@@ -316,6 +323,10 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
   let alive = true;
   let hiddenToast = "";
   const boxDrafts = new Map<string, string>();
+  /* The images pasted into the composer's comment box, and into the thread box (kept per thread, as its words are). */
+  const textPictures = createAttachments();
+  const boxPictures = createAttachments(() => boxTaken());
+  const boxImages = new Map<string, readonly string[]>();
   const took = new WeakSet<Event>();
   const composerCaret = ui.carets.make({ id: "mk-mentions", option: "mk-mention-", mentions: true });
   const boxCaret = ui.carets.make({ id: "mk-box-mentions", option: "mk-box-mention-", mentions: true });
@@ -527,13 +538,12 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
     else say(text);
   };
 
-  /* A side chat a post started now has its id: the thread open on it follows. */
+  /* A side chat a post started (or joined, by its open key) now has its id: the thread open on it follows. */
   const started = (p: Post, stored: JsonRecord): void => {
     const side = stored["side"];
-    const quote = p.body.quote;
 
-    if (p.body.side !== "new" || !Number.isInteger(side) || !quote) return;
-    const was = fresh().find((f) => f.quote.text === quote.text);
+    if (p.body.side !== "new" || !Number.isInteger(side)) return;
+    const was = fresh().find((f) => f.key === p.body.opens);
 
     if (!was) return;
     setFresh(fresh().filter((f) => f !== was));
@@ -580,9 +590,9 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
 
   /**
    * Send `p` (all that waits, or one thread's) now, for `reason`: the batch, then each conversation's
-   * messages, back to back; each cleared once stored. `carried`, marks an answer already took along, for the note.
+   * messages, back to back; each cleared once stored. `carried`, what an answer already took along, for the note.
    */
-  async function sendSet(p: Pending, reason: SendReason, carried = 0): Promise<void> {
+  async function sendSet(p: Pending, reason: SendReason, carried = NONE): Promise<void> {
     const tg = target();
 
     if (!tg || busy || !countOf(p)) {
@@ -592,7 +602,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
     }
 
     busy = true;
-    let n = 0;
+    const done: Post[] = [];
     let error = "";
 
     try {
@@ -608,10 +618,11 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
           return false;
         }
 
-        /* Stored: what it carried is gone; the owner's leaves the cited agents' batches owed until each is stored. */
-        keep(owing(without(pending(), one.carries), one.owes ?? []));
+        /* Stored: what it carried is gone; the owner's leaves the cited agents' batches owed until each is stored; the words
+         * still waiting for a new side chat it went to are now that side chat's. */
+        keep(afterStored(pending(), one, out.stored));
         started(one, out.stored);
-        n += one.carries.items.length + one.carries.msgs.length + (one.carries.withdrawn?.length ?? 0);
+        done.push(one);
         const id = out.stored["id"];
 
         if (page === null && one.body.marks?.to === tg.owner && one.body.side === undefined && Number.isInteger(id)) page = Number(id);
@@ -627,7 +638,10 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
       busy = false;
     }
 
-    if (n + carried) sentNote(p, reason);
+    /* The note counts what was stored, with what the answer took along. */
+    const told = joinSent(carried, sentPart(p, done));
+
+    if (countOf(told)) sentNote(told, reason);
 
     if (error) {
       say(error);
@@ -651,15 +665,16 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
     return { items: p.items.filter((i) => i.n === n), msgs: p.msgs.filter((x) => refKey(x.to) === key) };
   };
 
-  /* The page going away (pagehide, hidden): what waits goes as keepalive posts, cleared once handed to the browser; a post past the budget as a plain one, cleared once stored. */
+  /* The page going away (pagehide, hidden): what waits goes at once, as keepalive posts, cleared once handed to the browser; a post past the budget as a plain one, cleared once stored. Every run of a new side chat carries its open key, so the hub joins them into one side chat. */
   const leaveNow = (): void => {
     const tg = target();
     const p = pending();
 
     if (busy || !tg || !countOf(p)) return;
+    const posts = exitPosts(planSend(p, tg));
     const plain: Promise<void>[] = [];
 
-    for (const x of exitPosts(planSend(p, tg))) {
+    for (const x of posts) {
       const req = fetch("chat", { method: "POST", keepalive: x.keepalive, headers: chatHeaders(), body: x.json });
 
       if (x.keepalive) {
@@ -688,7 +703,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
       });
     }
 
-    sentNote(p, "leave");
+    sentNote(sentPart(p, posts.map((x) => x.post)), "leave");
     step({ _tag: "tick" });
   };
 
@@ -736,6 +751,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
     flush();
 
     if (textBox) textBox.value = e.comment;
+    textPictures.seed(e.images ?? []);
 
     if (withBox) withBox.value = e.replacement;
 
@@ -745,7 +761,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
   const openDraft = (n: number): void => {
     const d = pending().items.find((x) => x.n === n);
 
-    if (d) openComposer({ n, kind: d.kind, quote: d.quote ?? null, comment: d.comment ?? "", replacement: d.replacement ?? "" });
+    if (d) openComposer({ n, kind: d.kind, quote: d.quote ?? null, comment: d.comment ?? "", replacement: d.replacement ?? "", images: d.images ?? [] });
   };
 
   function closeComposer(): void {
@@ -753,6 +769,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
     setEditing(null);
     setProblem("");
     setMenu(null);
+    textPictures.clear();
     composerCaret.close();
     flush();
     post({ annotClearSel: true });
@@ -782,12 +799,21 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
       return;
     }
 
-    if ((e.kind === "comment" || e.kind === "question" || e.kind === "general") && !comment) {
+    if (textPictures.busy() > 0) {
+      setProblem(STILL_SENDING);
+
+      return;
+    }
+
+    /* A comment, a question or a general mark says something: its words, or an image in their place. */
+    if ((e.kind === "comment" || e.kind === "question" || e.kind === "general") && !comment && !textPictures.paths().length) {
       setProblem(e.kind === "question" ? "Write your question." : "Write your comment.");
       textBox?.focus();
 
       return;
     }
+
+    const images = [...textPictures.paths()];
 
     const items = pending().items;
     const n = e.n ?? nextNumber(sent(), items);
@@ -796,6 +822,8 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
     if (comment) item = { ...item, comment };
 
     if (item.kind === "replace") item = { ...item, replacement };
+
+    if (images.length) item = { ...item, images };
     keep({ ...pending(), items: e.n === null ? [...items, item] : items.map((d) => (d.n === e.n ? item : d)) });
     step({ _tag: "saved" });
     closeComposer();
@@ -837,10 +865,25 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
   }
 
   /* The box keeps what was typed in each thread while another is open. */
+  /* The images already on what the thread box adds to, so the two never pass 8: a waiting comment's (a reply joins
+   * it), or a side chat's waiting words (its post joins them); an edited message's own are in the tray. */
+  const boxTaken = (): number => {
+    const th = current();
+
+    if (!th) return 0;
+
+    if (editMsg() === null && th._tag === "mark" && th.status === "pending") return th.item.images?.length ?? 0;
+
+    return new Set(pending().msgs.flatMap((x) => (!batched(x) && refKey(x.to) === th.key && x.key !== editMsg() ? (x.images ?? []) : []))).size;
+  };
+
   const keepBox = (): void => {
     const k = thread();
 
-    if (boxEl && k !== null && editMsg() === null) boxDrafts.set(k, boxEl.value);
+    if (boxEl && k !== null && editMsg() === null) {
+      boxDrafts.set(k, boxEl.value);
+      boxImages.set(k, boxPictures.paths());
+    }
   };
 
   const fillBox = (): void => {
@@ -851,6 +894,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
 
     if (!boxEl || k === null) return;
     boxEl.value = boxDrafts.get(k) ?? "";
+    boxPictures.seed(boxImages.get(k) ?? []);
 
     if (!m.coarse()) {
       boxEl.focus({ preventScroll: true });
@@ -871,6 +915,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
   const stopEdit = (): void => {
     if (editMsg() === null) return;
     setEditMsg(null);
+    boxPictures.clear();
 
     if (boxEl) boxEl.value = "";
     step({ _tag: "editEnd" });
@@ -897,10 +942,17 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
   async function submitBox(then: "add" | "send"): Promise<void> {
     const th = current();
     const text = boxEl?.value.trim() ?? "";
+    const images = [...boxPictures.paths()];
 
     if (!th || !boxEl) return;
 
-    if (!text) {
+    if (boxPictures.busy() > 0) {
+      setBoxError(STILL_SENDING);
+
+      return;
+    }
+
+    if (!text && !images.length) {
       if (then === "send" && countOf(pendingOf(th.key))) await sendSet(pendingOf(th.key), "now");
 
       return;
@@ -909,15 +961,24 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
     setBoxError("");
     setMenu(null);
     const edited = editMsg();
+    /* What the box's images add to a message or a comment: none leaves it as it was. */
+    const withImages = <X extends { readonly images?: readonly string[] }>(x: X, more: readonly string[]): X => (more.length ? { ...x, images: [...new Set([...(x.images ?? []), ...more])] } : x);
+
+    /* An edited message is the box's words and images now (the box opened with its own). */
+    const edit = (x: PendingMsg): PendingMsg => {
+      const said: PendingMsg = x.quote ? { key: x.key, to: x.to, text, quote: x.quote } : { key: x.key, to: x.to, text };
+
+      return images.length ? { ...said, images } : said;
+    };
 
     if (edited !== null) {
-      keep({ ...pending(), msgs: pending().msgs.map((x) => (x.key === edited ? { ...x, text } : x)) });
+      keep({ ...pending(), msgs: pending().msgs.map((x) => (x.key === edited ? edit(x) : x)) });
       setEditMsg(null);
       boxEl.value = "";
       step({ _tag: "saved" });
       step({ _tag: "editEnd" });
     } else if (th._tag === "mark" && th.status === "pending") {
-      keep({ ...pending(), items: pending().items.map((i) => (i.n === th.item.n ? { ...i, comment: (i.comment ? i.comment + "\n" : "") + text } : i)) });
+      keep({ ...pending(), items: pending().items.map((i) => (i.n === th.item.n ? withImages({ ...i, comment: (i.comment ? i.comment + "\n" : "") + text }, images) : i)) });
       boxEl.value = "";
       step({ _tag: "saved" });
     } else {
@@ -925,7 +986,8 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
 
       if (!to) return;
       const q = th._tag === "page" ? chip() : null;
-      const msg: PendingMsg = q ? { key: freshKey(), to, text, quote: q } : { key: freshKey(), to, text };
+      const said: PendingMsg = q ? { key: freshKey(), to, text, quote: q } : { key: freshKey(), to, text };
+      const msg = withImages(said, images);
       keep({ ...pending(), msgs: [...pending().msgs, msg] });
       setChip(null);
       boxEl.value = "";
@@ -933,6 +995,8 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
     }
 
     boxDrafts.delete(th.key);
+    boxImages.delete(th.key);
+    boxPictures.clear();
     flush();
 
     if (then === "send") await sendSet(pendingOf(current()?.key ?? th.key), "now");
@@ -950,6 +1014,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
     if (editMsg() === null) step({ _tag: "editStart" });
     setEditMsg(turn.key);
     boxEl.value = turn.text;
+    boxPictures.seed(turn.images ?? []);
     boxEl.focus();
   };
 
@@ -1264,6 +1329,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
       }
 
       const n = rode ? ride.carries.items.length : 0;
+      const took = rode ? sentPart(p, [ride]) : NONE;
       const cited = rode ? ridePlan : [];
       ridePlan = [];
 
@@ -1281,9 +1347,9 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
           busy = false;
         }
 
-        if (countOf(pending())) await sendSet(pending(), "answer", n);
+        if (countOf(pending())) await sendSet(pending(), "answer", took);
         else if (n) {
-          sentNote(p, "answer");
+          sentNote(took, "answer");
           keepTimed();
         }
       })();
@@ -1497,6 +1563,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
                 <Show when={x().marks} fallback={<Show when={x().mine} fallback={<Rich text={x().text} refs />}><span class="mk-msg-text">{x().text}</span></Show>}>
                   {(b) => <BatchCard marks={b()} />}
                 </Show>
+                <Pictures images={x().images} />
                 <Show when={x().keep}>
                   <span class="mk-keep">No change: {x().keep}</span>
                 </Show>
@@ -1577,7 +1644,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
           </Show>
           <Icon d={ICON.plane} size={18} />
           <b class="mk-badge" id="mk-badge" hidden={!count()}>
-            {count()}
+            {String(count())}
           </b>
         </button>
         <div class={"mk-card" + (card() ? " show" : "")} id="mk-card" role="tooltip" onPointerLeave={(e) => e.pointerType === "mouse" && !(e.relatedTarget instanceof Element && e.relatedTarget.closest("#mk-now")) && setCard(false)}>
@@ -1717,10 +1784,12 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
                           boxCaret.attach(el);
                         }}
                         onInput={() => setBoxError("")}
+                        onPaste={(e) => boxPictures.onPaste(e)}
                       />
                       <CaretList caret={boxCaret} />
                     </div>
                     <div class="mk-sends">
+                      <AttachButton a={boxPictures} id="mk-box-attach" />
                       <button type="button" class="mk-send" id="mk-box-send" title={`Add, waits with the rest (Enter or ${KEY_SAVE})`} aria-label="Add to the wait" onClick={() => void submitBox("add")}>
                         <Icon d={ICON.up} size={18} />
                       </button>
@@ -1729,6 +1798,7 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
                       </button>
                     </div>
                   </div>
+                  <AttachTray a={boxPictures} id="mk-box-images" />
                   <p class="mk-problem" role="alert" hidden={!boxError()}>
                     {boxError()}
                   </p>
@@ -1784,8 +1854,13 @@ export function Marks(props: { readonly target: MarkTarget }): JSX.Element {
               textBox = el;
               composerCaret.attach(el);
             }}
+            onPaste={(e) => textPictures.onPaste(e)}
           />
           <CaretList caret={composerCaret} />
+        </div>
+        <div class="attach-row">
+          <AttachButton a={textPictures} id="mk-text-attach" />
+          <AttachTray a={textPictures} id="mk-text-images" />
         </div>
         <p class="mk-problem" role="alert" hidden={!problem()}>
           {problem()}

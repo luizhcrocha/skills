@@ -27,6 +27,8 @@ import { bodyRefs, REF_CSS, refScript, tappedRef, type BodyRefs, type FrameRefs,
 import { isRowId, refHref } from "./refs.ts";
 import { draftsKey } from "./marks.ts";
 import { answerBody } from "./autosend.ts";
+import { createAttachments } from "./attach.ts";
+import { AttachButton, AttachTray } from "./Attach.tsx";
 import { FieldHighlights } from "./FieldMarks.tsx";
 import { markDesk, Marks, type MarkTarget } from "./Marks.tsx";
 import { clock } from "./format.ts";
@@ -411,6 +413,8 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
   /* What an answer would be given to: the revision, and for a permission everything its yes would grant. */
   const shown = (): string => ui.revisionOf(props.d) + "\n" + Core.grantShown(props.d);
   const [moved, setMoved] = createSignal(false);
+  /* The images pasted into the answer's fields, or picked with its attach button: they go with the answer. */
+  const pictures = createAttachments();
   let form: HTMLFormElement | undefined;
   let answering = shown();
   /* A rule card's rule as rendered with `answering`, and as it was when an option was picked: the answer sends that
@@ -500,10 +504,17 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
       return;
     }
 
+    if (pictures.busy() > 0) {
+      setError("An image is still being sent; send the answer once it shows.");
+
+      return;
+    }
+
     /* The decision's pending comments ride along with the answer: one write, the batch first (SPEC, API 2). */
     const desk = markDesk.current;
     const ride = desk?.ride(d.id) ?? null;
-    const json = JSON.stringify(answerBody(out, d.id, ride));
+    const images = [...pictures.paths()];
+    const json = JSON.stringify(answerBody(images.length ? { ...out, images } : out, d.id, ride));
     const over = Core.tooBig(json, m.maxBytes());
 
     if (over) {
@@ -540,6 +551,7 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
       }
 
       m.prefs.remove(draftKey());
+      pictures.clear();
       stored = body;
       ui.addMessage(body, true);
 
@@ -575,6 +587,7 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
         save();
       }}
       onSubmit={(e) => void submit(e)}
+      onPaste={(e) => pictures.onPaste(e)}
     >
       <Show when={moved()}>
         <p class="dv-moved" id="dv-moved" role="alert">
@@ -582,6 +595,10 @@ function AnswerForm(props: { readonly d: Decision; readonly class?: string; read
         </p>
       </Show>
       {props.children}
+      <div class="attach-row">
+        <AttachButton a={pictures} />
+        <AttachTray a={pictures} />
+      </div>
       <p class="chat-error" id="dv-error" role="alert" hidden={!error()}>
         {error()}
         <Show when={stale()}>

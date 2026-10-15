@@ -766,6 +766,62 @@ test.skipIf(!found)("an answer carrying the owner's batch then sends the cited a
   expect(await kept(page)).toBeNull();
 });
 
+test.skipIf(!found)("an answer's note counts what rode along: a comment made while the answer posted, deleted before it went, is not counted", async () => {
+  const { page, harness } = await openD30(1280, 900, false);
+
+  await mark(page, SAVED, "comment", "@invoice-gen please check");
+  /* Each post to the chat is held (counted on the root's data-held) until a "go" event lets them go; "free" stops holding. */
+  await page.evaluate(() => {
+    const held: (() => void)[] = [];
+    const real = window.fetch.bind(window);
+    let holding = true;
+
+    const count = (): void => {
+      document.documentElement.dataset["held"] = String(held.length);
+    };
+
+    window.addEventListener("go", () => {
+      for (const f of held.splice(0)) f();
+      count();
+    });
+    window.addEventListener("free", () => {
+      holding = false;
+    });
+    Object.assign(window, {
+      fetch: (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        if (!holding || init?.method !== "POST" || !String(input).endsWith("chat")) return real(input, init);
+
+        return new Promise((resolve) => {
+          held.push(() => resolve(real(input, init)));
+          count();
+        });
+      },
+    });
+  });
+  const go = (): Promise<boolean> => page.evaluate(() => window.dispatchEvent(new Event("go")));
+
+  const waiting = async (): Promise<void> => {
+    await page.waitForFunction(() => document.documentElement.dataset["held"] === "1", { polling: 50, timeout: 5000 });
+  };
+
+  await page.$eval('#dv-answer input[name="choice"][value="A"]', (e) => (e instanceof HTMLInputElement ? e.click() : undefined));
+  await page.$eval('#dv-answer button[type="submit"]', (e) => (e instanceof HTMLButtonElement ? e.click() : undefined));
+  await waiting();
+  await mark(page, "Cloudflare D1", "comment", "made while the answer posts");
+  await go();
+  /* The answer took comment 1 along; the cited agent's batch is held, comment 2 still waits: deleted now, it never goes. */
+  await waiting();
+  await openThread(page, "m:2");
+  await page.click("#mk-delete");
+  await shut(page);
+  await page.evaluate(() => window.dispatchEvent(new Event("free")));
+  await go();
+  await page.waitForFunction(() => document.querySelector("#mk-toast")?.textContent?.startsWith("Sent:") === true, { polling: 50, timeout: 5000 });
+
+  expect(batches(harness).map((b) => b.marks?.["to"])).toEqual(["coordinator", "a2"]);
+  expect(await page.$eval("#mk-toast", (e) => e.textContent)).toBe("Sent: 1 to perf, 1 to invoice-gen (with your answer).");
+});
+
 test.skipIf(!found)("leaving the page sends what waits as a keepalive post; moving to another view does too", async () => {
   const { page, harness } = await openD30(1280, 900, false);
 

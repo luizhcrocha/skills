@@ -4,7 +4,7 @@ const tokenIn = (doc: Document): string => doc.querySelector<HTMLMetaElement>('m
 /** The page token the hub put in this page at its top-level load. A fleet's page shown in the manager's frame
  * (`?embed=1`) is served with none, so it sends the token of the page it is shown in, when that page has this
  * origin; a parent of another origin gives none. */
-function pageToken(): string {
+export function pageToken(): string {
   const own = tokenIn(document);
 
   if (own !== "" || window.parent === window) return own;
@@ -17,7 +17,7 @@ function pageToken(): string {
 }
 
 /** The headers of a chat post: JSON, and the page token (`pageToken`), which an answer that grants (allow-once,
- * allow-kind) or adds a rule (add-rule) needs (the hub's `grantRefusal`). */
+ * allow-kind) or adds a rule (add-rule) needs (the hub's `grantRefusal`), as an image's upload does (`attach.ts`). */
 export function chatHeaders(): Record<string, string> {
   const token = pageToken();
 

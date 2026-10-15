@@ -160,6 +160,8 @@ export function serveHarness(options: HarnessOptions): Harness {
         return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-store" } });
       }
 
+      if (req.method === "POST" && path === "/attachments") return json(201, { path: "attachments/0123456789abcdef.png" });
+
       if (req.method === "POST" && path === "/chat/preview") {
         // SAFETY: the page posts a JSON object; a batch of marks names its place.
         const asked = (await req.json()) as { readonly marks?: { readonly at?: { readonly hash?: string } } };

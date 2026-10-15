@@ -10,6 +10,7 @@
  * (its main thread, a side chat), back to back. Only Luiz's own input drives this: what the decision's frame
  * posts never saves, sends, restarts or pauses anything; the caller feeds only his events.
  */
+import { MAX_IMAGES } from "./attach.ts";
 import { Core, type Json, type JsonRecord, type MarkBatch, type MarkDecision, type MarkItem, type Quote, type QuoteAt, type RosterRow } from "./core.ts";
 import { makeBatch, type Batch, type DraftStore } from "./marks.ts";
 
@@ -132,6 +133,8 @@ export interface PendingMsg {
   readonly to: ThreadRef;
   readonly text: string;
   readonly quote?: Quote;
+  /** The images pasted with it, as the hub's `attachments` named them. */
+  readonly images?: readonly string[];
 }
 
 /** Everything waiting to be sent from a decision's page: its marks (the batch's items) and the messages of its conversations. */
@@ -190,8 +193,10 @@ function parseMsg(v: Json | undefined): PendingMsg | null {
 
   if (!to) return null;
   const msg: PendingMsg = { key: v["key"], to, text: v["text"] };
+  const images = Core.imagesIn(v["images"]);
+  const pictured = images.length ? { ...msg, images } : msg;
 
-  return quote ? { ...msg, quote } : msg;
+  return quote ? { ...pictured, quote } : pictured;
 }
 
 /**
@@ -275,6 +280,11 @@ export interface ChatPost {
   readonly side?: number | "new";
   readonly quote?: Quote;
   readonly re?: number;
+  /** The images of a side chat's words (a batch's are on its items). */
+  readonly images?: readonly string[];
+  /** With `side: "new"`, the page's key for the side chat it opens: the hub joins every post with this key on the
+   * decision into the one side chat the first opened, so a retry, a later run or a reload opens no second one. */
+  readonly opens?: string;
 }
 
 /** One chat message a send posts, and what it carries of the pending (cleared once it is stored). */
@@ -353,10 +363,34 @@ export function groupsOf(items: readonly MarkItem[], t: Pick<SendTarget, "owner"
   return [{ to: t.owner, items: ordered }, ...[...cited].map(([to, list]) => ({ to, items: list }))];
 }
 
+/** A conversation's waiting messages cut into runs, in order, each run's images (a repeat counted once) at most
+ * {@link MAX_IMAGES}: the hub refuses a post with more, so their words are joined into one post per run. */
+function byImages(list: readonly PendingMsg[]): PendingMsg[][] {
+  const runs: PendingMsg[][] = [];
+  let run: PendingMsg[] = [];
+  let seen = new Set<string>();
+
+  for (const m of list) {
+    const more = new Set([...seen, ...(m.images ?? [])]);
+
+    if (run.length && more.size > MAX_IMAGES) {
+      runs.push(run);
+      run = [];
+      seen = new Set(m.images ?? []);
+    } else seen = more;
+
+    run.push(m);
+  }
+
+  if (run.length) runs.push(run);
+
+  return runs;
+}
+
 /**
  * The posts that send `p`: one batch per agent its marks reach (`marks.to`): the owner's first, with every
  * mark, in the page's main thread once it has one (else it opens it); then each cited agent's; then one
- * message per conversation with words waiting, its messages joined in order: in the page's main thread (its first message opens it,
+ * message per conversation with words waiting (one per run of at most 8 images), its messages joined in order: in the page's main thread (its first message opens it,
  * quoting the decision at the page), a side chat, or a new side chat on its quoted words.
  */
 export function planSend(p: Pending, t: SendTarget): Post[] {
@@ -367,7 +401,10 @@ export function planSend(p: Pending, t: SendTarget): Post[] {
   const inBatch = p.msgs.filter(batched);
 
   const generals = inBatch.map((m, i): MarkItem => {
-    const item: MarkItem = { n: t.next + i, kind: "general", comment: quoting(m) };
+    const comment = quoting(m);
+    /* An image may stand in for the words. */
+    const said: MarkItem = comment ? { n: t.next + i, kind: "general", comment } : { n: t.next + i, kind: "general" };
+    const item: MarkItem = m.images?.length ? { ...said, images: m.images } : said;
 
     return m.to._tag === "mark" ? { ...item, on: m.to.n } : item;
   });
@@ -415,15 +452,55 @@ export function planSend(p: Pending, t: SendTarget): Post[] {
   for (const k of order) {
     const list = by.get(k) ?? [];
     const to = list[0]?.to;
-    const text = list.map(quoting).join("\n\n");
-    const carries = { items: [], msgs: list.map((m) => m.key) };
 
-    if (to?._tag === "side") posts.push({ body: { text, side: to.id }, carries });
-    else if (to?._tag === "new") posts.push({ body: { text, side: "new", quote: { ...to.quote } }, carries });
+    /* Each run of a new side chat carries its quote and its open key: whichever the hub stores first opens it, the rest join it. */
+    for (const run of byImages(list)) {
+      const text = run.map(quoting).join("\n\n");
+      const carries = { items: [], msgs: run.map((m) => m.key) };
+      const images = [...new Set(run.flatMap((m) => m.images ?? []))];
+      const pictured = images.length ? { images } : {};
+
+      if (to?._tag === "side") posts.push({ body: { text, side: to.id, ...pictured }, carries });
+      else if (to?._tag === "new") posts.push({ body: { text, side: "new", quote: { ...to.quote }, ...pictured, opens: to.key }, carries });
+    }
   }
 
   return posts;
 }
+
+/** `p` once a post with open key `key` is stored in side chat `side`: the words still waiting for that new side chat
+ * are words of `side`, so they show in it and go to it. */
+export function openedAs(p: Pending, key: string, side: number): Pending {
+  const to: ThreadRef = { _tag: "side", id: side };
+
+  return { ...p, msgs: p.msgs.map((m) => (m.to._tag === "new" && m.to.key === key ? { ...m, to } : m)) };
+}
+
+/** `p` once `post` is stored as `stored`: what it carried gone, the cited batches it leaves owed, and the words
+ * waiting for the new side chat it went to moved there ({@link openedAs}). */
+export function afterStored(p: Pending, post: Post, stored: JsonRecord): Pending {
+  const rest = owing(without(p, post.carries), post.owes ?? []);
+  const side = stored["side"];
+
+  return post.body.opens !== undefined && Number.isInteger(side) ? openedAs(rest, post.body.opens, Number(side)) : rest;
+}
+
+/** What of `p` the posts carry: the part a send may call sent. */
+export function sentPart(p: Pending, posts: readonly Post[]): Pending {
+  const items = new Set(posts.flatMap((x) => x.carries.items));
+  const msgs = new Set(posts.flatMap((x) => x.carries.msgs));
+  const told = new Set(posts.flatMap((x) => x.carries.withdrawn ?? []));
+  const paid = new Set(posts.flatMap((x) => x.carries.owed ?? []));
+  const withdrawn = (p.withdrawn ?? []).filter((n) => told.has(n));
+  const owed = (p.owed ?? []).filter((o) => paid.has(o.key));
+  const sent: Pending = { items: p.items.filter((i) => items.has(i.n)), msgs: p.msgs.filter((m) => msgs.has(m.key)) };
+  const withWithdrawn = withdrawn.length ? { ...sent, withdrawn } : sent;
+
+  return owed.length ? { ...withWithdrawn, owed } : withWithdrawn;
+}
+
+/** Two parts of one send as one: an answer's ride-along and what went after it. */
+export const joinSent = (a: Pending, b: Pending): Pending => ({ items: [...a.items, ...b.items], msgs: [...a.msgs, ...b.msgs], withdrawn: [...(a.withdrawn ?? []), ...(b.withdrawn ?? [])], owed: [...(a.owed ?? []), ...(b.owed ?? [])] });
 
 /**
  * The answer's post with the decision's pending marks riding along (SPEC, API 2): `batch` holds the batch's

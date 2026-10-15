@@ -14,6 +14,7 @@ import { Pill, usePage, Who } from "./bits.tsx";
 import { chatRows, dayWords, type Item, type Row } from "./chatlog.ts";
 import { Core, type Message, type Side } from "./core.ts";
 import { clock, fullTime } from "./format.ts";
+import { Pictures } from "./Attach.tsx";
 import { BatchCard } from "./BatchCard.tsx";
 import { Rich } from "./Rich.tsx";
 
@@ -187,6 +188,7 @@ export function Turn(props: { readonly item: Item; readonly replyable: boolean; 
           <Show when={msg().marks} fallback={<Words msg={msg()} />}>
             {(b) => <BatchCard marks={b()} />}
           </Show>
+          <Pictures images={msg().images} />
         </article>
         <Show when={canReply()}>
           <button type="button" class="reply-btn" data-reply={String(msg().id)} aria-label={`Reply to ${s().label}`} title="Reply">

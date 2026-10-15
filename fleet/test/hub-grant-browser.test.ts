@@ -346,3 +346,21 @@ test.skipIf(!found)("a stale page token in the manager's frame: Reload reloads t
   expect(grants().map((g) => [g["op"], g["decision"]])).toEqual([["grant", "p-1a2b3c4d"]]);
   await page.close();
 }, 60_000);
+
+test.skipIf(!found)("an image picked on the manager's page, in another fleet's frame, is uploaded to that fleet: the frame sends the manager's page token", async () => {
+  const { page, frame } = await managerOn("p-1a2b3c4d");
+  await frame.evaluate(`(() => {
+    const input = document.querySelector('#dv-answer .attach input[type=file]');
+    const dt = new DataTransfer();
+    dt.items.add(new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7])], "shot.png", { type: "image/png" }));
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  })()`);
+  await frame.waitForFunction('document.querySelector("#dv-answer .attach-tray img, #dv-answer .attach-error:not([hidden])") !== null', { timeout: 10_000 });
+  expect(await frame.evaluate('document.querySelector("#dv-answer .attach-error")?.textContent ?? ""')).toBe("");
+  const path = String(await frame.evaluate('document.querySelector("#dv-answer .attach-tray img").getAttribute("src")'));
+  expect(path).toMatch(/^attachments\/[0-9a-f]{16}\.png$/u);
+  expect(existsSync(join(root, path))).toBe(true);
+  await page.close();
+}, 60_000);

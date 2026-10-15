@@ -38,7 +38,12 @@ export interface Turn {
   readonly whole: readonly number[];
   /** A batch of comments in the page's thread, shown as its card. */
   readonly marks?: MarkBatch;
+  /** The images pasted with Luiz's words (a comment's, a reply's, a waiting message's). */
+  readonly images?: readonly string[];
 }
+
+/** A turn's images, as a field only when there are some. */
+const pictured = (images: readonly string[] | undefined): { readonly images?: readonly string[] } => (images?.length ? { images } : {});
 
 interface Common {
   readonly key: string;
@@ -111,7 +116,7 @@ export function inboxOf(src: InboxSource): Inbox {
 
   const turn = (m: Message, text = m.text): Turn => ({ id: m.id, key: "c" + String(m.id), mine: m.from === "user", who: who(m), text, quote: m.quote && !opensPage(m, hash) && !opensSide(m, hash) ? oneLine(m.quote.text) : "", at: m.at, keep: m.keep ?? "", whole: [] });
 
-  const waiting = (p: PendingMsg): Turn => ({ id: null, key: p.key, mine: true, who: "You", text: p.text, quote: p.quote ? oneLine(p.quote.text) : "", at: "", keep: "", whole: [] });
+  const waiting = (p: PendingMsg): Turn => ({ id: null, key: p.key, mine: true, who: "You", text: p.text, quote: p.quote ? oneLine(p.quote.text) : "", at: "", keep: "", whole: [], ...pictured(p.images) });
   const lastOf = (turns: readonly Turn[], waits: boolean): number => (waits ? ids + 1 : Math.max(0, ...turns.map((t) => t.id ?? 0)));
   const unreadOf = (key: string, turns: readonly Turn[]): boolean => turns.some((t) => !t.mine && t.id !== null && t.id > (src.read[key] ?? src.base));
 
@@ -167,7 +172,7 @@ export function inboxOf(src: InboxSource): Inbox {
 
   /* Luiz's replies batched in a comment's thread (`general` items on it), sent and waiting. */
   const atOf = (id: number): string => messages.find((m) => m.id === id)?.at ?? "";
-  const repliesTo = (n: number): Turn[] => sent.marks.flatMap((r) => (r.item.kind === "general" && r.item.on === n ? [{ id: r.batch, key: `g${String(r.batch)}-${String(r.item.n)}`, mine: true, who: "You", text: r.item.comment ?? "", quote: "", at: atOf(r.batch), keep: "", whole: [] }] : []));
+  const repliesTo = (n: number): Turn[] => sent.marks.flatMap((r) => (r.item.kind === "general" && r.item.on === n ? [{ id: r.batch, key: `g${String(r.batch)}-${String(r.item.n)}`, mine: true, who: "You", text: r.item.comment ?? "", quote: "", at: atOf(r.batch), keep: "", whole: [], ...pictured(r.item.images) }] : []));
   const waitingTo = (n: number): PendingMsg[] => pending.msgs.filter((p) => p.to._tag === "mark" && p.to.n === n);
 
   /* The fleet's answers to a whole batch, naming no mark, in the thread of each comment the batch is about (its comments, and the ones its replies are in). */
@@ -185,7 +190,7 @@ export function inboxOf(src: InboxSource): Inbox {
     const key = markKey(n);
     const later = [...repliesTo(n), ...messages.filter((m) => owner.get(m.id) === n).map((m) => turn(m, m.from === "user" ? m.text.replace(LEAD, "") : m.text)), ...(wholeOf.get(n) ?? [])].sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
     const waits = waitingTo(n);
-    const turns = [{ id: s.batch, key: "b" + String(s.batch), mine: true, who: "You", text: commentOf(s.item), quote: "", at: atOf(s.batch), keep: "", whole: [] }, ...later, ...waits.map(waiting)];
+    const turns = [{ id: s.batch, key: "b" + String(s.batch), mine: true, who: "You", text: commentOf(s.item), quote: "", at: atOf(s.batch), keep: "", whole: [], ...pictured(s.item.images) }, ...later, ...waits.map(waiting)];
     /* What was said to this comment alone: the thread's place in the order and its unread dot come from it. */
     const own = turns.filter((t) => t.whole.length === 0);
     /* A reply waiting in the thread makes it pending again, until it goes. */
@@ -196,7 +201,7 @@ export function inboxOf(src: InboxSource): Inbox {
   });
 
   for (const item of pending.items) {
-    const turns = [{ id: null, key: "d" + String(item.n), mine: true, who: "You", text: commentOf(item), quote: "", at: "", keep: "", whole: [] }];
+    const turns = [{ id: null, key: "d" + String(item.n), mine: true, who: "You", text: commentOf(item), quote: "", at: "", keep: "", whole: [], ...pictured(item.images) }];
 
     marks.push({ _tag: "mark", key: markKey(item.n), item, kind: item.kind, status: "pending", batch: null, turns, last: ids + 1 + item.n, unread: false, waits: true, withdrawn: false });
   }

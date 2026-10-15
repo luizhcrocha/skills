@@ -107,15 +107,32 @@ test.skipIf(!found)("on a phone every control in the chat is at least 44 px each
   await page.click("#chat-decisions");
   await page.waitForSelector("#chat-log .dmark");
 
-  const small = await page.evaluate(() =>
-    [...document.querySelectorAll<HTMLElement>("#chat .reply-btn, #chat .re-line, #chat-decisions, #chat .side-link button, #chat .dmark a, #chat .turn-head .who, #chat-close, #send")].flatMap((el) => {
-      const r = el.getBoundingClientRect();
+  const smallOnes = (): Promise<string[]> =>
+    page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>("#chat .reply-btn, #chat .re-line, #chat-decisions, #chat .side-link button, #chat .dmark a, #chat .turn-head .who, #chat-close, #send, #say-attach button, #say-images .icon-btn")].flatMap((el) => {
+        const r = el.getBoundingClientRect();
 
-      return getComputedStyle(el).visibility === "hidden" || r.width === 0 || (r.width >= 43.5 && r.height >= 43.5) ? [] : [`${el.className || el.id} ${Math.round(r.width)}x${Math.round(r.height)}`];
-    }),
-  );
+        return getComputedStyle(el).visibility === "hidden" || r.width === 0 || (r.width >= 43.5 && r.height >= 43.5) ? [] : [`${el.className || el.id} ${Math.round(r.width)}x${Math.round(r.height)}`];
+      }),
+    );
 
-  expect(small).toEqual([]);
+  expect(await smallOnes()).toEqual([]);
+
+  /* An image waiting under the composer: its remove button a full tap target, its thumbnail big enough to see past it. */
+  await page.evaluate(() => {
+    const input = document.querySelector<HTMLInputElement>("#say-attach input[type=file]");
+    const dt = new DataTransfer();
+    dt.items.add(new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], "shot.png", { type: "image/png" }));
+
+    if (input) {
+      input.files = dt.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+  await page.waitForSelector("#say-images li img");
+  expect(await smallOnes()).toEqual([]);
+  const sizes = await page.evaluate(() => [document.querySelector("#say-images li"), document.querySelector("#say-images .icon-btn")].map((el) => Math.round(el?.getBoundingClientRect().width ?? 0)));
+  expect(sizes[0] ?? 0).toBeGreaterThanOrEqual(2 * (sizes[1] ?? 0));
   await page.click("#chat-decisions");
   await page.close();
 });

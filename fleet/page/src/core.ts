@@ -621,6 +621,8 @@ export interface Message {
   readonly mark?: readonly number[];
   /** Why an answer leaves the marks it names as they are (`say --no-change`): they asked for a change the fleet declines. */
   readonly keep?: string;
+  /** The images pasted with it, as paths under its fleet's page (`attachments/<hash>.<ext>`). */
+  readonly images?: readonly string[];
 }
 
 /** What a mark asks of the words it marks; `general` is one comment on the whole decision, with no quote. */
@@ -663,6 +665,8 @@ export interface MarkItem {
   readonly replacement?: string;
   /** A `general` item that replies in comment `on`'s thread (Luiz's words batched with the rest). */
   readonly on?: number;
+  /** The images pasted with its words, as paths under its fleet's page (`attachments/<hash>.<ext>`). */
+  readonly images?: readonly string[];
 }
 
 /** The decision a batch of marks is on, as the page had it. */
@@ -2014,6 +2018,11 @@ const FIELD = /^(?:title|question|why|step|recommendation|option:[A-Za-z0-9_.-]{
 /** Whether `s` names a field of a decision's page. */
 const isField = (s: string): boolean => FIELD.test(s);
 
+/** The images a message or a mark names: each an `attachments/<hash>.<ext>` path of its fleet, anything else dropped. */
+function imagesIn(value: Json | undefined): string[] {
+  return Array.isArray(value) ? value.filter((p): p is string => isText(p) && /^attachments\/[0-9a-f]{16}\.(?:png|jpg|webp|gif)$/u.test(p)) : [];
+}
+
 /** A mark as stored (in a batch, or a draft the page kept), or null for anything else. */
 function parseMarkItem(value: Json | undefined): MarkItem | null {
   if (!isRow(value)) return null;
@@ -2040,8 +2049,9 @@ function parseMarkItem(value: Json | undefined): MarkItem | null {
   const on = value["on"];
 
   if (kind === "general" && Number.isInteger(on) && Number(on) > 0) item = { ...item, on: Number(on) };
+  const images = imagesIn(value["images"]);
 
-  return item;
+  return images.length ? { ...item, images } : item;
 }
 
 /** A message's batch of marks as stored, or null when it carries none. */
@@ -2106,8 +2116,11 @@ function parseMessage(value: Json | undefined): Message | null {
     side: Number.isInteger(value["side"]) ? Number(value["side"]) : null,
   };
 
+  const images = imagesIn(value["images"]);
+
+  const pictured: Message = images.length ? { ...message, images } : message;
   const keep = answers.length && isText(value["keep"]) && value["keep"].trim() ? value["keep"] : null;
-  const answering: Message = answers.length ? (keep === null ? { ...message, mark: answers } : { ...message, mark: answers, keep }) : message;
+  const answering: Message = answers.length ? (keep === null ? { ...pictured, mark: answers } : { ...pictured, mark: answers, keep }) : pictured;
 
   return marks ? { ...answering, marks } : answering;
 }
@@ -2532,6 +2545,7 @@ export const Core = {
   parseMessage,
   parseMarks,
   parseMarkItem,
+  imagesIn,
   isField,
   parseQuoteAt,
   hearingOf,

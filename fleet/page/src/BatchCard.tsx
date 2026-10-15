@@ -2,11 +2,13 @@
  * A batch of comments on a decision as the chat shows it (SPEC "Marks on a decision", the page): a compact
  * card built from the message's structured `marks`, never its Markdown: "N comments on <ref>", then each
  * comment with its number, kind, the words it is on (one line), the comment and a replacement's new words.
- * Every string is the batch's, flattened to one line (`oneLine`) and set as text. A tap opens the decision's
- * inbox on that comment's thread (on the page the batch's place names).
+ * Every string is the batch's, flattened to one line (`oneLine`) and set as text; a comment's images follow it,
+ * each a thumbnail that opens full size. A tap opens the decision's inbox on that comment's thread (on the page
+ * the batch's place names).
  */
 import { For, Show, type JSX } from "@solidjs/web";
 
+import { Pictures } from "./Attach.tsx";
 import type { MarkBatch, MarkItem } from "./core.ts";
 import { batchHead, KIND_WORDS, oneLine } from "./marks.ts";
 
@@ -46,6 +48,7 @@ function Item(props: { readonly item: MarkItem; readonly hash: string }): JSX.El
         <Show when={i().kind === "replace" && i().replacement}>{(r) => <span class="bc-with">with “{oneLine(r(), 160)}”</span>}</Show>
         <Show when={i().comment}>{(c) => <span class="bc-c">{oneLine(c(), 240)}</span>}</Show>
       </button>
+      <Pictures images={i().images} />
     </li>
   );
 }

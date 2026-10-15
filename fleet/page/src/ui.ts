@@ -10,6 +10,7 @@ import { createEffect, createMemo, createSignal, flush, untrack } from "solid-js
 import { createCarets } from "./carets.ts";
 import { decisionTrail, sideSummaries } from "./chatlog.ts";
 import { Core, type Decision, type FindRow, type ItemRef, type Json, type JsonRecord, type Lookup, type Quote, type QuoteAt } from "./core.ts";
+import { createAttachments } from "./attach.ts";
 import { chatHeaders } from "./chat-headers.ts";
 import { postAsk, postOpen } from "./embed.ts";
 import { arrange, countsOf, cycleTab, itemsOf, readPrefix, tabsOf, type Item, type Section } from "./find.ts";
@@ -38,6 +39,8 @@ interface ChatBody {
   re?: number;
   quote?: Quote;
   side?: number | "new";
+  /** The images pasted with it, as the hub's `attachments` named them. */
+  images?: string[];
 }
 
 /** Whether a parsed value is an object rather than null, a list or a scalar. */
@@ -447,14 +450,20 @@ export function createUi(m: Model) {
     }
   }
 
+  /** The images pasted into the composer, or picked with its attach button, until the message is sent. */
+  const pictures = createAttachments();
+
   async function send(): Promise<void> {
     const say = refs.say;
     const text = say?.value.trim() ?? "";
+    const images = [...pictures.paths()];
 
-    if (!say || !text || m.sending() || !m.chatWritable()) return;
+    if (!say || (!text && !images.length) || pictures.busy() > 0 || m.sending() || !m.chatWritable()) return;
     m.setSending(true);
     setError("");
     const body: ChatBody = { text };
+
+    if (images.length) body.images = images;
     const re = m.reply();
     const quote = m.quote();
     const focus = m.focus();
@@ -496,6 +505,7 @@ export function createUi(m: Model) {
       }
 
       say.value = "";
+      pictures.clear();
       store.remove("chat-draft");
       m.setDraft("");
       m.setReply(null);
@@ -1091,6 +1101,7 @@ export function createUi(m: Model) {
 
   return {
     refs,
+    pictures,
     follow,
     notify,
     panelOpen,

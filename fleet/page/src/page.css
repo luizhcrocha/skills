@@ -779,7 +779,7 @@
   .dv .chat-error .dv-reload { margin-left: 8px; vertical-align: middle; }
   /* The composer: one rounded surface holding the reply chip, the field (one line to eight, then it
      scrolls) and the round send button at its bottom right. The focus ring is the surface's. */
-  .box { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "chip chip" "text send"; align-items: end; row-gap: 6px; column-gap: 6px; padding: 6px 6px 6px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--bg); cursor: text; }
+  .box { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "chip chip chip" "text attach send"; align-items: end; row-gap: 6px; column-gap: 6px; padding: 6px 6px 6px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--bg); cursor: text; }
   .box:has(.reply[hidden]) { row-gap: 0; }
   .box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
   .box textarea { grid-area: text; display: block; width: 100%; min-width: 0; margin: 0; padding: 7px 0; border: 0; background: none; font-size: 16px; line-height: 1.45; field-sizing: content; min-block-size: calc(1lh + 14px); max-block-size: calc(8lh + 14px); overflow-y: auto; resize: none; box-sizing: border-box; outline: none; }
@@ -790,6 +790,28 @@
   .send svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
   .send:disabled { background: var(--line); color: var(--muted); cursor: default; }
   @media (max-width: 759.98px), (pointer: coarse) { .send { width: 44px; height: 44px; } .box { border-radius: 26px; padding-left: 16px; } }
+  /* Images: the attach button beside send, the tray of thumbnails waiting under a field, and a sent message's. */
+  .attach { display: contents; }
+  .attach-btn { cursor: pointer; }
+  .attach-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .attach-btn:disabled { opacity: .5; cursor: not-allowed; }
+  .box .attach-btn { grid-area: attach; width: 36px; height: 36px; border-radius: 50%; }
+  .attach-row { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+  .attach-tray ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
+  .attach-tray li { position: relative; display: grid; place-items: center; width: 64px; height: 64px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); color: var(--muted); }
+  .attach-tray img { width: 100%; height: 100%; object-fit: cover; }
+  .attach-tray .icon-btn { position: absolute; top: 0; right: 0; width: 28px; height: 28px; border-radius: 0 0 0 8px; background: color-mix(in srgb, var(--card) 85%, transparent); color: var(--text); font-size: 1rem; }
+  .attach-error { margin: 6px 0 0; color: var(--critical); font-size: var(--fs-s); }
+  /* On a phone every control is a full tap target: the attach button, and each thumbnail's remove button, on a
+     thumbnail big enough to be seen past it. */
+  @media (max-width: 759.98px), (pointer: coarse) {
+    .box .attach-btn { width: 44px; height: 44px; }
+    .attach-tray li { width: 96px; height: 96px; }
+    .attach-tray .icon-btn { width: 44px; height: 44px; border-radius: 0 0 0 12px; }
+  }
+  .msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .msg-images a { display: block; border-radius: 8px; overflow: hidden; line-height: 0; }
+  .msg-images img { max-width: min(240px, 100%); max-height: 240px; object-fit: contain; background: var(--bg); }
   .reply { grid-area: chip; display: flex; align-items: center; gap: 4px; justify-self: start; max-width: 100%; min-width: 0; box-sizing: border-box; padding: 0 0 0 10px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: var(--fs-xs); margin-top: 2px; }
   .reply-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .reply .icon-btn { width: var(--tap); height: var(--tap); color: inherit; font-size: 1rem; }
@@ -1204,6 +1226,7 @@
   /* The paper plane's glyph sits optically centred in its circle. */
   .mk-send .i[data-plane], .mk-now .i[data-plane] { transform: translate(-1px, 1px); }
   .mk-send { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: var(--on-accent); cursor: pointer; flex: none; }
+  .mk-sends .attach-btn { width: 32px; height: 32px; border-radius: 50%; }
   .mk-box.waits .mk-send { background: var(--you); color: var(--bg); }
   .mk-box.waits .mk-send.now { background: transparent; color: var(--you); border: 1.5px solid color-mix(in srgb, var(--you) 55%, transparent); }
   .mk-box.waits .mk-send.now:hover { background: var(--you-soft); }
@@ -1276,7 +1299,7 @@
     .mk-sheet { bottom: calc(100% - var(--vv-top, 0px) - var(--vv-h, 100%)); max-height: calc(var(--vv-h, 100dvh) * 0.92); overscroll-behavior: contain; }
     .mk-panel .mk-composer { padding-bottom: max(10px, env(safe-area-inset-bottom, 0px)); }
     .mk-panel .mk-icon { width: 44px; height: 44px; }
-    .mk-send { width: 44px; height: 44px; }
+    .mk-send, .mk-sends .attach-btn { width: 44px; height: 44px; }
     @media (prefers-reduced-motion: no-preference) { .mk-rail { transition: opacity 200ms ease, transform 200ms ease; } .mk-panel { animation: mk-up 240ms cubic-bezier(0.32, 0.72, 0, 1); } }
   }
   @keyframes mk-up { from { transform: translateY(100%); } }

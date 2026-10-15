@@ -15,6 +15,7 @@ import { resolvePath } from "../files.ts";
 import { asArray, asNumber, asObject, asString, truthy, type Json, type JsonObject } from "../json.ts";
 import type { Entry } from "../registry.ts";
 import type { Machine } from "../world.ts";
+import { copyImages, keepMarkImages, markImages } from "./attachments.ts";
 import { fromManager, sideChatIn, threadOf } from "./chat.ts";
 import { appendLocked, readChat, Tail, type Message } from "./store.ts";
 
@@ -34,6 +35,9 @@ export interface Delivered {
   readonly author: string | undefined;
   readonly quote: Json | undefined;
   readonly marks: Json | undefined;
+  /** The images it carries, as paths under the manager's DIR: copied into each coordinator's (`copyImages`), as
+   * are the images on its marks (`marks.items[].images`). */
+  readonly images: Json | undefined;
   readonly origin: string | undefined;
 }
 
@@ -51,6 +55,7 @@ interface Copy {
   marks?: Json;
   mark?: Json;
   keep?: Json;
+  images?: string[];
   side?: Json;
   origin?: string;
   via?: { fleet: string; id: number };
@@ -137,11 +142,13 @@ function placeIn(entry: Entry, placed: Json | undefined, managerPage: string | u
 }
 
 /** Write `message` into one coordinator's chat; its id there, or undefined when it could not be. */
-function deliverTo(entry: Entry, known: readonly Message[], message: Delivered, managerPage: string | undefined): number | undefined {
+function deliverTo(entry: Entry, known: readonly Message[], message: Delivered, managerPage: string | undefined, managerRoot: string): number | undefined {
   const parent = message.re === null ? undefined : known.find((m) => m.id === message.re);
   const re = parent === undefined ? null : (copyIn(entry, parent) ?? null);
   const continued = asNumber(message.side);
   const side = continued === message.id ? "new" : continued === undefined ? undefined : sideIn(entry, known, continued);
+  const images = copyImages(managerRoot, entry.dir, message.images);
+  const markCopies = copyImages(managerRoot, entry.dir, markImages(message.marks).map(([, p]) => p));
 
   const stored = appendLocked(entry.dir, (theirs, nextId) => {
     const answered = re === null ? undefined : theirs.find((m) => m.id === re);
@@ -166,12 +173,14 @@ function deliverTo(entry: Entry, known: readonly Message[], message: Delivered, 
     const quote = placeIn(entry, message.quote, managerPage);
 
     if (quote !== undefined) copy.quote = quote;
-    const placed = placeIn(entry, message.marks, managerPage);
+    const placed = keepMarkImages(placeIn(entry, message.marks, managerPage), markCopies);
     const marks = asObject(placed);
 
     // A batch for one fleet is for its host there.
     if (marks !== undefined) copy.marks = marks["to"] === undefined ? marks : { ...marks, to: "coordinator" };
     else if (placed !== undefined) copy.marks = placed;
+
+    if (images.length > 0) copy.images = images;
 
     if (own !== undefined) copy.side = own;
 
@@ -199,7 +208,7 @@ export function deliveries(machine: Machine, managerRoot: string, known: readonl
     let id: number | undefined;
 
     try {
-      id = deliverTo(entry, known, message, managerPage);
+      id = deliverTo(entry, known, message, managerPage, managerRoot);
     } catch {
       id = undefined;
     }

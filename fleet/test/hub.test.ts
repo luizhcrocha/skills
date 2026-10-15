@@ -5,15 +5,18 @@
  * Every test starts a real hub on a free loopback port, with a registry of its own and a fake
  * `tailscale` that names this machine's owner.
  */
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { append } from "../src/chat/chat.ts";
+import { storeImage } from "../src/chat/attachments.ts";
+import { append, renderLines } from "../src/chat/chat.ts";
 import { readChat } from "../src/chat/store.ts";
 import { ChatError } from "../src/errors.ts";
+import { resolvePath } from "../src/files.ts";
 import { expireGrants, grantAnswer, registeredSession } from "../src/hub/grants.ts";
 import { collapse } from "../src/hub/hub.ts";
 import { chatOriginsPath, grantor, hello, parseChatOrigins, postRefusal, viewerOf, writerRefusal } from "../src/hub/policy.ts";
@@ -21,7 +24,7 @@ import { lsofListenersOf } from "../src/hub/served.ts";
 import { startHub, type Running } from "../src/hub/server.ts";
 import { frontmatter } from "../src/hub/skills.ts";
 import { isTailnetIp, tailnetOf } from "../src/hub/tailnet.ts";
-import { asArray, asObject, asString, type JsonObject } from "../src/json.ts";
+import { asArray, asObject, asString, type Json, type JsonObject } from "../src/json.ts";
 import { parseInstant, stampOf } from "../src/clock.ts";
 import type { Probe } from "../src/host.ts";
 import { elapsedOf, holdsSocket, isClaudeBinary, lsofFiles, parentsOf, startedOf } from "../src/procs.ts";
@@ -318,6 +321,39 @@ describe("a fleet's chat through the hub", () => {
     expect(readChat(root).length).toBe(1);
   });
 
+  test("posts that open a side chat with the same key on a decision join one side chat, also after a restart; another key opens another", async () => {
+    const quote = { text: "Stripe rounds on the total", from: "D1 Rounding", at: { hash: "#decision/d1", anchor: "dv-body" } };
+    const first = await post({ text: "first", side: "new", quote, opens: "n1" });
+    const again = await post({ text: "second", side: "new", quote, opens: "n1" });
+    expect([first.status, first.body["side"], first.body["opens"], first.body["quote"]]).toEqual([201, 1, "n1", quote]);
+    expect([again.status, again.body["side"], again.body["opens"], again.body["quote"]]).toEqual([201, 1, undefined, undefined]);
+    await running?.stop();
+    await start();
+    const later = await post({ text: "days later", side: "new", quote, opens: "n1" });
+    const other = await post({ text: "another thought", side: "new", quote, opens: "n2" });
+    const elsewhere = await post({ text: "same key, d2", side: "new", quote: { ...quote, at: { hash: "#decision/d2", anchor: "dv-body" } }, opens: "n1" });
+    const keyless = await post({ text: "no key", side: "new", quote });
+    expect([later.body["side"], other.body["side"], elsewhere.body["side"], keyless.body["side"]]).toEqual([1, 4, 5, 6]);
+    expect(readChat(root).map((m) => m.side)).toEqual([1, 1, 1, 4, 5, 6]);
+  });
+
+  test("a side chat's open key is short, of letters, digits, - and _, and goes only with side new", async () => {
+    const quote = { text: "q", at: { hash: "#decision/d1" } };
+    const badKey = "opens is the page's key for the side chat it opens: 1 to 64 of A-Z, a-z, 0-9, - and _";
+
+    for (const [payload, error] of [
+      [{ text: "a", side: "new", quote, opens: "a b" }, badKey],
+      [{ text: "a", side: "new", quote, opens: "x".repeat(65) }, badKey],
+      [{ text: "a", side: "new", quote, opens: 7 }, badKey],
+      [{ text: "a", opens: "n1" }, "opens goes with side new: it names the side chat the post opens"],
+    ] as const) {
+      const got = await post(payload);
+      expect([got.status, got.body["error"]]).toEqual([400, error]);
+    }
+
+    expect(readChat(root)).toEqual([]);
+  });
+
   test("hello tells the page the most bytes a post may have", async () => {
     const stream = await Stream.open("/f/p/events");
     expect(data(await stream.next())).toEqual({ write: true, max_bytes: 256 * 1024 });
@@ -395,6 +431,225 @@ describe("a fleet's chat through the hub", () => {
     const old = await request("GET", "/f/p/?x=1");
     expect([old.status, old.headers.get("Location")]).toEqual([301, "/f/infra-coordinator-2/?x=1"]);
     expect((await request("GET", "/f/infra-coordinator-2/")).status).toBe(200);
+  });
+});
+
+describe("an image pasted into the chat", () => {
+  beforeEach(() => start());
+
+  /** A PNG's first bytes, then `tail` so each test's image is its own. */
+  const png = (tail: string): Buffer => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(tail)]);
+
+  async function upload(bytes: Buffer, type: string, headers: Record<string, string> = {}): Promise<Answer> {
+    const res = await fetch(`http://127.0.0.1:${port}/f/p/attachments`, { method: "POST", headers: { "Content-Type": type, ...headers }, body: bytes });
+    const text = await res.text();
+
+    return { status: res.status, body: asObject(JSON.parse(text)) ?? {}, headers: res.headers };
+  }
+
+  test("the page's paste is stored once per content under attachments/, and served back as the image", async () => {
+    const own = await pageHeaders("/f/p/chat");
+    const first = await upload(png("one"), "image/png", own);
+    const path = asString(first.body["path"]) ?? "";
+    expect([first.status, path]).toEqual([201, `attachments/${createHash("sha256").update(png("one")).digest("hex").slice(0, 16)}.png`]);
+    expect(readFileSync(join(root, path)).equals(png("one"))).toBe(true);
+    const again = await upload(png("one"), "image/png", own);
+    expect([again.status, again.body["path"]]).toEqual([201, path]);
+    expect(readdirSync(join(root, "attachments"))).toEqual([path.slice("attachments/".length)]);
+    const served = await fetch(`http://127.0.0.1:${port}/f/p/${path}`);
+    expect([served.status, served.headers.get("Content-Type")]).toEqual([200, "image/png"]);
+    expect(Buffer.from(await served.arrayBuffer()).equals(png("one"))).toBe(true);
+  });
+
+  test("only png, jpeg, webp and gif of at most 10 MB are taken, each its bytes what its type says", async () => {
+    const own = await pageHeaders("/f/p/chat");
+    const kinds = "Only a PNG, JPEG, WebP or GIF image can be attached.";
+
+    const cases: readonly (readonly [Buffer, string, number, string])[] = [
+      [Buffer.from("hello"), "text/plain", 415, kinds],
+      [Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>"), "image/svg+xml", 415, kinds],
+      [Buffer.from("not a png at all"), "image/png", 415, "This file is not the image/png it says it is."],
+      [Buffer.alloc(0), "image/png", 400, "The image is empty."],
+      [Buffer.concat([png("big"), Buffer.alloc(10 * 1024 * 1024)]), "image/png", 413, "This image is 10241 KiB; the most an image can be is 10 MB."],
+    ];
+
+    for (const [bytes, type, status, error] of cases) {
+      const got = await upload(bytes, type, own);
+      expect([got.status, got.body["error"]], type).toEqual([status, error]);
+    }
+
+    expect(existsSync(join(root, "attachments"))).toBe(false);
+    const jpeg = await upload(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2]), "image/jpeg", own);
+    const gif = await upload(Buffer.from("GIF89a...."), "image/gif", own);
+    const webp = await upload(Buffer.concat([Buffer.from("RIFF"), Buffer.from([4, 0, 0, 0]), Buffer.from("WEBPVP8 ")]), "image/webp", own);
+    expect([jpeg, gif, webp].map((a) => [a.status, (asString(a.body["path"]) ?? "").replace(/[0-9a-f]{16}/u, "H")])).toEqual([
+      [201, "attachments/H.jpg"],
+      [201, "attachments/H.gif"],
+      [201, "attachments/H.webp"],
+    ]);
+  });
+
+  test("an upload is the fleet's own page's, as a grant is: one with no Origin, Sec-Fetch-Site or page token stores nothing", async () => {
+    const self = `http://127.0.0.1:${String(port)}`;
+    const own = await pageHeaders("/f/p/chat");
+    const refused = "a grant comes only from the fleet's own page on this hub: answer it there";
+    const stale = "the page token is missing or stale: reload the fleet's page and answer again";
+
+    const cases: readonly (readonly [Record<string, string>, string])[] = [
+      [{}, refused],
+      [{ Origin: self }, refused],
+      [{ Origin: "http://evil.example", "Sec-Fetch-Site": "cross-site", "X-Fleet-Page-Token": own["X-Fleet-Page-Token"] ?? "" }, refused],
+      [{ Origin: self, "Sec-Fetch-Site": "same-origin" }, stale],
+      [{ ...own, "X-Fleet-Page-Token": "x" }, stale],
+    ];
+
+    for (const [headers, error] of cases) {
+      const got = await upload(png("gate"), "image/png", headers);
+      expect([got.status, got.body["error"]], JSON.stringify(headers)).toEqual([403, error]);
+    }
+
+    expect(existsSync(join(root, "attachments"))).toBe(false);
+  });
+
+  test("a message carries its images: stored with it, refused when one was never uploaded, and its watch line gives each one's path", async () => {
+    const own = await pageHeaders("/f/p/chat");
+    const path = asString((await upload(png("msg"), "image/png", own)).body["path"]) ?? "";
+    const sent = await post({ text: "@a1 this screen", images: [path] });
+    expect([sent.status, sent.body["images"]]).toEqual([201, [path]]);
+    const alone = await post({ text: "", images: [path] });
+    expect([alone.status, alone.body["text"], alone.body["images"]]).toEqual([201, "", [path]]);
+
+    for (const images of [["attachments/0123456789abcdef.png"], ["../state.json"], ["attachments/x.svg"], "attachments/a.png"]) {
+      const got = await post({ text: "look", images });
+      expect([got.status, got.body["error"]], JSON.stringify(images)).toEqual([400, "images are the attachments/<hash>.<png|jpg|webp|gif> files this fleet's page uploaded, at most 8"]);
+    }
+
+    expect((await post({ text: "", images: [] })).status).toBe(400);
+    const lines = renderLines(machine(env), root, readChat(root));
+    const abs = join(resolvePath(root), path);
+    expect(lines[0]?.endsWith(`: @a1 this screen [image: ${abs}]`)).toBe(true);
+    expect(lines[1]?.endsWith(`: [image: ${abs}]`)).toBe(true);
+  });
+
+  const marked = (images: Json): JsonObject => ({
+    decision: { id: "d1", title: "Invoice schema", revision: "2026-01-01T00:00:00+00:00" },
+    at: { hash: "#decision/d1" },
+    items: [
+      { n: 1, kind: "general", comment: "this screen", images },
+      { n: 2, kind: "general", comment: "no picture" },
+    ],
+  });
+
+  test("a mark carries its images: stored with its batch, refused when one was never uploaded or is not such a path, and the watch line gives each one's path with its mark", async () => {
+    const own = await pageHeaders("/f/p/chat");
+    const path = asString((await upload(png("mark"), "image/png", own)).body["path"]) ?? "";
+    const sent = await post({ text: "2 marks on d1", marks: marked([path]) });
+    expect([sent.status, sent.body["marks"]]).toEqual([201, marked([path])]);
+    expect(readChat(root)[0]?.stored["marks"]).toEqual(marked([path]));
+    const missing = await post({ text: "2 marks on d1", marks: marked(["attachments/0123456789abcdef.png"]) });
+    expect([missing.status, missing.body["error"]]).toEqual([400, "images are the attachments/<hash>.<png|jpg|webp|gif> files this fleet's page uploaded, at most 8"]);
+    const nine = Array.from({ length: 9 }, (_, i) => `attachments/${String(i).repeat(16)}.png`);
+
+    for (const images of [["../state.json"], ["attachments/x.svg"], "attachments/a.png", nine, [3]]) {
+      const got = await post({ text: "2 marks on d1", marks: marked(images) });
+      expect([got.status, got.body["error"]], JSON.stringify(images)).toEqual([400, "marks are {decision, at, items}: mark 1.images is a list of at most 8 attachments/<hash>.<png|jpg|webp|gif> paths"]);
+    }
+
+    expect(readChat(root).length).toBe(1);
+    const abs = join(resolvePath(root), path);
+    expect(renderLines(machine(env), root, readChat(root))[0]?.endsWith(`: 2 marks on d1 [image on mark 1: ${abs}]`)).toBe(true);
+  });
+
+  test("only the machine's owner uploads: a viewer Tailscale names as someone else is refused, with the page's own headers", async () => {
+    await running?.stop();
+    const fake = join(base, "tailscale");
+    writeFileSync(fake, FAKE_TAILSCALE);
+    chmodSync(fake, 0o755);
+    await start({ tailscale: fake });
+    const own = await pageHeaders("/f/p/chat");
+    const eve = await upload(png("eve"), "image/png", { ...own, "Tailscale-User-Login": "eve@example.com" });
+    expect([eve.status, eve.body["error"]]).toEqual([403, `only ${OWNER} can write here`]);
+    expect(existsSync(join(root, "attachments"))).toBe(false);
+  });
+
+  test("an upload names its length: one sent in chunks with no Content-Length is refused (411), small or over 10 MB, and stores nothing", async () => {
+    const own = await pageHeaders("/f/p/chat");
+
+    for (const bytes of [png("chunked"), Buffer.concat([png("big"), Buffer.alloc(10 * 1024 * 1024)])]) {
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          for (let i = 0; i < bytes.length; i += 1 << 20) c.enqueue(bytes.subarray(i, i + (1 << 20)));
+
+          c.close();
+        },
+      });
+
+      const res = await fetch(`http://127.0.0.1:${port}/f/p/attachments`, { method: "POST", headers: { "Content-Type": "image/png", ...own }, body });
+      const got = asObject(JSON.parse(await res.text())) ?? {};
+      expect([res.status, got["error"]], String(bytes.length)).toEqual([411, "An image is sent with its Content-Length."]);
+    }
+
+    expect(existsSync(join(root, "attachments"))).toBe(false);
+  });
+
+  test("an image path is the whole of attachments/<hash>.<ext>: one under another folder is refused, on a message and on a mark", async () => {
+    const planted = "../x/attachments/0123456789abcdef.png";
+    mkdirSync(join(root, "../x/attachments"), { recursive: true });
+    writeFileSync(join(root, planted), png("planted"));
+    const message = await post({ text: "look", images: [planted] });
+    expect([message.status, message.body["error"]]).toEqual([400, "images are the attachments/<hash>.<png|jpg|webp|gif> files this fleet's page uploaded, at most 8"]);
+    const mark = await post({ text: "2 marks on d1", marks: marked([planted]) });
+    expect([mark.status, mark.body["error"]]).toEqual([400, "marks are {decision, at, items}: mark 1.images is a list of at most 8 attachments/<hash>.<png|jpg|webp|gif> paths"]);
+    expect(readChat(root)).toEqual([]);
+  });
+
+  test("an attachments folder that is a symlink is never written through, nor read as the fleet's", async () => {
+    const own = await pageHeaders("/f/p/chat");
+    const outside = join(base, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "0123456789abcdef.png"), png("planted"));
+    symlinkSync(outside, join(root, "attachments"));
+    const got = await upload(png("through"), "image/png", own);
+    expect([got.status, got.body["error"]]).toEqual([500, "The fleet's attachments folder is a symlink: the hub keeps images only in a folder of its own."]);
+    expect(readdirSync(outside)).toEqual(["0123456789abcdef.png"]);
+    expect((await post({ text: "look", images: ["attachments/0123456789abcdef.png"] })).status).toBe(400);
+  });
+
+  test("an image's place that is already a symlink is refused, and nothing is written where it leads", async () => {
+    const own = await pageHeaders("/f/p/chat");
+    const bytes = png("linked");
+    const name = `${createHash("sha256").update(bytes).digest("hex").slice(0, 16)}.png`;
+    mkdirSync(join(root, "attachments"));
+    symlinkSync(join(base, "elsewhere.png"), join(root, "attachments", name));
+    const got = await upload(bytes, "image/png", own);
+    expect([got.status, got.body["error"]]).toEqual([500, `attachments/${name} is there and is not an image the hub stored: it is left as it is.`]);
+    expect(existsSync(join(base, "elsewhere.png"))).toBe(false);
+  });
+
+  test("a write cut short is never kept: the image is written beside its place and linked in whole", () => {
+    const bytes = png("cut");
+
+    const cut = (path: string, data: Buffer): void => {
+      writeFileSync(path, data.subarray(0, 4));
+      throw new Error("disk full");
+    };
+
+    expect(storeImage(root, "image/png", bytes, cut)).toEqual({ refused: [500, "Could not store the image: disk full"] });
+    expect(readdirSync(join(root, "attachments"))).toEqual([]);
+    const stored = storeImage(root, "image/png", bytes);
+    const path = "path" in stored ? stored.path : "";
+    expect(readFileSync(join(root, path)).equals(bytes)).toBe(true);
+    expect(readdirSync(join(root, "attachments"))).toEqual([path.slice("attachments/".length)]);
+  });
+
+  test("a mark's images may stand in for its words: a general mark with an image and no comment is taken, one with neither is not", async () => {
+    const own = await pageHeaders("/f/p/chat");
+    const path = asString((await upload(png("alone"), "image/png", own)).body["path"]) ?? "";
+    const batch = (images?: readonly string[]): JsonObject => ({ ...marked([]), items: [images === undefined ? { n: 1, kind: "general" } : { n: 1, kind: "general", images: [...images] }] });
+    const taken = await post({ text: "1 mark on d1", marks: batch([path]) });
+    expect([taken.status, asArray(asObject(taken.body["marks"])?.["items"])]).toEqual([201, [{ n: 1, kind: "general", images: [path] }]]);
+    const bare = await post({ text: "1 mark on d1", marks: batch() });
+    expect([bare.status, bare.body["error"]]).toEqual([400, "marks are {decision, at, items}: mark 1 is a general mark: it needs its comment"]);
   });
 });
 
@@ -2095,6 +2350,77 @@ describe("the user's word to a coordinator on the manager's page", () => {
     if (kept instanceof ChatError) throw new Error(kept.reason);
     relay();
     expect(fields(readChat(manager).at(-1), "from", "re", "mark", "keep", "via")).toEqual(["p", 1, [2], "the legal minimum", { fleet: "p", id: 3 }]);
+  });
+
+  test("a batch's mark images on the manager's page are copied into the fleet it goes to, under the same paths", async () => {
+    const bytes = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("relayed")]);
+    const res = await fetch(`http://127.0.0.1:${String(port)}/f/manager/attachments`, { method: "POST", headers: { "Content-Type": "image/png", ...(await pageHeaders("/f/manager/chat")) }, body: bytes });
+    const path = asString(asObject(JSON.parse(await res.text()))?.["path"]) ?? "";
+    expect([res.status, existsSync(join(manager, path))]).toEqual([201, true]);
+    const batch = marks("#decision/p/d30");
+    const items = (asArray(batch["items"]) ?? []).map((item, i) => (i === 1 ? { ...asObject(item), images: [path] } : item));
+    const sent = await toManager({ text: "2 marks on D30", marks: { ...batch, items } });
+    expect([sent.status, sent.body["delivered"]]).toEqual([201, [{ fleet: "p", id: 1 }]]);
+    expect(asObject(asArray(asObject(readChat(root)[0]?.stored["marks"])?.["items"])?.[1])?.["images"]).toEqual([path]);
+    expect(readFileSync(join(root, path)).equals(bytes)).toBe(true);
+  });
+
+  /** An image uploaded on the manager's page, as its page does: its path there. */
+  async function managerImage(bytes: Buffer): Promise<string> {
+    const res = await fetch(`http://127.0.0.1:${String(port)}/f/manager/attachments`, { method: "POST", headers: { "Content-Type": "image/png", ...(await pageHeaders("/f/manager/chat")) }, body: bytes });
+
+    return asString(asObject(JSON.parse(await res.text()))?.["path"]) ?? "";
+  }
+
+  const png = (tail: string): Buffer => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(tail)]);
+
+  test("a message's own images on the manager's page are copied into the fleet it goes to, under the same paths", async () => {
+    const bytes = png("own");
+    const path = await managerImage(bytes);
+    const sent = await toManager({ text: "@p this screen", images: [path] });
+    expect([sent.status, sent.body["delivered"]]).toEqual([201, [{ fleet: "p", id: 1 }]]);
+    expect(readChat(root)[0]?.stored["images"]).toEqual([path]);
+    expect(readFileSync(join(root, path)).equals(bytes)).toBe(true);
+  });
+
+  test("the copy never writes through a symlinked attachments folder: the delivered message names no image, and its watch line none", async () => {
+    const path = await managerImage(png("through"));
+    const outside = join(base, "outside");
+    mkdirSync(outside);
+    symlinkSync(outside, join(root, "attachments"));
+    const batch = marks("#decision/p/d30");
+    const items = (asArray(batch["items"]) ?? []).map((item, i) => (i === 1 ? { ...asObject(item), images: [path] } : item));
+    const sent = await toManager({ text: "2 marks on D30", images: [path], marks: { ...batch, items } });
+    expect([sent.status, sent.body["delivered"]]).toEqual([201, [{ fleet: "p", id: 1 }]]);
+    const got = readChat(root)[0];
+    expect([got?.stored["images"], asObject(asArray(asObject(got?.stored["marks"])?.["items"])?.[1])?.["images"]]).toEqual([undefined, undefined]);
+    expect(readdirSync(outside)).toEqual([]);
+    expect(renderLines(machine(env), root, readChat(root)).join("\n")).not.toContain("[image");
+  });
+
+  test("a mark that was an image alone, whose image did not reach the fleet, is delivered with words that say so", async () => {
+    const path = await managerImage(png("alone"));
+    const outside = join(base, "outside");
+    mkdirSync(outside);
+    symlinkSync(outside, join(root, "attachments"));
+    const batch = marks("#decision/p/d30");
+    const items = (asArray(batch["items"]) ?? []).map((item, i) => (i === 1 ? { n: 2, kind: "general", images: [path] } : item));
+    const sent = await toManager({ text: "2 marks on D30", marks: { ...batch, items } });
+    expect([sent.status, sent.body["delivered"]]).toEqual([201, [{ fleet: "p", id: 1 }]]);
+    expect(asArray(asObject(readChat(root)[0]?.stored["marks"])?.["items"])?.[1]).toEqual({ n: 2, kind: "general", comment: "(an image that did not reach this fleet)" });
+  });
+
+  test("an image already at its place in the fleet is kept when it is the same bytes; a symlink or other bytes there are left as they are, and the image is not named", async () => {
+    const same = png("same");
+    const [a, b, c] = [await managerImage(same), await managerImage(png("linked")), await managerImage(png("other"))];
+    mkdirSync(join(root, "attachments"));
+    writeFileSync(join(root, a), same);
+    symlinkSync(join(base, "elsewhere.png"), join(root, b));
+    writeFileSync(join(root, c), png("not the manager's"));
+    const sent = await toManager({ text: "@p three screens", images: [a, b, c] });
+    expect(sent.status).toBe(201);
+    expect(readChat(root)[0]?.stored["images"]).toEqual([a]);
+    expect([existsSync(join(base, "elsewhere.png")), readFileSync(join(root, c)).equals(png("not the manager's"))]).toEqual([false, true]);
   });
 
   test("a batch in its decision's page thread is delivered into the same thread in the fleet's chat, and its answer comes back there", async () => {

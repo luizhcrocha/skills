@@ -1032,9 +1032,14 @@ marks: {
   decision: {id, ref?, title, revision},   revision: the decision's `revised`, else `opened`, as the page had it
   at: {hash},                              the decision's place, as a quote's `at`: `#decision/<id>` on a
                                            fleet's page, `#decision/<fleet>/<id>` on the manager's
-  items: [{n, kind, quote?, comment?, replacement?}]
+  items: [{n, kind, quote?, comment?, replacement?, images?}]
 }
 ```
+
+- `images` (optional, TypeScript only): the images pasted with the mark's words, as a message's `images` are
+  ([Images in the chat](#images-in-the-chat-typescript-only)): at most 8 `attachments/<hash>.<png|jpg|webp|gif>`
+  paths (`mark <n>.images is a list of at most 8 attachments/<hash>.<png|jpg|webp|gif> paths` otherwise), each
+  a stored image of that fleet (the message's 400 otherwise). An empty list is dropped.
 
 - `on` (optional, on a `general` item only: `mark <n>.on is only for a general reply`): the earlier mark of
   the decision whose thread this item replies in, a positive int; the user's replies in a comment thread or
@@ -1051,7 +1056,8 @@ marks: {
   page see different batches (the manager's page does not see one sent from the fleet's page), so two
   pages may each send an `n` of the same number. At most 100 items.
 - `kind`: `comment`, `delete`, `replace`, `question` or `general` (one comment on the whole decision; no
-  quote). `comment` is required for `comment`, `question` and `general`, optional otherwise;
+  quote). `comment` is required for `comment`, `question` and `general` unless the mark has `images` (an image
+  may stand in for the words), optional otherwise;
   `replacement` (the new text) is required for `replace` and refused on any other kind. Each at most
   4000 characters.
 - `quote` (every kind but `general`): `{text, prefix, suffix, hint, blocks}`.
@@ -1206,7 +1212,8 @@ pulse and a tap of the phone once done, none with reduced motion) and shows the 
 press let go after 250 ms and before then does neither; Shift+click and the card's Reset timer reset too.
 Its hover card (the hold on a phone) is the only send status: what waits, how many comments to each agent
 ("4 to perf, 2 to skills"), when it goes by itself, and the last send with its reason; a send leaves at
-most a brief toast ("Sent: 4 to perf, 2 to skills (you left the page)."). The inbox (a full
+most a brief toast ("Sent: 4 to perf, 2 to skills (you left the page)."), which counts only what went: what
+the hub stored, with what an answer took along, or, for a page leaving, what it handed the browser. The inbox (a full
 sheet on a phone, filling the visual viewport above the keyboard, the page behind locked and out of sight; Esc closes it) lists the page's main thread first (a side chat per decision page, held
 with the decision's owner, named in words: its opener is a message of Luiz's quoting the decision's title
 at `{hash, anchor: "dv-page"}`, found by that place; empty with a hint before any message), then a thread
@@ -1778,7 +1785,7 @@ stderr, `serve: the takeover is not recorded where it should be: <why>`, and the
   or, when its host's watch is dead, in its session (200 `{cleared, told[]}`; see
   [1Password locked](#1password-locked-fleet-onepw)), `POST /wake` (TypeScript only; under the same policy):
   Luiz's "Wake now" on a host that does not listen (200 `{woken, fleet, at}`, 409, 502; see [The hub's
-  wake](#the-hubs-wake)), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
+  wake](#the-hubs-wake)), `POST /attachments` (TypeScript only; see [Images in the chat](#images-in-the-chat-typescript-only)), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
   sandbox CSP and the body's policy; every other file, whatever its type, with `Content-Security-Policy: sandbox;
   script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'` and `nosniff`; dot files and paths
   out of DIR 404), and `GET /f/<fleet>/files/<path>` (TypeScript only): a file a
@@ -1879,6 +1886,63 @@ stderr, `serve: the takeover is not recorded where it should be: <why>`, and the
   a client's own `Tailscale-*` headers: the preview sets them from what it verified (see [The
   preview](#the-preview-fleet-preview)), and a fleet's page on a peer hub is asked with `Accept`,
   `Content-Type` and `Last-Event-ID` only.
+
+### Images in the chat (TypeScript only)
+
+An image Luiz pastes into the chat's composer (a reply and a side chat are the composer too) or into a
+decision's answer form (its note, a grilling's answers, a value), or picks with the attach button beside
+either (a phone whose paste gives no file), goes to the hub first: `POST /f/<fleet>/attachments`, its bytes as
+the body and its type as `Content-Type`. Only the fleet's own page uploads, as only it grants: the writer's
+policy, then `grantRefusal` (the hub's origin, `Sec-Fetch-Site: same-origin`, the page token; 403 otherwise).
+The hub takes `image/png`, `image/jpeg`, `image/webp` and `image/gif` whose first bytes are that type's (415
+otherwise, "Only a PNG, JPEG, WebP or GIF image can be attached." or "This file is not the image/png it says it
+is."), of 1 byte to 10 MB (400 empty; 413 "This image is N KiB; the most an image can be is 10 MB."), sent with
+its `Content-Length` (411 "An image is sent with its Content-Length." for a chunked body, before it is read), and
+stores it at `DIR/attachments/<first 16 hex of its SHA-256>.<png|jpg|webp|gif>`, once per content: 201
+`{path}`, that path under DIR. The bytes go to a file of their own in that folder and are hard-linked into place
+whole, so a write cut short is never the image (500 "Could not store the image: …"). The hub never writes
+through a symlink: an `attachments` that is a symlink or not a folder is refused (500 "The fleet's attachments
+folder is a symlink: the hub keeps images only in a folder of its own."), and so is a `<hash>.<ext>` that is
+there and is not a regular file (500 "attachments/<hash>.<ext> is there and is not an image the hub stored: it
+is left as it is."); a message naming an image under a symlinked `attachments` is refused as one never
+uploaded. The message then names it: `POST /chat` takes `images`, a list of at most 8
+such paths, each a regular file of that fleet (400 `images are the attachments/<hash>.<png|jpg|webp|gif> files
+this fleet's page uploaded, at most 8` otherwise); a message with images may have no text. It is stored as
+`images` on the message, and the page shows each as a thumbnail that links to the image full size (the hub
+serves it as any file under DIR). The printed line (`fleet chat … watch`, `open`) ends with each one's absolute
+path, `#4 user -> coordinator: this screen [image: /abs/DIR/attachments/ab12….png]`, so the agent it reaches
+reads it with its Read tool. A mark's comment box and a decision's thread box (the inbox) take images the same
+way, and send them on the mark's item of the batch (`marks.items[].images`, a side chat's words as the
+message's `images`); the printed line then ends with `[image on mark N: /abs/DIR/attachments/….png]` for each.
+A comment, a question or a general mark, or a reply in a thread, may be an image alone, with no words. The
+tray takes at most 8 images, counting those already on what it adds to (a waiting comment a reply in its
+thread joins, the waiting words of a side chat its post joins): a 9th is refused under the field with "8
+images at most go together; N are there already." The waiting words of one side chat go in as few posts as
+keep each at 8 images or fewer. Each post of a new side chat's words carries its quote and the page's key for
+that side chat, `opens` (1 to 64 of `A-Z a-z 0-9 - _`; otherwise 400 "opens is the page's key for the side chat
+it opens: 1 to 64 of A-Z, a-z, 0-9, - and _", and without `side: "new"` 400 "opens goes with side new: it names
+the side chat the post opens"). Under the store's lock, the first post with a key opens the side chat and is
+stored with `opens`; a later post with `side: "new"`, that key and a quote on the same page (`quote.at.hash`, the
+decision) joins it, stored as a message of that side chat (`side` its id, no `quote`, no `opens`). The key is
+kept on the stored opener in `DIR/chat.jsonl`, so it holds across a hub restart. So a retry after an answer
+that never came, the side chat's later posts, and the same words sent from a reload days later all join the one
+side chat, and a page leaving sends every post at once (whichever the hub stores first opens it). A joined run
+is addressed from the @-cites in its own words, not the opener's; a retry after a lost answer joins too, so it
+may store the same words twice in that side chat; and a leaving page's runs go in parallel, so the first one
+stored opens the side chat and may show before a run written earlier. Two keys
+are two side chats, on the same quote too: Luiz may open a second on the same words. Once a post is stored, the
+words still waiting for that new side chat are kept as words of the side chat it is in, so the inbox shows
+them there and they go there. An upload
+still running when the field is cleared or moves to another thread (the thread box is one field for every
+thread) lands nowhere. Images in a field are not kept across a reload, as a draft's words are; a waiting
+comment's are, with it. The attach button is a button (a keyboard reaches it) that opens the file picker. On a
+peer hub's fleet (`/f/<fleet>@<machine>/`) the page has no attach button and a paste of an image is the
+browser's: the peer takes no upload from this hub's page.
+A message on the manager's page delivered to a coordinator copies its images, and its marks' images, into
+that coordinator's DIR under the same paths, never replacing what is there (`COPYFILE_EXCL`): the same bytes
+already there are the image; other bytes, a symlink at its place, or a symlinked `attachments` leave it out.
+The delivered message, and each of its marks, names only the images copied, so the coordinator's printed line
+names only those; a mark that was an image alone and lost it says "(an image that did not reach this fleet)". Nothing removes an image yet.
 
 ### Posting from a prototype page
 

@@ -7,7 +7,7 @@
  */
 import { expect, test } from "bun:test";
 
-import { answerBody, autoStep, citesOf, clock, countOf, exitPosts, IDLE, KEEPALIVE_MAX, leftOf, loadPending, NONE, pageQuote, owing, perRecipient, planSend, QUIET_MS, QUIET_WORDS, running, savePending, sentWords, without, type Auto, type AutoEvent, type Pending, type SendReason } from "../src/autosend.ts";
+import { afterStored, answerBody, autoStep, citesOf, clock, countOf, exitPosts, IDLE, KEEPALIVE_MAX, leftOf, loadPending, NONE, pageQuote, owing, perRecipient, planSend, QUIET_MS, QUIET_WORDS, running, savePending, sentPart, sentWords, without, type Auto, type AutoEvent, type Pending, type SendReason } from "../src/autosend.ts";
 import type { MarkDecision, MarkItem, RosterRow } from "../src/core.ts";
 import { draftsKey, saveDrafts, type DraftStore } from "../src/marks.ts";
 
@@ -209,7 +209,7 @@ test("one send: the owner's batch of every mark (its @-cites in the Markdown), a
   expect(posts[1]?.body.marks?.to).toBe("a1");
   expect(posts[1]?.body.marks?.items.map((i) => i.n)).toEqual([2]);
   expect(posts[2]?.body).toEqual({ text: "and the second?", side: 40 });
-  expect(posts[3]?.body).toEqual({ text: "who asked?", side: "new", quote: { text: "Deferido", from: "the evidence", at: { hash: "#decision/d30", anchor: "dv-body" } } });
+  expect(posts[3]?.body).toEqual({ text: "who asked?", side: "new", quote: { text: "Deferido", from: "the evidence", at: { hash: "#decision/d30", anchor: "dv-body" } }, opens: "s1" });
 
   /* Once the main thread is open, the owner's batch goes into it. */
   expect(planSend({ items: [], msgs: [{ key: "k1", to: { _tag: "page" }, text: "hi" }] }, { decision: D30, hash: "#decision/d30", page: 77, outdated: new Set(), ...WHO }).map((x) => [x.body.side, x.body.marks?.items, x.carries])).toEqual([[77, [{ n: 100, kind: "general", comment: "hi" }], { items: [], msgs: ["k1"] }]]);
@@ -224,6 +224,91 @@ test("one send: the owner's batch of every mark (its @-cites in the Markdown), a
   expect(planSend({ items: [], msgs: [{ key: "r", to: { _tag: "mark", n: 5 }, text: "and also this" }, { key: "s", to: { _tag: "mark", n: 5 }, text: "and that" }] }, { decision: D30, hash: "#decision/d30", page: 77, outdated: new Set(), ...WHO, known })[0]?.body.text).toContain("**Replies**\n- On #5 “Every model call is saved”:\n  > and also this\n  > and that");
   expect(planSend(NONE, { decision: D30, hash: "#decision/d30", page: null, outdated: new Set(), ...WHO })).toEqual([]);
   expect(pageQuote({ id: "d9", title: "  Two\nlines ", revision: "r" }, "#decision/perf/d9").text).toBe("Two lines");
+});
+
+test("a message's images go with it: on its item in the batch, on its side chat's post, and kept while it waits", () => {
+  const png = "attachments/0123456789abcdef.png";
+  const jpg = "attachments/fedcba9876543210.jpg";
+
+  const p: Pending = {
+    items: [{ ...item(1, "this"), images: [jpg] }],
+    msgs: [
+      { key: "k1", to: { _tag: "page" }, text: "see", images: [png] },
+      { key: "k2", to: { _tag: "side", id: 40 }, text: "and", images: [png] },
+      { key: "k3", to: { _tag: "side", id: 40 }, text: "more", images: [jpg] },
+      { key: "k4", to: { _tag: "side", id: 41 }, text: "none" },
+    ],
+  };
+
+  const posts = planSend(p, { decision: D30, hash: "#decision/d30", page: 77, outdated: new Set(), ...WHO });
+  expect(posts[0]?.body.marks?.items.map((i) => [i.n, i.images])).toEqual([
+    [1, [jpg]],
+    [100, [png]],
+  ]);
+  expect(posts.slice(1).map((x) => x.body)).toEqual([
+    { text: "and\n\nmore", side: 40, images: [png, jpg] },
+    { text: "none", side: 41 },
+  ]);
+  const store = memory();
+  savePending(store, "k", p);
+  expect(loadPending(store, "k")).toEqual(p);
+  store.setItem("k", JSON.stringify({ items: [{ ...item(2, "x"), images: ["../state.json", png] }], msgs: [{ key: "k9", to: { _tag: "page" }, text: "y", images: [3, jpg] }] }));
+  expect(loadPending(store, "k")).toEqual({ items: [{ ...item(2, "x"), images: [png] }], msgs: [{ key: "k9", to: { _tag: "page" }, text: "y", images: [jpg] }] });
+});
+
+const imgs = (from: number, count: number): string[] => Array.from({ length: count }, (_, i) => `attachments/${(from + i).toString(16).padStart(16, "0")}.png`);
+
+test("a conversation's waiting words are split so no post carries more than 8 images: a side chat's run continues it, a new one's each carry its quote and its open key", () => {
+  const quote = { text: "q", from: "D30" };
+
+  const p: Pending = {
+    items: [],
+    msgs: [
+      { key: "k1", to: { _tag: "side", id: 40 }, text: "one", images: imgs(0, 5) },
+      { key: "k2", to: { _tag: "side", id: 40 }, text: "two", images: imgs(5, 3) },
+      { key: "k3", to: { _tag: "side", id: 40 }, text: "three", images: imgs(8, 1) },
+      { key: "k4", to: { _tag: "new", key: "n1", quote }, text: "four", images: imgs(20, 6) },
+      { key: "k5", to: { _tag: "new", key: "n1", quote }, text: "five", images: imgs(26, 6) },
+    ],
+  };
+
+  const posts = planSend(p, { decision: D30, hash: "#decision/d30", page: 77, outdated: new Set(), ...WHO });
+  expect(posts.map((x) => [x.body.text, x.body.side, x.body.quote ?? null, x.body.images?.length, x.carries.msgs, x.body.opens ?? null])).toEqual([
+    ["one\n\ntwo", 40, null, 8, ["k1", "k2"], null],
+    ["three", 40, null, 1, ["k3"], null],
+    ["four", "new", quote, 6, ["k4"], "n1"],
+    ["five", "new", quote, 6, ["k5"], "n1"],
+  ]);
+});
+
+test("once a new side chat's post is stored, its words still waiting show in that side chat and go to it", () => {
+  const quote = { text: "q", from: "D30" };
+  const other = { _tag: "new", key: "n2", quote: { text: "r", from: "D30" } } as const;
+
+  const p: Pending = {
+    items: [],
+    msgs: [
+      { key: "k4", to: { _tag: "new", key: "n1", quote }, text: "four", images: imgs(20, 6) },
+      { key: "k5", to: { _tag: "new", key: "n1", quote }, text: "five", images: imgs(26, 6) },
+      { key: "k6", to: other, text: "six" },
+    ],
+  };
+
+  const t = { decision: D30, hash: "#decision/d30", page: 77, outdated: new Set<number>(), ...WHO };
+  const [opener] = planSend(p, t);
+
+  if (!opener) throw new Error("no opener");
+  const rest = afterStored(p, opener, { id: 120, side: 120 });
+  expect(rest.msgs.map((m) => [m.key, m.to])).toEqual([
+    ["k5", { _tag: "side", id: 120 }],
+    ["k6", other],
+  ]);
+  expect(planSend(rest, t).map((x) => [x.body.side, x.body.quote ?? null, x.body.opens ?? null, x.carries.msgs])).toEqual([
+    [120, null, null, ["k5"]],
+    ["new", other.quote, "n2", ["k6"]],
+  ]);
+  /* A stored post that opened nothing, or a reply with no side chat id, rewrites nothing. */
+  expect(afterStored(p, opener, { id: 120 }).msgs.map((m) => m.to._tag)).toEqual(["new", "new"]);
 });
 
 test("one batch per agent reached: the owner's holds all seven, each cited agent's only the comments citing it, in page order; the owner's joins the page thread", () => {
@@ -277,6 +362,15 @@ test("a page leaving sends keepalive posts up to 60 KB in all, the rest as plain
   expect(out.map((x) => x.keepalive)).toEqual([false, true]);
   expect(KEEPALIVE_MAX).toBe(61_440);
   expect(JSON.parse(out[1]?.json ?? "{}")).toEqual({ text: "small", side: 3 });
+});
+
+test("what a send sent is what its posts carried: a post not sent leaves its words out of the count", () => {
+  const p: Pending = { items: [item(1, "a"), item(2, "b")], msgs: [{ key: "k1", to: { _tag: "side", id: 3 }, text: "one" }, { key: "k2", to: { _tag: "side", id: 4 }, text: "two" }], withdrawn: [5] };
+  const posts = planSend(p, { decision: D30, hash: "#decision/d30", page: 9, outdated: new Set(), ...WHO });
+
+  expect(sentPart(p, posts)).toEqual(p);
+  expect(sentPart(p, posts.slice(0, 2))).toEqual({ items: p.items, msgs: [{ key: "k1", to: { _tag: "side", id: 3 }, text: "one" }], withdrawn: [5] });
+  expect(sentPart(p, [])).toEqual({ items: [], msgs: [] });
 });
 
 test("who a send reaches, with how many comments each, and the send in words", () => {
