@@ -39,6 +39,7 @@ class Hook:
         self._states = {}
         self._fleet_dirs = None
         self._grant_dirs = None
+        self._served_dirs = None
         self._grant_state_dirs = None
         self._allows = {}
         self._ended = {}
@@ -471,7 +472,13 @@ def _served_dirs(hook):
     """The DIR of each registry entry whose session_id is this session's, then each folder of the ledgers' home that
     the registry once gave this session and that has since moved (cloud.json): the cut-over's `fleet serve --stop`
     removes the entry, so the session remembers the home's folders it served. A folder is never taken by its name or
-    its marker alone: a session writes to no fleet the registry did not give it."""
+    its marker alone: a session writes to no fleet the registry did not give it. Looked up once per hook."""
+    if hook._served_dirs is None:
+        hook._served_dirs = _find_served_dirs(hook)
+    return list(hook._served_dirs)
+
+
+def _find_served_dirs(hook):
     found = _registry_dirs(hook)
     if not hook.session_id:
         return found
@@ -978,6 +985,15 @@ def _watch_refused(ledger, d, role):
     return None
 
 
+def _moved_served_dirs(hook, dirs):
+    """The ledgers' home folders this session served that have since moved to the cloud and are not among dirs: the
+    cut-over's `fleet serve --stop` removes the registry entry and the folder is outside the scratchpad, so neither
+    fleet_dirs nor served_by_session finds it, and a moved coordinator would end its turns deaf."""
+    seen = {os.path.realpath(d) for d in dirs}
+    return [d for d in _served_dirs(hook) if moved(d) and os.path.realpath(d) not in seen
+            and os.path.isfile(os.path.join(d, "state.json"))]
+
+
 def fleet_listen_guard(hook, tree=None):
     """Stop: a coordinator or manager does not end a turn deaf. When a fleet it hosts (running or blocked;
     a paused or done one is left alone) has no live chat watch as its role, the turn goes on with the
@@ -994,6 +1010,7 @@ def fleet_listen_guard(hook, tree=None):
     dirs = fleet_dirs(hook)
     if not hook.env.get("FLEET_DIR"):
         dirs = [d for d in dirs if served_by_session(hook, d)]
+        dirs += _moved_served_dirs(hook, dirs)
     if not dirs:
         return None
     state = hook.load_state("fleet-guard") if hook.session_id else {}
@@ -1290,10 +1307,14 @@ def _one_line(text, size):
 def _chat_since(path, offset):
     """(new offset, messages) of DIR/chat.jsonl after a byte offset: whole lines only (a torn last line
     waits for the next look). With no offset yet, only the file's last NUDGE_TAIL bytes are read. A chat
-    that shrank is read again from its tail."""
+    that shrank, or was rewritten whole so that the offset no longer ends a line (a moved fleet's export),
+    is read again from its tail."""
     with open(path, "rb") as f:
         size = os.fstat(f.fileno()).st_size
         fresh = not isinstance(offset, int) or offset < 0 or offset > size
+        if not fresh and offset > 0:
+            f.seek(offset - 1)
+            fresh = f.read(1) != b"\n"
         start = max(0, size - NUDGE_TAIL) if fresh else offset
         f.seek(start)
         chunk = f.read()
@@ -1335,13 +1356,15 @@ def fleet_chat_nudge(hook):
     the ledger is read only when something is due."""
     if fleet_worker(hook) or not hook.session_id:
         return None
-    dirs = fleet_dirs(hook)
-    if not dirs:
-        return None
     now = fleet_now(hook.env)
     state = hook.load_state("fleet-nudge")
     checked = state.get("checked")
     if isinstance(checked, (int, float)) and 0 <= now - checked < NUDGE_EVERY_S:
+        return None
+    dirs = fleet_dirs(hook)
+    if not hook.env.get("FLEET_DIR"):
+        dirs = dirs + _moved_served_dirs(hook, dirs)
+    if not dirs:
         return None
     try:
         wait_s = float(hook.env.get("FLEET_NUDGE_MIN") or 3) * 60

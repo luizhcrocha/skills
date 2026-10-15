@@ -684,6 +684,33 @@ class StopGuardTest(FleetCase):
         self.assertNotIn("--fleets", reason)
         self.assertSilent(self.stop())  # never twice within a few seconds
 
+    def test_a_moved_fleet_the_session_served_is_guarded_after_the_cut_over(self):
+        """The cut-over's `fleet serve --stop` removes the registry entry and the ledger lives in the ledgers' home,
+        outside the scratchpad: the session that served it still hears that its watch is not running."""
+        self.env["XDG_STATE_HOME"] = str(self.tmp / "state")
+        home = self.tmp / "state" / "fleet" / "infra"
+        home.mkdir(parents=True)
+        (home / "state.json").write_text((self.fleet / "state.json").read_text())
+        (self.fleet / "state.json").unlink()
+        self.register(home, id="infra")
+        self.assertSilent(self.stop())  # served and not moved: guarded by the registry, and remembered
+        (home / "cloud.json").write_text(json.dumps({"fleet": "infra", "cloud": "https://fleet.example"}))
+        (self.registry / "infra.json").unlink()
+        reason = self.blocked(self.stop())
+        self.assertIn(f"`{self.fleet_cli} chat {home} watch --as coordinator --all --resume --once`", reason)
+
+    def test_a_moved_fleet_another_session_served_is_not_guarded(self):
+        self.env["XDG_STATE_HOME"] = str(self.tmp / "state")
+        home = self.tmp / "state" / "fleet" / "infra"
+        home.mkdir(parents=True)
+        (home / "state.json").write_text((self.fleet / "state.json").read_text())
+        (self.fleet / "state.json").unlink()
+        self.register(home, session="another-session", id="infra")
+        self.assertSilent(self.stop())
+        (home / "cloud.json").write_text(json.dumps({"fleet": "infra", "cloud": "https://fleet.example"}))
+        (self.registry / "infra.json").unlink()
+        self.assertSilent(self.stop())
+
     def test_the_manager_is_told_its_role_and_the_fleets_rule(self):
         self.ledger(role="manager")
         reason = self.blocked(self.stop())
@@ -5565,6 +5592,47 @@ class MovedNudgeTest(MovedFleet, FleetCase):
                          "Fleet: G6 (Search): every question is answered and the grilling is still open, not recorded for "
                          f'4 min. Record it now with one program on the stdin of `{self.env["TSTACK_FLEET_RUN"]}`: '
                          '`decision.decide("g6", "...", "grilling finished"); return records.apply(ops);`.')
+
+
+    def test_a_moved_fleet_in_the_ledger_home_the_session_served_is_nudged(self):
+        """After the cut-over the registry entry is gone and the ledger is outside the scratchpad: the session that
+        served it is still told an answer it left unrecorded."""
+        self.env["XDG_STATE_HOME"] = str(self.tmp / "state")
+        home = self.tmp / "state" / "fleet" / "infra"
+        home.mkdir(parents=True)
+        (self.fleet / "state.json").unlink()
+        (self.fleet / "cloud.json").unlink()
+        self.fleet = home
+        self.ledger(decisions=[{"id": "x7", "ref": "A7", "kind": "action", "title": "Delete five finished workspaces?",
+                                "status": "open", "opened": "2026-01-05T08:00:00+00:00"}])
+        self.register(home, id="infra")
+        self.assertFalse(self.tool("2026-01-05T08:00:00+00:00"))  # served from the registry: remembered
+        self.move(home)
+        (self.registry / "infra.json").unlink()
+        self.say(1, "2026-01-05T08:10:00+00:00", "yes", decision="x7")
+        (home / "watch-coordinator.cursor").write_text("1")
+        self.assertIn("#1 from the user answers A7", self.tool("2026-01-05T08:22:00+00:00") or "")
+
+
+class ChatSinceRewriteTest(unittest.TestCase):
+    """_chat_since: a chat.jsonl rewritten whole (a moved fleet's export) so that the stored offset no longer ends a
+    line is read again from its tail, not from the middle of a line."""
+
+    def test_a_rewrite_that_leaves_the_offset_inside_a_line_is_read_again(self):
+        module = load_hook()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "chat.jsonl")
+            first = json.dumps({"id": 1, "from": "coordinator", "to": ["user"], "text": "a" * 40, "re": None}) + "\n"
+            with open(path, "w") as f:
+                f.write(first)
+            offset, _, _ = module._chat_since(path, None)
+            line = {"id": 2, "from": "user", "to": ["coordinator"], "text": "the answer " * 10}
+            with open(path, "w") as f:
+                f.write(json.dumps({"id": 1, "from": "coordinator", "to": ["user"], "text": "a"}, separators=(",", ":"))
+                        + "\n" + json.dumps(line, separators=(",", ":")) + "\n")
+            _, messages, fresh = module._chat_since(path, offset)
+            self.assertTrue(fresh)
+            self.assertEqual([m["id"] for m in messages if m["from"] == "user"], [2])
 
 
 class MovedWritesTest(MovedFleet, FleetCase):
