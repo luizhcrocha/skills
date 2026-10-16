@@ -3874,6 +3874,67 @@ class SuiteParseTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.suites(command), [(command, True)])
 
+    def test_a_launcher_is_read_for_the_command_it_is_given_not_for_its_comments(self):
+        (self.pkg / "tasks").mkdir()
+        (self.pkg / "tasks" / "loopback").write_text(
+            '#!/usr/bin/env bash\n# Run a command with loopback as its only network: `tasks/loopback <command>`.\n'
+            '# What a browser tier starts through (apps/casos: `pnpm test:browser`).\nset -euo pipefail\n'
+            '[ $# -eq 0 ] && { echo "usage: tasks/loopback <command> [args...]" >&2; exit 2; }\n'
+            'exec unshare --net --map-current-user sh -c \'ip link set lo up && exec "$@"\' sh "$@"\n')
+        for command in ("tasks/loopback ip -brief address", "bash -n tasks/loopback", "sh -n ./tasks/loopback",
+                        "tasks/loopback vp test src/a.test.ts", "tasks/loopback pnpm test -t parses"):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [])
+        for command in ("tasks/loopback vp test", "tasks/loopback pnpm test", "./tasks/loopback env CI=1 vitest run"):
+            with self.subTest(command=command):
+                found = self.suites(command)
+                self.assertTrue(found, command)
+                self.assertFalse(any(unclear for _, unclear in found), found)
+
+    def test_only_a_shell_whose_n_is_noexec_runs_nothing_under_it(self):
+        (self.pkg / "ci.sh").write_text("#!/bin/sh\nvp test\n")
+        for command in ("bash -n ci.sh", "sh -n ci.sh", "zsh -n ci.sh", "dash -n ci.sh", "ksh -n ci.sh", "fish -n ci.sh",
+                        "fish --no-execute ci.sh"):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [])
+        for command in ("nu -n -c 'vp test'", "nu -n -c 'pnpm test'", "nu -n ci.sh", "nu --no-config-file ci.sh",
+                        "nu --commands 'vp test'", "nu -n --commands 'pnpm test'", "fish --command 'vp test'",
+                        "fish --command='vp test'"):
+            with self.subTest(command=command):
+                self.assertTrue(self.suites(command), command)
+
+    def test_a_hash_line_inside_a_quote_is_code_not_a_comment(self):
+        (self.pkg / "tasks").mkdir()
+        (self.pkg / "tasks" / "split").write_text("#!/bin/sh\nx='\n#'; vp test\n")
+        (self.pkg / "tasks" / "dq").write_text('#!/bin/sh\nx="a\n# b"; pnpm test\n')
+        (self.pkg / "tasks" / "launch").write_text(
+            "#!/bin/sh\n# it's a launcher: `tasks/launch vp test` runs the suite\nexec \"$@\" # don't wrap it\n")
+        for command in ("tasks/split", "tasks/dq"):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [(command, True)])
+        self.assertEqual(self.suites("tasks/launch ip -brief address"), [])
+        self.assertEqual(self.suites("tasks/launch vp test"), [("tasks/launch vp test", False)])
+
+    def test_a_quote_in_a_heredoc_body_or_a_joined_line_hides_no_suite(self):
+        (self.pkg / "t").mkdir()
+        scripts = {"hd_apos": "#!/bin/sh\ncat <<EOF\nDon't run this by hand.\nEOF\nsed 's/ #.*//' list.txt && pnpm test\n",
+                   "hd_apos_echo": "#!/bin/sh\ncat <<'EOF'\nit's here\nEOF\necho 'x #'; vp test\n",
+                   "hd_dq": '#!/bin/sh\ncat <<EOF\nsay "hi\nEOF\necho "a #"; vp test\n',
+                   "joined": "#!/bin/sh\necho a\\\n#; vp test\n"}
+        for name, body in scripts.items():
+            (self.pkg / "t" / name).write_text(body)
+            with self.subTest(command=f"t/{name}"):
+                self.assertEqual(self.suites(f"t/{name}"), [(f"t/{name}", True)])
+
+    def test_a_launcher_keeps_what_the_hook_could_not_tell_of_its_command(self):
+        (self.pkg / "tasks").mkdir()
+        (self.pkg / "tasks" / "launch").write_text('#!/bin/sh\nexec "$@"\n')
+        (self.pkg / "tools").mkdir()
+        (self.pkg / "tools" / "check").write_text("#!/bin/sh\npnpm test\n")
+        for command in ("tasks/launch tools/check", "tasks/launch eval vp test"):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [(command, True)])
+
     def test_vp_exec_is_read_through_to_the_command_it_runs(self):
         for command in ("vp exec vitest run", "vp exec -F api vitest", "vp exec --filter=api pytest", "vp exec -r vitest"):
             with self.subTest(command=command):

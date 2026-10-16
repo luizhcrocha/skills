@@ -3162,6 +3162,7 @@ def fleet_spawn_effort(hook):
 # variable in it) counts as unclear, which a fleet without the landing turn may not run.
 Push = namedtuple("Push", "tool args cwd unclear")
 SHELLS = {"sh", "bash", "zsh", "dash", "nu", "fish", "ksh"}
+NOEXEC_SHELLS = SHELLS - {"nu"}  # their -n reads a script and runs nothing; nu's -n is --no-config-file
 OPENERS = {"for", "while", "until", "if", "case", "select", "function", "{"}
 CLOSERS = {"done", "fi", "esac", "}"}
 JJ_VALUED = {"-R", "--repository", "--at-operation", "--at-op", "--color", "--config", "--config-file", "--config-toml"}
@@ -3695,6 +3696,8 @@ JUST_FULL_SUITES = {"test", "test-scripts", "test-lint-ts", "test-coordinator", 
 NAME_FILTERS = {"-t", "--testNamePattern", "--test-name-pattern", "-k", "--lf", "--last-failed"}
 TEST_IN_TEXT = re.compile(r"\b(?:(?:pnpm|npm|yarn|bun)\s+(?:-\S+\s+)*(?:run\s+)?test\b|vitest\b|vp\s+test\b|pytest\b|py\.test\b"
                           r"|cargo\s+(?:test|nextest)\b|go\s+test\b|just\s+test\b|node\s+--test\b)")
+# A script that runs the command it is given (`exec "$@"`) is a launcher: the line runs the launcher's arguments.
+LAUNCHES_ARGS = re.compile(r"\$\{?[@*]\}?")
 PM_TEST = {"test", "t", "tst"}
 PM_RUN = {"run", "run-script", "rum", "urn"}
 PNPM_VALUED = {"-C", "--dir", "--filter", "-F", "--reporter", "--loglevel", "--workspace-concurrency", "--filter-prod",
@@ -3783,6 +3786,40 @@ def _scripts(cwd):
     return {k: v for k, v in scripts.items() if isinstance(v, str)} if isinstance(scripts, dict) else {}
 
 
+def _uncommented(code):
+    """Shell code with its comments left out: from a `#` that starts a word outside quotes to the end of its line."""
+    out, quote, i = [], None, 0
+    while i < len(code):
+        c = code[i]
+        if quote == "'":
+            quote = None if c == "'" else quote
+        elif c == "\\":
+            out.append(code[i:i + 2])
+            i += 2
+            continue
+        elif quote:
+            quote = None if c == quote[-1] else quote
+        elif c == "$" and code[i + 1:i + 2] == "'":
+            quote, c, i = "$'", "$'", i + 1
+        elif c in "'\"":
+            quote = c
+        elif c == "#" and _word_starts(code, i):
+            end = code.find("\n", i)
+            i = len(code) if end < 0 else end
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _word_starts(code, i):
+    """Whether code[i] starts a word: the line start or a blank or operator before it, past any `\\` + newline,
+    which joins the two lines into one."""
+    while code[i - 2:i] == "\\\n":
+        i -= 2
+    return i == 0 or code[i - 1] in " \t\n;&|()"
+
+
 class SuiteReader:
     """Reads a Bash command for the full test suites it runs."""
 
@@ -3808,10 +3845,17 @@ class SuiteReader:
                 continue  # already in a scope of its own
             elif name == "eval" and depth < 4:
                 out += self.suites(" ".join(words[1:]), cwd, True, depth + 1)
+            elif name in NOEXEC_SHELLS and any(re.fullmatch(r"-[a-zA-Z]*n[a-zA-Z]*|--no-execute", w) for w in
+                                               words[1:next((i for i, w in enumerate(words) if i and not w.startswith("-")),
+                                                            len(words))]):
+                continue  # `bash -n FILE` reads it for syntax and runs nothing
             elif name in SHELLS and depth < 4:
-                flag = next((i for i, w in enumerate(words[1:], 1) if re.fullmatch(r"-[a-z]*c[a-z]*", w)), None)
-                if flag is not None and flag + 1 < len(words):
-                    out += self.suites(words[flag + 1], cwd, unclear or stdin, depth + 1)
+                flag = next((i for i, w in enumerate(words[1:], 1) if re.fullmatch(r"-[a-z]*c[a-z]*|--commands?(?:=.*)?",
+                                                                                   w, re.S)), None)
+                code = (words[flag].split("=", 1)[1] if flag is not None and "=" in words[flag]
+                        else words[flag + 1] if flag is not None and flag + 1 < len(words) else None)
+                if code is not None:
+                    out += self.suites(code, cwd, unclear or stdin, depth + 1)
                 else:
                     files = [w for w in words[1:] if not w.startswith("-")]
                     if files and cwd and self._script_tests(os.path.join(cwd, files[0]), True):
@@ -3825,22 +3869,40 @@ class SuiteReader:
                     out.append(Suite(found, unclear or stdin or nesting > 0))
                 elif ("/" in words[0] or words[0].endswith(SCRIPT_SUFFIXES)) and cwd \
                         and not ((name in RUNNERS or re.fullmatch(r"python[\d.]*", name))
-                                 and _installed(_path(cwd, words[0]) or words[0])) \
-                        and self._script_tests(_path(cwd, words[0]) or ""):
-                    out.append(Suite(" ".join(words), True))
+                                 and _installed(_path(cwd, words[0]) or words[0])):
+                    code = self._script_code(_path(cwd, words[0]) or "")
+                    if code is not None and TEST_IN_TEXT.search(code):
+                        out.append(Suite(" ".join(words), True))
+                    elif code is not None and LAUNCHES_ARGS.search(code) and len(words) > 1 and depth < 4:
+                        import shlex
+                        inner = self.suites(shlex.join(words[1:]), cwd, False, depth + 1)
+                        if inner:
+                            out.append(Suite(" ".join(words), unclear or stdin or nesting > 0
+                                             or any(s.unclear for s in inner)))
         return out
 
     @staticmethod
-    def _script_tests(path, by_shell=False):
+    def _script_code(path, by_shell=False):
+        """The code of the shell script at path, its comments left out, twice: with its whole-line comments left
+        out, then read for quotes (_uncommented), which a stray quote in a heredoc body misleads; a pattern found in
+        either counts. None when it cannot be read or is no shell script (any file is when a shell runs it, else a
+        .sh-like file or one whose #! names a shell)."""
         try:
             with open(path, "rb") as f:
                 text = f.read(SCRIPT_MAX).decode("utf-8", "replace")
         except OSError:
-            return False
+            return None
         first = text.split("\n", 1)[0]
         shell = by_shell or path.endswith(SCRIPT_SUFFIXES) or (
             first.startswith("#!") and any(re.search(rf"\b{s}\b", first) for s in SHELLS))
-        return shell and bool(TEST_IN_TEXT.search(text))
+        if not shell:
+            return None
+        return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#")) + "\n" + _uncommented(text)
+
+    @classmethod
+    def _script_tests(cls, path, by_shell=False):
+        code = cls._script_code(path, by_shell)
+        return code is not None and bool(TEST_IN_TEXT.search(code))
 
     def command(self, words, cwd, depth=0):
         """The full suite one simple command runs, as the words to name it by, else None."""
