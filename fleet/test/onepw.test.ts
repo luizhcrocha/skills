@@ -439,7 +439,7 @@ describe("settle", () => {
     expect(readChat(skills)[0]?.stored).toEqual({ id: 1, at, from: "fleet-hub", to: ["coordinator"], text, re: null, parts: [{ text }] });
     expect(stateNow()).toEqual({ v: 2, kinds: { "ssh-agent": { ...SSH, cleared } }, waiting: [], told: { [skills]: at, [casos]: at, [manager]: at } });
     expect(logged()).toEqual([`${at} not told: no fleet is served at ${gone}`, `${at} told skills (coordinator, #1): ${text}`, `${at} told casos (coordinator, #1): ${text}`, `${at} told manager (manager, #1): ${text}`]);
-    expect(logged().join("\n")).not.toMatch(/s-secret-1|a3/u);
+    expect(logged().join("\n").replaceAll(base, "<base>")).not.toMatch(/s-secret-1|a3/u);
     expect(await settle(m, how())).toBeUndefined();
     at = "2026-10-12T14:42:09+00:00";
     expect(await settle(m, how())).toBeUndefined();
