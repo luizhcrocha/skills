@@ -17,12 +17,14 @@ import { baseEnv, fleet, sleep, start, tmp, type Environment } from "./support.t
 
 const SENTENCE = "this team records through programs: fleet-run";
 
+let base: string;
+
 let root: string;
 
 let env: Environment;
 
 beforeEach(() => {
-  const base = tmp();
+  base = tmp();
   root = join(base, "skills");
   env = baseEnv(join(base, "registry"));
   expect(fleet(["state", root, "init", "--project", "p", "--goal", "g", "--no-render"], env).code).toBe(0);
@@ -113,7 +115,7 @@ describe("a folder holding cloud.json", () => {
 
     expect(ran.code).toBe(1);
     expect(ran.stderr).toContain(SENTENCE);
-    expect(ran.stderr).not.toContain("jj");
+    expect(ran.stderr.replaceAll(base, "<base>")).not.toMatch(/\bjj\b/u);
     expect(fleet(["preview", root, "status"], env).stderr).not.toContain(SENTENCE);
   });
 
