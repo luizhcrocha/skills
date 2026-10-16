@@ -6,7 +6,8 @@
  *
  * Vite runs with its base at that path (`--base`), so the path goes to it as it is; its HMR client opens
  * its socket at the page's own origin under the base, which is this route. `Host` is rewritten to the dev
- * server's own address (Vite refuses a host it does not know, such as the tailnet name), and every request
+ * server's own address (Vite refuses a host it does not know, such as the tailnet name), the browser's goes as
+ * `X-Forwarded-Host` (`proxiedHost`), the socket carries the browser's `Origin` as a request does, and every request
  * and socket carries `X-Forwarded-Prefix` (the hub's path for the server, `/` for a root-mode preview on its
  * public port), the marker by which an app knows it came through a proxy and asks for a login. A dev server run at its root (base `/`) is asked for the path without the
  * prefix, and its redirects are put back under it.
@@ -27,7 +28,8 @@ import { isLoopback } from "./tailnet.ts";
 export interface SocketData {
   readonly url: string;
   readonly protocols: readonly string[];
-  /** The headers the dev server's socket is opened with: the identity (`proxiedIdentity`) and the proxy marker. */
+  /** The headers the dev server's socket is opened with: the identity (`proxiedIdentity`), where the browser asked
+   * (`proxiedHost`), its `Origin`, and the proxy marker. */
   readonly headers: Headers;
   readonly upstream: { socket: WebSocket | undefined; readonly queue: (string | Uint8Array)[] };
   /** Note a frame either way as use of the preview, for its idle sleep (the hub throttles the writes). */
@@ -225,8 +227,24 @@ export function proxiedIdentity(ip: string, viewer: Viewer, sent: Headers): Head
   return headers;
 }
 
+/**
+ * Where the browser asked the hub, for a dev server whose `Host` is its own (Vite refuses any other): `X-Forwarded-Host`
+ * the Host the browser sent, `X-Forwarded-Proto` its scheme, and `Forwarded` the two again (RFC 7239), so that an app
+ * that compares a write's `Origin` with its own address finds the page's. The scheme is the one the request came on, or,
+ * on loopback, the `X-Forwarded-Proto` that `tailscale serve` sets on what it passes from its https name; any other
+ * client's forwarding headers are replaced. The Host is one the hub answers to (it refuses any other, 421).
+ */
+export function proxiedHost(req: Request, ip: string): Headers {
+  const url = new URL(req.url);
+  const host = req.headers.get("Host") ?? url.host;
+  const served = isLoopback(ip) ? req.headers.get("X-Forwarded-Proto")?.toLowerCase() : undefined;
+  const proto = served === "https" || served === "http" ? served : url.protocol.slice(0, -1);
+
+  return new Headers({ "X-Forwarded-Host": host, "X-Forwarded-Proto": proto, Forwarded: `host="${host}";proto=${proto}` });
+}
+
 /** Ask the dev server for `target` as the browser asked the hub for it, with `identity` (`proxiedIdentity`)
- * for who asked; its answer, passed back, on the hub's origin (`Target.onHubOrigin`) without the headers that act
+ * for who asked and where (`proxiedHost`); its answer, passed back, on the hub's origin (`Target.onHubOrigin`) without the headers that act
  * on the whole origin (`ORIGIN_WIDE`). */
 export async function proxyHttp(req: Request, target: Target, search: string, identity: Headers): Promise<Response> {
   const headers = new Headers();
@@ -279,8 +297,8 @@ export async function proxyHttp(req: Request, target: Target, search: string, id
 }
 
 /** Upgrade a WebSocket request for `target` (HMR) to a socket piped to the dev server's, opened with
- * `identity` (`proxiedIdentity`) and the proxy marker (`X-Forwarded-Prefix`), as an HTTP request is; each
- * frame but Vite's ping calls `active`. */
+ * `identity` (`proxiedIdentity`, `proxiedHost`), the browser's `Origin` and the proxy marker (`X-Forwarded-Prefix`),
+ * as an HTTP request is; each frame but Vite's ping calls `active`. */
 export function proxySocket(req: Request, target: Target, search: string, upgrade: Upgrade, identity: Headers, active: () => void = () => {}): Response | undefined {
   const protocols = (req.headers.get("Sec-WebSocket-Protocol") ?? "")
     .split(",")
@@ -288,6 +306,9 @@ export function proxySocket(req: Request, target: Target, search: string, upgrad
     .filter((p) => p !== "");
 
   const headers = new Headers(identity);
+  const origin = req.headers.get("Origin");
+
+  if (origin !== null) headers.set("Origin", origin);
   headers.set("X-Forwarded-Prefix", target.prefix);
   const data: SocketData = { url: `ws://127.0.0.1:${target.server.port}${target.path}${search}`, protocols, headers, upstream: { socket: undefined, queue: [] }, active };
   const first = protocols[0];

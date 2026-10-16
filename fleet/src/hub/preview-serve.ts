@@ -29,7 +29,7 @@ export interface PortListener {
 const CONNECTION = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade"]);
 
 /** Request headers the upgrade does not pass on as the client sent them: the dev server's own Host, and
- * the proxy marker, set from what `answer` chose. */
+ * the proxy marker, set from what `answer` chose (as is every header it chose, `SocketData.headers`). */
 const REPLACED = new Set(["host", "x-forwarded-prefix"]);
 
 /** The request `req` as a web `Request`, aborted when the client goes away. */
@@ -125,7 +125,8 @@ async function refuseUpgrade(socket: Socket, answer: Response | undefined): Prom
 }
 
 /** Pipe the client's upgraded `socket` to the dev server's socket at `data.url`: the client's request as it
- * sent it, its identity and Host replaced by what the hub chose (`data.headers`), then bytes both ways. */
+ * sent it, its identity, Host and every header the hub chose replaced by what it chose (`data.headers`), then bytes
+ * both ways. */
 function pipeUpgrade(req: Http2ServerRequest, socket: Socket, head: Buffer, data: SocketData): void {
   const url = new URL(data.url);
   const lines = [`GET ${url.pathname}${url.search} HTTP/1.1`, `Host: ${url.host}`];
@@ -134,7 +135,7 @@ function pipeUpgrade(req: Http2ServerRequest, socket: Socket, head: Buffer, data
   for (let i = 0; i + 1 < raw.length; i += 2) {
     const key = raw[i] ?? "";
 
-    if (!REPLACED.has(key.toLowerCase()) && !isIdentity(key)) lines.push(`${key}: ${raw[i + 1] ?? ""}`);
+    if (!REPLACED.has(key.toLowerCase()) && !isIdentity(key) && !data.headers.has(key)) lines.push(`${key}: ${raw[i + 1] ?? ""}`);
   }
 
   data.headers.forEach((value, key) => lines.push(`${key}: ${value}`));

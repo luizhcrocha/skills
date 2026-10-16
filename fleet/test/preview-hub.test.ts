@@ -1,7 +1,8 @@
 /**
  * The hub's way to a fleet's preview, against a stand-in dev server in this process: `/f/<fleet>/preview/…`
  * goes to the combined preview's server and `/f/<fleet>/preview/<worker>/…` to a per-worker one, with the
- * path kept for a server told its base and stripped for one at its root, `Host` rewritten, the WebSocket
+ * path kept for a server told its base and stripped for one at its root, `Host` rewritten and the browser's
+ * forwarded (`X-Forwarded-Host`, an app's Origin check passing), the WebSocket
  * (Vite's HMR, protocol `vite-hmr`) piped both ways; and `POST preview-workers` takes a worker in or out
  * under the chat's write policy. The dev server sees only the identity the hub verified: never a client's
  * own Tailscale-* headers.
@@ -526,6 +527,111 @@ describe("the identity a preview's dev server sees", () => {
   });
 });
 
+/** What the guarded stand-in (`guarded`) was sent: the Origin, the address it took for its own, and `Forwarded`. */
+const guards: { readonly origin: string | null; readonly own: string; readonly forwarded: string | null }[] = [];
+
+/** A stand-in dev server that guards as an app does: a Host that is not its own is refused (Vite's
+ * `server.allowedHosts`), and so is a write or a WebSocket whose Origin is not its own address, which it reads
+ * from `X-Forwarded-Proto` and `X-Forwarded-Host` when a proxy sent them, else from its Host; its port. */
+function guarded(): number {
+  const server: ReturnType<typeof Bun.serve<undefined>> = Bun.serve<undefined>({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(req, srv) {
+      const host = req.headers.get("host") ?? "";
+
+      if (host !== `127.0.0.1:${server.port}`) return new Response(`Blocked request. This host ("${host}") is not allowed.`, { status: 403 });
+      const socket = (req.headers.get("upgrade") ?? "").toLowerCase() === "websocket";
+      const own = `${req.headers.get("x-forwarded-proto") ?? "http"}://${req.headers.get("x-forwarded-host") ?? host}`;
+      const origin = req.headers.get("origin");
+      guards.push({ origin, own, forwarded: req.headers.get("forwarded") });
+
+      if ((socket || !["GET", "HEAD", "OPTIONS"].includes(req.method)) && origin !== own) return new Response(`cross-origin request from ${origin ?? "nowhere"} refused`, { status: 403 });
+
+      if (socket) return srv.upgrade(req, { data: undefined }) ? undefined : new Response("no", { status: 400 });
+
+      return new Response(`guarded ${req.method}`);
+    },
+    websocket: {
+      message(ws, message) {
+        ws.send(`guarded echo:${String(message)}`);
+      },
+    },
+  });
+
+  stubs.push(server);
+
+  return server.port ?? 0;
+}
+
+/** What a WebSocket to `url` with `headers` echoes to "hi" once open, or "refused" when it does not open. */
+async function socketTo(url: string, headers: { readonly [key: string]: string }, tls?: { readonly ca: string }): Promise<string> {
+  const socket = new WebSocket(url, tls === undefined ? { headers } : { headers, tls });
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener("open", () => resolve());
+      socket.addEventListener("error", () => reject(new Error("socket failed")));
+      socket.addEventListener("close", () => reject(new Error("socket closed")));
+    });
+
+    return await new Promise<string>((resolve, reject) => {
+      socket.addEventListener("message", (e) => resolve(String(e.data)));
+      socket.addEventListener("close", () => reject(new Error("socket closed")));
+      socket.send("hi");
+    });
+  } catch {
+    return "refused";
+  } finally {
+    socket.close();
+  }
+}
+
+describe("an app that checks Origin against its own address, behind the hub", () => {
+  beforeEach(() => {
+    guards.length = 0;
+  });
+
+  test("a write from the page passes it: the Host stays the dev server's own, and the browser's host and scheme are forwarded", async () => {
+    writeRecord({ server: server(guarded(), "/f/shop/preview/") });
+    const origin = `http://127.0.0.1:${hubPort}`;
+    const res = await fetch(at("/preview/api/save"), { method: "POST", headers: { Origin: origin }, body: "x" });
+    expect([res.status, await res.text()]).toEqual([200, "guarded POST"]);
+    expect(guards.at(-1)).toEqual({ origin, own: origin, forwarded: `host="127.0.0.1:${hubPort}";proto=http` });
+  });
+
+  test("through tailscale serve the scheme is the https it set; a plain local request is taken as the http it came on", async () => {
+    writeRecord({ server: server(guarded(), "/f/shop/preview/") });
+    const origin = `https://localhost:${hubPort}`;
+    const served = await fetch(at("/preview/api/save"), { method: "POST", headers: { Host: `localhost:${hubPort}`, Origin: origin, "X-Forwarded-Proto": "https", "X-Forwarded-Host": `localhost:${hubPort}` }, body: "x" });
+    expect([served.status, await served.text()]).toEqual([200, "guarded POST"]);
+    expect(guards.at(-1)).toEqual({ origin, own: origin, forwarded: `host="localhost:${hubPort}";proto=https` });
+
+    const plain = await fetch(at("/preview/api/save"), { method: "POST", headers: { Host: `localhost:${hubPort}`, Origin: origin }, body: "x" });
+    expect(plain.status).toBe(403);
+    expect(guards.at(-1)?.own).toBe(`http://localhost:${hubPort}`);
+  });
+
+  test("a foreign Origin is still refused, and a tailnet peer's own forwarding headers are replaced by the hub's", async () => {
+    writeRecord({ server: server(guarded(), "/f/shop/preview/") });
+    expect((await fetch(at("/preview/api/save"), { method: "POST", headers: { Origin: "http://evil.example" }, body: "x" })).status).toBe(403);
+
+    const forging = { Origin: "https://evil.example", "X-Forwarded-Host": "evil.example", "X-Forwarded-Proto": "https", Forwarded: "host=evil.example;proto=https" };
+    const peer = peerAt("100.101.1.2");
+    expect(await (await fetch(`http://127.0.0.1:${peer}/f/shop/preview/api/me`, { headers: forging })).text()).toBe("guarded GET");
+    expect(guards.at(-1)).toEqual({ origin: "https://evil.example", own: `http://127.0.0.1:${hubPort}`, forwarded: `host="127.0.0.1:${hubPort}";proto=http` });
+  });
+
+  test("the WebSocket carries the Origin the browser sent, and the browser's host and scheme", async () => {
+    writeRecord({ server: server(guarded(), "/f/shop/preview/") });
+    const origin = `http://127.0.0.1:${hubPort}`;
+    expect(await socketTo(`ws://127.0.0.1:${hubPort}/f/shop/preview/`, { Origin: origin })).toBe("guarded echo:hi");
+    expect(guards.at(-1)).toEqual({ origin, own: origin, forwarded: `host="127.0.0.1:${hubPort}";proto=http` });
+    expect(await socketTo(`ws://127.0.0.1:${hubPort}/f/shop/preview/`, { Origin: "http://evil.example" })).toBe("refused");
+    expect(guards.at(-1)?.origin).toBe("http://evil.example");
+  });
+});
+
 describe("POST preview-workers", () => {
   const post = (body: string, headers: Record<string, string> = {}): Promise<Response> =>
     fetch(at("/preview-workers"), { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body });
@@ -785,6 +891,21 @@ describe("a preview at the root of a public port of its own", () => {
     } finally {
       await listener.stop(true);
     }
+  });
+
+  test("an app that checks Origin against its own address takes the port's writes and its wss socket, each with one Origin", async () => {
+    writeRecord({ server: server(guarded(), "/", publicPort) });
+    (await hubOnTailnet()).syncPreviews();
+    guards.length = 0;
+    const origin = `https://box.example.ts.net:${publicPort}`;
+    const res = await get(rootAt("127.0.0.1", "/api/save"), { method: "POST", headers: { Host: `box.example.ts.net:${publicPort}`, Origin: origin }, body: "x" });
+    expect([res.status, await res.text()]).toEqual([200, "guarded POST"]);
+    expect(guards.at(-1)).toEqual({ origin, own: origin, forwarded: `host="box.example.ts.net:${publicPort}";proto=https` });
+
+    const own = `https://127.0.0.1:${publicPort}`;
+    expect(await socketTo(`wss://127.0.0.1:${publicPort}/api/sala`, { Origin: own }, { ca: pem.cert })).toBe("guarded echo:hi");
+    expect(guards.at(-1)).toEqual({ origin: own, own, forwarded: `host="127.0.0.1:${publicPort}";proto=https` });
+    expect(await socketTo(`wss://127.0.0.1:${publicPort}/api/sala`, { Origin: "https://evil.example" }, { ca: pem.cert })).toBe("refused");
   });
 
   test("the listener goes when the preview stops and comes back with it, and after a hub restart", async () => {

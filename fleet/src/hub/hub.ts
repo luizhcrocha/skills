@@ -70,7 +70,7 @@ import { LinkProbes, ProbeCache } from "./probes.ts";
 import { answerAsOffered, expireGrants, grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
 import { allowedOrigin, chatOriginsPath, grantor, grantRefusal, hello, MAX_POST_BYTES, PAGE_TOKEN_META, PAGE_TOKEN_HEADER, parseChatOrigins, postRefusal, STALE_PAGE_TOKEN, STOP_TOKEN_META, stopRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
 import { idleMs, noteRequest, serverStanding } from "../preview/sleep.ts";
-import { haltedPage, isOriginWide, isPing, killSwitch, previewTarget, proxiedIdentity, proxyHttp, proxySocket, startingPage, type Target, type Upgrade } from "./preview-proxy.ts";
+import { haltedPage, isOriginWide, isPing, killSwitch, previewTarget, proxiedHost, proxiedIdentity, proxyHttp, proxySocket, startingPage, type Target, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
 import { HubTokens, tokensPath } from "./tokens.ts";
 import { OrphanWatch } from "./orphan-watch.ts";
@@ -855,12 +855,13 @@ export class Hub {
   }
 
   /** Pass a request to a preview's dev server: a WebSocket piped, anything else asked and answered, with the
-   * identity the hub verified. A request that could change something there (not GET, HEAD or OPTIONS) is the
+   * identity the hub verified and where the browser asked (`proxiedHost`). A request that could change something there (not GET, HEAD or OPTIONS) is the
    * chat's writers' only. */
   private async pass(req: Request, ip: string, root: string, target: Target, search: string, keepOpen: () => void, upgrade: Upgrade | undefined): Promise<Response | undefined> {
     this.note(req, root, target.worker);
     const viewer = await this.viewer(req, ip);
     const identity = proxiedIdentity(ip, viewer, req.headers);
+    proxiedHost(req, ip).forEach((value, key) => identity.set(key, value));
 
     if ((req.headers.get("Upgrade") ?? "").toLowerCase() === "websocket") {
       if (upgrade === undefined) return jsonResponse(400, { error: "WebSockets are not served here" });

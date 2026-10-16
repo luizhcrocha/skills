@@ -4384,8 +4384,9 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   - **Security**: the dev server stays on 127.0.0.1; only the hub faces the tailnet, on the two addresses
     it binds its own port on. The public port carries the same identity rule as `/f/<fleet>/preview/`
     (below): the client's `Tailscale-*` and `X-Forwarded-For` dropped, then set from what the hub
-    verified; `Host` rewritten to `127.0.0.1:<dev port>`; a write (not GET, HEAD or OPTIONS) the chat's
-    writers' only; a stopped dev server 502. Every request and WebSocket carries `X-Forwarded-Prefix: /`,
+    verified; `Host` rewritten to `127.0.0.1:<dev port>`, the browser's in `X-Forwarded-Host` (below); a
+    write (not GET, HEAD or OPTIONS) the chat's writers' only; a stopped dev server 502. Every request and
+    WebSocket carries `X-Forwarded-Prefix: /`,
     the proxy marker: an app's guard that reads `X-Forwarded-Prefix` as "came through a proxy" (the Casos
     dev guard does) asks such a request for a login instead of trusting loopback.
 - **The dev servers' environment**: every dev server the preview starts (combined, per-worker, root mode
@@ -4498,8 +4499,13 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   the tailnet name), hop-by-hop headers and `Accept-Encoding` dropped. A WebSocket upgrade (Vite's HMR, on
   the `vite-hmr` protocol, its token in the query) is piped to `ws://127.0.0.1:<port><path>` both ways,
   the protocol echoed, messages queued until the dev server's end opens. HTTP and the WebSocket alike
-  carry `X-Forwarded-Prefix` (the hub's path for the server), the proxy marker. A request that could change
-  something there (not GET, HEAD or OPTIONS) is the chat's writers' only (403 otherwise); a missing
+  carry `X-Forwarded-Prefix` (the hub's path for the server), the proxy marker, and where the browser
+  asked: `X-Forwarded-Host` (the Host it sent), `X-Forwarded-Proto` (the scheme it came on, or on loopback
+  the `https` that `tailscale serve` sets) and `Forwarded` with both, any client's own replaced; the
+  WebSocket carries the browser's `Origin`, as HTTP does. So an app that compares a write's `Origin` with
+  its own address finds the page's (reported 10-13: without them, every write behind the hub was refused).
+  `Host` stays the dev server's, since Vite's `server.allowedHosts` refuses the tailnet name. A request
+  that could change something there (not GET, HEAD or OPTIONS) is the chat's writers' only (403 otherwise); a missing
   preview is 404, a stopped server 502. `POST /f/<fleet>/preview-workers` `{worker, include}` takes a worker
   in or out under the chat's post policy (403, 415, 413, 400 as for `POST /chat`) and answers `{include,
   exclude}`. Peer hubs' previews are not passed through.
