@@ -29,7 +29,7 @@ beforeEach(() => {
   // This checkout's fleet, whatever newer one the machine has, and no cap, budget or weight from the session's own environment.
   env = baseEnv(home, { FLEET_NO_FORWARD: "1" });
 
-  for (const key of ["FLEET_GATE_MEMORY_MAX", "FLEET_GATE_MEMORY_BUDGET", "FLEET_GATE_CPU_WEIGHT", "FLEET_GATE_SCOPE"]) delete env[key];
+  for (const key of ["FLEET_GATE_MEMORY_MAX", "FLEET_GATE_MEMORY_BUDGET", "FLEET_GATE_CPU_WEIGHT", "FLEET_GATE_CPUS", "FLEET_GATE_SCOPE"]) delete env[key];
 });
 
 interface Done {
@@ -725,5 +725,43 @@ describe.skipIf(!SCOPE)("gate run's scope", () => {
     const niced = gate(["run", "--as", "w1", "--", "sh", "-c", "nice"], { FLEET_GATE_SCOPE: "1", FLEET_GATE_CPU_WEIGHT: "0" });
     expect(niced.stderr).toContain("nice 5 (no CPU weight");
     expect(Number(niced.stdout)).toBeGreaterThanOrEqual(5);
+  });
+
+  test("the scope has a CPU quota, half the CPUs, so a pool sized by a count that reads it (nproc, Node's) starts no more workers than that", () => {
+    const sees = ["sh", "-c", "nproc; node -p 'require(\"os\").availableParallelism()'"];
+
+    // The machine's CPUs, as nproc reads them in a fresh scope with no quota: the test itself may run in a scope that has one.
+    const whole = gate(["run", "--as", "w1", "--", ...sees], { FLEET_GATE_SCOPE: "1", FLEET_GATE_CPUS: "0" });
+    const all = Number(whole.stdout.split("\n")[0]);
+    expect(all).toBeGreaterThan(0);
+    expect(whole.stdout).toBe(`${String(all)}\n${String(all)}\n`);
+    expect(whole.stderr).not.toContain("CPUQuota");
+
+    const halved = gate(["run", "--as", "w1", "--", ...sees], { FLEET_GATE_SCOPE: "1" });
+
+    // Where the user manager has no cpu controller there is no quota, as there is no weight, and the run says so.
+    if (!halved.stderr.includes("CPUWeight=")) {
+      expect(halved.stderr).toContain("no CPUQuota (the systemd user manager has no cpu controller)");
+
+      return;
+    }
+
+    const half = Math.max(2, Math.floor(all / 2));
+
+    if (half < all) {
+      expect(halved.stdout).toBe(`${String(half)}\n${String(half)}\n`);
+      expect(halved.stderr).toContain(`CPUQuota=${String(half * 100)}% (${String(half)} of ${String(all)} CPUs: nproc, Node's os.availableParallelism(), Rust's and Go's (1.25 on) count ${String(half)}, so a pool they size starts ${String(half)} workers; one sized by os.cpus(), Bun's os.availableParallelism(), a config's maxWorkers or Playwright keeps its size)`);
+    }
+
+    if (all > 3) expect(gate(["run", "--as", "w1", "--", ...sees], { FLEET_GATE_SCOPE: "1", FLEET_GATE_CPUS: "3" }).stdout).toBe("3\n3\n");
+
+    expect(gate(["run", "--as", "w1", "--", "true"], { FLEET_GATE_SCOPE: "1", FLEET_GATE_CPUS: String(all) }).stderr).toContain(`no CPUQuota ($FLEET_GATE_CPUS is ${String(all)}, at least the machine's ${String(all)} CPUs)`);
+  });
+
+  test("a $FLEET_GATE_CPUS that is not a whole number is named in the run's line, and half the CPUs taken", () => {
+    for (const given of ["abc", "-1", "2.5", "+4", ""]) {
+      const said = gate(["run", "--as", "w1", "--", "true"], { FLEET_GATE_SCOPE: "1", FLEET_GATE_CPUS: given });
+      expect(said.stderr).toContain(`$FLEET_GATE_CPUS "${given}" is not a whole number of CPUs: half the CPUs taken`);
+    }
   });
 });

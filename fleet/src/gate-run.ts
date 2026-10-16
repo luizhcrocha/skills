@@ -4,15 +4,16 @@
  * budget (gate.ts: `--mem`, else $FLEET_GATE_MEMORY_MAX, else a quarter of the RAM, so two default runs fit the
  * budget at once), waiting in the gate's queue up to `--wait`, then runs COMMAND in a transient systemd user scope
  * capped at that memory, with no swap and OOMPolicy=continue (the kernel kills the hog, the suite sees it fail) and
- * a CPU weight, so two runs share the cores evenly whatever each one's thread count. On any end (exit, failure,
- * `--timeout` or the hold's `--for` running out, a signal) it stops the scope, so every process the command started
- * dies with it (one that asked for an app scope of its own, as Chromium does, is taken back into the run's while it
- * runs, and killed when it got out after the last look), frees its hold, keeps one line about the run (gate.ts's
- * `runs.jsonl`: the wait, the time, the scope's memory peak) and exits with the command's code. A scope that still
- * has processes after its stop keeps its hold, and the run says so. Where there is no systemd user manager (the
- * Mac), the command runs in a process group of its own, killed whole at its end, without a memory cap, and it says
- * so: it is then counted as the whole budget.
- * A run never goes under a hold taken by hand, its own name's included: it waits for that hold as for any other.
+ * a CPU weight, so two runs share the cores evenly whatever each one's thread count, and a CPU quota, half the CPUs,
+ * which a pool sized by nproc or Node's CPU count reads, so a suite's tests keep their time beside other work. On
+ * any end (exit, failure, `--timeout` or the hold's `--for` running out, a signal) it stops the scope, so every
+ * process the command started dies with it (one that asked for an app scope of its own, as Chromium does, is taken
+ * back into the run's while it runs, and killed when it got out after the last look), frees its hold, keeps one line
+ * about the run (gate.ts's `runs.jsonl`: the wait, the time, the scope's memory peak) and exits with the command's
+ * code. A scope that still has processes after its stop keeps its hold, and the run says so. Where there is no
+ * systemd user manager (the Mac), the command runs in a process group of its own, killed whole at its end, without a
+ * memory cap, and it says so: it is then counted as the whole budget. A run never goes under a hold taken by hand,
+ * its own name's included: it waits for that hold as for any other.
  *
  * The runner's own death is covered twice: the hold carries the runner's pid, so it lapses when the runner is
  * gone, and a small watchdog, outside the runner's process group, stops the scope (or kills the group) when the
@@ -20,7 +21,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readdirSync, writeFileSync } from "node:fs";
-import { constants } from "node:os";
+import { availableParallelism, constants, cpus } from "node:os";
 import { dirname, join } from "node:path";
 
 import { stampOf } from "./clock.ts";
@@ -138,6 +139,45 @@ function cpuWeight(env: (name: string) => string | undefined): number | undefine
   const weight = given !== undefined && /^[0-9]+$/.test(given) ? Number(given) : CPU_WEIGHT;
 
   return weight >= 1 && weight <= 10000 && cpuDelegated() ? weight : undefined;
+}
+
+/** A run's CPU quota: the CPUs, undefined for none, and what the run's line says of it. */
+interface CpuShare {
+  readonly cpus: number | undefined;
+  readonly said: string;
+}
+
+/** The CPUs a run's scope may use at once ($FLEET_GATE_CPUS, else half the machine's, 2 at least), as its CPUQuota,
+ * and what the run's line says of it; `cpus` is undefined for no quota ($FLEET_GATE_CPUS is 0, the CPUs are at least
+ * the machine's, or the cpu controller is not delegated). A pool sized from a CPU count that reads the quota (nproc,
+ * Node's os.availableParallelism(), which is libuv's uv_available_parallelism, so vitest's default workers under
+ * Node; Rust's available_parallelism; Go's GOMAXPROCS from 1.25) starts no more workers than the run may use, and a
+ * test's time stays its own beside other work. A pool sized from os.cpus(), Bun's os.availableParallelism(), a
+ * config's maxWorkers or Playwright keeps its size, and the quota only slows it. The machine's CPUs are os.cpus()'s,
+ * which no quota changes, so a run inside a run's scope halves the machine's too. */
+function cpuShare(env: (name: string) => string | undefined): CpuShare {
+  const all = cpus().length || availableParallelism();
+  const given = env("FLEET_GATE_CPUS");
+  const whole = given !== undefined && /^[0-9]+$/.test(given.trim());
+  const share = whole ? Number(given.trim()) : Math.max(2, Math.floor(all / 2));
+  const bad = given !== undefined && !whole ? `$FLEET_GATE_CPUS "${given}" is not a whole number of CPUs: half the CPUs taken` : undefined;
+
+  if (share === 0) return { cpus: undefined, said: "" };
+
+  if (!cpuDelegated()) return { cpus: undefined, said: `, no CPUQuota (the systemd user manager has no cpu controller)${bad === undefined ? "" : `, and ${bad}`}` };
+
+  if (share >= all) {
+    const why = whole ? `$FLEET_GATE_CPUS is ${String(share)}` : `half the CPUs, 2 at least, is ${String(share)}`;
+
+    return { cpus: undefined, said: `, no CPUQuota (${why}, at least the machine's ${String(all)} CPUs${bad === undefined ? "" : `; ${bad}`})` };
+  }
+
+  const n = String(share);
+
+  const reads = `nproc, Node's os.availableParallelism(), Rust's and Go's (1.25 on) count ${n}, so a pool they size starts ${n} workers; ` +
+    "one sized by os.cpus(), Bun's os.availableParallelism(), a config's maxWorkers or Playwright keeps its size";
+
+  return { cpus: share, said: `, CPUQuota=${String(share * 100)}% (${n} of ${String(all)} CPUs: ${reads})${bad === undefined ? "" : `; ${bad}`}` };
 }
 
 /** The shell that runs the command inside the scope. On descriptor 3, which the command does not get, it tells the
@@ -455,6 +495,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
   };
 
   const weight = scoped ? cpuWeight(machine.env) : undefined;
+  const quota = scoped ? cpuShare(machine.env) : undefined;
   const inScope = ["/bin/sh", "-c", IN_SCOPE, "sh", ...ask.command];
 
   // RuntimeMaxSec: the scope stops itself a grace after the runner would have, so a scope whose runner and watchdog
@@ -465,14 +506,14 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
 
   const [program = "", ...args] = scoped
     ? ["systemd-run", "--user", "--scope", "--collect", "--quiet", ...asGiven, "--unit", unit, "-p", `MemoryMax=${cap}`, "-p", "MemorySwapMax=0", "-p", "OOMPolicy=continue",
-      "-p", `TimeoutStopSec=${STOP_GRACE_S}`, "-p", `RuntimeMaxSec=${limitS + STOP_GRACE_S}`,
+      "-p", `TimeoutStopSec=${STOP_GRACE_S}`, "-p", `RuntimeMaxSec=${limitS + STOP_GRACE_S}`, ...(quota?.cpus === undefined ? [] : ["-p", `CPUQuota=${String(quota.cpus * 100)}%`]),
       ...(weight === undefined ? ["--", "nice", "-n", String(NICE)] : ["-p", `CPUWeight=${weight}`, "--"]), ...inScope]
     : [...ask.command];
 
   if (scoped) {
     const share = cap === parsed && spec.endsWith("%") ? ` (${spec} of ${sizeText(total)} RAM)` : "";
     const cpu = weight === undefined ? `nice ${NICE} (no CPU weight: the systemd user manager has no cpu controller, or $FLEET_GATE_CPU_WEIGHT is 0)` : `CPUWeight=${weight}`;
-    say(`gate run: running in the systemd scope ${unit}.scope, MemoryMax=${sizeText(cap)}${share}, no swap, ${cpu}: ${shown(ask.command)}`);
+    say(`gate run: running in the systemd scope ${unit}.scope, MemoryMax=${sizeText(cap)}${share}, no swap, ${cpu}${quota?.said ?? ""}: ${shown(ask.command)}`);
   } else {
     say(`gate run: running without a memory cap, in a process group of its own, killed whole at its end: ${shown(ask.command)}`);
   }
