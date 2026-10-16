@@ -61,10 +61,14 @@ async function open(width: number): Promise<Page> {
   return page;
 }
 
+/** Resolves once the page's web fonts have loaded: a face that arrives late re-wraps the text and moves the chat's scroll by a few pixels. */
+const fontsReady = (page: Page): Promise<void> => page.evaluate(() => document.fonts.ready.then(() => undefined));
+
 const scrollTop = (page: Page): Promise<number> => page.evaluate(() => document.querySelector("#chat-log")?.scrollTop ?? -1);
 
 /** Scroll the chat to `top` as a reader would, the scroll event included. */
 async function scrollTo(page: Page, top: number): Promise<number> {
+  await fontsReady(page);
   await page.evaluate((t: number) => {
     const log = document.querySelector("#chat-log");
 
