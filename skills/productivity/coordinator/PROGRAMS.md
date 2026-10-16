@@ -32,7 +32,7 @@ EOF
 | 5 | `unknown` | sent; the outcome is unknown: the program reached the service and no answer came back. Resend with `fleet-run --id <id>`, the id it printed, and the same program on stdin: under one id a program runs at most once |
 | 127 | none | the shim found no `node` on PATH: nothing was sent. The client needs Node 24 |
 
-`fleet-run --status` prints `{ "online", "queued", "lastSync", "mode" }`: whether the office machine's link is up, how
+`FLEET_DIR=<dir> fleet-run --status` prints `{ "online", "queued", "lastSync", "mode" }`: whether the office machine's link is up, how
 many programs wait in its outbox, when it last synced, and the service's mode (`mirror` or `export`). It exits 0, 4
 when the service is not running, and 2 on any other failure.
 
@@ -49,7 +49,7 @@ base overwrites, as the CLI did.
 
 ## What a program calls
 
-`fleet-run --types` prints these declarations; when they differ from the copy below, the printed ones hold.
+`FLEET_DIR=<dir> fleet-run --types` prints these declarations; when they differ from the copy below, the printed ones hold.
 
 ```ts
 type OpId = string;
