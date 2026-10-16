@@ -7,10 +7,15 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, sy
 import { constants as osConstants } from "node:os";
 import { join } from "node:path";
 
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
 import { baseEnv, FLEET, fleet, fleetAsync, readJson, tmp, type Environment } from "./support.ts";
+
+// Each test runs jj as a subprocess, up to 51 times (with the fleet CLI's own calls). 2026-10-16, 32 cores at load 48:
+// 567 calls, median 48 ms, p90 299 ms, the slowest 1.1 s, and a test up to 3.9 s; bun's default 5 s failed 2 of 43 at
+// load 15. 51 calls at 1.1 s each is 56 s.
+setDefaultTimeout(60_000);
 
 let base: string;
 
