@@ -43,6 +43,8 @@ class Hook:
         self._grant_state_dirs = None
         self._allows = {}
         self._ended = {}
+        self._issued = {}
+        self._grant_files = {}
         # Set once a PreToolUse handler has refused the call: fleet_grant_alone, the last one, then takes no grant for it.
         self.denied = False
         cwd = data.get("cwd")
@@ -1592,10 +1594,20 @@ SETTINGS_LOCK_SHARED_WITH_HUB = ".settings.local.json.lock"
 # narrower: the settings files and the skills, agents, commands and hooks directories (code.claude.com/docs/en/
 # sandboxing, "Protected paths"), so the record sits in `.claude/hooks/`, under both, as the allow rules do: an agent
 # that could forge a take-back there could as well write the lasting rule, so the record adds nothing to what it can
-# do. What stays, accepted: a forged `grant` line in grants.jsonl can still make the sweep remove a rule that matches
-# it, the owner's included; the failure is fewer allowed calls, never more.
+# do. The same goes for which grants exist: when the hub grants, it first puts each grant on the root's record of
+# issued grants, <root>/.claude/hooks/tstack-grants-issued.json: `issued`, `{decision, ref, rule, file, at, n, of, rev,
+# dir[, runs]}` each, newest last, the newest 4096 kept (grants.ts ISSUED_KEPT). The newest entry of a file and rule is
+# its grant, standing while its rule is in its file and it is not on the record of take-backs; its `at` (the 30
+# minutes), `runs` (the sha256 of each file its call runs), `n` (its turn) and `ref` are the entry's. grants.jsonl is
+# the log: a line names a root to read, and a deleted line hides no grant (measured on 83448844, which found grants
+# from lines: with the line deleted an edited bound script ran, ran again, and `A; A` passed). A line with no entry
+# grants nothing: it is expired at once, and the sweep takes its rule back. A take-back's `why` is on the record of
+# take-backs, so a list's turn is read from the records: each earlier call must have ended `used` (_out_of_turn).
+# What stays, accepted: a forged `grant` line of a rule with no entry on record can make the sweep remove it, the
+# owner's included; that failure is fewer allowed calls.
 AGENT_GRANTS = "tstack-grants.json"
 ENDED_RECORD = "tstack-grants-ended.json"
+ISSUED_RECORD = "tstack-grants-issued.json"
 GRANT_FILES = ("settings.local.json", AGENT_GRANTS)
 ENDED_KEPT = 4096
 
@@ -2143,13 +2155,25 @@ def _spawn_card(r, worker, host):
             "refusal": _refusal_of(r, r.call)}
 
 
-def _grant_file(value):
+def _grant_file(value, seen=None):
     """A grant's file, when it is one the hook may rewrite: an absolute <root>/.claude/settings.local.json, or
-    <root>/.claude/tstack-grants.json for an Agent grant."""
-    if not isinstance(value, str) or not os.path.isabs(value):
-        return None
-    path = Path(value)
-    return value if path.name in GRANT_FILES and path.parent.name == ".claude" else None
+    <root>/.claude/tstack-grants.json for an Agent grant, whose folder is its own realpath, and where neither the file,
+    .claude/hooks nor a record in it is a symlink. Else nothing there is read, taken back or written (review 3: a
+    symlinked .claude/hooks, or a `<link>/..` the hub's join reads by its text, sent a take-back onto another root's
+    record). `seen` caches the answer by path."""
+    if seen is not None and value in seen:
+        return seen[value]
+    file = None
+    if isinstance(value, str) and value.startswith("/"):
+        folder, name = os.path.split(value)
+        hooks = os.path.join(folder, "hooks")
+        if (name in GRANT_FILES and os.path.basename(folder) == ".claude" and os.path.realpath(folder) == folder
+                and not any(os.path.islink(p) for p in (value, hooks, os.path.join(hooks, ENDED_RECORD),
+                                                        os.path.join(hooks, ISSUED_RECORD)))):
+            file = value
+    if seen is not None and isinstance(value, str):
+        seen[value] = file
+    return file
 
 
 GRANT_STATE_MAX_BYTES = 8 * 1024 * 1024
@@ -2171,14 +2195,16 @@ def _read_grants(d):
         return None, f"{path} cannot be read ({e.strerror})"
 
 
-def _latest_grants(hook, raw):
-    """The last grant line of each (file, rule) of a grants.jsonl, each with `ended`: the why of a `remove` line that
-    follows it for the same decision, None when none does; and `over`: whether the grant is on its root's record of
-    take-backs (_ended_of). A remove line is a record, never the proof: any agent can append one, so whether a grant
-    still stands is read from its settings file (_stands) and from the record beside it, which an agent cannot
-    write. A grant line on that record never displaces a live one, so a line that borrows an ended decision's id
-    shields no later grant of the rule; it is kept where it is the last, for the why of its ending."""
-    latest, lists = {}, {}
+def _session_root(hook):
+    """The session's root: $CLAUDE_PROJECT_DIR, else its cwd; None when neither is an absolute path."""
+    project = hook.env.get("CLAUDE_PROJECT_DIR")
+    root = project if project and os.path.isabs(project) else hook.cwd
+    return root if isinstance(root, str) and os.path.isabs(root) else None
+
+
+def _grant_lines(raw, seen=None):
+    """The (file, line) of each line of a grants.jsonl that reads as a grant or remove of a grant file, in order."""
+    lines, seen = [], {} if seen is None else seen
     for line in raw[:raw.rfind(b"\n") + 1].splitlines():
         try:
             entry = json.loads(line)
@@ -2188,18 +2214,59 @@ def _latest_grants(hook, raw):
             continue
         # A line that names the user's settings.json (where a rule card's entry goes) is one _grant_file never takes:
         # nothing here takes it back. A line that says `lasting` of a session's grant file is the one-time grant it is.
-        file = _grant_file(entry.get("file"))
-        if file is None:
-            continue
+        file = _grant_file(entry.get("file"), seen)
+        if file is not None:
+            lines.append((file, entry))
+    return lines
+
+
+def _recorded_grant(entry, ended):
+    """A grant as the hook reads it, from its entry on the record of issued grants: `turn` its `n`, `over` whether
+    it is on the record of take-backs, `ended` the why recorded there (None while it stands)."""
+    why = _ended_why(ended, entry)
+    return {"op": "grant", "decision": entry["decision"], "rule": entry["rule"], "file": entry["file"], "at": entry["at"],
+            "rev": entry.get("rev") if isinstance(entry.get("rev"), str) else None,
+            "ref": entry.get("ref") if isinstance(entry.get("ref"), str) else None, "runs": entry.get("runs"),
+            "turn": entry["n"] if isinstance(entry.get("n"), int) else 1, "over": why is not None,
+            "ended": why, "issued": entry}
+
+
+def _latest_grants(hook, raw):
+    """The grant of each (file, rule): the newest entry of it on the record of issued grants of the session's root
+    and of each root a grants.jsonl line names (an earlier entry of the same rule is superseded, ended or not). The
+    record is the hub's, in `.claude/hooks/`, where no agent writes; grants.jsonl is the fleet's log, which any agent
+    can write, so a line found nothing and hides nothing: a grant whose line was deleted still stands, and is held
+    to its bounds. A record holds only the grants of its own root (_read_issued), and the session root's is read
+    first: no entry of a root a line names replaces one of the session's (review 2: one did, from a folder the agent
+    made, with a later `at` and no `runs`). A line names a root to read, and a line of a (file, rule) that has no entry on record is kept as a
+    grant on no record (`issued` None), which grants nothing and is taken back at once: a grant of a hub that wrote
+    no record, or a forged line, whose failure is fewer allowed calls; its take-back is marked `line` (_line_ended).
+    Each grant has `over` (on the root's record of take-backs, _ended_of), `ended` (the why recorded there), `turn` (its `n`), and `runs` and `ref`, all from
+    the record, never from a line."""
+    lines = _grant_lines(raw, hook._grant_files)
+    root = _session_root(hook)
+    if root and ("root", root) not in hook._grant_files:
+        hook._grant_files[("root", root)] = _grant_file(os.path.join(os.path.realpath(root), ".claude", GRANT_FILES[0]),
+                                                        hook._grant_files)
+    own = hook._grant_files.get(("root", root)) if root else None
+    places = {}
+    for file in ([own] if own else []) + [f for f, _ in lines]:
+        places.setdefault(os.path.dirname(file), file)
+    latest = {}
+    for place in places.values():
+        newest = {(entry["file"], entry["rule"]): entry for entry in _issued_of(hook, place)}
+        for key, entry in newest.items():
+            if key not in latest:
+                latest[key] = _recorded_grant(entry, _ended_of(hook, entry["file"]))
+    for file, entry in lines:
         key = (file, entry["rule"])
-        if entry.get("op") == "grant":
-            # A list's calls are granted in the order asked, one line each: a line's place in its list is its turn.
-            turn = lists[_list_of(entry)] = lists.get(_list_of(entry), 0) + 1
-            over = _ended_key(entry) in _ended_of(hook, file)
-            if not over or key not in latest or latest[key]["over"]:
-                latest[key] = dict(entry, ended=None, turn=turn, over=over)
-        elif entry.get("op") == "remove" and key in latest and latest[key]["decision"] == entry["decision"]:
-            latest[key]["ended"] = entry["why"] if isinstance(entry.get("why"), str) else "removed"
+        if entry.get("op") != "grant" or (key in latest and latest[key]["issued"] is not None):
+            continue
+        ended = _ended_of(hook, file)
+        over = _ended_why(ended, dict(entry, file=file), line=True) is not None or _line_ended(ended, dict(entry, file=file))
+        if key not in latest or not over:
+            latest[key] = dict(entry, file=file, ref=entry.get("ref") if isinstance(entry.get("ref"), str) else None,
+                               ended=None, turn=1, over=over, issued=None, runs=None)
     return list(latest.values())
 
 
@@ -2230,18 +2297,62 @@ def _record_file(file):
 
 
 def _ended_key(grant):
-    """What names one grant on the record of take-backs: its decision, rule and the `at` of its grant line."""
-    granted = grant.get("at")
-    return grant["decision"], grant["rule"], granted if isinstance(granted, str) else ""
+    """What names one grant on the record of take-backs: its grant file (a grant file is its own realpath:
+    _grant_file), decision, rule, the `at` of its grant and its `rev`, the permission's revision (None when it names
+    none). The file, as a take-back written beside one file named no file and ended another's grant (review 3). `at`
+    is to the second, and one decision answered twice in one second under two revisions is two grants: without the
+    rev, superseding the first ended the second at birth (review 2), and its rule stayed for good."""
+    granted, rev = grant.get("at"), grant.get("rev")
+    return (grant["file"], grant["decision"], grant["rule"], granted if isinstance(granted, str) else "",
+            rev if isinstance(rev, str) and rev else None)
+
+
+def _ended_entry(grant, at, why, line=False):
+    """The take-back of `grant` as the record of take-backs holds it, stamped `at`; `line` for a line on no record of
+    issued grants (_line_ended), whose take-back ends no issued grant."""
+    file, decision, rule, granted, rev = _ended_key(grant)
+    return {"file": file, "decision": decision, "rule": rule, "granted": granted, **({"rev": rev} if rev else {}),
+            **({"line": True} if line else {}), "at": at, "why": why}
 
 
 def _ended_in(record):
-    """The _ended_key of each take-back in a record's `ended`."""
+    """Each take-back in a record's `ended` by its _ended_key, to its `why` (`used`, `revoked`, `expired`, or
+    `superseded`: the hub granted the rule anew; "" for an entry that names none). The file and rev are None for an
+    entry that names none: master's hook and hub write neither (_ended_why). An entry marked `line` is keyed apart,
+    behind "line" (_line_ended), and no lookup of an issued grant's take-back reads it."""
     ended = record.get("ended") if isinstance(record, dict) else None
     if not isinstance(ended, list):
-        return frozenset()
-    return frozenset((e["decision"], e["rule"], e["granted"]) for e in ended
-                     if isinstance(e, dict) and all(isinstance(e.get(k), str) for k in ("decision", "rule", "granted")))
+        return {}
+    return {(("line",) if e.get("line") is True else ()) +
+            (e["file"] if isinstance(e.get("file"), str) and e["file"] else None, e["decision"], e["rule"], e["granted"],
+             e["rev"] if isinstance(e.get("rev"), str) and e["rev"] else None):
+            e["why"] if isinstance(e.get("why"), str) else "" for e in ended
+            if isinstance(e, dict) and all(isinstance(e.get(k), str) for k in ("decision", "rule", "granted"))}
+
+
+def _ended_why(ended, grant, line=False):
+    """The why of `grant`'s take-back in `ended` (_ended_in), None when it has none: an entry naming its file and its
+    rev. For a grant on no record of issued grants (`line`) alone, an entry with no file or no rev matches on the rest:
+    master's take-backs carry neither, and a session runs master's hook until it restarts, so a grant of master's era
+    its hook took back would be taken back again. Never for a recorded grant: master's writers check no symlink, so a
+    forged line in a session on master's hook put such an entry on a real root's record, and it ended the real grant
+    for good (review 4, finding 1). A recorded grant master's hook took back, whose rule the owner put back by hand,
+    goes once more during the skew: fewer calls."""
+    file, decision, rule, granted, rev = _ended_key(grant)
+    for f in ((file, None) if line else (file,)):
+        for r in ((rev, None) if rev and line else (rev,)):
+            why = ended.get((f, decision, rule, granted, r))
+            if why is not None:
+                return why
+    return None
+
+
+def _line_ended(ended, line):
+    """Whether `ended` (_ended_in) holds the take-back of a line on no record of issued grants: an entry marked `line`
+    with its file, decision, rule, `at` and rev, all of them. Such an entry ends no issued grant, under any key: a
+    line's fields are any agent's to copy from a real grant's (review 3, finding 1). Without it nothing marked a line
+    over, and a rule the owner added that is identical to one went at every sweep (round 4; the 2026-10-15 incident)."""
+    return ("line",) + _ended_key(line) in ended
 
 
 def _read_ended(file):
@@ -2251,7 +2362,7 @@ def _read_ended(file):
         with open(_record_file(file), encoding="utf-8") as f:
             return _ended_in(json.load(f))
     except (OSError, ValueError):
-        return frozenset()
+        return {}
 
 
 def _ended_of(hook, file):
@@ -2260,6 +2371,47 @@ def _ended_of(hook, file):
     if root not in hook._ended:
         hook._ended[root] = _read_ended(file)
     return hook._ended[root]
+
+
+def _issued_file(file):
+    """The record of issued grants for a grant file: the root's .claude/hooks/tstack-grants-issued.json."""
+    return os.path.join(os.path.dirname(file), "hooks", ISSUED_RECORD)
+
+
+def _read_issued(file):
+    """The grants the hub put on record beside `file`, oldest first, each naming a grant file of the record's own root:
+    its realpath in that root's .claude/ (an entry naming another root's file is no grant; the hub writes none). None
+    when the record is not there, cannot be read or does not parse (a grant on it then stands on no record: fewer
+    allowed calls). A full record (4096 entries with two `runs` each, 3.0 MB) costs about 30 ms to read (measured
+    2026-10-16), once in each hook of a Bash, Monitor or Agent call: no other tool reads it."""
+    try:
+        with open(_issued_file(file), encoding="utf-8") as f:
+            record = json.load(f)
+    except (OSError, ValueError):
+        return []
+    issued = record.get("issued") if isinstance(record, dict) else None
+    own, seen = os.path.dirname(file), {}
+
+    def of_own_root(name):
+        return _grant_file(name, seen) is not None and os.path.dirname(name) == own
+
+    return [e for e in (issued if isinstance(issued, list) else [])
+            if isinstance(e, dict) and all(isinstance(e.get(k), str) for k in ("file", "decision", "rule", "at"))
+            and of_own_root(e["file"])]
+
+
+def _issued_of(hook, file):
+    """The grants on record for a grant file's root, read once per hook."""
+    root = os.path.dirname(file)
+    if root not in hook._issued:
+        hook._issued[root] = _read_issued(file)
+    return hook._issued[root]
+
+
+def _issued_at(grant):
+    """When the hub issued the grant, from its entry on the record of issued grants; None when it is on none."""
+    issued = grant.get("issued")
+    return _instant(issued.get("at")) if isinstance(issued, dict) else None
 
 
 def _stands(hook, grant):
@@ -2563,20 +2715,21 @@ def _spent(standing, used):
 
 
 def _list_of(grant):
-    """What says two grants came from one answer to one permission: the calls of a list."""
-    return (grant["decision"], grant.get("at"))
+    """What says two grants came from one answer to one permission: the calls of a list (its decision, `at` and rev)."""
+    _, decision, _, at, rev = _ended_key(grant)
+    return decision, at, rev
 
 
 def _due_grants(hook, raw, used, now, failed=False, void=None):
     """(grant, why) for each standing grant to end now: `used` (its call ran), `revoked` (a call of its list failed,
     or the list is `void`: a list is a sequence, and what comes after a failure was allowed for another state of
-    things), `expired` (30 minutes old, or with no readable stamp)."""
+    things), `expired` (30 minutes after the `at` on the hub's record of issued grants, or on no such record)."""
     standing = [g for g in _latest_grants(hook, raw) if _live(hook, g)]
     spent = _spent(standing, used)
     lost = {_list_of(g) for g in spent if failed} | ({void} if void else set())
     due = []
     for grant in standing:
-        at = _instant(grant.get("at"))
+        at = _issued_at(grant)
         if any(grant is g for g in spent):
             due.append((grant, "used"))
         elif _list_of(grant) in lost:
@@ -2647,7 +2800,10 @@ def _take_back_locked(file, rule, ended):
     """Take `rule` out of `file`, then put the grant on the root's record of take-backs (`ended`: its decision, rule,
     granted and the stamp). A grant already on the record, read again under the lock, is over: the rule there is the
     owner's, and stays. The settings first: a record that cannot be written leaves fewer allowed calls, never more;
-    one that does not parse is left as it is (the hub's expireGrants), and what was not recorded is returned."""
+    one that does not parse is left as it is (the hub's expireGrants), and what was not recorded is returned. A file
+    that is no grant file now (_grant_file: a symlink made since the sweep read it) is left, and nothing written."""
+    if _grant_file(file) != file:
+        return None
     settings = _loaded(file)
     permissions = settings.get("permissions") if isinstance(settings, dict) else None
     allow = permissions.get("allow") if isinstance(permissions, dict) else None
@@ -2660,7 +2816,9 @@ def _take_back_locked(file, rule, ended):
         record, unrecorded = None, f"{e}: the take-back of {ended['decision']} is not on record"
     else:
         record, unrecorded = record if isinstance(record, dict) else {}, None
-        if _ended_key({**ended, "at": ended["granted"]}) in _ended_in(record):
+        named, taken = {**ended, "at": ended["granted"]}, _ended_in(record)
+        line = ended.get("line") is True
+        if _ended_why(taken, named, line=line) is not None or (line and _line_ended(taken, named)):
             return None
     permissions["allow"] = [r for r in allow if r != rule]
     _write_json(file, settings)
@@ -2678,7 +2836,17 @@ def _shell_command(hook):
     return command if isinstance(command, str) else None
 
 
+GRANT_TOOLS = ("Bash", "Monitor", "Agent")
+
+
 def fleet_grant_sweep(hook):
+    """PostToolUse and PostToolUseFailure of a Bash, Monitor or Agent call: end each standing grant that is due
+    (_due_grants). A rule of these tools' is all a grant writes, and no other tool's call is let through by one, so
+    another tool's call reads no record (a full one costs ~30 ms to read: measured, 2026-10-16); an expired grant
+    then waits for the next call of these tools in its root, which refuses it before it runs (fleet_grant_alone,
+    fleet_agent_grant), or for the hub's timer."""
+    if hook.input.get("tool_name") not in GRANT_TOOLS:
+        return None
     dirs = grant_state_dirs(hook)
     if not dirs:
         return None
@@ -2693,7 +2861,7 @@ def fleet_grant_sweep(hook):
         raw, unread = _read_grants(d)
         if raw is None:
             log(hook.data_dir, f"{hook.event} fleet_grant_sweep: {unread}; its grants are left to the hub's timer")
-        elif raw and _due_grants(hook, raw, used, now, failed):
+        elif _due_grants(hook, raw, used, now, failed):
             _close_due_grants_exclusively(hook, d, used, now, failed)
     return None
 
@@ -2708,12 +2876,17 @@ def _close_due_grants_exclusively(hook, d, used, now, failed=False, void=None):
             return
         hook._allows.clear()
         hook._ended.clear()
+        hook._issued.clear()
+        hook._grant_files.clear()
         lead = b"\n" if raw and not raw.endswith(b"\n") else b""
         for grant, why in _due_grants(hook, raw, used, now, failed, void):
             at = fleet_stamp(hook.env)
             try:
-                decision, rule, granted = _ended_key(grant)
-                unrecorded = _take_back(grant["file"], rule, {"decision": decision, "rule": rule, "granted": granted, "at": at})
+                # A grant on no record of issued grants was never issued: its take-back is marked `line`, and ends no
+                # issued grant (review 3: one with a line's decision, `at` and rev ended the real grant they were
+                # copied from), so a rule the owner adds again is not taken at the next sweep.
+                ended = _ended_entry(grant, at, why, line=grant["issued"] is None)
+                unrecorded = _take_back(grant["file"], grant["rule"], ended)
             except Exception:  # this grant stays open for the next call; the others go on
                 log(hook.data_dir, f"{hook.event} fleet_grant_sweep failed for {grant['decision']}\n"
                                    f"{traceback.format_exc()}")
@@ -2731,6 +2904,8 @@ def _close_due_grants_exclusively(hook, d, used, now, failed=False, void=None):
                 pass
         hook._allows.clear()
         hook._ended.clear()
+        hook._issued.clear()
+        hook._grant_files.clear()
 
 
 def fleet_agent_grant(hook):
@@ -2754,7 +2929,16 @@ def fleet_agent_grant(hook):
         return None
     permissions = granted.get("permissions") if isinstance(granted, dict) else None
     allow = permissions.get("allow") if isinstance(permissions, dict) else None
-    if not isinstance(allow, list) or f"Agent({_agent_call(tool_input)})" not in allow:
+    rule = f"Agent({_agent_call(tool_input)})"
+    if not isinstance(allow, list) or rule not in allow:
+        return None
+    # The rule alone is no grant: it is one while the hub's entry of it on the root's record stands, within its 30
+    # minutes and its list's turn, whatever grants.jsonl holds.
+    file = os.path.realpath(os.path.join(root, ".claude", AGENT_GRANTS))
+    grants = [g for g in _latest_grants(hook, b"") if g["rule"] == rule and os.path.realpath(g["file"]) == file]
+    at = _issued_at(grants[0]) if grants else None
+    if (at is None or fleet_now(hook.env) - at >= GRANT_TTL_S or not _live(hook, grants[0])
+            or _out_of_turn(hook, grants[0], grants)):
         return None
     return Allow("tstack: the user allowed this exact Agent call once, on the fleet page (a permission grant).")
 
@@ -2789,8 +2973,8 @@ def _take(hook, d, grant):
 
 
 def _moved_file(grant):
-    """Why a file the grant binds is no longer the one the user allowed (the hub recorded each one's sha256 when it
-    granted); None when every one is, or the grant binds none."""
+    """Why a file the grant binds is no longer the one the user allowed (the hub put each one's sha256 on the record of
+    issued grants when it granted: _latest_grants takes `runs` from there); None when every one is, or it binds none."""
     import hashlib
     runs = grant.get("runs")
     for run in runs if isinstance(runs, list) else []:
@@ -2843,23 +3027,80 @@ def _alone_by_grants(hook, d, raw, command, now):
         for grant in grants:
             if grant["ended"] == "revoked" and not _stands(hook, grant) and _is_call(command, _bash_call(grant["rule"])):
                 return Deny(f"tstack: this call was allowed once as part of a list ({grant.get('ref') or grant['decision']}), and a "
-                            f"call of that list failed, so what was left of it is no longer allowed. {ASK_AGAIN}")
+                            f"call of that list failed or ended without running, or a file it runs changed, so what was left "
+                            f"of it is no longer allowed. {ASK_AGAIN}")
         return None
-    grant = mine[0]
+    # Each grant of the call is held to its bounds, not the first: a line can name a file and record of any folder.
+    for grant in mine:
+        denial = _alone_denial(hook, d, grant, grants, now)
+        if denial:
+            return denial
+    if hook.denied:
+        return None
+    for grant in mine:
+        taken = _take(hook, d, grant)
+        if taken:
+            return Deny(f"tstack: the user allowed this call once ({grant.get('ref') or grant['decision']}), and {taken}. {ASK_AGAIN}")
+    return None
+
+
+def _earlier_calls(hook, grant):
+    """The entries on record of the calls before `grant`'s in its list: of its root, its decision and `at`, a lower
+    `n` (its own rule's entries aside); in their order."""
+    entry = grant["issued"]
+    if entry is None:
+        return []
+    return sorted((e for e in _issued_of(hook, grant["file"]) if _list_of(e) == _list_of(entry)
+                   and (e["file"], e["rule"]) != (grant["file"], grant["rule"]) and isinstance(e.get("n"), int)
+                   and e["n"] < grant["turn"]), key=lambda e: e["n"])
+
+
+def _out_of_turn(hook, grant, grants):
+    """(earlier entry, why) when `grant` may not run yet: `waits` while an earlier call of its list still stands, and
+    `void` when one ended other than by running (revoked, expired, superseded) or stopped standing with no ending on
+    record (its rule taken out of its file): a list is a sequence, and what follows a call that never ran was allowed
+    for another state of things. Read from the records, so no line, forged or deleted, moves a call's turn."""
+    newest = {(g["file"], g["rule"]): g for g in grants}
+    for entry in _earlier_calls(hook, grant):
+        why = _ended_why(_ended_of(hook, entry["file"]), entry)
+        if why == "used":
+            continue
+        g = newest.get((entry["file"], entry["rule"]))
+        if why is None and g is not None and g["issued"] is not None and _ended_key(g["issued"]) == _ended_key(entry) and _stands(hook, g):
+            return entry, "waits"
+        return entry, "void"
+    return None
+
+
+def _alone_denial(hook, d, grant, grants, now):
+    """Why the granted call may not run on `grant` now: it is on no record of the hub's grants, or 30 minutes old (the
+    grant is then taken back), out of its list's turn (the list void when an earlier call of it never ran), or a
+    file it binds moved (the grant and its list revoked)."""
     ref = grant.get("ref") or grant["decision"]
-    at = _instant(grant.get("at"))
+    at = _issued_at(grant)
     if at is None or now - at >= GRANT_TTL_S:
         try:
             _close_due_grants_exclusively(hook, d, None, now)
         except Exception:  # the hub's timer or the next sweep takes the rule back; the call is refused all the same
             log(hook.data_dir, f"{hook.event} fleet_grant_alone could not close {ref}\n{traceback.format_exc()}")
+        if grant["issued"] is None:
+            return Deny(f"tstack: this call's grant is on no record of the hub's grants ({_issued_file(grant['file'])}): "
+                        f"a line in grants.jsonl alone grants nothing, so its rule is taken back. {ASK_AGAIN}")
         return Deny(f"tstack: the user allowed this call once ({ref}), and a one-time grant lasts {GRANT_TTL_S // 60} minutes: "
                     f"this one is over. {ASK_AGAIN}")
-    before = sorted((g for g in standing if _list_of(g) == _list_of(grant) and g["turn"] < grant["turn"]), key=lambda g: g["turn"])
-    if before:
+    turn = _out_of_turn(hook, grant, grants)
+    if turn and turn[1] == "waits":
         return Deny(f"tstack: this is call {grant['turn']} of the list the user allowed ({ref}), and call "
-                    f"{before[0]['turn']} has not run: `{_bash_call(before[0]['rule'])}`. The list is a sequence: run "
-                    "that one first, as a Bash call of its own.")
+                    f"{turn[0]['n']} has not run: `{_bash_call(turn[0]['rule']) or turn[0]['rule']}`. The list is a "
+                    "sequence: run that one first, as a Bash call of its own.")
+    if turn:
+        try:
+            _close_due_grants_exclusively(hook, d, None, now, void=_list_of(grant))
+        except Exception:
+            log(hook.data_dir, f"{hook.event} fleet_grant_alone could not revoke {ref}\n{traceback.format_exc()}")
+        return Deny(f"tstack: this is call {grant['turn']} of the list the user allowed ({ref}), and call {turn[0]['n']} "
+                    f"(`{_bash_call(turn[0]['rule']) or turn[0]['rule']}`) ended without running, so what was left of "
+                    f"the list is no longer allowed. {ASK_AGAIN}")
     moved = _moved_file(grant)
     if moved:
         try:
@@ -2868,11 +3109,6 @@ def _alone_by_grants(hook, d, raw, command, now):
             log(hook.data_dir, f"{hook.event} fleet_grant_alone could not revoke {ref}\n{traceback.format_exc()}")
         return Deny(f"tstack: the user allowed this call once ({ref}), and {moved}: the grant was for the file as it was, "
                     f"so it is gone (with what was left of its list). {ASK_AGAIN}")
-    if hook.denied:
-        return None
-    taken = _take(hook, d, grant)
-    if taken:
-        return Deny(f"tstack: the user allowed this call once ({ref}), and {taken}. {ASK_AGAIN}")
     return None
 
 
@@ -2881,20 +3117,55 @@ def fleet_grant_alone(hook):
     lets a compound command through when each of its parts has an allow rule (measured on 2.1.296: with one rule for
     A, `A; A` ran A twice, and two rules let `A; B` and `A | B` through), so a command that runs a granted call inside
     more would run on the grant, more than once or beside what the user never read as one call: refused while the
-    rule stands. The call itself is refused when its grant is over 30 minutes old, when an earlier call of its list
-    has not run, when a file it binds changed, and when another call took the grant first; else it is marked taken
-    and left to the permission check, where its rule lets it through. A record of grants that cannot be read fails
+    rule stands. The call itself is refused when its grant is on no record of the hub's grants or over 30 minutes old
+    by that record, when an earlier call of its list has not run, when a file it binds changed, and when another call
+    took the grant first; else it is marked taken and left to the permission check, where its rule lets it through. A record of grants that cannot be read fails
     closed (_alone_by_settings). This handler never allows."""
     command = _shell_command(hook)
     if command is None:
         return None
     now = fleet_now(hook.env)
-    for d in grant_state_dirs(hook):
+    dirs = grant_state_dirs(hook)
+    if not dirs:
+        return _alone_without_fleet(hook, command)
+    for d in dirs:
         raw, unread = _read_grants(d)
         denial = _alone_by_settings(hook, command, unread) if raw is None else _alone_by_grants(hook, d, raw, command, now)
         if denial:
             return denial
     return None
+
+
+def _alone_without_fleet(hook, command):
+    """A session that works for no fleet has no record to mark a grant taken in: a command that runs a call of a
+    standing grant on its root's record is refused, so the grant is held to its bounds wherever the call comes from
+    (a fleet's record of grants deleted, or another session in the same root). A grant past its 30 minutes by the
+    record is taken back at any Bash or Monitor call, its take-back on the root's record (`expired`): with no fleet
+    there is no log to add a line to, and the hub's timer cannot find a root that no line or heartbeat names (review
+    2: such a root kept the rule). One within its 30 minutes is only refused: a fleet's session may still run it."""
+    now, denial = fleet_now(hook.env), None
+    for grant in _latest_grants(hook, b""):
+        call = _bash_call(grant["rule"])
+        if not call or grant["issued"] is None or not _live(hook, grant):
+            continue
+        ref, runs = grant["ref"] or grant["decision"], _is_call(command, call) or _holds_call(command, call)
+        at = _issued_at(grant)
+        if at is None or now - at >= GRANT_TTL_S:
+            try:
+                unrecorded = _take_back(grant["file"], grant["rule"], _ended_entry(grant, fleet_stamp(hook.env), "expired"))
+            except Exception:  # refused all the same; the next call tries again
+                log(hook.data_dir, f"{hook.event} fleet_grant_alone could not take back {ref}\n{traceback.format_exc()}")
+            else:
+                if unrecorded:
+                    log(hook.data_dir, f"{hook.event} fleet_grant_alone: {unrecorded}")
+            if runs and denial is None:
+                denial = Deny(f"tstack: the user allowed this call once ({ref}), and a one-time grant lasts "
+                              f"{GRANT_TTL_S // 60} minutes: this one is over. {ASK_AGAIN}")
+        elif runs and denial is None:
+            denial = Deny(f"tstack: this command runs a call the user allowed once ({ref}): `{call}`, and this session "
+                          "works for no fleet whose record could hold it to one run. Run it from the fleet's own session.")
+    hook._allows.clear()
+    return denial
 
 
 def fleet_monitor_watch(hook):

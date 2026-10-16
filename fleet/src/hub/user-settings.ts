@@ -9,6 +9,7 @@ import { lstatSync, realpathSync, rmSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
 import { readText, strerror } from "../files.ts";
+import { asArray, asObject } from "../json.ts";
 import { folderFor, lockSettings, parsed, releaseLock, settingsText, Ungranted, withAutoModeRule, writeAtomic } from "./settings-file.ts";
 
 /** The lock beside the user's real settings file: the name the one-time writer and the fleet repo's office host
@@ -34,6 +35,15 @@ export function userSettingsFile(home: string | undefined): string | Ungranted {
 
     return new Ungranted(`${file} cannot be resolved: ${strerror(cause)}`);
   }
+}
+
+/** Whether `autoMode.allow` of the user's settings `file` holds `rule`, read now; false when it cannot be read. */
+export function holdsAutoModeRule(file: string, rule: string): boolean {
+  const settings = parsed(file);
+
+  if (settings instanceof Ungranted) return false;
+
+  return asArray(asObject(settings["autoMode"])?.["allow"])?.includes(rule) === true;
 }
 
 /**

@@ -2602,20 +2602,33 @@ run of each exact command shown; the next run of the same command asks again.
   `.claude` is made, and the grant says `reload: restart` (Claude Code watches only a settings folder
   that existed when the session started), else `live`. An Agent grant goes the same way into
   `<root>/.claude/tstack-grants.json` instead, same shape (`permissions.allow`), and is always `live`:
-  Claude Code never reads that file, the hook reads it at each spawn. Then one line is appended to `DIR/grants.jsonl`:
+  Claude Code never reads that file, the hook reads it at each spawn. **The order of the writes**: first each
+  grant goes on the root's record of issued grants, `issued` in `<root>/.claude/hooks/tstack-grants-issued.json`
+  (`{decision,ref,rule,file,at,n,of,rev,dir[,runs]}` each, the same values as its line below, `dir` the fleet's
+  DIR; newest last, the newest 4096 kept, every other key kept; written through a temp file and a rename,
+  two-space JSON; a record that does not parse refuses the grant, 409, and nothing is written); then the rules
+  go into the settings (a failed write puts the record back); then one line is appended to `DIR/grants.jsonl`
+  (a failed append puts both back); last, the earlier grant of a rule granted anew goes on the root's record of
+  take-backs, `why: superseded`. What a crash leaves at each step: after the record, an entry whose rule is not
+  in its file, which grants nothing (a rule held already is bounded by the newer entry); after the settings, a
+  grant on record with no line, which the hook finds on its session root's record and the hub through the
+  fleet's heartbeats (hub.test.ts: a hub that dies at the line's append, its rollback and its lock's release
+  undone with it, and restarts takes the rule back at 31 minutes); after the line, an earlier grant not marked superseded, which the newest entry of its rule
+  supersedes all the same. No step leaves a rule that nothing bounds (measured on 83448844, which wrote the
+  settings first: a crash before the record left the rule with neither entry nor line). The line:
   `{"op":"grant",decision,ref,rule,agent_id,file,at,by,reload,rev,n,of[,runs][,workspace]}` (one line per rule
   granted, in the order asked, each with the same `decision`, `at` and `rev` and its own `rule`; `n` of
   `of` is the call's place in the list; `runs` is `[{path,sha256}]` for the files that call is bound to;
   `rev` is the row's last change and the revision of what it asks for), `agent_id` the row's `refusal.agent_id`
   (null: the session's main thread; kept for the record, the removal no longer reads it), `by` being `tailnet:<login>` for a
   tailnet peer that is not this machine (`tailscale whois`), else `local` (loopback, whatever header it
-  carries, or this machine's own tailnet address); then the answer is stored. A rule already in `permissions.allow` that no grant line of this fleet names for that file is
-  someone's own: the hub appends no grant line for it, so the hook never removes it (of several rules the
+  carries, or this machine's own tailnet address); then the answer is stored. A rule already in `permissions.allow` that no standing grant on the root's record (or, from before the record, no grant line of this fleet) names for that file is
+  someone's own: the hub records no grant of it, so the hook never removes it (of several rules the
   others are granted; with none to add the hub writes nothing), and the
   answer is stored as usual. One an earlier grant left there (its call cancelled, its 30 minutes not
-  over) is granted anew: the settings stay as they are and the new line is the grant the hook counts,
+  over) is granted anew: the settings stay as they are and the new entry is the grant the hook counts,
   in its own turn and for its own 30 minutes. **One grant for each state of a permission**: an answer
-  to a decision whose `rev` already has a grant line grants nothing more (a second tap, the same request
+  to a decision whose `rev` already has a grant on the root's record, or a grant line, grants nothing more (a second tap, the same request
   sent again while the row is open and the hook has taken the rule back), and the 201 says so in its
   `grant` note (`P<n> was already allowed once as it stands: one yes is one grant, ...`); asked again
   (a revision), the yes is a yes to that. A failed check answers
@@ -2623,16 +2636,61 @@ run of each exact command shown; the next run of the same command asks again.
 - **Letting a spawn through** (the plugin's hook, `fleet_agent_grant`, PreToolUse with matcher `Agent`):
   a spawn whose `Agent(<call>)` is in `permissions.allow` of `<$CLAUDE_PROJECT_DIR, else the input's
   cwd>/.claude/tstack-grants.json` gets `permissionDecision: allow`; anything else, an absent or broken
-  file included, gets no output. It needs no fleet DIR, and it allows that input for any caller, as a
-  settings rule does; the sweep below ends the grant.
-- **Which grants stand** (hook and hub alike): the last grant line of each file and rule is a grant
-  that stands for as long as the rule is in that file's `permissions.allow` and the grant is not on the
-  root's record of take-backs. A `remove` line is a record, never the proof: any agent can append one,
+  file included, gets no output. The rule alone is no grant: the spawn is allowed only while the newest entry
+  of that rule on the root's record of issued grants stands, within its 30 minutes and its list's turn
+  (measured on 83448844: any exact rule in the file was allowed, so with its line deleted and the hub
+  restarted the spawn was allowed for good). It needs no fleet DIR, and it allows that input for any caller,
+  as a settings rule does; the sweep below ends the grant.
+- **Which grants stand** (hook and hub alike): **the root's record of issued grants says which grants
+  exist, and `grants.jsonl` is the log.** The newest entry of each file and rule in `issued` of
+  `<root>/.claude/hooks/tstack-grants-issued.json` is that rule's grant (an earlier one is superseded, ended
+  or not), and it stands for as long as the rule is in that file's `permissions.allow` and the grant is not on
+  the root's record of take-backs, whether or not a line names it. Its `at` (the 30 minutes), `runs` (the files
+  it binds), `n` (its turn in its list) and `ref` come from that entry, never from a line. The hook reads the
+  record of its session's root and of each root a line names; the hub that of each root a line, a heartbeat of
+  the fleet or its own memory names. A record holds the grants of its own root alone: an entry counts only when
+  the realpath of its `file` is in the `.claude/` of the record's root, and the hook reads its session root's
+  record first, so no entry of a root a line names replaces one of the session's (review 2 of this record: a
+  line named a folder an agent made, whose record held an entry for the session's own settings with a later
+  `at` and no `runs`, and read after the session root's it replaced the grant there; any folder outside the
+  session's `.claude/` is one an agent can write). A line names a root and nothing more: a deleted one hides no grant
+  (measured on 83448844, which found grants from lines: with the line deleted an edited bound script ran,
+  ran again, and `A; A` passed, and a restarted hub never took the rule back). A line of a file and rule
+  with no entry on record (a forged one, one from before the record existed, or any line of a root whose
+  record cannot be read or does not parse) grants nothing: it is expired at once, the hook refuses its call
+  (`this call's grant is on no record of the hub's grants (...): a line in grants.jsonl alone grants
+  nothing, so its rule is taken back`, a fixed text: it quotes no `ref` or decision of the line's, which
+  whoever wrote the line chose), and either sweep takes its rule back with a take-back marked
+  `line: true`, which ends that line alone: nothing was issued (review 3 of this record: the take-back of such
+  a line carried the line's decision, `at` and `rev`, which any agent can copy from a real grant's line, and
+  through a symlink it landed on the real root's record and ended the real grant, so its rule stayed for
+  good). A grant file, whether a line, an
+  entry or a heartbeat names it, is one only when its folder is its own realpath and neither the file,
+  `.claude/hooks` nor a record in it is a symlink; else nothing there is read, taken back or written, and
+  the hub grants nothing into a session root where that fails (review 3: a symlinked `.claude/hooks` sent a
+  take-back to another root's record, and Node's `join` reads `<link>/..` by its text where the filesystem
+  follows the link). Without this, a copy of a bound
+  grant's line with no `runs` and an `at` an hour on let an edited script run on the rule and held the rule
+  past its 30 minutes (measured on 72729f26). The record sits under `.claude/hooks/` for the reason the record
+  of take-backs does (below). A `remove` line is a record, never the proof: any agent can append one,
   and one appended while the rule stood ended the grant for the hook (`A; A; A` then ran three times on
   one yes). The proof is the record of take-backs, `ended` in
-  `<root>/.claude/hooks/tstack-grants-ended.json` (`{decision, rule, granted, at}` each: `granted` the
-  grant line's `at`, `at` the take-back's; newest last, the newest 4096 kept), written by whichever
-  sweep took the rule back. A grant there is one grant line, not its decision: decision ids repeat
+  `<root>/.claude/hooks/tstack-grants-ended.json` (`{file, decision, rule, granted[, rev][, line], at, why}` each:
+  `file` the grant file, `granted` the grant's `at`, `rev` its permission's revision, `line: true` for the
+  take-back of a line on no record of issued grants, `at` the take-back's, `why` one of `used`, `revoked`,
+  `expired` or `superseded`; newest last, the newest 4096 kept), written by whichever sweep
+  took the rule back, and by the hub for a grant superseded. A grant there is named by its file, decision,
+  rule, `granted` and `rev`: the file, so a take-back ends only its own file's grant; `at` is to the second,
+  and two answers of one decision under two revisions in one second are two grants (without the `rev`,
+  superseding the first ended the second as it was born, and its rule stayed). An entry with no `file` or no
+  `rev` (master's hook and hub wrote neither, and a session runs the hook it started with until it restarts)
+  matches on the rest for a grant on no record of issued grants alone, a grant of master's era. A recorded
+  grant ends only through an entry naming its file, and its `rev` when it has one: master's writers check no
+  symlink, so in a session still on master's hook a forged line naming an agent's folder, its `.claude/hooks`
+  a symlink to the root's, put such an entry on the real root's record, and matched on the rest it ended the
+  real grant, whose rule then stayed for good (review 4, finding 1). The cost is fewer calls, once, during
+  the skew: a recorded grant master's hook took back, whose rule the owner then put back by hand, has its
+  rule removed once more, with a full take-back, and the rule added after that is left. A grant there is one grant, not its decision: decision ids repeat
   (`p-` and the hash of the caller and the call; a revised decision keeps its id), so a second allow-once
   of the same call is a grant of its own, on no record until its own take-back. Why there: Claude
   Code's permission check protects all of `.claude/`, any file name, but for a few listed exceptions
@@ -2651,10 +2709,23 @@ run of each exact command shown; the next run of the same command asks again.
   watch's lasting rule, added at 08:16:39 and identical to a grant used the evening before, went at
   08:16:41 by the hook and at 08:24:28 by the hub, and agent-tools' the same way). A grant line that
   copies an ended grant (its decision, rule and `at`) never displaces a live grant of the rule, so it
-  shields nothing. Once, on the change to this record: a rule identical to a grant used or expired
-  before the record existed is on no record, so the next sweep removes it once more; the owner adds it
-  again after that, and it stays. A settings file that cannot be read or does not parse is taken to hold every rule granted into it; a
+  shields nothing. An entry marked `line: true` ends only a line on no record of issued grants with all of
+  its file, decision, rule, `granted` and `rev`, and never a grant with an entry on the record of issued
+  grants, under any key: a forged line's take-back ends no real grant. It is what keeps a rule the owner adds
+  that is identical to such a line (a grant used or expired before the record of take-backs existed and never
+  taken back on it, or one an earlier hub granted with no record of issued grants and this change took back):
+  the sweep removes the rule once, as for any grant, and not at each sweep while that line is in a
+  `grants.jsonl` the sweeps read (round 4 of review 3 wrote no take-back for such a line, and so removed the
+  owner's rule at every sweep, as on 2026-10-15). A settings file that cannot be read or does not parse is taken to hold every rule granted into it; a
   record that cannot be read or does not parse holds no take-back (fewer allowed calls, never more).
+  Residuals, accepted (review 4): a symlink swapped in between a sweep's check of a grant file under the lock
+  and its rename ends no recorded grant, since a `line` take-back ends none wherever it lands and any other is
+  written only for a recorded grant, keyed by its own file's realpath, so landing on another record ends
+  nothing there and landing nowhere leaves the grant bounded or its rule gone (swapping a component of the
+  real root's path needs a write outside `.claude/`); and a root whose `.claude/hooks` the owner made a
+  symlink keeps the rules granted there before the deploy, unbounded, since neither the hook nor the hub
+  reads, takes back or writes anything there (`grantFile`), so its earlier grants are removed by hand. The
+  deploy: the hub restarts with the release, and a session on the old hook keeps it until it restarts.
 - **A granted call runs alone, once, in its turn** (the plugin's hook, `fleet_grant_alone`, the last
   PreToolUse handler, matcher `Bash|Monitor`; it returns a deny or nothing, never an allow). The hook
   reads the grants of `grant_state_dirs`: the fleets of `grant_dirs`, and any of the same places that
@@ -2672,12 +2743,15 @@ run of each exact command shown; the next run of the same command asks again.
     (`run it by itself, and anything else in a call of its own`). Without this, one grant for A let
     `A; A` run A twice in one call, and two grants let `A; B` and `A | B` through as one call the user
     never read.
-  - The granted call itself is denied when its grant is 30 minutes old or more (and the hook takes the
+  - Each standing grant of the call is held to what follows, not only the first a line names: a line can
+    name a settings file and record of any folder.
+  - The granted call itself is denied when its grant is on no record of issued grants, or 30 minutes old or
+    more by the `at` on that record (and the hook takes the
     rule back there and then: before, a grant three hours old still ran when its call was the first call
     after an idle spell); when an earlier call of its list still stands (`this is call 3 of the list the
-    user allowed (P1), and call 1 has not run: ...`; a list is a sequence, and a call's turn is its
-    line's place among the grant lines of one answer); when a file it binds no longer hashes to what the
-    hub recorded, cannot be read, or its record does not read (the grant and what is left of its list
+    user allowed (P1), and call 1 has not run: ...`; a list is a sequence, and a call's turn is its `n` on
+    the record of issued grants); when a file it binds (its `runs` on that record) no longer hashes to what
+    the hub recorded, cannot be read, or its record does not read (the grant and what is left of its list
     are then taken back, `why: revoked`); and when another call took the grant first.
   - **Taking** a grant is how one yes stays one run when two callers reach PreToolUse before either
     call has finished: the hook creates `DIR/grants.taken/<32 hex of sha256(decision, rule, file, at)>`
@@ -2702,23 +2776,39 @@ run of each exact command shown; the next run of the same command asks again.
   refuses such a command first, and a grant ends with it all the same if it ran. Each rule of a
   permission that granted several calls is a grant of its own: it goes when its call ran, and **when
   that call failed (PostToolUseFailure) the rest of its list goes with it** (`why: revoked`): what
-  comes after a failure was allowed for another state of things. An attempt out of turn, or inside a
-  longer command, is denied and revokes nothing: the fleet has only to make the right call. A grant is
-  `expired` 30 minutes after its `at`. The hook takes the rule out under the settings lock, puts the
+  comes after a failure was allowed for another state of things. A call's turn is read from the records:
+  each earlier call of its list (the same `decision`, `at` and `rev`, a lower `n`) must have ended `used`. While one
+  still stands, the call is denied and revokes nothing: the fleet has only to make the right call. When one
+  ended otherwise (`expired`, `revoked`, `superseded`), or its rule left its file with no ending on record, the
+  list is void: the call is denied (`call 1 (...) ended without running, so what was left of the list is no
+  longer allowed`) and the rest revoked (measured on master 725ab3b2, which counted only the earlier calls still
+  standing: a forged line for call 1's rule, or a sweep taking it back, let call 2 run first). A call inside a
+  longer command is denied and revokes nothing. A grant is
+  `expired` 30 minutes after the `at` on its root's record of issued grants, and at once when it is on none. The hook takes the rule out under the settings lock, puts the
   take-back on the root's record (`ended` in `<root>/.claude/hooks/tstack-grants-ended.json`, the
   settings first so a record write that fails leaves fewer allowed calls, never more; a record that
   does not parse is left as it is and the take-back logged), then appends a `remove` line,
   `{"op":"remove",decision,rule,file,at,why}` (`why`: `used`, `revoked` or `expired`), and removes the
   grant's `grants.taken` file. It rewrites only an absolute `<root>/.claude/settings.local.json` or
-  `<root>/.claude/tstack-grants.json`. Two hooks sweeping at
+  `<root>/.claude/tstack-grants.json` that is a grant file (above), checked again under the lock. Two hooks sweeping at
   once are kept apart by a `flock` on `grants.jsonl`, so a grant is closed once. A `grants.jsonl` that
   cannot be read is logged and left to the hub.
 - **The hub ends a grant itself** (`expireGrants`, at start and every 15 s): a grant 30 minutes old or
-  more whose rule is still in its file, and that is not on the root's record of take-backs, is taken
-  back under the settings lock, put on that record, with a `remove` line
-  (`why: expired`, `by: hub`). It reads the grants of every fleet the registry names, served or not
-  (so a restarted hub takes up what an earlier one granted), and the ones this process wrote, which it
-  holds in memory, so its own removal does not rest on a file every agent can write. This is what ends
+  more by the `at` on its root's record of issued grants, or on no such record, whose rule is still in its file, and that is not on the root's record of take-backs, is taken
+  back under the settings lock, put on that record (`why: expired`), with a `remove` line
+  (`why: expired`, `by: hub`). It reads the records of the roots that the lines and heartbeats of every
+  fleet the registry names (served or not, so a restarted hub takes up what an earlier one granted) and its
+  own memory of what this process granted name. A root none of them names (its lines deleted, no heartbeat,
+  the hub restarted) is ended by the hook: it reads its session root's record at each call, so the call is
+  refused and the rule taken back at the first Bash, Monitor or Agent call after the 30 minutes, in any session
+  of that root that works for a fleet, and at the first Bash or Monitor call in a session of no fleet (its
+  PreToolUse, `_alone_without_fleet`: with no fleet there is no sweep, and an Agent rule left in
+  `.claude/tstack-grants.json` lets nothing through past its 30 minutes, since `fleet_agent_grant` reads the
+  record and refuses it). The hook's sweep runs only on those calls (PostToolUse and
+  PostToolUseFailure of Bash, Monitor and Agent): a grant writes a rule of those tools alone, so another tool's
+  call is let through by none, and the next call a grant could let through is refused first (a full record of
+  4096 entries costs about 30 ms to read; read on every tool call it cost each Read, Edit or Grep that much).
+  This is what ends
   a grant whose session made no call after it, runs in the same folder without this fleet, or had its
   record of grants edited or deleted; the hook's sweep ran only when a session of the fleet made a tool
   call. With no hub running, the hook's sweep is all there is.
@@ -2747,9 +2837,13 @@ run of each exact command shown; the next run of the same command asks again.
     impossible; the registry names a process, and the hub reads where it runs, so a forged entry grants
     only in a directory some live process of the user's runs in. A forged `remove` line ends nothing
     while the rule stands and no take-back is on the root's record (in `.claude/`, which an agent
-    cannot write), an unreadable record of grants fails closed, and the hub removes at 30 minutes what
-    it granted whatever the record says; a deleted `grants.jsonl` or `grants.taken` file still lifts
-    the hook's hold on a second run until then.
+    cannot write), an unreadable record of grants fails closed, and a deleted or forged `grants.jsonl`
+    line changes no grant: the root's record of issued grants says which stand. A deleted `grants.taken`
+    file lifts the hold on a second run only between a call's PreToolUse and its PostToolUse, which takes
+    the rule back; a session whose hook finds no fleet refuses any call of a standing grant, and at any Bash or
+    Monitor call takes back a grant past its 30 minutes (`why: expired`, on the root's record, with no line:
+    it knows no fleet's log), so a root only such sessions visit keeps no rule. One within its 30 minutes it
+    only refuses: a session of the fleet may still run it, in turn.
   - A forged registry entry with a forged `op:grant` line can make the hook or the hub remove a rule
     that matches it, one added by hand in another project included: the failure is fewer allowed calls,
     never more.
@@ -4666,8 +4760,8 @@ recommendation attached.
 | `fleets.py gate take/free`, `name` | `REGISTRY/gate/gate.json` (under `REGISTRY/gate/gate.lock`; the TypeScript fleet also `queue.json` and, from `gate run`, `runs.jsonl`), `REGISTRY/<fleet>.json` |
 | `serve_dashboard.py` | `DIR/server.json`, `DIR/server.log`, `REGISTRY/<fleet>.json` |
 | `fleet serve` | `REGISTRY/<fleet>.json` (removed with `--stop`); with `--take-over`, when it displaced a host that ran: `DIR/state.json` (one event, `updated`) and one line in `DIR/chat.jsonl` (TypeScript only) |
-| `fleet hub` | `REGISTRY/hub/hub.json` while it runs (it reads `REGISTRY/hub/config.json`, written by hand); `REGISTRY/hub/tokens.json` at start and when a token rotates; `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, `<root>/.claude/settings.local.json` (and its folder) and `DIR/grants.jsonl`; on a page rename, `DIR/state.json` (a worker's `name`, `name_by`, `updated`, under the ledger's lock) or `REGISTRY/overrides/<hash>.json` and `REGISTRY/<fleet>.json` |
-| the plugin's hook (grant removal) | `<root>/.claude/settings.local.json`, `DIR/grants.jsonl` (`remove` lines) |
+| `fleet hub` | `REGISTRY/hub/hub.json` while it runs (it reads `REGISTRY/hub/config.json`, written by hand); `REGISTRY/hub/tokens.json` at start and when a token rotates; `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, in this order, `<root>/.claude/hooks/tstack-grants-issued.json`, `<root>/.claude/settings.local.json` (and its folder) or `<root>/.claude/tstack-grants.json`, `DIR/grants.jsonl`, and for a rule granted anew `<root>/.claude/hooks/tstack-grants-ended.json` (`why: superseded`); on an expiry, the settings file, `tstack-grants-ended.json` and `DIR/grants.jsonl`; on a page rename, `DIR/state.json` (a worker's `name`, `name_by`, `updated`, under the ledger's lock) or `REGISTRY/overrides/<hash>.json` and `REGISTRY/<fleet>.json` |
+| the plugin's hook (grant removal) | `<root>/.claude/settings.local.json` or `<root>/.claude/tstack-grants.json`, `<root>/.claude/hooks/tstack-grants-ended.json` (the take-back, with its `why`), `DIR/grants.jsonl` (`remove` lines), `DIR/grants.taken/` |
 | the plugin's hook (`fleet_permission_denied`), through `fleet state DIR decision ID --kind refusal\|permission` | `DIR/state.json` (`refusals`, or for a spawn `decisions`; `events`, `updated`), `DIR/index.html`; for a draft one line in `DIR/chat.jsonl` from `fleet-hub`, or one line to the host's session's socket when its watch is not running; the session's `transient-refusals` and `refusal-notes` folders in the plugin's data folder |
 | the hub (its wake timer, `POST wake`) | `REGISTRY/hub/wakes.json`; one line to the session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, which is Claude Code's, not the fleet's |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |

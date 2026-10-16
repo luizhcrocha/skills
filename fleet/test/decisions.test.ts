@@ -1694,7 +1694,12 @@ describe("rule card", () => {
   });
 
   test("--decide add-rule is refused until grants.jsonl records the rule the card holds, added by the hub", () => {
+    const home = tmp();
+    env = { ...env, HOME: home };
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ autoMode: { allow: ["$defaults"] } }));
     ok(...card("added", ruleFile(RULE)));
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ autoMode: { allow: ["$defaults", RULE] } }));
     const sha = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
     const line = (decision: string, text: string): void => appendFileSync(join(root, "grants.jsonl"), `${JSON.stringify({ op: "rule", decision, file: "/h/.claude/settings.json", sha256: sha(text), at: "t", by: "local" })}\n`);
     expect(refused("decision", "added", "--decide", "add-rule: Add this rule", "--resolution", "r")).toContain("no record that the hub added");
@@ -1702,10 +1707,31 @@ describe("rule card", () => {
     line("added", `${RULE} and more`);
     expect(refused("decision", "added", "--decide", "add-rule", "--resolution", "r")).toContain("no record that the hub added");
     line("added", RULE);
+    // A forged rule line, with the rule not in the user's settings, closes nothing.
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ autoMode: { allow: ["$defaults"] } }));
+    expect(refused("decision", "added", "--decide", "add-rule", "--resolution", "r")).toContain("no record that the hub added");
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ autoMode: { allow: ["$defaults", RULE] } }));
     ok("decision", "added", "--decide", "add-rule: Add this rule", "--resolution", "answered on the page (#4)");
     expect(item("added")["status"]).toBe("decided");
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ autoMode: { allow: ["$defaults"] } }));
     ok(...card("later", ruleFile(RULE)));
     ok("decision", "later", "--decide", "deny: Not now", "--resolution", "r");
+  });
+
+  test("a rule already in autoMode.allow is refused as already allowed: no card opens, so none closes with no rule added", () => {
+    // Review 4: ruleAdded passed for a rule the user's settings held before the card, and the card closed as added
+    // although the hub added nothing. A card's rule is absent from autoMode.allow when it opens, and present when it closes.
+    const home = tmp();
+    env = { ...env, HOME: home };
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ autoMode: { allow: ["$defaults", RULE] } }));
+    expect(refused(...card("held", ruleFile(RULE)))).toContain("already allowed");
+    expect(item("held")["id"]).toBeUndefined();
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ autoMode: { allow: ["$defaults"] } }));
+    ok(...card("held", ruleFile(RULE)));
+    const other = `${RULE}\nAlso the second workspace.`;
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ autoMode: { allow: ["$defaults", RULE, other] } }));
+    expect(refused("decision", "held", "--rule-file", ruleFile(other))).toContain("already allowed");
   });
 
   test("a rule file written with CRLF line ends is read with LF ones", () => {

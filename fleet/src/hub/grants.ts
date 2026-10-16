@@ -26,11 +26,18 @@
  * hook's and then this hub's). A grant there is one grant line, not its decision: decision ids repeat (the
  * hook's `_permission_id` hashes the caller and the call; a revised decision keeps its id), so a later grant of
  * the same id and rule is not on record until it too is taken back. An agent that could forge a take-back there could as well write the lasting rule, so the record adds
- * nothing to what it can do. What stays, accepted: a forged `grant` line in grants.jsonl can still make a
- * sweep remove a rule that matches it, the owner's included; the failure is fewer allowed calls, never more.
+ * nothing to what it can do. Which grants exist is kept the same way: as it grants, the hub first puts each grant
+ * on the root's record of issued grants, `.claude/hooks/tstack-grants-issued.json` (`issued`: decision, ref, rule,
+ * file, at, n, of, rev, dir and the files its call runs, `runs`), then the rule in its file, then its line, then
+ * ends the earlier grant of a rule granted anew (`why: superseded`), so a crash at any step leaves no rule that
+ * nothing bounds. The newest entry of a file and rule is its grant, whether or not a line names it: grants.jsonl
+ * is the fleet's log, a line names a root and grants nothing (measured on 83448844, which found grants from lines:
+ * with the line deleted, a restarted hub never took the rule back). A line with no entry is taken back at the next
+ * sweep. What stays, accepted: a forged `grant` line of a rule with no entry on record can make a sweep remove it,
+ * the owner's included; that failure is fewer allowed calls.
  */
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, rmSync } from "node:fs";
+import { appendFileSync, lstatSync, mkdirSync, rmSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
 import { isDir, readText, resolvePath, strerror } from "../files.ts";
@@ -299,7 +306,8 @@ function askedOf(dir: string, d: Decision, registered: () => Registered | undefi
   const rev = `${d.revised ?? d.opened} ${refusalRev(r)}`;
   const base = { id: d.id, ref: d.ref ?? "", rules: rulesOf(r), runs: r.runs ?? [], bound, rev, shown: r.root, tool: r.tool, agentId: r.agent_id };
 
-  if (placed.kind !== "workspace") return { ...base, root: r.root, workspace: undefined, notes: [] };
+  // The resolved root: a grant file is its own realpath, or no grant file (`grantFile`) the hook or this hub bounds.
+  if (placed.kind !== "workspace") return { ...base, root: at, workspace: undefined, notes: [] };
   const who = d.agent ?? "the worker";
   const moved = `This permission names ${placed.name}'s workspace ${r.root}; the hub granted it at the session root ${placed.root}, where ${who}'s session reads its permissions.`;
 
@@ -384,6 +392,8 @@ export async function grantAnswer(answered: Answered): Promise<GrantAnswer> {
   if (moved !== undefined) return { refused: moved };
   const notes = asked.notes;
   const file = grantFileOf(asked.tool, asked.root);
+
+  if (grantFile(file) === undefined) return { refused: `${file} is not its own path, or its .claude/hooks or a record there is a symlink, so no record of the grant there could be trusted: nothing is granted. Make .claude/hooks a plain folder; ${AGAIN}.` };
   // The hook reads the Agent grants file at each spawn; Claude Code watches only a settings folder that existed at start.
   const reload = asked.tool === "Agent" || isDir(dirname(file)) ? "live" : "restart";
 
@@ -417,8 +427,11 @@ function written(answered: Answered, asked: Asked, file: string, reload: string)
 
   const recorded = grantLines(record).filter((line) => line["op"] === "grant");
 
-  // One grant for each state of a permission: the same answer sent again (a second tap, a replayed request) grants nothing.
-  if (recorded.some((line) => line["decision"] === asked.id && line["rev"] === asked.rev)) return "again";
+  // One grant for each state of a permission: the same answer sent again (a second tap, a replayed request) grants
+  // nothing. The root's record says so whatever grants.jsonl holds; a line says so of a grant from before the record.
+  const onRecord = issuedEntries(file);
+
+  if (onRecord.some((e) => e.decision === asked.id && e.rev === asked.rev) || recorded.some((line) => line["decision"] === asked.id && line["rev"] === asked.rev)) return "again";
   const settings = parsed(file);
 
   if (settings instanceof Ungranted) return settings;
@@ -426,45 +439,102 @@ function written(answered: Answered, asked: Asked, file: string, reload: string)
 
   if (held instanceof Ungranted) return held;
 
-  // A rule someone put there is theirs, and nobody but them takes it out: no grant line for it, so the hook leaves it.
-  // One an earlier grant left there (its call cancelled, its 30 minutes not over) is granted anew: the new line is
-  // the grant the hook counts, in its own turn and for its own 30 minutes. One an earlier grant once named, since
-  // taken back (on the root's record), is the owner's again: they put it there after the take-back.
+  // A rule someone put there is theirs, and nobody but them takes it out: no grant for it, so the hook leaves it.
+  // One an earlier grant left there (its call cancelled, its 30 minutes not over: its newest entry on the root's
+  // record not ended, or a line of it from before the record) is granted anew: the new entry is the grant the hook
+  // counts, in its own turn and for its own 30 minutes, and the earlier one is superseded. One an earlier grant once
+  // named, since taken back (on the root's record of take-backs), is the owner's again.
   const ended = endedIn(file);
-  const granting = asked.rules.filter((rule) => held.added.includes(rule) || recorded.some((line) => line["rule"] === rule && line["file"] === file && !ended.has(endedKey(asString(line["decision"]) ?? "", rule, asString(line["at"]) ?? ""))));
+  const newest = newestEntries(onRecord);
+
+  const standsOf = (rule: string): boolean => {
+    const entry = newest.get(`${file}\n${rule}`);
+
+    if (entry !== undefined) return !endedHas(ended, entry);
+
+    return recorded.some((line) => {
+      const named = { file, decision: asString(line["decision"]) ?? "", rule, at: asString(line["at"]) ?? "", rev: asString(line["rev"]) };
+
+      return line["rule"] === rule && line["file"] === file && !endedHas(ended, named, true) && !lineEnded(ended, named);
+    });
+  };
+
+  const granting = asked.rules.filter((rule) => held.added.includes(rule) || standsOf(rule));
 
   if (granting.length === 0) return "kept";
   const before = readText(file);
 
+  const grants = granting.map((rule) => {
+    const n = asked.rules.indexOf(rule) + 1;
+    const runs = runsOfCall(asked, n);
+    const bound = runs.length === 0 ? {} : { runs };
+    const line = { op: "grant", decision: asked.id, ref: asked.ref, rule, agent_id: asked.agentId, file, at: answered.at, by: answered.by, reload, rev: asked.rev, n, of: asked.rules.length, ...bound };
+
+    return {
+      entry: { decision: asked.id, ref: asked.ref, rule, file, at: answered.at, n, of: asked.rules.length, rev: asked.rev, dir: answered.dir, ...bound },
+      line: asked.workspace === undefined ? line : { ...line, workspace: asked.workspace },
+    };
+  });
+
+  const issuedRecord = issuedFile(file);
+  const issuedBefore = readText(issuedRecord);
+  const record0 = parsed(issuedRecord, issuedBefore);
+
+  if (record0 instanceof Ungranted) return new Ungranted(`could not record the grant: ${record0.reason}`);
+
+  const unrecord = (): void => {
+    try {
+      if (issuedBefore === undefined) rmSync(issuedRecord, { force: true });
+      else writeAtomic(issuedRecord, issuedBefore);
+    } catch {
+      // An entry whose rule is not in its file grants nothing: the hook and the hub read no grant from it.
+    }
+  };
+
+  // 1. The grant on its root's record, before the rule: a crash after it leaves an entry whose rule is not in its
+  // file (a rule held already is now bounded by the newer entry), never a rule that nothing bounds.
+  try {
+    mkdirSync(dirname(issuedRecord), { recursive: true });
+    const issuedNow = [...(asArray(record0["issued"]) ?? []), ...grants.map((g) => g.entry)].slice(-ISSUED_KEPT);
+
+    writeAtomic(issuedRecord, `${JSON.stringify({ ...record0, issued: issuedNow }, null, 2)}\n`);
+  } catch (cause: unknown) {
+    return new Ungranted(`could not record the grant in ${issuedRecord}: ${strerror(cause)}`);
+  }
+
+  // 2. The rules. A crash after it leaves a grant on record with no line: the hook finds it on the record of its
+  // session's root, and this hub through the fleet's heartbeats.
   try {
     if (held.added.length > 0) writeAtomic(file, `${JSON.stringify(held.next, null, 2)}\n`);
   } catch (cause: unknown) {
+    unrecord();
+
     return new Ungranted(`could not grant ${held.added.join(", ")} in ${file}: ${strerror(cause)}`);
   }
 
+  // 3. The line, the fleet's log of the grant.
   try {
-    const lines = granting.map((rule) => {
-      const n = asked.rules.indexOf(rule) + 1;
+    appendFileSync(record, `${grants.map((g) => JSON.stringify(g.line)).join("\n")}\n`, "utf8");
 
-      const runs = runsOfCall(asked, n);
-      const grant = { op: "grant", decision: asked.id, ref: asked.ref, rule, agent_id: asked.agentId, file, at: answered.at, by: answered.by, reload, rev: asked.rev, n, of: asked.rules.length };
-      const bound = runs.length === 0 ? grant : { ...grant, runs };
-
-      return JSON.stringify(asked.workspace === undefined ? bound : { ...bound, workspace: asked.workspace });
-    });
-
-    appendFileSync(record, `${lines.join("\n")}\n`, "utf8");
-
-    for (const rule of granting) issued.set(`${file}\n${rule}`, { dir: answered.dir, decision: asked.id, file, rule, at: answered.at });
+    for (const rule of granting) issued.set(`${file}\n${rule}`, { dir: answered.dir, decision: asked.id, file, rule, at: answered.at, rev: asked.rev, recorded: true });
   } catch (cause: unknown) {
-    // A rule with no grant line is one the hook would never remove: take it back.
-    if (held.added.length === 0) return new Ungranted(`could not record the grant in ${record}: ${strerror(cause)}`);
+    if (held.added.length > 0) {
+      if (before === undefined) rmSync(file, { force: true });
+      else writeAtomic(file, before);
+    }
 
-    if (before === undefined) rmSync(file, { force: true });
-    else writeAtomic(file, before);
+    unrecord();
 
-    return new Ungranted(`could not record the grant in ${join(answered.dir, "grants.jsonl")}: ${strerror(cause)}`);
+    return new Ungranted(`could not record the grant in ${record}: ${strerror(cause)}`);
   }
+
+  // 4. The earlier grants of a rule granted anew, ended as superseded: the newest entry of a rule is its grant
+  // already, so a crash before this, or a record that cannot be written, leaves the same grants standing.
+  supersede(file, granting.flatMap((rule) => {
+    const entry = newest.get(`${file}\n${rule}`);
+
+    return entry === undefined || endedHas(ended, entry) ? [] : [endedEntry(entry, answered.at, "superseded")];
+  }));
 
   return "granted";
 }
@@ -559,7 +629,12 @@ interface Issued {
   readonly decision: string;
   readonly file: string;
   readonly rule: string;
+  /** The grant line's `at`, which names it on the records. */
   readonly at: string;
+  /** The permission's revision it was granted under, which names it on the records with `at`. */
+  readonly rev: string | undefined;
+  /** Whether the grant is on its root's record of issued grants (`issuedEntries`), so its `at` is the hub's. */
+  readonly recorded: boolean;
 }
 
 /** The grants this hub wrote and has not seen end, by file and rule. Held in memory, so the hub's own removal
@@ -567,42 +642,188 @@ interface Issued {
 const issued = new Map<string, Issued>();
 
 /** A grant's file, when it is one a grant is written to: an absolute `<root>/.claude/settings.local.json` or
- * `<root>/.claude/tstack-grants.json` (the hook's `_grant_file`). */
-function grantFile(value: Json | undefined): string | undefined {
+ * `<root>/.claude/tstack-grants.json` whose folder is its own realpath, and where neither the file, `.claude/hooks`
+ * nor a record in it is a symlink (the hook's `_grant_file`). Else nothing there is read, taken back or written
+ * (review 3): `join` reads a `<link>/..` by its text where the filesystem follows the link, and a symlinked
+ * `.claude/hooks` sent a take-back onto another root's record. `seen` caches the answer by path. */
+function grantFile(value: Json | undefined, seen?: Map<string, string | undefined>): string | undefined {
   const file = asString(value);
 
-  if (file === undefined || !isAbsolute(file) || basename(dirname(file)) !== ".claude") return undefined;
+  if (file === undefined) return undefined;
 
-  return ["settings.local.json", "tstack-grants.json"].includes(basename(file)) ? file : undefined;
+  if (seen?.has(file) === true) return seen.get(file);
+  const folder = dirname(file);
+  const hooks = join(folder, "hooks");
+
+  const ok =
+    isAbsolute(file) &&
+    basename(folder) === ".claude" &&
+    GRANT_FILES.includes(basename(file)) &&
+    resolvePath(folder) === folder &&
+    ![file, hooks, join(hooks, ENDED_RECORD), join(hooks, ISSUED_RECORD)].some(isSymlink);
+
+  seen?.set(file, ok ? file : undefined);
+
+  return ok ? file : undefined;
 }
+
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** The records beside a root's grant files, in its `.claude/hooks/`: of take-backs, and of issued grants. */
+const ENDED_RECORD = "tstack-grants-ended.json";
+
+const ISSUED_RECORD = "tstack-grants-issued.json";
 
 /** The record of take-backs for a grant file: the root's `.claude/hooks/tstack-grants-ended.json`; the hook's
  * `_record_file`. */
 function recordFile(file: string): string {
-  return join(dirname(file), "hooks", "tstack-grants-ended.json");
+  return join(dirname(file), "hooks", ENDED_RECORD);
 }
 
-/** What names one grant on the record of take-backs: its decision, rule and the `at` of its grant line. */
-function endedKey(decision: string, rule: string, granted: string): string {
-  return `${decision}\n${rule}\n${granted}`;
+/** A grant as the record of take-backs names it. */
+interface Named {
+  readonly file: string;
+  readonly decision: string;
+  readonly rule: string;
+  readonly at: string;
+  readonly rev: string | undefined;
 }
+
+/** What names one grant on the record of take-backs: its grant file (its own realpath: `grantFile`), decision, rule,
+ * the `at` of its grant and its revision (the hook's `_ended_key`); "" for a file or revision an entry names none of.
+ * The file, as a take-back written beside one file named no file and ended another's grant (review 3). `at` is to
+ * the second: one decision answered twice in one second under two revisions is two grants, and without the revision
+ * the supersede of the first ended the second as it was born (review 2). */
+function endedKey(file: string, decision: string, rule: string, granted: string, rev: string): string {
+  return [file, decision, rule, granted, rev].join("\n");
+}
+
+/** Whether `ended` (`endedIn`) holds the take-back of `grant` (the hook's `_ended_why`): an entry naming its file
+ * and its revision. For a grant on no record of issued grants (`line`) alone, an entry with no file or no revision
+ * matches on the rest: master's take-backs carry neither, and a session runs master's hook until it restarts, so a
+ * grant of master's era its hook took back would be taken back again. Never for a recorded grant: master's writers
+ * check no symlink, so a forged line in a session on master's hook put such an entry on a real root's record, and it
+ * ended the real grant for good (review 4, finding 1). A recorded grant master's hook took back, whose rule the owner
+ * put back by hand, goes once more during the skew: fewer calls. */
+function endedHas(ended: Ended, grant: Named, line = false): boolean {
+  const rev = grant.rev ?? "";
+  const revs = line && rev !== "" ? [rev, ""] : [rev];
+
+  return (line ? [grant.file, ""] : [grant.file]).some((file) => revs.some((r) => ended.taken.has(endedKey(file, grant.decision, grant.rule, grant.at, r))));
+}
+
+/** Whether `ended` holds the take-back of a line on no record of issued grants (the hook's `_line_ended`): an entry
+ * marked `line` with its file, decision, rule, at and revision, all of them. Such an entry ends no issued grant, under
+ * any key: a line's fields are any agent's to copy from a real grant's (review 3, finding 1). Without it nothing marked
+ * a line over, and a rule the owner added that is identical to one went at every sweep (round 4; 2026-10-15). */
+function lineEnded(ended: Ended, line: Named): boolean {
+  return ended.lines.has(endedKey(line.file, line.decision, line.rule, line.at, line.rev ?? ""));
+}
+
+/** The take-back of a grant as the record of take-backs holds it; `line` for a line on no record (`lineEnded`). */
+function endedEntry(grant: Named, at: string, why: string, line = false): JsonObject {
+  const base = { file: grant.file, decision: grant.decision, rule: grant.rule, granted: grant.at };
+  const named: JsonObject = grant.rev === undefined || grant.rev === "" ? base : { ...base, rev: grant.rev };
+
+  return line ? { ...named, line: true, at, why } : { ...named, at, why };
+}
+
+/** The files a grant is written to, in a root's `.claude/`. */
+const GRANT_FILES: readonly string[] = ["settings.local.json", "tstack-grants.json"];
 
 /** The newest ENDED_KEPT take-backs are kept on the record. */
 const ENDED_KEPT = 4096;
 
-/** The `endedKey` of each take-back on record for `file`; none when the record is not there, cannot be
- * read or does not parse (a sweep then errs toward fewer allowed calls, as everywhere). */
-function endedIn(file: string): Set<string> {
+/** The record of the grants issued for a grant file: the root's `.claude/hooks/tstack-grants-issued.json`; the hook's
+ * `_issued_file`. The one place a grant's `at`, `runs` and `n` are read from. */
+function issuedFile(file: string): string {
+  return join(dirname(file), "hooks", ISSUED_RECORD);
+}
+
+/** The newest ISSUED_KEPT grants are kept on the record of issued grants. */
+const ISSUED_KEPT = 4096;
+
+/** A grant on its root's record of issued grants, as the hub wrote it. */
+interface Entry {
+  readonly decision: string;
+  readonly rule: string;
+  readonly file: string;
+  readonly at: string;
+  readonly rev: string | undefined;
+  readonly dir: string | undefined;
+}
+
+/** The grants on record for `file`'s root, oldest first, each naming a grant file of that root: its realpath in
+ * the root's `.claude/` (the hook's `_read_issued`). An entry naming another root's file is no grant: the hub writes
+ * none, and a line names any folder's record (review 2: one from a folder an agent made replaced the session root's
+ * entry, with a later `at`). None when the record is not there, cannot be read or does not parse (a grant on it then
+ * stands on no record: fewer allowed calls). */
+function issuedEntries(file: string): Entry[] {
+  const record = parsed(issuedFile(file));
+  const issued = record instanceof Ungranted ? undefined : asArray(record["issued"]);
+  const own = dirname(file);
+  const seen = new Map<string, string | undefined>();
+
+  return (issued ?? []).flatMap((item) => {
+    const entry = asObject(item);
+    const [decision, rule, at] = (["decision", "rule", "at"] as const).map((key) => asString(entry?.[key]));
+    const of = grantFile(entry?.["file"], seen);
+
+    if (decision === undefined || rule === undefined || at === undefined || of === undefined || dirname(of) !== own) return [];
+
+    return [{ decision, rule, file: of, at, rev: asString(entry?.["rev"]), dir: asString(entry?.["dir"]) }];
+  });
+}
+
+/** The newest entry of each file and rule: an earlier grant of a rule granted anew is superseded, ended or not. */
+function newestEntries(entries: readonly Entry[]): Map<string, Entry> {
+  return new Map(entries.map((e) => [`${e.file}\n${e.rule}`, e]));
+}
+
+/** Put `ended` on the record of take-backs of `file`'s root, under the settings lock the caller holds. */
+function supersede(file: string, ended: readonly JsonObject[]): void {
+  if (ended.length === 0) return;
+  const record = recordFile(file);
+
+  try {
+    const held = parsed(record);
+
+    if (held instanceof Ungranted) return;
+    mkdirSync(dirname(record), { recursive: true });
+    writeAtomic(record, `${JSON.stringify(ended.reduce(withEnded, held), null, 2)}\n`);
+  } catch {
+    // The newer entry is the rule's grant all the same.
+  }
+}
+
+/** The take-backs on record for a root, by `endedKey`: `taken` of issued grants, `lines` of lines on no record (an
+ * entry marked `line`), apart so that no lookup of an issued grant's take-back reads a line's. */
+interface Ended {
+  readonly taken: ReadonlySet<string>;
+  readonly lines: ReadonlySet<string>;
+}
+
+/** The take-backs on record for `file`; none when the record is not there, cannot be read or does not parse (a
+ * sweep then errs toward fewer allowed calls, as everywhere). */
+function endedIn(file: string): Ended {
   const record = parsed(recordFile(file));
   const ended = record instanceof Ungranted ? undefined : asArray(record["ended"]);
+  const taken = new Set<string>();
+  const lines = new Set<string>();
 
-  return new Set(
-    (ended ?? []).flatMap((entry) => {
-      const [decision, rule, granted] = (["decision", "rule", "granted"] as const).map((key) => asString(asObject(entry)?.[key]));
+  for (const entry of ended ?? []) {
+    const [file, decision, rule, granted, rev] = (["file", "decision", "rule", "granted", "rev"] as const).map((key) => asString(asObject(entry)?.[key]));
 
-      return decision === undefined || rule === undefined || granted === undefined ? [] : [endedKey(decision, rule, granted)];
-    }),
-  );
+    if (decision !== undefined && rule !== undefined && granted !== undefined) (asObject(entry)?.["line"] === true ? lines : taken).add(endedKey(file ?? "", decision, rule, granted, rev ?? ""));
+  }
+
+  return { taken, lines };
 }
 
 /** `record` with the take-back `ended` appended, the newest ENDED_KEPT kept, every other key as it was. */
@@ -610,47 +831,75 @@ function withEnded(record: JsonObject, ended: JsonObject): JsonObject {
   return { ...record, ended: [...(asArray(record["ended"]) ?? []), ended].slice(-ENDED_KEPT) };
 }
 
-/** The last grant of each file and rule that the grants.jsonl of `dirs` and this hub's memory name, leaving out
- * the grants on their root's record of take-backs (`endedIn`: over, whatever the file holds; a line that borrows
- * an ended decision's id is left out before the last is picked, so it shields no later grant of the rule). A
- * `remove` line ends nothing here: the rule still in its file, and no take-back on record, is what says the
- * grant stands. */
+/** The grant of each file and rule: the newest entry of it on the record of issued grants of each root that the
+ * grants.jsonl of `dirs`, their heartbeats (each session's project, else its cwd) or this hub's memory name, left
+ * out when it is on its root's record of take-backs (`endedIn`: over, whatever the file holds). grants.jsonl is the
+ * fleet's log, any agent's to write: a line names a root and grants nothing, and a deleted one hides no grant whose
+ * root another source names. A line of a file and rule with no entry on record is a grant on no record
+ * (`recorded` false), which is taken back at once: a grant of a hub that wrote no record, or a forged line; its
+ * take-back is marked `line` (`lineEnded`). A `remove` line ends nothing here. */
 function latestGrants(dirs: readonly string[]): Issued[] {
   const latest = new Map<string, Issued>();
-  const endedOf = new Map<string, Set<string>>();
+  const endedOf = new Map<string, Ended>();
 
-  const isEnded = (grant: Issued): boolean => {
+  const isEnded = (grant: Named, line = false): boolean => {
     const root = dirname(grant.file);
     const ended = endedOf.get(root) ?? endedIn(grant.file);
 
     endedOf.set(root, ended);
 
-    return ended.has(endedKey(grant.decision, grant.rule, grant.at));
+    return endedHas(ended, grant, line) || (line && lineEnded(ended, grant));
   };
 
-  for (const dir of dirs) {
-    for (const line of grantLines(join(dir, "grants.jsonl"))) {
-      const [decision, rule, file, at] = [asString(line["decision"]), asString(line["rule"]), grantFile(line["file"]), asString(line["at"]) ?? ""];
+  const roots = new Map<string, { readonly file: string; readonly dir: string }>();
+  const seen = new Map<string, string | undefined>();
+
+  const name = (file: string, dir: string): void => {
+    if (grantFile(file, seen) !== undefined && !roots.has(dirname(file))) roots.set(dirname(file), { file, dir });
+  };
+
+  const lines = dirs.flatMap((dir) =>
+    grantLines(join(dir, "grants.jsonl")).flatMap((line) => {
+      const [decision, rule, file, at, rev] = [asString(line["decision"]), asString(line["rule"]), grantFile(line["file"], seen), asString(line["at"]) ?? "", asString(line["rev"])];
 
       // A rule line (a rule card's Add this rule) names the user's settings.json, which grantFile never takes, so no
       // sweep takes it back; a line that says `lasting` of a session's grant file is the one-time grant it is.
-      if (line["op"] !== "grant" || decision === undefined || rule === undefined || file === undefined) continue;
-      const grant = { dir, decision, file, rule, at };
+      if (line["op"] !== "grant" || decision === undefined || rule === undefined || file === undefined) return [];
+      name(file, dir);
 
-      if (!isEnded(grant)) latest.set(`${file}\n${rule}`, grant);
+      return [{ dir, decision, file, rule, at, rev, recorded: false }];
+    }),
+  );
+
+  for (const dir of dirs) {
+    for (const beat of readBeats(dir)) {
+      const root = beat.project ?? beat.cwd;
+
+      if (root !== null && isAbsolute(root)) for (const file of GRANT_FILES) name(join(resolvePath(root), ".claude", file), dir);
     }
   }
 
-  for (const [key, grant] of issued) {
-    if (isEnded(grant)) {
-      issued.delete(key);
-      continue;
+  for (const grant of issued.values()) name(grant.file, grant.dir);
+
+  const onRecord = new Set<string>();
+
+  for (const { file, dir } of roots.values()) {
+    for (const [key, entry] of newestEntries(issuedEntries(file))) {
+      // A record holds its own root's grants alone (`issuedEntries`); the first record to name a grant keeps it.
+      if (onRecord.has(key)) continue;
+      onRecord.add(key);
+
+      if (!isEnded(entry)) latest.set(key, { dir: entry.dir ?? dir, decision: entry.decision, file: entry.file, rule: entry.rule, at: entry.at, rev: entry.rev, recorded: true });
     }
-
-    const known = latest.get(key);
-
-    if (known === undefined || (parseInstant(known.at) ?? 0) < (parseInstant(grant.at) ?? 0)) latest.set(key, grant);
   }
+
+  for (const line of lines) {
+    const key = `${line.file}\n${line.rule}`;
+
+    if (!onRecord.has(key) && !isEnded(line, true)) latest.set(key, line);
+  }
+
+  for (const [key, grant] of issued) if (isEnded(grant, !grant.recorded)) issued.delete(key);
 
   return [...latest.values()];
 }
@@ -659,8 +908,9 @@ function latestGrants(dirs: readonly string[]): Issued[] {
  * Take back every grant older than 30 minutes whose rule is still in its file (SPEC.md "Permission grants",
  * Removal): the hub's own end of a one-time grant, for a rule the hook never removed because its session made no
  * call, runs without this fleet, or had its record of grants edited. It reads the grants of the fleets in `dirs`
- * (so a restarted hub takes up what an earlier one granted) and the ones this process wrote. A grant with no
- * readable stamp is expired. What it took back, as `rule in file`.
+ * (so a restarted hub takes up what an earlier one granted) and the ones this process wrote. A grant's age is
+ * the `at` on its root's record of issued grants; one on no record, or with no readable stamp, is expired. What it
+ * took back, as `rule in file`.
  */
 export async function expireGrants(dirs: readonly string[], now: Date, stamp: string): Promise<string[]> {
   const taken: string[] = [];
@@ -669,7 +919,7 @@ export async function expireGrants(dirs: readonly string[], now: Date, stamp: st
     const at = parseInstant(grant.at);
     const key = `${grant.file}\n${grant.rule}`;
 
-    if (at !== undefined && now.getTime() - at < GRANT_TTL_MS) continue;
+    if (grant.recorded && at !== undefined && now.getTime() - at < GRANT_TTL_MS) continue;
 
     if (!holdsRule(grant.file, grant.rule)) {
       issued.delete(key);
@@ -681,6 +931,8 @@ export async function expireGrants(dirs: readonly string[], now: Date, stamp: st
     if (lock instanceof Ungranted) continue;
 
     try {
+      // A file that is no grant file now (a symlink made since it was read) is left, and nothing is written.
+      if (grantFile(grant.file) !== grant.file) continue;
       const settings = parsed(grant.file);
       const permissions = settings instanceof Ungranted ? undefined : asObject(settings["permissions"]);
       const allow = asArray(permissions?.["allow"]);
@@ -691,7 +943,9 @@ export async function expireGrants(dirs: readonly string[], now: Date, stamp: st
 
       // The record read again under the lock (the hook's `_take_back_locked`): a grant the hook took back since is
       // over, and the rule there now is the owner's.
-      if (endedIn(grant.file).has(endedKey(grant.decision, grant.rule, grant.at))) {
+      const ended = endedIn(grant.file);
+
+      if (endedHas(ended, grant, !grant.recorded) || (!grant.recorded && lineEnded(ended, grant))) {
         issued.delete(key);
         continue;
       }
@@ -700,9 +954,12 @@ export async function expireGrants(dirs: readonly string[], now: Date, stamp: st
       // does not parse is left as it is.
       writeAtomic(grant.file, `${JSON.stringify({ ...settings, permissions: { ...permissions, allow: allow.filter((rule) => rule !== grant.rule) } }, null, 2)}\n`);
 
+      // A grant on no record of issued grants was never issued: its take-back is marked line, and ends no issued
+      // grant (review 3: one with a line's decision, `at` and rev ended the real grant they were copied from), so a
+      // rule the owner adds again is not taken at the next sweep.
       if (!(held instanceof Ungranted)) {
         mkdirSync(dirname(record), { recursive: true });
-        writeAtomic(record, `${JSON.stringify(withEnded(held, { decision: grant.decision, rule: grant.rule, granted: grant.at, at: stamp }), null, 2)}\n`);
+        writeAtomic(record, `${JSON.stringify(withEnded(held, endedEntry(grant, stamp, "expired", !grant.recorded)), null, 2)}\n`);
       }
 
       issued.delete(key);

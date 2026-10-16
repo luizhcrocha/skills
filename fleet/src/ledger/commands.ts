@@ -20,6 +20,8 @@ import { FLEET_BIN, isDir, makeDirs, readOrWhy, readText, remove, resolvePath, w
 import { fleetOf, managerOf, post as postNews, TEXT_MAX } from "../news/news.ts";
 import { allowedByUser, explainCommand, explained, failedAnswer, failureWords } from "../health.ts";
 import { placeRoot, registeredSession } from "../hub/grants.ts";
+import { Ungranted } from "../hub/settings-file.ts";
+import { holdsAutoModeRule, userSettingsFile } from "../hub/user-settings.ts";
 import { pidOfEntry } from "../registry.ts";
 import { workerFigures, workerTitle } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
@@ -1030,8 +1032,8 @@ const APPROVAL_REFUSAL =
 
 /** What `d`'s kind shows has to be there; `manualGiven`: the `--manual` is this command's, or the row became this
  * kind in this command, so its format is checked (a row recorded before a rule stays as it is). */
-function checkKind(d: Decision, manualGiven: boolean, hand: string | undefined, rule?: string): Step$ {
-  const ruled = checkRule(d, rule);
+function checkKind(d: Decision, manualGiven: boolean, hand: string | undefined, home: string | undefined, rule?: string): Step$ {
+  const ruled = checkRule(d, home, rule);
 
   if (ruled !== undefined) return refuse(ruled);
 
@@ -1091,14 +1093,20 @@ function checkKind(d: Decision, manualGiven: boolean, hand: string | undefined, 
 }
 
 /** Why a rule card (`--kind rule`) cannot be asked as it stands, or undefined; on the way its rule (`--rule-file`,
- * read whole) and its two options go on the row. The rule is checked by `whyNoRule` whenever it is given. */
-function checkRule(d: Decision, rule: string | undefined): string | undefined {
+ * read whole) and its two options go on the row. The rule is checked by `whyNoRule` whenever it is given, and refused
+ * as already allowed when the user's settings (under `home`) hold it in `autoMode.allow`: a card's rule is absent
+ * there when it is asked, so `ruleAdded`, which needs it there, passes only once the answer added it (review 4). */
+function checkRule(d: Decision, home: string | undefined, rule: string | undefined): string | undefined {
   if (rule !== undefined && d.kind !== RULE_KIND) return "--rule-file gives a rule card's autoMode.allow entry: it goes with --kind rule";
 
   if (d.kind !== RULE_KIND) return undefined;
   const bad = rule === undefined ? undefined : whyNoRule(rule);
 
   if (bad !== undefined) return `--rule-file: ${bad}`;
+
+  if (rule !== undefined && ruleHeld(home, rule)) {
+    return "--rule-file: the rule is already allowed: the user's settings hold it in autoMode.allow, so there is nothing to ask";
+  }
 
   if (rule !== undefined) d.rule = rule;
 
@@ -1115,10 +1123,21 @@ function checkRule(d: Decision, rule: string | undefined): string | undefined {
   return undefined;
 }
 
-/** Whether the fleet's grants.jsonl holds the hub's line for rule card `d`'s Add this rule: `op: "rule"`, the card's id,
- * and the sha256 of the rule the card holds now. */
-function ruleAdded(dir: string, d: Decision): boolean {
+/** Whether the user's settings under `home` hold `rule` in `autoMode.allow` now. */
+function ruleHeld(home: string | undefined, rule: string): boolean {
+  const settings = userSettingsFile(home);
+
+  return !(settings instanceof Ungranted) && holdsAutoModeRule(settings, rule);
+}
+
+/** Whether the hub added rule card `d`'s rule: the user's settings hold it in `autoMode.allow` now, and the fleet's
+ * grants.jsonl holds the hub's line for its Add this rule (`op: "rule"`, the card's id, the sha256 of the rule the card
+ * holds now). The line alone is any agent's to append; the settings are not (Claude Code protects `.claude/`). The
+ * card opened with the rule absent from `autoMode.allow` (`checkRule`), so its being there now is the answer's doing. */
+function ruleAdded(dir: string, d: Decision, home: string | undefined): boolean {
   const sha256 = createHash("sha256").update(d.rule ?? "", "utf8").digest("hex");
+
+  if (!ruleHeld(home, d.rule ?? "")) return false;
 
   return (readText(join(dir, "grants.jsonl")) ?? "").split("\n").some((line) => {
     const row = Option.getOrUndefined(parseObject(line));
@@ -2415,7 +2434,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       if (harness) writePermissionWords(run, ledger, fresh, worded);
 
       if (!elsewhere) {
-        yield* checkKind(fresh, true, args.str("hand"), yield* ruleFileArg(run));
+        yield* checkKind(fresh, true, args.str("hand"), run.machine.env("HOME"), yield* ruleFileArg(run));
         yield* setBody(run, fresh);
 
         if (ask) {
@@ -2559,7 +2578,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
       if (harness && (ask || !explained(row))) changed.push(...writePermissionWords(run, ledger, row, ask && worded));
       const ruleText = yield* ruleFileArg(run);
-      yield* checkKind(row, args.str("manual") !== undefined || row.kind !== kindBefore, args.str("hand"), ruleText);
+      yield* checkKind(row, args.str("manual") !== undefined || row.kind !== kindBefore, args.str("hand"), run.machine.env("HOME"), ruleText);
 
       // A new rule is the card asked anew: what Add this rule writes moved under the user.
       if (ruleText !== undefined) changed.push("rule");
@@ -2628,9 +2647,9 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       );
     }
 
-    if (decide !== undefined && d.kind === RULE_KIND && addsRule(decide) && !ruleAdded(run.root, d)) {
+    if (decide !== undefined && d.kind === RULE_KIND && addsRule(decide) && !ruleAdded(run.root, d, run.machine.env("HOME"))) {
       return yield* refuse(
-        `${d.ref ?? d.id} has no record that the hub added its rule: grants.jsonl holds no rule line for it with the sha256 of the rule it holds now. ` +
+        `${d.ref ?? d.id} has no record that the hub added its rule: the user's settings do not hold it in autoMode.allow, or grants.jsonl holds no rule line for it with the sha256 of the rule it holds now. ` +
           `Only the user's Add this rule on the fleet page adds it; wait for it (\`fleet chat ${run.root} wait ${d.id}\`), or --withdraw "why"`,
       );
     }
