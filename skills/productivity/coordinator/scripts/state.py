@@ -572,8 +572,13 @@ def cmd_agent(state, args):
         shared_overlap(state, a, args)
         print(f"recorded {a['id']} ({a['name']}); its brief opens with: Read {Path(args.dir).resolve() / 'brief.md'} first; your id is {a['id']}.")
         return state
-    if a["status"] == "done" and args.status == "running":  # sent back after its report
-        a["rounds"] = a.get("rounds", 1) + 1
+    if args.task and a["status"] in ("done", "stopped", "failed", "blocked"):
+        fail(f"agent {a['id']} is {a['status']}: --task records a new worker, and its id is taken. Record it under a new id, "
+             f"or start its next round with `agent {a['id']} --status running` (no --task)")
+    if a["status"] in ("done", "stopped", "failed") and args.status == "running":  # sent back after its report
+        if a["status"] == "done":
+            a["rounds"] = a.get("rounds", 1) + 1
+        a["started"] = now()
     if args.task_id:
         a["task_id"] = args.task_id
         a.pop("measured", None)

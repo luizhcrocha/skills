@@ -201,6 +201,51 @@ describe("agents", () => {
     expect([a["rounds"], a["tokens"]]).toEqual([3, 180]);
     expect(f.ok("show")).toContain("round 3");
   });
+
+  test("--task on a finished worker's row is refused, naming a new id and the next round; on a live row it is an update", () => {
+    const row = (id: string, status: string): void => {
+      f.ok("agent", id, "--task", "old job", "--milestone", "m1", "--name", `name-${id}`, "--lane", "src/old");
+      f.ok("agent", id, "--status", status);
+    };
+
+    for (const status of ["done", "stopped", "failed", "blocked"]) {
+      const id = `w-${status}`;
+      row(id, status);
+      const said = f.refused("agent", id, "--task", "new job", "--lane", "src/new", "--status", "running");
+      expect(said).toContain(`agent ${id} is ${status}`);
+      expect(said).toContain("a new id");
+      expect(said).toContain(`agent ${id} --status running`);
+    }
+
+    const rows = f.rows("agents");
+    expect(rows.map((r) => [r["task"], r["status"], r["lane"]])).toEqual(
+      ["done", "stopped", "failed", "blocked"].map((status) => ["old job", status, ["src/old"]]),
+    );
+    f.ok("agent", "q1", "--task", "first", "--milestone", "m1", "--status", "queued");
+    f.ok("agent", "q1", "--task", "second");
+    f.ok("agent", "r1", "--task", "first", "--milestone", "m1");
+    f.ok("agent", "r1", "--task", "second");
+    expect(f.rows("agents").slice(4).map((r) => r["task"])).toEqual(["second", "second"]);
+  });
+
+  test("a sent-back worker keeps its name, task and lane but starts its round at the time it was sent back", () => {
+    const at = (when: string, ...args: string[]): Ran =>
+      fleet(["state", f.root, ...args, "--no-render"], { ...f.env, FLEET_NOW: when, TZ: "UTC" });
+
+    at("2026-01-05T09:00:00+00:00", "agent", "d2", "--task", "job", "--milestone", "m1", "--name", "keep", "--lane", "src/a");
+    at("2026-01-05T09:30:00+00:00", "agent", "d2", "--status", "done");
+    at("2026-01-05T12:00:00+00:00", "agent", "d2", "--status", "running");
+    const d2 = f.rows("agents")[0] ?? {};
+    expect([d2["name"], d2["task"], d2["lane"], d2["rounds"], d2["started"]]).toEqual(["keep", "job", ["src/a"], 2, "2026-01-05T12:00:00+00:00"]);
+  });
+
+  test("a finished worker given only a lane or a model stays its row: it is an update, not a new worker", () => {
+    f.ok("agent", "s1", "--task", "t", "--milestone", "m1", "--name", "kept", "--lane", "src/a");
+    f.ok("agent", "s1", "--status", "stopped");
+    f.ok("agent", "s1", "--lane", "src/b", "--model", "sonnet");
+    const s1 = f.rows("agents")[0] ?? {};
+    expect([f.rows("agents").length, s1["name"], s1["task"], s1["lane"], s1["status"]]).toEqual([1, "kept", "t", ["src/b"], "stopped"]);
+  });
 });
 
 describe("park", () => {

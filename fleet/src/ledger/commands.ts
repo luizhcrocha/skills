@@ -532,6 +532,12 @@ function oneTurn(ledger: Ledger, m: Milestone, target: Step): Step$ {
 
 // -- workers --------------------------------------------------------------------------------------
 
+/** The statuses of a worker that has ended its round. Sent back with `--status running`, its next round starts. */
+const ENDED = ["done", "stopped", "failed"];
+
+/** The statuses whose id a `--task` cannot record again: a row that ended, or one that waits. */
+const TAKEN = [...ENDED, "blocked"];
+
 /** `agent`: a new worker row, or a change to one. */
 export function agent(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> {
   return Effect.gen(function* () {
@@ -604,7 +610,18 @@ export function agent(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
 
     const status = args.str("status");
 
-    if (a.status === "done" && status === "running") a.rounds = (a.rounds ?? 1) + 1;
+    if (TAKEN.includes(a.status) && given(args.str("task"))) {
+      return yield* refuse(
+        `agent ${a.id} is ${a.status}: --task records a new worker, and its id is taken. Record it under a new id, ` +
+          `or start its next round with \`agent ${a.id} --status running\` (no --task)`,
+      );
+    }
+
+    if (ENDED.includes(a.status) && status === "running") {
+      if (a.status === "done") a.rounds = (a.rounds ?? 1) + 1;
+      a.started = stamp(run);
+    }
+
     const taskId = args.str("task_id");
 
     if (given(taskId)) {

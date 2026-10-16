@@ -161,7 +161,7 @@ renames it. Milestones are never removed.
   parameters, `Spawn with model: "opus", effort: "high" (ID's Agent call takes both: a fleet refuses a spawn
   without effort).` (TypeScript only: the frozen twin prints the first line alone, which the traces' `spawn-hint`
   normaliser hides on a replay on it).
-- Known: status `done` → `running` adds a round. `--task-id` sets it and forgets `measured`.
+- Known: `--task` on a row whose status is `done`, `stopped`, `failed` or `blocked` is refused: `agent ID is done: --task records a new worker, and its id is taken. Record it under a new id, or start its next round with \`agent ID --status running\` (no --task)`. On a `running` or `queued` row it is an ordinary update. A row `done`, `stopped` or `failed` set to `running` starts its next round: `started` = now, and `done` → `running` also adds a round (the row's other fields stay). `--task-id` sets it and forgets `measured`.
   `--name N` sets the name and `name_by: "coordinator"`; `--name ""` puts the id back and drops
   `name_by`, so the worker's session names it again (below). The other fields given are set; `--tokens` or `--duration-ms` set `measured: "by hand"`, after which the
   transcript no longer overrides them. `updated` = now. `--step S` sets S's agent to this worker

@@ -227,6 +227,8 @@ class Model:
             self.refuse_shared_overlap(c, aid)
             c["printed"] = f"recorded {aid} ({self.agents[aid]['name']})"
             return
+        if c.get("task") and a["status"] in ("done", "stopped", "failed", "blocked"):
+            raise Refused("--task records a new worker: its id is taken by a row that ended or waits")
         if a["status"] == "done" and c.get("status") == "running":
             a["rounds"] += 1
         for key in ("name", "status", "milestone", "tokens", "model", "effort"):
@@ -784,6 +786,8 @@ def gen(rng: random.Random, m: Model) -> dict:
                 c["lane"] = rng.sample(LANES, rng.choice([1, 1, 2]))
             return c
         c["status"] = pick(["running", "done", "blocked", "queued", "stopped", "failed"])
+        if maybe(0.1):
+            c["task"] = "T2"
         if maybe(0.2):
             c["lane"] = rng.sample(LANES, rng.choice([1, 2]))
         if maybe(0.3):
