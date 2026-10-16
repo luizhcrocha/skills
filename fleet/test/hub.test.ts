@@ -2567,6 +2567,56 @@ describe("a peer hub's fleets", () => {
     expect([res.status, ...got]).toEqual([200, "yes", null, null, null]);
   });
 
+  /** A peer that serves a worker's script at `/wide.js` with `Service-Worker-Allowed: /` (a hub from before this one
+   * passed a preview's header through) and at any other path without it; `seen` gets each request's `Service-Worker`. */
+  async function workerPeer(seen: (string | null)[]): Promise<void> {
+    await start();
+
+    const stub = Bun.serve({
+      hostname: "127.0.0.2",
+      port,
+      fetch: (req) => {
+        const url = new URL(req.url);
+
+        if (url.pathname === "/api/fleets") return Response.json({ name: "stub", fleets: [{ id: "infra", status: "running", now: "n", decisions: [] }] });
+        seen.push(req.headers.get("Service-Worker"));
+        const wide = url.pathname.endsWith("/wide.js") ? { "Service-Worker-Allowed": "/" } : {};
+
+        return new Response("self.addEventListener('fetch', () => {});", { headers: { "Content-Type": "text/javascript", "X-Kept": "yes", ...wide } });
+      },
+    });
+
+    stubs.push(stub);
+    expect(await running?.hub.addPeer("stub", "127.0.0.2")).toBe(true);
+  }
+
+  test("a worker's script request goes to the peer with its Service-Worker header", async () => {
+    const seen: (string | null)[] = [];
+    await workerPeer(seen);
+    await (await fetch(`http://127.0.0.1:${port}/f/infra@stub/preview/sw.js`, { headers: { "Service-Worker": "script" } })).text();
+    expect(seen).toEqual(["script"]);
+  });
+
+  test("a peer's worker script sent with Service-Worker-Allowed is this hub's kill switch, allowed over the origin, so a worker registered over it before 1.9.61 ends at its update", async () => {
+    await workerPeer([]);
+    const killed = await fetch(`http://127.0.0.1:${port}/f/infra@stub/preview/wide.js`, { headers: { "Service-Worker": "script" } });
+    const text = await killed.text();
+    expect([killed.status, killed.headers.get("Content-Type"), killed.headers.get("Service-Worker-Allowed"), killed.headers.get("X-Kept"), text.includes("self.registration.unregister()"), text.includes("addEventListener('fetch'")]).toEqual([
+      200,
+      "text/javascript; charset=utf-8",
+      "/",
+      null,
+      true,
+      false,
+    ]);
+  });
+
+  test("a peer's worker script without Service-Worker-Allowed is the peer's, with no such header", async () => {
+    await workerPeer([]);
+    const own = await fetch(`http://127.0.0.1:${port}/f/infra@stub/preview/sw.js`, { headers: { "Service-Worker": "script" } });
+    expect([own.status, own.headers.get("Service-Worker-Allowed"), own.headers.get("X-Kept"), await own.text()]).toEqual([200, null, "yes", "self.addEventListener('fetch', () => {});"]);
+  });
+
   test("show on the index and are passed through, posts checked here first", async () => {
     const seen: { method: string; path: string; body: string; type: string | null }[] = [];
     await start();

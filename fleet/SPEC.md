@@ -2021,7 +2021,10 @@ it) is 403, and a DIR file whose type is JavaScript is `text/plain`. On a previe
 `Service-Worker-Allowed` is never passed back on the hub's origin, and a worker's script it sends that header with is
 the kill switch, sent with `Service-Worker-Allowed: /`: a worker the preview registered over the origin before
 1.9.61 is replaced and gone at its next update check, and the wide scope gives the preview nothing, since the body
-is the hub's own. The trade-off: a preview app that sends that header gets no service worker on the hub's origin,
+is the hub's own. A peer's preview (`/f/<fleet>@<peer>/preview/…`) is covered the same way: the hub passes the
+request's `Service-Worker` on to the peer, and a worker's script the peer answers with `Service-Worker-Allowed` (a
+peer from before 1.9.61 passing its preview's through, or a newer peer's own kill switch) is this hub's kill switch,
+sent with `Service-Worker-Allowed: /`; a peer's body never comes back with that header. The trade-off: a preview app that sends that header gets no service worker on the hub's origin,
 even one scoped within its path; a root-mode preview, on an origin of its own, keeps its worker and the header. As
 a backstop, the fleet's page unregisters at each load every registration whose scope is not under a preview's path,
 and loads again once (a sessionStorage mark stops a loop) when its controller was one of them; a worker that

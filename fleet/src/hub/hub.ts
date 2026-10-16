@@ -641,7 +641,7 @@ export class Hub {
     // would see every page in that script's folder, the page token included. Only a preview's own path serves one.
     // Elsewhere a worker's script is the kill switch, which ends a worker registered before this rule at its next
     // update check; any other worker's request is refused. On a preview's path, a script that asks for a scope past
-    // it (`Service-Worker-Allowed`) is the kill switch too (`proxyHttp`).
+    // it (`Service-Worker-Allowed`) is the kill switch too (`proxyHttp`, and `proxy` for a peer's preview).
     if (!PREVIEW_PATH.test(path)) {
       const worker = req.headers.get("Service-Worker");
 
@@ -1515,7 +1515,7 @@ export class Hub {
 
     const headers = new Headers();
 
-    for (const name of ["Accept", "Content-Type", "Last-Event-ID"]) {
+    for (const name of ["Accept", "Content-Type", "Last-Event-ID", "Service-Worker"]) {
       const value = req.headers.get(name);
 
       if (value !== null) headers.set(name, value);
@@ -1528,6 +1528,16 @@ export class Hub {
 
       if (body !== undefined) init.body = body;
       const upstream = await fetch(`http://${hostPart(peer.ip)}:${this.options.port}/f/${encodeURIComponent(fleet)}${rest}${search}`, init);
+
+      // A worker's script the peer sends with `Service-Worker-Allowed` (a peer from before 1.9.61 passes a preview's
+      // through; a newer one sends its own kill switch with it) is this hub's kill switch, allowed over the whole origin
+      // as `proxyHttp`'s is, so a worker registered over it from a peer's preview ends at its update check. A peer's body
+      // never comes with that header: the wide scope gives the peer nothing.
+      if (req.headers.get("Service-Worker") === "script" && upstream.headers.has("Service-Worker-Allowed")) {
+        await upstream.body?.cancel();
+
+        return killSwitch(req, { "Service-Worker-Allowed": "/" });
+      }
 
       const passed = new Headers();
 
