@@ -14,7 +14,7 @@
 import { createSecureServer, type Http2ServerRequest, type Http2ServerResponse, type OutgoingHttpHeaders } from "node:http2";
 import { connect, type Socket } from "node:net";
 
-import { isIdentity, type SocketData, type Upgrade } from "./preview-proxy.ts";
+import { isClaimed, isIdentity, type SocketData, type Upgrade } from "./preview-proxy.ts";
 
 /** What answers a request on the port: given it, the client's address, and the upgrade to a piped socket. */
 export type Answer = (req: Request, ip: string, upgrade: Upgrade) => Promise<Response | undefined>;
@@ -125,8 +125,8 @@ async function refuseUpgrade(socket: Socket, answer: Response | undefined): Prom
 }
 
 /** Pipe the client's upgraded `socket` to the dev server's socket at `data.url`: the client's request as it
- * sent it, its identity, Host and every header the hub chose replaced by what it chose (`data.headers`), then bytes
- * both ways. */
+ * sent it but for its identity and claimed forwarding (`isClaimed`), its Host and every header the hub chose replaced by
+ * what it chose (`data.headers`), then bytes both ways. */
 function pipeUpgrade(req: Http2ServerRequest, socket: Socket, head: Buffer, data: SocketData): void {
   const url = new URL(data.url);
   const lines = [`GET ${url.pathname}${url.search} HTTP/1.1`, `Host: ${url.host}`];
@@ -135,7 +135,7 @@ function pipeUpgrade(req: Http2ServerRequest, socket: Socket, head: Buffer, data
   for (let i = 0; i + 1 < raw.length; i += 2) {
     const key = raw[i] ?? "";
 
-    if (!REPLACED.has(key.toLowerCase()) && !isIdentity(key) && !data.headers.has(key)) lines.push(`${key}: ${raw[i + 1] ?? ""}`);
+    if (!REPLACED.has(key.toLowerCase()) && !isIdentity(key) && !isClaimed(key) && !data.headers.has(key)) lines.push(`${key}: ${raw[i + 1] ?? ""}`);
   }
 
   data.headers.forEach((value, key) => lines.push(`${key}: ${value}`));

@@ -201,6 +201,15 @@ export function isIdentity(key: string): boolean {
   return k.startsWith("tailscale-") || k === "x-forwarded-for";
 }
 
+/** Whether a request header is a client's claim about the connection that the hub does not make, so none reaches a dev
+ * server: the port, the TLS flag and the address as a proxy would set them (`X-Forwarded-Host` and `-Proto` are the
+ * hub's own, `proxiedHost`). */
+export function isClaimed(key: string): boolean {
+  const k = key.toLowerCase();
+
+  return k === "x-forwarded-port" || k === "x-forwarded-ssl" || k === "x-real-ip";
+}
+
 /**
  * The identity headers a request from `ip`, made by `viewer` (`viewerOf`), carries to a dev server:
  * on loopback with Tailscale's login, the `Tailscale-*` headers (and `X-Forwarded-For`) that `tailscale
@@ -231,13 +240,14 @@ export function proxiedIdentity(ip: string, viewer: Viewer, sent: Headers): Head
  * Where the browser asked the hub, for a dev server whose `Host` is its own (Vite refuses any other): `X-Forwarded-Host`
  * the Host the browser sent, `X-Forwarded-Proto` its scheme, and `Forwarded` the two again (RFC 7239), so that an app
  * that compares a write's `Origin` with its own address finds the page's. The scheme is the one the request came on, or,
- * on loopback, the `X-Forwarded-Proto` that `tailscale serve` sets on what it passes from its https name; any other
- * client's forwarding headers are replaced. The Host is one the hub answers to (it refuses any other, 421).
+ * on loopback and on the hub's own port (`onHubOrigin`, where `tailscale serve` passes), the `X-Forwarded-Proto` that it
+ * sets on what it passes from its https name, never on a root-mode port, which no `tailscale serve` fronts; any other
+ * client's forwarding headers are replaced, and `isClaimed` ones dropped. The Host is one the hub answers to (it refuses any other, 421).
  */
-export function proxiedHost(req: Request, ip: string): Headers {
+export function proxiedHost(req: Request, ip: string, onHubOrigin: boolean): Headers {
   const url = new URL(req.url);
   const host = req.headers.get("Host") ?? url.host;
-  const served = isLoopback(ip) ? req.headers.get("X-Forwarded-Proto")?.toLowerCase() : undefined;
+  const served = onHubOrigin && isLoopback(ip) ? req.headers.get("X-Forwarded-Proto")?.toLowerCase() : undefined;
   const proto = served === "https" || served === "http" ? served : url.protocol.slice(0, -1);
 
   return new Headers({ "X-Forwarded-Host": host, "X-Forwarded-Proto": proto, Forwarded: `host="${host}";proto=${proto}` });
@@ -250,7 +260,7 @@ export async function proxyHttp(req: Request, target: Target, search: string, id
   const headers = new Headers();
 
   req.headers.forEach((value, key) => {
-    if (!HOP.has(key.toLowerCase()) && !isIdentity(key)) headers.set(key, value);
+    if (!HOP.has(key.toLowerCase()) && !isIdentity(key) && !isClaimed(key)) headers.set(key, value);
   });
 
   identity.forEach((value, key) => headers.set(key, value));

@@ -530,6 +530,9 @@ describe("the identity a preview's dev server sees", () => {
 /** What the guarded stand-in (`guarded`) was sent: the Origin, the address it took for its own, and `Forwarded`. */
 const guards: { readonly origin: string | null; readonly own: string; readonly forwarded: string | null }[] = [];
 
+/** The client-set forwarding headers the guarded stand-in was sent besides the ones the hub sets: `X-Forwarded-Port`, `X-Forwarded-Ssl` and `X-Real-IP`, or null. */
+const leaks: { readonly port: string | null; readonly ssl: string | null; readonly realIp: string | null }[] = [];
+
 /** A stand-in dev server that guards as an app does: a Host that is not its own is refused (Vite's
  * `server.allowedHosts`), and so is a write or a WebSocket whose Origin is not its own address, which it reads
  * from `X-Forwarded-Proto` and `X-Forwarded-Host` when a proxy sent them, else from its Host; its port. */
@@ -545,6 +548,7 @@ function guarded(): number {
       const own = `${req.headers.get("x-forwarded-proto") ?? "http"}://${req.headers.get("x-forwarded-host") ?? host}`;
       const origin = req.headers.get("origin");
       guards.push({ origin, own, forwarded: req.headers.get("forwarded") });
+      leaks.push({ port: req.headers.get("x-forwarded-port"), ssl: req.headers.get("x-forwarded-ssl"), realIp: req.headers.get("x-real-ip") });
 
       if ((socket || !["GET", "HEAD", "OPTIONS"].includes(req.method)) && origin !== own) return new Response(`cross-origin request from ${origin ?? "nowhere"} refused`, { status: 403 });
 
@@ -590,6 +594,7 @@ async function socketTo(url: string, headers: { readonly [key: string]: string }
 describe("an app that checks Origin against its own address, behind the hub", () => {
   beforeEach(() => {
     guards.length = 0;
+    leaks.length = 0;
   });
 
   test("a write from the page passes it: the Host stays the dev server's own, and the browser's host and scheme are forwarded", async () => {
@@ -620,6 +625,20 @@ describe("an app that checks Origin against its own address, behind the hub", ()
     const peer = peerAt("100.101.1.2");
     expect(await (await fetch(`http://127.0.0.1:${peer}/f/shop/preview/api/me`, { headers: forging })).text()).toBe("guarded GET");
     expect(guards.at(-1)).toEqual({ origin: "https://evil.example", own: `http://127.0.0.1:${hubPort}`, forwarded: `host="127.0.0.1:${hubPort}";proto=http` });
+  });
+
+  test("the client's own X-Forwarded-Port, X-Forwarded-Ssl and X-Real-IP do not reach the app, on HTTP and the WebSocket, from loopback and from a peer", async () => {
+    writeRecord({ server: server(guarded(), "/f/shop/preview/") });
+    const own = { "X-Forwarded-Port": "443", "X-Forwarded-Ssl": "on", "X-Real-IP": "1.2.3.4" };
+    const none = { port: null, ssl: null, realIp: null };
+    expect((await fetch(at("/preview/api/me"), { headers: own })).status).toBe(200);
+    expect(leaks.at(-1)).toEqual(none);
+    expect((await fetch(`http://127.0.0.1:${peerAt("100.101.1.2")}/f/shop/preview/api/me`, { headers: own })).status).toBe(200);
+    expect(leaks.at(-1)).toEqual(none);
+
+    const origin = `http://127.0.0.1:${hubPort}`;
+    expect(await socketTo(`ws://127.0.0.1:${hubPort}/f/shop/preview/`, { Origin: origin, ...own })).toBe("guarded echo:hi");
+    expect(leaks.at(-1)).toEqual(none);
   });
 
   test("the WebSocket carries the Origin the browser sent, and the browser's host and scheme", async () => {
@@ -906,6 +925,23 @@ describe("a preview at the root of a public port of its own", () => {
     expect(await socketTo(`wss://127.0.0.1:${publicPort}/api/sala`, { Origin: own }, { ca: pem.cert })).toBe("guarded echo:hi");
     expect(guards.at(-1)).toEqual({ origin: own, own, forwarded: `host="127.0.0.1:${publicPort}";proto=https` });
     expect(await socketTo(`wss://127.0.0.1:${publicPort}/api/sala`, { Origin: "https://evil.example" }, { ca: pem.cert })).toBe("refused");
+  });
+
+  test("a loopback client's X-Forwarded-Proto is not believed on a root-mode port: the scheme is the TLS one, and its X-Real-IP and X-Forwarded-Port do not pass", async () => {
+    writeRecord({ server: server(guarded(), "/", publicPort) });
+    (await hubOnTailnet()).syncPreviews();
+    guards.length = 0;
+    leaks.length = 0;
+    const host = `box.example.ts.net:${publicPort}`;
+    const res = await get(rootAt("127.0.0.1", "/api/me"), { headers: { Host: host, "X-Forwarded-Proto": "http", "X-Forwarded-Port": "80", "X-Real-IP": "1.2.3.4" } });
+    expect(res.status).toBe(200);
+    expect(guards.at(-1)).toEqual({ origin: null, own: `https://${host}`, forwarded: `host="${host}";proto=https` });
+    expect(leaks.at(-1)).toEqual({ port: null, ssl: null, realIp: null });
+
+    const own = `https://127.0.0.1:${publicPort}`;
+    expect(await socketTo(`wss://127.0.0.1:${publicPort}/api/sala`, { Origin: own, "X-Forwarded-Proto": "http", "X-Forwarded-Ssl": "off", "X-Real-IP": "1.2.3.4" }, { ca: pem.cert })).toBe("guarded echo:hi");
+    expect(guards.at(-1)).toEqual({ origin: own, own, forwarded: `host="127.0.0.1:${publicPort}";proto=https` });
+    expect(leaks.at(-1)).toEqual({ port: null, ssl: null, realIp: null });
   });
 
   test("the listener goes when the preview stops and comes back with it, and after a hub restart", async () => {

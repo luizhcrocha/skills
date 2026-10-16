@@ -861,7 +861,7 @@ export class Hub {
     this.note(req, root, target.worker);
     const viewer = await this.viewer(req, ip);
     const identity = proxiedIdentity(ip, viewer, req.headers);
-    proxiedHost(req, ip).forEach((value, key) => identity.set(key, value));
+    proxiedHost(req, ip, target.onHubOrigin).forEach((value, key) => identity.set(key, value));
 
     if ((req.headers.get("Upgrade") ?? "").toLowerCase() === "websocket") {
       if (upgrade === undefined) return jsonResponse(400, { error: "WebSockets are not served here" });

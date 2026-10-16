@@ -4501,7 +4501,8 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   the protocol echoed, messages queued until the dev server's end opens. HTTP and the WebSocket alike
   carry `X-Forwarded-Prefix` (the hub's path for the server), the proxy marker, and where the browser
   asked: `X-Forwarded-Host` (the Host it sent), `X-Forwarded-Proto` (the scheme it came on, or on loopback
-  the `https` that `tailscale serve` sets) and `Forwarded` with both, any client's own replaced; the
+  the `https` that `tailscale serve` sets, believed on the hub's own port only, never on a root-mode port) and
+  `Forwarded` with both, any client's own replaced, and its `X-Forwarded-Port`, `X-Forwarded-Ssl` and `X-Real-IP` dropped; the
   WebSocket carries the browser's `Origin`, as HTTP does. So an app that compares a write's `Origin` with
   its own address finds the page's (reported 10-13: without them, every write behind the hub was refused).
   `Host` stays the dev server's, since Vite's `server.allowedHosts` refuses the tailnet name. A request
