@@ -48,7 +48,7 @@ class FleetRunShimTest(unittest.TestCase):
         self.assertEqual(json.loads(done.stdout), {"args": ["--status"], "program": "return 1;\n", "from": "sess-1"})
 
     def test_the_checkout_defaults_to_the_one_on_this_machine(self):
-        self.client(self.home / "repos" / "luizhcrocha" / "fleet")
+        self.client(self.home / "repos" / "luizhcrocha" / "fleet-live")
         done = self.run_shim(stdin="return 2;\n")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(json.loads(done.stdout)["program"], "return 2;\n")

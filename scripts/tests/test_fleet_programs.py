@@ -1,6 +1,6 @@
 """Every program a moved team's coordinator is taught (PROGRAMS.md's worked calls) and every program the plugin's
 hook sends through fleet-run, run through a fleet checkout's real prelude and fold (fleet_fold.mjs): each op lands
-`applied`. The fleet checkout is another repo: $TSTACK_FLEET_CHECKOUT, else the pinned ~/repos/luizhcrocha/fleet;
+`applied`. The fleet checkout is another repo: $TSTACK_FLEET_CHECKOUT, else the pinned ~/repos/luizhcrocha/fleet-live;
 when its prelude is not there, or Node is not on PATH, the tests skip and say so, so tstack's gate does not depend on
 the fleet repo."""
 
@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PROGRAMS = ROOT / "skills" / "productivity" / "coordinator" / "PROGRAMS.md"
 FOLD = Path(__file__).resolve().parent / "fleet_fold.mjs"
-CHECKOUT = Path(os.environ.get("TSTACK_FLEET_CHECKOUT") or Path.home() / "repos/luizhcrocha/fleet")
+CHECKOUT = Path(os.environ.get("TSTACK_FLEET_CHECKOUT") or Path.home() / "repos/luizhcrocha/fleet-live")
 NEEDS = ("packages/ledger/src/prelude.ts", "packages/ledger/src/mirror.ts", "packages/cloud/src/take-log.ts")
 
 # The team the programs run against: a milestone, two workers (no status: a new worker's is optional, as the CLI's

@@ -7,11 +7,11 @@
 #
 # Which client (M4): $FLEET_RUN_CLIENT, a pinned file a host's install ships, when set (an absolute path: the hook runs
 # this from the dashboard folder, where a relative one names another file, so it is refused, exit 2); else the client
-# of the checkout the host service itself runs from (the dotfiles' fleet-host unit runs ~/repos/luizhcrocha/fleet),
+# of the checkout the host service itself runs from (the dotfiles' fleet-host unit runs ~/repos/luizhcrocha/fleet-live),
 # $FLEET_REPO, so the client and the service it calls are one revision. That checkout moves only by a landed change and
 # a restart of fleet-host, in that order; agents edit the fleet in their own jj workspaces, never in it. Nothing sets
 # FLEET_RUN_CLIENT yet: the coordinator skill's PROGRAMS.md says the same.
-repo=${FLEET_REPO:-$HOME/repos/luizhcrocha/fleet}
+repo=${FLEET_REPO:-$HOME/repos/luizhcrocha/fleet-live}
 if [ -n "${FLEET_RUN_CLIENT:-}" ]; then
   case $FLEET_RUN_CLIENT in
     /*) ;;

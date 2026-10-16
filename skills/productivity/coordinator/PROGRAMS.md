@@ -39,7 +39,7 @@ when the service is not running, and 2 on any other failure.
 Which client the shim runs: `$FLEET_RUN_CLIENT`, an absolute path to a pinned client file, when set (a relative one is
 refused, exit 2: the hook runs the shim from the dashboard folder, where it would name another file); else the client
 in the fleet checkout the host service runs from, `$FLEET_REPO/apps/client/fleet-run.ts`
-(`~/repos/luizhcrocha/fleet` by default), so the client and the service are one revision. That checkout moves in one
+(`~/repos/luizhcrocha/fleet-live` by default), so the client and the service are one revision. That checkout moves in one
 order: land the change on the fleet's master, then restart `fleet-host`. A client newer than the running service, or
 an edit made in that checkout, would talk to a service of another revision.
 
