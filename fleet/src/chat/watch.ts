@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import { parseInstant } from "../clock.ts";
 import { ChatError } from "../errors.ts";
 import { isMoved, readText, remove, resolvePath, writeText } from "../files.ts";
-import { answeredAt, answeredGrill, answerRecorded, decisionRow, explainCommand, FAILED, silentWorkers, unexplained } from "../health.ts";
+import { answeredAt, answeredGrill, answerRecorded, decideProgram, decisionRow, explainCommand, FAILED, silentWorkers, unexplained } from "../health.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger, type Decision, type Ledger } from "../ledger/model.ts";
@@ -205,7 +205,10 @@ function unrecorded(machine: Machine, entry: { readonly id: string; readonly dir
     lines.push(
       `! ${entry.id} has not recorded the user's answer to ${ref} (${oneLine(d["title"])}), ` +
         `given at ${at.slice(11, 16)} as #${m?.id ?? "?"}: "${[...oneLine(m?.text ?? "")].slice(0, 120).join("")}". SendMessage its session ` +
-        `(${entry.session ?? entry.id}) to record it: \`fleet state <dir> decision ${ref} --decide ...\`.`,
+        `(${entry.session ?? entry.id}) to record it` +
+        (isMoved(entry.dir)
+          ? ` with ${decideProgram("<dir>", pyText(d["id"]), `answered on the page (#${m?.id ?? "?"})`)}.`
+          : `: \`fleet state <dir> decision ${ref} --decide ...\`.`),
     );
   }
 
@@ -340,9 +343,11 @@ function nudgeLines(machine: Machine, root: string, told: Map<string, Json>, nud
 
 /** The `!` lines for the grillings of `root` with every question answered and still open, whatever the
  * chat said since: the fleet records each before other work. Each told once per round (its last change),
- * so a watch armed again is not woken by it at once; `fleet state` says it at every command until then. */
+ * so a watch armed again is not woken by it at once; `fleet state` says it at every command until then. A moved
+ * team is told the program that records it (health's `decideProgram`). */
 function answeredGrillings(root: string, told: Map<string, Json>): string[] {
   const lines: string[] = [];
+  const moved = isMoved(root);
 
   for (const d of numberedLedger(root)?.decisions ?? []) {
     const mark = `grill:${d.id}:${d.revised !== undefined && d.revised !== null && d.revised !== "" ? d.revised : d.opened}`;
@@ -351,8 +356,10 @@ function answeredGrillings(root: string, told: Map<string, Json>): string[] {
     told.set(mark, true);
     const ref = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
     lines.push(
-      `! ${ref} (${oneLine(d.title)}): every question is answered and the grilling is still open. Record it now: ` +
-        `\`fleet state <dir> decision ${ref} --decide "..." --resolution "grilling finished"\`, or withdraw it with its reason.`,
+      `! ${ref} (${oneLine(d.title)}): every question is answered and the grilling is still open. Record it now` +
+        (moved
+          ? ` with ${decideProgram("<dir>", d.id, "grilling finished")}.`
+          : `: \`fleet state <dir> decision ${ref} --decide "..." --resolution "grilling finished"\`, or withdraw it with its reason.`),
     );
   }
 
@@ -730,12 +737,13 @@ function closedLine(d: Decision): string {
 /** `wait`: the user's answer to one of these open decisions (ids or numbers), printed the moment it is
  * given; one given already and not recorded (a reply to it records nothing) prints at once. The ledger is read again at every poll, so
  * a decision closed meanwhile (withdrawn, or decided without an answer on the page) ends the wait as one
- * closed before does (open-21). */
+ * closed before does (open-21). A moved team is told the program that records the answer (health's `decideProgram`). */
 export function wait(machine: Machine, root: string, keys: readonly string[]): Effect.Effect<void, ChatError, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
     const ledger = numberedLedger(root);
-    const wanted = new Map<string, { readonly label: string; readonly kind: string; readonly row: JsonObject }>();
+    const wanted = new Map<string, { readonly key: string; readonly label: string; readonly kind: string; readonly row: JsonObject }>();
+    const moved = isMoved(root);
 
     for (const key of keys) {
       const d = ledger === undefined ? undefined : findDecision(ledger, key);
@@ -749,7 +757,7 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
         return;
       }
 
-      wanted.set(d.id, { label, kind: d.kind, row: decisionRow(d) });
+      wanted.set(d.id, { key: d.id, label, kind: d.kind, row: decisionRow(d) });
     }
 
     let tail: Tail | undefined;
@@ -770,10 +778,12 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
         out.out(
           d.kind === "action" && m.text.startsWith(FAILED)
             ? `-> the user's step ${d.label} failed, and it is not done: fix it and re-present it, \`fleet state ${root} decision ${d.label} --manual ...\`, or --withdraw "why"; never --decide\n`
-            : d.kind === "permission"
-              ? `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide "<allow-once, allow-kind or deny>" --resolution "answered on the page (#${m.id})"\`; ` +
-                "for an allow-once or allow-kind that prints the exact call to run, and nothing of it runs before; an allow-kind then asks you for a rule card (the --decide output says how)\n"
-              : `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide ...\`\n`,
+            : moved
+              ? `-> the user answered ${d.label}: record it first, with ${decideProgram(root, d.key, `answered on the page (#${m.id})`)}\n`
+              : d.kind === "permission"
+                ? `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide "<allow-once, allow-kind or deny>" --resolution "answered on the page (#${m.id})"\`; ` +
+                  "for an allow-once or allow-kind that prints the exact call to run, and nothing of it runs before; an allow-kind then asks you for a rule card (the --decide output says how)\n"
+                : `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide ...\`\n`,
         );
 
         return;

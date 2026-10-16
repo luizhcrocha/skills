@@ -1827,6 +1827,48 @@ describe("wait", () => {
   });
 });
 
+describe("an answer on a moved team is recorded through a program", () => {
+  /** D68, keyed d-f819eec7 as the cloud keys a card, open in the ledger at `dir`, whose folder has moved to the cloud. */
+  function movedCard(dir: string): void {
+    const state = readJson(join(dir, "state.json"));
+    const card = { id: "d-f819eec7", ref: "D68", kind: "decision", title: "Do it", question: "q", status: "open", opened: "2026-01-01T00:00:00+00:00" };
+    writeFileSync(join(dir, "state.json"), JSON.stringify({ ...state, decisions: [card] }));
+    writeFileSync(join(dir, "cloud.json"), JSON.stringify({ fleet: "skills" }));
+  }
+
+  test("wait names decision.decide with the card's key, not the CLI's --decide", () => {
+    movedCard(root);
+    const answer = user("Done.", { decision: "d-f819eec7" });
+    const out = cli("wait", "D68").stdout;
+
+    expect(out).toContain(
+      `-> the user answered D68: record it first, with one program on the stdin of \`FLEET_DIR=${root} fleet-run\`: ` +
+        `\`decision.decide("d-f819eec7", "...", "answered on the page (#${answer.id})"); return records.apply(ops);\`\n`,
+    );
+    expect(out).not.toContain("--decide");
+  });
+
+  test("the manager's watch has the fleet record it with decision.decide and the card's key, not the CLI's --decide", async () => {
+    asManager(["billing", "billing"]);
+    const billing = m.registry.live().find((e) => e.id === "billing");
+
+    if (billing === undefined) throw new Error("billing is not served");
+    movedCard(billing.dir);
+    const sent = append(m, billing.dir, { sender: "user", text: "B", decision: "d-f819eec7", allowUser: true }, now());
+
+    if (sent instanceof ChatError) throw new Error(sent.reason);
+    const { proc, lines } = start(["chat", root, "watch", "--as", "manager", "--all", "--once"], { ...env, FLEET_CHECK_S: "0.2", FLEET_UNHEARD_S: "0" });
+    procs.push(proc);
+    const line = await lines.next();
+
+    expect(line).toStartWith("! billing has not recorded the user's answer to D68 (Do it)");
+    expect(line).toEndWith(
+      "SendMessage its session (billing) to record it with one program on the stdin of `FLEET_DIR=<dir> fleet-run`: " +
+        `\`decision.decide("d-f819eec7", "...", "answered on the page (#${sent.id})"); return records.apply(ops);\`.\n`,
+    );
+  });
+});
+
 describe("the manager relays the unheard", () => {
   test("the manager's watch names a fleet that does not read its chat", async () => {
     asManager(["billing", "billing"]);

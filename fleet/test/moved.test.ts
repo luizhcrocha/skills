@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import * as Option from "effect/Option";
 
 import { save } from "../src/cli/ws.ts";
+import { stampOf } from "../src/clock.ts";
 import { parseObject } from "../src/json.ts";
 import { machineOf } from "../src/world.ts";
 import { baseEnv, fleet, sleep, start, tmp, type Environment } from "./support.ts";
@@ -204,5 +205,55 @@ describe("a permission on a moved team", () => {
     expect(shown.code, shown.stderr).toBe(0);
     expect(shown.stderr).not.toContain("explain it now");
     expect(shown.stderr).not.toContain("--recommend");
+  });
+});
+
+describe("an answer on a moved team is recorded through a program", () => {
+  /** Run `state DIR args` on the folder before it moved, then mark it moved again. */
+  function beforeMove(...args: string[]): void {
+    rmSync(join(root, "cloud.json"));
+    const ran = fleet(["state", root, ...args, "--no-render"], env);
+    expect(ran.code, ran.stderr).toBe(0);
+    writeFileSync(join(root, "cloud.json"), JSON.stringify({ fleet: "skills" }));
+  }
+
+  /** Grilling G1, keyed g-f819eec7 as the cloud keys a card, with both questions answered and recorded. */
+  function grilled(): void {
+    beforeMove("grill", "g-f819eec7", "--title", "Search", "--ask", "Seam | one or many? | one | less code", "--ask", "Tier | local first? | yes | it is faster");
+    beforeMove("grill", "g-f819eec7", "--answer", "Q1: one", "--answer", "Q2: yes");
+  }
+
+  const GRILL_PROGRAM = 'one program on the stdin of `FLEET_DIR=<dir> fleet-run`: `decision.decide("g-f819eec7", "...", "grilling finished"); return records.apply(ops);`';
+
+  test("the coordinator's watch names decision.decide with the card's key, not the CLI's --decide", async () => {
+    grilled();
+    const watch = start(["chat", root, "watch", "--as", "coordinator", "--resume", "--once"], { ...env, FLEET_CHECK_S: "0.2" });
+    const line = await watch.lines.next();
+    watch.proc.kill();
+
+    expect(line).toBe(`! G1 (Search): every question is answered and the grilling is still open. Record it now with ${GRILL_PROGRAM}.\n`);
+  }, 20_000);
+
+  test("`state DIR show` says the grilling's program, not the CLI's --decide", () => {
+    grilled();
+    const shown = fleet(["state", root, "show"], env);
+
+    expect(shown.code, shown.stderr).toBe(0);
+    expect(shown.stderr).toContain(`state: every question of G1 (Search) is answered and the grilling is still open; record it before any other work with ${GRILL_PROGRAM}.`);
+    expect(shown.stderr).not.toContain("--decide");
+  });
+
+  test("`state DIR show` says the user's answer's program, with its reply, not the CLI's --decide", () => {
+    beforeMove("decision", "d-f819eec7", "--kind", "decision", "--title", "Schema", "--question", "Migrate?", "--why", "W", "--option", "A: a | x", "--option", "B: b | y", "--recommend", "A", "--reason", "R");
+    const at = stampOf(new Date(Date.now() + 1000));
+    writeFileSync(join(root, "chat.jsonl"), `${JSON.stringify({ id: 1, at, from: "user", to: ["coordinator"], text: "B", decision: "d-f819eec7" })}\n`);
+    const shown = fleet(["state", root, "show"], env);
+
+    expect(shown.code, shown.stderr).toBe(0);
+    expect(shown.stderr).toContain(
+      `state: the user answered D1 (Schema) as #1 at ${at.slice(11, 16)}; record it and answer #1 before any other work with one program on the stdin of \`FLEET_DIR=<dir> fleet-run\`: ` +
+        '`decision.decide("d-f819eec7", "...", "answered on the page (#1)"); say("...", { re: 1 }); return records.apply(ops);`.',
+    );
+    expect(shown.stderr).not.toContain("--decide");
   });
 });

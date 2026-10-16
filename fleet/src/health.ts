@@ -56,6 +56,16 @@ export function explainCommand(bin: string, dir: string, ref: string, rev: strin
   );
 }
 
+/** How a moved team (files.ts `isMoved`) records an answer to its card `key`, the ledger row's id (the page's ref,
+ * P68, is not one), with `resolution`, and with `re`, a reply to the user's message #re: one program on the stdin of
+ * fleet-run for the fleet in `dir`, as the Stop hook's nudge says it (`answer_program` in hooks/tstack-hook.py). The old CLI's
+ * `--decide` is refused there. */
+export function decideProgram(dir: string, key: string, resolution: string, re?: number): string {
+  const said = re === undefined ? "" : ` say("...", { re: ${re} });`;
+
+  return `one program on the stdin of \`FLEET_DIR=${dir} fleet-run\`: \`decision.decide(${JSON.stringify(key)}, "...", ${JSON.stringify(resolution)});${said} return records.apply(ops);\``;
+}
+
 /** How the page's answer to an action the user ran and that failed begins: `Failed: <what happened>`. */
 export const FAILED = "Failed:";
 
