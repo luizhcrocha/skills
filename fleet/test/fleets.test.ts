@@ -519,6 +519,8 @@ describe("the gate", () => {
     expect(cli("gate", "free", "infra").stdout).toBe("free\n");
   });
 
+  // Judged by the state each round leaves (one winner, the hold it names), not by the clock: twenty CLI starts take
+  // 2 s on an idle machine and past bun's default 5 s under load. The limit only catches a take that never exits.
   test("two takes at once: exactly one wins", async () => {
     for (let round = 0; round < 10; round += 1) {
       const takers = ["infra", "ui"].map((holder) =>
@@ -532,7 +534,7 @@ describe("the gate", () => {
       expect(said.split(" ")[0]).toBe(String(readJson(join(base, "registry", "gate", "gate.json"))["fleet"]));
       expect(cli("gate", "free", tokenOf({ code: 0, stdout: said, stderr: "" })).code).toBe(0);
     }
-  });
+  }, 120_000);
 
   test("--wait takes the slot as soon as it is free", async () => {
     const held = tokenOf(cli("gate", "take", "infra", "suite"));
@@ -589,6 +591,7 @@ describe("the gate", () => {
     });
   });
 
+  // As two takes at once: thirty CLI starts, judged by the state each round leaves; the limit only catches a hang.
   test("six takes of a quarter at once: exactly two win, whatever the order", async () => {
     for (let round = 0; round < 5; round += 1) {
       const takers = Array.from({ length: 6 }, (_, i) =>
@@ -604,7 +607,7 @@ describe("the gate", () => {
       for (const token of tokens) expect(cli("gate", "free", token).code).toBe(0);
       expect(cli("gate").stdout).toBe("free\n");
     }
-  });
+  }, 120_000);
 });
 
 describe("a fleet served again by a restarted session", () => {
