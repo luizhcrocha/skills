@@ -3926,6 +3926,23 @@ class SuiteParseTest(unittest.TestCase):
             with self.subTest(command=f"t/{name}"):
                 self.assertEqual(self.suites(f"t/{name}"), [(f"t/{name}", True)])
 
+    def test_a_flipped_quote_state_does_not_hide_a_hash_line_inside_a_later_quote(self):
+        (self.pkg / "t").mkdir()
+        scripts = {"hd_then_quote": "#!/bin/sh\ncat <<EOF\nDon't run this by hand.\nEOF\nx='a\n#'; vp test\n",
+                   "hd_dash_then_dq": '#!/bin/sh\ncat <<-"EOF"\n\tsay "hi\n\tEOF\nx="a\n#"; pnpm test\n',
+                   "nested_dq": "#!/bin/sh\nx=\"$(echo \"it's\")\"\ny='a\n#'; vp test\n",
+                   "dash_tab_only": "#!/bin/sh\ncat <<-EOF\n\t'\n  EOF\n\t'\nEOF\nx='a\n#'; vp test\n",
+                   "arith_shift": "#!/bin/sh\nn=$((1<<x))\ns='\nx\n#'; vp test\n",
+                   "dash_tab_strip": "#!/bin/sh\ncat <<-EOF\n  EOF\n'\nEOF\nx='a\n#'; vp test\n",
+                   "arith_shift_after_nested": "#!/bin/sh\ny=\"$(echo \"it's\")\"\nn=$((1<<x))\ns='\nx\n#'; vp test\n",
+                   "nested_dq_dq": '#!/bin/sh\nx="$(echo "it\'s")"\ny="a\n#"; pnpm test\n'}
+        for name, body in scripts.items():
+            (self.pkg / "t" / name).write_text(body)
+            with self.subTest(command=f"t/{name}"):
+                self.assertEqual(self.suites(f"t/{name}"), [(f"t/{name}", True)])
+        (self.pkg / "t" / "hd_body").write_text("#!/bin/sh\nsh <<EOF\nit's\nx='\n#'; vp test\nEOF\n")
+        self.assertEqual(self.suites("t/hd_body"), [("t/hd_body", True)])
+
     def test_a_launcher_keeps_what_the_hook_could_not_tell_of_its_command(self):
         (self.pkg / "tasks").mkdir()
         (self.pkg / "tasks" / "launch").write_text('#!/bin/sh\nexec "$@"\n')

@@ -3188,6 +3188,9 @@ SCRIPT_MAX = 256 * 1024
 TURN_TIMEOUT_S = 20
 
 
+HEREDOC_OPEN = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_]\w*)\2")
+
+
 def _strip_heredocs(text):
     """The text without its here-documents' bodies: their words are data, not commands."""
     lines, out, i = text.split("\n"), [], 0
@@ -3195,7 +3198,7 @@ def _strip_heredocs(text):
         line = lines[i]
         out.append(line)
         i += 1
-        for dash, _, word in re.findall(r"<<(-?)\s*(['\"]?)([A-Za-z_]\w*)\2", line):
+        for dash, _, word in HEREDOC_OPEN.findall(line):
             while i < len(lines) and (lines[i].strip() if dash else lines[i]) != word:
                 i += 1
             i += 1
@@ -3786,9 +3789,11 @@ def _scripts(cwd):
     return {k: v for k, v in scripts.items() if isinstance(v, str)} if isinstance(scripts, dict) else {}
 
 
-def _uncommented(code):
-    """Shell code with its comments left out: from a `#` that starts a word outside quotes to the end of its line."""
-    out, quote, i = [], None, 0
+def _uncommented(code, structured=True):
+    """Shell code with its comments left out: from a `#` that starts a word outside quotes to the end of its line.
+    A here-document's body is copied as it is, with no quotes read in it; a `$(` ... `)` inside double quotes is a
+    level of its own, where quotes start fresh. Unstructured, it reads quotes alone: no here-documents, no `$(` levels."""
+    out, quote, i, nested, heredocs = [], None, 0, [], []
     while i < len(code):
         c = code[i]
         if quote == "'":
@@ -3797,12 +3802,42 @@ def _uncommented(code):
             out.append(code[i:i + 2])
             i += 2
             continue
+        elif structured and quote == '"' and c == "$" and code[i + 1:i + 2] == "(":
+            nested.append([quote, 1])
+            quote = None
+            out.append("$(")
+            i += 2
+            continue
         elif quote:
             quote = None if c == quote[-1] else quote
+        elif structured and c == "\n" and heredocs:
+            out.append(c)
+            i += 1
+            for dash, word in heredocs:
+                while i < len(code):
+                    end = code.find("\n", i)
+                    end = len(code) if end < 0 else end
+                    line = code[i:end]
+                    out.append(code[i:end + 1])
+                    i = end + 1
+                    if (line.lstrip("\t") if dash else line) == word:
+                        break
+            heredocs = []
+            continue
+        elif structured and nested and c in "()":
+            nested[-1][1] += 1 if c == "(" else -1
+            if nested[-1][1] == 0:
+                quote = nested.pop()[0]
         elif c == "$" and code[i + 1:i + 2] == "'":
             quote, c, i = "$'", "$'", i + 1
         elif c in "'\"":
             quote = c
+        elif (structured and c == "<" and code[i - 1:i] != "<" and not _in_arithmetic(code, i)
+              and (found := HEREDOC_OPEN.match(code, i))):
+            heredocs.append((bool(found.group(1)), found.group(3)))
+            out.append(found.group(0))
+            i = found.end()
+            continue
         elif c == "#" and _word_starts(code, i):
             end = code.find("\n", i)
             i = len(code) if end < 0 else end
@@ -3810,6 +3845,12 @@ def _uncommented(code):
         out.append(c)
         i += 1
     return "".join(out)
+
+
+def _in_arithmetic(code, i):
+    """Whether code[i] is inside a `((` ... `))` on its line: `$((1<<x))` shifts, it opens no here-document."""
+    head = code[code.rfind("\n", 0, i) + 1:i]
+    return head.count("((") > head.count("))")
 
 
 def _word_starts(code, i):
@@ -3883,10 +3924,11 @@ class SuiteReader:
 
     @staticmethod
     def _script_code(path, by_shell=False):
-        """The code of the shell script at path, its comments left out, twice: with its whole-line comments left
-        out, then read for quotes (_uncommented), which a stray quote in a heredoc body misleads; a pattern found in
-        either counts. None when it cannot be read or is no shell script (any file is when a shell runs it, else a
-        .sh-like file or one whose #! names a shell)."""
+        """The code of the shell script at path, its comments left out, three times: with its whole-line comments
+        left out; read for quotes (_uncommented), which copies here-document bodies as they are; and read for quotes
+        alone, with no here-documents or `$(` levels. Each view can misread (a stray quote in a `<<\\EOF` body, a `<<`
+        taken for a here-document), so a pattern found in any counts. None when it cannot be read or is no shell
+        script (any file is when a shell runs it, else a .sh-like file or one whose #! names a shell)."""
         try:
             with open(path, "rb") as f:
                 text = f.read(SCRIPT_MAX).decode("utf-8", "replace")
@@ -3897,7 +3939,7 @@ class SuiteReader:
             first.startswith("#!") and any(re.search(rf"\b{s}\b", first) for s in SHELLS))
         if not shell:
             return None
-        return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#")) + "\n" + _uncommented(text)
+        return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#")) + "\n" + _uncommented(text) + "\n" + _uncommented(text, False)
 
     @classmethod
     def _script_tests(cls, path, by_shell=False):
