@@ -17,6 +17,8 @@ Every agent tstack spawns plays one of the roles below. The role fixes its model
 | Coordinator | The session running a fleet (the `coordinator` skill): routes, briefs, records, integrates. | Opus low | Sonnet medium | |
 | Manager | The session over every coordinator on the machine (the `manager` skill): landing order, the gate, health across fleets. | Opus low | Sonnet medium | |
 
+A Quick review ([Review levels](SKILL.md#review-levels)) is a Reviewer on its fallback pair, Sonnet high.
+
 ## Why each pair
 
 - **Watcher.** The judgement is "did X happen", and nobody waits on a watcher's first token, so Haiku's 10 s at low costs nothing (sourced: Artificial Analysis; inferred). Its output costs a twentieth of Sonnet's per token (sourced: Anthropic's Haiku 5.5 page). Prefer a background Bash loop whenever the watch is a command: it spends no model tokens.
