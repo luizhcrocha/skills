@@ -6,10 +6,12 @@
  * capped at that memory, with no swap and OOMPolicy=continue (the kernel kills the hog, the suite sees it fail) and
  * a CPU weight, so two runs share the cores evenly whatever each one's thread count. On any end (exit, failure,
  * `--timeout` or the hold's `--for` running out, a signal) it stops the scope, so every process the command started
- * dies with it, frees its hold, keeps one line about the run (gate.ts's `runs.jsonl`: the wait, the time, the
- * scope's memory peak) and exits with the command's code. A scope that still has processes after its stop keeps its
- * hold, and the run says so. Where there is no systemd user manager (the Mac), the command runs in a process group
- * of its own, killed whole at its end, without a memory cap, and it says so: it is then counted as the whole budget.
+ * dies with it (one that asked for an app scope of its own, as Chromium does, is taken back into the run's while it
+ * runs, and killed when it got out after the last look), frees its hold, keeps one line about the run (gate.ts's
+ * `runs.jsonl`: the wait, the time, the scope's memory peak) and exits with the command's code. A scope that still
+ * has processes after its stop keeps its hold, and the run says so. Where there is no systemd user manager (the
+ * Mac), the command runs in a process group of its own, killed whole at its end, without a memory cap, and it says
+ * so: it is then counted as the whole budget.
  * A run never goes under a hold taken by hand, its own name's included: it waits for that hold as for any other.
  *
  * The runner's own death is covered twice: the hold carries the runner's pid, so it lapses when the runner is
@@ -17,11 +19,14 @@
  * runner dies without cleaning up (SIGKILL). */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { readdirSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
+import { dirname, join } from "node:path";
 
 import { stampOf } from "./clock.ts";
 import { readText } from "./files.ts";
 import { budgetOf, capBytes, DEFAULT_CAP, gateOf, holdText, memTotal, plain, scopeLives, sizeText, type GateHolder, type RunRecord, type Waiting } from "./gate.ts";
+import { ancestry } from "./procs.ts";
 import type { Machine } from "./world.ts";
 
 /** How long a run holds the slot when `--for` does not say; the command is stopped when it runs out. */
@@ -156,6 +161,107 @@ function memoryNow(cgroup: string | undefined): ScopeMemory {
   if (cgroup === undefined) return { peak: undefined, killed: undefined };
 
   return { peak: count(readText(`${cgroup}/memory.peak`)), killed: count(/^oom_kill (\d+)$/m.exec(readText(`${cgroup}/memory.events`) ?? "")?.[1]) };
+}
+
+/** How often the runner looks for a process of the run that left its scope for an app scope. */
+const SWEEP_MS = 250;
+
+/** The variable that names the run's unit to every process the run starts: the runner knows its own process in an
+ * app scope by it when no parent chain leads back (its launcher died), and a gate run inside the run its own. */
+const RUN_MARK = "FLEET_GATE_RUN";
+
+/** Whether a line of /proc/PID/cgroup (`0::/...`) is an app scope's: `app-<id>-<pid>.scope`, the scope a program
+ * asks the user manager for so that a desktop portal can tell it apart (Chromium does, as
+ * `app-org.chromium.Chromium-<pid>.scope`, however it was started). */
+function appScope(group: string): boolean {
+  return /\/app-[^/]+\.scope$/.test(group);
+}
+
+/** Whose a process in an app scope is. The run's (`own`, its scope's line of /proc/PID/cgroup; `unit`, its unit)
+ * when its environment names the run's unit, or names none and the first of its ancestors outside an app scope is
+ * in the run's scope; another's when it names another unit (a gate run inside the run), that ancestor is in another
+ * scope, or it is an orphan (the user manager or init has it) whose environment names no unit; unknown, and asked
+ * again at the next sweep, when a read fails. */
+function whose(pid: number, own: string, unit: string): "ours" | "theirs" | "unknown" {
+  const environ = readText(`/proc/${String(pid)}/environ`);
+  const mark = environ?.split("\0").find((entry) => entry.startsWith(`${RUN_MARK}=`))?.slice(RUN_MARK.length + 1);
+
+  if (mark !== undefined) return mark === unit ? "ours" : "theirs";
+
+  for (const parent of ancestry(pid).slice(1)) {
+    const group = readText(`/proc/${String(parent)}/cgroup`)?.trim();
+
+    if (group === undefined) return "unknown";
+
+    if (appScope(group)) continue;
+
+    if (group === own) return "ours";
+
+    return group.endsWith("/init.scope") && environ === undefined ? "unknown" : "theirs";
+  }
+
+  return environ === undefined ? "unknown" : "theirs";
+}
+
+/** What the sweeps did, by app scope: the pids taken back, killed, and refused (with the error). */
+interface Swept {
+  readonly taken: Map<string, Set<number>>;
+  readonly killed: Map<string, Set<number>>;
+  readonly failed: Map<string, { readonly pids: Set<number>; why: string }>;
+}
+
+function noted(by: Map<string, Set<number>>, scope: string, pid: number): void {
+  by.set(scope, (by.get(scope) ?? new Set()).add(pid));
+}
+
+/** One look at the app scopes beside the run's scope (`own`, its cgroup directory): each process of the run there
+ * (see {@link whose}), outside the run's cap, its memory peak and its stop, is written back into `own`, and its
+ * scope, empty, goes; with `kill` (the run's scope has stopped) it is killed instead. A scope holding only others'
+ * processes is put in `foreign` and not read again. A pid is moved or killed only while /proc still has it in that
+ * app scope, read again just before (a pid reused since is another's). A write into a run's scope that has gone
+ * (ENOENT) is left to the sweep after the stop. */
+function sweepApps(own: string, unit: string, foreign: Set<string>, kill: boolean, swept: Swept): void {
+  const slice = dirname(own);
+  const ownGroup = `0::${own.slice("/sys/fs/cgroup".length)}`;
+  let names: string[];
+
+  try {
+    names = readdirSync(slice);
+  } catch {
+    return;
+  }
+
+  for (const scope of names) {
+    if (!/^app-.+\.scope$/.test(scope) || foreign.has(scope)) continue;
+    const pids = (readText(join(slice, scope, "cgroup.procs")) ?? "").split("\n").filter((line) => /^\d+$/.test(line)).map(Number);
+    const kinds = pids.map((pid) => ({ pid, kind: whose(pid, ownGroup, unit) }));
+
+    if (pids.length > 0 && kinds.every(({ kind }) => kind === "theirs")) {
+      foreign.add(scope);
+      continue;
+    }
+
+    const group = `${dirname(ownGroup)}/${scope}`;
+
+    for (const { pid } of kinds.filter(({ kind }) => kind === "ours")) {
+      if (readText(`/proc/${String(pid)}/cgroup`)?.trim() !== group) continue;
+
+      try {
+        if (kill) process.kill(pid, "SIGKILL");
+        else writeFileSync(join(own, "cgroup.procs"), String(pid));
+        noted(kill ? swept.killed : swept.taken, scope, pid);
+      } catch (cause: unknown) {
+        // SAFETY: node's fs and process.kill errors carry an errno code.
+        const code = (cause as NodeJS.ErrnoException).code ?? String(cause);
+
+        if (code === "ESRCH" || (!kill && code === "ENOENT")) continue;
+        const failed = swept.failed.get(scope) ?? { pids: new Set<number>(), why: code };
+        failed.pids.add(pid);
+        failed.why = code;
+        swept.failed.set(scope, failed);
+      }
+    }
+  }
 }
 
 /** The value `key` has in what {@link IN_SCOPE} wrote (`key value` a line). */
@@ -375,7 +481,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
   let child: ChildProcess;
 
   try {
-    child = spawn(program, args, { stdio: scoped ? ["inherit", "inherit", "inherit", "pipe"] : "inherit", detached: !scoped, env: process.env });
+    child = spawn(program, args, { stdio: scoped ? ["inherit", "inherit", "inherit", "pipe"] : "inherit", detached: !scoped, env: scoped ? { ...process.env, [RUN_MARK]: unit } : process.env });
   } catch (cause: unknown) {
     free();
     say(`gate run: ${program} could not start: ${cause instanceof Error ? cause.message : String(cause)}`);
@@ -406,6 +512,17 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     pipe.once("error", () => resolve());
   });
 
+  // What left the scope for an app scope is taken back while the run goes, and once more before its stop.
+  const foreign = new Set<string>();
+  const swept: Swept = { taken: new Map(), killed: new Map(), failed: new Map() };
+
+  const sweep = (kill = false): void => {
+    const own = told(piped, "cgroup");
+
+    if (own !== undefined) sweepApps(own, unit, foreign, kill, swept);
+  };
+
+  const sweeper = scoped ? setInterval(() => sweep(), SWEEP_MS) : undefined;
   const pid = child.pid;
 
   const dog = pid === undefined ? undefined
@@ -423,6 +540,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
 
     stopping = (async () => {
       if (scoped) {
+        sweep();
         atStop = memoryNow(told(piped, "cgroup"));
         stopUnit(unit);
 
@@ -448,14 +566,21 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     clearTimeout(timer);
     await stopping;
 
-    // What the command left behind dies with it.
-    if (scoped) stopUnit(unit);
+    // What the command left behind dies with it, what it left in an app scope too.
+    if (scoped) {
+      sweep();
+      clearInterval(sweeper);
+      stopUnit(unit);
+    }
     else if (pid !== undefined) signalGroup(pid, "SIGKILL");
 
     // A scope whose stop failed or timed out still holds its memory: its hold stays, counted for as long as its
     // cgroup is there (gate.ts), and whoever reads this stops it by name.
     for (const end = Date.now() + SCOPE_GONE_MS; scoped && scopeLives(unit) && Date.now() < end; ) await sleep(50);
     const left = scoped && scopeLives(unit);
+
+    // What left for an app scope after the last sweep, or once the run's scope had emptied, dies now.
+    if (scoped) sweep(true);
 
     if (left) {
       freed = true;
@@ -470,6 +595,14 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     const peak = count(told(piped, "peak")) ?? atStop.peak;
     const killed = count(told(piped, "oom_kill")) ?? atStop.killed ?? 0;
     const slot = left ? "its hold stays while its scope does" : token === undefined ? "the hold stays its taker's" : "freed the gate";
+
+    const listed = (by: Map<string, Set<number>>, word: string): string => [...by].map(([scope, pids]) => `${String(pids.size)} ${word} ${scope}`).join(", ");
+
+    if (swept.taken.size > 0) say(`gate run: took back into the run's scope the processes of the run that had left it for an app scope (${listed(swept.taken, "from")}): the cap, the memory peak and the stop count them`);
+
+    if (swept.killed.size > 0) say(`gate run: killed the processes of the run left in an app scope after its scope had stopped (${listed(swept.killed, "in")})`);
+
+    for (const [scope, { pids, why }] of swept.failed) say(`gate run: could not take back ${String(pids.size)} from ${scope}: ${why}`);
 
     if (end.error !== undefined) {
       say(`gate run: ${program} could not run: ${end.error} (exit 127); ${slot}`);
@@ -512,6 +645,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     }
 
     clearTimeout(timer);
+    clearInterval(sweeper);
     free();
   }
 }

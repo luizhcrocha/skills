@@ -619,6 +619,97 @@ describe.skipIf(!SCOPE)("gate run's scope", () => {
     expect(asNumber(standing().day?.["max_peak"])).toBeGreaterThan(0);
   });
 
+  test("a process of the run that asks for an app scope of its own, as Chromium does, is taken back: the cap, the peak and the stop count it", () => {
+    const dir = tmp("fleet-gate-app-");
+    const app = `app-fleet-test-${String(process.pid)}-${String(Date.now())}`;
+
+    // systemd-run --scope asks the user manager for the scope over D-Bus and execs into it, as Chromium's browser process asks for app-org.chromium.Chromium-<pid>.scope.
+    const command = `systemd-run --user --scope --quiet --collect --unit ${app} sleep 300 & echo $! > ${dir}/pid; sleep 2; ` +
+      `if [ "$(cat /proc/$(cat ${dir}/pid)/cgroup)" = "$(cat /proc/self/cgroup)" ]; then echo inside; else echo outside; fi`;
+
+    try {
+      const done = gate(["run", "--as", "w1", "--", "sh", "-c", command], { FLEET_GATE_SCOPE: "1" });
+      expect(done.stdout).toBe("inside\n");
+      expect(done.stderr).toContain(`took back into the run's scope the processes of the run that had left it for an app scope (1 from ${app}.scope)`);
+      expect(alive(pidIn(join(dir, "pid")))).toBe(false);
+    } finally {
+      Bun.spawnSync(["systemctl", "--user", "stop", `${app}.scope`], { stdout: "ignore", stderr: "ignore" });
+    }
+  });
+
+  test("an app scope's process whose chain reaches the run only through another scope (a gate run inside the run) is that scope's, and left alone", () => {
+    const dir = tmp("fleet-gate-nested-");
+    const stamp = `${String(process.pid)}-${String(Date.now())}`;
+    const [inner, bare, marked] = [`fleet-test-inner-${stamp}`, `app-fleet-test-bare-${stamp}`, `app-fleet-test-marked-${stamp}`];
+
+    // The inner scope is a gate run inside the run, its own FLEET_GATE_RUN: one escapee keeps it, one has none, so only its parent chain says whose it is.
+    const launch = `env -u FLEET_GATE_RUN systemd-run --user --scope --quiet --collect --unit ${bare} sleep 300 & echo $! > ${dir}/bare; ` +
+      `systemd-run --user --scope --quiet --collect --unit ${marked} sleep 300 & echo $! > ${dir}/marked; wait`;
+
+    const command = `FLEET_GATE_RUN=${inner} systemd-run --user --scope --quiet --collect --unit ${inner} sh -c '${launch}' >/dev/null 2>&1 & sleep 2; ` +
+      `for p in bare marked; do sed -n 's/.*\\///p' /proc/$(cat ${dir}/$p)/cgroup; done`;
+
+    try {
+      const done = gate(["run", "--as", "w1", "--", "sh", "-c", command], { FLEET_GATE_SCOPE: "1" });
+      expect(done.stdout).toBe(`${bare}.scope\n${marked}.scope\n`);
+      expect(done.stderr).not.toContain("took back");
+    } finally {
+      for (const unit of [inner, bare, marked]) Bun.spawnSync(["systemctl", "--user", "stop", `${unit}.scope`], { stdout: "ignore", stderr: "ignore" });
+    }
+  });
+
+  test("a process of the run orphaned before it asks for an app scope is still taken back, by the FLEET_GATE_RUN it carries", () => {
+    const dir = tmp("fleet-gate-orphan-");
+    const app = `app-fleet-test-orphan-${String(process.pid)}-${String(Date.now())}`;
+
+    // The shell that starts it exits first: the user manager inherits it, and no parent chain leads back to the run.
+    const command = `sh -c '(sleep 0.5; exec systemd-run --user --scope --quiet --collect --unit ${app} sleep 300) >/dev/null 2>&1 & echo $! > ${dir}/pid'; sleep 3; ` +
+      `if [ "$(cat /proc/$(cat ${dir}/pid)/cgroup)" = "$(cat /proc/self/cgroup)" ]; then echo inside; else echo outside; fi`;
+
+    try {
+      const done = gate(["run", "--as", "w1", "--", "sh", "-c", command], { FLEET_GATE_SCOPE: "1" });
+      expect(done.stdout).toBe("inside\n");
+      expect(done.stderr).toContain(`(1 from ${app}.scope)`);
+      expect(alive(pidIn(join(dir, "pid")))).toBe(false);
+    } finally {
+      Bun.spawnSync(["systemctl", "--user", "stop", `${app}.scope`], { stdout: "ignore", stderr: "ignore" });
+    }
+  });
+
+  test("a process of the run that leaves for an app scope as the run ends dies with the run's stop, and the run says so", () => {
+    const dir = tmp("fleet-gate-late-");
+    const app = `app-fleet-test-late-${String(process.pid)}-${String(Date.now())}`;
+
+    // The command ends the moment its child is in the app scope: no sweep of the run's sees it while the run goes.
+    const command = `systemd-run --user --scope --quiet --collect --unit ${app} sleep 300 >/dev/null 2>&1 & echo $! > ${dir}/pid; ` +
+      `while [ "$(cat /proc/$!/cgroup)" = "$(cat /proc/self/cgroup)" ]; do :; done`;
+
+    try {
+      const done = gate(["run", "--as", "w1", "--", "sh", "-c", command], { FLEET_GATE_SCOPE: "1" });
+      expect(alive(pidIn(join(dir, "pid")))).toBe(false);
+      expect(done.stderr.includes(`(1 from ${app}.scope)`) || done.stderr.includes(`(1 in ${app}.scope)`)).toBe(true);
+    } finally {
+      Bun.spawnSync(["systemctl", "--user", "stop", `${app}.scope`], { stdout: "ignore", stderr: "ignore" });
+    }
+  });
+
+  test("a process the run could not take back is named, with the error, and dies with the run's stop", () => {
+    const dir = tmp("fleet-gate-refused-");
+    const app = `app-fleet-test-refused-${String(process.pid)}-${String(Date.now())}`;
+
+    // The run's own cgroup.procs, read-only, refuses the runner's write.
+    const command = `chmod a-w "/sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)/cgroup.procs"; ` +
+      `systemd-run --user --scope --quiet --collect --unit ${app} sleep 300 >/dev/null 2>&1 & echo $! > ${dir}/pid; sleep 1.5`;
+
+    try {
+      const done = gate(["run", "--as", "w1", "--", "sh", "-c", command], { FLEET_GATE_SCOPE: "1" });
+      expect(done.stderr).toContain(`gate run: could not take back 1 from ${app}.scope: EACCES`);
+      expect(alive(pidIn(join(dir, "pid")))).toBe(false);
+    } finally {
+      Bun.spawnSync(["systemctl", "--user", "stop", `${app}.scope`], { stdout: "ignore", stderr: "ignore" });
+    }
+  });
+
   test("the scope has a CPU weight, so two runs share the cores evenly; without one the run is niced", () => {
     const weight = ["sh", "-c", 'cat "/sys/fs/cgroup$(sed -n "s/^0:://p" /proc/self/cgroup)/cpu.weight"'];
     const weighed = gate(["run", "--as", "w1", "--", ...weight], { FLEET_GATE_SCOPE: "1" });
