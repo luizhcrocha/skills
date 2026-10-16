@@ -21,6 +21,9 @@ const found = chromium !== "" && existsSync(chromium);
 
 const NOW = Date.parse("2026-10-01T12:00:00Z");
 
+/** A wait's own limit, under bun's 20 s per test: a page that never gets there fails at the wait that names it. */
+const WAIT_MS = 10_000;
+
 let browser: Browser;
 
 let harness: Harness;
@@ -59,6 +62,11 @@ const chip = (page: Page): Promise<{ shown: boolean; text: string; link: string;
 test.skipIf(!found)("at 1280 px, Side chat on a decision docks the composer with the item quoted, lists @ people, and sends a side chat about it", async () => {
   const page = await open(1280);
   await page.click("#dv-answer [data-discuss-side]");
+  await page.waitForFunction(() => {
+    const q = document.querySelector<HTMLElement>("#quote");
+
+    return Boolean(q?.getClientRects().length && q.querySelector("a.quote-from")) && document.activeElement?.id === "say";
+  }, { timeout: WAIT_MS });
   const c = await chip(page);
 
   expect(c.shown).toBe(true);
@@ -90,7 +98,7 @@ test.skipIf(!found)("at 1280 px, Side chat on a decision docks the composer with
 test.skipIf(!found)("on a phone, Ask in the chat opens the chat's overlay with the item quoted", async () => {
   const page = await open(390);
   await page.click("#dv-answer [data-discuss]");
-  await page.waitForSelector("#chat.open");
+  await page.waitForSelector("#chat.open", { timeout: WAIT_MS });
   const c = await chip(page);
 
   expect(c.shown).toBe(true);
