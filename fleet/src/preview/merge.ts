@@ -29,7 +29,7 @@
  *    is also the trial: a merge jj marks conflicted is not kept (`fit`). The workers the last look left out
  *    are tried one at a time on top of the others; when the others conflict among themselves, every worker
  *    is, in `tryOrder`, so the worker that brought the conflict is the one left out. A worker whose own @
- *    is conflicted is left out untried. A stack that is itself conflicted fails the look: nothing merges
+ *    is conflicted is left out untried, or once a trial reads it conflicted. A stack that is itself conflicted fails the look: nothing merges
  *    clean on it.
  * 4. When the preview's @ is a commit its files on disk are not at yet, `workspace update-stale` writes
  *    the difference in place, so a dev server's hot reload picks it up. A file the preview's own directory
@@ -350,9 +350,11 @@ function tryOrder(wanted: readonly Merged[], before: Before, holding: ReadonlySe
 
 /**
  * The largest merge of `wanted` on the stack that jj does not mark conflicted, left as the preview's @, and
- * the workers left out of it. A worker whose own @ is conflicted is left out untried. The others are placed
- * at once (without those the last look left out, which are then tried one at a time on top); when that
- * merge conflicts, every worker is tried one at a time in `tryOrder`. Why not, when jj fails or the stack is
+ * the workers left out of it. A worker whose own @ is conflicted is left out untried, and so is one whose
+ * own @ a trial reads conflicted, at the commit it is at then: its own jj command (a rebase) conflicted it
+ * after the look read it, and the trial's names resolve to the new commit. The others are placed at once
+ * (without those the last look left out, which are then tried one at a time on top); when that merge
+ * conflicts, every worker is tried one at a time in `tryOrder`. Why not, when jj fails or the stack is
  * itself conflicted.
  */
 function fit(held: Held, wanted: readonly Merged[], before: Before, memory: Memory): readonly LeftOut[] | PreviewError {
@@ -396,6 +398,13 @@ function fit(held: Held, wanted: readonly Merged[], before: Before, memory: Memo
 
     if (!tried.conflict) {
       taken.push(m);
+      continue;
+    }
+
+    const now = held.copies.get(m.workspace);
+
+    if (now?.conflict === true) {
+      leave({ ...m, commit: now.commit }, true, conflictsOf(held.repo, now.commit, held.stack, [], paths));
       continue;
     }
 

@@ -1,9 +1,9 @@
 /**
  * The preview's look (`merge.ts`) against a throwaway jj repo, with a worker's own jj command landed inside
  * one look at a chosen step. A stand-in `jj`, first on PATH, plays the worker: before the look's call that a
- * race names it writes the worker's file and runs the worker's own `jj status`, then runs the real jj. What
- * the repo and the preview's files hold when the look ends is what is checked: no second copy of anyone's
- * change, no head on no workspace, no conflict markers.
+ * race names it writes the worker's file and runs the worker's own `jj status`, or runs another jj command
+ * of the worker's, then runs the real jj. What the repo and the preview's files hold when the look ends is
+ * what is checked: no second copy of anyone's change, no head on no workspace, no conflict markers.
  */
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -20,8 +20,8 @@ setDefaultTimeout(60_000);
 const REAL = Bun.which("jj") ?? "jj";
 
 /** The stand-in jj. `$RACE` is a file of races, one a line, tab-separated: how many matching calls to let
- * pass first, what the call's arguments hold, then the worker's workspace, its file and the text it saves.
- * The first line is the next race; a race that ran is dropped. */
+ * pass first, what the call's arguments hold, then the worker's workspace, its file and the text it saves,
+ * or `-` and the worker's own jj arguments. The first line is the next race; a race that ran is dropped. */
 const SHIM = `#!/bin/sh
 if [ -n "$RACE" ] && [ -s "$RACE" ]; then
   IFS='	' read -r skip on ws file text < "$RACE"
@@ -31,8 +31,12 @@ if [ -n "$RACE" ] && [ -s "$RACE" ]; then
         { printf '%s\\t%s\\t%s\\t%s\\t%s\\n' "$((skip - 1))" "$on" "$ws" "$file" "$text"; tail -n +2 "$RACE"; } > "$RACE.next"
       else
         tail -n +2 "$RACE" > "$RACE.next"
-        printf '%s\\n' "$text" > "$file"
-        ${REAL} -R "$ws" status >/dev/null 2>&1
+        if [ "$file" = "-" ]; then
+          ${REAL} -R "$ws" $text >/dev/null 2>&1
+        else
+          printf '%s\\n' "$text" > "$file"
+          ${REAL} -R "$ws" status >/dev/null 2>&1
+        fi
       fi
       mv "$RACE.next" "$RACE" ;;
   esac
@@ -89,10 +93,11 @@ function step(): Look {
 }
 
 /** The races the stand-in jj plays, in order: before the call whose arguments hold `on`, after `skip` such
- * calls passed, `worker` saves `text` in `file` and runs its own `jj status`. */
+ * calls passed, `worker` saves `text` in `file` and runs its own `jj status`; with `file` `-`, it runs its own
+ * jj with the arguments `text` holds, split at spaces. */
 function races(...all: readonly { readonly on: string; readonly skip?: number; readonly worker: string; readonly file: string; readonly text: string }[]): string {
   const plan = join(base, "races");
-  writeFileSync(plan, all.map((r) => `${r.skip ?? 0}\t${r.on}\t${ws(r.worker)}\t${join(ws(r.worker), r.file)}\t${r.text}\n`).join(""));
+  writeFileSync(plan, all.map((r) => `${r.skip ?? 0}\t${r.on}\t${ws(r.worker)}\t${r.file === "-" ? "-" : join(ws(r.worker), r.file)}\t${r.text}\n`).join(""));
   process.env["RACE"] = plan;
 
   return plan;
@@ -195,6 +200,24 @@ describe("a worker's own jj command inside one look", () => {
     expect(read(plan)).toBe("");
     expect([found.failed, found.error, found.merged.map((m) => m.id), found.left.map((l) => l.id)]).toEqual([false, null, ["w1", "w3"], ["w2"]]);
     expect([shown("c.txt"), shown("d.txt"), log("preview@", "conflict")]).toEqual(["c by w1\n", "d by w3\n", "false"]);
+  });
+
+  test("a rebase that conflicts the worker's own @ after the look read it: left out as conflicted in its own @, at the commit it is at now", () => {
+    writeFileSync(join(ws("w1"), "c.txt"), "c by w1\n");
+    writeFileSync(join(ws("w2"), "b.txt"), "b by w2\n");
+    jj(ws("w2"), "describe", "-m", "w2's footer");
+    const footer = log("w2@", "commit_id");
+    jj(ws("w2"), "new", "default@-", "-m", "w2's other footer");
+    writeFileSync(join(ws("w2"), "b.txt"), "another b by w2\n");
+    // The look reads w2's @ clean; w2 rebases it onto its first footer before the look's first rebase.
+    const plan = races({ on: " rebase ", worker: "w2", file: "-", text: `rebase -r @ -d ${footer}` });
+    const found = step();
+
+    expect(read(plan)).toBe("");
+    expect(log("w2@", "conflict")).toBe("true");
+    expect([found.failed, found.error, found.merged.map((m) => m.id)]).toEqual([false, null, ["w1"]]);
+    expect(found.left).toEqual([{ id: "w2", workspace: "w2", commit: log("w2@", "commit_id"), own: true, conflicts: [{ path: "b.txt", workers: [] }] }]);
+    expect([shown("b.txt"), shown("c.txt"), log("preview@", "conflict")]).toEqual(["base\n", "c by w1\n", "false"]);
   });
 
   test("a conflicted write at every refit: the preview serves the stack alone for one look, says so, and the next look merges again", () => {
