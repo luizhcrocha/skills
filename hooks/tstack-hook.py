@@ -3970,6 +3970,13 @@ JUST_FULL_SUITES = {"test", "test-scripts", "test-lint-ts", "test-coordinator", 
 NAME_FILTERS = {"-t", "--testNamePattern", "--test-name-pattern", "-k", "--lf", "--last-failed"}
 TEST_IN_TEXT = re.compile(r"\b(?:(?:pnpm|npm|yarn|bun)\s+(?:-\S+\s+)*(?:run\s+)?test\b|vitest\b|vp\s+test\b|pytest\b|py\.test\b"
                           r"|cargo\s+(?:test|nextest)\b|go\s+test\b|just\s+test\b|node\s+--test\b)")
+# A plain `echo` or `printf` (no `printf -v`), its words holding no `$(` or backtick, with its own `>&2` or `1>&2`:
+# its words go to stderr, which no outer `|` or `>` takes, so a test runner they name runs nothing. Not in a script
+# that moves stderr anywhere but /dev/null (STDERR_MOVED), where a pipe or a file could take them after all.
+ECHOED = re.compile(r"(^|;|&&|\|\||\{|\b(?:then|do|else)\b)([ \t]*(?:1?>&2[ \t]+)?(?:echo|printf(?![ \t]+-v)))"
+                    r"((?:[ \t]+(?:'[^'\n]*'|\"(?:[^\"\\`$\n]|\\.|\$(?!\())*\"|[^\s'\"`;&|<>()$\\]|\$(?!\()|\\.)+)+)"
+                    r"(?=((?:[ \t]+1?>&2)*)[ \t]*(?:$|;|&&|\|\||\}))", re.M)
+STDERR_MOVED = re.compile(r"2>>?(?![ \t]*/dev/null\b)|\|&|&>|>&(?![ \t]*\d)|\bexec\b[^\n;|&]*[<>]")
 # A script that runs the command it is given (`exec "$@"`) is a launcher: the line runs the launcher's arguments.
 LAUNCHES_ARGS = re.compile(r"\$\{?[@*]\}?")
 PM_TEST = {"test", "t", "tst"}
@@ -4198,7 +4205,8 @@ class SuiteReader:
         """The code of the shell script at path, its comments left out, three times: with its whole-line comments
         left out; read for quotes (_uncommented), which copies here-document bodies as they are; and read for quotes
         alone, with no here-documents or `$(` levels. Each view can misread (a stray quote in a `<<\\EOF` body, a `<<`
-        taken for a here-document), so a pattern found in any counts. None when it cannot be read or is no shell
+        taken for a here-document), so a pattern found in any counts; the words a plain echo or printf prints are blanked
+        in each (ECHOED) when it prints to stderr, so a runner named only there, in every view, counts in none. None when it cannot be read or is no shell
         script (any file is when a shell runs it, else a .sh-like file or one whose #! names a shell)."""
         try:
             with open(path, "rb") as f:
@@ -4210,7 +4218,10 @@ class SuiteReader:
             first.startswith("#!") and any(re.search(rf"\b{s}\b", first) for s in SHELLS))
         if not shell:
             return None
-        return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#")) + "\n" + _uncommented(text) + "\n" + _uncommented(text, False)
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#")) + "\n" + _uncommented(text) + "\n" + _uncommented(text, False)
+        if STDERR_MOVED.search(text):
+            return code
+        return ECHOED.sub(lambda m: m[1] + m[2] + (re.sub(r"\S", " ", m[3]) if ">&2" in m[2] + m[4] else m[3]), code)
 
     @classmethod
     def _script_tests(cls, path, by_shell=False):

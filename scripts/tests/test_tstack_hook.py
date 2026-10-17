@@ -4399,6 +4399,89 @@ class SuiteParseTest(unittest.TestCase):
         (self.pkg / "t" / "hd_body").write_text("#!/bin/sh\nsh <<EOF\nit's\nx='\n#'; vp test\nEOF\n")
         self.assertEqual(self.suites("t/hd_body"), [("t/hd_body", True)])
 
+    def scripts(self, scripts):
+        """Writes each script under t/ and yields the two ways to run it, by a shell and by its path."""
+        (self.pkg / "t").mkdir(exist_ok=True)
+        for name, body in scripts.items():
+            (self.pkg / "t" / name).write_text("#!/bin/sh\nset -e\n" + body)
+            yield from (f"bash t/{name}", f"./t/{name}")
+
+    def test_a_suite_named_only_in_what_a_script_echoes_or_comments_is_none(self):
+        for command in self.scripts({
+                "deploy.sh": '[ -f .tested ] || { echo "run pnpm test:postgres first" >&2; exit 1; }\nwrangler deploy\n',
+                "printf.sh": "printf 'refused: run pnpm test before a deploy\\n' 1>&2\nexit 1\n",
+                "stderr_first.sh": ">&2 echo 'run vitest run first' && exit 1\n",
+                "comment.sh": "# then run pnpm test\nwrangler deploy\n",
+                "devnull.sh": "rm -f .tested 2>/dev/null\necho 'run pnpm test first' >&2\n"}):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [])
+
+    def test_a_script_that_runs_a_suite_stays_one_wherever_the_command_sits(self):
+        for command in self.scripts({
+                "bare.sh": "pnpm test\n",
+                "if.sh": "if pnpm test; then echo ok; fi\n",
+                "and.sh": "pnpm build && pnpm test\n",
+                "subst.sh": "out=$(pnpm test)\n",
+                "subst_in_echo.sh": 'echo "result: $(pnpm test 2>&1)"\n',
+                "backtick_in_echo.sh": 'echo "result: `pnpm test`"\n',
+                "echo_to_sh.sh": "echo 'pnpm test' | sh\n",
+                "printf_to_bash.sh": "printf 'pnpm test\\n' | bash\n",
+                "echo_to_file.sh": "echo 'pnpm test' > x.sh\nsh x.sh\n",
+                "eval_echo.sh": "eval \"$(echo 'pnpm test')\"\n",
+                "echo_in_c.sh": "bash -c \"echo start; pnpm test\"\n",
+                "printf_v.sh": "printf -v c 'pnpm test'\n$c\n",
+                "echo_to_fd3.sh": "exec 3> >(sh)\necho 'pnpm test' >&3\n",
+                "stdout_echo.sh": "echo 'run pnpm test first'\n",
+                "fn_pipe.sh": "gen() { echo 'pnpm test'; }\ngen | sh\n",
+                "fn_pipe_amp.sh": "gen() { echo 'pnpm test' >&2; }\ngen |& sh\n",
+                "fn_procsub.sh": "gen() { echo 'pnpm test'; }\nsh <(gen)\n",
+                "fn_source.sh": "gen() { echo 'pnpm test'; }\nsource <(gen)\n",
+                "group_pipe.sh": "{ echo 'pnpm test'; } | sh\n",
+                "group_file.sh": "{ echo 'pnpm test'; } > run.sh\nsh run.sh\n",
+                "if_pipe.sh": "if true; then\n  echo 'pnpm test'\nfi | sh\n",
+                "subshell_pipe.sh": "(\n  echo 'pnpm test'\n) | sh\n",
+                "for_parallel.sh": "for p in a b; do echo \"pnpm test --filter $p\"; done | parallel\n",
+                "for_xargs.sh": "for p in a b; do echo \"pnpm test --filter $p\"; done | xargs -P2 -I{} sh -c '{}'\n",
+                "while_sh.sh": "while read -r p; do echo \"cargo test -p $p\"; done < crates.txt | sh\n",
+                "subst_lines.sh": "x=$(\necho 'pnpm test'\n)\n$x\n",
+                "eval_subst_lines.sh": "eval \"$(\necho 'pnpm test'\n)\"\n",
+                "exec_file.sh": "exec > run.sh\necho 'pnpm test'\nsh run.sh\n",
+                "stderr_group.sh": "{ echo 'pnpm test' >&2; } 2>&1 | sh\n",
+                "stderr_fn_file.sh": "gen() { echo 'pnpm test' >&2; }\ngen 2> run.sh\nsh run.sh\n",
+                "stderr_loop_file.sh": "for p in a; do echo \"pnpm test --filter $p\" >&2; done 2>run.sh\nsh run.sh\n",
+                "stderr_both_file.sh": "{ echo 'pnpm test' >&2; } &> run.sh\nsh run.sh\n"}):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [(command, True)])
+
+    def test_a_suite_in_a_string_or_here_document_that_something_runs_is_still_one(self):
+        for command in self.scripts({
+                "cmd_var.sh": 'cmd="pnpm test"\n$cmd\n',
+                "eval_var.sh": "x='pnpm test'\neval \"$x\"\n",
+                "watch.sh": 'watch "pnpm test"\n',
+                "watchexec.sh": "watchexec -- 'pnpm test'\n",
+                "nodemon.sh": "nodemon -x 'pnpm test'\n",
+                "nix_shell.sh": "nix-shell --run 'pnpm test'\n",
+                "devenv.sh": "devenv shell 'pnpm test'\n",
+                "tmux.sh": "tmux new-session -d 'pnpm test'\n",
+                "concurrently.sh": "concurrently 'pnpm build' 'pnpm test'\n",
+                "parallel.sh": "parallel ::: 'pnpm test'\n",
+                "herestring.sh": "bash <<< 'pnpm test'\n",
+                "procsub.sh": "bash <(echo 'pnpm test')\n",
+                "eval_dashes.sh": "eval -- 'pnpm test'\n",
+                "trap.sh": "trap -- 'pnpm test' EXIT\n",
+                "c_newline.sh": "bash -c \\\n'pnpm test'\n",
+                "concatenated.sh": "sh -c 'cd app'\" && pnpm test\"\n",
+                "bash_hd.sh": "bash <<EOF\npnpm test\nEOF\n",
+                "sh_s_hd.sh": "sh -s <<'EOF'\ncd app\nvitest run\nEOF\n",
+                "cat_pipe_sh.sh": "cat <<EOF | sh\npnpm test\nEOF\n",
+                "write_then_run.sh": "cat > x.sh <<EOF\npnpm test\nEOF\nsh x.sh\n",
+                "tee_then_run.sh": "tee x.sh >/dev/null <<'EOF'\npnpm test\nEOF\nchmod +x x.sh && ./x.sh\n",
+                "read_then_eval.sh": "read -r -d '' c <<EOF || true\npnpm test\nEOF\neval \"$c\"\n",
+                "eval_cat_hd.sh": 'eval "$(cat <<EOF\npnpm test\nEOF\n)"\n',
+                "spaced_delim.sh": "cat << \"E F\"\nit's\nE F\npnpm test\necho 'done now'\n"}):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [(command, True)])
+
     def test_a_launcher_keeps_what_the_hook_could_not_tell_of_its_command(self):
         (self.pkg / "tasks").mkdir()
         (self.pkg / "tasks" / "launch").write_text('#!/bin/sh\nexec "$@"\n')
