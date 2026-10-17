@@ -3976,7 +3976,7 @@ TEST_IN_TEXT = re.compile(r"\b(?:(?:pnpm|npm|yarn|bun)\s+(?:-\S+\s+)*(?:run\s+)?
 ECHOED = re.compile(r"(^|;|&&|\|\||\{|\b(?:then|do|else)\b)([ \t]*(?:1?>&2[ \t]+)?(?:echo|printf(?![ \t]+-v)))"
                     r"((?:[ \t]+(?:'[^'\n]*'|\"(?:[^\"\\`$\n]|\\.|\$(?!\())*\"|[^\s'\"`;&|<>()$\\]|\$(?!\()|\\.)+)+)"
                     r"(?=((?:[ \t]+1?>&2)*)[ \t]*(?:$|;|&&|\|\||\}))", re.M)
-STDERR_MOVED = re.compile(r"2(?:>>?|<>)(?![ \t]*/dev/null\b)|2<&\d|\|&|&>|>&(?![ \t]*\d)|\bexec\b[^\n;|&]*[<>]")
+STDERR_MOVED = re.compile(r"2(?:>>?|<>|<&)(?![ \t]*/dev/null\b)|\|&|&>|>&(?![ \t]*\d)|\bexec\b[^\n;|&]*[<>]")
 # On a line with a stderr move, what lets the move take an echo on another line: a shell, eval, source or exec that
 # runs code, a here-document, and (before the move, past any `${...}`) a block's closer.
 MOVE_RUNS = re.compile(rf"(?<![\w.$-])(?:{'|'.join(sorted(SHELLS))}|eval|source|exec)(?![\w.-])|(?<![^\s;&|{{(])\.(?=\s)|<<")
@@ -4216,7 +4216,8 @@ def _outer_carries(text, segments, stage):
         if words[0] == "tee":
             written += [w for w in words[1:] if not w.startswith("-")]
     names = [os.path.basename(w) for w in written]
-    return any(re.search(r"[$`*?[{~\"']", n) or not n or len(re.findall(rf"(?<![\w.-]){re.escape(n)}(?![\w.-])", text))
+    plain = re.sub(r"[\"'\\]", "", text)
+    return any(re.search(r"[$`*?[{~\"'\\]", n) or not n or len(re.findall(rf"(?<![\w.-]){re.escape(n)}(?![\w.-])", plain))
                > names.count(n) for n in names)
 
 

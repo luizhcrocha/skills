@@ -4527,7 +4527,9 @@ class SuiteParseTest(unittest.TestCase):
                 "fn_allman.sh": "hint()\n{\n  echo 'pnpm test' >&2\n}\nhint 2>&1 | parallel\n",
                 "fn_paren_line.sh": "hint() {\nargs=(\n-x\n)\necho 'pnpm test' >&2\n}\nhint 2>&1 | parallel\n",
                 "lt_dup.sh": "{\n  echo 'pnpm test' >&2\n} 2<&1 | sh\n",
-                "read_write.sh": "{\n  echo 'pnpm test' >&2\n} 2<> run.sh\nsh run.sh\n"}):
+                "read_write.sh": "{\n  echo 'pnpm test' >&2\n} 2<> run.sh\nsh run.sh\n",
+                "lt_dup_spaced.sh": "{\n  echo 'pnpm test' >&2\n} 2<& 1 | sh\n",
+                "lt_dup_var.sh": "fd=1\n{\n  echo 'pnpm test' >&2\n} 2<&$fd | sh\n"}):
             with self.subTest(command=command):
                 self.assertEqual(self.suites(command), [(command, True)])
 
@@ -4553,6 +4555,10 @@ class SuiteParseTest(unittest.TestCase):
                         'bash t/hint.sh 2>&1 | grep -v \\" >> t/hint.sh; grep -v \\" log',
                         'bash t/hint.sh 2>> "t/hint".sh', 'bash t/hint.sh 2>&1 | tee -a "t/hi"nt.sh',
                         "bash t/hint.sh 2<&1 | sh", "bash t/hint.sh 2<> run.sh; sh run.sh", "bash t/hint.sh 2<> t/hint.sh",
+                        "bash t/hint.sh 2<& 1 | sh", 'bash t/hint.sh 2<&"1" | sh', "bash t/hint.sh 2<&\\1 | sh",
+                        "fd=1; bash t/hint.sh 2<&$fd | sh", "bash t/hint.sh 2>> t/hi\\nt.sh",
+                        "bash t/hint.sh 2>&1 | tee -a t/hi\\nt.sh", 'bash t/hint.sh 2>&1 | t"ee" -a "t/hi"nt.sh',
+                        'bash "t/hi"nt.sh 2>> t/hint.sh', "bash t/hi\\nt.sh 2>> t/hint.sh",
                         'x="$(bash t/hint.sh 2>&1)"; $x',
                         "./t/hint.sh 2>&1 | sh", "{ bash t/hint.sh; } 2>&1 | sh", "(bash t/hint.sh) 2>&1 | sh",
                         "bash t/hint.sh 2> >(sh)", "bash t/hint.sh |& sh", "bash t/hint.sh 2>&1 | tee >(sh)"):
