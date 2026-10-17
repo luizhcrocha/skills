@@ -5,9 +5,13 @@
  * copy numbered for reading (the machine's counter is taken only by a write): a letter for the kind and 1 + the
  * highest number of that letter, skipping a
  * number another row has as its id; decisions in `opened` order, links and roadblocks in list order.
+ *
+ * A decision whose id reads as a number (a cloud card, D270) shows its id. A lookup takes an id first, so a
+ * decision whose number is another decision's id (a legacy card {id D209, ref D211} next to cloud D211) shows its
+ * own id when that reads as a number, else a new number: a typed label reaches the card that shows it.
  */
 import { asArray, asObject, asString, pyRepr, truthy, type Json, type JsonObject } from "../json.ts";
-import { PREFIX } from "../ledger/numbers.ts";
+import { PREFIX, readsAsNumber } from "../ledger/numbers.ts";
 
 /** Python's `str()` of a JSON value. */
 export function pyStr(value: Json | undefined): string {
@@ -47,7 +51,16 @@ function objects(value: Json | undefined): JsonObject[] {
 export function numberState(state: JsonObject): JsonObject {
   const given = new Map<JsonObject, string>();
   const decisions = objects(state["decisions"]);
-  const waiting = decisions.filter((d) => !truthy(d["ref"]));
+  const shadowed = (d: JsonObject): boolean => decisions.some((o) => o !== d && asString(o["id"]) === pyStr(d["ref"]));
+  const unnumbered = decisions.filter((d) => !truthy(d["ref"]) || shadowed(d));
+
+  for (const d of unnumbered) {
+    const id = asString(d["id"]);
+
+    if (id !== undefined && readsAsNumber(id)) given.set(d, id);
+  }
+
+  const waiting = unnumbered.filter((d) => !given.has(d));
   const opened = (d: JsonObject): string => (d["opened"] === undefined ? "" : pyStr(d["opened"]));
   const byOpened = [...waiting].sort((a, b) => (opened(a) < opened(b) ? -1 : opened(a) > opened(b) ? 1 : 0));
   const withRefs = (rows: readonly JsonObject[]): JsonObject[] => rows.map((r) => (given.has(r) ? { ...r, ref: given.get(r) ?? "" } : r));
