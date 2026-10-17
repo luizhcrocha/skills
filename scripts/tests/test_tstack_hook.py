@@ -4524,8 +4524,8 @@ class SuiteParseTest(unittest.TestCase):
                 "fn_var.sh": "hint() {\n  echo 'pnpm test' >&2\n}\nfn=hint\n$fn 2>&1 | xargs env\n",
                 "fn_wrapper_args.sh": "hint() { echo 'pnpm test' >&2; }\nrun() {\n  \"$@\" 2>&1 | xargs env\n}\nrun hint\n",
                 "fn_var_procsub.sh": "hint() {\n  echo 'pnpm test' >&2\n}\nf=hint\n\"$f\" 2> >(xargs env)\n",
-                "fn_allman.sh": "hint()\n{\n  echo 'pnpm test' >&2\n}\nhint 2>&1 | xargs env\n",
-                "fn_paren_line.sh": "hint() {\nargs=(\n-x\n)\necho 'pnpm test' >&2\n}\nhint 2>&1 | xargs env\n"}):
+                "fn_allman.sh": "hint()\n{\n  echo 'pnpm test' >&2\n}\nhint 2>&1 | parallel\n",
+                "fn_paren_line.sh": "hint() {\nargs=(\n-x\n)\necho 'pnpm test' >&2\n}\nhint 2>&1 | parallel\n"}):
             with self.subTest(command=command):
                 self.assertEqual(self.suites(command), [(command, True)])
 
@@ -4536,10 +4536,29 @@ class SuiteParseTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertNotEqual(self.suites(command), [])
 
+    def test_a_hint_echoed_to_stderr_counts_when_anything_but_a_sink_shares_the_command_that_moves_its_stderr(self):
+        list(self.scripts({"hint.sh": "echo 'run pnpm test first' >&2\n"}))
+        for command in ("bash t/hint.sh 2>&1 | sh -s t/hint.sh", "bash t/hint.sh 2>&1 | bash /dev/stdin t/hint.sh",
+                        'bash t/hint.sh 2>&1 | sh "t/hint.sh"', "bash t/hint.sh 2>&1 | sudo -u luiz sh",
+                        "bash t/hint.sh 2>&1 | doas -u luiz sh", "bash t/hint.sh 2>&1 | env -u HOME sh",
+                        "bash t/hint.sh 2>&1 | timeout -s KILL 30 sh", "bash t/hint.sh 2>&1 | stdbuf -o L sh",
+                        "bash t/hint.sh 2>&1 | busybox sh", "bash t/hint.sh 2>&1 | parallel",
+                        "bash t/hint.sh 2>&1 | python3 -c 'import os,sys; os.system(sys.stdin.read())'",
+                        "bash t/hint.sh 2>&1 | ssh localhost", "bash t/hint.sh 2> h.txt; parallel < h.txt",
+                        'bash t/hint.sh 2>&1 | tr \\" q | sh | tr q "x"', "bash t/hint.sh 2>> t/hint.sh",
+                        "bash t/hint.sh 2>&1 | tee t/hint.sh", "bash t/hint.sh 2> h.txt; rg --pre sh x h.txt",
+                        "bash t/hint.sh 2>&1 | sort --compress-program=sh",
+                        'bash t/hint.sh 2>&1 | grep -v \\" >> t/hint.sh; grep -v \\" log',
+                        "./t/hint.sh 2>&1 | sh", "{ bash t/hint.sh; } 2>&1 | sh", "(bash t/hint.sh) 2>&1 | sh",
+                        "bash t/hint.sh 2> >(sh)", "bash t/hint.sh |& sh", "bash t/hint.sh 2>&1 | tee >(sh)"):
+            with self.subTest(command=command):
+                self.assertNotEqual(self.suites(command), [])
+
     def test_a_hint_echoed_to_stderr_names_no_suite_when_the_command_running_the_script_only_reads_its_stderr(self):
         list(self.scripts({"hint.sh": "echo 'run pnpm test first' >&2\n"}))
         for command in ("bash t/hint.sh 2>&1 | tail -5", "bash t/hint.sh > log 2>&1", "./t/hint.sh 2>&1 | grep -v x",
-                        "bash t/hint.sh 2>&1 | tee log"):
+                        "bash t/hint.sh 2>&1 | tee log", "bash t/hint.sh 2>&1 | sort | uniq -c | head -3 > counts.txt",
+                        "cat notes.txt | bash t/hint.sh 2>&1 | tail -5"):
             with self.subTest(command=command):
                 self.assertEqual(self.suites(command), [])
 

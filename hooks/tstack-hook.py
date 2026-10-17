@@ -3988,6 +3988,11 @@ MOVE_TAKERS = SHELLS | {"eval", "source", ".", "exec", "xargs"}
 MOVE_WORD = re.compile(r"(?:\"[^\"]*\"|'[^']*'|[^\s\"'])+")
 MOVE_SKIPPED = {"!", "if", "then", "do", "while", "until", "elif", "else", "time", "command", "builtin", "env", "timeout",
                 "nohup", "nice", "stdbuf", "setsid", "sudo", "$"}
+# What may share a command line that moves the stderr of a script it runs and still leave the script's echoes out
+# (_outer_carries): commands that only read, count or show what they are given, and tee into files. A sink's word that
+# makes it run a program (rg --pre, sort --compress-program or a prefix of it, less +cmd) makes it no sink.
+OUTER_SINKS = {"tail", "head", "grep", "egrep", "fgrep", "rg", "wc", "sort", "uniq", "cut", "cat", "less", "tee"}
+SINK_RUNS = {"rg": re.compile(r"--pre"), "sort": re.compile(r"--co"), "less": re.compile(r"\+")}
 FUNCTION_DEF = re.compile(r"([ \t]*)(?:function[ \t]+([\w:.-]+)(?:[ \t]*\(\))?|([\w:.-]+)[ \t]*\(\))")
 # A script that runs the command it is given (`exec "$@"`) is a launcher: the line runs the launcher's arguments.
 LAUNCHES_ARGS = re.compile(r"\$\{?[@*]\}?")
@@ -4166,21 +4171,17 @@ def _runner_functions(lines):
     return found
 
 
-def _move_carries(line, script=None):
-    """Whether a stage of the line (between `|`, `;`, `&&`, `(`, `{` and the like) runs what a stderr move on it could
-    hand an echo's words to: a shell, eval, source, exec or xargs (MOVE_TAKERS), a command whose name is computed
+def _move_carries(line):
+    """Whether a stage of a script's line (between `|`, `;`, `&&`, `(`, `{` and the like) runs what a stderr move on it
+    could hand an echo's words to: a shell, eval, source, exec or xargs (MOVE_TAKERS), a command whose name is computed
     (`$fn`, `"$@"`, `${BASH:-sh}`, `` `cmd` ``), or a file the line writes (`2> run.sh; ./run.sh`). A stage's command
-    is its first word past assignments, redirects, keywords and wrappers such as `env` or `timeout` and their options;
-    the stage that names script (the script a command line runs) is the one whose echoes are read, not a taker. No
-    operator inside quotes splits a stage."""
+    is its first word past assignments, redirects, keywords and wrappers such as `env` or `timeout` and their options.
+    No operator inside quotes splits a stage."""
     line = re.sub(r"""(?:"(?:[^"\\$`\n]|\\.|\$(?!\())*"|'[^'\n]*')""", lambda m: re.sub(r"[|&;(){}<>]", "_", m[0]),
                   re.sub(r"\$\{[^}\n]*\}", "$x", line))
     written = {t.strip("\"'").removeprefix("./") for t in MOVE_TARGET.findall(line)}
     for stage in MOVE_STAGE.split(line):
-        words = MOVE_WORD.findall(stage)
-        if script is not None and script in (w.strip("\"'") for w in words):
-            continue
-        rest = iter(words)
+        rest = iter(MOVE_WORD.findall(stage))
         for word in rest:
             if (word in MOVE_SKIPPED or re.fullmatch(r"\w+(?:\[[^]]*\])?\+?=.*|-.*|\d[\w.]*", word, re.S)
                     or re.fullmatch(r"\d*(?:[<>]{1,2}|&>>?|[<>]&)", word) and next(rest, None) is not None
@@ -4191,6 +4192,27 @@ def _move_carries(line, script=None):
                 return True
             break
     return False
+
+
+def _outer_carries(text, segments, stage):
+    """Whether a command line that moves stderr could hand on what the script run by its stage (an index into its
+    _segments) echoes: unless every other stage is a sink (OUTER_SINKS) and no file it writes, by a redirect or tee,
+    is named anywhere else in it (`2>> x.sh` into the running script, `2> h; sh < h`), it could. An escaped quote, a
+    `$(`, a backtick or a process substitution anywhere in it, or a written name that is not a plain word, could too."""
+    if re.search(r"\\[\"']|[<>$]\(|`", text):
+        return True
+    written = [t.strip("\"'") for t in MOVE_TARGET.findall(re.sub(
+        r"""(?:"[^"\n]*"|'[^'\n]*')""", lambda m: re.sub(r"[|&;(){}<>]", "_", m[0]), text))]
+    for k, (words, _) in enumerate(segments):
+        if k == stage:
+            continue
+        if words[0] not in OUTER_SINKS or any(SINK_RUNS[words[0]].match(w) for w in words[1:] if words[0] in SINK_RUNS):
+            return True
+        if words[0] == "tee":
+            written += [w for w in words[1:] if not w.startswith("-")]
+    names = [os.path.basename(w) for w in written]
+    return any(re.search(r"[$`*?[{~]", n) or not n or len(re.findall(rf"(?<![\w.-]){re.escape(n)}(?![\w.-])", text))
+               > names.count(n) for n in names)
 
 
 def _stderr_carried(text):
@@ -4233,21 +4255,22 @@ class SuiteReader:
 
     def suites(self, command, cwd, unclear=False, depth=0, taken=False):
         """The suites a command line runs. taken: a command line around this one moves stderr where it could run what
-        an echo prints (_move_carries), so no script it runs has its echoes left out."""
+        an echo prints (_outer_carries), so no script it runs has its echoes left out; a `$(` ... `)` in a line that
+        moves stderr anywhere is taken, its output being the line's to use."""
         text = _strip_heredocs(command)
         moves = bool(STDERR_MOVED.search(text))
-
-        def takes(script=None):
-            return taken or moves and _move_carries(text, script)
         out = []
         if depth < 4:
             for sub in _substitutions(text):
-                out += self.suites(sub, cwd, True, depth + 1, takes())
+                out += self.suites(sub, cwd, True, depth + 1, taken or moves)
         try:
             segments = _segments(text)
         except ValueError:
             return out + ([Suite("a command the hook cannot parse", True)] if TEST_IN_TEXT.search(text) else [])
-        for words, nesting in segments:
+
+        def takes(stage):
+            return taken or moves and _outer_carries(text, segments, stage)
+        for stage, (words, nesting) in enumerate(segments):
             words, stdin = _unwrap(words)
             if not words:
                 continue
@@ -4258,7 +4281,7 @@ class SuiteReader:
             elif name == "systemd-run" and "--scope" in words:
                 continue  # already in a scope of its own
             elif name == "eval" and depth < 4:
-                out += self.suites(" ".join(words[1:]), cwd, True, depth + 1, takes())
+                out += self.suites(" ".join(words[1:]), cwd, True, depth + 1, takes(stage))
             elif name in NOEXEC_SHELLS and any(re.fullmatch(r"-[a-zA-Z]*n[a-zA-Z]*|--no-execute", w) for w in
                                                words[1:next((i for i, w in enumerate(words) if i and not w.startswith("-")),
                                                             len(words))]):
@@ -4269,13 +4292,13 @@ class SuiteReader:
                 code = (words[flag].split("=", 1)[1] if flag is not None and "=" in words[flag]
                         else words[flag + 1] if flag is not None and flag + 1 < len(words) else None)
                 if code is not None:
-                    out += self.suites(code, cwd, unclear or stdin, depth + 1, takes())
+                    out += self.suites(code, cwd, unclear or stdin, depth + 1, takes(stage))
                 else:
                     files = [w for w in words[1:] if not w.startswith("-")]
-                    if files and cwd and self._script_tests(os.path.join(cwd, files[0]), True, takes(files[0])):
+                    if files and cwd and self._script_tests(os.path.join(cwd, files[0]), True, takes(stage)):
                         out.append(Suite(" ".join(words), True))
             elif name in ("source", ".") and len(words) > 1:
-                if cwd and self._script_tests(os.path.join(cwd, words[1]), True, takes(words[1])):
+                if cwd and self._script_tests(os.path.join(cwd, words[1]), True, takes(stage)):
                     out.append(Suite(" ".join(words), True))
             else:
                 found = self.command(words, cwd, depth)
@@ -4284,12 +4307,12 @@ class SuiteReader:
                 elif ("/" in words[0] or words[0].endswith(SCRIPT_SUFFIXES)) and cwd \
                         and not ((name in RUNNERS or re.fullmatch(r"python[\d.]*", name))
                                  and _installed(_path(cwd, words[0]) or words[0])):
-                    code = self._script_code(_path(cwd, words[0]) or "", taken=takes(words[0]))
+                    code = self._script_code(_path(cwd, words[0]) or "", taken=takes(stage))
                     if code is not None and TEST_IN_TEXT.search(code):
                         out.append(Suite(" ".join(words), True))
                     elif code is not None and LAUNCHES_ARGS.search(code) and len(words) > 1 and depth < 4:
                         import shlex
-                        inner = self.suites(shlex.join(words[1:]), cwd, False, depth + 1, takes())
+                        inner = self.suites(shlex.join(words[1:]), cwd, False, depth + 1, takes(stage))
                         if inner:
                             out.append(Suite(" ".join(words), unclear or stdin or nesting > 0
                                              or any(s.unclear for s in inner)))
