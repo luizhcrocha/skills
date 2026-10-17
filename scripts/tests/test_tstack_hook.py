@@ -4520,9 +4520,35 @@ class SuiteParseTest(unittest.TestCase):
                 "exec_later.sh": self.DEPLOY_HEAD + "exec 2> run.sh\necho 'pnpm test' >&2\nsh run.sh\n",
                 "shell_hd.sh": self.DEPLOY_HEAD + "bash 2>&1 <<EOF | sh\necho 'pnpm test' >&2\nEOF\n",
                 "string_lines.sh": self.DEPLOY_HEAD + "x -c \"\necho 'pnpm test' >&2;\n\" 2>&1 | parallel\n",
-                "continued.sh": self.DEPLOY_HEAD + "{ echo 'pnpm test' >&2; } \\\n  2>&1 | sh\n"}):
+                "continued.sh": self.DEPLOY_HEAD + "{ echo 'pnpm test' >&2; } \\\n  2> run.sh\nsh run.sh\n",
+                "fn_var.sh": "hint() {\n  echo 'pnpm test' >&2\n}\nfn=hint\n$fn 2>&1 | xargs env\n",
+                "fn_wrapper_args.sh": "hint() { echo 'pnpm test' >&2; }\nrun() {\n  \"$@\" 2>&1 | xargs env\n}\nrun hint\n",
+                "fn_var_procsub.sh": "hint() {\n  echo 'pnpm test' >&2\n}\nf=hint\n\"$f\" 2> >(xargs env)\n",
+                "fn_allman.sh": "hint()\n{\n  echo 'pnpm test' >&2\n}\nhint 2>&1 | xargs env\n",
+                "fn_paren_line.sh": "hint() {\nargs=(\n-x\n)\necho 'pnpm test' >&2\n}\nhint 2>&1 | xargs env\n"}):
             with self.subTest(command=command):
                 self.assertEqual(self.suites(command), [(command, True)])
+
+    def test_a_hint_echoed_to_stderr_counts_when_the_command_running_the_script_moves_stderr(self):
+        list(self.scripts({"hint.sh": "echo 'run pnpm test first' >&2\n"}))
+        for command in ("bash t/hint.sh 2>&1 | sh", "./t/hint.sh 2>&1 | xargs env", "bash t/hint.sh 2> run.sh; bash run.sh",
+                        "./t/hint.sh 2> run.sh && ./run.sh", 'bash t/hint.sh 2>&1 | "$SHELL"'):
+            with self.subTest(command=command):
+                self.assertNotEqual(self.suites(command), [])
+
+    def test_a_hint_echoed_to_stderr_names_no_suite_when_the_command_running_the_script_only_reads_its_stderr(self):
+        list(self.scripts({"hint.sh": "echo 'run pnpm test first' >&2\n"}))
+        for command in ("bash t/hint.sh 2>&1 | tail -5", "bash t/hint.sh > log 2>&1", "./t/hint.sh 2>&1 | grep -v x",
+                        "bash t/hint.sh 2>&1 | tee log"):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [])
+
+    def test_a_script_of_many_stderr_moves_is_read_in_well_under_the_hook_timeout(self):
+        body = "".join(f'psql -c "select {i}" 2> "$work/e{i}"\n' for i in range(4000))
+        list(self.scripts({"many.sh": body + "echo 'run pnpm test first' >&2\n"}))
+        started = time.monotonic()
+        self.assertEqual(self.suites("bash t/many.sh"), [])
+        self.assertLess(time.monotonic() - started, 1)
 
     def test_a_launcher_keeps_what_the_hook_could_not_tell_of_its_command(self):
         (self.pkg / "tasks").mkdir()

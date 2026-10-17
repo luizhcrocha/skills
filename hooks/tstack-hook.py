@@ -3981,6 +3981,13 @@ STDERR_MOVED = re.compile(r"2>>?(?![ \t]*/dev/null\b)|\|&|&>|>&(?![ \t]*\d)|\bex
 # runs code, a here-document, and (before the move, past any `${...}`) a block's closer.
 MOVE_RUNS = re.compile(rf"(?<![\w.$-])(?:{'|'.join(sorted(SHELLS))}|eval|source|exec)(?![\w.-])|(?<![^\s;&|{{(])\.(?=\s)|<<")
 MOVE_CLOSES = re.compile(r"[})]|\b(?:done|fi|esac)\b")
+# A line's stages, the words of one, and what comes before a command's name (keywords, wrappers, the `$` of a `$(`).
+MOVE_STAGE = re.compile(r"\|&|\|\|?|&&|;|\n|(?<![<>])&(?!>)|\(|\)|\{|\}")
+MOVE_TARGET = re.compile(r"(?<![<>&\d])\d*(?:&>>?|>>?|>\|)(?!&)[ \t]*((?:\"[^\"]*\"|'[^']*'|[^\s;&|<>()])+)")
+MOVE_TAKERS = SHELLS | {"eval", "source", ".", "exec", "xargs"}
+MOVE_WORD = re.compile(r"(?:\"[^\"]*\"|'[^']*'|[^\s\"'])+")
+MOVE_SKIPPED = {"!", "if", "then", "do", "while", "until", "elif", "else", "time", "command", "builtin", "env", "timeout",
+                "nohup", "nice", "stdbuf", "setsid", "sudo", "$"}
 FUNCTION_DEF = re.compile(r"([ \t]*)(?:function[ \t]+([\w:.-]+)(?:[ \t]*\(\))?|([\w:.-]+)[ \t]*\(\))")
 # A script that runs the command it is given (`exec "$@"`) is a launcher: the line runs the launcher's arguments.
 LAUNCHES_ARGS = re.compile(r"\$\{?[@*]\}?")
@@ -4072,13 +4079,16 @@ def _scripts(cwd):
     return {k: v for k, v in scripts.items() if isinstance(v, str)} if isinstance(scripts, dict) else {}
 
 
-def _uncommented(code, structured=True):
+def _uncommented(code, structured=True, outside=None):
     """Shell code with its comments left out: from a `#` that starts a word outside quotes to the end of its line.
     A here-document's body is copied as it is, with no quotes read in it; a `$(` ... `)` inside double quotes is a
-    level of its own, where quotes start fresh. Unstructured, it reads quotes alone: no here-documents, no `$(` levels."""
+    level of its own, where quotes start fresh. Unstructured, it reads quotes alone: no here-documents, no `$(` levels.
+    Given a set as outside, it adds the offset of each line start that is outside any quote and here-document body."""
     out, quote, i, nested, heredocs = [], None, 0, [], []
     while i < len(code):
         c = code[i]
+        if outside is not None and quote is None and code[i - 1:i] == "\n":
+            outside.add(i)
         if quote == "'":
             quote = None if c == "'" else quote
         elif c == "\\":
@@ -4132,16 +4142,22 @@ def _uncommented(code, structured=True):
 
 def _runner_functions(lines):
     """The script's functions whose body names a test runner, or calls one that does: a call of one can move what
-    its echoes print. A body runs from its definition to the first `}` or `)` line indented no deeper, or is the
-    definition's line when that closes what it opens."""
+    its echoes print. A body opens on its definition's line or, when nothing follows the `()`, on the next line that
+    holds anything (`{` alone); it is that line when it closes what it opens, else it runs to the first line that
+    starts with the opener's closer (`}` for `{`, `)` for `(`) indented no deeper than the definition."""
     bodies = []
     for i, line in enumerate(lines):
         if not (m := FUNCTION_DEF.match(line)):
             continue
-        end = i
-        if sum(map(line.count, "{(")) > sum(map(line.count, "})")):
-            end = next((j for j in range(i + 1, len(lines)) if lines[j].lstrip()[:1] in ("}", ")")
-                        and len(lines[j]) - len(lines[j].lstrip()) <= len(m[1])), len(lines) - 1)
+        j, head = i, line[m.end():]
+        if not head.strip():
+            j = next((k for k in range(i + 1, len(lines)) if lines[k].strip()), i)
+            head = lines[j] if j > i else head
+        end = j
+        if sum(map(head.count, "{(")) > sum(map(head.count, "})")):
+            close = ")" if head.lstrip()[:1] == "(" else "}"
+            end = next((k for k in range(j + 1, len(lines)) if lines[k].lstrip()[:1] == close
+                        and len(lines[k]) - len(lines[k].lstrip()) <= len(m[1])), len(lines) - 1)
         bodies.append((m[2] or m[3], "\n".join(lines[i:end + 1])))
     found = set()
     while new := {name for name, body in bodies if name not in found and (TEST_IN_TEXT.search(body) or any(
@@ -4150,22 +4166,50 @@ def _runner_functions(lines):
     return found
 
 
+def _move_carries(line, script=None):
+    """Whether a stage of the line (between `|`, `;`, `&&`, `(`, `{` and the like) runs what a stderr move on it could
+    hand an echo's words to: a shell, eval, source, exec or xargs (MOVE_TAKERS), a command whose name is computed
+    (`$fn`, `"$@"`, `${BASH:-sh}`, `` `cmd` ``), or a file the line writes (`2> run.sh; ./run.sh`). A stage's command
+    is its first word past assignments, redirects, keywords and wrappers such as `env` or `timeout` and their options;
+    the stage that names script (the script a command line runs) is the one whose echoes are read, not a taker. No
+    operator inside quotes splits a stage."""
+    line = re.sub(r"""(?:"(?:[^"\\$`\n]|\\.|\$(?!\())*"|'[^'\n]*')""", lambda m: re.sub(r"[|&;(){}<>]", "_", m[0]),
+                  re.sub(r"\$\{[^}\n]*\}", "$x", line))
+    written = {t.strip("\"'").removeprefix("./") for t in MOVE_TARGET.findall(line)}
+    for stage in MOVE_STAGE.split(line):
+        words = MOVE_WORD.findall(stage)
+        if script is not None and script in (w.strip("\"'") for w in words):
+            continue
+        rest = iter(words)
+        for word in rest:
+            if (word in MOVE_SKIPPED or re.fullmatch(r"\w+(?:\[[^]]*\])?\+?=.*|-.*|\d[\w.]*", word, re.S)
+                    or re.fullmatch(r"\d*(?:[<>]{1,2}|&>>?|[<>]&)", word) and next(rest, None) is not None
+                    or re.fullmatch(r"\d*(?:[<>]{1,2}|&>>?|[<>]&)\S+", word)):
+                continue
+            name = word.strip("\"'")
+            if re.search(r"[$`]", word) or os.path.basename(name) in MOVE_TAKERS or name.removeprefix("./") in written:
+                return True
+            break
+    return False
+
+
 def _stderr_carried(text):
     """Whether a stderr move in the script, outside its whole-line comments, could take what an echo on any line
     prints to stderr: an exec, shell, eval, source or here-document on its line (MOVE_RUNS), a block's closer before
-    it (MOVE_CLOSES), a call of a function that names a runner (_runner_functions), or a line that a `\\` continues or
-    that starts inside a quote or a here-document. A move that takes only an outside command's stderr
-    (`psql ... 2> err`, `lint 2>&1 | redact`) takes no echo's."""
-    lines, start, functions = text.split("\n"), 0, None
+    it (MOVE_CLOSES), a stage that takes it (_move_carries), a call of a function that names a runner
+    (_runner_functions), or a line that a `\\` continues or that starts inside a quote or a here-document. A move that
+    takes only an outside command's stderr (`psql ... 2> err`, `lint 2>&1 | redact`) takes no echo's."""
+    lines, start, functions, outside = text.split("\n"), 0, None, None
     for i, line in enumerate(lines):
         at, start = start, start + len(line) + 1
         if line.lstrip().startswith("#") or not (move := STDERR_MOVED.search(line)):
             continue
         if functions is None:
-            functions = _runner_functions(lines)
+            functions, outside = _runner_functions(lines), {0}
+            _uncommented(text, outside=outside)
         if (MOVE_RUNS.search(line) or MOVE_CLOSES.search(re.sub(r"\$\{[^}\n]*\}", "$x", line[:move.start()]))
-                or any(re.search(rf"(?<![\w.-]){re.escape(f)}(?![\w.-])", line) for f in functions)
-                or (i and lines[i - 1].endswith("\\")) or _uncommented(text[:at] + "#").endswith("#")):
+                or _move_carries(line) or any(re.search(rf"(?<![\w.-]){re.escape(f)}(?![\w.-])", line) for f in functions)
+                or (i and lines[i - 1].endswith("\\")) or at not in outside):
             return True
     return False
 
@@ -4187,12 +4231,18 @@ def _word_starts(code, i):
 class SuiteReader:
     """Reads a Bash command for the full test suites it runs."""
 
-    def suites(self, command, cwd, unclear=False, depth=0):
+    def suites(self, command, cwd, unclear=False, depth=0, taken=False):
+        """The suites a command line runs. taken: a command line around this one moves stderr where it could run what
+        an echo prints (_move_carries), so no script it runs has its echoes left out."""
         text = _strip_heredocs(command)
+        moves = bool(STDERR_MOVED.search(text))
+
+        def takes(script=None):
+            return taken or moves and _move_carries(text, script)
         out = []
         if depth < 4:
             for sub in _substitutions(text):
-                out += self.suites(sub, cwd, True, depth + 1)
+                out += self.suites(sub, cwd, True, depth + 1, takes())
         try:
             segments = _segments(text)
         except ValueError:
@@ -4208,7 +4258,7 @@ class SuiteReader:
             elif name == "systemd-run" and "--scope" in words:
                 continue  # already in a scope of its own
             elif name == "eval" and depth < 4:
-                out += self.suites(" ".join(words[1:]), cwd, True, depth + 1)
+                out += self.suites(" ".join(words[1:]), cwd, True, depth + 1, takes())
             elif name in NOEXEC_SHELLS and any(re.fullmatch(r"-[a-zA-Z]*n[a-zA-Z]*|--no-execute", w) for w in
                                                words[1:next((i for i, w in enumerate(words) if i and not w.startswith("-")),
                                                             len(words))]):
@@ -4219,13 +4269,13 @@ class SuiteReader:
                 code = (words[flag].split("=", 1)[1] if flag is not None and "=" in words[flag]
                         else words[flag + 1] if flag is not None and flag + 1 < len(words) else None)
                 if code is not None:
-                    out += self.suites(code, cwd, unclear or stdin, depth + 1)
+                    out += self.suites(code, cwd, unclear or stdin, depth + 1, takes())
                 else:
                     files = [w for w in words[1:] if not w.startswith("-")]
-                    if files and cwd and self._script_tests(os.path.join(cwd, files[0]), True):
+                    if files and cwd and self._script_tests(os.path.join(cwd, files[0]), True, takes(files[0])):
                         out.append(Suite(" ".join(words), True))
             elif name in ("source", ".") and len(words) > 1:
-                if cwd and self._script_tests(os.path.join(cwd, words[1]), True):
+                if cwd and self._script_tests(os.path.join(cwd, words[1]), True, takes(words[1])):
                     out.append(Suite(" ".join(words), True))
             else:
                 found = self.command(words, cwd, depth)
@@ -4234,25 +4284,26 @@ class SuiteReader:
                 elif ("/" in words[0] or words[0].endswith(SCRIPT_SUFFIXES)) and cwd \
                         and not ((name in RUNNERS or re.fullmatch(r"python[\d.]*", name))
                                  and _installed(_path(cwd, words[0]) or words[0])):
-                    code = self._script_code(_path(cwd, words[0]) or "")
+                    code = self._script_code(_path(cwd, words[0]) or "", taken=takes(words[0]))
                     if code is not None and TEST_IN_TEXT.search(code):
                         out.append(Suite(" ".join(words), True))
                     elif code is not None and LAUNCHES_ARGS.search(code) and len(words) > 1 and depth < 4:
                         import shlex
-                        inner = self.suites(shlex.join(words[1:]), cwd, False, depth + 1)
+                        inner = self.suites(shlex.join(words[1:]), cwd, False, depth + 1, takes())
                         if inner:
                             out.append(Suite(" ".join(words), unclear or stdin or nesting > 0
                                              or any(s.unclear for s in inner)))
         return out
 
     @staticmethod
-    def _script_code(path, by_shell=False):
+    def _script_code(path, by_shell=False, taken=False):
         """The code of the shell script at path, its comments left out, three times: with its whole-line comments
         left out; read for quotes (_uncommented), which copies here-document bodies as they are; and read for quotes
         alone, with no here-documents or `$(` levels. Each view can misread (a stray quote in a `<<\\EOF` body, a `<<`
         taken for a here-document), so a pattern found in any counts; the words a plain echo or printf prints are blanked
-        in each (ECHOED) when it prints to stderr and no stderr move could take them (_stderr_carried), so a runner named
-        only there, in every view, counts in none. None when it cannot be read or is no shell
+        in each (ECHOED) when it prints to stderr and no stderr move, in the script (_stderr_carried) or in the command
+        line that runs it (taken), could take them, so a runner named only there, in every view, counts in none; the script is
+        read for moves only when the blanking leaves no runner. None when it cannot be read or is no shell
         script (any file is when a shell runs it, else a .sh-like file or one whose #! names a shell)."""
         try:
             with open(path, "rb") as f:
@@ -4265,13 +4316,14 @@ class SuiteReader:
         if not shell:
             return None
         code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#")) + "\n" + _uncommented(text) + "\n" + _uncommented(text, False)
-        if _stderr_carried(text):
+        if taken or not TEST_IN_TEXT.search(code):
             return code
-        return ECHOED.sub(lambda m: m[1] + m[2] + (re.sub(r"\S", " ", m[3]) if ">&2" in m[2] + m[4] else m[3]), code)
+        blanked = ECHOED.sub(lambda m: m[1] + m[2] + (re.sub(r"\S", " ", m[3]) if ">&2" in m[2] + m[4] else m[3]), code)
+        return code if TEST_IN_TEXT.search(blanked) or _stderr_carried(text) else blanked
 
     @classmethod
-    def _script_tests(cls, path, by_shell=False):
-        code = cls._script_code(path, by_shell)
+    def _script_tests(cls, path, by_shell=False, taken=False):
+        code = cls._script_code(path, by_shell, taken)
         return code is not None and bool(TEST_IN_TEXT.search(code))
 
     def command(self, words, cwd, depth=0):
