@@ -3976,14 +3976,14 @@ TEST_IN_TEXT = re.compile(r"\b(?:(?:pnpm|npm|yarn|bun)\s+(?:-\S+\s+)*(?:run\s+)?
 ECHOED = re.compile(r"(^|;|&&|\|\||\{|\b(?:then|do|else)\b)([ \t]*(?:1?>&2[ \t]+)?(?:echo|printf(?![ \t]+-v)))"
                     r"((?:[ \t]+(?:'[^'\n]*'|\"(?:[^\"\\`$\n]|\\.|\$(?!\())*\"|[^\s'\"`;&|<>()$\\]|\$(?!\()|\\.)+)+)"
                     r"(?=((?:[ \t]+1?>&2)*)[ \t]*(?:$|;|&&|\|\||\}))", re.M)
-STDERR_MOVED = re.compile(r"2>>?(?![ \t]*/dev/null\b)|\|&|&>|>&(?![ \t]*\d)|\bexec\b[^\n;|&]*[<>]")
+STDERR_MOVED = re.compile(r"2(?:>>?|<>)(?![ \t]*/dev/null\b)|2<&\d|\|&|&>|>&(?![ \t]*\d)|\bexec\b[^\n;|&]*[<>]")
 # On a line with a stderr move, what lets the move take an echo on another line: a shell, eval, source or exec that
 # runs code, a here-document, and (before the move, past any `${...}`) a block's closer.
 MOVE_RUNS = re.compile(rf"(?<![\w.$-])(?:{'|'.join(sorted(SHELLS))}|eval|source|exec)(?![\w.-])|(?<![^\s;&|{{(])\.(?=\s)|<<")
 MOVE_CLOSES = re.compile(r"[})]|\b(?:done|fi|esac)\b")
 # A line's stages, the words of one, and what comes before a command's name (keywords, wrappers, the `$` of a `$(`).
 MOVE_STAGE = re.compile(r"\|&|\|\|?|&&|;|\n|(?<![<>])&(?!>)|\(|\)|\{|\}")
-MOVE_TARGET = re.compile(r"(?<![<>&\d])\d*(?:&>>?|>>?|>\|)(?!&)[ \t]*((?:\"[^\"]*\"|'[^']*'|[^\s;&|<>()])+)")
+MOVE_TARGET = re.compile(r"(?<![<>&\d])\d*(?:&>>?|>>?|>\||<>)(?!&)[ \t]*((?:\"[^\"]*\"|'[^']*'|[^\s;&|<>()])+)")
 MOVE_TAKERS = SHELLS | {"eval", "source", ".", "exec", "xargs"}
 MOVE_WORD = re.compile(r"(?:\"[^\"]*\"|'[^']*'|[^\s\"'])+")
 MOVE_SKIPPED = {"!", "if", "then", "do", "while", "until", "elif", "else", "time", "command", "builtin", "env", "timeout",
@@ -4198,11 +4198,16 @@ def _outer_carries(text, segments, stage):
     """Whether a command line that moves stderr could hand on what the script run by its stage (an index into its
     _segments) echoes: unless every other stage is a sink (OUTER_SINKS) and no file it writes, by a redirect or tee,
     is named anywhere else in it (`2>> x.sh` into the running script, `2> h; sh < h`), it could. An escaped quote, a
-    `$(`, a backtick or a process substitution anywhere in it, or a written name that is not a plain word, could too."""
+    `$(`, a backtick or a process substitution anywhere in it, or a written name that is not a plain word (a quote, `$`,
+    a glob, `~`), could too."""
     if re.search(r"\\[\"']|[<>$]\(|`", text):
         return True
-    written = [t.strip("\"'") for t in MOVE_TARGET.findall(re.sub(
-        r"""(?:"[^"\n]*"|'[^'\n]*')""", lambda m: re.sub(r"[|&;(){}<>]", "_", m[0]), text))]
+    neutral = re.sub(r"""(?:"[^"\n]*"|'[^'\n]*')""", lambda m: re.sub(r"[|&;(){}<>]", "_", m[0]), text)
+    written = MOVE_TARGET.findall(neutral)
+    for part in MOVE_STAGE.split(neutral):
+        words = MOVE_WORD.findall(part)
+        tee = next((i for i, w in enumerate(words) if w.strip("\"'") == "tee"), len(words))
+        written += [w for w in words[tee + 1:] if re.search("[\"']", w)]
     for k, (words, _) in enumerate(segments):
         if k == stage:
             continue
@@ -4211,7 +4216,7 @@ def _outer_carries(text, segments, stage):
         if words[0] == "tee":
             written += [w for w in words[1:] if not w.startswith("-")]
     names = [os.path.basename(w) for w in written]
-    return any(re.search(r"[$`*?[{~]", n) or not n or len(re.findall(rf"(?<![\w.-]){re.escape(n)}(?![\w.-])", text))
+    return any(re.search(r"[$`*?[{~\"']", n) or not n or len(re.findall(rf"(?<![\w.-]){re.escape(n)}(?![\w.-])", text))
                > names.count(n) for n in names)
 
 
