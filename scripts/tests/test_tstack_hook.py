@@ -4482,6 +4482,48 @@ class SuiteParseTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.suites(command), [(command, True)])
 
+    # A deploy script's shape (P138): a hint echoed to stderr inside a loop, real stderr redirects on other lines that
+    # take only an outside command's stderr, and comments naming `<sha12>`.
+    DEPLOY_HEAD = ("# worker-deploy.<sha12>.sh   the deploy, from its read-only copy\n"
+                   "redact() { sed -u -E 's#postgres://[^ ]*#postgres://REDACTED#g'; } # the filter\n"
+                   "on_db() { DEPLOY_ATLAS_URL=\"$atlas_url\" \"$@\"; }\n"
+                   "for tier in postgres graph; do\n"
+                   "  test \"$(cat \".$tier-tier-passed\" 2>/dev/null)\" = \"$PIN\" || { echo \"refused: the $tier tier's "
+                   "stamp is not $PIN. Run pnpm test:$tier at $PIN first\" >&2; exit 2; }\n"
+                   "done\n"
+                   "lt=\"$(psql -X -At \"${plain}&${LOCK}\" -c \"SHOW lock_timeout\" 2> \"$work/psql.err\")\" || {\n"
+                   "  redact < \"$work/psql.err\" >&2; exit 2; }\n"
+                   "if ! atlas migrate lint --dir \"$dir\" --latest \"${#pending[@]}\" 2>&1 | redact; then\n"
+                   "  exit 1\n"
+                   "fi\n"
+                   "on_db atlas migrate apply --tx-mode file 1 > \"$log\" 2>&1 || rc=$?\n")
+
+    def test_a_hint_echoed_to_stderr_names_no_suite_whatever_outside_commands_redirect(self):
+        for command in self.scripts({
+                "deploy.sh": self.DEPLOY_HEAD + "wrangler deploy\n",
+                "sha12_comment.sh": "# install -m 0444 worker-deploy.sh worker-deploy.<sha12>.sh\n"
+                                    "echo 'refused: run pnpm test first' >&2\nexit 2\n"}):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [])
+
+    def test_a_deploy_script_that_runs_or_hands_on_a_suite_stays_one(self):
+        for command in self.scripts({
+                "real.sh": self.DEPLOY_HEAD + "pnpm test\n",
+                "real_tier.sh": self.DEPLOY_HEAD + "pnpm test:e2e\n",
+                "echo_to_sh.sh": self.DEPLOY_HEAD + 'echo "pnpm test" | sh\n',
+                "eval.sh": self.DEPLOY_HEAD + 'eval "pnpm test"\n',
+                "subst_cmd.sh": self.DEPLOY_HEAD + "$(echo pnpm test)\n",
+                "group_lines.sh": self.DEPLOY_HEAD + "{\n  echo 'pnpm test' >&2\n} 2>&1 | sh\n",
+                "loop_lines.sh": self.DEPLOY_HEAD + "for p in a; do\n  echo \"pnpm test --filter $p\" >&2\ndone 2> run.sh\nsh run.sh\n",
+                "fn_wrapped.sh": self.DEPLOY_HEAD + "hint() { echo 'pnpm test' >&2; }\nwarn() { hint; }\nwarn 2> run.sh\nsh run.sh\n",
+                "fn_lines.sh": self.DEPLOY_HEAD + "hint() {\n  echo 'pnpm test' >&2\n}\nhint 2>&1 | sh\n",
+                "exec_later.sh": self.DEPLOY_HEAD + "exec 2> run.sh\necho 'pnpm test' >&2\nsh run.sh\n",
+                "shell_hd.sh": self.DEPLOY_HEAD + "bash 2>&1 <<EOF | sh\necho 'pnpm test' >&2\nEOF\n",
+                "string_lines.sh": self.DEPLOY_HEAD + "x -c \"\necho 'pnpm test' >&2;\n\" 2>&1 | parallel\n",
+                "continued.sh": self.DEPLOY_HEAD + "{ echo 'pnpm test' >&2; } \\\n  2>&1 | sh\n"}):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [(command, True)])
+
     def test_a_launcher_keeps_what_the_hook_could_not_tell_of_its_command(self):
         (self.pkg / "tasks").mkdir()
         (self.pkg / "tasks" / "launch").write_text('#!/bin/sh\nexec "$@"\n')

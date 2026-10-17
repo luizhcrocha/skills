@@ -3972,11 +3972,16 @@ TEST_IN_TEXT = re.compile(r"\b(?:(?:pnpm|npm|yarn|bun)\s+(?:-\S+\s+)*(?:run\s+)?
                           r"|cargo\s+(?:test|nextest)\b|go\s+test\b|just\s+test\b|node\s+--test\b)")
 # A plain `echo` or `printf` (no `printf -v`), its words holding no `$(` or backtick, with its own `>&2` or `1>&2`:
 # its words go to stderr, which no outer `|` or `>` takes, so a test runner they name runs nothing. Not in a script
-# that moves stderr anywhere but /dev/null (STDERR_MOVED), where a pipe or a file could take them after all.
+# with a stderr move (STDERR_MOVED, anywhere but /dev/null) that could take them after all (_stderr_carried).
 ECHOED = re.compile(r"(^|;|&&|\|\||\{|\b(?:then|do|else)\b)([ \t]*(?:1?>&2[ \t]+)?(?:echo|printf(?![ \t]+-v)))"
                     r"((?:[ \t]+(?:'[^'\n]*'|\"(?:[^\"\\`$\n]|\\.|\$(?!\())*\"|[^\s'\"`;&|<>()$\\]|\$(?!\()|\\.)+)+)"
                     r"(?=((?:[ \t]+1?>&2)*)[ \t]*(?:$|;|&&|\|\||\}))", re.M)
 STDERR_MOVED = re.compile(r"2>>?(?![ \t]*/dev/null\b)|\|&|&>|>&(?![ \t]*\d)|\bexec\b[^\n;|&]*[<>]")
+# On a line with a stderr move, what lets the move take an echo on another line: a shell, eval, source or exec that
+# runs code, a here-document, and (before the move, past any `${...}`) a block's closer.
+MOVE_RUNS = re.compile(rf"(?<![\w.$-])(?:{'|'.join(sorted(SHELLS))}|eval|source|exec)(?![\w.-])|(?<![^\s;&|{{(])\.(?=\s)|<<")
+MOVE_CLOSES = re.compile(r"[})]|\b(?:done|fi|esac)\b")
+FUNCTION_DEF = re.compile(r"([ \t]*)(?:function[ \t]+([\w:.-]+)(?:[ \t]*\(\))?|([\w:.-]+)[ \t]*\(\))")
 # A script that runs the command it is given (`exec "$@"`) is a launcher: the line runs the launcher's arguments.
 LAUNCHES_ARGS = re.compile(r"\$\{?[@*]\}?")
 PM_TEST = {"test", "t", "tst"}
@@ -4125,6 +4130,46 @@ def _uncommented(code, structured=True):
     return "".join(out)
 
 
+def _runner_functions(lines):
+    """The script's functions whose body names a test runner, or calls one that does: a call of one can move what
+    its echoes print. A body runs from its definition to the first `}` or `)` line indented no deeper, or is the
+    definition's line when that closes what it opens."""
+    bodies = []
+    for i, line in enumerate(lines):
+        if not (m := FUNCTION_DEF.match(line)):
+            continue
+        end = i
+        if sum(map(line.count, "{(")) > sum(map(line.count, "})")):
+            end = next((j for j in range(i + 1, len(lines)) if lines[j].lstrip()[:1] in ("}", ")")
+                        and len(lines[j]) - len(lines[j].lstrip()) <= len(m[1])), len(lines) - 1)
+        bodies.append((m[2] or m[3], "\n".join(lines[i:end + 1])))
+    found = set()
+    while new := {name for name, body in bodies if name not in found and (TEST_IN_TEXT.search(body) or any(
+            re.search(rf"(?<![\w.-]){re.escape(f)}(?![\w.-])", body) for f in found))}:
+        found |= new
+    return found
+
+
+def _stderr_carried(text):
+    """Whether a stderr move in the script, outside its whole-line comments, could take what an echo on any line
+    prints to stderr: an exec, shell, eval, source or here-document on its line (MOVE_RUNS), a block's closer before
+    it (MOVE_CLOSES), a call of a function that names a runner (_runner_functions), or a line that a `\\` continues or
+    that starts inside a quote or a here-document. A move that takes only an outside command's stderr
+    (`psql ... 2> err`, `lint 2>&1 | redact`) takes no echo's."""
+    lines, start, functions = text.split("\n"), 0, None
+    for i, line in enumerate(lines):
+        at, start = start, start + len(line) + 1
+        if line.lstrip().startswith("#") or not (move := STDERR_MOVED.search(line)):
+            continue
+        if functions is None:
+            functions = _runner_functions(lines)
+        if (MOVE_RUNS.search(line) or MOVE_CLOSES.search(re.sub(r"\$\{[^}\n]*\}", "$x", line[:move.start()]))
+                or any(re.search(rf"(?<![\w.-]){re.escape(f)}(?![\w.-])", line) for f in functions)
+                or (i and lines[i - 1].endswith("\\")) or _uncommented(text[:at] + "#").endswith("#")):
+            return True
+    return False
+
+
 def _in_arithmetic(code, i):
     """Whether code[i] is inside a `((` ... `))` on its line: `$((1<<x))` shifts, it opens no here-document."""
     head = code[code.rfind("\n", 0, i) + 1:i]
@@ -4206,7 +4251,8 @@ class SuiteReader:
         left out; read for quotes (_uncommented), which copies here-document bodies as they are; and read for quotes
         alone, with no here-documents or `$(` levels. Each view can misread (a stray quote in a `<<\\EOF` body, a `<<`
         taken for a here-document), so a pattern found in any counts; the words a plain echo or printf prints are blanked
-        in each (ECHOED) when it prints to stderr, so a runner named only there, in every view, counts in none. None when it cannot be read or is no shell
+        in each (ECHOED) when it prints to stderr and no stderr move could take them (_stderr_carried), so a runner named
+        only there, in every view, counts in none. None when it cannot be read or is no shell
         script (any file is when a shell runs it, else a .sh-like file or one whose #! names a shell)."""
         try:
             with open(path, "rb") as f:
@@ -4219,7 +4265,7 @@ class SuiteReader:
         if not shell:
             return None
         code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#")) + "\n" + _uncommented(text) + "\n" + _uncommented(text, False)
-        if STDERR_MOVED.search(text):
+        if _stderr_carried(text):
             return code
         return ECHOED.sub(lambda m: m[1] + m[2] + (re.sub(r"\S", " ", m[3]) if ">&2" in m[2] + m[4] else m[3]), code)
 
