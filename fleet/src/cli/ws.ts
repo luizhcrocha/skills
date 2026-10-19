@@ -12,6 +12,8 @@
  *   at work to the next worker of its lane, on a fresh change (on BASE when given, else on what the last
  *   holder left), and records who held it before. Its setup (dependencies, a dev shell, build caches) stays,
  *   and so does its place out of the preview when it was added out of it.
+ * - Before either makes or hands over anything, the repo's own executable `<repo>/.fleet/ws-pre-add WORKSPACE
+ *   SOURCE` checks, in SOURCE: any end but exit 0 refuses the add, and nothing is made or handed over.
  * - After either, the repo's own executable `<repo>/.fleet/ws-add WORKSPACE SOURCE` prepares the workspace
  *   (SOURCE: the default workspace, or the workspace handed over); a devenv repo without one gets
  *   `devenv-run --prepare`. At most `--hook-timeout` seconds (100, under a Bash tool call's 120 s), then its
@@ -25,10 +27,16 @@
  *   copy's @ into one described change.
  * - `list`: each workspace's tip, whether it is empty or conflicted, what it holds that the stack (the
  *   default workspace's @) does not, and when its worker was last seen.
- * - `prune [--apply | --dry-run]`: forgets the workspaces whose worker is no longer live and whose changes
- *   are all in the stack (or empty, or abandoned), and moves their folders to the trash; refuses the others,
- *   naming why. Only a directory recorded here, that jj knows as that workspace of that repo, is ever
- *   moved. Without `--apply` it is a dry run.
+ * - `prune [--apply | --dry-run] [--hook-timeout S]`: forgets the workspaces whose worker is no longer live and
+ *   whose changes are all in the stack (or empty, or abandoned), and moves their folders to the trash; refuses
+ *   the others, naming why. Only a directory recorded here, that jj knows as that workspace of that repo, is
+ *   ever moved. Before each move the repo's own `<repo>/.fleet/ws-pre-remove WORKSPACE` runs there (to stop
+ *   its dev server): any end but exit 0, or a change it leaves, keeps that workspace. `--hook-timeout`
+ *   bounds all of prune's hooks together: a workspace whose hook gets no time left is kept. Without
+ *   `--apply` it is a dry run, and runs no hook.
+ * - Every hook runs alike (`--hook-timeout`, its own process group, its output under a header, its run on
+ *   the row) with the same environment: FLEET_EVENT, FLEET_WS_ID (`<repo>-<name>-<hash>`, the row's `ws_id`),
+ *   FLEET_WS_NAME, FLEET_WS_PATH, FLEET_WS_PORT, FLEET_REPO, FLEET_FLEET (fleet/SPEC.md, "Lifecycle hooks").
  * - `fleet ws trash`, `restore ENTRY`, `gc [--older-than DAYS] [--dry-run]` (no DIR: the trash is the
  *   machine's): list the trash, bring an entry back as a jj workspace, delete the entries past the age
  *   (7 days). The folder holds files jj never snapshots (ignored ones: `.dev.vars`, notes), so a prune is
@@ -45,7 +53,7 @@ import { Refusal } from "../errors.ts";
 import { exists, isDir, movedRefusal, readText, remove, resolvePath, writeText } from "../files.ts";
 import { workerActivity } from "../heartbeat.ts";
 import { Out } from "../io.ts";
-import { asArray, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
+import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { laneMatches, lanesMeet } from "../ledger/lanes.ts";
 import { activeWorkspaces } from "../ledger/warnings.ts";
 import { decodeLedger } from "../ledger/model.ts";
@@ -57,7 +65,21 @@ import { validate } from "../ledger/validate.ts";
 import { cliLookups } from "../page/lookups.ts";
 import { pageHtml, readTemplate, writePage } from "../page/render.ts";
 import { view } from "../page/view.ts";
-import { HOOK_PATH, HOOK_TIMEOUT_S, hookOutcome, hookRecord, planHook, runHook, type HookCall, type HookRun } from "../ws/hook.ts";
+import {
+  HOOK_PATH,
+  HOOK_TIMEOUT_S,
+  hookEnv,
+  hookOutcome,
+  hookRecord,
+  planHook,
+  RECORD_FIELD,
+  runHook,
+  wsId,
+  type HookCall,
+  type HookEvent,
+  type HookRun,
+  type HookSubject,
+} from "../ws/hook.ts";
 import { changes, jj, literal, unintegratedRevset, why, workspaceNames, workspaceRoot, type Change } from "../ws/jj.ts";
 import { collect, listing, restore, toTrash, trashHome, untrash, type Note, type Trashed } from "../ws/trash.ts";
 import { readObject } from "../registry.ts";
@@ -66,7 +88,7 @@ import { exitOf } from "./exit.ts";
 
 const USAGE =
   "usage: fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] [--no-preview] [--hook-timeout S] | add WORKER --reuse WORKSPACE|WORKER [-r BASE] [--no-preview] [--hook-timeout S] | " +
-  "split WORKER -m MESSAGE [--repo PATH] | list | prune [--apply | --dry-run]; fleet ws trash | restore ENTRY | gc [--older-than DAYS] [--dry-run]";
+  "split WORKER -m MESSAGE [--repo PATH] | list | prune [--apply | --dry-run] [--hook-timeout S]; fleet ws trash | restore ENTRY | gc [--older-than DAYS] [--dry-run]";
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
 
@@ -179,6 +201,101 @@ function described(c: Change): string {
 
 // -- add ----------------------------------------------------------------------------------------
 
+/** A hook's run, its output printed. */
+interface Ran {
+  readonly call: HookCall;
+  readonly run: HookRun;
+  /** How it ended, in words. */
+  readonly outcome: string;
+}
+
+/** Run the repo's hook for `event` of `subject` with every hook's environment, its output printed between a
+ * header and how it ended: the run; the note when the repo's hook is there but cannot run; undefined when
+ * there is no hook. */
+function runEvent(machine: Machine, out: Out["Service"], event: HookEvent, subject: HookSubject, timeout: number): Effect.Effect<Ran | { readonly note: string } | undefined> {
+  const plan = planHook(event, subject, machine.env("PATH") ?? "");
+
+  if (plan === undefined || "note" in plan) return Effect.succeed(plan);
+  const { call } = plan;
+  out.out(`--- ${call.line} (at most ${String(timeout)} s) ---\n`);
+
+  return Effect.promise(() => runHook(call, timeout, { ...process.env, PATH: machine.env("PATH"), ...hookEnv(event, subject) })).pipe(
+    Effect.map((run) => {
+      if (run.output !== "") out.out(run.output.endsWith("\n") ? run.output : `${run.output}\n`);
+      const outcome = hookOutcome(call, run, timeout);
+      out.out(`--- ${outcome} ---\n`);
+
+      return { call, run, outcome };
+    }),
+  );
+}
+
+/** The exit code `fleet ws` ends with when a TERM, INT or HUP stopped it during the hook (128 + the
+ * signal's number), else undefined. */
+function stoppedBy(run: HookRun): number | undefined {
+  return run.interrupted === undefined ? undefined : 128 + (osConstants.signals[run.interrupted] ?? 0);
+}
+
+/** Record a hook's run on the active row of workspace `id`, when the ledger has one, and in a note event.
+ * The ledger is read again: other commands may have written it while the hook ran. */
+function recordHook(machine: Machine, out: Out["Service"], root: string, id: string, worker: string | null, ran: Ran, text: string): void {
+  const now = load(root);
+
+  if (now instanceof Refusal) {
+    out.err(`ws: the hook's run is not recorded: ${now.reason}\n`);
+
+    return;
+  }
+
+  const record = hookRecord(ran.call, ran.run, stampOf(machine.now()));
+
+  const workspaces = (asArray(now["workspaces"]) ?? []).map((item) => {
+    const row = asObject(item);
+
+    return row !== undefined && asString(row["id"]) === id && row["status"] !== "pruned" ? { ...row, [RECORD_FIELD[ran.call.event]]: record } : item;
+  });
+
+  const fault = save(machine, root, now, workspaces, [event(machine, now, worker, "note", text)]);
+
+  if (fault !== undefined) out.err(`ws: the hook's run is not recorded: ${fault.reason}\n`);
+}
+
+/** How the pre-add check let `add` go on: with its run when it passed (undefined when the repo has none),
+ * or not, `add` ending with `stopped`, the exit code of the signal that stopped it. */
+type Checked = { readonly passed: Ran | undefined } | { readonly stopped: number };
+
+/** The pre-add check, before `add` makes or hands over anything: when it fails `add` is refused
+ * (`nothing` says what was not done), or, stopped by a signal, ends with that signal's exit code. A refusal is recorded in a note event (`text`), and on the row when the
+ * workspace is there. */
+function preAdd(
+  machine: Machine,
+  out: Out["Service"],
+  root: string,
+  subject: HookSubject,
+  worker: string,
+  timeout: number,
+  nothing: string,
+  text: (outcome: string) => string,
+): Effect.Effect<Checked, Refusal> {
+  return Effect.gen(function* () {
+    const ran = yield* runEvent(machine, out, "pre-add", subject, timeout);
+
+    if (ran === undefined) return { passed: undefined };
+
+    if ("note" in ran) return yield* refuse(`${ran.note}; ${nothing}`);
+
+    if (ran.run.exit === 0) return { passed: ran };
+    recordHook(machine, out, root, subject.name, worker, ran, text(ran.outcome));
+    const reason = `${ran.call.name} refused the add: ${ran.outcome}; ${nothing}`;
+    const code = stoppedBy(ran.run);
+
+    if (code === undefined) return yield* refuse(reason);
+    out.err(`ws: ${reason}\n`);
+
+    return { stopped: code };
+  });
+}
+
 /** A workspace `add` has just made or handed over, for its hook. */
 interface Made {
   readonly id: string;
@@ -188,42 +305,36 @@ interface Made {
   readonly workspace: string;
   /** What it was made from: the default workspace, or the workspace handed over. */
   readonly source: string;
+  readonly port: number | undefined;
 }
 
-/** Run the workspace's hook (the repo's own `.fleet/ws-add`, else `devenv-run --prepare` in a devenv
- * repo), print its output under a header, and record on the workspace's row that it ran and how it
- * ended. A hook that fails or times out is a warning: the workspace is made. The ledger is read again
- * after the hook, since other commands may have written it while the hook ran. The exit code `ws add`
- * ends with when a TERM, INT or HUP stopped it during the hook (128 + the signal's number), else
- * undefined. */
+/** Run the workspace's post-add hook (the repo's own `.fleet/ws-add`, else `devenv-run --prepare` in a
+ * devenv repo) and record on the workspace's row that it ran and how it ended. A hook that fails or times
+ * out is a warning: the workspace is made. The exit code `ws add` ends with when a signal stopped it during
+ * the hook, else undefined. */
 function prepare(machine: Machine, out: Out["Service"], root: string, made: Made, timeout: number): Effect.Effect<number | undefined> {
-  const plan = planHook(made.repo, made.workspace, made.source, machine.env("PATH") ?? "");
+  const subject: HookSubject = { name: made.id, path: made.workspace, repo: made.repo, source: made.source, fleet: root, port: made.port };
 
-  if (plan === undefined) return Effect.succeed(undefined);
+  return runEvent(machine, out, "post-add", subject, timeout).pipe(
+    Effect.map((ran) => {
+      if (ran === undefined) return undefined;
 
-  if ("note" in plan) {
-    out.err(`${plan.note}\n`);
+      if ("note" in ran) {
+        out.err(`ws: ${ran.note}\n`);
 
-    return Effect.succeed(undefined);
-  }
+        return undefined;
+      }
 
-  const { call } = plan;
-  out.out(`--- ${call.line} (at most ${String(timeout)} s) ---\n`);
+      reportHook(machine, out, root, made, ran);
 
-  return Effect.promise(() => runHook(call, timeout, { ...process.env, PATH: machine.env("PATH") })).pipe(
-    Effect.map((run) => {
-      reportHook(machine, out, root, made, call, run, timeout);
-
-      return run.interrupted === undefined ? undefined : 128 + (osConstants.signals[run.interrupted] ?? 0);
+      return stoppedBy(ran.run);
     }),
   );
 }
 
-/** Print how the hook ended, warn when it failed or left files in the workspace, and record the run. */
-function reportHook(machine: Machine, out: Out["Service"], root: string, made: Made, call: HookCall, run: HookRun, timeout: number): void {
-  if (run.output !== "") out.out(run.output.endsWith("\n") ? run.output : `${run.output}\n`);
-  const outcome = hookOutcome(call, run, timeout);
-  out.out(`--- ${outcome} ---\n`);
+/** Warn when the post-add hook failed or left files in the workspace, and record the run. */
+function reportHook(machine: Machine, out: Out["Service"], root: string, made: Made, ran: Ran): void {
+  const { call, run, outcome } = ran;
 
   if (run.interrupted !== undefined) {
     out.err(`ws: ${outcome}; workspace ${made.id} is made, but not prepared\n`);
@@ -244,25 +355,19 @@ function reportHook(machine: Machine, out: Out["Service"], root: string, made: M
     }
   }
 
-  const now = load(root);
+  recordHook(machine, out, root, made.id, made.worker, ran, `Workspace ${made.id}'s hook ran: ${outcome}.`);
+}
 
-  if (now instanceof Refusal) {
-    out.err(`ws: the hook's run is not recorded: ${now.reason}\n`);
+/** The seconds `--hook-timeout` gives every hook a command runs, else {@link HOOK_TIMEOUT_S}. */
+function hookTimeout(given: string | undefined): Effect.Effect<number, Refusal> {
+  const timeout = given === undefined ? HOOK_TIMEOUT_S : Number(given);
 
-    return;
-  }
+  return Number.isFinite(timeout) && timeout > 0 ? Effect.succeed(timeout) : refuse(`--hook-timeout takes the seconds a hook may run: ${JSON.stringify(given)}`);
+}
 
-  const record = hookRecord(call, run, stampOf(machine.now()));
-
-  const workspaces = (asArray(now["workspaces"]) ?? []).map((item) => {
-    const row = asObject(item);
-
-    return row !== undefined && asString(row["id"]) === made.id && row["status"] !== "pruned" ? { ...row, hook: record } : item;
-  });
-
-  const fault = save(machine, root, now, workspaces, [event(machine, now, made.worker, "note", `Workspace ${made.id}'s hook ran: ${outcome}.`)]);
-
-  if (fault !== undefined) out.err(`ws: the hook's run is not recorded: ${fault.reason}\n`);
+/** A row's dev-server port. */
+function portOf(row: JsonObject): number | undefined {
+  return asNumber(row["port"]);
 }
 
 /** The flag that adds a workspace out of the fleet's combined preview. */
@@ -289,9 +394,7 @@ function add(machine: Machine, root: string, raw: JsonObject, argv: readonly str
     const name = rest[0];
 
     if (rest.length !== 1 || name === undefined) return yield* refuse(USAGE);
-    const timeout = timeoutGiven === undefined ? HOOK_TIMEOUT_S : Number(timeoutGiven);
-
-    if (!Number.isFinite(timeout) || timeout <= 0) return yield* refuse(`--hook-timeout takes the seconds the ws-add hook may run: ${JSON.stringify(timeoutGiven)}`);
+    const timeout = yield* hookTimeout(timeoutGiven);
 
     if (shared(raw)) return yield* addShared(root, raw, agentGiven ?? name, repoGiven, baseGiven, reuse);
 
@@ -309,6 +412,17 @@ function add(machine: Machine, root: string, raw: JsonObject, argv: readonly str
  * fleet this machine serves holds: each worker checks its UI on a port of its own, never the
  * framework's default, so two workers' servers never meet. */
 export function freePort(machine: Machine, raw: JsonObject): number {
+  const used = usedPorts(machine, raw);
+  const base = Number(machine.env("FLEET_PORT_BASE") ?? "");
+  let port = Number.isInteger(base) && base > 1023 && base < 65000 ? base : 5300;
+
+  while (used.has(port)) port += 1;
+
+  return port;
+}
+
+/** The dev-server ports the workspaces and previews of every fleet this machine serves hold, `raw`'s with them. */
+function usedPorts(machine: Machine, raw: JsonObject): Set<number> {
   const used = new Set<number>();
 
   const take = (ledger: JsonObject | undefined): void => {
@@ -326,12 +440,7 @@ export function freePort(machine: Machine, raw: JsonObject): number {
     for (const w of preview?.workers ?? []) used.add(w.port);
   }
 
-  const base = Number(machine.env("FLEET_PORT_BASE") ?? "");
-  let port = Number.isInteger(base) && base > 1023 && base < 65000 ? base : 5300;
-
-  while (used.has(port)) port += 1;
-
-  return port;
+  return used;
 }
 
 function addFresh(
@@ -364,20 +473,33 @@ function addFresh(
     const from = at?.[0];
 
     if (at === undefined || from === undefined || at.length !== 1) return yield* refuse(`-r ${base} names ${at?.length ?? "no"} commit(s) in ${main}; give one`);
+    const port = freePort(machine, raw);
+    const subject: HookSubject = { name, path, repo: main, source: main, fleet: root, port };
+    const check = yield* preAdd(machine, out, root, subject, agent, timeout, "no workspace is made", (outcome) => `Workspace ${name} not added: ${outcome}.`);
+
+    if ("stopped" in check) return check.stopped;
+    const checked = check.passed;
+    // The check ran for a while: the ledger as it is now.
+    const now = checked === undefined ? raw : load(root);
+
+    if (now instanceof Refusal) return yield* Effect.fail(now);
+
+    if (usedPorts(machine, now).has(port)) return yield* refuse(`dev-server port ${String(port)} was taken during the pre-add check (${String(freePort(machine, now))} is free now); no workspace is made: run add again`);
     // By the change's name, which jj resolves as it adds: the commit read above may be rewritten by now, and
     // a workspace on a hidden commit makes it visible again, a second copy of its change.
     const made = jj(main, ["workspace", "add", path, "-r", from.change, "--name", name]);
 
     if (!made.ok) return yield* refuse(why(made));
     const stamp = stampOf(machine.now());
-    const port = freePort(machine, raw);
-    const made$: JsonObject = { id: name, agent, path, repo: main, base: from.change, added: stamp, status: "active", port };
-    const row: JsonObject = noPreview ? { ...made$, preview: OUT } : made$;
+    const made$: JsonObject = { id: name, ws_id: wsId(main, name), agent, path, repo: main, base: from.change, added: stamp, status: "active", port };
+    const preview: JsonObject = noPreview ? { ...made$, preview: OUT } : made$;
+    const row: JsonObject = checked === undefined ? preview : { ...preview, pre_add_hook: hookRecord(checked.call, checked.run, stamp) };
     const note = `Workspace ${name} for ${agent} at ${path}, on ${described(from)}${noPreview ? ", out of the preview" : ""}.`;
-    const fault = save(machine, root, raw, [...(asArray(raw["workspaces"]) ?? []), row], [event(machine, raw, agent, "note", note)]);
+    const ranText = checked === undefined ? [] : [event(machine, now, agent, "note", `Workspace ${name}'s pre-add check ran: ${checked.outcome}.`)];
+    const fault = save(machine, root, now, [...(asArray(now["workspaces"]) ?? []), row], [...ranText, event(machine, now, agent, "note", note)]);
 
     if (fault !== undefined) return yield* Effect.fail(fault);
-    const stopped = yield* prepare(machine, out, root, { id: name, worker: agent, repo: main, workspace: path, source: main }, timeout);
+    const stopped = yield* prepare(machine, out, root, { id: name, worker: agent, repo: main, workspace: path, source: main, port }, timeout);
 
     if (stopped !== undefined) return stopped;
     noRowYet(out, root, raw, agent);
@@ -457,6 +579,31 @@ function handOver(
       return yield* refuse(`${r.path} is no longer jj workspace ${r.id} of ${r.repo}: make ${worker} a fresh one`);
     }
 
+    const subject: HookSubject = { name: r.id, path: r.path, repo: r.repo, source: r.path, fleet: root, port: portOf(r.row) };
+    const check = yield* preAdd(machine, out, root, subject, worker, timeout, "nothing is handed over", (outcome) => `Workspace ${r.id} not handed to ${worker}: ${outcome}.`);
+
+    if ("stopped" in check) return check.stopped;
+    const checked = check.passed;
+    // The check ran for a while: the ledger, and the workspace's row, as they are now.
+    const now = checked === undefined ? raw : load(root);
+
+    if (now instanceof Refusal) return yield* Effect.fail(now);
+    const still = recorded(now).find((x) => x.id === r.id);
+
+    if (still === undefined) return yield* refuse(`workspace ${r.id} is no longer recorded`);
+    const row = still.row;
+
+    // What was checked before the hook, checked again: another command may have run meanwhile.
+    if (still.agent !== r.agent) return yield* refuse(`workspace ${r.id} changed hands during the pre-add check: it is ${still.agent}'s now; nothing is handed over`);
+    const status$ = statusOf(now, r.agent);
+
+    if (status$ !== undefined && LIVE.has(status$)) {
+      return yield* refuse(`${r.agent} is ${status$} again since the pre-add check began: workspace ${r.id} stays ${r.agent}'s; nothing is handed over`);
+    }
+
+    const got = recorded(now).find((x) => x.agent === worker);
+
+    if (got !== undefined) return yield* refuse(`${worker} got workspace ${got.id} (${got.path}) during the pre-add check; a worker holds one workspace: nothing is handed over`);
     const failed = snapshot(r.path);
 
     if (failed !== undefined) return yield* refuse(`jj could not snapshot ${r.id}: ${failed}`);
@@ -483,18 +630,20 @@ function handOver(
 
     if (parent === undefined || changes(r.repo, `${literal(r.id)}@-`)?.length !== 1) return yield* refuse(`workspace ${r.id}'s @ has no single parent; give -r BASE`);
     const stamp = stampOf(machine.now());
-    const handovers = [...(asArray(r.row["handovers"]) ?? []), { from: r.agent, at: stamp }];
+    const handovers = [...(asArray(row["handovers"]) ?? []), { from: r.agent, at: stamp }];
     // A workspace added out of the preview stays out for the lane's next worker, whose work is of the same
     // kind: the row keeps its `preview`.
-    const was = r.row["preview"] === OUT;
-    const handed: JsonObject = { ...r.row, agent: worker, base: parent.change, handovers };
-    const next: JsonObject = noPreview ? { ...handed, preview: OUT } : handed;
-    const workspaces = (asArray(raw["workspaces"]) ?? []).map((item) => (asObject(item) === r.row ? next : item));
+    const was = row["preview"] === OUT;
+    const handed: JsonObject = { ...row, ws_id: wsId(r.repo, r.id), agent: worker, base: parent.change, handovers };
+    const checkedRow: JsonObject = checked === undefined ? handed : { ...handed, pre_add_hook: hookRecord(checked.call, checked.run, stamp) };
+    const next: JsonObject = noPreview ? { ...checkedRow, preview: OUT } : checkedRow;
+    const workspaces = (asArray(now["workspaces"]) ?? []).map((item) => (asObject(item) === row ? next : item));
     const text = `Workspace ${r.id} handed from ${r.agent} (${status ?? "no row"}) to ${worker} at ${r.path}, on ${described(parent)}${noPreview || was ? ", out of the preview" : ""}.`;
-    const fault = save(machine, root, raw, workspaces, [event(machine, raw, worker, "note", text)]);
+    const ranText = checked === undefined ? [] : [event(machine, now, worker, "note", `Workspace ${r.id}'s pre-add check ran: ${checked.outcome}.`)];
+    const fault = save(machine, root, now, workspaces, [...ranText, event(machine, now, worker, "note", text)]);
 
     if (fault !== undefined) return yield* Effect.fail(fault);
-    const stopped = yield* prepare(machine, out, root, { id: r.id, worker, repo: r.repo, workspace: r.path, source: r.path }, timeout);
+    const stopped = yield* prepare(machine, out, root, { id: r.id, worker, repo: r.repo, workspace: r.path, source: r.path, port: portOf(row) }, timeout);
 
     if (stopped !== undefined) return stopped;
     noRowYet(out, root, raw, worker);
@@ -753,6 +902,18 @@ function forgetPreview(root: string): void {
   else remove(recordPath(root));
 }
 
+/** Why `r` must stay after its pre-remove hook ran, by `raw`, the ledger read again: the workspace left the
+ * ledger or changed hands meanwhile, or {@link keepBecause}. */
+function keepAfterHook(root: string, raw: JsonObject, r: Recorded): string | undefined {
+  const now = recorded(raw).find((x) => x.id === r.id);
+
+  if (now === undefined) return `the ledger no longer records workspace ${r.id} as active`;
+
+  if (now.agent !== r.agent) return `it was handed over to ${now.agent}`;
+
+  return keepBecause(root, raw, r);
+}
+
 /** Why `r` must stay, or undefined when it may go. */
 function keepBecause(root: string, raw: JsonObject, r: Recorded): string | undefined {
   if (r.preview) return previewKept(root, r);
@@ -836,9 +997,13 @@ function noteOf(machine: Machine, root: string, raw: JsonObject, r: Recorded, ti
 function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly string[]): Effect.Effect<number, Refusal, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
-    const apply = argv.includes("--apply");
 
-    if (argv.some((a) => a !== "--apply" && a !== "--dry-run") || (apply && argv.includes("--dry-run"))) return yield* refuse(USAGE);
+    if (VALUED.has(argv.at(-1) ?? "")) return yield* refuse(USAGE);
+    const [timeoutGiven, flags] = option(argv, "--hook-timeout");
+    const apply = flags.includes("--apply");
+
+    if (flags.some((a) => a !== "--apply" && a !== "--dry-run") || (apply && flags.includes("--dry-run"))) return yield* refuse(USAGE);
+    const timeout = yield* hookTimeout(timeoutGiven);
     const going: Recorded[] = [];
     let kept = 0;
 
@@ -866,8 +1031,69 @@ function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly s
     const gone = new Set<string>();
 
     const home = trashHome(machine.env);
+    /** Each pre-remove hook's run, for its workspace's row. */
+    const hooks = new Map<string, JsonObject>();
+    let stopped: number | undefined;
+    // `--hook-timeout` bounds all the hooks together, so prune's hooks take about that time however many run.
+    let spentMs = 0;
+    /** The last pre-remove hook that ran: from then on the ledger may have changed under every workspace still to go. */
+    let lastHook: { readonly id: string; readonly name: string } | undefined;
 
     for (const r of going) {
+      // The repo's pre-remove hook (to stop the workspace's dev server, say) runs before anything moves, and
+      // any end but exit 0 keeps the workspace whole.
+      if (isDir(r.path)) {
+        const subject: HookSubject = { name: r.id, path: r.path, repo: r.repo, source: r.path, fleet: root, port: portOf(r.row) };
+        const left = Math.floor((timeout * 1000 - spentMs) / 100) / 10;
+        const plan = planHook("pre-remove", subject, machine.env("PATH") ?? "");
+
+        if (left <= 0 && plan !== undefined && "call" in plan) {
+          kept += 1;
+          out.err(`ws: kept ${r.id}: prune's hooks ran out of their ${String(timeout)} s (--hook-timeout) before its ${plan.call.name} ran; nothing is moved or deleted\n`);
+          continue;
+        }
+
+        const started = Date.now();
+        const ran = yield* runEvent(machine, out, "pre-remove", subject, Math.min(timeout, left));
+        spentMs += Date.now() - started;
+
+        if (ran !== undefined && "note" in ran) {
+          kept += 1;
+          out.err(`ws: kept ${r.id}: ${ran.note}; nothing is moved or deleted\n`);
+          continue;
+        }
+
+        if (ran !== undefined) {
+          hooks.set(r.id, hookRecord(ran.call, ran.run, stampOf(machine.now())));
+          lastHook = { id: r.id, name: ran.call.name };
+
+          if (ran.run.exit !== 0) {
+            kept += 1;
+            out.err(`ws: kept ${r.id}: ${ran.outcome}; nothing is moved or deleted\n`);
+            events.push(event(machine, raw, r.agent, "note", `Workspace ${r.id} kept: ${ran.outcome}.`));
+            stopped = stoppedBy(ran.run);
+
+            if (stopped !== undefined) break;
+            continue;
+          }
+
+          events.push(event(machine, raw, r.agent, "note", `Workspace ${r.id}'s pre-remove hook ran: ${ran.outcome}.`));
+        }
+      }
+
+      // Once any hook ran, this workspace (hook or none) is checked again against the ledger as it is now: its
+      // worker may have gone back to work meanwhile, or handed it over, or a hook left a change in it.
+      if (lastHook !== undefined) {
+        const current = load(root);
+        const after = current instanceof Refusal ? `the ledger cannot be read again: ${current.reason}` : keepAfterHook(root, current, r);
+
+        if (after !== undefined) {
+          kept += 1;
+          out.err(`ws: kept ${r.id}: after ${lastHook.id === r.id ? "" : `${lastHook.id}'s `}${lastHook.name}, ${after}\n`);
+          continue;
+        }
+      }
+
       const known = (workspaceNames(r.repo) ?? []).includes(r.id);
       // The preview's merge commit goes with it: nothing else descends from it.
       const tip = known ? tipOf(r) : undefined;
@@ -910,24 +1136,32 @@ function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly s
       out.out(trashed === undefined ? `pruned ${r.id}: ${r.path} was gone already\n` : `pruned ${r.id}: ${r.path} is in the trash, ${trashed.id}: \`fleet ws restore ${trashed.id}\` brings it back\n`);
     }
 
-    if (gone.size === 0) {
-      out.out("nothing to prune\n");
+    const code = stopped ?? (kept > 0 ? 1 : 0);
 
-      return kept > 0 ? 1 : 0;
-    }
+    if (gone.size === 0) out.out("nothing to prune\n");
 
-    const workspaces = (asArray(raw["workspaces"]) ?? []).map((item) => {
+    if (gone.size === 0 && hooks.size === 0) return code;
+    // A hook ran for a while: the ledger as it is now.
+    const now = hooks.size === 0 ? raw : load(root);
+
+    if (now instanceof Refusal) return yield* Effect.fail(now);
+
+    const workspaces = (asArray(now["workspaces"]) ?? []).map((item) => {
       const row = asObject(item);
       const id = asString(row?.["id"]);
 
-      return row !== undefined && id !== undefined && gone.has(id) && row["status"] !== "pruned" ? { ...row, status: "pruned", pruned: stamp } : item;
+      if (row === undefined || id === undefined || row["status"] === "pruned") return item;
+      const hook = hooks.get(id);
+      const ran = hook === undefined ? row : { ...row, pre_remove_hook: hook };
+
+      return gone.has(id) ? { ...ran, status: "pruned", pruned: stamp } : ran;
     });
 
-    const fault = save(machine, root, raw, workspaces, events);
+    const fault = save(machine, root, now, workspaces, events);
 
     if (fault !== undefined) return yield* Effect.fail(fault);
 
-    return kept > 0 ? 1 : 0;
+    return code;
   });
 }
 
