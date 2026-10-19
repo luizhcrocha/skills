@@ -734,13 +734,16 @@ links[]?      {id, ref, url, title, kind (preview|prototype|doc|tool|service; de
                for (what the user does there, or null), since, done? (when the fleet marked it done)}
 kept[]?       {id, text, at}
 workspace_mode? "isolated" | "shared"   `set --workspaces`; absent reads as isolated
-workspaces[]? {id (the jj workspace's name), agent (its worker now), path, repo (the default workspace's root),
-               base (change id), added, status (active|pruned), pruned?,
+workspaces[]? {id (the jj workspace's name), ws_id? (`<repo's basename>-<id>-<hash>`, mapped to `[a-z0-9-]`, the hooks'
+               FLEET_WS_ID; absent on a row from before it), agent (its worker now), path, repo (the default
+               workspace's root), base (change id), added, status (active|pruned), pruned?,
                preview? ("out": added out of the combined preview, `ws add --no-preview`),
                handovers[]? {from (the worker that held it before), at},
                hook? {command (".fleet/ws-add" | "devenv-run --prepare"), at, exit (null: timed out, killed,
                interrupted, or could not start), seconds, timed_out?, interrupted? (the signal `add` got),
-               error? (why it could not start, or what killed it)}}   written by `fleet ws` only
+               error? (why it could not start, or what killed it)},
+               pre_add_hook?, pre_remove_hook? (the same shape, for `.fleet/ws-pre-add` and
+               `.fleet/ws-pre-remove`)}   written by `fleet ws` only
 ```
 
 **Text on the page.** The page shows a decision's `question`, `why`, `reason`, its options'
@@ -4224,6 +4227,51 @@ makes as few as the work allows: sequential work **reuses** a lane's workspace (
 one is for parallel workers whose files could meet, risky experiments, and arena or swarm comparisons; and
 a fleet may opt into one **shared** working copy (`workspace_mode: "shared"`).
 
+<a id="workspace-hooks"></a>**Lifecycle hooks** (TypeScript only; the rules are rift's, github.com/anomalyco/rift
+`specs.md`, "precreate", "postcreate", "preremove"). A repo hooks a workspace's life with an executable file
+of its own, in its default workspace's root. A check before a step gates it; a hook after a step only
+warns, since the step is done:
+
+| Event (`FLEET_EVENT`) | The repo's file, its arguments | When it runs, and where | A failure means |
+|---|---|---|---|
+| `pre-add` | `.fleet/ws-pre-add WORKSPACE SOURCE` | `add`, fresh or `--reuse`, once its own checks pass and before jj makes or hands over anything; in SOURCE (the default workspace, or the workspace handed over), since a fresh WORKSPACE does not exist yet | `add` is refused: no workspace is made or handed over, and no row is made; a `--reuse` refusal is recorded on the holder's row (`pre_add_hook`) (`ws: .fleet/ws-pre-add refused the add: <how it ended>`), exit 1 |
+| `post-add` | `.fleet/ws-add WORKSPACE SOURCE`, else `devenv-run --prepare` in a devenv repo | once the workspace is made or handed over and recorded; in WORKSPACE | a warning: the workspace is kept and `add` exits 0 ([the ws-add hook](#the-ws-add-hook)) |
+| `pre-remove` | `.fleet/ws-pre-remove WORKSPACE` | `prune --apply`, for each workspace prune's rules let go, before its folder moves to the trash (to stop its dev server, say); in WORKSPACE; not on a dry run, nor for a folder already gone | that workspace is kept, folder, jj workspace and row (`ws: kept a1: .fleet/ws-pre-remove exited 2 ...`), nothing is deleted; the others still go, and prune exits 1 |
+
+A failure is any end but exit 0: a non-zero exit, a timeout, a hook that cannot start, one stopped by a TERM,
+INT or HUP to `fleet ws` (which then ends with 128 + the signal's number), and, for the two checks, a file
+there that is not executable or resolves outside the repo (fail closed: the repo asked for a check that did
+not run). Once the check passes, `add` reads the ledger again and refuses what changed while it ran, making
+nothing: for a fresh add, its own dev-server port taken (a lower port freed meanwhile is no reason) (`ws: dev-server port 5300 was taken during the pre-add
+check (5301 is free now); no workspace is made: run add again`); for `--reuse`, the workspace handed to
+another worker, its holder running, queued or blocked again, or WORKER given a workspace of its own. Every
+hook runs alike: at most `--hook-timeout S` seconds (100; `add` and `prune` take it; for `prune` it bounds
+all its hooks together), in a
+process group of its own, its output printed between `--- <command> (at most S s) ---` and `--- <how it
+ended> ---`, its run recorded on the workspace's row (`pre_add_hook`, `hook`, `pre_remove_hook`: `{command,
+at, exit, seconds, timed_out?, interrupted?, error?}`) and in a note event; a refused fresh `add` has no row,
+so only the event records it. Every hook gets the same environment, over `fleet ws`'s own:
+
+| Variable | Value |
+|---|---|
+| `FLEET_EVENT` | `pre-add`, `post-add` or `pre-remove` |
+| `FLEET_WS_ID` | `<basename>-<name>-<hash>`, the basename of the repo root's real path and the hash the first 6 hex of the sha256 of that path, a NUL byte and the name; lower-cased, every character but `a-z`, `0-9` and `-` made `-`, leading `-`s dropped (`skills-a1-7c1fcf`; `a.1` and `a_1` both read `a-1`, with different hashes). It matches `^[a-z0-9][a-z0-9-]*$`, so it is a valid compose project name (`^[a-z0-9][a-z0-9_-]*$`). The hash, taken before the mapping, keeps apart two repos of one basename and two names that differ only in case or punctuation. Stable for the workspace's life (a handover keeps it) and written on its row (`ws_id`) |
+| `FLEET_WS_NAME` | the jj workspace's name (`a1`) |
+| `FLEET_WS_PATH` | the workspace's root, absolute; for `pre-add` of a fresh one, where it is about to be made |
+| `FLEET_WS_PORT` | the workspace's dev-server port (its row's `port`), when it has one |
+| `FLEET_REPO` | the repo's default workspace's root |
+| `FLEET_FLEET` | the fleet's DIR |
+
+Taken from rift: a check before a step that refuses it, a hook after it that never undoes it, the
+pre-add check running in the source, the pre-remove hook running before anything moves, one stable id per
+workspace in the environment. Not taken: rift's ULID (fleet already checks a folder against jj's own
+pointer, and a readable id can name a hook's resources: a database, a compose project); a list of commands
+per event in a `.rift.toml` (one executable per event, which sequences what it needs, as `.fleet/ws-add`
+did); inherited stdio (a pipe a hook's leftover process holds keeps a Bash tool call open: output goes to
+a file); and `postremove`: once the folder is in the trash nothing of the workspace is left to act on, and
+no repo needs it. Known limit: a name used again in one repo (a pruned `a1`, then a fresh `a1`) gets the
+same `FLEET_WS_ID`, so a hook frees what it names in `pre-remove`.
+
 - `fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] [--no-preview] [--hook-timeout S]`: `jj workspace add <repo>-NAME -r
   <BASE's commit> --name NAME`, beside the default workspace of the repo `--repo` (else the cwd) is
   in. BASE defaults to `@-` there and must name one commit. Refused: an invalid name or `default`, a
@@ -4256,7 +4304,7 @@ a fleet may opt into one **shared** working copy (`workspace_mode: "shared"`).
   lines printed (`workspace a1 for b1 at PATH, reused from a1, on <change>`, then the brief line). A
   workspace out of the preview stays out for its next holder (the row keeps `preview: "out"`; `add` says
   `(as a1 had it)`), and `--no-preview` takes a handed one out.
-- **The ws-add hook** (TypeScript only). Once `add` has made a workspace, or `--reuse` has handed one
+- <a id="the-ws-add-hook"></a>**The ws-add hook** (TypeScript only; the `post-add` event of the [lifecycle hooks](#workspace-hooks)). Once `add` has made a workspace, or `--reuse` has handed one
   over, it prepares it, so a worker does not pay the repo's setup (a saved devenv env, a uv venv: about
   70 s) on its first command. The repo's own executable `<root>/.fleet/ws-add WORKSPACE SOURCE` (root: the
   repo's default workspace; SOURCE: that default workspace for a fresh one, the workspace itself for a
@@ -4314,13 +4362,29 @@ a fleet may opt into one **shared** working copy (`workspace_mode: "shared"`).
   entry holds what it covers by the lane rule of [Warnings](#warnings) 6: a glob's `*` stays in its
   segment). Read with
   `--ignore-working-copy`: a worker's files are never snapshotted under it while it works.
-- `fleet ws DIR prune [--apply | --dry-run]`: a workspace goes when (1) its worker's row is not
+- `fleet ws DIR prune [--apply | --dry-run] [--hook-timeout S]`: a workspace goes when (1) its worker's row is not
   running, queued or blocked (done, failed, stopped, or no row: gone); (2) its directory, if it is
   there, is the one jj knows as that workspace (`jj workspace root --name`) and its `.jj/repo` points
   at that repo's store; (3) after a snapshot of its files (a stale workspace is updated first: jj then
   keeps its unsnapshotted files in a copy of its change) nothing is ahead of the stack:
   `(::(NAME@ | change_id(<its change>)) ~ ::default@ ~ immutable()) ~ (empty() & description(exact:""))`
-  is empty (integrated, abandoned, or empty). Going: the directory moved to [the trash](#the-workspace-trash)
+  is empty (integrated, abandoned, or empty). Going, with `--apply`: first the repo's
+  [pre-remove hook](#workspace-hooks), `.fleet/ws-pre-remove WORKSPACE`, in the workspace, when the repo has
+  one and the folder is there. Any end but exit 0 keeps that workspace whole, folder, jj workspace and row
+  (`ws: kept a1: .fleet/ws-pre-remove exited 2 in 0.1 s; nothing is moved or deleted`; the row gains
+  `pre_remove_hook` and a note event `Workspace a1 kept: ...`), and the others still go; a TERM, INT or HUP
+  stops the hook, keeps its workspace, records what prune did so far, and ends prune with 128 + the
+  signal's number, the workspaces after it untouched. Once a hook has run, rules (1) and (3) are read
+  again against the ledger as it is now, for its workspace once it exits 0 and for every workspace after
+  it, hook or none: a workspace handed over or no longer active meanwhile, a worker that went back to work,
+  or a change a hook left keeps the workspace (`ws: kept a1: after .fleet/ws-pre-remove, 1 change(s) not in
+  the stack: ...`; `ws: kept a2: after a1's .fleet/ws-pre-remove, it was handed over to b1`).
+  `--hook-timeout S` bounds all of prune's hooks together, so they take about S seconds in all however
+  many run: each hook gets what the earlier ones left, and a workspace whose hook gets nothing is kept, its hook not run
+  (`ws: kept a3: prune's hooks ran out of their 100 s (--hook-timeout) before its .fleet/ws-pre-remove ran;
+  nothing is moved or deleted`). A repo with a pre-remove hook runs `prune --apply` in the background
+  (`run_in_background`), as `add` with a long setup does.
+  Then the directory moved to [the trash](#the-workspace-trash)
   (`pruned a1: PATH is in the trash, repo/a1@20260105T090000Z: \`fleet ws restore repo/a1@20260105T090000Z\`
   brings it back`), then `jj workspace forget NAME` (a forget that fails puts the folder back), the row
   `status: pruned` with `pruned`, an `integrated` event (`... ; PATH moved to the trash (ENTRY).`). Kept:
@@ -4815,7 +4879,7 @@ recommendation attached.
 | the plugin's hook (`onepw_watch`, `onepw_hold`) | `REGISTRY/onepw/locked.json` (under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken` (a state that did not read, set aside), `REGISTRY/onepw/onepw.log` |
 | the hub (its settle timer, `POST onepw/unlocked`), `fleet onepw unlocked` outside Claude Code | `REGISTRY/onepw/locked.json` (`cleared`, `lapsed` and `told` set, rows dropped, kinds pruned, and the file removed when nothing is left; under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken`, `REGISTRY/onepw/onepw.log`, and for each held fleet the hub's notice: its `DIR/chat.jsonl` (under the store's lock), or one line to its session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, when its host's watch is dead |
 | `state`, on a write that numbers a row or `approval add next` (TypeScript only) | `REGISTRY/numbers/numbers.json` (under `REGISTRY/numbers/numbers.lock`), when `REGISTRY` exists |
-| `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / moved to the trash with its note, `TRASH/<repo>/<entry>` and `<entry>.json` (a shared fleet's `add` writes nothing); whatever the repo's ws-add hook (or `devenv-run --prepare`) writes |
+| `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / moved to the trash with its note, `TRASH/<repo>/<entry>` and `<entry>.json` (a shared fleet's `add` writes nothing); whatever the repo's hooks (`.fleet/ws-pre-add`, `.fleet/ws-add` or `devenv-run --prepare`, `.fleet/ws-pre-remove`) write |
 | `fleet ws restore` / `gc` | the entry's folder moved back and a jj workspace added there (`jj workspace add`, `jj sparse reset`), its note removed / each entry past the age deleted, folder and note |
 | `fleet ws add --reuse` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; a new change in the workspace (`jj new`) |
 | `fleet ws split` | `DIR/state.json` (`events`, `updated`), `DIR/index.html`; the default workspace's `@` split in two |

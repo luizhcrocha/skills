@@ -202,6 +202,9 @@ the decision's `why` and `reason`, or in a page you publish and link from the ch
 
 `fleet ws <dir> add`, `split` and `prune --apply` write the ledger's workspace rows, which a moved team's ledger does
 not keep, so they are refused. Make a worker's workspace with jj beside the repo's default workspace,
-`jj workspace add <repo>-<name> -r @- --name <name>`, run the repo's `.fleet/ws-add <workspace> <default workspace>`
-when it has one, and name the path in the brief. `fleet preview <dir>` records its workspace and server in the ledger too, so only
+`jj workspace add <repo>-<name> -r @- --name <name>`, and name the path in the brief. When the repo has
+`.fleet/ws-pre-add`, run it first, in the default workspace, and make nothing if it fails; when it has
+`.fleet/ws-add <workspace> <default workspace>`, run it after. Give both the environment `fleet ws` gives its
+hooks (FLEET_EVENT, FLEET_WS_ID, FLEET_WS_NAME, FLEET_WS_PATH, FLEET_WS_PORT, empty for a workspace made by
+hand, FLEET_REPO, FLEET_FLEET: fleet/SPEC.md, Lifecycle hooks). `fleet preview <dir>` records its workspace and server in the ledger too, so only
 `preview status` runs on a moved team.
