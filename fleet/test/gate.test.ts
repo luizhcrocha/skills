@@ -3,13 +3,13 @@
  * whose process is gone, the files an older fleet reads and wrote, and the runs' records. Each asker is a real
  * process (a `sleep`), since a hold and a place in the queue live as long as the process that asked.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { asArray, asObject, asString, type JsonObject } from "../src/json.ts";
-import { capBytes, endOf, Gate, holdText, type Hold, type RunRecord, type Waiting } from "../src/gate.ts";
+import { capBytes, endOf, floorOf, Gate, holdText, memAvailable, type Hold, type RunRecord, type Waiting } from "../src/gate.ts";
 import { readJson, tmp } from "./support.ts";
 
 const GB = 1024 ** 3;
@@ -221,6 +221,154 @@ describe("admission by the budget", () => {
     expect(gate.standing(at(4)).holders.map((h) => h.pid)).toEqual([pid]);
     expect(gate.free(a?.token ?? "", at(5), pid)).toEqual({ freed: true });
     expect(gate.standing(at(5)).holders).toEqual([]);
+  });
+});
+
+describe("admission by the memory available", () => {
+  const FLOOR = 8 * GB;
+
+  /** What a scope's cgroup says it uses: memory.current, and the file cache memory.stat counts in it. */
+  interface Use {
+    readonly current: number;
+    readonly file: number;
+  }
+
+  /** The machine as a test sets it: a meminfo of 64 GB with `available` bytes of MemAvailable, and a cgroup root
+   * whose scopes `scopes` names use what they say. */
+  function machine(available: number, scopes: Readonly<Record<string, Use>> = {}): (name: string) => string | undefined {
+    const info = join(dir, "..", "meminfo");
+    const root = join(dir, "..", "cgroup");
+    writeFileSync(info, `MemTotal:       67108864 kB\nMemAvailable:   ${String(available / 1024)} kB\n`);
+
+    for (const [unit, use] of Object.entries(scopes)) {
+      mkdirSync(join(root, `${unit}.scope`), { recursive: true });
+      writeFileSync(join(root, `${unit}.scope`, "memory.current"), `${String(use.current)}\n`);
+      writeFileSync(join(root, `${unit}.scope`, "memory.stat"), `anon ${String(use.current - use.file)}\nfile ${String(use.file)}\nkernel 0\n`);
+    }
+
+    return (name) => (name === "FLEET_MEMINFO" ? info : name === "FLEET_CGROUP_ROOT" ? root : undefined);
+  }
+
+  /** `name` asks for `cap` bytes on the machine `env`, keeping {@link FLOOR} free; an ask of the whole budget counts a
+   * quarter of the RAM. */
+  function askOn(env: (name: string) => string | undefined, name: string, pid: number, cap: number | undefined, seconds = 0, waitS = 600): Asked {
+    return gate.ask({ holder: { name, kind: "session" }, what: `suite ${name}`, seconds: 3600, cap, budget: BUDGET, pid, runs: true, waitS, memory: { floor: FLOOR, whole: QUARTER, env } }, at(seconds));
+  }
+
+  function askWith(available: number, name: string, pid: number, cap: number | undefined, seconds = 0, waitS = 600): Asked {
+    return askOn(machine(available), name, pid, cap, seconds, waitS);
+  }
+
+  test("a run goes ahead while MemAvailable less its cap keeps the floor free", () => {
+    const took = askWith(24 * GB, "a", asker(), QUARTER);
+    expect(took.took?.cap).toBe(QUARTER);
+    expect(took.waiting).toBeUndefined();
+  });
+
+  test("below the floor a run waits in the queue, and goes once memory frees", () => {
+    const pid = asker();
+    const short = askWith(20 * GB, "a", pid, QUARTER);
+    expect(short.took).toBeUndefined();
+    expect(short.waiting?.holders).toEqual([]);
+    expect(short.waiting?.short).toEqual({ available: 20 * GB, unused: 0, part: QUARTER, whole: false, floor: FLOOR });
+    expect(names(gate.standing(at(1)).queue)).toEqual(["a"]);
+    expect(gate.standing(at(1)).holders).toEqual([]);
+
+    expect(askWith(23 * GB, "a", pid, QUARTER, 5).took).toBeUndefined();
+    expect(askWith(24 * GB, "a", pid, QUARTER, 10).took?.name).toBe("a");
+    expect(gate.standing(at(11)).queue).toEqual([]);
+  });
+
+  test("an ask that does not wait is refused below the floor, and keeps no place", () => {
+    const refused = askWith(20 * GB, "a", asker(), QUARTER, 0, 0);
+    expect(refused.took).toBeUndefined();
+    expect(refused.waiting?.short).toEqual({ available: 20 * GB, unused: 0, part: QUARTER, whole: false, floor: FLOOR });
+    expect(gate.standing(at(1)).queue).toEqual([]);
+  });
+
+  test("the floor is one more condition: with memory to spare, the budget still admits two default runs", () => {
+    expect(askWith(200 * GB, "a", asker(), QUARTER).took?.name).toBe("a");
+    expect(askWith(200 * GB, "b", asker(), QUARTER).took?.name).toBe("b");
+    const third = askWith(200 * GB, "c", asker(), QUARTER);
+    expect(third.took).toBeUndefined();
+    expect(names(third.waiting?.holders)).toEqual(["a", "b"]);
+    expect(third.waiting?.short).toBeUndefined();
+  });
+
+  // The 22:58 case: MemAvailable is read before either run has used any memory, so each would see room for itself.
+  test("two runs asked seconds apart: the second counts the first's cap, which its scope has not used yet", () => {
+    expect(askWith(36 * GB, "a", asker(), QUARTER, 0, 0).took?.name).toBe("a");
+    const second = askWith(36 * GB, "b", asker(), QUARTER, 1, 0);
+    expect(second.took).toBeUndefined();
+    expect(second.waiting?.short).toEqual({ available: 36 * GB, unused: QUARTER, part: QUARTER, whole: false, floor: FLOOR });
+  });
+
+  test("a hold counts the part of its cap its scope does not use yet, its file cache not counted as used", () => {
+    const first = askWith(40 * GB, "a", asker(), QUARTER).took;
+    const unit = first?.unit ?? "";
+    expect(unit).toMatch(/^fleet-gate-/);
+
+    // 14G in the scope, 4G of it file cache that MemAvailable already counts as available: 10G used, 6G still to come.
+    const cached = askOn(machine(28 * GB, { [unit]: { current: 14 * GB, file: 4 * GB } }), "b", asker(), QUARTER, 1, 0);
+    expect(cached.waiting?.short).toEqual({ available: 28 * GB, unused: 6 * GB, part: QUARTER, whole: false, floor: FLOOR });
+
+    // A scope that used more than its cap leaves nothing unused.
+    expect(askOn(machine(24 * GB, { [unit]: { current: 17 * GB, file: 0 } }), "b", asker(), QUARTER, 2, 0).took?.name).toBe("b");
+  });
+
+  test("an ask of the whole budget counts one run's cap against the floor: no other hold runs beside it", () => {
+    const short = askWith(QUARTER + 7 * GB, "all", asker(), undefined, 0, 0);
+    expect(short.waiting?.short).toEqual({ available: QUARTER + 7 * GB, unused: 0, part: QUARTER, whole: true, floor: FLOOR });
+    expect(askWith(QUARTER + FLOOR, "all", asker(), undefined, 1, 0).took?.cap).toBeUndefined();
+  });
+
+  test("a run waiting only for memory does not hold back a smaller one that fits the budget and the floor", () => {
+    const big = asker();
+    expect(askWith(20 * GB, "big", big, QUARTER).took).toBeUndefined();
+    expect(gate.standing(at(1)).queue[0]).toMatchObject({ name: "big", memory: true });
+    expect(askWith(20 * GB, "small", asker(), GB, 1).took?.name).toBe("small");
+    expect(askWith(30 * GB, "big", big, QUARTER, 2).took?.name).toBe("big");
+
+    // One that waits on the budget keeps its place: whoever comes after it waits behind it.
+    const c = askWith(200 * GB, "c", asker(), QUARTER, 3);
+    expect(names(c.waiting?.holders)).toEqual(["small", "big"]);
+    expect(gate.standing(at(4)).queue[0]).toMatchObject({ name: "c", memory: false });
+    const behind = askWith(200 * GB, "tiny", asker(), GB, 5);
+    expect(behind.took).toBeUndefined();
+    expect(names(behind.waiting?.ahead)).toEqual(["c"]);
+  });
+});
+
+describe("MemAvailable and the floor", () => {
+  const meminfo = (text: string): string => {
+    const path = join(dir, "..", "meminfo");
+    writeFileSync(path, text);
+
+    return path;
+  };
+
+  test("MemAvailable is read from /proc/meminfo, or the file $FLEET_MEMINFO names; none where it cannot be read", () => {
+    const path = meminfo("MemTotal:       65536000 kB\nMemFree:         1000000 kB\nMemAvailable:   14889779 kB\n");
+    expect(memAvailable((name) => (name === "FLEET_MEMINFO" ? path : undefined))).toBe(14889779 * 1024);
+    expect(memAvailable((name) => (name === "FLEET_MEMINFO" ? join(dir, "none") : undefined))).toBeUndefined();
+    expect(memAvailable((name) => (name === "FLEET_MEMINFO" ? meminfo("MemTotal: 1 kB\n") : undefined))).toBeUndefined();
+  });
+
+  test("the floor is --floor, else $FLEET_GATE_MEMORY_FLOOR, else 8G; any zero keeps nothing free", () => {
+    const env = (floor: string | undefined) => (name: string): string | undefined => (name === "FLEET_GATE_MEMORY_FLOOR" ? floor : undefined);
+    expect(floorOf(undefined, env(undefined))).toEqual({ spec: "8G", bytes: 8 * GB });
+    expect(floorOf(undefined, env(" 4G "))).toEqual({ spec: "4G", bytes: 4 * GB });
+    expect(floorOf(undefined, env(""))).toEqual({ spec: "8G", bytes: 8 * GB });
+    expect(floorOf("2G", env("4G"))).toEqual({ spec: "2G", bytes: 2 * GB });
+
+    for (const zero of ["0", "0G", "0.0M", "0%"]) expect(floorOf(zero, env(undefined))).toEqual({ spec: zero, bytes: 0 });
+    expect(floorOf("lots", env(undefined))).toBeUndefined();
+    expect(floorOf(undefined, env("-1G"))).toBeUndefined();
+  });
+
+  test("a share of the RAM is of the MemTotal the same meminfo says", () => {
+    const path = meminfo("MemTotal:       16777216 kB\nMemAvailable:   12582912 kB\n");
+    expect(floorOf("50%", (name) => (name === "FLEET_MEMINFO" ? path : undefined))).toEqual({ spec: "50%", bytes: 8 * GB });
   });
 });
 

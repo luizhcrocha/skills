@@ -580,7 +580,9 @@ describe("the gate", () => {
   test("a --mem over the budget or unreadable is refused, and $FLEET_GATE_MEMORY_BUDGET sets the budget", () => {
     expect(cli("gate", "take", "infra", "build", "--mem", "60%").stderr).toMatch(/^fleets: --mem 60% \(\S+\) is more than the budget of all holds together, 50% \(\S+\)\n$/);
     expect(cli("gate", "take", "infra", "build", "--mem", "lots").stderr).toBe("fleets: cannot read --mem 'lots': give a share of the RAM (25%) or a size (24G), 64M at least\n");
-    expect(cli("gate", "take", "infra", "build", "--mem").stderr).toContain("usage: fleet fleets gate");
+    expect(cli("gate", "take", "infra", "build", "--mem").stderr).toBe(
+      "fleets: usage: fleet fleets gate | gate take FLEET|--as NAME WHAT [--for MINUTES] [--wait SECONDS] [--mem SIZE|PERCENT] [--floor SIZE|PERCENT] | gate free TOKEN\n",
+    );
     expect(cli("gate").stdout).toBe("free\n");
     expect(fleet(["fleets", "gate", "take", "infra", "build", "--mem", "60%"], { ...env, FLEET_GATE_MEMORY_BUDGET: "75%" }).code).toBe(0);
     expect(JSON.parse(fleet(["fleets", "gate", "--json"], { ...env, FLEET_GATE_MEMORY_BUDGET: "2G" }).stdout)).toMatchObject({
@@ -608,6 +610,122 @@ describe("the gate", () => {
       expect(cli("gate").stdout).toBe("free\n");
     }
   }, 120_000);
+
+  describe("the memory available", () => {
+    const GB = 1024 ** 3;
+
+    /** A meminfo of the test's own whose MemAvailable is `available` bytes; the environment that reads it, with a
+     * budget of 48G whatever the RAM of the machine running the test. */
+    function withAvailable(available: number, more: Readonly<Environment> = {}): Environment {
+      const path = join(base, "meminfo");
+      writeFileSync(path, `MemTotal:       67108864 kB\nMemAvailable:   ${String(available / 1024)} kB\n`);
+
+      return { ...env, FLEET_MEMINFO: path, FLEET_GATE_MEMORY_BUDGET: "48G", ...more };
+    }
+
+    test("a take goes ahead while MemAvailable less its part keeps 8G free", () => {
+      const took = fleet(["fleets", "gate", "take", "infra", "build", "--mem", "16G"], withAvailable(24 * GB));
+      expect(took.code).toBe(0);
+      expect(took.stdout).toStartWith("infra holds the gate: build\n");
+    });
+
+    test("without --wait, a take below the floor is refused, naming MemAvailable, its part and the floor", () => {
+      const refused = fleet(["fleets", "gate", "take", "infra", "build", "--mem", "16G"], withAvailable(20 * GB));
+      expect(refused.code).toBe(1);
+      expect(refused.stderr).toBe(
+        "fleets: not enough memory: 24.0G needed, 20.0G available (16.0G for this hold, 8.0G floor); take it when more memory is available (--wait queues for it), or with a smaller --mem\n",
+      );
+      expect(cli("gate").stdout).toBe("free\n");
+    });
+
+    // The 22:58 case: two suites asked seconds apart, before either used any memory, each read room for itself.
+    test("two takes one after the other: the second counts the first's part, which nothing has used yet", () => {
+      const at36 = withAvailable(36 * GB, { FLEET_GATE_MEMORY_BUDGET: "31.4G" });
+      expect(fleet(["fleets", "gate", "take", "--as", "pipeline-a", "suite", "--mem", "15.7G"], at36).code).toBe(0);
+      const second = fleet(["fleets", "gate", "take", "--as", "pipeline-b", "suite", "--mem", "15.7G"], at36);
+      expect(second.code).toBe(1);
+      expect(second.stderr).toMatch(/^fleets: held by pipeline-a \(no fleet\) since \S+, until \S+, cap 15\.7G: suite; /);
+      expect(second.stderr).toEndWith(
+        "; not enough memory: 39.4G needed, 36.0G available (15.7G held but not yet used, 15.7G for this hold, 8.0G floor); " +
+          "take it when more memory is available (--wait queues for it), or with a smaller --mem\n",
+      );
+      expect(cli("gate").stdout).toStartWith("held by pipeline-a (no fleet)");
+    });
+
+    test("a take of the whole budget counts one run's cap, a quarter of the RAM, against the floor", () => {
+      expect(fleet(["fleets", "gate", "take", "--as", "hand", "build"], withAvailable(36.5 * GB, { FLEET_GATE_MEMORY_BUDGET: "31.4G" })).code).toBe(0);
+      expect(cli("gate", "free", "hand").code).toBe(0);
+      const refused = fleet(["fleets", "gate", "take", "--as", "hand", "build"], withAvailable(23 * GB, { FLEET_GATE_MEMORY_BUDGET: "31.4G" }));
+      expect(refused.stderr).toBe(
+        "fleets: not enough memory: 24.0G needed, 23.0G available (16.0G for this hold, one run's cap, as it takes the whole budget, 8.0G floor); " +
+          "take it when more memory is available (--wait queues for it), or with a smaller --mem\n",
+      );
+    });
+
+    test("a take waiting only for memory holds back no smaller take that fits; the gate says it waits for memory", async () => {
+      const short = withAvailable(20 * GB);
+      const big = Bun.spawn([FLEET, "fleets", "gate", "take", "--as", "big", "build", "--wait", "3"], { env: short, stdout: "pipe", stderr: "pipe" });
+      const queued = (): JsonObject => asObject(JSON.parse(fleet(["fleets", "gate", "--json"], short).stdout)) ?? {};
+
+      for (let tries = 0; tries < 100 && (asArray(queued()["queue"]) ?? []).length === 0; tries += 1) await Bun.sleep(100);
+      expect(queued()).toMatchObject({ holders: [], queue: [{ place: 1, name: "big", for_memory: true }] });
+      expect(fleet(["fleets", "gate"], short).stdout).toMatch(/^free\nqueue 1: big \(no fleet\), the whole budget, waiting for memory \d+s: build\n$/);
+      const small = fleet(["fleets", "gate", "take", "--as", "small", "lint", "--mem", "2G"], short);
+      expect(small.stderr).toBe("");
+      expect(small.code).toBe(0);
+      expect(await big.exited).toBe(1);
+    });
+
+    test("--floor 50% is half the MemTotal of the same meminfo", () => {
+      const path = join(base, "meminfo");
+      writeFileSync(path, "MemTotal:       16777216 kB\nMemAvailable:   13631488 kB\n");
+      expect(fleet(["fleets", "gate", "take", "--as", "pct", "x", "--mem", "4G", "--floor", "50%"], { ...env, FLEET_MEMINFO: path, FLEET_GATE_MEMORY_BUDGET: "8G" }).stderr).toBe("");
+    });
+
+    test("where MemAvailable cannot be read, --floor is ignored, and says so", () => {
+      const took = fleet(["fleets", "gate", "take", "infra", "build", "--mem", "4G", "--floor", "4G"], env);
+      expect(took.code).toBe(0);
+      expect(took.stderr).toBe("fleets: no MemAvailable here (no /proc/meminfo): --floor is ignored, and only the budget counts\n");
+    });
+
+    test("--floor, else $FLEET_GATE_MEMORY_FLOOR, sets the floor, and 0 keeps nothing free", () => {
+      expect(fleet(["fleets", "gate", "take", "infra", "a", "--mem", "16G", "--floor", "4G"], withAvailable(20 * GB)).code).toBe(0);
+      expect(cli("gate", "free", "infra").code).toBe(0);
+      expect(fleet(["fleets", "gate", "take", "ui", "b", "--mem", "16G"], withAvailable(20 * GB, { FLEET_GATE_MEMORY_FLOOR: "4G" })).code).toBe(0);
+      expect(cli("gate", "free", "ui").code).toBe(0);
+      expect(fleet(["fleets", "gate", "take", "infra", "c", "--mem", "16G", "--floor", "0"], withAvailable(16 * GB)).code).toBe(0);
+      expect(cli("gate", "free", "infra").code).toBe(0);
+      expect(fleet(["fleets", "gate", "take", "infra", "c", "--mem", "16G", "--floor", "0G"], withAvailable(16 * GB)).code).toBe(0);
+      expect(fleet(["fleets", "gate", "take", "infra", "d", "--floor", "lots"], withAvailable(20 * GB)).stderr).toBe(
+        "fleets: cannot read --floor 'lots': give a size (8G) or a share of the RAM (12%), 64M at least, or 0 to keep nothing free\n",
+      );
+      expect(fleet(["fleets", "gate", "take", "infra", "d"], withAvailable(20 * GB, { FLEET_GATE_MEMORY_FLOOR: "lots" })).stderr).toBe(
+        "fleets: cannot read the floor $FLEET_GATE_MEMORY_FLOOR='lots': give a size (8G) or a share of the RAM (12%), 64M at least, or 0 to keep nothing free\n",
+      );
+    });
+
+    test("with --wait, a take below the floor waits in the queue and takes once memory frees", async () => {
+      const short = withAvailable(20 * GB);
+      const waiter = Bun.spawn([FLEET, "fleets", "gate", "take", "--as", "w1", "suite", "--mem", "16G", "--wait", "20"], { env: short, stdout: "pipe", stderr: "pipe" });
+      const queued = (): JsonObject => asObject(JSON.parse(fleet(["fleets", "gate", "--json"], short).stdout)) ?? {};
+
+      for (let tries = 0; tries < 100 && (asArray(queued()["queue"]) ?? []).length === 0; tries += 1) await Bun.sleep(100);
+      expect(queued()).toMatchObject({ holders: [], queue: [{ place: 1, name: "w1" }] });
+      withAvailable(24 * GB);
+      expect(await waiter.exited).toBe(0);
+      expect(await new Response(waiter.stderr).text()).toBe("fleets: not enough memory: 24.0G needed, 20.0G available (16.0G for this hold, 8.0G floor); waiting up to 20s\n");
+      expect(cli("gate").stdout).toStartWith("held by w1 (no fleet)");
+    });
+
+    test("with --wait, a take still below the floor when its wait ends is refused", () => {
+      const refused = fleet(["fleets", "gate", "take", "infra", "build", "--mem", "16G", "--wait", "1"], withAvailable(20 * GB));
+      expect(refused.code).toBe(1);
+      expect(refused.stderr).toEndWith(
+        "fleets: not enough memory: 24.0G needed, 20.0G available (16.0G for this hold, 8.0G floor); take it when more memory is available (--wait queues for it), or with a smaller --mem\n",
+      );
+      expect(JSON.parse(cli("gate", "--json").stdout)).toMatchObject({ holders: [], queue: [] });
+    });
+  });
 });
 
 describe("a fleet served again by a restarted session", () => {

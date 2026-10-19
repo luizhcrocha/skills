@@ -1,8 +1,9 @@
 /**
- * `fleet fleets gate run FLEET|--as NAME [--wait SECONDS] [--for MINUTES] [--timeout SECONDS] [--mem SIZE] -- COMMAND...`:
+ * `fleet fleets gate run FLEET|--as NAME [--wait SECONDS] [--for MINUTES] [--timeout SECONDS] [--mem SIZE|PERCENT] [--floor SIZE|PERCENT] -- COMMAND...`:
  * a test suite run through the gate, as one process tree that dies whole. It takes its part of the gate's memory
  * budget (gate.ts: `--mem`, else $FLEET_GATE_MEMORY_MAX, else a quarter of the RAM, so two default runs fit the
- * budget at once), waiting in the gate's queue up to `--wait`, then runs COMMAND in a transient systemd user scope
+ * budget at once), waiting in the gate's queue up to `--wait` (also while MemAvailable, less that cap and what the
+ * holds may still take, is under the floor, `--floor`, else $FLEET_GATE_MEMORY_FLOOR, else 8G), then runs COMMAND in a transient systemd user scope
  * capped at that memory, with no swap and OOMPolicy=continue (the kernel kills the hog, the suite sees it fail) and
  * a CPU weight, so two runs share the cores evenly whatever each one's thread count, and a CPU quota, half the CPUs,
  * which a pool sized by nproc or Node's CPU count reads, so a suite's tests keep their time beside other work. On
@@ -26,7 +27,7 @@ import { dirname, join } from "node:path";
 
 import { stampOf } from "./clock.ts";
 import { readText } from "./files.ts";
-import { budgetOf, capBytes, DEFAULT_CAP, gateOf, holdText, memTotal, plain, scopeLives, sizeText, type GateHolder, type RunRecord, type Waiting } from "./gate.ts";
+import { budgetOf, capBytes, DEFAULT_CAP, floorOf, floorRefusal, gateOf, holdText, memAvailable, memTotal, plain, scopeLives, shortText, sizeText, type GateHolder, type Memory, type RunRecord, type Waiting } from "./gate.ts";
 import { ancestry } from "./procs.ts";
 import type { Machine } from "./world.ts";
 
@@ -60,11 +61,13 @@ export interface RunAsk {
   readonly waitS: number;
   readonly minutes: number;
   readonly mem: string | undefined;
+  /** The memory it leaves free (`--floor`); undefined is $FLEET_GATE_MEMORY_FLOOR's, else the default. */
+  readonly floor: string | undefined;
   /** Seconds the command may run before it is stopped; its hold's `--for` when not given. */
   readonly timeoutS: number;
 }
 
-export const RUN_USAGE = "usage: fleet fleets gate run FLEET|--as NAME [--wait SECONDS] [--for MINUTES] [--timeout SECONDS] [--mem SIZE|PERCENT] -- COMMAND...";
+export const RUN_USAGE = "usage: fleet fleets gate run FLEET|--as NAME [--wait SECONDS] [--for MINUTES] [--timeout SECONDS] [--mem SIZE|PERCENT] [--floor SIZE|PERCENT] -- COMMAND...";
 
 /** `gate run`'s arguments (after `run`), or undefined when they do not parse. */
 export function runArgs(argv: readonly string[]): RunAsk | undefined {
@@ -78,13 +81,14 @@ export function runArgs(argv: readonly string[]): RunAsk | undefined {
   let waitS = 0;
   let minutes = RUN_MINUTES;
   let mem: string | undefined;
+  let floor: string | undefined;
   let timeoutS: number | undefined;
 
   for (let i = 0; i < own.length; i += 1) {
     const word = own[i] ?? "";
     const value = own[i + 1];
 
-    if (word === "--as" || word === "--wait" || word === "--for" || word === "--mem" || word === "--timeout") {
+    if (word === "--as" || word === "--wait" || word === "--for" || word === "--mem" || word === "--floor" || word === "--timeout") {
       if (value === undefined) return undefined;
       i += 1;
 
@@ -92,18 +96,19 @@ export function runArgs(argv: readonly string[]): RunAsk | undefined {
       else if (word === "--wait") waitS = /^[0-9]+$/.test(value) ? Number(value) : -1;
       else if (word === "--for") minutes = /^[0-9]+$/.test(value) ? Number(value) : 0;
       else if (word === "--timeout") timeoutS = /^[0-9]+$/.test(value) ? Number(value) : 0;
+      else if (word === "--floor") floor = value.trim();
       else mem = value.trim();
     } else {
       words.push(word);
     }
   }
 
-  if (waitS < 0 || minutes <= 0 || timeoutS === 0 || as === "" || mem === "") return undefined;
+  if (waitS < 0 || minutes <= 0 || timeoutS === 0 || as === "" || mem === "" || floor === "") return undefined;
   const name = as ?? (words.length === 1 ? words[0] : undefined);
 
   if (name === undefined || (as !== undefined && words.length > 0) || words.length > 1) return undefined;
 
-  return { name, command, waitS, minutes, mem, timeoutS: Math.min(timeoutS ?? minutes * 60, minutes * 60) };
+  return { name, command, waitS, minutes, mem, floor, timeoutS: Math.min(timeoutS ?? minutes * 60, minutes * 60) };
 }
 
 /** Whether a systemd user manager answers here, so a transient scope can hold the command: `why` says why not.
@@ -359,9 +364,13 @@ function shown(command: readonly string[], length = 160): string {
   return text.length > length ? `${text.slice(0, length - 3)}...` : text;
 }
 
-/** Why a run waits, in words: who holds the gate, and its place in the queue. */
+/** Why a run waits, in words: who holds the gate, the memory it lacks, and its place in the queue. */
 function waitText(waiting: Waiting): string {
-  const held = waiting.holders.length === 0 ? "the gate is free, but others wait before it" : `the gate is ${waiting.holders.map(holdText).join("; and ")}`;
+  const short = waiting.short === undefined ? undefined : `not enough memory: ${shortText(waiting.short, "this run")}`;
+
+  const held = waiting.holders.length > 0 ? `the gate is ${waiting.holders.map(holdText).join("; and ")}${short === undefined ? "" : `; ${short}`}`
+    : short ?? "the gate is free, but others wait before it";
+
   const behind = waiting.ahead.length === 0 ? "" : `, behind ${waiting.ahead.map((w) => plain(w.name)).join(", ")}`;
 
   return `${held}; place ${String(waiting.ahead.length + 1)} in the queue${behind}`;
@@ -375,8 +384,8 @@ export interface Say {
 }
 
 /** Run `ask` through the gate; the exit code (the command's, 124 when its time ran out, 128+N on signal N, 75 when
- * the gate had no room for it within `--wait` and nothing ran, 2 when its cap or the budget cannot be read or the
- * cap is more than the budget). */
+ * the gate, or the memory available, had no room for it within `--wait` and nothing ran, 2 when its cap, the budget
+ * or the floor cannot be read or the cap is more than the budget). */
 export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<number> {
   const gate = gateOf(machine.registry);
   const holder: GateHolder = { name: ask.name, kind: machine.registry.live().some((e) => e.id === ask.name) ? "fleet" : "session" };
@@ -412,6 +421,16 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     return 2;
   }
 
+  const floor = floorOf(ask.floor, machine.env);
+
+  if (floor === undefined) {
+    say(`gate run: ${floorRefusal(ask.floor, machine.env)}`);
+
+    return 2;
+  }
+
+  if (ask.floor !== undefined && memAvailable(machine.env) === undefined) say("gate run: no MemAvailable here (no /proc/meminfo): --floor is ignored, and only the budget counts");
+
   // Asked before the gate is: a command no scope caps is counted as the whole budget, one run at a time.
   const scope = scopeHere(machine.env);
   const scoped = scope.scoped;
@@ -443,13 +462,17 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
   let unit = `fleet-gate-${randomBytes(4).toString("hex")}-${process.pid}`;
   let saidWait = false;
   let wasByHand = false;
+  let wasShort = false;
+  // The gate reads MemAvailable at each ask, under its lock: what others use (dev servers, sessions) comes and goes. A
+  // run without a scope asks for the whole budget, and counts its own cap against the floor.
+  const memory: Memory = { floor: floor.bytes, whole: wanted, env: machine.env };
 
   for (;;) {
     const now = machine.now();
 
     // A hold taken by hand is its taker's alone, its own name's included: the run waits for it as any other.
     warn("this run asks for the whole budget, one run at a time");
-    const result = gate.ask({ holder, what, seconds: ask.minutes * 60 + HOLD_GRACE_S, cap: scoped ? wanted : undefined, budget: budget.bytes, pid: process.pid, runs: true, waitS: ask.waitS }, now);
+    const result = gate.ask({ holder, what, seconds: ask.minutes * 60 + HOLD_GRACE_S, cap: scoped ? wanted : undefined, budget: budget.bytes, pid: process.pid, runs: true, waitS: ask.waitS, memory }, now);
 
     if ("took" in result) {
       token = result.took.token;
@@ -466,6 +489,10 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     // The first wait line says it; a hold by hand of its own name taken while it waits gets a line of its own.
     if (saidWait && byHand && !wasByHand) say(`gate run: ${byHandText}; still waiting`);
     wasByHand = byHand;
+
+    // So does memory that runs short while it waits for a hold.
+    if (saidWait && result.waiting.short !== undefined && !wasShort) say(`gate run: not enough memory: ${shortText(result.waiting.short, "this run")}; still waiting`);
+    wasShort = result.waiting.short !== undefined;
 
     if (Date.now() >= deadline) {
       gate.leave(process.pid, machine.now());

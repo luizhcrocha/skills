@@ -96,6 +96,14 @@ class CorpusTest(unittest.TestCase):
         self.assertNotEqual(hide({"stdout": said}), hide({"stdout": said.replace("[action]", "[decision]")}))
         self.assertEqual(hide({"results": 4}), {"results": 4})
 
+    def test_hiding_the_gate_usage_flags_keeps_every_other_line(self):
+        hide = run.TWIN_NORMALISERS["gate-usage"]
+        ts = "fleets: usage: fleet fleets gate | gate take FLEET|--as NAME WHAT [--for MINUTES] [--wait SECONDS] [--mem SIZE|PERCENT] [--floor SIZE|PERCENT] | gate free TOKEN\n"
+        twin = "fleets: usage: fleet fleets gate | gate take FLEET|--as NAME WHAT [--for MINUTES] [--wait SECONDS] | gate free TOKEN\n"
+        self.assertEqual(hide({"stderr": ts}), {"stderr": twin})
+        self.assertNotEqual(hide({"stderr": ts}), hide({"stderr": ts.replace("[--for MINUTES]", "")}))
+        self.assertEqual(hide({"results": 4}), {"results": 4})
+
     def test_every_trace_that_records_a_worker_hides_the_spawn_hint_on_the_twin(self):
         for trace in TRACES:
             said = run.expected_of(trace).read_text(encoding="utf-8")

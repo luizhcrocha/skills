@@ -230,7 +230,7 @@ class Session:
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.home), "TZ": "UTC", "LANG": "C.UTF-8",
                "FLEET_HOME": str(self.registry), "FLEET_DISCOVER": "0", "CLAUDE_CONFIG_DIR": str(self.home / ".claude"),
                "XDG_STATE_HOME": str(self.home / ".local" / "state"), "PYTHONDONTWRITEBYTECODE": "1",
-               "FLEET_NOW": self.clock}
+               "FLEET_NOW": self.clock, "FLEET_MEMINFO": str(self.home / "no-meminfo")}
         for key, value in (step.get("env") or {}).items():
             if value is None:
                 env.pop(key, None)
@@ -379,9 +379,21 @@ def _card_address_hidden(result):
     return result
 
 
+# `fleets gate take`'s usage: TypeScript names `--mem` and `--floor` (fleet/src/cli/fleets.ts GATE_USAGE), the twin neither.
+GATE_USAGE_FLAGS = re.compile(r" \[--mem SIZE\|PERCENT\] \[--floor SIZE\|PERCENT\](?= \| gate free TOKEN)")
+
+
+def _gate_usage_hidden(result):
+    """A step's result with `gate take`'s `--mem` and `--floor` left out of the usage line: the frozen Python twin's has neither."""
+    if isinstance(result, dict) and isinstance(result.get("stderr"), str):
+        return {**result, "stderr": GATE_USAGE_FLAGS.sub("", result["stderr"])}
+    return result
+
+
 # What a trace's header `twin.normalise` may name: a difference the frozen Python twin keeps on purpose (ADR 0003),
 # hidden on both sides before a replay on the twin is compared.
-TWIN_NORMALISERS = {"numbers": _numbers_hidden, "spawn-hint": _spawn_hint_hidden, "card-address": _card_address_hidden}
+TWIN_NORMALISERS = {"numbers": _numbers_hidden, "spawn-hint": _spawn_hint_hidden, "card-address": _card_address_hidden,
+                    "gate-usage": _gate_usage_hidden}
 
 
 def twin_view(results: list[dict], normalise: list[str]) -> list[dict]:

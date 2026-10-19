@@ -72,13 +72,21 @@ export function baseEnv(home: string, more: Readonly<Environment> = {}): Environ
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
   delete env["FLEET_NOW"];
 
+  // No cap, budget, floor, weight or scope from the session's own environment.
+  for (const key of Object.keys(env)) if (key.startsWith("FLEET_GATE_")) delete env[key];
+
   for (const key of ["FLEET_WATCH_SETTLE_USER", "FLEET_WATCH_SETTLE_MAX"]) delete env[key];
 
   // A --once watch exits with its first batch, as before it settled; a settle test gives its own. A preview's
   // processes stay in the test's own process tree (and the gate's scope), not in systemd user scopes of their own.
   // No picasso: a preview asks no real sidecar whether a watch hears it. A pruned workspace goes to a trash of the
-  // test's own, on the temp dir's filesystem (a trash on another filesystem refuses the prune).
-  return { ...env, FLEET_HOME: registry, FLEET_TRASH: join(home, "trash"), FLEET_DISCOVER: "0", FLEET_WATCH_SETTLE: "0", FLEET_PREVIEW_SCOPE: "0", FLEET_CC_SOCKS: join(home, "cc-socks"), PICASSO: join(home, "no-picasso"), ...more };
+  // test's own, on the temp dir's filesystem (a trash on another filesystem refuses the prune). No MemAvailable: the
+  // gate counts its budget alone, whatever the machine running the tests has free; a floor test gives its own meminfo,
+  // and its own cgroups for what the scopes use.
+  return {
+    ...env, FLEET_HOME: registry, FLEET_TRASH: join(home, "trash"), FLEET_DISCOVER: "0", FLEET_WATCH_SETTLE: "0", FLEET_PREVIEW_SCOPE: "0", FLEET_CC_SOCKS: join(home, "cc-socks"),
+    PICASSO: join(home, "no-picasso"), FLEET_MEMINFO: join(home, "no-meminfo"), FLEET_CGROUP_ROOT: join(home, "no-cgroup"), ...more,
+  };
 }
 
 /** Run `fleet ARGS` in this process, through the CLI's own interface, with `env` as its environment. */

@@ -1,9 +1,12 @@
 /**
  * The machine's gate (`REGISTRY/gate/`): the heavy checks of every fleet share one memory budget. A hold takes a
  * part of the budget (its cap, in bytes) or all of it (a hold taken by hand, or one an older fleet wrote), and is
- * admitted when the caps of the holds plus its own fit the budget. Whoever does not fit waits in a queue and is
- * admitted in order of arrival: only the head of the queue may take, so a large ask is never passed by smaller
- * ones that would fit. A hold lapses at its `until`, a fleet's when the fleet is no longer served, a run's when
+ * admitted when the caps of the holds plus its own fit the budget, and MemAvailable, less what the holds' caps allow
+ * them that their scopes do not use yet and less its own cap, still leaves the floor free (`--floor`, else
+ * $FLEET_GATE_MEMORY_FLOOR, else 8G): the budget counts the holds alone, and dev servers and sessions use the same
+ * memory. Whoever does not fit waits in a queue and is admitted in order of arrival: only the head of the queue may
+ * take, so a large ask is never passed by smaller ones that would fit; a waiter whose cap fits the budget and that
+ * waits for memory alone holds back nobody, since no hold's end is what it waits for. A hold lapses at its `until`, a fleet's when the fleet is no longer served, a run's when
  * its runner is gone; a waiter leaves the queue when its process is gone or its own `--wait` has run out. Every
  * change runs under an exclusive `flock` of `gate.lock`, so two takers never both pass the budget.
  *
@@ -21,7 +24,7 @@
  * frees it. A `runner` mark an older fleet's run left on one keeps the hold live while that run goes.
  */
 import { createHash } from "node:crypto";
-import { appendFileSync, closeSync, openSync, readFileSync } from "node:fs";
+import { appendFileSync, closeSync, openSync } from "node:fs";
 import { totalmem } from "node:os";
 import { join } from "node:path";
 
@@ -43,23 +46,51 @@ export const DEFAULT_CAP = "25%";
 /** Seconds a waiter stays in the queue past its own `--wait` before anyone may drop it (a stopped waiter). */
 const WAIT_GRACE_S = 10;
 
+/** What MemAvailable, less the part an ask takes, must leave free when neither `--floor` nor $FLEET_GATE_MEMORY_FLOOR says. */
+export const DEFAULT_FLOOR = "8G";
+
 /** The least memory a cap or a budget may be: under it nothing runs, and a share that rounds to no bytes is a mistake. */
 export const MIN_CAP = 64 * 1024 ** 2;
 
 /** How many lines `runs.jsonl` keeps: past twice this, the oldest are dropped. */
 const RUNS_KEPT = 1000;
 
-/** The machine's RAM in bytes: /proc/meminfo's MemTotal, else what the runtime says (the Mac). */
-export function memTotal(): number {
-  try {
-    const kb = /^MemTotal:\s+(\d+)\s+kB/m.exec(readFileSync("/proc/meminfo", "utf8"))?.[1];
+/** Where a setting comes from: the process's environment, or a test's. */
+export type Env = (name: string) => string | undefined;
 
-    if (kb !== undefined) return Number(kb) * 1024;
-  } catch {
-    // not Linux
-  }
+/** The line `key` of /proc/meminfo, or of the file $FLEET_MEMINFO names (a test's), in bytes. */
+function meminfo(key: "MemTotal" | "MemAvailable", env: Env): number | undefined {
+  const kb = new RegExp(`^${key}:\\s+(\\d+)\\s+kB`, "m").exec(readText(env("FLEET_MEMINFO") ?? "/proc/meminfo") ?? "")?.[1];
 
-  return totalmem();
+  return kb === undefined ? undefined : Number(kb) * 1024;
+}
+
+/** The machine's RAM in bytes: MemTotal (of $FLEET_MEMINFO's file when `env` names one), else what the runtime says (the Mac). */
+export function memTotal(env: Env = () => undefined): number {
+  return meminfo("MemTotal", env) ?? totalmem();
+}
+
+/** MemAvailable in bytes: /proc/meminfo's, or that of the file $FLEET_MEMINFO names (a test's); undefined where it
+ * cannot be read (the Mac), and then the gate counts its budget alone. */
+export function memAvailable(env: Env): number | undefined {
+  return meminfo("MemAvailable", env);
+}
+
+/** The directory of the systemd user manager's transient scopes: $FLEET_CGROUP_ROOT (a test's), else this user's app.slice. */
+function appSlice(env: Env): string {
+  const uid = String(process.getuid?.() ?? "");
+
+  return env("FLEET_CGROUP_ROOT") ?? `/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/app.slice`;
+}
+
+/** The memory the scope `unit` uses beyond its file cache (memory.current less memory.stat's `file`, which MemAvailable
+ * already counts as available); undefined while it has no cgroup (its run has not started, or is gone). */
+function scopeUsed(unit: string, env: Env): number | undefined {
+  const cgroup = join(appSlice(env), `${unit}.scope`);
+  const current = Number.parseInt(readText(join(cgroup, "memory.current")) ?? "", 10);
+  const file = Number(/^file (\d+)$/m.exec(readText(join(cgroup, "memory.stat")) ?? "")?.[1] ?? 0);
+
+  return Number.isNaN(current) ? undefined : Math.max(0, current - file);
 }
 
 const UNITS = { "": 1, K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4 } as const;
@@ -120,6 +151,55 @@ export function budgetOf(env: (name: string) => string | undefined): Budget | un
   return bytes === undefined ? undefined : { spec, bytes };
 }
 
+/** The memory an ask leaves free beside it, as given (`8G`, `12%`, `0`) and in bytes. */
+export interface Floor {
+  readonly spec: string;
+  readonly bytes: number;
+}
+
+/** The floor `given` (`--floor`) names, else $FLEET_GATE_MEMORY_FLOOR, else {@link DEFAULT_FLOOR}: a size or a share of
+ * the RAM, 64M at least, or 0 for none. Undefined when it does not parse. */
+export function floorOf(given: string | undefined, env: Env): Floor | undefined {
+  const set = env("FLEET_GATE_MEMORY_FLOOR")?.trim();
+  const spec = given?.trim() ?? (set === undefined || set === "" ? DEFAULT_FLOOR : set);
+  const zero = /^0+(?:\.0+)?(?:[KMGT]?i?B?|%)$/i.test(spec);
+  // A share is of the MemTotal of the meminfo MemAvailable is read from.
+  const bytes = zero ? 0 : capBytes(spec, memTotal(env));
+
+  return bytes === undefined ? undefined : { spec, bytes };
+}
+
+/** The cap of one run when `--mem` does not say: $FLEET_GATE_MEMORY_MAX, else {@link DEFAULT_CAP} of the RAM, at most
+ * `budget`. What an ask of the whole budget counts against the floor. */
+export function runCapOf(env: Env, budget: number): number {
+  const total = memTotal(env);
+
+  return Math.min(capBytes(env("FLEET_GATE_MEMORY_MAX")?.trim() ?? DEFAULT_CAP, total) ?? capBytes(DEFAULT_CAP, total) ?? budget, budget);
+}
+
+/** What an ask keeps free of the machine's memory. MemAvailable and the scopes' use are read under the gate's lock. */
+export interface Memory {
+  /** Bytes MemAvailable must keep beside what the ask and the holds may still take. */
+  readonly floor: number;
+  /** What an ask of the whole budget counts: one run's cap. Such a hold keeps every other hold out, so what the
+   * machine must have is its own run's cap and the floor. */
+  readonly whole: number;
+  /** Where MemAvailable ($FLEET_MEMINFO) and the scopes' use ($FLEET_CGROUP_ROOT) are read. */
+  readonly env: Env;
+}
+
+/** Why an ask does not fit the memory available: MemAvailable, less what the holds may still take (`unused`) and its
+ * own part, is under the floor. */
+export interface Short {
+  readonly available: number;
+  /** What the holds' caps allow them beyond what their scopes use now; a hold with no scope counts its whole cap. */
+  readonly unused: number;
+  /** The ask's own part: its cap, or one run's cap when it asks for the whole budget (`whole`). */
+  readonly part: number;
+  readonly whole: boolean;
+  readonly floor: number;
+}
+
 /** Who takes the gate: a served fleet, or a session or worker by the name it gives (`--as`). */
 export interface GateHolder {
   readonly name: string;
@@ -161,6 +241,8 @@ export interface Waiter extends GateHolder {
   readonly until: string;
   readonly pid: number;
   readonly started: string | undefined;
+  /** Whether at its last ask it fitted the budget and waited for memory alone. */
+  readonly memory: boolean;
 }
 
 /** What a process asks of the gate. */
@@ -179,12 +261,18 @@ export interface Ask {
   readonly runs: boolean;
   /** Seconds it is ready to wait; 0 never joins the queue. */
   readonly waitS: number;
+  /** What it keeps free; undefined, or where MemAvailable cannot be read, only the budget counts. */
+  readonly memory?: Memory | undefined;
 }
 
-/** Why an ask was not admitted: who holds, and who is before it in the queue. */
+/** Why an ask was not admitted: who holds, who is before it in the queue, and the memory it lacks. */
 export interface Waiting {
   readonly holders: readonly Hold[];
   readonly ahead: readonly Waiter[];
+  /** Whether its part fits the budget beside the holds. */
+  readonly fits: boolean;
+  /** Set when the memory available, less what the holds may still take and its part, is under the floor. */
+  readonly short?: Short | undefined;
 }
 
 /** The gate at an instant. */
@@ -197,6 +285,59 @@ export interface Standing {
  * budgets the holders read. One caller that reads a larger budget cannot widen it beside the others. */
 export function roomOf(budget: number, holders: readonly Hold[]): number {
   return Math.min(budget, ...holders.flatMap((h) => h.budget ?? []));
+}
+
+/** Whether a part of `cap` bytes (undefined: the whole budget) fits the budget `budget` beside `holders`. */
+function fitsBeside(cap: number | undefined, budget: number, holders: readonly Hold[]): boolean {
+  const used = holders.reduce((sum, h) => sum + (h.cap ?? Infinity), 0);
+
+  return cap === undefined ? holders.length === 0 : used + cap <= roomOf(budget, holders);
+}
+
+/** Whether `waiter` waits for memory alone: at its last ask, and still, its part fits the budget `budget` beside `holders`. */
+export function waitsForMemory(waiter: Waiter, budget: number, holders: readonly Hold[]): boolean {
+  return waiter.memory && fitsBeside(waiter.cap, budget, holders);
+}
+
+/** Why `ask` does not fit the memory available beside `holders`, or undefined when it does (or MemAvailable cannot be
+ * read). It is a condition beside the budget: the budget counts the holds, this the memory others use too (dev servers,
+ * sessions). A hold counts the part of its cap its scope has not used yet: two runs asked seconds apart each read
+ * MemAvailable before either used anything. */
+function shortOf(ask: Ask, holders: readonly Hold[]): Short | undefined {
+  const memory = ask.memory;
+  const available = memory === undefined ? undefined : memAvailable(memory.env);
+
+  if (memory === undefined || available === undefined) return undefined;
+
+  const unused = holders.reduce((sum, h) => {
+    if (h.cap === undefined) return sum;
+    const used = h.unit === undefined ? undefined : scopeUsed(h.unit, memory.env);
+
+    return sum + Math.max(0, h.cap - (used ?? 0));
+  }, 0);
+
+  const part = ask.cap ?? memory.whole;
+
+  return available - unused - part >= memory.floor ? undefined : { available, unused, part, whole: ask.cap === undefined, floor: memory.floor };
+}
+
+/** `short` in words, for `noun` (`this run`): `39.4G needed, 36.0G available (15.7G held but not yet used, 15.7G for
+ * this run, 8.0G floor)`. */
+export function shortText(short: Short, noun: string): string {
+  const parts = [
+    ...(short.unused > 0 ? [`${sizeText(short.unused)} held but not yet used`] : []),
+    `${sizeText(short.part)} for ${noun}${short.whole ? ", one run's cap, as it takes the whole budget" : ""}`,
+    `${sizeText(short.floor)} floor`,
+  ];
+
+  return `${sizeText(short.unused + short.part + short.floor)} needed, ${sizeText(short.available)} available (${parts.join(", ")})`;
+}
+
+/** What `fleet fleets gate take` and `gate run` say of a floor they cannot read: `given` is `--floor`'s value, if any. */
+export function floorRefusal(given: string | undefined, env: Env): string {
+  const what = given === undefined ? `the floor $FLEET_GATE_MEMORY_FLOOR='${env("FLEET_GATE_MEMORY_FLOOR") ?? ""}'` : `--floor '${given}'`;
+
+  return `cannot read ${what}: give a size (8G) or a share of the RAM (12%), 64M at least, or 0 to keep nothing free`;
 }
 
 /** One finished `gate run`, a line of `runs.jsonl`. */
@@ -272,6 +413,7 @@ function waiterOf(raw: JsonObject): Waiter | undefined {
     until: asString(raw["until"]) ?? "",
     pid,
     started: asString(raw["started"]),
+    memory: raw["memory"] === true,
   };
 }
 
@@ -281,7 +423,7 @@ function plus(raw: JsonObject, key: string, value: Json | undefined): JsonObject
 }
 
 function waiterJson(w: Waiter): JsonObject {
-  return plus(plus({ fleet: w.name, kind: w.kind, what: w.what, since: w.since, until: w.until, pid: w.pid }, "cap", w.cap), "started", w.started);
+  return plus(plus(plus({ fleet: w.name, kind: w.kind, what: w.what, since: w.since, until: w.until, pid: w.pid }, "cap", w.cap), "started", w.started), "memory", w.memory || undefined);
 }
 
 /** Whether the process `pid` that started at `started` still runs: a later process with its pid is another. */
@@ -291,9 +433,7 @@ function running(pid: number, started: string | undefined): boolean {
 
 /** Whether the transient scope `unit` of the systemd user manager still has processes: its cgroup is there. */
 export function scopeLives(unit: string): boolean {
-  const uid = String(process.getuid?.() ?? "");
-
-  return exists(`/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/app.slice/${unit}.scope`);
+  return exists(join(appSlice(() => undefined), `${unit}.scope`));
 }
 
 /** Whether the `gate run` of an older fleet whose mark `hold`, one taken by hand, carries still goes: its runner is
@@ -490,18 +630,21 @@ export class Gate {
     return holders.length === 0 ? undefined : fileOf(holders);
   }
 
-  /** `ask` takes its part of the budget when it is first in line and fits beside the holds: the hold it made. Else
-   * who is in its way; an ask ready to wait (`waitS`) then has its place in the queue, kept across calls by its pid. */
+  /** `ask` takes its part of the budget when it is first in line (but for waiters that wait for memory alone), fits
+   * beside the holds and leaves the floor free: the hold it made. Else who is in its way; an ask ready to wait
+   * (`waitS`) then has its place in the queue, kept across calls by its pid. */
   ask(ask: Ask, now: Date): { readonly took: Hold } | { readonly waiting: Waiting } {
     return this.locked(() => {
       const { holders, queue } = this.settled(now);
       const at = queue.findIndex((w) => w.pid === ask.pid);
-      const ahead = at < 0 ? queue : queue.slice(0, at);
-      const used = holders.reduce((sum, h) => sum + (h.cap ?? Infinity), 0);
-      const fits = ask.cap === undefined ? holders.length === 0 : used + ask.cap <= roomOf(ask.budget, holders);
+      // No hold's end frees memory for a waiter whose part fits the budget: it holds back nobody that fits now.
+      const ahead = (at < 0 ? queue : queue.slice(0, at)).filter((w) => !waitsForMemory(w, ask.budget, holders));
+      const fits = fitsBeside(ask.cap, ask.budget, holders);
+      const short = shortOf(ask, holders);
+      const memory = fits && short !== undefined;
       const since = stampOf(now);
 
-      if (ahead.length === 0 && fits) {
+      if (ahead.length === 0 && fits && short === undefined) {
         const made = this.made(ask, since, now, holders);
 
         this.keepHolds([...holders, made]);
@@ -521,12 +664,15 @@ export class Gate {
           until: stampOf(new Date(now.getTime() + (ask.waitS + WAIT_GRACE_S) * 1000)),
           pid: ask.pid,
           started: startedOf(ask.pid),
+          memory,
         };
 
         this.keepQueue([...queue, waiter]);
+      } else if (at >= 0 && queue[at]?.memory !== memory) {
+        this.keepQueue(queue.map((w, i) => (i === at ? { ...w, memory } : w)));
       }
 
-      return { waiting: { holders, ahead } };
+      return { waiting: short === undefined ? { holders, ahead, fits } : { holders, ahead, fits, short } };
     });
   }
 

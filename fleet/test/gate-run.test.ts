@@ -26,10 +26,8 @@ setDefaultTimeout(30_000);
 beforeEach(() => {
   home = join(tmp("fleet-gate-run-"), "registry");
   mkdirSync(home);
-  // This checkout's fleet, whatever newer one the machine has, and no cap, budget or weight from the session's own environment.
+  // This checkout's fleet, whatever newer one the machine has (baseEnv drops the session's FLEET_GATE_* settings).
   env = baseEnv(home, { FLEET_NO_FORWARD: "1" });
-
-  for (const key of ["FLEET_GATE_MEMORY_MAX", "FLEET_GATE_MEMORY_BUDGET", "FLEET_GATE_CPU_WEIGHT", "FLEET_GATE_CPUS", "FLEET_GATE_SCOPE"]) delete env[key];
 });
 
 interface Done {
@@ -122,7 +120,7 @@ function tree(dir: string): string[] {
 describe("gate run's arguments", () => {
   test("a fleet or --as, then the command after --", () => {
     expect(runArgs(["--as", "ui", "--wait", "1800", "--", "pnpm", "test"])).toEqual({
-      name: "ui", command: ["pnpm", "test"], waitS: 1800, minutes: 60, mem: undefined, timeoutS: 3600,
+      name: "ui", command: ["pnpm", "test"], waitS: 1800, minutes: 60, mem: undefined, floor: undefined, timeoutS: 3600,
     });
     expect(runArgs(["infra", "--for", "5", "--timeout", "30", "--mem", "8G", "--", "just", "test"])?.timeoutS).toBe(30);
     expect(runArgs(["infra", "--for", "1", "--timeout", "300", "--", "x"])?.timeoutS).toBe(60);
@@ -395,6 +393,56 @@ describe.skipIf(!SCOPE)("gate run and the budget", () => {
     expect(lines[0]).toContain("held by other (no fleet)");
     expect(lines.at(-1)).toMatch(/^last 24 h: 1 runs, wait median 0s, p90 \d+s, memory peak max [\d.]+[KMG], 1 gave up waiting$/);
     expect(standing().day).toMatchObject({ runs: 1, gave_up: 1, median_wait: 0, capped: 0 });
+  });
+});
+
+describe("gate run and the memory available", () => {
+  const GB = 1024 ** 3;
+
+  /** No scope, so the run asks for the whole budget, 32G, and counts its cap, 16G, against the floor; a meminfo whose
+   * MemAvailable is `available` bytes. */
+  function withAvailable(available: number, more: Readonly<Environment> = {}): Environment {
+    const path = join(home, "meminfo");
+    writeFileSync(path, `MemTotal:       67108864 kB\nMemAvailable:   ${String(available / 1024)} kB\n`);
+
+    return { FLEET_GATE_SCOPE: "0", FLEET_GATE_MEMORY_BUDGET: "32G", FLEET_GATE_MEMORY_MAX: "16G", FLEET_MEMINFO: path, ...more };
+  }
+
+  test("below the floor it waits in the queue, says why, and gives up at --wait, exit 75, running nothing", () => {
+    const done = gate(["run", "--as", "w1", "--wait", "1", "--", "sh", "-c", "echo ran"], withAvailable(20 * GB));
+    expect(done.code).toBe(75);
+    expect(done.stdout).toBe("");
+    expect(done.stderr).toContain("gate run: not enough memory: 24.0G needed, 20.0G available (16.0G for this run, one run's cap, as it takes the whole budget, 8.0G floor); place 1 in the queue; waiting up to 1s\n");
+    expect(done.stderr).toContain(
+      "gate run: not enough memory: 24.0G needed, 20.0G available (16.0G for this run, one run's cap, as it takes the whole budget, 8.0G floor); place 1 in the queue; gave up after 1s without running the command (exit 75). " +
+        "Run it again later, or with a longer --wait\n",
+    );
+    expect(records()[0]).toMatchObject({ name: "w1", code: 75, ran: null });
+    expect(standing()).toMatchObject({ holders: [], queue: [] });
+  });
+
+  test("it runs once memory frees within --wait", async () => {
+    const short = withAvailable(20 * GB);
+    const runner = Bun.spawn([FLEET, "fleets", "gate", "run", "--as", "w1", "--wait", "30", "--", "sh", "-c", "echo ran"], { env: { ...env, ...short }, stdout: "pipe", stderr: "pipe" });
+    expect(await until(() => standing().queue.length === 1, 10000)).toBe(true);
+    withAvailable(24 * GB);
+    expect(await runner.exited).toBe(0);
+    expect(await new Response(runner.stdout).text()).toBe("ran\n");
+  });
+
+  test("--floor, else $FLEET_GATE_MEMORY_FLOOR, sets the floor; one that cannot be read is refused before anything waits (exit 2)", () => {
+    expect(gate(["run", "--as", "w1", "--floor", "4G", "--", "true"], withAvailable(20 * GB)).code).toBe(0);
+    expect(gate(["run", "--as", "w1", "--", "true"], withAvailable(20 * GB, { FLEET_GATE_MEMORY_FLOOR: "4G" })).code).toBe(0);
+    const bad = gate(["run", "--as", "w1", "--floor", "lots", "--", "sh", "-c", "echo ran"], withAvailable(64 * GB));
+    expect(bad.code).toBe(2);
+    expect(bad.stdout).toBe("");
+    expect(bad.stderr).toBe("gate run: cannot read --floor 'lots': give a size (8G) or a share of the RAM (12%), 64M at least, or 0 to keep nothing free\n");
+  });
+
+  test("where MemAvailable cannot be read, --floor is ignored, and says so", () => {
+    const done = gate(["run", "--as", "w1", "--floor", "4G", "--", "true"], { FLEET_GATE_SCOPE: "0" });
+    expect(done.code).toBe(0);
+    expect(done.stderr).toContain("gate run: no MemAvailable here (no /proc/meminfo): --floor is ignored, and only the budget counts\n");
   });
 });
 
