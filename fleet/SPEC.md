@@ -4320,13 +4320,56 @@ a fleet may opt into one **shared** working copy (`workspace_mode: "shared"`).
   at that repo's store; (3) after a snapshot of its files (a stale workspace is updated first: jj then
   keeps its unsnapshotted files in a copy of its change) nothing is ahead of the stack:
   `(::(NAME@ | change_id(<its change>)) ~ ::default@ ~ immutable()) ~ (empty() & description(exact:""))`
-  is empty (integrated, abandoned, or empty). Going: `jj workspace forget NAME`, the directory deleted,
-  the row `status: pruned` with `pruned`, an `integrated` event. Kept: `ws: kept NAME: <why>` on
-  stderr, naming the changes not in the stack; exit 1 when any is kept. Only a recorded directory is
-  ever deleted, so a workspace made by hand, or a recorded path that is something else now, is never
-  touched. **The default is the dry run** (prints what would go and what stays): the delete reaches
-  files jj never snapshots (ignored ones: `.env`, build output, a worker's notes), and a worker marked
-  done too early loses its directory, so the delete takes a second, deliberate command, `--apply`.
+  is empty (integrated, abandoned, or empty). Going: the directory moved to [the trash](#the-workspace-trash)
+  (`pruned a1: PATH is in the trash, repo/a1@20260105T090000Z: \`fleet ws restore repo/a1@20260105T090000Z\`
+  brings it back`), then `jj workspace forget NAME` (a forget that fails puts the folder back), the row
+  `status: pruned` with `pruned`, an `integrated` event (`... ; PATH moved to the trash (ENTRY).`). Kept:
+  `ws: kept NAME: <why>` on stderr, naming the changes not in the stack; exit 1 when any is kept. Only a
+  recorded directory is ever moved, so a workspace made by hand, or a recorded path that is something else
+  now, is never touched. **The default is the dry run** (prints what would go and what stays,
+  `would prune a1: forget the workspace and move PATH to the trash; ...`): the move takes files jj never
+  snapshots (ignored ones: `.env`, `.dev.vars`, build output, a worker's notes) out of reach of the
+  worker, so it takes a second, deliberate command, `--apply`.
+- <a id="the-workspace-trash"></a>**The trash** (TypeScript only; the idea is rift's, github.com/anomalyco/rift).
+  Twice a workspace removal deleted what nothing could bring back (agent-tools' hm2 workspace; on
+  2026-10-19 a hand-run prune of 29 folders with their ignored files): jj keeps committed work, not a
+  folder's ignored files. So prune deletes nothing: it renames the folder to
+  `<trash>/<repo's basename>/<workspace>@<UTC stamp, 20260105T090000Z>` (`-2`, `-3` on a clash), beside
+  `<entry>.json`, a note `{repo, workspace, path, commit (its last @), parents (that commit's), trashed,
+  fleet (DIR), why}` written first. The trash is `$FLEET_TRASH`, else `$XDG_DATA_HOME/fleet/trash`, else
+  `~/.local/share/fleet/trash`: one per machine, shared by every fleet. The move is a rename, never a copy:
+  a trash on another filesystem than the folder (`st_dev` differs), a note that cannot be written, or a
+  rename that fails keeps that workspace, folder, jj workspace and row alike (`ws: kept a1: could not move
+  PATH to the trash (<why>); nothing is deleted`), and never falls back to deleting. These three take no
+  DIR (the fleet-name lookup leaves `trash`, `restore` and `gc` alone):
+  - `fleet ws trash`: a line naming the trash and how many entries, then per entry, oldest first,
+    `<entry>  <age, 8d 1h>  <size, N KB>  <workspace> of <repo>, fleet <DIR>: <why>` and `    was <path>,
+    its @ <commit>`.
+  - `fleet ws restore ENTRY`: the folder goes back to its old path, or to `<path>-restored` (`-2`, ...)
+    when that is taken, and becomes jj's workspace again, named as before (`<name>-restored` when jj has
+    that name now): `restored ENTRY to PATH: jj workspace a1 again, on <parents>`. `jj workspace add`
+    makes a workspace only in an empty directory and has no flag to adopt one, so restore adds it at the
+    path on the noted parents with `--sparse-patterns empty` (only its `.jj` is written), swaps that `.jj`
+    into the folder in place of the stale one, removes the now empty directory, renames the folder in and
+    runs `jj sparse reset`, which skips every file already on disk as a conflicting change: no file of the
+    folder is overwritten, and the next snapshot takes what it holds beyond the parents into the new @.
+    So a restore starts on the old @'s parents, not on the old @: that @'s description does not come
+    back, and a file it deleted comes back from the parents, but no file of the folder is lost. A noted
+    parent jj no longer has (`present()` finds nothing) is dropped, and the line says so (`... (its noted
+    parent <id> is gone)`); with none left, the workspace starts on the default workspace's parents.
+    When jj cannot add it (the repo gone, a parent jj refuses), restore forgets the workspace jj
+    registered before it failed and removes the `.jj` and empty directory it made, and the folder still
+    comes back, as plain files with a stale `.jj`: restore prints jj's `Error:` line and exits 1. An
+    old `.jj` whose `repo` is a directory holds a repo's own store, not a workspace's pointer to one:
+    restore leaves it at `<entry>.stale-jj`, says so and exits 1. The fleet's row stays `pruned`: a
+    restored workspace is one the fleet does not record, so `prune` never touches it again.
+  - `fleet ws gc [--older-than DAYS] [--dry-run]`: deletes each entry, folder and note, older than DAYS
+    (7) by the stamp in its name (`deleted ENTRY (8d 1h old)`, then `N entries younger than 7 days kept`);
+    `--dry-run` prints `would delete ...` and `dry run, nothing deleted` and touches nothing. An entry
+    with no stamp in its name has no age: gc keeps it and names it on a line of its own (`1 entry with
+    no stamp in its name kept: repo/e`); a note with no folder beside it is named too (`a note with no
+    folder, kept: PATH`); an `<entry>.stale-jj` is no entry, for `trash` or gc. It is the only command
+    that deletes a workspace's folder for good.
 
 ## The preview (`fleet preview`)
 
@@ -4569,7 +4612,7 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   preview and every per-worker one. The record keeps the ports with no pids. The workspace stays for the next start. **`fleet ws prune`** keeps
   the preview's workspace while its dev server, its keeper (the server asleep or waking) or its updater
   runs (`ws: kept preview: the fleet's preview is running (...)`) or when its @ holds changes of its own; otherwise it forgets it, abandons its merge
-  commit, deletes the directory and the record.
+  commit, moves the directory to [the trash](#the-workspace-trash) and removes the record.
 - **The record**, `DIR/preview.json`: `{fleet, workspace, path, repo, server {cmd, port, pid, pid_started, unit, base, path,
   log, started, public, keeper, keeper_started, keeper_unit, asleep, failed {at, why, log}}, updater, updater_started, include[], exclude[], merged[] {id, workspace, commit, change},
   left_out[] {id, workspace, commit, own, conflicts[] {path, workers[]}}, stack,
@@ -4772,13 +4815,14 @@ recommendation attached.
 | the plugin's hook (`onepw_watch`, `onepw_hold`) | `REGISTRY/onepw/locked.json` (under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken` (a state that did not read, set aside), `REGISTRY/onepw/onepw.log` |
 | the hub (its settle timer, `POST onepw/unlocked`), `fleet onepw unlocked` outside Claude Code | `REGISTRY/onepw/locked.json` (`cleared`, `lapsed` and `told` set, rows dropped, kinds pruned, and the file removed when nothing is left; under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken`, `REGISTRY/onepw/onepw.log`, and for each held fleet the hub's notice: its `DIR/chat.jsonl` (under the store's lock), or one line to its session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, when its host's watch is dead |
 | `state`, on a write that numbers a row or `approval add next` (TypeScript only) | `REGISTRY/numbers/numbers.json` (under `REGISTRY/numbers/numbers.lock`), when `REGISTRY` exists |
-| `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / deleted (a shared fleet's `add` writes nothing); whatever the repo's ws-add hook (or `devenv-run --prepare`) writes |
+| `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / moved to the trash with its note, `TRASH/<repo>/<entry>` and `<entry>.json` (a shared fleet's `add` writes nothing); whatever the repo's ws-add hook (or `devenv-run --prepare`) writes |
+| `fleet ws restore` / `gc` | the entry's folder moved back and a jj workspace added there (`jj workspace add`, `jj sparse reset`), its note removed / each entry past the age deleted, folder and note |
 | `fleet ws add --reuse` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; a new change in the workspace (`jj new`) |
 | `fleet ws split` | `DIR/state.json` (`events`, `updated`), `DIR/index.html`; the default workspace's `@` split in two |
 | `fleet preview start` / `stop` / `set` | `DIR/state.json` (`workspaces` with the preview's row on its first start, `preview` by `set`, `events`, `updated`), `DIR/index.html`; `DIR/preview.json` (under `DIR/preview.lock`); `DIR/preview/*.log`; the `<repo>-preview` workspace (made once); a node_modules install in a workspace that has none |
 | `fleet preview include` / `exclude`, the hub's `POST preview-workers` | `DIR/preview.json` |
 | `fleet preview`'s updater | `DIR/preview.json` when the merge changed; the preview workspace's @ (rebased, also for each trial of a worker that may conflict) and its files (`update-stale`, a clean merge only); jj's operation log (each worker snapshot that records an edit); `DIR/chat.jsonl` (one `[hub]` line when a worker is left out, the same worker and reason not again within 10 minutes) |
-| `fleet ws prune --apply` of the preview | its directory deleted, its merge commit abandoned, `DIR/preview.json` removed |
+| `fleet ws prune --apply` of the preview | its directory moved to the trash, its merge commit abandoned, `DIR/preview.json` removed |
 
 ## Oracle traces
 
