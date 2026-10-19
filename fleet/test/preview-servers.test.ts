@@ -165,7 +165,7 @@ describe("fleet preview stop, and prune", () => {
 
     preview("stop");
     const gone = fleet(["ws", dir, "prune", "--apply"], env);
-    expect(gone.stdout).toContain(`pruned preview: ${ws("preview")} deleted`);
+    expect(gone.stdout).toContain(`pruned preview: ${ws("preview")} is in the trash, `);
     expect(existsSync(ws("preview"))).toBe(false);
     expect(jj(repo, "workspace", "list", "-T", 'name ++ "\\n"')).toBe("a1\na2\ndefault\n");
     expect(jj(repo, "log", "--no-graph", "--ignore-working-copy", "-r", "merges()", "-T", "commit_id")).toBe("");

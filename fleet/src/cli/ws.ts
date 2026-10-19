@@ -25,13 +25,15 @@
  *   copy's @ into one described change.
  * - `list`: each workspace's tip, whether it is empty or conflicted, what it holds that the stack (the
  *   default workspace's @) does not, and when its worker was last seen.
- * - `prune [--apply | --dry-run]`: forgets and deletes the workspaces whose worker is no longer live and
- *   whose changes are all in the stack (or empty, or abandoned); refuses the others, naming why. Only a
- *   directory recorded here, that jj knows as that workspace of that repo, is ever deleted. Without
- *   `--apply` it is a dry run: deletion reaches files jj never snapshotted (ignored ones), so it waits
- *   for a second, deliberate command.
+ * - `prune [--apply | --dry-run]`: forgets the workspaces whose worker is no longer live and whose changes
+ *   are all in the stack (or empty, or abandoned), and moves their folders to the trash; refuses the others,
+ *   naming why. Only a directory recorded here, that jj knows as that workspace of that repo, is ever
+ *   moved. Without `--apply` it is a dry run.
+ * - `fleet ws trash`, `restore ENTRY`, `gc [--older-than DAYS] [--dry-run]` (no DIR: the trash is the
+ *   machine's): list the trash, bring an entry back as a jj workspace, delete the entries past the age
+ *   (7 days). The folder holds files jj never snapshots (ignored ones: `.dev.vars`, notes), so a prune is
+ *   undone until gc runs, and gc is the only command that deletes a workspace's folder.
  */
-import { rmSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -57,13 +59,14 @@ import { pageHtml, readTemplate, writePage } from "../page/render.ts";
 import { view } from "../page/view.ts";
 import { HOOK_PATH, HOOK_TIMEOUT_S, hookOutcome, hookRecord, planHook, runHook, type HookCall, type HookRun } from "../ws/hook.ts";
 import { changes, jj, literal, unintegratedRevset, why, workspaceNames, workspaceRoot, type Change } from "../ws/jj.ts";
+import { collect, listing, restore, toTrash, trashHome, untrash, type Note, type Trashed } from "../ws/trash.ts";
 import { readObject } from "../registry.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 
 const USAGE =
   "usage: fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] [--no-preview] [--hook-timeout S] | add WORKER --reuse WORKSPACE|WORKER [-r BASE] [--no-preview] [--hook-timeout S] | " +
-  "split WORKER -m MESSAGE [--repo PATH] | list | prune [--apply | --dry-run]";
+  "split WORKER -m MESSAGE [--repo PATH] | list | prune [--apply | --dry-run]; fleet ws trash | restore ENTRY | gc [--older-than DAYS] [--dry-run]";
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
 
@@ -808,6 +811,28 @@ export function pruneOutlook(root: string, raw: JsonObject): string[] {
   ];
 }
 
+/** The workspace's @ and its parents, read before it is forgotten. */
+interface Tip {
+  readonly change: string;
+  readonly commit: string;
+  readonly parents: string[];
+}
+
+function tipOf(r: Recorded): Tip | undefined {
+  const read = jj(r.repo, ["log", "--no-graph", "-r", `${literal(r.id)}@`, "-T", 'change_id ++ "|" ++ commit_id ++ "|" ++ parents.map(|c| c.commit_id()).join(" ")'], true);
+  const [change, commit, parents] = read.stdout.trim().split("|");
+
+  return !read.ok || change === undefined || commit === undefined ? undefined : { change, commit, parents: (parents ?? "").split(" ").filter((p) => p !== "") };
+}
+
+/** What the trash keeps beside a pruned workspace's folder. */
+function noteOf(machine: Machine, root: string, raw: JsonObject, r: Recorded, tip: Tip | undefined): Note {
+  const status = statusOf(raw, r.agent);
+  const reason = r.preview ? "the fleet's preview, stopped" : `its worker ${r.agent} ${status === undefined ? "has no row" : `is ${status}`} and its changes are in the stack`;
+
+  return { repo: r.repo, workspace: r.id, path: r.path, commit: tip?.commit ?? null, parents: tip?.parents ?? [], trashed: stampOf(machine.now()), fleet: root, why: `fleet ws prune --apply: ${reason}` };
+}
+
 function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly string[]): Effect.Effect<number, Refusal, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
@@ -830,8 +855,8 @@ function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly s
     }
 
     if (!apply) {
-      for (const r of going) out.out(`would prune ${r.id}: forget the workspace and delete ${r.path}; ${r.preview ? "the fleet's preview, and nothing runs there" : "its changes are in the stack"}\n`);
-      out.out(going.length === 0 ? "nothing to prune\n" : `dry run, nothing deleted: \`fleet ws ${root} prune --apply\` does it\n`);
+      for (const r of going) out.out(`would prune ${r.id}: forget the workspace and move ${r.path} to the trash; ${r.preview ? "the fleet's preview, and nothing runs there" : "its changes are in the stack"}\n`);
+      out.out(going.length === 0 ? "nothing to prune\n" : `dry run, nothing moved: \`fleet ws ${root} prune --apply\` does it\n`);
 
       return kept > 0 ? 1 : 0;
     }
@@ -840,33 +865,49 @@ function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly s
     const events: JsonObject[] = [];
     const gone = new Set<string>();
 
-    for (const r of going) {
-      // The preview's merge commit goes with it: nothing else descends from it.
-      const merge = r.preview ? changes(r.repo, `${literal(r.id)}@`)?.[0] : undefined;
+    const home = trashHome(machine.env);
 
-      if ((workspaceNames(r.repo) ?? []).includes(r.id)) {
+    for (const r of going) {
+      const known = (workspaceNames(r.repo) ?? []).includes(r.id);
+      // The preview's merge commit goes with it: nothing else descends from it.
+      const tip = known ? tipOf(r) : undefined;
+      let trashed: Trashed | undefined;
+
+      if (isDir(r.path)) {
+        const moved = toTrash(home, noteOf(machine, root, raw, r, tip), machine.now());
+
+        if ("refused" in moved) {
+          kept += 1;
+          out.err(`ws: kept ${r.id}: ${moved.refused}\n`);
+          continue;
+        }
+
+        trashed = moved;
+      }
+
+      if (known) {
         const forgot = jj(r.repo, ["workspace", "forget", r.id]);
 
         if (!forgot.ok) {
+          const back = trashed === undefined ? undefined : untrash(trashed, r.path);
           kept += 1;
-          out.err(`ws: kept ${r.id}: ${why(forgot)}\n`);
+          out.err(`ws: kept ${r.id}: ${why(forgot)}${back === undefined ? "" : `; its folder stays in the trash, ${trashed?.id ?? ""} (${back})`}\n`);
           continue;
         }
       }
 
-      if (merge !== undefined) jj(r.repo, ["--ignore-working-copy", "abandon", `change_id(${merge.change})`]);
-
-      if (isDir(r.path)) rmSync(r.path, { recursive: true, force: true });
+      if (r.preview && tip !== undefined) jj(r.repo, ["--ignore-working-copy", "abandon", `change_id(${tip.change})`]);
 
       if (r.preview) forgetPreview(root);
       else forgetIncluded(root, r.agent);
       gone.add(r.id);
+      const where = trashed === undefined ? `${r.path} was gone already` : `${r.path} moved to the trash (${trashed.id})`;
       events.push(
         r.preview
-          ? event(machine, raw, null, "note", `Workspace ${r.id} pruned: the fleet's preview, stopped; ${r.path} deleted.`)
-          : event(machine, raw, r.agent, "integrated", `Workspace ${r.id} pruned: its changes are in the stack; ${r.path} deleted.`),
+          ? event(machine, raw, null, "note", `Workspace ${r.id} pruned: the fleet's preview, stopped; ${where}.`)
+          : event(machine, raw, r.agent, "integrated", `Workspace ${r.id} pruned: its changes are in the stack; ${where}.`),
       );
-      out.out(`pruned ${r.id}: ${r.path} deleted\n`);
+      out.out(trashed === undefined ? `pruned ${r.id}: ${r.path} was gone already\n` : `pruned ${r.id}: ${r.path} is in the trash, ${trashed.id}: \`fleet ws restore ${trashed.id}\` brings it back\n`);
     }
 
     if (gone.size === 0) {
@@ -890,9 +931,47 @@ function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly s
   });
 }
 
+/** The commands of the machine's workspace trash, which take no fleet directory. */
+export const TRASH_COMMANDS: ReadonlySet<string> = new Set(["trash", "restore", "gc"]);
+
+function trashCommand(machine: Machine, command: string, argv: readonly string[]): Effect.Effect<number, Refusal, Out> {
+  return Effect.gen(function* () {
+    const out = yield* Out;
+    const home = trashHome(machine.env);
+
+    if (command === "trash" && argv.length === 0) {
+      for (const line of listing(home, machine.now())) out.out(`${line}\n`);
+
+      return 0;
+    }
+
+    if (command === "restore" && argv.length === 1 && argv[0] !== undefined) {
+      const done = restore(home, argv[0]);
+
+      if ("refused" in done) return yield* refuse(done.refused);
+
+      for (const line of done.lines) out.out(`${line}\n`);
+
+      return done.ok ? 0 : 1;
+    }
+
+    const [older, rest] = option(argv, "--older-than");
+    const days = older === undefined ? 7 : Number(older);
+    const dry = rest.includes("--dry-run");
+
+    if (command !== "gc" || rest.some((a) => a !== "--dry-run") || (argv.includes("--older-than") && older === undefined) || !Number.isFinite(days) || days < 0 || older?.trim() === "") return yield* refuse(USAGE);
+
+    for (const line of collect(home, machine.now(), days, dry)) out.out(`${line}\n`);
+
+    return 0;
+  });
+}
+
 function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, Refusal, Out> {
   return Effect.gen(function* () {
     const [dir, command, ...rest] = argv;
+
+    if (dir !== undefined && TRASH_COMMANDS.has(dir)) return yield* trashCommand(machine, dir, argv.slice(1));
 
     if (dir === undefined || command === undefined) return yield* refuse(USAGE);
     const root = resolvePath(dir);

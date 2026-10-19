@@ -26,7 +26,7 @@ import { CONTROL_CLIS, controlCli } from "./hub.ts";
 import { stateCli } from "./state.ts";
 import { tellCli } from "./tell.ts";
 import { turnCli } from "./turn.ts";
-import { wsCli } from "./ws.ts";
+import { TRASH_COMMANDS, wsCli } from "./ws.ts";
 
 const USAGE = "usage: fleet {version,ls,tell,state,chat,fleets,news,onepw,ws,preview,brief,turn,advisor,hub,serve,render,usage,spend,served} ...\n";
 
@@ -58,6 +58,9 @@ export function withFleetDir(argv: readonly string[], machine: Machine): string[
   const [cli, first, ...more] = argv;
 
   if (cli === undefined || first === undefined || !DIR_CLIS.has(cli) || first.includes("/") || first.startsWith("-") || existsSync(first)) return [...argv];
+
+  // `fleet ws trash|restore|gc` take no fleet's directory: a fleet whose name holds "gc" is not meant.
+  if (cli === "ws" && TRASH_COMMANDS.has(first)) return [...argv];
   const fits = fleetsNamed(machine.registry.live(), first);
 
   if (fits.length === 1 && fits[0] !== undefined) return [cli, fits[0].dir, ...more];

@@ -3,13 +3,14 @@
  * records it; `list` says what each holds; `prune` deletes only what is recorded, known to jj as that
  * workspace, idle, and integrated, and refuses the rest by name.
  */
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
+import { toTrash } from "../src/ws/trash.ts";
 import { baseEnv, FLEET, fleet, fleetAsync, readJson, tmp, type Environment } from "./support.ts";
 
 // Each test runs jj as a subprocess, up to 51 times (with the fleet CLI's own calls). 2026-10-16, 32 cores at load 48:
@@ -198,7 +199,7 @@ describe("fleet ws prune", () => {
     const { done, open } = twoWorkers();
     const ran = ws("prune");
     expect(ran.code).toBe(1);
-    expect(ran.stdout).toBe(`would prune a1: forget the workspace and delete ${done}; its changes are in the stack\ndry run, nothing deleted: \`fleet ws ${dir} prune --apply\` does it\n`);
+    expect(ran.stdout).toBe(`would prune a1: forget the workspace and move ${done} to the trash; its changes are in the stack\ndry run, nothing moved: \`fleet ws ${dir} prune --apply\` does it\n`);
     expect(ran.stderr).toMatch(/^ws: kept a2: 1 change\(s\) not in the stack: \w+ a2: two\n$/);
     expect([existsSync(done), existsSync(open)]).toEqual([true, true]);
     expect(workspaces().map((w) => w["status"])).toEqual(["active", "active"]);
@@ -210,7 +211,7 @@ describe("fleet ws prune", () => {
     const { done, open } = twoWorkers();
     const ran = ws("prune", "--apply");
     expect(ran.code).toBe(1);
-    expect(ran.stdout).toBe(`pruned a1: ${done} deleted\n`);
+    expect(ran.stdout).toBe(`pruned a1: ${done} is in the trash, repo/a1@20260105T090000Z: \`fleet ws restore repo/a1@20260105T090000Z\` brings it back\n`);
     expect(ran.stderr).toContain("ws: kept a2: 1 change(s) not in the stack");
     expect([existsSync(done), existsSync(open)]).toEqual([false, true]);
     expect(jj(repo, "workspace", "list", "-T", 'name ++ "\\n"')).toBe("a2\ndefault\n");
@@ -224,7 +225,7 @@ describe("fleet ws prune", () => {
     expect(ws("list").stdout).not.toContain("a1");
     // integrate a2 too, then it goes
     jj(repo, "rebase", "-r", "a2@-", "-B", "@");
-    expect(ws("prune", "--apply").stdout).toBe(`pruned a2: ${open} deleted\n`);
+    expect(ws("prune", "--apply").stdout).toContain(`pruned a2: ${open} is in the trash, repo/a2@20260105T090000Z`);
     expect(existsSync(open)).toBe(false);
   });
 
@@ -279,6 +280,224 @@ describe("fleet ws prune", () => {
     expect(ws("prune", "--apply").code).toBe(0);
     expect(jj(repo, "workspace", "list", "-T", 'name ++ "\\n"')).toBe("default\n");
     expect(workspaces()[0]?.["status"]).toBe("pruned");
+  });
+});
+
+describe("the trash: a pruned workspace is moved, not deleted, until gc", () => {
+  const ID = "repo/a1@20260105T090000Z";
+
+  function trash(): string {
+    return join(base, "registry", "trash");
+  }
+
+  /** A done worker a1 whose change is integrated, and whose workspace holds an ignored file and a scratch note. */
+  function integrated(): string {
+    writeFileSync(join(repo, ".gitignore"), ".dev.vars\nnotes/\n");
+    jj(repo, "describe", "-m", "ignore");
+    jj(repo, "new");
+    state("agent", "a1", "--task", "t", "--milestone", "m1");
+    ws("add", "a1", "--repo", repo);
+    const at = join(base, "repo-a1");
+    work(at, "one.txt", "a1: one");
+    writeFileSync(join(at, ".dev.vars"), "TOKEN=only here\n");
+    mkdirSync(join(at, "notes"));
+    writeFileSync(join(at, "notes", "scratch.md"), "half a thought\n");
+    jj(repo, "rebase", "-r", "a1@-", "-B", "@");
+    state("agent", "a1", "--status", "done");
+
+    return at;
+  }
+
+  test("prune --apply moves the folder, ignored files and all, to the trash beside a note, and forgets the workspace", () => {
+    const at = integrated();
+    const tip = jj(repo, "log", "--no-graph", "-r", "a1@", "-T", 'commit_id ++ "|" ++ parents.map(|c| c.commit_id()).join(",")').split("|");
+    const ran = ws("prune", "--apply");
+    expect([ran.code, ran.stderr]).toEqual([0, ""]);
+    expect(ran.stdout).toBe(`pruned a1: ${at} is in the trash, ${ID}: \`fleet ws restore ${ID}\` brings it back\n`);
+    expect(existsSync(at)).toBe(false);
+    const entry = join(trash(), "repo", "a1@20260105T090000Z");
+    expect(readFileSync(join(entry, ".dev.vars"), "utf8")).toBe("TOKEN=only here\n");
+    expect(readFileSync(join(entry, "notes", "scratch.md"), "utf8")).toBe("half a thought\n");
+    expect(readJson(`${entry}.json`)).toEqual({
+      repo,
+      workspace: "a1",
+      path: at,
+      commit: tip[0] ?? "",
+      parents: [tip[1] ?? ""],
+      trashed: "2026-01-05T09:00:00+00:00",
+      fleet: dir,
+      why: "fleet ws prune --apply: its worker a1 is done and its changes are in the stack",
+    });
+    expect(jj(repo, "workspace", "list", "-T", 'name ++ "\\n"')).toBe("default\n");
+    expect(asObject(lastEvent())?.["text"]).toBe(`Workspace a1 pruned: its changes are in the stack; ${at} moved to the trash (${ID}).`);
+  });
+
+  test("restore brings the folder and its ignored files back to its old path, and jj knows it as the workspace again", () => {
+    const at = integrated();
+    const parent = jj(repo, "log", "--no-graph", "-r", "a1@-", "-T", "commit_id");
+    expect(ws("prune", "--apply").code).toBe(0);
+    const ran = fleet(["ws", "restore", ID], env);
+    expect([ran.code, ran.stderr]).toEqual([0, ""]);
+    expect(ran.stdout).toBe(`restored ${ID} to ${at}: jj workspace a1 again, on ${parent.slice(0, 12)}\n`);
+    expect(readFileSync(join(at, ".dev.vars"), "utf8")).toBe("TOKEN=only here\n");
+    expect(readFileSync(join(at, "notes", "scratch.md"), "utf8")).toBe("half a thought\n");
+    expect(jj(repo, "workspace", "list", "-T", 'name ++ "\\n"')).toBe("a1\ndefault\n");
+    expect(jj(repo, "workspace", "root", "--name", "a1").trim()).toBe(at);
+    expect(jj(at, "log", "--no-graph", "-r", "@", "-T", 'parents.map(|c| c.commit_id()).join(",") ++ "|" ++ empty')).toBe(`${parent}|true`);
+    expect(jj(at, "status")).toContain("The working copy has no changes.");
+    expect(readdirSync(join(trash(), "repo"))).toEqual([]);
+  });
+
+  /** Rewrite the trashed a1's note with `parents`, as a hand-edited note or a parent jj lost would leave it. */
+  function noteParents(parents: readonly string[]): void {
+    const note = join(trash(), "repo", "a1@20260105T090000Z.json");
+    writeFileSync(note, JSON.stringify({ ...readJson(note), parents }));
+  }
+
+  test("restore on a noted parent jj no longer has starts on the default workspace's parents, and says the parent is gone", () => {
+    const at = integrated();
+    expect(ws("prune", "--apply").code).toBe(0);
+    noteParents(["0123456789abcdef0123456789abcdef01234567"]);
+    const ran = fleet(["ws", "restore", ID], env);
+    expect([ran.code, ran.stderr, ran.stdout]).toEqual([0, "", `restored ${ID} to ${at}: jj workspace a1 again, on the default workspace's parents (its noted parent 0123456789ab is gone)\n`]);
+    expect(readFileSync(join(at, ".dev.vars"), "utf8")).toBe("TOKEN=only here\n");
+    expect(jj(repo, "workspace", "list", "-T", 'name ++ "\\n"')).toBe("a1\ndefault\n");
+    expect(jj(repo, "workspace", "root", "--name", "a1").trim()).toBe(at);
+    expect(jj(at, "log", "--no-graph", "-r", "@-", "-T", "commit_id")).toBe(jj(repo, "log", "--no-graph", "-r", "@-", "-T", "commit_id"));
+    expect(readdirSync(join(trash(), "repo"))).toEqual([]);
+  });
+
+  test("a restore jj cannot add leaves no workspace behind and brings the folder back as plain files, with jj's error", () => {
+    const at = integrated();
+    expect(ws("prune", "--apply").code).toBe(0);
+    noteParents(["x("]);
+    const ran = fleet(["ws", "restore", ID], env);
+    expect([ran.code, ran.stderr, ran.stdout]).toEqual([
+      1,
+      "",
+      `restored ${ID} to ${at}, as plain files: jj could not add it as workspace a1 (Error: Failed to parse revset: Syntax error); its .jj is stale, so jj there fails until the folder is a workspace again\n`,
+    ]);
+    expect(readFileSync(join(at, ".dev.vars"), "utf8")).toBe("TOKEN=only here\n");
+    expect(jj(repo, "workspace", "list", "-T", 'name ++ "\\n"')).toBe("default\n");
+    expect(existsSync(`${at}-restored`)).toBe(false);
+    expect(readdirSync(join(trash(), "repo"))).toEqual([]);
+  });
+
+  test("restore never deletes an old .jj that holds a repo's store, as a hand-written note pointing at a repo would leave", () => {
+    const other = join(base, "other");
+    Bun.spawnSync(["jj", "git", "init", other], { stdout: "ignore", stderr: "ignore" });
+    writeFileSync(join(other, "kept.txt"), "mine\n");
+    const entry = join(trash(), "repo", "other@20260105T090000Z");
+    mkdirSync(join(trash(), "repo"), { recursive: true });
+    Bun.spawnSync(["mv", other, entry]);
+    const at = join(base, "repo-other");
+    writeFileSync(`${entry}.json`, JSON.stringify({ repo, workspace: "other", path: at, parents: [] }));
+    const ran = fleet(["ws", "restore", "repo/other@20260105T090000Z"], env);
+    expect([ran.code, ran.stderr, ran.stdout]).toEqual([
+      1,
+      "",
+      `restored repo/other@20260105T090000Z to ${at}: jj workspace other again, on the default workspace's parents\nws: kept ${entry}.stale-jj: its repo is a directory, a repo's own store, so restore does not delete it\n`,
+    ]);
+    expect(existsSync(join(`${entry}.stale-jj`, "repo", "store"))).toBe(true);
+    expect(readFileSync(join(at, "kept.txt"), "utf8")).toBe("mine\n");
+  });
+
+  test("restore to a path that is taken goes beside it, and says so", () => {
+    const at = integrated();
+    ws("prune", "--apply");
+    mkdirSync(at);
+    writeFileSync(join(at, "someone else's"), "x\n");
+    const ran = fleet(["ws", "restore", ID], env);
+    expect(ran.code).toBe(0);
+    expect(ran.stdout).toContain(`restored ${ID} to ${at}-restored (${at} is taken): jj workspace a1 again`);
+    expect(readFileSync(join(`${at}-restored`, ".dev.vars"), "utf8")).toBe("TOKEN=only here\n");
+    expect(existsSync(join(at, "someone else's"))).toBe(true);
+    expect(jj(repo, "workspace", "root", "--name", "a1").trim()).toBe(`${at}-restored`);
+    expect(fleet(["ws", "restore", "repo/nothing@20260105T090000Z"], env).stderr).toContain("ws: no trash entry repo/nothing@20260105T090000Z");
+  });
+
+  test("trash lists each entry with its age, size and note; gc deletes only those past the age, and a dry run touches nothing", () => {
+    integrated();
+    ws("prune", "--apply");
+    env = { ...env, FLEET_NOW: "2026-01-10T09:00:00+00:00" };
+    state("agent", "a2", "--task", "t", "--milestone", "m1");
+    ws("add", "a2", "--repo", repo);
+    state("agent", "a2", "--status", "done");
+    ws("prune", "--apply");
+    env = { ...env, FLEET_NOW: "2026-01-13T10:00:00+00:00" };
+    const listed = fleet(["ws", "trash"], env);
+    expect(listed.code).toBe(0);
+    expect(listed.stdout).toMatch(new RegExp(`^${ID}  8d 1h  \\d+ KB  a1 of ${repo}, fleet ${dir}: fleet ws prune --apply: its worker a1 is done`, "m"));
+    expect(listed.stdout).toMatch(/^repo\/a2@20260110T090000Z {2}3d 1h {2}\d+ KB {2}a2 of /m);
+
+    const dry = fleet(["ws", "gc", "--dry-run"], env);
+    expect([dry.code, dry.stdout]).toEqual([0, `would delete ${ID} (8d 1h old)\ndry run, nothing deleted; 1 entry younger than 7 days kept\n`]);
+    expect(existsSync(join(trash(), "repo", "a1@20260105T090000Z"))).toBe(true);
+
+    const gone = fleet(["ws", "gc"], env);
+    expect([gone.code, gone.stdout]).toEqual([0, `deleted ${ID} (8d 1h old)\n1 entry younger than 7 days kept\n`]);
+    expect(readdirSync(join(trash(), "repo")).sort()).toEqual(["a2@20260110T090000Z", "a2@20260110T090000Z.json"]);
+    expect(fleet(["ws", "gc", "--older-than", "3"], env).stdout).toContain("deleted repo/a2@20260110T090000Z (3d 1h old)");
+    expect(readdirSync(join(trash(), "repo"))).toEqual([]);
+    expect(fleet(["ws", "gc", "--older-than", "x"], env).code).toBe(1);
+  });
+
+  test("a trash on another filesystem refuses the move and leaves the folder and no note", () => {
+    // The shelf is `<trash>/<repo's basename>`: with the trash at / and a repo named proc, the shelf is /proc,
+    // which exists (mkdir is a no-op) and is another filesystem than the temp dir.
+    const path = join(base, "proc-w");
+    mkdirSync(path);
+    writeFileSync(join(path, ".dev.vars"), "SECRET\n");
+    expect(statSync("/proc").dev).not.toBe(statSync(path).dev);
+    const note = { repo: join(base, "proc"), workspace: "w", path, commit: null, parents: [], trashed: "", fleet: "", why: "" };
+    expect(toTrash("/", note, new Date("2026-01-01T00:00:00Z"))).toEqual({ refused: `could not move ${path} to the trash (/ is on another filesystem, and the trash only renames); nothing is deleted` });
+    expect(readFileSync(join(path, ".dev.vars"), "utf8")).toBe("SECRET\n");
+    expect(existsSync("/proc/w@20260101T000000Z.json")).toBe(false);
+  });
+
+  test("gc goes by the stamp in an entry's name: an entry without one is kept and named, a note with no folder is named, a restore's stale .jj is no entry", () => {
+    const shelf = join(trash(), "repo");
+
+    const entry = (name: string, note?: string): void => {
+      mkdirSync(join(shelf, name), { recursive: true });
+      writeFileSync(join(shelf, name, "f"), "x");
+
+      if (note !== undefined) writeFileSync(join(shelf, `${name}.json`), note);
+    };
+
+    entry("a@20260101T000000Z", JSON.stringify({ repo, workspace: "a", path: join(base, "repo-a") })); // exactly 7 days old
+    entry("b@20251231T235959Z"); // 7 days and 1 s, no note
+    entry("c@20251201T000000Z", "{not json");
+    entry("f@20260107T120000Z", JSON.stringify({ repo, workspace: "f", path: join(base, "repo-f") })); // 12 hours old
+    entry("d@20251201T000000Z.stale-jj"); // a restore that stopped half way left it
+    entry("e");
+    writeFileSync(join(shelf, "g@20251101T000000Z.json"), "{}");
+    env = { ...env, FLEET_NOW: "2026-01-08T00:00:00+00:00" };
+    const extras = `1 entry with no stamp in its name kept: repo/e\na note with no folder, kept: ${join(shelf, "g@20251101T000000Z.json")}\n`;
+
+    expect(fleet(["ws", "trash"], env).stdout).not.toContain("stale-jj");
+    const dry = fleet(["ws", "gc", "--older-than", "1", "--dry-run"], env);
+    expect([dry.code, dry.stdout]).toEqual([
+      0,
+      `would delete repo/c@20251201T000000Z (38d 0h old)\nwould delete repo/b@20251231T235959Z (7d 0h old)\nwould delete repo/a@20260101T000000Z (7d 0h old)\ndry run, nothing deleted; 1 entry younger than 1 day kept\n${extras}`,
+    ]);
+    const gone = fleet(["ws", "gc"], env);
+    expect([gone.code, gone.stdout]).toEqual([0, `deleted repo/c@20251201T000000Z (38d 0h old)\ndeleted repo/b@20251231T235959Z (7d 0h old)\n2 entries younger than 7 days kept\n${extras}`]);
+    expect(readdirSync(shelf).sort()).toEqual(["a@20260101T000000Z", "a@20260101T000000Z.json", "d@20251201T000000Z.stale-jj", "e", "f@20260107T120000Z", "f@20260107T120000Z.json", "g@20251101T000000Z.json"]);
+  });
+
+  test("a trash the folder cannot be moved into refuses the prune for that workspace and keeps the folder", () => {
+    const at = integrated();
+    mkdirSync(join(trash(), "repo"), { recursive: true });
+    chmodSync(join(trash(), "repo"), 0o555);
+    const ran = ws("prune", "--apply");
+    chmodSync(join(trash(), "repo"), 0o755);
+    expect(ran.code).toBe(1);
+    expect(ran.stderr).toMatch(new RegExp(`^ws: kept a1: could not move ${at} to the trash \\(.*EACCES.*\\); nothing is deleted\\n$`));
+    expect(readFileSync(join(at, ".dev.vars"), "utf8")).toBe("TOKEN=only here\n");
+    expect(jj(repo, "workspace", "list", "-T", 'name ++ "\\n"')).toBe("a1\ndefault\n");
+    expect(workspaces()[0]?.["status"]).toBe("active");
+    expect(readdirSync(join(trash(), "repo"))).toEqual([]);
   });
 });
 
@@ -455,7 +674,7 @@ describe("prune is part of integrating", () => {
     jj(repo, "rebase", "-r", "(::a1@ ~ ::@) ~ a1@", "-B", "@");
     const done = fleet(["state", dir, "agent", "a1", "--status", "done", "--no-render"], env);
     expect(done.stderr).toContain("then prune it (`fleet ws <dir> prune`, a dry run, then --apply), or hand it to the next worker of its lane (`fleet ws <dir> add <next> --reuse a1`)");
-    expect(ws("prune", "--apply").stdout).toBe(`pruned a1: ${at} deleted\n`);
+    expect(ws("prune", "--apply").stdout).toContain(`pruned a1: ${at} is in the trash`);
     expect(existsSync(at)).toBe(false);
     expect(fleet(["state", dir, "event", "x", "--no-render"], env).stderr).not.toContain("still there");
     expect(jj(repo, "log", "--no-graph", "-r", "@-", "-T", "description")).toBe("a1: one\n");
