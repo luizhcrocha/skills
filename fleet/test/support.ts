@@ -76,7 +76,8 @@ export function baseEnv(home: string, more: Readonly<Environment> = {}): Environ
 
   // A --once watch exits with its first batch, as before it settled; a settle test gives its own. A preview's
   // processes stay in the test's own process tree (and the gate's scope), not in systemd user scopes of their own.
-  return { ...env, FLEET_HOME: registry, FLEET_DISCOVER: "0", FLEET_WATCH_SETTLE: "0", FLEET_PREVIEW_SCOPE: "0", FLEET_CC_SOCKS: join(home, "cc-socks"), ...more };
+  // No picasso: a preview asks no real sidecar whether a watch hears it.
+  return { ...env, FLEET_HOME: registry, FLEET_DISCOVER: "0", FLEET_WATCH_SETTLE: "0", FLEET_PREVIEW_SCOPE: "0", FLEET_CC_SOCKS: join(home, "cc-socks"), PICASSO: join(home, "no-picasso"), ...more };
 }
 
 /** Run `fleet ARGS` in this process, through the CLI's own interface, with `env` as its environment. */

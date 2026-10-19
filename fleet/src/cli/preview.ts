@@ -13,6 +13,7 @@
  *   own workspace, at `/f/<fleet>/preview/<worker>/`. No merge.
  * - `status`: the address, the workers and their commits, the workers left out because their workspace would
  *   conflict the merge (with the files), the dev servers' last error.
+ *   It and `start` warn when no live picasso watch hears the preview's page-id (`preview/watch.ts`).
  * - `include WORKER` / `exclude WORKER`: take a worker into the merge, or out of it.
  * - `stop [--per-worker WORKER | --all]`: stop the combined preview's dev server and the updater (or that
  *   worker's server; `--all`: both and every per-worker one). The workspace stays for the next start;
@@ -52,6 +53,7 @@ import { keeperProc, logDir, readRecord, serverProc, updateRecord, updaterProc, 
 import { allocate } from "../preview/ports.ts";
 import { asleep, idleMs, kept, restartCommand, runKeeper, serverStanding, sleeps, stopServer } from "../preview/sleep.ts";
 import { runs, scopes, stopTracked, unitName, type Tracked } from "../preview/tracked.ts";
+import { watchWarning, type PreviewAt } from "../preview/watch.ts";
 import { candidates, everyMs, freshMemory, included, ledgerStack, leftLines, lookOnce, pick, runUpdater, standing } from "../preview/updater.ts";
 import { jj, why, workspaceNames, workspaceRoot } from "../ws/jj.ts";
 import { World, type Machine } from "../world.ts";
@@ -324,10 +326,23 @@ function publicLine(machine: Machine, server: DevServer): string | undefined {
   const port = server.public;
 
   if (port === null) return undefined;
-  const self = tailnetOf(machine)?.self;
-  const address = self === undefined ? `port ${port}, no https address: this machine has no MagicDNS name (is Tailscale running?)` : `https://${self.dns}:${port}/`;
+  const address = publicUrl(machine, server) ?? `port ${port}, no https address: this machine has no MagicDNS name (is Tailscale running?)`;
 
   return `  public: ${address}; ${hubSays(machine, port, running(server))}\n`;
+}
+
+/** A root-mode dev server's `https://<MagicDNS name>:<port>/`, or undefined (not in root mode, or no MagicDNS name). */
+function publicUrl(machine: Machine, server: DevServer): string | undefined {
+  const self = tailnetOf(machine)?.self;
+
+  return server.public === null || self === undefined ? undefined : `https://${self.dns}:${server.public}/`;
+}
+
+/** Where the reviewer opens a preview: its root-mode address, else `hub` (under the hub's, shared by every fleet). */
+function previewAt(machine: Machine, server: DevServer | null, hub: string, dir: string): PreviewAt {
+  const own = server === null ? undefined : publicUrl(machine, server);
+
+  return own === undefined ? { kind: "shared", url: hub, dir } : { kind: "own", url: own };
 }
 
 /** What the running hub says of a public port. */
@@ -545,6 +560,7 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
     for (const line of leftLines(record ?? { left: [] })) out.err(`preview: ${line}; the preview serves the merge without it (\`fleet preview ${root} status\`)\n`);
 
     if (record !== undefined && record.error !== null) out.err(`preview: the updater's first look says: ${record.error}\n`);
+    out.err(watchWarning(machine.env, previewAt(machine, ours, address, root)) ?? "");
 
     return came === "exited" ? 1 : 0;
   });
@@ -696,6 +712,7 @@ function status(machine: Machine, root: string, raw: JsonObject): Effect.Effect<
 
       if (said !== "") out.out(said);
       else if (record.server !== null && !running(record.server)) out.out(`  its log ends:\n${indent(tail(logTail(record.server.log), 8))}\n`);
+      out.out(watchWarning(machine.env, previewAt(machine, record.server, `${base}preview/`, root)) ?? "");
     }
 
     for (const w of record.workers) {
