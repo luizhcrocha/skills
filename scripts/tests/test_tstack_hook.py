@@ -7581,7 +7581,9 @@ class MovedRefusalTest(MovedFleet, RefusalCase):
 
 
 class MovedNudgeTest(MovedFleet, FleetCase):
-    """fleet_chat_nudge on a moved fleet: an answer left unrecorded is recorded with a program, not the CLI."""
+    """fleet_chat_nudge on a moved fleet: the user's answer on the page records itself, so a line its card is still
+    open after is answered "Answer on the card, please", and a grilling answered in full is closed with grill.close,
+    each with a program, not the CLI."""
 
     tool = ChatNudgeTest.tool
 
@@ -7589,28 +7591,42 @@ class MovedNudgeTest(MovedFleet, FleetCase):
         super().setUp()
         self.move()
 
-    def test_an_answer_not_recorded_is_told_as_a_program(self):
-        self.ledger(decisions=[{"id": "x7", "ref": "A7", "kind": "action", "title": "Delete five finished workspaces?",
-                                "status": "open", "opened": "2026-01-05T08:00:00+00:00"}])
+    def test_a_line_its_card_is_still_open_after_is_answered_on_the_card(self):
+        decision = {"id": "x7", "ref": "A7", "kind": "action", "title": "Delete five finished workspaces?",
+                    "status": "open", "opened": "2026-01-05T08:00:00+00:00"}
+        self.ledger(decisions=[decision])
         self.say(1, "2026-01-05T08:10:00+00:00", "yes", decision="x7")
         (self.fleet / "watch-coordinator.cursor").write_text("1")
         self.assertEqual(self.tool("2026-01-05T08:22:00+00:00"),
-                         'Fleet: #1 from the user answers A7 (Delete five finished workspaces?), not recorded for 12 min: '
-                         f'"yes". Record it and answer #1 in one program on the stdin of `{self.env["TSTACK_FLEET_RUN"]}`: '
-                         '`decision.decide("x7", "...", "answer given on the page (#1)"); say("...", { re: 1 }); '
-                         'return records.apply(ops);`.')
+                         'Fleet: #1 from the user on A7 (Delete five finished workspaces?) is unanswered for 12 min, and '
+                         'A7 is still open: "yes". Only the user\'s answer on the card records it. Answer #1 with one '
+                         f'program on the stdin of `{self.env["TSTACK_FLEET_RUN"]}`: '
+                         '`say("Answer on the card, please: A7.", { re: 1, decision: "x7" }); return records.apply(ops);`, '
+                         'or, for a None of these or a Failed:, revise or withdraw A7.')
+        self.assertEqual(self.tool("2026-01-05T08:30:00+00:00"), "")  # told once
 
-    def test_a_grilling_answered_and_not_recorded_is_told_as_a_program(self):
-        question = {"id": "q1", "title": "T", "status": "answered", "asked": "2026-01-05T08:00:00+00:00"}
+    def test_a_reply_ends_it_and_a_card_the_page_decided_is_not_told(self):
+        decision = {"id": "x7", "ref": "A7", "kind": "action", "title": "Delete five finished workspaces?",
+                    "status": "open", "opened": "2026-01-05T08:00:00+00:00"}
+        self.ledger(decisions=[decision, {**decision, "id": "x8", "ref": "A8", "status": "decided", "answer": "done",
+                                          "answer_line": 2}])
+        self.say(1, "2026-01-05T08:10:00+00:00", "yes", decision="x7")
+        self.say(2, "2026-01-05T08:10:00+00:00", "Done.", decision="x8")
+        self.say(3, "2026-01-05T08:11:00+00:00", "Answer on the card, please: A7.", frm="coordinator", to=("user",), re=1,
+                 decision="x7")
+        (self.fleet / "watch-coordinator.cursor").write_text("3")
+        self.assertEqual(self.tool("2026-01-05T08:22:00+00:00"), "")
+
+    def test_a_grilling_answered_in_full_is_told_to_close(self):
+        question = {"id": "q1", "title": "T", "status": "answered", "asked": "2026-01-05T08:00:00+00:00", "answer_line": 1}
         self.ledger(decisions=[{"id": "g6", "ref": "G6", "kind": "grill", "title": "Search", "status": "open",
                                 "opened": "2026-01-05T08:00:00+00:00", "questions": [question]}])
         self.say(1, "2026-01-05T08:10:00+00:00", "Q1: ok", decision="g6")
         (self.fleet / "watch-coordinator.cursor").write_text("1")
         self.assertEqual(self.tool("2026-01-05T08:14:00+00:00"),
-                         "Fleet: G6 (Search): every question is answered and the grilling is still open, not recorded for "
-                         f'4 min. Record it now with one program on the stdin of `{self.env["TSTACK_FLEET_RUN"]}`: '
-                         '`decision.decide("g6", "...", "grilling finished"); return records.apply(ops);`.')
-
+                         "Fleet: G6 (Search): every question is answered and the grilling is still open, not closed for "
+                         f'4 min. Close it now with one program on the stdin of `{self.env["TSTACK_FLEET_RUN"]}`: '
+                         '`grill.close("g6", "grilling finished"); return records.apply(ops);`.')
 
     def test_a_moved_fleet_in_the_ledger_home_the_session_served_is_nudged(self):
         """After the cut-over the registry entry is gone and the ledger is outside the scratchpad: the session that
@@ -7629,7 +7645,7 @@ class MovedNudgeTest(MovedFleet, FleetCase):
         (self.registry / "infra.json").unlink()
         self.say(1, "2026-01-05T08:10:00+00:00", "yes", decision="x7")
         (home / "watch-coordinator.cursor").write_text("1")
-        self.assertIn("#1 from the user answers A7", self.tool("2026-01-05T08:22:00+00:00") or "")
+        self.assertIn("#1 from the user on A7", self.tool("2026-01-05T08:22:00+00:00") or "")
 
 
 class IdleGuardTest(MovedFleet, FleetCase):

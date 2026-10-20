@@ -9,9 +9,11 @@
 // 2 MB, never empty) and answers the revision of the text it was given. It checks the Markdown text only: the cloud
 // also holds the HTML that marked makes of it to 2 MB and never empty (bodies.ts:355-358), and its revision is of that
 // HTML, but marked is not installed for the harness. A program over the service's limit (wire.ts) throws.
-// node fleet_fold.mjs FLEET_CHECKOUT < {"programs": [{"name", "body", "fresh"?}]}
+// node fleet_fold.mjs FLEET_CHECKOUT < {"programs": [{"name", "body", "fresh"?}], "gate"?: ISO time}
 // prints [{"name", "returned", "applied": OpResult[]} | {"name", "thrown"}]; `fresh` starts that program on a mirror
-// holding only the first program's records (the setup), so one program's records do not meet another's.
+// holding only the first program's records (the setup), so one program's records do not meet another's. `gate` is the
+// owner-answer gate's time (the Worker's OWNER_ANSWERS_FROM, takeLog's ownerAnswersFrom): from it, the fold refuses
+// a program's decide.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -24,7 +26,7 @@ const { bodySentences, CARD_ID, EVIDENCE_LIMIT_BYTES, revisionOf } = await load(
 const { PROGRAM_LIMIT_BYTES } = await load("packages/ledger/src/wire.ts");
 const { applyOps, emptyMirror } = await load("packages/ledger/src/mirror.ts");
 const { takeLog } = await load("packages/cloud/src/take-log.ts");
-const { programs } = JSON.parse(readFileSync(0, "utf8"));
+const { programs, gate } = JSON.parse(readFileSync(0, "utf8"));
 
 let n = 0;
 const log = new Map();
@@ -56,7 +58,8 @@ const records = (applied) => ({
   apply(drafts) {
     const logs = drafts.map((d) => ({ _tag: "Log", id: id(), host: "office", by: { _tag: "program", session: "s", execution: "x" }, at, ...d }));
     // The fleet object's log: round A's takeLog reads it as `logged`, slice 3's first one as `seen`.
-    const folded = takeLog({ mirror, ops: logs, logged: (id) => log.get(id), seen: (id) => log.has(id), now: at });
+    const folded = takeLog({ mirror, ops: logs, logged: (id) => log.get(id), seen: (id) => log.has(id), now: at,
+      ownerAnswersFrom: gate });
     for (const op of folded.logged ?? []) log.set(op.id, op);
     mirror = folded.mirror;
     applied.push(...folded.results);

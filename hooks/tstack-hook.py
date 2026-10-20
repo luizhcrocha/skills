@@ -683,11 +683,17 @@ def fleet_program(*calls):
     return "".join(f"{c};\n" for c in calls) + "return records.apply(ops);\n"
 
 
-def answer_program(decision_id, resolution, re=None):
-    """The one-line program a nudge tells the coordinator to send: the card decided ("..." is its answer to fill in),
-    and with re, a chat line answering the user's message #re."""
-    said = f' say("...", {{ re: {int(re)} }});' if re is not None else ""
-    return f'decision.decide({_js(decision_id)}, "...", {_js(resolution)});{said} return records.apply(ops);'
+def close_program(decision_id, resolution):
+    """The one-line program a nudge tells a moved team's coordinator to send for a grilling the user answered in full:
+    grill.close, the one close of a card a program may still make once the cloud's owner-answer gate is on."""
+    return f'grill.close({_js(decision_id)}, {_js(resolution)}); return records.apply(ops);'
+
+
+def on_card_program(decision_id, number, re):
+    """The one-line program a nudge tells a moved team's coordinator to send for the user's line #re on a card the
+    line left open: the reply that asks them to answer on the card, its number (the page links it) in the words."""
+    return (f'say({_js(f"Answer on the card, please: {number}.")}, {{ re: {int(re)}, decision: {_js(decision_id)} }}); '
+            'return records.apply(ops);')
 
 
 def blocked_program(text, worker):
@@ -1597,8 +1603,10 @@ def fleet_chat_nudge(hook):
     message from the user to its role left unread (after the watch's cursor) and unanswered, and of each
     answer to an open decision left unrecorded, for FLEET_NUDGE_MIN minutes (3) on the fleet's clock: only
     the decision's own state records it (decisions.py `recorded`), never a reply in the chat. An answer to a
-    grilling that leaves every question answered is told once, as the grilling to record. Each message is
-    told once. No process;
+    grilling that leaves every question answered is told once, as the grilling to record. On a moved team the
+    user's answer on the page records itself (the fleet's owner-answer gate): the grilling is told as one to close
+    with grill.close, and a line its card is still open after as one to answer "Answer on the card, please", which a
+    reply ends. Each message is told once. No process;
     the ledger is read only when something is due."""
     if fleet_worker(hook) or not hook.session_id:
         return None
@@ -1633,8 +1641,10 @@ def fleet_chat_nudge(hook):
                                              "decision": m.get("decision")}
             elif isinstance(m.get("re"), int):
                 answer = pending.get(str(m["re"]))
-                # A reply to an answer to a decision does not record it: only the decision's own state does.
-                if not (isinstance(answer, dict) and answer.get("decision")):
+                # A reply to an answer to a decision does not record it: only the decision's own state does. On a
+                # moved team the user's write on the page records it, so a line the card is still open after is
+                # one no program can record, and the reply is all that is owed.
+                if not (isinstance(answer, dict) and answer.get("decision")) or moved(d):
                     pending.pop(str(m["re"]), None)
         due = {k: p for k, p in pending.items() if not isinstance(p, dict)
                or (_instant(p.get("at")) is not None and now - _instant(p["at"]) >= wait_s)}
@@ -1659,14 +1669,16 @@ def fleet_chat_nudge(hook):
                     if not dec or dec.get("status") != "open":
                         continue
                     ref = dec.get("ref") or dec.get("id")
-                    # A moved team records with a program; decide() names the card by its key, the row's id.
+                    # A moved team's programs (grill.close, the on-card reply) name the card by its key, the row's id.
                     run = f"one program on the stdin of `{fleet_run_cli(hook.env)}`: "
                     if _answered_grill(dec):
-                        how = (f'with {run}`{answer_program(dec.get("id"), "grilling finished")}`.' if moved(d) else
-                               f'(`{fleet_cli()} state {d} decision {ref} --decide "..." --resolution "grilling finished"`).')
+                        how = (f'not closed for {minutes} min. Close it now with {run}'
+                               f'`{close_program(dec.get("id"), "grilling finished")}`.' if moved(d) else
+                               f'not recorded for {minutes} min. Record it now (`{fleet_cli()} state {d} decision {ref} '
+                               '--decide "..." --resolution "grilling finished"`).')
                         lines.append(
                             f'Fleet: {ref} ({_one_line(dec.get("title") or "", 60)}): every question is answered and the '
-                            f'grilling is still open, not recorded for {minutes} min. Record it now {how}')
+                            f'grilling is still open, {how}')
                         told.append(int(k))
                         continue
                     since = _instant(dec.get("revised") or dec.get("opened"))
@@ -1677,13 +1689,20 @@ def fleet_chat_nudge(hook):
                     questions = dec.get("questions") if isinstance(dec.get("questions"), list) else []
                     if any(isinstance(q, dict) and (_instant(q.get("answered")) or 0) >= _instant(p["at"]) for q in questions):
                         continue  # a grilling's question answered or dropped after it: recorded
-                    how = (f'Record it and answer #{k} in {run}`{answer_program(dec.get("id"), f"answer given on the page (#{k})", int(k))}`.'
-                           if moved(d) else
-                           f'Record it now (`{fleet_cli()} state {d} decision {ref} --decide "..." --resolution '
-                           f'"answer given on the page (#{k})"`), then answer #{k} with --re.')
+                    if moved(d):
+                        # The user's answer on the page decides the card as it is sent: a line that left it open is
+                        # words typed in the chat, a None of these or a Failed:, and no program can record it.
+                        lines.append(
+                            f'Fleet: #{k} from the user on {ref} ({_one_line(dec.get("title") or "", 60)}) is unanswered '
+                            f'for {minutes} min, and {ref} is still open: "{said}". Only the user\'s answer on the card '
+                            f'records it. Answer #{k} with {run}`{on_card_program(dec.get("id"), ref, int(k))}`, or, '
+                            f'for a None of these or a Failed:, revise or withdraw {ref}.')
+                        told.append(int(k))
+                        continue
                     lines.append(
                         f'Fleet: #{k} from the user answers {ref} ({_one_line(dec.get("title") or "", 60)}), '
-                        f'not recorded for {minutes} min: "{said}". {how}')
+                        f'not recorded for {minutes} min: "{said}". Record it now (`{fleet_cli()} state {d} decision '
+                        f'{ref} --decide "..." --resolution "answer given on the page (#{k})"`), then answer #{k} with --re.')
                 else:
                     to = p.get("to") if isinstance(p.get("to"), list) else []
                     if (to and role not in to) or int(k) <= cursor:

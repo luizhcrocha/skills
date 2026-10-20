@@ -60,21 +60,23 @@ these:
 | CLI | Program |
 | :-- | :-- |
 | `agent`, `step`, `milestone`, `event`, `keep`, `set` | `worker`, `step`, `milestone`, `event`, `keep`, `set` |
+| `event --kind decision` (your own choice, for the record) | `event("note", …)`: the cloud refuses a program's decision event |
 | `chat … say` | `say` |
 | `decision` (any `--kind`, `permission` with `tool`, `call`, `then` and `root`) | `decision.open` |
-| `decision --decide` | `decision.decide` |
+| `decision --decide` | none: the owner's answer on the page records itself ([The owner answers on the card](#the-owner-answers-on-the-card)) |
 | `decision` with new fields and `--log` | `decision.revise(id, fields, log)` |
 | `decision --hold`, `--unhold`, `--withdraw` | `decision.hold`, `decision.unhold`, `decision.withdraw` |
 | `decision --body FILE`, `--no-body` | `decision.body(id, text)`, `decision.body(id, null)` |
-| `grill --ask`, `--revise`, `--answer`, `--drop` | `grill.open` (the first round), `grill.ask`, `grill.revise`, `grill.answer`, `grill.drop` |
-| `grill --done` | `decision.decide(id, "done", what was agreed)` |
+| `grill --ask`, `--revise`, `--drop` | `grill.open` (the first round), `grill.ask`, `grill.revise`, `grill.drop` |
+| `grill --answer` | none, as `--decide`: the owner answers each question on the card's page |
+| `grill --done` | `grill.close(id, what was agreed)`, once no question is open |
 | `roadblock`, `roadblock --resolved` | `roadblock`, `roadblock.resolve` |
 
 **The cloud writes a card's events.** Each applied card or roadblock op gets the event the old CLI wrote for it
-(decision 101): `asked` for an open, a revise or a new round, a `note` for a hold or an unhold, `decision` for a
-decide, `resolved` for a withdraw, and `blocked` or `resolved` for a roadblock. A card's close also resolves the
-roadblocks that wait on it and sets their workers running again. So a program writes no event after an open, a
-decide or any of these: a second one shows twice in the card's history. `event` is for what has no card
+(decision 101): `asked` for an open, a revise or a new round, a `note` for a hold or an unhold, `decision` as it
+records the owner's answer, `resolved` for a withdraw, and `blocked` or `resolved` for a roadblock. A card's close also
+resolves the roadblocks that wait on it and sets their workers running again. So a program writes no event after an
+open, an answer or any of these: a second one shows twice in the card's history. `event` is for what has no card
 (`integrated`, `reviewed`, a `note`).
 
 ## Worked calls
@@ -105,11 +107,11 @@ decision.open({ kind: "decision", title: "Where sessions live",
 return records.apply(ops);
 ```
 
-A decision decided (an answer the user gave on the page or in the session):
+The user's answer, read off the card. Their pick on the page decided D219 already (`status: "decided"`, `answer`
+the option's id, `answer_line` their line in the chat), so the program only reads it:
 
 ```ts
-decision.decide("D219", "do", "A Durable Object per session: logout must be immediate.");
-return records.apply(ops);
+return records.read({ kind: "decision", key: "D219" });
 ```
 
 A yes asked before an exact command the fleet runs (a deploy, a push that deploys), as `decision --kind permission`
@@ -174,17 +176,18 @@ grill.open("g1", { title: "How users sign in", question: "Two questions settle h
 return records.apply(ops);
 ```
 
-The owner's answer arrives as one chat line tagged with the card, a `Qn:` line per question answered
-(`Q1: b: Both (as recommended)`). Record each with `grill.answer`, from its line. `grill.ask`, `grill.revise`,
-`grill.answer` and `grill.drop` read the card, so `await` each before `records.apply(ops)`. Once every question is
-answered, close the grilling with what was agreed, in the same program:
+The owner answers each question on the card's page: their write marks it `answered`, with the words after its
+`Qn: `, and the card stays open. A chat line tagged with the card tells you, a `Qn:` line per question answered
+(`Q1: b: Both (as recommended)`); no program records those answers. Read them off the card:
 
 ```ts
-await grill.answer("g1", "q1", "b: Both");
-await grill.answer("g1", "q2", "a: 30 days");
-decision.decide("g1", "done", "Passkeys and passwords; a session lasts 30 days.");
-return records.apply(ops);
+return records.read({ kind: "decision", key: "g1" });
 ```
+
+Once no question is open (each answered, or dropped), close the grilling with what was agreed:
+`grill.close("g1", "Passkeys and passwords; a session lasts 30 days.")`. It is decided with no answer of its own, and
+the cloud refuses the close while a question is open. `grill.ask`, `grill.revise` and `grill.drop` read the card, so
+`await` each before `records.apply(ops)`.
 
 A follow-up is a new round, `await grill.ask("g1", { id: "q3", of: "q1", title: "…", body: "…", options: […] }, "why it follows")`,
 and a question nobody needs goes with `await grill.drop("g1", "q3", "why")`.
@@ -219,8 +222,8 @@ roadblock({ title: "The session store waits on its domain", detail: "w2 cannot r
 return records.apply(ops);
 ```
 
-**A failed action.** The owner answers `Failed: <what happened>`, and the fleet refuses `decision.decide` on it until
-it changes. Fix the cause, then re-present it with new steps and a one-line log:
+**A failed action.** The owner answers `Failed: <what happened>`, which leaves the card open with their line in the
+chat. Fix the cause, then re-present it with new steps and a one-line log:
 
 ```ts
 decision.revise("A219", { manual: "1. Open dash.cloudflare.com, then Workers, then acme-login, then Settings.\n2. Under Domains and Routes, click Add, then Custom domain, and type `login.acme.test`." },
@@ -228,12 +231,8 @@ decision.revise("A219", { manual: "1. Open dash.cloudflare.com, then Workers, th
 return records.apply(ops);
 ```
 
-When the owner answers Done, decide it. The close resolves the roadblock and sets w2 running:
-
-```ts
-decision.decide("A219", "done", "the owner did it on the page (#58)");
-return records.apply(ops);
-```
+When the owner answers Done on the page, their write decides the card; no program records it. The close resolves the
+roadblock and sets w2 running.
 
 **Hold, unhold, withdraw.** `decision.hold` keeps a card open and takes it off the owner's list while the fleet works
 on it; `decision.unhold("S219")` puts it back, and so does a revise with new words (question, options, manual):
@@ -270,7 +269,7 @@ Then answer #61 in the next program, naming the new card: `say("D220 asks it aga
 
 **A marks batch.** Marks the owner put on a card's words reach you as one chat line of their own, the batch. It comes
 alone, or just before the answer it rides with (the batch is #63, the answer #64). Read the batch first and handle
-every mark before you record the answer: a mark can change what the answer means. A mark that asks for a change
+every mark before you act on the answer: a mark can change what the answer means. A mark that asks for a change
 (delete, replace, comment, a general note) is settled by revising the card (`decision.revise`, `decision.body`,
 `grill.revise`), a question by an answer. Answer the batch with `say` and `re`. `say` takes no mark numbers, so one
 line answers the whole batch: name each mark's number in its text.
@@ -279,6 +278,19 @@ line answers the whole batch: name each mark's number in its text.
 decision.revise("D220", { why: "You changed your answer in #61. With KV, a signed-out user stays signed in for up to 60 s on other edges." },
   "the why says what a slower logout means, for mark 1 of #63");
 say("Mark 1: the why now says what a 60 s logout means.", { re: 63, decision: "D220" });
+return records.apply(ops);
+```
+
+**A standing approval** is asked on a card of its own: the question names the act in plain words, and
+`approval_question` and `approval_rule` go on the card when you open it (it lands as D221 here):
+
+```ts
+decision.open({ kind: "decision", title: "Deploy previews without asking",
+  question: "May the fleet deploy a preview of any branch without asking each time?",
+  options: [{ id: "yes", label: "Yes", consequence: "previews deploy after a green test-changed; you see each one as a notice" },
+            { id: "no", label: "No", consequence: "each preview deploy waits on a permission card" }],
+  approval_question: true, approval_rule: "deploy a preview of any branch after a green test-changed",
+  why: "Six preview deploys this week each waited on a permission card." });
 return records.apply(ops);
 ```
 
@@ -319,6 +331,51 @@ return records.read({ decisions: "open" });
 
 Then pass the row's `op` as the `base` of the write that depends on it, for example
 `worker("w2", { status: "stopped" }, "<op of w2's row>")`.
+
+## The owner answers on the card
+
+The cloud's owner-answer gate (its `OWNER_ANSWERS_FROM`) is on since 2026-10-28 20:35 UTC; this text ships with it.
+
+- **The owner's write is the record.** The page sends the owner's answer with its form (the option they picked, an
+  input's words, their note, or a grilling's picks), and the cloud records it on the card at once: `status:
+  "decided"`, `answer` (the option's id, an input's or a secret's words, or `done`), and `answer_line`, the id of
+  their line in the chat. A grilling's question is marked `answered`, with the words after its `Qn: `, and the card
+  stays open. Read the answer off the card (`records.read({ kind: "decision", key })`, or the watch's line) and act
+  on it. Only `answer_line` says the owner answered: `resolution` is a program's prose, whatever it says, and the
+  cloud refuses one that reads as the page's own "answered on the page (#N)".
+- **No program records an answer.** The cloud refuses `decision.decide`, `grill.answer`, and any op that sets a
+  card's `status: "decided"` or its `answer`, or marks a question answered: "the owner answers on the card's page; a
+  program can't record it". Two ops still close a card: a notice opened under an active approval (`under`), and
+  `grill.close(id, resolution)` on a grilling with no question open. `decision.withdraw` stays. A decided card keeps
+  its answer, resolution and closed time, so a program sets none of them: on a card that holds the owner's answer
+  the cloud refuses with "a program cannot set the resolution of decision D219 while it holds the owner's answer
+  (#41)". To change them, reopen the card (`decision.revise` with `status: "open"`) or withdraw it.
+  `decision.decide` and `grill.answer` stay in the prelude until the rollout is done, and the cloud refuses both. A
+  team that has not moved records with the state CLI, as before.
+- **An answer typed in the chat counts for nothing**, and so does one given in the terminal. Do not record it, and
+  do not act on it as the card's answer. Answer the line at once: `say("Answer on the card, please: D219.", { re: 41,
+  decision: "D219" })`. The page turns the card's number into its link.
+- **None of these, and an action's Failed:**, leave the card open with the owner's line in the chat. Revise the card
+  from their note, or withdraw it.
+- **A change the owner reads asks again.** A revise of a field the page shows (the question, options, why, recommend,
+  reason, approval_rule and the rest) bumps the card's `rev`, and the page refuses an answer begun on the words
+  before. On a grilling, a question re-worded is asked again, and so is a follow-up (`of`) of it.
+- **A card for the Manager** (`asks: "manager"`): once the Manager answers, withdraw it with `decision.withdraw(id,
+  "answered by the Manager outside the chat: <gist>")`. When the answer is the user's to give, open a new card for
+  the user.
+- **A standing approval comes from the card, not from you.** Two answers back one: the user's plain yes (Yes,
+  Approve, OK, Sim) on a card opened with `approval_question` and `approval_rule`, picked with no note while the page
+  showed the rule; or allow-kind with no note on a permission, when its rule covers every call it asked for. An
+  allow-once never backs one, and neither does a yes on a card opened without `approval_question`. Then push the
+  approval op under your next K, naming the card: `ops.push({ record: { kind: "approval", key: "K7" }, set: { ref:
+  "D221", by: "luiz", status: "active" } })` (on a grilling, `question` names the question too). The cloud fills
+  its rule (the one the owner's form showed), message (their line) and author from the card, and stamps `added`; a
+  value of yours that differs is refused. One line backs one approval, and an approval that is there may only be
+  revoked.
+- **A fleet-wide approval does not reach a moved team**: the cloud refuses an approval whose `ref` names another
+  fleet's card (`manager/G5:Q1`). Ask on this team's own page with an approval question.
+- **Ask once, link the rest** works as [SKILL.md](SKILL.md) says: the user answers on the asking card, and you
+  withdraw yours after they answered. An answer they give on your own card is recorded there as any other.
 
 ## Gotchas
 
