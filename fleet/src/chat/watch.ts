@@ -451,9 +451,10 @@ function touch(path: string, at: number): void {
 }
 
 /** `watch`: what is open for WHO (with `--all`, every open message from the user too) with id > N, then
- * each new message to WHO as it lands. A `--once` watch holds its pid in DIR/watch-WHO.pid while it runs,
- * and on exiting moves the cursor to the last message it printed: what it handed to the session it wakes
- * is what was read. Without `--once` it never exits, so it runs only on a terminal and marks nothing read. */
+ * each new message to WHO as it lands. A `--once` watch holds its pid in DIR/watch-WHO.pid from its first
+ * read of the chat on (a line sent once the file is there is a new line, not one that waited), and on
+ * exiting moves the cursor to the last message it printed: what it handed to the session it wakes is what
+ * was read. Without `--once` it never exits, so it runs only on a terminal and marks nothing read. */
 export function watch(machine: Machine, root: string, request: WatchRequest): Effect.Effect<void, ChatError, Out> {
   return Effect.gen(function* () {
     const roster = rosterOf(machine, root);
@@ -520,7 +521,6 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
 
     const pid = String(process.pid);
     const mine = recordOwner(root, who);
-    writeText(pulse, pid);
     let nobody = false;
 
     const end = (): void => {
@@ -542,7 +542,7 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
 
     yield* Effect.ensuring(
       Effect.gen(function* () {
-        const last = yield* follow(machine, root, who, request, mine, host !== undefined);
+        const last = yield* follow(machine, root, who, request, mine, host !== undefined, () => writeText(pulse, pid));
 
         if (last === NOBODY) {
           nobody = true;
@@ -600,8 +600,17 @@ function taken(root: string, who: string): boolean {
 /** What `watch` prints; the id of the last message it printed when it exits (`--once`), or {@link NOBODY}
  * when it stood down: another watch took its place, the session that armed it (`mine`) is gone, or (`hosted`:
  * a watch as the host's role, armed by the fleet's host) the fleet has another host now. Standing down is
- * silent but for that last case: the displaced host is told in one line (takeover.ts `displacedLine`). */
-function follow(machine: Machine, root: string, who: string, request: WatchRequest, mine: Owner | undefined, hosted: boolean): Effect.Effect<number | typeof NOBODY | undefined, never, Out> {
+ * silent but for that last case: the displaced host is told in one line (takeover.ts `displacedLine`).
+ * `armed` runs once the first read of the chat is done. */
+function follow(
+  machine: Machine,
+  root: string,
+  who: string,
+  request: WatchRequest,
+  mine: Owner | undefined,
+  hosted: boolean,
+  armed?: () => void,
+): Effect.Effect<number | typeof NOBODY | undefined, never, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
     let last: number | undefined;
@@ -616,6 +625,7 @@ function follow(machine: Machine, root: string, who: string, request: WatchReque
     if (request.resume) after = Math.max(after, intOf(readText(cursorPath(root, who))) ?? after);
     const tail = new Tail(root);
     const messages = tail.read();
+    armed?.();
     const wanted = new Set(openAmong(messages, who).map((m) => m.id));
 
     if (request.all) {

@@ -569,9 +569,9 @@ describe("a --once watch settles", () => {
     const { proc, lines } = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once", "--settle", "3"], env);
     procs.push(proc);
 
-    // Armed: its pid file is written just before its first read, and a poll later it is past it.
-    for (let tries = 0; tries < 400 && !existsSync(join(root, "watch-coordinator.pid")); tries += 1) await sleep(50);
-    await sleep(300);
+    // Armed: its pid file is written once its first read is done, so the first line is new to it, not one that waited.
+    for (let tries = 0; tries < 200 && !existsSync(join(root, "watch-coordinator.pid")); tries += 1) await sleep(50);
+    expect(existsSync(join(root, "watch-coordinator.pid"))).toBe(true);
     send("a1", "@coordinator done with the parser");
     // The second line comes once the watch printed the first, inside its settle, so the settle starts again.
     expect(await lines.next(20_000)).toBe("#1 a1 (notes-impl) -> user, coordinator: @coordinator done with the parser\n");
@@ -581,7 +581,7 @@ describe("a --once watch settles", () => {
     expect(performance.now() - last).toBeGreaterThanOrEqual(2000);
     expect(await lines.rest()).toBe("#2 a1 (notes-impl) -> user, coordinator: @coordinator and the tests\n");
     expect(readFileSync(join(root, "watch-coordinator.cursor"), "utf8")).toBe("2");
-  });
+  }, 40_000);
 
   test("the user's message settles shorter", async () => {
     const { proc, lines } = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once", "--settle", "30"], { ...env, FLEET_WATCH_SETTLE_USER: "0.5" });
