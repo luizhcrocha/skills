@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Land's verdict on one push: may it go without asking?
 
-    land-check --bookmark B [--head REV] [--remote origin] [--apply-skip-ci]
+    land-check --bookmark B [--head REV] [--remote origin] [--apply-skip-ci | --pre-gate]
 
 Prints JSON. Run it after `jj git fetch` and the rebase, from inside the
 workspace. Exit 0 when the verdict is "push", 1 for "ask" or "stop", 2 on error.
@@ -49,6 +49,13 @@ fleet whose registry entry's pid is among this process's parents.
 
 --apply-skip-ci appends " [skip ci]" to head's subject when suggest_skip_ci
 holds (idempotent, head only), then reports on the rewritten head.
+
+--pre-gate runs before the full gate takes the slot (Land's step 5,
+`land-check --pre-gate -b B && fleet fleets gate run ...`): the same JSON, no
+landing turn asked and nothing rewritten, and the exit code says whether the
+gate may start: 1 when the stack needs a review the ledger does not record
+(the "warning:" reason) or there is no single head with work to push (its
+reason on stderr), 0 otherwise, 2 on error.
 """
 
 import argparse
@@ -831,8 +838,11 @@ def main(argv=None):
     parser.add_argument("--bookmark", "-b", required=True)
     parser.add_argument("--head", help="the revision to land (default: the single head of the work under @)")
     parser.add_argument("--remote", default=LANDING_REMOTE)
-    parser.add_argument("--apply-skip-ci", action="store_true",
-                        help="append [skip ci] to head's subject when suggest_skip_ci holds")
+    when = parser.add_mutually_exclusive_group()
+    when.add_argument("--apply-skip-ci", action="store_true",
+                      help="append [skip ci] to head's subject when suggest_skip_ci holds")
+    when.add_argument("--pre-gate", action="store_true",
+                      help="before the full gate: exit 1 when the stack needs a review the ledger does not record")
     parser.add_argument("--ledger", metavar="DIR", help="the fleet's dashboard directory, whose reviewed events are read")
     args = parser.parse_args(argv)
     try:
@@ -841,11 +851,19 @@ def main(argv=None):
     except CheckError as e:
         print(f"land-check: {e}", file=sys.stderr)
         return 2
-    result = with_turn(result, landing_turn())
+    if not args.pre_gate:
+        result = with_turn(result, landing_turn())
     for reason in result["reasons"]:
         if reason.startswith(("warning: ", "reminder: ")):
             print(f"land-check: {reason}", file=sys.stderr)
     print(json.dumps(result, indent=2))
+    if args.pre_gate:
+        if not result["stack"]:
+            for reason in result["reasons"]:
+                if not reason.startswith(("warning: ", "reminder: ", "note: ")):
+                    print(f"land-check: --pre-gate: {reason}", file=sys.stderr)
+            return 1
+        return 1 if any(r.startswith("warning: ") for r in result["reasons"]) else 0
     return 0 if result["verdict"] == "push" else 1
 
 

@@ -404,6 +404,65 @@ class ReviewTest(RepoCase):
         self.said(result, "review's bug hunt")
 
 
+class PreGateTest(RepoCase):
+    """`land-check --pre-gate` runs before the full gate takes the slot: it fails on a stack whose review the
+    ledger does not record, so a 4 to 13 minute gate never runs ahead of a review that sends the stack back."""
+
+    ledger, changes, lines = ReviewTest.ledger, ReviewTest.changes, ReviewTest.lines
+
+    def pre_gate(self, *args):
+        return subprocess.run([sys.executable, str(CHECK), "-R", str(self.repo), "-b", "master", "--pre-gate", *args],
+                              capture_output=True, text=True, env=ENV)
+
+    def test_an_unreviewed_big_stack_fails_before_the_gate(self):
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        self.change("feat: b", {"b.ts": self.lines(301)})
+        r = self.pre_gate("--ledger", self.ledger())
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("land-check: warning: 301 changed lines (over 300), and the ledger has no `reviewed` event", r.stderr)
+        self.assertEqual(json.loads(r.stdout)["review"]["unreviewed"], self.changes())
+
+    def test_a_reviewed_stack_goes_to_the_gate(self):
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        self.change("feat: b", {"b.ts": self.lines(301)})
+        (change,) = self.changes()
+        ledger = self.ledger({"at": "2026-01-05T10:00:00+00:00", "kind": "reviewed", "text": "r", "findings": 0,
+                              "changes": [change]})
+        r = self.pre_gate("--ledger", ledger)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, "")
+
+    def test_a_small_stack_or_no_ledger_goes_to_the_gate(self):
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        self.change("feat: b", {"b.ts": self.lines(40)})
+        self.assertEqual(self.pre_gate("--ledger", self.ledger()).returncode, 0)
+        self.change("feat: c", {"c.ts": self.lines(301)})
+        r = self.pre_gate()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("land-check: reminder: ", r.stderr)
+
+    def test_work_with_two_heads_or_nothing_to_push_stops_before_the_gate(self):
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        r = self.pre_gate("--ledger", self.ledger())
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("land-check: --pre-gate: nothing to push", r.stderr)
+        self.change("feat: b", {"b.ts": "b\n"})
+        b = jj(self.repo, "log", "--no-graph", "-r", "@-", "-T", "change_id").strip()
+        self.change("feat: c", {"c.ts": "c\n"})
+        jj(self.repo, "new", b)
+        self.change("feat: d", {"d.ts": "d\n"})
+        r = self.pre_gate("--ledger", self.ledger())
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("land-check: --pre-gate: the work has 2 heads", r.stderr)
+
+    def test_it_never_rewrites_the_head(self):
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        self.change("docs: b", {"b.md": "b\n"})
+        r = self.pre_gate("--apply-skip-ci")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("not allowed with argument", r.stderr)
+
+
 class LandingBookmarkTest(RepoCase):
     """landing_bookmarks: what the push gate (hooks/tstack-hook.py) reads as the landing bookmark."""
 
