@@ -243,6 +243,38 @@ class NoteTest(MemoCase):
         self.assertEqual(self.wake(env=worker), "")
         self.assertIn("from the coordinator", self.ok("recall", "coordinator", env=worker), "a worker may read")
 
+    def test_the_same_line_noted_again_is_not_written_twice(self):
+        first = self.note("fact", "the retry wrote this line")
+        self.assertEqual(self.ok("note", "fact", "the retry  wrote\nthis line"), f"already noted as {first}\n",
+                         "the store holds text with its whitespace collapsed, so a retry compares that way")
+        self.assertEqual(self.files(), [f"{first}.md"])
+        out = self.ok("note", "fact", "the retry wrote this line", "--pin")
+        self.assertIn(f"already noted as {first}", out)
+        self.assertIn(f"memo pin {first}", out, "a pin asked on a retry is not dropped in silence")
+        self.assertEqual(self.files(), [f"{first}.md"])
+        written = lambda *args: self.ok("note", *args).startswith("noted ")  # noqa: E731
+        self.assertTrue(written("fact", "The retry wrote this line"), "an exact match only")
+        self.note("fact", "check whether the cache expires")
+        self.assertTrue(written("open", "check whether the cache expires"), "a thread is not a fact")
+        self.assertIn("## Open threads", self.wake())
+        self.assertTrue(written("decision", "the retry wrote this line"), "the kind is matched exactly")
+        self.note("fact", "the retry wrote this line", "--global")
+        self.assertEqual(len(self.files(store=self.global_dir)), 1, "another store is another store")
+
+    def test_a_retried_close_or_thread_is_not_written_twice(self):
+        env = {"MEMO_PROJECT_LINES": "8"}
+        threads = [self.note("open", f"thread {n}", env=env) for n in range(4)]
+        self.assertEqual(self.ok("open", "thread 0", env=env), f"already noted as {threads[0]}\n",
+                         "a retry at the cap is not refused")
+        closed = self.ok("supersede", threads[1], "thread 1 done", env=env).split()[1]
+        self.assertEqual(self.ok("supersede", threads[1], "thread 1 done", env=env), f"already noted as {closed}\n")
+        other = self.ok("supersede", threads[2], "thread 1 done", env=env)
+        self.assertTrue(other.startswith("noted "), "the same line closing another note still closes it")
+        again = self.note("fact", "thread 0 notes")
+        self.ok("supersede", again, "thread 0 notes, corrected")
+        self.assertTrue(self.ok("note", "fact", "thread 0 notes").startswith("noted "),
+                        "a superseded line may be noted anew")
+
     def test_global_notes_live_outside_the_repo(self):
         self.note("preference", "commands in nushell syntax", "--global")
         self.assertEqual(self.files(), [])
