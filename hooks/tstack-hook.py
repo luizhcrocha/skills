@@ -4025,7 +4025,8 @@ def _log_denial(hook, lc, cli, text):
 # only through the gate slot, in a memory-capped scope that dies whole (`fleet fleets gate run`): the hook denies the
 # call and names that command, so Claude issues it and the permission check reviews it as any other. The hook never
 # allows or rewrites a call. A scoped run (a path, `--changed`, `related`, one package, a name filter: `-t`, `-k`,
-# `--lf`, `cargo test NAME`, `go test -run X`) is left alone. Reading follows the push gate's: redirections, wrappers,
+# `--lf`, `cargo test NAME`, `go test -run X`) is left alone; `.`, `./` and a `find -exec`'s `{}` name every file, a
+# `--cov SRC` its coverage source, so neither scopes a run. Reading follows the push gate's: redirections, wrappers,
 # `cd`, `-C`, `sh -c`; a test runner the hook cannot read (eval, xargs, a substitution) counts as a full suite. A script
 # it reads is judged by the words of each test runner it names (SuiteReader._script_runs): one whose words it cannot
 # read is a suite it cannot tell (unsure), and the deny says so rather than call it a full one.
@@ -4086,6 +4087,7 @@ PYTEST_VALUED = {"-k", "-m", "-p", "-c", "-o", "-n", "-W", "-r", "--rootdir", "-
                  "--junitxml", "--junit-xml", "--ignore", "--ignore-glob", "--deselect", "--confcutdir", "--basetemp",
                  "--log-level", "--timeout", "--dist", "--cov-report", "--color", "--import-mode", "-x"}
 PYTEST_FLAGS = {"-x"}  # -x is a flag, not valued
+PYTEST_OPTIONAL = {"--cov"}  # takes the word after it as its value unless that word is an option (pytest-cov's nargs="?")
 PYTEST_SCOPES = {"-k", "--lf", "--last-failed"}
 CARGO_TEST_VALUED = {"--manifest-path", "--features", "-F", "--target", "--target-dir", "-j", "--jobs", "--profile",
                      "--message-format", "--color", "--config", "-Z", "--test", "--bench", "--example", "--bin"}
@@ -4095,7 +4097,10 @@ TEST_FILE = re.compile(r"(\.|_)(test|spec)\.[cm]?[jt]sx?$|^test_.*\.py$|_test\.p
 # The commands SuiteReader.command reads by name (pinned by a test). Called by the path of an installed runner's shim
 # (_installed), its verdict stands: the shim's text names the runner, it is not a script to read for tests.
 RUNNERS = {"npx", "bunx", "pnpx", "uvx", "uv", "poetry", "pipenv", "hatch", "pdm", "rye", "gates", "pnpm", "npm",
-           "yarn", "bun", "vitest", "vp", "pytest", "py.test", "cargo", "go", "just", "node"}
+           "yarn", "bun", "vitest", "vp", "pytest", "py.test", "cargo", "go", "just", "node", "find"}
+# Words where a runner's file arguments go that name no file of their own: the directory it runs in, and the `{}` that
+# `find -exec` fills with every file it finds.
+EVERY_FILE = {".", "./", "{}"}
 VP_EXEC_VALUED = {"-F", "--filter", "--resume-from"}
 
 
@@ -4123,6 +4128,11 @@ def _opts(args, valued):
             pos.append(a)
         i += 1
     return pos, opts
+
+
+def _file_args(pos):
+    """The positionals that name files or tests: pos past EVERY_FILE and the `+` or `;` that ends a `find -exec` at `{}`."""
+    return [p for i, p in enumerate(pos) if p not in EVERY_FILE and not (p in ("+", ";") and pos[i - 1:i] == ["{}"])]
 
 
 def _filters(opts, flags):
@@ -4489,8 +4499,10 @@ class SuiteReader:
                 return self.command(rest, cwd, depth) if rest else None
             return None
         if name in ("pytest", "py.test"):
-            pos, opts = _opts([a for a in args if a not in PYTEST_FLAGS], PYTEST_VALUED - PYTEST_FLAGS)
-            return None if pos or _filters(opts, PYTEST_SCOPES) else shown
+            args = [a for i, a in enumerate(args) if a not in PYTEST_FLAGS
+                    and not (i and args[i - 1] in PYTEST_OPTIONAL and not a.startswith("-"))]
+            pos, opts = _opts(args, PYTEST_VALUED - PYTEST_FLAGS)
+            return None if _file_args(pos) or _filters(opts, PYTEST_SCOPES) else shown
         if name == "cargo":
             own = args[:args.index("--")] if "--" in args else args
             pos, opts = _opts(own, CARGO_TEST_VALUED | {"-p", "--package", "--exclude", "-E", "--filter-expr"})
@@ -4513,6 +4525,11 @@ class SuiteReader:
                 return None  # `go test -run X ./...`: the tests X names
             pos = [a for a in rest if not a.startswith("-")]
             return shown if any(p in ("./...", "...") for p in pos) else None
+        if name == "find":
+            at = next((i for i, a in enumerate(args) if a in ("-exec", "-execdir", "-ok", "-okdir")), None)
+            run = args[at + 1:] if at is not None else []
+            run = run[:next((i for i, a in enumerate(run) if a == ";" or a == "+" and run[i - 1:i] == ["{}"]), len(run))]
+            return self.command(run, cwd, depth) if run else None
         if name == "just":
             pos, _ = _opts(args, JUST_VALUED)
             return shown if pos[:1] and pos[0] in JUST_FULL_SUITES else None
@@ -4528,7 +4545,8 @@ class SuiteReader:
             return None
         if pos[:1] in (["run"], ["watch"], ["dev"]):
             pos = pos[1:]
-        if pos or any(o == "--changed" or o.startswith("--changed=") or o == "--dir" or o.startswith("--dir=") for o in opts):
+        if _file_args(pos) or any(o == "--changed" or o.startswith("--changed=") or o == "--dir" or o.startswith("--dir=")
+                              for o in opts):
             return None
         return None if _filters(opts, {"-t", "--testNamePattern"}) else shown
 
@@ -4547,7 +4565,7 @@ class SuiteReader:
         sub, rest = args[i], args[i + 1:]
         if name == "bun" and sub == "test":
             pos, opts = _opts(rest, BUN_TEST_VALUED)
-            return None if pos or _filters(opts, {"-t", "--test-name-pattern"}) else shown
+            return None if _file_args(pos) or _filters(opts, {"-t", "--test-name-pattern"}) else shown
         if name == "bun" and sub == "x":
             return self.command(rest, here, depth) if rest else None
         if sub in ("exec", "dlx") or (name == "npm" and sub in ("exec", "x")):
@@ -4723,14 +4741,15 @@ def suite_gate(hook):
     found = SuiteReader().suites(command, hook.cwd)
     if not found:
         return None
-    what = found[0].what
+    sure = [s for s in found if not s.unsure]
     fleet = managed_fleet(hook)
     cli = hook.env.get("TSTACK_FLEET_CLI") or fleet_cli()
     if fleet is None:
         if not hook.headless:
-            sys.stderr.write(f"tstack: `{_one_line(what, 80)}` runs a whole test suite; "
-                             f"`{cli} fleets gate run --as <name> -- <command>` queues it behind other suites and caps "
-                             f"its memory.\n")
+            runs = (f"`{_one_line(sure[0].what, 80)}` runs a whole test suite" if sure else
+                    f"the hook can't tell whether `{_one_line(command, 80)}` runs a whole test suite")
+            sys.stderr.write(f"tstack: {runs}; `{cli} fleets gate run --as <name> -- <command>` queues it behind other "
+                             f"suites and caps its memory.\n")
         return None
     words = None
     try:
@@ -4751,7 +4770,6 @@ def suite_gate(hook):
         slot += (f"Fleet {fleet} holds the slot by hand (token {', '.join(tokens)}), and a gate run never runs under a "
                  f"hold taken by hand, its own fleet's included: when that hold is this session's, free it first with "
                  f"`{frees}`; else the run waits for it like any other. ")
-    sure = [s for s in found if not s.unsure]
     if sure:
         unclear = (" The hook couldn't tell all that this line runs around the test runner."
                    if any(s.unclear for s in found) else "")
@@ -4759,7 +4777,7 @@ def suite_gate(hook):
     else:
         unclear = (" It names a test runner whose words the hook can't read (a variable, an escape, a line it can't "
                    "parse), so it goes through the gate as a suite would.")
-        lead = f"The hook can't tell whether `{_one_line(what, 80)}` runs a whole test suite. In"
+        lead = f"The hook can't tell whether `{_one_line(command, 80)}` runs a whole test suite. In"
     return Deny(f"{lead} fleet {fleet} (this machine serves a manager) a "
                 f"full suite runs only through the gate slot, in a memory-capped scope that dies whole.{unclear} Run "
                 f"it as: `{wrapped}` (Bash timeout {SUITE_TIMEOUT_MS}, or run_in_background: it may queue behind "

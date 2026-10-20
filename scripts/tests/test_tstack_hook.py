@@ -4476,7 +4476,13 @@ class SuiteParseTest(unittest.TestCase):
                 "continued.sh": "vp test \\\n  --run\n",
                 "logged.sh": 'vp test --run > "$out/log" 2>&1\n',
                 "after_one.sh": "vp test src/a.test.ts; pnpm test\n",
-                "commented.sh": "vp test # src/a.test.ts\n"}):
+                "commented.sh": "vp test # src/a.test.ts\n",
+                "then.sh": "vp test; cp x src/a.test.ts\n",
+                "piped.sh": "vp test | tee src/x.log\n",
+                "subshell.sh": "(vp test) && ls src/\n",
+                "background.sh": "vp test & echo src/a.test.ts\n",
+                # A stray quote in a `<<\\EOF` body misleads each reading that leaves comments out: the `#` still ends it.
+                "commented_after_heredoc.sh": "cat <<\\EOF\nit's\nEOF\nvp test # src/a.test.ts\n"}):
             with self.subTest(command=command):
                 self.assertEqual(self.suites(command), [(command, True)])
 
@@ -4486,8 +4492,34 @@ class SuiteParseTest(unittest.TestCase):
             with self.subTest(command=command):
                 found = self.mod.SuiteReader().suites(command, str(self.pkg))
                 self.assertEqual([(s.what, s.unclear, s.unsure) for s in found], [(command, True, True)])
+        for command in ("source t/var.sh", ". t/arg.sh"):
+            with self.subTest(command=command):
+                found = self.mod.SuiteReader().suites(command, str(self.pkg))
+                self.assertEqual([(s.what, s.unclear, s.unsure) for s in found], [(command, True, True)])
+        found = self.mod.SuiteReader().suites("vp test 'src/a.test.ts", str(self.pkg))
+        self.assertEqual([(s.unclear, s.unsure) for s in found], [(True, True)])
         list(self.scripts({"whole.sh": "vp test $files\npnpm test\n"}))
         self.assertEqual([s.unsure for s in self.mod.SuiteReader().suites("./t/whole.sh", str(self.pkg))], [False])
+
+    # The review's probes (2026-10-20): each runs every test file, typed or in a script, and was read as naming some.
+    WHOLE_BY_ITS_WORDS = ("pytest --cov src", "pytest --cov -n 4", "pytest .", "py.test ./", "vp test .",
+                          "vitest run ./", "bun test .", "find src -name '*.test.ts' -exec vp test {} +",
+                          "find . -name 'test_*.py' -exec pytest {} +")
+
+    def test_a_coverage_source_a_dot_or_the_files_find_hands_over_name_no_test(self):
+        for command in self.WHOLE_BY_ITS_WORDS:
+            with self.subTest(command=command):
+                found = self.suites(command)
+                self.assertTrue(found, command)
+                self.assertFalse(any(unclear for _, unclear in found), found)
+        for command in self.scripts({f"whole{i}.sh": f"{c}\n" for i, c in enumerate(self.WHOLE_BY_ITS_WORDS)}):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [(command, True)])
+        for command in ("pytest --cov src tests/test_a.py", "pytest --cov=src tests/", "pytest --cov -k parses",
+                        "vp test ./src/a.test.ts", "find src -name '*.ts' -exec vp check {} +",
+                        "find src -name 'a.test.ts' -exec vp test {} -t parses +", "find src -name '*.test.ts'"):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [])
 
     def test_a_launcher_is_read_for_the_command_it_is_given_not_for_its_comments(self):
         (self.pkg / "tasks").mkdir()
@@ -4850,6 +4882,13 @@ class SuiteGateTest(FleetCase):
                 reason = self.decision(self.run_bash(command))["permissionDecisionReason"]
                 self.assertIn(f"`{command}` runs a full test suite", reason)
 
+    def test_a_line_the_hook_cannot_parse_is_named_by_its_own_words(self):
+        self.manager()
+        command = "pnpm test 'src/a.test.ts"
+        reason = self.decision(self.run_bash(command))["permissionDecisionReason"]
+        self.assertIn(f"The hook can't tell whether `{command}` runs a whole test suite", reason)
+        self.assertNotIn("a command the hook cannot parse", reason)
+
     # The review's probes (2026-10-12): each came back `allow` with an updatedInput, which skips auto mode's check.
     PROBES = (
         "pnpm test; rm -rf ~/x", "pnpm test && git push --force", "cd /etc && pnpm test", "pnpm test\nrm -rf ~/x",
@@ -4947,6 +4986,16 @@ class SuiteGateTest(FleetCase):
         r = self.run_bash("pnpm test")
         self.assertEqual(r.stdout, "")
         self.assertIn("runs a whole test suite", r.stderr)
+
+    def test_outside_a_managed_fleet_a_runner_the_hook_cannot_read_is_hinted_as_one_it_cannot_tell(self):
+        (self.repo / "var.sh").write_text("#!/bin/sh\nvp test --run $files\n")
+        for command in ("./var.sh", "pnpm test 'src/a.test.ts"):
+            with self.subTest(command=command):
+                r = self.run_bash(command)
+                self.assertEqual(r.stdout, "")
+                self.assertIn(f"tstack: the hook can't tell whether `{command}` runs a whole test suite", r.stderr)
+                self.assertNotIn(f"tstack: `{command}` runs", r.stderr)
+                self.assertIn("fleets gate run --as <name> -- <command>", r.stderr)
 
     def test_a_dead_manager_does_not_manage(self):
         self.manager()
