@@ -520,6 +520,121 @@ class HeartbeatTest(HookCase):
         self.assertEqual(self.beats(other)["sess-1.json"]["worker"], "a1")
         self.assertEqual(self.beats(), {})  # FLEET_DIR wins over the scratchpad
 
+    def served_home(self, name="skills", dir=None):
+        """A fleet folder in the ledgers' home that the registry gives this session (`fleet serve`)."""
+        self.env["XDG_STATE_HOME"] = str(self.tmp / "state")
+        self.env["FLEET_HOME"] = str(self.tmp / "registry")
+        (self.tmp / "registry").mkdir(exist_ok=True)
+        home = self.tmp / "state" / "fleet" / name
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "state.json").write_text('{"project": "skills", "status": "paused"}')
+        (self.tmp / "registry" / f"{name}.json").write_text(json.dumps(
+            {"id": name, "dir": dir or str(home), "session_id": "sess-1"}))
+        return home
+
+    def cut_over(self, home):
+        """The move to the cloud: the host's marker in the folder, and `fleet serve --stop` drops the entry."""
+        (home / "cloud.json").write_text(json.dumps({"fleet": home.name, "cloud": "https://fleet.example"}))
+        (self.tmp / "registry" / f"{home.name}.json").unlink()
+
+    def at(self, seconds):
+        return {"FLEET_NOW": f"2026-01-05T09:{seconds // 60:02d}:{seconds % 60:02d}+00:00"}
+
+    def test_a_moved_fleet_the_session_served_gets_its_beat_beside_its_ledger(self):
+        """The cut-over's `fleet serve --stop` removes the registry entry; the session still beats into the moved
+        folder, where the cloud host reads it. The scratchpad's own fleet beats as before."""
+        home = self.served_home()
+        self.hook("PostToolUse", self.tool(), env=self.at(0))  # served: the session remembers the folder
+        self.assertEqual(self.beat_folders(), [self.fleet])  # not moved yet: no beat outside the scratchpad
+        self.cut_over(home)
+        self.assertSilent(self.hook("PostToolUse", self.tool(tool_name="Bash", tool_input={"command": "ls"}),
+                                    env=self.at(60)))
+        self.assertEqual(self.beats(home)["sess-1.json"]["tool"], "Bash")
+        self.assertEqual(self.beats()["sess-1.json"]["tool"], "Bash")
+        self.assertEqual(self.beat_folders(), [self.fleet, home])
+
+    def test_the_moved_folders_are_looked_up_once_a_minute(self):
+        home = self.served_home()
+        self.hook("PostToolUse", self.tool(), env=self.at(0))
+        self.cut_over(home)
+        self.hook("PostToolUse", self.tool(), env=self.at(59))
+        self.assertEqual(self.beats(home), {})  # the lookup of 0 s still holds
+        self.hook("PostToolUse", self.tool(tool_name="Grep"), env=self.at(60))
+        self.assertEqual(self.beats(home)["sess-1.json"]["tool"], "Grep")
+        shutil.rmtree(self.tmp / "state" / "fleet")  # the folder is gone: still cached, its write fails
+        self.assertSilent(self.hook("PostToolUse", self.tool(tool_name="Read"), env=self.at(61)))
+        self.assertEqual(self.beats()["sess-1.json"]["tool"], "Read")
+
+    def test_a_nul_in_a_registry_dir_costs_no_own_beat_and_is_logged_once(self):
+        self.served_home(dir="/fleets/sk\x00ills")
+        for seconds in (0, 30, 61, 200):
+            self.assertSilent(self.hook("PostToolUse", self.tool(tool_name="Read"), env=self.at(seconds)))
+            self.assertEqual(self.beats()["sess-1.json"]["tool"], "Read")
+        self.assertEqual(self.log().count("a moved fleet's beat failed (ValueError"), 1, self.log())
+
+    def test_a_read_only_data_dir_costs_no_own_beat(self):
+        self.served_home()
+        self.data.mkdir()
+        self.data.chmod(0o500)
+        self.addCleanup(self.data.chmod, 0o700)
+        self.assertSilent(self.hook("PostToolUse", self.tool(tool_name="Read")))
+        self.assertEqual(self.beats()["sess-1.json"]["tool"], "Read")
+
+    def test_a_deeply_nested_cache_or_registry_entry_costs_no_own_beat(self):
+        deep = "[" * 200000 + "]" * 200000  # json.loads raises RecursionError, not ValueError
+        (self.data / "sessions").mkdir(parents=True)
+        (self.data / "sessions" / "sess-1.fleet-beat.json").write_text(deep)
+        self.assertSilent(self.hook("PostToolUse", self.tool(tool_name="Read"), env=self.at(0)))
+        self.assertEqual(self.beats()["sess-1.json"]["tool"], "Read")
+        self.served_home()  # the broken file was replaced; a minute on, the registry is read again
+        (self.tmp / "registry" / "deep.json").write_text(deep)
+        self.assertSilent(self.hook("PostToolUse", self.tool(tool_name="Grep"), env=self.at(60)))
+        self.assertEqual(self.beats()["sess-1.json"]["tool"], "Grep")
+        self.assertEqual(self.log().count("a moved fleet's beat failed (RecursionError"), 1, self.log())
+
+    def test_a_moved_folder_gets_its_beat_when_the_cache_cannot_be_saved(self):
+        home = self.served_home()
+        self.hook("PostToolUse", self.tool(), env=self.at(0))  # remembered while the data dir is writable
+        self.cut_over(home)
+        self.data.chmod(0o500)
+        (self.data / "sessions").chmod(0o500)
+        self.addCleanup(self.data.chmod, 0o700)
+        self.addCleanup((self.data / "sessions").chmod, 0o700)
+        self.assertSilent(self.hook("PostToolUse", self.tool(tool_name="Grep"), env=self.at(60)))
+        self.assertEqual(self.beats(home)["sess-1.json"]["tool"], "Grep")
+
+    def test_an_unmoved_fleet_the_registry_gives_the_session_gets_no_beat_outside_its_own(self):
+        """The beats of a fleet that has not moved go where they went before: the scratchpad's ledgers, or $FLEET_DIR.
+        A folder the registry gives this session, outside them, gets none."""
+        self.env["FLEET_HOME"] = str(self.tmp / "registry")
+        (self.tmp / "registry").mkdir()
+        served = self.tmp / "served"
+        served.mkdir()
+        (served / "state.json").write_text("{}")
+        (self.tmp / "registry" / "served.json").write_text(json.dumps(
+            {"id": "served", "dir": str(served), "session_id": "sess-1"}))
+        self.hook("PostToolUse", self.tool())
+        self.assertEqual(self.beat_folders(), [self.fleet])
+        other = self.tmp / "elsewhere"
+        other.mkdir()
+        (other / "state.json").write_text("{}")
+        shutil.rmtree(self.fleet / "heartbeats")
+        self.hook("PostToolUse", self.tool(), env={"FLEET_DIR": str(other)})
+        self.assertEqual(self.beat_folders(), [other])
+
+    def beat_folders(self):
+        return sorted((p.parent for p in self.tmp.rglob("heartbeats")), key=str)
+
+    def test_a_moved_fleet_no_session_of_ours_served_gets_no_beat(self):
+        self.env["XDG_STATE_HOME"] = str(self.tmp / "state")
+        home = self.tmp / "state" / "fleet" / "skills"
+        home.mkdir(parents=True)
+        (home / "state.json").write_text("{}")
+        (home / "cloud.json").write_text(json.dumps({"fleet": "skills", "cloud": "https://fleet.example"}))
+        self.hook("PostToolUse", self.tool())
+        self.assertEqual(self.beats(home), {})
+        self.assertEqual(self.beats()["sess-1.json"]["tool"], "Edit")
+
     def test_the_jj_workspace_is_named(self):
         main = self.tmp / "jjmain"
         main.mkdir()
@@ -6531,8 +6646,8 @@ class IdleGuardTest(MovedFleet, FleetCase):
         self.assertIn("no lane is running: s2", self.blocked(self.stop()))
 
     def test_a_moved_teams_heartbeats_are_not_read(self):
-        """The hook beats into the scratchpad's fleets only, never a moved team's home folder: a beat there is from
-        before the move, so it says nothing of the worker now."""
+        """A moved team's folder holds beats from before the move and from sessions whose hook predates beating
+        there, so an old one says nothing of the worker now."""
         self.move()
         self.ledger(roadmap=self.STEPS, agents=[self.worker("a2", task_id="ab12")])
         self.beat("ab12", 60 * 60)

@@ -3064,18 +3064,27 @@ tool call waits on it) and, inside the synchronous dispatcher, on SessionStart, 
   Code 2.1.257+) that holds a `state.json`. A coordinator's DIR is `<scratchpad>/coordinator`, and its
   subagents share its session and scratchpad, so every worker spawned as a subagent beats with no
   setup; a worker launched as its own process (`claude -p` in its workspace) gets `FLEET_DIR` (and
-  `FLEET_WORKER`) from whoever launches it. Anything else is no fleet, and the handler does nothing.
-  Why not the registry: it is machine-wide (one served fleet would make every session on the machine
-  beat), it needs the fleet served first, and reading it means a file per fleet on every tool call;
-  the scratchpad is the tie the fleet already uses (open-23) and costs one directory listing.
+  `FLEET_WORKER`) from whoever launches it. Besides, a session beats into each folder of the ledgers'
+  home that moved to the cloud (its `cloud.json`) and that the registry gave this very session (`fleet
+  serve`, its `session_id`), remembered after the cut-over's `fleet serve --stop` drops the entry: there
+  the cloud host reads the beats. An unmoved folder the registry gives the session gets none, so an
+  unmoved fleet's beats go where they went. Anything else is no fleet, and the handler does nothing.
+  The registry is not the tie for the rest: it is machine-wide and needs the fleet served first, and
+  the scratchpad is the tie the fleet already uses (open-23) and costs one directory listing. Reading
+  the registry and the session's memory costs a file per entry, so the moved folders are looked up at
+  most once a minute per session and kept in the session's `fleet-beat` state; a call in between opens
+  that one file. The session's own beats are written first, and a failed lookup or write of a moved
+  folder never costs them: it is logged once per session.
 - **The file**: `DIR/heartbeats/<session>.json`, or `<session>.<agent_id>.json` for a subagent, replaced
   atomically (a dot-file then a rename): `{session, agent, agent_type, worker, cwd, project, workspace, path,
   tool, event, at, transcript, agent_transcript}`. `project` is `$CLAUDE_PROJECT_DIR`, the session's
   project directory, which a [permission grant](#permission-grants) names; `cwd` follows its shell. `workspace` is the jj workspace's name, read from
   `.jj/working_copy/checkout` (no jj process); `path` is the tool's absolute `file_path`,
   `notebook_path` or `path`; `at` is a stamp from the fleet's clock (`FLEET_NOW`, local time with its
-  offset). A start or a stop (no tool) keeps the `tool` the file already had. Measured: 0.35 ms median in process inside a fleet, under 0.5 ms outside one; the hook
-  process itself is Python's start-up (~30 ms), which a PostToolUse now waits for.
+  offset). A start or a stop (no tool) keeps the `tool` the file already had. Measured 2026-10-19, in
+  process, median of 400 calls with 16 registry entries: 0.30 ms inside a fleet, 0.51 ms with a moved
+  folder as well, 0.05 ms outside one; the hook process itself is Python's start-up (~30 ms), which a
+  PostToolUse now waits for.
 - **Never breaks**: a failure is logged to the plugin's `hook.log`, and the hook exits 0 with nothing
   on stdout. It writes nothing to `state.json` or `chat.jsonl`, so no trace sees it.
 - **Reading** (`src/heartbeat.ts`): each heartbeat is tied to a worker row by, in order, `worker`; the
@@ -3165,8 +3174,8 @@ A Stop handler of the same dispatcher keeps a coordinator at work while work wai
   and every running worker is no lane (the advisor's row, a reviewer by its skill `review`, `interrogate` or
   `code-review` or the word reviewer in its name, a watcher by MODELS.md's Watcher pair, haiku at low, or a worker
   gone silent: its heartbeat `DIR/heartbeats/<session>.<task_id>.json` older than `SILENT_S`, 20 minutes, as
-  `silentWorkers` says; a row with no task_id or no heartbeat, or a moved team's, whose home folder gets no
-  heartbeats, is a lane; a gate run is no ledger row), and its Now line does not say why the work waits (a wait
+  `silentWorkers` says; a row with no task_id or no heartbeat, or a moved team's, whose folder holds beats from
+  before the move, is a lane; a gate run is no ledger row), and its Now line does not say why the work waits (a wait
   word: wait, await, until, pause, on hold, blocked on or by; or the ref of an open card or unresolved roadblock,
   D12, G33, R4: an open card the line does not name is no reason), the stop is blocked with `Work is
   queued and no lane is running: <the first three, id (title)>[, and N more]. Start the independent ones now, or

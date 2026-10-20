@@ -325,12 +325,28 @@ def fleet_stamp(env):
     return (at or datetime.now(timezone.utc)).astimezone().isoformat(timespec="seconds")
 
 
+BEAT_MOVED_EVERY_S = 60
+
+
 def fleet_heartbeat(hook):
     """Every tool call, session start and stop, subagent start and stop: one small file per session
     (and per subagent) in DIR/heartbeats/, which the hub reads for a worker's last-seen and the
-    silent-worker warning. A no-op outside a fleet; one atomic write per fleet, no process."""
-    dirs = fleet_dirs(hook)
-    if not dirs or not hook.session_id:
+    silent-worker warning. The folders are fleet_dirs, written first, then each moved folder the session served
+    (a team in the cloud, whose host reads its beats there): an unmoved fleet's beats go where they went. The moved
+    folders are looked up at most once per BEAT_MOVED_EVERY_S per session (_moved_beat_dirs); any failure there (a
+    deeply nested JSON file raises RecursionError) or in their writes never costs the own beat and is logged once per
+    session. A no-op outside a fleet; one atomic write
+    per fleet, no process."""
+    if not hook.session_id:
+        return None
+    own = fleet_dirs(hook)
+    failed = None
+    try:
+        extra = _moved_beat_dirs(hook, own)
+    except Exception as e:  # a broken cache or registry entry (even a RecursionError) costs no own beat
+        extra, failed = [], e
+        _moved_beat_failed(hook, e, lookup=True)
+    if not own and not extra:
         return None
     data = hook.input
 
@@ -353,21 +369,71 @@ def fleet_heartbeat(hook):
     project = hook.env.get("CLAUDE_PROJECT_DIR")
     if project and os.path.isabs(project):
         beat["project"] = project
-    name =re.sub(r"[^A-Za-z0-9_.-]", "_", hook.session_id + (f".{agent}" if agent else ""))
-    for d in dirs:
-        folder = Path(d) / "heartbeats"
-        folder.mkdir(exist_ok=True)
-        path = folder / f"{name}.json"
-        if beat["tool"] is None:  # a start or a stop keeps the last tool the session ran
-            try:
-                last = json.loads(path.read_text()).get("tool")
-                beat["tool"] = last if isinstance(last, str) else None
-            except (OSError, ValueError, AttributeError):
-                pass
-        tmp = folder / f".{name}.{os.getpid()}"
-        tmp.write_text(json.dumps(beat))
-        os.replace(tmp, path)
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", hook.session_id + (f".{agent}" if agent else ""))
+    for d in own:
+        _write_beat(d, name, beat)
+    for d in extra:
+        try:
+            _write_beat(d, name, beat)
+        except (OSError, ValueError) as e:
+            if failed is None:
+                failed = e
+                _moved_beat_failed(hook, e, lookup=False)
     return None
+
+
+def _write_beat(d, name, beat):
+    folder = Path(d) / "heartbeats"
+    folder.mkdir(exist_ok=True)
+    path = folder / f"{name}.json"
+    beat = dict(beat)
+    if beat["tool"] is None:  # a start or a stop keeps the last tool the session ran
+        try:
+            last = json.loads(path.read_text()).get("tool")
+            beat["tool"] = last if isinstance(last, str) else None
+        except (OSError, ValueError, AttributeError):
+            pass
+    tmp = folder / f".{name}.{os.getpid()}"
+    tmp.write_text(json.dumps(beat))
+    os.replace(tmp, path)
+
+
+def _moved_beat_dirs(hook, own):
+    """The moved folders this session served (_moved_served_dirs) that are not among own, from the session's
+    `fleet-beat` state while it is under BEAT_MOVED_EVERY_S old: the registry and the session's memory are read once a
+    minute, not on every call. Outside a fleet a call opens that one state file."""
+    now = fleet_now(hook.env)
+    state = hook.load_state("fleet-beat")
+    checked, kept = state.get("checked"), state.get("moved")
+    if isinstance(checked, (int, float)) and 0 <= now - checked < BEAT_MOVED_EVERY_S and isinstance(kept, list):
+        found = [d for d in kept if isinstance(d, str) and os.path.isabs(d)]
+    else:
+        found = _moved_served_dirs(hook, [])
+        try:
+            hook.save_state("fleet-beat", {**state, "checked": now, "moved": found})
+        except OSError:  # a read-only data dir: looked up again next call, and the folders still get their beats
+            pass
+    if not found:
+        return []
+    seen = {os.path.realpath(d) for d in own}
+    return [d for d in found if os.path.realpath(d) not in seen]
+
+
+def _moved_beat_failed(hook, error, lookup):
+    """Logs a failed moved-folder lookup or write once per session; a failed lookup is not tried again for a minute. A
+    state file that does not load is replaced."""
+    try:
+        state = hook.load_state("fleet-beat")
+    except Exception:  # the broken file the lookup failed on
+        state = {}
+    if not state.get("logged"):
+        log(hook.data_dir, f"{hook.event} fleet_heartbeat: a moved fleet's beat failed ({type(error).__name__}: "
+                           f"{_one_line(str(error), 120)}); the session's own beats go on, and this is said once")
+    again = {"checked": fleet_now(hook.env), "moved": []} if lookup else {}
+    try:
+        hook.save_state("fleet-beat", {**state, **again, "logged": True})
+    except OSError:
+        pass
 
 
 class Block(str):
@@ -1086,8 +1152,10 @@ def _no_lane(row):
 
 def _silent(hook, d, row, now):
     """Whether a running row's worker went silent: its heartbeat file, DIR/heartbeats/<session>.<task_id>.json as
-    fleet_heartbeat names a subagent's, is older than SILENT_S. Stat only. A row with no task_id or no file, or a
-    moved team's (the hook beats into the scratchpad's fleets, never a moved one's home folder), is not known silent."""
+    fleet_heartbeat names a subagent's, is older than SILENT_S. Stat only. A row with no task_id or no file is not known
+    silent, nor is a moved team's: the hook beats into a moved folder the session served, but that folder also holds
+    beats from before the move and from sessions whose hook predates that, so an old file there would mark a live
+    worker silent."""
     task = row.get("task_id")
     if not isinstance(task, str) or not task or not hook.session_id or moved(d):
         return False
