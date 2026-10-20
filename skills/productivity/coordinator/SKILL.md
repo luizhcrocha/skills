@@ -349,3 +349,5 @@ An action the harness refused (a permission denied, a classifier's stop) is the 
 ## Reporting to the user
 
 Lead with the state of the fleet: what finished, what is running, what is blocked and on whom, and what waits on the user, by title. Keep it to what changed since the last message; the dashboard carries the history. Link the dashboard once at the start and again whenever the user seems to have lost it.
+
+A time estimate for a run (a bench, a gate, a batch) comes from its size and its measured rate when both are known (requests times seconds per request, the last run's duration), and says which basis it used; only an estimate with neither is a guess, and says so. On 10-20 a bench with a known request count and rate was guessed at 25 minutes and took 90 (perf's report).
