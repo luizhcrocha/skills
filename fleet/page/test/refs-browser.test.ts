@@ -97,6 +97,11 @@ test.skipIf(!found)("on a phone, the Links row's d30 is a link in its words; a t
   await page.goto(at("/f/manager/#links"), { waitUntil: "domcontentloaded" });
   const row = '#links-view .link-row[data-link="bench"]';
   await page.waitForSelector(`${row} .link-for a.dref`);
+  /* The page's fonts come from Google after the row shows: their swap moves the link 4 px left and 1 px down. Read
+   * before it, the link moved on a loaded machine and the tip took the blame. */
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+  });
 
   const read = () =>
     page.evaluate((sel: string) => {
