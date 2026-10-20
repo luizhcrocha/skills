@@ -2,7 +2,7 @@
  * The chat seam (ported from the coordinator's tests/test_chat.py, all but the dashboard server's
  * routes, which are stage 3's): the chat module, its CLI, the watch and the wait.
  */
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -787,6 +787,45 @@ describe("listening", () => {
     expect(listening(m, root).seen).toBe(sent.id);
     expect(existsSync(ownerPath(root, "coordinator"))).toBe(false);
   });
+
+  test("a second watch is refused while the first is still in its first read, before its pid file is written", async () => {
+    // The chat is a FIFO: the first watch's first read opens it, and waits there until this test opens it to write.
+    const store = join(root, "chat.jsonl");
+    expect(existsSync(store)).toBe(false);
+    expect(Bun.spawnSync(["mkfifo", store]).exitCode).toBe(0);
+    const first = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], env);
+    procs.push(first.proc);
+
+    for (let tries = 0; tries < 200 && readOwner(root, "coordinator")?.watch !== first.proc.pid; tries += 1) await sleep(50);
+    expect([readOwner(root, "coordinator")?.watch, existsSync(join(root, "watch-coordinator.pid"))]).toEqual([first.proc.pid, false]);
+
+    const second = Bun.spawn([FLEET, "chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], { env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    procs.push(second);
+    expect(await Promise.race([second.exited, sleep(5000).then(() => "still running")])).toBe(1);
+    expect(await new Response(second.stderr).text()).toStartWith(`chat: a watch as coordinator already runs for ${root} (pid ${String(first.proc.pid)}), `);
+
+    // Let the first read go on (a writer opened and closed is an empty chat), then put a file in the FIFO's place.
+    let writer: number | undefined;
+
+    for (let tries = 0; tries < 200 && writer === undefined; tries += 1) {
+      try {
+        writer = openSync(store, constants.O_WRONLY | constants.O_NONBLOCK);
+      } catch {
+        await sleep(50);
+      }
+    }
+
+    expect(writer).toBeDefined();
+    rmSync(store);
+    writeFileSync(store, "");
+    closeSync(writer ?? -1);
+
+    for (let tries = 0; tries < 200 && !existsSync(join(root, "watch-coordinator.pid")); tries += 1) await sleep(50);
+    expect(readFileSync(join(root, "watch-coordinator.pid"), "utf8")).toBe(String(first.proc.pid));
+    const sent = user("status?");
+    expect(await first.proc.exited).toBe(0);
+    expect(await first.lines.rest()).toBe(`#${String(sent.id)} user -> coordinator: status?\n`);
+   }, 30_000);
 
   /** Make the watch `pid` an orphan: its record names a session that is gone. */
   async function orphan(pid: number): Promise<void> {

@@ -500,15 +500,15 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
 
     if (copy !== undefined) return yield* Effect.fail(new ChatError({ reason: copy }));
     const pulse = pulsePath(root, who);
-    const held = intOf(readText(pulse));
+    const owner = readOwner(root, who);
 
-    // A held watch whose session is gone, or is not the fleet's host, hears for nobody the fleet knows: this one
-    // takes its place, and that one, finding the pid file no longer its own, exits with nothing more printed and
-    // nothing marked read.
-    if (held !== undefined && held > 0 && held !== process.pid && isWatch(held, root, who)) {
-      const owner = readOwner(root, who);
-
-      if (!orphaned(held, owner) && !foreign(held, owner, host)) {
+    // The watch the pid file names, and the one the record names: a watch writes its record before its first
+    // read and its pid file after it, so one still in that read is found by its record alone. A held watch
+    // whose session is gone, or is not the fleet's host, hears for nobody the fleet knows: this one takes its
+    // place, and that one, finding the pid file no longer its own, exits with nothing more printed and nothing
+    // marked read.
+    for (const held of new Set([intOf(readText(pulse)), owner?.watch])) {
+      if (held !== undefined && held > 0 && held !== process.pid && isWatch(held, root, who) && !orphaned(held, owner) && !foreign(held, owner, host)) {
         return yield* Effect.fail(
           new ChatError({
             reason:
