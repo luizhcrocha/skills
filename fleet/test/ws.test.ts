@@ -3,11 +3,11 @@
  * records it; `list` says what each holds; `prune` deletes only what is recorded, known to jj as that
  * workspace, idle, and integrated, and refuses the rest by name.
  */
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { join } from "node:path";
 
-import { beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
 import { wsId } from "../src/ws/hook.ts";
@@ -61,13 +61,21 @@ function work(at: string, file: string, message: string): void {
   jj(at, "new");
 }
 
+/** The repo each test starts from, made once: a jj repo holds no path of its own, so a copy is a repo of its own. */
+let template: string;
+
+beforeAll(() => {
+  template = join(tmp("fleet-ws-template-"), "repo");
+  Bun.spawnSync(["jj", "git", "init", template], { stdout: "ignore", stderr: "ignore" });
+  writeFileSync(join(template, "README"), "base\n");
+  jj(template, "describe", "-m", "base");
+  jj(template, "new");
+});
+
 beforeEach(() => {
   base = tmp("fleet-ws-");
   repo = join(base, "repo");
-  Bun.spawnSync(["jj", "git", "init", repo], { stdout: "ignore", stderr: "ignore" });
-  writeFileSync(join(repo, "README"), "base\n");
-  jj(repo, "describe", "-m", "base");
-  jj(repo, "new");
+  cpSync(template, repo, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true });
   dir = join(base, "fleet");
   env = baseEnv(join(base, "registry"), { FLEET_NOW: "2026-01-05T09:00:00+00:00", TZ: "UTC" });
   state("init", "--project", "p", "--goal", "g");
