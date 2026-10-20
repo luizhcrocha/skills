@@ -140,8 +140,7 @@ def tape_build(hook):
     hook's pipes."""
     if hook.is_worker or hook.headless:
         return None
-    data = hook.env.get("XDG_DATA_HOME") or str(Path(hook.env.get("HOME", "/tmp")) / ".local" / "share")
-    if not (Path(data) / "tstack" / "tape" / "index.db").exists() or memo().resolve_project(hook.cwd) is None:
+    if not memo().tape_index(hook.env).exists() or memo().resolve_project(hook.cwd) is None:
         return None
     import shutil
     import subprocess

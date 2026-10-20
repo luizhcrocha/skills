@@ -357,9 +357,19 @@ def resolve_project(cwd):
     return _scope_cache[cwd]
 
 
+def data_home(env):
+    """$XDG_DATA_HOME, else ~/.local/share: where memo's global store, tape's stores and its index live."""
+    return Path(env.get("XDG_DATA_HOME") or Path(env.get("HOME", str(Path.home()))) / ".local" / "share")
+
+
+def tape_index(env):
+    """tape's index.db, whose presence says tape is in use on the machine: here so tstack-hook finds it without
+    loading tape."""
+    return data_home(env) / "tstack" / "tape" / "index.db"
+
+
 def global_store(env):
-    data = env.get("XDG_DATA_HOME") or str(Path(env.get("HOME", str(Path.home()))) / ".local" / "share")
-    return Store("global", Path(data) / "tstack" / "memo" / "global")
+    return Store("global", data_home(env) / "tstack" / "memo" / "global")
 
 
 # --- config -----------------------------------------------------------------

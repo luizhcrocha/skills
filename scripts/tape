@@ -316,8 +316,7 @@ def key_of(cwd):
 
 # --- the store ------------------------------------------------------------------
 
-def data_home(env):
-    return Path(env.get("XDG_DATA_HOME") or Path(env.get("HOME", str(Path.home()))) / ".local" / "share")
+data_home = memo.data_home
 
 
 def config_path(env):
@@ -393,8 +392,7 @@ def load_config(env):
                   on_start)
 
 
-def index_path(env):
-    return data_home(env) / "tstack" / "tape" / "index.db"
+index_path = memo.tape_index
 
 
 def classify(env):

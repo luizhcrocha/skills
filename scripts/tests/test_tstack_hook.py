@@ -273,6 +273,24 @@ class TapeBuildTest(HookCase):
         self.assertEqual(self.wait_runs(1), [["build", "--on-start", "--cwd", str(self.repo)]])
         self.assertIn("--user --scope --collect --quiet -p MemoryMax=2G --", (self.tmp / "systemd-run.log").read_text())
 
+    def test_tape_in_use_is_read_at_tapes_own_index_even_with_home_unset(self):
+        """The hook reads tape's index path from memo's tape_index, the one tape's index_path is. With HOME unset
+        both are under the account's home, as Path.home() finds it (the hook's own copy had /tmp)."""
+        import pwd
+        from importlib.machinery import SourceFileLoader
+        from importlib.util import module_from_spec, spec_from_loader
+        def load(name, path):
+            loader = SourceFileLoader(name, str(path))
+            module = module_from_spec(spec_from_loader(name, loader))
+            loader.exec_module(module)
+            return module
+        memo, tape = load("memo_for_hook_test", MEMO), load("tape_for_hook_test", ROOT / "scripts" / "tape")
+        env = {k: v for k, v in self.env.items() if k not in ("HOME", "XDG_DATA_HOME")}
+        index = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local" / "share" / "tstack" / "tape" / "index.db"
+        self.assertEqual(memo.tape_index(env), index)
+        self.assertEqual(tape.index_path(env), index)
+        self.assertEqual(memo.tape_index(self.env), self.index)
+
     def test_a_real_build_lands_the_sessions_turns(self):
         tape = ROOT / "scripts" / "tape"
         env = {**self.env, "CLAUDE_PLUGIN_ROOT": str(ROOT)}
