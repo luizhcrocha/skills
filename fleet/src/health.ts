@@ -5,9 +5,10 @@
  */
 import { atOrAfter, stampOf } from "./clock.ts";
 import type { Message } from "./chat/store.ts";
-import { asArray, asObject, asString, pyRepr, truthy, type JsonObject } from "./json.ts";
+import { asArray, asObject, asString, dumps, pyRepr, truthy, type JsonObject, type JsonOut } from "./json.ts";
 import { workerActivity } from "./heartbeat.ts";
 import type { Decision } from "./ledger/model.ts";
+import movedPrograms from "./moved-programs.json" with { type: "json" };
 import { secondsNow, type Machine } from "./world.ts";
 
 /** A running worker that has made no tool call (by its heartbeat) or written nothing (by its transcript,
@@ -56,14 +57,32 @@ export function explainCommand(bin: string, dir: string, ref: string, rev: strin
   );
 }
 
-/** How a moved team (files.ts `isMoved`) records an answer to its card `key`, the ledger row's id (the page's ref,
- * P68, is not one), with `resolution`, and with `re`, a reply to the user's message #re: one program on the stdin of
- * fleet-run for the fleet in `dir`, as the Stop hook's nudge says it (`answer_program` in hooks/tstack-hook.py). The old CLI's
- * `--decide` is refused there. */
-export function decideProgram(dir: string, key: string, resolution: string, re?: number): string {
-  const said = re === undefined ? "" : ` say("...", { re: ${re} });`;
+/** A program of moved-programs.json's, its `{name}`s filled with `values` as JSON literals, ASCII-escaped as the
+ * hook's `_js` writes them (Python's json.dumps). */
+function program(template: string, values: Readonly<Record<string, JsonOut>>): string {
+  return template.replace(/\{(\w+)\}/gu, (_, name: string) => dumps(values[name] ?? null));
+}
 
-  return `one program on the stdin of \`FLEET_DIR=${dir} fleet-run\`: \`decision.decide(${JSON.stringify(key)}, "...", ${JSON.stringify(resolution)});${said} return records.apply(ops);\``;
+function onStdin(dir: string, text: string): string {
+  return `one program on the stdin of \`FLEET_DIR=${dir} fleet-run\`: \`${text}\``;
+}
+
+/** How a moved team (files.ts `isMoved`) closes its grilling `key`, the ledger row's id (the page's ref, G6, is not
+ * one), once the user answered every question on the page: grill.close with `resolution`, which closes it decided,
+ * since the fleet's owner-answer gate refuses `decision.decide` (decision.withdraw closes a card too, but as one nobody
+ * needs). The hook's nudge says the same program (`close_program` in hooks/tstack-hook.py, from moved-programs.json). */
+export function closeProgram(dir: string, key: string, resolution: string): string {
+  return onStdin(dir, program(movedPrograms.close, { key, resolution }));
+}
+
+/** How a moved team answers the user's line #`re` on its card `key` (the ledger row's id), `number` on the page, that
+ * left the card open: words typed in the chat, a None of these or a Failed:. Only the user's answer on the card
+ * records it, so the reply asks for that, naming the card's number, which the page links. The hook's nudge says the
+ * same program (`on_card_program` in hooks/tstack-hook.py, from moved-programs.json). */
+export function onCardProgram(dir: string, key: string, number: string, re: number): string {
+  const reply = movedPrograms.reply.replace("{number}", number);
+
+  return onStdin(dir, program(movedPrograms.onCard, { reply, re, key }));
 }
 
 /** How the page's answer to an action the user ran and that failed begins: `Failed: <what happened>`. */

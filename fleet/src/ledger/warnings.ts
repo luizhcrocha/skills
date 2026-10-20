@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { Message } from "../chat/store.ts";
 import { atOrAfter, parseInstant } from "../clock.ts";
 import { Refusal } from "../errors.ts";
-import { answeredAt, answeredGrill, decideProgram, decisionRow, explainCommand, failedAnswer, failureWords, unexplained } from "../health.ts";
+import { answeredAt, answeredGrill, closeProgram, decisionRow, explainCommand, failedAnswer, failureWords, onCardProgram, unexplained } from "../health.ts";
 import { asArray, asNumber, asObject, asString, type JsonObject } from "../json.ts";
 import { readObject } from "../registry.ts";
 import { callsLine, refusalRev } from "./permission.ts";
@@ -110,8 +110,9 @@ export function closedNamed(machine: Machine, ledger: Ledger, text: string): str
  * and the fleet has not acted on it, so it is recorded before any other work. A grilling with every
  * question answered is said so until it is decided or withdrawn, whatever the chat said after the last
  * answer (a reply to it, a recap, amendments). A permission not explained is asked for, unless the team has
- * `moved` to the cloud, where no program can explain it (health's `unexplained`); a moved team is told the
- * program that records an answer (health's `decideProgram`), as its CLI refuses `--decide`. */
+ * `moved` to the cloud, where no program can explain it (health's `unexplained`). On a moved team no program records
+ * an answer (the fleet's owner-answer gate): a grilling answered in full is told as one to close (health's
+ * `closeProgram`), and a line from the user that left its card open as one to answer on the card (`onCardProgram`). */
 export function unrecorded(ledger: Ledger, said: readonly Message[], moved: boolean): string[] {
   const numbered = copyLedger(ledger);
   number(numbered);
@@ -122,10 +123,10 @@ export function unrecorded(ledger: Ledger, said: readonly Message[], moved: bool
 
     if (answeredGrill(d)) {
       lines.push(
-        `state: every question of ${d.ref ?? d.id} (${d.title ?? "None"}) is answered and the grilling is still open; record it before any other ` +
+        `state: every question of ${d.ref ?? d.id} (${d.title ?? "None"}) is answered and the grilling is still open; ` +
           (moved
-            ? `work with ${decideProgram("<dir>", d.id, "grilling finished")}.`
-            : `work: \`fleet state <dir> decision ${d.ref ?? d.id} --decide "..." --resolution "grilling finished"\`, or --withdraw "why".`),
+            ? `close it before any other work with ${closeProgram("<dir>", d.id, "grilling finished")}.`
+            : `record it before any other work: \`fleet state <dir> decision ${d.ref ?? d.id} --decide "..." --resolution "grilling finished"\`, or --withdraw "why".`),
       );
       continue;
     }
@@ -165,10 +166,12 @@ export function unrecorded(ledger: Ledger, said: readonly Message[], moved: bool
     const m = [...said].reverse().find((x) => x.decision === d.id && x.from === "user" && x.at === at);
     const n = m?.id ?? "?";
     lines.push(
-      `state: the user answered ${d.ref ?? d.id} (${d.title ?? "None"}) as #${n} at ${at.slice(11, 16)}; ` +
-        (moved
-          ? `record it and answer #${n} before any other work with ${decideProgram("<dir>", d.id, `answer given on the page (#${n})`, m?.id)}.`
-          : `record it before any other work: \`fleet state <dir> decision ${d.ref ?? d.id} --decide "..." --resolution "answer given on the page (#${n})"\`, then answer #${n} with --re.`),
+      moved
+        ? `state: #${n} from the user on ${d.ref ?? d.id} (${d.title ?? "None"}) at ${at.slice(11, 16)} left it open: only the user's answer on ` +
+            `the card records it. Answer #${n} before any other work with ${onCardProgram("<dir>", d.id, d.ref ?? d.id, m?.id ?? 0)}, ` +
+            `or, for a None of these, revise or withdraw ${d.ref ?? d.id}.`
+        : `state: the user answered ${d.ref ?? d.id} (${d.title ?? "None"}) as #${n} at ${at.slice(11, 16)}; ` +
+            `record it before any other work: \`fleet state <dir> decision ${d.ref ?? d.id} --decide "..." --resolution "answer given on the page (#${n})"\`, then answer #${n} with --re.`,
     );
   }
 

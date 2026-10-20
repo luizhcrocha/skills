@@ -1,0 +1,6 @@
+{
+  "about": "The programs a moved team's coordinator is told to send once the fleet's owner-answer gate is on, when no program may record the user's answer: one text, read by fleet/src/health.ts and hooks/tstack-hook.py. In close and onCard, {name} is that value as a JSON literal, ASCII-escaped; in reply, {number} is the card's number as it is.",
+  "close": "grill.close({key}, {resolution}); return records.apply(ops);",
+  "onCard": "say({reply}, { re: {re}, decision: {key} }); return records.apply(ops);",
+  "reply": "Answer on the card, please: {number}."
+}

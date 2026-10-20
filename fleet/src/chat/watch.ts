@@ -12,9 +12,9 @@ import { ADVISOR } from "../advisor/advisor.ts";
 import { parseInstant } from "../clock.ts";
 import { ChatError } from "../errors.ts";
 import { isMoved, readText, remove, resolvePath, writeText } from "../files.ts";
-import { answeredAt, answeredGrill, answerRecorded, decideProgram, decisionRow, explainCommand, FAILED, silentWorkers, unexplained } from "../health.ts";
+import { answeredAt, answeredGrill, answerRecorded, closeProgram, decisionRow, explainCommand, FAILED, onCardProgram, silentWorkers, unexplained } from "../health.ts";
 import { Out } from "../io.ts";
-import { asArray, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
+import { asArray, asNumber, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger, type Decision, type Ledger } from "../ledger/model.ts";
 import { refusalRev } from "../ledger/permission.ts";
 import { draftLine, draftReminder } from "../ledger/refusal-draft.ts";
@@ -254,13 +254,19 @@ function unrecorded(machine: Machine, entry: { readonly id: string; readonly dir
     told.set(mark, true);
     const m = [...said].reverse().find((x) => x.decision !== undefined && pyRepr(x.decision) === pyRepr(d["id"]) && pyText(x.at) === at);
     const ref = asString(d["ref"]) ?? pyText(d["id"]);
+    const words = `"${[...oneLine(m?.text ?? "")].slice(0, 120).join("")}"`;
+    const session = entry.session ?? entry.id;
+
+    // A moved team's card is decided by the user's answer on the page as it is sent: a line that left it open
+    // (words typed in the chat, a None of these, a Failed:) is one no program can record.
     lines.push(
-      `! ${entry.id} has not recorded the user's answer to ${ref} (${oneLine(d["title"])}), ` +
-        `given at ${at.slice(11, 16)} as #${m?.id ?? "?"}: "${[...oneLine(m?.text ?? "")].slice(0, 120).join("")}". SendMessage its session ` +
-        `(${entry.session ?? entry.id}) to record it` +
-        (isMoved(entry.dir)
-          ? ` with ${decideProgram("<dir>", pyText(d["id"]), `answer given on the page (#${m?.id ?? "?"})`)}.`
-          : `: \`fleet state <dir> decision ${ref} --decide ...\`.`),
+      isMoved(entry.dir)
+        ? `! ${entry.id} has not answered the user's #${m?.id ?? "?"} on ${ref} (${oneLine(d["title"])}), given at ${at.slice(11, 16)}, ` +
+            `and ${ref} is still open: ${words}. SendMessage its session (${session}) to answer it with ` +
+            `${onCardProgram("<dir>", pyText(d["id"]), ref, m?.id ?? 0)}, or, for a None of these or a Failed:, to revise or withdraw ${ref}.`
+        : `! ${entry.id} has not recorded the user's answer to ${ref} (${oneLine(d["title"])}), ` +
+            `given at ${at.slice(11, 16)} as #${m?.id ?? "?"}: ${words}. SendMessage its session ` +
+            `(${session}) to record it: \`fleet state <dir> decision ${ref} --decide ...\`.`,
     );
   }
 
@@ -397,7 +403,7 @@ function nudgeLines(machine: Machine, root: string, told: Map<string, Json>, nud
 /** The `!` lines for the grillings of `root` with every question answered and still open, whatever the
  * chat said since: the fleet records each before other work. Each told once per round (its last change),
  * so a watch armed again is not woken by it at once; `fleet state` says it at every command until then. A moved
- * team is told the program that records it (health's `decideProgram`). */
+ * team is told the program that closes it (health's `closeProgram`). */
 function answeredGrillings(root: string, told: Map<string, Json>): string[] {
   const lines: string[] = [];
   const moved = isMoved(root);
@@ -409,10 +415,10 @@ function answeredGrillings(root: string, told: Map<string, Json>): string[] {
     told.set(mark, true);
     const ref = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
     lines.push(
-      `! ${ref} (${oneLine(d.title)}): every question is answered and the grilling is still open. Record it now` +
+      `! ${ref} (${oneLine(d.title)}): every question is answered and the grilling is still open. ` +
         (moved
-          ? ` with ${decideProgram("<dir>", d.id, "grilling finished")}.`
-          : `: \`fleet state <dir> decision ${ref} --decide "..." --resolution "grilling finished"\`, or withdraw it with its reason.`),
+          ? `Close it now with ${closeProgram("<dir>", d.id, "grilling finished")}.`
+          : `Record it now: \`fleet state <dir> decision ${ref} --decide "..." --resolution "grilling finished"\`, or withdraw it with its reason.`),
     );
   }
 
@@ -800,18 +806,38 @@ function numberedLedger(root: string): Ledger | undefined {
   return ledger;
 }
 
-/** What `wait` says of a decision already closed. */
-function closedLine(d: Decision): string {
-  const label = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
+/** The chat line of the user's answer that decided card `id` on the page (its `answer_line`, which the cloud writes and
+ * this ledger's model does not know), or undefined when it has none. */
+function answerLine(root: string, id: string): number | undefined {
+  const row = (asArray(stateOfDir(root)["decisions"]) ?? []).map(asObject).find((r) => r?.["id"] === id);
+  const line = asNumber(row?.["answer_line"]);
+
+  return line !== undefined && Number.isInteger(line) ? line : undefined;
+}
+
+/** What `wait` says of a moved team's card `d` the user answered on the page with their line #`line`. */
+function answeredOnCard(label: string, d: Decision, line: number): string {
   const answer = d.answer ?? "";
 
-  return `${label} is already ${d.status}: ${answer !== "" ? answer : (d.resolution ?? "None")}\n`;
+  return `-> the user answered ${label} on the card, which records it (${d.status}: ${answer !== "" ? answer : (d.resolution ?? "None")}): answer #${line} and act on it\n`;
+}
+
+/** What `wait` says of a decision already closed: on a moved team, one the user answered on the page (it has an
+ * `answer_line`) is that answer, whether a chat line has come yet or not. */
+function closedLine(root: string, d: Decision): string {
+  const label = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
+  const line = isMoved(root) ? answerLine(root, d.id) : undefined;
+  const answer = d.answer ?? "";
+
+  return line !== undefined ? answeredOnCard(label, d, line) : `${label} is already ${d.status}: ${answer !== "" ? answer : (d.resolution ?? "None")}\n`;
 }
 
 /** `wait`: the user's answer to one of these open decisions (ids or numbers), printed the moment it is
  * given; one given already and not recorded (a reply to it records nothing) prints at once. The ledger is read again at every poll, so
  * a decision closed meanwhile (withdrawn, or decided without an answer on the page) ends the wait as one
- * closed before does (open-21). A moved team is told the program that records the answer (health's `decideProgram`). */
+ * closed before does (open-21). On a moved team the user's answer on the page decides the card as it is sent: a card
+ * decided with an `answer_line` is told as that answer, #answer_line, at the start or at any poll, with no need of its
+ * chat line; a line that left the card open is told as one to answer with health's `onCardProgram`. */
 export function wait(machine: Machine, root: string, keys: readonly string[]): Effect.Effect<void, ChatError, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
@@ -826,7 +852,7 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
       const label = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
 
       if (d.status !== "open") {
-        out.out(closedLine(d));
+        out.out(closedLine(root, d));
 
         return;
       }
@@ -849,15 +875,28 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
         if (first && answerRecorded(d.row, m)) continue;
 
         for (const line of renderLines(machine, root, [m])) out.out(`${line}\n`);
+
+        if (moved && !(d.kind === "action" && m.text.startsWith(FAILED))) {
+          const current = numberedLedger(root);
+          const card = current === undefined ? undefined : findDecision(current, d.key);
+
+          out.out(
+            card !== undefined && card.status !== "open"
+              ? answeredOnCard(d.label, card, answerLine(root, d.key) ?? m.id)
+              : `-> #${m.id} from the user left ${d.label} open: only the user's answer on the card records it. Answer #${m.id} with ` +
+                  `${onCardProgram(root, d.key, d.label, m.id)}, or, for a None of these, revise or withdraw ${d.label}\n`,
+          );
+
+          return;
+        }
+
         out.out(
           d.kind === "action" && m.text.startsWith(FAILED)
             ? `-> the user's step ${d.label} failed, and it is not done: fix it and re-present it, \`fleet state ${root} decision ${d.label} --manual ...\`, or --withdraw "why"; never --decide\n`
-            : moved
-              ? `-> the user answered ${d.label}: record it first, with ${decideProgram(root, d.key, `answer given on the page (#${m.id})`)}\n`
-              : d.kind === "permission"
-                ? `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide "<allow-once, allow-kind or deny>" --resolution "answer given on the page (#${m.id})"\`; ` +
-                  "for an allow-once or allow-kind that prints the exact call to run, and nothing of it runs before; an allow-kind then asks you for a rule card (the --decide output says how)\n"
-                : `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide ...\`\n`,
+            : d.kind === "permission"
+              ? `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide "<allow-once, allow-kind or deny>" --resolution "answer given on the page (#${m.id})"\`; ` +
+                "for an allow-once or allow-kind that prints the exact call to run, and nothing of it runs before; an allow-kind then asks you for a rule card (the --decide output says how)\n"
+              : `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide ...\`\n`,
         );
 
         return;
@@ -868,7 +907,7 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
       const closed = [...wanted.keys()].map((id) => (now === undefined ? undefined : findDecision(now, id))).find((d) => d !== undefined && d.status !== "open");
 
       if (closed !== undefined) {
-        out.out(closedLine(closed));
+        out.out(closedLine(root, closed));
 
         return;
       }

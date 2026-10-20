@@ -210,7 +210,7 @@ describe("a permission on a moved team", () => {
   });
 });
 
-describe("an answer on a moved team is recorded through a program", () => {
+describe("a moved team is told the programs the owner-answer gate leaves it", () => {
   /** Run `state DIR args` on the folder before it moved, then mark it moved again. */
   function beforeMove(...args: string[]): void {
     rmSync(join(root, "cloud.json"));
@@ -225,27 +225,27 @@ describe("an answer on a moved team is recorded through a program", () => {
     beforeMove("grill", "g-f819eec7", "--answer", "Q1: one", "--answer", "Q2: yes");
   }
 
-  const GRILL_PROGRAM = 'one program on the stdin of `FLEET_DIR=<dir> fleet-run`: `decision.decide("g-f819eec7", "...", "grilling finished"); return records.apply(ops);`';
+  const GRILL_PROGRAM = 'one program on the stdin of `FLEET_DIR=<dir> fleet-run`: `grill.close("g-f819eec7", "grilling finished"); return records.apply(ops);`';
 
-  test("the coordinator's watch names decision.decide with the card's key, not the CLI's --decide", async () => {
+  test("the coordinator's watch names grill.close with the card's key, not decision.decide or the CLI's --decide", async () => {
     grilled();
     const watch = start(["chat", root, "watch", "--as", "coordinator", "--resume", "--once"], { ...env, FLEET_CHECK_S: "0.2" });
     const line = await watch.lines.next();
     watch.proc.kill();
 
-    expect(line).toBe(`! G1 (Search): every question is answered and the grilling is still open. Record it now with ${GRILL_PROGRAM}.\n`);
+    expect(line).toBe(`! G1 (Search): every question is answered and the grilling is still open. Close it now with ${GRILL_PROGRAM}.\n`);
   }, 20_000);
 
-  test("`state DIR show` says the grilling's program, not the CLI's --decide", () => {
+  test("`state DIR show` says the grilling's grill.close, not the CLI's --decide", () => {
     grilled();
     const shown = fleet(["state", root, "show"], env);
 
     expect(shown.code, shown.stderr).toBe(0);
-    expect(shown.stderr).toContain(`state: every question of G1 (Search) is answered and the grilling is still open; record it before any other work with ${GRILL_PROGRAM}.`);
+    expect(shown.stderr).toContain(`state: every question of G1 (Search) is answered and the grilling is still open; close it before any other work with ${GRILL_PROGRAM}.`);
     expect(shown.stderr).not.toContain("--decide");
   });
 
-  test("`state DIR show` says the user's answer's program, with its reply, not the CLI's --decide", () => {
+  test("`state DIR show` answers the user's line that left a card open on the card, not with decision.decide or the CLI's --decide", () => {
     beforeMove("decision", "d-f819eec7", "--kind", "decision", "--title", "Schema", "--question", "Migrate?", "--why", "W", "--option", "A: a | x", "--option", "B: b | y", "--recommend", "A", "--reason", "R");
     const at = stampOf(new Date(Date.now() + 1000));
     writeFileSync(join(root, "chat.jsonl"), `${JSON.stringify({ id: 1, at, from: "user", to: ["coordinator"], text: "B", decision: "d-f819eec7" })}\n`);
@@ -253,9 +253,12 @@ describe("an answer on a moved team is recorded through a program", () => {
 
     expect(shown.code, shown.stderr).toBe(0);
     expect(shown.stderr).toContain(
-      `state: the user answered D1 (Schema) as #1 at ${at.slice(11, 16)}; record it and answer #1 before any other work with one program on the stdin of \`FLEET_DIR=<dir> fleet-run\`: ` +
-        '`decision.decide("d-f819eec7", "...", "answer given on the page (#1)"); say("...", { re: 1 }); return records.apply(ops);`.',
+      `state: #1 from the user on D1 (Schema) at ${at.slice(11, 16)} left it open: only the user's answer on the card records it. ` +
+        "Answer #1 before any other work with one program on the stdin of `FLEET_DIR=<dir> fleet-run`: " +
+        '`say("Answer on the card, please: D1.", { re: 1, decision: "d-f819eec7" }); return records.apply(ops);`, ' +
+        "or, for a None of these, revise or withdraw D1.",
     );
     expect(shown.stderr).not.toContain("--decide");
+    expect(shown.stderr).not.toContain("decision.decide");
   });
 });

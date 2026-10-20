@@ -683,17 +683,30 @@ def fleet_program(*calls):
     return "".join(f"{c};\n" for c in calls) + "return records.apply(ops);\n"
 
 
+def _moved_programs():
+    """fleet/src/moved-programs.json: the programs a moved team's coordinator is told to send, one text the fleet's
+    health.ts reads too."""
+    with open(os.path.join(ROOT, "fleet", "src", "moved-programs.json")) as f:
+        return json.load(f)
+
+
+def _filled(template, **values):
+    """A program of moved-programs.json, its {name}s filled with values as JSON literals."""
+    return re.sub(r"\{(\w+)\}", lambda m: _js(values[m.group(1)]), template)
+
+
 def close_program(decision_id, resolution):
     """The one-line program a nudge tells a moved team's coordinator to send for a grilling the user answered in full:
-    grill.close, the one close of a card a program may still make once the cloud's owner-answer gate is on."""
-    return f'grill.close({_js(decision_id)}, {_js(resolution)}); return records.apply(ops);'
+    grill.close, which closes it decided once the cloud's owner-answer gate refuses decision.decide."""
+    return _filled(_moved_programs()["close"], key=decision_id, resolution=resolution)
 
 
-def on_card_program(decision_id, number, re):
-    """The one-line program a nudge tells a moved team's coordinator to send for the user's line #re on a card the
+def on_card_program(decision_id, number, line):
+    """The one-line program a nudge tells a moved team's coordinator to send for the user's line #line on a card the
     line left open: the reply that asks them to answer on the card, its number (the page links it) in the words."""
-    return (f'say({_js(f"Answer on the card, please: {number}.")}, {{ re: {int(re)}, decision: {_js(decision_id)} }}); '
-            'return records.apply(ops);')
+    programs = _moved_programs()
+    reply = programs["reply"].replace("{number}", number)
+    return _filled(programs["onCard"], reply=reply, re=int(line), key=decision_id)
 
 
 def blocked_program(text, worker):

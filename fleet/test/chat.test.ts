@@ -1920,7 +1920,7 @@ describe("wait", () => {
   });
 });
 
-describe("an answer on a moved team is recorded through a program", () => {
+describe("an answer on a moved team is the card's, and no program records it", () => {
   /** D68, keyed d-f819eec7 as the cloud keys a card, open in the ledger at `dir`, whose folder has moved to the cloud. */
   function movedCard(dir: string): void {
     const state = readJson(join(dir, "state.json"));
@@ -1929,19 +1929,46 @@ describe("an answer on a moved team is recorded through a program", () => {
     writeFileSync(join(dir, "cloud.json"), JSON.stringify({ fleet: "skills" }));
   }
 
-  test("wait names decision.decide with the card's key, not the CLI's --decide", () => {
+  test("wait answers a line that left the card open on the card, with the card's key, not decision.decide or the CLI's --decide", () => {
     movedCard(root);
-    const answer = user("Done.", { decision: "d-f819eec7" });
+    const answer = user("yes, do it", { decision: "d-f819eec7" });
     const out = cli("wait", "D68").stdout;
 
     expect(out).toContain(
-      `-> the user answered D68: record it first, with one program on the stdin of \`FLEET_DIR=${root} fleet-run\`: ` +
-        `\`decision.decide("d-f819eec7", "...", "answer given on the page (#${answer.id})"); return records.apply(ops);\`\n`,
+      `-> #${answer.id} from the user left D68 open: only the user's answer on the card records it. Answer #${answer.id} with ` +
+        `one program on the stdin of \`FLEET_DIR=${root} fleet-run\`: ` +
+        `\`say("Answer on the card, please: D68.", { re: ${answer.id}, decision: "d-f819eec7" }); return records.apply(ops);\`, ` +
+        "or, for a None of these, revise or withdraw D68\n",
     );
     expect(out).not.toContain("--decide");
+    expect(out).not.toContain("decision.decide");
   });
 
-  test("the manager's watch has the fleet record it with decision.decide and the card's key, not the CLI's --decide", async () => {
+  test("wait tells a card the page decided as answered on the card, by its answer_line, with no chat line and no program to send", async () => {
+    movedCard(root);
+    const { proc, lines } = start(["chat", root, "wait", "D68"], env);
+    procs.push(proc);
+    // The page's write decides the card; whether wait reads it at its start or at a poll, it says the same.
+    const state = readJson(join(root, "state.json"));
+    const card = { id: "d-f819eec7", ref: "D68", kind: "decision", title: "Do it", question: "q", status: "decided", answer: "done", answer_line: 9, opened: "2026-01-01T00:00:00+00:00" };
+    writeFileSync(join(root, "state.json"), JSON.stringify({ ...state, decisions: [card] }));
+
+    expect(await proc.exited).toBe(0);
+    const out = await lines.rest();
+
+    expect(out).toBe("-> the user answered D68 on the card, which records it (decided: done): answer #9 and act on it\n");
+  });
+
+  test("wait on a card the page decided before it started says the same", () => {
+    movedCard(root);
+    const state = readJson(join(root, "state.json"));
+    const card = { id: "d-f819eec7", ref: "D68", kind: "decision", title: "Do it", question: "q", status: "decided", answer: "done", answer_line: 9, opened: "2026-01-01T00:00:00+00:00" };
+    writeFileSync(join(root, "state.json"), JSON.stringify({ ...state, decisions: [card] }));
+
+    expect(cli("wait", "D68").stdout).toBe("-> the user answered D68 on the card, which records it (decided: done): answer #9 and act on it\n");
+  });
+
+  test("the manager's watch has the fleet answer a line that left its card open on the card, not with decision.decide", async () => {
     asManager(["billing", "billing"]);
     const billing = m.registry.live().find((e) => e.id === "billing");
 
@@ -1954,10 +1981,11 @@ describe("an answer on a moved team is recorded through a program", () => {
     procs.push(proc);
     const line = await lines.next();
 
-    expect(line).toStartWith("! billing has not recorded the user's answer to D68 (Do it)");
+    expect(line).toStartWith(`! billing has not answered the user's #${sent.id} on D68 (Do it), given at `);
     expect(line).toEndWith(
-      "SendMessage its session (billing) to record it with one program on the stdin of `FLEET_DIR=<dir> fleet-run`: " +
-        `\`decision.decide("d-f819eec7", "...", "answer given on the page (#${sent.id})"); return records.apply(ops);\`.\n`,
+      'and D68 is still open: "B". SendMessage its session (billing) to answer it with one program on the stdin of `FLEET_DIR=<dir> fleet-run`: ' +
+        `\`say("Answer on the card, please: D68.", { re: ${sent.id}, decision: "d-f819eec7" }); return records.apply(ops);\`, ` +
+        "or, for a None of these or a Failed:, to revise or withdraw D68.\n",
     );
   });
 });
