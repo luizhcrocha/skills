@@ -2839,12 +2839,26 @@ class GrantRemovalTest(GrantCase):
         payload = self.payload("PostToolUse", tool_name="Bash", tool_input={"command": "ls"})
         hook = module.Hook("PostToolUse", payload, self.env)
         module.fleet_dirs(hook)
-        started = time.perf_counter()
-        for _ in range(500):
-            module.fleet_grant_sweep(hook)
-        per_call = (time.perf_counter() - started) * 1000 / 500
-        print(f"\n  grant sweep with no grants.jsonl: {per_call * 1000:.0f} µs", end="", file=sys.stderr)
-        self.assertLess(per_call, 0.1)
+
+        def missing():
+            try:
+                os.path.getsize(self.grants)
+            except FileNotFoundError:
+                pass
+
+        def cpu_ms(run):
+            started = time.process_time()
+            for _ in range(100):
+                run()
+            return (time.process_time() - started) * 1000 / 100
+
+        # CPU time, not wall time: a loaded machine takes the CPU away, and that time is not the sweep's. The budget is
+        # in stats of the missing grants.jsonl, timed in the same rounds: a slower machine slows both alike. Measured
+        # 2026-10-20, load ~80 on 32 cores: 12 µs a sweep, 3.4 µs a stat, 3.5 stats a sweep.
+        rounds = [(cpu_ms(lambda: module.fleet_grant_sweep(hook)), cpu_ms(missing)) for _ in range(5)]
+        per_call, stat = min(r[0] for r in rounds), min(r[1] for r in rounds)
+        print(f"\n  grant sweep with no grants.jsonl: {per_call * 1000:.0f} µs, {per_call / stat:.1f} stats", end="", file=sys.stderr)
+        self.assertLess(per_call, 10 * stat, rounds)
         self.grant(at="2026-01-05T09:00:00+00:00")
         self.grant(decision="p-2", op="remove")
         self.grant(decision="p-2")
