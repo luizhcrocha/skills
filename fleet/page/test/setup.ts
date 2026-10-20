@@ -11,7 +11,9 @@ import { afterEach } from "bun:test";
 /* The server side of a test (the harness, puppeteer) keeps Bun's own network and streams. */
 const own = { fetch, Response, Request, Headers, ReadableStream, WritableStream, TransformStream, AbortController, AbortSignal, TextEncoder, TextDecoder, URL, URLSearchParams, WebSocket };
 
-GlobalRegistrator.register({ url: "http://127.0.0.1:9/f/billing/", width: 1280, height: 900 });
+/* No page loads over the network (offline.test.ts): a frame's src and a link opened in a new page stay addresses.
+ * Loaded, they fail against 127.0.0.1:9, or abort when a test removes the frame, and happy-dom prints each. */
+GlobalRegistrator.register({ url: "http://127.0.0.1:9/f/billing/", width: 1280, height: 900, settings: { navigation: { disableChildFrameNavigation: true, disableChildPageNavigation: true } } });
 
 Object.assign(globalThis, own);
 
