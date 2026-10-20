@@ -14,9 +14,12 @@
 // criteria) and a PNG per load in DIR. Every DevTools call of a load ends within --timeout plus 5 s, so a server
 // that never answers or a page that never yields fails its load instead of hanging the run.
 // A browser that dies fails every load left. The browser is closed and its profile removed on every exit,
-// SIGINT and SIGTERM included, also while Chromium starts. Under a $TMPDIR too deep for Chromium's socket path the
-// profile goes under /tmp and is Chromium's $TMPDIR, removed with it. Exit 0 when every load passes, 1 when one fails or
-// the run broke, 2 on bad arguments, 3 when no Chromium runs, 130 or 143 when stopped by SIGINT or SIGTERM.
+// SIGHUP, SIGINT and SIGTERM included, also while Chromium starts. Chromium runs in a process group of its own, and
+// the profile is removed once that group is gone, so no helper that outlived the browser writes it again. A run
+// killed outright (SIGKILL) leaves its profile, but its Chromium dies with it. Under a $TMPDIR too deep for
+// Chromium's socket path the profile goes under /tmp and is Chromium's $TMPDIR, removed with it. Exit 0 when every
+// load passes, 1 when one fails or the run broke, 2 on bad arguments, 3 when no Chromium runs, 129, 130 or 143 when
+// stopped by SIGHUP, SIGINT or SIGTERM.
 
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -107,13 +110,19 @@ const SOCKET_PATH_MAX = process.platform === "linux" ? 107 : 103;
 /** Chromium's singleton socket under `dir` as its $TMPDIR: dir/org.chromium.Chromium.XXXXXX/SingletonSocket. */
 const socketFits = (dir) => Buffer.byteLength(join(dir, "org.chromium.Chromium.XXXXXX", "SingletonSocket")) <= SOCKET_PATH_MAX;
 
+/** Run as `sh -c WATCHDOG chromium ARGS...` in a process group of its own: Chromium, beside a watchdog that kills
+ * the group once round-check's end of fd 3 closes, so a run killed outright (SIGKILL) takes its Chromium with it. */
+const WATCHDOG = '(read _ <&3; kill -s KILL 0) 2>/dev/null & exec 3<&-; exec "$0" "$@"';
+
 /** A headless Chromium, started at once, and its DevTools connection once `ready` resolves. `close` works from
  * the start, so a stop while Chromium starts leaves no browser and no profile either. */
 function launch(bin) {
   const short = !socketFits(tmpdir());
   const profile = mkdtempSync(join(short ? "/tmp" : tmpdir(), "round-check-"));
   const env = short ? { ...process.env, TMPDIR: profile } : process.env;
-  const proc = spawn(bin, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--no-sandbox", "--hide-scrollbars", "--mute-audio", "about:blank"], { stdio: ["ignore", "ignore", "pipe"], env });
+  const args = ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--no-sandbox", "--hide-scrollbars", "--mute-audio", "about:blank"];
+  const proc = spawn("/bin/sh", ["-c", WATCHDOG, bin, ...args], { stdio: ["ignore", "ignore", "pipe", "pipe"], env, detached: true });
+  proc.stdio[3].on("error", () => {}).unref();
   const exited = new Promise((resolve) => proc.once("exit", resolve));
   let ws = null;
   let open = false;
@@ -134,17 +143,35 @@ function launch(bin) {
       waiting.set(next, { resolve, reject });
       ws.send(JSON.stringify({ id: next, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
+  /** Send `signal` to Chromium's process group: the browser and every helper it forked. */
+  const signalGroup = (signal) => {
+    try {
+      process.kill(-proc.pid, signal);
+    } catch {}
+  };
+  /** Whether the group is empty by `deadline` (ms since the epoch). */
+  const groupGone = async (deadline) => {
+    for (;;) {
+      try {
+        process.kill(-proc.pid, 0);
+      } catch (e) {
+        if (e.code === "ESRCH") return true;
+      }
+      if (Date.now() >= deadline) return false;
+      await sleep(20);
+    }
+  };
   let closing = null;
-  /** Ask Chromium to close (Browser.close once connected, else SIGTERM), kill it if it has not exited in 5 s,
-   * then remove its profile once it is gone. */
+  /** Close Chromium and remove its profile. The profile goes only once the whole group is gone: a helper left
+   * alive recreates it on its way out. */
   const close = () =>
     (closing ??= (async () => {
       if (open && !dead) await within(send("Browser.close"), Date.now() + 5000, "Browser.close in 5 s").catch(() => {});
-      else if (!dead) proc.kill("SIGTERM");
-      if (!(await within(exited, Date.now() + 5000, "Chromium's exit in 5 s").then(() => true, () => false))) {
-        proc.kill("SIGKILL");
-        await exited;
-      }
+      else if (!dead) signalGroup("SIGTERM");
+      await within(exited, Date.now() + 5000, "Chromium's exit in 5 s").catch(() => {});
+      signalGroup("SIGKILL");
+      await exited;
+      await groupGone(Date.now() + 5000);
       rmSync(profile, { recursive: true, force: true });
     })());
   const ready = (async () => {
@@ -292,7 +319,10 @@ async function main() {
   if (bin === null) noChromium("no Chromium found: pass --chromium PATH or set $CHROMIUM");
   mkdirSync(o.out, { recursive: true });
   let browser = null;
-  for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]]) {
+  // After a hangup every write to the closed terminal fails (EIO); unhandled, that ends the run before it closes
+  // Chromium.
+  for (const stream of [process.stdout, process.stderr]) stream.on("error", () => {});
+  for (const [signal, code] of [["SIGHUP", 129], ["SIGINT", 130], ["SIGTERM", 143]]) {
     process.on(signal, () => {
       process.stderr.write(`round-check: stopped by ${signal}; closing Chromium\n`);
       (browser?.close() ?? Promise.resolve()).finally(() => process.exit(code));

@@ -1,19 +1,24 @@
 """Tests for the prototype skill's round-check.mjs. A page's URL reaches the browser whole, query and every "="
 in it included. Each load sees its own width and color scheme. A load fails when its page never shows, throws,
 or a --check is false. A run fails with a summary when the browser dies or a page hangs, removes its browser
-profile, also when it is stopped by a signal, runs under a $TMPDIR too deep for Chromium's socket path, and refuses
-a Chromium that does not run. The browser tests run a local HTTP server and the machine's Chromium; without Node or
-Chromium they skip and say so.
+profile, also when it is stopped by a signal or a helper of a dead browser outlives it, takes its Chromium with it
+when killed outright, runs under a $TMPDIR too deep for Chromium's socket path, and refuses a Chromium that does not
+run. The browser tests run a local HTTP server and the machine's Chromium; without Node or Chromium they skip and
+say so; the tests that read /proc run on Linux only.
 
 Run: just test-scripts  (or python3 -m unittest scripts.tests.test_prototype_round_check)
 """
 
+import fcntl
 import json
 import os
+import pty
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
+import termios
 import threading
 import time
 import unittest
@@ -25,6 +30,7 @@ SCRIPT = ROOT / "skills" / "engineering" / "prototype" / "scripts" / "round-chec
 NODE = shutil.which("node")
 CHROMIUM = next((p for p in map(shutil.which, ("chromium", "chromium-browser", "google-chrome")) if p), None)
 QUERY = "/processos?l=123&x=a=b"
+LINUX = sys.platform == "linux"
 
 PAGE = b"""<!doctype html><meta charset="utf-8"><title>t</title>
 <main id="where"></main>
@@ -45,6 +51,14 @@ BUSY = b"""<!doctype html><meta charset="utf-8"><title>t</title><main id="where"
 
 def run(*args, env=None):
     return subprocess.run([NODE, str(SCRIPT), *args], capture_output=True, text=True, timeout=120, env=env)
+
+
+def running(pid):
+    """Whether `pid` is a process that has not exited (a zombie has)."""
+    try:
+        return "zombie" not in Path(f"/proc/{pid}/status").read_text().lower()
+    except FileNotFoundError:
+        return False
 
 
 @unittest.skipUnless(NODE, "no node on PATH")
@@ -230,21 +244,75 @@ class Browser(unittest.TestCase):
         self.assertIn("0/2 loads pass", done.stdout)
         self.assertEqual(self.profiles_left(), [])
 
-    def test_a_run_stopped_by_sigterm_closes_chromium_and_removes_its_profile(self):
+    @unittest.skipUnless(LINUX, "running() reads /proc")
+    def test_a_helper_that_outlives_a_dead_browser_does_not_bring_its_profile_back(self):
+        """Chromium's zygote, forked just before the browser is killed, outlives it by about 100 ms and creates
+        --user-data-dir again on its way out. The helper here does the same, 100 ms after the browser is gone."""
+        helper_pid = self.pidfile.parent / "helper.pid"
+        lingers = self.pidfile.parent / "chromium-with-a-helper"
+        lingers.write_text(
+            '#!/bin/sh\nfor a; do case "$a" in --user-data-dir=*) profile="${a#--user-data-dir=}";; esac; done\n'
+            'if [ -n "$profile" ]; then\n'
+            '  (while kill -0 $$ 2>/dev/null; do sleep 0.01; done; sleep 0.1; mkdir "$profile") \\\n'
+            '    </dev/null >/dev/null 2>&1 &\n'
+            f'  echo $! > "{helper_pid}"\nfi\nexec "{self.chromium}" "$@"\n')
+        lingers.chmod(0o755)
+        done = run("--out", str(self.out), "--chromium", str(lingers), "--page", self.base + "/die", "--timeout", "10",
+                   env=self.env)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        helper = int(helper_pid.read_text())
+        self.addCleanup(lambda: running(helper) and os.kill(helper, signal.SIGKILL))
+        deadline = time.monotonic() + 10
+        while running(helper) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(running(helper))
+        self.assertEqual(self.profiles_left(), [])
+
+    def hanging_run(self, **stdio):
+        """A run waiting on a page that never answers, and its browser's pid. `stdio` replaces the run's pipes."""
+        stdio = stdio or {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
         proc = subprocess.Popen([NODE, str(SCRIPT), "--out", str(self.out), "--chromium", str(self.chromium),
-                                 "--page", self.base + "/hang", "--timeout", "60"],
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.env)
+                                 "--page", self.base + "/hang", "--timeout", "60"], env=self.env, **stdio)
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        self.addCleanup(lambda: [os.kill(pid, signal.SIGKILL) for pid in self.chromiums_left()])
         deadline = time.monotonic() + 30
         while "/hang" not in self.seen and time.monotonic() < deadline:
             time.sleep(0.1)
         self.assertIn("/hang", self.seen)
-        browser = int(self.pidfile.read_text())
+        return proc, int(self.pidfile.read_text())
+
+    def test_a_run_stopped_by_sigterm_closes_chromium_and_removes_its_profile(self):
+        proc, browser = self.hanging_run()
         proc.send_signal(signal.SIGTERM)
         _, err = proc.communicate(timeout=20)
         self.assertEqual(proc.returncode, 143, err)
         self.assertEqual(self.profiles_left(), [])
-        self.assertFalse(Path(f"/proc/{browser}").exists() and "zombie" not in Path(f"/proc/{browser}/status").read_text().lower())
+        self.assertFalse(running(browser))
+
+    def test_a_run_whose_terminal_closes_closes_chromium_and_removes_its_profile(self):
+        """The run's terminal is a pty, and its master closes: a hangup, after which a write to it fails (EIO)."""
+        master, terminal = pty.openpty()
+        try:
+            proc, browser = self.hanging_run(stdin=terminal, stdout=terminal, stderr=terminal, start_new_session=True,
+                                             preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
+        finally:
+            os.close(terminal)
+            os.close(master)
+        proc.wait(timeout=20)
+        self.assertEqual(proc.returncode, 129)
+        self.assertEqual(self.profiles_left(), [])
+        self.assertFalse(running(browser))
+
+    @unittest.skipUnless(LINUX, "running() reads /proc")
+    def test_a_run_killed_outright_takes_its_chromium_with_it(self):
+        proc, browser = self.hanging_run()
+        proc.kill()
+        proc.communicate(timeout=20)
+        deadline = time.monotonic() + 10
+        while (running(browser) or self.chromiums_left()) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self.assertFalse(running(browser))
+        self.assertEqual(self.chromiums_left(), [])
 
     def chromiums_left(self):
         """The processes whose command line names this test's TMPDIR or a profile the run gave Chromium: the
