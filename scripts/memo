@@ -786,13 +786,23 @@ def _stamp():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(_now_ms() / 1000))
 
 
+def _closing(thread):
+    """An open thread, and the command that closes it."""
+    return f"  {ulid_date(thread.id)} {thread.text}\n    memo supersede {thread.id} \"<outcome>\""
+
+
 def _check_room(ctx, store, view, adding):
     """Pins and open threads are always shown, so together they may take half the budget at most."""
     cap = ctx.budget(store) // 2
     if len(view.pins) + len(view.opens) + adding > cap:
+        # Not the pinned threads: `memo supersede` carries a pin over, so closing one frees no line.
+        oldest = view.opens[:5]
         raise MemoError(f"memo: {len(view.pins)} pins and {len(view.opens)} open threads already; together "
                         f"they may take {cap} lines of the wake. Close a thread (`memo supersede`) or "
-                        "`memo pin --unpin` one first.")
+                        "`memo pin --unpin` one first."
+                        + ((f" The {len(oldest)} oldest of {len(view.opens)} open threads:\n"
+                            if len(view.opens) > len(oldest) else " The open threads:\n")
+                           + "\n".join(map(_closing, oldest)) if oldest else ""))
 
 
 def write_note(ctx, store, kind, text, refs=(), supersedes=(), pin=False, out=None):

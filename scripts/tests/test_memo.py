@@ -365,6 +365,22 @@ class PinTest(MemoCase):
         self.assertEqual(self.run_memo("pin", plain, env=env)[0], 2)
         self.ok("supersede", self.files()[0][:-3], "rule 0, corrected", env=env)  # replacing a pin frees its line
 
+    def test_the_cap_refusal_names_the_five_oldest_open_threads(self):
+        env = {"MEMO_PROJECT_LINES": "16"}
+        pinned = self.note("open", "a pinned thread", "--pin", env=env)
+        threads = [self.note("open", f"thread {n}", env=env) for n in range(6)]
+        self.note("preference", "a standing rule", "--pin", env=env)
+        for args in [("open", "one too many"), ("note", "fact", "one too many", "--pin")]:
+            code, _, err = self.run_memo(*args, env=env)
+            self.assertEqual(code, 2, args)
+            for n, ident in enumerate(threads[:5]):
+                self.assertIn(f"memo supersede {ident} ", err)
+                self.assertIn(f"thread {n}", err)
+            self.assertNotIn(threads[5], err, "five, the oldest")
+            self.assertIn("The 5 oldest of 6 open threads", err)
+            self.assertNotIn(pinned, err, "closing a pinned thread carries its pin over and frees no line")
+            self.assertNotIn("standing rule", err)
+
 
 class SummarizeTest(MemoCase):
     ENV = {"MEMO_PROJECT_LINES": "12", "MEMO_BUCKET": "4"}
