@@ -83,7 +83,7 @@ given. Every ID argument also takes the row's number (D3, L2, R1) where rows hav
 3a. *TypeScript only.* **A moved team** (fleet slice 3, decision 48): when `DIR/cloud.json` exists, every
    command but `show` is refused, `this team records through programs: fleet-run. DIR/cloud.json says this
    fleet has moved to the cloud: …`, before DIR is made or the ledger read. `chat DIR say` is refused the same
-   way, and so are `ws DIR add`, `split` and `prune --apply`, every `preview DIR` command but `status`,
+   way, and so are `ws DIR add`, `split`, `trash NAME` and `prune --apply`, every `preview DIR` command but `status`,
    `render DIR/state.json` (it stamps the ledger), and any other writer through `ws`'s `save` (the workspace
    hook's report); the chat's readers, `ws list`, a dry-run `ws prune` and `preview status` stay. The host service exports that folder's ledger from the cloud.
    A moved team stays in the machine's view after `fleet serve --stop` takes it off the hub: every folder beside the
@@ -738,7 +738,7 @@ kept[]?       {id, text, at}
 workspace_mode? "isolated" | "shared"   `set --workspaces`; absent reads as isolated
 workspaces[]? {id (the jj workspace's name), ws_id? (`<repo's basename>-<id>-<hash>`, mapped to `[a-z0-9-]`, the hooks'
                FLEET_WS_ID; absent on a row from before it), agent (its worker now), path, repo (the default
-               workspace's root), base (change id), added, status (active|pruned), pruned?,
+               workspace's root), base (change id), added, status (active|pruned), pruned?, card? (the card a `trash NAME --card ID` moved it on),
                preview? ("out": added out of the combined preview, `ws add --no-preview`),
                handovers[]? {from (the worker that held it before), at},
                hook? {command (".fleet/ws-add" | "devenv-run --prepare"), at, exit (null: timed out, killed,
@@ -4248,7 +4248,7 @@ warns, since the step is done:
 |---|---|---|---|
 | `pre-add` | `.fleet/ws-pre-add WORKSPACE SOURCE` | `add`, fresh or `--reuse`, once its own checks pass and before jj makes or hands over anything; in SOURCE (the default workspace, or the workspace handed over), since a fresh WORKSPACE does not exist yet | `add` is refused: no workspace is made or handed over, and no row is made; a `--reuse` refusal is recorded on the holder's row (`pre_add_hook`) (`ws: .fleet/ws-pre-add refused the add: <how it ended>`), exit 1 |
 | `post-add` | `.fleet/ws-add WORKSPACE SOURCE`, else `devenv-run --prepare` in a devenv repo | once the workspace is made or handed over and recorded; in WORKSPACE | a warning: the workspace is kept and `add` exits 0 ([the ws-add hook](#the-ws-add-hook)) |
-| `pre-remove` | `.fleet/ws-pre-remove WORKSPACE` | `prune --apply`, for each workspace prune's rules let go, before its folder moves to the trash (to stop its dev server, say); in WORKSPACE; not on a dry run, nor for a folder already gone | that workspace is kept, folder, jj workspace and row (`ws: kept a1: .fleet/ws-pre-remove exited 2 ...`), nothing is deleted; the others still go, and prune exits 1 |
+| `pre-remove` | `.fleet/ws-pre-remove WORKSPACE` | `prune --apply`, for each workspace prune's rules let go (and `trash NAME --card ID`, for its one), before its folder moves to the trash (to stop its dev server, say); in WORKSPACE; not on a dry run, nor for a folder already gone | that workspace is kept, folder, jj workspace and row (`ws: kept a1: .fleet/ws-pre-remove exited 2 ...`), nothing is deleted; the others still go, and prune exits 1 |
 
 A failure is any end but exit 0: a non-zero exit, a timeout, a hook that cannot start, one stopped by a TERM,
 INT or HUP to `fleet ws` (which then ends with 128 + the signal's number), and, for the two checks, a file
@@ -4406,13 +4406,48 @@ same `FLEET_WS_ID`, so a hook frees what it names in `pre-remove`.
   `would prune a1: forget the workspace and move PATH to the trash; ...`): the move takes files jj never
   snapshots (ignored ones: `.env`, `.dev.vars`, build output, a worker's notes) out of reach of the
   worker, so it takes a second, deliberate command, `--apply`.
+- `fleet ws DIR trash NAME --card ID` (TypeScript only): one workspace prune keeps because it holds
+  prototype changes nobody lands, taken out as prune takes one out, on a card's yes. Before it, a kept
+  prototype workspace needed a hand-run `jj workspace forget` and `mv` (casos-work's c18, 2026-10-19), which
+  left an entry with no note that `restore` refused and gc kept forever. One NAME per call, no batch flag.
+  Refused, with nothing moved (`ws: <why>`, exit 1): `default`, or a row whose path is its repo's root or
+  holds a repo's store (`never the default workspace, nor a main checkout`); a NAME the ledger records as no
+  active workspace, or the fleet's preview; the workspace that holds the command's own working directory;
+  rule (1) or (2) of prune; any change ahead of the stack (prune's revset, after the same snapshot) that is
+  neither empty nor described starting `THROWAWAY` (`ws: kept t1: 1 change(s) neither THROWAWAY nor empty:
+  ...`); an ID that is not letters, digits and `-` (`a card ID is letters, digits and '-': ...`); and
+  unless card ID is a yes. A yes is a permission card only: of DIR's own ledger, found by id or number as
+  every command finds one (no `FLEET/ID`); whose call (`refusal.call`) is, byte for byte, this very command
+  as the CLI prints it, `fleet ws <DIR> trash <NAME> --card <ID>` with DIR the fleet's resolved absolute
+  path; decided (not open or withdrawn) and not superseded by another card; and answered exactly
+  `allow-once` or `allow-kind`, nothing after the word but whitespace. A decision, input, action or grilling
+  card is no yes whatever it says, and neither is a permission for any other call (another NAME, another
+  ID, a flag more) or answered otherwise (`deny`, `allow-once, but not t1`). Each refusal prints the exact
+  call to put on the card: ``ws: card k is kind decision, not a permission: only a permission card whose
+  call is exactly `fleet ws /home/u/fleet trash t1 --card k`, decided allow-once or allow-kind, moves a
+  workspace prune keeps; open one for that call``. That call starts with a bare `fleet`, and the grant an
+  allow-once writes is a rule for its exact text, so it is run exactly as the refusal prints it, with `fleet`
+  on PATH: the plugin's `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet ws ...` is another command, and the rule does
+  not let it through. A moved team (`DIR/cloud.json`, 3a) has no route yet: `trash` is refused there before
+  any card is read, as `prune --apply` is, and its workspaces have no ledger rows to find NAME in. Until one
+  exists, ask the Manager for a one-time permission to take the workspace out by hand (`jj --ignore-working-copy
+  workspace forget NAME`, then the folder moved into the trash), then `fleet ws trash --adopt` the entry. Why a permission and nothing else: it already names one
+  exact command and is answered by Luiz on the page, so no new card field is needed and no card's wording
+  is read as a yes (a review found 8 cards that were no yes to trashing t1, from `A: keep it` to a plain yes
+  to another question about t1, and each trashed it under the reading of answers this replaced). Then, as prune: the repo's pre-remove hook (any end but exit 0 refuses;
+  after it the checks run again), the folder to the trash beside its note, which also records `card`, then
+  `jj --ignore-working-copy workspace forget NAME` from the repo's default workspace (prune forgets the same
+  way, so neither snapshots the main checkout), the folder put back when the forget fails. Its commits stay
+  in jj. The row gets `status: pruned`, `pruned` and `card`, and a note event (`Workspace t1 trashed under
+  card D7: its changes are THROWAWAY or empty; PATH moved to the trash (ENTRY).`); stdout `trashed t1 under
+  card D7: PATH is in the trash, ENTRY: \`fleet ws restore ENTRY\` brings it back`.
 - <a id="the-workspace-trash"></a>**The trash** (TypeScript only; the idea is rift's, github.com/anomalyco/rift).
   Twice a workspace removal deleted what nothing could bring back (agent-tools' hm2 workspace; on
   2026-10-19 a hand-run prune of 29 folders with their ignored files): jj keeps committed work, not a
   folder's ignored files. So prune deletes nothing: it renames the folder to
   `<trash>/<repo's basename>/<workspace>@<UTC stamp, 20260105T090000Z>` (`-2`, `-3` on a clash), beside
   `<entry>.json`, a note `{repo, workspace, path, commit (its last @), parents (that commit's), trashed,
-  fleet (DIR), why}` written first. The trash is `$FLEET_TRASH`, else `$XDG_DATA_HOME/fleet/trash`, else
+  fleet (DIR), why, card (only from \`trash NAME --card ID\`)}` written first. The trash is `$FLEET_TRASH`, else `$XDG_DATA_HOME/fleet/trash`, else
   `~/.local/share/fleet/trash`: one per machine, shared by every fleet. The move is a rename, never a copy:
   a trash on another filesystem than the folder (`st_dev` differs), a note that cannot be written, or a
   rename that fails keeps that workspace, folder, jj workspace and row alike (`ws: kept a1: could not move
@@ -4421,6 +4456,17 @@ same `FLEET_WS_ID`, so a hook frees what it names in `pre-remove`.
   - `fleet ws trash`: a line naming the trash and how many entries, then per entry, oldest first,
     `<entry>  <age, 8d 1h>  <size, N KB>  <workspace> of <repo>, fleet <DIR>: <why>` and `    was <path>,
     its @ <commit>`.
+  - `fleet ws trash --adopt ENTRY --repo REPO [--name NAME]`: an entry moved into the trash by hand, with
+    no note (so `restore` refuses it) and no stamp (so gc keeps it forever), gets both. Its workspace's name
+    is the one jj wrote in the folder's `.jj/working_copy/checkout` (a protobuf `Checkout`, field 3
+    `workspace_name`), else `--name`; the entry's own name is never read as it (`c18-manual` was jj
+    workspace `c18`). The entry is renamed to `<name>@<now's stamp>` beside a note `{repo: REPO, workspace:
+    <name>, path: <REPO>-<name>, commit: null, parents: [], trashed, fleet: "", why}`. `restore` then brings
+    it back on the default workspace's parents, its files giving back the rest, and gc ages it from the
+    adoption. Refused: an entry with a note already, one that is not there, a REPO that is no jj repo's
+    default workspace, a REPO whose basename is not the entry's shelf, a folder whose checkout names no
+    workspace and no `--name` (`... give it with --name NAME`), a `--name` other than the one the checkout
+    names, and a name `ws add` refuses (`x y`, `default`).
   - `fleet ws restore ENTRY`: the folder goes back to its old path, or to `<path>-restored` (`-2`, ...)
     when that is taken, and becomes jj's workspace again, named as before (`<name>-restored` when jj has
     that name now): `restored ENTRY to PATH: jj workspace a1 again, on <parents>`. `jj workspace add`

@@ -3,7 +3,7 @@
 Read this file instead of [DASHBOARD.md](DASHBOARD.md)'s "The state CLI" section when your dashboard folder holds
 `cloud.json`: the team has moved to the cloud. The machine's host service then writes `state.json` and `chat.jsonl`
 from the cloud, and both the plugin's hook and the old CLI itself refuse every `fleet state <dir> <verb>` but `show`,
-`fleet chat <dir> say`, `fleet ws <dir> add`, `split` and `prune --apply`, every `fleet preview <dir> <verb>` but
+`fleet chat <dir> say`, `fleet ws <dir> add`, `split`, `trash` and `prune --apply`, every `fleet preview <dir> <verb>` but
 `status`, and `fleet render <dir>/state.json`, with "this team records through programs: fleet-run". With no `cloud.json`, this file does
 not apply: record with the state CLI as [DASHBOARD.md](DASHBOARD.md) says.
 
@@ -200,8 +200,12 @@ wake, unchanged), `fleet state <dir> show`, `fleet brief`, `fleet ws <dir> list`
 and the gate slot, `fleet fleets gate run`. Evidence bodies (`decision --body`) have no program: keep the evidence in
 the decision's `why` and `reason`, or in a page you publish and link from the chat line.
 
-`fleet ws <dir> add`, `split` and `prune --apply` write the ledger's workspace rows, which a moved team's ledger does
-not keep, so they are refused. Make a worker's workspace with jj beside the repo's default workspace,
+`fleet ws <dir> add`, `split`, `trash` and `prune --apply` write the ledger's workspace rows, which a moved team's ledger does
+not keep, so they are refused. So a moved team has no route yet to take out a workspace prune would keep for
+THROWAWAY changes (`trash NAME --card ID` is refused before it reads any card). Until it has one, ask the Manager
+for a one-time permission to take it out by hand (`jj --ignore-working-copy workspace forget <name>` from the
+default workspace, then the folder moved into the machine's trash), then run `fleet ws trash --adopt <entry> --repo <repo>`
+so `restore` and `gc` handle it. Make a worker's workspace with jj beside the repo's default workspace,
 `jj workspace add <repo>-<name> -r @- --name <name>`, and name the path in the brief. When the repo has
 `.fleet/ws-pre-add`, run it first, in the default workspace, and make nothing if it fails; when it has
 `.fleet/ws-add <workspace> <default workspace>`, run it after. Give both the environment `fleet ws` gives its
