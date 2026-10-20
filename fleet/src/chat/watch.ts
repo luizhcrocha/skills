@@ -542,7 +542,16 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
 
     yield* Effect.ensuring(
       Effect.gen(function* () {
-        const last = yield* follow(machine, root, who, request, mine, host !== undefined, () => writeText(pulse, pid));
+        // A watch that another took the place of while it was in its first read (it was orphaned, or not the
+        // host's) finds the record no longer its own: it stands down, and the pid file stays the other's.
+        const armed = (): boolean => {
+          if (readOwner(root, who)?.watch !== process.pid) return false;
+          writeText(pulse, pid);
+
+          return true;
+        };
+
+        const last = yield* follow(machine, root, who, request, mine, host !== undefined, armed);
 
         if (last === NOBODY) {
           nobody = true;
@@ -601,7 +610,7 @@ function taken(root: string, who: string): boolean {
  * when it stood down: another watch took its place, the session that armed it (`mine`) is gone, or (`hosted`:
  * a watch as the host's role, armed by the fleet's host) the fleet has another host now. Standing down is
  * silent but for that last case: the displaced host is told in one line (takeover.ts `displacedLine`).
- * `armed` runs once the first read of the chat is done. */
+ * `armed` runs once the first read of the chat is done; when it says no, the watch stands down. */
 function follow(
   machine: Machine,
   root: string,
@@ -609,7 +618,7 @@ function follow(
   request: WatchRequest,
   mine: Owner | undefined,
   hosted: boolean,
-  armed?: () => void,
+  armed?: () => boolean,
 ): Effect.Effect<number | typeof NOBODY | undefined, never, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
@@ -625,7 +634,8 @@ function follow(
     if (request.resume) after = Math.max(after, intOf(readText(cursorPath(root, who))) ?? after);
     const tail = new Tail(root);
     const messages = tail.read();
-    armed?.();
+
+    if (armed?.() === false) return NOBODY;
     const wanted = new Set(openAmong(messages, who).map((m) => m.id));
 
     if (request.all) {

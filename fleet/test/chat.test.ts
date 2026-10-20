@@ -2,7 +2,7 @@
  * The chat seam (ported from the coordinator's tests/test_chat.py, all but the dashboard server's
  * routes, which are stage 3's): the chat module, its CLI, the watch and the wait.
  */
-import { appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, existsSync, linkSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -839,6 +839,38 @@ describe("listening", () => {
     expect(readOwner(root, "coordinator")?.watch).toBe(pid);
     writeFileSync(ownerPath(root, "coordinator"), JSON.stringify({ watch: pid, session: gone.pid, started: "0" }));
   }
+
+  test("an orphan still in its first read when the next watch arms stands down once that read is done, and the next watch goes on", async () => {
+    // The chat is a FIFO, linked under a second name: the first watch's first read waits in its open until this
+    // test opens that second name to write. A file takes the chat's place, so the next watch reads at once.
+    const store = join(root, "chat.jsonl");
+    const held = join(root, "held.fifo");
+    expect(Bun.spawnSync(["mkfifo", store]).exitCode).toBe(0);
+    linkSync(store, held);
+    const first = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], env);
+    procs.push(first.proc);
+
+    for (let tries = 0; tries < 200 && readOwner(root, "coordinator")?.watch !== first.proc.pid; tries += 1) await sleep(50);
+    await orphan(first.proc.pid);
+    rmSync(store);
+    writeFileSync(store, "");
+
+    const second = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], env);
+    procs.push(second.proc);
+
+    for (let tries = 0; tries < 200 && !existsSync(join(root, "watch-coordinator.pid")); tries += 1) await sleep(50);
+    expect([readFileSync(join(root, "watch-coordinator.pid"), "utf8"), readOwner(root, "coordinator")?.watch, first.proc.exitCode]).toEqual([String(second.proc.pid), second.proc.pid, null]);
+
+    closeSync(openSync(held, constants.O_WRONLY | constants.O_NONBLOCK));
+    // Which stands down: the orphan, not the watch that took its place.
+    expect(await Promise.race([first.proc.exited.then(() => "first"), second.proc.exited.then(() => "second"), sleep(5000).then(() => "neither")])).toBe("first");
+    expect([first.proc.exitCode, await first.lines.rest()]).toEqual([0, ""]);
+    expect([readFileSync(join(root, "watch-coordinator.pid"), "utf8"), second.proc.exitCode]).toEqual([String(second.proc.pid), null]);
+    const sent = user("status?");
+    expect(await second.proc.exited).toBe(0);
+    expect(await second.lines.rest()).toBe(`#${String(sent.id)} user -> coordinator: status?\n`);
+    expect(listening(m, root).seen).toBe(sent.id);
+  }, 30_000);
 
   test("a watch whose session is gone is not listening, and the next watch takes its place: nothing is killed, nothing is lost", async () => {
     const first = await armed();
