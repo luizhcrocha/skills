@@ -625,7 +625,7 @@ def fleet_moved_writes(hook):
             if "fleet" not in os.path.basename(words[i]).lower():
                 continue
             if not ((sub == "state" and verb != "show" and not verb.startswith("-")) or (sub == "chat" and verb == "say")
-                    or (sub == "ws" and (verb in ("add", "split") or (verb == "prune" and "--apply" in words[i + 4:])))
+                    or (sub == "ws" and (verb in ("add", "split", "trash") or (verb == "prune" and "--apply" in words[i + 4:])))
                     or (sub == "preview" and verb != "status" and not verb.startswith("-")) or sub == "render"):
                 continue
             path = os.path.expanduser(os.path.dirname(d) if sub == "render" else d)

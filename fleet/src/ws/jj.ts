@@ -59,6 +59,13 @@ export function changes(at: string, revset: string, read = true): Change[] | und
     });
 }
 
+const WORKSPACE_NAME = /^[A-Za-z0-9_.-]+$/u;
+
+/** Why `name` cannot name a fleet workspace (`fleet ws add NAME`, `ws trash --adopt --name`), or undefined. */
+export function badWorkspaceName(name: string): string | undefined {
+  return WORKSPACE_NAME.test(name) && name !== "default" ? undefined : `a workspace name is letters, digits, '_', '.' or '-', and not 'default': ${JSON.stringify(name)}`;
+}
+
 /** The root of the workspace jj calls `name` in the repo at `at`, or undefined. */
 export function workspaceRoot(at: string, name: string): string | undefined {
   const run = jj(at, ["workspace", "root", "--name", name], true);

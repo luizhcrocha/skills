@@ -34,11 +34,15 @@
  *   its dev server): any end but exit 0, or a change it leaves, keeps that workspace. `--hook-timeout`
  *   bounds all of prune's hooks together: a workspace whose hook gets no time left is kept. Without
  *   `--apply` it is a dry run, and runs no hook.
+ * - `trash NAME --card ID`: one workspace prune keeps, taken out as prune takes one out, when its worker is not
+ *   live, every change it holds ahead of the stack is empty or described THROWAWAY, and card ID of this ledger is
+ *   a permission whose call is this very command (DIR its resolved path), answered allow-once or allow-kind
+ *   (fleet/SPEC.md). Never `default` or a main checkout.
  * - Every hook runs alike (`--hook-timeout`, its own process group, its output under a header, its run on
  *   the row) with the same environment: FLEET_EVENT, FLEET_WS_ID (`<repo>-<name>-<hash>`, the row's `ws_id`),
  *   FLEET_WS_NAME, FLEET_WS_PATH, FLEET_WS_PORT, FLEET_REPO, FLEET_FLEET (fleet/SPEC.md, "Lifecycle hooks").
- * - `fleet ws trash`, `restore ENTRY`, `gc [--older-than DAYS] [--dry-run]` (no DIR: the trash is the
- *   machine's): list the trash, bring an entry back as a jj workspace, delete the entries past the age
+ * - `fleet ws trash [--adopt ENTRY --repo REPO [--name NAME]]`, `restore ENTRY`, `gc [--older-than DAYS] [--dry-run]` (no DIR:
+ *   the trash is the machine's): list the trash (or give an entry moved in by hand a note and a stamp), bring an entry back as a jj workspace, delete the entries past the age
  *   (7 days). The folder holds files jj never snapshots (ignored ones: `.dev.vars`, notes), so a prune is
  *   undone until gc runs, and gc is the only command that deletes a workspace's folder.
  */
@@ -80,17 +84,20 @@ import {
   type HookRun,
   type HookSubject,
 } from "../ws/hook.ts";
-import { changes, jj, literal, unintegratedRevset, why, workspaceNames, workspaceRoot, type Change } from "../ws/jj.ts";
-import { collect, listing, restore, toTrash, trashHome, untrash, type Note, type Trashed } from "../ws/trash.ts";
+import { badWorkspaceName, changes, jj, literal, unintegratedRevset, why, workspaceNames, workspaceRoot, type Change } from "../ws/jj.ts";
+import { adopt, collect, discard, listing, restore, trashHome, type Note } from "../ws/trash.ts";
+import { findDecision } from "../ledger/numbers.ts";
 import { readObject } from "../registry.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 
 const USAGE =
   "usage: fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] [--no-preview] [--hook-timeout S] | add WORKER --reuse WORKSPACE|WORKER [-r BASE] [--no-preview] [--hook-timeout S] | " +
-  "split WORKER -m MESSAGE [--repo PATH] | list | prune [--apply | --dry-run] [--hook-timeout S]; fleet ws trash | restore ENTRY | gc [--older-than DAYS] [--dry-run]";
+  "split WORKER -m MESSAGE [--repo PATH] | list | prune [--apply | --dry-run] [--hook-timeout S] | trash NAME --card ID; " +
+  "fleet ws trash [--adopt ENTRY --repo REPO [--name NAME]] | restore ENTRY | gc [--older-than DAYS] [--dry-run]";
 
-const NAME = /^[A-Za-z0-9_.-]+$/;
+/** A card's ID or ref as `trash NAME --card ID` takes it: a permission's `p-<hex>`, a ref such as `P3`. */
+const CARD = /^[A-Za-z0-9-]+$/u;
 
 /** A worker in one of these is still at work: its workspace stays. */
 const LIVE = new Set(["running", "queued", "blocked"]);
@@ -457,7 +464,9 @@ function addFresh(
   return Effect.gen(function* () {
     const out = yield* Out;
 
-    if (!NAME.test(name) || name === "default") return yield* refuse(`a workspace name is letters, digits, '_', '.' or '-', and not 'default': ${JSON.stringify(name)}`);
+    const bad = badWorkspaceName(name);
+
+    if (bad !== undefined) return yield* refuse(bad);
     const main = workspaceRoot(resolvePath(repoGiven ?? process.cwd()), "default");
 
     if (main === undefined) return yield* refuse(`${repoGiven ?? process.cwd()} is not in a jj repo with a default workspace`);
@@ -917,33 +926,40 @@ function keepAfterHook(root: string, raw: JsonObject, r: Recorded): string | und
 /** Why `r` must stay, or undefined when it may go. */
 function keepBecause(root: string, raw: JsonObject, r: Recorded): string | undefined {
   if (r.preview) return previewKept(root, r);
+  const read = aheadOf(raw, r);
+
+  if ("kept" in read) return read.kept;
+  const { ahead } = read;
+
+  return ahead.length > 0 ? `${ahead.length} change(s) not in the stack: ${ahead.map(described).join("; ")}` : undefined;
+}
+
+/** What `r` holds that the stack does not, or why it must stay before that is asked: its worker is live, its
+ * directory is not that jj workspace, or jj could not snapshot it or say what it holds. Snapshots it. */
+function aheadOf(raw: JsonObject, r: Recorded): { readonly ahead: Change[] } | { readonly kept: string } {
   const row = agentRow(raw, r.agent);
   const status = asString(row?.["status"]);
 
-  if (status !== undefined && LIVE.has(status)) return `its worker ${r.agent} is ${status}`;
+  if (status !== undefined && LIVE.has(status)) return { kept: `its worker ${r.agent} is ${status}` };
   const known = (workspaceNames(r.repo) ?? []).includes(r.id);
 
   if (isDir(r.path)) {
     const at = known ? workspaceRoot(r.repo, r.id) : undefined;
 
     if (at === undefined || resolvePath(at) !== resolvePath(r.path) || !belongs(r.path, r.repo) || resolvePath(r.path) === resolvePath(r.repo)) {
-      return `${r.path} is not jj workspace ${r.id} of ${r.repo}; nothing there is touched`;
+      return { kept: `${r.path} is not jj workspace ${r.id} of ${r.repo}; nothing there is touched` };
     }
 
     const failed = snapshot(r.path);
 
-    if (failed !== undefined) return `jj could not snapshot it: ${failed}`;
+    if (failed !== undefined) return { kept: `jj could not snapshot it: ${failed}` };
   }
 
-  if (!known) return undefined;
+  if (!known) return { ahead: [] };
   const tip = changes(r.repo, `${literal(r.id)}@`)?.[0];
   const ahead = tip === undefined ? undefined : changes(r.repo, unintegratedRevset(r.id, tip.change));
 
-  if (ahead === undefined) return "jj could not say what it holds";
-
-  if (ahead.length > 0) return `${ahead.length} change(s) not in the stack: ${ahead.map(described).join("; ")}`;
-
-  return undefined;
+  return ahead === undefined ? { kept: "jj could not say what it holds" } : { ahead };
 }
 
 /** What `prune --apply` would do now, for a fleet that stops (`fleet serve --stop`, `set --status done`):
@@ -1097,30 +1113,15 @@ function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly s
       const known = (workspaceNames(r.repo) ?? []).includes(r.id);
       // The preview's merge commit goes with it: nothing else descends from it.
       const tip = known ? tipOf(r) : undefined;
-      let trashed: Trashed | undefined;
+      const done = discard(home, noteOf(machine, root, raw, r, tip), machine.now(), known);
 
-      if (isDir(r.path)) {
-        const moved = toTrash(home, noteOf(machine, root, raw, r, tip), machine.now());
-
-        if ("refused" in moved) {
-          kept += 1;
-          out.err(`ws: kept ${r.id}: ${moved.refused}\n`);
-          continue;
-        }
-
-        trashed = moved;
+      if ("refused" in done) {
+        kept += 1;
+        out.err(`ws: kept ${r.id}: ${done.refused}\n`);
+        continue;
       }
 
-      if (known) {
-        const forgot = jj(r.repo, ["workspace", "forget", r.id]);
-
-        if (!forgot.ok) {
-          const back = trashed === undefined ? undefined : untrash(trashed, r.path);
-          kept += 1;
-          out.err(`ws: kept ${r.id}: ${why(forgot)}${back === undefined ? "" : `; its folder stays in the trash, ${trashed?.id ?? ""} (${back})`}\n`);
-          continue;
-        }
-      }
+      const { trashed } = done;
 
       if (r.preview && tip !== undefined) jj(r.repo, ["--ignore-working-copy", "abandon", `change_id(${tip.change})`]);
 
@@ -1165,6 +1166,136 @@ function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly s
   });
 }
 
+/** A description that marks a change as a prototype nobody lands: a workspace holding only these may be trashed on a card. */
+const THROWAWAY = "THROWAWAY";
+
+/** Why `r` must stay even on a card's yes: prune's own checks (a live worker, a directory that is not that
+ * workspace, a snapshot that failed), then any change not in the stack that is neither empty nor THROWAWAY. */
+function keepOnCard(raw: JsonObject, r: Recorded): string | undefined {
+  const read = aheadOf(raw, r);
+
+  if ("kept" in read) return read.kept;
+  const kept = read.ahead.filter((c) => !c.empty && !c.description.startsWith(THROWAWAY));
+
+  return kept.length > 0 ? `${kept.length} change(s) neither ${THROWAWAY} nor empty: ${kept.map(described).join("; ")}` : undefined;
+}
+
+/** The one command a card can let through: `fleet ws <DIR> trash <NAME> --card <ID>`, DIR the fleet's resolved path. */
+function trashCall(root: string, name: string, key: string): string {
+  return `fleet ws ${root} trash ${name} --card ${key}`;
+}
+
+/** The answers that let a permission's call through for this command: the word alone, whitespace around it. */
+const ALLOW = /^\s*(?:allow-once|allow-kind)\s*$/u;
+
+/**
+ * Why card `key` of this fleet's ledger is no yes to `fleet ws <root> trash <name> --card <key>`, or undefined when
+ * it is. Only a permission card counts: its call is that command, byte for byte as {@link trashCall} prints it; it
+ * stands (decided, never withdrawn or superseded); and Luiz answered it allow-once or allow-kind, nothing after the
+ * word. A decision, input, action or grilling is refused whatever it says: the permission card already names the
+ * exact command and is answered on the page, so no other card's wording is read as a yes.
+ */
+function cardRefusal(raw: JsonObject, root: string, key: string, name: string): string | undefined {
+  const call = trashCall(root, name, key);
+  const only = `only a permission card whose call is exactly \`${call}\`, decided allow-once or allow-kind, moves a workspace prune keeps`;
+  const ask = `${only}; open one for that call`;
+  const ledger = decodeLedger(raw);
+  const d = ledger instanceof Refusal ? undefined : findDecision(ledger, key);
+
+  if (ledger instanceof Refusal || d === undefined) return `no card ${key} in this fleet's ledger: ${ask}`;
+
+  if (d.kind !== "permission") return `card ${key} is kind ${d.kind}, not a permission: ${ask}`;
+
+  if (d.refusal?.call !== call) return `card ${key} asks for \`${d.refusal?.call ?? ""}\`: ${ask}`;
+
+  if (d.status !== "decided") return `card ${key} is ${d.status}: ${only}`;
+  const over = (ledger.decisions ?? []).find((x) => x.supersedes === d.id);
+
+  if (over !== undefined) return `card ${key} is superseded by ${over.ref ?? over.id}: ${only}`;
+  const answer = d.answer ?? "";
+
+  return ALLOW.test(answer) ? undefined : `card ${key} was decided ${JSON.stringify(answer)}: ${only}`;
+}
+
+/**
+ * `fleet ws DIR trash NAME --card ID`: one workspace prune keeps, because it holds changes nobody lands, taken out
+ * as prune takes one out ({@link discard}), on card ID's yes. Refused for `default` and a main checkout, for a
+ * workspace this command runs in, unless card ID is a permission for this exact call, allowed ({@link cardRefusal}), and unless the
+ * workspace passes {@link keepOnCard}. The pre-remove hook runs first, as for prune, and the checks run again after it.
+ */
+function trashNamed(machine: Machine, root: string, raw: JsonObject, argv: readonly string[]): Effect.Effect<number, Refusal, Out> {
+  return Effect.gen(function* () {
+    const out = yield* Out;
+    const [key, rest] = option(argv, "--card");
+    const [name, ...extra] = rest;
+
+    if (key === undefined || key.startsWith("-") || name === undefined || name.startsWith("-") || extra.length > 0) return yield* refuse(USAGE);
+
+    if (!CARD.test(key)) return yield* refuse(`a card ID is letters, digits and '-': ${JSON.stringify(key)}`);
+    const r = recorded(raw).find((x) => x.id === name);
+
+    if (name === "default" || (r !== undefined && (resolvePath(r.path) === resolvePath(r.repo) || isDir(join(r.path, ".jj", "repo"))))) return yield* refuse("never the default workspace, nor a main checkout");
+
+    if (r === undefined || r.preview) return yield* refuse(`no active workspace ${name} in this fleet's ledger: \`fleet ws DIR list\` names them`);
+    const here = resolvePath(process.cwd());
+    const at = resolvePath(r.path);
+
+    if (here === at || here.startsWith(`${at}/`)) return yield* refuse(`${r.path} holds this command's own working directory: run it from elsewhere`);
+    const unsaid = cardRefusal(raw, root, key, name);
+
+    if (unsaid !== undefined) return yield* refuse(unsaid);
+    const before = keepOnCard(raw, r);
+
+    if (before !== undefined) return yield* refuse(`kept ${name}: ${before}`);
+    const events: JsonObject[] = [];
+    let hooks: JsonObject = {};
+
+    if (isDir(r.path)) {
+      const ran = yield* runEvent(machine, out, "pre-remove", { name: r.id, path: r.path, repo: r.repo, source: r.path, fleet: root, port: portOf(r.row) }, HOOK_TIMEOUT_S);
+
+      if (ran !== undefined && "note" in ran) return yield* refuse(`kept ${name}: ${ran.note}; nothing is moved or deleted`);
+
+      if (ran !== undefined) {
+        hooks = { pre_remove_hook: hookRecord(ran.call, ran.run, stampOf(machine.now())) };
+
+        if (ran.run.exit !== 0) return yield* refuse(`kept ${name}: ${ran.outcome}; nothing is moved or deleted`);
+        const now = load(root);
+        const again = now instanceof Refusal ? now.reason : keepOnCard(now, r);
+
+        if (again !== undefined) return yield* refuse(`kept ${name}: after its ${ran.call.name}, ${again}`);
+      }
+    }
+
+    const known = (workspaceNames(r.repo) ?? []).includes(r.id);
+    const tip = known ? tipOf(r) : undefined;
+    const status = statusOf(raw, r.agent);
+    const reason = `its worker ${r.agent} ${status === undefined ? "has no row" : `is ${status}`} and its changes are ${THROWAWAY} or empty`;
+    const note: Note = { repo: r.repo, workspace: r.id, path: r.path, commit: tip?.commit ?? null, parents: tip?.parents ?? [], trashed: stampOf(machine.now()), fleet: root, why: `fleet ws trash ${name} --card ${key}: ${reason}`, card: key };
+    const done = discard(trashHome(machine.env), note, machine.now(), known);
+
+    if ("refused" in done) return yield* refuse(`kept ${name}: ${done.refused}`);
+    forgetIncluded(root, r.agent);
+    const where = done.trashed === undefined ? `${r.path} was gone already` : `${r.path} moved to the trash (${done.trashed.id})`;
+    events.push(event(machine, raw, r.agent, "note", `Workspace ${name} trashed under card ${key}: its changes are ${THROWAWAY} or empty; ${where}.`));
+    const now = load(root);
+
+    if (now instanceof Refusal) return yield* Effect.fail(now);
+
+    const workspaces = (asArray(now["workspaces"]) ?? []).map((item) => {
+      const row = asObject(item);
+
+      return row !== undefined && asString(row["id"]) === name && row["status"] !== "pruned" ? { ...row, ...hooks, status: "pruned", pruned: note.trashed, card: key } : item;
+    });
+
+    const fault = save(machine, root, now, workspaces, events);
+
+    if (fault !== undefined) return yield* Effect.fail(fault);
+    out.out(done.trashed === undefined ? `trashed ${name} under card ${key}: ${r.path} was gone already\n` : `trashed ${name} under card ${key}: ${r.path} is in the trash, ${done.trashed.id}: \`fleet ws restore ${done.trashed.id}\` brings it back\n`);
+
+    return 0;
+  });
+}
+
 /** The commands of the machine's workspace trash, which take no fleet directory. */
 export const TRASH_COMMANDS: ReadonlySet<string> = new Set(["trash", "restore", "gc"]);
 
@@ -1172,6 +1303,20 @@ function trashCommand(machine: Machine, command: string, argv: readonly string[]
   return Effect.gen(function* () {
     const out = yield* Out;
     const home = trashHome(machine.env);
+
+    if (command === "trash" && argv[0] === "--adopt") {
+      const [entry, rest] = option(argv, "--adopt");
+      const [repoGiven, others] = option(rest, "--repo");
+      const [nameGiven, left] = option(others, "--name");
+
+      if (entry === undefined || repoGiven === undefined || (others.includes("--name") && nameGiven === undefined) || left.length > 0) return yield* refuse(USAGE);
+      const done = adopt(home, entry, resolvePath(repoGiven), nameGiven, machine.now(), stampOf(machine.now()));
+
+      if ("refused" in done) return yield* refuse(done.refused);
+      out.out(`adopted ${entry} as ${done.id}: \`fleet ws restore ${done.id}\` brings it back, \`fleet ws gc\` deletes it after 7 days\n`);
+
+      return 0;
+    }
 
     if (command === "trash" && argv.length === 0) {
       for (const line of listing(home, machine.now())) out.out(`${line}\n`);
@@ -1209,7 +1354,7 @@ function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
 
     if (dir === undefined || command === undefined) return yield* refuse(USAGE);
     const root = resolvePath(dir);
-    const writes = command === "add" || command === "split" || (command === "prune" && rest.includes("--apply"));
+    const writes = command === "add" || command === "split" || command === "trash" || (command === "prune" && rest.includes("--apply"));
     const moved = writes ? movedRefusal(root) : undefined;
 
     if (moved !== undefined) return yield* refuse(moved);
@@ -1224,6 +1369,8 @@ function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
     if (command === "prune") return yield* prune(machine, root, raw, rest);
 
     if (command === "split") return yield* split(machine, root, raw, rest);
+
+    if (command === "trash") return yield* trashNamed(machine, root, raw, rest);
 
     return yield* refuse(USAGE);
   });

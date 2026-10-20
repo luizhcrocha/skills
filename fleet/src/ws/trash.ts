@@ -9,14 +9,14 @@
  * {@link restore} moves an entry back and makes it a jj workspace again; {@link collect} (`fleet ws gc`)
  * is the only place an entry is deleted for good.
  */
-import { lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import * as Option from "effect/Option";
 
 import { exists, isDir, readText, remove, writeText } from "../files.ts";
 import { asArray, asObject, asString, dumps, parseObject, type JsonOut } from "../json.ts";
-import { jj, why, workspaceNames, type JjRun } from "./jj.ts";
+import { badWorkspaceName, jj, why, workspaceNames, type JjRun } from "./jj.ts";
 
 /** What the trash keeps beside a folder, to say what it was and to put it back. */
 export interface Note {
@@ -33,6 +33,8 @@ export interface Note {
   /** The fleet's directory. */
   readonly fleet: string;
   readonly why: string;
+  /** The card whose yes moved it (`fleet ws DIR trash NAME --card ID`); absent for a prune. */
+  readonly card?: string;
 }
 
 /** The trash's directory, from the environment. */
@@ -97,7 +99,7 @@ export function toTrash(home: string, note: Note, now: Date): Trashed | Refused 
   const folder = join(shelf, name);
 
   try {
-    const json: JsonOut = { repo: note.repo, workspace: note.workspace, path: note.path, commit: note.commit, parents: [...note.parents], trashed: note.trashed, fleet: note.fleet, why: note.why };
+    const json: JsonOut = { repo: note.repo, workspace: note.workspace, path: note.path, commit: note.commit, parents: [...note.parents], trashed: note.trashed, fleet: note.fleet, why: note.why, card: note.card };
     writeText(`${folder}.json`, `${dumps(json, { indent: 2, ensureAscii: false })}\n`);
   } catch (cause) {
     return refused(failure(cause));
@@ -115,7 +117,7 @@ export function toTrash(home: string, note: Note, now: Date): Trashed | Refused 
 }
 
 /** Put a folder {@link toTrash} just moved back where it was (its workspace could not be forgotten); why not. */
-export function untrash(trashed: Trashed, path: string): string | undefined {
+function untrash(trashed: Trashed, path: string): string | undefined {
   try {
     renameSync(trashed.folder, path);
     remove(`${trashed.folder}.json`);
@@ -126,6 +128,149 @@ export function untrash(trashed: Trashed, path: string): string | undefined {
   }
 }
 
+/**
+ * Take a workspace out: its folder (when there is one) to the trash by {@link toTrash}, then, when jj still knows
+ * it (`forget`), `jj workspace forget` run from the repo's default workspace with `--ignore-working-copy`, so the
+ * main checkout is never snapshotted. When jj refuses the forget, the folder goes back where it was. The entry
+ * (undefined when there was no folder), or why it stays.
+ */
+export function discard(home: string, note: Note, now: Date, forget: boolean): { readonly trashed: Trashed | undefined } | Refused {
+  let trashed: Trashed | undefined;
+
+  if (isDir(note.path)) {
+    const moved = toTrash(home, note, now);
+
+    if ("refused" in moved) return moved;
+    trashed = moved;
+  }
+
+  if (forget) {
+    const forgot = jj(note.repo, ["workspace", "forget", note.workspace], true);
+
+    if (!forgot.ok) {
+      const back = trashed === undefined ? undefined : untrash(trashed, note.path);
+
+      return { refused: `${why(forgot)}${back === undefined ? "" : `; its folder stays in the trash, ${trashed?.id ?? ""} (${back})`}` };
+    }
+  }
+
+  return { trashed };
+}
+
+/**
+ * The workspace name jj wrote into `<folder>/.jj/working_copy/checkout`: a protobuf `Checkout` whose field 3 is
+ * `workspace_name` (1 and 2 are the commit and operation ids). Undefined when the file is missing, is not that
+ * message, or holds no name.
+ */
+export function checkoutName(folder: string): string | undefined {
+  let bytes: Uint8Array;
+
+  try {
+    bytes = readFileSync(join(folder, ".jj", "working_copy", "checkout"));
+  } catch {
+    return undefined;
+  }
+
+  let at = 0;
+  let name: string | undefined;
+
+  const varint = (): number | undefined => {
+    for (let value = 0, shift = 0; at < bytes.length && shift < 35; shift += 7) {
+      const byte = bytes[at] ?? 0;
+      at += 1;
+      value += (byte & 0x7f) * 2 ** shift;
+
+      if ((byte & 0x80) === 0) return value;
+    }
+
+    return undefined;
+  };
+
+  while (at < bytes.length) {
+    const key = varint();
+
+    if (key === undefined) return undefined;
+    const wire = key % 8;
+
+    if (wire === 0) {
+      if (varint() === undefined) return undefined;
+    } else if (wire === 2) {
+      const length = varint();
+
+      if (length === undefined || at + length > bytes.length) return undefined;
+
+      if (Math.floor(key / 8) === 3) {
+        try {
+          name = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(at, at + length));
+        } catch {
+          return undefined;
+        }
+      }
+
+      at += length;
+    } else if (wire === 1 || wire === 5) {
+      at += wire === 1 ? 8 : 4;
+    } else {
+      return undefined;
+    }
+  }
+
+  return at === bytes.length && name !== "" ? name : undefined;
+}
+
+/**
+ * `fleet ws trash --adopt ENTRY --repo REPO [--name NAME]`: give an entry moved into the trash by hand (no note,
+ * no stamp) the note and stamp a prune writes, so {@link restore} can bring it back and {@link collect} ages it
+ * from now. The workspace is the name jj recorded in the folder ({@link checkoutName}), unless
+ * {@link badWorkspaceName} refuses it (`../x1`: then it is read as no name), else `given`, else the adopt is
+ * refused: the entry's own name is whatever the hand chose (`c18-manual`), never read as the workspace's. `given`
+ * passes {@link badWorkspaceName} too. Its old path is `<REPO>-<name>` beside REPO (where `fleet ws add`
+ * makes one), its @ unknown: a restore starts it on the default workspace's parents and its files give back the rest.
+ */
+export function adopt(home: string, id: string, repo: string, given: string | undefined, now: Date, stamp: string): Trashed | Refused {
+  const folder = join(home, id);
+  const [shelf, name] = id.split("/");
+
+  if (id.includes("..") || shelf === undefined || name === undefined || id.split("/").length !== 2 || name.endsWith(".json") || name.endsWith(STALE) || !isDir(folder)) {
+    return { refused: `no trash entry ${id} in ${home}: \`fleet ws trash\` lists them` };
+  }
+
+  if (exists(`${folder}.json`)) return { refused: `trash entry ${id} has a note already` };
+
+  if (!isDir(join(repo, ".jj", "repo"))) return { refused: `${repo} is no jj repo's default workspace: --repo names the repo the workspace was of` };
+
+  if (basename(repo) !== shelf) return { refused: `trash entry ${id} is on shelf ${shelf}, and --repo ${repo} would shelve it under ${basename(repo)}` };
+  const read = checkoutName(folder);
+  const recorded = read === undefined || badWorkspaceName(read) !== undefined ? undefined : read;
+
+  if (recorded !== undefined && given !== undefined && recorded !== given) {
+    return { refused: `trash entry ${id} is jj workspace ${recorded} by its .jj/working_copy/checkout, not ${given}: leave --name out` };
+  }
+
+  const workspace = recorded ?? given;
+
+  if (workspace === undefined) return { refused: `trash entry ${id} has no .jj/working_copy/checkout that names its workspace: give it with --name NAME` };
+  const bad = badWorkspaceName(workspace);
+
+  if (bad !== undefined) return { refused: bad };
+  let entry = `${workspace}@${utcStamp(now)}`;
+
+  for (let n = 2; exists(join(home, shelf, entry)) || exists(join(home, shelf, `${entry}.json`)); n += 1) entry = `${workspace}@${utcStamp(now)}-${String(n)}`;
+  const target = join(home, shelf, entry);
+  const json: JsonOut = { repo, workspace, path: `${repo}-${workspace}`, commit: null, parents: [], trashed: stamp, fleet: "", why: "fleet ws trash --adopt: moved to the trash by hand, with no note" };
+
+  try {
+    writeText(`${target}.json`, `${dumps(json, { indent: 2, ensureAscii: false })}\n`);
+    renameSync(folder, target);
+  } catch (cause) {
+    remove(`${target}.json`);
+
+    return { refused: `could not adopt ${id} (${failure(cause)}); it stays as it was` };
+  }
+
+  return { id: `${shelf}/${entry}`, folder: target };
+}
+
 function readNote(folder: string): Note | undefined {
   const raw = asObject(Option.getOrUndefined(parseObject(readText(`${folder}.json`) ?? "")));
   const repo = asString(raw?.["repo"]);
@@ -133,6 +278,8 @@ function readNote(folder: string): Note | undefined {
   const path = asString(raw?.["path"]);
 
   if (raw === undefined || repo === undefined || workspace === undefined || path === undefined) return undefined;
+  const given = asString(raw["card"]);
+  const card = given === undefined ? {} : { card: given };
 
   return {
     repo,
@@ -143,6 +290,7 @@ function readNote(folder: string): Note | undefined {
     trashed: asString(raw["trashed"]) ?? "",
     fleet: asString(raw["fleet"]) ?? "",
     why: asString(raw["why"]) ?? "",
+    ...card,
   };
 }
 

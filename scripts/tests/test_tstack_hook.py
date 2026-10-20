@@ -6601,7 +6601,7 @@ class MovedWritesTest(MovedFleet, FleetCase):
         d, cli = self.fleet, self.fleet_cli
         return [f"{cli} state {d} agent w2 --status running", f"{cli} state {d} event --kind note 'x'",
                 f'cd /tmp && {cli} chat {d} say "done" --re 4', f"FLEET={cli}; $FLEET state {d} decision D9 --kind x",
-                f"{cli} ws {d} add w3", f"{cli} ws {d} split w2 -m 'w2: done'", f"{cli} ws {d} prune --apply",
+                f"{cli} ws {d} add w3", f"{cli} ws {d} split w2 -m 'w2: done'", f"{cli} ws {d} prune --apply", f"{cli} ws {d} trash w2 --card D7",
                 f"{cli} preview {d} start", f"{cli} preview {d} set --cmd 'bun dev'", f"{cli} preview {d} stop",
                 f"{cli} preview {d} include w2", f"{cli} render {d}/state.json {d}/index.html"]
 

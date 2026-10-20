@@ -1302,3 +1302,248 @@ describe("idle workspaces are pruned at the end of a fleet", () => {
     expect(fleet(["serve", dir, "--stop"], env).stdout).toBe(`${dir} was not being served\n`);
   });
 });
+
+describe("fleet ws DIR trash NAME --card ID: one workspace prune keeps, trashed on a permission card for that exact call", () => {
+  const trash = (): string => join(base, "registry", "trash");
+  const names = (): string => jj(repo, "--ignore-working-copy", "workspace", "list", "-T", 'name ++ "\\n"');
+  /** The command as the CLI prints it, which a permission card's call must be. */
+  const call = (name: string, id: string): string => `fleet ws ${dir} trash ${name} --card ${id}`;
+
+  const only = (name: string, id: string): string =>
+    `only a permission card whose call is exactly \`${call(name, id)}\`, decided allow-once or allow-kind, moves a workspace prune keeps`;
+
+  /** Luiz's answer on the page: the CLI lets no agent decide a permission allow-once, so the test writes it. */
+  function answer(id: string, said: string): void {
+    const raw = readJson(join(dir, "state.json"));
+    const decisions = (asArray(raw["decisions"]) ?? []).map((d) => (asObject(d)?.["id"] === id ? { ...asObject(d), status: "decided", answer: said, resolution: "answered on the page" } : d));
+    writeFileSync(join(dir, "state.json"), JSON.stringify({ ...raw, decisions }));
+  }
+
+  /** Permission card `id` for Bash call `asked`, decided `said` (undefined: left open). */
+  function permission(id: string, asked: string, said: string | undefined): void {
+    state("decision", id, "--kind", "permission", "--tool", "Bash", "--call", asked, "--root", repo, "--title", "Trash a workspace?", "--why", "prune keeps it",
+      "--recommend", "allow-once", "--reason", "throwaway work");
+
+    if (said !== undefined) answer(id, said);
+  }
+
+  /** A done worker t1 whose workspace holds a THROWAWAY change and an empty described one: prune keeps it. */
+  function throwaway() {
+    state("agent", "t1", "--task", "t", "--milestone", "m1");
+    ws("add", "t1", "--repo", repo);
+    const at = join(base, "repo-t1");
+    work(at, "proto.txt", "THROWAWAY: prototype of the page");
+    jj(at, "describe", "-m", "THROWAWAY notes, empty");
+    jj(at, "new");
+    state("agent", "t1", "--status", "done");
+    const commit = jj(repo, "log", "--no-graph", "-r", "description(substring:'THROWAWAY: prototype')", "-T", "commit_id");
+
+    return { at, commit };
+  }
+
+  /** Nothing moved: folder, jj workspace and row as they were, no trash entry. */
+  function untouched(at: string): void {
+    expect(existsSync(join(at, "proto.txt"))).toBe(true);
+    expect(names()).toBe("default\nt1\n");
+    expect(workspaces().find((w) => w["id"] === "t1")?.["status"]).toBe("active");
+    expect(existsSync(join(trash(), "repo")) ? readdirSync(join(trash(), "repo")) : []).toEqual([]);
+  }
+
+  test("moves the folder to the trash beside a note naming the card, forgets the workspace without snapshotting the main checkout, keeps its commits", () => {
+    const { at, commit } = throwaway();
+    expect(ws("prune", "--apply").stderr).toContain("ws: kept t1: 2 change(s) not in the stack");
+    permission("d1", call("t1", "d1"), "allow-once");
+    writeFileSync(join(repo, "unsnapshotted.txt"), "the main checkout's own edit\n");
+    // a hand-made entry under the same stamp is never overwritten
+    mkdirSync(join(trash(), "repo", "t1@20260105T090000Z"), { recursive: true });
+    const ran = ws("trash", "t1", "--card", "d1");
+    const id = "repo/t1@20260105T090000Z-2";
+    expect([ran.code, ran.stderr]).toEqual([0, ""]);
+    expect(ran.stdout).toBe(`trashed t1 under card d1: ${at} is in the trash, ${id}: \`fleet ws restore ${id}\` brings it back\n`);
+    expect(existsSync(at)).toBe(false);
+    expect(readFileSync(join(trash(), id, "proto.txt"), "utf8")).toBe("THROWAWAY: prototype of the page\n");
+    expect(readJson(join(trash(), `${id}.json`))).toMatchObject({ workspace: "t1", path: at, fleet: dir, card: "d1", why: "fleet ws trash t1 --card d1: its worker t1 is done and its changes are THROWAWAY or empty" });
+    expect(names()).toBe("default\n");
+    expect(jj(repo, "--ignore-working-copy", "log", "--no-graph", "-r", commit, "-T", "description")).toBe("THROWAWAY: prototype of the page\n");
+    expect(jj(repo, "--ignore-working-copy", "log", "--no-graph", "-r", "default@", "-T", "empty")).toBe("true");
+    expect(workspaces()[0]).toMatchObject({ id: "t1", status: "pruned", pruned: "2026-01-05T09:00:00+00:00", card: "d1" });
+    expect(asObject(lastEvent())?.["text"]).toBe(`Workspace t1 trashed under card d1: its changes are THROWAWAY or empty; ${at} moved to the trash (${id}).`);
+    expect(fleet(["ws", "restore", id], env).code).toBe(0);
+    expect(readFileSync(join(at, "proto.txt"), "utf8")).toBe("THROWAWAY: prototype of the page\n");
+  });
+
+  test("allow-kind with only whitespace after it is a yes too", () => {
+    const { at } = throwaway();
+    permission("p-9a2b3c4d", call("t1", "p-9a2b3c4d"), "allow-kind \n");
+    expect(ws("trash", "t1", "--card", "p-9a2b3c4d").code).toBe(0);
+    expect(existsSync(at)).toBe(false);
+  });
+
+  // The review's probes (ws-trash-card-rv/probe.test.ts): each of these cards trashed t1, and none is a yes to it.
+  const notYes: [string, () => void, string, () => string][] = [
+    ["a decision decided A, where A means keep", () => state("decision", "k", "--kind", "decision", "--title", "Keep workspace t1 for the demo?", "--question", "Keep t1?", "--why", "w",
+      "--option", "A: keep it | t1 stays for the demo", "--option", "B: trash it | it goes", "--decide", "A", "--resolution", "r"), "k", () => "card k is kind decision, not a permission"],
+    ["a plain yes to another question about t1", () => state("decision", "q", "--title", "Should t1's prototype be shown Friday?", "--question", "Show t1 on Friday?", "--decide", "yes", "--resolution", "r"), "q", () => "card q is kind decision, not a permission"],
+    ["a decision naming t1 in passing, decided A", () => state("decision", "n", "--kind", "decision", "--title", "Which lane gets the docs?", "--question", "Docs lane?", "--why", "t1 is done",
+      "--option", "A: lane x | x does it", "--option", "B: lane y | y", "--decide", "A", "--resolution", "r"), "n", () => "card n is kind decision, not a permission"],
+    ["an input answered ok", () => state("decision", "i", "--kind", "input", "--title", "Port for t1?", "--question", "Which port should t1 use?", "--decide", "ok", "--resolution", "r"), "i", () => "card i is kind input, not a permission"],
+    ["an action answered yes", () => state("decision", "ac", "--kind", "action", "--title", "Log into t1's preview", "--question", "Please log in on t1", "--decide", "yes", "--resolution", "r"), "ac", () => "card ac is kind action, not a permission"],
+    ["a permission allow-once for a read of t1", () => permission("p-1a2b3c4d", `jj -R ${repo} log -r t1@`, "allow-once"), "p-1a2b3c4d", () => `card p-1a2b3c4d asks for \`jj -R ${repo} log -r t1@\``],
+    ["a permission allow-once with a qualifier, for another card's call", () => permission("p-2a2b3c4d", call("t1", "x"), "allow-once, but not t1"), "p-2a2b3c4d", () => `card p-2a2b3c4d asks for \`${call("t1", "x")}\``],
+    ["a permission allow-kind for another card's call", () => permission("p-3a2b3c4d", call("t1", "x"), "allow-kind"), "p-3a2b3c4d", () => `card p-3a2b3c4d asks for \`${call("t1", "x")}\``],
+  ];
+
+  for (const [label, open, id, why] of notYes) {
+    test(`refuses ${label}, moving nothing, and says to open a permission card for the exact call`, () => {
+      const { at } = throwaway();
+      open();
+      const ran = ws("trash", "t1", "--card", id);
+      expect([ran.code, ran.stderr]).toEqual([1, `ws: ${why()}: ${only("t1", id)}; open one for that call\n`]);
+      untouched(at);
+    });
+  }
+
+  test("refuses, moving nothing, unless the worker is idle, every change is THROWAWAY or empty, and the card is a standing allow on this very call", () => {
+    const { at } = throwaway();
+
+    const refused = (args: string[], why: string): void => {
+      const ran = ws("trash", ...args);
+      expect([ran.code, ran.stderr]).toEqual([1, `ws: ${why}\n`]);
+      untouched(at);
+    };
+
+    const usage = (args: string[]): void => {
+      expect(ws("trash", ...args).stderr).toStartWith("ws: usage: fleet ws DIR");
+      untouched(at);
+    };
+
+    usage(["t1"]);
+    usage(["t1", "--card"]);
+    usage(["t1", "t2", "--card", "d1"]);
+    usage(["t1", "--card", "d1", "--all"]);
+    permission("open", call("t1", "open"), undefined);
+    refused(["t1", "--card", "open"], `card open is open: ${only("t1", "open")}`);
+    permission("no", call("t1", "no"), "deny");
+    refused(["t1", "--card", "no"], `card no was decided "deny": ${only("t1", "no")}`);
+    permission("vague", call("t1", "vague"), "allow-once, but keep the notes");
+    refused(["t1", "--card", "vague"], `card vague was decided "allow-once, but keep the notes": ${only("t1", "vague")}`);
+    permission("caps", call("t1", "caps"), "Allow-Once");
+    refused(["t1", "--card", "caps"], `card caps was decided "Allow-Once": ${only("t1", "caps")}`);
+    permission("other", call("t9", "other"), "allow-once");
+    refused(["t1", "--card", "other"], `card other asks for \`${call("t9", "other")}\`: ${only("t1", "other")}; open one for that call`);
+    permission("more", `${call("t1", "more")} --all`, "allow-once");
+    refused(["t1", "--card", "more"], `card more asks for \`${call("t1", "more")} --all\`: ${only("t1", "more")}; open one for that call`);
+    refused(["t1", "--card", "d9"], `no card d9 in this fleet's ledger: ${only("t1", "d9")}; open one for that call`);
+    refused(["t1", "--card", "elsewhere/d1"], "a card ID is letters, digits and '-': \"elsewhere/d1\"");
+    permission("gone", call("t1", "gone"), undefined);
+    state("decision", "gone", "--withdraw", "moot");
+    refused(["t1", "--card", "gone"], `card gone is withdrawn: ${only("t1", "gone")}`);
+    permission("ok", call("t1", "ok"), "allow-once");
+    state("decision", "later", "--kind", "input", "--title", "Keep t1 after all?", "--question", "q", "--why", "w", "--supersedes", "ok");
+    refused(["t1", "--card", "ok"], `card ok is superseded by I1: ${only("t1", "ok")}`);
+    permission("yes", call("t1", "yes"), "allow-once");
+    refused(["default", "--card", "yes"], "never the default workspace, nor a main checkout");
+    refused(["../t1", "--card", "yes"], "no active workspace ../t1 in this fleet's ledger: `fleet ws DIR list` names them");
+    refused(["t2", "--card", "yes"], "no active workspace t2 in this fleet's ledger: `fleet ws DIR list` names them");
+    state("agent", "t1", "--status", "running");
+    refused(["t1", "--card", "yes"], "kept t1: its worker t1 is running");
+    state("agent", "t1", "--status", "done");
+    work(at, "real.txt", "feat: real work");
+    const real = ws("trash", "t1", "--card", "yes");
+    expect([real.code, real.stderr]).toEqual([1, expect.stringMatching(/^ws: kept t1: 1 change\(s\) neither THROWAWAY nor empty: \w+ feat: real work\n$/)]);
+    expect(existsSync(at)).toBe(true);
+  });
+
+  test("refuses the workspace it runs in, and a row whose path is the main checkout", () => {
+    const { at } = throwaway();
+    permission("yes", call("t1", "yes"), "allow-once");
+    const was = process.cwd();
+    process.chdir(at);
+
+    try {
+      expect(ws("trash", "t1", "--card", "yes").stderr).toBe(`ws: ${at} holds this command's own working directory: run it from elsewhere\n`);
+    } finally {
+      process.chdir(was);
+    }
+
+    untouched(at);
+    permission("main", call("main", "main"), "allow-once");
+    const raw = readJson(join(dir, "state.json"));
+    writeFileSync(join(dir, "state.json"), JSON.stringify({ ...raw, workspaces: [...(asArray(raw["workspaces"]) ?? []), { id: "main", agent: "t1", path: repo, repo, status: "active" }] }));
+    expect(ws("trash", "main", "--card", "main").stderr).toBe("ws: never the default workspace, nor a main checkout\n");
+    expect(existsSync(join(repo, "README"))).toBe(true);
+  });
+
+  test("jj failing to forget brings the folder back and leaves no entry", () => {
+    const { at } = throwaway();
+    permission("yes", call("t1", "yes"), "allow-once");
+    const ops = join(repo, ".jj", "repo", "op_heads", "heads");
+    chmodSync(ops, 0o555);
+    const ran = ws("trash", "t1", "--card", "yes");
+    chmodSync(ops, 0o755);
+    expect(ran.code).toBe(1);
+    expect(ran.stderr).toStartWith("ws: kept t1: ");
+    untouched(at);
+  });
+
+  /** Workspace `name` of the repo, with a THROWAWAY change, forgotten and moved by hand into the trash as `entry`. */
+  function byHand(name: string, entry: string): string {
+    state("agent", name, "--task", "t", "--milestone", "m1");
+    ws("add", name, "--repo", repo);
+    const at = join(base, `repo-${name}`);
+    work(at, "proto.txt", "THROWAWAY: proto");
+    jj(repo, "workspace", "forget", name);
+    mkdirSync(join(trash(), "repo"), { recursive: true });
+    Bun.spawnSync(["mv", at, join(trash(), "repo", entry)]);
+
+    return at;
+  }
+
+  test("--adopt gives an entry moved in by hand a note and a stamp under the workspace name its .jj records, so restore brings it back and gc ages it", () => {
+    const at = byHand("c18", "c18-manual");
+    expect(fleet(["ws", "restore", "repo/c18-manual"], env).stderr).toContain("has no readable note");
+    expect(fleet(["ws", "trash", "--adopt", "repo/c18-manual", "--repo", repo, "--name", "c19"], env).stderr)
+      .toBe("ws: trash entry repo/c18-manual is jj workspace c18 by its .jj/working_copy/checkout, not c19: leave --name out\n");
+    const ran = fleet(["ws", "trash", "--adopt", "repo/c18-manual", "--repo", repo], env);
+    const id = "repo/c18@20260105T090000Z";
+    expect([ran.code, ran.stderr, ran.stdout]).toEqual([0, "", `adopted repo/c18-manual as ${id}: \`fleet ws restore ${id}\` brings it back, \`fleet ws gc\` deletes it after 7 days\n`]);
+    expect(readJson(join(trash(), `${id}.json`))).toEqual({
+      repo, workspace: "c18", path: at, commit: null, parents: [], trashed: "2026-01-05T09:00:00+00:00", fleet: "", why: "fleet ws trash --adopt: moved to the trash by hand, with no note",
+    });
+    expect(fleet(["ws", "trash", "--adopt", id, "--repo", repo], env).stderr).toBe(`ws: trash entry ${id} has a note already\n`);
+    expect(fleet(["ws", "trash", "--adopt", "repo/nothing", "--repo", repo], env).stderr).toContain("ws: no trash entry repo/nothing in ");
+    expect(fleet(["ws", "gc", "--dry-run"], { ...env, FLEET_NOW: "2026-01-13T09:00:00+00:00" }).stdout).toContain(`would delete ${id} (8d 0h old)`);
+    expect(fleet(["ws", "restore", id], env).code).toBe(0);
+    expect(readFileSync(join(at, "proto.txt"), "utf8")).toBe("THROWAWAY: proto\n");
+    expect(names()).toBe("c18\ndefault\n");
+  });
+
+  test("--adopt of an entry whose .jj names no workspace takes --name, checked as add checks a name, and refuses without it", () => {
+    byHand("c20", "x y");
+    rmSync(join(trash(), "repo", "x y", ".jj", "working_copy", "checkout"));
+    const adopt = (...more: string[]) => fleet(["ws", "trash", "--adopt", "repo/x y", "--repo", repo, ...more], env);
+    expect(adopt().stderr).toBe("ws: trash entry repo/x y has no .jj/working_copy/checkout that names its workspace: give it with --name NAME\n");
+    expect(adopt("--name", "x y").stderr).toBe("ws: a workspace name is letters, digits, '_', '.' or '-', and not 'default': \"x y\"\n");
+    expect(adopt("--name", "default").code).toBe(1);
+    expect(readdirSync(join(trash(), "repo"))).toEqual(["x y"]);
+    const ran = adopt("--name", "c20");
+    expect([ran.code, ran.stderr]).toEqual([0, ""]);
+    expect(readJson(join(trash(), "repo", "c20@20260105T090000Z.json"))).toMatchObject({ workspace: "c20", path: join(base, "repo-c20") });
+  });
+
+  test("--adopt of an entry whose .jj records a name add would refuse (../x1, a NUL, a space) reads it as no name and takes --name", () => {
+    byHand("c21", "odd");
+    const checkout = join(trash(), "repo", "odd", ".jj", "working_copy", "checkout");
+    const adopt = (...more: string[]) => fleet(["ws", "trash", "--adopt", "repo/odd", "--repo", repo, ...more], env);
+
+    for (const recorded of ["../x1", "a\0", "x y"]) {
+      const bytes = Buffer.from(recorded);
+      writeFileSync(checkout, Buffer.concat([Buffer.from([0x1a, bytes.length]), bytes]));
+      expect(adopt().stderr).toBe("ws: trash entry repo/odd has no .jj/working_copy/checkout that names its workspace: give it with --name NAME\n");
+    }
+
+    const ran = adopt("--name", "c21");
+    expect([ran.code, ran.stderr]).toEqual([0, ""]);
+    expect(readJson(join(trash(), "repo", "c21@20260105T090000Z.json"))).toMatchObject({ workspace: "c21", path: join(base, "repo-c21") });
+  });
+});
