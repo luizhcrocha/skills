@@ -262,6 +262,21 @@ class NoteTest(MemoCase):
         self.note("fact", "the retry wrote this line", "--global")
         self.assertEqual(len(self.files(store=self.global_dir)), 1, "another store is another store")
 
+    def test_a_line_folded_into_a_summary_may_be_noted_again_word_for_word(self):
+        # The wake shows the summary in place of a plain note it covers, so a re-note is no retry: it puts the line
+        # back. A pin or an open thread is shown whole under its summary too, so noting it again is still a retry.
+        old = self.note("fact", "the cache expires after an hour")
+        pinned = self.note("preference", "commands in nushell syntax", "--pin")
+        thread = self.note("open", "does the cache survive a deploy")
+        self.ok("summarize", old, self.note("fact", "the cache lives in R2"), pinned, thread, "where the cache lives")
+        self.assertNotIn("the cache expires after an hour", self.wake())
+        out = self.ok("note", "fact", "the cache expires after an hour")
+        self.assertTrue(out.startswith("noted "), out)
+        self.assertIn("the cache expires after an hour", self.wake())
+        self.assertEqual(self.ok("note", "preference", "commands in nushell syntax", "--pin"),
+                         f"already noted as {pinned}\n")
+        self.assertEqual(self.ok("open", "does the cache survive a deploy"), f"already noted as {thread}\n")
+
     def test_a_retried_close_or_thread_is_not_written_twice(self):
         env = {"MEMO_PROJECT_LINES": "8"}
         threads = [self.note("open", f"thread {n}", env=env) for n in range(4)]

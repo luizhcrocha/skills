@@ -828,9 +828,11 @@ def write_note(ctx, store, kind, text, refs=(), supersedes=(), pin=False, out=No
             raise MemoError(f"memo: {old.id} is a summary; supersede the notes, not their summary")
         olds.append(old)
     # A retry writes nothing: a live note of this store already says this line, as this kind, and closes what
-    # this one would. The text compared is the stored form, whitespace collapsed (clean_text, parse_item).
+    # this one would. The text compared is the stored form, whitespace collapsed (clean_text, parse_item). A plain
+    # note a summary covers is no match: the wake shows the summary in its place, and noting it again puts it back.
     same = next((i for i in view.items if not i.is_summary and view.is_live(i) and (i.kind, i.text) == (kind, text)
-                 and {o.id for o in olds} <= set(i.supersedes)), None)
+                 and {o.id for o in olds} <= set(i.supersedes)
+                 and (i.pin or i.kind == "open" or i.id not in view.covered_by)), None)
     if same is not None:
         print(f"already noted as {same.id}"
               + (f" (not pinned: `memo pin {same.id}` pins it)" if pin and not same.pin else ""), file=out)
