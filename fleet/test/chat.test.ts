@@ -566,19 +566,20 @@ describe("a --once watch settles", () => {
   });
 
   test("a burst is one wake", async () => {
-    const { proc, lines } = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once", "--settle", "1"], env);
+    const { proc, lines } = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once", "--settle", "3"], env);
     procs.push(proc);
-    await sleep(600);
+
+    // Armed: its pid file is written just before its first read, and a poll later it is past it.
+    for (let tries = 0; tries < 400 && !existsSync(join(root, "watch-coordinator.pid")); tries += 1) await sleep(50);
+    await sleep(300);
     send("a1", "@coordinator done with the parser");
-    await sleep(600);
-    expect(proc.exitCode).toBeNull();
+    // The second line comes once the watch printed the first, inside its settle, so the settle starts again.
+    expect(await lines.next(20_000)).toBe("#1 a1 (notes-impl) -> user, coordinator: @coordinator done with the parser\n");
     send("a1", "@coordinator and the tests");
     const last = performance.now();
     expect(await proc.exited).toBe(0);
-    expect(performance.now() - last).toBeGreaterThanOrEqual(700);
-    expect(await lines.rest()).toBe(
-      "#1 a1 (notes-impl) -> user, coordinator: @coordinator done with the parser\n#2 a1 (notes-impl) -> user, coordinator: @coordinator and the tests\n",
-    );
+    expect(performance.now() - last).toBeGreaterThanOrEqual(2000);
+    expect(await lines.rest()).toBe("#2 a1 (notes-impl) -> user, coordinator: @coordinator and the tests\n");
     expect(readFileSync(join(root, "watch-coordinator.cursor"), "utf8")).toBe("2");
   });
 
