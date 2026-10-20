@@ -830,7 +830,7 @@ describe("listening", () => {
     const sent = user("status?");
     expect(await first.proc.exited).toBe(0);
     expect(await first.lines.rest()).toBe(`#${String(sent.id)} user -> coordinator: status?\n`);
-   }, 30_000);
+  }, 30_000);
 
   /** Make the watch `pid` an orphan: its record names a session that is gone. */
   async function orphan(pid: number): Promise<void> {
