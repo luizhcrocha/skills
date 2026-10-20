@@ -21,24 +21,26 @@ The line is self-contained, one sentence, at most 280 characters: a reader with 
 
 A `gotcha` a linter could catch is also a `tstack:lint-evolve` candidate, with the note's id as its evidence.
 
-Leave out what already has a home: narration of the session, what the code, a comment, the docs or `jj log` already say, anything true only for this session. A note lands in `.tstack/memo/` and is committed with the work: everyone who reads the repo reads it, company repos included. Secrets never go in a note; name where the secret lives instead (memo refuses text that looks like a key or password).
+Leave out what already has a home: narration of the session, what the code, a comment, the docs or `jj log` already say, anything true only for this session. A note never records that something landed, shipped or was decided; the fleet ledger and `jj log` hold that status. A `decision` note keeps the reason for the choice, and a version number or a sha stays in when it is the lesson's evidence. A note lands in `.tstack/memo/` and is committed with the work: everyone who reads the repo reads it, company repos included. Secrets never go in a note; name where the secret lives instead (memo refuses text that looks like a key or password).
 
 User- and machine-wide lessons (a preference that holds in every repo, how this machine is set up) take `--global`; outside a repo every note is global.
 
 ## Commands
 
 ```
-memo note <kind> "<line>" [--ref <change id|path>]... [--pin] [--global]
+memo note <kind> "<one line, at most 280 characters>" [--ref <change id|path>]... [--pin] [--global]
 memo supersede <ID>... "<line>" [--kind <kind>] [--unpin]
 memo pin <ID> [--unpin]
 memo open ["<line>"]              # list open threads, or open one
 memo summarize <ID>... "<line>"   # answer a compaction task
 memo tasks                        # every pending compaction task, for a backlog
-memo recall <words> | zoom <ID> | export | doctor
-memo import <file.tsv> [--cwd <repo>] [--global] [--dry-run]   # reviewed notes, each at its original date
+memo recall <words> [--live] [--limit N]   # --live leaves out superseded notes; --limit then counts live hits
+memo zoom <ID> | export | doctor           # doctor warns on open threads older than 7 days, with each one's supersede command
+memo import <file.tsv> [--global] [--dry-run]   # reviewed notes, each at its original date
+--cwd <dir>                       # on any subcommand, before or after it: resolve the project from <dir>
 ```
 
-IDs are the short tails shown at wake, e.g. `(Q4KT23)`.
+An ID argument is a full ID or a unique tail of one, like the six-character tails the wake shows (`Q4KT23`). memo refuses a prefix with "no note or summary ... here". `memo note` and `memo supersede` write nothing when a live note in the same store has the same text and kind and already closes every ID given, and print `already noted as <ID>`.
 
 ## Correcting and closing
 
