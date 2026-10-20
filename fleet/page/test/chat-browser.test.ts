@@ -210,7 +210,13 @@ test.skipIf(!found)("a chat event is appended in place: the rows keep their node
   await page.close();
 });
 
-/** A page whose composer has no draft (an earlier test's is kept in the page's storage), the To line hidden. */
+/** Two frames, so the chat's resize observer has seen the box as it is now. */
+async function frames(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+}
+
+/** A page whose composer has no draft (an earlier test's is kept in the page's storage), the To line hidden
+ * and the chat's box as tall as it gets. */
 async function noDraft(width: number): Promise<Page> {
   const page = await open(width);
   await page.evaluate(() => {
@@ -221,6 +227,7 @@ async function noDraft(width: number): Promise<Page> {
     say.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await page.waitForFunction(() => document.querySelector<HTMLElement>("#to")?.hidden === true);
+  await frames(page);
 
   return page;
 }
@@ -241,7 +248,7 @@ async function draftShown(page: Page): Promise<void> {
   await page.focus("#say");
   await page.keyboard.type("a draft in flight");
   await page.waitForFunction(() => document.querySelector<HTMLElement>("#to")?.hidden === false);
-  await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  await frames(page);
 }
 
 test.skipIf(!found)("the chat at its end stays there when the composer's To line takes its room", async () => {
