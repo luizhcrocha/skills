@@ -116,6 +116,19 @@ def memo_wake(hook):
     return memo().wake_text(hook.env, hook.cwd, str(hook.input.get("source") or "")) or None
 
 
+def user_manager_runs(run):
+    """Whether this user's systemd user manager serves the runtime dir run: its own socket, systemd/private, is
+    a socket and ours. A bus alone is not enough: dbus runs without systemd --user (a container, dbus-launch), and after
+    `su` the runtime dir is another user's; there systemd-run fails before it starts the build, and the hook,
+    which never waits on it, could not see that."""
+    import stat
+    try:
+        private = (run / "systemd" / "private").stat()
+    except OSError:
+        return False
+    return stat.S_ISSOCK(private.st_mode) and private.st_uid == os.getuid()
+
+
 def tape_build(hook):
     """SessionStart: start `tape build --on-start` for the session's project and return without waiting
     (docs/design/tape.md, Phase 2). Only once tape is in use on the machine (its index.db, left by a first
@@ -133,8 +146,8 @@ def tape_build(hook):
     import shutil
     import subprocess
     argv = [sys.executable, str(ROOT / "scripts" / "tape"), "build", "--on-start", "--cwd", hook.cwd]
-    bus = Path(hook.env.get("XDG_RUNTIME_DIR") or "/nonexistent") / "bus"
-    if bus.exists() and shutil.which("systemd-run", path=hook.env.get("PATH")):
+    run = Path(hook.env.get("XDG_RUNTIME_DIR") or "/nonexistent")
+    if (run / "bus").exists() and user_manager_runs(run) and shutil.which("systemd-run", path=hook.env.get("PATH")):
         argv = ["systemd-run", "--user", "--scope", "--collect", "--quiet", "-p", "MemoryMax=2G", "--", *argv]
     subprocess.Popen(argv, env=dict(hook.env), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True, preexec_fn=lambda: os.nice(10))

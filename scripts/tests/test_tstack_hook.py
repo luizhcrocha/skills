@@ -225,6 +225,54 @@ class TapeBuildTest(HookCase):
         time.sleep(0.5)
         self.assertEqual(len(self.runs.read_text().splitlines()), 1, "a build started for a cwd in no repo")
 
+    def fake_systemd_run(self, fails):
+        """systemd-run on PATH: records its argv, then fails the way the real one does with no user manager
+        behind the bus, or execs the command after `--` as `--scope` does."""
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        script = bin_dir / "systemd-run"
+        script.write_text(f"#!{sys.executable}\nimport os, sys\n"
+                          f"open({str(self.tmp / 'systemd-run.log')!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+                          + ("sys.exit('Failed to connect to user scope bus via local transport: No such file')\n" if fails
+                             else "rest = sys.argv[sys.argv.index('--') + 1:]\nos.execvp(rest[0], rest)\n"))
+        script.chmod(0o755)
+        run = self.tmp / "run"
+        run.mkdir()
+        (run / "bus").write_bytes(b"")
+        self.env.update(PATH=f"{bin_dir}{os.pathsep}{self.env['PATH']}", XDG_RUNTIME_DIR=str(run))
+        return run
+
+    def test_a_bus_with_no_user_manager_behind_it_still_gets_the_build(self):
+        self.tape_in_use()
+        self.fake_systemd_run(fails=True)  # a container, a dbus without systemd --user: the bus, no systemd/private
+        self.assertEqual(self.hook("SessionStart", self.base("SessionStart", source="startup")).returncode, 0)
+        self.assertEqual(self.wait_runs(1), [["build", "--on-start", "--cwd", str(self.repo)]])
+
+    def user_manager_socket(self, run):
+        """What systemd --user leaves in its runtime dir: systemd/private, a listening AF_UNIX socket."""
+        import socket
+        (run / "systemd").mkdir()
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(sock.close)
+        sock.bind(str(run / "systemd" / "private"))
+        sock.listen()
+
+    def test_a_file_named_like_the_user_managers_socket_is_not_one(self):
+        self.tape_in_use()
+        run = self.fake_systemd_run(fails=True)
+        (run / "systemd").mkdir()
+        (run / "systemd" / "private").write_bytes(b"")
+        self.assertEqual(self.hook("SessionStart", self.base("SessionStart", source="startup")).returncode, 0)
+        self.assertEqual(self.wait_runs(1), [["build", "--on-start", "--cwd", str(self.repo)]])
+
+    def test_the_build_runs_in_a_scope_where_the_user_manager_is_there(self):
+        self.tape_in_use()
+        run = self.fake_systemd_run(fails=False)
+        self.user_manager_socket(run)
+        self.assertEqual(self.hook("SessionStart", self.base("SessionStart", source="startup")).returncode, 0)
+        self.assertEqual(self.wait_runs(1), [["build", "--on-start", "--cwd", str(self.repo)]])
+        self.assertIn("--user --scope --collect --quiet -p MemoryMax=2G --", (self.tmp / "systemd-run.log").read_text())
+
     def test_a_real_build_lands_the_sessions_turns(self):
         tape = ROOT / "scripts" / "tape"
         env = {**self.env, "CLAUDE_PLUGIN_ROOT": str(ROOT)}
