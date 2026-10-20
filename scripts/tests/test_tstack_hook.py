@@ -4445,6 +4445,50 @@ class SuiteParseTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.suites(command), [(command, True)])
 
+    # The worker's shots.sh (casos-work, 2026-10-20): one browser test file, through tasks/loopback, then copies its shots.
+    SHOTS = ('round="$1"\nout=/tmp/pad/c65\nraw="$out/raw-$round"\nrm -rf "$raw"; mkdir -p "$raw"\ncd app || exit 1\n'
+             'BROWSER_SHOTS="$raw" CR_BROWSER=1 ../../tasks/loopback node_modules/.bin/vp test --run --maxWorkers=2 '
+             '--project=browser src/actions/pendencias.browser.test.tsx > "$out/test-$round.log" 2>&1\ncode=$?\n'
+             'for w in 1440 390; do\n  a=$(find "$raw" -name "*approver-at-$w--light-*-1.png" | head -1)\n'
+             '  [ -n "$a" ] && cp "$a" "$out/$round-$w.png" && echo "$round-$w.png <- $(basename "$a")"\ndone\n'
+             'tail -6 "$out/test-$round.log"\necho "exit $code"\n')
+
+    def test_a_script_whose_runners_each_name_their_files_is_no_suite(self):
+        for command in self.scripts({
+                "shots.sh": self.SHOTS,
+                "two.sh": "vp test src/a.test.ts && pnpm test -- src/b.test.ts\n",
+                "filtered.sh": "pytest tests/test_a.py -k b\nvitest run -t 'parses a line'\ncargo test parse\n",
+                "continued.sh": "vp test --run \\\n  src/a.test.ts 2>&1 | tail -5\n",
+                "string.sh": "watch 'vp test src/a.test.ts'\n"}):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [])
+        for command in ("./t/shots.sh after; cd app; CR_BROWSER=1 ../../tasks/loopback node_modules/.bin/vp test --run "
+                        "--maxWorkers=2 --project=browser src/kit/uploads.browser.test.tsx 2>&1 | tail -5; "
+                        "node_modules/.bin/vp check src/a.tsx 2>&1 | tail -5",
+                        "bash -c './t/shots.sh after; vp test --run --project=browser src/kit/uploads.browser.test.tsx; "
+                        "vp check src/a.tsx'", "source t/shots.sh after", f"{self.pkg}/t/shots.sh before"):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [])
+
+    def test_a_script_runner_read_to_its_command_end_still_finds_the_whole_suite(self):
+        for command in self.scripts({
+                "redirected.sh": "vp test --run --project=browser 2>&1 | tail -5\n",
+                "continued.sh": "vp test \\\n  --run\n",
+                "logged.sh": 'vp test --run > "$out/log" 2>&1\n',
+                "after_one.sh": "vp test src/a.test.ts; pnpm test\n",
+                "commented.sh": "vp test # src/a.test.ts\n"}):
+            with self.subTest(command=command):
+                self.assertEqual(self.suites(command), [(command, True)])
+
+    def test_a_script_runner_whose_words_the_hook_cannot_read_is_one_it_cannot_tell(self):
+        for command in self.scripts({"var.sh": "vp test $files\n", "arg.sh": 'cd app\nvp test --run "$1"\n',
+                                     "escaped.sh": "vp test src/a\\ b.test.ts\n"}):
+            with self.subTest(command=command):
+                found = self.mod.SuiteReader().suites(command, str(self.pkg))
+                self.assertEqual([(s.what, s.unclear, s.unsure) for s in found], [(command, True, True)])
+        list(self.scripts({"whole.sh": "vp test $files\npnpm test\n"}))
+        self.assertEqual([s.unsure for s in self.mod.SuiteReader().suites("./t/whole.sh", str(self.pkg))], [False])
+
     def test_a_launcher_is_read_for_the_command_it_is_given_not_for_its_comments(self):
         (self.pkg / "tasks").mkdir()
         (self.pkg / "tasks" / "loopback").write_text(
@@ -4788,6 +4832,23 @@ class SuiteGateTest(FleetCase):
                 self.assertEqual(d["permissionDecision"], "deny")
                 self.assertIn("couldn't tell all that this line runs around the test runner", d["permissionDecisionReason"])
                 self.assertIn(f"Run it as: `{self.gate_run('bash -c ' + shlex.quote(command))}`", d["permissionDecisionReason"])
+
+    def test_a_script_whose_runner_names_one_file_is_left_alone_and_one_the_hook_cannot_read_is_said_so(self):
+        self.manager()
+        (self.repo / "one.sh").write_text(
+            "#!/bin/sh\ncd app || exit 1\nvp test --run --project=browser src/a.browser.test.tsx > log 2>&1\n")
+        (self.repo / "var.sh").write_text("#!/bin/sh\nvp test --run $files\n")
+        for command in ("./one.sh after", "bash -c './one.sh after; vp test --run src/b.test.ts; vp check src/a.tsx'"):
+            with self.subTest(command=command):
+                self.assertEqual(self.run_bash(command).stdout, "")
+        reason = self.decision(self.run_bash("./var.sh"))["permissionDecisionReason"]
+        self.assertIn("The hook can't tell whether `./var.sh` runs a whole test suite", reason)
+        self.assertNotIn("runs a full test suite", reason)
+        self.assertIn(f"Run it as: `{self.gate_run('./var.sh')}`", reason)
+        for command in ("vp test", "vp test --run --project=browser", "pnpm test", "just test"):
+            with self.subTest(command=command):
+                reason = self.decision(self.run_bash(command))["permissionDecisionReason"]
+                self.assertIn(f"`{command}` runs a full test suite", reason)
 
     # The review's probes (2026-10-12): each came back `allow` with an updatedInput, which skips auto mode's check.
     PROBES = (

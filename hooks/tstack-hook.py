@@ -4026,8 +4026,10 @@ def _log_denial(hook, lc, cli, text):
 # call and names that command, so Claude issues it and the permission check reviews it as any other. The hook never
 # allows or rewrites a call. A scoped run (a path, `--changed`, `related`, one package, a name filter: `-t`, `-k`,
 # `--lf`, `cargo test NAME`, `go test -run X`) is left alone. Reading follows the push gate's: redirections, wrappers,
-# `cd`, `-C`, `sh -c`; a test runner the hook cannot read (a script, eval, xargs, a substitution) counts as a full suite.
-Suite = namedtuple("Suite", "what unclear")
+# `cd`, `-C`, `sh -c`; a test runner the hook cannot read (eval, xargs, a substitution) counts as a full suite. A script
+# it reads is judged by the words of each test runner it names (SuiteReader._script_runs): one whose words it cannot
+# read is a suite it cannot tell (unsure), and the deny says so rather than call it a full one.
+Suite = namedtuple("Suite", "what unclear unsure", defaults=(False,))
 SUITE_WAIT_S = 1800
 SUITE_TIMEOUT_MS = 600000  # the Bash tool's most: a run may queue behind another suite
 # `just` recipes that run a full suite, by name: tstack's `test` (every suite) and its per-suite recipes (justfile).
@@ -4064,6 +4066,8 @@ SINK_RUNS = {"rg": re.compile(r"--pre"), "sort": re.compile(r"--co"), "less": re
 FUNCTION_DEF = re.compile(r"([ \t]*)(?:function[ \t]+([\w:.-]+)(?:[ \t]*\(\))?|([\w:.-]+)[ \t]*\(\))")
 # A script that runs the command it is given (`exec "$@"`) is a launcher: the line runs the launcher's arguments.
 LAUNCHES_ARGS = re.compile(r"\$\{?[@*]\}?")
+# Where a test runner a script names ends its words (SuiteReader._script_runs): a quote, an operator, a redirection.
+SCRIPT_RUNNER_END = re.compile(r"[\n;&|()<>\"'`]")
 PM_TEST = {"test", "t", "tst"}
 PM_RUN = {"run", "run-script", "rum", "urn"}
 PNPM_VALUED = {"-C", "--dir", "--filter", "-F", "--reporter", "--loglevel", "--workspace-concurrency", "--filter-prod",
@@ -4340,7 +4344,7 @@ class SuiteReader:
         try:
             segments = _segments(text)
         except ValueError:
-            return out + ([Suite("a command the hook cannot parse", True)] if TEST_IN_TEXT.search(text) else [])
+            return out + ([Suite("a command the hook cannot parse", True, True)] if TEST_IN_TEXT.search(text) else [])
 
         def takes(stage):
             return taken or moves and _outer_carries(text, segments, stage)
@@ -4369,11 +4373,14 @@ class SuiteReader:
                     out += self.suites(code, cwd, unclear or stdin, depth + 1, takes(stage))
                 else:
                     files = [w for w in words[1:] if not w.startswith("-")]
-                    if files and cwd and self._script_tests(os.path.join(cwd, files[0]), True, takes(stage)):
-                        out.append(Suite(" ".join(words), True))
+                    runs = files and cwd and self._script_runs(
+                        self._script_code(os.path.join(cwd, files[0]), True, takes(stage)), depth)
+                    if runs:
+                        out.append(Suite(" ".join(words), True, runs == "unsure"))
             elif name in ("source", ".") and len(words) > 1:
-                if cwd and self._script_tests(os.path.join(cwd, words[1]), True, takes(stage)):
-                    out.append(Suite(" ".join(words), True))
+                runs = cwd and self._script_runs(self._script_code(os.path.join(cwd, words[1]), True, takes(stage)), depth)
+                if runs:
+                    out.append(Suite(" ".join(words), True, runs == "unsure"))
             else:
                 found = self.command(words, cwd, depth)
                 if found:
@@ -4382,8 +4389,9 @@ class SuiteReader:
                         and not ((name in RUNNERS or re.fullmatch(r"python[\d.]*", name))
                                  and _installed(_path(cwd, words[0]) or words[0])):
                     code = self._script_code(_path(cwd, words[0]) or "", taken=takes(stage))
-                    if code is not None and TEST_IN_TEXT.search(code):
-                        out.append(Suite(" ".join(words), True))
+                    runs = self._script_runs(code, depth)
+                    if runs:
+                        out.append(Suite(" ".join(words), True, runs == "unsure"))
                     elif code is not None and LAUNCHES_ARGS.search(code) and len(words) > 1 and depth < 4:
                         import shlex
                         inner = self.suites(shlex.join(words[1:]), cwd, False, depth + 1, takes(stage))
@@ -4418,10 +4426,31 @@ class SuiteReader:
         blanked = ECHOED.sub(lambda m: m[1] + m[2] + (re.sub(r"\S", " ", m[3]) if ">&2" in m[2] + m[4] else m[3]), code)
         return code if TEST_IN_TEXT.search(blanked) or _stderr_carried(text) else blanked
 
-    @classmethod
-    def _script_tests(cls, path, by_shell=False, taken=False):
-        code = cls._script_code(path, by_shell, taken)
-        return code is not None and bool(TEST_IN_TEXT.search(code))
+    def _script_runs(self, code, depth):
+        """What the test runners a script's code names run, each read by its own words: from its name up to a quote,
+        an operator, a redirection or a comment. "full" when one is a whole suite by words that end its command;
+        "unsure" when one is a whole suite by words a quote cuts short (`vp test "$1"`, `cmd="vp test"`), or runs
+        what a word the hook cannot read names (a `$`, a backslash); else None: no runner, or each runs the files or
+        tests it names, wherever it sits (a line, a string, an echo, a here-document). Read before the call runs, a
+        script edited after the check runs as edited: the gate keeps a fleet's own suites from running at once, it
+        is no lock against its sessions."""
+        if code is None:
+            return None
+        code, runs = code.replace("\\\n", " "), None
+        for m in TEST_IN_TEXT.finditer(code):
+            end = SCRIPT_RUNNER_END.search(code, m.start())
+            stop = code[end.start()] if end else "\n"
+            words = code[m.start():end.start() if end else len(code)].split()
+            words = words[:next((i for i, w in enumerate(words) if w.startswith("#")), len(words))]
+            if stop in "<>" and words and re.fullmatch(r"\d+|\{\w+\}", words[-1]):
+                words.pop()  # `2>&1`: the fd of a redirection, not a word
+            if self.command(words, None, depth + 1):
+                if stop not in "\"'`":
+                    return "full"
+                runs = "unsure"
+            elif any("$" in w or "\\" in w for w in words):
+                runs = "unsure"
+        return runs
 
     def command(self, words, cwd, depth=0):
         """The full suite one simple command runs, as the words to name it by, else None."""
@@ -4722,9 +4751,16 @@ def suite_gate(hook):
         slot += (f"Fleet {fleet} holds the slot by hand (token {', '.join(tokens)}), and a gate run never runs under a "
                  f"hold taken by hand, its own fleet's included: when that hold is this session's, free it first with "
                  f"`{frees}`; else the run waits for it like any other. ")
-    unclear = (" The hook couldn't tell all that this line runs around the test runner." if any(s.unclear for s in found)
-               else "")
-    return Deny(f"`{_one_line(what, 80)}` runs a full test suite, and in fleet {fleet} (this machine serves a manager) a "
+    sure = [s for s in found if not s.unsure]
+    if sure:
+        unclear = (" The hook couldn't tell all that this line runs around the test runner."
+                   if any(s.unclear for s in found) else "")
+        lead = f"`{_one_line(sure[0].what, 80)}` runs a full test suite, and in"
+    else:
+        unclear = (" It names a test runner whose words the hook can't read (a variable, an escape, a line it can't "
+                   "parse), so it goes through the gate as a suite would.")
+        lead = f"The hook can't tell whether `{_one_line(what, 80)}` runs a whole test suite. In"
+    return Deny(f"{lead} fleet {fleet} (this machine serves a manager) a "
                 f"full suite runs only through the gate slot, in a memory-capped scope that dies whole.{unclear} Run "
                 f"it as: `{wrapped}` (Bash timeout {SUITE_TIMEOUT_MS}, or run_in_background: it may queue behind "
                 f"another suite). {slot}It exits with the suite's code, except 75: the slot stayed held past --wait "
