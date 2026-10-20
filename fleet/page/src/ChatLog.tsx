@@ -7,7 +7,7 @@
  * leads to the decision (`chatlog.ts` says what counts). Each row's node is made once, by its key, and only
  * its changed parts are touched, so focus, a selection and the scroll survive every update.
  */
-import { createMemo } from "solid-js";
+import { createMemo, onCleanup } from "solid-js";
 import { For, Show, type JSX } from "@solidjs/web";
 
 import { Pill, usePage, Who } from "./bits.tsx";
@@ -278,12 +278,34 @@ export function Log(): JSX.Element {
           : "No messages yet."
         : "";
 
+  /* At its end, the chat stays there when its box gets shorter: the composer's "To" line, or an image waiting
+     under it, takes room after the last message came. Near its end is the same rule as a message added. */
+  let height = 0;
+
+  const end = "ResizeObserver" in globalThis
+    ? new ResizeObserver(([e]) => {
+        const log = e?.target;
+
+        if (!log) return;
+        const was = log.scrollHeight - log.scrollTop - height < 120;
+        height = log.clientHeight;
+
+        if (was) log.scrollTop = log.scrollHeight;
+      })
+    : undefined;
+
+  onCleanup(() => end?.disconnect());
+
   return (
     <ol
       class="chat-log"
       id="chat-log"
       hidden={ui.sideList()}
-      ref={(el) => (ui.refs.chatLog = el)}
+      ref={(el) => {
+        ui.refs.chatLog = el;
+        height = el.clientHeight;
+        end?.observe(el);
+      }}
       onScroll={() => ui.keepPlace()}
       onClick={(e) => {
         const t = e.target instanceof Element ? e.target : null;

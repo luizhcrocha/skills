@@ -193,11 +193,39 @@ test.skipIf(!found)("a chat event is appended in place: the rows keep their node
   });
   harness.say({ id: 15, at: new Date(NOW).toISOString(), from: "a3", to: ["user"], text: "Adapter unblocked." });
   await page.waitForSelector('#chat-log article[data-id="15"]');
-  expect(await page.evaluate(() => {
+  // The composer's To line for the draft may come in meanwhile: the chat goes back to its end at the next frame.
+  await page.waitForFunction(() => {
     const log = document.querySelector("#chat-log");
 
-    return log ? log.scrollHeight - log.scrollTop - log.clientHeight < 2 : false;
-  })).toBe(true);
+    return log !== null && log.scrollHeight - log.scrollTop - log.clientHeight < 2;
+  }, { timeout: 10_000 });
+  await page.close();
+});
+
+test.skipIf(!found)("the chat at its end stays there when the composer's To line takes its room", async () => {
+  const page = await open(1280);
+
+  const end = (): Promise<number> =>
+    page.evaluate(() => {
+      const log = document.querySelector("#chat-log");
+
+      return log ? log.scrollHeight - log.scrollTop - log.clientHeight : -1;
+    });
+
+  await page.evaluate(() => {
+    const log = document.querySelector("#chat-log");
+
+    if (log) log.scrollTop = log.scrollHeight;
+  });
+  expect(await end()).toBeLessThan(2);
+  await page.focus("#say");
+  await page.keyboard.type("a draft in flight");
+  await page.waitForFunction(() => document.querySelector<HTMLElement>("#to")?.hidden === false);
+  await page.waitForFunction(() => {
+    const log = document.querySelector("#chat-log");
+
+    return log !== null && log.scrollHeight - log.scrollTop - log.clientHeight < 2;
+  }, { timeout: 10_000 });
   await page.close();
 });
 
