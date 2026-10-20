@@ -511,10 +511,15 @@ class Index:
 
     def items(self, store):
         self.sync(store)
-        return [_row_item(r) for r in self.open().execute(
-            f"select {_COLS} from items where store=? order by id", (str(store.dir),))]
+        return self.stored(str(store.dir))
 
-    def search(self, stores, query, limit):
+    def stored(self, key):
+        """The rows indexed for the store at key, as they are: no sync with its files."""
+        return [_row_item(r) for r in self.open().execute(
+            f"select {_COLS} from items where store=? order by id", (key,))]
+
+    def search(self, stores, query, limit, keep=None):
+        """(item, store key) hits, best first: at most limit of them, counting only those keep accepts."""
         con = self.open()
         keys = [str(s.dir) for s in stores]
         marks = ",".join("?" * len(keys))
@@ -528,13 +533,16 @@ class Index:
             tries += [" ".join(f'"{w}"' for w in words), " OR ".join(f'"{w}"*' for w in words)]
         for n, q in enumerate(tries):
             try:
-                rows = con.execute(sql, (q, *keys, limit)).fetchall()
+                rows = con.execute(sql, (q, *keys, -1 if keep else limit)).fetchall()
             except sqlite3.OperationalError:
                 if n:
                     raise
                 continue  # the words as typed were not FTS syntax: try them quoted
-            if rows:
-                return [(_row_item(r), r[11]) for r in rows]
+            hits = [(_row_item(r), r[11]) for r in rows]
+            if keep:
+                hits = [h for h in hits if keep(*h)][:limit]
+            if hits:
+                return hits
         return []
 
 
@@ -971,12 +979,22 @@ def cmd_recall(ctx, a, out):
     query = " ".join(a.query)
     stores = ctx.stores()
     views = {str(s.dir): (s, ctx.view(s)) for s in stores}  # also brings the index up to date
+    keep = None
+    if a.live:
+        others = {}
+
+        def keep(item, key):
+            if key in views:
+                return views[key][1].is_live(item)
+            if key not in others:
+                others[key] = View(ctx.index.stored(key))
+            return others[key].is_live(item)
     try:
-        hits = ctx.index.search([] if a.all else stores, query, a.limit)
+        hits = ctx.index.search([] if a.all else stores, query, a.limit, keep)
     except sqlite3.Error:
         words = [w.lower() for w in re.findall(r"\w+", query)]
         hits = [(i, k) for k, (_, v) in views.items() for i in v.items
-                if all(w in i.text.lower() for w in words)][:a.limit]
+                if all(w in i.text.lower() for w in words) and (keep is None or keep(i, k))][:a.limit]
     if not hits:
         print(f"memo: nothing on {query!r}", file=out)
         return
@@ -1219,6 +1237,7 @@ def build_parser():
     s.add_argument("query", nargs="+")
     s.add_argument("--limit", type=int, default=20)
     s.add_argument("--all", action="store_true", help="every store this machine has indexed")
+    s.add_argument("--live", action="store_true", help="leave out superseded notes (by default they are shown, as history)")
     s = add("zoom", cmd_zoom, "one item in full; for a summary, what it covers")
     s.add_argument("id")
     s = add("open", cmd_open, "list the open threads, or with a text, open one")

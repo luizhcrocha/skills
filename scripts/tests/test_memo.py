@@ -585,6 +585,26 @@ class ReadTest(MemoCase):
         self.assertIn("nothing on", self.ok("recall", "fridays"))
         self.assertIn("project:acme/other", self.ok("recall", "fridays", "--all"))
 
+    def test_recall_live_drops_superseded_notes_before_the_limit(self):
+        old = self.note("fact", "the port port port is 8080")
+        new = self.ok("supersede", old, "the port is 9090").split()[1]
+        both = self.ok("recall", "port")
+        self.assertIn(f"{old} ", both, "without --live a superseded hit is history, still shown")
+        self.assertIn("superseded by", both)
+        live = self.ok("recall", "port", "--live", "--limit", "1")
+        self.assertIn(f"{new} ", live, "the limit counts live hits only")
+        self.assertNotIn(old, live)
+        self.assertIn("nothing on", self.ok("recall", "8080", "--live"))
+
+    def test_recall_live_reaches_other_repos_with_all(self):
+        other = init_repo(self.tmp / "other", "git@github.com:acme/other.git")
+        old = self.note("fact", "the other repo deploys on fridays", cwd=other)
+        self.ok("supersede", old, "the other repo deploys on mondays", cwd=other)
+        self.assertIn(old, self.ok("recall", "deploys", "--all"))
+        live = self.ok("recall", "deploys", "--all", "--live")
+        self.assertIn("mondays", live)
+        self.assertNotIn("fridays", live)
+
     def test_cwd_is_accepted_before_or_after_the_subcommand(self):
         other = init_repo(self.tmp / "other", "git@github.com:acme/other.git")
         self.note("fact", "the other repo deploys on fridays", cwd=other)
