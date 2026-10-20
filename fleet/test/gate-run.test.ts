@@ -280,7 +280,9 @@ describe.skipIf(!SCOPE)("gate run and the budget", () => {
 
   test("a run of the whole budget waits for a default run, and a default run that comes after does not pass it", async () => {
     const dir = tmp("fleet-gate-order-");
-    const small = running(["--as", "small", "--", "sh", "-c", `echo small >> ${dir}/order; sleep 4`], more);
+    // `small` holds the gate until the test has read the queue (a minute at most), however slow the machine.
+    const hold = `i=0; while [ ! -e ${dir}/release ] && [ $i -lt 1200 ]; do sleep 0.05; i=$((i+1)); done`;
+    const small = running(["--as", "small", "--", "sh", "-c", `echo small >> ${dir}/order; ${hold}`], more);
     expect(await until(() => standing().holders.length === 1, 10000)).toBe(true);
     const big = running(["--as", "big", "--mem", "50%", "--wait", "60", "--", "sh", "-c", `echo big >> ${dir}/order`], more);
     const runs = [small, big];
@@ -302,6 +304,7 @@ describe.skipIf(!SCOPE)("gate run and the budget", () => {
       expect(lines[3]).toMatch(/^queue 2: late \(no fleet\), [\d.]+G, waiting \d+s: gate run: sh -c /);
       expect(standing().queue.map((w) => [w["place"], w["name"]])).toEqual([[1, "big"], [2, "late"]]);
 
+      writeFileSync(join(dir, "release"), "");
       expect(await small.exited).toBe(0);
       expect(await big.exited).toBe(0);
       expect(await late.exited).toBe(0);
