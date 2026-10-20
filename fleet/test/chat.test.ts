@@ -586,13 +586,18 @@ describe("a --once watch settles", () => {
   test("the user's message settles shorter", async () => {
     const { proc, lines } = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once", "--settle", "30"], { ...env, FLEET_WATCH_SETTLE_USER: "0.5" });
     procs.push(proc);
-    await sleep(600);
+
+    // Armed once its pid file is there: past its first read, so the message is new to it, not one that waited.
+    for (let tries = 0; tries < 200 && !existsSync(join(root, "watch-coordinator.pid")); tries += 1) await sleep(50);
+    expect(existsSync(join(root, "watch-coordinator.pid"))).toBe(true);
     const begun = performance.now();
     user("status?");
     expect(await proc.exited).toBe(0);
+    // Its 0.5 s settle, not the 30 s one, and not at once as for a message that waited.
+    expect(performance.now() - begun).toBeGreaterThanOrEqual(450);
     expect(performance.now() - begun).toBeLessThan(5000);
     expect(await lines.rest()).toBe("#1 user -> coordinator: status?\n");
-  });
+  }, 30_000);
 
   test("what waited already exits at once", () => {
     user("status?");
