@@ -2,8 +2,9 @@
  * The chat in a real browser (the built template in headless Chromium, fed by the harness's event stream),
  * on a day and a half of conversation: where the bubbles sit at 390 and 1280 px, the size of every control
  * a finger taps on a phone, decision activity (left out, a marker when shown, the decision page's thread),
- * and a `chat` event appended in place with the chat's scroll and the draft as they were. Skipped when no
- * Chromium is found (FLEET_CHROMIUM, or chromium on the PATH).
+ * a `chat` event appended in place with the chat's scroll and the draft as they were, and the chat's place
+ * when the composer's To line takes its room. Skipped when no Chromium is found (FLEET_CHROMIUM, or chromium
+ * on the PATH).
  */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -185,47 +186,95 @@ test.skipIf(!found)("a chat event is appended in place: the rows keep their node
 
   expect(after).toEqual({ same: true, top: 0, last: "14", draft: "a draft in flight", focused: "say" });
 
-  /* At its end, the chat stays at its end. */
-  await page.evaluate(() => {
+  /* At its end, the chat stays at its end. The draft's To line is in first, so the chat's box keeps its size
+     and the message added is what takes the chat to its end, not the box getting shorter. */
+  await page.waitForFunction(() => document.querySelector<HTMLElement>("#to")?.hidden === false);
+
+  const box = await page.evaluate(() => {
     const log = document.querySelector("#chat-log");
 
     if (log) log.scrollTop = log.scrollHeight;
+
+    return log?.clientHeight ?? -1;
   });
+
   harness.say({ id: 15, at: new Date(NOW).toISOString(), from: "a3", to: ["user"], text: "Adapter unblocked." });
   await page.waitForSelector('#chat-log article[data-id="15"]');
-  // The composer's To line for the draft may come in meanwhile: the chat goes back to its end at the next frame.
-  await page.waitForFunction(() => {
-    const log = document.querySelector("#chat-log");
+  expect(
+    await page.evaluate(() => {
+      const log = document.querySelector("#chat-log");
 
-    return log !== null && log.scrollHeight - log.scrollTop - log.clientHeight < 2;
-  }, { timeout: 10_000 });
+      return log ? { box: log.clientHeight, end: log.scrollHeight - log.scrollTop - log.clientHeight < 2 } : null;
+    }),
+  ).toEqual({ box, end: true });
   await page.close();
 });
 
+/** A page whose composer has no draft (an earlier test's is kept in the page's storage), the To line hidden. */
+async function noDraft(width: number): Promise<Page> {
+  const page = await open(width);
+  await page.evaluate(() => {
+    const say = document.querySelector<HTMLTextAreaElement>("#say");
+
+    if (!say) return;
+    say.value = "";
+    say.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.waitForFunction(() => document.querySelector<HTMLElement>("#to")?.hidden === true);
+
+  return page;
+}
+
+/** The chat's box, its scroll, how far its end is, and whether the To line shows. */
+async function place(page: Page): Promise<{ box: number; top: number; end: number; to: boolean }> {
+  return page.evaluate(() => {
+    const log = document.querySelector("#chat-log");
+
+    return log
+      ? { box: log.clientHeight, top: log.scrollTop, end: log.scrollHeight - log.scrollTop - log.clientHeight, to: document.querySelector<HTMLElement>("#to")?.hidden === false }
+      : { box: -1, top: -1, end: -1, to: false };
+  });
+}
+
+/** Type a draft, and wait for its To line and two frames, so what a box getting shorter does is done. */
+async function draftShown(page: Page): Promise<void> {
+  await page.focus("#say");
+  await page.keyboard.type("a draft in flight");
+  await page.waitForFunction(() => document.querySelector<HTMLElement>("#to")?.hidden === false);
+  await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+}
+
 test.skipIf(!found)("the chat at its end stays there when the composer's To line takes its room", async () => {
-  const page = await open(1280);
-
-  const end = (): Promise<number> =>
-    page.evaluate(() => {
-      const log = document.querySelector("#chat-log");
-
-      return log ? log.scrollHeight - log.scrollTop - log.clientHeight : -1;
-    });
-
+  const page = await noDraft(1280);
   await page.evaluate(() => {
     const log = document.querySelector("#chat-log");
 
     if (log) log.scrollTop = log.scrollHeight;
   });
-  expect(await end()).toBeLessThan(2);
-  await page.focus("#say");
-  await page.keyboard.type("a draft in flight");
-  await page.waitForFunction(() => document.querySelector<HTMLElement>("#to")?.hidden === false);
-  await page.waitForFunction(() => {
+  const before = await place(page);
+  expect([before.end < 2, before.to]).toEqual([true, false]);
+
+  await draftShown(page);
+  const after = await place(page);
+  expect(after.box).toBeLessThan(before.box);
+  expect([after.end < 2, after.to]).toEqual([true, true]);
+  await page.close();
+});
+
+test.skipIf(!found)("a reader scrolled up in the chat stays where they are when the composer's To line takes its room", async () => {
+  const page = await noDraft(1280);
+  await page.evaluate(() => {
     const log = document.querySelector("#chat-log");
 
-    return log !== null && log.scrollHeight - log.scrollTop - log.clientHeight < 2;
-  }, { timeout: 10_000 });
+    if (log) log.scrollTop = log.scrollHeight - log.clientHeight - 400;
+  });
+  const before = await place(page);
+  expect([before.end, before.to]).toEqual([400, false]);
+
+  await draftShown(page);
+  const after = await place(page);
+  expect(after.box).toBeLessThan(before.box);
+  expect([after.top, after.to]).toEqual([before.top, true]);
   await page.close();
 });
 
