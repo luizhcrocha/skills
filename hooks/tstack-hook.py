@@ -116,6 +116,29 @@ def memo_wake(hook):
     return memo().wake_text(hook.env, hook.cwd, str(hook.input.get("source") or "")) or None
 
 
+def tape_build(hook):
+    """SessionStart: start `tape build --on-start` for the session's project and return without waiting
+    (docs/design/tape.md, Phase 2). Only once tape is in use on the machine (its index.db, left by a first
+    `tape build`), never for a worker or a headless run. tape owns the rest: `build_on_start = false` in tape.toml
+    makes it a no-op, and the project's flock keeps it to one build at a time. The build runs in a session of its
+    own, out of the hook's process group, and in a user scope of its own where systemd has one, out of the
+    session's; its output goes nowhere, so nothing holds the hook's pipes."""
+    if hook.is_worker or hook.headless:
+        return None
+    data = hook.env.get("XDG_DATA_HOME") or str(Path(hook.env.get("HOME", "/tmp")) / ".local" / "share")
+    if not (Path(data) / "tstack" / "tape" / "index.db").exists():
+        return None
+    import shutil
+    import subprocess
+    argv = [sys.executable, str(ROOT / "scripts" / "tape"), "build", "--on-start", "--cwd", hook.cwd]
+    bus = Path(hook.env.get("XDG_RUNTIME_DIR") or "/nonexistent") / "bus"
+    if bus.exists() and shutil.which("systemd-run", path=hook.env.get("PATH")):
+        argv = ["systemd-run", "--user", "--scope", "--collect", "--quiet", "--", *argv]
+    subprocess.Popen(argv, env=dict(hook.env), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+    return None
+
+
 NUDGE = (
     "memo: this session changed things and wrote no note. If it produced a decision and its why, "
     "a gotcha, a stated preference or a thread left unfinished that the next session would pay to "
@@ -4882,7 +4905,7 @@ def onepw_watch(hook):
 
 
 HANDLERS = {
-    "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, fleet_heartbeat],
+    "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, fleet_heartbeat, tape_build],
     "Stop": [memo_nudge, fleet_listen_guard, fleet_idle_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
     "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, fleet_moved_writes, land_turn_gate, suite_gate, onepw_hold, fleet_monitor_watch,

@@ -236,10 +236,24 @@ environment, run in the store's folder (outside any repo).
 
 - Phase 1a: only `tape build`, run by hand. Phase 1b: `tape summarize`, run
   by hand; no hook starts it.
-- Phase 2: the `SessionStart` hook starts `tape build` detached and returns,
-  inside tstack-hook's 10 s budget. Not `SessionEnd`: its hooks share a
-  1.5 s budget (sourced: Claude Code hooks docs). Not `Stop`: it fires on
-  every turn.
+- Phase 2 (built, 2026-10-20): the `SessionStart` hook starts `tape build`
+  detached and returns, inside tstack-hook's 10 s budget. Not `SessionEnd`:
+  its hooks share a 1.5 s budget (sourced: Claude Code hooks docs). Not
+  `Stop`: it fires on every turn.
+  - What it starts: `tape build --on-start --cwd <the session's directory>`,
+    which ingests that one project and makes no model call: no summarize.
+    The hook starts it only once tape is in use on the machine (its
+    `index.db` exists, from a first `tape build` by hand), and never for a
+    worker or a headless run.
+  - `build_on_start = false` in `tape.toml` turns it off: the build exits
+    having built nothing. A build by hand ignores the switch.
+  - Detached: a new session (`setsid`), out of the hook's process group, and,
+    where a user systemd bus exists, `systemd-run --user --scope --collect`,
+    out of the Claude Code session's cgroup. Its stdin, stdout and stderr
+    are `/dev/null`, so it holds none of the hook's pipes.
+  - Measured (2026-10-20, temp dirs, best of 5 runs): SessionStart takes
+    42 ms with no spawn, 54 ms with a build that sleeps 5 s, and 64 ms with
+    the real `tape build`; the build is still running when the hook returns.
 - Under `TSTACK_ROLE=tape` every tstack-hook handler is silent, memo_wake
   and every spawn included, so a builder's own calls never start a builder
   or receive a wake.
@@ -379,8 +393,9 @@ Phase 2 goes ahead only if all hold: (iii) finds at least 18 of 20 with at
 most 3 zooms per hit and fewer tokens per hit than (ii); at most 1 invented
 fact in 30 nodes; the backfill moves the weekly meter by less than 10%.
 
-**Phase 2: kept current.** The `SessionStart` builder of section 4, the
-daily cap, `recall` uses tape. Every project not excluded.
+**Phase 2: kept current.** The `SessionStart` builder of section 4 (built,
+2026-10-20: leaves only, no summarize), the daily cap, `recall` uses tape.
+Every project not excluded.
 
 **Phase 3: wake.** tape view after memo's wake, 8-16 KB, opt-in per
 project; two weeks with and without, judged by how often sessions zoom and

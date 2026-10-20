@@ -4,6 +4,7 @@
 Design: docs/design/tape.md. One file, standard library only (Python >= 3.11).
 
     tape build [--project KEY]     ingest every project's Claude Code transcripts, or one project's
+    tape build --on-start --cwd D  Phase 2: D's project, unless `build_on_start = false` (tstack-hook's SessionStart)
     tape summarize                 Phase 1b, this project: ingest, then Haiku merges and leaves under the daily cap
     tape view [--bytes N]          coarse to fine: merged lines for old turns, leaves for recent ones, within N bytes
     tape zoom S+N | I [--raw]      a merged node's two children; one turn: its digest, or --raw its records
@@ -27,7 +28,10 @@ Nothing reads across stores. Which projects: $XDG_CONFIG_HOME/tstack/tape.toml, 
 (written when absent) or a list of keys, and `exclude = [...]`. The transcript -> project map is
 cached in $XDG_DATA_HOME/tstack/tape/index.db.
 
-Phase 1b runs only when invoked (`tape summarize`), only on the projects in `summarize` (default
+Phase 2 keeps the leaves current: tstack-hook's SessionStart starts `tape build --on-start --cwd <the
+session's directory>` detached, once tape has a store on the machine; `build_on_start = false` in
+tape.toml turns it off. It ingests only, never summarizes, and the project's lock keeps it to one
+build at a time. Phase 1b runs only when invoked (`tape summarize`), only on the projects in `summarize` (default
 coelhorocha/skills), through `claude -p --model haiku --effort high` with TSTACK_ROLE=tape, billed to
 the plan, at most `max_calls_per_day` calls per project per local day (default 300). The saved view
 is a list of nodes covering every turn; node S+N stands for turns S..S+N-1 in one line of at most
@@ -73,6 +77,8 @@ exclude = []
 summarize = ["coelhorocha/skills"]
 # Calls per project per local day; over it a run stops and `tape status` says so.
 max_calls_per_day = 300
+# Phase 2: each SessionStart builds its project's leaves in the background (no model calls); false turns it off.
+build_on_start = true
 """
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 DROPPED_KINDS = ("COMPACTED", "AWAY SUMMARY")  # they restate turns tape already has
@@ -331,7 +337,8 @@ def norm_key(key):
 
 class Config:
     def __init__(self, projects="all", exclude=(), path=None, summarize=SUMMARIZE, max_calls=MAX_CALLS_PER_DAY,
-                 view_low=VIEW_LOW, view_high=VIEW_HIGH):
+                 view_low=VIEW_LOW, view_high=VIEW_HIGH, build_on_start=True):
+        self.build_on_start = build_on_start
         self.projects = projects if projects == "all" else {norm_key(k) for k in projects}
         self.exclude = {norm_key(k) for k in exclude}
         self.path = path
@@ -379,7 +386,11 @@ def load_config(env):
         nums[name] = v
     if nums["view_low"] > nums["view_high"]:
         raise TapeError(f"tape: `view_low` in {path} is over `view_high`")
-    return Config(projects, exclude, path, summarize, nums["max_calls_per_day"], nums["view_low"], nums["view_high"])
+    on_start = data.get("build_on_start", True)
+    if not isinstance(on_start, bool):
+        raise TapeError(f"tape: `build_on_start` in {path} must be true or false")
+    return Config(projects, exclude, path, summarize, nums["max_calls_per_day"], nums["view_low"], nums["view_high"],
+                  on_start)
 
 
 def index_path(env):
@@ -649,9 +660,13 @@ def _built(key, r):
             f"{r['read']} transcripts read; {r['seconds']:.1f} s")
 
 
-def build(env, now, out, key=None):
-    """Every project the config allows, or only key. Exit 3 when key is not allowed."""
+def build(env, now, out, key=None, on_start=False):
+    """Every project the config allows, or only key. Exit 3 when key is not allowed. on_start: SessionStart's
+    build, which `build_on_start = false` turns into nothing."""
     cfg = load_config(env)
+    if on_start and not cfg.build_on_start:
+        print(f"tape: build_on_start is false in {cfg.path}; nothing built", file=out)
+        return 0
     if key is not None and not cfg.allows(key):
         raise TapeError(cfg.why_not(key) + ".", EXIT_REFUSED)
     started = time.monotonic()
@@ -1225,7 +1240,7 @@ def raw_turn(t):
 
 def cmd_build(ctx, a, out):
     one = a.project or a.sub_project or a.cwd or a.sub_cwd
-    return build(ctx.env, ctx.now, out, ctx.key if one else None)
+    return build(ctx.env, ctx.now, out, ctx.key if one else None, a.on_start)
 
 
 def cmd_view(ctx, a, out):
@@ -1384,7 +1399,9 @@ def build_parser():
         s.add_argument("--cwd", dest="sub_cwd", help="resolve the project from this directory")
         return s
 
-    add("build", cmd_build, "ingest every project's finished turns, or with --project or --cwd one project's")
+    s = add("build", cmd_build, "ingest every project's finished turns, or with --project or --cwd one project's")
+    s.add_argument("--on-start", action="store_true",
+                   help="tstack-hook's SessionStart build: nothing when tape.toml sets build_on_start = false")
     add("summarize", cmd_summarize, "Phase 1b: ingest, then build Haiku merges and leaves under the daily cap")
     s = add("view", cmd_view, "coarse to fine: merged lines for old turns, leaves for recent ones, within a budget")
     s.add_argument("--bytes", type=int, help=f"the budget (default: the high mark with a saved view, else {VIEW_BYTES})")

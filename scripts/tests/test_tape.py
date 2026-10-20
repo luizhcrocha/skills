@@ -354,6 +354,45 @@ class IsolationTest(TapeCase):
         self.assertEqual(self.prompts(store), ["in main", "in the lane"])
 
 
+class OnStartTest(TapeCase):
+    """Phase 2: `tape build --on-start`, the build tstack-hook's SessionStart starts; `build_on_start` in tape.toml."""
+
+    def setUp(self):
+        super().setUp()
+        w, o = Writer("mine", self.repo), Writer("theirs", self.other)
+        append(self.transcript(self.repo, "mine"), [w.prompt("widget work"), w.reply("ok")])
+        append(self.transcript(self.other, "theirs"), [o.prompt("client work"), o.reply("ok")])
+
+    def test_it_builds_the_sessions_project_only(self):
+        self.assertIn("tape: acme/widget: +1 turns", self.ok("build", "--on-start", "--cwd", self.repo))
+        self.assertEqual(self.prompts(), ["widget work"])
+        self.assertFalse(self.other_store.exists())
+
+    def test_build_on_start_false_builds_nothing(self):
+        self.config.write_text('projects = "all"\nbuild_on_start = false\n')
+        out = self.ok("build", "--on-start", "--cwd", self.repo)
+        self.assertIn(f"build_on_start is false in {self.config}", out)
+        self.assertFalse(self.store.exists())
+
+    def test_a_build_by_hand_ignores_build_on_start(self):
+        self.config.write_text('projects = "all"\nbuild_on_start = false\n')
+        self.ok("build", "--cwd", self.repo)
+        self.assertEqual(self.prompts(), ["widget work"])
+
+    def test_build_on_start_is_true_or_false(self):
+        self.config.write_text('build_on_start = "no"\n')
+        code, _, err = self.run_tape("build", "--on-start", "--cwd", self.repo)
+        self.assertEqual(code, tape.EXIT_INVALID)
+        self.assertIn("`build_on_start`", err)
+        self.assertIn("true or false", err)
+        self.assertFalse(self.store.exists())
+
+    def test_the_seeded_config_names_build_on_start(self):
+        self.config.unlink()
+        self.ok("build", "--on-start", "--cwd", self.repo)
+        self.assertIn("build_on_start = true", self.config.read_text())
+
+
 class StoreTest(TapeCase):
     def setUp(self):
         super().setUp()

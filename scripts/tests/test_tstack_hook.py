@@ -142,6 +142,103 @@ class SessionStartTest(HookCase):
         self.assertIn("found through CLAUDE_PROJECT_DIR", r.stdout)
 
 
+FAKE_TAPE = """import json, os, sys, time
+time.sleep(float(os.environ.get("FAKE_TAPE_SLEEP", "0")))
+with open(os.environ["FAKE_TAPE_LOG"], "a") as f:
+    f.write(json.dumps(sys.argv[1:]) + "\\n")
+"""
+
+
+class TapeBuildTest(HookCase):
+    """tape_build: SessionStart starts `tape build --on-start` for the session's project, detached, and returns
+    (docs/design/tape.md, Phase 2). The plugin root's scripts/tape is the seam: a fake one records its argv."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = self.tmp / "plugin"
+        (self.root / "scripts").mkdir(parents=True)
+        (self.root / "scripts" / "memo").symlink_to(MEMO)
+        (self.root / "scripts" / "tape").write_text(FAKE_TAPE)
+        self.runs = self.tmp / "tape-runs.jsonl"
+        self.env.update(CLAUDE_PLUGIN_ROOT=str(self.root), FAKE_TAPE_LOG=str(self.runs))
+        self.index = self.tmp / "data" / "tstack" / "tape" / "index.db"
+
+    def tape_in_use(self):
+        self.index.parent.mkdir(parents=True)
+        self.index.write_bytes(b"")
+
+    def wait_runs(self, n, timeout=20):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            lines = self.runs.read_text().splitlines() if self.runs.exists() else []
+            if len(lines) >= n:
+                return [json.loads(line) for line in lines]
+            time.sleep(0.05)
+        self.fail(f"tape ran {self.runs.read_text() if self.runs.exists() else 'never'}, not {n} times")
+
+    def test_it_starts_the_build_and_returns_before_it_ends(self):
+        import signal
+        self.tape_in_use()
+        started = time.monotonic()
+        p = subprocess.Popen([str(HOOK), "SessionStart"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, start_new_session=True,
+                             env={**self.env, "FAKE_TAPE_SLEEP": "3"})
+        out, err = p.communicate(json.dumps(self.base("SessionStart", source="startup")), timeout=30)
+        took = time.monotonic() - started
+        self.assertEqual(p.returncode, 0, err)
+        self.assertLess(took, 2.5, "the hook waited on the build")
+        self.assertFalse(self.runs.exists())
+        try:
+            os.killpg(p.pid, signal.SIGKILL)  # what is left of the hook's process group dies; the build is not in it
+        except ProcessLookupError:
+            pass
+        self.assertEqual(self.wait_runs(1), [["build", "--on-start", "--cwd", str(self.repo)]])
+        self.assertNotIn("tape_build failed", self.log())
+
+    def test_no_build_without_tape_on_the_machine_nor_for_a_worker_or_a_headless_run(self):
+        self.assertEqual(self.hook("SessionStart", self.base("SessionStart", source="startup")).returncode, 0)
+        self.tape_in_use()
+        self.hook("SessionStart", self.base("SessionStart", source="startup", agent_id="a1"))
+        self.hook("SessionStart", self.base("SessionStart", source="startup"), env={"TSTACK_ROLE": "worker"})
+        self.hook("SessionStart", self.base("SessionStart", source="startup"), env={"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"})
+        self.hook("SessionStart", self.base("SessionStart", source="startup"), env={"TSTACK_ROLE": "tape"})
+        last = self.tmp / "last"
+        last.mkdir()
+        self.hook("SessionStart", {**self.base("SessionStart", source="resume"), "cwd": str(last)})
+        time.sleep(0.5)
+        self.assertEqual(self.wait_runs(1), [["build", "--on-start", "--cwd", str(last)]])
+
+    def test_a_real_build_lands_the_sessions_turns(self):
+        tape = ROOT / "scripts" / "tape"
+        env = {**self.env, "CLAUDE_PLUGIN_ROOT": str(ROOT)}
+        if os.environ.get("XDG_RUNTIME_DIR"):  # the user systemd scope, where this machine has one
+            env["XDG_RUNTIME_DIR"] = os.environ["XDG_RUNTIME_DIR"]
+        subprocess.run([sys.executable, str(tape), "build"], cwd=self.repo, env=env, capture_output=True, check=True)
+        self.assertTrue(self.index.exists())
+        records = []
+        for n, (kind, text) in enumerate([("user", "tape this turn"), ("assistant", "done"), ("user", "next")]):
+            r = {"type": kind, "timestamp": f"2026-10-01T09:0{n}:00.000Z", "sessionId": "s1", "cwd": str(self.repo),
+                 "uuid": f"u{n}", "isSidechain": False, "entrypoint": "cli"}
+            if kind == "user":
+                r.update(message={"role": "user", "content": text}, origin={"kind": "human"}, promptSource="typed")
+            else:
+                r["message"] = {"role": "assistant", "content": [{"type": "text", "text": text}]}
+            records.append(json.dumps(r))
+        projects = self.tmp / "home" / ".claude" / "projects" / "any-slug"
+        projects.mkdir(parents=True)
+        (projects / "s1.jsonl").write_text("\n".join(records) + "\n")
+        r = subprocess.run([str(HOOK), "SessionStart"], input=json.dumps(self.base("SessionStart", source="startup")),
+                           capture_output=True, text=True, env=env, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        deadline = time.monotonic() + 20
+        found = ""
+        while time.monotonic() < deadline and "tape this turn" not in found:
+            time.sleep(0.1)
+            found = subprocess.run([sys.executable, str(tape), "search", "tape"], cwd=self.repo, env=env,
+                                   capture_output=True, text=True).stdout
+        self.assertIn("tape this turn", found)
+
+
 @unittest.skipUnless(shutil.which("jj"), "jj is not installed")
 class JJHintsTest(HookCase):
     def setUp(self):
