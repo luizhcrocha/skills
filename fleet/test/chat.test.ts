@@ -856,32 +856,32 @@ describe("listening", () => {
   }
 
   test("an orphan still in its first read when the next watch arms stands down once that read is done, and the next watch goes on", async () => {
-    // The chat is a FIFO, linked under a second name: the first watch's first read waits in its open until this
-    // test opens that second name to write. A file takes the chat's place, so the next watch reads at once.
-    const store = join(root, "chat.jsonl");
+    // The cursor is a FIFO, linked under a second name: the first watch's read of it, before its first read of the
+    // chat, waits in its open until this test opens that second name to write. The next watch finds no cursor.
+    const cursor = join(root, "watch-coordinator.cursor");
     const held = join(root, "held.fifo");
-    expect(Bun.spawnSync(["mkfifo", store]).exitCode).toBe(0);
-    linkSync(store, held);
+    expect(Bun.spawnSync(["mkfifo", cursor]).exitCode).toBe(0);
+    linkSync(cursor, held);
     const first = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], env);
     procs.push(first.proc);
 
     for (let tries = 0; tries < 200 && readOwner(root, "coordinator")?.watch !== first.proc.pid; tries += 1) await sleep(50);
     await orphan(first.proc.pid);
-    rmSync(store);
-    writeFileSync(store, "");
+    rmSync(cursor);
 
-    const second = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], env);
+    // The next watch holds the user's message 5 s before it exits, so the orphan's first read finds it waiting.
+    const second = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once", "--settle", "5"], env);
     procs.push(second.proc);
 
     for (let tries = 0; tries < 200 && !existsSync(join(root, "watch-coordinator.pid")); tries += 1) await sleep(50);
     expect([readFileSync(join(root, "watch-coordinator.pid"), "utf8"), readOwner(root, "coordinator")?.watch, first.proc.exitCode]).toEqual([String(second.proc.pid), second.proc.pid, null]);
+    const sent = user("status?");
 
     closeSync(openSync(held, constants.O_WRONLY | constants.O_NONBLOCK));
-    // Which stands down: the orphan, not the watch that took its place.
-    expect(await Promise.race([first.proc.exited.then(() => "first"), second.proc.exited.then(() => "second"), sleep(5000).then(() => "neither")])).toBe("first");
-    expect([first.proc.exitCode, await first.lines.rest()]).toEqual([0, ""]);
+    // Which stands down: the orphan, not the watch that took its place, and it prints and marks nothing.
+    expect(await Promise.race([first.proc.exited.then(() => "first"), second.proc.exited.then(() => "second"), sleep(4000).then(() => "neither")])).toBe("first");
+    expect([first.proc.exitCode, await first.lines.rest(), existsSync(cursor)]).toEqual([0, "", false]);
     expect([readFileSync(join(root, "watch-coordinator.pid"), "utf8"), second.proc.exitCode]).toEqual([String(second.proc.pid), null]);
-    const sent = user("status?");
     expect(await second.proc.exited).toBe(0);
     expect(await second.lines.rest()).toBe(`#${String(sent.id)} user -> coordinator: status?\n`);
     expect(listening(m, root).seen).toBe(sent.id);
