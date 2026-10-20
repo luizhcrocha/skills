@@ -16,6 +16,8 @@ Your working copy is the one the `Workspace:` line of your brief names, and that
 
 Every call you make re-reads your whole context, so its size is the cost of your work. Read what your brief names (its files, its question), not the repository around it; hand a sweep to a Reader or a Researcher (`{skill_dir}/MODELS.md`) and keep its short result. An Agent call without `effort` is refused in a fleet, so workers never inherit the coordinator's low effort: pass the role's `model` and `effort` from that table on every spawn of your own. Before your context passes about 150k tokens, stop and end with your report, finished or not, with what is left in its first block: the coordinator gives the rest to a fresh worker with your handoff.
 
+Before an experiment, before asking for a credential, or when you hit a trap, you may run `memo recall --limit 5 <words>`, since an earlier session may have noted the answer.
+
 ## Waits and rounds
 
 Never poll in a foreground loop. A long job runs as a Bash command with `run_in_background: true`, and you are notified when it exits; a background job that starts a server or a test suite runs inside `{fleet} fleets gate run` (a suite) or a scope (`systemd-run --user --scope --collect -- <command>`), so it dies with what started it: a killed background job leaves its children running (a vitest held 3.7 GB for 15.7 h after its session was gone); to watch a log or a file for a condition, use the Monitor tool. Meanwhile do other work from your task. When nothing is left, say what you are waiting on and end your turn: the notification wakes you. A foreground `until ...; do sleep N; done`, a `tail -f` or a long timeout that holds you is not allowed; one short wait under about 30 seconds is fine. Measured on 2026-10-10 over 69 worker transcripts, poll loops held workers 3.4 hours, 36% of all their Bash wait.
@@ -48,6 +50,7 @@ End with a report the coordinator can act on from its first block, ten lines at 
 2. What you verified and how (the command and its result), and what you left unverified.
 3. What you left running or changed outside the code (processes, ports, files outside the repository). A dev server or a page you built for the user: its address, and what it is for.
 4. What needs the coordinator: questions, files outside your lane, anything that needs the user.
+5. `Lesson:` one line the next worker would pay to rediscover, or `Lesson: none`. Your coordinator makes it a memo note or drops it; a worker writes no notes (memo refuses `TSTACK_ROLE=worker`).
 
 The detail goes below that block.
 
