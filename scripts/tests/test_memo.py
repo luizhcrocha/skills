@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from importlib.machinery import SourceFileLoader
@@ -626,6 +627,21 @@ class ReadTest(MemoCase):
         self.assertIn("operation log", self.ok("recall", "operat"), "a prefix is enough when nothing matches whole")
         self.assertIn("nothing on", self.ok("recall", "kubernetes"))
         self.assertIn("operation log", self.ok("recall", 'jj "AND (', "workspaces"), "odd characters are not a syntax error")
+
+    def test_recall_of_a_sentence_stays_fast_on_a_large_store(self):
+        notes = self.global_dir / "notes"
+        notes.mkdir(parents=True)
+        rnd = random.Random(1)
+        vocab = [f"s{w}{i}" for i in range(400) for w in ("ab", "et")]
+        for _ in range(500):
+            item = memo.Item(memo.new_ulid(), "fact", " ".join(rnd.choices(vocab, k=20)), scope="global")
+            (notes / f"{item.id}.md").write_text(memo.render_item(item))
+        self.ok("recall", "warm the index")
+        start = time.perf_counter()
+        out = self.ok("recall", "the case's past s")
+        took = time.perf_counter() - start
+        self.assertIn("global:", out, "the one-letter word falls back to a prefix that matches")
+        self.assertLess(took, 1.0, "the FTS match runs once, not once per indexed row (2.3 s before)")
 
     def test_recall_all_reaches_other_repos_indexed_here(self):
         other = init_repo(self.tmp / "other", "git@github.com:acme/other.git")

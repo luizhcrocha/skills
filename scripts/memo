@@ -526,7 +526,8 @@ class Index:
         marks = ",".join("?" * len(keys))
         where = f"items.store in ({marks})" if keys else "1"
         cols = ", ".join(f"items.{c.strip()}" for c in _COLS.split(","))
-        sql = (f"select {cols}, items.store from fts join items on items.rowid = fts.rowid"
+        # cross join keeps fts the outer loop: driven from items, sqlite re-runs the match once per row
+        sql = (f"select {cols}, items.store from fts cross join items on items.rowid = fts.rowid"
                f" where fts match ? and {where} order by bm25(fts) limit ?")
         words = re.findall(r"\w+", query)
         tries = [query] if words else []
