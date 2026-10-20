@@ -832,6 +832,21 @@ describe("listening", () => {
     expect(await first.lines.rest()).toBe(`#${String(sent.id)} user -> coordinator: status?\n`);
   }, 30_000);
 
+  test("a record left by a killed watch whose session still runs, its pid now another process's, does not refuse the next watch", async () => {
+    const other = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    procs.push(other);
+    writeFileSync(ownerPath(root, "coordinator"), JSON.stringify({ watch: other.pid, session: process.pid, started: startedOf(process.pid) ?? "" }));
+    const next = start(["chat", root, "watch", "--as", "coordinator", "--all", "--resume", "--once"], env);
+    procs.push(next.proc);
+    const pidFile = join(root, "watch-coordinator.pid");
+
+    for (let tries = 0; tries < 100 && next.proc.exitCode === null && !existsSync(pidFile); tries += 1) await sleep(50);
+    expect([next.proc.exitCode, existsSync(pidFile) ? readFileSync(pidFile, "utf8") : "no pid file", readOwner(root, "coordinator")?.watch]).toEqual([null, String(next.proc.pid), next.proc.pid]);
+    const sent = user("status?");
+    expect(await next.proc.exited).toBe(0);
+    expect(await next.lines.rest()).toBe(`#${String(sent.id)} user -> coordinator: status?\n`);
+  });
+
   /** Make the watch `pid` an orphan: its record names a session that is gone. */
   async function orphan(pid: number): Promise<void> {
     const gone = Bun.spawn(["true"], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
