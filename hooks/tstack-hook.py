@@ -122,7 +122,8 @@ def tape_build(hook):
     `tape build`), never for a worker or a headless run. tape owns the rest: `build_on_start = false` in tape.toml
     makes it a no-op, and the project's flock keeps it to one build at a time. The build runs in a session of its
     own, out of the hook's process group, and in a user scope of its own where systemd has one, out of the
-    session's; its output goes nowhere, so nothing holds the hook's pipes."""
+    session's; it runs at nice 10, capped at 2G in that scope; its output goes nowhere, so nothing holds the
+    hook's pipes."""
     if hook.is_worker or hook.headless:
         return None
     data = hook.env.get("XDG_DATA_HOME") or str(Path(hook.env.get("HOME", "/tmp")) / ".local" / "share")
@@ -133,9 +134,9 @@ def tape_build(hook):
     argv = [sys.executable, str(ROOT / "scripts" / "tape"), "build", "--on-start", "--cwd", hook.cwd]
     bus = Path(hook.env.get("XDG_RUNTIME_DIR") or "/nonexistent") / "bus"
     if bus.exists() and shutil.which("systemd-run", path=hook.env.get("PATH")):
-        argv = ["systemd-run", "--user", "--scope", "--collect", "--quiet", "--", *argv]
+        argv = ["systemd-run", "--user", "--scope", "--collect", "--quiet", "-p", "MemoryMax=2G", "--", *argv]
     subprocess.Popen(argv, env=dict(hook.env), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL, start_new_session=True)
+                     stderr=subprocess.DEVNULL, start_new_session=True, preexec_fn=lambda: os.nice(10))
     return None
 
 

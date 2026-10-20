@@ -249,7 +249,8 @@ environment, run in the store's folder (outside any repo).
     having built nothing. A build by hand ignores the switch.
   - Detached: a new session (`setsid`), out of the hook's process group, and,
     where a user systemd bus exists, `systemd-run --user --scope --collect`,
-    out of the Claude Code session's cgroup. Its stdin, stdout and stderr
+    out of the Claude Code session's cgroup. It runs niced (nice 10) and,
+    in that scope, capped (`-p MemoryMax=2G`). Its stdin, stdout and stderr
     are `/dev/null`, so it holds none of the hook's pipes.
   - Measured (2026-10-20, temp dirs, best of 5 runs): SessionStart takes
     42 ms with no spawn, 54 ms with a build that sleeps 5 s, and 64 ms with

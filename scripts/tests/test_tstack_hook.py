@@ -145,13 +145,13 @@ class SessionStartTest(HookCase):
 FAKE_TAPE = """import json, os, sys, time
 time.sleep(float(os.environ.get("FAKE_TAPE_SLEEP", "0")))
 with open(os.environ["FAKE_TAPE_LOG"], "a") as f:
-    f.write(json.dumps(sys.argv[1:]) + "\\n")
+    f.write(json.dumps({"argv": sys.argv[1:], "nice": os.nice(0)}) + "\\n")
 """
 
 
 class TapeBuildTest(HookCase):
     """tape_build: SessionStart starts `tape build --on-start` for the session's project, detached, and returns
-    (docs/design/tape.md, Phase 2). The plugin root's scripts/tape is the seam: a fake one records its argv."""
+    (docs/design/tape.md, Phase 2). The plugin root's scripts/tape is the seam: a fake one records its argv and its niceness."""
 
     def setUp(self):
         super().setUp()
@@ -167,12 +167,12 @@ class TapeBuildTest(HookCase):
         self.index.parent.mkdir(parents=True)
         self.index.write_bytes(b"")
 
-    def wait_runs(self, n, timeout=20):
+    def wait_runs(self, n, timeout=20, key="argv"):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             lines = self.runs.read_text().splitlines() if self.runs.exists() else []
             if len(lines) >= n:
-                return [json.loads(line) for line in lines]
+                return [json.loads(line)[key] for line in lines]
             time.sleep(0.05)
         self.fail(f"tape ran {self.runs.read_text() if self.runs.exists() else 'never'}, not {n} times")
 
@@ -194,6 +194,11 @@ class TapeBuildTest(HookCase):
             pass
         self.assertEqual(self.wait_runs(1), [["build", "--on-start", "--cwd", str(self.repo)]])
         self.assertNotIn("tape_build failed", self.log())
+
+    def test_the_build_runs_niced_ten_below_the_session(self):
+        self.tape_in_use()
+        self.assertEqual(self.hook("SessionStart", self.base("SessionStart", source="startup")).returncode, 0)
+        self.assertEqual(self.wait_runs(1, key="nice"), [min(os.nice(0) + 10, 19)])
 
     def test_no_build_without_tape_on_the_machine_nor_for_a_worker_or_a_headless_run(self):
         self.assertEqual(self.hook("SessionStart", self.base("SessionStart", source="startup")).returncode, 0)
