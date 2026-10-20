@@ -4775,6 +4775,9 @@ def suite_gate(hook):
     command = tool_input.get("command") if hook.input.get("tool_name") == "Bash" else None
     if not isinstance(command, str) or re.search(r"\bfleets\s+gate\s+(?:run|take)\b", command):
         return None
+    # This session runs inside a gate run's scope ($FLEET_GATE_RUN names it): that run holds the slot.
+    if hook.env.get("FLEET_GATE_RUN"):
+        return None
     found = SuiteReader().suites(command, hook.cwd)
     if not found:
         return None

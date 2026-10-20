@@ -82,9 +82,10 @@ export function baseEnv(home: string, more: Readonly<Environment> = {}): Environ
   // No picasso: a preview asks no real sidecar whether a watch hears it. A pruned workspace goes to a trash of the
   // test's own, on the temp dir's filesystem (a trash on another filesystem refuses the prune). No MemAvailable: the
   // gate counts its budget alone, whatever the machine running the tests has free; a floor test gives its own meminfo,
-  // and its own cgroups for what the scopes use.
+  // and its own cgroups for what the scopes use. A process the test spawns runs in the test's own zone: `bun test` runs
+  // in UTC with $TZ unset, and a child given no $TZ would print the machine's zone's stamps.
   return {
-    ...env, FLEET_HOME: registry, FLEET_TRASH: join(home, "trash"), FLEET_DISCOVER: "0", FLEET_WATCH_SETTLE: "0", FLEET_PREVIEW_SCOPE: "0", FLEET_CC_SOCKS: join(home, "cc-socks"),
+    ...env, TZ: env["TZ"] ?? "UTC", FLEET_HOME: registry, FLEET_TRASH: join(home, "trash"), FLEET_DISCOVER: "0", FLEET_WATCH_SETTLE: "0", FLEET_PREVIEW_SCOPE: "0", FLEET_CC_SOCKS: join(home, "cc-socks"),
     PICASSO: join(home, "no-picasso"), FLEET_MEMINFO: join(home, "no-meminfo"), FLEET_CGROUP_ROOT: join(home, "no-cgroup"), ...more,
   };
 }
@@ -92,14 +93,10 @@ export function baseEnv(home: string, more: Readonly<Environment> = {}): Environ
 /** Run `fleet ARGS` in this process, through the CLI's own interface, with `env` as its environment. */
 export function fleet(args: readonly string[], env: Readonly<Environment>): Ran {
   const { layer, recorded } = recordingOut();
-  const zone = process.env["TZ"];
-  const wanted = env["TZ"] ?? zone;
-
-  if (wanted !== undefined) process.env["TZ"] = wanted;
+  const restore = zoned(env["TZ"]);
   const code = runFleetSync(args, envOf(env), layer, env["FLEET_NOW"]);
 
-  if (zone === undefined) delete process.env["TZ"];
-  else process.env["TZ"] = zone;
+  restore();
 
   return { code, stdout: recorded.stdout.join(""), stderr: recorded.stderr.join("") };
 }
@@ -107,19 +104,29 @@ export function fleet(args: readonly string[], env: Readonly<Environment>): Ran 
 /** {@link fleet} for a command that waits on a process (`ws add` running a hook). */
 export async function fleetAsync(args: readonly string[], env: Readonly<Environment>): Promise<Ran> {
   const { layer, recorded } = recordingOut();
-  const zone = process.env["TZ"];
-  const wanted = env["TZ"] ?? zone;
-
-  if (wanted !== undefined) process.env["TZ"] = wanted;
+  const restore = zoned(env["TZ"]);
 
   try {
     const code = await runFleet(args, envOf(env), layer, env["FLEET_NOW"]);
 
     return { code, stdout: recorded.stdout.join(""), stderr: recorded.stderr.join("") };
   } finally {
-    if (zone === undefined) delete process.env["TZ"];
-    else process.env["TZ"] = zone;
+    restore();
   }
+}
+
+/** Set $TZ to `wanted` for a call, when it names one: what puts it back. `bun test` runs in UTC with $TZ unset, and
+ * deleting $TZ (even an unset one) moves the process to the machine's zone, so with none before it goes back to UTC:
+ * a later test file in the same process would print another zone's stamps. */
+function zoned(wanted: string | undefined): () => void {
+  if (wanted === undefined) return () => undefined;
+  const zone = process.env["TZ"];
+
+  process.env["TZ"] = wanted;
+
+  return () => {
+    process.env["TZ"] = zone ?? "UTC";
+  };
 }
 
 /** Run `fleet ARGS` as its own process and wait for it. */

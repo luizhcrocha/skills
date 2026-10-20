@@ -22,7 +22,7 @@ import { Out, recordingOut } from "../io.ts";
 import { asArray, asNumber, asObject, asString, dumps, pyRepr, truthy, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { decodeLedger } from "../ledger/model.ts";
 import { find, number } from "../ledger/numbers.ts";
-import { budgetOf, capBytes, endOf, floorOf, floorRefusal, gateOf, holdText, memAvailable, memTotal, plain, roomOf, runCapOf, shortText, sizeText, waitsForMemory, type Ask, type Budget, type Day, type GateHolder, type Standing, type Waiting } from "../gate.ts";
+import { budgetOf, capBytes, cpuBudgetOf, cpusHeld, endOf, floorOf, floorRefusal, gateOf, holdText, memAvailable, memTotal, plain, roomOf, runCapOf, shortText, sizeText, waitsForMemory, type Ask, type Budget, type Day, type GateHolder, type Standing, type Waiting } from "../gate.ts";
 import { gateRun, RUN_USAGE, runArgs } from "../gate-run.ts";
 import { processes } from "../procs.ts";
 import { approvalSource, NoSource, parseSource, sameSource } from "../ledger/approvals.ts";
@@ -531,9 +531,14 @@ function capText(cap: number | undefined): string {
   return cap === undefined ? "the whole budget" : sizeText(cap);
 }
 
-/** `fleet fleets gate`: `free`, or a line per hold; then the budget when a hold takes a part of it, the queue in
- * order, and the last day's runs in a line when there were any. */
-function gateLines(standing: Standing, budget: Budget | undefined, day: Day | undefined, now: Date): string[] {
+/** The CPU row in words, beside the memory's: `CPUs 24: 16 held, 8 free`. */
+function cpuText(cpus: number, held: number): string {
+  return `CPUs ${String(cpus)}: ${String(held)} held, ${String(Math.max(0, cpus - held))} free`;
+}
+
+/** `fleet fleets gate`: `free`, or a line per hold; then the budget, memory and CPUs, when a hold takes a part of it,
+ * the queue in order, and the last day's runs in a line when there were any. */
+function gateLines(standing: Standing, budget: Budget | undefined, cpus: number | undefined, day: Day | undefined, now: Date): string[] {
   const { holders, queue } = standing;
   // The room all holds share: the smallest budget any holder read, and this caller's.
   const room = budget === undefined ? undefined : roomOf(budget.bytes, holders);
@@ -542,12 +547,14 @@ function gateLines(standing: Standing, budget: Budget | undefined, day: Day | un
   return [
     ...(holders.length === 0 ? ["free"] : holders.map(holdText)),
     ...(budget !== undefined && room !== undefined && holders.some((h) => h.cap !== undefined)
-      ? [`budget ${sizeText(room)}${room === budget.bytes ? ` (${budget.spec})` : ""}: ${sizeText(held)} held, ${sizeText(Math.max(0, room - held))} free`]
+      ? [`budget ${sizeText(room)}${room === budget.bytes ? ` (${budget.spec})` : ""}: ${sizeText(held)} held, ${sizeText(Math.max(0, room - held))} free` +
+        `${cpus === undefined ? "" : `; ${cpuText(cpus, cpusHeld(holders))}`}`]
       : []),
     ...queue.map((w, i) => {
-      const forMemory = room !== undefined && waitsForMemory(w, room, holders);
+      const forMemory = room !== undefined && waitsForMemory(w, room, holders, cpus);
+      const marks = `${w.cpus === undefined ? "" : `, ${String(w.cpus)} CPUs`}${w.landing ? ", a landing gate" : ""}${w.light ? ", light" : ""}`;
 
-      return `queue ${String(i + 1)}: ${w.kind === "session" ? `${plain(w.name)} (no fleet)` : plain(w.name)}, ${capText(w.cap)}, waiting ${forMemory ? "for memory " : ""}${String(secondsSince(w.since, now))}s: ${plain(w.what)}`;
+      return `queue ${String(i + 1)}: ${w.kind === "session" ? `${plain(w.name)} (no fleet)` : plain(w.name)}, ${capText(w.cap)}${marks}, waiting ${forMemory ? "for the memory floor " : ""}${String(secondsSince(w.since, now))}s: ${plain(w.what)}`;
     }),
     ...(day === undefined ? [] : [
       `last 24 h: ${String(day.runs)} runs, wait median ${String(day.medianWait)}s, p90 ${String(day.p90Wait)}s, memory peak max ${day.maxPeak === undefined ? "unknown" : sizeText(day.maxPeak)}` +
@@ -557,13 +564,18 @@ function gateLines(standing: Standing, budget: Budget | undefined, day: Day | un
 }
 
 /** `fleet fleets gate --json`: the same, for a page or a script. Sizes are bytes, waits seconds. */
-function gateJson(standing: Standing, budget: Budget | undefined, day: Day | undefined, now: Date): JsonOut {
+function gateJson(standing: Standing, budget: Budget | undefined, cpus: number | undefined, day: Day | undefined, now: Date): JsonOut {
   return {
     budget: budget === undefined ? null : { spec: budget.spec, bytes: budget.bytes },
-    holders: standing.holders.map((h) => ({ name: h.name, kind: h.kind, what: h.what, since: h.since, until: h.until ?? null, cap: h.cap ?? null, budget: h.budget ?? null, pid: h.pid ?? null, runner: h.runner ?? null, unit: h.unit ?? h.runnerUnit ?? null })),
+    cpu: cpus === undefined ? null : { budget: cpus, held: cpusHeld(standing.holders) },
+    holders: standing.holders.map((h) => ({
+      name: h.name, kind: h.kind, what: h.what, since: h.since, until: h.until ?? null, cap: h.cap ?? null, budget: h.budget ?? null, pid: h.pid ?? null, runner: h.runner ?? null,
+      unit: h.unit ?? h.runnerUnit ?? null, cpus: h.cpus ?? null, landing: h.landing, light: h.light,
+    })),
     queue: standing.queue.map((w, i) => ({
       place: i + 1, name: w.name, kind: w.kind, what: w.what, cap: w.cap ?? null, since: w.since, waited: secondsSince(w.since, now), pid: w.pid,
-      for_memory: budget !== undefined && waitsForMemory(w, roomOf(budget.bytes, standing.holders), standing.holders),
+      cpus: w.cpus ?? null, landing: w.landing, light: w.light,
+      for_memory: budget !== undefined && waitsForMemory(w, roomOf(budget.bytes, standing.holders), standing.holders, cpus),
     })),
     day: day === undefined ? null : { runs: day.runs, gave_up: day.gaveUp, median_wait: day.medianWait, p90_wait: day.p90Wait, max_peak: day.maxPeak ?? null, capped: day.capped },
   };
@@ -602,9 +614,10 @@ function gate(machine: Machine, argv: readonly string[]): Effect.Effect<void | n
       const now = machine.now();
       const standing = slot.standing(now);
       const budget = budgetOf(machine.env);
+      const cpus = cpuBudgetOf(machine.env);
       const day = slot.day(now);
 
-      out.out(what === "--json" ? `${dumps(gateJson(standing, budget, day, now))}\n` : `${gateLines(standing, budget, day, now).join("\n")}\n`);
+      out.out(what === "--json" ? `${dumps(gateJson(standing, budget, cpus, day, now))}\n` : `${gateLines(standing, budget, cpus, day, now).join("\n")}\n`);
     } else if (what === "take") {
       const take = takeArgs(argv.slice(1));
 

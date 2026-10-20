@@ -267,6 +267,22 @@ describe("token counts", () => {
 });
 
 describe("the CLI", () => {
+  // A call given a $TZ puts the process's zone back as it was: `bun test` runs in UTC with $TZ unset, and a deleted $TZ
+  // is the machine's zone, so a later test file in the same process would print another zone's stamps.
+  test("a call with its own $TZ leaves the process in the zone it had", () => {
+    const zone = process.env["TZ"] ?? "UTC";
+    const offset = new Date(0).getTimezoneOffset();
+    expect(fleet(["fleets", "gate"], { ...env, TZ: "Asia/Kolkata" }).code).toBe(0);
+    expect(process.env["TZ"]).toBe(zone);
+    expect(new Date(0).getTimezoneOffset()).toBe(offset);
+  });
+
+  // A watch the test spawns prints `HH:MM` that the test computes in its own process: both must read one zone.
+  test("a process spawned with the test's environment tells time in the test's zone, not the machine's", () => {
+    const told = Bun.spawnSync([process.execPath, "-e", "console.log(new Date(0).getTimezoneOffset())"], { env, stdout: "pipe", stderr: "pipe" });
+    expect(told.stdout.toString().trim()).toBe(String(new Date(0).getTimezoneOffset()));
+  });
+
   test("list prints each fleet with how to reach it", () => {
     const a = makeFleet("a", "billing", { decisions: [{ id: "d1", kind: "input", title: "Rate", question: "q", status: "open", asks: "manager", opened: "x" }] });
     register(a, "https://box.ts.net:1/");
@@ -565,14 +581,15 @@ describe("the gate", () => {
     const lines = cliAt("2026-10-05T12:02:00+00:00", "gate").stdout.split("\n");
     expect(lines[0]).toMatch(/^held by infra since \S+, until \S+, cap [\d.]+[MG]: build A$/);
     expect(lines[1]).toMatch(/^held by w1 \(no fleet\) since \S+, until \S+, cap [\d.]+[MG]: build B$/);
-    expect(lines[2]).toMatch(/^budget ([\d.]+[MG]) \(50%\): \1 held, 0B free$/);
+    // Takes by hand declare no CPUs: the CPU row beside the memory's is all free.
+    expect(lines[2]).toMatch(/^budget ([\d.]+[MG]) \(50%\): \1 held, 0B free; CPUs (\d+): 0 held, \2 free$/);
     expect(lines.slice(3)).toEqual([""]);
 
     // An older fleet reads one hold there, by nobody it can free: held until the last hold's until.
     expect(readJson(join(base, "registry", "gate", "gate.json"))).toMatchObject({ kind: "session", since: "2026-10-05T12:00:00+00:00", until: "2026-10-05T13:00:00+00:00", v: 2 });
     expect(cliAt("2026-10-05T12:03:00+00:00", "gate", "free", "nobody").stderr).toBe("fleets: held by infra, w1, not nobody\n");
     expect(cliAt("2026-10-05T12:03:00+00:00", "gate", "free", tokenOf(a)).stdout).toBe("free\n");
-    expect(cliAt("2026-10-05T12:04:00+00:00", "gate").stdout).toMatch(/^held by w1 \(no fleet\) .*\nbudget \S+ \(50%\): (\S+) held, \1 free\n$/);
+    expect(cliAt("2026-10-05T12:04:00+00:00", "gate").stdout).toMatch(/^held by w1 \(no fleet\) .*\nbudget \S+ \(50%\): (\S+) held, \1 free; CPUs \d+: 0 held, .*\n$/);
     expect(cliAt("2026-10-05T12:04:00+00:00", "gate", "take", "ui", "build C", "--mem", "25%").code).toBe(0);
     expect(cliAt("2026-10-05T12:31:00+00:00", "gate").stdout).toMatch(/^held by ui since /);
   });
@@ -662,18 +679,44 @@ describe("the gate", () => {
       );
     });
 
-    test("a take waiting only for memory holds back no smaller take that fits; the gate says it waits for memory", async () => {
+    test("a take waiting only for memory keeps its place: a smaller take that fits waits behind it; the gate says it waits for the memory floor", async () => {
       const short = withAvailable(20 * GB);
       const big = Bun.spawn([FLEET, "fleets", "gate", "take", "--as", "big", "build", "--wait", "3"], { env: short, stdout: "pipe", stderr: "pipe" });
       const queued = (): JsonObject => asObject(JSON.parse(fleet(["fleets", "gate", "--json"], short).stdout)) ?? {};
 
       for (let tries = 0; tries < 100 && (asArray(queued()["queue"]) ?? []).length === 0; tries += 1) await Bun.sleep(100);
       expect(queued()).toMatchObject({ holders: [], queue: [{ place: 1, name: "big", for_memory: true }] });
-      expect(fleet(["fleets", "gate"], short).stdout).toMatch(/^free\nqueue 1: big \(no fleet\), the whole budget, waiting for memory \d+s: build\n$/);
+      expect(fleet(["fleets", "gate"], short).stdout).toMatch(/^free\nqueue 1: big \(no fleet\), the whole budget, waiting for the memory floor \d+s: build\n$/);
       const small = fleet(["fleets", "gate", "take", "--as", "small", "lint", "--mem", "2G"], short);
-      expect(small.stderr).toBe("");
-      expect(small.code).toBe(0);
+      expect(small.code).toBe(1);
+      expect(small.stderr).toContain("1 before it in the queue (big)");
       expect(await big.exited).toBe(1);
+    });
+
+    // A waiter that fitted both rows at its last ask, and now lacks CPUs beside the holds, waits for the gate, not for
+    // the floor alone.
+    test("a waiter is waiting for the memory floor only while it fits the CPU budget beside the holds as well", async () => {
+      const sleepers = [Bun.spawn(["sleep", "300"]), Bun.spawn(["sleep", "300"])];
+      const [runner, waiter] = sleepers.map((p) => p.pid);
+      const since = new Date().toISOString();
+      const until = new Date(Date.now() + 3600_000).toISOString();
+      const dir = join(base, "registry", "gate");
+      mkdirSync(dir, { recursive: true });
+      const run = { fleet: "run", kind: "session", what: "gate run: suite", since, until, token: "0a1b2c3d", cap: 8 * GB, budget: 48 * GB, pid: runner, cpus: 8 };
+      writeFileSync(join(dir, "gate.json"), JSON.stringify({ fleet: "run", kind: "session", what: "w", since, v: 2, until, holds: [run] }));
+      writeFileSync(join(dir, "queue.json"), JSON.stringify({ waiters: [{ fleet: "late", kind: "session", what: "gate run: lint", since, until, pid: waiter, cap: 2 * GB, memory: true, cpus: 4 }] }));
+
+      try {
+        const at = (cpus: number): Environment => withAvailable(20 * GB, { FLEET_GATE_CPU_BUDGET: String(cpus) });
+        const json = (cpus: number): JsonObject => asObject(JSON.parse(fleet(["fleets", "gate", "--json"], at(cpus)).stdout)) ?? {};
+        expect(json(12)).toMatchObject({ cpu: { budget: 12, held: 8 }, queue: [{ name: "late", cpus: 4, for_memory: true }] });
+        expect(fleet(["fleets", "gate"], at(12)).stdout).toContain("queue 1: late (no fleet), 2.0G, 4 CPUs, waiting for the memory floor ");
+        expect(json(10)).toMatchObject({ queue: [{ name: "late", for_memory: false }] });
+        expect(fleet(["fleets", "gate"], at(10)).stdout).toMatch(/\nqueue 1: late \(no fleet\), 2\.0G, 4 CPUs, waiting \d+s: gate run: lint\n/);
+      } finally {
+        for (const p of sleepers) p.kill("SIGKILL");
+        await Promise.all(sleepers.map(async (p) => p.exited));
+      }
     });
 
     test("--floor 50% is half the MemTotal of the same meminfo", () => {

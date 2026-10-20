@@ -1,14 +1,17 @@
 /**
- * The machine's gate (`REGISTRY/gate/`): the heavy checks of every fleet share one memory budget. A hold takes a
- * part of the budget (its cap, in bytes) or all of it (a hold taken by hand, or one an older fleet wrote), and is
- * admitted when the caps of the holds plus its own fit the budget, and MemAvailable, less what the holds' caps allow
- * them that their scopes do not use yet and less its own cap, still leaves the floor free (`--floor`, else
- * $FLEET_GATE_MEMORY_FLOOR, else 8G): the budget counts the holds alone, and dev servers and sessions use the same
- * memory. Whoever does not fit waits in a queue and is admitted in order of arrival: only the head of the queue may
- * take, so a large ask is never passed by smaller ones that would fit; a waiter whose cap fits the budget and that
- * waits for memory alone holds back nobody, since no hold's end is what it waits for. A hold lapses at its `until`, a fleet's when the fleet is no longer served, a run's when
- * its runner is gone; a waiter leaves the queue when its process is gone or its own `--wait` has run out. Every
- * change runs under an exclusive `flock` of `gate.lock`, so two takers never both pass the budget.
+ * The machine's gate (`REGISTRY/gate/`): the heavy checks of every fleet share one memory budget.
+ * A hold takes a part of the budget (its cap, in bytes: a run's estimate) or all of it (a hold
+ * taken by hand, or one an older fleet wrote), and is admitted when the caps of the holds plus its
+ * own fit the budget, and MemAvailable, less what the holds' caps allow them that their scopes do
+ * not use yet and less its own cap, still leaves the floor free (`--floor`, else
+ * $FLEET_GATE_MEMORY_FLOOR, else 8G): the budget counts the holds alone, and dev servers and
+ * sessions use the same memory. Whoever does not fit waits in a queue and is admitted in order of
+ * arrival: only the head of the queue may take, so a large ask is never passed by smaller ones
+ * that would fit, a waiter that waits for the memory floor alone included (the holds that pass it
+ * would keep it short of the floor). A hold lapses at its `until`, a fleet's when the fleet is no
+ * longer served, a run's when its runner is gone; a waiter leaves the queue when its process is
+ * gone or its own `--wait` has run out. Every change runs under an exclusive `flock` of
+ * `gate.lock`, so two takers never both pass the budget.
  *
  * Three files: `gate.json` (the holds), `queue.json` (the waiters, in order), `runs.jsonl` (one line per finished
  * `gate run`). `gate.json` is read by older fleets too (a `gate run` in flight, a hub, the plugin's hook), which
@@ -22,10 +25,18 @@
  * registry says of its fleet, and only its runner frees it. A hold taken by hand is its taker's alone: no `gate run`
  * goes under it, its own name's included (that name is often a fleet's, shared by its sessions), and its token always
  * frees it. A `runner` mark an older fleet's run left on one keeps the hold live while that run goes.
+ *
+ * A second row beside memory, CPUs: a run declares the CPUs it estimates, and the CPUs of the holds plus its own stay
+ * within the CPU budget (the machine's CPUs less 8, kept for agents, the hub and dev servers; $FLEET_GATE_CPU_BUDGET).
+ * A run's part in both rows is its estimate (gate-run.ts), which decides admission only; what limits a run is its
+ * scope's ceiling, the same for every run. A light run (an estimate of 4G at most, and each of its last runs 2 minutes
+ * at most) passes the head of the queue only when the head would not be admitted even with every light hold gone, in
+ * either row of the budget or by the memory floor: lights never keep a head out, since once they are what blocks it
+ * they stop passing and drain.
  */
 import { createHash } from "node:crypto";
 import { appendFileSync, closeSync, openSync } from "node:fs";
-import { totalmem } from "node:os";
+import { availableParallelism, cpus as cpuList, totalmem } from "node:os";
 import { join } from "node:path";
 
 import { parseInstant, stampOf } from "./clock.ts";
@@ -51,6 +62,36 @@ export const DEFAULT_FLOOR = "8G";
 
 /** The least memory a cap or a budget may be: under it nothing runs, and a share that rounds to no bytes is a mistake. */
 export const MIN_CAP = 64 * 1024 ** 2;
+
+/** The CPUs the gate keeps out of its budget, for agents, the hub and dev servers, when $FLEET_GATE_CPU_BUDGET does not say. */
+export const CPUS_KEPT = 8;
+
+/** A light run's most: its estimate, and how long each of its last runs ran. */
+export const LIGHT_CAP = 4 * 1024 ** 3;
+
+export const LIGHT_S = 120;
+
+/** The least estimate a run's peaks give it, the margin over the largest, and how many of its last runs count. */
+const LEAST_CAP = 2 * 1024 ** 3;
+
+const PEAK_MARGIN = 1.25;
+
+const RUNS_MEASURED = 3;
+
+const MIB = 1024 ** 2;
+
+/** The estimate a measured peak gives a run: the peak times {@link PEAK_MARGIN}, in whole MiB, {@link LEAST_CAP} at least. */
+export function memEstimate(peak: number): number {
+  return Math.max(LEAST_CAP, Math.ceil((peak * PEAK_MARGIN) / MIB) * MIB);
+}
+
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/** A command as its history knows it: a session's scratchpad (`.../<uuid>/scratchpad`) and any other UUID in it are
+ * placeholders, so the same suite run from another session is the same command. */
+export function whatKey(what: string): string {
+  return what.replace(/(?:\/[^/\s'"=]+)*\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\/scratchpad(?=[/\s'"]|$)/gi, "<scratchpad>").replace(UUID, "<uuid>");
+}
 
 /** How many lines `runs.jsonl` keeps: past twice this, the oldest are dropped. */
 const RUNS_KEPT = 1000;
@@ -177,6 +218,22 @@ export function runCapOf(env: Env, budget: number): number {
   return Math.min(capBytes(env("FLEET_GATE_MEMORY_MAX")?.trim() ?? DEFAULT_CAP, total) ?? capBytes(DEFAULT_CAP, total) ?? budget, budget);
 }
 
+/** The machine's CPUs, as os.cpus() counts them (no quota changes it). */
+export function cpusHere(): number {
+  return cpuList().length || availableParallelism();
+}
+
+/** The CPUs all holds together may declare: $FLEET_GATE_CPU_BUDGET (a whole number of CPUs), else the `all` CPUs
+ * (the machine's) less {@link CPUS_KEPT} and half of them at least; undefined when $FLEET_GATE_CPU_BUDGET does not
+ * parse. */
+export function cpuBudgetOf(env: Env, all = cpusHere()): number | undefined {
+  const given = env("FLEET_GATE_CPU_BUDGET")?.trim();
+
+  if (given === undefined || given === "") return Math.max(Math.floor(all / 2), all - CPUS_KEPT, 1);
+
+  return /^[0-9]+$/.test(given) && Number(given) > 0 ? Number(given) : undefined;
+}
+
 /** What an ask keeps free of the machine's memory. MemAvailable and the scopes' use are read under the gate's lock. */
 export interface Memory {
   /** Bytes MemAvailable must keep beside what the ask and the holds may still take. */
@@ -213,8 +270,8 @@ export interface Hold extends GateHolder {
   readonly until: string | undefined;
   /** What `gate free` takes. */
   readonly token: string | undefined;
-  /** Bytes of the budget it takes; undefined is all of it (taken by hand without `--mem`, by a run that has no
-   * scope to cap it, or by an older fleet). */
+  /** Bytes of the budget it takes, a run's estimate (not its scope's ceiling); undefined is all of it (taken by hand
+   * without `--mem`, by a run that has no scope to cap it, or by an older fleet). */
   readonly cap: number | undefined;
   /** The budget's bytes as its taker read it; undefined when an older fleet took it. */
   readonly budget: number | undefined;
@@ -227,6 +284,12 @@ export interface Hold extends GateHolder {
   readonly runner: number | undefined;
   /** The systemd user scope that run's command is in, when it has one: the run goes for as long as the scope does. */
   readonly runnerUnit: string | undefined;
+  /** The CPUs its run estimated; undefined when it declared none (by hand, or an older fleet's run). */
+  readonly cpus: number | undefined;
+  /** Whether its run was marked a landing gate (`--landing`): recorded, nothing more. */
+  readonly landing: boolean;
+  /** Whether its run is light: a light waiter passes a head that would not fit even without the light holds. */
+  readonly light: boolean;
   /** The hold as gate.json has it. */
   readonly raw: JsonObject;
 }
@@ -243,6 +306,15 @@ export interface Waiter extends GateHolder {
   readonly started: string | undefined;
   /** Whether at its last ask it fitted the budget and waited for memory alone. */
   readonly memory: boolean;
+  readonly cpus: number | undefined;
+  readonly landing: boolean;
+  /** Whether it is light ({@link Ask}'s `light`). */
+  readonly light: boolean;
+  /** The limits it asked under, by which a light run judges it: the budget's bytes, the CPU budget and the floor it
+   * read. A waiter an older fleet queued has none. */
+  readonly budget: number | undefined;
+  readonly cpuBudget: number | undefined;
+  readonly floor: number | undefined;
 }
 
 /** What a process asks of the gate. */
@@ -263,6 +335,15 @@ export interface Ask {
   readonly waitS: number;
   /** What it keeps free; undefined, or where MemAvailable cannot be read, only the budget counts. */
   readonly memory?: Memory | undefined;
+  /** The CPUs it estimates; undefined declares none (a hold by hand). */
+  readonly cpus?: number | undefined;
+  /** The CPUs all holds together may declare; undefined counts memory alone. */
+  readonly cpuBudget?: number | undefined;
+  /** Whether it is marked a landing gate: recorded on its hold, nothing more. */
+  readonly landing?: boolean | undefined;
+  /** Whether it is light (an estimate of {@link LIGHT_CAP} at most, each of its last runs {@link LIGHT_S} at most): it
+   * passes a head that would not fit even with every light hold gone. */
+  readonly light?: boolean | undefined;
 }
 
 /** Why an ask was not admitted: who holds, who is before it in the queue, and the memory it lacks. */
@@ -271,6 +352,8 @@ export interface Waiting {
   readonly ahead: readonly Waiter[];
   /** Whether its part fits the budget beside the holds. */
   readonly fits: boolean;
+  /** The rows it does not fit beside the holds: memory, CPU, or both; none when it fits. */
+  readonly lacks: readonly Row[];
   /** Set when the memory available, less what the holds may still take and its part, is under the floor. */
   readonly short?: Short | undefined;
 }
@@ -287,38 +370,73 @@ export function roomOf(budget: number, holders: readonly Hold[]): number {
   return Math.min(budget, ...holders.flatMap((h) => h.budget ?? []));
 }
 
-/** Whether a part of `cap` bytes (undefined: the whole budget) fits the budget `budget` beside `holders`. */
-function fitsBeside(cap: number | undefined, budget: number, holders: readonly Hold[]): boolean {
-  const used = holders.reduce((sum, h) => sum + (h.cap ?? Infinity), 0);
-
-  return cap === undefined ? holders.length === 0 : used + cap <= roomOf(budget, holders);
+/** What an ask or a waiter asks: its bytes (undefined: the whole budget) and its CPUs. */
+interface Part {
+  readonly cap: number | undefined;
+  readonly cpus?: number | undefined;
 }
 
-/** Whether `waiter` waits for memory alone: at its last ask, and still, its part fits the budget `budget` beside `holders`. */
-export function waitsForMemory(waiter: Waiter, budget: number, holders: readonly Hold[]): boolean {
-  return waiter.memory && fitsBeside(waiter.cap, budget, holders);
+/** The bytes `holders` take of the budget: a hold of the whole budget is all of it. */
+function memHeld(holders: readonly Hold[]): number {
+  return holders.reduce((sum, h) => sum + (h.cap ?? Infinity), 0);
 }
 
-/** Why `ask` does not fit the memory available beside `holders`, or undefined when it does (or MemAvailable cannot be
+/** The CPUs `holders` declared. A run an older fleet started, with no CPUs on its hold, runs at the quota it had then,
+ * half the CPUs; a hold by hand declares none. */
+export function cpusHeld(holders: readonly Hold[]): number {
+  const half = Math.max(2, Math.floor(cpusHere() / 2));
+
+  return holders.reduce((sum, h) => sum + (h.cpus ?? (h.pid !== undefined && h.cap !== undefined ? half : 0)), 0);
+}
+
+/** A row of the budget: what an ask may not fit. */
+export type Row = "memory" | "CPU";
+
+/** The rows in which `part` does not fit beside `holders`: the memory budget `budget` and, given one, the CPU budget
+ * `cpuBudget`. None: it fits. */
+function lacksBeside(part: Part, budget: number, holders: readonly Hold[], cpuBudget?: number): Row[] {
+  if (part.cap === undefined) return holders.length === 0 ? [] : ["memory"];
+  const mem = memHeld(holders) + part.cap > roomOf(budget, holders);
+  const cpu = cpuBudget !== undefined && cpusHeld(holders) + (part.cpus ?? 0) > cpuBudget;
+
+  return [...(mem ? ["memory" as const] : []), ...(cpu ? ["CPU" as const] : [])];
+}
+
+/** Whether `part` fits every row of the budget beside `holders` ({@link lacksBeside}). */
+function fitsBeside(part: Part, budget: number, holders: readonly Hold[], cpuBudget?: number): boolean {
+  return lacksBeside(part, budget, holders, cpuBudget).length === 0;
+}
+
+/** Whether `waiter` waits for the memory floor alone: at its last ask, and still, its part fits both rows of the
+ * budget, `budget` and `cpuBudget`, beside `holders`. What `fleet fleets gate` says of it; it keeps its place all the
+ * same. */
+export function waitsForMemory(waiter: Waiter, budget: number, holders: readonly Hold[], cpuBudget?: number): boolean {
+  return waiter.memory && fitsBeside(waiter, budget, holders, cpuBudget);
+}
+
+/** What the scope of `hold` uses now, or undefined when it has none to read. */
+function usedBy(hold: Hold, env: Env): number | undefined {
+  return hold.unit === undefined ? undefined : scopeUsed(hold.unit, env);
+}
+
+/** Why `part` does not fit the memory available beside `holders`, or undefined when it does (or MemAvailable cannot be
  * read). It is a condition beside the budget: the budget counts the holds, this the memory others use too (dev servers,
- * sessions). A hold counts the part of its cap its scope has not used yet: two runs asked seconds apart each read
- * MemAvailable before either used anything. */
-function shortOf(ask: Ask, holders: readonly Hold[]): Short | undefined {
-  const memory = ask.memory;
-  const available = memory === undefined ? undefined : memAvailable(memory.env);
+ * sessions). A hold counts the larger of its estimate and what its scope uses now, never its ceiling; what it uses is
+ * out of MemAvailable already, so it counts the part of its estimate not used yet: two runs asked seconds apart each
+ * read MemAvailable before either used anything, and a run past its estimate counts what it uses. `gone` are holds
+ * left out of `holders` to ask what the floor would say without them: what their scopes use comes back to
+ * MemAvailable. */
+function shortOf(part: Part, memory: Memory | undefined, holders: readonly Hold[], gone: readonly Hold[] = []): Short | undefined {
+  const read = memory === undefined ? undefined : memAvailable(memory.env);
 
-  if (memory === undefined || available === undefined) return undefined;
+  if (memory === undefined || read === undefined) return undefined;
+  const available = gone.reduce((sum, h) => sum + (usedBy(h, memory.env) ?? 0), read);
 
-  const unused = holders.reduce((sum, h) => {
-    if (h.cap === undefined) return sum;
-    const used = h.unit === undefined ? undefined : scopeUsed(h.unit, memory.env);
+  const unused = holders.reduce((sum, h) => (h.cap === undefined ? sum : sum + Math.max(0, h.cap - (usedBy(h, memory.env) ?? 0))), 0);
 
-    return sum + Math.max(0, h.cap - (used ?? 0));
-  }, 0);
+  const own = part.cap ?? memory.whole;
 
-  const part = ask.cap ?? memory.whole;
-
-  return available - unused - part >= memory.floor ? undefined : { available, unused, part, whole: ask.cap === undefined, floor: memory.floor };
+  return available - unused - own >= memory.floor ? undefined : { available, unused, part: own, whole: part.cap === undefined, floor: memory.floor };
 }
 
 /** `short` in words, for `noun` (`this run`): `39.4G needed, 36.0G available (15.7G held but not yet used, 15.7G for
@@ -346,11 +464,14 @@ export interface RunRecord {
   readonly at: string;
   readonly name: string;
   readonly kind: "fleet" | "session";
-  /** The command's first words. */
+  /** The whole command, quoted for a shell. */
   readonly what: string;
-  /** The cap it asked for, as given (`25%`, `24G`), and in bytes. */
+  /** Where its estimate came from (`--mem`'s `24G`, `last runs`, the default `25%`), and its ceiling in bytes: its
+   * scope's MemoryMax, the budget (the whole budget for a run with no scope). */
   readonly asked: string;
   readonly cap: number;
+  /** The memory it estimated, in bytes: its part of the budget. Older lines have none. */
+  readonly estimate?: number | undefined;
   /** Seconds it waited for the gate. */
   readonly waited: number;
   /** Seconds the command ran; null when it gave up waiting and never ran. */
@@ -358,8 +479,53 @@ export interface RunRecord {
   readonly code: number;
   /** The most memory its scope held, in bytes; null where there was no scope. */
   readonly peak: number | null;
-  /** How many processes the cap killed. */
+  /** How many processes of its scope an OOM killer killed (memory.events' oom_kill). */
   readonly killed: number;
+  /** The repository it ran in (jj's store, `.jj/repo`, which every workspace of it shares, else git's common
+   * directory), the workspace's root, and the commit: jj's `@-`, else git's HEAD. Older lines have none. */
+  readonly repo?: string | undefined;
+  readonly workspace?: string | undefined;
+  readonly commit?: string | undefined;
+  /** CPU seconds its scope used (cpu.stat's usage_usec); null where there was no scope. Older lines have none. */
+  readonly cpu_s?: number | null | undefined;
+  /** The CPUs it estimated, and whether it was marked a landing gate. Older lines have neither. */
+  readonly cpus?: number | undefined;
+  readonly landing?: boolean | undefined;
+}
+
+/** What a command's last runs that ran in a scope did, whatever their end (a failed run's peak and a killed run's are
+ * real peaks), at most {@link RUNS_MEASURED} of them: the largest memory peak and when that run ended, the longest
+ * time, and the most CPUs used on average (CPU seconds over time; undefined where none kept its CPU seconds). */
+export interface Measured {
+  readonly peak: number;
+  readonly at: string;
+  readonly ran: number;
+  readonly cores: number | undefined;
+  readonly runs: number;
+}
+
+/** A measured run's line: what {@link Measured} reads of it. */
+interface Ran {
+  readonly run: JsonObject;
+  readonly peak: number;
+  readonly ran: number;
+  readonly at: string;
+}
+
+/** `runs`, newest first, in numbers: undefined for none. */
+function measuredOf(runs: readonly Ran[]): Measured | undefined {
+  const last = runs.slice(0, RUNS_MEASURED);
+  const top = last.reduce<Ran | undefined>((max, r) => (max === undefined || r.peak > max.peak ? r : max), undefined);
+
+  if (top === undefined) return undefined;
+
+  const cores = last.flatMap((r) => {
+    const cpuS = asNumber(r.run["cpu_s"]);
+
+    return cpuS === undefined || r.ran <= 0 ? [] : [cpuS / r.ran];
+  });
+
+  return { peak: top.peak, at: top.at, ran: Math.max(...last.map((r) => r.ran)), cores: cores.length === 0 ? undefined : Math.max(...cores), runs: last.length };
 }
 
 /** The last day's runs in numbers. */
@@ -394,6 +560,9 @@ function holdOf(raw: JsonObject): Hold {
     unit: unitOf(raw["unit"]),
     runner: pidOf(raw["runner"]),
     runnerUnit: unitOf(raw["runner_unit"]),
+    cpus: asNumber(raw["cpus"]),
+    landing: raw["landing"] === true,
+    light: raw["light"] === true,
     raw,
   };
 }
@@ -414,6 +583,12 @@ function waiterOf(raw: JsonObject): Waiter | undefined {
     pid,
     started: asString(raw["started"]),
     memory: raw["memory"] === true,
+    cpus: asNumber(raw["cpus"]),
+    landing: raw["landing"] === true,
+    light: raw["light"] === true,
+    budget: asNumber(raw["budget"]),
+    cpuBudget: asNumber(raw["cpu_budget"]),
+    floor: asNumber(raw["floor"]),
   };
 }
 
@@ -423,7 +598,11 @@ function plus(raw: JsonObject, key: string, value: Json | undefined): JsonObject
 }
 
 function waiterJson(w: Waiter): JsonObject {
-  return plus(plus(plus({ fleet: w.name, kind: w.kind, what: w.what, since: w.since, until: w.until, pid: w.pid }, "cap", w.cap), "started", w.started), "memory", w.memory || undefined);
+  const base = plus(plus(plus({ fleet: w.name, kind: w.kind, what: w.what, since: w.since, until: w.until, pid: w.pid }, "cap", w.cap), "started", w.started), "memory", w.memory || undefined);
+
+  const kind = plus(plus(plus(base, "cpus", w.cpus), "landing", w.landing || undefined), "light", w.light || undefined);
+
+  return plus(plus(plus(kind, "budget", w.budget), "cpu_budget", w.cpuBudget), "floor", w.floor);
 }
 
 /** Whether the process `pid` that started at `started` still runs: a later process with its pid is another. */
@@ -505,9 +684,10 @@ function rank(sorted: readonly number[], p: number): number {
 export function holdText(hold: Hold): string {
   const who = hold.kind === "session" ? `${plain(hold.name)} (no fleet)` : plain(hold.name);
   const until = hold.until === undefined || hold.until === "" ? "" : `, until ${plain(hold.until)}`;
-  const cap = hold.cap === undefined ? "" : `, cap ${sizeText(hold.cap)}`;
+  const cap = hold.cap === undefined ? "" : `, ${hold.unit === undefined ? "cap" : "estimate"} ${sizeText(hold.cap)}`;
+  const cpus = hold.cpus === undefined ? "" : `, ${String(hold.cpus)} CPUs`;
 
-  return `held by ${who} since ${plain(hold.since)}${until}${cap}: ${plain(hold.what)}`;
+  return `held by ${who} since ${plain(hold.since)}${until}${cap}${cpus}${hold.landing ? ", a landing gate" : ""}: ${plain(hold.what)}`;
 }
 
 /** The gate of the machine whose registry is `registry`. */
@@ -630,17 +810,33 @@ export class Gate {
     return holders.length === 0 ? undefined : fileOf(holders);
   }
 
-  /** `ask` takes its part of the budget when it is first in line (but for waiters that wait for memory alone), fits
+  /** `ask` takes its part of the budget when it is first in line (but for waiters a light run passes), fits
    * beside the holds and leaves the floor free: the hold it made. Else who is in its way; an ask ready to wait
    * (`waitS`) then has its place in the queue, kept across calls by its pid. */
   ask(ask: Ask, now: Date): { readonly took: Hold } | { readonly waiting: Waiting } {
     return this.locked(() => {
       const { holders, queue } = this.settled(now);
       const at = queue.findIndex((w) => w.pid === ask.pid);
-      // No hold's end frees memory for a waiter whose part fits the budget: it holds back nobody that fits now.
-      const ahead = (at < 0 ? queue : queue.slice(0, at)).filter((w) => !waitsForMemory(w, ask.budget, holders));
-      const fits = fitsBeside(ask.cap, ask.budget, holders);
-      const short = shortOf(ask, holders);
+      const lacks = lacksBeside(ask, ask.budget, holders, ask.cpuBudget);
+      const fits = lacks.length === 0;
+      const before = at < 0 ? queue : queue.slice(0, at);
+      const heavy = holders.filter((h) => !h.light);
+      const lights = holders.filter((h) => h.light);
+
+      // Arrival order, a waiter short of the memory floor alone included: a run that passed it would hold memory it
+      // waits for, and overlapping runs would keep it short for ever. A light run that fits passes only a waiter that
+      // would not be admitted even with every light hold gone, its own included once it holds: not in the budget's
+      // rows, or not by the floor. Once the lights are what keeps a waiter out they stop passing it, and drain in
+      // minutes. A waiter is judged by the limits it asked under; one an older fleet queued, by this ask's.
+      const blocks = (w: Waiter): boolean => {
+        const own = w.budget === undefined ? ask : { budget: w.budget, cpuBudget: w.cpuBudget, memory: ask.memory === undefined || w.floor === undefined ? undefined : { ...ask.memory, floor: w.floor } };
+
+        return fitsBeside(w, own.budget, heavy, own.cpuBudget) && shortOf(w, own.memory, heavy, lights) === undefined;
+      };
+
+      const ahead = ask.light === true && fits ? before.filter(blocks) : before;
+
+      const short = shortOf(ask, ask.memory, holders);
       const memory = fits && short !== undefined;
       const since = stampOf(now);
 
@@ -665,6 +861,12 @@ export class Gate {
           pid: ask.pid,
           started: startedOf(ask.pid),
           memory,
+          cpus: ask.cpus,
+          landing: ask.landing === true,
+          light: ask.light === true,
+          budget: ask.budget,
+          cpuBudget: ask.cpuBudget,
+          floor: ask.memory?.floor,
         };
 
         this.keepQueue([...queue, waiter]);
@@ -672,7 +874,7 @@ export class Gate {
         this.keepQueue(queue.map((w, i) => (i === at ? { ...w, memory } : w)));
       }
 
-      return { waiting: short === undefined ? { holders, ahead, fits } : { holders, ahead, fits, short } };
+      return { waiting: short === undefined ? { holders, ahead, fits, lacks } : { holders, ahead, fits, lacks, short } };
     });
   }
 
@@ -697,7 +899,7 @@ export class Gate {
     // A run with a cap is a run in a scope (without one it asks for the whole budget): the scope's name is the hold's.
     const scoped = ask.runs && ask.cap !== undefined ? { ...run, unit: `fleet-gate-${token}-${String(ask.pid)}` } : run;
 
-    return holdOf(plus({ ...scoped, budget: ask.budget }, "cap", ask.cap));
+    return holdOf(plus(plus(plus(plus({ ...scoped, budget: ask.budget }, "cap", ask.cap), "cpus", ask.cpus), "landing", ask.landing === true ? true : undefined), "light", ask.light === true ? true : undefined));
   }
 
   /** The process `pid` gives up its place in the queue. */
@@ -744,6 +946,26 @@ export class Gate {
 
       if (lines.length > RUNS_KEPT * 2) writeText(path, `${lines.slice(-RUNS_KEPT).join("\n")}\n`);
     });
+  }
+
+  /** The runs kept that ran in a scope, newest first, whatever their end: a peak and a time measured. */
+  private measuredRuns(): Ran[] {
+    return (readText(this.path("runs.jsonl")) ?? "").split("\n").flatMap((line) => {
+      const run = Option.getOrUndefined(parseObject(line));
+      const peak = asNumber(run?.["peak"]);
+      const ran = asNumber(run?.["ran"]);
+      const at = asString(run?.["at"]);
+
+      return run === undefined || peak === undefined || ran === undefined || at === undefined ? [] : [{ run, peak, ran, at }];
+    }).toReversed();
+  }
+
+  /** What the last runs of `what` (as {@link whatKey} keys it) in the repository `repo` did, or undefined when there
+   * were none: older lines, which name no repository, are never one. */
+  history(repo: string, what: string): Measured | undefined {
+    const key = whatKey(what);
+
+    return measuredOf(this.measuredRuns().filter((r) => r.run["repo"] === repo && whatKey(asString(r.run["what"]) ?? "") === key));
   }
 
   /** The runs that ended in the day before `now`, in numbers; undefined when there were none. */

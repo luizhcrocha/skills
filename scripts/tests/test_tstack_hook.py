@@ -5124,6 +5124,13 @@ class SuiteGateTest(FleetCase):
                 self.assertNotIn("updatedInput", d)
                 self.assertIn(" fleets gate run --as p --wait 1800 -- ", d["permissionDecisionReason"])
 
+    def test_a_session_inside_a_gate_run_is_never_sent_to_the_gate_again(self):
+        self.manager()
+        for command in ("just test", "pnpm test:workers", "bash -c 'pnpm test'"):
+            with self.subTest(command=command):
+                r = self.run_bash(command, env={"FLEET_GATE_RUN": "fleet-gate-0a1b2c3d-4242"})
+                self.assertEqual(r.stdout.strip(), "", r.stdout)
+
     def test_scoped_probes_pass_untouched(self):
         self.manager()
         for command in ("vitest -t foo", "vitest run -t 'a b'", "pytest -k foo", "pytest --lf", "cargo test foo",

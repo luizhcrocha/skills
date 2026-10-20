@@ -1,12 +1,17 @@
 /**
- * `fleet fleets gate run FLEET|--as NAME [--wait SECONDS] [--for MINUTES] [--timeout SECONDS] [--mem SIZE|PERCENT] [--floor SIZE|PERCENT] -- COMMAND...`:
- * a test suite run through the gate, as one process tree that dies whole. It takes its part of the gate's memory
- * budget (gate.ts: `--mem`, else $FLEET_GATE_MEMORY_MAX, else a quarter of the RAM, so two default runs fit the
- * budget at once), waiting in the gate's queue up to `--wait` (also while MemAvailable, less that cap and what the
- * holds may still take, is under the floor, `--floor`, else $FLEET_GATE_MEMORY_FLOOR, else 8G), then runs COMMAND in a transient systemd user scope
- * capped at that memory, with no swap and OOMPolicy=continue (the kernel kills the hog, the suite sees it fail) and
- * a CPU weight, so two runs share the cores evenly whatever each one's thread count, and a CPU quota, half the CPUs,
- * which a pool sized by nproc or Node's CPU count reads, so a suite's tests keep their time beside other work. On
+ * `fleet fleets gate run FLEET|--as NAME [--wait SECONDS] [--for MINUTES] [--timeout SECONDS] [--mem SIZE|PERCENT] [--floor SIZE|PERCENT] [--cpus N] [--landing] -- COMMAND...`:
+ * a test suite run through the gate, as one process tree that dies whole. Two numbers size it. Its estimate, memory
+ * and CPUs, is its part of the gate's budgets and decides admission only (gate.ts): `--mem` and `--cpus` when given;
+ * else the largest of the last 3 runs of the same command in this repository, whatever their end, times 1.25 (memory
+ * 2G at least; CPUs its CPU seconds over its time, 2 at least); else $FLEET_GATE_MEMORY_MAX or a quarter of the RAM,
+ * and 8 CPUs. It waits in the gate's queue up to `--wait` (also while MemAvailable, less its estimate and what the
+ * holds' estimates still leave them, is under the floor, `--floor`, else $FLEET_GATE_MEMORY_FLOOR, else 8G), then runs
+ * COMMAND in a transient systemd user scope under its ceiling, the same for every run: MemoryMax the whole budget
+ * (half the RAM), no swap and OOMPolicy=continue (the kernel kills the hog, the suite sees it fail), a CPU weight, so
+ * two runs share the cores evenly whatever each one's thread count, and a CPU quota, $FLEET_GATE_CPUS else half the
+ * CPUs, which a pool sized by nproc or Node's CPU count reads, so a suite's tests keep their time beside other work.
+ * Nothing kills a run for passing its estimate: only the ceiling and the kernel's OOM killer limit it, and its peak,
+ * on its record, raises the next run's estimate. `--landing` marks the run on its hold and its record, nothing more. On
  * any end (exit, failure, `--timeout` or the hold's `--for` running out, a signal) it stops the scope, so every
  * process the command started dies with it (one that asked for an app scope of its own, as Chromium does, is taken
  * back into the run's while it runs, and killed when it got out after the last look), frees its hold, keeps one line
@@ -21,13 +26,13 @@
  * runner dies without cleaning up (SIGKILL). */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readdirSync, writeFileSync } from "node:fs";
-import { availableParallelism, constants, cpus } from "node:os";
-import { dirname, join } from "node:path";
+import { existsSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { constants } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 import { stampOf } from "./clock.ts";
 import { readText } from "./files.ts";
-import { budgetOf, capBytes, DEFAULT_CAP, floorOf, floorRefusal, gateOf, holdText, memAvailable, memTotal, plain, scopeLives, shortText, sizeText, type GateHolder, type Memory, type RunRecord, type Waiting } from "./gate.ts";
+import { budgetOf, capBytes, cpuBudgetOf, cpusHere, DEFAULT_CAP, floorOf, floorRefusal, gateOf, holdText, LIGHT_CAP, LIGHT_S, memAvailable, memEstimate, memTotal, plain, scopeLives, shortText, sizeText, type GateHolder, type Memory, type RunRecord, type Waiting } from "./gate.ts";
 import { ancestry } from "./procs.ts";
 import type { Machine } from "./world.ts";
 
@@ -54,6 +59,16 @@ const STOP_GRACE_S = 5;
 /** How long a stopped scope's cgroup has to go, once `systemctl stop` has answered, before it is taken as still there. */
 const SCOPE_GONE_MS = 1000;
 
+/** The CPUs a run estimates with no earlier run to size it from, the least its runs give it, and the margin over them. */
+const FIRST_CPUS = 8;
+
+const LEAST_CPUS = 2;
+
+const CPU_MARGIN = 1.25;
+
+/** How long git or jj has to say where a run is. */
+const VCS_MS = 5000;
+
 /** What `gate run` was asked to do. */
 export interface RunAsk {
   readonly name: string;
@@ -65,9 +80,13 @@ export interface RunAsk {
   readonly floor: string | undefined;
   /** Seconds the command may run before it is stopped; its hold's `--for` when not given. */
   readonly timeoutS: number;
+  /** The CPUs it estimates (`--cpus`), for admission alone; undefined sizes them from its last runs. */
+  readonly cpus: number | undefined;
+  /** Whether it is marked a landing gate (`--landing`): on its hold and its record, nothing more. */
+  readonly landing: boolean;
 }
 
-export const RUN_USAGE = "usage: fleet fleets gate run FLEET|--as NAME [--wait SECONDS] [--for MINUTES] [--timeout SECONDS] [--mem SIZE|PERCENT] [--floor SIZE|PERCENT] -- COMMAND...";
+export const RUN_USAGE = "usage: fleet fleets gate run FLEET|--as NAME [--wait SECONDS] [--for MINUTES] [--timeout SECONDS] [--mem SIZE|PERCENT] [--floor SIZE|PERCENT] [--cpus N] [--landing] -- COMMAND...";
 
 /** `gate run`'s arguments (after `run`), or undefined when they do not parse. */
 export function runArgs(argv: readonly string[]): RunAsk | undefined {
@@ -83,16 +102,21 @@ export function runArgs(argv: readonly string[]): RunAsk | undefined {
   let mem: string | undefined;
   let floor: string | undefined;
   let timeoutS: number | undefined;
+  let cpus: number | undefined;
+  let landing = false;
 
   for (let i = 0; i < own.length; i += 1) {
     const word = own[i] ?? "";
     const value = own[i + 1];
 
-    if (word === "--as" || word === "--wait" || word === "--for" || word === "--mem" || word === "--floor" || word === "--timeout") {
+    if (word === "--landing") {
+      landing = true;
+    } else if (word === "--as" || word === "--wait" || word === "--for" || word === "--mem" || word === "--floor" || word === "--timeout" || word === "--cpus") {
       if (value === undefined) return undefined;
       i += 1;
 
       if (word === "--as") as = value.trim();
+      else if (word === "--cpus") cpus = /^[0-9]+$/.test(value) ? Number(value) : 0;
       else if (word === "--wait") waitS = /^[0-9]+$/.test(value) ? Number(value) : -1;
       else if (word === "--for") minutes = /^[0-9]+$/.test(value) ? Number(value) : 0;
       else if (word === "--timeout") timeoutS = /^[0-9]+$/.test(value) ? Number(value) : 0;
@@ -103,12 +127,12 @@ export function runArgs(argv: readonly string[]): RunAsk | undefined {
     }
   }
 
-  if (waitS < 0 || minutes <= 0 || timeoutS === 0 || as === "" || mem === "" || floor === "") return undefined;
+  if (waitS < 0 || minutes <= 0 || timeoutS === 0 || cpus === 0 || as === "" || mem === "" || floor === "") return undefined;
   const name = as ?? (words.length === 1 ? words[0] : undefined);
 
   if (name === undefined || (as !== undefined && words.length > 0) || words.length > 1) return undefined;
 
-  return { name, command, waitS, minutes, mem, floor, timeoutS: Math.min(timeoutS ?? minutes * 60, minutes * 60) };
+  return { name, command, waitS, minutes, mem, floor, timeoutS: Math.min(timeoutS ?? minutes * 60, minutes * 60), cpus, landing };
 }
 
 /** Whether a systemd user manager answers here, so a transient scope can hold the command: `why` says why not.
@@ -154,14 +178,15 @@ interface CpuShare {
 
 /** The CPUs a run's scope may use at once ($FLEET_GATE_CPUS, else half the machine's, 2 at least), as its CPUQuota,
  * and what the run's line says of it; `cpus` is undefined for no quota ($FLEET_GATE_CPUS is 0, the CPUs are at least
- * the machine's, or the cpu controller is not delegated). A pool sized from a CPU count that reads the quota (nproc,
- * Node's os.availableParallelism(), which is libuv's uv_available_parallelism, so vitest's default workers under
- * Node; Rust's available_parallelism; Go's GOMAXPROCS from 1.25) starts no more workers than the run may use, and a
- * test's time stays its own beside other work. A pool sized from os.cpus(), Bun's os.availableParallelism(), a
- * config's maxWorkers or Playwright keeps its size, and the quota only slows it. The machine's CPUs are os.cpus()'s,
- * which no quota changes, so a run inside a run's scope halves the machine's too. */
+ * the machine's, or the cpu controller is not delegated). It is the ceiling, the same for every run whatever it
+ * estimates. A pool sized from a CPU count that reads the quota (nproc, Node's os.availableParallelism(), which is
+ * libuv's uv_available_parallelism, so vitest's default workers under Node; Rust's available_parallelism; Go's
+ * GOMAXPROCS from 1.25) starts no more workers than the run may use, and a test's time stays its own beside other
+ * work. A pool sized from os.cpus(), Bun's os.availableParallelism(), a config's maxWorkers or Playwright keeps its
+ * size, and the quota only slows it. The machine's CPUs are os.cpus()'s, which no quota changes, so a run inside a
+ * run's scope halves the machine's too. */
 function cpuShare(env: (name: string) => string | undefined): CpuShare {
-  const all = cpus().length || availableParallelism();
+  const all = cpusHere();
   const given = env("FLEET_GATE_CPUS");
   const whole = given !== undefined && /^[0-9]+$/.test(given.trim());
   const share = whole ? Number(given.trim()) : Math.max(2, Math.floor(all / 2));
@@ -185,16 +210,65 @@ function cpuShare(env: (name: string) => string | undefined): CpuShare {
   return { cpus: share, said: `, CPUQuota=${String(share * 100)}% (${n} of ${String(all)} CPUs: ${reads})${bad === undefined ? "" : `; ${bad}`}` };
 }
 
+/** Where a run is: its repository (jj's store, `.jj/repo`, which every workspace of the repository shares, else git's
+ * common directory), the workspace's root, and its commit (jj's `@-`, else git's HEAD), each absent where it cannot be
+ * read. The repository keys a command's history, so a new workspace has its repository's. */
+interface Where {
+  readonly repo?: string | undefined;
+  readonly workspace?: string | undefined;
+  readonly commit?: string | undefined;
+}
+
+/** The jj store of the workspace whose root is `root`: its `.jj/repo` directory, or the one a later workspace's
+ * `.jj/repo` file names (a path from its `.jj`). */
+function jjStore(root: string): string | undefined {
+  const dotJj = join(root, ".jj");
+  const pointer = join(dotJj, "repo");
+
+  try {
+    return realpathSync(statSync(pointer).isDirectory() ? pointer : resolve(dotJj, readText(pointer)?.trim() ?? ""));
+  } catch {
+    return undefined;
+  }
+}
+
+function whereRun(): Where {
+  const read = (program: string, args: readonly string[]): string | undefined => {
+    const done = spawnSync(program, args, { encoding: "utf8", timeout: VCS_MS, stdio: ["ignore", "pipe", "ignore"] });
+    const out = done.error === undefined && done.status === 0 ? done.stdout.split("\n")[0]?.trim() : undefined;
+
+    return out === "" ? undefined : out;
+  };
+
+  const real = (path: string | undefined): string | undefined => (path !== undefined && existsSync(path) ? realpathSync(path) : undefined);
+  const jj = read("jj", ["root", "--ignore-working-copy", "--color", "never"]);
+
+  if (jj !== undefined) {
+    const commit = read("jj", ["log", "--ignore-working-copy", "--no-graph", "--color", "never", "-r", "@-", "-T", 'commit_id ++ "\\n"']);
+
+    return { repo: jjStore(jj), workspace: jj, commit };
+  }
+
+  const git = read("git", ["rev-parse", "--show-toplevel"]);
+
+  if (git === undefined) return {};
+
+  return { repo: real(read("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"])), workspace: git, commit: read("git", ["rev-parse", "HEAD"]) };
+}
+
 /** The shell that runs the command inside the scope. On descriptor 3, which the command does not get, it tells the
  * runner its cgroup, and at the end the scope's memory peak and how many processes the cap killed, read before the
  * scope (gone with its last process) takes them with it. */
 const IN_SCOPE = 'cg=/sys/fs/cgroup$(sed -n "s/^0:://p" /proc/self/cgroup); echo "cgroup $cg" >&3; "$@" 3>&-; rc=$?; ' +
-  'echo "peak $(cat "$cg/memory.peak" 2>/dev/null)" >&3; echo "oom_kill $(sed -n "s/^oom_kill //p" "$cg/memory.events" 2>/dev/null)" >&3; exit $rc';
+  'echo "peak $(cat "$cg/memory.peak" 2>/dev/null)" >&3; echo "oom_kill $(sed -n "s/^oom_kill //p" "$cg/memory.events" 2>/dev/null)" >&3; ' +
+  'echo "cpu $(sed -n "s/^usage_usec //p" "$cg/cpu.stat" 2>/dev/null)" >&3; exit $rc';
 
-/** What a scope's memory did: its peak in bytes and how many processes its cap killed, where known. */
+/** What a scope did: its memory peak in bytes, how many processes its cap killed, and the CPU time it used in
+ * microseconds, where known. */
 interface ScopeMemory {
   readonly peak: number | undefined;
   readonly killed: number | undefined;
+  readonly usec: number | undefined;
 }
 
 function count(text: string | undefined): number | undefined {
@@ -203,9 +277,13 @@ function count(text: string | undefined): number | undefined {
 
 /** The memory of the scope whose cgroup directory is `cgroup`, read from the kernel now. */
 function memoryNow(cgroup: string | undefined): ScopeMemory {
-  if (cgroup === undefined) return { peak: undefined, killed: undefined };
+  if (cgroup === undefined) return { peak: undefined, killed: undefined, usec: undefined };
 
-  return { peak: count(readText(`${cgroup}/memory.peak`)), killed: count(/^oom_kill (\d+)$/m.exec(readText(`${cgroup}/memory.events`) ?? "")?.[1]) };
+  return {
+    peak: count(readText(`${cgroup}/memory.peak`)),
+    killed: count(/^oom_kill (\d+)$/m.exec(readText(`${cgroup}/memory.events`) ?? "")?.[1]),
+    usec: count(/^usage_usec (\d+)$/m.exec(readText(`${cgroup}/cpu.stat`) ?? "")?.[1]),
+  };
 }
 
 /** How often the runner looks for a process of the run that left its scope for an app scope. */
@@ -373,7 +451,11 @@ function waitText(waiting: Waiting): string {
 
   const behind = waiting.ahead.length === 0 ? "" : `, behind ${waiting.ahead.map((w) => plain(w.name)).join(", ")}`;
 
-  return `${held}; place ${String(waiting.ahead.length + 1)} in the queue${behind}`;
+  // What it waits on: a budget row the holds' estimates fill (memory, CPU), MemAvailable under the floor, or its turn.
+  const rows = [...waiting.lacks, ...(short === undefined ? [] : ["the memory floor"])];
+  const reason = rows.length === 0 ? "waiting for its turn" : `waiting for ${rows.join(" and ")}`;
+
+  return `${reason}: ${held}; place ${String(waiting.ahead.length + 1)} in the queue${behind}`;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((wake) => setTimeout(wake, ms));
@@ -398,28 +480,55 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     return 2;
   }
 
+  const cpuBudget = cpuBudgetOf(machine.env);
+
+  if (cpuBudget === undefined) {
+    say(`gate run: cannot read the CPU budget of all runs together, $FLEET_GATE_CPU_BUDGET='${machine.env("FLEET_GATE_CPU_BUDGET") ?? ""}': give a whole number of CPUs`);
+
+    return 2;
+  }
+
+  const where = whereRun();
+  const command = quoted(ask.command);
+  const last = where.repo === undefined ? undefined : gate.history(where.repo, command);
   const total = memTotal();
-  const given = ask.mem ?? machine.env("FLEET_GATE_MEMORY_MAX");
-  const spec = given ?? DEFAULT_CAP;
-  const parsed = capBytes(spec, total);
+  // The estimate: --mem, else its last runs, else $FLEET_GATE_MEMORY_MAX or the default.
+  const given = ask.mem ?? (last !== undefined ? undefined : machine.env("FLEET_GATE_MEMORY_MAX"));
+  const measured = given === undefined && last !== undefined ? memEstimate(last.peak) : undefined;
+  const spec = given ?? (measured === undefined ? DEFAULT_CAP : sizeText(measured));
+  const parsed = measured ?? capBytes(spec, total);
 
   if (parsed === undefined) {
-    say(`gate run: cannot read the memory cap '${spec}': give a share of the RAM (25%) or a size (24G), 64M at least`);
+    say(`gate run: cannot read the memory estimate '${spec}': give a share of the RAM (25%) or a size (24G), 64M at least`);
 
     return 2;
   }
 
-  // The default follows a smaller budget down; a cap someone gave is theirs to change.
-  const wanted = given === undefined ? Math.min(parsed, budget.bytes) : parsed;
+  // An estimate the gate makes follows a smaller budget down; one someone gave is theirs to change.
+  const estimate = given === undefined ? Math.min(parsed, budget.bytes) : parsed;
 
-  const over = (limit: number, whose: string): string =>
-    `gate run: the memory cap '${spec}' (${sizeText(parsed)}) is more than ${whose} (${sizeText(limit)}): ask for at most that`;
-
-  if (wanted > budget.bytes) {
-    say(over(budget.bytes, `the budget of all runs together, ${budget.spec}`));
+  if (estimate > budget.bytes) {
+    say(`gate run: the memory estimate '${spec}' (${sizeText(parsed)}) is more than the budget of all runs together, ${budget.spec} (${sizeText(budget.bytes)}): ask for at most that`);
 
     return 2;
   }
+
+  if (ask.cpus !== undefined && ask.cpus > cpuBudget) {
+    say(`gate run: --cpus ${String(ask.cpus)} is more than the CPU budget of all runs together (${String(cpuBudget)}): ask for at most that`);
+
+    return 2;
+  }
+
+  const fromRuns = last?.cores === undefined ? undefined : Math.max(LEAST_CPUS, Math.ceil(last.cores * CPU_MARGIN));
+  const cpus = Math.min(ask.cpus ?? fromRuns ?? FIRST_CPUS, cpuBudget);
+  const runs = last === undefined ? "" : last.runs === 1 ? "its last run" : `its last ${String(last.runs)} runs`;
+
+  const memFrom = ask.mem !== undefined ? "--mem" : last !== undefined ? `${runs} (${sizeText(last.peak)} peak at ${last.at})`
+    : `${given === undefined ? "the default" : "$FLEET_GATE_MEMORY_MAX"} ${spec} (no earlier run)`;
+
+  const cpuFrom = ask.cpus !== undefined ? "--cpus" : fromRuns !== undefined ? `${runs} (${last?.cores?.toFixed(1) ?? "?"} used on average)` : "the default (no earlier run)";
+  const lowered = estimate < parsed ? `, lowered from ${sizeText(parsed)} to the budget` : "";
+  const estimateSaid = `estimate ${sizeText(estimate)} from ${memFrom}${lowered} and ${String(cpus)} of the ${String(cpuBudget)} CPUs of all runs from ${cpuFrom}`;
 
   const floor = floorOf(ask.floor, machine.env);
 
@@ -445,7 +554,6 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
   const arrived = Date.now();
   const deadline = arrived + ask.waitS * 1000;
   const waited = (): number => Math.round((Date.now() - arrived) / 1000);
-  const first = shown(ask.command.slice(0, 6), 80);
 
   const keep = (record: RunRecord): void => {
     try {
@@ -455,8 +563,12 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     }
   };
 
-  const cap = scoped ? wanted : budget.bytes;
-  const askedAs = scoped ? spec : "all (no scope)";
+  // The ceiling, the same for every run: the whole budget. The estimate only admits it.
+  const cap = budget.bytes;
+  const askedAs = !scoped ? "all (no scope)" : measured === undefined ? spec : "last runs";
+  // Light: a small estimate, and every one of its last runs short. A first run is never light.
+  const light = scoped && last !== undefined && last.ran <= LIGHT_S && estimate <= LIGHT_CAP;
+  const marks = { repo: where.repo, workspace: where.workspace, commit: where.commit, estimate: scoped ? estimate : undefined, cpus, landing: ask.landing || undefined };
   const limitS = ask.timeoutS;
   let token: string | undefined;
   let unit = `fleet-gate-${randomBytes(4).toString("hex")}-${process.pid}`;
@@ -464,20 +576,25 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
   let wasByHand = false;
   let wasShort = false;
   // The gate reads MemAvailable at each ask, under its lock: what others use (dev servers, sessions) comes and goes. A
-  // run without a scope asks for the whole budget, and counts its own cap against the floor.
-  const memory: Memory = { floor: floor.bytes, whole: wanted, env: machine.env };
+  // run without a scope asks for the whole budget, and counts its own estimate against the floor.
+  const memory: Memory = { floor: floor.bytes, whole: estimate, env: machine.env };
 
   for (;;) {
     const now = machine.now();
 
     // A hold taken by hand is its taker's alone, its own name's included: the run waits for it as any other.
     warn("this run asks for the whole budget, one run at a time");
-    const result = gate.ask({ holder, what, seconds: ask.minutes * 60 + HOLD_GRACE_S, cap: scoped ? wanted : undefined, budget: budget.bytes, pid: process.pid, runs: true, waitS: ask.waitS, memory }, now);
+
+    const result = gate.ask({
+      holder, what, seconds: ask.minutes * 60 + HOLD_GRACE_S, cap: scoped ? estimate : undefined, budget: budget.bytes, pid: process.pid, runs: true, waitS: ask.waitS, memory,
+      cpus: scoped ? cpus : undefined, cpuBudget, landing: ask.landing, light,
+    }, now);
 
     if ("took" in result) {
       token = result.took.token;
       unit = result.took.unit ?? unit;
-      say(`gate run: ${plain(ask.name)} holds the gate (token ${token ?? "?"}, until ${result.took.until ?? "?"})${saidWait ? `, after ${String(waited())}s of waiting` : ""}`);
+      const as = `${ask.landing ? " as a landing gate" : ""}${light ? ", a light run" : ""}`;
+      say(`gate run: ${plain(ask.name)} holds the gate${as} (token ${token ?? "?"}, until ${result.took.until ?? "?"})${saidWait ? `, after ${String(waited())}s of waiting` : ""}`);
       break;
     }
 
@@ -496,7 +613,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
 
     if (Date.now() >= deadline) {
       gate.leave(process.pid, machine.now());
-      keep({ name: holder.name, kind: holder.kind, what: first, asked: askedAs, at: stampOf(machine.now()), cap, waited: waited(), ran: null, code: 75, peak: null, killed: 0 });
+      keep({ name: holder.name, kind: holder.kind, what: command, asked: askedAs, at: stampOf(machine.now()), cap, waited: waited(), ran: null, code: 75, peak: null, killed: 0, cpu_s: null, ...marks });
       say(`gate run: ${why}; gave up after ${ask.waitS}s without running the command (exit 75). Run it again later, or with a longer --wait`);
 
       return 75;
@@ -538,9 +655,9 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     : [...ask.command];
 
   if (scoped) {
-    const share = cap === parsed && spec.endsWith("%") ? ` (${spec} of ${sizeText(total)} RAM)` : "";
+    const share = budget.spec.endsWith("%") ? ` (the budget, ${budget.spec} of ${sizeText(total)} RAM)` : " (the budget)";
     const cpu = weight === undefined ? `nice ${NICE} (no CPU weight: the systemd user manager has no cpu controller, or $FLEET_GATE_CPU_WEIGHT is 0)` : `CPUWeight=${weight}`;
-    say(`gate run: running in the systemd scope ${unit}.scope, MemoryMax=${sizeText(cap)}${share}, no swap, ${cpu}${quota?.said ?? ""}: ${shown(ask.command)}`);
+    say(`gate run: running in the systemd scope ${unit}.scope, ${estimateSaid}; MemoryMax=${sizeText(cap)}${share}, no swap, ${cpu}${quota?.said ?? ""}: ${shown(ask.command)}`);
   } else {
     say(`gate run: running without a memory cap, in a process group of its own, killed whole at its end: ${shown(ask.command)}`);
   }
@@ -599,7 +716,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
   let why: "timeout" | NodeJS.Signals | undefined;
   let stopping: Promise<void> | undefined;
   // A stopped scope's shell never tells its end: the runner reads the scope's memory before it stops it.
-  let atStop: ScopeMemory = { peak: undefined, killed: undefined };
+  let atStop: ScopeMemory = { peak: undefined, killed: undefined, usec: undefined };
 
   const stop = (reason: "timeout" | NodeJS.Signals): void => {
     if (why !== undefined || pid === undefined) return;
@@ -662,6 +779,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     const secs = ranS.toFixed(1);
     const peak = count(told(piped, "peak")) ?? atStop.peak;
     const killed = count(told(piped, "oom_kill")) ?? atStop.killed ?? 0;
+    const usec = count(told(piped, "cpu")) ?? atStop.usec;
     const slot = left ? "its hold stays while its scope does" : token === undefined ? "the hold stays its taker's" : "freed the gate";
 
     const listed = (by: Map<string, Set<number>>, word: string): string => [...by].map(([scope, pids]) => `${String(pids.size)} ${word} ${scope}`).join(", ");
@@ -682,22 +800,16 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
       : why !== undefined ? 128 + (constants.signals[why] ?? 15)
       : end.code ?? 128 + (end.signal === null ? 9 : (constants.signals[end.signal] ?? 9));
 
-    if (killed > 0) {
-      const who = holder.kind === "fleet" ? quoted([ask.name]) : `--as ${quoted([ask.name])}`;
-      const kept = `${ask.waitS > 0 ? ` --wait ${ask.waitS}` : ""}${ask.minutes === RUN_MINUTES ? "" : ` --for ${ask.minutes}`}${ask.timeoutS === ask.minutes * 60 ? "" : ` --timeout ${ask.timeoutS}`}`;
-
-      const next = cap < budget.bytes ? `Run it again with the whole budget: \`fleet fleets gate run ${who}${kept} --mem ${budget.spec} -- ${quoted(ask.command)}\``
-        : `It had the whole budget (${budget.spec}, ${sizeText(budget.bytes)}): the command needs fewer processes at once`;
-
-      say(`gate run: the memory cap (MemoryMax=${sizeText(cap)}) killed ${killed} process(es). ${next}`);
-    }
+    // oom_kill counts the scope's processes the machine-wide OOM killer took too, not only those its ceiling did.
+    if (killed > 0) say(`gate run: ${killed} process(es) of the run killed for memory: the run or the machine ran out (its ceiling MemoryMax=${sizeText(cap)} is the whole budget, ${budget.spec})`);
 
     const how = why === "timeout" ? `stopped at its ${limitS}s limit after ${secs}s (exit 124)`
       : why !== undefined ? `stopped on ${why} after ${secs}s (exit ${code})`
       : end.signal !== null ? `killed by ${end.signal} after ${secs}s (exit ${code})`
       : `exit ${code} after ${secs}s`;
 
-    keep({ name: holder.name, kind: holder.kind, what: first, asked: askedAs, at: stampOf(machine.now()), cap, waited: waitedS, ran: Math.round(ranS * 10) / 10, code, peak: peak ?? null, killed });
+    const cpuS = usec === undefined ? null : Math.round(usec / 1000) / 1000;
+    keep({ name: holder.name, kind: holder.kind, what: command, asked: askedAs, at: stampOf(machine.now()), cap, waited: waitedS, ran: Math.round(ranS * 10) / 10, code, peak: peak ?? null, killed, cpu_s: cpuS, ...marks });
     say(`gate run: ${how}${peak === undefined ? "" : `, memory peak ${sizeText(peak)}`}; ${slot}`);
 
     return code;
