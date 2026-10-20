@@ -244,7 +244,7 @@ environment, run in the store's folder (outside any repo).
     which ingests that one project and makes no model call: no summarize.
     The hook starts it only once tape is in use on the machine (its
     `index.db` exists, from a first `tape build` by hand), and never for a
-    worker or a headless run.
+    worker, a headless run, or a session in no jj or git repo.
   - `build_on_start = false` in `tape.toml` turns it off: the build exits
     having built nothing. A build by hand ignores the switch.
   - Detached: a new session (`setsid`), out of the hook's process group, and,

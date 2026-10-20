@@ -119,7 +119,8 @@ def memo_wake(hook):
 def tape_build(hook):
     """SessionStart: start `tape build --on-start` for the session's project and return without waiting
     (docs/design/tape.md, Phase 2). Only once tape is in use on the machine (its index.db, left by a first
-    `tape build`), never for a worker or a headless run. tape owns the rest: `build_on_start = false` in tape.toml
+    `tape build`) and for a cwd in a jj or git repo (memo's rule, tape's too), never for a worker or a headless
+    run. tape owns the rest: `build_on_start = false` in tape.toml
     makes it a no-op, and the project's flock keeps it to one build at a time. The build runs in a session of its
     own, out of the hook's process group, and in a user scope of its own where systemd has one, out of the
     session's; it runs at nice 10, capped at 2G in that scope; its output goes nowhere, so nothing holds the
@@ -127,7 +128,7 @@ def tape_build(hook):
     if hook.is_worker or hook.headless:
         return None
     data = hook.env.get("XDG_DATA_HOME") or str(Path(hook.env.get("HOME", "/tmp")) / ".local" / "share")
-    if not (Path(data) / "tstack" / "tape" / "index.db").exists():
+    if not (Path(data) / "tstack" / "tape" / "index.db").exists() or memo().resolve_project(hook.cwd) is None:
         return None
     import shutil
     import subprocess

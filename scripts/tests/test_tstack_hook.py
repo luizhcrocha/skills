@@ -209,9 +209,21 @@ class TapeBuildTest(HookCase):
         self.hook("SessionStart", self.base("SessionStart", source="startup"), env={"TSTACK_ROLE": "tape"})
         last = self.tmp / "last"
         last.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=last, check=True)
         self.hook("SessionStart", {**self.base("SessionStart", source="resume"), "cwd": str(last)})
         time.sleep(0.5)
         self.assertEqual(self.wait_runs(1), [["build", "--on-start", "--cwd", str(last)]])
+
+    def test_no_build_for_a_session_in_no_jj_or_git_repo(self):
+        self.tape_in_use()
+        home = self.tmp / "home"
+        home.mkdir()
+        self.assertEqual(self.hook("SessionStart", {**self.base("SessionStart", source="startup"),
+                                                    "cwd": str(home)}).returncode, 0)
+        self.hook("SessionStart", self.base("SessionStart", source="startup"))
+        self.assertEqual(self.wait_runs(1), [["build", "--on-start", "--cwd", str(self.repo)]])
+        time.sleep(0.5)
+        self.assertEqual(len(self.runs.read_text().splitlines()), 1, "a build started for a cwd in no repo")
 
     def test_a_real_build_lands_the_sessions_turns(self):
         tape = ROOT / "scripts" / "tape"
