@@ -70,6 +70,14 @@ Answer from what you know when you know it: `standing.md`, the fleets' ledgers (
 
 When the matter needs rounds (a review of a diff, a diagnosis with measurements), open a **direct line**: tell both coordinators the question, its bounds, and that the outcome comes back to you. They settle it between them, with diffs as files on disk and a numbered summary. Log the outcome when it comes.
 
+### The same question from several fleets
+
+When cards from several fleets need the same answer from the user, ask it once on your page: one decision, or one grilling with one question per matter. Only that asking card holds the question's words, so write it with what each fleet's card needs to know. Then tell each fleet, in your answer to its decision, which card and question to point its own card at. Each fleet keeps its card open and withdraws it only after the user answers (the coordinator's SKILL.md, "With a manager"). Relay the answer to those fleets as you relay any other. Never merge a `permission` or `rule` card: each is asked in its own fleet. Never make one card that two fleets own: it would hold two sets of words, and the cloud has no path between fleets.
+
+For example, infra's d3 and billing's d7 both ask whether the legal terms stay in Postgres. You open grilling G5 and make it Q2. You tell infra "point d3 at manager/G5#q2" and billing "point d7 at manager/G5#q2". The user answers Q2 with (b). You relay it, and each fleet withdraws its card with the resolution "answered on manager/G5 Q2: (b) keep Postgres". Had the user answered on billing's d7 instead, that answer settles d7: the user's answer outranks the pointer.
+
+A later change adds the card field (`asked_on: "FLEET/ID"` or `"FLEET/ID#qN"`) and lists a pointed card under its asking card instead of in the open count. Until then, each fleet notes the pointer in its card's why or its log.
+
 ### A landing
 
 A coordinator asks for the turn before anything that goes out or moves history others build on: what, which files, from which workspace, which checks are green.
