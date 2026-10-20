@@ -4,6 +4,7 @@ import json
 import os
 import pty
 import queue
+import select
 import socket
 import subprocess
 import sys
@@ -1456,32 +1457,47 @@ class ManagerHearsTheFleetsTest(FleetDir):
         self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
         return proc
 
+    def armed(self, proc: subprocess.Popen) -> None:
+        """Wait, a minute at most, for the watch's first look at the fleets: what lands after it is news. A
+        first --once watch records that look in watch-manager.fleets.json."""
+        seen = self.root / "watch-manager.fleets.json"
+        deadline = time.monotonic() + 60
+        while not seen.exists() and proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(seen.exists(), "the watch never looked at the fleets")
+
+    def told(self, proc: subprocess.Popen) -> str:
+        """The watch's next line, waited for a minute at most."""
+        ready, _, _ = select.select([proc.stdout], [], [], 60)
+        self.assertTrue(ready, "the watch told nothing")
+        return proc.stdout.readline()
+
     def test_a_user_answer_on_another_fleet_wakes_the_managers_watch(self):
         proc = self.watch("--resume", "--once", "--batch", "0")
-        time.sleep(1.0)
+        self.armed(proc)
         self.assertIsNone(proc.poll(), "a fleet seen for the first time is read from then on: nothing yet")
         chat.append(self.infra, "user", "Re-run after the cost improvements work is done\nthanks", allow_user=True, decision="rerun")
-        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertEqual(proc.wait(timeout=60), 0)
         self.assertEqual(proc.stdout.read(), "infra: you answered A1 Re-run CA1014: Re-run after the cost improvements work is done …\n")
 
     def test_cursors_are_per_fleet_and_resume_misses_nothing_and_tells_nothing_twice(self):
         proc = self.watch("--resume", "--once", "--batch", "0")
-        time.sleep(1.0)
+        self.armed(proc)
         chat.append(self.billing, "user", "where are we?", allow_user=True)
-        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertEqual(proc.wait(timeout=60), 0)
         self.assertEqual(proc.stdout.read(), "billing: you wrote to coordinator: where are we?\n")
         # No watch runs: what lands on both fleets meanwhile waits for the next one.
         chat.append(self.billing, "coordinator", "halfway", 1)
         chat.append(self.infra, "user", "@coordinator is the gate green?", allow_user=True)
         chat.append(self.billing, "user", "thanks", allow_user=True)
         again = self.watch("--resume", "--once", "--batch", "0")
-        self.assertEqual(again.wait(timeout=10), 0)
+        self.assertEqual(again.wait(timeout=60), 0)
         self.assertEqual(again.stdout.read(), "billing: you wrote to coordinator: thanks\ninfra: you wrote to coordinator: @coordinator is the gate green?\n")
         rows = json.loads((self.root / "watch-manager.fleets.json").read_text())
         self.assertEqual({r["fleet"]: r["chat"] for r in rows}, {"billing": 3, "infra": 1})
         chat.append(self.root, "user", "@infra and you?", allow_user=True)
         third = self.watch("--resume", "--once", "--batch", "0")
-        self.assertEqual(third.wait(timeout=10), 0)
+        self.assertEqual(third.wait(timeout=60), 0)
         self.assertEqual(third.stdout.read(), "#1 user -> infra: @infra and you?\n",
                          "the manager's own chat prints once, and nothing from a fleet is told twice")
 
@@ -1500,27 +1516,28 @@ class ManagerHearsTheFleetsTest(FleetDir):
 
     def test_a_burst_is_one_wake(self):
         proc = self.watch("--resume", "--once", "--batch", "2")
-        time.sleep(1.0)
+        self.armed(proc)
         start = time.monotonic()
         chat.append(self.infra, "user", "first", allow_user=True)
-        time.sleep(0.8)
-        self.assertIsNone(proc.poll(), "the first news waits for more")
+        # Told the first news, the watch has opened its 2 s window: what lands now is in it.
+        self.assertEqual(self.told(proc), "infra: you wrote to coordinator: first\n")
         chat.append(self.billing, "user", "second", allow_user=True)
         self.change(self.infra, "upload", asks="user")
-        self.assertEqual(proc.wait(timeout=10), 0)
+        self.assertEqual(proc.wait(timeout=60), 0)
         self.assertGreaterEqual(time.monotonic() - start, 1.9)
-        self.assertEqual(proc.stdout.read(), "infra: you wrote to coordinator: first\nbilling: you wrote to coordinator: second\n"
-                                             "infra A2 opened for you: Small test upload\n")
+        self.assertEqual(proc.stdout.read(), "billing: you wrote to coordinator: second\ninfra A2 opened for you: Small test upload\n")
 
     def test_the_managers_own_chat_still_wakes_at_once(self):
         proc = self.watch("--resume", "--once", "--batch", "60")
-        time.sleep(1.0)
+        self.armed(proc)
+        start = time.monotonic()
         chat.append(self.infra, "user", "first", allow_user=True)
-        time.sleep(0.8)
+        self.assertEqual(self.told(proc), "infra: you wrote to coordinator: first\n")
         self.assertIsNone(proc.poll())
         chat.append(self.root, "user", "are you there?", allow_user=True)
-        self.assertEqual(proc.wait(timeout=10), 0)
-        self.assertEqual(proc.stdout.read(), "infra: you wrote to coordinator: first\n#1 user -> manager: are you there?\n")
+        self.assertEqual(proc.wait(timeout=60), 0)
+        self.assertLess(time.monotonic() - start, 60, "before the fleets' window of 60 s closes")
+        self.assertEqual(proc.stdout.read(), "#1 user -> manager: are you there?\n")
 
     def test_only_the_manager_follows_the_fleets(self):
         out = run_cli(self.infra, "watch", "--as", "coordinator", "--fleets")
