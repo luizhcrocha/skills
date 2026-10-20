@@ -712,6 +712,32 @@ class ReadTest(MemoCase):
         self.assertIn("FAIL every file parses", out)
         self.assertIn("healthy", self.wake(), "a bad file does not break the wake")
 
+    def test_doctor_warns_on_open_threads_older_than_a_week(self):
+        day = 86_400_000
+
+        def aged(days, kind, text, **kw):
+            item = memo.Item(id=memo.encode_ulid(memo._now_ms() - days * day, memo._rand80()), kind=kind,
+                             text=text, scope="project:acme/widget", **kw)
+            memo.atomic_write(self.store / "notes" / f"{item.id}.md", memo.render_item(item))
+            return item.id
+
+        stale = aged(8, "open", "the stale thread")
+        pinned = aged(9, "open", "the stale pinned thread", pin=True)
+        fresh = aged(6, "open", "the fresh thread")
+        closed = aged(10, "open", "the closed thread")
+        aged(9, "fact", "the closed thread is done", supersedes=[closed])
+        aged(30, "fact", "an old fact")
+        code, out, _ = self.run_memo("doctor")
+        self.assertEqual(code, 0, "a stale thread is a warning, not a problem")
+        self.assertIn("memo: healthy", out)
+        self.assertIn("warn 2 open threads older than 7 days", out)
+        self.assertIn(f'memo supersede {stale} "<outcome>"', out)
+        self.assertIn(f'memo supersede {pinned} "<outcome>"', out)
+        for ident in (fresh, closed):
+            self.assertNotIn(ident, out)
+        self.assertNotIn("an old fact", out)
+        self.assertIn("the stale thread", self.wake(), "a stale thread is still shown at wake")
+
 
 class ImportTest(MemoCase):
     HEADER = "date\tkind\tpin\ttext\tsources\n"

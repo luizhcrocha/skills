@@ -28,6 +28,7 @@ DEFAULT_PROJECT_LINES = 120
 DEFAULT_GLOBAL_LINES = 20
 DEFAULT_BUCKET = 16
 MIN_LINES = 8
+STALE_DAYS = 7  # `memo doctor` warns on an open thread older than this
 SHORT = 6  # characters of a ULID's random tail shown at wake
 SCHEMA = 1
 FENCE = "+++"
@@ -1217,6 +1218,12 @@ def cmd_doctor(ctx, a, out):
         say(len(render(view, budget, flat)) <= budget, "the wake fits its budget")
         long = [i.id for i in items if len(i.text) > MAX_CHARS]
         say(not long, f"every line is at most {MAX_CHARS} characters" + (f": {', '.join(long)}" if long else ""))
+        since = _now_ms() - STALE_DAYS * 86_400_000
+        stale = sorted((n for n in view.pins + view.opens if n.kind == "open" and ulid_ms(n.id) < since),
+                       key=lambda n: n.id)
+        if stale:
+            print(f"warn {len(stale)} open thread{'s' if len(stale) > 1 else ''} older than {STALE_DAYS} days; close each with its outcome:\n"
+                  + "\n".join(map(_closing, stale)), file=out)
         if indexed:
             try:
                 got = {i.id: i for i in ctx.index.items(store)}
