@@ -5050,6 +5050,23 @@ class SuiteGateTest(FleetCase):
                 self.assertIn("except 75: the slot stayed held past --wait and the suite never ran; 124: the suite ran "
                               "past its time and was stopped", d["permissionDecisionReason"])
 
+    def test_the_deny_names_the_review_check_a_landing_puts_in_front_and_runs_the_gate_alone(self):
+        # Land step 5 runs `land-check --pre-gate -b B && fleet fleets gate run ...`. The hook can't tell a landing's
+        # gate from any other full suite, and --pre-gate exits 1 on a stack with nothing to push, so the command to
+        # issue stays the gate run alone and the chained one is named for a landing; that one passes untouched.
+        self.manager()
+        land_check = f"{ROOT}/bin/land-check"
+        for command in ("just test", "pnpm test"):
+            with self.subTest(command=command):
+                reason = self.decision(self.run_bash(command))["permissionDecisionReason"]
+                self.assertIn(f"Run it as: `{self.gate_run(command)}`", reason)
+                self.assertIn(f"When this is a landing's full gate (Land step 5), put the review check in front of it: "
+                              f"`{land_check} --pre-gate -b <bookmark> && {self.gate_run(command)}`, so a stack that "
+                              f"needs a review the ledger does not record stops before the gate takes the slot. ",
+                              reason)
+                self.assertEqual(self.run_bash(f"{land_check} --pre-gate -b master && {self.gate_run(command)}").stdout,
+                                 "")
+
     def test_a_line_the_hook_cannot_read_says_so(self):
         self.manager()
         for command in ("for i in 1 2; do pnpm test; done", "eval 'pnpm test'", "ls | xargs vitest run"):

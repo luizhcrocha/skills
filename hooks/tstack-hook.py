@@ -4797,6 +4797,11 @@ def suite_gate(hook):
         and os.path.basename(words[0]) not in ("cd", "pushd", "eval", "source", ".")
     inner = command.strip() if simple else f"{'bash' if shutil_which('bash') else 'sh'} -c {shlex.quote(command)}"
     wrapped = f"{shlex.quote(cli)} fleets gate run --as {shlex.quote(fleet)} --wait {SUITE_WAIT_S} -- {inner}"
+    # Named, never carried: the hook can't tell a landing's gate from another full suite, and --pre-gate stops one
+    # with nothing to push.
+    landing = (f"When this is a landing's full gate (Land step 5), put the review check in front of it: "
+               f"`{shlex.quote(str(ROOT / 'bin' / 'land-check'))} --pre-gate -b <bookmark> && {wrapped}`, so a stack "
+               f"that needs a review the ledger does not record stops before the gate takes the slot. ")
     held = _gate_hold(hook.env)
     slot = (f"The slot is held now ({_one_line(held, 120)}), so it waits for it (up to {SUITE_WAIT_S // 60} min). "
             if held else "")
@@ -4818,8 +4823,8 @@ def suite_gate(hook):
     return Deny(f"{lead} fleet {fleet} (this machine serves a manager) a "
                 f"full suite runs only through the gate slot, in a memory-capped scope that dies whole.{unclear} Run "
                 f"it as: `{wrapped}` (Bash timeout {SUITE_TIMEOUT_MS}, or run_in_background: it may queue behind "
-                f"another suite). {slot}It exits with the suite's code, except 75: the slot stayed held past --wait "
-                f"and the suite never ran; 124: the suite ran past its time and was stopped.")
+                f"another suite). {landing}{slot}It exits with the suite's code, except 75: the slot stayed held past "
+                f"--wait and the suite never ran; 124: the suite ran past its time and was stopped.")
 
 
 def shutil_which(name):
