@@ -8,6 +8,7 @@ import { join } from "node:path";
 
 import * as Effect from "effect/Effect";
 
+import { ADVISOR } from "../advisor/advisor.ts";
 import { parseInstant } from "../clock.ts";
 import { ChatError } from "../errors.ts";
 import { isMoved, readText, remove, resolvePath, writeText } from "../files.ts";
@@ -17,6 +18,7 @@ import { asArray, asObject, asString, dumps, parseObject, pyRepr, type Json, typ
 import { decodeLedger, type Decision, type Ledger } from "../ledger/model.ts";
 import { refusalRev } from "../ledger/permission.ts";
 import { draftLine, draftReminder } from "../ledger/refusal-draft.ts";
+import { lanesMeet } from "../ledger/lanes.ts";
 import { staleDrafts, untoldDrafts } from "../ledger/warnings.ts";
 import { stripHidden } from "../ledger/permission-words.ts";
 import { findDecision, number } from "../ledger/numbers.ts";
@@ -167,6 +169,56 @@ function silentLines(machine: Machine, root: string, fleet: string | undefined, 
   return lines;
 }
 
+/** How long a worker may stay queued (on a rule, the gate slot, a landing turn) before the watch tells. */
+const QUEUED_S = 30 * 60;
+
+/** Whether a queued row waits behind a running or blocked worker's lane: the fleet's own ordering, no rule's. */
+function behindLane(rows: readonly (JsonObject | undefined)[], a: JsonObject): boolean {
+  const laneOf = (r: JsonObject): string[] => (asArray(r["lane"]) ?? []).flatMap((x) => asString(x) ?? []);
+  const mine = laneOf(a);
+
+  return rows.some(
+    (o) =>
+      o !== undefined &&
+      o !== a &&
+      (o["status"] === "running" || o["status"] === "blocked") &&
+      laneOf(o).some((y) => mine.some((x) => lanesMeet(x, y))),
+  );
+}
+
+/** The `!` line for each worker of `root` queued for over {@link QUEUED_S} since its row last changed (the row
+ * keeps no time it was queued), as a silent one gets: the wait goes on the Now line with its cost, and the rule,
+ * gate slot or turn behind it is offered to the user to drop or yield. A row queued behind a live lane and the
+ * advisor, queued while it waits for questions, get none. Each wait told once. */
+function queuedLines(machine: Machine, root: string, fleet: string | undefined, told: Map<string, Json>): string[] {
+  const lines: string[] = [];
+  const now = secondsNow(machine);
+  const rows = (asArray(stateOfDir(root)["agents"]) ?? []).map(asObject);
+
+  for (const a of rows) {
+    const id = asString(a?.["id"]);
+    const since = asString(a?.["updated"]) ?? asString(a?.["started"]);
+    const at = since === undefined ? undefined : parseInstant(since);
+
+    if (a === undefined || id === undefined || id === ADVISOR || a["status"] !== "queued" || since === undefined || at === undefined) continue;
+    const waited = now - at / 1000;
+    const mark = `queued:${fleet ?? ""}:${id}:${since}`;
+
+    if (waited <= QUEUED_S || (told.has(mark) && told.get(mark) !== false) || behindLane(rows, a)) continue;
+    told.set(mark, true);
+    const name = asString(a["name"]) ?? id;
+    const where = fleet === undefined ? "worker" : `${fleet}'s worker`;
+    lines.push(
+      `! ${where} ${id} (${oneLine(name === "" ? id : name)}) has waited queued since ${since.slice(11, 16)} (${String(Math.floor(waited / 60))} min). ` +
+        (fleet === undefined
+          ? "Put the wait on the Now line (what it waits on, which rule, gate or turn holds it, the time so far) and offer the user to drop the rule or yield as a decision."
+          : `SendMessage ${fleet} to put it on its Now line.`),
+    );
+  }
+
+  return lines;
+}
+
 function numberedDecisions(root: string): JsonObject[] {
   const raw = readObject(join(root, "state.json"));
   const ledger = raw === undefined ? undefined : decodeLedger(raw);
@@ -252,8 +304,8 @@ function unanswered(machine: Machine, entry: { readonly id: string; readonly dir
 }
 
 /** For a manager's watch: the fleets that do not read their chat while the user waits, or leave the user's
- * messages unanswered, the answers they have not recorded, their silent workers; each told once (kept in the
- * manager's DIR); and the manager's own batches of marks still open, once per FLEET_BATCH_REMIND_S.
+ * messages unanswered, the answers they have not recorded, their silent workers and those queued past half an
+ * hour; each told once (kept in the manager's DIR); and the manager's own batches of marks still open, once per FLEET_BATCH_REMIND_S.
  *
  * While a hub runs on the machine and its wake works for a fleet (wake.ts `wakeWorks`: its last wake was
  * written, and its wakes are not spent), a fleet that does not read its chat is not told here: the hub wakes
@@ -272,6 +324,7 @@ export function fleetsUnheard(machine: Machine, me: string): string[] {
     if (e.role === "manager" || e.dir === me) continue;
     lines.push(...unrecorded(machine, e, told, unheardS));
     lines.push(...silentLines(machine, e.dir, e.id, told));
+    lines.push(...queuedLines(machine, e.dir, e.id, told));
     const heard = listening(machine, e.dir);
     const since = heard.since === null ? "None" : pyText(heard.since);
     const mark = `${heard.seen}:${heard.unread}:${since}`;
@@ -419,8 +472,8 @@ export function draftReminders(machine: Machine, root: string, told: Map<string,
   return lines;
 }
 
-/** For a coordinator's watch: its own silent workers, the messages its workers left unanswered for
- * FLEET_NUDGE_S (ten minutes), its grillings answered and not recorded, its permissions not explained, its
+/** For a coordinator's watch: its own silent workers and those queued past half an hour, the messages its
+ * workers left unanswered for FLEET_NUDGE_S (ten minutes), its grillings answered and not recorded, its permissions not explained, its
  * refusal drafts left open for fifteen minutes, each told once across watches, and its batches of marks still
  * open, once per FLEET_BATCH_REMIND_S. */
 export function ownSilent(machine: Machine, root: string): string[] {
@@ -429,6 +482,7 @@ export function ownSilent(machine: Machine, root: string): string[] {
 
   const lines = [
     ...silentLines(machine, root, undefined, told),
+    ...queuedLines(machine, root, undefined, told),
     ...nudgeLines(machine, root, told, seconds(machine.env, "FLEET_NUDGE_S", NUDGE_S)),
     ...answeredGrillings(root, told),
     ...unexplainedPermissions(root, told),

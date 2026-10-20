@@ -98,6 +98,8 @@ The Now line (`set --now`) names what it waits on by number (A6, I2), so the pag
 
 `agent` warns when a running worker's lane meets another running lane: that task waits (`--status queued`) or joins that worker's queue.
 
+A wait past about 30 minutes on a rule, the gate slot or a landing turn, for work the user asked for, goes on the Now line: what waits, on which rule, gate or turn, the time so far, and the offer to drop the rule or yield as a decision. Your chat watch prints `! worker a4 ... has waited queued since 09:00 (35 min)` for a worker queued that long, timed from its row's last change; a worker queued behind a running lane is your own ordering and gets no line. On 10-20 a bench waited a day on two serializing rules the user never saw.
+
 **Never end a turn idle while work is queued.** With a pending step, a queued worker or a `keep` that opens with Follow-up, TODO, Backlog or Queued in the ledger and no lane running (a gate run, a reviewer, a watcher, the advisor or a worker silent for 20 minutes is no lane), start the independent work, or say in the Now line why it waits, or name the open card it waits on (D12); the plugin's Stop hook blocks the turn once per state otherwise.
 
 **Workspaces.** Your session's working copy (`default`) is the stack. A worker that edits code works in a jj workspace, and a new one pays its own setup (dependencies, a dev shell, build caches: minutes and gigabytes in a large repo), so a fleet makes as few as its work allows:
