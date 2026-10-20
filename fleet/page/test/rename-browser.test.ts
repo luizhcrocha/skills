@@ -35,6 +35,11 @@ beforeAll(async () => {
   await page.setViewport({ width: 1280, height: 900 });
   await page.goto(harness.url + "#fleet", { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelector("#conn")?.textContent === "Live");
+  // The page's fonts come in after it is live, and the header reflows: the pencil moves left by ~50 px. A click
+  // aimed before that lands beside it on a loaded machine.
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+  });
 });
 
 afterAll(async () => {
