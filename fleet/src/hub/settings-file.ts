@@ -111,6 +111,37 @@ export async function lockSettings(file: string, name: string): Promise<string |
   }
 }
 
+/** `lockSettings` for a caller that cannot wait asynchronously (the import of a root's grant records, grant-records.ts):
+ * the same lock, waited for the same 2 s by sleeping. Its path, or none when it could not be had. */
+export function lockSettingsSync(file: string, name: string): string | undefined {
+  const lock = join(dirname(file), name);
+  const deadline = performance.now() + LOCK_WAIT_MS;
+
+  for (;;) {
+    try {
+      mkdirSync(lock);
+
+      return lock;
+    } catch (cause: unknown) {
+      if (!hasCode(cause, "EEXIST")) return undefined;
+    }
+
+    try {
+      if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
+        rmdirSync(lock);
+        continue;
+      }
+    } catch (cause: unknown) {
+      if (hasCode(cause, "ENOENT")) continue;
+
+      return undefined;
+    }
+
+    if (performance.now() >= deadline) return undefined;
+    Bun.sleepSync(20);
+  }
+}
+
 /** Let go of a lock `lockSettings` gave: one another writer already took over as stale and removed is let go of too. */
 export function releaseLock(lock: string): void {
   try {

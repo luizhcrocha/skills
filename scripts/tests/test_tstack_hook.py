@@ -7,6 +7,7 @@ The rule under test above all: a hook never breaks a session. Whatever goes
 wrong, the dispatcher exits 0 with nothing on stdout and logs to hook.log.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -36,6 +37,12 @@ HEARTBEAT_ONLY = ("PostToolUseFailure", "SubagentStart", "SubagentStop")
 # START runs the python3 the hook's own `#!/usr/bin/env python3` finds on the test env's PATH.
 START = ["-c", "import collections, json, os, pathlib, re, sys, time, traceback"]
 HOOK_CPU_RATIO = 2.1
+
+
+def records_dir(home, root):
+    """Where the grant records of the root whose real path is ROOT live, for the user whose home is HOME:
+    <home>/.claude/tstack-grants/<sha256 of the root's path, UTF-8, hex> (fleet/src/hub/grant-records.ts)."""
+    return Path(home) / ".claude" / "tstack-grants" / hashlib.sha256(str(root).encode()).hexdigest()
 
 
 def tool_use(name, **tool_input):
@@ -2532,10 +2539,12 @@ class GrantCase(FleetCase):
         self.write_settings({"permissions": {"allow": ["Bash(ls)", self.RULE, "Bash(üñí)"], "deny": ["Bash(rm)"]},
                              "env": {"A": "1"}})
         self.grants = self.fleet / "grants.jsonl"
-        # The root's record of the grants taken back (`ended`), in .claude/hooks/ under the sandbox's write-deny too.
-        self.record = self.settings.parent / "hooks" / "tstack-grants-ended.json"
+        # The root's record of the grants taken back (`ended`), outside its tree in ~/.claude (the test's HOME), under
+        # the permission check and the sandbox's write-deny.
+        self.records = records_dir(self.env["HOME"], self.settings.parent.parent)
+        self.record = self.records / "tstack-grants-ended.json"
         # The root's record of the grants the hub issued (`issued`), beside it: the only `at` and `runs` the hook reads.
-        self.issued = self.settings.parent / "hooks" / "tstack-grants-issued.json"
+        self.issued = self.records / "tstack-grants-issued.json"
 
     def write_settings(self, value):
         self.settings.write_text(json.dumps(value))
@@ -2546,8 +2555,8 @@ class GrantCase(FleetCase):
         file = Path(entry["file"])
         if not file.is_absolute() or file.parent.name != ".claude" or not file.parent.is_dir():
             return
-        record = file.parent / "hooks" / "tstack-grants-issued.json"
-        record.parent.mkdir(exist_ok=True)
+        record = records_dir(self.env["HOME"], file.parent.parent) / "tstack-grants-issued.json"
+        record.parent.mkdir(parents=True, exist_ok=True)
         issued = json.loads(record.read_text())["issued"] if record.exists() else []
         n = 1 + sum(1 for e in issued if (e["decision"], e["at"]) == (entry["decision"], entry["at"]))
         kept = {k: entry[k] for k in ("decision", "ref", "rule", "file", "at", "runs", "rev") if k in entry}
@@ -2591,8 +2600,8 @@ class GrantRemovalTest(GrantCase):
         self.assertTrue(text.endswith("}\n"))
         self.assertIn('\n  "permissions": {\n    "allow": [\n      "Bash(ls)"', text)
         self.assertIn("üñí", text)
-        # No scratch file left; the take-back's record in .claude/hooks/.
-        self.assertEqual(sorted(p.name for p in self.settings.parent.iterdir()), ["hooks", "settings.local.json"])
+        # No scratch file left, and nothing in the tree but the settings: the take-back's record is outside it.
+        self.assertEqual(sorted(p.name for p in self.settings.parent.iterdir()), ["settings.local.json"])
         self.assertEqual(sorted(p.name for p in self.record.parent.iterdir()), ["tstack-grants-ended.json", "tstack-grants-issued.json"])
         self.assertEqual(self.lines()[-1], {"op": "remove", "decision": "p-1a2b3c4d", "rule": self.RULE,
                                             "file": str(self.settings), "at": "2026-01-05T09:05:00+00:00",
@@ -2791,7 +2800,7 @@ class GrantRemovalTest(GrantCase):
         self.env["CLAUDE_PROJECT_DIR"] = str(self.settings.parent.parent)
         at = "2026-01-05T09:00:00+00:00"
         entry = {"decision": "p-1a2b3c4d", "ref": "P1", "rule": self.RULE, "file": str(self.settings), "at": at, "n": 1, "of": 1}
-        self.issued.parent.mkdir()
+        self.issued.parent.mkdir(parents=True, exist_ok=True)
         self.issued.write_text(json.dumps({"issued": [{**entry, "rev": "r1"}, {**entry, "rev": "r2"}]}))
         self.record.write_text(json.dumps({"ended": [
             {"decision": "p-1a2b3c4d", "rule": self.RULE, "granted": at, "rev": "r1", "at": at, "why": "superseded"}]}))
@@ -2852,13 +2861,16 @@ class GrantRemovalTest(GrantCase):
     def test_a_take_back_through_a_symlinked_hooks_folder_lands_on_no_record(self):
         """Review 3, finding 1, path (a): a line naming the agent's folder, its .claude/hooks a symlink to the root's,
         with the real grant's decision, `at` and rev. Its take-back went onto the root's record and ended the real
-        grant, so its rule stayed for good. A grant file whose hooks folder is a symlink is no grant file."""
+        grant, so its rule stayed for good. The records of a root are kept by its own real path now, outside its tree:
+        the fake folder's line is a grant on no record of its own root, taken back at once onto that root's record."""
         fake = self.fake_root()
-        os.symlink(self.issued.parent, fake.parent / "hooks")
+        (self.settings.parent / "hooks").mkdir()
+        os.symlink(self.settings.parent / "hooks", fake.parent / "hooks")
         self.grant(rev="r1", file=fake, issued=False)
         self.run_tool("ls")
         self.assertFalse(self.record.exists())
-        self.assertIn(self.RULE, json.loads(fake.read_text())["permissions"]["allow"])
+        self.assertNotIn(self.RULE, json.loads(fake.read_text())["permissions"]["allow"])
+        self.assertEqual(os.listdir(self.settings.parent / "hooks"), [])
         self.run_tool("ls", now="2026-01-05T09:31:00+00:00")
         self.assertNotIn(self.RULE, self.allow())
 
@@ -2922,7 +2934,7 @@ class GrantRemovalTest(GrantCase):
         self.assertEqual(json.loads(self.record.read_text())["ended"][-1]["why"], "expired")
 
     def test_a_record_that_does_not_parse_leaves_the_take_back_done_and_logged(self):
-        self.record.parent.mkdir()
+        self.record.parent.mkdir(parents=True, exist_ok=True)
         self.record.write_text("{")
         self.grant()
         payload = self.payload("PostToolUse", tool_name="Bash", tool_input={"command": "git push --force origin HEAD:main"})
@@ -2936,7 +2948,7 @@ class GrantRemovalTest(GrantCase):
     def test_the_record_of_take_backs_keeps_the_newest(self):
         old = [{"decision": f"p-{n:08x}", "rule": "Bash(x)", "granted": "2026-01-01T00:00:00+00:00",
                 "at": "2026-01-01T00:00:00+00:00"} for n in range(4096)]
-        self.record.parent.mkdir()
+        self.record.parent.mkdir(parents=True, exist_ok=True)
         self.record.write_text(json.dumps({"note": "kept", "ended": old}))
         self.grant()
         self.run_tool("git push --force origin HEAD:main")
@@ -3152,6 +3164,349 @@ class GrantRemovalTest(GrantCase):
         self.assertLess(medians["Bash sweep"], 300, medians)
         self.assertLess(medians["Bash alone"], 300, medians)
         self.assertIn(self.RULE, self.allow())
+
+
+JJ_TEST_ENV = {"JJ_USER": "t", "JJ_EMAIL": "t@t", "JJ_CONFIG": "/dev/null"}
+
+
+class GrantRecordsTest(GrantCase):
+    """A root's grant records live outside its tree, in <home>/.claude/tstack-grants/<hash>/ (grant-records.ts): a
+    checkout in the root changes no grant the hook sees, and the tree's copy is imported once and never written."""
+
+    CASES = ROOT / "fleet" / "test" / "grant-records.cases.json"
+
+    def jj(self, *args, cwd=None):
+        return subprocess.run(["jj", *args], cwd=cwd or self.settings.parent.parent, capture_output=True, text=True,
+                              env={**os.environ, **JJ_TEST_ENV}, timeout=30, check=True)
+
+    def tree(self, name):
+        return self.settings.parent / "hooks" / name
+
+    def test_the_hub_the_hook_and_the_host_put_a_root_in_one_folder(self):
+        cases = json.loads(self.CASES.read_text())["cases"]
+        self.assertEqual(len(cases), 3)
+        module = load_hook(onepw=False)
+        for case in cases:
+            self.assertEqual(module._records_dir(case["home"], case["root"]), case["dir"], case["root"])
+        self.assertIsNone(module._records_dir(None, "/r"))
+
+    def test_a_grant_the_hub_put_on_record_is_read_from_there_and_the_tree_is_never_written(self):
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main")
+        self.assertNotIn(self.RULE, self.allow())
+        self.assertEqual(json.loads(self.record.read_text())["ended"][-1]["why"], "used")
+        self.assertNotIn("line", json.loads(self.record.read_text())["ended"][-1])
+        self.assertFalse((self.settings.parent / "hooks").exists())
+
+    def test_a_checkout_over_the_trees_copy_changes_no_grant(self):
+        """2026-10-21: in a root jj tracked the records in, `jj workspace update-stale` put an older tree's copy back
+        over them, and the hook took back a grant the user had allowed ("on no record of the hub's grants")."""
+        project = self.settings.parent.parent
+        self.jj("git", "init", str(project), cwd=self.tmp)
+        (project / ".gitignore").write_text(".claude/settings.local.json\n")
+        self.tree("x").parent.mkdir()
+        self.tree("tstack-grants-issued.json").write_text(json.dumps({"issued": []}))
+        self.jj("status")
+        self.jj("workspace", "add", str(self.tmp / "b"))
+        self.jj("describe", "-r", "default@", "-m", "rewritten elsewhere", cwd=self.tmp / "b")
+        self.grant()
+        self.tree("tstack-grants-ended.json").write_text(json.dumps({"ended": [
+            {"file": str(self.settings), "decision": "p-1a2b3c4d", "rule": self.RULE,
+             "granted": "2026-01-05T09:00:00+00:00", "at": "2026-01-05T09:00:00+00:00", "why": "used"}]}))
+        self.jj("workspace", "update-stale")
+        self.assertEqual(json.loads(self.tree("tstack-grants-issued.json").read_text()), {"issued": []})
+        self.run_tool("ls", now="2026-01-05T09:10:00+00:00")
+        self.assertIn(self.RULE, self.allow())
+        # A `jj new` onto a commit without the records deletes them from the tree: the grant stands all the same.
+        self.jj("new", "root()")
+        self.assertFalse(self.tree("tstack-grants-issued.json").exists())
+        self.run_tool("ls", now="2026-01-05T09:20:00+00:00")
+        self.assertIn(self.RULE, self.allow())
+        self.run_tool("git push --force origin HEAD:main", now="2026-01-05T09:21:00+00:00")
+        self.assertNotIn(self.RULE, self.allow())
+        self.assertEqual([e["why"] for e in json.loads(self.record.read_text())["ended"]], ["used"])
+
+    def test_the_trees_records_are_imported_once_every_entry_kept(self):
+        old = {"decision": "p-old", "ref": "P0", "rule": "Bash(old)", "file": str(self.settings),
+               "at": "2026-01-04T09:00:00+00:00", "n": 1, "of": 1}
+        entries = [{"decision": f"p-{n}", "ref": f"P{n}", "rule": f"Bash(echo {n})", "file": str(self.settings),
+                    "at": "2026-01-05T09:00:00+00:00", "n": 1, "of": 1} for n in range(3)]
+        ended = [{"file": str(self.settings), "decision": "p-old", "rule": "Bash(old)", "granted": "2026-01-04T09:00:00+00:00",
+                  "at": "2026-01-04T09:01:00+00:00", "why": "used"}]
+        self.tree("x").parent.mkdir()
+        issued_text, ended_text = json.dumps({"issued": [old, *entries]}), json.dumps({"note": "kept", "ended": ended})
+        self.tree("tstack-grants-issued.json").write_text(issued_text)
+        self.tree("tstack-grants-ended.json").write_text(ended_text)
+        for e in entries:
+            self.grant(decision=e["decision"], rule=e["rule"], issued=False)
+        self.run_tool("ls", now="2026-01-05T09:05:00+00:00")
+        self.assertEqual((self.issued.read_text(), json.loads(self.record.read_text())), (issued_text, json.loads(ended_text)))
+        # Once: what a checkout puts in the tree later is not read, and the tree's copy is not written.
+        self.tree("tstack-grants-issued.json").write_text(json.dumps({"issued": entries + entries}))
+        self.write_settings({"permissions": {"allow": ["Bash(echo 1)"]}})
+        self.run_tool("echo 1", now="2026-01-05T09:06:00+00:00")
+        self.assertEqual(self.allow(), [])
+        self.assertEqual(self.issued.read_text(), issued_text)
+        self.assertEqual([e["decision"] for e in json.loads(self.issued.read_text())["issued"]], ["p-old", "p-0", "p-1", "p-2"])
+        self.assertEqual([(e["decision"], e["why"]) for e in json.loads(self.record.read_text())["ended"]],
+                         [("p-old", "used"), ("p-1", "used")])
+        self.assertEqual((self.tree("tstack-grants-ended.json").read_text()), ended_text)
+
+    def test_a_take_back_forged_on_the_tree_whose_rule_is_still_there_is_not_imported(self):
+        """The tree's copy is any checkout's or agent's to write, and a take-back is written once its rule is out:
+        imported, a forged one made the one-time grant's rule the owner's, for good."""
+        older = {"file": str(self.settings), "decision": "p-old", "rule": "Bash(old)", "granted": "2026-01-04T09:00:00+00:00",
+                 "at": "2026-01-04T09:01:00+00:00", "why": "used"}
+        forged = {"file": str(self.settings), "decision": "p-1a2b3c4d", "rule": self.RULE,
+                  "granted": "2026-01-05T09:00:00+00:00", "at": "2026-01-05T09:01:00+00:00", "why": "used"}
+        self.tree("x").parent.mkdir()
+        self.tree("tstack-grants-issued.json").write_text(json.dumps({"issued": [
+            {"decision": "p-old", "ref": "P0", "rule": "Bash(old)", "file": str(self.settings),
+             "at": "2026-01-04T09:00:00+00:00", "n": 1, "of": 1},
+            {"decision": "p-1a2b3c4d", "ref": "P1", "rule": self.RULE, "file": str(self.settings),
+             "at": "2026-01-05T09:00:00+00:00", "n": 1, "of": 1}]}))
+        self.tree("tstack-grants-ended.json").write_text(json.dumps({"note": "kept", "ended": [older, forged]}))
+        self.grant(issued=False)
+        self.run_tool("ls")
+        self.assertEqual(json.loads(self.record.read_text()), {"note": "kept", "ended": [older]})
+        self.run_tool("git push --force origin HEAD:main", now="2026-01-05T09:06:00+00:00")
+        self.assertNotIn(self.RULE, self.allow())
+        self.assertEqual([(e["decision"], e["why"]) for e in json.loads(self.record.read_text())["ended"]],
+                         [("p-old", "used"), ("p-1a2b3c4d", "used")])
+
+    def test_a_take_back_on_the_tree_of_no_grant_on_its_issued_record_is_not_imported(self):
+        """A forged take-back that names a grant not issued yet, its rule out of every grant file, ended that grant
+        at birth once imported, its rule the owner's for good: the import takes only a take-back of an issued grant,
+        never one marked `line`; one naming no file and no rev, as master's hub wrote, matches without them."""
+        issued = {"decision": "p-old", "ref": "P0", "rule": "Bash(old)", "file": str(self.settings),
+                  "at": "2026-01-04T09:00:00+00:00", "rev": "r1", "n": 1, "of": 1}
+        kept = {"file": str(self.settings), "decision": "p-old", "rule": "Bash(old)", "granted": "2026-01-04T09:00:00+00:00",
+                "rev": "r1", "at": "2026-01-04T09:01:00+00:00", "why": "used"}
+        future = {"file": str(self.settings), "decision": "p-9", "rule": "Bash(echo 9)",
+                  "granted": "2026-01-05T09:00:00+00:00", "at": "2026-01-05T09:01:00+00:00", "why": "used"}
+        other_rev, line = dict(kept, rev="r2"), dict(kept, line=True)
+        bare = {k: v for k, v in kept.items() if k not in ("file", "rev")}
+        self.tree("x").parent.mkdir()
+        self.tree("tstack-grants-issued.json").write_text(json.dumps({"issued": [issued]}))
+        self.tree("tstack-grants-ended.json").write_text(json.dumps({"ended": [kept, bare, future, other_rev, line]}))
+        module = load_hook(onepw=False)
+        module._record_at(self.env["HOME"], str(self.settings), "tstack-grants-ended.json")
+        self.assertEqual(json.loads(self.record.read_text()), {"ended": [kept, bare]})
+        self.grant(decision="p-9", rule="Bash(echo 9)")
+        self.write_settings({"permissions": {"allow": ["Bash(echo 9)"]}})
+        self.run_tool("echo 9", now="2026-01-05T09:02:00+00:00")
+        self.assertEqual(self.allow(), [])
+
+    def test_a_fifo_swapped_in_after_the_imports_check_hangs_no_import(self):
+        """The import reads each record through an open that cannot block (O_NONBLOCK) and checks the open file: a
+        FIFO put at a record's name between a check by name and the open hung the hook there."""
+        self.tree("x").parent.mkdir()
+        self.tree("tstack-grants-issued.json").write_text('{"issued":[]}')
+        fifo = self.tree("tstack-grants-ended.json")
+        os.mkfifo(fifo)
+        lstat, regular = os.lstat, os.lstat(self.tree("tstack-grants-issued.json"))
+        module = load_hook(onepw=False)
+        from unittest import mock
+        with mock.patch.object(os, "lstat", lambda p, *a, **k: regular if str(p) == str(fifo) else lstat(p, *a, **k)):
+            self.assertTrue(self.finishes(lambda: module._record_at(
+                self.env["HOME"], str(self.settings), "tstack-grants-ended.json"), fifo))
+        self.assertEqual(os.listdir(self.records), ["tstack-grants-issued.json"])
+
+    def finishes(self, call, fifo, timeout=5):
+        """Whether `call` returns within `timeout` seconds; when it hangs on `fifo`, a writer is opened on it, so it
+        ends and the test with it."""
+        import threading
+        thread = threading.Thread(target=call, daemon=True)
+        thread.start()
+        thread.join(timeout)
+        if not thread.is_alive():
+            return True
+        try:
+            os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        except OSError:
+            pass
+        thread.join(timeout)
+        return False
+
+    def scratch(self, file):
+        return file.parent / f".{file.name}.{os.getpid()}"
+
+    def test_a_symlink_at_the_writers_scratch_name_has_its_target_left_alone(self):
+        target = self.tmp / "target"
+        target.write_text("theirs")
+        os.symlink(target, self.scratch(self.settings))
+        load_hook(onepw=False)._write_json(str(self.settings), {"permissions": {"allow": []}})
+        self.assertEqual(target.read_text(), "theirs")
+        self.assertFalse(self.settings.is_symlink())
+        self.assertEqual(json.loads(self.settings.read_text()), {"permissions": {"allow": []}})
+        self.assertFalse(os.path.lexists(self.scratch(self.settings)))
+
+    def test_a_hardlink_at_the_writers_scratch_name_has_its_other_name_left_alone(self):
+        other = self.tmp / "other"
+        other.write_text("theirs")
+        os.link(other, self.scratch(self.settings))
+        load_hook(onepw=False)._write_json(str(self.settings), {"permissions": {"allow": []}})
+        self.assertEqual(other.read_text(), "theirs")
+        self.assertEqual(json.loads(self.settings.read_text()), {"permissions": {"allow": []}})
+
+    def test_a_fifo_at_the_writers_scratch_name_hangs_no_write_and_the_mode_is_kept(self):
+        os.chmod(self.settings, 0o640)
+        os.mkfifo(self.scratch(self.settings))
+        module = load_hook(onepw=False)
+        self.assertTrue(self.finishes(lambda: module._write_json(str(self.settings), {"a": 1}), self.scratch(self.settings)))
+        self.assertEqual((json.loads(self.settings.read_text()), os.stat(self.settings).st_mode & 0o777), ({"a": 1}, 0o640))
+
+    def test_nothing_is_imported_through_a_symlinked_hooks_folder(self):
+        """A hooks folder that is a symlink leads to records any agent could have written there: none is imported."""
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "tstack-grants-issued.json").write_text('{"issued":[]}')
+        (elsewhere / "tstack-grants-ended.json").write_text(json.dumps({"ended": [
+            {"file": str(self.settings), "decision": "p-1a2b3c4d", "rule": self.RULE,
+             "granted": "2026-01-05T09:00:00+00:00", "at": "2026-01-05T09:05:00+00:00", "why": "used"}]}))
+        os.symlink(elsewhere, self.tree("x").parent)
+        module = load_hook(onepw=False)
+        self.assertEqual(module._record_at(self.env["HOME"], str(self.settings), "tstack-grants-ended.json"), str(self.record))
+        self.assertEqual(os.listdir(self.records), [])
+
+    def test_only_regular_files_are_imported(self):
+        """A folder or a FIFO at the tree's path is skipped, as the hub's import skips it."""
+        self.tree("tstack-grants-issued.json").mkdir(parents=True)
+        os.mkfifo(self.tree("tstack-grants-ended.json"))
+        module = load_hook(onepw=False)
+        self.assertEqual(module._record_at(self.env["HOME"], str(self.settings), "tstack-grants-ended.json"), str(self.record))
+        self.assertEqual(os.listdir(self.records), [])
+
+    def test_the_import_holds_the_settings_lock(self):
+        """While another holds the lock nothing is made and no record is given; a root with no .claude has none."""
+        self.tree("x").parent.mkdir()
+        self.tree("tstack-grants-issued.json").write_text('{"issued":[]}')
+        lock = self.settings.parent / ".settings.local.json.lock"
+        lock.mkdir()
+        module = load_hook(onepw=False)
+        self.assertIsNone(module._record_at(self.env["HOME"], str(self.settings), "tstack-grants-issued.json"))
+        self.assertFalse(self.records.exists())
+        lock.rmdir()
+        self.assertEqual(module._record_at(self.env["HOME"], str(self.settings), "tstack-grants-issued.json"), str(self.issued))
+        self.assertFalse(lock.exists())
+        self.assertIsNone(module._record_at(self.env["HOME"], str(self.tmp / "none" / ".claude" / "settings.local.json"),
+                                            "tstack-grants-issued.json"))
+
+    def test_a_record_a_writer_puts_there_during_the_import_is_kept(self):
+        """The import moves each copy in by link, never the folder by rename (rename(2) replaces an empty folder)."""
+        self.tree("x").parent.mkdir()
+        self.tree("tstack-grants-issued.json").write_text("the tree's issued")
+        self.tree("tstack-grants-ended.json").write_text("the tree's ended")
+        module = load_hook(onepw=False)
+        module._record_at(self.env["HOME"], str(self.settings), "tstack-grants-issued.json",
+                          before_move=lambda: self.record.write_text("a writer's"))
+        self.assertEqual((sorted(os.listdir(self.records)), self.issued.read_text(), self.record.read_text()),
+                         (["tstack-grants-ended.json", "tstack-grants-issued.json"], "the tree's issued", "a writer's"))
+        self.assertEqual(os.listdir(self.records.parent), [self.records.name])
+
+    def test_a_sweep_started_mid_import_keeps_the_imported_take_back_and_adds_its_own(self):
+        self.tree("x").parent.mkdir()
+        self.tree("tstack-grants-issued.json").write_text(json.dumps({"issued": [
+            {"decision": "p-0", "ref": "P0", "rule": "Bash(old)", "file": str(self.settings),
+             "at": "2026-01-04T09:00:00+00:00", "n": 1, "of": 1},
+            {"decision": "p-1a2b3c4d", "ref": "P1", "rule": self.RULE, "file": str(self.settings),
+             "at": "2026-01-05T09:00:00+00:00", "n": 1, "of": 1}]}))
+        self.tree("tstack-grants-ended.json").write_text(json.dumps({"ended": [
+            {"file": str(self.settings), "decision": "p-0", "rule": "Bash(old)", "granted": "2026-01-04T09:00:00+00:00",
+             "at": "2026-01-04T09:01:00+00:00", "why": "used"}]}))
+        self.grant(issued=False)
+        sweeps = []
+
+        def sweep():
+            payload = self.payload("PostToolUse", tool_name="Bash", tool_input={"command": "git push --force origin HEAD:main"})
+            sweeps.append(subprocess.Popen([str(HOOK), "PostToolUse"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                           stderr=subprocess.PIPE, text=True,
+                                           env={**self.env, "FLEET_NOW": "2026-01-05T09:05:00+00:00", "TZ": "UTC"}))
+            sweeps[0].stdin.write(json.dumps(payload))
+            sweeps[0].stdin.close()
+            time.sleep(0.5)
+
+        module = load_hook(onepw=False)
+        module._record_at(self.env["HOME"], str(self.settings), "tstack-grants-issued.json", before_move=sweep)
+        sweeps[0].wait(timeout=60)
+        self.assertEqual(sweeps[0].returncode, 0, sweeps[0].stderr.read())
+        self.assertNotIn(self.RULE, self.allow())
+        self.assertEqual([(e["decision"], e["why"]) for e in json.loads(self.record.read_text())["ended"]],
+                         [("p-0", "used"), ("p-1a2b3c4d", "used")])
+
+    def test_a_tracked_record_in_a_git_worktree_is_warned_of(self):
+        """A git worktree's .git is a file, not a folder."""
+        main = self.tmp / "main"
+        git = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+               "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_GLOBAL": "/dev/null"}
+        run = lambda *a, cwd=main: subprocess.run(["git", *a], cwd=cwd, env=git, capture_output=True, text=True, check=True)
+        main.mkdir()
+        run("init", "-q")
+        (main / ".claude" / "hooks").mkdir(parents=True)
+        (main / ".claude" / "hooks" / "tstack-grants-issued.json").write_text('{"issued":[]}')
+        run("add", ".")
+        run("commit", "-qm", "records")
+        worktree = self.tmp / "wt"
+        run("worktree", "add", "-q", str(worktree))
+        self.assertTrue((worktree / ".git").is_file())
+        told = self.session_start(root=worktree)
+        self.assertIn(f"{worktree}: .claude/hooks/tstack-grants-issued.json is tracked", told)
+        self.assertIn("`git rm --cached .claude/hooks/tstack-grants-issued.json`", told)
+
+    def session_start(self, source="startup", root=None):
+        root = root or self.settings.parent.parent
+        r = self.hook("SessionStart", {**self.base("SessionStart", source=source), "cwd": str(root)},
+                      env={"CLAUDE_PROJECT_DIR": str(root), **JJ_TEST_ENV})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout else ""
+
+    def test_a_tracked_record_in_the_tree_is_warned_of_once_a_session(self):
+        project = self.settings.parent.parent
+        self.jj("git", "init", str(project), cwd=self.tmp)
+        self.assertNotIn("tstack-grants", self.session_start())
+        self.tree("x").parent.mkdir()
+        self.tree("tstack-grants-issued.json").write_text(json.dumps({"issued": []}))
+        self.jj("status")
+        told = self.session_start()
+        self.assertIn(f"{project}: .claude/hooks/tstack-grants-issued.json is tracked", told)
+        self.assertIn(".claude/hooks/tstack-grants-*.json", told)
+        self.assertIn("`jj file untrack .claude/hooks/tstack-grants-issued.json`", told)
+        self.assertNotIn("tstack-grants", self.session_start("resume"))
+
+    def test_an_untracked_record_in_the_tree_is_not_warned_of(self):
+        project = self.settings.parent.parent
+        self.jj("git", "init", str(project), cwd=self.tmp)
+        (project / ".gitignore").write_text(".claude/hooks/tstack-grants-*.json\n")
+        self.tree("x").parent.mkdir()
+        self.tree("tstack-grants-issued.json").write_text(json.dumps({"issued": []}))
+        self.jj("status")
+        self.assertNotIn("tstack-grants", self.session_start())
+
+    def test_concurrent_take_backs_each_land_on_the_record_under_the_lock(self):
+        rules = [f"Bash(echo {n})" for n in range(6)]
+        self.write_settings({"permissions": {"allow": rules}})
+        for n, rule in enumerate(rules):
+            self.grant(decision=f"p-{n}", rule=rule)
+        runs = []
+        for _ in range(6):
+            runs.append(subprocess.Popen([str(HOOK), "PostToolUse"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE, text=True,
+                                         env={**self.env, "FLEET_NOW": "2026-01-05T09:05:00+00:00", "TZ": "UTC"}))
+        for p, n in zip(runs, range(6)):
+            p.communicate(json.dumps(self.payload("PostToolUse", tool_name="Bash", tool_input={"command": f"echo {n}"})),
+                          timeout=60)
+        self.assertEqual(self.allow(), [])
+        self.assertEqual(sorted(e["decision"] for e in json.loads(self.record.read_text())["ended"]),
+                         [f"p-{n}" for n in range(6)])
+
+    def test_a_held_lock_keeps_the_hook_off_the_records(self):
+        self.grant()
+        lock = self.settings.parent / ".settings.local.json.lock"
+        lock.mkdir()
+        before = self.issued.read_text()
+        payload = self.payload("PostToolUse", tool_name="Bash", tool_input={"command": "git push --force origin HEAD:main"})
+        self.hook("PostToolUse", payload, env={"FLEET_NOW": "2026-01-05T09:05:00+00:00"})
+        self.assertEqual((self.issued.read_text(), self.record.exists()), (before, False))
 
 
 class GrantAloneTest(GrantCase):
@@ -3497,9 +3852,10 @@ class GrantAloneTest(GrantCase):
         """A folder an agent made, a record in its .claude/hooks/ with an entry naming the session's own settings, and
         a line after the session's that names that folder."""
         fake = self.tmp / "fake" / ".claude" / "settings.local.json"
-        (fake.parent / "hooks").mkdir(parents=True)
+        fake.parent.mkdir(parents=True)
+        records_dir(self.env["HOME"], fake.parent.parent).mkdir(parents=True)
         fake.write_text(json.dumps({"permissions": {"allow": []}}))
-        (fake.parent / "hooks" / "tstack-grants-issued.json").write_text(json.dumps({"issued": [
+        (records_dir(self.env["HOME"], fake.parent.parent) / "tstack-grants-issued.json").write_text(json.dumps({"issued": [
             {"decision": "p-1a2b3c4d", "ref": "P1", "rule": f"Bash({call})", "file": str(self.settings), "at": at,
              "n": 1, "of": 1}]}))
         with open(self.grants, "a") as f:
@@ -3996,8 +4352,8 @@ class AgentGrantTest(HookCase):
         """What the hub does as it grants: the spawn's grant on the root's record of issued grants."""
         import datetime
         at = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        record = self.file.parent / "hooks" / "tstack-grants-issued.json"
-        record.parent.mkdir(exist_ok=True)
+        record = records_dir(self.env["HOME"], self.project) / "tstack-grants-issued.json"
+        record.parent.mkdir(parents=True, exist_ok=True)
         issued = json.loads(record.read_text())["issued"] if record.exists() else []
         record.write_text(json.dumps({"issued": issued + [{"decision": decision, "ref": "P1", "rule": rule, "file": str(self.file),
                                                            "at": at, "n": 1, "of": 1}]}))
@@ -4031,8 +4387,9 @@ class AgentGrantTest(HookCase):
         self.issue(self.rule(self.SPAWN), minutes_ago=31)
         self.assertEqual(self.spawn(), "")
         self.issue(self.rule(self.SPAWN), minutes_ago=1, decision="p-2")
-        (self.file.parent / "hooks" / "tstack-grants-ended.json").write_text(json.dumps({"ended": [
-            {"file": os.path.realpath(self.file), "decision": "p-2", "rule": self.rule(self.SPAWN), "granted": json.loads((self.file.parent / "hooks" / "tstack-grants-issued.json").read_text())["issued"][-1]["at"], "at": "x", "why": "used"}]}))
+        records = records_dir(self.env["HOME"], self.project)
+        (records / "tstack-grants-ended.json").write_text(json.dumps({"ended": [
+            {"file": os.path.realpath(self.file), "decision": "p-2", "rule": self.rule(self.SPAWN), "granted": json.loads((records / "tstack-grants-issued.json").read_text())["issued"][-1]["at"], "at": "x", "why": "used"}]}))
         self.assertEqual(self.spawn(), "")
 
     def test_anything_else_says_nothing(self):
@@ -4314,8 +4671,8 @@ class SpawnEffortTest(FleetCase):
         (self.project / ".claude" / "tstack-grants.json").write_text(json.dumps({"permissions": {"allow": [rule]}}))
         import datetime
         at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        (self.project / ".claude" / "hooks").mkdir(exist_ok=True)
-        (self.project / ".claude" / "hooks" / "tstack-grants-issued.json").write_text(json.dumps({"issued": [
+        records_dir(self.env["HOME"], self.project).mkdir(parents=True, exist_ok=True)
+        (records_dir(self.env["HOME"], self.project) / "tstack-grants-issued.json").write_text(json.dumps({"issued": [
             {"decision": "p-1", "ref": "P1", "rule": rule, "file": str(self.project / ".claude" / "tstack-grants.json"), "at": at, "n": 1, "of": 1}]}))
         self.assertIn('"allow"', self.spawn(model="opus", effort="high").stdout)  # fleet_agent_grant's, as before
 

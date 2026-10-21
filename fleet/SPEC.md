@@ -2618,7 +2618,7 @@ run of each exact command shown; the next run of the same command asks again.
   that existed when the session started), else `live`. An Agent grant goes the same way into
   `<root>/.claude/tstack-grants.json` instead, same shape (`permissions.allow`), and is always `live`:
   Claude Code never reads that file, the hook reads it at each spawn. **The order of the writes**: first each
-  grant goes on the root's record of issued grants, `issued` in `<root>/.claude/hooks/tstack-grants-issued.json`
+  grant goes on the root's record of issued grants, `issued` in the root's `tstack-grants-issued.json` (in `~/.claude/tstack-grants/<hash>/`, outside its tree: Where the records live, below)
   (`{decision,ref,rule,file,at,n,of,rev,dir[,runs]}` each, the same values as its line below, `dir` the fleet's
   DIR; newest last, the newest 4096 kept, every other key kept; written through a temp file and a rename,
   two-space JSON; a record that does not parse refuses the grant, 409, and nothing is written); then the rules
@@ -2658,7 +2658,7 @@ run of each exact command shown; the next run of the same command asks again.
   as a settings rule does; the sweep below ends the grant.
 - **Which grants stand** (hook and hub alike): **the root's record of issued grants says which grants
   exist, and `grants.jsonl` is the log.** The newest entry of each file and rule in `issued` of
-  `<root>/.claude/hooks/tstack-grants-issued.json` is that rule's grant (an earlier one is superseded, ended
+  the root's `tstack-grants-issued.json` is that rule's grant (an earlier one is superseded, ended
   or not), and it stands for as long as the rule is in that file's `permissions.allow` and the grant is not on
   the root's record of take-backs, whether or not a line names it. Its `at` (the 30 minutes), `runs` (the files
   it binds), `n` (its turn in its list) and `ref` come from that entry, never from a line. The hook reads the
@@ -2686,11 +2686,11 @@ run of each exact command shown; the next run of the same command asks again.
   take-back to another root's record, and Node's `join` reads `<link>/..` by its text where the filesystem
   follows the link). Without this, a copy of a bound
   grant's line with no `runs` and an `at` an hour on let an edited script run on the rule and held the rule
-  past its 30 minutes (measured on 72729f26). The record sits under `.claude/hooks/` for the reason the record
+  past its 30 minutes (measured on 72729f26). The record sits in `~/.claude` for the reason the record
   of take-backs does (below). A `remove` line is a record, never the proof: any agent can append one,
   and one appended while the rule stood ended the grant for the hook (`A; A; A` then ran three times on
   one yes). The proof is the record of take-backs, `ended` in
-  `<root>/.claude/hooks/tstack-grants-ended.json` (`{file, decision, rule, granted[, rev][, line], at, why}` each:
+  the root's `tstack-grants-ended.json` (`{file, decision, rule, granted[, rev][, line], at, why}` each:
   `file` the grant file, `granted` the grant's `at`, `rev` its permission's revision, `line: true` for the
   take-back of a line on no record of issued grants, `at` the take-back's, `why` one of `used`, `revoked`,
   `expired` or `superseded`; newest last, the newest 4096 kept), written by whichever sweep
@@ -2715,9 +2715,9 @@ run of each exact command shown; the next run of the same command asks again.
   write-deny is narrower: "the `.claude` settings files, the `.claude/skills`, `.claude/agents`,
   `.claude/commands`, and `.claude/hooks` directories"
   ([Sandboxing, Protected paths](https://code.claude.com/docs/en/sandboxing#protected-paths)), so a
-  sandboxed command could write `.claude/tstack-grants.json` but not `.claude/hooks/`. The record sits
-  under both, as the rules themselves do, so an agent can no more forge a take-back there than write
-  the rule itself. Each sweep reads the record again under the settings lock before it takes a rule
+  sandboxed command could write `.claude/tstack-grants.json` but not `.claude/hooks/`; it denies writes
+  to most of `~/.claude` too. The record sits under both, as the rules themselves do, so an agent can no
+  more forge a take-back there than write the rule itself. Each sweep reads the record again under the settings lock before it takes a rule
   out, so a take-back the other sweep put there meanwhile holds. A grant on that record is over
   whatever its file holds: a rule the owner adds after the take-back, byte-identical to the one once
   granted, is the owner's, and no sweep removes it (measured 2026-10-15: without the record, the chat
@@ -2741,6 +2741,22 @@ run of each exact command shown; the next run of the same command asks again.
   symlink keeps the rules granted there before the deploy, unbounded, since neither the hook nor the hub
   reads, takes back or writes anything there (`grantFile`), so its earlier grants are removed by hand. The
   deploy: the hub restarts with the release, and a session on the old hook keeps it until it restarts.
+- **Where the records live**: both records of a root are in `<home>/.claude/tstack-grants/<hash>/`, `<hash>`
+  the SHA-256 of the UTF-8 bytes of the root's real path, as lowercase hex; `fleet/src/hub/grant-records.ts`
+  is the one place this is written down, with why there and the one-time import, and
+  `fleet/test/grant-records.cases.json` the cases the hub, the hook and the office host must read alike.
+  They sat in the root's `.claude/hooks/` until 2026-10-21, when in a root that jj tracked them in a
+  `jj workspace update-stale` put an older copy over them and the hook took back a grant the user had
+  allowed. Not in `$XDG_STATE_HOME`: no protected path covers it, and an agent that could edit the record
+  of issued grants could rewrite a grant's `runs` or its `at`. The writes stay under the settings lock beside
+  the grant files, `<root>/.claude/.settings.local.json.lock`, and so does the one-time import (the first reader or writer to find
+  no folder takes the lock, looks again, copies each tree record that is a regular file into a fresh folder, of the
+  take-backs only those whose rule is in none of the root's grant files (one whose rule is there is forged: the
+  take-back is written once the rule is out), makes the
+  folder with `mkdir` and links each copy in, never renaming a whole folder; with the lock not had in 2 s, or no
+  `.claude`, there is no record for now). Nothing writes the tree's copy any more; the
+  hook says at SessionStart, once a session, when jj or git still tracks one, with the cleanup (a
+  `.gitignore` line, then `jj file untrack`).
 - **A granted call runs alone, once, in its turn** (the plugin's hook, `fleet_grant_alone`, the last
   PreToolUse handler, matcher `Bash|Monitor`; it returns a deny or nothing, never an allow). The hook
   reads the grants of `grant_state_dirs`: the fleets of `grant_dirs`, and any of the same places that
@@ -2800,7 +2816,7 @@ run of each exact command shown; the next run of the same command asks again.
   standing: a forged line for call 1's rule, or a sweep taking it back, let call 2 run first). A call inside a
   longer command is denied and revokes nothing. A grant is
   `expired` 30 minutes after the `at` on its root's record of issued grants, and at once when it is on none. The hook takes the rule out under the settings lock, puts the
-  take-back on the root's record (`ended` in `<root>/.claude/hooks/tstack-grants-ended.json`, the
+  take-back on the root's record (`ended` in its `tstack-grants-ended.json`, the
   settings first so a record write that fails leaves fewer allowed calls, never more; a record that
   does not parse is left as it is and the take-back logged), then appends a `remove` line,
   `{"op":"remove",decision,rule,file,at,why}` (`why`: `used`, `revoked` or `expired`), and removes the
@@ -4934,8 +4950,8 @@ recommendation attached.
 | `fleets.py gate take/free`, `name` | `REGISTRY/gate/gate.json` (under `REGISTRY/gate/gate.lock`; the TypeScript fleet also `queue.json` and, from `gate run`, `runs.jsonl`), `REGISTRY/<fleet>.json` |
 | `serve_dashboard.py` | `DIR/server.json`, `DIR/server.log`, `REGISTRY/<fleet>.json` |
 | `fleet serve` | `REGISTRY/<fleet>.json` (removed with `--stop`); with `--take-over`, when it displaced a host that ran: `DIR/state.json` (one event, `updated`) and one line in `DIR/chat.jsonl` (TypeScript only) |
-| `fleet hub` | `REGISTRY/hub/hub.json` while it runs (it reads `REGISTRY/hub/config.json`, written by hand); `REGISTRY/hub/tokens.json` at start and when a token rotates; `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, in this order, `<root>/.claude/hooks/tstack-grants-issued.json`, `<root>/.claude/settings.local.json` (and its folder) or `<root>/.claude/tstack-grants.json`, `DIR/grants.jsonl`, and for a rule granted anew `<root>/.claude/hooks/tstack-grants-ended.json` (`why: superseded`); on an expiry, the settings file, `tstack-grants-ended.json` and `DIR/grants.jsonl`; on a page rename, `DIR/state.json` (a worker's `name`, `name_by`, `updated`, under the ledger's lock) or `REGISTRY/overrides/<hash>.json` and `REGISTRY/<fleet>.json` |
-| the plugin's hook (grant removal) | `<root>/.claude/settings.local.json` or `<root>/.claude/tstack-grants.json`, `<root>/.claude/hooks/tstack-grants-ended.json` (the take-back, with its `why`), `DIR/grants.jsonl` (`remove` lines), `DIR/grants.taken/` |
+| `fleet hub` | `REGISTRY/hub/hub.json` while it runs (it reads `REGISTRY/hub/config.json`, written by hand); `REGISTRY/hub/tokens.json` at start and when a token rotates; `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, in this order, the root's `~/.claude/tstack-grants/<hash>/tstack-grants-issued.json`, `<root>/.claude/settings.local.json` (and its folder) or `<root>/.claude/tstack-grants.json`, `DIR/grants.jsonl`, and for a rule granted anew the root's `tstack-grants-ended.json` beside it (`why: superseded`); on an expiry, the settings file, `tstack-grants-ended.json` and `DIR/grants.jsonl`; on a page rename, `DIR/state.json` (a worker's `name`, `name_by`, `updated`, under the ledger's lock) or `REGISTRY/overrides/<hash>.json` and `REGISTRY/<fleet>.json` |
+| the plugin's hook (grant removal) | `<root>/.claude/settings.local.json` or `<root>/.claude/tstack-grants.json`, the root's `~/.claude/tstack-grants/<hash>/tstack-grants-ended.json` (the take-back, with its `why`), `DIR/grants.jsonl` (`remove` lines), `DIR/grants.taken/` |
 | the plugin's hook (`fleet_permission_denied`), through `fleet state DIR decision ID --kind refusal\|permission` | `DIR/state.json` (`refusals`, or for a spawn `decisions`; `events`, `updated`), `DIR/index.html`; for a draft one line in `DIR/chat.jsonl` from `fleet-hub`, or one line to the host's session's socket when its watch is not running; the session's `transient-refusals` and `refusal-notes` folders in the plugin's data folder |
 | the hub (its wake timer, `POST wake`) | `REGISTRY/hub/wakes.json`; one line to the session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, which is Claude Code's, not the fleet's |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |

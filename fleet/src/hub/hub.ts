@@ -563,7 +563,7 @@ export class Hub {
   expireGrants(): Promise<string[]> {
     const machine = this.options.machine;
 
-    return expireGrants(machine.registry.ledgerDirs(), machine.now(), stampOf(machine.now()));
+    return expireGrants(machine.registry.ledgerDirs(), machine.now(), stampOf(machine.now()), machine.env("HOME"));
   }
 
   /** This machine's fleets, as a peer hub and the index read them. */

@@ -22,6 +22,7 @@ import { type Answered, expireGrants, grantAnswer, registeredSession } from "../
 import { collapse } from "../src/hub/hub.ts";
 import { chatOriginsPath, grantor, hello, parseChatOrigins, postRefusal, viewerOf, writerRefusal } from "../src/hub/policy.ts";
 import { lsofListenersOf } from "../src/hub/served.ts";
+import { recordsDir } from "../src/hub/grant-records.ts";
 import { startHub, type Running } from "../src/hub/server.ts";
 import { frontmatter } from "../src/hub/skills.ts";
 import { isTailnetIp, tailnetOf } from "../src/hub/tailnet.ts";
@@ -2744,6 +2745,9 @@ describe("a permission's answer grants the call once", () => {
 
   let settings: string;
 
+  /** The session root's grant records, outside its tree, under the test's own HOME (grant-records.ts). */
+  let records: string;
+
   function permission(over: JsonObject = {}): JsonObject {
     return {
       id: "p-1a2b3c4d",
@@ -2791,6 +2795,8 @@ describe("a permission's answer grants the call once", () => {
   beforeEach(() => {
     session = join(base, "repo");
     settings = join(session, ".claude", "settings.local.json");
+    env = { ...env, HOME: join(base, "home") };
+    records = recordsDir(join(base, "home"), session);
     mkdirSync(join(session, ".claude"), { recursive: true });
     mkdirSync(join(root, "heartbeats"), { recursive: true });
     writeFileSync(join(root, "heartbeats", "s1.json"), JSON.stringify({ session: "s1", at: "2026-01-01T00:00:00+00:00", cwd: session }));
@@ -2857,18 +2863,19 @@ describe("a permission's answer grants the call once", () => {
     expect(String(grant?.["at"])).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$/);
     expect(readFileSync(join(root, "grants.jsonl"), "utf8")).toBe(`${JSON.stringify(grant)}\n`);
     expect(readChat(root).map((m) => m.stored["decision"])).toEqual(["p-1a2b3c4d"]);
-    expect(readdirSync(join(session, ".claude")).sort()).toEqual(["hooks", "settings.local.json"]);
+    // Nothing in the tree but the rule: the records are kept outside it (grant-records.ts).
+    expect(readdirSync(join(session, ".claude")).sort()).toEqual(["settings.local.json"]);
     // The grant on the root's record of issued grants, where an agent can no more write than the rule itself: the
     // only `at`, `runs` and `n` the hook and the hub's expiry read.
-    expect(JSON.parse(readFileSync(join(session, ".claude", "hooks", "tstack-grants-issued.json"), "utf8"))).toEqual({
+    expect(JSON.parse(readFileSync(join(records, "tstack-grants-issued.json"), "utf8"))).toEqual({
       issued: [{ decision: "p-1a2b3c4d", ref: "P1", rule: RULE, file: settings, at: grant?.["at"], n: 1, of: 1, rev: grant?.["rev"], dir: root }],
     });
-    expect(readdirSync(join(session, ".claude", "hooks"))).toEqual(["tstack-grants-issued.json"]);
+    expect(readdirSync(records)).toEqual(["tstack-grants-issued.json"]);
   });
 
   test("a record of issued grants that does not parse refuses the grant, and nothing is written", async () => {
-    mkdirSync(join(session, ".claude", "hooks"), { recursive: true });
-    writeFileSync(join(session, ".claude", "hooks", "tstack-grants-issued.json"), "{");
+    mkdirSync(records, { recursive: true });
+    writeFileSync(join(records, "tstack-grants-issued.json"), "{");
     await start();
     const sent = await post(allow);
     expect(sent.status).toBe(409);
@@ -3068,15 +3075,15 @@ describe("a permission's answer grants the call once", () => {
     // Granted a minute ago, its call cancelled: the rule is still there, and the fleet asks again.
     const old = { decision: "p-old", ref: "P0", rule: RULE, file: settings, at: new Date(Date.now() - 60_000).toISOString() };
     writeFileSync(join(root, "grants.jsonl"), `${JSON.stringify({ op: "grant", ...old })}\n`);
-    mkdirSync(join(session, ".claude", "hooks"), { recursive: true });
-    writeFileSync(join(session, ".claude", "hooks", "tstack-grants-issued.json"), JSON.stringify({ issued: [{ ...old, n: 1, of: 1 }] }));
+    mkdirSync(records, { recursive: true });
+    writeFileSync(join(records, "tstack-grants-issued.json"), JSON.stringify({ issued: [{ ...old, n: 1, of: 1 }] }));
     await start();
     expect((await post(allow)).status).toBe(201);
     expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
     expect(grants().map((g) => [g["decision"], g["rule"]])).toEqual([["p-old", RULE], ["p-1a2b3c4d", RULE]]);
     // The earlier grant is ended as superseded (measured on 83448844: it stayed on record, never ended, and a copy of
     // its line put the rule back on its bounds).
-    const ended = asArray(asObject(JSON.parse(readFileSync(join(session, ".claude", "hooks", "tstack-grants-ended.json"), "utf8")))?.["ended"]) ?? [];
+    const ended = asArray(asObject(JSON.parse(readFileSync(join(records, "tstack-grants-ended.json"), "utf8")))?.["ended"]) ?? [];
     expect(ended.map((e) => [asObject(e)?.["decision"], asObject(e)?.["granted"], asObject(e)?.["why"]])).toEqual([["p-old", old.at, "superseded"]]);
   });
 
@@ -3084,7 +3091,7 @@ describe("a permission's answer grants the call once", () => {
     mkdirSync(settings, { recursive: true });
     await start();
     expect((await post(allow)).status).toBe(409);
-    const record = join(session, ".claude", "hooks", "tstack-grants-issued.json");
+    const record = join(records, "tstack-grants-issued.json");
     expect(existsSync(record) ? readFileSync(record, "utf8") : undefined).toBeUndefined();
     expect(existsSync(join(root, "grants.jsonl")) ? readFileSync(join(root, "grants.jsonl"), "utf8") : "").toBe("");
   });
@@ -3093,8 +3100,8 @@ describe("a permission's answer grants the call once", () => {
     writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE] } }));
     const old = new Date(Date.now() - 3_600_000).toISOString();
     writeFileSync(join(root, "grants.jsonl"), `${JSON.stringify({ op: "grant", decision: "p-old", ref: "P0", rule: RULE, file: settings, at: old })}\n${JSON.stringify({ op: "remove", decision: "p-old", rule: RULE, file: settings, at: old, why: "used" })}\n`);
-    mkdirSync(join(session, ".claude", "hooks"), { recursive: true });
-    writeFileSync(join(session, ".claude", "hooks", "tstack-grants-ended.json"), JSON.stringify({ ended: [{ decision: "p-old", rule: RULE, granted: old, at: old }] }));
+    mkdirSync(records, { recursive: true });
+    writeFileSync(join(records, "tstack-grants-ended.json"), JSON.stringify({ ended: [{ decision: "p-old", rule: RULE, granted: old, at: old }] }));
     await start();
     expect((await post(allow)).status).toBe(201);
     expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: [RULE] } });
@@ -3208,7 +3215,7 @@ describe("a permission's answer grants the call once", () => {
     const moved = { id: "retire-plan", kind: "decision", title: "Retire the plan", question: "q", status: "decided", opened: "2026-01-01T00:00:00+00:00", body: "11ba2f7abbada514" };
     withRows(permission(), moved);
     writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
-    const answered: Answered = { dir: root, decision: "p-1a2b3c4d", text: "allow-once: Allow this call once", rule: RULE, rules: undefined, root: session, runs: undefined, by: "local", at: "2026-01-01T00:00:00+00:00", registered: () => undefined, home: undefined };
+    const answered: Answered = { dir: root, decision: "p-1a2b3c4d", text: "allow-once: Allow this call once", rule: RULE, rules: undefined, root: session, runs: undefined, by: "local", at: "2026-01-01T00:00:00+00:00", registered: () => undefined, home: join(base, "home") };
     expect(await grantAnswer(answered)).not.toHaveProperty("refused");
     expect(asObject(asObject(JSON.parse(readFileSync(settings, "utf8")))?.["permissions"])?.["allow"]).toEqual(["Bash(ls)", RULE]);
   });
@@ -3233,7 +3240,7 @@ describe("a permission's answer grants the call once", () => {
       await start();
       expect((await post(yes())).status).toBe(201);
       expect(grants().map((g) => [g["rule"], g["runs"]])).toEqual([[`Bash(${call()})`, [{ path: script, sha256: sha() }]]]);
-      const issued = asArray(asObject(JSON.parse(readFileSync(join(session, ".claude", "hooks", "tstack-grants-issued.json"), "utf8")))?.["issued"]) ?? [];
+      const issued = asArray(asObject(JSON.parse(readFileSync(join(records, "tstack-grants-issued.json"), "utf8")))?.["issued"]) ?? [];
       expect(issued.map((e) => [asObject(e)?.["rule"], asObject(e)?.["runs"]])).toEqual([[`Bash(${call()})`, [{ path: script, sha256: sha() }]]]);
     });
 
@@ -3262,19 +3269,19 @@ describe("a permission's answer grants the call once", () => {
   describe("the hub ends a grant itself, 30 minutes after the answer", () => {
     const at = "2026-01-01T00:00:00+00:00";
     const grantLine = (over: JsonObject = {}): string => `${JSON.stringify({ op: "grant", decision: "p-1a2b3c4d", ref: "P1", rule: RULE, file: settings, at, ...over })}\n`;
-    const expire = (now: string): Promise<string[]> => expireGrants([root], new Date(now), now);
+    const expire = (now: string): Promise<string[]> => expireGrants([root], new Date(now), now, join(base, "home"));
 
     const record = (): string => {
-      mkdirSync(join(session, ".claude", "hooks"), { recursive: true });
+      mkdirSync(records, { recursive: true });
 
-      return join(session, ".claude", "hooks", "tstack-grants-ended.json");
+      return join(records, "tstack-grants-ended.json");
     };
 
     const allowed = (): string => JSON.stringify(asObject(asObject(JSON.parse(readFileSync(settings, "utf8")))?.["permissions"])?.["allow"] ?? null);
 
     /** What the hub does as it grants: the grant on the root's record of issued grants, then its line, returned. */
     const issue = (over: JsonObject = {}): string => {
-      const file = join(session, ".claude", "hooks", "tstack-grants-issued.json");
+      const file = join(records, "tstack-grants-issued.json");
       mkdirSync(dirname(file), { recursive: true });
       const held = existsSync(file) ? (asArray(asObject(JSON.parse(readFileSync(file, "utf8")))?.["issued"]) ?? []) : [];
       writeFileSync(file, JSON.stringify({ issued: [...held, { decision: "p-1a2b3c4d", ref: "P1", rule: RULE, file: settings, at, n: 1, of: 1, ...over }] }));
@@ -3297,6 +3304,44 @@ describe("a permission's answer grants the call once", () => {
       expect(existsSync(join(session, ".claude", ".settings.local.json.lock"))).toBe(false);
     });
 
+    test("a checkout that puts an older record in the tree, or deletes it, changes no grant: the records are outside it, and the tree's copy is never written", async () => {
+      // 2026-10-21: in a root jj tracks the records in, `jj workspace update-stale` put an older tree's copy back over
+      // them, and the hook took back a grant the user had allowed. A `jj new` onto a commit without them deletes both.
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
+      expect(await grantAnswer(answer())).not.toHaveProperty("refused");
+      const tree = join(session, ".claude", "hooks");
+      mkdirSync(tree);
+      const older = JSON.stringify({ issued: [] });
+      const ended = { ended: [{ file: settings, decision: "p-1a2b3c4d", rule: RULE, granted: at, at, why: "used" }] };
+      writeFileSync(join(tree, "tstack-grants-issued.json"), older);
+      writeFileSync(join(tree, "tstack-grants-ended.json"), JSON.stringify(ended));
+      expect(await expire("2026-01-01T00:29:00+00:00")).toEqual([]);
+      rmSync(tree, { recursive: true });
+      expect(await expire("2026-01-01T00:29:30+00:00")).toEqual([]);
+      expect(allowed()).toBe(JSON.stringify(["Bash(ls)", RULE]));
+      mkdirSync(tree);
+      writeFileSync(join(tree, "tstack-grants-issued.json"), older);
+      expect(await expire("2026-01-01T00:31:00+00:00")).toEqual([`${RULE} in ${settings}`]);
+      expect([readdirSync(tree), readFileSync(join(tree, "tstack-grants-issued.json"), "utf8")]).toEqual([["tstack-grants-issued.json"], older]);
+      expect((asArray(asObject(JSON.parse(readFileSync(record(), "utf8")))?.["ended"]) ?? []).map((e) => asObject(e)?.["why"])).toEqual(["expired"]);
+    });
+
+    test("a record kept in the tree before is imported once, every entry kept, and its grant ends at its 30 minutes", async () => {
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE, "Bash(x)"] } }));
+      const tree = join(session, ".claude", "hooks");
+      mkdirSync(tree);
+      const entries = [{ decision: "p-1a2b3c4d", ref: "P1", rule: RULE, file: settings, at, n: 1, of: 1 }, { decision: "p-x", ref: "P2", rule: "Bash(x)", file: settings, at: "2026-01-01T00:10:00+00:00", n: 1, of: 1 }];
+      const text = JSON.stringify({ issued: entries });
+      writeFileSync(join(tree, "tstack-grants-issued.json"), text);
+      expect(await expire("2026-01-01T00:29:00+00:00")).toEqual([]);
+      expect(readFileSync(join(records, "tstack-grants-issued.json"), "utf8")).toBe(text);
+      // Imported once: what the tree holds after that is not read.
+      writeFileSync(join(tree, "tstack-grants-issued.json"), JSON.stringify({ issued: [...entries, ...entries] }));
+      expect(await expire("2026-01-01T00:31:00+00:00")).toEqual([`${RULE} in ${settings}`]);
+      expect(readFileSync(join(records, "tstack-grants-issued.json"), "utf8")).toBe(text);
+      expect(await expire("2026-01-01T00:41:00+00:00")).toEqual([`Bash(x) in ${settings}`]);
+    });
+
     test("a grant whose line was deleted is found on its root's record, by a restarted hub too (measured on 83448844: taken: [])", async () => {
       // The root is named by the fleet's heartbeat (beforeEach), not by any line; expireGrants reads no memory of this process's grants here.
       writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)", RULE] } }));
@@ -3316,7 +3361,7 @@ describe("a permission's answer grants the call once", () => {
     });
 
     /** An allow-once of the row's permission, answered at `at`. */
-    const answer = (over: Partial<Answered> = {}): Answered => ({ dir: root, decision: "p-1a2b3c4d", text: "allow-once: Allow this call once", rule: RULE, rules: undefined, root: session, runs: undefined, by: "local", at, registered: () => undefined, home: undefined, ...over });
+    const answer = (over: Partial<Answered> = {}): Answered => ({ dir: root, decision: "p-1a2b3c4d", text: "allow-once: Allow this call once", rule: RULE, rules: undefined, root: session, runs: undefined, by: "local", at, registered: () => undefined, home: join(base, "home"), ...over });
 
     test("a hub that dies after the rule and before the line leaves a grant a restarted hub takes back at its 30 minutes", async () => {
       writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
@@ -3356,7 +3401,7 @@ describe("a permission's answer grants the call once", () => {
 
       // The entry and the rule landed, the line did not.
       expect(allowed()).toBe(JSON.stringify(["Bash(ls)", RULE]));
-      expect((asArray(asObject(JSON.parse(readFileSync(join(session, ".claude", "hooks", "tstack-grants-issued.json"), "utf8")))?.["issued"]) ?? []).map((e) => asObject(e)?.["at"])).toEqual([at]);
+      expect((asArray(asObject(JSON.parse(readFileSync(join(records, "tstack-grants-issued.json"), "utf8")))?.["issued"]) ?? []).map((e) => asObject(e)?.["at"])).toEqual([at]);
       expect(grants()).toEqual([]);
       // Restarted 31 minutes on: its lock is stale by then, and the fleet's heartbeat names the root.
       const lock = join(session, ".claude", ".settings.local.json.lock");
@@ -3372,8 +3417,9 @@ describe("a permission's answer grants the call once", () => {
       // entry naming the session's settings with a later `at`, and it replaced the session root's own entry.
       writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE] } }));
       const fake = join(base, "fake", ".claude");
-      mkdirSync(join(fake, "hooks"), { recursive: true });
-      writeFileSync(join(fake, "hooks", "tstack-grants-issued.json"), JSON.stringify({ issued: [{ decision: "p-1a2b3c4d", ref: "P1", rule: RULE, file: settings, at: "2026-01-01T00:20:00+00:00", n: 1, of: 1 }] }));
+      const fakeRecords = recordsDir(join(base, "home"), join(base, "fake"));
+      mkdirSync(fakeRecords, { recursive: true });
+      writeFileSync(join(fakeRecords, "tstack-grants-issued.json"), JSON.stringify({ issued: [{ decision: "p-1a2b3c4d", ref: "P1", rule: RULE, file: settings, at: "2026-01-01T00:20:00+00:00", n: 1, of: 1 }] }));
       writeFileSync(join(root, "grants.jsonl"), issue() + grantLine({ decision: "p-x", rule: "Bash(x)", file: join(fake, "settings.local.json") }));
       expect(await expire("2026-01-01T00:31:00+00:00")).toEqual([`${RULE} in ${settings}`]);
       expect(allowed()).toBe(JSON.stringify([]));
@@ -3391,15 +3437,17 @@ describe("a permission's answer grants the call once", () => {
 
     const fakeAllowed = (file: string): string => JSON.stringify(asObject(asObject(JSON.parse(readFileSync(file, "utf8")))?.["permissions"])?.["allow"] ?? null);
 
-    test("a take-back through a symlinked .claude/hooks lands on no record: the real grant still ends at its 30 minutes", async () => {
+    test("a take-back through a symlinked .claude/hooks lands on its own root's record, not the real one: the real grant still ends at its 30 minutes", async () => {
       // Review 3, finding 1, path (a): a line naming the agent's folder, its hooks a symlink to the root's, with the real
-      // grant's decision, at and rev. Its take-back went onto the root's record and ended the real grant, for good.
+      // grant's decision, at and rev. Its take-back went onto the root's record and ended the real grant, for good. The
+      // records of a root are kept by its own real path now, so the fake folder's line is a grant on no record of its
+      // own root, taken back at once onto that root's record.
       const line = fakeRoot();
       symlinkSync(join(session, ".claude", "hooks"), join(base, "fake", ".claude", "hooks"));
       writeFileSync(join(root, "grants.jsonl"), line + grantLine({ rev: "r1", file: join(base, "fake", ".claude", "settings.local.json") }));
-      expect(await expire("2026-01-01T00:01:00+00:00")).toEqual([]);
-      expect(existsSync(record())).toBe(false);
-      expect(fakeAllowed(join(base, "fake", ".claude", "settings.local.json"))).toBe(JSON.stringify([RULE]));
+      expect(await expire("2026-01-01T00:01:00+00:00")).toEqual([`${RULE} in ${join(base, "fake", ".claude", "settings.local.json")}`]);
+      expect(existsSync(join(records, "tstack-grants-ended.json"))).toBe(false);
+      expect(fakeAllowed(join(base, "fake", ".claude", "settings.local.json"))).toBe(JSON.stringify([]));
       expect(await expire("2026-01-01T00:31:00+00:00")).toEqual([`${RULE} in ${settings}`]);
       expect(allowed()).toBe(JSON.stringify([]));
     });
@@ -3462,13 +3510,14 @@ describe("a permission's answer grants the call once", () => {
       expect(asArray(asObject(JSON.parse(readFileSync(record(), "utf8")))?.["ended"])?.at(-1)).toEqual({ file: settings, decision: "p-1a2b3c4d", rule: RULE, granted: at, rev: "r1", at: "2026-01-01T00:31:00+00:00", why: "expired" });
     });
 
-    test("a session root whose .claude/hooks is a symlink is granted nothing: no record there can be trusted", async () => {
+    test("a session root whose .claude/hooks is a symlink is granted, and nothing is written through the link: the records are outside the tree", async () => {
       writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
       mkdirSync(join(base, "elsewhere"));
       symlinkSync(join(base, "elsewhere"), join(session, ".claude", "hooks"));
-      expect(await grantAnswer(answer())).toEqual({ refused: expect.stringContaining("symlink") });
-      expect(allowed()).toBe(JSON.stringify(["Bash(ls)"]));
+      expect(await grantAnswer(answer())).not.toHaveProperty("refused");
+      expect(allowed()).toBe(JSON.stringify(["Bash(ls)", RULE]));
       expect(readdirSync(join(base, "elsewhere"))).toEqual([]);
+      expect(readdirSync(records)).toEqual(["tstack-grants-issued.json"]);
     });
 
     test("two answers of one decision under two revisions in one second are two grants: the newer one ends at its 30 minutes", async () => {
@@ -3541,10 +3590,10 @@ describe("a permission's answer grants the call once", () => {
       writeFileSync(record(), JSON.stringify({ ended: [{ decision: "p-1a2b3c4d", rule: RULE, granted, at: granted }] }));
       writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE] } }));
       const due = Date.parse(granted) + 30 * 60_000;
-      expect(await expireGrants([root], new Date(due), "t")).toContain(`${RULE} in ${settings}`);
+      expect(await expireGrants([root], new Date(due), "t", join(base, "home"))).toContain(`${RULE} in ${settings}`);
       expect(allowed()).toBe(JSON.stringify([]));
       writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE] } }));
-      expect(await expireGrants([root], new Date(due + 60_000), "t")).not.toContain(`${RULE} in ${settings}`);
+      expect(await expireGrants([root], new Date(due + 60_000), "t", join(base, "home"))).not.toContain(`${RULE} in ${settings}`);
       expect(allowed()).toBe(JSON.stringify([RULE]));
     });
 
@@ -3581,7 +3630,7 @@ describe("a permission's answer grants the call once", () => {
       const [line] = grants();
       const granted = String(line?.["at"]);
       appendFileSync(join(root, "grants.jsonl"), `${JSON.stringify({ ...line, at: new Date(Date.parse(granted) + 3_600_000).toISOString() })}\n`);
-      expect(await expireGrants([root], new Date(Date.parse(granted) + 30 * 60_000), "t")).toContain(`${RULE} in ${settings}`);
+      expect(await expireGrants([root], new Date(Date.parse(granted) + 30 * 60_000), "t", join(base, "home"))).toContain(`${RULE} in ${settings}`);
       expect(allowed()).toBe(JSON.stringify([]));
     });
 
@@ -3590,10 +3639,10 @@ describe("a permission's answer grants the call once", () => {
       expect((await post(allow)).status).toBe(201);
       const granted = String(grants()[0]?.["at"]);
       rmSync(join(root, "grants.jsonl"));
-      expect(await expireGrants([root], new Date(Date.parse(granted) + 29 * 60_000), "t")).toEqual([]);
+      expect(await expireGrants([root], new Date(Date.parse(granted) + 29 * 60_000), "t", join(base, "home"))).toEqual([]);
       expect(allowed()).toBe(JSON.stringify([RULE]));
       // Every grant this process wrote and has not seen end is in its memory, whatever fleet it was for.
-      expect(await expireGrants([], new Date(Date.parse(granted) + 30 * 60_000), "t")).toContain(`${RULE} in ${settings}`);
+      expect(await expireGrants([], new Date(Date.parse(granted) + 30 * 60_000), "t", join(base, "home"))).toContain(`${RULE} in ${settings}`);
       expect(allowed()).toBe(JSON.stringify([]));
     });
 

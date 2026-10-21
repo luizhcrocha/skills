@@ -1708,7 +1708,9 @@ SETTINGS_LOCK_SHARED_WITH_HUB = ".settings.local.json.lock"
 # tstack's own file beside the settings, <root>/.claude/tstack-grants.json (permission.ts's grantFileOf names it too),
 # holds the Agent grants (`permissions.allow`): auto mode drops Agent allow rules from the settings, so the hub writes
 # an Agent grant here instead and fleet_agent_grant lets the exact spawn through.
-# The record of take-backs, <root>/.claude/hooks/tstack-grants-ended.json: `ended`, the grants taken back,
+# A root's two grant records live outside its tree, in <home>/.claude/tstack-grants/<hash>/ (_records_dir; where, why
+# there and the one-time import: fleet/src/hub/grant-records.ts, the one place it is written down).
+# The record of take-backs, tstack-grants-ended.json there: `ended`, the grants taken back,
 # `{decision, rule, granted, at}` each (`granted`: the grant line's `at`), newest last, the newest ENDED_KEPT kept. A
 # grant on it is over whatever its file holds, so a rule the owner adds after the take-back, byte-identical to the
 # one once granted, is the owner's and no sweep removes it (measured 2026-10-15: the chat watch's lasting rule went at
@@ -1721,11 +1723,12 @@ SETTINGS_LOCK_SHARED_WITH_HUB = ".settings.local.json.lock"
 # for a few listed exceptions (worktrees, plans, agent memory): writes are prompted, routed to the classifier in auto
 # mode (which refused an agent writing its own allow rule as `[Self-Modification]`), and allow rules do not
 # pre-approve them (code.claude.com/docs/en/permission-modes, "Protected paths"). The sandbox's write-deny is
-# narrower: the settings files and the skills, agents, commands and hooks directories (code.claude.com/docs/en/
-# sandboxing, "Protected paths"), so the record sits in `.claude/hooks/`, under both, as the allow rules do: an agent
+# narrower: the settings files and the skills, agents, commands and hooks directories, and most of ~/.claude
+# (code.claude.com/docs/en/sandboxing, "Protected paths"), so the record sits in ~/.claude, under both, as the allow
+# rules do (it sat in the root's .claude/hooks/ until a jj checkout put an older copy over it, 2026-10-21): an agent
 # that could forge a take-back there could as well write the lasting rule, so the record adds nothing to what it can
 # do. The same goes for which grants exist: when the hub grants, it first puts each grant on the root's record of
-# issued grants, <root>/.claude/hooks/tstack-grants-issued.json: `issued`, `{decision, ref, rule, file, at, n, of, rev,
+# issued grants, tstack-grants-issued.json beside it: `issued`, `{decision, ref, rule, file, at, n, of, rev,
 # dir[, runs]}` each, newest last, the newest 4096 kept (grants.ts ISSUED_KEPT). The newest entry of a file and rule is
 # its grant, standing while its rule is in its file and it is not on the record of take-backs; its `at` (the 30
 # minutes), `runs` (the sha256 of each file its call runs), `n` (its turn) and `ref` are the entry's. grants.jsonl is
@@ -2287,19 +2290,17 @@ def _spawn_card(r, worker, host):
 
 def _grant_file(value, seen=None):
     """A grant's file, when it is one the hook may rewrite: an absolute <root>/.claude/settings.local.json, or
-    <root>/.claude/tstack-grants.json for an Agent grant, whose folder is its own realpath, and where neither the file,
-    .claude/hooks nor a record in it is a symlink. Else nothing there is read, taken back or written (review 3: a
-    symlinked .claude/hooks, or a `<link>/..` the hub's join reads by its text, sent a take-back onto another root's
-    record). `seen` caches the answer by path."""
+    <root>/.claude/tstack-grants.json for an Agent grant, whose folder is its own realpath, and that is no symlink.
+    Else nothing there is read, taken back or written (review 3: a `<link>/..` the hub's join reads by its text sent a
+    take-back onto another root's record). A symlinked .claude/hooks once did too; the records are kept by the root's
+    real path outside its tree now (_records_dir), so it reaches none. `seen` caches the answer by path."""
     if seen is not None and value in seen:
         return seen[value]
     file = None
     if isinstance(value, str) and value.startswith("/"):
         folder, name = os.path.split(value)
-        hooks = os.path.join(folder, "hooks")
         if (name in GRANT_FILES and os.path.basename(folder) == ".claude" and os.path.realpath(folder) == folder
-                and not any(os.path.islink(p) for p in (value, hooks, os.path.join(hooks, ENDED_RECORD),
-                                                        os.path.join(hooks, ISSUED_RECORD)))):
+                and not os.path.islink(value)):
             file = value
     if seen is not None and isinstance(value, str):
         seen[value] = file
@@ -2364,7 +2365,7 @@ def _recorded_grant(entry, ended):
 def _latest_grants(hook, raw):
     """The grant of each (file, rule): the newest entry of it on the record of issued grants of the session's root
     and of each root a grants.jsonl line names (an earlier entry of the same rule is superseded, ended or not). The
-    record is the hub's, in `.claude/hooks/`, where no agent writes; grants.jsonl is the fleet's log, which any agent
+    record is the hub's, in ~/.claude (_records_dir), where no agent writes; grants.jsonl is the fleet's log, which any agent
     can write, so a line found nothing and hides nothing: a grant whose line was deleted still stands, and is held
     to its bounds. A record holds only the grants of its own root (_read_issued), and the session root's is read
     first: no entry of a root a line names replaces one of the session's (review 2: one did, from a folder the agent
@@ -2421,9 +2422,160 @@ def _allow_of(hook, file):
     return hook._allows[file]
 
 
-def _record_file(file):
-    """The record of take-backs for a grant file: the root's .claude/hooks/tstack-grants-ended.json."""
-    return os.path.join(os.path.dirname(file), "hooks", ENDED_RECORD)
+GRANT_RECORDS = "tstack-grants"
+
+
+def _records_dir(home, root):
+    """The folder of the grant records of the root whose real path is `root`, for the user whose home is `home`:
+    <home>/.claude/tstack-grants/<sha256 of the root's path, UTF-8, lowercase hex>, as grant-records.ts computes it
+    (fleet/test/grant-records.cases.json). None with no home."""
+    if not home:
+        return None
+    import hashlib
+    return os.path.join(home, ".claude", GRANT_RECORDS, hashlib.sha256(os.fsencode(root)).hexdigest())
+
+
+def _record_at(home, file, name, locked=False, before_move=None):
+    """The record `name` of the root of grant file `file` (<root>/.claude/<grant file>), with the tree's records
+    imported first when the root has no records folder yet (_import_records), under the settings lock unless the caller
+    holds it (`locked`), the folder looked for again once the lock is held. None with no home, or with no folder and a
+    root with no .claude or a lock not had in SETTINGS_LOCK_WAIT_S. `before_move` is a test's seam (_import_records)."""
+    folder = os.path.dirname(file)
+    records = _records_dir(home, os.path.dirname(folder))
+    if records is None:
+        return None
+    if os.path.lexists(records):
+        return os.path.join(records, name)
+    if locked:
+        _import_records(os.path.join(folder, "hooks"), records, before_move)
+        return os.path.join(records, name)
+    if not os.path.isdir(folder) or os.path.islink(folder):
+        return None
+    try:
+        lock = _lock_settings(file)
+    except (OSError, TimeoutError):
+        return None
+    try:
+        if not os.path.lexists(records):
+            _import_records(os.path.join(folder, "hooks"), records, before_move)
+    finally:
+        try:
+            os.rmdir(lock)
+        except OSError:
+            pass
+    return os.path.join(records, name)
+
+
+def _import_records(hooks, records, before_move=None):
+    """Make `records` with a copy of each record in the tree's `hooks` folder that is a regular file (_regular_bytes:
+    no symlink, folder or FIFO), none when `hooks` or the .claude above it is a symlink, as grant-records.ts
+    `importRoot` does: the copies go into a fresh folder beside it, the
+    folder is made with mkdir (one there already is another importer's, and this one stops), and each copy is linked
+    in, a record already there kept. Never a rename of the whole folder: rename(2) replaces an empty folder, so a late
+    importer could swap its copy in over a writer's. Of the record of take-backs, only the take-backs _ended_to_import
+    keeps come in. `before_move` runs once the folder is made, before the records move in."""
+    import shutil
+    import tempfile
+    fresh = None
+    try:
+        os.makedirs(os.path.dirname(records), mode=0o700, exist_ok=True)
+        fresh = tempfile.mkdtemp(prefix=os.path.basename(records) + ".import-", dir=os.path.dirname(records))
+        copied = []
+        linked = os.path.islink(os.path.dirname(hooks)) or os.path.islink(hooks)
+        tree = {} if linked else {name: _regular_bytes(os.path.join(hooks, name)) for name in (ISSUED_RECORD, ENDED_RECORD)}
+        for name, data in tree.items():
+            if data is None:
+                continue
+            if name == ENDED_RECORD:
+                record = _ended_to_import(data, tree[ISSUED_RECORD], os.path.dirname(hooks))
+                if record is None:
+                    continue
+                data = (json.dumps(record, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+            with open(os.path.join(fresh, name), "wb") as f:
+                f.write(data)
+            copied.append(name)
+        try:
+            os.mkdir(records, 0o700)
+        except FileExistsError:
+            return
+        if before_move is not None:
+            before_move()
+        for name in copied:
+            try:
+                os.link(os.path.join(fresh, name), os.path.join(records, name))
+            except FileExistsError:
+                pass
+    except OSError:
+        pass  # the folder or a copy cannot be made: a write of a record says why
+    finally:
+        if fresh is not None:
+            shutil.rmtree(fresh, ignore_errors=True)
+
+
+def _regular_bytes(path):
+    """The bytes of the regular file at `path`; None when it is not there, cannot be read or is anything else: opened
+    O_NOFOLLOW, and O_NONBLOCK so a FIFO swapped in after a check does not hang the open, then checked on the open
+    file (grant-records.ts `regularBytes`)."""
+    import stat
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        with open(fd, "rb") as f:
+            return f.read() if stat.S_ISREG(os.fstat(f.fileno()).st_mode) else None
+    except OSError:
+        return None
+
+
+def _held_rules(claude):
+    """The allow rules of each grant file in the root's `claude` folder; None when one does not parse."""
+    allows = [_read_allow(os.path.join(claude, name)) for name in GRANT_FILES]
+    return None if any(allow is None for allow in allows) else allows
+
+
+def _issued_keys(data):
+    """The keys (_ended_in) a take-back of a grant on the tree's record of issued grants, whose bytes are `data`, may
+    carry: with the grant's file and rev, or without either, as master's and the old host's take-backs name neither.
+    None when it is not there (None) or does not parse."""
+    try:
+        record = None if data is None else json.loads(data)
+    except ValueError:
+        return frozenset()
+    issued = record.get("issued") if isinstance(record, dict) else None
+    keys = (_ended_key(e) for e in (issued if isinstance(issued, list) else [])
+            if isinstance(e, dict) and all(isinstance(e.get(k), str) for k in ("file", "decision", "rule", "at")))
+    return frozenset((f, d, r, a, v) for file, d, r, a, rev in keys for f in (file, None) for v in {rev, None})
+
+
+def _ended_to_import(data, issued, claude):
+    """The tree's record of take-backs, whose bytes are `data`, as the import copies it, every other key kept: only the
+    take-backs of a grant on the tree's record of issued grants, whose bytes are `issued` (_issued_keys, never one marked
+    `line`), whose rule is in none of the root's grant files in `claude`, read under the settings lock the
+    import holds. The tree's copy is any checkout's or agent's to write, and a take-back is written once its rule is
+    out, so one whose rule is still there is forged: imported, it made a one-time grant's rule the owner's, for good;
+    and one of no grant issued yet named a future grant, and ended it at birth with its rule the owner's. None when the
+    record or a grant file does not parse."""
+    try:
+        record = json.loads(data)
+    except ValueError:
+        return None
+    allows = _held_rules(claude)
+    if not isinstance(record, dict) or allows is None:
+        return None
+    keys = _issued_keys(issued)
+    ended = record.get("ended")
+    if isinstance(ended, list):
+        record["ended"] = [e for e in ended if isinstance(e, dict) and e.get("line") is not True
+                           and all(isinstance(e.get(k), str) for k in ("decision", "rule", "granted"))
+                           and _ended_key(dict(e, file=e.get("file") or None, at=e["granted"])) in keys
+                           and not any(e["rule"] in allow for allow in allows)]
+    return record
+
+
+def _record_file(home, file, locked=False):
+    """The record of take-backs for a grant file's root (_record_at); None with no home."""
+    return _record_at(home, file, ENDED_RECORD, locked=locked)
 
 
 def _ended_key(grant):
@@ -2485,11 +2637,14 @@ def _line_ended(ended, line):
     return ("line",) + _ended_key(line) in ended
 
 
-def _read_ended(file):
-    """The take-backs on record beside `file` (_ended_in); none when the record is not there, cannot be read or does
+def _read_ended(home, file):
+    """The take-backs on record for `file`'s root (_ended_in); none when the record is not there, cannot be read or does
     not parse (the sweep then errs toward fewer allowed calls, as everywhere)."""
+    record = _record_file(home, file)
+    if record is None:
+        return {}
     try:
-        with open(_record_file(file), encoding="utf-8") as f:
+        with open(record, encoding="utf-8") as f:
             return _ended_in(json.load(f))
     except (OSError, ValueError):
         return {}
@@ -2499,23 +2654,26 @@ def _ended_of(hook, file):
     """The take-backs on record for a grant file's root, read once per hook."""
     root = os.path.dirname(file)
     if root not in hook._ended:
-        hook._ended[root] = _read_ended(file)
+        hook._ended[root] = _read_ended(hook.env.get("HOME"), file)
     return hook._ended[root]
 
 
-def _issued_file(file):
-    """The record of issued grants for a grant file: the root's .claude/hooks/tstack-grants-issued.json."""
-    return os.path.join(os.path.dirname(file), "hooks", ISSUED_RECORD)
+def _issued_file(home, file):
+    """The record of issued grants for a grant file's root (_record_at); None with no home."""
+    return _record_at(home, file, ISSUED_RECORD)
 
 
-def _read_issued(file):
-    """The grants the hub put on record beside `file`, oldest first, each naming a grant file of the record's own root:
+def _read_issued(home, file):
+    """The grants the hub put on record for `file`'s root, oldest first, each naming a grant file of the record's own root:
     its realpath in that root's .claude/ (an entry naming another root's file is no grant; the hub writes none). None
     when the record is not there, cannot be read or does not parse (a grant on it then stands on no record: fewer
     allowed calls). A full record (4096 entries with two `runs` each, 3.0 MB) costs about 30 ms to read (measured
     2026-10-16), once in each hook of a Bash, Monitor or Agent call: no other tool reads it."""
+    record_file = _issued_file(home, file)
+    if record_file is None:
+        return []
     try:
-        with open(_issued_file(file), encoding="utf-8") as f:
+        with open(record_file, encoding="utf-8") as f:
             record = json.load(f)
     except (OSError, ValueError):
         return []
@@ -2534,7 +2692,7 @@ def _issued_of(hook, file):
     """The grants on record for a grant file's root, read once per hook."""
     root = os.path.dirname(file)
     if root not in hook._issued:
-        hook._issued[root] = _read_issued(file)
+        hook._issued[root] = _read_issued(hook.env.get("HOME"), file)
     return hook._issued[root]
 
 
@@ -2889,14 +3047,14 @@ def _lock_settings(file):
         time.sleep(0.02)
 
 
-def _take_back(file, rule, ended):
+def _take_back(home, file, rule, ended):
     """_take_back_locked under the settings lock: what it could not record, None when nothing."""
     try:
         lock = _lock_settings(file)
     except FileNotFoundError:
         return None
     try:
-        return _take_back_locked(file, rule, ended)
+        return _take_back_locked(home, file, rule, ended)
     finally:
         os.rmdir(lock)
 
@@ -2915,10 +3073,30 @@ def _loaded(file):
 
 
 def _write_json(file, value):
+    """Write `value` to `file` whole, as settings-file.ts `writeAtomic` does: into a scratch file beside it, made anew
+    (O_EXCL, O_NOFOLLOW, whatever was at its name unlinked first) with the mode `file` had (0o600 for a new one), then
+    renamed over it: a symlink or hardlink at the scratch name has no target rewritten, and a FIFO there hangs nothing."""
     tmp = os.path.join(os.path.dirname(file), f".{os.path.basename(file)}.{os.getpid()}")
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
-    os.replace(tmp, file)
+    try:
+        mode = os.stat(file).st_mode & 0o7777
+    except FileNotFoundError:
+        mode = 0o600
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with open(fd, "w", encoding="utf-8") as f:
+            os.fchmod(f.fileno(), mode)
+            f.write(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
+        os.replace(tmp, file)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _with_ended(record, ended):
@@ -2926,7 +3104,7 @@ def _with_ended(record, ended):
     record["ended"] = (kept + [ended])[-ENDED_KEPT:]
 
 
-def _take_back_locked(file, rule, ended):
+def _take_back_locked(home, file, rule, ended):
     """Take `rule` out of `file`, then put the grant on the root's record of take-backs (`ended`: its decision, rule,
     granted and the stamp). A grant already on the record, read again under the lock, is over: the rule there is the
     owner's, and stays. The settings first: a record that cannot be written leaves fewer allowed calls, never more;
@@ -2939,8 +3117,10 @@ def _take_back_locked(file, rule, ended):
     allow = permissions.get("allow") if isinstance(permissions, dict) else None
     if not isinstance(allow, list) or rule not in allow:
         return None
-    record_file = _record_file(file)
+    record_file = _record_file(home, file, locked=True)
     try:
+        if record_file is None:
+            raise ValueError("no HOME to keep the record of take-backs in")
         record = _loaded(record_file)
     except ValueError as e:
         record, unrecorded = None, f"{e}: the take-back of {ended['decision']} is not on record"
@@ -2954,7 +3134,7 @@ def _take_back_locked(file, rule, ended):
     _write_json(file, settings)
     if record is not None:
         _with_ended(record, ended)
-        os.makedirs(os.path.dirname(record_file), exist_ok=True)
+        os.makedirs(os.path.dirname(record_file), mode=0o700, exist_ok=True)
         _write_json(record_file, record)
     return unrecorded
 
@@ -3016,7 +3196,7 @@ def _close_due_grants_exclusively(hook, d, used, now, failed=False, void=None):
                 # issued grant (review 3: one with a line's decision, `at` and rev ended the real grant they were
                 # copied from), so a rule the owner adds again is not taken at the next sweep.
                 ended = _ended_entry(grant, at, why, line=grant["issued"] is None)
-                unrecorded = _take_back(grant["file"], grant["rule"], ended)
+                unrecorded = _take_back(hook.env.get("HOME"), grant["file"], grant["rule"], ended)
             except Exception:  # this grant stays open for the next call; the others go on
                 log(hook.data_dir, f"{hook.event} fleet_grant_sweep failed for {grant['decision']}\n"
                                    f"{traceback.format_exc()}")
@@ -3214,7 +3394,7 @@ def _alone_denial(hook, d, grant, grants, now):
         except Exception:  # the hub's timer or the next sweep takes the rule back; the call is refused all the same
             log(hook.data_dir, f"{hook.event} fleet_grant_alone could not close {ref}\n{traceback.format_exc()}")
         if grant["issued"] is None:
-            return Deny(f"tstack: this call's grant is on no record of the hub's grants ({_issued_file(grant['file'])}): "
+            return Deny(f"tstack: this call's grant is on no record of the hub's grants ({_issued_file(hook.env.get('HOME'), grant['file'])}): "
                         f"a line in grants.jsonl alone grants nothing, so its rule is taken back. {ASK_AGAIN}")
         return Deny(f"tstack: the user allowed this call once ({ref}), and a one-time grant lasts {GRANT_TTL_S // 60} minutes: "
                     f"this one is over. {ASK_AGAIN}")
@@ -3282,7 +3462,8 @@ def _alone_without_fleet(hook, command):
         at = _issued_at(grant)
         if at is None or now - at >= GRANT_TTL_S:
             try:
-                unrecorded = _take_back(grant["file"], grant["rule"], _ended_entry(grant, fleet_stamp(hook.env), "expired"))
+                unrecorded = _take_back(hook.env.get("HOME"), grant["file"], grant["rule"],
+                                        _ended_entry(grant, fleet_stamp(hook.env), "expired"))
             except Exception:  # refused all the same; the next call tries again
                 log(hook.data_dir, f"{hook.event} fleet_grant_alone could not take back {ref}\n{traceback.format_exc()}")
             else:
@@ -4951,8 +5132,50 @@ def onepw_watch(hook):
     return _onepw()["_onepw_watch"](hook)
 
 
+def _tracked(root, paths):
+    """Which of `paths` (relative to `root`) the root's jj working-copy commit, as last snapshotted, or else its git
+    index, tracks; none when neither answers."""
+    import subprocess
+    if jj_workspace(root):
+        argv = ["jj", "--ignore-working-copy", "--no-pager", "--color=never", "file", "list", "-r", "@", "--", *paths]
+    elif os.path.lexists(os.path.join(root, ".git")):  # a folder, or a file in a git worktree
+        argv = ["git", "ls-files", "--", *paths]
+    else:
+        return []
+    try:
+        out = subprocess.run(argv, cwd=root, capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    listed = {line.strip() for line in out.splitlines()}
+    return [p for p in paths if p in listed]
+
+
+def grant_records_tracked(hook):
+    """SessionStart: once a session, a warning when the session root's tree still holds a grant record that jj or git
+    tracks. The records live outside the tree now (_records_dir); a tracked copy is one a checkout rewrites, and it
+    is read only by the one-time import. Silent when there is none, and costs no process then."""
+    root = _session_root(hook)
+    if not root:
+        return None
+    root = os.path.realpath(root)
+    names = [f".claude/hooks/{n}" for n in (ISSUED_RECORD, ENDED_RECORD) if os.path.isfile(os.path.join(root, ".claude", "hooks", n))]
+    if not names or hook.load_state("grant-records").get("warned"):
+        return None
+    tracked = _tracked(root, names)
+    if not tracked:
+        return None
+    hook.save_state("grant-records", {"warned": True})
+    import shlex
+    untrack = " ".join(shlex.quote(p) for p in tracked)
+    return (f"# tstack grant records\n{root}: {' and '.join(tracked)} {'is' if len(tracked) == 1 else 'are'} tracked, "
+            "so a checkout (`jj workspace update-stale`, `jj new`) can put an older copy there. The hub and the hook keep a "
+            "root's grant records in ~/.claude/tstack-grants/ now and never read the tree's copy again. Tell the user; the "
+            f"cleanup is theirs: add `.claude/hooks/tstack-grants-*.json` to {root}/.gitignore, then run "
+            f"`{'jj file untrack' if jj_workspace(root) else 'git rm --cached'} {untrack}` there.")
+
+
 HANDLERS = {
-    "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, memo_dream_pending, fleet_heartbeat, tape_build],
+    "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, memo_dream_pending, fleet_heartbeat, grant_records_tracked, tape_build],
     "Stop": [memo_nudge, fleet_listen_guard, fleet_idle_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
     "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, fleet_moved_writes, land_turn_gate, suite_gate, onepw_hold, fleet_monitor_watch,
