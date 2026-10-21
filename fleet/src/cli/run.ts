@@ -28,8 +28,9 @@ import { stateCli } from "./state.ts";
 import { teamCli } from "./team.ts";
 import { turnCli } from "./turn.ts";
 import { TRASH_COMMANDS, wsCli } from "./ws.ts";
+import { wasteCli } from "./waste.ts";
 
-const USAGE = "usage: fleet {version,ls,state,chat,fleets,news,secrets,ws,preview,brief,turn,advisor,team,serve,render,usage,spend,served} ...\n";
+const USAGE = "usage: fleet {version,ls,state,chat,fleets,news,secrets,ws,preview,brief,turn,advisor,team,waste,serve,render,usage,spend,served} ...\n";
 
 /** This copy of tstack: its version (from the plugin's manifest) and where it is, for `fleet version`. */
 function versionLine(): string {
@@ -40,7 +41,7 @@ function versionLine(): string {
 }
 
 /** The commands whose first argument is a fleet's directory. */
-const DIR_CLIS: ReadonlySet<string> = new Set(["state", "chat", "ws", "preview", "brief", "turn", "advisor", "serve", "spend"]);
+const DIR_CLIS: ReadonlySet<string> = new Set(["state", "chat", "ws", "preview", "brief", "turn", "advisor", "waste", "serve", "spend"]);
 
 /** A name that fits several served fleets: say which. */
 export interface Ambiguous {
@@ -138,6 +139,8 @@ function route(argv: readonly string[]): Effect.Effect<number, never, Out | Worl
   if (cli === "advisor") return advisorCli(rest);
 
   if (cli === "team") return teamCli(rest);
+
+  if (cli === "waste") return wasteCli(rest);
   const control = CONTROL_CLIS.find((c) => c === cli);
 
   if (control !== undefined) return controlCli(control, rest);
@@ -145,7 +148,7 @@ function route(argv: readonly string[]): Effect.Effect<number, never, Out | Worl
   return Effect.gen(function* () {
     const out = yield* Out;
 
-    out.err(`${USAGE}fleet: error: the first argument is state, chat, fleets, news, secrets, ws, preview, brief, turn, advisor, team, serve, render, usage, spend or served\n`);
+    out.err(`${USAGE}fleet: error: the first argument is state, chat, fleets, news, secrets, ws, preview, brief, turn, advisor, team, waste, serve, render, usage, spend or served\n`);
 
     return 2;
   });

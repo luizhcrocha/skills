@@ -159,6 +159,15 @@ export function mtimeOf(path: string): number | undefined {
   }
 }
 
+/** Whether `path` is a regular file itself, not a symlink to one. */
+export function isRegularFile(path: string): boolean {
+  try {
+    return lstatSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /** Whether `path` is a directory. */
 export function isDir(path: string): boolean {
   try {

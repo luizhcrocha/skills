@@ -28,7 +28,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 [The other scripts](#the-other-scripts) · [`fleet serve`](#fleet-serve-the-fleets-host) · [Heartbeats](#heartbeats) ·
 [Listening hooks](#listening-hooks) · [The wake](#the-wake) · [The news](#the-news-fleet-news) ·
 [1Password locked](#1password-locked-fleet-secrets) ·
-[Workspaces](#workspaces-fleet-ws) · [The preview](#the-preview-fleet-preview) · [The advisor](#the-advisor-fleet-advisor) · [Files by writer](#files-by-writer) ·
+[Workspaces](#workspaces-fleet-ws) · [The preview](#the-preview-fleet-preview) · [The advisor](#the-advisor-fleet-advisor) · [Waste](#waste-fleet-waste) · [Files by writer](#files-by-writer) ·
 [Oracle traces](#oracle-traces) · [The model](#the-model-based-test) · [Open](#open)
 
 ## Environment
@@ -4462,6 +4462,73 @@ says `all`; `attach` takes none.
   are the adapter's, opaque to `fleet team`; the command line, the system prompt file and the multiplexer's
   words stay in the adapter. herdr (`team/herdr.ts`, commands both 0.9.3 and 0.9.5 have) is the one real
   adapter; the tests use a fake. Rex and Managed Agents would each be one more adapter file; none is built.
+
+## Waste (`fleet waste`)
+
+`fleet waste DIR [WORKER] [--json]` (TypeScript only, read-only; pinned by `test/waste.test.ts` and its
+fixtures under `test/waste/`) prints what each worker row with a `task_id` wasted, read from its own
+transcript (`<session>/subagents/agent-<task_id>.jsonl`), looked for only in the folders of the sessions that
+serve the fleet (`src/serving.ts`): the one whose scratchpad holds DIR, its served registry entry's, the one
+that owns the coordinator's chat watch (`DIR/watch-coordinator.owner.pid`, its pid's `sessions/<pid>.json`, only
+while that file's `procStart` is the `started` the watch recorded: a later process with the pid is another
+session), and the sessions that beat in `DIR/heartbeats/`, in whichever project each one is. In those folders
+only `subagents/agent-<task_id>.jsonl` of a `task_id` in the ledger is ever opened; nothing else there is
+opened, read or listed. A `task_id` that is not a plain id (`^[A-Za-z0-9_-]+$`) is never made into a path, a
+symlinked transcript is not followed, and a session folder or `subagents/` whose real path is outside
+`projects/<its project>/` is refused. Other sessions' and projects' transcripts are unrelated private work and
+are never looked through; with no serving session known it prints `no session known for DIR: …` (`[]` with `--json`) and no rows.
+It is the standing form of three one-off studies: poll loops held 36% of workers' Bash wait and separate
+probe calls 31% (2026-10-10), calls above 150k tokens 34% of cost (the cap study, 2026-10-20). The module
+is one function, `wasteOf(transcript path)` in `src/waste.ts`, giving a `WorkerWaste`; the CLI and the
+page panel that comes later read that record.
+
+- **A call** is one assistant message with usage, deduplicated by message id (a streamed message is a
+  line per content block, each with the same usage). Its context is input + cache read + cache creation.
+- **The record:** `calls`; `peak_context`; `past_cap` (the calls whose context passed 150,000, their cache
+  read + input, and that as a share of the worker's); `cache` (`hit_ratio` = cache read / (cache read +
+  cache creation + input), `misses` = calls that created more cache than they read); `rereads` (files the
+  Read tool, or `cat`, `head`, `tail`, `sed -n` or `less` in Bash, read more than once, keyed as the Read
+  tool's absolute path, a relative one against the line's `cwd` and any `cd` before it (one inside a `( … )`
+  only until it closes), a leading `~` as HOME and a `$VAR` the line set (or `export`ed) as its value; the reads past each one's first; the 3 most read paths); `polls`
+  (foreground Bash calls that are a `while`/`until`/`for` loop with `sleep` before its `done`, a `sleep` of 30 seconds or
+  more, `tail -f` (after any options) or `watch`, matched outside quoted text and heredoc bodies but inside
+  a nested `bash -c`/`sh -c` script, or a read-only command repeated with no write between, and the seconds they
+  held, beside `bash_seconds`, what every foreground Bash call held, from its tool use to its result);
+  `probe_runs` (runs of 3 or more consecutive calls whose every tool use is a screenshot or a probe: a
+  `curl`, `wget`, `picasso`, `playwright`, a program whose name holds `screenshot`, or a
+  `python -c`/`node -e`/heredoc experiment; the calls in them
+  and the seconds they held); `ramp` (the calls before the first write, and whether
+  one came: Edit, Write or NotebookEdit on a file outside /tmp and /dev (a scratchpad note is no product
+  write), or a Bash `sed -i`, redirect (`>`, `>>`, `N>`, `&>`, `>&` to a file,
+  wherever it stands, a leading one too; a `>` inside `$(( ))` is a comparison) or `tee` to a file known to be outside /tmp and /dev, `patch`,
+  `jj describe`, `jj commit` or `jj squash`; a target through a variable the line never set is unknown, and
+  no write; a heredoc's body and a `#` comment are data, not a command); and `series`, one point per call: index, context, cache read, cache creation, `latency_ms`
+  (the user line before the message to the message's last line), its tools' names and
+  `tool_result_share` (the tool results before it, at 4 characters a token and 1,600 an image, as a share
+  of its context).
+- **Output.** One row per worker found, worst first: most cache read + input past 150k, then poll seconds,
+  then calls in probe runs. A row: worker, task id, calls, peak, `>150k` calls and share, cache hit ratio
+  and misses, re-read files and re-reads, polls (count, seconds / Bash seconds), probe runs (runs / calls,
+  seconds) and the ramp (`-` when it never wrote). Then `no transcript with usage:` and the workers whose
+  transcript was not found. With WORKER (an id or a task id), that worker only, and its re-read paths; an
+  unknown one is refused (`waste: no worker X with a task id in DIR`). `--json` prints the rows as
+  `{worker, task_id, waste}`, the series included.
+- **No contents.** The record holds counts, seconds, token figures, tool names and Read paths; never a
+  message, a thinking block, a command or a tool result, since transcripts hold secrets.
+- **Known limits.**
+  - A write by a script (`python3 - <<EOF`, `node -e`), `cp`, `mv` or a tool other than those named does not end the ramp.
+  - A read by `grep`, `rg`, a script or a pipe (`… | head`) is not a re-read; a glob, or a `$VAR` the line did not set, is skipped.
+  - Shell words are split by `src/shell-words.ts` (quotes and their escapes, comments, heredocs, redirections,
+    `$VAR` and `~`): `$(…)`, backticks and `eval` are not followed, and a nested shell's script only for polls
+    and probes. An unbalanced quote runs to the end of its line. npm's shell-quote (1.12.0) was weighed and
+    not taken: it splits an unbalanced `'` into words, loses `2>` as an fd, and knows no heredoc.
+  - "Read-only", for a repeated command to be a poll, is a list of commands that change things.
+  - A probe is known by its program (`curl`, `wget`, `picasso`, `playwright`, `python -c`, `node -e`, a heredoc), so a script under another name is missed.
+  - Latency runs from the user line before a call to the call's last line: the whole answer, not the time to its first token.
+  - An image in a tool result counts as 1,600 tokens, and `tool_result_share` ignores compaction.
+  - The chat watch's owner is found through Claude Code's live `sessions/<pid>.json`: once that session ends and
+    no heartbeat or registry entry names it, its workers are not found. Its `procStart` is /proc's start
+    time on Linux; where it differs from what the watch recorded (another platform), the owner is not followed.
 
 ## Files by writer
 

@@ -29,10 +29,13 @@ export function transcriptOf(root: string, config: string): string | undefined {
   return join(config, "projects", parts.at(-4) ?? "", `${parts.at(-3) ?? ""}.jsonl`);
 }
 
+/** Whether `id` (a session id, a task id) is a plain id, safe to make into a file name: no `/`, no `..`. */
+export const isPlainId = (id: string): boolean => /^[A-Za-z0-9_-]+$/.test(id);
+
 /** The folder beside session `sessionId`'s transcript (`projects/<project>/<session>`), in whichever project
  * holds that transcript or folder, or undefined. */
 export function sessionFolderOf(config: string, sessionId: string | null | undefined): string | undefined {
-  if (sessionId === undefined || sessionId === null || !/^[A-Za-z0-9_-]+$/.test(sessionId)) return undefined;
+  if (sessionId === undefined || sessionId === null || !isPlainId(sessionId)) return undefined;
   const projects = join(config, "projects");
 
   return listDir(projects)
@@ -141,6 +144,7 @@ function rows(text: string): JsonObject[] {
 /** The name a session gave worker `taskId`: its subagent's meta.json `name` (the Agent tool's), else its
  * `description`, in the first of the session `folders` that has it; undefined without one. */
 export function workerTitle(folders: readonly string[], taskId: string): string | undefined {
+  if (!isPlainId(taskId)) return undefined;
   const text = folders.map((folder) => readText(join(folder, "subagents", `agent-${taskId}.meta.json`))).find((t) => t !== undefined);
   const meta = text === undefined ? undefined : asObject(Option.getOrUndefined(parseJson(text)));
 
@@ -165,7 +169,7 @@ export interface WorkerFigures {
 export function workerFigures(root: string, config: string, taskId: string): WorkerFigures | undefined {
   const folder = subagents(root, config);
 
-  if (folder === undefined) return undefined;
+  if (folder === undefined || !isPlainId(taskId)) return undefined;
   const path = join(folder, `agent-${taskId}.jsonl`);
   const at = mtimeOf(path);
   const text = readText(path);
