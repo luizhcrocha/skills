@@ -312,7 +312,7 @@ class SupersedeTest(MemoCase):
         self.assertIn("the port is 9090", wake)
         self.assertNotIn("the port is 8080", wake)
         self.assertEqual(len(self.files()), 2, "the old note stays on disk")
-        self.assertIn("superseded by", self.ok("recall", "8080"))
+        self.assertIn("superseded by", self.ok("recall", "port"))
 
     def test_an_open_thread_is_closed_by_the_note_that_supersedes_it(self):
         thread = self.note("open", "migration half done")
@@ -643,6 +643,60 @@ class ReadTest(MemoCase):
         self.assertIn("nothing on", self.ok("recall", "kubernetes"))
         self.assertIn("operation log", self.ok("recall", 'jj "AND (', "workspaces"), "odd characters are not a syntax error")
 
+    def test_recall_keeps_worker_and_decision_ids_in_the_query(self):
+        worker = self.note("fact", "the deploy runs in workspace a265")
+        other = self.note("fact", "the deploy runs on fridays")
+        out = self.ok("recall", "what did a265 deploy")
+        self.assertTrue(out.startswith(worker), "a note can be about a worker's work")
+        self.assertIn(other, out)
+        self.assertIn(worker, self.ok("recall", "a265"))
+
+    def test_a_word_the_query_repeats_weighs_more(self):
+        deploy = self.note("fact", "the deploy runs nightly")
+        fridays = self.note("fact", "the office closes on fridays")
+        self.assertTrue(self.ok("recall", "deploy deploy deploy fridays").startswith(deploy))
+        self.assertTrue(self.ok("recall", "deploy fridays fridays fridays").startswith(fridays))
+
+    def test_recall_searches_stopwords(self):
+        note = self.note("fact", "what is the cache for, and where is it")
+        self.assertIn(note, self.ok("recall", "what is it for"))
+
+    def test_recall_searches_every_term_of_a_long_query(self):
+        thirteenth = self.note("fact", "mike is the thirteenth word")
+        out = self.ok("recall", "alfa bravo charlie delta echo foxtrot golf hotel india juliett kilo lima mike")
+        self.assertIn(thirteenth, out)
+
+    def test_recall_without_the_index_also_drops_bare_numbers(self):
+        self.note("fact", "read straight from disk")
+        blocked = self.tmp / "blocked"
+        blocked.write_text("a file where the cache folder should be")
+        self.assertIn("read straight from disk", self.ok("recall", "straight 42", env={"XDG_CACHE_HOME": str(blocked)}))
+
+    def test_recall_does_not_search_bare_numbers(self):
+        real = self.note("fact", "the deploy runs on fridays")
+        noise = self.note("fact", "the port is 8080")
+        out = self.ok("recall", "8080 deploy")
+        self.assertIn(real, out)
+        self.assertNotIn(noise, out)
+        decision = self.note("decision", "D238 B is live")
+        self.assertIn(decision, self.ok("recall", "D238 400"), "an id that mixes letters and digits is searched")
+
+    def test_recall_drops_one_letter_words(self):
+        real = self.note("fact", "the deploy runs on fridays")
+        noise = self.note("fact", "sync stops soon")
+        out = self.ok("recall", "deploy's x")
+        self.assertIn(real, out)
+        self.assertNotIn(noise, out, "the possessive s is not a prefix of every s word")
+
+    def test_recall_of_a_query_with_no_word_left_finds_nothing(self):
+        self.note("fact", "the port is 42 and the user's shell is nu")
+        blocked = self.tmp / "blocked"
+        blocked.write_text("a file where the cache folder should be")
+        for env in ({}, {"XDG_CACHE_HOME": str(blocked)}):
+            for query in ("42", "s"):
+                out = self.ok("recall", query, env=env)
+                self.assertTrue(out.startswith(f"memo: nothing on {query!r}"), f"{query!r} {env}: {out}")
+
     def test_recall_of_a_sentence_stays_fast_on_a_large_store(self):
         notes = self.global_dir / "notes"
         notes.mkdir(parents=True)
@@ -653,9 +707,9 @@ class ReadTest(MemoCase):
             (notes / f"{item.id}.md").write_text(memo.render_item(item))
         self.ok("recall", "warm the index")
         start = time.perf_counter()
-        out = self.ok("recall", "the case's past s")
+        out = self.ok("recall", "the case's past sab")
         took = time.perf_counter() - start
-        self.assertIn("global:", out, "the one-letter word falls back to a prefix that matches")
+        self.assertIn("global:", out, "the partial word falls back to a prefix that matches")
         self.assertLess(took, 1.0, "the FTS match runs once, not once per indexed row (2.3 s before)")
 
     def test_recall_all_reaches_other_repos_indexed_here(self):
@@ -665,7 +719,7 @@ class ReadTest(MemoCase):
         self.assertIn("project:acme/other", self.ok("recall", "fridays", "--all"))
 
     def test_recall_live_drops_superseded_notes_before_the_limit(self):
-        old = self.note("fact", "the port port port is 8080")
+        old = self.note("fact", "the port port port is 8080, the default")
         new = self.ok("supersede", old, "the port is 9090").split()[1]
         both = self.ok("recall", "port")
         self.assertIn(f"{old} ", both, "without --live a superseded hit is history, still shown")
@@ -673,7 +727,7 @@ class ReadTest(MemoCase):
         live = self.ok("recall", "port", "--live", "--limit", "1")
         self.assertIn(f"{new} ", live, "the limit counts live hits only")
         self.assertNotIn(old, live)
-        self.assertIn("nothing on", self.ok("recall", "8080", "--live"))
+        self.assertIn("nothing on", self.ok("recall", "default", "--live"))
 
     def test_recall_live_reaches_other_repos_with_all(self):
         other = init_repo(self.tmp / "other", "git@github.com:acme/other.git")

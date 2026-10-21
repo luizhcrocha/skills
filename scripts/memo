@@ -529,8 +529,8 @@ class Index:
         return [_row_item(r) for r in self.open().execute(
             f"select {_COLS} from items where store=? order by id", (key,))]
 
-    def search(self, stores, query, limit, keep=None):
-        """(item, store key) hits, best first: at most limit of them, counting only those keep accepts."""
+    def search(self, stores, terms, limit, keep=None):
+        """(item, store key) hits for query_terms' terms, best first: at most limit of them, counting only those keep accepts."""
         con = self.open()
         keys = [str(s.dir) for s in stores]
         marks = ",".join("?" * len(keys))
@@ -539,17 +539,8 @@ class Index:
         # cross join keeps fts the outer loop: driven from items, sqlite re-runs the match once per row
         sql = (f"select {cols}, items.store from fts cross join items on items.rowid = fts.rowid"
                f" where fts match ? and {where} order by bm25(fts) limit ?")
-        words = re.findall(r"\w+", query)
-        tries = [query] if words else []
-        if words:
-            tries += [" ".join(f'"{w}"' for w in words), " OR ".join(f'"{w}"*' for w in words)]
-        for n, q in enumerate(tries):
-            try:
-                rows = con.execute(sql, (q, *keys, -1 if keep else limit)).fetchall()
-            except sqlite3.OperationalError:
-                if n:
-                    raise
-                continue  # the words as typed were not FTS syntax: try them quoted
+        for q in (" ".join(f'"{w}"' for w in terms), " OR ".join(f'"{w}"*' for w in terms)) if terms else ():
+            rows = con.execute(sql, (q, *keys, -1 if keep else limit)).fetchall()
             hits = [(_row_item(r), r[11]) for r in rows]
             if keep:
                 hits = [h for h in hits if keep(*h)][:limit]
@@ -1007,6 +998,12 @@ def _describe(view, item, scope=""):
     return f"{item.id} {ulid_date(item.id)} [{kind}]{' ' + scope if scope else ''}: {item.text}{tail}"
 
 
+def query_terms(query):
+    """The words recall searches for, lower-cased and in query order, a repeated word repeated (it weighs more).
+    Out: bare numbers and one-letter words (a possessive's s)."""
+    return [w for w in re.findall(r"\w+", query.lower()) if len(w) > 1 and not w.isdigit()]
+
+
 def cmd_recall(ctx, a, out):
     query = " ".join(a.query)
     stores = ctx.stores()
@@ -1021,12 +1018,12 @@ def cmd_recall(ctx, a, out):
             if key not in others:
                 others[key] = View(ctx.index.stored(key))
             return others[key].is_live(item)
+    terms = query_terms(query)
     try:
-        hits = ctx.index.search([] if a.all else stores, query, a.limit, keep)
+        hits = ctx.index.search([] if a.all else stores, terms, a.limit, keep)
     except sqlite3.Error:
-        words = [w.lower() for w in re.findall(r"\w+", query)]
-        hits = [(i, k) for k, (_, v) in views.items() for i in v.items
-                if all(w in i.text.lower() for w in words) and (keep is None or keep(i, k))][:a.limit]
+        hits = [(i, k) for k, (_, v) in views.items() for i in v.items if terms
+                and all(w in i.text.lower() for w in terms) and (keep is None or keep(i, k))][:a.limit]
     if not hits:
         print(f"memo: nothing on {query!r}", file=out)
         return
