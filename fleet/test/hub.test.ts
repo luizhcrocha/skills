@@ -3170,6 +3170,15 @@ describe("a permission's answer grants the call once", () => {
     });
   });
 
+  test("a ledger holding a card whose body is its ref id still lets a permission be checked and granted", async () => {
+    const moved = { id: "retire-plan", kind: "decision", title: "Retire the plan", question: "q", status: "decided", opened: "2026-01-01T00:00:00+00:00", body: "11ba2f7abbada514" };
+    withRows(permission(), moved);
+    writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
+    const answered: Answered = { dir: root, decision: "p-1a2b3c4d", text: "allow-once: Allow this call once", rule: RULE, rules: undefined, root: session, runs: undefined, by: "local", at: "2026-01-01T00:00:00+00:00", registered: () => undefined, home: undefined };
+    expect(await grantAnswer(answered)).not.toHaveProperty("refused");
+    expect(asObject(asObject(JSON.parse(readFileSync(settings, "utf8")))?.["permissions"])?.["allow"]).toEqual(["Bash(ls)", RULE]);
+  });
+
   describe("a call that runs a script is bound to the file", () => {
     let script: string;
     const sha = (): string => new Bun.CryptoHasher("sha256").update(readFileSync(script)).digest("hex");

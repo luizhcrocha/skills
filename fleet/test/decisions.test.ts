@@ -859,6 +859,28 @@ describe("ledger", () => {
     expect(existsSync(join(root, "index.html"))).toBe(true);
   });
 
+  test("a moved team's ledger, which names a card's body by its ref id, is read and written back with the ref as it was", () => {
+    // The cloud's host service exports a moved team's state.json with a card's body as the id of its ref, not true.
+    ok("decision", ...SCHEMA);
+    const ledger = JSON.parse(readFileSync(join(root, "state.json"), "utf8"));
+    ledger.decisions[0].body = "11ba2f7abbada514";
+    writeFileSync(join(root, "state.json"), JSON.stringify(ledger));
+    ok("set", "--now", "x");
+    expect(item("d1")["body"]).toBe("11ba2f7abbada514");
+  });
+
+  test("a card's body that is neither true, false nor a ref id is refused", () => {
+    ok("decision", ...SCHEMA);
+    const good = readFileSync(join(root, "state.json"), "utf8");
+
+    for (const body of ["", 3, ["11ba2f7abbada514"]]) {
+      const ledger = JSON.parse(good);
+      ledger.decisions[0].body = body;
+      writeFileSync(join(root, "state.json"), JSON.stringify(ledger));
+      expect(refused("set", "--now", "x")).toContain("'body'");
+    }
+  });
+
   test("a state whose decisions are malformed is refused", () => {
     ok("decision", ...SCHEMA);
     const good = readFileSync(join(root, "state.json"), "utf8");

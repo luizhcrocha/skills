@@ -27,7 +27,7 @@ import { workerFigures, workerTitle } from "../transcripts.ts";
 import type { Machine } from "../world.ts";
 import { isFormatted, manualBlocks } from "../../page/src/text.ts";
 import { isMarkdownFile, markdownToHtml, markdownWarning } from "./body.ts";
-import { dropKey, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type RefusalDraft, type RefusedCall, type Roadblock, type Step } from "./model.ts";
+import { dropKey, hasBody, type Approval, type LedgerEvent, type Agent, type Choice, type Decision, type Ledger, type Milestone, type Question, type RefusalDraft, type RefusedCall, type Roadblock, type Step } from "./model.ts";
 import { find, findDecision, highest, milestoneOfStep, misnumbered, nextStepId, PREFIX, readsAsNumber } from "./numbers.ts";
 import { approvalNumber, nextDecisionRef, refusedFor, Unreachable } from "./shared-numbers.ts";
 import { approvalSource, comesFrom, namesOf, NoSource, refOf, sameSource } from "./approvals.ts";
@@ -1377,7 +1377,7 @@ function unnamedPastWarning(what: string, texts: readonly string[], body: string
 
 /** The body `d` carries, as written to DIR/decisions/ID.html; "" when it has none. */
 function bodyText(root: string, d: Decision): string {
-  return d.body === true ? (readText(join(root, "decisions", `${d.id}.html`)) ?? "") : "";
+  return hasBody(d) ? (readText(join(root, "decisions", `${d.id}.html`)) ?? "") : "";
 }
 
 /** The show-me warning for `what` when its words name parts that talk to each other or carry three or more amounts
@@ -1403,7 +1403,7 @@ function readabilityWarnings(d: Decision, fields: ReadonlySet<string>, root?: st
   const out: string[] = [];
   const q = d.question ?? "";
 
-  if (fields.has("question") && chars(q) > QUESTION_NEAR && d.body !== true) {
+  if (fields.has("question") && chars(q) > QUESTION_NEAR && !hasBody(d)) {
     out.push(`state: ${d.id}'s question is ${chars(q)} characters and it has no --body: say the ask in one or two sentences and put the plan, the settings and the numbers in --body FILE.`);
   }
 
@@ -1619,7 +1619,7 @@ function dropExplanation(run: Run, d: Decision): void {
   d.recommend = null;
   d.reason = null;
 
-  if (d.body === true) {
+  if (hasBody(d)) {
     remove(join(run.root, "decisions", `${d.id}.html`));
     d.body = false;
   }
@@ -1637,7 +1637,7 @@ function checkExplanation(run: Run, d: Decision, wasExplained: boolean): Step$ {
   const missing = [
     ...(given(d.reason ?? undefined) ? [] : ["--reason"]),
     ...(wasExplained || run.args.str("why") !== undefined ? [] : ["--why"]),
-    ...(wasExplained || d.body === true ? [] : ["--body FILE"]),
+    ...(wasExplained || hasBody(d) ? [] : ["--body FILE"]),
   ];
 
   if (missing.length > 0) {

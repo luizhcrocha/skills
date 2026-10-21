@@ -144,7 +144,9 @@ export interface Decision {
   manual?: string | null;
   /** Why only Luiz can take an action's step (`--hand`), shown on the card as "Why only you"; absent when not given. */
   hand?: string;
-  body?: boolean;
+  /** True when DIR/decisions/ID.html holds the card's body. A moved team's ledger, as the cloud's host service
+   * exports it, holds the body's ref id instead ("11ba2f7abbada514"), kept as written: {@link hasBody} reads both. */
+  body?: boolean | string;
   page?: boolean;
   supersedes?: string | null;
   status: string;
@@ -175,6 +177,11 @@ export interface Decision {
   under?: string;
   /** A notice's way to undo what was done. */
   undo?: string;
+}
+
+/** Whether `d` has a body: one written to DIR/decisions/ID.html, or one a moved team's ledger names by its ref id. */
+export function hasBody(d: Decision): boolean {
+  return d.body !== undefined && d.body !== false;
 }
 
 /** One entry of the append-only event log. */
@@ -403,6 +410,18 @@ class Fields {
     const flag = asBoolean(value);
 
     if (flag === undefined) this.wrong(key, "true or false");
+
+    return flag;
+  }
+
+  /** A flag, or the non-empty id a moved team's ledger names a body by. */
+  optBoolOrRef(key: string): boolean | string | undefined {
+    const value = this.object[key];
+
+    if (value === undefined) return undefined;
+    const flag = asBoolean(value) ?? asString(value);
+
+    if (flag === undefined || flag === "") this.wrong(key, "true, false or a body's ref id");
 
     return flag;
   }
@@ -801,7 +820,7 @@ function readDecision(object: JsonObject): Fields | Decision {
     secret: f.nullStr("secret"),
     manual: f.nullStr("manual"),
     hand: f.optStr("hand"),
-    body: f.optBool("body"),
+    body: f.optBoolOrRef("body"),
     page: f.optBool("page"),
     supersedes: f.nullStr("supersedes"),
     answer: f.nullStr("answer"),
