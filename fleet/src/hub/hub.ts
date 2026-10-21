@@ -39,11 +39,11 @@ import { dirname, join, normalize, relative, sep } from "node:path";
 import type { Building } from "../building.ts";
 import { address, appendAll, hostOf, marksAlone, marksOf, ownerOfBatch, prepare, stateOfDir, storeRefusal, type Draft, type Prepared } from "../chat/chat.ts";
 import { storeImage, uploadRefusal } from "../chat/attachments.ts";
-import { Courier, deliveries } from "../chat/relay.ts";
+import { coordinators, Courier, deliveries } from "../chat/relay.ts";
 import { readChat, Tail } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
 import { ChatError } from "../errors.ts";
-import { readBytes, readText, resolvePath, strerror } from "../files.ts";
+import { MOVED_MARKER, readBytes, readText, resolvePath, strerror } from "../files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { answerRefusal } from "../ledger/answers.ts";
 import { renameAgent } from "../ledger/rename.ts";
@@ -56,7 +56,7 @@ import { readRecord, recordPath, type DevServer } from "../preview/record.ts";
 import { PreviewError } from "../errors.ts";
 import { summary, view, type Lookups } from "../page/view.ts";
 import { gateOf } from "../gate.ts";
-import { pidOfEntry, type Entry } from "../registry.ts";
+import { movedTeam, pidOfEntry, type Entry } from "../registry.ts";
 import { SpendReader } from "../transcripts.ts";
 import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
@@ -1402,6 +1402,9 @@ export class Hub {
         }
       }
 
+      const away = movedWrite(root);
+
+      if (away !== undefined) return away;
       const quote = quoteOf(body["quote"]);
       const side = sideOf(body["side"]);
 
@@ -1461,6 +1464,9 @@ export class Hub {
 
       if (prepared instanceof ChatError) return jsonResponse(400, { error: prepared.reason });
       const writing = riding === undefined ? [prepared] : [riding, prepared];
+      const reachesMoved = hostOf(root) === "manager" ? movedRecipient(machine, root, writing) : undefined;
+
+      if (reachesMoved !== undefined) return reachesMoved;
       const refused = storeRefusal(root, writing, stampOf(machine.now()));
 
       if (refused !== undefined) return jsonResponse(400, { error: refused.reason });
@@ -1644,6 +1650,31 @@ function rideAlong(
   }
 
   return prepared;
+}
+
+/** The refusal of a write into the chat of the team at `dir` when it moved to the cloud: its host service owns that
+ * chat.jsonl and rewrites it from the cloud, dropping a line the hub wrote there, so the user answers on its cloud page. */
+function movedWrite(dir: string): Response | undefined {
+  const team = movedTeam(dir);
+
+  if (team === undefined) return undefined;
+  const where = team.url === "" ? `its cloud page (${join(team.dir, MOVED_MARKER)} names none)` : `its cloud page, ${team.url}`;
+  const error = `${team.id} has moved to the cloud: its host service rewrites ${join(team.dir, "chat.jsonl")} from the cloud and drops what the hub writes there, so nothing was written. Answer on ${where}.`;
+
+  return jsonResponse(409, { error, cloud: team.url });
+}
+
+/** The refusal of a message on the manager's page that would be delivered into a moved team's chat ({@link movedWrite}). */
+function movedRecipient(machine: Machine, managerRoot: string, writing: readonly Prepared[]): Response | undefined {
+  const named = new Set(writing.flatMap((p) => p.resolved.to));
+
+  for (const entry of coordinators(machine, managerRoot)) {
+    const away = named.has(entry.id) ? movedWrite(entry.dir) : undefined;
+
+    if (away !== undefined) return away;
+  }
+
+  return undefined;
 }
 
 /** Whether `given` (an id or a ref, as an answer names its decision) names the decision whose id is `id`. */

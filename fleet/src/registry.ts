@@ -191,6 +191,11 @@ function movedEntry(dir: string): Entry | undefined {
   return { id, dir, role, url, session: null, since, aliases: [], raw: { id, dir, role, url, since, moved: true }, moved: true };
 }
 
+/** The team moved to the cloud whose folder is `dir`, when its folder holds {@link MOVED_MARKER}, with its cloud page. */
+export function movedTeam(dir: string): Entry | undefined {
+  return movedEntry(resolvePath(dir));
+}
+
 /** Team `id`'s page under the marker's `cloud`, or "" (no page) unless `cloud` is an https address with no user,
  * query or fragment: the marker sits in a folder any process of the user writes, and its page becomes a link and a
  * redirect on the hub's origin, where a `javascript:` address would run as the hub. */

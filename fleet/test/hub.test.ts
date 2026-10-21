@@ -280,6 +280,24 @@ describe("a fleet's chat through the hub", () => {
     expect(asArray((await request("GET", "/f/p/chat")).body["messages"])?.length).toBe(2);
   });
 
+  test("a moved team's chat takes no write from the hub: its card answer and a side chat are refused, naming its cloud page, and chat.jsonl stays as it was", async () => {
+    // The cloud's host service owns a moved team's chat.jsonl and rewrites it from the cloud, dropping the hub's lines.
+    writeState(root, [], { decisions: [{ id: "d1", kind: "decision", title: "Invoice schema", question: "q", status: "open", opened: "2026-01-01T00:00:00+00:00", options: [{ id: "B", label: "keep both", consequence: "c" }] }] });
+    say("coordinator", "an earlier line of the cloud's");
+    writeFileSync(join(root, "cloud.json"), JSON.stringify({ fleet: "p", cloud: "https://fleet.example.dev" }));
+    const before = readFileSync(join(root, "chat.jsonl"), "utf8");
+
+    for (const payload of [{ text: "B: keep both", decision: "d1" }, { text: "why this?", side: "new", quote: { text: "keep both", from: "decision Invoice schema" } }, { text: "@a1 status?" }]) {
+      const got = await post(payload);
+      expect([got.status, got.body["error"], got.body["cloud"]]).toEqual([409, expect.stringContaining("https://fleet.example.dev/p"), "https://fleet.example.dev/p"]);
+    }
+
+    expect(readFileSync(join(root, "chat.jsonl"), "utf8")).toBe(before);
+    rmSync(join(root, "cloud.json"));
+    expect((await post({ text: "B: keep both", decision: "d1" })).status).toBe(201);
+    expect(readChat(root).map((m) => m.text)).toEqual(["an earlier line of the cloud's", "B: keep both"]);
+  });
+
   test("a command typed on the page is stored as it was typed, and reaches GET /chat and the stream", async () => {
     const stream = await Stream.open("/f/p/events");
     const sent = await post({ text: "/tstack:tdd fix the parser" });
@@ -2159,6 +2177,22 @@ describe("the user's word to a coordinator on the manager's page", () => {
     expect(got.length).toBe(1);
     expect(fields(got[0], "id", "from", "to", "text", "re", "via")).toEqual([1, "user", ["coordinator"], "@p hello", null, { fleet: "manager", id: 1 }]);
     expect(readChat(infra)).toEqual([]);
+  });
+
+  test("a word to a moved team is refused whole, naming its cloud page: neither its chat.jsonl nor the manager's gets a line, and an unmoved team's still lands", async () => {
+    say("coordinator", "an earlier line of the cloud's");
+    writeFileSync(join(root, "cloud.json"), JSON.stringify({ fleet: "p", cloud: "https://fleet.example.dev" }));
+    const before = readFileSync(join(root, "chat.jsonl"), "utf8");
+
+    for (const payload of [{ text: "@p why this?", side: "new", quote: { text: "keep both", from: "p's decision Invoice schema" } }, { text: "@p and @infra, status?" }]) {
+      const got = await toManager(payload);
+      expect([got.status, got.body["error"], got.body["cloud"]]).toEqual([409, expect.stringContaining("https://fleet.example.dev/p"), "https://fleet.example.dev/p"]);
+    }
+
+    expect([readFileSync(join(root, "chat.jsonl"), "utf8"), readChat(manager), readChat(infra)]).toEqual([before, [], []]);
+    const sent = await toManager({ text: "@infra status?" });
+    expect([sent.status, sent.body["delivered"]]).toEqual([201, [{ fleet: "infra", id: 1 }]]);
+    expect(readChat(infra).map((m) => m.text)).toEqual(["@infra status?"]);
   });
 
   test("the coordinator's reply in its own chat is mirrored once onto the manager's page, as its answer to the original", async () => {
