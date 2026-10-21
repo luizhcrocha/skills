@@ -100,6 +100,14 @@ class MemoCase(unittest.TestCase):
     def files(self, sub="notes", store=None):
         return sorted(p.name for p in ((store or self.store) / sub).glob("*.md"))
 
+    def section(self, out, head):
+        """The lines of out from the one starting with head through its indented lines."""
+        lines = out.splitlines()
+        start = next((n for n, ln in enumerate(lines) if ln.startswith(head)), None)
+        self.assertIsNotNone(start, f"no line starts with {head!r}:\n{out}")
+        end = next((n for n in range(start + 1, len(lines)) if not lines[n].startswith("  ")), len(lines))
+        return lines[start:end]
+
 
 class UlidTest(unittest.TestCase):
     def test_sortable_unique_and_well_formed(self):
@@ -856,13 +864,90 @@ class ReadTest(MemoCase):
         code, out, _ = self.run_memo("doctor")
         self.assertEqual(code, 0, "a stale thread is a warning, not a problem")
         self.assertIn("memo: healthy", out)
-        self.assertIn("warn 2 open threads older than 7 days", out)
-        self.assertIn(f'memo supersede {stale} "<outcome>"', out)
-        self.assertIn(f'memo supersede {pinned} "<outcome>"', out)
+        warned = "\n".join(self.section(out, "warn 2 open threads older than 7 days"))
+        self.assertIn(f'memo supersede {stale} "<outcome>"', warned)
+        self.assertIn(f'memo supersede {pinned} "<outcome>"', warned)
         for ident in (fresh, closed):
-            self.assertNotIn(ident, out)
-        self.assertNotIn("an old fact", out)
+            self.assertNotIn(ident, warned)
+        self.assertNotIn("an old fact", warned)
         self.assertIn("the stale thread", self.wake(), "a stale thread is still shown at wake")
+
+
+class DoctorReportTest(MemoCase):
+    def put(self, kind, text, **kw):
+        item = memo.Item(id=memo.new_ulid(), kind=kind, text=text, scope="project:acme/widget", **kw)
+        memo.atomic_write(self.store / "notes" / f"{item.id}.md", memo.render_item(item))
+        return item.id
+
+    def doctor(self):
+        code, out, _ = self.run_memo("doctor")
+        self.assertEqual(code, 0, "the reports change nothing about health: " + out)
+        self.assertIn("memo: healthy", out)
+        return out
+
+    def test_overlapping_live_notes_are_listed_highest_first(self):
+        a = self.put("fact", "the build cache lives in ~/.cache/widget and survives a reboot")
+        self.put("fact", "the gateway retries a request three times")
+        b = self.put("gotcha", "the build cache lives in ~/.cache/widget and is wiped on reboot")
+        c = self.put("fact", "deploys wait for the Friday freeze to lift")
+        d = self.put("decision", "deploys wait for the Friday freeze to lift")
+        old = self.put("fact", "the build cache lives in ~/.cache/widget and survives a reboot")
+        self.put("fact", "the cache note was wrong", supersedes=[old])
+        self.assertEqual(self.section(self.doctor(), "info 2 overlapping"), [
+            "info 2 overlapping note pairs (Jaccard of their words >= 0.5), highest first. "
+            "Shared words can't tell a duplicate from a contradiction: read both before superseding either.",
+            f"  1.00 {c} deploys wait for the Friday freeze to lift",
+            f"       {d} deploys wait for the Friday freeze to lift",
+            f"  0.62 {a} the build cache lives in ~/.cache/widget and survives a reboot",
+            f"       {b} the build cache lives in ~/.cache/widget and is wiped on reboot",
+        ])
+
+    def test_the_overlap_report_shows_twenty_pairs_and_counts_the_rest(self):
+        for kind in ("fact", "gotcha", "decision", "preference", "open", "fact", "gotcha"):
+            self.put(kind, "the release train leaves on Thursday")
+        report = self.section(self.doctor(), "info 21 overlapping note pairs")
+        self.assertEqual(len(report), 1 + 2 * 20 + 1)
+        self.assertEqual(report[-1], "  1 more")
+
+    def test_notes_naming_a_landed_hash_or_a_landing_word_are_listed_for_review(self):
+        hashed = self.put("fact", "the retry fix is in e00b668 on master")
+        landed = self.put("fact", "the gateway timeout change Landed on Tuesday")
+        for text in ("the widget id is 1234567", "the facade wraps a decade of feedback", "python 3.12 is enough",
+                     "note 01ARZ3NDEKTSV4RRFFQ69G5FAV covers it", "the host is 10.0.0.12 on the lab net",
+                     "the man pages say nothing", "pin ruff to 0.6.9 until the config migrates; v1.2.0 broke it"):
+            self.put("fact", text)
+        old = self.put("fact", "deployed the old build")
+        self.put("fact", "the old build is gone", supersedes=[old])
+        self.assertEqual(self.section(self.doctor(), "info 2 notes"), [
+            "info 2 notes carry a commit hash or a landing word. A review list, not a removal list: "
+            "a hash is often a lesson's evidence; supersede a note only when its point is now in the code.",
+            f"  {hashed} the retry fix is in e00b668 on master",
+            f"  {landed} the gateway timeout change Landed on Tuesday",
+        ])
+
+    def test_the_overlap_index_finds_every_pair_the_all_pairs_loop_finds(self):
+        vocab = "the a cache build deploy freeze widget gateway reboot lift wait retry pin note store".split()
+        only = os.environ.get("MEMO_OVERLAP_SEED")
+        for seed in [int(only)] if only else range(200):
+            rng = random.Random(seed)
+            notes = [memo.Item(id=memo.encode_ulid(n, 0), kind="fact",
+                               text=" ".join(rng.choices(vocab, k=rng.randint(0, 9))))
+                     for n in range(rng.randint(2, 14))]
+            floor = rng.choice([0.3, 0.5, 0.7, 1.0])
+            want = []
+            for i, a in enumerate(notes):
+                for b in notes[i + 1:]:
+                    sa, sb = set(a.text.split()), set(b.text.split())
+                    if sa and sb and len(sa & sb) >= floor * len(sa | sb):
+                        want.append((a.id, b.id))
+            got = [(a.id, b.id) for _, a, b in memo.overlapping(notes, floor)]
+            self.assertEqual(sorted(got), sorted(want), f"seed {seed} (replay: MEMO_OVERLAP_SEED={seed})")
+
+    def test_a_pair_at_exactly_the_floor_is_found_when_the_floor_is_not_exact_in_binary(self):
+        words = [f"w{i}" for i in range(100)]
+        notes = [memo.Item(id=memo.encode_ulid(n, 0), kind="fact", text=" ".join(ws))
+                 for n, ws in enumerate([words, words[:55]])]
+        self.assertEqual([round(j, 2) for j, _, _ in memo.overlapping(notes, 0.55)], [0.55])
 
 
 class ImportTest(MemoCase):

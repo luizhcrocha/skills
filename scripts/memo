@@ -11,6 +11,7 @@ files; it is never the source of truth.
 """
 
 import json
+import math
 import os
 import re
 import sqlite3
@@ -1024,10 +1025,15 @@ STOPWORDS = frozenset("""
 COVERAGE_FLOOR = 0.05  # the gold sweep: any higher floor costs P@3
 
 
+def words(text):
+    """A text's words, lower-cased, in order: what recall searches and what doctor's overlap compares."""
+    return re.findall(r"\w+", text.lower())
+
+
 def query_terms(query):
     """The words recall searches for, lower-cased and in query order, a repeated word repeated (it weighs more).
     Out: bare numbers and one-letter words (a possessive's s)."""
-    return [w for w in re.findall(r"\w+", query.lower()) if len(w) > 1 and not w.isdigit()]
+    return [w for w in words(query) if len(w) > 1 and not w.isdigit()]
 
 
 def cmd_recall(ctx, a, out):
@@ -1218,6 +1224,69 @@ def cmd_scope(ctx, a, out):
         print(f"{store.scope}\t{store.dir}", file=out)
 
 
+OVERLAP_FLOOR = 0.5  # in a hand-labelled sample of one store's pairs, every duplicate had a Jaccard of 0.5 or more
+REPORT_SHOWN = 20  # pairs or notes each doctor report prints before "N more"
+
+
+def overlapping(notes, floor=OVERLAP_FLOOR):
+    """(jaccard, a, b) for each pair of notes whose word sets have a Jaccard of at least floor, a older than b,
+    highest first. Prefix filtering keeps it off the all-pairs loop: words are ranked rarest first, and two sets
+    that meet floor share a word among each one's first len - ceil(floor * len) + 1."""
+    sets = [(n, frozenset(words(n.text))) for n in sorted(notes, key=lambda n: n.id)]
+    sets = [(n, ws) for n, ws in sets if ws]
+    df = {}
+    for _, ws in sets:
+        for w in ws:
+            df[w] = df.get(w, 0) + 1
+    sets.sort(key=lambda p: len(p[1]))
+    posting, pairs = {}, []
+    for k, (n, ws) in enumerate(sets):
+        seen = set()
+        for w in sorted(ws, key=lambda w: (df[w], w))[:len(ws) - math.ceil(floor * len(ws) - 1e-9) + 1]:
+            for o in posting.get(w, ()):
+                if o in seen:
+                    continue
+                seen.add(o)
+                m, ms = sets[o]
+                shared = len(ws & ms)
+                j = shared / (len(ws) + len(ms) - shared)
+                if j >= floor:
+                    pairs.append((j,) + ((m, n) if m.id < n.id else (n, m)))
+            posting.setdefault(w, []).append(k)
+    return sorted(pairs, key=lambda p: (-p[0], p[1].id, p[2].id))
+
+
+def _overlap_report(view):
+    pairs = overlapping(n for n in view.items if not n.is_summary and view.is_live(n))
+    if not pairs:
+        return []
+    lines = [f"info {len(pairs)} overlapping note pair{'s' if len(pairs) > 1 else ''} (Jaccard of their words >= "
+             f"{OVERLAP_FLOOR}), highest first. Shared words can't tell a duplicate from a contradiction: "
+             "read both before superseding either."]
+    for j, a, b in pairs[:REPORT_SHOWN]:
+        lines += [f"  {j:.2f} {a.id} {a.text}", f"       {b.id} {b.text}"]
+    if len(pairs) > REPORT_SHOWN:
+        lines.append(f"  {len(pairs) - REPORT_SHOWN} more")
+    return lines
+
+
+LANDED_RE = re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}\b"  # a commit hash: hex, a digit and a letter
+                       r"|\b(?i:landed|pushed|deployed|shipped)\b")
+
+
+def _landed_report(view):
+    notes = [n for n in view.items if not n.is_summary and view.is_live(n) and LANDED_RE.search(n.text)]
+    if not notes:
+        return []
+    lines = [f"info {len(notes)} note{'s carry' if len(notes) > 1 else ' carries'} a commit hash or a "
+             "landing word. A review list, not a removal list: a hash is often a lesson's evidence; "
+             "supersede a note only when its point is now in the code."]
+    lines += [f"  {n.id} {n.text}" for n in notes[:REPORT_SHOWN]]
+    if len(notes) > REPORT_SHOWN:
+        lines.append(f"  {len(notes) - REPORT_SHOWN} more")
+    return lines
+
+
 def cmd_doctor(ctx, a, out):
     problems = []
 
@@ -1260,6 +1329,8 @@ def cmd_doctor(ctx, a, out):
         if stale:
             print(f"warn {len(stale)} open thread{'s' if len(stale) > 1 else ''} older than {STALE_DAYS} days; close each with its outcome:\n"
                   + "\n".join(map(_closing, stale)), file=out)
+        for line in _overlap_report(view) + _landed_report(view):
+            print(line, file=out)
         if indexed:
             try:
                 got = {i.id: i for i in ctx.index.items(store)}

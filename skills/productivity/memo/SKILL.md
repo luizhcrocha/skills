@@ -36,6 +36,7 @@ memo summarize <ID>... "<line>"   # answer a compaction task
 memo tasks                        # every pending compaction task, for a backlog
 memo recall <words> [--live] [--limit N]   # --live leaves out superseded notes; --limit then counts live hits
 memo zoom <ID> | export | doctor           # doctor warns on open threads older than 7 days, with each one's supersede command
+                                           # and lists, for you to judge, overlapping note pairs (word Jaccard >= 0.5) and notes naming a hash or a landing word
 memo import <file.tsv> [--global] [--dry-run]   # reviewed notes, each at its original date
 --cwd <dir>                       # on any subcommand, before or after it: resolve the project from <dir>
 ```
