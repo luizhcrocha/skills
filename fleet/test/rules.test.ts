@@ -3,7 +3,7 @@
  * (D13 stage 5, fleet/RULES.md): what it refuses, what it warns about, and what it composes. Through the
  * CLI, as every other test of the fleet.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -491,6 +491,73 @@ describe("fleet brief", () => {
     expect(ran.stdout).toContain("End with your changes described there (`jj describe`, `jj split` by intent, `jj new` on top)");
     expect(ran.stderr).toContain("a2 has no completion criterion");
     expect(ran.stderr).not.toContain("no workspace");
+  });
+});
+
+describe("fleet brief recalls memo notes for the coordinator", () => {
+  const HEADING =
+    "brief: memo recall on the task, candidates for you to paste into the brief if they fit; they are not facts (recall rarely abstains), and the worker sees none of them:";
+
+  /** A stand-in `memo`: the program, and the arguments it was last run with. */
+  interface StubMemo {
+    readonly program: string;
+    readonly args: () => string[];
+  }
+
+  /** A stand-in `memo` that keeps its arguments, one a line, beside itself and runs `body`. */
+  function stubMemo(body: string): StubMemo {
+    const dir = join(base, "memo-stub");
+    mkdirSync(dir, { recursive: true });
+    const program = join(dir, "memo");
+    writeFileSync(program, `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done > "${join(dir, "args")}"\n${body}\n`, { mode: 0o755 });
+
+    return { program, args: () => readFileSync(join(dir, "args"), "utf8").split("\n").slice(0, -1) };
+  }
+
+  function worker(task: string): void {
+    ok("agent", "a3", "--task", task, "--milestone", "m1", "--skill", "tdd", "--lane", "src/", "--brief", "done when brief.test.ts passes");
+    const state = readJson(join(root, "state.json"));
+    writeFileSync(join(root, "state.json"), JSON.stringify({ ...state, workspaces: [{ id: "a3", agent: "a3", path: "/repo-a3", repo: "/the-repo", base: "x", added: "t", status: "active" }] }));
+  }
+
+  test("up to three hits go on stderr under a heading that calls them candidates, never into the brief", () => {
+    const memo = stubMemo("echo '01AAA 2026-10-21 [gotcha] project:p: one hit'\necho '01BBB 2026-10-21 [fact] project:p: two hit'");
+    worker("--all the recall words");
+    const ran = fleet(["brief", root, "a3"], { ...env, FLEET_MEMO: memo.program });
+    expect(ran.code).toBe(0);
+    // the fleet's repo as memo's project, its live notes only, three at most, and the task's words after `--`, so a flag-like word stays a word
+    expect(memo.args()).toEqual(["recall", "--cwd", "/the-repo", "--live", "--limit", "3", "--", "--all the recall words brief.test.ts passes"]);
+    const lines = ran.stderr.split("\n");
+    const at = lines.indexOf(HEADING);
+    expect(at).toBeGreaterThan(0);
+    expect(lines.slice(at + 1, at + 3)).toEqual(["  01AAA 2026-10-21 [gotcha] project:p: one hit", "  01BBB 2026-10-21 [fact] project:p: two hit"]);
+    expect(ran.stdout).not.toContain("one hit");
+    expect(ran.stdout).not.toContain("memo");
+  });
+
+  test("with no hit the block is memo's nothing line", () => {
+    const memo = stubMemo("echo \"memo: nothing on 'zz'; try \\`tape search <words>\\` (coordinator sessions only)\"");
+    worker("zz");
+    const ran = fleet(["brief", root, "a3"], { ...env, FLEET_MEMO: memo.program });
+    const lines = ran.stderr.split("\n");
+    expect(lines[lines.indexOf(HEADING) + 1]).toBe("  memo: nothing on 'zz'; try `tape search <words>` (coordinator sessions only)");
+  });
+
+  test("a missing memo, a failing one or a slow one costs the brief one skip line", () => {
+    worker("anything");
+    const missing = fleet(["brief", root, "a3"], env);
+    expect(missing.code).toBe(0);
+    expect(missing.stdout).toContain("Task: anything");
+    expect(missing.stderr).not.toContain(HEADING);
+    expect(missing.stderr).toContain(`brief: no memo notes recalled: ${join(base, "registry", "no-memo")} did not run (ENOENT)`);
+    const failing = fleet(["brief", root, "a3"], { ...env, FLEET_MEMO: stubMemo("echo boom >&2; exit 3").program });
+    expect(failing.stderr).toContain("brief: no memo notes recalled: memo recall exited 3");
+    expect(failing.stderr).not.toContain(HEADING);
+    const started = Date.now();
+    const slow = fleet(["brief", root, "a3"], { ...env, FLEET_MEMO: stubMemo("exec sleep 10").program });
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(slow.code).toBe(0);
+    expect(slow.stderr).toContain("brief: no memo notes recalled: memo recall took over 2 s");
   });
 });
 

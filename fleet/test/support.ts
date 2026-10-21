@@ -79,14 +79,14 @@ export function baseEnv(home: string, more: Readonly<Environment> = {}): Environ
 
   // A --once watch exits with its first batch, as before it settled; a settle test gives its own. A preview's
   // processes stay in the test's own process tree (and the gate's scope), not in systemd user scopes of their own.
-  // No picasso: a preview asks no real sidecar whether a watch hears it. A pruned workspace goes to a trash of the
+  // No picasso: a preview asks no real sidecar whether a watch hears it. No memo: a brief recalls no note of the machine's stores. A pruned workspace goes to a trash of the
   // test's own, on the temp dir's filesystem (a trash on another filesystem refuses the prune). No MemAvailable: the
   // gate counts its budget alone, whatever the machine running the tests has free; a floor test gives its own meminfo,
   // and its own cgroups for what the scopes use. A process the test spawns runs in the test's own zone: `bun test` runs
   // in UTC with $TZ unset, and a child given no $TZ would print the machine's zone's stamps.
   return {
     ...env, TZ: env["TZ"] ?? "UTC", FLEET_HOME: registry, FLEET_TRASH: join(home, "trash"), FLEET_DISCOVER: "0", FLEET_WATCH_SETTLE: "0", FLEET_PREVIEW_SCOPE: "0", FLEET_CC_SOCKS: join(home, "cc-socks"),
-    PICASSO: join(home, "no-picasso"), FLEET_MEMINFO: join(home, "no-meminfo"), FLEET_CGROUP_ROOT: join(home, "no-cgroup"), ...more,
+    PICASSO: join(home, "no-picasso"), FLEET_MEMO: join(home, "no-memo"), FLEET_MEMINFO: join(home, "no-meminfo"), FLEET_CGROUP_ROOT: join(home, "no-cgroup"), ...more,
   };
 }
 

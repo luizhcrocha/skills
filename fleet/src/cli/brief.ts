@@ -5,9 +5,12 @@
  * tool for a user-invoked skill, read from the skill's own frontmatter), the lane, the workspace
  * `fleet ws add` recorded for it (or, in a fleet that shares one working copy, that copy) with the rules of
  * history that go with it, the step it works and its id on the chat. Before the brief, on stderr, the
- * line the coordinator spawns it by: the Agent call's `model` and `effort`. Refused for a worker the
- * ledger does not have: a worker is recorded, then spawned.
+ * line the coordinator spawns it by: the Agent call's `model` and `effort`. After it, also on stderr and so
+ * never in the brief, the memo notes `memo recall` finds for the worker's task and completion criterion in
+ * the fleet's repo, as candidates the coordinator may paste. Refused for a worker the ledger does not have:
+ * a worker is recorded, then spawned.
  */
+import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -120,9 +123,9 @@ function handedFrom(raw: JsonObject, id: string): string | undefined {
   return asString(asObject(asArray(row?.["handovers"])?.at(-1))?.["from"]);
 }
 
-/** The shared working copy: the repo a recorded workspace names, else the default workspace of the repo the
- * command runs in. */
-function sharedPath(raw: JsonObject): string | undefined {
+/** The fleet's repo, which is also its shared working copy: the repo a recorded workspace names, else the
+ * default workspace of the repo the command runs in. */
+function fleetRepo(raw: JsonObject): string | undefined {
   const named = (asArray(raw["workspaces"]) ?? []).map((w) => asString(asObject(w)?.["repo"])).find((r) => r !== undefined);
 
   return named ?? workspaceRoot(process.cwd(), "default");
@@ -157,13 +160,56 @@ function devLine(root: string, a: Agent, port: number | undefined): string | und
   );
 }
 
-function compose(root: string, ledger: Ledger, raw: JsonObject, a: Agent): Composed {
+/** How long `memo recall` may take before the brief goes on without it; its p95 is about 0.14 s. */
+const RECALL_MS = 2000;
+
+/** The most notes recalled for one brief. */
+const RECALL_LIMIT = 3;
+
+/** The coordinator's lines of the notes `memo` (the program at `memo`) recalls in `repo` for `words`: a
+ * heading and memo's lines (its hits, or its line saying it has none), or one line saying why there are
+ * none. Never fails and never takes much over {@link RECALL_MS}: recall serves the brief, never blocks it. */
+function recalledNotes(memo: string, repo: string | undefined, words: string): string[] {
+  const skip = (why: string): string[] => [`brief: no memo notes recalled: ${why}`];
+
+  if (repo === undefined) return skip("the fleet's repo is unknown (no workspace recorded, and not run in a jj repo)");
+  const args = ["recall", "--cwd", repo, "--live", "--limit", String(RECALL_LIMIT), "--", words];
+  const done = spawnSync(memo, args, { encoding: "utf8", timeout: RECALL_MS, stdio: ["ignore", "pipe", "ignore"] });
+
+  if (done.error !== undefined) {
+    const code = "code" in done.error ? String(done.error.code) : done.error.name;
+
+    return skip(code === "ETIMEDOUT" ? `memo recall took over ${String(RECALL_MS / 1000)} s` : `${memo} did not run (${code})`);
+  }
+
+  if (done.status !== 0) return skip(`memo recall exited ${String(done.status ?? done.signal)}`);
+  const lines = done.stdout.split("\n").filter((l) => l.trim() !== "");
+
+  if (lines.length === 0) return skip("memo recall printed nothing");
+
+  return [
+    "brief: memo recall on the task, candidates for you to paste into the brief if they fit; they are not facts (recall rarely abstains), and the worker sees none of them:",
+    ...lines.slice(0, RECALL_LIMIT).map((l) => `  ${l}`),
+  ];
+}
+
+/** A worker's completion criterion without its "done when", or "" when it has none. */
+function criterion(a: Agent): string {
+  return (a.brief ?? "").replace(/^done when:?\s*/i, "");
+}
+
+/** The words a worker's notes are recalled by: its task and its completion criterion. */
+function taskWords(a: Agent): string {
+  return [a.task, criterion(a)].filter((w) => w !== "").join(" ");
+}
+
+function compose(root: string, ledger: Ledger, raw: JsonObject, a: Agent, memo: string): Composed {
   const brief: string[] = [`Read ${join(root, "brief.md")} first; your id is ${a.id}.`, "", `Task: ${a.task}`];
   const notes: string[] = [];
-  const done = a.brief ?? "";
+  const done = criterion(a);
 
   if (done === "") notes.push(`brief: ${a.id} has no completion criterion: \`fleet state ${root} agent ${a.id} --brief "done when ..."\` records one`);
-  else brief.push(`Done when: ${done.replace(/^done when:?\s*/i, "")}`);
+  else brief.push(`Done when: ${done}`);
   const skill = skillLine(a);
 
   if (skill !== undefined) brief.push(skill);
@@ -176,7 +222,7 @@ function compose(root: string, ledger: Ledger, raw: JsonObject, a: Agent): Compo
   const ws = activeWorkspaces(raw).find((w) => w.agent === a.id);
 
   if (ledger.workspace_mode === "shared") {
-    if (a.lane.length > 0) brief.push(sharedLine(sharedPath(raw)));
+    if (a.lane.length > 0) brief.push(sharedLine(fleetRepo(raw)));
   } else if (ws !== undefined) {
     brief.push(isolatedLine(ws.path, handedFrom(raw, ws.id)));
   } else if (a.lane.length > 0) {
@@ -196,13 +242,15 @@ function compose(root: string, ledger: Ledger, raw: JsonObject, a: Agent): Compo
     `brief: add the context only you have (decisions from the session, CONTEXT.md terms, ADRs, the user's constraints), ` +
       `spawn ${a.id} on model: "${role.model}", effort: "${role.effort}" (run_in_background), then \`fleet state ${root} agent ${a.id} --task-id <its agentId>\`.`,
   );
+  notes.push(...recalledNotes(memo, fleetRepo(raw), taskWords(a)));
 
   return { brief, notes };
 }
 
-function run(argv: readonly string[]): Effect.Effect<number, Refusal, Out> {
+function run(argv: readonly string[]): Effect.Effect<number, Refusal, Out | World> {
   return Effect.gen(function* () {
     const out = yield* Out;
+    const world = yield* World;
     const [dir, worker, ...rest] = argv;
 
     if (dir === undefined || worker === undefined || rest.length > 0) return yield* refuse(USAGE);
@@ -219,7 +267,8 @@ function run(argv: readonly string[]): Effect.Effect<number, Refusal, Out> {
       return yield* refuse(`no worker '${worker}' in ${root}: record it first (\`fleet state ${root} agent ${worker} --task T --milestone M ...\`), then brief and spawn it`);
     }
 
-    const { brief, notes } = compose(root, ledger, raw, a);
+    const memo = world.env("FLEET_MEMO") || join(PLUGIN_DIR, "scripts", "memo");
+    const { brief, notes } = compose(root, ledger, raw, a, memo);
 
     out.err(`${spawnLine(a.id, a.skill, a.model, a.effort)}\n`);
 
