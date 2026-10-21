@@ -733,6 +733,11 @@ class ReadTest(MemoCase):
                 out = self.ok("recall", query, env=env)
                 self.assertTrue(out.startswith(f"memo: nothing on {query!r}"), f"{query!r} {env}: {out}")
 
+    def test_a_note_whose_kind_is_the_query_word_does_not_outrank_one_that_says_it(self):
+        about = self.note("fact", "the decision log lives under docs and is read at every planning meeting")
+        self.note("decision", "ship on fridays")
+        self.assertTrue(self.ok("recall", "decision").startswith(about))
+
     def test_recall_of_a_sentence_stays_fast_on_a_large_store(self):
         notes = self.global_dir / "notes"
         notes.mkdir(parents=True)

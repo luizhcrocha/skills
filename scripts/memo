@@ -539,7 +539,8 @@ class Index:
         cols = ", ".join(f"items.{c.strip()}" for c in _COLS.split(","))
         # cross join keeps fts the outer loop: driven from items, sqlite re-runs the match once per row
         join = f"from fts cross join items on items.rowid = fts.rowid where fts match ? and {where}"
-        sql = f"select {cols}, items.store, items.rowid {join} order by bm25(fts) limit ?"
+        # bm25 weighs text and refs; a match on the kind column scores nothing: it says what a note is, not what it is about
+        sql = f"select {cols}, items.store, items.rowid {join} order by bm25(fts, 1, 1, 0) limit ?"
         if not terms:
             return []
 
