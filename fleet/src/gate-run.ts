@@ -36,7 +36,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { stampOf } from "./clock.ts";
 import { readText } from "./files.ts";
-import { budgetOf, capBytes, cpuBudgetOf, cpusHere, DEFAULT_CAP, floorOf, floorRefusal, gateOf, holdText, LIGHT_CAP, LIGHT_S, memAvailable, memEstimate, memTotal, PEAK_MARGIN_TEXT, plain, pressureNow, scopeLives, shortText, sizeText, type GateHolder, type Memory, type Pressure, type RunRecord, type Waiting } from "./gate.ts";
+import { BEHIND_KEPT, type Behind, budgetOf, capBytes, cpuBudgetOf, cpusHere, DEFAULT_CAP, floorOf, floorRefusal, gateOf, holdText, LIGHT_CAP, LIGHT_S, memAvailable, memEstimate, memTotal, PEAK_MARGIN_TEXT, plain, pressureNow, scopeLives, shortText, sizeText, type GateHolder, type Memory, type Pressure, type RunRecord, type WaitedFor, type Waiting } from "./gate.ts";
 import { ancestry } from "./procs.ts";
 import type { Machine } from "./world.ts";
 
@@ -479,6 +479,27 @@ function shown(command: readonly string[], length = 160): string {
   return text.length > length ? `${text.slice(0, length - 3)}...` : text;
 }
 
+/** What a run waits for, the rows of its wait line: the budget's rows its estimate does not fit beside the holds,
+ * MemAvailable under the floor, or, with neither, its turn. */
+export function waitedFor(waiting: Pick<Waiting, "lacks" | "short">): WaitedFor[] {
+  const rows: WaitedFor[] = [...waiting.lacks.map((row): WaitedFor => (row === "CPU" ? "cpu" : "memory")), ...(waiting.short === undefined ? [] : ["floor" as const])];
+
+  return rows.length === 0 ? ["turn"] : rows;
+}
+
+/** Who a run waits behind: the holds, then the waiters before it, {@link BEHIND_KEPT} at most. */
+export function behindOf(waiting: { readonly holders: readonly Ahead[]; readonly ahead: readonly Ahead[] }): Behind[] {
+  return [...waiting.holders, ...waiting.ahead].slice(0, BEHIND_KEPT).map((a) => (a.landing ? { name: a.name, landing: true } : { name: a.name }));
+}
+
+/** A hold or a waiter, as {@link behindOf} reads it. */
+interface Ahead {
+  readonly name: string;
+  readonly landing: boolean;
+}
+
+const WAITED_WORDS: Readonly<Record<WaitedFor, string>> = { memory: "memory", cpu: "CPU", floor: "the memory floor", turn: "its turn" };
+
 /** Why a run waits, in words: who holds the gate, the memory it lacks, and its place in the queue. */
 function waitText(waiting: Waiting): string {
   const short = waiting.short === undefined ? undefined : `not enough memory: ${shortText(waiting.short, "this run")}`;
@@ -488,9 +509,7 @@ function waitText(waiting: Waiting): string {
 
   const behind = waiting.ahead.length === 0 ? "" : `, behind ${waiting.ahead.map((w) => plain(w.name)).join(", ")}`;
 
-  // What it waits on: a budget row the holds' estimates fill (memory, CPU), MemAvailable under the floor, or its turn.
-  const rows = [...waiting.lacks, ...(short === undefined ? [] : ["the memory floor"])];
-  const reason = rows.length === 0 ? "waiting for its turn" : `waiting for ${rows.join(" and ")}`;
+  const reason = `waiting for ${waitedFor(waiting).map((row) => WAITED_WORDS[row]).join(" and ")}`;
 
   return `${reason}: ${held}; place ${String(waiting.ahead.length + 1)} in the queue${behind}`;
 }
@@ -631,7 +650,11 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
   const askedAs = !scoped ? "all (no scope)" : raised !== undefined ? `${spec} raised to the peak` : measured === undefined ? spec : last !== undefined ? "last runs" : "its family's runs";
   // Light: a small estimate, and every one of its last runs short. A first run is never light.
   const light = scoped && last !== undefined && last.ran <= LIGHT_S && estimate <= LIGHT_CAP;
-  const marks = { repo: where.repo, workspace: where.workspace, commit: where.commit, estimate: scoped ? estimate : undefined, cpus, landing: ask.landing || undefined };
+  const marks = { repo: where.repo, workspace: where.workspace, commit: where.commit, estimate: scoped ? estimate : undefined, cpus, landing: ask.landing || undefined, light: light || undefined };
+  // What it waited for over the whole wait, each once, and who was before it when it first waited.
+  const waitedOn = new Set<WaitedFor>();
+  let behind: Behind[] | undefined;
+  const waitMarks = (): Pick<RunRecord, "waited_for" | "behind"> => ({ waited_for: waitedOn.size === 0 ? undefined : [...waitedOn], behind: behind?.length === 0 ? undefined : behind });
   const limitS = ask.timeoutS;
   let token: string | undefined;
   let unit = `fleet-gate-${randomBytes(4).toString("hex")}-${process.pid}`;
@@ -661,6 +684,9 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
       break;
     }
 
+    for (const row of waitedFor(result.waiting)) waitedOn.add(row);
+    behind ??= behindOf(result.waiting);
+
     const byHand = result.waiting.holders.some((h) => h.pid === undefined && plain(h.name) === plain(ask.name));
 
     const byHandText = `${plain(ask.name)} holds the gate by hand, and a gate run never runs under a hold taken by hand: free it with its token first (\`fleet fleets gate free <token>\`)`;
@@ -676,7 +702,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
 
     if (Date.now() >= deadline) {
       gate.leave(process.pid, machine.now());
-      keep({ name: holder.name, kind: holder.kind, what: command, asked: askedAs, at: stampOf(machine.now()), cap, waited: waited(), ran: null, code: 75, peak: null, killed: 0, cpu_s: null, ...marks });
+      keep({ name: holder.name, kind: holder.kind, what: command, asked: askedAs, at: stampOf(machine.now()), cap, waited: waited(), ran: null, code: 75, peak: null, killed: 0, cpu_s: null, ...marks, ...waitMarks() });
       say(`gate run: ${why}; gave up after ${ask.waitS}s without running the command (exit 75). Run it again later, or with a longer --wait`);
 
       return 75;
@@ -892,7 +918,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
       : `exit ${code} after ${secs}s`;
 
     const cpuS = usec === undefined ? null : Math.round(usec / 1000) / 1000;
-    keep({ name: holder.name, kind: holder.kind, what: command, asked: askedAs, at: stampOf(machine.now()), cap, waited: waitedS, ran: Math.round(ranS * 10) / 10, code, peak: peak ?? null, killed, cpu_s: cpuS, ...marks, psi_start: psiStart, psi_end: psiEnd, psi_max: psiMax });
+    keep({ name: holder.name, kind: holder.kind, what: command, asked: askedAs, at: stampOf(machine.now()), cap, waited: waitedS, ran: Math.round(ranS * 10) / 10, code, peak: peak ?? null, killed, cpu_s: cpuS, ...marks, ...waitMarks(), psi_start: psiStart, psi_end: psiEnd, psi_max: psiMax });
     say(`gate run: ${how}${peak === undefined ? "" : `, memory peak ${sizeText(peak)}`}; ${slot}`);
 
     return code;

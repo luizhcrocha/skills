@@ -505,6 +505,17 @@ export function floorRefusal(given: string | undefined, env: Env): string {
   return `cannot read ${what}: give a size (8G) or a share of the RAM (12%), 64M at least, or 0 to keep nothing free`;
 }
 
+/** What a run waited for, a row of its wait line: a budget row the holds' estimates fill (`memory`, `cpu`), MemAvailable
+ * under the floor (`floor`), or its turn in the queue (`turn`). */
+export type WaitedFor = "memory" | "cpu" | "floor" | "turn";
+
+/** A run or a hold a run waited behind, by name; `landing` when it was marked a landing gate. */
+// A type, not an interface: a record is written as JSON, and an interface has no index signature.
+export type Behind = {
+  readonly name: string;
+  readonly landing?: true | undefined;
+};
+
 /** One finished `gate run`, a line of `runs.jsonl`. */
 export interface RunRecord {
   /** When it ended. */
@@ -543,7 +554,17 @@ export interface RunRecord {
   readonly psi_start?: Pressure | undefined;
   readonly psi_end?: Pressure | undefined;
   readonly psi_max?: Pressure | undefined;
+  /** Whether it asked the gate as a light run, and was admitted as one when it ran. Older lines have none. */
+  readonly light?: boolean | undefined;
+  /** What it waited for over its whole wait, each once, in the order first seen; none when it never waited. */
+  readonly waited_for?: readonly WaitedFor[] | undefined;
+  /** The holds, then the waiters before it, when it first waited, {@link BEHIND_KEPT} at most; none when it never
+   * waited behind anyone. */
+  readonly behind?: readonly Behind[] | undefined;
 }
+
+/** How many runs and holds a record's `behind` keeps. */
+export const BEHIND_KEPT = 5;
 
 /** What a command's last runs that ran in a scope did, whatever their end (a failed run's peak and a killed run's are
  * real peaks), at most {@link RUNS_MEASURED} of them: the largest memory peak and when that run ended, the longest

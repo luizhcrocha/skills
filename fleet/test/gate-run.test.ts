@@ -5,14 +5,14 @@
  * none (the Mac). gate.test.ts has the admission rules themselves; gate-run-scope.test.ts the run's scope, its record
  * and its asks, a file of their own so that bun_files.py runs the two at once, each within its per-file limit.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 
 import { capBytes, memEstimate } from "../src/gate.ts";
-import { asNumber, type JsonObject } from "../src/json.ts";
-import { runArgs } from "../src/gate-run.ts";
+import { asArray, asNumber, asObject, type JsonObject } from "../src/json.ts";
+import { behindOf, runArgs, waitedFor } from "../src/gate-run.ts";
 import { alive, budgetBytes, env, first, freshRegistry, gate, holdFile, holds, home, pidIn, records, running, SCOPE, standing, stopAll, tree, until } from "./gate-run-support.ts";
 import { FLEET, tmp, type Environment } from "./support.ts";
 
@@ -58,6 +58,25 @@ describe("gate run's arguments", () => {
     const done = gate(["run", "--as", "ui", "pnpm", "test"]);
     expect(done.code).toBe(1);
     expect(done.stderr).toContain("usage: fleet fleets gate run");
+  });
+});
+
+describe("gate run's record of its wait", () => {
+  const short = { available: 20, unused: 0, part: 16, whole: true, floor: 8 };
+
+  test("what it waited for: the rows of its wait line, memory and CPU as the budget's rows, the floor, or its turn", () => {
+    expect(waitedFor({ lacks: [] })).toEqual(["turn"]);
+    expect(waitedFor({ lacks: ["memory"] })).toEqual(["memory"]);
+    expect(waitedFor({ lacks: ["CPU"] })).toEqual(["cpu"]);
+    expect(waitedFor({ lacks: ["memory", "CPU"], short })).toEqual(["memory", "cpu", "floor"]);
+    expect(waitedFor({ lacks: [], short })).toEqual(["floor"]);
+  });
+
+  test("who it waited behind: the holders, then the waiters before it, a landing gate marked, 5 at most", () => {
+    const at = (name: string, landing = false) => ({ name, landing });
+    expect(behindOf({ holders: [], ahead: [] })).toEqual([]);
+    expect(behindOf({ holders: [at("tier"), at("gate", true)], ahead: [at("big", true)] })).toEqual([{ name: "tier" }, { name: "gate", landing: true }, { name: "big", landing: true }]);
+    expect(behindOf({ holders: [at("h1"), at("h2"), at("h3")], ahead: [at("w1"), at("w2"), at("w3")] }).map((b) => b.name)).toEqual(["h1", "h2", "h3", "w1", "w2"]);
   });
 });
 
@@ -187,6 +206,35 @@ describe("gate run and the slot", () => {
     expect(gate(["free", token]).code).toBe(0);
     expect(await runner.exited).toBe(0);
     expect(await new Response(runner.stdout).text()).toBe("ran\n");
+    // It waited for the memory the hold by hand takes, the whole budget, behind its taker.
+    expect(records()[0]).toMatchObject({ name: "w1", code: 0, waited_for: ["memory"], behind: [{ name: "other" }] });
+  });
+
+  test("its record keeps each row it waited for over the whole wait, once, and who was before it when it first waited", async () => {
+    const fixed = { FLEET_GATE_SCOPE: "0", FLEET_GATE_MEMORY_FLOOR: "0" };
+    const took = gate(["take", "--as", "A", "a build"]);
+    const token = /fleet fleets gate free (\S+)`/.exec(took.stdout)?.[1] ?? "";
+    const runner = running(["--as", "w1", "--wait", "4", "--", "sh", "-c", "echo ran"], fixed);
+
+    try {
+      // It waits for memory, behind A alone.
+      expect(await until(() => standing().queue.length === 1, 10000)).toBe(true);
+      // Then a waiter comes before it (an entry as an older fleet's, live by the test's own pid), and A frees: it waits for its turn.
+      const queue = join(home, "gate", "queue.json");
+      const waiters = asArray(asObject(JSON.parse(readFileSync(queue, "utf8")))?.["waiters"]) ?? [];
+      const earlier = { fleet: "W", kind: "session", what: "gate run: earlier", since: new Date().toISOString(), until: new Date(Date.now() + 60_000).toISOString(), pid: process.pid };
+      writeFileSync(`${queue}.new`, JSON.stringify({ waiters: [earlier, ...waiters] }));
+      renameSync(`${queue}.new`, queue);
+      expect(standing().queue.map((w) => w["name"])).toEqual(["W", "w1"]);
+      expect(gate(["free", token]).code).toBe(0);
+      expect(await runner.exited).toBe(75);
+    } finally {
+      await stopAll([runner]);
+    }
+
+    expect(await new Response(runner.stderr).text()).toContain("waiting for its turn: the gate is free, but others wait before it; place 2 in the queue, behind W; gave up after 4s");
+    expect(records()[0]).toMatchObject({ name: "w1", code: 75, waited_for: ["memory", "turn"] });
+    expect(records()[0]?.["behind"]).toEqual([{ name: "A" }]);
   });
 
   test("a run never goes under a hold taken by hand, its own name's included: it waits as anyone does", () => {
@@ -197,7 +245,7 @@ describe("gate run and the slot", () => {
     expect(done.stderr).toContain("the gate is held by w1");
     expect(done.stderr).toContain("w1 holds the gate by hand, and a gate run never runs under a hold taken by hand: free it with its token first");
     expect(holds()[0]).not.toHaveProperty("runner");
-    expect(records()[0]).toMatchObject({ name: "w1", code: 75, ran: null });
+    expect(records()[0]).toMatchObject({ name: "w1", code: 75, ran: null, waited_for: ["memory"], behind: [{ name: "w1" }] });
   });
 
   test("a run past its time says so with its exit code", () => {
@@ -257,6 +305,9 @@ describe.skipIf(!SCOPE)("gate run and the budget", () => {
       const passing = gate(["run", "--as", "late", "--mem", "4G", "--cpus", "2", "--wait", "0", "--", "sh", "-c", `echo late >> ${dir}/order`], more);
       expect(passing.code).toBe(75);
       expect(passing.stderr).toContain("place 2 in the queue, behind big");
+      // It fitted beside `small` and waited for its turn, behind `small`, which holds, and `big`, a landing gate.
+      expect(records().at(-1)).toMatchObject({ name: "late", code: 75, waited_for: ["turn"] });
+      expect(records().at(-1)?.["behind"]).toEqual([{ name: "small" }, { name: "big", landing: true }]);
 
       const late = running(["--as", "late", "--mem", "4G", "--cpus", "2", "--wait", "60", "--", "sh", "-c", `echo late >> ${dir}/order`], more);
       runs.push(late);
@@ -274,6 +325,11 @@ describe.skipIf(!SCOPE)("gate run and the budget", () => {
       expect(await late.exited).toBe(0);
       expect(readFileSync(join(dir, "order"), "utf8")).toBe("small\nbig\nlate\n");
       expect(await new Response(big.stderr).text()).toMatch(/big holds the gate as a landing gate \(token [0-9a-f]{8}, until \S+\), after \d+s of waiting/);
+      const ran = records().filter((r) => r["code"] === 0);
+      // `small` never waited: neither field. `big`, a landing gate, waited for memory behind `small`.
+      expect(ran.find((r) => r["name"] === "small")).not.toContainAnyKeys(["waited_for", "behind"]);
+      expect(ran.find((r) => r["name"] === "big")).toMatchObject({ landing: true, behind: [{ name: "small" }] });
+      expect(ran.find((r) => r["name"] === "big")?.["waited_for"]).toContain("memory");
     } finally {
       await stopAll(runs);
     }
@@ -385,7 +441,9 @@ describe("gate run and the memory available", () => {
       "gate run: waiting for the memory floor: not enough memory: 24.0G needed, 20.0G available (16.0G for this run, one run's cap, as it takes the whole budget, 8.0G floor); place 1 in the queue; gave up after 1s without running the command (exit 75). " +
         "Run it again later, or with a longer --wait\n",
     );
-    expect(records()[0]).toMatchObject({ name: "w1", code: 75, ran: null });
+    expect(records()[0]).toMatchObject({ name: "w1", code: 75, ran: null, waited_for: ["floor"] });
+    // Nobody held the gate or waited before it.
+    expect(records()[0]).not.toHaveProperty("behind");
     expect(standing()).toMatchObject({ holders: [], queue: [] });
   });
 

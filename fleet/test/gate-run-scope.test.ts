@@ -235,6 +235,8 @@ describe.skipIf(!SCOPE)("gate run's record, and its estimate from the last runs"
     expect(asNumber(kept?.["cpus"])).toBeGreaterThan(0);
     expect(asNumber(kept?.["estimate"])).toBeGreaterThan(0);
     expect(kept?.["landing"]).toBeUndefined();
+    // A first run, which never waited: not light, and nothing it waited for or behind.
+    expect(kept).not.toContainAnyKeys(["light", "waited_for", "behind"]);
   });
 
   test.skipIf(Bun.which("jj") === null)("in a jj repository the commit is @-'s, and a landing gate is marked", () => {
@@ -545,7 +547,9 @@ describe.skipIf(!SCOPE)("gate run's asks: the CPUs, light runs, --landing", () =
     const light = gate(["run", "--as", "w1", "--", "true"], { FLEET_GATE_SCOPE: "1" }, repo.dir);
     expect(light.stderr).toContain(", estimate 4.0G from its last run");
     expect(light.stderr).toContain("w1 holds the gate, a light run (token");
+    expect(last()).toMatchObject({ what: "true", light: true });
     expect(gate(["run", "--as", "w1", "--", "sh", "-c", "true"], { FLEET_GATE_SCOPE: "1" }, repo.dir).stderr).not.toContain("a light run");
+    expect(last()).not.toHaveProperty("light");
     const big = gate(["run", "--as", "w1", "--", "sh", "-c", ":"], { FLEET_GATE_SCOPE: "1" }, repo.dir);
     expect(big.stderr).toContain(", estimate 4.1G from its last run");
     expect(big.stderr).not.toContain("a light run");
@@ -571,6 +575,9 @@ describe.skipIf(!SCOPE)("gate run's asks: the CPUs, light runs, --landing", () =
       expect(late.stdout).toBe("");
       expect(late.stderr).toContain("gate run: waiting for CPU: the gate is held by ");
       expect(late.stderr).not.toContain("waiting for memory");
+      expect(last()).toMatchObject({ name: "late", code: 75, waited_for: ["cpu"] });
+      const behind = (asArray(last()["behind"]) ?? []).map((b) => asObject(b) ?? {}).toSorted((a, b) => String(a["name"]).localeCompare(String(b["name"])));
+      expect(behind).toEqual([{ name: "bench" }, { name: "gate", landing: true }]);
     } finally {
       await stopAll(runs);
     }
@@ -587,7 +594,7 @@ describe.skipIf(!SCOPE)("gate run's asks: the CPUs, light runs, --landing", () =
       const light = gate(["run", "--as", "light", "--wait", "0", "--", "true"], cpuEnv, repo.dir);
       expect(light.stderr).toContain("light holds the gate, a light run (token");
       expect(light.code).toBe(0);
-      expect(last()).toMatchObject({ name: "light", cpus: 2 });
+      expect(last()).toMatchObject({ name: "light", cpus: 2, light: true });
     } finally {
       await stopAll([tier]);
     }
