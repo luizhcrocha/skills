@@ -18,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[2]
 PROGRAMS = ROOT / "skills" / "productivity" / "coordinator" / "PROGRAMS.md"
 FOLD = Path(__file__).resolve().parent / "fleet_fold.mjs"
 CHECKOUT = Path(os.environ.get("TSTACK_FLEET_CHECKOUT") or Path.home() / "repos/luizhcrocha/fleet-live")
-NEEDS = ("packages/ledger/src/prelude.ts", "packages/ledger/src/mirror.ts", "packages/cloud/src/take-log.ts")
+NEEDS = ("packages/ledger/src/prelude.ts", "packages/ledger/src/mirror.ts", "packages/ledger/src/bodies.ts",
+         "packages/ledger/src/wire.ts", "packages/cloud/src/take-log.ts")
 
 # The team the programs run against: a milestone, two workers (no status: a new worker's is optional, as the CLI's
 # `agent` defaulted it), and an open card the hook's nudge decides.
@@ -73,6 +74,19 @@ class WorkedCallsTest(unittest.TestCase):
                                for i, b in enumerate(bodies, 1)])
         assert_applied(self, outcomes)
         self.assertEqual(outcomes[-1]["returned"][0]["key"], "x7", "the read returns the open cards")
+
+
+class BodiesLimitTest(unittest.TestCase):
+    """A program puts at most 16 bodies, as the cloud's PROGRAM_BODIES_LIMIT holds it: the 17th put throws."""
+
+    def test_the_seventeenth_body_put_throws(self):
+        def puts(count):
+            return "".join(f'await decision.body("x7", "<p>{i}</p>");\n' for i in range(count)) + "return records.apply(ops);\n"
+        sixteen, seventeen = fold(self, [{"name": "16 puts", "fresh": True, "body": puts(16)},
+                                         {"name": "17 puts", "fresh": True, "body": puts(17)}])
+        assert_applied(self, [sixteen])
+        self.assertEqual(len(sixteen["applied"]), 16)
+        self.assertIn("a program puts at most 16 bodies", seventeen.get("thrown", ""), seventeen)
 
 
 class HookProgramsTest(unittest.TestCase):

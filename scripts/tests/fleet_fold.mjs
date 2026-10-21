@@ -1,7 +1,14 @@
 // Runs programs through a fleet checkout's real prelude and fold, as the cloud's program runtime does: the prelude
 // (packages/ledger/src/prelude.ts) makes the drafts, and the fleet object's takeLog (packages/cloud/src/take-log.ts:
 // the ledger's applyOps, a keyless card numbered from its letter's block, the checks across records) folds them into
-// one mirror the programs share in order. The mirror starts with the number blocks a host puts (D, P, L, R from 219).
+// one mirror the programs share in order. The mirror starts with the number blocks a host puts (every letter it
+// numbers with, apps/host/src/numbers.ts, from 219). A program's body runs as an async function, as the cloud's
+// runtime runs it, so it may await grill.answer and the other intents that read the card. The bodies prelude runs after
+// the prelude, as in the cloud, over a `bodies` connector of each program's own that keeps nothing: it holds a put to
+// the cloud's rules (packages/cloud/src/bodies.ts:349-354: the ask's shape, a card id, 16 puts a program, the text's
+// 2 MB, never empty) and answers the revision of the text it was given. It checks the Markdown text only: the cloud
+// also holds the HTML that marked makes of it to 2 MB and never empty (bodies.ts:355-358), and its revision is of that
+// HTML, but marked is not installed for the harness. A program over the service's limit (wire.ts) throws.
 // node fleet_fold.mjs FLEET_CHECKOUT < {"programs": [{"name", "body", "fresh"?}]}
 // prints [{"name", "returned", "applied": OpResult[]} | {"name", "thrown"}]; `fresh` starts that program on a mirror
 // holding only the first program's records (the setup), so one program's records do not meet another's.
@@ -12,7 +19,9 @@ import { pathToFileURL } from "node:url";
 const checkout = process.argv[2];
 const at = "2026-10-14T12:00:00.000Z";
 const load = (path) => import(pathToFileURL(join(checkout, path)).href);
-const { preludeSource } = await load("packages/ledger/src/prelude.ts");
+const { preludeSource, bodiesPreludeSource } = await load("packages/ledger/src/prelude.ts");
+const { bodySentences, CARD_ID, EVIDENCE_LIMIT_BYTES, revisionOf } = await load("packages/ledger/src/bodies.ts");
+const { PROGRAM_LIMIT_BYTES } = await load("packages/ledger/src/wire.ts");
 const { applyOps, emptyMirror } = await load("packages/ledger/src/mirror.ts");
 const { takeLog } = await load("packages/cloud/src/take-log.ts");
 const { programs } = JSON.parse(readFileSync(0, "utf8"));
@@ -20,7 +29,26 @@ const { programs } = JSON.parse(readFileSync(0, "utf8"));
 let n = 0;
 const log = new Map();
 const id = () => `01K7C2Z9M4V8Q3R5T6W7X8${String(n++).padStart(4, "0")}`.slice(0, 26);
-const blocks = ["D", "P", "L", "R"].map((letter, pos) => ({ _tag: "Put", kind: "numbers", key: letter, pos, record: { letter, next: 219, until: 239 } }));
+const blocks = ["D", "A", "I", "S", "G", "N", "P", "L", "R"].map((letter, pos) => ({ _tag: "Put", kind: "numbers", key: letter, pos, record: { letter, next: 219, until: 239 } }));
+const AsyncFunction = (async () => {}).constructor;
+const utf8 = new TextEncoder();
+// PROGRAM_BODIES_LIMIT, packages/cloud/src/program-object.ts:77: the puts one program may make.
+const PROGRAM_BODIES_LIMIT = 16;
+const bodiesOf = () => {
+  let puts = 0;
+  return { async put(asked) {
+    const keys = Object.keys(asked ?? {}).toSorted().join(",");
+    const text = asked?.html ?? asked?.markdown;
+    if (typeof asked?.card !== "string" || typeof text !== "string" || (keys !== "card,html" && keys !== "card,markdown"))
+      throw new Error("bodies.put takes { card, html } or { card, markdown }, both strings");
+    if (!CARD_ID.test(asked.card)) throw new Error(bodySentences.notACard(asked.card));
+    if (++puts > PROGRAM_BODIES_LIMIT) throw new Error(`a program puts at most ${PROGRAM_BODIES_LIMIT} bodies`);
+    const bytes = utf8.encode(text);
+    if (bytes.byteLength > EVIDENCE_LIMIT_BYTES) throw new Error(bodySentences.tooLarge(bytes.byteLength));
+    if (bytes.byteLength === 0) throw new Error(bodySentences.empty);
+    return { revision: await revisionOf(bytes) };
+  } };
+};
 let mirror = applyOps(emptyMirror, blocks).mirror;
 let setup = mirror;
 
@@ -47,7 +75,10 @@ for (const [i, p] of programs.entries()) {
   if (p.fresh) mirror = setup;
   const applied = [];
   try {
-    const returned = new Function("records", `${preludeSource}\n${p.body}`)(records(applied));
+    const size = utf8.encode(p.body).byteLength;
+    if (size > PROGRAM_LIMIT_BYTES) throw new Error(`a program takes at most ${PROGRAM_LIMIT_BYTES} bytes; this one has ${size}`);
+    const source = `${preludeSource}\n${bodiesPreludeSource}\n${p.body}`;
+    const returned = await new AsyncFunction("records", "bodies", source)(records(applied), bodiesOf());
     out.push({ name: p.name, returned, applied });
   } catch (e) {
     out.push({ name: p.name, thrown: String(e?.stack ?? e) });

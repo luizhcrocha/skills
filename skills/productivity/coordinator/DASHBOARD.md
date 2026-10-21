@@ -110,7 +110,7 @@ events[]     activity log, oldest first
 
 ## The state CLI
 
-A moved team (its folder holds `cloud.json`) skips this section and records through [PROGRAMS.md](PROGRAMS.md); the `fleet ws`, `fleet preview` and `fleet brief` rows below still apply to it.
+A moved team (its folder holds `cloud.json`) skips this section and records through [PROGRAMS.md](PROGRAMS.md). Of the rows below, `fleet brief`, `fleet ws <dir> list`, a dry-run `fleet ws <dir> prune` and `fleet preview <dir> status` still apply to it; `fleet ws` refuses `add`, `split`, `trash` and `prune --apply` there, so a moved team makes a worker's workspace with `jj workspace add` (PROGRAMS.md, "What stays on the old CLI").
 
 `fleet state <scratchpad>/coordinator <command>`. Create and update share a verb: an unknown id with its required fields creates the row, a known id changes only the fields given. Timestamps are stamped for you, ids you reference are checked, and every command renders.
 
