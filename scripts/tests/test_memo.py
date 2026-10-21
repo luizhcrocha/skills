@@ -661,6 +661,42 @@ class ReadTest(MemoCase):
         note = self.note("fact", "what is the cache for, and where is it")
         self.assertIn(note, self.ok("recall", "what is it for"))
 
+    def one_topic_notes(self):
+        """More topics than the floor lets one of them stand for, a note each: (topic words, note ids)."""
+        words = [f"topic{n}word" for n in range(int(1 / memo.COVERAGE_FLOOR) + 1)]
+        return words, [self.note("fact", f"the {w} runs on fridays") for w in words]
+
+    def test_recall_says_nothing_fits_when_no_note_covers_enough_of_the_query(self):
+        words, weak = self.one_topic_notes()
+        out = self.ok("recall", *words, "--limit", "3")
+        self.assertEqual(out.splitlines(), [f"memo: nothing on {' '.join(words)!r}; try `tape search <words>` (coordinator sessions only)"])
+        self.assertFalse(any(i in out for i in weak))
+
+    def test_the_or_try_never_pads_past_the_floor(self):
+        words, weak = self.one_topic_notes()
+        strong = self.note("fact", "notes on " + " ".join(words[:-1]))
+        out = self.ok("recall", *words, "--limit", "3")
+        self.assertEqual([ln.split()[0] for ln in out.splitlines()], [strong])
+        self.assertFalse(any(i in out for i in weak))
+
+    def test_a_query_word_no_note_has_does_not_count_against_coverage(self):
+        deploy = self.note("fact", "the deploy runs on fridays")
+        self.note("fact", "the cache lives under home")
+        out = self.ok("recall", "deploy", *(f"zq{n}nothing" for n in range(int(1 / memo.COVERAGE_FLOOR) + 1)))
+        self.assertIn(deploy, out)
+
+    def test_stopwords_count_for_the_search_but_not_for_coverage(self):
+        deploy = self.note("fact", "the deploy runs on fridays")
+        chatter = self.note("fact", "what is it for, and where is the rest")
+        out = self.ok("recall", "what", "is", "the", "rollout", "of", "deploy", "for")
+        self.assertIn(deploy, out)
+        self.assertNotIn(chatter, out, "a note that shares only stopwords with the query covers none of it")
+
+    def test_a_query_whose_content_terms_no_note_has_finds_nothing_on_its_stopwords(self):
+        self.note("fact", "what is it")
+        out = self.ok("recall", "what", "is", "kubernetes")
+        self.assertTrue(out.startswith("memo: nothing on 'what is kubernetes'"), out)
+
     def test_recall_searches_every_term_of_a_long_query(self):
         thirteenth = self.note("fact", "mike is the thirteenth word")
         out = self.ok("recall", "alfa bravo charlie delta echo foxtrot golf hotel india juliett kilo lima mike")
