@@ -4,7 +4,7 @@
  * object, add the exact rules it lacks to `permissions.allow` with every other key and entry kept in order, under a
  * lock directory beside it (Bun has no flock; the plugin's hook takes the same one), written whole by a rename.
  */
-import { chmodSync, mkdirSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fchmodSync, mkdirSync, openSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -152,7 +152,9 @@ export function releaseLock(lock: string): void {
 }
 
 /**
- * Write `text` to `file` whole: a scratch file beside it, with the file's mode when it has one, renamed over it. With
+ * Write `text` to `file` whole: a scratch file beside it, with the file's mode when it has one, renamed over it. The
+ * scratch file is made fresh, whatever was at its name removed first and the new one opened `O_EXCL` and
+ * `O_NOFOLLOW`, so nothing planted there (a symlink, a FIFO) is written through or hangs the write. With
  * `read` (the text the caller read the file as, undefined when there was none), the file is read again just before
  * the rename, and one another writer changed since (Claude Code and an editor take no lock) is left as it is: the
  * write throws and nothing is written. The scratch file never stays. `beforeRename` is a test's seam.
@@ -161,12 +163,19 @@ export function writeAtomic(file: string, text: string, read?: { readonly text: 
   const scratch = join(dirname(file), `.${String(process.pid)}.${basename(file)}.tmp`);
 
   try {
-    writeFileSync(scratch, text, "utf8");
+    rmSync(scratch, { force: true });
+    const fd = openSync(scratch, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o666);
 
     try {
-      chmodSync(scratch, statSync(file).mode & 0o7777);
-    } catch {
-      // A new file keeps the mode it was made with.
+      writeFileSync(fd, text, "utf8");
+
+      try {
+        fchmodSync(fd, statSync(file).mode & 0o7777);
+      } catch {
+        // A new file keeps the mode it was made with.
+      }
+    } finally {
+      closeSync(fd);
     }
 
     beforeRename?.();

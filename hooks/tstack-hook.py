@@ -2351,15 +2351,18 @@ def _grant_lines(raw, seen=None):
     return lines
 
 
-def _recorded_grant(entry, ended):
+def _recorded_grant(entry, ended, kept, line_why=None):
     """A grant as the hook reads it, from its entry on the record of issued grants: `turn` its `n`, `over` whether
-    it is on the record of take-backs, `ended` the why recorded there (None while it stands)."""
+    it is on a record of take-backs (`ended`), or an old hook took it back as a line (`line_why`, _old_line_why),
+    `ended` the why recorded there (None while it stands), `kept` whether its take-back is one of `kept`, which make a
+    rule still in its file the owner's (_read_ended)."""
     why = _ended_why(ended, entry)
+    why = line_why if why is None else why
     return {"op": "grant", "decision": entry["decision"], "rule": entry["rule"], "file": entry["file"], "at": entry["at"],
             "rev": entry.get("rev") if isinstance(entry.get("rev"), str) else None,
             "ref": entry.get("ref") if isinstance(entry.get("ref"), str) else None, "runs": entry.get("runs"),
             "turn": entry["n"] if isinstance(entry.get("n"), int) else 1, "over": why is not None,
-            "ended": why, "issued": entry}
+            "kept": _ended_why(kept, entry) is not None, "ended": why, "issued": entry}
 
 
 def _latest_grants(hook, raw):
@@ -2372,8 +2375,9 @@ def _latest_grants(hook, raw):
     made, with a later `at` and no `runs`). A line names a root to read, and a line of a (file, rule) that has no entry on record is kept as a
     grant on no record (`issued` None), which grants nothing and is taken back at once: a grant of a hub that wrote
     no record, or a forged line, whose failure is fewer allowed calls; its take-back is marked `line` (_line_ended).
-    Each grant has `over` (on the root's record of take-backs, _ended_of), `ended` (the why recorded there), `turn` (its `n`), and `runs` and `ref`, all from
-    the record, never from a line."""
+    Each grant has `over` (on a record of take-backs of the root, _ended_of), `kept` (its rule, while in its file, the
+    owner's: _kept_of), `ended` (the why recorded there), `turn` (its `n`), and `runs` and `ref`, all from the record,
+    never from a line."""
     lines = _grant_lines(raw, hook._grant_files)
     root = _session_root(hook)
     if root and ("root", root) not in hook._grant_files:
@@ -2388,16 +2392,18 @@ def _latest_grants(hook, raw):
         newest = {(entry["file"], entry["rule"]): entry for entry in _issued_of(hook, place)}
         for key, entry in newest.items():
             if key not in latest:
-                latest[key] = _recorded_grant(entry, _ended_of(hook, entry["file"]))
+                latest[key] = _recorded_grant(entry, _ended_of(hook, entry["file"]), _kept_of(hook, entry["file"]),
+                                              _old_line_why(hook, entry))
     for file, entry in lines:
         key = (file, entry["rule"])
         if entry.get("op") != "grant" or (key in latest and latest[key]["issued"] is not None):
             continue
-        ended = _ended_of(hook, file)
-        over = _ended_why(ended, dict(entry, file=file), line=True) is not None or _line_ended(ended, dict(entry, file=file))
+        named = dict(entry, file=file)
+        over, kept = (_ended_why(e, named, line=True) is not None or _line_ended(e, named)
+                      for e in (_ended_of(hook, file), _kept_of(hook, file)))
         if key not in latest or not over:
             latest[key] = dict(entry, file=file, ref=entry.get("ref") if isinstance(entry.get("ref"), str) else None,
-                               ended=None, turn=1, over=over, issued=None, runs=None)
+                               ended=None, turn=1, over=over, kept=kept, issued=None, runs=None)
     return list(latest.values())
 
 
@@ -2637,25 +2643,121 @@ def _line_ended(ended, line):
     return ("line",) + _ended_key(line) in ended
 
 
-def _read_ended(home, file):
-    """The take-backs on record for `file`'s root (_ended_in); none when the record is not there, cannot be read or does
-    not parse (the sweep then errs toward fewer allowed calls, as everywhere)."""
-    record = _record_file(home, file)
-    if record is None:
+def _tree_record(file, name):
+    """The tree's copy of record `name` of grant file `file`'s root, <root>/.claude/hooks/<name>: where the records sat
+    before, and where the one-time import reads them (grant-records.ts `treeRecordOf`). Temporary, until step
+    grant-dual-drop: a session on the old hook reads and writes only this copy."""
+    return os.path.join(os.path.dirname(file), "hooks", name)
+
+
+def _tree_folder(file):
+    """Temporary, until step grant-dual-drop: the tree's hooks folder of grant file `file`'s root (_tree_record),
+    opened O_NOFOLLOW as a folder; None when it is not there or is anything else, a symlink included."""
+    try:
+        return os.open(os.path.dirname(_tree_record(file, ENDED_RECORD)), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+
+
+def _tree_text(folder, name):
+    """The text of record `name` in the tree's hooks folder open at `folder` (_tree_folder); None when it is not there.
+    OSError when it is anything but a regular file: opened O_NOFOLLOW, and O_NONBLOCK so a FIFO swapped in does not
+    hang the open, then checked again on the open file (the host's readTreeRecord)."""
+    import stat
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder)
+    except FileNotFoundError:
+        return None
+    with open(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"{name} is not a regular file")
+        return f.read().decode("utf-8")
+
+
+def _tree_ended(file):
+    """Temporary, until step grant-dual-drop: the take-backs on the tree's copy of the record (_tree_record), where a
+    session on the old hook puts its own; none when it is not a regular file in a plain folder (never through a
+    symlink), cannot be read or does not parse. Each ends its grant; it makes a rule the owner's only as _rules_gone
+    says (grant-records.ts, "The transition")."""
+    folder = _tree_folder(file)
+    if folder is None:
         return {}
     try:
-        with open(record, encoding="utf-8") as f:
-            return _ended_in(json.load(f))
+        text = _tree_text(folder, ENDED_RECORD)
+        return {} if text is None else _ended_in(json.loads(text))
     except (OSError, ValueError):
         return {}
+    finally:
+        os.close(folder)
+
+
+def _rules_gone(file, ended):
+    """Of the tree's take-backs the folder's record lacks (`ended`), those whose rule is in none of the root's grant
+    files, read under the settings lock: the old hook took the rule out before it put the take-back on record, and the
+    tree's copy is any checkout's or agent's to write, so one whose rule is still there makes it no owner's rule, and
+    the sweep takes it as ever: else a forged take-back of a one-time grant made its rule the owner's, for good. None when the
+    lock is not had or a grant file does not parse."""
+    if not ended:
+        return {}
+    try:
+        lock = _lock_settings(file)
+    except (OSError, TimeoutError):
+        return {}
+    try:
+        allows = _held_rules(os.path.dirname(file))
+    finally:
+        try:
+            os.rmdir(lock)
+        except OSError:
+            pass
+    if allows is None:
+        return {}
+    return {key: why for key, why in ended.items() if not any(key[-3] in allow for allow in allows)}
+
+
+def _read_ended(home, file):
+    """The take-backs on record for `file`'s root (_ended_in), three ways: every one, the folder's record's with the
+    tree's copy's (_tree_ended), each of which ends its grant, so it may not run; those that make a rule still in its
+    file the owner's, which no sweep takes: the folder's, with those of the tree's copy that _rules_gone keeps; and the
+    why of each take-back marked `line` on the tree's copy alone, by its file, decision, rule and granted `at`
+    (_old_line_why). None from a record that is not there, cannot be read or does not parse (the sweep then errs toward
+    fewer allowed calls, as everywhere)."""
+    record = _record_file(home, file)
+    ended = {}
+    if record is not None:
+        try:
+            with open(record, encoding="utf-8") as f:
+                ended = _ended_in(json.load(f))
+        except (OSError, ValueError):
+            pass
+    tree = {key: why for key, why in _tree_ended(file).items() if key not in ended}
+    lines = {key[1:5]: why for key, why in tree.items() if key[0] == "line"}
+    return {**tree, **ended}, {**_rules_gone(file, tree), **ended}, lines
 
 
 def _ended_of(hook, file):
-    """The take-backs on record for a grant file's root, read once per hook."""
+    """Every take-back on record for a grant file's root (_read_ended), read once per hook."""
     root = os.path.dirname(file)
     if root not in hook._ended:
         hook._ended[root] = _read_ended(hook.env.get("HOME"), file)
-    return hook._ended[root]
+    return hook._ended[root][0]
+
+
+def _kept_of(hook, file):
+    """The take-backs on record for a grant file's root that make a rule still in its file the owner's
+    (_read_ended)."""
+    _ended_of(hook, file)
+    return hook._ended[os.path.dirname(file)][1]
+
+
+def _old_line_why(hook, entry):
+    """Temporary, until step grant-dual-drop: the why of a take-back marked `line` on the tree's copy of the record of
+    take-backs alone with the file, decision, rule and `at` of `entry`, a grant on the record of issued grants; None
+    when there is none. A session on the old hook finds no grant issued since this release on the tree's record, so it
+    takes a new grant back as a line on no record, and only such a mark names it. It ends the grant, so it may not
+    run; it never makes its rule the owner's (_kept_of): a line's fields are any agent's to copy."""
+    _ended_of(hook, entry["file"])
+    return hook._ended[os.path.dirname(entry["file"])][2].get((entry["file"], entry["decision"], entry["rule"], entry["at"]))
 
 
 def _issued_file(home, file):
@@ -2709,9 +2811,16 @@ def _stands(hook, grant):
 
 
 def _live(hook, grant):
-    """Whether the grant stands: its rule in its file, and no take-back of it on record. A rule in the file past a
-    take-back on record is the owner's, whoever wrote it there, and no grant."""
+    """Whether the grant stands, and may run: its rule in its file, and no take-back of it on either record."""
     return not grant["over"] and _stands(hook, grant)
+
+
+def _held(hook, grant):
+    """Whether the grant's rule, in its file, is still the grant's, for the sweep to take: no take-back makes it the
+    owner's (_kept_of). A rule in the file past such a take-back is the owner's, whoever wrote it there, and no grant;
+    one past a take-back on the tree's copy alone is neither: its grant may not run, and the sweep takes it at its
+    30 minutes."""
+    return not grant["kept"] and _stands(hook, grant)
 
 
 def _bash_call(rule):
@@ -3011,8 +3120,9 @@ def _list_of(grant):
 def _due_grants(hook, raw, used, now, failed=False, void=None):
     """(grant, why) for each standing grant to end now: `used` (its call ran), `revoked` (a call of its list failed,
     or the list is `void`: a list is a sequence, and what comes after a failure was allowed for another state of
-    things), `expired` (30 minutes after the `at` on the hub's record of issued grants, or on no such record)."""
-    standing = [g for g in _latest_grants(hook, raw) if _live(hook, g)]
+    things), `expired` (30 minutes after the `at` on the hub's record of issued grants, or on no such record). A grant
+    is the sweep's while its rule is (_held), ended or not."""
+    standing = [g for g in _latest_grants(hook, raw) if _held(hook, g)]
     spent = _spent(standing, used)
     lost = {_list_of(g) for g in spent if failed} | ({void} if void else set())
     due = []
@@ -3324,6 +3434,10 @@ def _alone_by_settings(hook, command, unread):
 
 def _alone_by_grants(hook, d, raw, command, now):
     grants = [g for g in _latest_grants(hook, raw) if _bash_call(g["rule"]) is not None]
+    for grant in grants:
+        call = _bash_call(grant["rule"])
+        if grant["over"] and _held(hook, grant) and (_is_call(command, call) or _holds_call(command, call)):
+            return Deny(_taken_back(grant))
     standing = [g for g in grants if _live(hook, g)]
     mine = [g for g in standing if _is_call(command, _bash_call(g["rule"]))]
     if not mine:
@@ -3352,6 +3466,14 @@ def _alone_by_grants(hook, d, raw, command, now):
         if taken:
             return Deny(f"tstack: the user allowed this call once ({grant.get('ref') or grant['decision']}), and {taken}. {ASK_AGAIN}")
     return None
+
+
+def _taken_back(grant):
+    """The denial of a call of a grant taken back whose rule is still the grant's (_held): a take-back on the tree's
+    copy alone, whose rule is there again."""
+    return (f"tstack: the user allowed this call once ({grant.get('ref') or grant['decision']}), and the grant is on record "
+            f"as taken back ({grant['ended'] or 'ended'}), though its rule is in {grant['file']} again: a grant taken "
+            f"back runs no more, and the sweep takes the rule. {ASK_AGAIN}")
 
 
 def _earlier_calls(hook, grant):
@@ -3456,7 +3578,7 @@ def _alone_without_fleet(hook, command):
     now, denial = fleet_now(hook.env), None
     for grant in _latest_grants(hook, b""):
         call = _bash_call(grant["rule"])
-        if not call or grant["issued"] is None or not _live(hook, grant):
+        if not call or grant["issued"] is None or not _held(hook, grant):
             continue
         ref, runs = grant["ref"] or grant["decision"], _is_call(command, call) or _holds_call(command, call)
         at = _issued_at(grant)
@@ -3472,6 +3594,8 @@ def _alone_without_fleet(hook, command):
             if runs and denial is None:
                 denial = Deny(f"tstack: the user allowed this call once ({ref}), and a one-time grant lasts "
                               f"{GRANT_TTL_S // 60} minutes: this one is over. {ASK_AGAIN}")
+        elif runs and denial is None and grant["over"]:
+            denial = Deny(_taken_back(grant))
         elif runs and denial is None:
             denial = Deny(f"tstack: this command runs a call the user allowed once ({ref}): `{call}`, and this session "
                           "works for no fleet whose record could hold it to one run. Run it from the fleet's own session.")
@@ -5153,7 +5277,8 @@ def _tracked(root, paths):
 def grant_records_tracked(hook):
     """SessionStart: once a session, a warning when the session root's tree still holds a grant record that jj or git
     tracks. The records live outside the tree now (_records_dir); a tracked copy is one a checkout rewrites, and it
-    is read only by the one-time import. Silent when there is none, and costs no process then."""
+    is read only by the one-time import and, until step grant-dual-drop, by the transition (_tree_ended); only a
+    session on the old hook writes there. Silent when there is none, and costs no process then."""
     root = _session_root(hook)
     if not root:
         return None
@@ -5169,7 +5294,9 @@ def grant_records_tracked(hook):
     untrack = " ".join(shlex.quote(p) for p in tracked)
     return (f"# tstack grant records\n{root}: {' and '.join(tracked)} {'is' if len(tracked) == 1 else 'are'} tracked, "
             "so a checkout (`jj workspace update-stale`, `jj new`) can put an older copy there. The hub and the hook keep a "
-            "root's grant records in ~/.claude/tstack-grants/ now and never read the tree's copy again. Tell the user; the "
+            "root's grant records in ~/.claude/tstack-grants/ now and write nothing to the tree's copy; until every session "
+            "runs the new hook, the hook runs no grant a take-back there ends, so a checkout there revives no grant. "
+            "Tell the user; the "
             f"cleanup is theirs: add `.claude/hooks/tstack-grants-*.json` to {root}/.gitignore, then run "
             f"`{'jj file untrack' if jj_workspace(root) else 'git rm --cached'} {untrack}` there.")
 

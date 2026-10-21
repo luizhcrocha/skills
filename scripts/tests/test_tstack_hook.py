@@ -3210,9 +3210,10 @@ class GrantRecordsTest(GrantCase):
         self.jj("workspace", "add", str(self.tmp / "b"))
         self.jj("describe", "-r", "default@", "-m", "rewritten elsewhere", cwd=self.tmp / "b")
         self.grant()
+        # An older tree holds only older take-backs: one of this grant would end it (the transition's union).
         self.tree("tstack-grants-ended.json").write_text(json.dumps({"ended": [
-            {"file": str(self.settings), "decision": "p-1a2b3c4d", "rule": self.RULE,
-             "granted": "2026-01-05T09:00:00+00:00", "at": "2026-01-05T09:00:00+00:00", "why": "used"}]}))
+            {"file": str(self.settings), "decision": "p-0", "rule": self.RULE,
+             "granted": "2026-01-04T09:00:00+00:00", "at": "2026-01-04T09:01:00+00:00", "why": "used"}]}))
         self.jj("workspace", "update-stale")
         self.assertEqual(json.loads(self.tree("tstack-grants-issued.json").read_text()), {"issued": []})
         self.run_tool("ls", now="2026-01-05T09:10:00+00:00")
@@ -3250,7 +3251,7 @@ class GrantRecordsTest(GrantCase):
         self.assertEqual([e["decision"] for e in json.loads(self.issued.read_text())["issued"]], ["p-old", "p-0", "p-1", "p-2"])
         self.assertEqual([(e["decision"], e["why"]) for e in json.loads(self.record.read_text())["ended"]],
                          [("p-old", "used"), ("p-1", "used")])
-        self.assertEqual((self.tree("tstack-grants-ended.json").read_text()), ended_text)
+        self.assertEqual(self.tree("tstack-grants-ended.json").read_text(), ended_text)
 
     def test_a_take_back_forged_on_the_tree_whose_rule_is_still_there_is_not_imported(self):
         """The tree's copy is any checkout's or agent's to write, and a take-back is written once its rule is out:
@@ -3452,6 +3453,98 @@ class GrantRecordsTest(GrantCase):
         told = self.session_start(root=worktree)
         self.assertIn(f"{worktree}: .claude/hooks/tstack-grants-issued.json is tracked", told)
         self.assertIn("`git rm --cached .claude/hooks/tstack-grants-issued.json`", told)
+
+    def test_a_take_back_forged_on_the_trees_record_leaves_no_lasting_rule(self):
+        """Temporary, until step grant-dual-drop. The tree's copy of the record of take-backs is any checkout's or
+        agent's to write: a take-back there of a grant whose rule is still in its file is no old hook's, which takes the
+        rule out first, and ends nothing. Counted, it made the one-time grant's rule the owner's, for good."""
+        self.grant()
+        self.tree("x").parent.mkdir()
+        self.tree("tstack-grants-ended.json").write_text(json.dumps({"ended": [
+            {"file": str(self.settings), "decision": "p-1a2b3c4d", "rule": self.RULE,
+             "granted": "2026-01-05T09:00:00+00:00", "at": "2026-01-05T09:05:00+00:00", "why": "used"}]}))
+        self.run_tool("ls", now="2026-01-05T09:31:00+00:00")
+        self.assertEqual(self.allow(), ["Bash(ls)", "Bash(üñí)"])
+        self.assertEqual([e["why"] for e in json.loads(self.record.read_text())["ended"]], ["expired"])
+
+    def trees_take_back(self, file, rule):
+        self.tree("x").parent.mkdir()
+        self.tree("tstack-grants-ended.json").write_text(json.dumps({"ended": [
+            {"file": str(file), "decision": "p-1a2b3c4d", "rule": rule, "granted": "2026-01-05T09:00:00+00:00",
+             "at": "2026-01-05T09:02:00+00:00", "why": "used"}]}))
+
+    def test_an_agent_grant_taken_back_on_the_trees_record_alone_runs_no_more_and_its_rule_is_swept(self):
+        """Temporary, until step grant-dual-drop. A take-back on the tree's copy, where a session on the old hook puts
+        its own, ends its grant though its rule is in the file again (a checkout put it back, or the take-back is
+        forged): the spawn is not let through. It makes the rule no owner's: the sweep takes it at the 30 minutes."""
+        spawn = {"subagent_type": "general-purpose", "description": "d", "prompt": "p", "model": "sonnet", "effort": "medium"}
+        rule = "Agent(" + json.dumps(spawn, sort_keys=True, separators=(",", ":")) + ")"
+        agents = self.settings.parent / "tstack-grants.json"
+        agents.write_text(json.dumps({"permissions": {"allow": [rule]}}))
+        self.grant(rule=rule, file=agents)
+        env = {"FLEET_NOW": "2026-01-05T09:05:00+00:00", "TZ": "UTC", "CLAUDE_PROJECT_DIR": str(self.settings.parent.parent)}
+
+        def spawned():
+            r = self.hook("PreToolUse", self.payload("PreToolUse", tool_name="Agent", tool_input=spawn), env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return r.stdout
+
+        self.assertIn('"allow"', spawned())
+        self.trees_take_back(agents, rule)
+        self.assertNotIn('"allow"', spawned())
+        self.run_tool("ls", now="2026-01-05T09:31:00+00:00")
+        self.assertEqual(json.loads(agents.read_text())["permissions"]["allow"], [])
+        self.assertEqual([e["why"] for e in json.loads(self.record.read_text())["ended"]], ["expired"])
+
+    def test_a_bash_grant_taken_back_on_the_trees_record_alone_runs_no_more(self):
+        """Temporary, until step grant-dual-drop: as an Agent grant. Its rule would let the call through, so the hook
+        refuses it, alone or inside more."""
+        self.grant()
+        self.trees_take_back(self.settings, self.RULE)
+        for command in ("git push --force origin HEAD:main", "ls; git push --force origin HEAD:main"):
+            payload = self.payload("PreToolUse", tool_name="Bash", tool_input={"command": command})
+            r = self.hook("PreToolUse", payload, env={"FLEET_NOW": "2026-01-05T09:05:00+00:00", "TZ": "UTC"})
+            out = json.loads(r.stdout)["hookSpecificOutput"]
+            self.assertEqual(out["permissionDecision"], "deny", command)
+            self.assertIn("taken back (used)", out["permissionDecisionReason"])
+        self.assertIn(self.RULE, self.allow())
+
+    def test_a_grant_an_old_hook_took_back_as_a_line_runs_no_more_and_its_rule_is_swept(self):
+        """Temporary, until step grant-dual-drop. A session on the old hook finds no grant issued since the release on
+        the tree's record, and takes it back as a line on no record: that take-back, with the grant's file, decision,
+        rule and `at`, whatever its rev, ends the grant. It never makes the rule the owner's: the sweep takes it at the
+        30 minutes. One with another `at` ends nothing."""
+        self.grant(rev="r1")
+        self.tree("x").parent.mkdir()
+        line = {"file": str(self.settings), "decision": "p-1a2b3c4d", "rule": self.RULE, "granted": "2026-01-05T09:00:00+00:00",
+                "line": True, "at": "2026-01-05T09:02:00+00:00", "why": "used"}
+        command = "git push --force origin HEAD:main"
+        payload = self.payload("PreToolUse", tool_name="Bash", tool_input={"command": command})
+        for take, denied in ((line, "taken back (used)"), (dict(line, granted="2026-01-05T08:59:00+00:00"), None)):
+            self.tree("tstack-grants-ended.json").write_text(json.dumps({"ended": [take]}))
+            r = self.hook("PreToolUse", payload, env={"FLEET_NOW": "2026-01-05T09:05:00+00:00", "TZ": "UTC"})
+            out = json.loads(r.stdout)["hookSpecificOutput"] if r.stdout.strip() else {}
+            self.assertEqual(out.get("permissionDecision") == "deny", denied is not None, out)
+            if denied:
+                self.assertIn(denied, out["permissionDecisionReason"])
+        self.run_tool("ls", now="2026-01-05T09:29:00+00:00")
+        self.assertIn(self.RULE, self.allow())
+        self.run_tool("ls", now="2026-01-05T09:31:00+00:00")
+        self.assertNotIn(self.RULE, self.allow())
+        self.assertEqual([e["why"] for e in json.loads(self.record.read_text())["ended"]], ["expired"])
+
+    def test_a_fifo_at_the_trees_record_of_take_backs_hangs_no_hook(self):
+        """The tree's copy is opened O_NOFOLLOW and O_NONBLOCK, then checked on the open file: a FIFO there is no
+        record, and the grant is taken back as ever."""
+        self.tree("x").parent.mkdir()
+        os.mkfifo(self.tree("tstack-grants-ended.json"))
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main")
+        self.assertNotIn(self.RULE, self.allow())
+        self.assertEqual([e["why"] for e in json.loads(self.record.read_text())["ended"]], ["used"])
+        module = load_hook(onepw=False)
+        self.assertEqual(module._tree_ended(str(self.settings)), {})
+        self.assertFalse(self.tree("tstack-grants-ended.json").is_file())
 
     def session_start(self, source="startup", root=None):
         root = root or self.settings.parent.parent
@@ -4391,6 +4484,36 @@ class AgentGrantTest(HookCase):
         (records / "tstack-grants-ended.json").write_text(json.dumps({"ended": [
             {"file": os.path.realpath(self.file), "decision": "p-2", "rule": self.rule(self.SPAWN), "granted": json.loads((records / "tstack-grants-issued.json").read_text())["issued"][-1]["at"], "at": "x", "why": "used"}]}))
         self.assertEqual(self.spawn(), "")
+
+    def test_a_checkout_that_rolls_the_trees_take_backs_back_revives_no_grant(self):
+        """Temporary, until step grant-dual-drop: the hook reads the union of both records of take-backs. A session on
+        the old hook ran the first call of a list, took its rule out and put its take-back on the tree's record alone:
+        the second call takes its turn. With the take-back on the folder's record too, a checkout that rolls the tree's
+        copy back revives no grant: the owner's identical first rule is no grant, and the second keeps its turn."""
+        second = {**self.SPAWN, "description": "the second call"}
+        first_rule, second_rule = self.rule(self.SPAWN), self.rule(second)
+        import datetime
+        at = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        records = records_dir(self.env["HOME"], self.project)
+        records.mkdir(parents=True)
+        (records / "tstack-grants-issued.json").write_text(json.dumps({"issued": [
+            {"decision": "p-1", "ref": "P1", "rule": rule, "file": str(self.file), "at": at, "n": n, "of": 2}
+            for n, rule in ((1, first_rule), (2, second_rule))]}))
+        taken = json.dumps({"ended": [{"file": os.path.realpath(self.file), "decision": "p-1", "rule": first_rule,
+                                       "granted": at, "at": "x", "why": "used"}]})
+        tree = self.project / ".claude" / "hooks" / "tstack-grants-ended.json"
+        tree.parent.mkdir()
+        tree.write_text(taken)
+        self.file.write_text(json.dumps({"permissions": {"allow": [second_rule]}}))
+        self.assertIn('"allow"', self.spawn(second))
+        (records / "tstack-grants-ended.json").write_text(taken)
+        self.file.write_text(json.dumps({"permissions": {"allow": [first_rule, second_rule]}}))
+        tree.write_text(json.dumps({"ended": []}))
+        self.assertEqual(self.spawn(), "")
+        self.assertIn('"allow"', self.spawn(second))
+        tree.unlink()
+        self.assertEqual(self.spawn(), "")
+        self.assertIn('"allow"', self.spawn(second))
 
     def test_anything_else_says_nothing(self):
         self.file.write_text(json.dumps({"permissions": {"allow": [self.rule(self.SPAWN)]}}))

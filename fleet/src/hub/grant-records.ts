@@ -37,9 +37,27 @@
  * already, `EEXIST`, is another importer's: it stops), and links each copy in, keeping a record a writer put there
  * first. Never a rename of the whole folder: rename(2) replaces an empty folder, so a late importer could swap its
  * copy in over a writer's. With the lock not had in 2 s, or a root with no `.claude`, there is no record for now. From
- * then on the tree's copies are never read or written: not one a later checkout puts there, whose take-backs and
- * grants are older than the folder's. The hook (`_record_at`) and the office host import the same way. The hook warns
- * when jj or git still tracks a tree's copy, and says how to stop tracking it.
+ * then on the tree's copies are never read or written, but for the transition below: not one a later checkout puts
+ * there, whose take-backs and grants are older than the folder's. The hook (`_record_at`) and the office host import
+ * the same way. The hook warns when jj or git still tracks a tree's copy, and says how to stop tracking it.
+ *
+ * The transition, temporary (dropped at step grant-dual-drop, once every fleet reports a restart): a session that
+ * started before this release runs the old hook, which reads only the tree's copies. This release writes none of them
+ * at all: the hub, the hook and the host write a root's records in its folder alone, never in its tree, since the tree
+ * is a folder any agent can write to, and Node has no rename relative to an open folder, so a `.claude/hooks` swapped
+ * for a symlink between a check and the rename could replace the folder's record of issued grants or write into
+ * another root's tree. So an old-hook session finds no grant issued since the release and refuses it as "on no record
+ * of the hub's grants" until it restarts: fewer calls, and the release asks for every session to restart. The tree's
+ * copies are only read: by the import, and by the union of take-backs. The hook lets no grant run that either record
+ * of take-backs ends, the folder's or the tree's, which an old-hook session writes, so a grant one of those used
+ * cannot run again in a new one. But a take-back on the tree's copy alone makes a rule standing in its file the
+ * owner's, which no sweep takes, only while its rule is in none of the root's grant files, read under the lock: the
+ * old hook takes the rule out before it puts the take-back on record, and the tree's copy is any checkout's or
+ * agent's to write, so one whose rule is still there would make a one-time grant's rule lasting. So an owner's
+ * identical rule put back after an old-hook take-back is taken at the grant's 30 minutes: fewer calls. An old-hook
+ * session misses a take-back the new ones write, and takes an owner's identical rule put back after it at the grant's
+ * 30 minutes: fewer calls again. The union only ever ends a grant: a checkout that rolls the tree's copy back takes no
+ * take-back out of the folder's.
  */
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -54,6 +72,21 @@ const RECORDS = "tstack-grants";
 /** The records folder of the root whose real path is `root`, for the user whose home is `home`. */
 export function recordsDir(home: string, root: string): string {
   return join(home, ".claude", RECORDS, createHash("sha256").update(root, "utf8").digest("hex"));
+}
+
+/** The tree's copy of record `name` of grant file `file`'s root, `<root>/.claude/hooks/<name>`: where the records sat
+ * before, and where the import and the transition above read them. Only the old hook writes it. */
+export function treeRecordOf(file: string, name: string): string {
+  return join(dirname(file), "hooks", name);
+}
+
+/** Temporary, until step grant-dual-drop: the text of the tree's copy of record `name` of grant file `file`'s root
+ * (`treeRecordOf`), as the host's `readTreeRecord` reads it: none unless `hooks` is a folder and the record a regular
+ * file, neither a symlink (`regularBytes`). */
+export function readTreeRecord(file: string, name: string): string | undefined {
+  const tree = treeRecordOf(file, name);
+
+  return isDir(dirname(tree)) ? regularBytes(tree)?.toString("utf8") : undefined;
 }
 
 /** The names of a root's records. */

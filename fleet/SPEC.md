@@ -2754,7 +2754,22 @@ run of each exact command shown; the next run of the same command asks again.
   take-backs only those whose rule is in none of the root's grant files (one whose rule is there is forged: the
   take-back is written once the rule is out), makes the
   folder with `mkdir` and links each copy in, never renaming a whole folder; with the lock not had in 2 s, or no
-  `.claude`, there is no record for now). Nothing writes the tree's copy any more; the
+  `.claude`, there is no record for now). **The transition** (temporary: dropped at step grant-dual-drop, once every
+  fleet reports a restart): a session started before the move runs the old hook, which reads only
+  `<root>/.claude/hooks/`. Nothing of this release writes there: the hub, the hook and the host write a root's
+  records in its folder alone. Node has no rename relative to an open folder, so a `.claude/hooks` swapped for a
+  symlink between a check and the rename could replace the folder's record of issued grants or write into another
+  root's tree. So an old-hook session finds no grant issued since the release and refuses it (`on no record of the
+  hub's grants`) until it restarts: that fails closed, and the release asks for every session to restart. An
+  old-hook session also misses the take-backs the new ones write, and takes an owner's identical rule put back after
+  one at the grant's 30 minutes (fewer calls). The tree's copies are only read: by the import, and by the union of
+  take-backs. The hook lets no grant run that the folder's record of take-backs or
+  the tree's ends, the tree's being where an old-hook session writes its own; but a take-back on the tree's alone
+  makes a rule still in its file the owner's, which no sweep takes, only while that rule is in none of the root's
+  grant files, read under the settings lock (the hub and the host count it so too): the old hook takes the rule out
+  first, and a take-back forged there of a grant whose rule stands would make that rule lasting. The union only ever
+  ends a grant: a checkout that rolls the tree's copy back takes no take-back out of the folder's. Only an old-hook session writes
+  the tree's copy; the
   hook says at SessionStart, once a session, when jj or git still tracks one, with the cleanup (a
   `.gitignore` line, then `jj file untrack`).
 - **A granted call runs alone, once, in its turn** (the plugin's hook, `fleet_grant_alone`, the last

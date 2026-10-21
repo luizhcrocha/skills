@@ -2863,14 +2863,35 @@ describe("a permission's answer grants the call once", () => {
     expect(String(grant?.["at"])).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$/);
     expect(readFileSync(join(root, "grants.jsonl"), "utf8")).toBe(`${JSON.stringify(grant)}\n`);
     expect(readChat(root).map((m) => m.stored["decision"])).toEqual(["p-1a2b3c4d"]);
-    // Nothing in the tree but the rule: the records are kept outside it (grant-records.ts).
-    expect(readdirSync(join(session, ".claude")).sort()).toEqual(["settings.local.json"]);
+    // In the tree, the rule alone: the records are kept outside it (grant-records.ts).
+    expect(readdirSync(join(session, ".claude"))).toEqual(["settings.local.json"]);
     // The grant on the root's record of issued grants, where an agent can no more write than the rule itself: the
     // only `at`, `runs` and `n` the hook and the hub's expiry read.
     expect(JSON.parse(readFileSync(join(records, "tstack-grants-issued.json"), "utf8"))).toEqual({
       issued: [{ decision: "p-1a2b3c4d", ref: "P1", rule: RULE, file: settings, at: grant?.["at"], n: 1, of: 1, rev: grant?.["rev"], dir: root }],
     });
     expect(readdirSync(records)).toEqual(["tstack-grants-issued.json"]);
+  });
+
+  test("a symlink planted at a write's scratch name is not written through: the file it leads to is left as it is, and the grant is made", async () => {
+    writeFileSync(join(base, "elsewhere.json"), "{}");
+    chmodSync(join(base, "elsewhere.json"), 0o600);
+
+    symlinkSync(join(base, "elsewhere.json"), join(session, ".claude", `.${String(process.pid)}.settings.local.json.tmp`));
+    await start();
+    expect((await post(allow)).status).toBe(201);
+    expect([readFileSync(join(base, "elsewhere.json"), "utf8"), lstatSync(join(base, "elsewhere.json")).mode & 0o777]).toEqual(["{}", 0o600]);
+    expect(lstatSync(settings).isFile()).toBe(true);
+    expect(asObject(asObject(JSON.parse(readFileSync(settings, "utf8")))?.["permissions"])?.["allow"]).toEqual([RULE]);
+  });
+
+  test("a FIFO planted at a write's scratch name hangs no grant: it is removed, and the write made fresh", async () => {
+    const fifo = join(session, ".claude", `.${String(process.pid)}.settings.local.json.tmp`);
+    expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
+    await start();
+    expect((await post(allow)).status).toBe(201);
+    expect(existsSync(fifo)).toBe(false);
+    expect(asObject(asObject(JSON.parse(readFileSync(settings, "utf8")))?.["permissions"])?.["allow"]).toEqual([RULE]);
   });
 
   test("a record of issued grants that does not parse refuses the grant, and nothing is written", async () => {
@@ -3304,7 +3325,26 @@ describe("a permission's answer grants the call once", () => {
       expect(existsSync(join(session, ".claude", ".settings.local.json.lock"))).toBe(false);
     });
 
-    test("a checkout that puts an older record in the tree, or deletes it, changes no grant: the records are outside it, and the tree's copy is never written", async () => {
+    test("a grant writes nothing into the tree's .claude/hooks: a folder there is left byte for byte, and none is made", async () => {
+      // Node has no rename relative to an open folder: a .claude/hooks swapped for a symlink between a check and the
+      // rename sent a write of the tree's copy over the folder's record, or into another root's tree.
+      const hooks = join(session, ".claude", "hooks");
+      const snapshot = (): [string, string][] => readdirSync(hooks).sort().map((name) => [name, readFileSync(join(hooks, name), "utf8")]);
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
+      expect(await grantAnswer(answer())).not.toHaveProperty("refused");
+      expect([existsSync(hooks), readdirSync(join(session, ".claude"))]).toEqual([false, ["settings.local.json"]]);
+      mkdirSync(hooks);
+      writeFileSync(join(hooks, "tstack-grants-issued.json"), JSON.stringify({ note: "kept", issued: [] }));
+      writeFileSync(join(hooks, "tstack-grants-ended.json"), JSON.stringify({ ended: [] }));
+      const before = snapshot();
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
+      withRows(permission(), permission({ id: "p-5e6f7a8b", ref: "P2" }));
+      expect(await grantAnswer(answer({ decision: "p-5e6f7a8b", at: "2026-01-01T00:01:00+00:00" }))).not.toHaveProperty("refused");
+      expect([snapshot(), allowed()]).toEqual([before, JSON.stringify(["Bash(ls)", RULE])]);
+      expect((asArray(asObject(JSON.parse(readFileSync(join(records, "tstack-grants-issued.json"), "utf8")))?.["issued"]) ?? []).map((e) => asObject(e)?.["at"])).toEqual([at, "2026-01-01T00:01:00+00:00"]);
+    });
+
+    test("a checkout that puts an older record in the tree, or deletes it, changes no grant: the records are outside it, and nothing writes the tree's copy", async () => {
       // 2026-10-21: in a root jj tracks the records in, `jj workspace update-stale` put an older tree's copy back over
       // them, and the hook took back a grant the user had allowed. A `jj new` onto a commit without them deletes both.
       writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
@@ -3312,7 +3352,8 @@ describe("a permission's answer grants the call once", () => {
       const tree = join(session, ".claude", "hooks");
       mkdirSync(tree);
       const older = JSON.stringify({ issued: [] });
-      const ended = { ended: [{ file: settings, decision: "p-1a2b3c4d", rule: RULE, granted: at, at, why: "used" }] };
+      // An older tree holds only older take-backs: one of this grant would end it (the transition's union).
+      const ended = { ended: [{ file: settings, decision: "p-0", rule: RULE, granted: "2025-12-31T00:00:00+00:00", at: "2025-12-31T00:01:00+00:00", why: "used" }] };
       writeFileSync(join(tree, "tstack-grants-issued.json"), older);
       writeFileSync(join(tree, "tstack-grants-ended.json"), JSON.stringify(ended));
       expect(await expire("2026-01-01T00:29:00+00:00")).toEqual([]);
@@ -3324,6 +3365,42 @@ describe("a permission's answer grants the call once", () => {
       expect(await expire("2026-01-01T00:31:00+00:00")).toEqual([`${RULE} in ${settings}`]);
       expect([readdirSync(tree), readFileSync(join(tree, "tstack-grants-issued.json"), "utf8")]).toEqual([["tstack-grants-issued.json"], older]);
       expect((asArray(asObject(JSON.parse(readFileSync(record(), "utf8")))?.["ended"]) ?? []).map((e) => asObject(e)?.["why"])).toEqual(["expired"]);
+    });
+
+    test("a take-back forged on the tree's record, its rule still in the file, ends nothing: the grant goes at its 30 minutes (temporary: grant-dual-drop)", async () => {
+      // The tree's copy is any checkout's or agent's to write, and the old hook takes the rule out before it puts its
+      // take-back there: counted, a forged one made the one-time grant's rule the owner's, for good.
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
+      expect(await grantAnswer(answer())).not.toHaveProperty("refused");
+      const tree = join(session, ".claude", "hooks");
+      mkdirSync(tree);
+      const rev = asObject((asArray(asObject(JSON.parse(readFileSync(join(records, "tstack-grants-issued.json"), "utf8")))?.["issued"]) ?? []).at(-1))?.["rev"];
+      writeFileSync(join(tree, "tstack-grants-ended.json"), JSON.stringify({ ended: [{ file: settings, decision: "p-1a2b3c4d", rule: RULE, granted: at, rev, at: "2026-01-01T00:05:00+00:00", why: "used" }] }));
+      expect(await expire("2026-01-01T00:31:00+00:00")).toEqual([`${RULE} in ${settings}`]);
+      expect(allowed()).toBe(JSON.stringify(["Bash(ls)"]));
+    });
+
+    test("a FIFO at the tree's record of take-backs hangs no sweep: opened O_NONBLOCK and checked on the open file, it is no record (temporary: grant-dual-drop)", async () => {
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
+      expect(await grantAnswer(answer())).not.toHaveProperty("refused");
+      const fifo = join(session, ".claude", "hooks", "tstack-grants-ended.json");
+      mkdirSync(dirname(fifo));
+      expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
+      expect(await expire("2026-01-01T00:31:00+00:00")).toEqual([`${RULE} in ${settings}`]);
+      expect(lstatSync(fifo).isFIFO()).toBe(true);
+      expect((asArray(asObject(JSON.parse(readFileSync(record(), "utf8")))?.["ended"]) ?? []).map((e) => asObject(e)?.["why"])).toEqual(["expired"]);
+    });
+
+    test("a checkout that rolls the tree's record of take-backs back revives no grant: the folder's take-back holds (temporary: grant-dual-drop)", async () => {
+      writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE] } }));
+      const tree = join(session, ".claude", "hooks");
+      mkdirSync(tree, { recursive: true });
+      writeFileSync(join(tree, "tstack-grants-ended.json"), JSON.stringify({ ended: [] }));
+      writeFileSync(join(root, "grants.jsonl"), issue());
+      writeFileSync(record(), JSON.stringify({ ended: [{ file: settings, decision: "p-1a2b3c4d", rule: RULE, granted: at, at: "2026-01-01T00:05:00+00:00", why: "used" }] }));
+      // The owner's rule, after the take-back: the grant is over, whatever the tree's copy says.
+      expect(await expire("2026-01-01T00:31:00+00:00")).toEqual([]);
+      expect(allowed()).toBe(JSON.stringify([RULE]));
     });
 
     test("a record kept in the tree before is imported once, every entry kept, and its grant ends at its 30 minutes", async () => {

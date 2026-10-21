@@ -47,8 +47,8 @@ import * as Option from "effect/Option";
 import { Refusal } from "../errors.ts";
 import { asArray, asObject, asString, type Json, type JsonObject } from "../json.ts";
 import { addsRule, RULE_KIND, whyNoRule } from "../ledger/rule-card.ts";
-import { ENDED_RECORD, GRANT_FILES, holdsRule, ISSUED_RECORD, recordOf, SETTINGS_LOCK } from "./grant-records.ts";
-import { lockSettings, parsed, releaseLock, Ungranted, withRules, writeAtomic } from "./settings-file.ts";
+import { ENDED_RECORD, GRANT_FILES, holdsRule, ISSUED_RECORD, readTreeRecord, recordOf, SETTINGS_LOCK, treeRecordOf } from "./grant-records.ts";
+import { lockSettings, lockSettingsSync, parsed, releaseLock, Ungranted, withRules, writeAtomic } from "./settings-file.ts";
 import { addAutoModeRule, userSettingsFile } from "./user-settings.ts";
 import { readBeats } from "../heartbeat.ts";
 import { parseLedger, type Decision } from "../ledger/model.ts";
@@ -807,20 +807,55 @@ interface Ended {
 }
 
 /** The take-backs on record for `file`; none when the record is not there, cannot be read or does not parse (a
- * sweep then errs toward fewer allowed calls, as everywhere). */
+ * sweep then errs toward fewer allowed calls, as everywhere). Temporary, until step grant-dual-drop: with those on
+ * the tree's copy (`readTreeRecord`), where a session on the old hook puts its take-backs, that `rulesGone` keeps;
+ * the union only ever ends a grant (grant-records.ts, "The transition"). `locked`: the caller holds the settings
+ * lock. */
 function endedIn(home: string | undefined, file: string, locked: boolean): Ended {
   const record = parsedRecord(recordFile(home, file, locked));
-  const ended = record instanceof Ungranted ? undefined : asArray(record["ended"]);
+  const ours = takeBacks(record);
+  const text = readTreeRecord(file, ENDED_RECORD);
+  const known = new Set(ours.map((t) => `${t.line}\n${t.key}`));
+  const theirs = takeBacks(text === undefined ? {} : parsed(treeRecordOf(file, ENDED_RECORD), text)).filter((t) => !known.has(`${t.line}\n${t.key}`));
   const taken = new Set<string>();
   const lines = new Set<string>();
 
-  for (const entry of ended ?? []) {
-    const [file, decision, rule, granted, rev] = (["file", "decision", "rule", "granted", "rev"] as const).map((key) => asString(asObject(entry)?.[key]));
-
-    if (decision !== undefined && rule !== undefined && granted !== undefined) (asObject(entry)?.["line"] === true ? lines : taken).add(endedKey(file ?? "", decision, rule, granted, rev ?? ""));
-  }
+  for (const t of [...ours, ...rulesGone(file, theirs, locked)]) (t.line ? lines : taken).add(t.key);
 
   return { taken, lines };
+}
+
+/** A take-back as `endedIn` reads it: its `endedKey`, whether it is a line's, and its rule. */
+interface TakeBack {
+  readonly key: string;
+  readonly line: boolean;
+  readonly rule: string;
+}
+
+function takeBacks(record: JsonObject | Ungranted): TakeBack[] {
+  return (record instanceof Ungranted ? [] : (asArray(record["ended"]) ?? [])).flatMap((entry) => {
+    const [file, decision, rule, granted, rev] = (["file", "decision", "rule", "granted", "rev"] as const).map((key) => asString(asObject(entry)?.[key]));
+
+    return decision !== undefined && rule !== undefined && granted !== undefined ? [{ key: endedKey(file ?? "", decision, rule, granted, rev ?? ""), line: asObject(entry)?.["line"] === true, rule }] : [];
+  });
+}
+
+/** Temporary, until step grant-dual-drop: of the tree's take-backs the folder's record lacks, those whose rule is in
+ * none of the root's grant files, read under the settings lock (taken here unless the caller holds it): the old hook
+ * takes the rule out before it puts its take-back on record, and the tree's copy is any checkout's or agent's to
+ * write, so one whose rule is still there ends nothing, and its grant keeps its bounds; else a forged take-back of a
+ * one-time grant made its rule the owner's, for good. None when the lock is not had or a grant file does not parse. */
+function rulesGone(file: string, tree: readonly TakeBack[], locked: boolean): readonly TakeBack[] {
+  if (tree.length === 0) return [];
+  const lock = locked ? undefined : lockSettingsSync(file, SETTINGS_LOCK);
+
+  if (!locked && lock === undefined) return [];
+
+  try {
+    return tree.filter((t) => !GRANT_FILES.some((name) => holdsRule(join(dirname(file), name), t.rule)));
+  } finally {
+    if (lock !== undefined) releaseLock(lock);
+  }
 }
 
 /** `record` with the take-back `ended` appended, the newest ENDED_KEPT kept, every other key as it was. */
