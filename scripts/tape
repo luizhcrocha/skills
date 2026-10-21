@@ -748,16 +748,17 @@ class Permits:
             return True
 
 
-def claude_argv(env):
+def claude_argv(env, model="haiku", prompt=None):
+    """`claude -p` for one call on model with prompt as its system prompt (tape's own SYSTEM_PROMPT by default)."""
     import shutil
     exe = shutil.which("claude", path=env.get("PATH") or os.defpath)
     if not exe:
         raise TapeError("tape: no `claude` on PATH; Phase 1b calls Haiku through `claude -p`")
     # Flags checked against `claude -p --help` (2.1.295). --safe-mode drops CLAUDE.md, plugins, hooks and MCP from
     # the call (600 input tokens instead of 4,330, measured 2026-10-08); TSTACK_ROLE=tape silences tstack-hook too.
-    return [exe, "-p", "--model", "haiku", "--effort", "high", "--output-format", "json", "--no-session-persistence",
+    return [exe, "-p", "--model", model, "--effort", "high", "--output-format", "json", "--no-session-persistence",
             "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--safe-mode",
-            "--system-prompt", SYSTEM_PROMPT]
+            "--system-prompt", SYSTEM_PROMPT if prompt is None else prompt]
 
 
 def call_claude(argv, env, cwd, stdin):
@@ -1024,18 +1025,25 @@ def next_task(con, tree, busy, skip):
     return None
 
 
+def insert_call(con, row, day, kind, start, n):
+    """One spent call as a row of `calls`, the ledger calls_on counts against max_calls_per_day. row is
+    call_claude's fields plus attempt, ok, out_bytes and error; a field call_claude did not fill is null. Every
+    caller that spends a call (tape's own nodes, memo-dream's draft) writes it here."""
+    con.execute("insert into calls (at, day, kind, start, n, attempt, ok, out_bytes, input_tokens, cache_read,"
+                " cache_write, output_tokens, cost_usd, duration_ms, wall_ms, model, error) values (:at, :day,"
+                " :kind, :start, :n, :attempt, :ok, :out_bytes, :input_tokens, :cache_read, :cache_write,"
+                " :output_tokens, :cost_usd, :duration_ms, :wall_ms, :model, :error)",
+                {"input_tokens": None, "cache_read": None, "cache_write": None, "output_tokens": None,
+                 "cost_usd": None, "duration_ms": None, "wall_ms": None, "model": None, "out_bytes": None,
+                 **row, "day": day, "kind": kind, "start": start, "n": n})
+
+
 def record(con, answer, day):
     kind, (s, n) = answer.task["kind"], answer.task["node"]
     made = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     con.execute("begin immediate")
     for r in answer.rows:
-        con.execute("insert into calls (at, day, kind, start, n, attempt, ok, out_bytes, input_tokens, cache_read,"
-                    " cache_write, output_tokens, cost_usd, duration_ms, wall_ms, model, error) values (:at, :day,"
-                    " :kind, :start, :n, :attempt, :ok, :out_bytes, :input_tokens, :cache_read, :cache_write,"
-                    " :output_tokens, :cost_usd, :duration_ms, :wall_ms, :model, :error)",
-                    {"input_tokens": None, "cache_read": None, "cache_write": None, "output_tokens": None,
-                     "cost_usd": None, "duration_ms": None, "wall_ms": None, "model": None,
-                     **r, "day": day, "kind": kind, "start": s, "n": n})
+        insert_call(con, r, day, kind, s, n)
     if answer.line is not None:
         if kind == "merge":
             con.execute("insert or replace into nodes values (?, ?, ?, ?, ?, ?)",

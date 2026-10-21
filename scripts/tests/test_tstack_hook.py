@@ -159,8 +159,10 @@ class TapeBuildTest(HookCase):
         (self.root / "scripts").mkdir(parents=True)
         (self.root / "scripts" / "memo").symlink_to(MEMO)
         (self.root / "scripts" / "tape").write_text(FAKE_TAPE)
+        (self.root / "scripts" / "memo-dream").write_text(FAKE_TAPE.replace("FAKE_TAPE_LOG", "FAKE_DREAM_LOG"))
         self.runs = self.tmp / "tape-runs.jsonl"
-        self.env.update(CLAUDE_PLUGIN_ROOT=str(self.root), FAKE_TAPE_LOG=str(self.runs))
+        self.dreams = self.tmp / "dream-runs.jsonl"
+        self.env.update(CLAUDE_PLUGIN_ROOT=str(self.root), FAKE_TAPE_LOG=str(self.runs), FAKE_DREAM_LOG=str(self.dreams))
         self.index = self.tmp / "data" / "tstack" / "tape" / "index.db"
 
     def tape_in_use(self):
@@ -194,6 +196,33 @@ class TapeBuildTest(HookCase):
             pass
         self.assertEqual(self.wait_runs(1), [["build", "--on-start", "--cwd", str(self.repo)]])
         self.assertNotIn("tape_build failed", self.log())
+
+    def test_the_note_proposer_starts_detached_beside_the_build(self):
+        """memo-dream (the proposer) starts with the build, niced and out of the hook's process group like it; it
+        waits on the build's lock itself and keeps its own pilot list and once-a-day rule, so the hook only starts it."""
+        import signal
+        self.tape_in_use()
+        p = subprocess.Popen([str(HOOK), "SessionStart"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, start_new_session=True,
+                             env={**self.env, "FAKE_TAPE_SLEEP": "3"})
+        started = time.monotonic()
+        out, err = p.communicate(json.dumps(self.base("SessionStart", source="startup")), timeout=30)
+        self.assertEqual(p.returncode, 0, err)
+        self.assertLess(time.monotonic() - started, 2.5, "the hook waited on the proposer")
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        self.runs = self.dreams
+        self.assertEqual(self.wait_runs(1), [["run", "--cwd", str(self.repo)]])
+        self.assertEqual(self.wait_runs(1, key="nice"), [min(os.nice(0) + 10, 19)])
+
+    def test_no_proposer_without_tape_on_the_machine_nor_for_a_worker(self):
+        self.hook("SessionStart", self.base("SessionStart", source="startup"))
+        self.tape_in_use()
+        self.hook("SessionStart", self.base("SessionStart", source="startup", agent_id="a1"))
+        time.sleep(0.5)
+        self.assertFalse(self.dreams.exists())
 
     def test_the_build_runs_niced_ten_below_the_session(self):
         self.tape_in_use()
@@ -1517,6 +1546,41 @@ class NewsHookTest(FleetCase):
         self.assertEqual(self.news(self.hook("SessionStart", {**self.base("SessionStart"), "source": "startup"})), [])
         self.register(self.fleet, session="sess-other")
         self.assertEqual(self.news(self.hook("SessionStart", self.payload("SessionStart", source="startup"))), [])
+
+
+class DreamPendingTest(FleetCase):
+    """memo_dream_pending: a coordinator's SessionStart says, in one line, how many drafted notes wait for Luiz."""
+
+    def batch(self, key, date, n, answer=None):
+        """A batch as memo-dream itself saves it, so the hook reads memo-dream's own layout."""
+        from importlib.machinery import SourceFileLoader
+        from importlib.util import module_from_spec, spec_from_loader
+        loader = SourceFileLoader("dream_for_hook", str(ROOT / "scripts" / "memo-dream"))
+        dream = module_from_spec(spec_from_loader("dream_for_hook", loader))
+        loader.exec_module(dream)
+        candidates = [{"kind": "fact", "text": f"t{k}", "turn": 0} for k in range(n)]
+        dream.Batches(self.env, key).save({"project": key, "date": date, "made": 0, "turns": [0, 1], "answer": answer,
+                                           "candidates": candidates})
+
+    def lines(self, payload):
+        result = self.hook("SessionStart", payload)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"] if result.stdout else ""
+        return [l for l in text.splitlines() if l.startswith("memo-dream:")]
+
+    def test_a_coordinator_hears_how_many_candidates_wait_across_projects(self):
+        start = self.payload("SessionStart", source="startup")
+        self.assertEqual(self.lines(start), [])
+        self.batch("coelhorocha/custom-mcp-servers", "2026-10-01", 2)
+        self.batch("acme/widget", "2026-10-02", 1)
+        self.batch("acme/widget", "2026-10-01", 4, answer={"at": 0, "verdicts": ["drop"] * 4})
+        self.assertEqual(self.lines(start), [
+            f"memo-dream: 3 candidate notes wait for Luiz (`{ROOT}/scripts/memo-dream pending`, from any directory)."])
+
+    def test_a_worker_and_a_session_hosting_no_fleet_hear_nothing(self):
+        self.batch("coelhorocha/custom-mcp-servers", "2026-10-01", 2)
+        self.assertEqual(self.lines(self.payload("SessionStart", source="startup", agent_id="a1")), [])
+        self.assertEqual(self.lines({**self.base("SessionStart"), "source": "startup"}), [])
 
 
 class SaidOnceTest(FleetCase):

@@ -137,20 +137,45 @@ def tape_build(hook):
     makes it a no-op, and the project's flock keeps it to one build at a time. The build runs in a session of its
     own, out of the hook's process group, and in a user scope of its own where systemd has one, out of the
     session's; it runs at nice 10, capped at 2G in that scope; its output goes nowhere, so nothing holds the
-    hook's pipes."""
+    hook's pipes.
+    Right after it, the same way but in a scope of its own, it starts `memo-dream run`, the note proposer: that keeps
+    its own pilot list and once-a-day rule and waits on the build's lock itself, so the hook only starts it."""
     if hook.is_worker or hook.headless:
         return None
     if not memo().tape_index(hook.env).exists() or memo().resolve_project(hook.cwd) is None:
         return None
     import shutil
     import subprocess
-    argv = [sys.executable, str(ROOT / "scripts" / "tape"), "build", "--on-start", "--cwd", hook.cwd]
     run = Path(hook.env.get("XDG_RUNTIME_DIR") or "/nonexistent")
-    if (run / "bus").exists() and user_manager_runs(run) and shutil.which("systemd-run", path=hook.env.get("PATH")):
-        argv = ["systemd-run", "--user", "--scope", "--collect", "--quiet", "-p", "MemoryMax=2G", "--", *argv]
-    subprocess.Popen(argv, env=dict(hook.env), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL, start_new_session=True, preexec_fn=lambda: os.nice(10))
+    scope = (run / "bus").exists() and user_manager_runs(run) and shutil.which("systemd-run", path=hook.env.get("PATH"))
+    for script, *args in (("tape", "build", "--on-start"), ("memo-dream", "run")):
+        argv = [sys.executable, str(ROOT / "scripts" / script), *args, "--cwd", hook.cwd]
+        if scope:
+            argv = ["systemd-run", "--user", "--scope", "--collect", "--quiet", "-p", "MemoryMax=2G", "--", *argv]
+        subprocess.Popen(argv, env=dict(hook.env), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True, preexec_fn=lambda: os.nice(10))
     return None
+
+
+DREAM_LINE = "memo-dream: {n} candidate notes wait for Luiz (`{bin} pending`, from any directory)."
+
+
+def memo_dream_pending(hook):
+    """SessionStart: one line for a session that hosts a fleet when memo-dream's drafted notes wait for Luiz,
+    counted over every project's unanswered batches. It reads the batch files memo-dream writes
+    ($XDG_STATE_HOME/tstack/memo-dream/<owner>__<repo>/<date>.json) and nothing else: no model, no import."""
+    if hook.is_worker or hook.headless or not hosted_fleets(hook):
+        return None
+    base = Path(hook.env.get("XDG_STATE_HOME") or Path(hook.env.get("HOME", "/tmp")) / ".local" / "state")
+    n = 0
+    for path in (base / "tstack" / "memo-dream").glob("*/????-??-??.json"):
+        try:
+            batch = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(batch, dict) and not batch.get("answer") and isinstance(batch.get("candidates"), list):
+            n += len(batch["candidates"])
+    return DREAM_LINE.format(n=n, bin=ROOT / "scripts" / "memo-dream") if n else None
 
 
 NUDGE = (
@@ -4927,7 +4952,7 @@ def onepw_watch(hook):
 
 
 HANDLERS = {
-    "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, fleet_heartbeat, tape_build],
+    "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, memo_dream_pending, fleet_heartbeat, tape_build],
     "Stop": [memo_nudge, fleet_listen_guard, fleet_idle_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
     "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, fleet_moved_writes, land_turn_gate, suite_gate, onepw_hold, fleet_monitor_watch,
