@@ -142,7 +142,8 @@ export function createModel(initial: State) {
 
   /* ------------------------------------------------------------------ the fleet's state */
 
-  const withUrls = (s: State): State => (s.role === "manager" ? { ...s, coordinators: s.coordinators.map((c) => ({ ...c, url: "f/" + encodeURIComponent(c.id) + "/" })) } : s);
+  /* A fleet's page is its /f/<fleet>/ on the hub; a team moved to the cloud keeps its cloud page, which the hub does not serve. */
+  const withUrls = (s: State): State => (s.role === "manager" ? { ...s, coordinators: s.coordinators.map((c) => (c.moved ? c : { ...c, url: "f/" + encodeURIComponent(c.id) + "/" })) } : s);
   const [state, setState] = createStore<State>(withUrls(initial));
   const [now, setNow] = createSignal(Date.now());
   /** Ticks every 30 s, so "5 min ago" stays current. */

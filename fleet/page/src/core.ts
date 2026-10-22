@@ -524,6 +524,8 @@ export interface Coordinator {
   readonly decisions: readonly Decision[];
   readonly updated?: string;
   readonly silent?: readonly JsonRecord[];
+  /** A team moved to the cloud: its {@link url} is its cloud page, and the hub serves none of its files. */
+  readonly moved: boolean;
 }
 
 /** A logged event. */
@@ -1660,6 +1662,7 @@ function parseState(value: Json | undefined): State | null {
       deaf: deafOf(c["deaf"]),
       blind: blindOf(c["blind"]),
       takeover: takeoverOf(c["takeover"]),
+      moved: c["moved"] === true,
       active: text(c["active"], ""),
       index: list(c["index"]),
       workers: isRow(c["workers"]) ? c["workers"] : {},

@@ -682,3 +682,23 @@ test("on the manager's page, the fleet's frame opens another of its decisions on
   arrive({ fleetEmbed: true, finder: true }, frame()?.contentWindow);
   expect(page.ui.finderOpen()).toBe(true);
 });
+
+test("a fleet moved to the cloud is not framed: its card links to the card on its cloud page, and none of its files is fetched", () => {
+  // SAFETY: the fixture's coordinators are records, as managerView writes them.
+  const coordinators = managerView(NOW)["coordinators"] as View[];
+  open("/f/manager/", { ...managerView(NOW), coordinators: coordinators.map((c) => (c["id"] === "billing" ? { ...c, moved: true, url: "https://fleet.example.dev/billing" } : c)) });
+  const fetched: string[] = [];
+  const stub = globalThis.fetch;
+  // SAFETY: the wrapper hands each call to the test's stub as it came, only noting its address.
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    fetched.push(String(input));
+
+    return stub(input, init);
+  }) as typeof fetch;
+  go("#decision/billing/d1");
+  expect(frame()?.getAttribute("src") ?? null).toBeNull();
+  expect(root.querySelector("#dv-moved-team h1")?.textContent).toBe("D1 Rounding rule for totals");
+  const link = root.querySelector<HTMLAnchorElement>("#dv-moved-link");
+  expect([link?.textContent, link?.getAttribute("href")]).toEqual(["Answer on billing's cloud page", "https://fleet.example.dev/billing#decision/billing/d1-rounding-rule-for-totals"]);
+  expect(fetched.filter((u) => u.includes("billing"))).toEqual([]);
+});

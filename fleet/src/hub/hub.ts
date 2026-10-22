@@ -690,9 +690,13 @@ export class Hub {
     if (moved !== undefined) return new Response(null, { status: 301, headers: { Location: `/f/${encodeURIComponent(moved.id)}${rest}${url.search}`, ...NO_STORE } });
 
     // A team moved to the cloud is read on its cloud page; a write to it is refused as for any fleet not served.
+    // Only a top-level load goes there (the browser keeps its `#decision/<fleet>/<card>`, which the cloud page reads):
+    // a fetch or a frame sent there lands on the cloud's login, which the browser blocks (no CORS, frame-ancestors).
     const away = entry === undefined && (req.method === "GET" || req.method === "HEAD") ? this.options.machine.registry.moved(entries).find((e) => e.id === name && e.url !== "") : undefined;
 
-    if (away !== undefined) return new Response(null, { status: 302, headers: { Location: away.url, ...NO_STORE } });
+    if (away !== undefined && req.headers.get("Sec-Fetch-Dest") === "document") return new Response(null, { status: 302, headers: { Location: away.url, ...NO_STORE } });
+
+    if (away !== undefined) return jsonResponse(409, { error: `${away.id} has moved to the cloud: its page is ${away.url}, which this hub neither serves nor frames`, moved: true, cloud: away.url });
 
     if (entry === undefined) return jsonResponse(404, { error: `no fleet '${name}' is being served; the hub's index lists the ones that are` });
 

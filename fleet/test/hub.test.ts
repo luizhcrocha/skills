@@ -429,9 +429,31 @@ describe("a fleet's chat through the hub", () => {
     mkdirSync(moved, { recursive: true });
     writeFileSync(join(moved, "state.json"), JSON.stringify({ project: "skills", decisions: [] }));
     writeFileSync(join(moved, "cloud.json"), JSON.stringify({ fleet: "skills", cloud: "https://fleet.example.dev/" }));
-    const read = await request("GET", "/f/skills/?x=1");
+    const read = await request("GET", "/f/skills/?x=1", undefined, { "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document" });
     expect([read.status, read.headers.get("Location")]).toEqual([302, "https://fleet.example.dev/skills"]);
     expect((await post({ text: "hi" }, {}, "/f/skills/chat")).status).toBe(404);
+  });
+
+  test("a moved team's file fetched by a page, or its page framed, is no redirect to the cloud: a 409 naming its cloud page", async () => {
+    // A 302 there sends the manager's fetch of state.json, or its frame of the team's page, to the cloud's login, which
+    // the browser blocks (no CORS header; frame-ancestors 'none'). Only a top-level load of the page is sent there.
+    const moved = join(base, "fleet", "skills");
+    mkdirSync(moved, { recursive: true });
+    writeFileSync(join(moved, "state.json"), JSON.stringify({ project: "skills", decisions: [] }));
+    writeFileSync(join(moved, "cloud.json"), JSON.stringify({ fleet: "skills", cloud: "https://fleet.example.dev/" }));
+    const fetched = { "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty", "Sec-Fetch-Site": "same-origin" };
+    const framed = { "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "same-origin" };
+
+    for (const [path, headers] of [
+      ["/f/skills/state.json", fetched],
+      ["/f/skills/decisions/prune-empty-ws-2.html?v=1", fetched],
+      ["/f/skills/chat", fetched],
+      ["/f/skills/?embed=1", framed],
+      ["/f/skills/state.json", {}],
+    ] as const) {
+      const got = await request("GET", path, undefined, headers);
+      expect([path, got.status, got.headers.get("Location"), got.body["moved"], got.body["cloud"], asString(got.body["error"])?.includes("https://fleet.example.dev/skills")]).toEqual([path, 409, null, true, "https://fleet.example.dev/skills", true]);
+    }
   });
 
   test("a moved team whose cloud is not an https address is not redirected to", async () => {

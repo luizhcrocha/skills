@@ -1583,6 +1583,33 @@ function QueueNav(): JSX.Element {
   );
 }
 
+/** Another fleet's decision when that fleet moved to the cloud: a link to the card on its cloud page, which is where it
+ * is answered. Never a frame of it (the cloud refuses one) nor a fetch of its files (the hub serves none of them). */
+function MovedCard(props: { readonly fleet: string; readonly id: string; readonly url: string }): JSX.Element {
+  const { m } = usePage();
+  const item = createMemo(() => m.decisionAnywhere(props.fleet + "/" + props.id));
+
+  return (
+    <div class="dv-info" id="dv-moved-team">
+      <p class="dv-meta dv-fleet">
+        <PillAs cls="plain" text={"in " + props.fleet} />
+      </p>
+      <Show when={item()}>{(d) => <h1>{`${d().ref ?? ""} ${d().title}`.trim()}</h1>}</Show>
+      <p class="note">
+        {props.fleet} has moved to the cloud: its cards are answered on its cloud page
+        {props.url ? "." : ", and its cloud.json names no https page."}
+      </p>
+      <Show when={props.url}>
+        <p>
+          <a class="btn" id="dv-moved-link" href={props.url + m.cardHref(props.fleet + "/" + props.id)}>
+            Answer on {props.fleet}'s cloud page
+          </a>
+        </p>
+      </Show>
+    </div>
+  );
+}
+
 /** Another fleet's decision: that fleet's page in a frame, showing only the decision, sized by the height it reports. */
 function FleetFrame(props: { readonly fleet: string; readonly id: string }): JSX.Element {
   const { m, ui } = usePage();
@@ -1743,6 +1770,12 @@ export function DecisionPage(): JSX.Element {
   const d = createMemo(() => m.decisionById(m.viewing()));
   const theirs = createMemo(() => (m.managed() ? Core.parseFleetDecision(m.viewing()) : null));
 
+  const away = createMemo(() => {
+    const t = theirs();
+
+    return t ? m.state.coordinators.find((c) => c.id === t.fleet && c.moved) : undefined;
+  });
+
   return (
     <main class="wrap dv" id="decision" tabindex="-1" hidden={!m.viewing()} ref={(el) => (ui.refs.decision = el)}>
       <Show when={!m.embed}>
@@ -1757,9 +1790,13 @@ export function DecisionPage(): JSX.Element {
         <QueueNav />
       </Show>
       <Show when={theirs()} fallback={<OwnDecision d={d()} />}>
-        {(t) => <FleetFrame fleet={t().fleet} id={t().id} />}
+        {(t) => (
+          <Show when={away()} fallback={<FleetFrame fleet={t().fleet} id={t().id} />}>
+            {(c) => <MovedCard fleet={t().fleet} id={t().id} url={c().url} />}
+          </Show>
+        )}
       </Show>
-      <Show when={!m.embed && m.viewing()} keyed>
+      <Show when={!m.embed && !away() && m.viewing()} keyed>
         {(id) => <MarksOn id={id} />}
       </Show>
       <FieldHighlights />

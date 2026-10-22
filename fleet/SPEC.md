@@ -92,8 +92,11 @@ given. Every ID argument also takes the row's number (D3, L2, R1) where rows hav
    registry home (`~/.local/state/fleet/<team>`, the home's sibling `fleet`) that holds `cloud.json` is listed after
    the served fleets by `fleets list` (`(coordinator, <status>, moved to the cloud)`), `fleets waiting`, `fleets show`,
    `fleets decision`, the manager's page and the manager's `watch --fleets`, read from the exported `state.json` and
-   `chat.jsonl`. Its page is `<cloud>/<fleet>` (cloud.json's `cloud` and `fleet`), and the hub sends a `GET /f/<fleet>/`
-   there (302); every write to it stays refused.
+   `chat.jsonl`. Its page is `<cloud>/<fleet>` (cloud.json's `cloud` and `fleet`). The hub sends a top-level load of
+   `/f/<fleet>/…` (`Sec-Fetch-Dest: document`) there (302; the browser keeps its `#decision/<fleet>/<card>`); any other
+   read (a page's fetch, a frame, a client sending no `Sec-Fetch-Dest`) gets 409 `{error, moved: true, cloud}`, so no
+   fetch or frame lands on the cloud's login. The manager's page shows such a team's card as a link to it on the cloud
+   page, never a frame, and fetches none of its files. Every write to it stays refused.
 4. `DIR` is created (mkdir -p), even when the command then fails (open-17).
 5. `state.json` is read. Missing, with any command but `init`: refused, `no state.json in DIR; run \`init\` first`.
 6. The command's handler runs on the ledger in memory. A refusal exits **1** with

@@ -123,7 +123,7 @@ describe("a moved team no server here serves", () => {
     const coordinators = asArray(view(machine(env), cliLookups(), { project: "everything", role: "manager" }, manager)["coordinators"]) ?? [];
     const c = asObject(coordinators.find((x) => asObject(x)?.["id"] === "skills")) ?? {};
 
-    expect(c["url"]).toBe(PAGE);
+    expect([c["url"], c["moved"]]).toEqual([PAGE, true]);
     expect((asArray(c["decisions"]) ?? []).map((d) => asObject(d)?.["title"])).toEqual(["Pick the export host", "Approve the 1Password prompt"]);
     expect(asObject(c["chat"])?.["unread"]).toBe(1);
   });

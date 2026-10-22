@@ -208,7 +208,7 @@ export function summary(machine: Machine, lookups: Lookups, entry: Entry): JsonO
   const lanes = [...new Set(running.flatMap((a) => (truthy(a["lane"]) ? (asArray(a["lane"]) ?? []) : []).map((l) => pyStr(l))))].sort();
   const heard = heardIn(machine, entry.dir);
 
-  return {
+  const shown = {
     id: entry.id,
     url: entry.url,
     session: entry.raw["session"] ?? null,
@@ -255,6 +255,9 @@ export function summary(machine: Machine, lookups: Lookups, entry: Entry): JsonO
         return truthy(d["held"]) ? { ...asked, held: d["held"] ?? null, held_at: d["held_at"] ?? null } : asked;
       }),
   };
+
+  // Only a team moved to the cloud has the key: its `url` is then its cloud page, which the manager's page links, never frames.
+  return entry.moved === true ? { ...shown, moved: true } : shown;
 }
 
 /** The status of the decision `key` names in `state` (by id, else by number), or null. */
