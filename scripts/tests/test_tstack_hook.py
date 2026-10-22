@@ -7847,5 +7847,39 @@ class MovedWritesTest(MovedFleet, FleetCase):
             self.assertNotIn(self.SENTENCE, self.bash(command).stdout, command)
 
 
+class PermissionSplitTest(unittest.TestCase):
+    """The Bash split a permission's binding rests on, against the cases every port shares
+    (fleet/src/ledger/permission-split.cases.json, which fleet/test/permission-split.test.ts runs on the CLI's port and
+    the fleet repo copies and pins by sha256): _rule_commands, scripts_of, why_no_asks and runs_of give what the CLI's
+    simpleCommands, scriptsOf, whyNoAsks and runsOf give."""
+
+    CASES = ROOT / "fleet" / "src" / "ledger" / "permission-split.cases.json"
+
+    def test_every_shared_case(self):
+        corpus = json.loads(self.CASES.read_text())
+        module = load_hook(onepw=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = os.path.realpath(tmp)
+            for name, text in corpus["fixtures"].items():
+                Path(fixture, name).write_text(text)
+
+            def at(value):
+                return [at(v) for v in value] if isinstance(value, list) else value.replace("$FIXTURE", fixture)
+
+            self.assertGreaterEqual(len(corpus["cases"]), 30)
+            for case in corpus["cases"]:
+                call = at(case["call"])
+                calls = [call, *at(case.get("more", []))]
+                with self.subTest(case["name"], since=case.get("since")):
+                    self.assertEqual(module._rule_commands(call), at(case["commands"]))
+                    self.assertEqual(module.scripts_of(call), at(case["scripts"]))
+                    why = module.why_no_asks(calls)
+                    if case["whyNoAsk"] is None:
+                        self.assertIsNone(why)
+                    else:
+                        self.assertIn(case["whyNoAsk"], why or "")
+                    self.assertEqual(module.runs_of(calls), at(case["runs"]))
+
+
 if __name__ == "__main__":
     unittest.main()

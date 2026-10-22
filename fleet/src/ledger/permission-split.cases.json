@@ -1,0 +1,345 @@
+{
+  "//": "The Bash split a permission's binding rests on, shared by every port: tstack fleet/src/ledger/permission.ts (simpleCommands, scriptsOf, whyNoAsks, runsOf), the hook hooks/tstack-hook.py (_rule_commands, scripts_of, why_no_asks, runs_of), and the fleet repo's packages/ledger/src/permission.ts and fleet-host's grant-writes.ts, which copy this file byte for byte and pin it by sha256. A case is a call; `$FIXTURE` stands for a folder that holds `fixtures` (file name to its text), and is put in every string before the case runs. `commands` is the split, `scripts` the script each simple command names (in order, repeats kept), `whyNoAsk` null when the call can be asked for or a substring of the refusal whyNoAsks gives for [call, ...more], and `runs` what runsOf gives for [call, ...more]. A case with `since` is a hole of the design review closed by that patch (F3, F11). Change every port and this file together.",
+  "fixtures": {
+    "deploy.sh": "#!/bin/sh\necho deploy\n",
+    "other.sh": "echo other\n",
+    "tool.py": "print(\"tool\")\n"
+  },
+  "cases": [
+    {
+      "name": "an interpreter and an absolute script",
+      "call": "bash $FIXTURE/deploy.sh",
+      "commands": [["bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "shell keywords lead to the command that runs",
+      "call": "if true; then bash $FIXTURE/deploy.sh; fi",
+      "commands": [["if", "true"], ["then", "bash", "$FIXTURE/deploy.sh"], ["fi"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "assignments before the command are skipped",
+      "call": "FOO=1 BAR=2 bash $FIXTURE/deploy.sh",
+      "commands": [["FOO=1", "BAR=2", "bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "a wrapper with flags and durations",
+      "call": "timeout -k 5 30s bash $FIXTURE/deploy.sh",
+      "commands": [["timeout", "-k", "5", "30s", "bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "nice with a niceness, before a script given as a path",
+      "call": "nice -n 10 $FIXTURE/deploy.sh --now",
+      "commands": [["nice", "-n", "10", "$FIXTURE/deploy.sh", "--now"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "env with an assignment, then an interpreter",
+      "call": "env FOO=1 python3 $FIXTURE/tool.py --flag",
+      "commands": [["env", "FOO=1", "python3", "$FIXTURE/tool.py", "--flag"]],
+      "scripts": ["$FIXTURE/tool.py"],
+      "whyNoAsk": null,
+      "runs": ["1 08d0a0587a858b7a198f3e2e8518cc91ef0b1176ab9e6d22d6280deea3e998c7 $FIXTURE/tool.py"]
+    },
+    {
+      "name": "stdbuf with a joined flag",
+      "call": "stdbuf -oL sh $FIXTURE/other.sh",
+      "commands": [["stdbuf", "-oL", "sh", "$FIXTURE/other.sh"]],
+      "scripts": ["$FIXTURE/other.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 2477f9f055ec3d6315b91a3efa8410101bdc45261d3b9b541ef8b77b34d26f66 $FIXTURE/other.sh"]
+    },
+    {
+      "name": "a command found by name names no script",
+      "call": "just deploy",
+      "commands": [["just", "deploy"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "python3 -m runs a module found by name",
+      "call": "python3 -m pytest",
+      "commands": [["python3", "-m", "pytest"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "quotes are taken off each word",
+      "call": "bash \"$FIXTURE/deploy.sh\" 'a b'",
+      "commands": [["bash", "$FIXTURE/deploy.sh", "a b"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "a ; inside quotes ends no command; && does",
+      "call": "echo 'a; b' && bash $FIXTURE/deploy.sh",
+      "commands": [["echo", "a; b"], ["bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "a script named twice is bound once",
+      "call": "bash $FIXTURE/deploy.sh && bash $FIXTURE/deploy.sh",
+      "commands": [["bash", "$FIXTURE/deploy.sh"], ["bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh", "$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "two scripts of one call, in order",
+      "call": "bash $FIXTURE/deploy.sh; sh $FIXTURE/other.sh",
+      "commands": [["bash", "$FIXTURE/deploy.sh"], ["sh", "$FIXTURE/other.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh", "$FIXTURE/other.sh"],
+      "whyNoAsk": null,
+      "runs": [
+        "1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh",
+        "1 2477f9f055ec3d6315b91a3efa8410101bdc45261d3b9b541ef8b77b34d26f66 $FIXTURE/other.sh"
+      ]
+    },
+    {
+      "name": "each further call is numbered after the first",
+      "call": "bash $FIXTURE/deploy.sh",
+      "more": ["just build", "sh $FIXTURE/other.sh"],
+      "commands": [["bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": [
+        "1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh",
+        "3 2477f9f055ec3d6315b91a3efa8410101bdc45261d3b9b541ef8b77b34d26f66 $FIXTURE/other.sh"
+      ]
+    },
+    {
+      "name": "&> is a redirection, not a background &",
+      "call": "bash $FIXTURE/deploy.sh &> /tmp/log",
+      "commands": [["bash", "$FIXTURE/deploy.sh", "&>", "/tmp/log"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": ">& is a redirection",
+      "call": "bash $FIXTURE/deploy.sh >&2",
+      "commands": [["bash", "$FIXTURE/deploy.sh", ">&2"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "2>&1 is a redirection",
+      "call": "bash $FIXTURE/deploy.sh 2>&1",
+      "commands": [["bash", "$FIXTURE/deploy.sh", "2>&1"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "a background & ends a command",
+      "call": "bash $FIXTURE/deploy.sh & echo done",
+      "commands": [["bash", "$FIXTURE/deploy.sh"], ["echo", "done"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "a | is a word here: whyNoRule refuses a piped call, not whyNoAsk",
+      "call": "bash $FIXTURE/deploy.sh | tee log",
+      "commands": [["bash", "$FIXTURE/deploy.sh", "|", "tee", "log"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "a group's parentheses end commands",
+      "call": "(cd /tmp; ls)",
+      "commands": [["cd", "/tmp"], ["ls"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "a brace group leads to its command",
+      "call": "{ bash $FIXTURE/deploy.sh; }",
+      "commands": [["{", "bash", "$FIXTURE/deploy.sh"], ["}"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "flags after the script are the script's",
+      "call": "sh $FIXTURE/other.sh -x",
+      "commands": [["sh", "$FIXTURE/other.sh", "-x"]],
+      "scripts": ["$FIXTURE/other.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 2477f9f055ec3d6315b91a3efa8410101bdc45261d3b9b541ef8b77b34d26f66 $FIXTURE/other.sh"]
+    },
+    {
+      "name": "$( ) is decided when it runs",
+      "call": "echo $(cat /etc/hostname)",
+      "commands": [["echo", "$"], ["cat", "/etc/hostname"]],
+      "scripts": [],
+      "whyNoAsk": "the call has a command substitution",
+      "runs": []
+    },
+    {
+      "name": "backticks are decided when they run",
+      "call": "echo `date`",
+      "commands": [["echo", "`date`"]],
+      "scripts": [],
+      "whyNoAsk": "the call has a command substitution",
+      "runs": []
+    },
+    {
+      "name": "<( ) is decided when it runs",
+      "call": "diff <(ls) b",
+      "commands": [["diff", "<"], ["ls"], ["b"]],
+      "scripts": [],
+      "whyNoAsk": "the call has a command substitution",
+      "runs": []
+    },
+    {
+      "name": "a script by a ./ path",
+      "call": "bash ./deploy.sh",
+      "commands": [["bash", "./deploy.sh"]],
+      "scripts": ["./deploy.sh"],
+      "whyNoAsk": "runs the script ./deploy.sh by a relative path",
+      "runs": []
+    },
+    {
+      "name": "a script by a bare name",
+      "call": "bash deploy.sh",
+      "commands": [["bash", "deploy.sh"]],
+      "scripts": ["deploy.sh"],
+      "whyNoAsk": "runs the script deploy.sh by a relative path",
+      "runs": []
+    },
+    {
+      "name": "a command given as a relative path",
+      "call": "scripts/deploy.sh --now",
+      "commands": [["scripts/deploy.sh", "--now"]],
+      "scripts": ["scripts/deploy.sh"],
+      "whyNoAsk": "runs the script scripts/deploy.sh by a relative path",
+      "runs": []
+    },
+    {
+      "name": "an absolute script that is not there",
+      "call": "bash $FIXTURE/missing.sh",
+      "commands": [["bash", "$FIXTURE/missing.sh"]],
+      "scripts": ["$FIXTURE/missing.sh"],
+      "whyNoAsk": "which is no file that can be read",
+      "runs": []
+    },
+    {
+      "name": "bash -c runs the text the user reads",
+      "call": "bash -c 'ls /tmp'",
+      "commands": [["bash", "-c", "ls /tmp"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "node -e runs the text the user reads; quoted parentheses end nothing",
+      "call": "node -e 'console.log(1)'",
+      "commands": [["node", "-e", "console.log(1)"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "bash -x before an absolute script",
+      "since": "F3",
+      "call": "bash -x $FIXTURE/deploy.sh",
+      "commands": [["bash", "-x", "$FIXTURE/deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "bash -e before an absolute script",
+      "since": "F3",
+      "call": "bash -e $FIXTURE/deploy.sh",
+      "commands": [["bash", "-e", "$FIXTURE/deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "sh -x before an absolute script",
+      "since": "F3",
+      "call": "sh -x $FIXTURE/other.sh",
+      "commands": [["sh", "-x", "$FIXTURE/other.sh"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "a long flag before an absolute script, behind a wrapper",
+      "since": "F3",
+      "call": "timeout 30s bash --norc $FIXTURE/deploy.sh",
+      "commands": [["timeout", "30s", "bash", "--norc", "$FIXTURE/deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "python3 -m with an absolute path after it",
+      "since": "F3",
+      "call": "python3 -m pytest $FIXTURE/tool.py",
+      "commands": [["python3", "-m", "pytest", "$FIXTURE/tool.py"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "known residual: interpreter flags before a relative script are not caught (no word starts with /)",
+      "call": "bash -x ./deploy.sh",
+      "commands": [["bash", "-x", "./deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "source binds its script",
+      "since": "F11",
+      "call": "source $FIXTURE/deploy.sh",
+      "commands": [["source", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": ". binds its script",
+      "since": "F11",
+      "call": ". $FIXTURE/other.sh",
+      "commands": [[".", "$FIXTURE/other.sh"]],
+      "scripts": ["$FIXTURE/other.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 2477f9f055ec3d6315b91a3efa8410101bdc45261d3b9b541ef8b77b34d26f66 $FIXTURE/other.sh"]
+    },
+    {
+      "name": "source by a relative path",
+      "since": "F11",
+      "call": "source ./deploy.sh",
+      "commands": [["source", "./deploy.sh"]],
+      "scripts": ["./deploy.sh"],
+      "whyNoAsk": "runs the script ./deploy.sh by a relative path",
+      "runs": []
+    }
+  ]
+}

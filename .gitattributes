@@ -1,2 +1,3 @@
 skills/productivity/coordinator/assets/dashboard.html linguist-generated
 fleet/oracle/traces/*.expected.jsonl linguist-generated
+fleet/src/ledger/permission-split.cases.json -text
