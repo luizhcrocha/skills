@@ -3403,7 +3403,7 @@ describe("a permission's answer grants the call once", () => {
       expect(allowed()).toBe(JSON.stringify([RULE]));
     });
 
-    test("a record kept in the tree before is imported once, every entry kept, and its grant ends at its 30 minutes", async () => {
+    test("a record kept in the tree before is imported once, every entry kept and marked imported, and its grant ends at its 30 minutes", async () => {
       writeFileSync(settings, JSON.stringify({ permissions: { allow: [RULE, "Bash(x)"] } }));
       const tree = join(session, ".claude", "hooks");
       mkdirSync(tree);
@@ -3411,11 +3411,12 @@ describe("a permission's answer grants the call once", () => {
       const text = JSON.stringify({ issued: entries });
       writeFileSync(join(tree, "tstack-grants-issued.json"), text);
       expect(await expire("2026-01-01T00:29:00+00:00")).toEqual([]);
-      expect(readFileSync(join(records, "tstack-grants-issued.json"), "utf8")).toBe(text);
+      expect(JSON.parse(readFileSync(join(records, "tstack-grants-issued.json"), "utf8"))).toEqual({ issued: entries.map((e) => ({ ...e, imported: true })) });
+      const imported = readFileSync(join(records, "tstack-grants-issued.json"), "utf8");
       // Imported once: what the tree holds after that is not read.
       writeFileSync(join(tree, "tstack-grants-issued.json"), JSON.stringify({ issued: [...entries, ...entries] }));
       expect(await expire("2026-01-01T00:31:00+00:00")).toEqual([`${RULE} in ${settings}`]);
-      expect(readFileSync(join(records, "tstack-grants-issued.json"), "utf8")).toBe(text);
+      expect(readFileSync(join(records, "tstack-grants-issued.json"), "utf8")).toBe(imported);
       expect(await expire("2026-01-01T00:41:00+00:00")).toEqual([`Bash(x) in ${settings}`]);
     });
 

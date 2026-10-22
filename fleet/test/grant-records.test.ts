@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, symlinkSyn
 import { join } from "node:path";
 
 import { recordOf, recordsDir } from "../src/hub/grant-records.ts";
+import { expireGrants } from "../src/hub/grants.ts";
 import { asArray, asObject, asString } from "../src/json.ts";
 import { tmp } from "./support.ts";
 
@@ -37,7 +38,7 @@ describe("the one-time import of a record kept in the tree", () => {
     return { home: join(base, "home"), root, file: join(root, ".claude", "settings.local.json"), old: join(root, ".claude", "hooks", ISSUED) };
   };
 
-  test("the tree's record is copied once, every entry kept exactly once, and never read again", () => {
+  test("the tree's record is copied once, every entry kept exactly once and marked imported, and never read again", () => {
     const { home, root, file, old } = setup();
     const entries = ["p-1", "p-2", "p-3"].map((decision) => ({ decision, rule: `Bash(${decision})`, file, at: "2026-10-21T10:00:00+00:00", n: 1, of: 1 }));
     const text = `${JSON.stringify({ issued: entries }, null, 2)}\n`;
@@ -45,12 +46,13 @@ describe("the one-time import of a record kept in the tree", () => {
 
     const got = recordOf(home, file, ISSUED);
     expect(got).toBe(join(recordsDir(home, root), ISSUED));
-    expect(readFileSync(got ?? "", "utf8")).toBe(text);
+    expect(JSON.parse(readFileSync(got ?? "", "utf8"))).toEqual({ issued: entries.map((e) => ({ ...e, imported: true })) });
+    const imported = readFileSync(got ?? "", "utf8");
 
     // A checkout puts an older record in the tree: the one outside it is the record now, as it was.
     writeFileSync(old, JSON.stringify({ issued: [entries[0]] }));
     expect(recordOf(home, file, ISSUED)).toBe(got);
-    expect(readFileSync(got ?? "", "utf8")).toBe(text);
+    expect(readFileSync(got ?? "", "utf8")).toBe(imported);
     expect((asArray(asObject(JSON.parse(readFileSync(got ?? "", "utf8")))?.["issued"]) ?? []).map((e) => asObject(e)?.["decision"])).toEqual(["p-1", "p-2", "p-3"]);
   });
 
@@ -91,7 +93,7 @@ describe("the one-time import of a record kept in the tree", () => {
     writeFileSync(join(root, ".claude", "hooks", ISSUED), JSON.stringify({ issued: [["p-1", "Bash(ls)"], ["p-2", "Bash(gone)"], ["p-3", "Agent(spawn)"]].map(([decision, rule]) => ({ decision, rule, file, at: "2026-10-21T10:00:00+00:00", n: 1, of: 1 })) }));
     writeFileSync(join(root, ".claude", "hooks", "tstack-grants-ended.json"), JSON.stringify({ note: "kept", ended: [take("p-1", "Bash(ls)"), take("p-2", "Bash(gone)"), take("p-3", "Agent(spawn)")] }));
     const got = recordOf(home, file, "tstack-grants-ended.json");
-    expect(JSON.parse(readFileSync(got ?? "", "utf8"))).toEqual({ note: "kept", ended: [take("p-2", "Bash(gone)")] });
+    expect(JSON.parse(readFileSync(got ?? "", "utf8"))).toEqual({ note: "kept", ended: [{ ...take("p-2", "Bash(gone)"), imported: true }] });
   });
 
   test("a take-back on the tree of no grant on the tree's record of issued grants is not imported, nor one marked line; one with no file and no rev matches without", () => {
@@ -104,7 +106,7 @@ describe("the one-time import of a record kept in the tree", () => {
     writeFileSync(old, JSON.stringify({ issued: [issued] }));
     writeFileSync(join(root, ".claude", "hooks", "tstack-grants-ended.json"), JSON.stringify({ ended: [take, bare, future, { ...take, rev: "r2" }, { ...take, file: join(root, ".claude", "tstack-grants.json") }, { ...take, line: true }] }));
     const got = recordOf(home, file, "tstack-grants-ended.json");
-    expect(JSON.parse(readFileSync(got ?? "", "utf8"))).toEqual({ ended: [take, bare] });
+    expect(JSON.parse(readFileSync(got ?? "", "utf8"))).toEqual({ ended: [take, bare].map((e) => ({ ...e, imported: true })) });
   });
 
   test("only regular files are imported: a folder or a FIFO at the tree's path is skipped", () => {
@@ -136,13 +138,62 @@ describe("the one-time import of a record kept in the tree", () => {
   test("a record a writer puts in the folder while it is imported is kept: the import moves each copy in by link, never the folder by rename", () => {
     const { home, root, file, old } = setup();
     const ended = join(root, ".claude", "hooks", "tstack-grants-ended.json");
-    writeFileSync(old, "the tree's issued");
+    writeFileSync(old, JSON.stringify({ issued: [], of: "the tree" }));
     writeFileSync(ended, "the tree's ended");
     const dir = recordsDir(home, root);
     const got = recordOf(home, file, ISSUED, { beforeMove: () => writeFileSync(join(dir, "tstack-grants-ended.json"), "a writer's") });
     expect(got).toBe(join(dir, ISSUED));
-    expect([readdirSync(dir).toSorted(), readFileSync(join(dir, ISSUED), "utf8"), readFileSync(join(dir, "tstack-grants-ended.json"), "utf8")]).toEqual([["tstack-grants-ended.json", ISSUED], "the tree's issued", "a writer's"]);
+    expect([readdirSync(dir).toSorted(), JSON.parse(readFileSync(join(dir, ISSUED), "utf8")), readFileSync(join(dir, "tstack-grants-ended.json"), "utf8")]).toEqual([["tstack-grants-ended.json", ISSUED], { issued: [], of: "the tree" }, "a writer's"]);
     expect(readdirSync(join(home, ".claude", "tstack-grants"))).toEqual([dir.split("/").at(-1) ?? ""]);
+  });
+
+  const RULE = "Bash(echo hi)";
+  const FORGED = "2026-01-01T00:00:00+00:00";
+
+  /** A root whose tree holds the entries `issued` and the take-backs `ended`, imported with RULE out of the file and
+   * put back after, and a fleet whose grants.jsonl holds `lines`; what a sweep at 09:05 took back, and the file's
+   * rules after. */
+  const sweepImported = async (issued: readonly object[], ended: readonly object[], lines: readonly object[]) => {
+    const { home, root, file, old } = setup();
+    const fleetDir = join(root, "..", "fleet");
+    mkdirSync(fleetDir);
+    const named = (entries: readonly object[]) => entries.map((e) => ({ rule: RULE, file, ...e }));
+    writeFileSync(file, JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
+    writeFileSync(old, JSON.stringify({ issued: named(issued) }));
+    writeFileSync(join(root, ".claude", "hooks", "tstack-grants-ended.json"), JSON.stringify({ ended: named(ended) }));
+    recordOf(home, file, ISSUED);
+    writeFileSync(file, JSON.stringify({ permissions: { allow: ["Bash(ls)", RULE] } }));
+    writeFileSync(join(fleetDir, "grants.jsonl"), named(lines).map((l) => `${JSON.stringify({ op: "grant", ref: "P1", by: "host", ...l })}\n`).join(""));
+    const taken = await expireGrants([fleetDir], new Date("2026-01-05T09:05:00+00:00"), "2026-01-05T09:05:00+00:00", home);
+
+    return { taken, allow: asObject(asObject(JSON.parse(readFileSync(file, "utf8")))?.["permissions"])?.["allow"], file };
+  };
+
+  const forged = { decision: "p-forged", ref: "P9", at: FORGED, n: 1, of: 1 };
+  const forgedTakeBack = { decision: "p-forged", granted: FORGED, at: FORGED, why: "used" };
+
+  test("a forged pair on the tree, an issued entry and its take-back of a rule out at the import, makes no later grant of the rule the owner's", async () => {
+    const { taken, allow, file } = await sweepImported([forged], [forgedTakeBack], [{ decision: "p-host", at: "2026-01-05T09:00:00+00:00" }]);
+    expect(taken).toEqual([`${RULE} in ${file}`]);
+    expect(allow).toEqual(["Bash(ls)"]);
+  });
+
+  test("an imported take-back keeps no rule where no line replaces its entry: the entry stands past its 30 minutes, and its rule is taken back", async () => {
+    const { taken, allow, file } = await sweepImported([forged], [forgedTakeBack], [{ decision: "p-forged", at: FORGED }]);
+    expect(taken).toEqual([`${RULE} in ${file}`]);
+    expect(allow).toEqual(["Bash(ls)"]);
+  });
+
+  test("a line of another grant replaces an imported entry within its 30 minutes, a grant on no record taken back at once", async () => {
+    const { taken, allow, file } = await sweepImported([{ ...forged, at: "2026-01-05T09:04:00+00:00" }], [], [{ decision: "p-host", at: "2026-01-05T09:00:00+00:00" }]);
+    expect(taken).toEqual([`${RULE} in ${file}`]);
+    expect(allow).toEqual(["Bash(ls)"]);
+  });
+
+  test("an imported entry dated more than GRANT_SKEW_MS ahead of now is over: no hub wrote that `at`, and it never came to its 30 minutes", async () => {
+    const { taken, allow, file } = await sweepImported([{ ...forged, at: "2099-01-01T00:00:00+00:00" }], [], [{ decision: "p-other", rule: "Bash(unrelated)", at: "2026-01-05T09:00:00+00:00" }]);
+    expect(taken).toEqual([`${RULE} in ${file}`]);
+    expect(allow).toEqual(["Bash(ls)"]);
   });
 
   test("a sweep started mid-import waits for it, then keeps the imported take-back and adds its own", async () => {

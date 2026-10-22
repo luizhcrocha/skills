@@ -537,7 +537,7 @@ function written(answered: Answered, asked: Asked, file: string, reload: string)
   supersede(answered.home, file, granting.flatMap((rule) => {
     const entry = newest.get(`${file}\n${rule}`);
 
-    return entry === undefined || endedHas(ended, entry) ? [] : [endedEntry(entry, answered.at, "superseded")];
+    return entry === undefined || endedHas(ended, entry) || ended.imported.has(endedKey(entry.file, entry.decision, entry.rule, entry.at, entry.rev ?? "")) ? [] : [endedEntry(entry, answered.at, "superseded")];
   }));
 
   return "granted";
@@ -731,6 +731,10 @@ function endedEntry(grant: Named, at: string, why: string, line = false): JsonOb
 /** The newest ENDED_KEPT take-backs are kept on the record. */
 const ENDED_KEPT = 4096;
 
+/** How far ahead of now a grant's `at` may be and still be a hub's own stamp (the hook's GRANT_SKEW_S): one further
+ * ahead is forged, never comes to its 30 minutes, and is over. */
+const GRANT_SKEW_MS = 5 * 60_000;
+
 /** The record of the grants issued for a grant file's root (grant-records.ts); the hook's `_issued_file`. The one
  * place a grant's `at`, `runs` and `n` are read from. None with no home. */
 function issuedFile(home: string | undefined, file: string, locked: boolean): string | undefined {
@@ -753,6 +757,8 @@ interface Entry {
   readonly at: string;
   readonly rev: string | undefined;
   readonly dir: string | undefined;
+  /** Copied from the tree by the import (grant-records.ts). */
+  readonly imported: boolean;
 }
 
 /** The grants on record for `file`'s root, oldest first, each naming a grant file of that root: its realpath in
@@ -773,7 +779,7 @@ function issuedEntries(home: string | undefined, file: string, locked: boolean):
 
     if (decision === undefined || rule === undefined || at === undefined || of === undefined || dirname(of) !== own) return [];
 
-    return [{ decision, rule, file: of, at, rev: asString(entry?.["rev"]), dir: asString(entry?.["dir"]) }];
+    return [{ decision, rule, file: of, at, rev: asString(entry?.["rev"]), dir: asString(entry?.["dir"]), imported: entry?.["imported"] === true }];
   });
 }
 
@@ -800,10 +806,12 @@ function supersede(home: string | undefined, file: string, ended: readonly JsonO
 }
 
 /** The take-backs on record for a root, by `endedKey`: `taken` of issued grants, `lines` of lines on no record (an
- * entry marked `line`), apart so that no lookup of an issued grant's take-back reads a line's. */
+ * entry marked `line`), apart so that no lookup of an issued grant's take-back reads a line's, and `imported` those the
+ * import copied from the tree, which end their grant and make no rule the owner's. */
 interface Ended {
   readonly taken: ReadonlySet<string>;
   readonly lines: ReadonlySet<string>;
+  readonly imported: ReadonlySet<string>;
 }
 
 /** The take-backs on record for `file`; none when the record is not there, cannot be read or does not parse (a
@@ -819,16 +827,18 @@ function endedIn(home: string | undefined, file: string, locked: boolean): Ended
   const theirs = takeBacks(text === undefined ? {} : parsed(treeRecordOf(file, ENDED_RECORD), text)).filter((t) => !known.has(`${t.line}\n${t.key}`));
   const taken = new Set<string>();
   const lines = new Set<string>();
+  const imported = new Set<string>();
 
-  for (const t of [...ours, ...rulesGone(file, theirs, locked)]) (t.line ? lines : taken).add(t.key);
+  for (const t of [...ours, ...rulesGone(file, theirs, locked)]) (t.imported ? imported : t.line ? lines : taken).add(t.key);
 
-  return { taken, lines };
+  return { taken, lines, imported };
 }
 
-/** A take-back as `endedIn` reads it: its `endedKey`, whether it is a line's, and its rule. */
+/** A take-back as `endedIn` reads it: its `endedKey`, whether it is a line's or the import's, and its rule. */
 interface TakeBack {
   readonly key: string;
   readonly line: boolean;
+  readonly imported: boolean;
   readonly rule: string;
 }
 
@@ -836,7 +846,7 @@ function takeBacks(record: JsonObject | Ungranted): TakeBack[] {
   return (record instanceof Ungranted ? [] : (asArray(record["ended"]) ?? [])).flatMap((entry) => {
     const [file, decision, rule, granted, rev] = (["file", "decision", "rule", "granted", "rev"] as const).map((key) => asString(asObject(entry)?.[key]));
 
-    return decision !== undefined && rule !== undefined && granted !== undefined ? [{ key: endedKey(file ?? "", decision, rule, granted, rev ?? ""), line: asObject(entry)?.["line"] === true, rule }] : [];
+    return decision !== undefined && rule !== undefined && granted !== undefined ? [{ key: endedKey(file ?? "", decision, rule, granted, rev ?? ""), line: asObject(entry)?.["line"] === true, imported: asObject(entry)?.["imported"] === true, rule }] : [];
   });
 }
 
@@ -867,8 +877,9 @@ function withEnded(record: JsonObject, ended: JsonObject): JsonObject {
  * grants.jsonl of `dirs`, their heartbeats (each session's project, else its cwd) or this hub's memory name, left
  * out when it is on its root's record of take-backs (`endedIn`: over, whatever the file holds). grants.jsonl is the
  * fleet's log, any agent's to write: a line names a root and grants nothing, and a deleted one hides no grant whose
- * root another source names. A line of a file and rule with no entry on record is a grant on no record
- * (`recorded` false), which is taken back at once: a grant of a hub that wrote no record, or a forged line; its
+ * root another source names. An entry the import copied from the tree hides no line but those of the grants
+ * imported with it: the tree is any agent's to write (grant-records.ts). A line of a file and rule with no entry on
+ * record is a grant on no record (`recorded` false), which is taken back at once: a grant of a hub that wrote no record, or a forged line; its
  * take-back is marked `line` (`lineEnded`). A `remove` line ends nothing here. */
 function latestGrants(dirs: readonly string[], home: string | undefined): Issued[] {
   const latest = new Map<string, Issued>();
@@ -914,12 +925,20 @@ function latestGrants(dirs: readonly string[], home: string | undefined): Issued
   for (const grant of issued.values()) name(grant.file, grant.dir);
 
   const onRecord = new Set<string>();
+  const fromTree = new Set<string>();
+  const imported = new Set<string>();
 
   for (const { file, dir } of roots.values()) {
-    for (const [key, entry] of newestEntries(issuedEntries(home, file, false))) {
+    const entries = issuedEntries(home, file, false);
+
+    for (const e of entries) if (e.imported) imported.add(endedKey(e.file, e.decision, e.rule, e.at, e.rev ?? ""));
+
+    for (const [key, entry] of newestEntries(entries)) {
       // A record holds its own root's grants alone (`issuedEntries`); the first record to name a grant keeps it.
       if (onRecord.has(key)) continue;
       onRecord.add(key);
+
+      if (entry.imported) fromTree.add(key);
 
       if (!isEnded(entry)) latest.set(key, { dir: entry.dir ?? dir, decision: entry.decision, file: entry.file, rule: entry.rule, at: entry.at, rev: entry.rev, recorded: true });
     }
@@ -928,7 +947,10 @@ function latestGrants(dirs: readonly string[], home: string | undefined): Issued
   for (const line of lines) {
     const key = `${line.file}\n${line.rule}`;
 
-    if (!onRecord.has(key) && !isEnded(line, true)) latest.set(key, line);
+    if (onRecord.has(key) && (!fromTree.has(key) || imported.has(endedKey(line.file, line.decision, line.rule, line.at, line.rev ?? "")))) continue;
+
+    if (!isEnded(line, true)) latest.set(key, line);
+    else if (latest.get(key)?.recorded === true) latest.delete(key);
   }
 
   for (const [key, grant] of issued) if (isEnded(grant, !grant.recorded)) issued.delete(key);
@@ -941,7 +963,8 @@ function latestGrants(dirs: readonly string[], home: string | undefined): Issued
  * Removal): the hub's own end of a one-time grant, for a rule the hook never removed because its session made no
  * call, runs without this fleet, or had its record of grants edited. It reads the grants of the fleets in `dirs`
  * (so a restarted hub takes up what an earlier one granted) and the ones this process wrote. A grant's age is
- * the `at` on its root's record of issued grants; one on no record, or with no readable stamp, is expired. What it
+ * the `at` on its root's record of issued grants; one on no record, with no readable stamp, or with one more than
+ * GRANT_SKEW_MS ahead of `now`, is expired. What it
  * took back, as `rule in file`.
  */
 export async function expireGrants(dirs: readonly string[], now: Date, stamp: string, home: string | undefined): Promise<string[]> {
@@ -951,7 +974,7 @@ export async function expireGrants(dirs: readonly string[], now: Date, stamp: st
     const at = parseInstant(grant.at);
     const key = `${grant.file}\n${grant.rule}`;
 
-    if (grant.recorded && at !== undefined && now.getTime() - at < GRANT_TTL_MS) continue;
+    if (grant.recorded && at !== undefined && now.getTime() - at < GRANT_TTL_MS && at - now.getTime() <= GRANT_SKEW_MS) continue;
 
     if (!holdsRule(grant.file, grant.rule)) {
       issued.delete(key);

@@ -30,7 +30,10 @@
  * byte for byte, of each record the root's tree holds at `<root>/.claude/hooks/<name>` that is a regular file (no
  * symlink, folder or FIFO), and none when `.claude` or its `hooks` is a symlink; of the record of take-backs, only
  * the take-backs of a grant on the tree's record of issued grants whose rule is in none of the root's grant files
- * (`endedToImport`). It holds the settings lock beside the root's grant files (below), which every writer of a
+ * (`endedToImport`). Each entry of both comes in marked `"imported": true`: an imported take-back ends its grant and
+ * never makes a rule the owner's, and an imported entry hides no line but those of the grants imported with it, since
+ * the tree's copy is any agent's to write (an owner's identical rule put back after an old-hook take-back is taken at
+ * the grant's 30 minutes: fewer calls). It holds the settings lock beside the root's grant files (below), which every writer of a
  * record takes, and looks again for the folder under it, so no writer sees the folder half made and a sweep or writer
  * that comes during an import waits for it; a caller that holds the lock already imports without taking it again.
  * Under the lock it copies the records into a fresh folder beside the target, makes the target with `mkdir` (one there
@@ -174,13 +177,34 @@ function issuedKeys(text: string | undefined): ReadonlySet<string> {
   }));
 }
 
+/** The tree's record of issued grants, whose text is `text`, as the import copies it, every other key kept: each entry
+ * marked `imported`. The tree's copy is any checkout's or agent's to write, so no imported entry hides a later line of
+ * its rule (grants.ts `latestGrants`). None when it does not parse. */
+function issuedToImport(text: string): JsonObject | undefined {
+  const record = parsed(ISSUED_RECORD, text);
+
+  if (record instanceof Ungranted) return undefined;
+  const issued = asArray(record["issued"]);
+
+  return issued === undefined
+    ? record
+    : {
+        ...record,
+        issued: issued.map((entry) => {
+          const e = asObject(entry);
+
+          return e === undefined ? entry : { ...e, imported: true };
+        }),
+      };
+}
+
 /** The tree's record of take-backs, whose text is `text`, as the import copies it, every other key kept: only the
  * take-backs of a grant on the tree's record of issued grants, whose text is `issued` (by `grantKey`, never one marked
  * `line`), whose rule is in none of the root's grant files in `claude`, read under the settings lock the import
  * holds. The tree's copy is any checkout's or agent's to write, and a take-back is written once its rule is out, so
  * one whose rule is still there is forged: imported, it made a one-time grant's rule the owner's, for good; and one of
- * no grant issued yet named a future grant, and ended it at birth with its rule the owner's. None when it does not
- * parse. */
+ * no grant issued yet named a future grant, and ended it at birth with its rule the owner's. Each comes in marked
+ * `imported`: it ends its grant, and never makes a rule the owner's (grants.ts `endedIn`). None when it does not parse. */
 function endedToImport(text: string, issued: string | undefined, claude: string): JsonObject | undefined {
   const record = parsed(ENDED_RECORD, text);
 
@@ -192,12 +216,12 @@ function endedToImport(text: string, issued: string | undefined, claude: string)
 
   return {
     ...record,
-    ended: ended.filter((entry) => {
+    ended: ended.flatMap((entry) => {
       const e = asObject(entry);
       const rule = asString(e?.["rule"]);
       const key = e === undefined || e["line"] === true ? undefined : grantKey(e["file"], e["decision"], rule, e["granted"], e["rev"]);
 
-      return rule !== undefined && key !== undefined && keys.has(key) && !GRANT_FILES.some((name) => holdsRule(join(claude, name), rule));
+      return rule !== undefined && key !== undefined && keys.has(key) && !GRANT_FILES.some((name) => holdsRule(join(claude, name), rule)) ? [{ ...e, imported: true }] : [];
     }),
   };
 }
@@ -254,7 +278,8 @@ function hasCode(cause: unknown, code: string): boolean {
 }
 
 /** Make `dir` with a copy of each record in the tree's `hooks` folder that is a regular file, of the record of
- * take-backs only what `endedToImport` keeps, unless another importer made it first; a record already in it is kept. */
+ * take-backs only what `endedToImport` keeps, each entry marked `imported` (`issuedToImport`), unless another importer
+ * made it first; a record already in it is kept. */
 function importRoot(hooks: string, dir: string, seam: ImportSeam): void {
   let fresh: string | undefined;
 
@@ -268,13 +293,10 @@ function importRoot(hooks: string, dir: string, seam: ImportSeam): void {
 
     for (const [name, bytes] of tree) {
       if (bytes === undefined) continue;
+      const record = name === ENDED_RECORD ? endedToImport(bytes.toString("utf8"), tree.get(ISSUED_RECORD)?.toString("utf8"), dirname(hooks)) : issuedToImport(bytes.toString("utf8"));
 
-      if (name === ENDED_RECORD) {
-        const record = endedToImport(bytes.toString("utf8"), tree.get(ISSUED_RECORD)?.toString("utf8"), dirname(hooks));
-
-        if (record === undefined) continue;
-        writeFileSync(join(fresh, name), `${JSON.stringify(record, null, 2)}\n`);
-      } else writeFileSync(join(fresh, name), bytes);
+      if (record === undefined) continue;
+      writeFileSync(join(fresh, name), `${JSON.stringify(record, null, 2)}\n`);
       copied.push(name);
     }
 

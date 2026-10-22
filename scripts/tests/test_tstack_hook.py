@@ -3227,7 +3227,7 @@ class GrantRecordsTest(GrantCase):
         self.assertNotIn(self.RULE, self.allow())
         self.assertEqual([e["why"] for e in json.loads(self.record.read_text())["ended"]], ["used"])
 
-    def test_the_trees_records_are_imported_once_every_entry_kept(self):
+    def test_the_trees_records_are_imported_once_every_entry_kept_and_marked(self):
         old = {"decision": "p-old", "ref": "P0", "rule": "Bash(old)", "file": str(self.settings),
                "at": "2026-01-04T09:00:00+00:00", "n": 1, "of": 1}
         entries = [{"decision": f"p-{n}", "ref": f"P{n}", "rule": f"Bash(echo {n})", "file": str(self.settings),
@@ -3241,7 +3241,11 @@ class GrantRecordsTest(GrantCase):
         for e in entries:
             self.grant(decision=e["decision"], rule=e["rule"], issued=False)
         self.run_tool("ls", now="2026-01-05T09:05:00+00:00")
-        self.assertEqual((self.issued.read_text(), json.loads(self.record.read_text())), (issued_text, json.loads(ended_text)))
+        marked = [dict(e, imported=True) for e in (old, *entries)]
+        imported = {"note": "kept", "ended": [dict(e, imported=True) for e in ended]}
+        self.assertEqual((json.loads(self.issued.read_text()), json.loads(self.record.read_text())),
+                         ({"issued": marked}, imported))
+        issued_text = self.issued.read_text()
         # Once: what a checkout puts in the tree later is not read, and the tree's copy is not written.
         self.tree("tstack-grants-issued.json").write_text(json.dumps({"issued": entries + entries}))
         self.write_settings({"permissions": {"allow": ["Bash(echo 1)"]}})
@@ -3269,11 +3273,96 @@ class GrantRecordsTest(GrantCase):
         self.tree("tstack-grants-ended.json").write_text(json.dumps({"note": "kept", "ended": [older, forged]}))
         self.grant(issued=False)
         self.run_tool("ls")
-        self.assertEqual(json.loads(self.record.read_text()), {"note": "kept", "ended": [older]})
+        self.assertEqual(json.loads(self.record.read_text()), {"note": "kept", "ended": [dict(older, imported=True)]})
         self.run_tool("git push --force origin HEAD:main", now="2026-01-05T09:06:00+00:00")
         self.assertNotIn(self.RULE, self.allow())
         self.assertEqual([(e["decision"], e["why"]) for e in json.loads(self.record.read_text())["ended"]],
                          [("p-old", "used"), ("p-1a2b3c4d", "used")])
+
+    def test_a_forged_pair_on_the_tree_makes_no_later_grant_of_its_rule_the_owners(self):
+        """An issued entry and its take-back forged on the tree, the rule out of every grant file at the import:
+        imported, the entry hid a later grant line of the rule (the host's are all on no record) and the take-back
+        kept the rule for good. An imported entry hides no later line, and an imported take-back keeps no rule."""
+        self.import_forged_pair()
+        self.grant(decision="p-host", issued=False)
+        self.run_tool("ls", now="2026-01-05T09:05:00+00:00")
+        self.assertEqual(self.allow(), ["Bash(ls)"])
+
+    def import_forged_pair(self):
+        """An issued entry of RULE and its take-back on the tree, imported with the rule out of every grant file, and
+        the rule put back in the file after."""
+        at = "2026-01-01T00:00:00+00:00"
+        self.write_settings({"permissions": {"allow": ["Bash(ls)"]}})
+        self.tree("x").parent.mkdir()
+        self.tree("tstack-grants-issued.json").write_text(json.dumps({"issued": [
+            {"decision": "p-forged", "ref": "P9", "rule": self.RULE, "file": str(self.settings), "at": at, "n": 1,
+             "of": 1}]}))
+        self.tree("tstack-grants-ended.json").write_text(json.dumps({"ended": [
+            {"file": str(self.settings), "decision": "p-forged", "rule": self.RULE, "granted": at, "at": at,
+             "why": "used"}]}))
+        load_hook(onepw=False)._record_at(self.env["HOME"], str(self.settings), "tstack-grants-ended.json")
+        self.write_settings({"permissions": {"allow": ["Bash(ls)", self.RULE]}})
+
+    def pre(self, command, now="2026-01-05T09:05:00+00:00"):
+        payload = self.payload("PreToolUse", tool_name="Bash", tool_input={"command": command})
+        r = self.hook("PreToolUse", payload, env={"FLEET_NOW": now, "TZ": "UTC"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)["hookSpecificOutput"] if r.stdout else None
+
+    def test_an_imported_take_back_keeps_no_rule_where_no_line_replaces_its_entry(self):
+        """The take-back half alone: in a session of no fleet no line is read, so the imported entry stands, past its
+        30 minutes, and only its imported take-back could keep the rule: it does not, and the rule is taken back."""
+        self.import_forged_pair()
+        self.env["CLAUDE_PROJECT_DIR"] = str(self.settings.parent.parent)
+        (self.fleet / "state.json").unlink()
+        (self.registry / "p.json").unlink()
+        self.assertIsNone(self.pre("ls"))
+        self.assertEqual(self.allow(), ["Bash(ls)"])
+        self.assertEqual([(e["decision"], e["why"], e.get("imported")) for e in json.loads(self.record.read_text())["ended"]],
+                         [("p-forged", "used", True), ("p-forged", "expired", None)])
+
+    def test_a_line_of_another_grant_replaces_an_imported_entry_within_its_thirty_minutes(self):
+        """The line half alone: an imported entry with no take-back, issued a minute ago, hid the host's later line of
+        its rule, so the rule stood its 30 minutes on a forged entry. The line replaces it, a grant on no record, taken
+        back at once."""
+        self.tree("x").parent.mkdir()
+        self.tree("tstack-grants-issued.json").write_text(json.dumps({"issued": [
+            {"decision": "p-forged", "ref": "P9", "rule": self.RULE, "file": str(self.settings),
+             "at": "2026-01-05T09:04:00+00:00", "n": 1, "of": 1}]}))
+        self.grant(decision="p-host", issued=False)
+        self.run_tool("ls", now="2026-01-05T09:05:00+00:00")
+        self.assertNotIn(self.RULE, self.allow())
+
+    def test_an_imported_entry_dated_ahead_of_now_is_over(self):
+        """An `at` no hub wrote, years ahead, never came to its 30 minutes, so the forged entry held its rule for good:
+        one more than GRANT_SKEW_S ahead of now is over, and its rule taken back."""
+        self.tree("x").parent.mkdir()
+        self.tree("tstack-grants-issued.json").write_text(json.dumps({"issued": [
+            {"decision": "p-1", "ref": "P1", "rule": self.RULE, "file": str(self.settings),
+             "at": "2099-01-01T00:00:00+00:00", "n": 1, "of": 1}]}))
+        self.grant(decision="p-other", rule="Bash(unrelated)", issued=False)
+        self.run_tool("ls", now="2026-01-05T09:05:00+00:00")
+        self.assertNotIn(self.RULE, self.allow())
+
+    def test_a_lone_surrogate_on_a_tree_record_leaves_the_force_push_refused(self):
+        """A record of the tree with a lone surrogate in a string parses, and its import failed as it wrote the copy
+        (UnicodeEncodeError, no OSError): the grant handlers then decided nothing, and `A; echo x` ran on A's grant. In
+        1.9.77 the import wrote only the record of take-backs that way."""
+        entry = {"decision": "p-1", "ref": "P1", "rule": self.RULE, "file": str(self.settings),
+                 "at": "2026-01-05T09:00:00+00:00", "n": 1, "of": 1}
+        records = {"tstack-grants-issued.json": {"issued": [entry]}, "tstack-grants-ended.json": {"ended": []}}
+        self.grant(decision="p-1", issued=False)
+        for name in records:
+            with self.subTest(record=name):
+                shutil.rmtree(self.records.parent, ignore_errors=True)
+                shutil.rmtree(self.tree("x").parent, ignore_errors=True)
+                self.tree("x").parent.mkdir()
+                for other, record in records.items():
+                    self.tree(other).write_text(json.dumps(record)[:-1] + (', "x": "\\ud800"}' if other == name else "}"))
+                out = self.pre(f"{self.RULE[5:-1]}; echo x")
+                self.assertEqual((out or {}).get("permissionDecision"), "deny", out)
+                self.assertIn(f"`{self.RULE[5:-1]}`", out["permissionDecisionReason"])
+                self.assertFalse((self.records / name).exists(), "a record whose strings do not encode came in")
 
     def test_a_take_back_on_the_tree_of_no_grant_on_its_issued_record_is_not_imported(self):
         """A forged take-back that names a grant not issued yet, its rule out of every grant file, ended that grant
@@ -3292,7 +3381,7 @@ class GrantRecordsTest(GrantCase):
         self.tree("tstack-grants-ended.json").write_text(json.dumps({"ended": [kept, bare, future, other_rev, line]}))
         module = load_hook(onepw=False)
         module._record_at(self.env["HOME"], str(self.settings), "tstack-grants-ended.json")
-        self.assertEqual(json.loads(self.record.read_text()), {"ended": [kept, bare]})
+        self.assertEqual(json.loads(self.record.read_text()), {"ended": [dict(e, imported=True) for e in (kept, bare)]})
         self.grant(decision="p-9", rule="Bash(echo 9)")
         self.write_settings({"permissions": {"allow": ["Bash(echo 9)"]}})
         self.run_tool("echo 9", now="2026-01-05T09:02:00+00:00")
@@ -3396,13 +3485,14 @@ class GrantRecordsTest(GrantCase):
     def test_a_record_a_writer_puts_there_during_the_import_is_kept(self):
         """The import moves each copy in by link, never the folder by rename (rename(2) replaces an empty folder)."""
         self.tree("x").parent.mkdir()
-        self.tree("tstack-grants-issued.json").write_text("the tree's issued")
+        self.tree("tstack-grants-issued.json").write_text('{"issued": [], "of": "the tree"}')
         self.tree("tstack-grants-ended.json").write_text("the tree's ended")
         module = load_hook(onepw=False)
         module._record_at(self.env["HOME"], str(self.settings), "tstack-grants-issued.json",
                           before_move=lambda: self.record.write_text("a writer's"))
-        self.assertEqual((sorted(os.listdir(self.records)), self.issued.read_text(), self.record.read_text()),
-                         (["tstack-grants-ended.json", "tstack-grants-issued.json"], "the tree's issued", "a writer's"))
+        self.assertEqual((sorted(os.listdir(self.records)), json.loads(self.issued.read_text()), self.record.read_text()),
+                         (["tstack-grants-ended.json", "tstack-grants-issued.json"], {"issued": [], "of": "the tree"},
+                          "a writer's"))
         self.assertEqual(os.listdir(self.records.parent), [self.records.name])
 
     def test_a_sweep_started_mid_import_keeps_the_imported_take_back_and_adds_its_own(self):
@@ -4362,13 +4452,18 @@ class MonitorWatchTest(GrantCase):
         payload = {**self.payload("PreToolUse"), "tool_name": tool, "tool_input": tool_input}
         return mod.dispatch("PreToolUse", json.dumps(payload), self.env)
 
-    def test_the_hooks_own_error_fails_open_and_a_command_it_cannot_read_is_denied(self):
+    def test_the_hooks_own_error_denies_naming_the_guard_and_a_command_it_cannot_read_is_denied(self):
+        """A guard that fails refuses the call it was there to judge, naming itself and the error's class (1.9.78:
+        a failing guard used to decide nothing, so the call ran)."""
         mod = load_hook(onepw=False)
 
         def broken(*_):
             raise RuntimeError("the fleet lookup exploded")
         saved, mod.grant_state_dirs = mod.grant_state_dirs, broken
-        self.assertEqual(self.dispatch(mod, "Monitor", command=self.DEPLOY), "")
+        out = json.loads(self.dispatch(mod, "Monitor", command=self.DEPLOY))["hookSpecificOutput"]
+        self.assertEqual(out["permissionDecision"], "deny")
+        self.assertTrue(out["permissionDecisionReason"].startswith(
+            "tstack guard fleet_monitor_watch failed (RuntimeError): denied"), out)
         self.assertIn("PreToolUse fleet_monitor_watch failed", self.log())
         self.assertIn("the fleet lookup exploded", self.log())
         mod.grant_state_dirs = saved
@@ -6897,6 +6992,41 @@ class PreToolUseDecisionTest(unittest.TestCase):
         self.assertEqual(out, {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "mind this"}})
         self.assertEqual(self.decide(lambda hook: self.mod.Note("mind"), lambda hook: self.mod.Deny("no")), "deny")
         self.assertEqual(self.decide(lambda hook: self.mod.Note("mind"), lambda hook: self.mod.Allow("yes")), "allow")
+
+    def test_a_guard_that_fails_denies_and_names_itself_and_the_error(self):
+        """A guard's failure decided nothing, so the call it was there to refuse ran (a lone surrogate in a tree's
+        record, review 4): every handler that can deny refuses the call when it fails."""
+        def broken(hook):
+            raise UnicodeEncodeError("utf-8", "\ud800", 0, 1, "surrogates not allowed")
+        self.mod._shell_command = broken
+        self.mod.HANDLERS["PreToolUse"] = [self.mod.fleet_grant_alone]
+        out = self.mod.dispatch("PreToolUse", json.dumps({"tool_name": "Bash", "tool_input": {"command": "x"}}),
+                                {"HOME": tempfile.gettempdir()})
+        decided = json.loads(out)["hookSpecificOutput"]
+        self.assertEqual(decided["permissionDecision"], "deny")
+        self.assertTrue(decided["permissionDecisionReason"].startswith(
+            "tstack guard fleet_grant_alone failed (UnicodeEncodeError): denied"), decided)
+
+    def test_a_guard_whose_error_carries_a_lone_surrogate_still_denies(self):
+        """The failure's trace went to the log before the deny was made, and the log write itself raised on a lone
+        surrogate in it (review 5): the hook then exited 1, a non-blocking error, and the call ran."""
+        def broken(hook):
+            raise ValueError("\ud800")
+        self.mod._shell_command = broken
+        self.mod.HANDLERS["PreToolUse"] = [self.mod.fleet_grant_alone]
+        out = self.mod.dispatch("PreToolUse", json.dumps({"tool_name": "Bash", "tool_input": {"command": "x"}}),
+                                {"HOME": tempfile.mkdtemp()})
+        decided = json.loads(out)["hookSpecificOutput"]
+        self.assertEqual(decided["permissionDecision"], "deny")
+        self.assertTrue(decided["permissionDecisionReason"].startswith(
+            "tstack guard fleet_grant_alone failed (ValueError): denied"), decided)
+
+    def test_a_handler_that_never_denies_passes_when_it_fails(self):
+        def broken(hook):
+            raise RuntimeError("a note that broke")
+        self.assertIsNone(self.decide(broken))
+        self.assertEqual(self.decide(broken, lambda hook: self.mod.Allow("granted")), "allow")
+        self.assertEqual(set(self.saved) - self.mod.GUARDS, {self.mod.fleet_agent_grant})
 
     def test_the_gates_return_only_a_deny(self):
         import inspect

@@ -86,9 +86,9 @@ def log(hook_dir, text):
         path = hook_dir / "hook.log"
         if path.exists() and path.stat().st_size > LOG_MAX:
             path.write_text(path.read_text(errors="replace")[-LOG_MAX // 2:])
-        with open(path, "a", encoding="utf-8") as f:
+        with open(path, "a", encoding="utf-8", errors="backslashreplace") as f:
             f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {text.rstrip()}\n")
-    except OSError:
+    except (OSError, ValueError):
         pass
 
 
@@ -1702,6 +1702,7 @@ def fleet_chat_nudge(hook):
 
 CLI_TIMEOUT_S = 25
 GRANT_TTL_S = 30 * 60
+GRANT_SKEW_S = 5 * 60
 SETTINGS_LOCK_WAIT_S = 2.0
 SETTINGS_LOCK_STALE_S = 10.0
 SETTINGS_LOCK_SHARED_WITH_HUB = ".settings.local.json.lock"
@@ -2372,9 +2373,12 @@ def _latest_grants(hook, raw):
     can write, so a line found nothing and hides nothing: a grant whose line was deleted still stands, and is held
     to its bounds. A record holds only the grants of its own root (_read_issued), and the session root's is read
     first: no entry of a root a line names replaces one of the session's (review 2: one did, from a folder the agent
-    made, with a later `at` and no `runs`). A line names a root to read, and a line of a (file, rule) that has no entry on record is kept as a
-    grant on no record (`issued` None), which grants nothing and is taken back at once: a grant of a hub that wrote
-    no record, or a forged line, whose failure is fewer allowed calls; its take-back is marked `line` (_line_ended).
+    made, with a later `at` and no `runs`). An entry the import copied from the tree (`imported`, _import_records)
+    hides only the lines of the grants imported with it: the tree is any agent's to write, so a forged entry of a rule
+    hid a later line of it, and its take-back kept the rule. A line names a root to read, and a line of a (file, rule)
+    that has no entry on record is kept as a grant on no record (`issued` None), which grants nothing and is taken
+    back at once: a grant of a hub that wrote no record, or a forged line, whose failure is fewer allowed calls; its
+    take-back is marked `line` (_line_ended).
     Each grant has `over` (on a record of take-backs of the root, _ended_of), `kept` (its rule, while in its file, the
     owner's: _kept_of), `ended` (the why recorded there), `turn` (its `n`), and `runs` and `ref`, all from the record,
     never from a line."""
@@ -2388,20 +2392,26 @@ def _latest_grants(hook, raw):
     for file in ([own] if own else []) + [f for f, _ in lines]:
         places.setdefault(os.path.dirname(file), file)
     latest = {}
+    imported = set()
     for place in places.values():
-        newest = {(entry["file"], entry["rule"]): entry for entry in _issued_of(hook, place)}
+        entries = _issued_of(hook, place)
+        imported.update(_ended_key(e) for e in entries if e.get("imported") is True)
+        newest = {(entry["file"], entry["rule"]): entry for entry in entries}
         for key, entry in newest.items():
             if key not in latest:
                 latest[key] = _recorded_grant(entry, _ended_of(hook, entry["file"]), _kept_of(hook, entry["file"]),
                                               _old_line_why(hook, entry))
     for file, entry in lines:
         key = (file, entry["rule"])
-        if entry.get("op") != "grant" or (key in latest and latest[key]["issued"] is not None):
+        if entry.get("op") != "grant":
             continue
         named = dict(entry, file=file)
+        issued = latest[key]["issued"] if key in latest else None
+        if issued is not None and (issued.get("imported") is not True or _ended_key(named) in imported):
+            continue
         over, kept = (_ended_why(e, named, line=True) is not None or _line_ended(e, named)
                       for e in (_ended_of(hook, file), _kept_of(hook, file)))
-        if key not in latest or not over:
+        if issued is not None or key not in latest or not over:
             latest[key] = dict(entry, file=file, ref=entry.get("ref") if isinstance(entry.get("ref"), str) else None,
                                ended=None, turn=1, over=over, kept=kept, issued=None, runs=None)
     return list(latest.values())
@@ -2479,7 +2489,8 @@ def _import_records(hooks, records, before_move=None):
     folder is made with mkdir (one there already is another importer's, and this one stops), and each copy is linked
     in, a record already there kept. Never a rename of the whole folder: rename(2) replaces an empty folder, so a late
     importer could swap its copy in over a writer's. Of the record of take-backs, only the take-backs _ended_to_import
-    keeps come in. `before_move` runs once the folder is made, before the records move in."""
+    keeps come in; each entry of both comes in marked `imported` (_issued_to_import). `before_move` runs once the
+    folder is made, before the records move in."""
     import shutil
     import tempfile
     fresh = None
@@ -2494,9 +2505,11 @@ def _import_records(hooks, records, before_move=None):
                 continue
             if name == ENDED_RECORD:
                 record = _ended_to_import(data, tree[ISSUED_RECORD], os.path.dirname(hooks))
-                if record is None:
-                    continue
-                data = (json.dumps(record, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+            else:
+                record = _issued_to_import(data)
+            if record is None or not _encodes(record):
+                continue
+            data = (json.dumps(record, indent=2) + "\n").encode("ascii")
             with open(os.path.join(fresh, name), "wb") as f:
                 f.write(data)
             copied.append(name)
@@ -2516,6 +2529,16 @@ def _import_records(hooks, records, before_move=None):
     finally:
         if fresh is not None:
             shutil.rmtree(fresh, ignore_errors=True)
+
+
+def _encodes(record):
+    """Whether every string of `record` encodes as UTF-8: a lone surrogate (\\ud800) parses from JSON but breaks every
+    later rewrite of the record (_write_json, the sweep's removal line), so such a record is not imported."""
+    try:
+        json.dumps(record, ensure_ascii=False).encode("utf-8")
+    except ValueError:
+        return False
+    return True
 
 
 def _regular_bytes(path):
@@ -2554,14 +2577,31 @@ def _issued_keys(data):
     return frozenset((f, d, r, a, v) for file, d, r, a, rev in keys for f in (file, None) for v in {rev, None})
 
 
+def _issued_to_import(data):
+    """The tree's record of issued grants, whose bytes are `data`, as the import copies it, every other key kept: each
+    entry marked `imported`. The tree's copy is any checkout's or agent's to write, so no imported entry hides a later
+    line of its rule (_latest_grants). None when it does not parse as an object."""
+    try:
+        record = json.loads(data)
+    except ValueError:
+        return None
+    if not isinstance(record, dict):
+        return None
+    issued = record.get("issued")
+    if isinstance(issued, list):
+        record["issued"] = [dict(e, imported=True) if isinstance(e, dict) else e for e in issued]
+    return record
+
+
 def _ended_to_import(data, issued, claude):
     """The tree's record of take-backs, whose bytes are `data`, as the import copies it, every other key kept: only the
     take-backs of a grant on the tree's record of issued grants, whose bytes are `issued` (_issued_keys, never one marked
     `line`), whose rule is in none of the root's grant files in `claude`, read under the settings lock the
     import holds. The tree's copy is any checkout's or agent's to write, and a take-back is written once its rule is
     out, so one whose rule is still there is forged: imported, it made a one-time grant's rule the owner's, for good;
-    and one of no grant issued yet named a future grant, and ended it at birth with its rule the owner's. None when the
-    record or a grant file does not parse."""
+    and one of no grant issued yet named a future grant, and ended it at birth with its rule the owner's. Each comes in
+    marked `imported`: it ends its grant, and never makes a rule the owner's (_read_ended). None when the record or a
+    grant file does not parse."""
     try:
         record = json.loads(data)
     except ValueError:
@@ -2572,7 +2612,7 @@ def _ended_to_import(data, issued, claude):
     keys = _issued_keys(issued)
     ended = record.get("ended")
     if isinstance(ended, list):
-        record["ended"] = [e for e in ended if isinstance(e, dict) and e.get("line") is not True
+        record["ended"] = [dict(e, imported=True) for e in ended if isinstance(e, dict) and e.get("line") is not True
                            and all(isinstance(e.get(k), str) for k in ("decision", "rule", "granted"))
                            and _ended_key(dict(e, file=e.get("file") or None, at=e["granted"])) in keys
                            and not any(e["rule"] in allow for allow in allows)]
@@ -2603,11 +2643,12 @@ def _ended_entry(grant, at, why, line=False):
             **({"line": True} if line else {}), "at": at, "why": why}
 
 
-def _ended_in(record):
+def _ended_in(record, imported=True):
     """Each take-back in a record's `ended` by its _ended_key, to its `why` (`used`, `revoked`, `expired`, or
     `superseded`: the hub granted the rule anew; "" for an entry that names none). The file and rev are None for an
     entry that names none: master's hook and hub write neither (_ended_why). An entry marked `line` is keyed apart,
-    behind "line" (_line_ended), and no lookup of an issued grant's take-back reads it."""
+    behind "line" (_line_ended), and no lookup of an issued grant's take-back reads it. With `imported` False, an entry
+    the import copied from the tree (`imported`) is left out."""
     ended = record.get("ended") if isinstance(record, dict) else None
     if not isinstance(ended, list):
         return {}
@@ -2615,7 +2656,8 @@ def _ended_in(record):
             (e["file"] if isinstance(e.get("file"), str) and e["file"] else None, e["decision"], e["rule"], e["granted"],
              e["rev"] if isinstance(e.get("rev"), str) and e["rev"] else None):
             e["why"] if isinstance(e.get("why"), str) else "" for e in ended
-            if isinstance(e, dict) and all(isinstance(e.get(k), str) for k in ("decision", "rule", "granted"))}
+            if isinstance(e, dict) and all(isinstance(e.get(k), str) for k in ("decision", "rule", "granted"))
+            and (imported or e.get("imported") is not True)}
 
 
 def _ended_why(ended, grant, line=False):
@@ -2718,21 +2760,22 @@ def _rules_gone(file, ended):
 def _read_ended(home, file):
     """The take-backs on record for `file`'s root (_ended_in), three ways: every one, the folder's record's with the
     tree's copy's (_tree_ended), each of which ends its grant, so it may not run; those that make a rule still in its
-    file the owner's, which no sweep takes: the folder's, with those of the tree's copy that _rules_gone keeps; and the
-    why of each take-back marked `line` on the tree's copy alone, by its file, decision, rule and granted `at`
-    (_old_line_why). None from a record that is not there, cannot be read or does not parse (the sweep then errs toward
-    fewer allowed calls, as everywhere)."""
+    file the owner's, which no sweep takes: the folder's but those it imported, with those of the tree's copy that
+    _rules_gone keeps; and the why of each take-back marked `line` on the tree's copy alone, by its file, decision,
+    rule and granted `at` (_old_line_why). None from a record that is not there, cannot be read or does not parse
+    (the sweep then errs toward fewer allowed calls, as everywhere)."""
     record = _record_file(home, file)
-    ended = {}
+    ended, ours = {}, {}
     if record is not None:
         try:
             with open(record, encoding="utf-8") as f:
-                ended = _ended_in(json.load(f))
+                held = json.load(f)
+            ended, ours = _ended_in(held), _ended_in(held, imported=False)
         except (OSError, ValueError):
             pass
     tree = {key: why for key, why in _tree_ended(file).items() if key not in ended}
     lines = {key[1:5]: why for key, why in tree.items() if key[0] == "line"}
-    return {**tree, **ended}, {**_rules_gone(file, tree), **ended}, lines
+    return {**tree, **ended}, {**_rules_gone(file, tree), **ours}, lines
 
 
 def _ended_of(hook, file):
@@ -2802,6 +2845,14 @@ def _issued_at(grant):
     """When the hub issued the grant, from its entry on the record of issued grants; None when it is on none."""
     issued = grant.get("issued")
     return _instant(issued.get("at")) if isinstance(issued, dict) else None
+
+
+def _grant_over(grant, now):
+    """Whether `grant` is past its GRANT_TTL_S by the `at` on its entry on record (_issued_at), or on no record. An `at`
+    more than GRANT_SKEW_S ahead of `now` is no hub's stamp (each writes its own clock's now): a forged one, which
+    never came to its end, so its grant is over."""
+    at = _issued_at(grant)
+    return at is None or not -GRANT_SKEW_S <= now - at < GRANT_TTL_S
 
 
 def _stands(hook, grant):
@@ -3120,19 +3171,19 @@ def _list_of(grant):
 def _due_grants(hook, raw, used, now, failed=False, void=None):
     """(grant, why) for each standing grant to end now: `used` (its call ran), `revoked` (a call of its list failed,
     or the list is `void`: a list is a sequence, and what comes after a failure was allowed for another state of
-    things), `expired` (30 minutes after the `at` on the hub's record of issued grants, or on no such record). A grant
+    things), `expired` (30 minutes after the `at` on the hub's record of issued grants, or on no such record, or with an
+    `at` ahead of now: _grant_over). A grant
     is the sweep's while its rule is (_held), ended or not."""
     standing = [g for g in _latest_grants(hook, raw) if _held(hook, g)]
     spent = _spent(standing, used)
     lost = {_list_of(g) for g in spent if failed} | ({void} if void else set())
     due = []
     for grant in standing:
-        at = _issued_at(grant)
         if any(grant is g for g in spent):
             due.append((grant, "used"))
         elif _list_of(grant) in lost:
             due.append((grant, "revoked"))
-        elif at is None or now - at >= GRANT_TTL_S:
+        elif _grant_over(grant, now):
             due.append((grant, "expired"))
     return due
 
@@ -3217,9 +3268,10 @@ def _with_ended(record, ended):
 def _take_back_locked(home, file, rule, ended):
     """Take `rule` out of `file`, then put the grant on the root's record of take-backs (`ended`: its decision, rule,
     granted and the stamp). A grant already on the record, read again under the lock, is over: the rule there is the
-    owner's, and stays. The settings first: a record that cannot be written leaves fewer allowed calls, never more;
-    one that does not parse is left as it is (the hub's expireGrants), and what was not recorded is returned. A file
-    that is no grant file now (_grant_file: a symlink made since the sweep read it) is left, and nothing written."""
+    owner's, and stays; not for a take-back the import copied (`imported`), which makes no rule the owner's. The
+    settings first: a record that cannot be written leaves fewer allowed calls, never more; one that does not parse
+    is left as it is (the hub's expireGrants), and what was not recorded is returned. A file that is no grant file now
+    (_grant_file: a symlink made since the sweep read it) is left, and nothing written."""
     if _grant_file(file) != file:
         return None
     settings = _loaded(file)
@@ -3236,7 +3288,7 @@ def _take_back_locked(home, file, rule, ended):
         record, unrecorded = None, f"{e}: the take-back of {ended['decision']} is not on record"
     else:
         record, unrecorded = record if isinstance(record, dict) else {}, None
-        named, taken = {**ended, "at": ended["granted"]}, _ended_in(record)
+        named, taken = {**ended, "at": ended["granted"]}, _ended_in(record, imported=False)
         line = ended.get("line") is True
         if _ended_why(taken, named, line=line) is not None or (line and _line_ended(taken, named)):
             return None
@@ -3356,8 +3408,7 @@ def fleet_agent_grant(hook):
     # minutes and its list's turn, whatever grants.jsonl holds.
     file = os.path.realpath(os.path.join(root, ".claude", AGENT_GRANTS))
     grants = [g for g in _latest_grants(hook, b"") if g["rule"] == rule and os.path.realpath(g["file"]) == file]
-    at = _issued_at(grants[0]) if grants else None
-    if (at is None or fleet_now(hook.env) - at >= GRANT_TTL_S or not _live(hook, grants[0])
+    if (not grants or _grant_over(grants[0], fleet_now(hook.env)) or not _live(hook, grants[0])
             or _out_of_turn(hook, grants[0], grants)):
         return None
     return Allow("tstack: the user allowed this exact Agent call once, on the fleet page (a permission grant).")
@@ -3509,8 +3560,7 @@ def _alone_denial(hook, d, grant, grants, now):
     grant is then taken back), out of its list's turn (the list void when an earlier call of it never ran), or a
     file it binds moved (the grant and its list revoked)."""
     ref = grant.get("ref") or grant["decision"]
-    at = _issued_at(grant)
-    if at is None or now - at >= GRANT_TTL_S:
+    if _grant_over(grant, now):
         try:
             _close_due_grants_exclusively(hook, d, None, now)
         except Exception:  # the hub's timer or the next sweep takes the rule back; the call is refused all the same
@@ -3581,8 +3631,7 @@ def _alone_without_fleet(hook, command):
         if not call or grant["issued"] is None or not _held(hook, grant):
             continue
         ref, runs = grant["ref"] or grant["decision"], _is_call(command, call) or _holds_call(command, call)
-        at = _issued_at(grant)
-        if at is None or now - at >= GRANT_TTL_S:
+        if _grant_over(grant, now):
             try:
                 unrecorded = _take_back(hook.env.get("HOME"), grant["file"], grant["rule"],
                                         _ended_entry(grant, fleet_stamp(hook.env), "expired"))
@@ -5314,6 +5363,11 @@ HANDLERS = {
     "SubagentStop": [fleet_heartbeat],
 }
 
+# The PreToolUse handlers that can deny, each of which denies the call when it fails (dispatch); fleet_agent_grant
+# only allows, and its failure allows nothing.
+GUARDS = frozenset({fleet_spawn_effort, fleet_moved_writes, land_turn_gate, suite_gate, onepw_hold, fleet_monitor_watch,
+                    fleet_grant_alone})
+
 
 def _context(event, text):
     return json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}})
@@ -5338,7 +5392,8 @@ def dispatch(event, raw, env):
     output into the block decision, whose reason (every handler's text) Claude reads as it goes on. On
     PreToolUse, a handler's Deny refuses the call, with the Deny texts alone as the reason; else an Allow (an Agent
     call the hub granted) allows it; else a Note is context beside the call's result, with no decision; any other
-    text decides nothing.
+    text decides nothing. A PreToolUse handler that can deny (GUARDS) and fails denies the call, naming itself and
+    the error; any other handler that fails is logged and decides nothing.
     Under TSTACK_ROLE=tape (a tape builder's own `claude -p` call) no handler runs: no wake lands in the
     compaction prompt, and nothing is written or spawned (docs/design/tape.md, section 4)."""
     if env.get("TSTACK_ROLE") == "tape":
@@ -5352,9 +5407,12 @@ def dispatch(event, raw, env):
     for handler in HANDLERS.get(event, ()):
         try:
             text = handler(hook)
-        except Exception:  # one handler failing does not take the others down
+        except Exception as e:  # one handler failing does not take the others down
             log(hook.data_dir, f"{event} {handler.__name__} failed\n{traceback.format_exc()}")
-            continue
+            if event != "PreToolUse" or handler not in GUARDS:
+                continue
+            text = Deny(f"tstack guard {handler.__name__} failed ({type(e).__name__}): denied. A guard that cannot "
+                        f"decide a call refuses it; the trace is in {hook.data_dir / 'hook.log'}.")
         if text and text.strip():
             parts.append(text.strip())
             blocked = blocked or isinstance(text, Block)
