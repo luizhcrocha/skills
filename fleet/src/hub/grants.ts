@@ -873,14 +873,25 @@ function withEnded(record: JsonObject, ended: JsonObject): JsonObject {
   return { ...record, ended: [...(asArray(record["ended"]) ?? []), ended].slice(-ENDED_KEPT) };
 }
 
+/** Whether grant line `line`, on no record, came after `entry`, on record, by `at` (the hook's `_later`); a line whose
+ * `at` does not read is later: it then hides the entry's grant, which is fewer allowed calls. */
+function later(line: Named, entry: Named): boolean {
+  const [at, then] = [parseInstant(line.at), parseInstant(entry.at)];
+
+  return at === undefined || then === undefined || at >= then;
+}
+
 /** The grant of each file and rule: the newest entry of it on the record of issued grants of each root that the
  * grants.jsonl of `dirs`, their heartbeats (each session's project, else its cwd) or this hub's memory name, left
  * out when it is on its root's record of take-backs (`endedIn`: over, whatever the file holds). grants.jsonl is the
  * fleet's log, any agent's to write: a line names a root and grants nothing, and a deleted one hides no grant whose
- * root another source names. An entry the import copied from the tree hides no line but those of the grants
- * imported with it: the tree is any agent's to write (grant-records.ts). A line of a file and rule with no entry on
- * record is a grant on no record (`recorded` false), which is taken back at once: a grant of a hub that wrote no record, or a forged line; its
- * take-back is marked `line` (`lineEnded`). A `remove` line ends nothing here. */
+ * root another source names. A line is the grant of its own entry (by `endedKey`), never of an earlier entry of its
+ * rule (the hook's `_latest_grants`): a line with no entry is a grant on no record (`recorded` false), which is taken
+ * back at once: a grant of a hub that wrote no record (the host's), or a forged line; its take-back is marked `line`
+ * (`lineEnded`). Such a line replaces the rule's grant on record when that grant is over and the line came after it
+ * (`later`), or the entry is one the import copied from the tree, any agent's to write (grant-records.ts); else it
+ * hides nothing, so no forged line moves a standing grant. Hidden behind a grant the hook took back, a second
+ * allow-once of its rule kept its rule past every sweep. A `remove` line ends nothing here. */
 function latestGrants(dirs: readonly string[], home: string | undefined): Issued[] {
   const latest = new Map<string, Issued>();
   const endedOf = new Map<string, Ended>();
@@ -924,30 +935,31 @@ function latestGrants(dirs: readonly string[], home: string | undefined): Issued
 
   for (const grant of issued.values()) name(grant.file, grant.dir);
 
-  const onRecord = new Set<string>();
-  const fromTree = new Set<string>();
-  const imported = new Set<string>();
+  const onRecord = new Map<string, { readonly entry: Entry; readonly over: boolean }>();
+  const paired = new Set<string>();
 
   for (const { file, dir } of roots.values()) {
     const entries = issuedEntries(home, file, false);
 
-    for (const e of entries) if (e.imported) imported.add(endedKey(e.file, e.decision, e.rule, e.at, e.rev ?? ""));
+    for (const e of entries) paired.add(endedKey(e.file, e.decision, e.rule, e.at, e.rev ?? ""));
 
     for (const [key, entry] of newestEntries(entries)) {
       // A record holds its own root's grants alone (`issuedEntries`); the first record to name a grant keeps it.
       if (onRecord.has(key)) continue;
-      onRecord.add(key);
+      const over = isEnded(entry);
+      onRecord.set(key, { entry, over });
 
-      if (entry.imported) fromTree.add(key);
-
-      if (!isEnded(entry)) latest.set(key, { dir: entry.dir ?? dir, decision: entry.decision, file: entry.file, rule: entry.rule, at: entry.at, rev: entry.rev, recorded: true });
+      if (!over) latest.set(key, { dir: entry.dir ?? dir, decision: entry.decision, file: entry.file, rule: entry.rule, at: entry.at, rev: entry.rev, recorded: true });
     }
   }
 
   for (const line of lines) {
     const key = `${line.file}\n${line.rule}`;
 
-    if (onRecord.has(key) && (!fromTree.has(key) || imported.has(endedKey(line.file, line.decision, line.rule, line.at, line.rev ?? "")))) continue;
+    if (paired.has(endedKey(line.file, line.decision, line.rule, line.at, line.rev ?? ""))) continue;
+    const held = onRecord.get(key);
+
+    if (held !== undefined && !held.entry.imported && !(held.over && later(line, held.entry))) continue;
 
     if (!isEnded(line, true)) latest.set(key, line);
     else if (latest.get(key)?.recorded === true) latest.delete(key);

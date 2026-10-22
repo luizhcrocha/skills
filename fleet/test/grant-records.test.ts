@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { recordOf, recordsDir } from "../src/hub/grant-records.ts";
 import { expireGrants } from "../src/hub/grants.ts";
@@ -190,6 +190,13 @@ describe("the one-time import of a record kept in the tree", () => {
     expect(allow).toEqual(["Bash(ls)"]);
   });
 
+  test("an imported entry's own line is that entry's grant, not one on no record: the grant keeps its 30 minutes", async () => {
+    const within = { ...forged, at: "2026-01-05T09:04:00+00:00" };
+    const { taken, allow } = await sweepImported([within], [], [{ decision: within.decision, at: within.at }]);
+    expect(taken).toEqual([]);
+    expect(allow).toEqual(["Bash(ls)", RULE]);
+  });
+
   test("an imported entry dated more than GRANT_SKEW_MS ahead of now is over: no hub wrote that `at`, and it never came to its 30 minutes", async () => {
     const { taken, allow, file } = await sweepImported([{ ...forged, at: "2099-01-01T00:00:00+00:00" }], [], [{ decision: "p-other", rule: "Bash(unrelated)", at: "2026-01-05T09:00:00+00:00" }]);
     expect(taken).toEqual([`${RULE} in ${file}`]);
@@ -220,5 +227,61 @@ describe("the one-time import of a record kept in the tree", () => {
     expect(await new Response(sweep?.stdout).text()).toBe(`${JSON.stringify([`${rule} in ${file}`])}\n`);
     const ended = asArray(asObject(JSON.parse(readFileSync(join(recordsDir(home, root), "tstack-grants-ended.json"), "utf8")))?.["ended"]) ?? [];
     expect(ended.map((e) => [asObject(e)?.["decision"], asObject(e)?.["why"]])).toEqual([["p-0", "used"], ["p-1", "expired"]]);
+  });
+});
+
+describe("a grant line is the grant of its own entry on record, never of an earlier entry of its rule", () => {
+  const RULE = "Bash(git push --force origin HEAD:main)";
+  const FIRST = "2026-01-05T09:00:00+00:00";
+  const AGAIN = "2026-01-05T09:10:00+00:00";
+
+  /** A root whose records hold the entries `issued` and the take-backs `ended`, its settings `allow`, and a fleet
+   * whose grants.jsonl holds `lines`; `sweep(now)` is what a sweep at `now` took back, and the file's rules after. */
+  const root = (issued: readonly object[], ended: readonly object[], lines: readonly object[], allow: readonly string[] = [RULE]) => {
+    const base = tmp("grant-lines-");
+    const home = join(base, "home");
+    const file = join(base, "root", ".claude", "settings.local.json");
+    const records = recordsDir(home, join(base, "root"));
+    const fleetDir = join(base, "fleet");
+    const named = (entries: readonly object[]) => entries.map((e) => ({ decision: "p-1", rule: RULE, file, ...e }));
+
+    for (const dir of [dirname(file), records, fleetDir]) mkdirSync(dir, { recursive: true });
+    writeFileSync(file, JSON.stringify({ permissions: { allow } }));
+    writeFileSync(join(records, "tstack-grants-issued.json"), JSON.stringify({ issued: named(issued).map((e) => ({ ref: "P1", n: 1, of: 1, ...e })) }));
+    writeFileSync(join(records, "tstack-grants-ended.json"), JSON.stringify({ ended: named(ended) }));
+    writeFileSync(join(fleetDir, "grants.jsonl"), named(lines).map((l) => `${JSON.stringify({ op: "grant", ref: "P1", by: "host", ...l })}\n`).join(""));
+
+    const rules = () => asObject(asObject(JSON.parse(readFileSync(file, "utf8")))?.["permissions"])?.["allow"];
+    const sweep = async (now: string) => ({ taken: await expireGrants([fleetDir], new Date(now), now, home), allow: rules() });
+    const takeBacks = () => (asArray(asObject(JSON.parse(readFileSync(join(records, "tstack-grants-ended.json"), "utf8")))?.["ended"]) ?? []).map((e) => [asObject(e)?.["granted"], asObject(e)?.["line"] ?? false]);
+
+    return { file, sweep, takeBacks };
+  };
+
+  /** The first allow-once, used and taken back by the hook; the rule is back in the file (`root`'s default) for a second. */
+  const used = { at: FIRST };
+  const usedTakeBack = { granted: FIRST, at: "2026-01-05T09:01:00+00:00", why: "used" };
+
+  test("a second allow-once with no entry, after the first one's take-back, is a grant on no record: its rule goes at the next sweep", async () => {
+    const { file, sweep, takeBacks } = root([used], [usedTakeBack], [{ at: FIRST }, { at: AGAIN }]);
+    expect(await sweep("2026-01-05T09:11:00+00:00")).toEqual({ taken: [`${RULE} in ${file}`], allow: [] });
+    expect(takeBacks()).toEqual([[FIRST, false], [AGAIN, true]]);
+  });
+
+  test("a second allow-once with its own entry, as the hub writes it, stands its 30 minutes and then goes", async () => {
+    const { file, sweep } = root([used, { at: AGAIN }], [usedTakeBack], [{ at: FIRST }, { at: AGAIN }]);
+    expect(await sweep("2026-01-05T09:20:00+00:00")).toEqual({ taken: [], allow: [RULE] });
+    expect(await sweep("2026-01-05T09:40:00+00:00")).toEqual({ taken: [`${RULE} in ${file}`], allow: [] });
+  });
+
+  test("a line on no record after a grant that still stands moves nothing: the grant keeps its 30 minutes", async () => {
+    const { file, sweep } = root([used], [], [{ at: FIRST }, { decision: "p-forged", at: AGAIN }]);
+    expect(await sweep("2026-01-05T09:11:00+00:00")).toEqual({ taken: [], allow: [RULE] });
+    expect(await sweep("2026-01-05T09:30:00+00:00")).toEqual({ taken: [`${RULE} in ${file}`], allow: [] });
+  });
+
+  test("a line on no record from before a grant on record is no grant after that grant's take-back: the owner's rule stays", async () => {
+    const { sweep } = root([used], [usedTakeBack], [{ decision: "p-0", at: "2026-01-05T08:00:00+00:00" }, { at: FIRST }]);
+    expect(await sweep("2026-01-05T10:00:00+00:00")).toEqual({ taken: [], allow: [RULE] });
   });
 });
