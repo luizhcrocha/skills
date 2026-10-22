@@ -1348,9 +1348,9 @@ describe("permission", () => {
   describe("asked before the call runs", () => {
     // An ask names the script it runs by an absolute path, and the file is there to be read.
     const TASKS = mkdtempSync(join(tmpdir(), "fleet-tasks-"));
-    const DEPLOY = `${TASKS}/deploy-worker --approve-migrations`;
+    const DEPLOY = `bash ${TASKS}/deploy-worker --approve-migrations`;
     const MIGRATE = `bash ${TASKS}/migrate-db.sh --env production`;
-    const SMOKE = `${TASKS}/smoke --env production`;
+    const SMOKE = `bash ${TASKS}/smoke --env production`;
     const sha = (name: string): string => createHash("sha256").update(readFileSync(join(TASKS, name))).digest("hex");
 
     beforeEach(() => {
@@ -1562,14 +1562,18 @@ describe("permission", () => {
         return refused(...args);
       };
 
-      expect(with_(`${DEPLOY} --tag $(git describe)`)).toContain("no permission for this call: the call has a command substitution ($( ), backticks or <( )), so what it runs is decided when it runs");
+      expect(with_(`${DEPLOY} --tag $(git describe)`)).toContain("no permission for this call: the call has a command substitution ($( ), backticks, <( ) or >( )), so what it runs is decided when it runs");
       expect(with_(`${DEPLOY} --tag \`git describe\``)).toContain("command substitution");
       expect(with_("bash tasks/deploy.sh --env production")).toContain("the call runs the script tasks/deploy.sh by a relative path: give its absolute path, so the file the user allows is the file that runs");
       expect(with_("cd /work/repo && ./deploy.sh")).toContain("the script ./deploy.sh by a relative path");
-      expect(with_("CI=1 timeout 600 python3 scripts/release.py")).toContain("the script scripts/release.py by a relative path");
+      expect(with_("CI=1 python3 scripts/release.py")).toContain("the script scripts/release.py by a relative path");
+      // Only an interpreter binds its script: a script run as a program, or behind a wrapper, is no page ask.
+      expect(with_(`${TASKS}/deploy-worker --approve-migrations`)).toContain(`no page ask can hold this call: ${TASKS}/deploy-worker is run as a program`);
+      expect(with_("CI=1 timeout 600 python3 scripts/release.py")).toContain("timeout runs another command");
       expect(with_(DEPLOY, "node build/index.js")).toContain("no permission for call 2 of 2 (`node build/index.js`): the call runs the script build/index.js by a relative path");
       expect(with_(`bash ${TASKS}/gone.sh`)).toContain(`it runs ${TASKS}/gone.sh, which is no file that can be read`);
-      expect(with_("bash tasks/deploy.sh")).toContain("Ask for a form an exact rule can hold");
+      // A page ask's refusal carries its own advice, so the rule refusal's SUPPORTED_FORM is not added on top.
+      expect(with_("bash tasks/deploy.sh")).not.toContain("Ask for a form an exact rule can hold");
       expect(rows("decisions")).toEqual([]);
       // A command found by name runs whatever its name finds then: asked for as it is, and bound to no file.
       const named = ask("p1");

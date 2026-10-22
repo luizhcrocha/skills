@@ -3057,7 +3057,7 @@ describe("a permission's answer grants the call once", () => {
       await start();
       const [, second = "", third = ""] = CALLS;
 
-      for (const more of [[second], [second, third, "rm -rf build"], [second, "just deploy-worker --approve-migrations --force"], [third, second]]) {
+      for (const more of [[second], [second, third, "ls build"], [second, "just deploy-worker --approve-migrations --force"], [third, second]]) {
         withRows(several({ more }));
         const got = await post(yes);
         expect([got.status, asString(got.body["error"])?.includes("look at it again (reload the page)")]).toEqual([409, true]);
@@ -3080,7 +3080,7 @@ describe("a permission's answer grants the call once", () => {
         [{ more: [second, "just deploy-worker | tail -n 5"] }, "no grant: no permission for call 3 of 3 (`just deploy-worker | tail -n 5`): the call has a |, and no exact allow rule clears a piped command"],
         [{ more: [FIRST] }, "no grant: call 2 is call 1 again (`just build-worker`): one grant is one run, so a command asked for twice cannot be granted twice"],
         // What the CLI refuses in an ask, a row written past it is refused for too.
-        [{ more: [second, "just deploy --tag $(git describe)"] }, "no grant: no permission for call 3 of 3 (`just deploy --tag $(git describe)`): the call has a command substitution ($( ), backticks or <( )), so what it runs is decided when it runs, not when the user reads it: give the value itself, or put the lines in a script"],
+        [{ more: [second, "just deploy --tag $(git describe)"] }, "no grant: no permission for call 3 of 3 (`just deploy --tag $(git describe)`): the call has a command substitution ($( ), backticks, <( ) or >( )), so what it runs is decided when it runs, not when the user reads it: give the value itself, or put the lines in a script"],
         [{ more: ["bash tasks/deploy.sh"] }, "no grant: no permission for call 2 of 2 (`bash tasks/deploy.sh`): the call runs the script tasks/deploy.sh by a relative path: give its absolute path, so the file the user allows is the file that runs"],
         [{ more: ["just d\u0435ploy"] }, "no grant: no permission for call 2 of 2 (`just d\u0435ploy`): the call has a character outside printable ASCII at position 7 (U+0435), which the user cannot tell from a plain one on the card"],
         [{ more: Array.from({ length: 10 }, (_, k) => `echo ${String(k)}`) }, "no grant: a permission asks for at most 10 calls, and this one has 11: a longer sequence is a script (`bash tasks/<name>.sh`)"],

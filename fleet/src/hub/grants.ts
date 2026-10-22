@@ -53,7 +53,7 @@ import { addAutoModeRule, userSettingsFile } from "./user-settings.ts";
 import { readBeats } from "../heartbeat.ts";
 import { parseLedger, type Decision } from "../ledger/model.ts";
 import { findDecision } from "../ledger/numbers.ts";
-import { ALLOW_ONCE, allows, asksKind, callsOf, GRANT_TTL_MS, offersKind, permissionOptions, grantFileOf, PERMISSION_TOOLS, readRun, refusalRev, ruleOf, rulesOf, runsOf, whyNoAsks, whyNoCalls } from "../ledger/permission.ts";
+import { ALLOW_ONCE, allows, asksKind, callsOf, GRANT_TTL_MS, offersKind, permissionOptions, grantFileOf, PERMISSION_TOOLS, readRun, refusalRev, ruleOf, rulesOf, runsOf, whyNoAsks, whyNoCalls, whyRunsMoved } from "../ledger/permission.ts";
 import { parseInstant } from "../clock.ts";
 import { cwdOf } from "../procs.ts";
 import { alive } from "../registry.ts";
@@ -347,14 +347,12 @@ function alike(a: readonly string[], b: readonly string[]): boolean {
 
 /** Why the answer does not grant the files the calls run now: a call that runs a script by an absolute path is
  * bound to the file's content. The row records each file's sha256 when the permission is asked, the page shows
- * it and sends it back, and the hub hashes the files itself: a script edited after the card opened grants nothing. */
+ * it and sends it back, and the hub hashes the files itself: a script edited after the card opened grants nothing,
+ * nor a ws hook that appeared after a card bound its absence (whyRunsMoved). */
 function filesMoved(answered: Answered, asked: Asked): string | undefined {
-  if (!alike(asked.runs, asked.bound)) {
-    const [odd = ""] = [...asked.runs.filter((entry) => !asked.bound.includes(entry)), ...asked.bound.filter((entry) => !asked.runs.includes(entry))];
-    const path = readRun(odd)?.path;
+  const moved = whyRunsMoved(asked.runs, asked.bound);
 
-    return `a file this permission's call runs changed after it was asked for${path === undefined ? "" : ` (${path})`}, so the yes would allow another file than the one shown: ask the coordinator to record the permission again`;
-  }
+  if (moved !== undefined) return moved;
 
   if (!alike(answered.runs ?? [], asked.bound)) return "the page showed other files than the ones the permission's calls run now: look at it again (reload the page)";
 

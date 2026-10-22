@@ -2167,11 +2167,13 @@ SCRIPT_LEADERS = ("{", "!", "if", "then", "else", "elif", "do", "while", "until"
                   "builtin", "noglob", "exec", "env", "timeout", "stdbuf")
 
 
-def _rule_commands(call):
+def _rule_commands(call, quoted=lambda c, quote: c):
     """The words of each simple command of a Bash call a rule can hold, as the CLI's simpleCommands splits them: on
-    `;`, `&&`, `||`, `&` and a group's parentheses outside quotes, each word without its quotes. Not _simple_commands,
-    which parses bash whole: the files a card binds are the ones fleet-host finds again at the grant, so the split is
-    the CLI's, character for character."""
+    `;`, `&&`, `||`, `&` and a group's parentheses outside quotes, each word without its quotes, each quoted character
+    as `quoted` gives it from the character and its quote (the CLI's splitCall, for _expanded_word and
+    _literal_dollar). Not _simple_commands, which parses bash whole: the
+    files a card binds are the ones fleet-host finds again at the grant, so the split is the CLI's, character for
+    character."""
     commands, words, word, quote = [], [], None, ""
 
     def end_word():
@@ -2192,7 +2194,7 @@ def _rule_commands(call):
             if c == quote:
                 quote = ""
             else:
-                word = (word or "") + c
+                word = (word or "") + quoted(c, quote)
         elif c in "'\"":
             quote = c
             word = word if word is not None else ""
@@ -2206,46 +2208,55 @@ def _rule_commands(call):
     return commands
 
 
-def _running_commands(call):
-    """Each simple command of a Bash call from the program that runs: the CLI's runningCommands. Assignments, and
-    leaders with their flags and durations, before it are skipped."""
+def _ask_pieces(call, quoted=lambda c, quote: c):
+    """The simple commands of a Bash call (each quoted character as `quoted` gives it), each also split at a word of
+    only `|` and `&`, the CLI's pieces: whyNoRule refuses a `|` first on every path, so such a word is a quoted one
+    (`'|'`, `'&&'`), and reading it as a separator fails closed."""
     found = []
-    for words in _rule_commands(call):
-        while words:
-            first, rest = words[0], words[1:]
-            if re.match(r"[A-Za-z_][A-Za-z0-9_]*=", first):
-                words = rest
-            elif first in SCRIPT_LEADERS:
-                k = next((k for k, w in enumerate(rest) if not w.startswith("-") and not re.fullmatch(r"[0-9.]+[smhd]?", w)), None)
-                words = [] if k is None else rest[k:]
+    for command in _rule_commands(call, quoted):
+        found.append([])
+        for word in command:
+            if re.fullmatch(r"[|&]+", word):
+                found.append([])
             else:
-                break
-        found.append(words)
-    return found
+                found[-1].append(word)
+    return [words for words in found if words]
 
 
-# An interpreter's leading flags after which it runs the text or module the call gives, not a script file (`bash -c`,
-# `-lc`, `node -e`, `python3 -I -c`, `-m`), and those under which it runs nothing, only reads the script for syntax
-# (`bash -n`, `--no-execute`, `node --check`, as NOEXEC_SHELLS): the CLI's INLINE_FLAGS and NO_RUN_FLAGS, character
-# for character (each matched from the word's start, `\Z` for the CLI's `$`).
-SCRIPT_INLINE_FLAGS = {
-    "bash": r"-[A-NP-Za-np-z]*c[A-NP-Za-np-z]*\Z",
-    "sh": r"-[A-NP-Za-np-z]*c[A-NP-Za-np-z]*\Z",
-    "node": r"(?:-e|-p|-pe|--eval|--print)\Z",
-    "python": r"-[BEIOPRSVbdhiqsuvx]*[cm]",
-    "python3": r"-[BEIOPRSVbdhiqsuvx]*[cm]",
-}
-SCRIPT_NO_RUN_FLAGS = {
-    "bash": r"(?:-[A-NP-Za-np-z]*n[A-NP-Za-np-z]*|--no-execute)\Z",
-    "sh": r"(?:-[A-NP-Za-np-z]*n[A-NP-Za-np-z]*|--no-execute)\Z",
-    "node": r"--check\Z",
-}
+_ASK_ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\+?=")
+
+
+def _from_program(words, leaders):
+    """Where one simple command's program stands, the CLI's fromProgram, the one place every port finds it: output
+    redirections aside (_without_outputs), the shell keywords and assignments (`NAME=`, `NAME+=`) before it skipped,
+    and with `leaders`, the words that only lead to it (SCRIPT_LEADERS) with their flags and durations. Gives the
+    assignments and the words from the program."""
+    assignments, words = [], _without_outputs(words)
+    while words:
+        first, rest = words[0], words[1:]
+        if leaders and first in SCRIPT_LEADERS:
+            k = next((k for k, w in enumerate(rest) if not w.startswith("-") and not re.fullmatch(r"[0-9.]+[smhd]?", w)), None)
+            words = [] if k is None else rest[k:]
+        elif first in ASK_KEYWORDS:
+            words = rest
+        elif _ASK_ASSIGNMENT.match(first):
+            assignments.append(first)
+            words = rest
+        else:
+            break
+    return assignments, words
+
+
+def _running_commands(call):
+    """Each simple command of a Bash call from the program that runs: the CLI's runningCommands (_from_program,
+    leaders skipped)."""
+    return [_from_program(words, True)[1] for words in _ask_pieces(call)]
 
 
 def _without_outputs(words):
     """A command's words without its output redirections and their targets (`> /tmp/x.log`, `>>`, `2>`, `&>`,
     `2>&1`, `>&2`), the CLI's withoutOutputs: what they name is written, not run. An input redirection (`< ./x.sh`,
-    `<<<`) stays, since it feeds the interpreter a script."""
+    `<<<`) stays, and _why_no_ask refuses it."""
     kept, target = [], False
     for w in words:
         skip = target or re.match(r"(?:[0-9]*|&)>", w) is not None
@@ -2255,33 +2266,294 @@ def _without_outputs(words):
     return kept
 
 
-def _flagged_script(call):
-    """An interpreter run with a flag first whose script scripts_of does not bind, output redirections aside: the
-    CLI's flaggedScript. A word after its flags that its inline-code flags do not account for (`bash -x ./x.sh`,
-    `source -- x.sh`), or any absolute path after the first flag (`bash -x /abs/x.sh`, `python3 -m pytest /abs/x`);
-    a no-run flag (`bash -n`) clears its own command only."""
-    for words in _running_commands(call):
-        words = _without_outputs(words)
-        if len(words) < 2 or words[0] not in SCRIPT_INTERPRETERS or not words[1].startswith("-"):
-            continue
-        program, args = words[0], words[1:]
-        end = next((k for k, w in enumerate(args) if not w.startswith("-")), None)
-        flags = args if end is None else args[:end]
-        if any(program in SCRIPT_NO_RUN_FLAGS and re.match(SCRIPT_NO_RUN_FLAGS[program], w) for w in flags):
-            continue
-        if any(w.startswith("/") for w in args[1:]):
-            return True
-        if end is not None and not any(program in SCRIPT_INLINE_FLAGS and re.match(SCRIPT_INLINE_FLAGS[program], w)
-                                       for w in flags):
-            return True
-    return False
+# What a page ask holds, the CLI's KEYWORDS, ASSIGNABLE, INERT, WRAPPERS, RUNNERS and INLINE_FLAGS
+# (fleet/src/ledger/permission.ts), which fleet's ledger copies: the shell keywords a command may start with; the
+# variables an assignment may set; the programs that run only themselves (not sed, awk, rg or printf: `sed e`,
+# `system()`, `rg --pre`, `printf -v PATH`); the wrappers that run a command they are given; the project runners
+# with the flags and subcommands that run code the call does not name, and `config`, which writes what a later call
+# runs (what else a runner runs, the repo's own scripts, config, hooks and tests, is the residual of a page ask, and
+# so is the folder it runs in: `cd`, `git -C` and `jj -R` are held, wrangler's `--cwd` and just's `-d` refused as
+# belt and braces); and an interpreter's flags that give it code to
+# run in place of a script file (each matched from the word's start).
+ASK_KEYWORDS = ("{", "}", "!", "if", "then", "else", "elif", "fi", "do", "done", "while", "until", "time")
+ASK_ASSIGNABLE = ("CI", "TZ", "NO_COLOR", "FORCE_COLOR")
+ASK_INERT = ("ls", "cat", "echo", "cd", "pwd", "true", "false", "head", "tail", "wc", "grep", "jq", "date", "sleep",
+             "diff", "tee")
+ASK_WRAPPERS = ("env", "timeout", "nice", "nohup", "stdbuf", "exec", "command", "builtin", "sudo", "xargs", "find",
+                "eval")
+_ASK_PACKAGE_RUNNER = ("exec", "dlx", "x", "create", "init", "config", "c", "set", "--script-shell", "--node-options")
+ASK_RUNNERS = {
+    "git": ("-c", "--config-env", "--exec-path", "--upload-pack", "--receive-pack", "--exec", "-O",
+            "--open-files-in-pager", "--extcmd", "--tool", "config", "bisect", "submodule", "filter-branch", "difftool",
+            "mergetool", "rebase", "clone"),
+    "jj": ("--config", "--config-toml", "--config-file", "--tool", "util", "config"),
+    "just": ("-f", "--justfile", "-d", "--working-directory", "--shell", "-c", "--command", "--dotenv-path"),
+    "pnpm": _ASK_PACKAGE_RUNNER,
+    "npm": _ASK_PACKAGE_RUNNER,
+    "vp": ("exec",),
+    "cargo": ("--config", "-Z"),
+    "go": ("run", "generate", "-exec", "-toolexec"),
+    "gh": ("extension", "ext", "alias", "config"),
+    "wrangler": ("-c", "--config", "--cwd"),
+    "fleet": ("run", "start", "serve", "hub", "capture"),
+}
+# The fleet CLI's `preview` subcommands a page ask holds, the CLI's FLEET_PREVIEW: the others start the dev command
+# the fleet's preview records, change it, or feed a worker's code to the running server.
+ASK_FLEET_PREVIEW = ("status", "stop")
+# The fleet CLI's `ws` subcommands that run the repo's `.fleet/ws-*` hooks, wherever they stand after `ws`, the CLI's
+# FLEET_WS_HOOKED: an agent can change those files between the ask and the yes, and nothing binds them. `ws trash`
+# runs the pre-remove hook too, which runs_of binds (ws_hooks_of).
+ASK_FLEET_WS_HOOKED = ("add", "prune")
+ASK_INLINE_FLAGS = {
+    "bash": r"-[A-Za-z]*c",
+    "sh": r"-[A-Za-z]*c",
+    "node": r"(?:-[ep]+|--eval|--print)(?:=|\Z)",
+    "python": r"-[A-Za-z]*c",
+    "python3": r"-[A-Za-z]*c",
+}
+
+
+def _refused_word(word, refused):
+    """Whether a word is a runner's refused flag or subcommand, the CLI's refusedWord: a subcommand by itself, a flag
+    by its name whatever its dashes or `=value`, a long flag also by a prefix of its name (git's parse-options and
+    npm's nopt take a unique one), and a one-letter flag also glued or bundled."""
+    if not refused.startswith("-"):
+        return word == refused
+    if not word.startswith("-"):
+        return False
+
+    def name(flag):
+        return re.sub(r"^-+", "", flag).split("=")[0]
+    given = name(word)
+    return (given == name(refused)
+            or (refused.startswith("--") and word.startswith("--") and given != "" and name(refused).startswith(given))
+            or (len(refused) == 2 and re.match(r"-[^-]", word) is not None and refused[1:] in word))
+
+
+# The flags of a package runner that take the next word as their value, the CLI's SUBCOMMAND_VALUED; git's own
+# options that do, before its subcommand, the CLI's GIT_VALUED.
+_ASK_SUBCOMMAND_VALUED = {"pnpm": ("--filter", "-F", "-C", "--dir"), "npm": ("--prefix", "-w", "--workspace")}
+_ASK_GIT_VALUED = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env",
+                   "--attr-source")
+
+
+def _subcommand_at(args, valued):
+    """The index of the first word past the flags and the values of `valued`, the CLI's subcommandAt."""
+    at = 0
+    while at < len(args):
+        if not args[at].startswith("-"):
+            return at
+        at += 2 if args[at] in valued else 1
+    return len(args)
+
+
+def _refused_at(program, args, refused, at):
+    """Whether a runner's refused word counts at args[at], the CLI's refusedAt: git's `-c` only before git's
+    subcommand, a package runner's subcommand only as its subcommand, the fleet CLI's only in its first three words
+    (none in `fleet tell`'s message), every other one anywhere."""
+    if program == "git" and refused == "-c":
+        return at < _subcommand_at(args, _ASK_GIT_VALUED)
+    if refused.startswith("-"):
+        return True
+    if program == "fleet":
+        return at < (1 if args[:1] == ["tell"] else 3)
+    valued = _ASK_SUBCOMMAND_VALUED.get(program)
+    return valued is None or at == _subcommand_at(args, valued)
+
+
+# The unquoted characters of a word bash expands when the call runs, past a `$`, the CLI's EXPANDING: a glob (`?`,
+# `*`, `[…]`), which a file of the working directory turns into its name, and a brace expansion (`{a,b}`, `{1..3}`).
+_ASK_EXPANDING = re.compile(r"[?*]|\[.*\]|\{.*(?:,|\.\.).*\}", re.S)
+
+
+def _expanded_word(call):
+    """The first word of a call that bash expands by its characters outside quotes, the CLI's expandedWord: each
+    quoted character is read as `_`, which expands nothing."""
+    bare = [w for command in _rule_commands(call, lambda c, quote: "_") for w in command]
+    at = next((k for k, w in enumerate(bare) if _ASK_EXPANDING.search(w)), None)
+    return None if at is None else [w for command in _rule_commands(call) for w in command][at]
+
+
+def _no_page(reason):
+    """The refusal of a call no page ask can hold, the CLI's noPage."""
+    return (f"no page ask can hold this call: {reason}; run it in the terminal, or put it in a script and ask for "
+            "`bash <its absolute path>`")
+
+
+def _ask_relative(path):
+    return (f"the call runs the script {path} by a relative path: give its absolute path, so the file the user "
+            "allows is the file that runs")
+
+
+_ASK_FLAGGED = ("the call runs a script after interpreter flags: give `bash <path>` with no flags (put `set -x`/`-e` "
+                "in the script)")
+
+
+def _why_no_interpreter(program, args):
+    """Why no page ask holds an interpreter's command, the CLI's whyNoInterpreter: it binds `I <absolute path>
+    [args]`, and runs nothing past `bash -n <path>`, `bash -c '<code>'` held to _why_no_ask, `node --check <path>`,
+    `node --version`, `python3 -m pytest …` and `python3 --version`."""
+    if not args:
+        return _no_page(f"{program} with no script reads its code from its input")
+    first, more = args[0], args[1:]
+    nxt = more[0] if more else None
+    if not first.startswith("-"):
+        return None if first.startswith("/") else _ask_relative(first)
+    one = len(more) == 1 and not more[0].startswith("-")
+    shell = program in ("bash", "sh")
+    if shell and first == "-n" and one:
+        return None
+    if shell and first == "-c" and len(more) == 1:
+        inner = _why_no_ask(nxt)
+        if inner is not None:
+            return inner
+        script = next(iter(scripts_of(nxt)), None)
+        return None if script is None else _no_page(f"`{program} -c` runs the script {script}, which only a call of "
+                                                     "its own binds")
+    if program == "node" and ((first == "--check" and one) or (first == "--version" and not more)):
+        return None
+    if program in ("python", "python3") and ((first == "-m" and nxt == "pytest"
+                                               and not any(w.startswith("/") for w in more))
+                                              or (first == "--version" and not more)):
+        return None
+    end = next((k for k, w in enumerate(args) if not w.startswith("-")), None)
+    flags = args if end is None else args[:end]
+    inline = next((w for w in flags if program in ASK_INLINE_FLAGS and re.match(ASK_INLINE_FLAGS[program], w)), None)
+    return _ASK_FLAGGED if inline is None else _no_page(f"`{program} {inline}` runs code that no file of the call "
+                                                         "holds")
+
+
+def fleet_cli_paths(env):
+    """Every path the fleet CLI has on this machine, resolved, the CLI's fleetClis (fleet/src/files.ts): this
+    plugin's, and the ones fleet/bin/fleet hands over to (the checkouts in $CLAUDE_CODE_PLUGIN_DIRS, the marketplace
+    clone, each cached version). A session keeps the plugin folder it started with, and the CLI prints the newest
+    one's path, so a session names more than one."""
+    home = env.get("HOME") or ""
+    roots = [str(ROOT), *(env.get("CLAUDE_CODE_PLUGIN_DIRS") or "").split(":")]
+    if os.path.isabs(home):
+        plugins = os.path.join(home, ".claude", "plugins")
+        roots.append(os.path.join(plugins, "marketplaces", "tstack"))
+        cache = os.path.join(plugins, "cache", "tstack", "tstack")
+        try:
+            roots += [os.path.join(cache, version) for version in os.listdir(cache)]
+        except OSError:
+            pass
+    return {os.path.realpath(os.path.join(root, "fleet", "bin", "fleet")) for root in roots if os.path.isabs(root)}
+
+
+def is_fleet_cli(program, env):
+    """Whether a command's first word runs the fleet CLI, the CLI's isFleetCli: a bare `fleet`, or an absolute path of
+    path characters with no `.`, `..` or empty component that resolves to one of fleet_cli_paths (resolving drops
+    `/s/..` before it follows the link s, the kernel follows s first)."""
+    if program == "fleet":
+        return True
+    if re.fullmatch(r"/[\w./+@-]+", program, re.ASCII) is None \
+            or any(part in ("", ".", "..") for part in program[1:].split("/")):
+        return False
+    return os.path.realpath(program) in fleet_cli_paths(env)
+
+
+def _why_no_fleet(args):
+    """Why no page ask holds the fleet CLI's words past its refused ones, the CLI's whyNoFleet: a `--` hands the words
+    after it to a command, `ws add` and `ws prune` run the repo's `.fleet/ws-*` hooks (ASK_FLEET_WS_HOOKED), and
+    `preview` is held only to look or stop (ASK_FLEET_PREVIEW)."""
+    if "--" in args:
+        return _no_page("`fleet --` hands the words after it to a command, which the user reads as words of the fleet "
+                        "CLI")
+    group, sub = (args[0] if args else None), (args[2] if len(args) > 2 else None)
+    hooked = next((w for w in args[1:] if w in ASK_FLEET_WS_HOOKED), None) if group == "ws" else None
+    if hooked is not None:
+        return (f"no page ask can hold this call: `fleet ws {hooked}` runs the repo's .fleet/ws-* hooks, files an agent "
+                "can change after the ask and no permission binds: run it in the terminal")
+    if group == "preview" and sub is None:
+        return _no_page("`fleet preview DIR` needs its subcommand, status or stop, the two a page ask holds")
+    if group == "preview" and sub not in ASK_FLEET_PREVIEW:
+        return _no_page(f"`fleet preview {sub}` runs or changes the dev command the fleet's preview records, "
+                        "which the call does not name (only status and stop are held)")
+    return None
+
+
+def _literal_dollar(c, quote):
+    """A `$` in single quotes, which bash reads as written (`echo '$HOME'`), read as `_`, the CLI's LITERAL_DOLLAR; in
+    double quotes or outside quotes it expands, and stays."""
+    return "_" if quote == "'" and c == "$" else c
+
+
+def _why_no_command(all_words, bare):
+    """Why no page ask holds one simple command, or None, the CLI's whyNoCommand: see _why_no_ask. `bare` is the same
+    command with each `$` bash reads as written masked (_literal_dollar), word for word, so the `$` check sees only the
+    ones that expand."""
+    assignments, words = _from_program(all_words, False)
+    seen = [*assignments, *words]
+    at = next((k for k, w in enumerate(_without_outputs(bare)) if "$" in w), None)
+    if at is not None:
+        return _no_page(f"`{_without_outputs(all_words)[at]}` has a $, which the shell expands when the call runs")
+    name = next((n for n in (_ASK_ASSIGNMENT.match(w).group(1) for w in assignments) if n not in ASK_ASSIGNABLE), None)
+    if name is not None:
+        return _no_page(f"the assignment to {name} changes what the command runs (only CI, TZ, NO_COLOR and "
+                        "FORCE_COLOR are held)")
+    feeds = next((w for w in seen if "<" in w), None)
+    if feeds is not None:
+        return _no_page(f"`{feeds}` redirects the command's input, which no permission binds")
+    if not words:
+        return None
+    program, args = words[0], words[1:]
+    if program in ASK_INERT:
+        return None
+    if program.startswith("/") and program.endswith("/fleet"):
+        if not is_fleet_cli(program, os.environ):
+            return _no_page(f"{program} is not the fleet CLI: a program named fleet by its path is held only at one of "
+                            "the plugin's install paths, by a path with no `.`, `..` or empty component")
+        program = "fleet"
+    if "/" in program:
+        return (_no_page(f"{program} is run as a program, and only an interpreter's script is bound to its file")
+                if program.startswith("/") else _ask_relative(program))
+    if program in SCRIPT_INTERPRETERS:
+        return _why_no_interpreter(program, args)
+    if program in ASK_WRAPPERS:
+        return _no_page(f"{program} runs another command, which the user does not read as a call of its own")
+    if program == "bun":
+        sub, name = (args + [None, None])[:2]
+        named = sub == "run" and name is not None and re.search(r"^-|[/.]", name) is None
+        return None if sub == "test" or named else _no_page(f"`bun {sub or ''}` runs code the call does not name")
+    if program not in ASK_RUNNERS:
+        return _no_page(f"{program} is not a program a page ask holds")
+    word = next((w for at, w in enumerate(args)
+                 if any(_refused_word(w, r) and _refused_at(program, args, r, at) for r in ASK_RUNNERS[program])), None)
+    if word is not None:
+        return _no_page(f"`{program} {word}` runs code the call does not name")
+    return _why_no_fleet(args) if program == "fleet" else None
+
+
+def _why_no_ask(call):
+    """Why a Bash call cannot be asked for before it runs, though a rule can hold it, or None: the CLI's whyNoAsk,
+    in its words. A command substitution is decided when it runs, and so is a word bash expands outside quotes, a glob
+    or a brace expansion (_expanded_word), which _refused_word would read as written. Then each simple command
+    (_pieces: also split at a quoted `'|'` or `'&&'` word, which fails closed), from its program as _from_program
+    finds it, is held to what a page ask can bind (_why_no_command): no word with a `$` outside single quotes, no assignment but CI, TZ,
+    NO_COLOR or FORCE_COLOR, no input redirection; an interpreter binds `<interpreter> <absolute path>`; an inert
+    program and a project runner past its refused words are held (tstack's own CLI also by its full path, `…/fleet`
+    resolving to one of its install paths (is_fleet_cli), whose file runs_of binds); a program by a path, a wrapper
+    and any other program are not."""
+    if any(s in call for s in ("$(", "`", "<(", ">(")):
+        return ("the call has a command substitution ($( ), backticks, <( ) or >( )), so what it runs is decided when "
+                "it runs, not when the user reads it: give the value itself, or put the lines in a script")
+    expanded = _expanded_word(call)
+    if expanded is not None:
+        return _no_page(f"the call has a word bash would expand ({expanded}): quote it or give it literally")
+    bare = _ask_pieces(call, _literal_dollar)
+    for k, words in enumerate(_ask_pieces(call)):
+        why = _why_no_command(words, bare[k] if k < len(bare) else words)
+        if why is not None:
+            return why
+    return None
 
 
 def scripts_of(call):
     """The script file each simple command of a Bash call runs, where its text names one: the CLI's scriptsOf. The
     first argument of an interpreter (SCRIPT_INTERPRETERS), or a command given as a path; a command found by name
-    names none, and neither does an interpreter's flag first (why_no_asks refuses one whose flags a script follows,
-    _flagged_script)."""
+    names none, and neither does an interpreter's flag first (_why_no_ask refuses one whose flags a script
+    follows)."""
     found = []
     for words in _running_commands(call):
         program, argument = (words[0] if words else ""), (words[1] if len(words) > 1 else None)
@@ -2305,13 +2577,58 @@ def _file_sha256(path):
     return digest.hexdigest()
 
 
+def ws_trashes_of(call):
+    """The fleet ledger and workspace of each `fleet ws DIR trash NAME` of a Bash call, the CLI's wsTrashesOf: the
+    fleet CLI bare or by its path (is_fleet_cli), DIR absolute, as a trash card names it."""
+    found = []
+    for words in _running_commands(call):
+        program, args = (words[0] if words else ""), words[1:]
+        group, folder, sub, name = (list(args) + [None] * 4)[:4]
+        if (program == "fleet" or is_fleet_cli(program, os.environ)) and group == "ws" and sub == "trash" \
+                and folder is not None and folder.startswith("/") and name is not None:
+            found.append((folder, name))
+    return found
+
+
+def ws_hooks_of(call):
+    """The `.fleet/ws-*` hook files a Bash call's `fleet ws DIR trash NAME` runs, the CLI's wsHooksOf: the
+    pre-remove hook of the repo DIR/state.json records for workspace NAME, which runs_of binds by its sha256 when it is
+    there and by its absence (ABSENT_SHA256) when it is not."""
+    return [hook for hook in (_ws_hook_of(folder, name) for folder, name in ws_trashes_of(call)) if hook is not None]
+
+
+def _ws_hook_of(folder, name):
+    """The pre-remove hook one `fleet ws DIR trash NAME` runs (ws_hooks_of), or None when DIR/state.json does not read
+    or records no workspace NAME with an absolute repo, the CLI's wsHookOf: why_no_asks then refuses the call."""
+    try:
+        with open(os.path.join(folder, "state.json"), encoding="utf-8") as f:
+            ledger = json.load(f)
+    except (OSError, ValueError):
+        return None
+    rows = ledger.get("workspaces") if isinstance(ledger, dict) else None
+    row = next((w for w in (rows if isinstance(rows, list) else [])
+                if isinstance(w, dict) and w.get("id") == name and w.get("status") != "pruned"), None)
+    repo = row.get("repo") if row is not None else None
+    return os.path.join(repo, ".fleet", "ws-pre-remove") if isinstance(repo, str) and repo.startswith("/") else None
+
+
+# The sha256 a run entry gives a `fleet ws DIR trash` hook file that does not exist, the CLI's ABSENT_SHA256: the
+# card binds the hook's absence in the form every reader of `runs` parses, as no file's content hashes to it.
+ABSENT_SHA256 = "0" * 64
+
+
 def runs_of(calls):
     """The files a permission's calls are bound to, as a card's `runs` holds them: the CLI's runsOf. `<n> <sha256>
-    <path>` for each script call n (from 1) runs by an absolute path that can be read now, each path once."""
+    <path>` for each script call n (from 1) runs by an absolute path that can be read now, and for each `fleet ws DIR
+    trash`, the repo's pre-remove hook it runs (ws_hooks_of), by its sha256 when it is there and by ABSENT_SHA256
+    when it does not exist, each path once."""
     runs = []
     for n, call in enumerate(calls, 1):
-        for path in dict.fromkeys(scripts_of(call)):
+        hooks = ws_hooks_of(call)
+        for path in dict.fromkeys([*scripts_of(call), *hooks]):
             sha = _file_sha256(path) if path.startswith("/") else None
+            if sha is None and path in hooks and not os.path.exists(path):
+                sha = ABSENT_SHA256
             if sha is not None:
                 runs.append(f"{n} {sha} {path}")
     return runs
@@ -2319,27 +2636,28 @@ def runs_of(calls):
 
 def why_no_asks(calls):
     """Why the calls cannot be asked for, though a rule can hold them, or None: the CLI's whyNoAsks, in its words.
-    The user allows what they read, so a call names what it runs: a command substitution is decided when it runs, a
-    script after an interpreter's flags is bound to no file, a script named by a relative path is whatever that path finds from where the call runs, and a script that cannot
-    be read is no file the user could allow."""
+    The user allows what they read, so a call names what it runs (_why_no_ask), a script that cannot be read is no
+    file the user could allow, and a `fleet ws DIR trash NAME` needs its repo's pre-remove hook bound: refused when
+    the workspace's repo is not found, or the hook is there and cannot be read (a folder, a file of mode 000), which
+    an agent could swap for a script after the yes."""
     for k, call in enumerate(calls, 1):
         which = "this call" if len(calls) == 1 else f"call {k} of {len(calls)} (`{call}`)"
-        if any(s in call for s in ("$(", "`", "<(", ">(")):
-            return (f"no permission for {which}: the call has a command substitution ($( ), backticks or <( )), so what "
-                    "it runs is decided when it runs, not when the user reads it: give the value itself, or put the "
-                    "lines in a script")
-        if _flagged_script(call):
-            return (f"no permission for {which}: the call runs a script after interpreter flags: give `bash <path>` "
-                    "with no flags (put `set -x`/`-e` in the script)")
+        why = _why_no_ask(call)
+        if why is not None:
+            return f"no permission for {which}: {why}"
         scripts = scripts_of(call)
-        relative = next((p for p in scripts if not p.startswith("/")), None)
-        if relative is not None:
-            return (f"no permission for {which}: the call runs the script {relative} by a relative path: give its "
-                    "absolute path, so the file the user allows is the file that runs")
         unread = next((p for p in scripts if _file_sha256(p) is None), None)
         if unread is not None:
             return (f"no permission for {which}: it runs {unread}, which is no file that can be read, so the user "
                     "would allow a file that is not there")
+        for folder, name in ws_trashes_of(call):
+            hook = _ws_hook_of(folder, name)
+            if hook is None:
+                return (f"no permission for {which}: the fleet ledger {folder} records no workspace {name} with its "
+                        "repo, so the card cannot bind the file trash runs")
+            if os.path.exists(hook) and _file_sha256(hook) is None:
+                return (f"no permission for {which}: the repo's ws hook {hook} cannot be read, so the card cannot bind "
+                        "the file trash runs")
     return None
 
 
@@ -3646,13 +3964,21 @@ def _take(hook, d, grant):
 
 def _moved_file(grant):
     """Why a file the grant binds is no longer the one the user allowed (the hub put each one's sha256 on the record of
-    issued grants when it granted: _latest_grants takes `runs` from there); None when every one is, or it binds none."""
+    issued grants when it granted: _latest_grants takes `runs` from there); None when every one is, or it binds none.
+    A ws hook bound by its absence (ABSENT_SHA256) must still be absent."""
     import hashlib
     runs = grant.get("runs")
     for run in runs if isinstance(runs, list) else []:
         path, sha = (run.get("path"), run.get("sha256")) if isinstance(run, dict) else (None, None)
         if not isinstance(path, str) or not isinstance(sha, str):
             return "its record of the file it runs does not read"
+        if sha == ABSENT_SHA256:
+            if os.path.exists(path) and not path.endswith("/.fleet/ws-pre-remove"):
+                return (f"the grant binds the script {path} by the absence entry, which only a ws hook takes, and the "
+                        "file is there")
+            if os.path.exists(path):
+                return f"the repo's ws hook appeared after the ask ({path})"
+            continue
         digest = hashlib.sha256()
         try:
             with open(path, "rb") as f:

@@ -128,11 +128,15 @@ return records.apply(ops);
 After the yes, run the call as a Bash call of its own, unchanged, once.
 
 A program opens a permission only for a call that runs no script by its path. A call that does (`bash
-/abs/deploy.sh`, `/abs/deploy.sh`, `source /abs/env.sh`) is bound to the sha256 of each file it runs, read on this
-machine: a program's card carries none, so the fold refuses the card when it opens. It refuses there too a call
-that does not name what it runs (`$(…)` or backticks, `bash -x /abs/x.sh`, a script by a relative path), which no
-one can be asked for. Open a script call from the machine: run it as a Bash call of its own, and when auto mode
-refuses it, the hook opens its card with the files it runs.
+/abs/deploy.sh`, `source /abs/env.sh`, also past an assignment or an output redirect: `CI=1 bash /abs/x.sh`,
+`> /tmp/x bash /abs/x.sh`) is bound to the sha256 of each file it runs, read on this machine, and so is a `fleet ws
+<dir> trash` to its repo's `.fleet/ws-pre-remove` hook, or to the hook's absence where the repo has none (a hook
+that appears after the ask grants nothing): a program's card carries none, so the fold refuses the card when it
+opens. It refuses there too a call no page ask can hold (whyNoAsk, DASHBOARD.md's permission row): one that does not name what it runs (`$(…)` or backticks, `bash -x
+/abs/x.sh`, a script by a relative path), a program given by its path (`/abs/deploy.sh`), a wrapper (`env`,
+`timeout`, `sudo`), an assignment that changes what runs (`PATH=`, `BASH_ENV=`), inline code (`node -e`), and any
+program a page ask does not know. Open a script call from the machine: run it as a Bash call of its own, and when
+auto mode refuses it, the hook opens its card with the files it runs.
 
 An event, and a note kept for the next session:
 

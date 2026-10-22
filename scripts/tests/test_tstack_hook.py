@@ -7,6 +7,7 @@ The rule under test above all: a hook never breaks a session. Whatever goes
 wrong, the dispatcher exits 0 with nothing on stdout and logs to hook.log.
 """
 
+import contextlib
 import hashlib
 import json
 import os
@@ -7297,14 +7298,28 @@ class MovedRefusalTest(MovedFleet, RefusalCase):
                                                 "cause": "[Deploy]", "root": str(self.project), "agent_id": "ab12cd34",
                                                 "runs": [f"1 {self.DEPLOY_SHA} {script}"]})
 
-    def test_a_card_binds_each_script_its_call_names_once_past_assignments_and_wrappers(self):
-        """scriptsOf: an interpreter's first argument, a command given as a path, after an assignment, a keyword or a
-        wrapper and its flags; a command found by name, an interpreter's flag and a script named twice add none."""
+    def test_a_card_binds_each_script_its_call_names_once(self):
+        """scriptsOf: each interpreter's first argument, after a keyword; a command found by name, an interpreter's
+        flag and a script named twice add none."""
         deploy, check = self.script(), self.script("check.sh")
-        command = f"FOO=1 timeout -k 5 30s bash {deploy} && {check} --fast; just ship; python3 -m pytest; sh '{deploy}'"
+        command = f"bash {deploy} && if true; then bash {check} --fast; fi; just ship; python3 -m pytest; sh '{deploy}'"
         self.refuse(command=command, reason="[Deploy]", agent_id="ab12cd34")
         [op] = self.programs()[-1]["ops"]
         self.assertEqual(op["set"]["refusal"]["runs"], [f"1 {self.DEPLOY_SHA} {deploy}", f"1 {self.DEPLOY_SHA} {check}"])
+
+    def test_an_assignment_a_wrapper_or_a_script_run_as_a_program_is_a_blocked_event_never_a_card(self):
+        """Round 6: scriptsOf still binds past an assignment and a wrapper (broader is fail-closed for the fold), but
+        no page ask holds them: an assignment can change what runs, a wrapper runs a command the user does not read
+        as a call of its own, and only an interpreter binds its script."""
+        deploy, check = self.script(), self.script("check.sh")
+        cases = {f"FOO=1 bash {deploy}": "the assignment to FOO", f"timeout -k 5 30s bash {deploy}": "timeout runs",
+                 f"bash {deploy} && {check} --fast": f"{check} is run as a program"}
+        for i, (command, why) in enumerate(cases.items()):
+            with self.subTest(command=command):
+                self.refuse(command=command, reason="[Deploy]", agent_id=f"ab12fe{i:02d}")
+                text = self.blocked()
+                self.assertIn(why, text)
+                self.assertIn("Nothing was asked of the user", text)
 
     def test_a_call_with_no_script_opens_a_card_bound_to_no_file(self):
         self.refuse(command="just deploy", reason="[Deploy]", agent_id="ab12cd34")
@@ -7400,7 +7415,7 @@ class MovedRefusalTest(MovedFleet, RefusalCase):
                 self.assertNotIn(secret, text)
 
     def test_a_call_naming_no_credential_still_opens_its_card(self):
-        for i, command in enumerate(("ls ./disk-usage", "secretspec run -- node server.js")):
+        for i, command in enumerate(("ls ./disk-usage", "gh auth status")):
             with self.subTest(command=command):
                 self.refuse(command=command, agent_id=f"ab12cd{i:02d}")
                 self.assertEqual(self.programs()[-1]["ops"][0]["record"]["kind"], "decision")
@@ -7854,23 +7869,40 @@ class PermissionSplitTest(unittest.TestCase):
     simpleCommands, scriptsOf, whyNoAsks and runsOf give."""
 
     CASES = ROOT / "fleet" / "src" / "ledger" / "permission-split.cases.json"
+    # The case file's sha256, the value fleet/test/permission-split.test.ts and the fleet repo's SPLIT_SHA256
+    # (packages/ledger/src/permission.test.ts) pin too: a copy that drifts by a byte is red. Change all three with it.
+    SPLIT_SHA256 = "d63a896d2623ad9ddac86190f25b004778a732f1d04547805b3d0539a3d9f6b3"
+
+    def test_the_case_file_is_the_bytes_every_port_pins(self):
+        self.assertEqual(hashlib.sha256(self.CASES.read_bytes()).hexdigest(), self.SPLIT_SHA256)
 
     def test_every_shared_case(self):
         corpus = json.loads(self.CASES.read_text())
         module = load_hook(onepw=False)
         with tempfile.TemporaryDirectory() as tmp:
             fixture = os.path.realpath(tmp)
-            for name, text in corpus["fixtures"].items():
-                Path(fixture, name).write_text(text)
+            cli = str(module.ROOT / "fleet" / "bin" / "fleet")  # an install path the hook's is_fleet_cli holds
+            sha = module._file_sha256(cli)
 
             def at(value):
-                return [at(v) for v in value] if isinstance(value, list) else value.replace("$FIXTURE", fixture)
+                return [at(v) for v in value] if isinstance(value, list) else \
+                    value.replace("$FIXTURE", fixture).replace("$FLEET_CLI", cli).replace("$FLEET_SHA", sha)
+
+            for name, text in corpus["fixtures"].items():
+                Path(fixture, name).parent.mkdir(parents=True, exist_ok=True)
+                Path(fixture, name).write_text(at(text))
 
             self.assertGreaterEqual(len(corpus["cases"]), 30)
             for case in corpus["cases"]:
                 call = at(case["call"])
                 calls = [call, *at(case.get("more", []))]
-                with self.subTest(case["name"], since=case.get("since")):
+                unreadable = [Path(fixture, name) for name in case.get("unreadable", [])]
+                with self.subTest(case["name"], since=case.get("since")), contextlib.ExitStack() as stack:
+                    if unreadable and os.geteuid() == 0:
+                        self.skipTest("root reads a file of mode 000 anyway")
+                    for path in unreadable:
+                        path.chmod(0)
+                        stack.callback(path.chmod, 0o644)
                     self.assertEqual(module._rule_commands(call), at(case["commands"]))
                     self.assertEqual(module.scripts_of(call), at(case["scripts"]))
                     why = module.why_no_asks(calls)
@@ -7878,7 +7910,30 @@ class PermissionSplitTest(unittest.TestCase):
                         self.assertIsNone(why)
                     else:
                         self.assertIn(case["whyNoAsk"], why or "")
-                    self.assertEqual(module.runs_of(calls), at(case["runs"]))
+                    asked = module.runs_of(calls)
+                    self.assertEqual(asked, at(case["runs"]))
+                    # The hook's check at the call: a grant's runs are the card's, as the hub puts them on the record.
+                    grant = {"runs": [{"path": path, "sha256": sha} for _, sha, path in (e.split(" ", 2) for e in asked)]}
+                    if "appears" not in case:
+                        self.assertIsNone(module._moved_file(grant))
+                        continue
+                    appears = [Path(fixture, name) for name in case["appears"]]
+                    try:
+                        for (name, text), path in zip(case["appears"].items(), appears):
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                            path.write_text(at(text))
+                        self.assertIn(case["appeared"], module._moved_file(grant) or "")
+                    finally:
+                        for path in appears:
+                            path.unlink(missing_ok=True)
+
+    def test_an_absence_entry_on_a_script_names_the_script(self):
+        module = load_hook(onepw=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp, "deploy.sh")
+            script.write_text("echo deploy\n")
+            grant = {"runs": [{"path": str(script), "sha256": module.ABSENT_SHA256}]}
+            self.assertIn(f"the grant binds the script {script} by the absence entry", module._moved_file(grant) or "")
 
 
 if __name__ == "__main__":

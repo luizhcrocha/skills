@@ -1398,7 +1398,10 @@ describe("fleet ws DIR trash NAME --card ID: one workspace prune keeps, trashed 
 
   test("a card whose call names this CLI by a link to it is a yes", () => {
     const { at } = throwaway();
-    const link = join(base, "linked-fleet");
+    // A page ask holds a CLI by its path only when the path ends in /fleet and its real path is an install path
+    // (isFleetCli): this link's is the plugin's own bin/fleet.
+    const link = join(base, "bin", "fleet");
+    mkdirSync(join(base, "bin"), { recursive: true });
     symlinkSync(FLEET, link);
     permission("linked", `${link} ws ${dir} trash t1 --card linked`, "allow-once");
     expect(ws("trash", "t1", "--card", "linked").code).toBe(0);
@@ -1437,6 +1440,7 @@ describe("fleet ws DIR trash NAME --card ID: one workspace prune keeps, trashed 
     chmodSync(join(dd, "evil", "good", "fleet"), 0o755);
     const throughLink = `${join(dd, "a", "s")}/../good/fleet`;
 
+    // A page ask holds …/fleet only at an install path (whyNoAsk's isFleetCli), so these cards are not opened at all.
     for (const [id, asked] of [
       ["evil", `${evil} ws ${dir} trash t1 --card evil`],
       ["lookalike", `${lookalike} ws ${dir} trash t1 --card lookalike`],
@@ -1444,6 +1448,18 @@ describe("fleet ws DIR trash NAME --card ID: one workspace prune keeps, trashed 
       ["dot", `${dirname(FLEET)}/./fleet ws ${dir} trash t1 --card dot`],
       ["empty", `${dirname(FLEET)}//fleet ws ${dir} trash t1 --card empty`],
       ["chained", `${evil};/..${FLEET} ws ${dir} trash t1 --card chained`],
+    ] as const) {
+      const opened = fleet(["state", dir, "decision", id, "--kind", "permission", "--tool", "Bash", "--call", asked, "--root", repo, "--title", "Trash a workspace?",
+        "--why", "prune keeps it", "--recommend", "allow-once", "--reason", "throwaway work", "--no-render"], env);
+
+      expect([opened.code, opened.stderr.includes("is not the fleet CLI: a program named fleet by its path is held only at one of the plugin's install paths")]).toEqual([1, true]);
+
+      const ran = ws("trash", "t1", "--card", id);
+      expect([ran.code, ran.stderr]).toEqual([1, `ws: no card ${id} in this fleet's ledger: ${only("t1", id)}; open one for that call\n`]);
+      untouched(at);
+    }
+
+    for (const [id, asked] of [
       ["spaced", `${FLEET}  ws ${dir} trash t1 --card spaced`],
       ["more", `${FLEET} ws ${dir} trash t1 --card more --all`],
     ] as const) {
@@ -1504,8 +1520,9 @@ describe("fleet ws DIR trash NAME --card ID: one workspace prune keeps, trashed 
     refused(["t1", "--card", "vague"], `card vague was decided "allow-once, but keep the notes": ${only("t1", "vague")}`);
     permission("caps", call("t1", "caps"), "Allow-Once");
     refused(["t1", "--card", "caps"], `card caps was decided "Allow-Once": ${only("t1", "caps")}`);
-    permission("other", call("t9", "other"), "allow-once");
-    refused(["t1", "--card", "other"], `card other asks for \`${call("t9", "other")}\`: ${only("t1", "other")}; open one for that call`);
+    // A card's opener refuses a trash of a workspace the ledger does not record (whyNoAsks): the other call is t1's.
+    permission("other", call("t1", "d2"), "allow-once");
+    refused(["t1", "--card", "other"], `card other asks for \`${call("t1", "d2")}\`: ${only("t1", "other")}; open one for that call`);
     permission("more", `${call("t1", "more")} --all`, "allow-once");
     refused(["t1", "--card", "more"], `card more asks for \`${call("t1", "more")} --all\`: ${only("t1", "more")}; open one for that call`);
     refused(["t1", "--card", "d9"], `no card d9 in this fleet's ledger: ${only("t1", "d9")}; open one for that call`);
@@ -1542,9 +1559,19 @@ describe("fleet ws DIR trash NAME --card ID: one workspace prune keeps, trashed 
     }
 
     untouched(at);
+
+    const row = (path: string): void => {
+      const raw = readJson(join(dir, "state.json"));
+      const others = (asArray(raw["workspaces"]) ?? []).filter((w) => asObject(w)?.["id"] !== "main");
+
+      writeFileSync(join(dir, "state.json"), JSON.stringify({ ...raw, workspaces: [...others, { id: "main", agent: "t1", path, repo, status: "active" }] }));
+    };
+
+    // A card's opener refuses a trash of a workspace the ledger does not record (whyNoAsks), and a root that is a
+    // worker's workspace: the row is recorded elsewhere for the card, then moved onto the main checkout.
+    row(join(dir, "elsewhere"));
     permission("main", call("main", "main"), "allow-once");
-    const raw = readJson(join(dir, "state.json"));
-    writeFileSync(join(dir, "state.json"), JSON.stringify({ ...raw, workspaces: [...(asArray(raw["workspaces"]) ?? []), { id: "main", agent: "t1", path: repo, repo, status: "active" }] }));
+    row(repo);
     expect(ws("trash", "main", "--card", "main").stderr).toBe("ws: never the default workspace, nor a main checkout\n");
     expect(existsSync(join(repo, "README"))).toBe(true);
   });

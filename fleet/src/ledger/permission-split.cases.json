@@ -1,8 +1,13 @@
 {
-  "//": "The Bash split a permission's binding rests on, shared by every port: tstack fleet/src/ledger/permission.ts (simpleCommands, scriptsOf, whyNoAsks, runsOf), the hook hooks/tstack-hook.py (_rule_commands, scripts_of, why_no_asks, runs_of), and the fleet repo's packages/ledger/src/permission.ts and fleet-host's grant-writes.ts, which copy this file byte for byte and pin it by sha256. A case is a call; `$FIXTURE` stands for a folder that holds `fixtures` (file name to its text), and is put in every string before the case runs. `commands` is the split, `scripts` the script each simple command names (in order, repeats kept), `whyNoAsk` null when the call can be asked for or a substring of the refusal whyNoAsks gives for [call, ...more], and `runs` what runsOf gives for [call, ...more]. A case with `since` is a hole of the design review closed by that patch (F3, F11). Change every port and this file together.",
+  "//": "The Bash split a permission's binding rests on, shared by every port: tstack fleet/src/ledger/permission.ts (simpleCommands, scriptsOf, whyNoAsks, runsOf), the hook hooks/tstack-hook.py (_rule_commands, scripts_of, why_no_asks, runs_of), and the fleet repo's packages/ledger/src/permission.ts and fleet-host's grant-writes.ts, which copy this file byte for byte and pin it by sha256. A case is a call; `$FIXTURE` stands for a folder that holds `fixtures` (a file's path in it, its folders made, to its text), and is put in every string before the case runs, a fixture's text too. `commands` is the split, `scripts` the script each simple command names (in order, repeats kept), `whyNoAsk` null when the call can be asked for or a substring of the refusal whyNoAsks gives for [call, ...more], and `runs` what runsOf gives for [call, ...more] (a script's file, and the .fleet/ws-pre-remove hook a `fleet ws DIR trash NAME` runs, by its sha256, or by 64 zeros, the absence entry, when the repo has no such file). A case with `appears` writes those fixtures after `runs` is checked: the port's check at the yes (tstack's whyRunsMoved, the hook's _moved_file, the host's grantOf) then gives a refusal that holds `appeared`, and the files go again. A case with `unreadable` has those fixtures made mode 000 for the case and given their mode back after (a port that runs as root, which reads them anyway, skips the case). A case with `since` is a hole of the design review closed by that patch (F3, F11), or a call round 6 holds to its rule (R6): a page ask holds a call only of the programs it knows, whose words name what runs. `$FLEET_CLI` stands for the plugin's own fleet CLI, fleet/bin/fleet of the checkout the port runs from (the fleet repo's ledger, which reads no file, any absolute path; its host, a file it writes), and `$FLEET_SHA` for that file's sha256. `isolate`, where a case has it, is the substring the fleet repo's ledger port gives in place of `whyNoAsk`: it runs in the cloud's isolate, where no file can be read, so it refuses any absolute `…/fleet`, and the hook and tstack's CLI, which read the disk, decide such a grant. A `//` on a case says why it stays as it is. Change every port and this file together.",
   "fixtures": {
+    ".fleet/ws-pre-remove": "#!/bin/sh\necho stop\n",
+    "dirhook/.fleet/ws-pre-remove/keep": "a folder where the hook would be\n",
     "deploy.sh": "#!/bin/sh\necho deploy\n",
+    "fleet": "#!/bin/sh\necho fleet\n",
+    "locked/.fleet/ws-pre-remove": "#!/bin/sh\necho locked\n",
     "other.sh": "echo other\n",
+    "state.json": "{\"workspaces\": [{\"id\": \"w1\", \"path\": \"$FIXTURE/w1\", \"repo\": \"$FIXTURE\", \"status\": \"active\"}, {\"id\": \"w2\", \"path\": \"$FIXTURE/w2\", \"repo\": \"$FIXTURE/bare\", \"status\": \"active\"}, {\"id\": \"w3\", \"path\": \"$FIXTURE/w3\", \"repo\": \"$FIXTURE/later\", \"status\": \"active\"}, {\"id\": \"w4\", \"path\": \"$FIXTURE/w4\", \"repo\": \"$FIXTURE/dirhook\", \"status\": \"active\"}, {\"id\": \"w5\", \"path\": \"$FIXTURE/w5\", \"repo\": \"$FIXTURE/locked\", \"status\": \"active\"}]}",
     "tool.py": "print(\"tool\")\n"
   },
   "cases": [
@@ -23,47 +28,53 @@
       "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
     },
     {
-      "name": "assignments before the command are skipped",
+      "name": "an assignment before the command is no ask, since it can change what runs",
+      "since": "R6",
       "call": "FOO=1 BAR=2 bash $FIXTURE/deploy.sh",
       "commands": [["FOO=1", "BAR=2", "bash", "$FIXTURE/deploy.sh"]],
       "scripts": ["$FIXTURE/deploy.sh"],
-      "whyNoAsk": null,
+      "whyNoAsk": "the assignment to FOO",
       "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
     },
     {
-      "name": "a wrapper with flags and durations",
+      "name": "a wrapper is no ask, whatever its flags and durations",
+      "since": "R6",
       "call": "timeout -k 5 30s bash $FIXTURE/deploy.sh",
       "commands": [["timeout", "-k", "5", "30s", "bash", "$FIXTURE/deploy.sh"]],
       "scripts": ["$FIXTURE/deploy.sh"],
-      "whyNoAsk": null,
+      "whyNoAsk": "timeout runs another command",
       "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
     },
     {
-      "name": "nice with a niceness, before a script given as a path",
+      "name": "nice is a wrapper, and no ask",
+      "since": "R6",
       "call": "nice -n 10 $FIXTURE/deploy.sh --now",
       "commands": [["nice", "-n", "10", "$FIXTURE/deploy.sh", "--now"]],
       "scripts": ["$FIXTURE/deploy.sh"],
-      "whyNoAsk": null,
+      "whyNoAsk": "nice runs another command",
       "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
     },
     {
-      "name": "env with an assignment, then an interpreter",
+      "name": "env is a wrapper, and no ask",
+      "since": "R6",
       "call": "env FOO=1 python3 $FIXTURE/tool.py --flag",
       "commands": [["env", "FOO=1", "python3", "$FIXTURE/tool.py", "--flag"]],
       "scripts": ["$FIXTURE/tool.py"],
-      "whyNoAsk": null,
+      "whyNoAsk": "env runs another command",
       "runs": ["1 08d0a0587a858b7a198f3e2e8518cc91ef0b1176ab9e6d22d6280deea3e998c7 $FIXTURE/tool.py"]
     },
     {
-      "name": "stdbuf with a joined flag",
+      "name": "stdbuf is a wrapper, and no ask",
+      "since": "R6",
       "call": "stdbuf -oL sh $FIXTURE/other.sh",
       "commands": [["stdbuf", "-oL", "sh", "$FIXTURE/other.sh"]],
       "scripts": ["$FIXTURE/other.sh"],
-      "whyNoAsk": null,
+      "whyNoAsk": "stdbuf runs another command",
       "runs": ["1 2477f9f055ec3d6315b91a3efa8410101bdc45261d3b9b541ef8b77b34d26f66 $FIXTURE/other.sh"]
     },
     {
       "name": "a command found by name names no script",
+      "//": "residual by design: just runs the repo's justfile, its recipes and their scripts, which no permission binds",
       "call": "just deploy",
       "commands": [["just", "deploy"]],
       "scripts": [],
@@ -254,11 +265,12 @@
       "runs": []
     },
     {
-      "name": "node -e runs the text the user reads; quoted parentheses end nothing",
+      "name": "node -e runs code no file holds (a require runs a file of the agent's); quoted parentheses end nothing",
+      "since": "R6",
       "call": "node -e 'console.log(1)'",
       "commands": [["node", "-e", "console.log(1)"]],
       "scripts": [],
-      "whyNoAsk": null,
+      "whyNoAsk": "`node -e` runs code that no file of the call holds",
       "runs": []
     },
     {
@@ -294,7 +306,7 @@
       "call": "timeout 30s bash --norc $FIXTURE/deploy.sh",
       "commands": [["timeout", "30s", "bash", "--norc", "$FIXTURE/deploy.sh"]],
       "scripts": [],
-      "whyNoAsk": "the call runs a script after interpreter flags",
+      "whyNoAsk": "timeout runs another command",
       "runs": []
     },
     {
@@ -360,11 +372,12 @@
       "runs": []
     },
     {
-      "name": "python3 -c after -I runs the text the user reads",
+      "name": "python3 -c after -I runs code no file holds (an import runs a file of the agent's)",
+      "since": "R6",
       "call": "python3 -I -c 'print(1)'",
       "commands": [["python3", "-I", "-c", "print(1)"]],
       "scripts": [],
-      "whyNoAsk": null,
+      "whyNoAsk": "`python3 -c` runs code that no file of the call holds",
       "runs": []
     },
     {
@@ -376,11 +389,12 @@
       "runs": []
     },
     {
-      "name": "bash -lc: -c in a bundle of flags",
+      "name": "bash -lc: a login shell reads ~/.profile first",
+      "since": "R6",
       "call": "bash -lc 'ls tasks'",
       "commands": [["bash", "-lc", "ls tasks"]],
       "scripts": [],
-      "whyNoAsk": null,
+      "whyNoAsk": "`bash -lc` runs code that no file of the call holds",
       "runs": []
     },
     {
@@ -400,11 +414,12 @@
       "runs": []
     },
     {
-      "name": "sh --no-execute runs nothing",
+      "name": "sh --no-execute: only -n is the no-run flag held",
+      "since": "R6",
       "call": "sh --no-execute deploy.sh",
       "commands": [["sh", "--no-execute", "deploy.sh"]],
       "scripts": [],
-      "whyNoAsk": null,
+      "whyNoAsk": "the call runs a script after interpreter flags",
       "runs": []
     },
     {
@@ -480,11 +495,11 @@
       "runs": []
     },
     {
-      "name": "an input redirect feeds the interpreter a script: refused, not bound (the script it names is the < word)",
+      "name": "an input redirect feeds the interpreter a script: refused, not bound (the script scriptsOf names is the < word)",
       "call": "bash < ./deploy.sh",
       "commands": [["bash", "<", "./deploy.sh"]],
       "scripts": ["<"],
-      "whyNoAsk": "by a relative path",
+      "whyNoAsk": "`<` redirects the command's input",
       "runs": []
     },
     {
@@ -492,7 +507,7 @@
       "call": "sh -s < ./deploy.sh",
       "commands": [["sh", "-s", "<", "./deploy.sh"]],
       "scripts": [],
-      "whyNoAsk": "the call runs a script after interpreter flags",
+      "whyNoAsk": "`<` redirects the command's input",
       "runs": []
     },
     {
@@ -500,7 +515,7 @@
       "call": "python3 -I < $FIXTURE/tool.py",
       "commands": [["python3", "-I", "<", "$FIXTURE/tool.py"]],
       "scripts": [],
-      "whyNoAsk": "the call runs a script after interpreter flags",
+      "whyNoAsk": "`<` redirects the command's input",
       "runs": []
     },
     {
@@ -508,7 +523,7 @@
       "call": "sh <<< 'ls tasks'",
       "commands": [["sh", "<<<", "ls tasks"]],
       "scripts": ["<<<"],
-      "whyNoAsk": "by a relative path",
+      "whyNoAsk": "`<<<` redirects the command's input",
       "runs": []
     },
     {
@@ -536,6 +551,1540 @@
       "commands": [["source", "./deploy.sh"]],
       "scripts": ["./deploy.sh"],
       "whyNoAsk": "runs the script ./deploy.sh by a relative path",
+      "runs": []
+    },
+    {
+      "name": "a project runner by name stays askable",
+      "//": "residual by design: pnpm runs the repo's package.json script, which no permission binds",
+      "since": "R6",
+      "call": "pnpm run deploy",
+      "commands": [["pnpm", "run", "deploy"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "tstack's own CLI is a runner a page ask holds",
+      "//": "fleet ws <dir> trash <name> --card <id> moves a workspace only on a permission card for that exact call",
+      "since": "R6",
+      "call": "fleet ws $FIXTURE trash w1 --card p1",
+      "commands": [["fleet", "ws", "$FIXTURE", "trash", "w1", "--card", "p1"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": ["1 db3d305053ceb372b019f428fbcd4c1d79b5f61499c05641fdc0c6bcc2f5e832 $FIXTURE/.fleet/ws-pre-remove"]
+    },
+    {
+      "name": "a program named fleet by a path that is no install of the plugin is not the fleet CLI",
+      "//": "a page ask holds …/fleet as the runner fleet only when its real path is one of the plugin's install paths (isFleetCli, as the hook's ws trash takes a card, rquuxvpk): another file named fleet would open a card under the CLI's name",
+      "since": "R6",
+      "call": "$FIXTURE/fleet ws /work/fleet trash w1 --card p1",
+      "commands": [["$FIXTURE/fleet", "ws", "/work/fleet", "trash", "w1", "--card", "p1"]],
+      "scripts": ["$FIXTURE/fleet"],
+      "whyNoAsk": "is not the fleet CLI: a program named fleet by its path is held only at one of the plugin's install paths",
+      "isolate": "names the fleet CLI by its path, which the cloud cannot resolve",
+      "runs": ["1 b0a9b0c3b3bfd1ccd02fc1b7bc70cf348091bdc5e44b6dfa6eab221850a0ed01 $FIXTURE/fleet"]
+    },
+    {
+      "name": "CI, TZ, NO_COLOR and FORCE_COLOR are the assignments held",
+      "since": "R6",
+      "call": "CI=1 bash $FIXTURE/deploy.sh",
+      "commands": [["CI=1", "bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "BASH_ENV runs a file before the bound script",
+      "since": "R6",
+      "call": "BASH_ENV=./evil.sh bash $FIXTURE/deploy.sh",
+      "commands": [["BASH_ENV=./evil.sh", "bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": "the assignment to BASH_ENV",
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "NODE_OPTIONS requires a file before the bound script",
+      "since": "R6",
+      "call": "NODE_OPTIONS=--require=./evil.js node $FIXTURE/tool.py",
+      "commands": [["NODE_OPTIONS=--require=./evil.js", "node", "$FIXTURE/tool.py"]],
+      "scripts": ["$FIXTURE/tool.py"],
+      "whyNoAsk": "the assignment to NODE_OPTIONS",
+      "runs": ["1 08d0a0587a858b7a198f3e2e8518cc91ef0b1176ab9e6d22d6280deea3e998c7 $FIXTURE/tool.py"]
+    },
+    {
+      "name": "an assignment standing alone changes what the next command finds",
+      "since": "R6",
+      "call": "PATH=./bin; git status",
+      "commands": [["PATH=./bin"], ["git", "status"]],
+      "scripts": [],
+      "whyNoAsk": "the assignment to PATH",
+      "runs": []
+    },
+    {
+      "name": "a program by an absolute path (an env) is no ask",
+      "since": "R6",
+      "call": "$FIXTURE/env bash ./x.sh",
+      "commands": [["$FIXTURE/env", "bash", "./x.sh"]],
+      "scripts": ["$FIXTURE/env"],
+      "whyNoAsk": "is run as a program",
+      "runs": []
+    },
+    {
+      "name": "a shell by an absolute path is no ask",
+      "since": "R6",
+      "call": "$FIXTURE/bash ./x",
+      "commands": [["$FIXTURE/bash", "./x"]],
+      "scripts": ["$FIXTURE/bash"],
+      "whyNoAsk": "is run as a program",
+      "runs": []
+    },
+    {
+      "name": "a script run as a program is no ask, though runsOf binds it",
+      "since": "R6",
+      "call": "$FIXTURE/deploy.sh --now",
+      "commands": [["$FIXTURE/deploy.sh", "--now"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": "is run as a program",
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "env -u takes a name scriptsOf reads as the program",
+      "since": "R6",
+      "call": "env -u HOME bash ./x.sh",
+      "commands": [["env", "-u", "HOME", "bash", "./x.sh"]],
+      "scripts": [],
+      "whyNoAsk": "env runs another command",
+      "runs": []
+    },
+    {
+      "name": "timeout -s takes a signal scriptsOf reads as the program",
+      "since": "R6",
+      "call": "timeout -s KILL 10 bash $FIXTURE/deploy.sh",
+      "commands": [["timeout", "-s", "KILL", "10", "bash", "$FIXTURE/deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "timeout runs another command",
+      "runs": []
+    },
+    {
+      "name": "exec -a takes a name",
+      "since": "R6",
+      "call": "exec -a n bash ./x",
+      "commands": [["exec", "-a", "n", "bash", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "exec runs another command",
+      "runs": []
+    },
+    {
+      "name": "stdbuf -o takes a mode",
+      "since": "R6",
+      "call": "stdbuf -o L bash $FIXTURE/deploy.sh",
+      "commands": [["stdbuf", "-o", "L", "bash", "$FIXTURE/deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "stdbuf runs another command",
+      "runs": []
+    },
+    {
+      "name": "sudo runs a command",
+      "since": "R6",
+      "call": "sudo bash $FIXTURE/deploy.sh",
+      "commands": [["sudo", "bash", "$FIXTURE/deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "sudo runs another command",
+      "runs": []
+    },
+    {
+      "name": "xargs runs a command",
+      "since": "R6",
+      "call": "xargs bash $FIXTURE/deploy.sh",
+      "commands": [["xargs", "bash", "$FIXTURE/deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "xargs runs another command",
+      "runs": []
+    },
+    {
+      "name": "find -exec runs a command",
+      "since": "R6",
+      "call": "find . -exec $FIXTURE/deploy.sh {} ;",
+      "commands": [["find", ".", "-exec", "$FIXTURE/deploy.sh", "{}"]],
+      "scripts": [],
+      "whyNoAsk": "find runs another command",
+      "runs": []
+    },
+    {
+      "name": "eval runs a command",
+      "since": "R6",
+      "call": "eval ./x",
+      "commands": [["eval", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "eval runs another command",
+      "runs": []
+    },
+    {
+      "name": "devenv shell runs a command",
+      "since": "R6",
+      "call": "devenv shell -- bash $FIXTURE/deploy.sh",
+      "commands": [["devenv", "shell", "--", "bash", "$FIXTURE/deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "devenv is not a program a page ask holds",
+      "runs": []
+    },
+    {
+      "name": "bash -c holds its code to the same rule: a relative script",
+      "since": "R6",
+      "call": "bash -c './x.sh'",
+      "commands": [["bash", "-c", "./x.sh"]],
+      "scripts": [],
+      "whyNoAsk": "runs the script ./x.sh by a relative path",
+      "runs": []
+    },
+    {
+      "name": "bash -c with an absolute script binds no file: the script is a call of its own",
+      "since": "R6",
+      "call": "bash -c 'bash $FIXTURE/deploy.sh'",
+      "commands": [["bash", "-c", "bash $FIXTURE/deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "`bash -c` runs the script",
+      "runs": []
+    },
+    {
+      "name": "bash -c with arguments runs what they give",
+      "//": "the $1 is in single quotes, which the call's shell reads as written, and the inner bash expands it: bash -c with arguments is code no file holds",
+      "since": "R6",
+      "call": "bash -c 'source \"$1\"' _ ./x.sh",
+      "commands": [["bash", "-c", "source \"$1\"", "_", "./x.sh"]],
+      "scripts": [],
+      "whyNoAsk": "`bash -c` runs code that no file of the call holds",
+      "runs": []
+    },
+    {
+      "name": "zsh is no interpreter a page ask binds",
+      "since": "R6",
+      "call": "zsh $FIXTURE/deploy.sh",
+      "commands": [["zsh", "$FIXTURE/deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "zsh is not a program a page ask holds",
+      "runs": []
+    },
+    {
+      "name": "dash is no interpreter a page ask binds",
+      "since": "R6",
+      "call": "dash $FIXTURE/deploy.sh",
+      "commands": [["dash", "$FIXTURE/deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "dash is not a program a page ask holds",
+      "runs": []
+    },
+    {
+      "name": "nu is no interpreter a page ask binds",
+      "since": "R6",
+      "call": "nu $FIXTURE/deploy.sh",
+      "commands": [["nu", "$FIXTURE/deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "nu is not a program a page ask holds",
+      "runs": []
+    },
+    {
+      "name": "perl is no interpreter a page ask binds",
+      "since": "R6",
+      "call": "perl $FIXTURE/tool.py",
+      "commands": [["perl", "$FIXTURE/tool.py"]],
+      "scripts": [],
+      "whyNoAsk": "perl is not a program a page ask holds",
+      "runs": []
+    },
+    {
+      "name": "python3.12 is no interpreter a page ask binds",
+      "since": "R6",
+      "call": "python3.12 $FIXTURE/tool.py",
+      "commands": [["python3.12", "$FIXTURE/tool.py"]],
+      "scripts": [],
+      "whyNoAsk": "python3.12 is not a program a page ask holds",
+      "runs": []
+    },
+    {
+      "name": "bun runs a file by a path",
+      "since": "R6",
+      "call": "bun ./x.ts",
+      "commands": [["bun", "./x.ts"]],
+      "scripts": [],
+      "whyNoAsk": "`bun ./x.ts` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "uv run runs a file no permission binds",
+      "since": "R6",
+      "call": "uv run $FIXTURE/tool.py",
+      "commands": [["uv", "run", "$FIXTURE/tool.py"]],
+      "scripts": [],
+      "whyNoAsk": "uv is not a program a page ask holds",
+      "runs": []
+    },
+    {
+      "name": "node --check with a require runs the required file",
+      "since": "R6",
+      "call": "node --check -r ./pre.js app.js",
+      "commands": [["node", "--check", "-r", "./pre.js", "app.js"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "a $ in a script's path expands when it runs",
+      "since": "R6",
+      "call": "bash $FIXTURE/deploy.sh$X",
+      "commands": [["bash", "$FIXTURE/deploy.sh$X"]],
+      "scripts": ["$FIXTURE/deploy.sh$X"],
+      "whyNoAsk": "has a $",
+      "runs": []
+    },
+    {
+      "name": "git -c sets a pager that runs",
+      "since": "R6",
+      "call": "git -c core.pager=./x log",
+      "commands": [["git", "-c", "core.pager=./x", "log"]],
+      "scripts": [],
+      "whyNoAsk": "`git -c` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "jj --config sets a pager that runs",
+      "since": "R6",
+      "call": "jj --config ui.pager=./x log",
+      "commands": [["jj", "--config", "ui.pager=./x", "log"]],
+      "scripts": [],
+      "whyNoAsk": "`jj --config` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "pnpm exec runs a file",
+      "since": "R6",
+      "call": "pnpm exec ./x",
+      "commands": [["pnpm", "exec", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "`pnpm exec` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "tstack's own CLI by its install path is the same runner, bound to its file",
+      "//": "the hook's ws trash takes a card that names the CLI by its path (rquuxvpk); runsOf binds the launcher as for any program by a path, and the plugin code it loads is trusted as installed, as for a bare fleet from PATH",
+      "since": "R6",
+      "call": "$FLEET_CLI ws $FIXTURE trash w1 --card p1",
+      "commands": [["$FLEET_CLI", "ws", "$FIXTURE", "trash", "w1", "--card", "p1"]],
+      "scripts": ["$FLEET_CLI"],
+      "whyNoAsk": null,
+      "isolate": "names the fleet CLI by its path, which the cloud cannot resolve",
+      "runs": ["1 $FLEET_SHA $FLEET_CLI", "1 db3d305053ceb372b019f428fbcd4c1d79b5f61499c05641fdc0c6bcc2f5e832 $FIXTURE/.fleet/ws-pre-remove"]
+    },
+    {
+      "name": "the install path with a .. component is not the fleet CLI",
+      "//": "resolving drops /s/.. before it follows the link s, the kernel follows s first: a path with ., .. or an empty component is refused whatever it resolves to",
+      "since": "R6",
+      "call": "/..$FLEET_CLI state /work/fleet show",
+      "commands": [["/..$FLEET_CLI", "state", "/work/fleet", "show"]],
+      "scripts": ["/..$FLEET_CLI"],
+      "whyNoAsk": "is not the fleet CLI: a program named fleet by its path is held only at one of the plugin's install paths",
+      "isolate": "names the fleet CLI by its path, which the cloud cannot resolve",
+      "runs": ["1 $FLEET_SHA /..$FLEET_CLI"]
+    },
+    {
+      "name": "the install path with a . component is not the fleet CLI",
+      "since": "R6",
+      "call": "/.$FLEET_CLI state /work/fleet show",
+      "commands": [["/.$FLEET_CLI", "state", "/work/fleet", "show"]],
+      "scripts": ["/.$FLEET_CLI"],
+      "whyNoAsk": "is not the fleet CLI: a program named fleet by its path is held only at one of the plugin's install paths",
+      "isolate": "names the fleet CLI by its path, which the cloud cannot resolve",
+      "runs": ["1 $FLEET_SHA /.$FLEET_CLI"]
+    },
+    {
+      "name": "the install path with an empty component is not the fleet CLI",
+      "since": "R6",
+      "call": "/$FLEET_CLI state /work/fleet show",
+      "commands": [["/$FLEET_CLI", "state", "/work/fleet", "show"]],
+      "scripts": ["/$FLEET_CLI"],
+      "whyNoAsk": "is not the fleet CLI: a program named fleet by its path is held only at one of the plugin's install paths",
+      "isolate": "names the fleet CLI by its path, which the cloud cannot resolve",
+      "runs": ["1 $FLEET_SHA /$FLEET_CLI"]
+    },
+    {
+      "name": "fleet state show only reads the ledger",
+      "since": "R6",
+      "call": "fleet state /work/fleet show",
+      "commands": [["fleet", "state", "/work/fleet", "show"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "fleet fleets gate run runs the command it is given",
+      "since": "R6",
+      "call": "fleet fleets gate run --as w1 --for 5 -- pnpm test",
+      "commands": [["fleet", "fleets", "gate", "run", "--as", "w1", "--for", "5", "--", "pnpm", "test"]],
+      "scripts": [],
+      "whyNoAsk": "`fleet run` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "any fleet -- form hands what follows to a command",
+      "since": "R6",
+      "call": "fleet tell all -- go",
+      "commands": [["fleet", "tell", "all", "--", "go"]],
+      "scripts": [],
+      "whyNoAsk": "`fleet --` hands the words after it to a command",
+      "runs": []
+    },
+    {
+      "name": "fleet usage capture runs the status line command it wraps",
+      "since": "R6",
+      "call": "fleet usage capture -- node statusline.js",
+      "commands": [["fleet", "usage", "capture", "--", "node", "statusline.js"]],
+      "scripts": [],
+      "whyNoAsk": "`fleet capture` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "fleet usage show only reads",
+      "since": "R6",
+      "call": "fleet usage show",
+      "commands": [["fleet", "usage", "show"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "fleet preview start runs the dev command the preview records",
+      "since": "R6",
+      "call": "fleet preview /work/fleet start --port 5300",
+      "commands": [["fleet", "preview", "/work/fleet", "start", "--port", "5300"]],
+      "scripts": [],
+      "whyNoAsk": "`fleet start` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "fleet preview set records a dev command a later start runs",
+      "since": "R6",
+      "call": "fleet preview /work/fleet set --root",
+      "commands": [["fleet", "preview", "/work/fleet", "set", "--root"]],
+      "scripts": [],
+      "whyNoAsk": "`fleet preview set` runs or changes the dev command the fleet's preview records",
+      "runs": []
+    },
+    {
+      "name": "fleet preview include feeds a worker's code to the running dev server",
+      "since": "R6",
+      "call": "fleet preview /work/fleet include w1",
+      "commands": [["fleet", "preview", "/work/fleet", "include", "w1"]],
+      "scripts": [],
+      "whyNoAsk": "`fleet preview include` runs or changes the dev command the fleet's preview records",
+      "runs": []
+    },
+    {
+      "name": "fleet preview status only reads",
+      "since": "R6",
+      "call": "fleet preview /work/fleet status",
+      "commands": [["fleet", "preview", "/work/fleet", "status"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "fleet preview stop only stops",
+      "since": "R6",
+      "call": "fleet preview /work/fleet stop --all",
+      "commands": [["fleet", "preview", "/work/fleet", "stop", "--all"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "fleet serve has the hub serve a fleet, its previews and grants",
+      "since": "R6",
+      "call": "fleet serve /work/fleet",
+      "commands": [["fleet", "serve", "/work/fleet"]],
+      "scripts": [],
+      "whyNoAsk": "`fleet serve` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "fleet hub starts the machine's server, which runs previews and writes grants",
+      "since": "R6",
+      "call": "fleet hub --port 4519",
+      "commands": [["fleet", "hub", "--port", "4519"]],
+      "scripts": [],
+      "whyNoAsk": "`fleet hub` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "a fleet refused word past the CLI's subcommand places is an argument",
+      "//": "the fleet CLI reads its subcommands in its first three words (fleet usage capture, fleet preview DIR start)",
+      "since": "R6",
+      "call": "fleet state /work/fleet agent w1 start",
+      "commands": [["fleet", "state", "/work/fleet", "agent", "w1", "start"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "fleet-run runs the program on its stdin",
+      "since": "R6",
+      "call": "fleet-run --id p1",
+      "commands": [["fleet-run", "--id", "p1"]],
+      "scripts": [],
+      "whyNoAsk": "fleet-run is not a program a page ask holds",
+      "runs": []
+    },
+    {
+      "name": "fleet-run by its path is a program by a path",
+      "since": "R6",
+      "call": "$FIXTURE/fleet-run --id p1",
+      "commands": [["$FIXTURE/fleet-run", "--id", "p1"]],
+      "scripts": ["$FIXTURE/fleet-run"],
+      "whyNoAsk": "/fleet-run is run as a program",
+      "runs": []
+    },
+    {
+      "name": "python3 -m pytest with an absolute word after a flag runs a script after interpreter flags",
+      "since": "R6",
+      "call": "python3 -m pytest -q $FIXTURE/tool.py",
+      "commands": [["python3", "-m", "pytest", "-q", "$FIXTURE/tool.py"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "just -c runs the command it is given",
+      "since": "R6",
+      "call": "just -c 'ls tasks'",
+      "commands": [["just", "-c", "ls tasks"]],
+      "scripts": [],
+      "whyNoAsk": "`just -c` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "npm init runs a create- package",
+      "since": "R6",
+      "call": "npm init vite",
+      "commands": [["npm", "init", "vite"]],
+      "scripts": [],
+      "whyNoAsk": "`npm init` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "pnpm init writes and runs what the call does not name",
+      "since": "R6",
+      "call": "pnpm init",
+      "commands": [["pnpm", "init"]],
+      "scripts": [],
+      "whyNoAsk": "`pnpm init` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "bun run of a file is no script name",
+      "since": "R6",
+      "call": "bun run x.ts",
+      "commands": [["bun", "run", "x.ts"]],
+      "scripts": [],
+      "whyNoAsk": "`bun run` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "fleet ws add runs the repo's ws hooks, which nothing binds",
+      "//": "ws add runs .fleet/ws-pre-add and .fleet/ws-add (or devenv-run --prepare) from the repo: an agent can edit them between the ask and the yes",
+      "since": "R6",
+      "call": "fleet ws /work/fleet add w2 --repo /work/repo",
+      "commands": [["fleet", "ws", "/work/fleet", "add", "w2", "--repo", "/work/repo"]],
+      "scripts": [],
+      "whyNoAsk": "`fleet ws add` runs the repo's .fleet/ws-* hooks, files an agent can change after the ask and no permission binds",
+      "runs": []
+    },
+    {
+      "name": "fleet ws prune runs the repo's ws hooks, wherever prune stands after ws",
+      "since": "R6",
+      "call": "fleet ws /work/fleet --hook-timeout 5 prune --apply",
+      "commands": [["fleet", "ws", "/work/fleet", "--hook-timeout", "5", "prune", "--apply"]],
+      "scripts": [],
+      "whyNoAsk": "`fleet ws prune` runs the repo's .fleet/ws-* hooks, files an agent can change after the ask and no permission binds",
+      "runs": []
+    },
+    {
+      "name": "nohup is a wrapper, and no ask",
+      "since": "R6",
+      "call": "nohup bash $FIXTURE/deploy.sh",
+      "commands": [["nohup", "bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": "nohup runs another command",
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "command is a wrapper, and no ask",
+      "since": "R6",
+      "call": "command bash $FIXTURE/deploy.sh",
+      "commands": [["command", "bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": "command runs another command",
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "builtin is a wrapper, and no ask",
+      "since": "R6",
+      "call": "builtin source $FIXTURE/deploy.sh",
+      "commands": [["builtin", "source", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": "builtin runs another command",
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "noglob leads to a command, and is no program a page ask holds",
+      "since": "R6",
+      "call": "noglob bash $FIXTURE/deploy.sh",
+      "commands": [["noglob", "bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": "noglob is not a program a page ask holds",
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "a double-quoted relative script is still relative",
+      "since": "R6",
+      "call": "bash \"./deploy.sh\"",
+      "commands": [["bash", "./deploy.sh"]],
+      "scripts": ["./deploy.sh"],
+      "whyNoAsk": "by a relative path",
+      "runs": []
+    },
+    {
+      "name": "quotes glued into a word make the word it runs",
+      "since": "R6",
+      "call": "ba'sh' ./deploy.sh",
+      "commands": [["bash", "./deploy.sh"]],
+      "scripts": ["./deploy.sh"],
+      "whyNoAsk": "by a relative path",
+      "runs": []
+    },
+    {
+      "name": "ANSI-C quoting is a $ word the shell decodes when it runs",
+      "since": "R6",
+      "call": "bash $'./deploy.sh'",
+      "commands": [["bash", "$./deploy.sh"]],
+      "scripts": ["$./deploy.sh"],
+      "whyNoAsk": "`$./deploy.sh` has a $",
+      "runs": []
+    },
+    {
+      "name": "locale quoting is a $ word the shell translates when it runs",
+      "since": "R6",
+      "call": "bash $\"./deploy.sh\"",
+      "commands": [["bash", "$./deploy.sh"]],
+      "scripts": ["$./deploy.sh"],
+      "whyNoAsk": "`$./deploy.sh` has a $",
+      "runs": []
+    },
+    {
+      "name": "a ? glob is a word the shell expands when it runs",
+      "//": "a file named util in the working directory turns it into jj util exec -- ./x",
+      "since": "R6",
+      "call": "jj ut?l exec -- ./x",
+      "commands": [["jj", "ut?l", "exec", "--", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "the call has a word bash would expand (ut?l): quote it or give it literally",
+      "runs": []
+    },
+    {
+      "name": "a [ ] glob is a word the shell expands when it runs",
+      "//": "a file named config in the working directory turns it into git config core.pager ./x",
+      "since": "R6",
+      "call": "git [c]onfig core.pager ./x",
+      "commands": [["git", "[c]onfig", "core.pager", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "the call has a word bash would expand ([c]onfig): quote it or give it literally",
+      "runs": []
+    },
+    {
+      "name": "a brace expansion is words the shell makes when it runs",
+      "//": "bash runs it as jj util exec -- ./x, with no file needed",
+      "since": "R6",
+      "call": "jj {util,exec} -- ./x",
+      "commands": [["jj", "{util,exec}", "--", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "the call has a word bash would expand ({util,exec}): quote it or give it literally",
+      "runs": []
+    },
+    {
+      "name": "a * glob is a word the shell expands when it runs",
+      "//": "whyNoRule refuses a * first; whyNoAsk refuses it on its own too",
+      "since": "R6",
+      "call": "jj u*l exec -- ./x",
+      "commands": [["jj", "u*l", "exec", "--", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "the call has a word bash would expand (u*l): quote it or give it literally",
+      "runs": []
+    },
+    {
+      "name": "a brace sequence is words the shell makes when it runs",
+      "since": "R6",
+      "call": "git log -{1..3}",
+      "commands": [["git", "log", "-{1..3}"]],
+      "scripts": [],
+      "whyNoAsk": "the call has a word bash would expand (-{1..3}): quote it or give it literally",
+      "runs": []
+    },
+    {
+      "name": "a glob or brace inside quotes is literal",
+      "since": "R6",
+      "call": "grep -e 'ut?l' -e \"{util,exec}\" -e '[c]onfig' -e x'{1..3}' notes.txt",
+      "commands": [["grep", "-e", "ut?l", "-e", "{util,exec}", "-e", "[c]onfig", "-e", "x{1..3}", "notes.txt"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "a here-doc feeds the interpreter its code",
+      "since": "R6",
+      "call": "bash <<EOF",
+      "commands": [["bash", "<<EOF"]],
+      "scripts": ["<<EOF"],
+      "whyNoAsk": "`<<EOF` redirects the command's input",
+      "runs": []
+    },
+    {
+      "name": "an output process substitution runs a command",
+      "since": "R6",
+      "call": "echo done > >(tee /tmp/log)",
+      "commands": [["echo", "done", ">", ">"], ["tee", "/tmp/log"]],
+      "scripts": [],
+      "whyNoAsk": "the call has a command substitution",
+      "runs": []
+    },
+    {
+      "name": "a || word ends a command, and the next is held to the rule",
+      "since": "R6",
+      "call": "true || bash ./deploy.sh",
+      "commands": [["true", "||", "bash", "./deploy.sh"]],
+      "scripts": ["./deploy.sh"],
+      "whyNoAsk": "by a relative path",
+      "runs": []
+    },
+    {
+      "name": "a & ends a command, and the next is held to the rule",
+      "since": "R6",
+      "call": "true & bash ./deploy.sh",
+      "commands": [["true"], ["bash", "./deploy.sh"]],
+      "scripts": ["./deploy.sh"],
+      "whyNoAsk": "by a relative path",
+      "runs": []
+    },
+    {
+      "name": "a | word ends a command: a shell fed by a pipe reads its code from its input",
+      "since": "R6",
+      "call": "echo ls | bash",
+      "commands": [["echo", "ls", "|", "bash"]],
+      "scripts": [],
+      "whyNoAsk": "bash with no script reads its code from its input",
+      "runs": []
+    },
+    {
+      "name": "a |& ends a command: a shell fed by it reads its code from its input",
+      "since": "R6",
+      "call": "echo ls |& bash",
+      "commands": [["echo", "ls", "|"], ["bash"]],
+      "scripts": [],
+      "whyNoAsk": "bash with no script reads its code from its input",
+      "runs": []
+    },
+    {
+      "name": "a newline is no separator here, and the word it joins is no program",
+      "//": "whyNoRule refuses a newline first; this pins whyNoAsk failing closed on its own",
+      "since": "R6",
+      "call": "true\nbash ./deploy.sh",
+      "commands": [["true\nbash", "./deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "no page ask can hold this call",
+      "runs": []
+    },
+    {
+      "name": "a subshell's command is held to the rule",
+      "since": "R6",
+      "call": "(bash ./deploy.sh)",
+      "commands": [["bash", "./deploy.sh"]],
+      "scripts": ["./deploy.sh"],
+      "whyNoAsk": "by a relative path",
+      "runs": []
+    },
+    {
+      "name": "a brace group's command is held to the rule",
+      "since": "R6",
+      "call": "{ bash ./deploy.sh; }",
+      "commands": [["{", "bash", "./deploy.sh"], ["}"]],
+      "scripts": ["./deploy.sh"],
+      "whyNoAsk": "by a relative path",
+      "runs": []
+    },
+    {
+      "name": "dot reads a relative script into the shell",
+      "since": "R6",
+      "call": ". ./deploy.sh",
+      "commands": [[".", "./deploy.sh"]],
+      "scripts": ["./deploy.sh"],
+      "whyNoAsk": "by a relative path",
+      "runs": []
+    },
+    {
+      "name": "PYTHONPATH makes python import the agent's files",
+      "since": "R6",
+      "call": "PYTHONPATH=. python3 $FIXTURE/tool.py",
+      "commands": [["PYTHONPATH=.", "python3", "$FIXTURE/tool.py"]],
+      "scripts": ["$FIXTURE/tool.py"],
+      "whyNoAsk": "the assignment to PYTHONPATH",
+      "runs": ["1 08d0a0587a858b7a198f3e2e8518cc91ef0b1176ab9e6d22d6280deea3e998c7 $FIXTURE/tool.py"]
+    },
+    {
+      "name": "LD_PRELOAD loads a library into an inert program",
+      "since": "R6",
+      "call": "LD_PRELOAD=./evil.so ls",
+      "commands": [["LD_PRELOAD=./evil.so", "ls"]],
+      "scripts": [],
+      "whyNoAsk": "the assignment to LD_PRELOAD",
+      "runs": []
+    },
+    {
+      "name": "GIT_EXTERNAL_DIFF names a program git runs",
+      "since": "R6",
+      "call": "GIT_EXTERNAL_DIFF=./x git diff",
+      "commands": [["GIT_EXTERNAL_DIFF=./x", "git", "diff"]],
+      "scripts": [],
+      "whyNoAsk": "the assignment to GIT_EXTERNAL_DIFF",
+      "runs": []
+    },
+    {
+      "name": "export sets a variable for the commands after it",
+      "since": "R6",
+      "call": "export BASH_ENV=./evil.sh; bash $FIXTURE/deploy.sh",
+      "commands": [["export", "BASH_ENV=./evil.sh"], ["bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": "export is not a program a page ask holds",
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "git --config-env sets config from the environment",
+      "since": "R6",
+      "call": "git --config-env=core.pager=EVIL log",
+      "commands": [["git", "--config-env=core.pager=EVIL", "log"]],
+      "scripts": [],
+      "whyNoAsk": "`git --config-env=core.pager=EVIL` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git --exec-path finds git's commands in a folder",
+      "since": "R6",
+      "call": "git --exec-path=./bin status",
+      "commands": [["git", "--exec-path=./bin", "status"]],
+      "scripts": [],
+      "whyNoAsk": "`git --exec-path=./bin` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git --upload-pack runs a program",
+      "since": "R6",
+      "call": "git fetch --upload-pack=./x origin",
+      "commands": [["git", "fetch", "--upload-pack=./x", "origin"]],
+      "scripts": [],
+      "whyNoAsk": "`git --upload-pack=./x` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git --receive-pack runs a program",
+      "since": "R6",
+      "call": "git push --receive-pack=./x origin",
+      "commands": [["git", "push", "--receive-pack=./x", "origin"]],
+      "scripts": [],
+      "whyNoAsk": "`git --receive-pack=./x` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git --exec runs a program",
+      "since": "R6",
+      "call": "git archive --exec=./x --remote=origin HEAD",
+      "commands": [["git", "archive", "--exec=./x", "--remote=origin", "HEAD"]],
+      "scripts": [],
+      "whyNoAsk": "`git --exec=./x` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git -O names a pager",
+      "since": "R6",
+      "call": "git grep -O./x foo",
+      "commands": [["git", "grep", "-O./x", "foo"]],
+      "scripts": [],
+      "whyNoAsk": "`git -O./x` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git --open-files-in-pager names a pager",
+      "since": "R6",
+      "call": "git grep --open-files-in-pager=./x foo",
+      "commands": [["git", "grep", "--open-files-in-pager=./x", "foo"]],
+      "scripts": [],
+      "whyNoAsk": "`git --open-files-in-pager=./x` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git --extcmd runs a program, also through an alias",
+      "since": "R6",
+      "call": "git dt --extcmd=./x HEAD",
+      "commands": [["git", "dt", "--extcmd=./x", "HEAD"]],
+      "scripts": [],
+      "whyNoAsk": "`git --extcmd=./x` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git --tool runs a program, also through an alias",
+      "since": "R6",
+      "call": "git mt --tool=x",
+      "commands": [["git", "mt", "--tool=x"]],
+      "scripts": [],
+      "whyNoAsk": "`git --tool=x` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git config writes what later calls run",
+      "since": "R6",
+      "call": "git config core.pager ./x",
+      "commands": [["git", "config", "core.pager", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "`git config` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git bisect run runs a program",
+      "since": "R6",
+      "call": "git bisect run ./x",
+      "commands": [["git", "bisect", "run", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "`git bisect` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git submodule foreach runs a program",
+      "since": "R6",
+      "call": "git submodule foreach ./x",
+      "commands": [["git", "submodule", "foreach", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "`git submodule` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git filter-branch runs a filter",
+      "since": "R6",
+      "call": "git filter-branch --tree-filter ./x HEAD",
+      "commands": [["git", "filter-branch", "--tree-filter", "./x", "HEAD"]],
+      "scripts": [],
+      "whyNoAsk": "`git filter-branch` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git difftool runs a program",
+      "since": "R6",
+      "call": "git difftool --extcmd=./x HEAD",
+      "commands": [["git", "difftool", "--extcmd=./x", "HEAD"]],
+      "scripts": [],
+      "whyNoAsk": "`git difftool` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git mergetool runs a program",
+      "since": "R6",
+      "call": "git mergetool --tool=x",
+      "commands": [["git", "mergetool", "--tool=x"]],
+      "scripts": [],
+      "whyNoAsk": "`git mergetool` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git rebase -x runs a program",
+      "since": "R6",
+      "call": "git rebase -x ./x main",
+      "commands": [["git", "rebase", "-x", "./x", "main"]],
+      "scripts": [],
+      "whyNoAsk": "`git rebase` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "jj --config-toml sets a program jj runs",
+      "since": "R6",
+      "call": "jj --config-toml 'ui.pager=\"./x\"' log",
+      "commands": [["jj", "--config-toml", "ui.pager=\"./x\"", "log"]],
+      "scripts": [],
+      "whyNoAsk": "`jj --config-toml` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "jj --config-file reads config that names programs",
+      "since": "R6",
+      "call": "jj --config-file ./evil.toml log",
+      "commands": [["jj", "--config-file", "./evil.toml", "log"]],
+      "scripts": [],
+      "whyNoAsk": "`jj --config-file` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "jj --tool runs a program",
+      "since": "R6",
+      "call": "jj diff --tool ./x",
+      "commands": [["jj", "diff", "--tool", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "`jj --tool` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "jj util exec runs a program",
+      "since": "R6",
+      "call": "jj util exec -- ./x",
+      "commands": [["jj", "util", "exec", "--", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "`jj util` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "just -f reads another justfile",
+      "since": "R6",
+      "call": "just -f ./evil.just deploy",
+      "commands": [["just", "-f", "./evil.just", "deploy"]],
+      "scripts": [],
+      "whyNoAsk": "`just -f` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "just --justfile reads another justfile",
+      "since": "R6",
+      "call": "just --justfile ./evil.just deploy",
+      "commands": [["just", "--justfile", "./evil.just", "deploy"]],
+      "scripts": [],
+      "whyNoAsk": "`just --justfile` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "just -d runs from another folder",
+      "since": "R6",
+      "call": "just -d /tmp deploy",
+      "commands": [["just", "-d", "/tmp", "deploy"]],
+      "scripts": [],
+      "whyNoAsk": "`just -d` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "just --working-directory runs from another folder",
+      "since": "R6",
+      "call": "just --working-directory /tmp deploy",
+      "commands": [["just", "--working-directory", "/tmp", "deploy"]],
+      "scripts": [],
+      "whyNoAsk": "`just --working-directory` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "just --shell runs recipes with a program",
+      "since": "R6",
+      "call": "just --shell ./x deploy",
+      "commands": [["just", "--shell", "./x", "deploy"]],
+      "scripts": [],
+      "whyNoAsk": "`just --shell` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "just --command runs a program",
+      "since": "R6",
+      "call": "just --command ./x",
+      "commands": [["just", "--command", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "`just --command` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "just --dotenv-path loads variables from a file",
+      "since": "R6",
+      "call": "just --dotenv-path ./evil.env deploy",
+      "commands": [["just", "--dotenv-path", "./evil.env", "deploy"]],
+      "scripts": [],
+      "whyNoAsk": "`just --dotenv-path` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "pnpm dlx runs a package",
+      "since": "R6",
+      "call": "pnpm dlx cowsay",
+      "commands": [["pnpm", "dlx", "cowsay"]],
+      "scripts": [],
+      "whyNoAsk": "`pnpm dlx` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "pnpm create runs a package",
+      "since": "R6",
+      "call": "pnpm create vite",
+      "commands": [["pnpm", "create", "vite"]],
+      "scripts": [],
+      "whyNoAsk": "`pnpm create` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "pnpm --script-shell runs scripts with a program",
+      "since": "R6",
+      "call": "pnpm --script-shell ./x run build",
+      "commands": [["pnpm", "--script-shell", "./x", "run", "build"]],
+      "scripts": [],
+      "whyNoAsk": "`pnpm --script-shell` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "pnpm --node-options loads a file into node",
+      "since": "R6",
+      "call": "pnpm --node-options=--require=./x.js test",
+      "commands": [["pnpm", "--node-options=--require=./x.js", "test"]],
+      "scripts": [],
+      "whyNoAsk": "`pnpm --node-options=--require=./x.js` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "npm exec runs a file",
+      "since": "R6",
+      "call": "npm exec ./x",
+      "commands": [["npm", "exec", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "`npm exec` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "npm x runs a package",
+      "since": "R6",
+      "call": "npm x cowsay",
+      "commands": [["npm", "x", "cowsay"]],
+      "scripts": [],
+      "whyNoAsk": "`npm x` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "npm create runs a package",
+      "since": "R6",
+      "call": "npm create vite",
+      "commands": [["npm", "create", "vite"]],
+      "scripts": [],
+      "whyNoAsk": "`npm create` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "npm --script-shell runs scripts with a program",
+      "since": "R6",
+      "call": "npm --script-shell ./x run build",
+      "commands": [["npm", "--script-shell", "./x", "run", "build"]],
+      "scripts": [],
+      "whyNoAsk": "`npm --script-shell` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "npm --node-options loads a file into node",
+      "since": "R6",
+      "call": "npm --node-options=--require=./x.js test",
+      "commands": [["npm", "--node-options=--require=./x.js", "test"]],
+      "scripts": [],
+      "whyNoAsk": "`npm --node-options=--require=./x.js` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "vp exec runs a file",
+      "since": "R6",
+      "call": "vp exec ./x",
+      "commands": [["vp", "exec", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "`vp exec` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "cargo --config reads config that names programs",
+      "since": "R6",
+      "call": "cargo --config ./evil.toml build",
+      "commands": [["cargo", "--config", "./evil.toml", "build"]],
+      "scripts": [],
+      "whyNoAsk": "`cargo --config` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "cargo -Z turns on unstable behaviour",
+      "since": "R6",
+      "call": "cargo -Z unstable-options build",
+      "commands": [["cargo", "-Z", "unstable-options", "build"]],
+      "scripts": [],
+      "whyNoAsk": "`cargo -Z` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "go run runs a package",
+      "since": "R6",
+      "call": "go run ./cmd/x",
+      "commands": [["go", "run", "./cmd/x"]],
+      "scripts": [],
+      "whyNoAsk": "`go run` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "go generate runs the commands its sources name",
+      "since": "R6",
+      "call": "go generate ./...",
+      "commands": [["go", "generate", "./..."]],
+      "scripts": [],
+      "whyNoAsk": "`go generate` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "go -exec runs test binaries with a program",
+      "since": "R6",
+      "call": "go test -exec ./x ./...",
+      "commands": [["go", "test", "-exec", "./x", "./..."]],
+      "scripts": [],
+      "whyNoAsk": "`go -exec` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "go -toolexec runs the toolchain through a program",
+      "since": "R6",
+      "call": "go build -toolexec ./x ./...",
+      "commands": [["go", "build", "-toolexec", "./x", "./..."]],
+      "scripts": [],
+      "whyNoAsk": "`go -toolexec` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "gh extension runs an extension",
+      "since": "R6",
+      "call": "gh extension install owner/gh-x",
+      "commands": [["gh", "extension", "install", "owner/gh-x"]],
+      "scripts": [],
+      "whyNoAsk": "`gh extension` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "gh ext runs an extension",
+      "since": "R6",
+      "call": "gh ext exec x",
+      "commands": [["gh", "ext", "exec", "x"]],
+      "scripts": [],
+      "whyNoAsk": "`gh ext` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "gh alias sets a command gh runs",
+      "since": "R6",
+      "call": "gh alias set --shell co ./x",
+      "commands": [["gh", "alias", "set", "--shell", "co", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "`gh alias` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "wrangler --config reads a config that names a build command",
+      "since": "R6",
+      "call": "wrangler --config ./evil.toml deploy",
+      "commands": [["wrangler", "--config", "./evil.toml", "deploy"]],
+      "scripts": [],
+      "whyNoAsk": "`wrangler --config` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "wrangler -c is its --config",
+      "since": "R6",
+      "call": "wrangler -c ./evil.toml dev",
+      "commands": [["wrangler", "-c", "./evil.toml", "dev"]],
+      "scripts": [],
+      "whyNoAsk": "`wrangler -c` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "wrangler --cwd runs it from a folder whose config the call does not name",
+      "since": "R6",
+      "call": "wrangler --cwd=../other deploy",
+      "commands": [["wrangler", "--cwd=../other", "deploy"]],
+      "scripts": [],
+      "whyNoAsk": "`wrangler --cwd=../other` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "fleet preview exclude feeds a worker's code to the running server",
+      "since": "R6",
+      "call": "fleet preview /work/fleet exclude w1",
+      "commands": [["fleet", "preview", "/work/fleet", "exclude", "w1"]],
+      "scripts": [],
+      "whyNoAsk": "`fleet preview exclude` runs or changes the dev command the fleet's preview records",
+      "runs": []
+    },
+    {
+      "name": "fleet usage show by a path that is no install of the plugin is not the fleet CLI",
+      "since": "R6",
+      "call": "$FIXTURE/fleet usage show",
+      "commands": [["$FIXTURE/fleet", "usage", "show"]],
+      "scripts": ["$FIXTURE/fleet"],
+      "whyNoAsk": "is not the fleet CLI: a program named fleet by its path is held only at one of the plugin's install paths",
+      "isolate": "names the fleet CLI by its path, which the cloud cannot resolve",
+      "runs": ["1 b0a9b0c3b3bfd1ccd02fc1b7bc70cf348091bdc5e44b6dfa6eab221850a0ed01 $FIXTURE/fleet"]
+    },
+    {
+      "name": "fleet preview status with a -- hands words to a command",
+      "since": "R6",
+      "call": "fleet preview /work/fleet status -- pnpm dev",
+      "commands": [["fleet", "preview", "/work/fleet", "status", "--", "pnpm", "dev"]],
+      "scripts": [],
+      "whyNoAsk": "`fleet --` hands the words after it to a command",
+      "runs": []
+    },
+    {
+      "name": "fleet preview stop of a $ folder expands when it runs",
+      "since": "R6",
+      "call": "fleet preview $DIR stop",
+      "commands": [["fleet", "preview", "$DIR", "stop"]],
+      "scripts": [],
+      "whyNoAsk": "`$DIR` has a $",
+      "runs": []
+    },
+    {
+      "name": "an assignment by += before the command is read past, so its script is bound",
+      "since": "R6",
+      "call": "CI+=1 bash $FIXTURE/deploy.sh",
+      "commands": [["CI+=1", "bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "an output redirection before the command is read past, so its script is bound",
+      "since": "R6",
+      "call": "> /tmp/x bash $FIXTURE/deploy.sh",
+      "commands": [[">", "/tmp/x", "bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "an output redirection in a group is read past too",
+      "since": "R6",
+      "call": "{ &> /dev/null source $FIXTURE/deploy.sh; }",
+      "commands": [["{", "&>", "/dev/null", "source", "$FIXTURE/deploy.sh"], ["}"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "fleet ws trash runs the repo's pre-remove hook, which its card binds as a script",
+      "//": "trashNamed (fleet/src/cli/ws.ts) runs <repo>/.fleet/ws-pre-remove before it moves anything; the repo is the workspace's row in DIR/state.json. The fleet repo's ledger reads no file: its whyNoGrant refuses a trash call whose card has no runs entry, a hash or the absence entry",
+      "since": "R6",
+      "call": "fleet ws $FIXTURE trash w1 --card p1",
+      "commands": [["fleet", "ws", "$FIXTURE", "trash", "w1", "--card", "p1"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": ["1 db3d305053ceb372b019f428fbcd4c1d79b5f61499c05641fdc0c6bcc2f5e832 $FIXTURE/.fleet/ws-pre-remove"]
+    },
+    {
+      "name": "fleet ws trash in a repo with no pre-remove hook binds the hook's absence",
+      "//": "trash then runs no hook; the absence entry is the sha256 slot as 64 zeros, which no file hashes to, so a card is opened and the ledger's whyNoGrant takes it",
+      "since": "R6",
+      "call": "fleet ws $FIXTURE trash w2 --card p1",
+      "commands": [["fleet", "ws", "$FIXTURE", "trash", "w2", "--card", "p1"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": ["1 0000000000000000000000000000000000000000000000000000000000000000 $FIXTURE/bare/.fleet/ws-pre-remove"]
+    },
+    {
+      "name": "a pre-remove hook that appears after the ask grants nothing",
+      "//": "the card bound the hook's absence; at the yes the host and the hub hash a file there, and the hook refuses the call while one is",
+      "since": "R6",
+      "call": "fleet ws $FIXTURE trash w3 --card p1",
+      "commands": [["fleet", "ws", "$FIXTURE", "trash", "w3", "--card", "p1"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": ["1 0000000000000000000000000000000000000000000000000000000000000000 $FIXTURE/later/.fleet/ws-pre-remove"],
+      "appears": {"later/.fleet/ws-pre-remove": "#!/bin/sh\necho late\n"},
+      "appeared": "the repo's ws hook appeared after the ask"
+    },
+    {
+      "name": "fleet ws trash of a workspace the ledger does not record is refused, as no card can bind its hook",
+      "//": "runsOf finds no repo, so the card would bind no hook; the fleet repo's ledger, which reads no file, refuses it at whyNoGrant for its empty runs",
+      "since": "R6",
+      "call": "fleet ws $FIXTURE trash w9 --card p1",
+      "commands": [["fleet", "ws", "$FIXTURE", "trash", "w9", "--card", "p1"]],
+      "scripts": [],
+      "whyNoAsk": "records no workspace w9 with its repo, so the card cannot bind the file trash runs",
+      "runs": []
+    },
+    {
+      "name": "fleet ws trash whose pre-remove hook is a folder is refused, as runsOf cannot hash it",
+      "//": "a folder there is neither a hash nor the absence: after the yes an agent could put a script in its place, which trash would run unbound",
+      "since": "R6",
+      "call": "fleet ws $FIXTURE trash w4 --card p1",
+      "commands": [["fleet", "ws", "$FIXTURE", "trash", "w4", "--card", "p1"]],
+      "scripts": [],
+      "whyNoAsk": "/dirhook/.fleet/ws-pre-remove cannot be read, so the card cannot bind the file trash runs",
+      "runs": []
+    },
+    {
+      "name": "fleet ws trash whose pre-remove hook cannot be read is refused, as runsOf cannot hash it",
+      "//": "a hook of mode 000 is there and cannot be hashed; root reads it anyway, so a port that runs as root skips the case",
+      "since": "R6",
+      "call": "fleet ws $FIXTURE trash w5 --card p1",
+      "commands": [["fleet", "ws", "$FIXTURE", "trash", "w5", "--card", "p1"]],
+      "scripts": [],
+      "whyNoAsk": "/locked/.fleet/ws-pre-remove cannot be read, so the card cannot bind the file trash runs",
+      "runs": [],
+      "unreadable": ["locked/.fleet/ws-pre-remove"]
+    },
+    {
+      "name": "a $ in single quotes is read as written",
+      "since": "R6",
+      "call": "echo '$HOME'",
+      "commands": [["echo", "$HOME"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "a $ in double quotes expands when it runs",
+      "since": "R6",
+      "call": "echo \"$HOME\"",
+      "commands": [["echo", "$HOME"]],
+      "scripts": [],
+      "whyNoAsk": "`$HOME` has a $",
+      "runs": []
+    },
+    {
+      "name": "a $ outside quotes expands, next to a single-quoted one",
+      "since": "R6",
+      "call": "echo '$HOME'$PATH",
+      "commands": [["echo", "$HOME$PATH"]],
+      "scripts": [],
+      "whyNoAsk": "`$HOME$PATH` has a $",
+      "runs": []
+    },
+    {
+      "name": "a single quote in double quotes quotes nothing, so its $ expands",
+      "since": "R6",
+      "call": "echo \"'$HOME'\"",
+      "commands": [["echo", "'$HOME'"]],
+      "scripts": [],
+      "whyNoAsk": "`'$HOME'` has a $",
+      "runs": []
+    },
+    {
+      "name": "git takes a refused long flag by a unique prefix: the pager of grep",
+      "since": "R6",
+      "call": "git grep --open-files=./x pat",
+      "commands": [["git", "grep", "--open-files=./x", "pat"]],
+      "scripts": [],
+      "whyNoAsk": "`git --open-files=./x` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git takes a refused long flag by a unique prefix: the remote's pack program",
+      "since": "R6",
+      "call": "git fetch --upl=./x /r",
+      "commands": [["git", "fetch", "--upl=./x", "/r"]],
+      "scripts": [],
+      "whyNoAsk": "`git --upl=./x` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git push takes --receive-pack by a prefix",
+      "since": "R6",
+      "call": "git push --rece=./x /r",
+      "commands": [["git", "push", "--rece=./x", "/r"]],
+      "scripts": [],
+      "whyNoAsk": "`git --rece=./x` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git clone is no ask: its -u is --upload-pack, and a template's hooks run",
+      "since": "R6",
+      "call": "git clone -u ./x /src /dst",
+      "commands": [["git", "clone", "-u", "./x", "/src", "/dst"]],
+      "scripts": [],
+      "whyNoAsk": "`git clone` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "git's -c after the subcommand is the subcommand's own",
+      "//": "git reads -c <name>=<value> as its own only before the subcommand: git grep -c counts, git switch -c makes a branch",
+      "since": "R6",
+      "call": "git grep -c foo",
+      "commands": [["git", "grep", "-c", "foo"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "git's -c before the subcommand, past another global option, still sets config",
+      "since": "R6",
+      "call": "git -C /r -c core.pager=./x log",
+      "commands": [["git", "-C", "/r", "-c", "core.pager=./x", "log"]],
+      "scripts": [],
+      "whyNoAsk": "`git -c` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "a pnpm subcommand is the first word past its flags and their values",
+      "//": "pnpm --filter x test runs the test script of package x: x is the filter's value, not pnpm x",
+      "since": "R6",
+      "call": "pnpm --filter x test",
+      "commands": [["pnpm", "--filter", "x", "test"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "pnpm exec past a filter is still pnpm exec",
+      "since": "R6",
+      "call": "pnpm --filter web exec vite",
+      "commands": [["pnpm", "--filter", "web", "exec", "vite"]],
+      "scripts": [],
+      "whyNoAsk": "`pnpm exec` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "a fleet refused word in a message is a word of the message",
+      "//": "fleet tell FLEET TEXT...: the text is told, not run",
+      "since": "R6",
+      "call": "fleet tell w1 start",
+      "commands": [["fleet", "tell", "w1", "start"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "jj config set writes what a later jj call runs",
+      "since": "R6",
+      "call": "jj config set --repo ui.pager ./x",
+      "commands": [["jj", "config", "set", "--repo", "ui.pager", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "`jj config` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "gh config set writes what a later gh call runs",
+      "since": "R6",
+      "call": "gh config set pager ./x",
+      "commands": [["gh", "config", "set", "pager", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "`gh config` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "npm config set writes what a later npm call runs",
+      "since": "R6",
+      "call": "npm config set script-shell ./x",
+      "commands": [["npm", "config", "set", "script-shell", "./x"]],
+      "scripts": [],
+      "whyNoAsk": "`npm config` runs code the call does not name",
+      "runs": []
+    },
+    {
+      "name": "fleet preview with no subcommand names what is missing",
+      "since": "R6",
+      "call": "fleet preview /work/fleet",
+      "commands": [["fleet", "preview", "/work/fleet"]],
+      "scripts": [],
+      "whyNoAsk": "`fleet preview DIR` needs its subcommand, status or stop",
       "runs": []
     }
   ]

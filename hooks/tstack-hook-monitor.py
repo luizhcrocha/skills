@@ -396,20 +396,9 @@ def _watch_reads(head, args):
 
 
 def _fleet_clis(hook):
-    """Every path the fleet CLI has on this machine, resolved: this plugin's, and the ones fleet/bin/fleet hands over
-    to (the checkouts in $CLAUDE_CODE_PLUGIN_DIRS, the marketplace clone, each cached version). A session keeps the
-    plugin folder it started with, and the CLI prints the newest one's path, so a session names more than one."""
-    home = hook.env.get("HOME") or ""
-    roots = [str(ROOT), *(hook.env.get("CLAUDE_CODE_PLUGIN_DIRS") or "").split(":")]
-    if os.path.isabs(home):
-        plugins = os.path.join(home, ".claude", "plugins")
-        roots.append(os.path.join(plugins, "marketplaces", "tstack"))
-        cache = os.path.join(plugins, "cache", "tstack", "tstack")
-        try:
-            roots += [os.path.join(cache, version) for version in os.listdir(cache)]
-        except OSError:
-            pass
-    return {os.path.realpath(os.path.join(root, "fleet", "bin", "fleet")) for root in roots if os.path.isabs(root)}
+    """Every path the fleet CLI has on this machine, resolved (fleet_cli_paths, which a page ask's is_fleet_cli
+    reads too)."""
+    return fleet_cli_paths(hook.env)
 
 
 def _watch_fleet(names):
