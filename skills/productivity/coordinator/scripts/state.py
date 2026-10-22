@@ -373,7 +373,7 @@ def unrecorded(root, state: dict) -> list[str]:
             continue
         m = next(x for x in reversed(said) if x.get("decision") == d["id"] and x["from"] == "user" and x["at"] == at)
         lines.append(f"state: the user answered {d['ref']} ({d['title']}) as #{m['id']} at {str(at)[11:16]}; record it before any other "
-                     f"work: `fleet state <dir> decision {d['ref']} --decide \"...\" --resolution \"answered on the page (#{m['id']})\"`, "
+                     f"work: `fleet state <dir> decision {d['ref']} --decide \"...\" --resolution \"answer given on the page (#{m['id']})\"`, "
                      f"then answer #{m['id']} with --re.")
     return lines
 
@@ -1097,7 +1097,7 @@ def cmd_decision(state, args):
     rows = state.setdefault("decisions", [])
     d = decisions.find(state, args.id)
     if args.decide is not None and not args.resolution:
-        fail("--decide says what was chosen and --resolution how it came (\"answered on the page (#14)\", \"said in the session\")")
+        fail("--decide says what was chosen and --resolution how it came (\"answer given on the page (#14)\", \"said in the session\")")
     if args.agent and not known(state, args.agent):
         fail(f"unknown agent '{args.agent}'")
     if d is None and (args.hold is not None or args.unhold):

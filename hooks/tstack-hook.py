@@ -1677,10 +1677,10 @@ def fleet_chat_nudge(hook):
                     questions = dec.get("questions") if isinstance(dec.get("questions"), list) else []
                     if any(isinstance(q, dict) and (_instant(q.get("answered")) or 0) >= _instant(p["at"]) for q in questions):
                         continue  # a grilling's question answered or dropped after it: recorded
-                    how = (f'Record it and answer #{k} in {run}`{answer_program(dec.get("id"), f"answered on the page (#{k})", int(k))}`.'
+                    how = (f'Record it and answer #{k} in {run}`{answer_program(dec.get("id"), f"answer given on the page (#{k})", int(k))}`.'
                            if moved(d) else
                            f'Record it now (`{fleet_cli()} state {d} decision {ref} --decide "..." --resolution '
-                           f'"answered on the page (#{k})"`), then answer #{k} with --re.')
+                           f'"answer given on the page (#{k})"`), then answer #{k} with --re.')
                     lines.append(
                         f'Fleet: #{k} from the user answers {ref} ({_one_line(dec.get("title") or "", 60)}), '
                         f'not recorded for {minutes} min: "{said}". {how}')

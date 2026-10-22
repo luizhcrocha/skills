@@ -2303,7 +2303,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
     const unhold = args.flag("unhold");
 
     if (decide !== undefined && !given(resolution)) {
-      return yield* refuse('--decide says what was chosen and --resolution how it came ("answered on the page (#14)", "said in the session")');
+      return yield* refuse('--decide says what was chosen and --resolution how it came ("answer given on the page (#14)", "said in the session")');
     }
 
     if (args.str("kind") === DRAFT_KIND) return yield* draftRefusal(ledger, run, d);

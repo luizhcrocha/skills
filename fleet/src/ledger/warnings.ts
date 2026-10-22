@@ -167,8 +167,8 @@ export function unrecorded(ledger: Ledger, said: readonly Message[], moved: bool
     lines.push(
       `state: the user answered ${d.ref ?? d.id} (${d.title ?? "None"}) as #${n} at ${at.slice(11, 16)}; ` +
         (moved
-          ? `record it and answer #${n} before any other work with ${decideProgram("<dir>", d.id, `answered on the page (#${n})`, m?.id)}.`
-          : `record it before any other work: \`fleet state <dir> decision ${d.ref ?? d.id} --decide "..." --resolution "answered on the page (#${n})"\`, then answer #${n} with --re.`),
+          ? `record it and answer #${n} before any other work with ${decideProgram("<dir>", d.id, `answer given on the page (#${n})`, m?.id)}.`
+          : `record it before any other work: \`fleet state <dir> decision ${d.ref ?? d.id} --decide "..." --resolution "answer given on the page (#${n})"\`, then answer #${n} with --re.`),
     );
   }
 

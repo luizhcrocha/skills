@@ -254,7 +254,7 @@ describe("an answer on a moved team is recorded through a program", () => {
     expect(shown.code, shown.stderr).toBe(0);
     expect(shown.stderr).toContain(
       `state: the user answered D1 (Schema) as #1 at ${at.slice(11, 16)}; record it and answer #1 before any other work with one program on the stdin of \`FLEET_DIR=<dir> fleet-run\`: ` +
-        '`decision.decide("d-f819eec7", "...", "answered on the page (#1)"); say("...", { re: 1 }); return records.apply(ops);`.',
+        '`decision.decide("d-f819eec7", "...", "answer given on the page (#1)"); say("...", { re: 1 }); return records.apply(ops);`.',
     );
     expect(shown.stderr).not.toContain("--decide");
   });

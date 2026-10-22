@@ -259,7 +259,7 @@ function unrecorded(machine: Machine, entry: { readonly id: string; readonly dir
         `given at ${at.slice(11, 16)} as #${m?.id ?? "?"}: "${[...oneLine(m?.text ?? "")].slice(0, 120).join("")}". SendMessage its session ` +
         `(${entry.session ?? entry.id}) to record it` +
         (isMoved(entry.dir)
-          ? ` with ${decideProgram("<dir>", pyText(d["id"]), `answered on the page (#${m?.id ?? "?"})`)}.`
+          ? ` with ${decideProgram("<dir>", pyText(d["id"]), `answer given on the page (#${m?.id ?? "?"})`)}.`
           : `: \`fleet state <dir> decision ${ref} --decide ...\`.`),
     );
   }
@@ -853,9 +853,9 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
           d.kind === "action" && m.text.startsWith(FAILED)
             ? `-> the user's step ${d.label} failed, and it is not done: fix it and re-present it, \`fleet state ${root} decision ${d.label} --manual ...\`, or --withdraw "why"; never --decide\n`
             : moved
-              ? `-> the user answered ${d.label}: record it first, with ${decideProgram(root, d.key, `answered on the page (#${m.id})`)}\n`
+              ? `-> the user answered ${d.label}: record it first, with ${decideProgram(root, d.key, `answer given on the page (#${m.id})`)}\n`
               : d.kind === "permission"
-                ? `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide "<allow-once, allow-kind or deny>" --resolution "answered on the page (#${m.id})"\`; ` +
+                ? `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide "<allow-once, allow-kind or deny>" --resolution "answer given on the page (#${m.id})"\`; ` +
                   "for an allow-once or allow-kind that prints the exact call to run, and nothing of it runs before; an allow-kind then asks you for a rule card (the --decide output says how)\n"
                 : `-> the user answered ${d.label}: record it first, \`fleet state ${root} decision ${d.label} --decide ...\`\n`,
         );

@@ -888,8 +888,8 @@ After the handler succeeds, before validation, on stderr, in this order (not for
    missing or doesn't parse), except on `set --now`.
 
 4. **An answer not recorded** (`state: the user answered D3 (<title>) as #14 at 09:12; record it
-   before any other work: \`fleet state <dir> decision D3 --decide "..." --resolution "answered on the
-   page (#14)"\`, then answer #14 with --re.`), one line per open decision of the ledger the command
+   before any other work: \`fleet state <dir> decision D3 --decide "..." --resolution "answer given on
+   the page (#14)"\`, then answer #14 with --re.`), one line per open decision of the ledger the command
    leaves whose answer the user gave on the page and the decision has not recorded (`answerRecorded`,
    Python's `decisions.recorded`): given after it was opened or last revised (instants), after `held_at`
    when it is held, and, on a grilling, after its last question answered or dropped. Only the decision's
@@ -2510,7 +2510,7 @@ run of each exact command shown; the next run of the same command asks again.
   stays stopped. Act on the user's note; no other route to the same act (another worker, a reworded
   command, an action that asks the user to run it).` `fleet chat DIR wait P<n>` ends, for a permission,
   with `-> the user answered P<n>: record it first, \`fleet state DIR decision P<n> --decide "<allow-once
-  or deny>" --resolution "answered on the page (#N)"\`; for an allow-once that prints the exact call to
+  or deny>" --resolution "answer given on the page (#N)"\`; for an allow-once that prints the exact call to
   run, and nothing of it runs before`. Before this the fleet was told `allow-once: Allow this call once`
   and `record it first`, with the call nowhere in what it read.
 - **Explaining**: a permission recorded with its cause (a refused Agent spawn, a Bash call recorded by
@@ -3176,7 +3176,7 @@ hook: a broken `chat.jsonl` or ledger is skipped, an error is logged.
   - an answer to a decision still open that it has not recorded (given after it was opened or revised,
     not held after it, and on a grilling not followed by a question answered or dropped), read or not;
     a reply in the chat does not record an answer; only the decision command does: `Fleet: #82 from
-    the user answers A7 (<title>), not recorded for 12 min: "<text>". Record it now (`<fleet> state DIR decision A7 --decide "..." --resolution "answered on the page (#82)"`),
+    the user answers A7 (<title>), not recorded for 12 min: "<text>". Record it now (`<fleet> state DIR decision A7 --decide "..." --resolution "answer given on the page (#82)"`),
     then answer #82 with --re.`
   - an answer to a grilling that is then answered and waiting to be recorded, even when the fleet
     replied to it (a reply to an answer to a decision keeps it pending; a reply to any other message

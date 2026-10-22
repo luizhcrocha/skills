@@ -125,7 +125,7 @@ class HookProgramsTest(unittest.TestCase):
             {"name": "blocked event", "fresh": True,
              "body": hook.blocked_program("Auto mode refused a Write call of w1", "w1")},
             {"name": "the nudge's answer", "fresh": True,
-             "body": hook.answer_program("x7", "answered on the page (#1)", 1).replace('"..."', '"yes"')},
+             "body": hook.answer_program("x7", "answer given on the page (#1)", 1).replace('"..."', '"yes"')},
             {"name": "the nudge's grilling", "fresh": True,
              "body": hook.answer_program("x7", "grilling finished").replace('"..."', '"done"')},
         ]

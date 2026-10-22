@@ -101,7 +101,7 @@ describe("an answer on the page is recorded before other work", () => {
     userSays(1, "2026-01-05T09:05:00+00:00", "B", "d1");
     const warned = ok("event", "something else").stderr;
     expect(warned).toContain("state: the user answered D1 (Schema) as #1 at 09:05; record it before any other work: ");
-    expect(warned).toContain('decision D1 --decide "..." --resolution "answered on the page (#1)"');
+    expect(warned).toContain('decision D1 --decide "..." --resolution "answer given on the page (#1)"');
     expect(ok("decision", "D1", "--decide", "B", "--resolution", "answered on the page (#1)").stderr).not.toContain("the user answered");
     expect(ok("event", "later").stderr).not.toContain("the user answered");
   });

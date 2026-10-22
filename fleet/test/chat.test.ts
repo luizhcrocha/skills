@@ -1935,7 +1935,7 @@ describe("an answer on a moved team is recorded through a program", () => {
 
     expect(out).toContain(
       `-> the user answered D68: record it first, with one program on the stdin of \`FLEET_DIR=${root} fleet-run\`: ` +
-        `\`decision.decide("d-f819eec7", "...", "answered on the page (#${answer.id})"); return records.apply(ops);\`\n`,
+        `\`decision.decide("d-f819eec7", "...", "answer given on the page (#${answer.id})"); return records.apply(ops);\`\n`,
     );
     expect(out).not.toContain("--decide");
   });
@@ -1956,7 +1956,7 @@ describe("an answer on a moved team is recorded through a program", () => {
     expect(line).toStartWith("! billing has not recorded the user's answer to D68 (Do it)");
     expect(line).toEndWith(
       "SendMessage its session (billing) to record it with one program on the stdin of `FLEET_DIR=<dir> fleet-run`: " +
-        `\`decision.decide("d-f819eec7", "...", "answered on the page (#${sent.id})"); return records.apply(ops);\`.\n`,
+        `\`decision.decide("d-f819eec7", "...", "answer given on the page (#${sent.id})"); return records.apply(ops);\`.\n`,
     );
   });
 });

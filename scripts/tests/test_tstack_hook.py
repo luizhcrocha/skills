@@ -1813,7 +1813,7 @@ class ChatNudgeTest(FleetCase):
         self.assertEqual(context,
                          'Fleet: #1 from the user answers A7 (Delete five finished worker workspaces?), not recorded '
                          f'for 12 min: "yes". Record it now (`{self.fleet_cli} state {self.fleet} decision A7 --decide '
-                         '"..." --resolution "answered on the page (#1)"`), then answer #1 with --re.')
+                         '"..." --resolution "answer given on the page (#1)"`), then answer #1 with --re.')
         self.say(2, "2026-01-05T08:20:00+00:00", "yes, again", decision="x7")
         self.ledger(decisions=[{**decision, "status": "decided"}])  # recorded meanwhile
         self.assertEqual(self.tool("2026-01-05T08:30:00+00:00"), "")
@@ -7359,7 +7359,7 @@ class MovedNudgeTest(MovedFleet, FleetCase):
         self.assertEqual(self.tool("2026-01-05T08:22:00+00:00"),
                          'Fleet: #1 from the user answers A7 (Delete five finished workspaces?), not recorded for 12 min: '
                          f'"yes". Record it and answer #1 in one program on the stdin of `{self.env["TSTACK_FLEET_RUN"]}`: '
-                         '`decision.decide("x7", "...", "answered on the page (#1)"); say("...", { re: 1 }); '
+                         '`decision.decide("x7", "...", "answer given on the page (#1)"); say("...", { re: 1 }); '
                          'return records.apply(ops);`.')
 
     def test_a_grilling_answered_and_not_recorded_is_told_as_a_program(self):
