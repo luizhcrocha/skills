@@ -4471,18 +4471,25 @@ same `FLEET_WS_ID`, so a hook frees what it names in `pre-remove`.
   neither empty nor described starting `THROWAWAY` (`ws: kept t1: 1 change(s) neither THROWAWAY nor empty:
   ...`); an ID that is not letters, digits and `-` (`a card ID is letters, digits and '-': ...`); and
   unless card ID is a yes. A yes is a permission card only: of DIR's own ledger, found by id or number as
-  every command finds one (no `FLEET/ID`); whose call (`refusal.call`) is, byte for byte, this very command
-  as the CLI prints it, `fleet ws <DIR> trash <NAME> --card <ID>` with DIR the fleet's resolved absolute
-  path; decided (not open or withdrawn) and not superseded by another card; and answered exactly
+  every command finds one (no `FLEET/ID`); whose call (`refusal.call`) is this very command,
+  `<FLEET> ws <DIR> trash <NAME> --card <ID>` with DIR the fleet's resolved absolute path: FLEET is the fleet
+  CLI, by the full path a permission's call names it by or a bare `fleet`, and the words after it are those
+  byte for byte. A full path counts when it is one plain word of path characters, with no `.`, `..` or empty
+  (`//`) component, that resolves (links followed) to a path the CLI has on the machine (a `..` after a link
+  resolves as if the link were not there, while the kernel follows the link first and runs another file), the same set the hook knows (this plugin's
+  `fleet/bin/fleet`, and each one `fleet/bin/fleet` hands over to: the checkouts in
+  `$CLAUDE_CODE_PLUGIN_DIRS`, the marketplace clone, each cached version); another file named `fleet`, or a
+  `fleet/bin/fleet` of no tstack there, is another program and no yes (P196, #1323: the full-path call a card
+  made the documented way names, and allow-kind prints to run, was refused while the rule wanted a bare
+  `fleet`); decided (not open or withdrawn) and not superseded by another card; and answered exactly
   `allow-once` or `allow-kind`, nothing after the word but whitespace. A decision, input, action or grilling
   card is no yes whatever it says, and neither is a permission for any other call (another NAME, another
   ID, a flag more) or answered otherwise (`deny`, `allow-once, but not t1`). Each refusal prints the exact
   call to put on the card: ``ws: card k is kind decision, not a permission: only a permission card whose
-  call is exactly `fleet ws /home/u/fleet trash t1 --card k`, decided allow-once or allow-kind, moves a
-  workspace prune keeps; open one for that call``. That call starts with a bare `fleet`, and the grant an
-  allow-once writes is a rule for its exact text, so it is run exactly as the refusal prints it, with `fleet`
-  on PATH: the plugin's `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet ws ...` is another command, and the rule does
-  not let it through. A moved team (`DIR/cloud.json`, 3a) has no route yet: `trash` is refused there before
+  call is exactly `/p/fleet/bin/fleet ws /home/u/fleet trash t1 --card k`, decided allow-once or allow-kind,
+  moves a workspace prune keeps; open one for that call``, the call naming the CLI by its own full path, as
+  every printed command does. The grant an allow-once writes is a rule for the card's exact text, so the call
+  is run exactly as the card names it. A moved team (`DIR/cloud.json`, 3a) has no route yet: `trash` is refused there before
   any card is read, as `prune --apply` is, and its workspaces have no ledger rows to find NAME in. Until one
   exists, ask the Manager for a one-time permission to take the workspace out by hand (`jj --ignore-working-copy
   workspace forget NAME`, then the folder moved into the trash), then `fleet ws trash --adopt` the entry. Why a permission and nothing else: it already names one

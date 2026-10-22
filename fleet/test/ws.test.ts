@@ -5,7 +5,7 @@
  */
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 
@@ -1315,7 +1315,7 @@ describe("fleet ws DIR trash NAME --card ID: one workspace prune keeps, trashed 
   const trash = (): string => join(base, "registry", "trash");
   const names = (): string => jj(repo, "--ignore-working-copy", "workspace", "list", "-T", 'name ++ "\\n"');
   /** The command as the CLI prints it, which a permission card's call must be. */
-  const call = (name: string, id: string): string => `fleet ws ${dir} trash ${name} --card ${id}`;
+  const call = (name: string, id: string): string => `${FLEET} ws ${dir} trash ${name} --card ${id}`;
 
   const only = (name: string, id: string): string =>
     `only a permission card whose call is exactly \`${call(name, id)}\`, decided allow-once or allow-kind, moves a workspace prune keeps`;
@@ -1385,6 +1385,73 @@ describe("fleet ws DIR trash NAME --card ID: one workspace prune keeps, trashed 
     permission("p-9a2b3c4d", call("t1", "p-9a2b3c4d"), "allow-kind \n");
     expect(ws("trash", "t1", "--card", "p-9a2b3c4d").code).toBe(0);
     expect(existsSync(at)).toBe(false);
+  });
+
+  // P196 (#1323): a permission card's call carries the CLI's full path, and allow-kind prints that call to run.
+  test("a card whose call names this CLI by its full path is a yes", () => {
+    const { at } = throwaway();
+    permission("full", `${FLEET} ws ${dir} trash t1 --card full`, "allow-kind");
+    const ran = ws("trash", "t1", "--card", "full");
+    expect([ran.code, ran.stderr]).toEqual([0, ""]);
+    expect(existsSync(at)).toBe(false);
+  });
+
+  test("a card whose call names this CLI by a link to it is a yes", () => {
+    const { at } = throwaway();
+    const link = join(base, "linked-fleet");
+    symlinkSync(FLEET, link);
+    permission("linked", `${link} ws ${dir} trash t1 --card linked`, "allow-once");
+    expect(ws("trash", "t1", "--card", "linked").code).toBe(0);
+    expect(existsSync(at)).toBe(false);
+  });
+
+  test("a card whose call is the bare fleet form older refusals printed is a yes", () => {
+    const { at } = throwaway();
+    permission("bare", `fleet ws ${dir} trash t1 --card bare`, "allow-once");
+    expect(ws("trash", "t1", "--card", "bare").code).toBe(0);
+    expect(existsSync(at)).toBe(false);
+  });
+
+  test("a card whose call names another program, or this CLI with words changed, is no yes", () => {
+    const { at } = throwaway();
+    // A permission names a file that can be read, so each program is one: another `fleet`, and one under a
+    // `fleet/bin/fleet` of its own that is no tstack bin/fleet hands over to.
+    const evil = join(base, "evil", "fleet");
+    const lookalike = join(base, "lookalike", "fleet", "bin", "fleet");
+
+    for (const program of [evil, lookalike]) {
+      mkdirSync(join(program, ".."), { recursive: true });
+      writeFileSync(program, "#!/bin/sh\n");
+      chmodSync(program, 0o755);
+    }
+
+    // `..` after a link: the path resolves, `..` dropped first, to a link to this CLI (dd/a/good/fleet), but the
+    // kernel follows dd/a/s to dd/evil/d1 first and runs the planted dd/evil/good/fleet (round 5's late review, R1).
+    const dd = join(base, "dd");
+    mkdirSync(join(dd, "a", "good"), { recursive: true });
+    mkdirSync(join(dd, "evil", "d1"), { recursive: true });
+    mkdirSync(join(dd, "evil", "good"), { recursive: true });
+    symlinkSync(FLEET, join(dd, "a", "good", "fleet"));
+    symlinkSync(join(dd, "evil", "d1"), join(dd, "a", "s"));
+    writeFileSync(join(dd, "evil", "good", "fleet"), "#!/bin/sh\n");
+    chmodSync(join(dd, "evil", "good", "fleet"), 0o755);
+    const throughLink = `${join(dd, "a", "s")}/../good/fleet`;
+
+    for (const [id, asked] of [
+      ["evil", `${evil} ws ${dir} trash t1 --card evil`],
+      ["lookalike", `${lookalike} ws ${dir} trash t1 --card lookalike`],
+      ["dotdot", `${throughLink} ws ${dir} trash t1 --card dotdot`],
+      ["dot", `${dirname(FLEET)}/./fleet ws ${dir} trash t1 --card dot`],
+      ["empty", `${dirname(FLEET)}//fleet ws ${dir} trash t1 --card empty`],
+      ["chained", `${evil};/..${FLEET} ws ${dir} trash t1 --card chained`],
+      ["spaced", `${FLEET}  ws ${dir} trash t1 --card spaced`],
+      ["more", `${FLEET} ws ${dir} trash t1 --card more --all`],
+    ] as const) {
+      permission(id, asked, "allow-kind");
+      const ran = ws("trash", "t1", "--card", id);
+      expect([ran.code, ran.stderr]).toEqual([1, `ws: card ${id} asks for \`${asked}\`: ${only("t1", id)}; open one for that call\n`]);
+      untouched(at);
+    }
   });
 
   // The review's probes (ws-trash-card-rv/probe.test.ts): each of these cards trashed t1, and none is a yes to it.

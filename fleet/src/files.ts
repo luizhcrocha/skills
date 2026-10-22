@@ -16,7 +16,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** The coordinator skill's directory: the templates (assets/) brief.md and the page are made from. */
@@ -24,6 +24,44 @@ export const SKILL_DIR = resolvePath(fileURLToPath(new URL("../../skills/product
 
 /** This CLI's own path, `<plugin>/fleet/bin/fleet`, as every printed command names it. */
 export const FLEET_BIN = join(resolve(SKILL_DIR, "..", "..", ".."), "fleet", "bin", "fleet");
+
+/**
+ * Every path the fleet CLI has on this machine, resolved: this plugin's ({@link FLEET_BIN}), and the ones
+ * fleet/bin/fleet hands over to (the checkouts in $CLAUDE_CODE_PLUGIN_DIRS, the marketplace clone, each cached
+ * version). A session keeps the plugin folder it started with, and the CLI prints the newest one's path, so a session
+ * names more than one. The hook's `_fleet_clis` (hooks/tstack-hook-monitor.py) is the same set.
+ */
+export function fleetClis(env: (name: string) => string | undefined): ReadonlySet<string> {
+  const home = env("HOME") ?? "";
+  const roots = [resolve(FLEET_BIN, "..", "..", ".."), ...(env("CLAUDE_CODE_PLUGIN_DIRS") ?? "").split(":")];
+
+  if (isAbsolute(home)) {
+    const plugins = join(home, ".claude", "plugins");
+    const cache = join(plugins, "cache", "tstack", "tstack");
+    roots.push(join(plugins, "marketplaces", "tstack"));
+
+    try {
+      roots.push(...readdirSync(cache).map((version) => join(cache, version)));
+    } catch {
+      // no cached version
+    }
+  }
+
+  return new Set(roots.flatMap((root) => (isAbsolute(root) ? [resolvePath(join(root, "fleet", "bin", "fleet"))] : [])));
+}
+
+/** Whether `program`, the first word of a command, runs the fleet CLI: a bare `fleet` (found on PATH), or an
+ * absolute path that resolves to one of {@link fleetClis}, one shell word of path characters (`/x;/<plugin>/...`
+ * runs /x first) with no `.`, `..` or empty component: resolving drops `/s/..` before it follows the link s, the
+ * kernel follows s first, so `/link/../fleet/bin/fleet` can resolve to the CLI and run another file. Another file
+ * named `fleet`, wherever it sits, does not. */
+export function isFleetCli(program: string, env: (name: string) => string | undefined): boolean {
+  if (program === "fleet") return true;
+
+  if (!/^\/[\w./+@-]+$/u.test(program) || program.slice(1).split("/").some((part) => part === "" || part === "." || part === "..")) return false;
+
+  return fleetClis(env).has(resolvePath(program));
+}
 
 /** The marker a moved team's folder holds (fleet slice 3): the host service exports state.json and chat.jsonl from
  * the cloud into it, and its ledger is written by programs through fleet-run. */

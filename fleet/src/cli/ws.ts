@@ -36,8 +36,8 @@
  *   `--apply` it is a dry run, and runs no hook.
  * - `trash NAME --card ID`: one workspace prune keeps, taken out as prune takes one out, when its worker is not
  *   live, every change it holds ahead of the stack is empty or described THROWAWAY, and card ID of this ledger is
- *   a permission whose call is this very command (DIR its resolved path), answered allow-once or allow-kind
- *   (fleet/SPEC.md). Never `default` or a main checkout.
+ *   a permission whose call is this very command (the fleet CLI by its full path or a bare `fleet`, DIR its
+ *   resolved path), answered allow-once or allow-kind (fleet/SPEC.md). Never `default` or a main checkout.
  * - Every hook runs alike (`--hook-timeout`, its own process group, its output under a header, its run on
  *   the row) with the same environment: FLEET_EVENT, FLEET_WS_ID (`<repo>-<name>-<hash>`, the row's `ws_id`),
  *   FLEET_WS_NAME, FLEET_WS_PATH, FLEET_WS_PORT, FLEET_REPO, FLEET_FLEET (fleet/SPEC.md, "Lifecycle hooks").
@@ -54,7 +54,7 @@ import * as Option from "effect/Option";
 
 import { stampOf } from "../clock.ts";
 import { Refusal } from "../errors.ts";
-import { exists, isDir, movedRefusal, readText, remove, resolvePath, writeText } from "../files.ts";
+import { exists, FLEET_BIN, isDir, isFleetCli, movedRefusal, readText, remove, resolvePath, writeText } from "../files.ts";
 import { workerActivity } from "../heartbeat.ts";
 import { Out } from "../io.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
@@ -1180,9 +1180,18 @@ function keepOnCard(raw: JsonObject, r: Recorded): string | undefined {
   return kept.length > 0 ? `${kept.length} change(s) neither ${THROWAWAY} nor empty: ${kept.map(described).join("; ")}` : undefined;
 }
 
-/** The one command a card can let through: `fleet ws <DIR> trash <NAME> --card <ID>`, DIR the fleet's resolved path. */
-function trashCall(root: string, name: string, key: string): string {
-  return `fleet ws ${root} trash ${name} --card ${key}`;
+/** The words after the program of the one command a card can let through, ` ws <DIR> trash <NAME> --card <ID>`,
+ * DIR the fleet's resolved path. */
+function trashWords(root: string, name: string, key: string): string {
+  return ` ws ${root} trash ${name} --card ${key}`;
+}
+
+/** Whether a permission's call is that command: {@link trashWords} byte for byte after a program word that runs
+ * the fleet CLI ({@link isFleetCli}), as a card made the documented way names it by its full path. */
+function isTrashCall(call: string, root: string, name: string, key: string, env: (name: string) => string | undefined): boolean {
+  const words = trashWords(root, name, key);
+
+  return call.endsWith(words) && isFleetCli(call.slice(0, -words.length), env);
 }
 
 /** The answers that let a permission's call through for this command: the word alone, whitespace around it. */
@@ -1190,13 +1199,13 @@ const ALLOW = /^\s*(?:allow-once|allow-kind)\s*$/u;
 
 /**
  * Why card `key` of this fleet's ledger is no yes to `fleet ws <root> trash <name> --card <key>`, or undefined when
- * it is. Only a permission card counts: its call is that command, byte for byte as {@link trashCall} prints it; it
- * stands (decided, never withdrawn or superseded); and Luiz answered it allow-once or allow-kind, nothing after the
+ * it is. Only a permission card counts: its call is that command ({@link isTrashCall}): the fleet CLI by any path
+ * it has, then the words byte for byte; it stands (decided, never withdrawn or superseded); and Luiz answered it allow-once or allow-kind, nothing after the
  * word. A decision, input, action or grilling is refused whatever it says: the permission card already names the
  * exact command and is answered on the page, so no other card's wording is read as a yes.
  */
-function cardRefusal(raw: JsonObject, root: string, key: string, name: string): string | undefined {
-  const call = trashCall(root, name, key);
+function cardRefusal(raw: JsonObject, root: string, key: string, name: string, env: (name: string) => string | undefined): string | undefined {
+  const call = `${FLEET_BIN}${trashWords(root, name, key)}`;
   const only = `only a permission card whose call is exactly \`${call}\`, decided allow-once or allow-kind, moves a workspace prune keeps`;
   const ask = `${only}; open one for that call`;
   const ledger = decodeLedger(raw);
@@ -1206,7 +1215,9 @@ function cardRefusal(raw: JsonObject, root: string, key: string, name: string): 
 
   if (d.kind !== "permission") return `card ${key} is kind ${d.kind}, not a permission: ${ask}`;
 
-  if (d.refusal?.call !== call) return `card ${key} asks for \`${d.refusal?.call ?? ""}\`: ${ask}`;
+  const asked = d.refusal?.call ?? "";
+
+  if (!isTrashCall(asked, root, name, key, env)) return `card ${key} asks for \`${asked}\`: ${ask}`;
 
   if (d.status !== "decided") return `card ${key} is ${d.status}: ${only}`;
   const over = (ledger.decisions ?? []).find((x) => x.supersedes === d.id);
@@ -1241,7 +1252,7 @@ function trashNamed(machine: Machine, root: string, raw: JsonObject, argv: reado
     const at = resolvePath(r.path);
 
     if (here === at || here.startsWith(`${at}/`)) return yield* refuse(`${r.path} holds this command's own working directory: run it from elsewhere`);
-    const unsaid = cardRefusal(raw, root, key, name);
+    const unsaid = cardRefusal(raw, root, key, name, machine.env);
 
     if (unsaid !== undefined) return yield* refuse(unsaid);
     const before = keepOnCard(raw, r);
