@@ -2224,17 +2224,64 @@ def _running_commands(call):
     return found
 
 
+# An interpreter's leading flags after which it runs the text or module the call gives, not a script file (`bash -c`,
+# `-lc`, `node -e`, `python3 -I -c`, `-m`), and those under which it runs nothing, only reads the script for syntax
+# (`bash -n`, `--no-execute`, `node --check`, as NOEXEC_SHELLS): the CLI's INLINE_FLAGS and NO_RUN_FLAGS, character
+# for character (each matched from the word's start, `\Z` for the CLI's `$`).
+SCRIPT_INLINE_FLAGS = {
+    "bash": r"-[A-NP-Za-np-z]*c[A-NP-Za-np-z]*\Z",
+    "sh": r"-[A-NP-Za-np-z]*c[A-NP-Za-np-z]*\Z",
+    "node": r"(?:-e|-p|-pe|--eval|--print)\Z",
+    "python": r"-[BEIOPRSVbdhiqsuvx]*[cm]",
+    "python3": r"-[BEIOPRSVbdhiqsuvx]*[cm]",
+}
+SCRIPT_NO_RUN_FLAGS = {
+    "bash": r"(?:-[A-NP-Za-np-z]*n[A-NP-Za-np-z]*|--no-execute)\Z",
+    "sh": r"(?:-[A-NP-Za-np-z]*n[A-NP-Za-np-z]*|--no-execute)\Z",
+    "node": r"--check\Z",
+}
+
+
+def _without_outputs(words):
+    """A command's words without its output redirections and their targets (`> /tmp/x.log`, `>>`, `2>`, `&>`,
+    `2>&1`, `>&2`), the CLI's withoutOutputs: what they name is written, not run. An input redirection (`< ./x.sh`,
+    `<<<`) stays, since it feeds the interpreter a script."""
+    kept, target = [], False
+    for w in words:
+        skip = target or re.match(r"(?:[0-9]*|&)>", w) is not None
+        target = not target and re.match(r"(?:[0-9]*|&)>[>&|]?\Z", w) is not None
+        if not skip:
+            kept.append(w)
+    return kept
+
+
 def _flagged_script(call):
-    """An interpreter run with a flag first whose command names an absolute path after it (`bash -x /abs/x.sh`): the
-    CLI's flaggedScript, a script scripts_of does not bind."""
-    return any(len(words) > 1 and words[0] in SCRIPT_INTERPRETERS and words[1].startswith("-")
-               and any(w.startswith("/") for w in words[2:]) for words in _running_commands(call))
+    """An interpreter run with a flag first whose script scripts_of does not bind, output redirections aside: the
+    CLI's flaggedScript. A word after its flags that its inline-code flags do not account for (`bash -x ./x.sh`,
+    `source -- x.sh`), or any absolute path after the first flag (`bash -x /abs/x.sh`, `python3 -m pytest /abs/x`);
+    a no-run flag (`bash -n`) clears its own command only."""
+    for words in _running_commands(call):
+        words = _without_outputs(words)
+        if len(words) < 2 or words[0] not in SCRIPT_INTERPRETERS or not words[1].startswith("-"):
+            continue
+        program, args = words[0], words[1:]
+        end = next((k for k, w in enumerate(args) if not w.startswith("-")), None)
+        flags = args if end is None else args[:end]
+        if any(program in SCRIPT_NO_RUN_FLAGS and re.match(SCRIPT_NO_RUN_FLAGS[program], w) for w in flags):
+            continue
+        if any(w.startswith("/") for w in args[1:]):
+            return True
+        if end is not None and not any(program in SCRIPT_INLINE_FLAGS and re.match(SCRIPT_INLINE_FLAGS[program], w)
+                                       for w in flags):
+            return True
+    return False
 
 
 def scripts_of(call):
     """The script file each simple command of a Bash call runs, where its text names one: the CLI's scriptsOf. The
     first argument of an interpreter (SCRIPT_INTERPRETERS), or a command given as a path; a command found by name
-    names none, and neither does an interpreter's flag first (why_no_asks refuses one that a path follows)."""
+    names none, and neither does an interpreter's flag first (why_no_asks refuses one whose flags a script follows,
+    _flagged_script)."""
     found = []
     for words in _running_commands(call):
         program, argument = (words[0] if words else ""), (words[1] if len(words) > 1 else None)

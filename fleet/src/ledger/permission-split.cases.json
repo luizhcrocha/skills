@@ -307,11 +307,208 @@
       "runs": []
     },
     {
-      "name": "known residual: interpreter flags before a relative script are not caught (no word starts with /)",
+      "name": "bash -x before a relative script",
+      "since": "F3",
       "call": "bash -x ./deploy.sh",
       "commands": [["bash", "-x", "./deploy.sh"]],
       "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "bash -e before a script under a folder",
+      "since": "F3",
+      "call": "bash -e tasks/x.sh",
+      "commands": [["bash", "-e", "tasks/x.sh"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "sh -x before a script by a bare name",
+      "since": "F3",
+      "call": "sh -x deploy.sh",
+      "commands": [["sh", "-x", "deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "source -- before a relative script",
+      "since": "F3",
+      "call": "source -- ./deploy.sh",
+      "commands": [["source", "--", "./deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "python3 -I before a relative script",
+      "since": "F3",
+      "call": "python3 -I tools/check.py",
+      "commands": [["python3", "-I", "tools/check.py"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "python3 -m with flags of its module",
+      "call": "python3 -m pytest -q",
+      "commands": [["python3", "-m", "pytest", "-q"]],
+      "scripts": [],
       "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "python3 -c after -I runs the text the user reads",
+      "call": "python3 -I -c 'print(1)'",
+      "commands": [["python3", "-I", "-c", "print(1)"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "sh -c runs the text the user reads",
+      "call": "sh -c 'ls tasks'",
+      "commands": [["sh", "-c", "ls tasks"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "bash -lc: -c in a bundle of flags",
+      "call": "bash -lc 'ls tasks'",
+      "commands": [["bash", "-lc", "ls tasks"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "bash -n reads a relative script for syntax and runs nothing",
+      "call": "bash -n ./deploy.sh",
+      "commands": [["bash", "-n", "./deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "bash -n reads an absolute script for syntax and runs nothing",
+      "call": "bash -n $FIXTURE/deploy.sh",
+      "commands": [["bash", "-n", "$FIXTURE/deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "sh --no-execute runs nothing",
+      "call": "sh --no-execute deploy.sh",
+      "commands": [["sh", "--no-execute", "deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "node --check reads a script for syntax and runs nothing",
+      "call": "node --check app.js",
+      "commands": [["node", "--check", "app.js"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "-n counts on its own command only: the relative script run after it is refused",
+      "call": "bash -n ./deploy.sh && bash ./deploy.sh",
+      "commands": [["bash", "-n", "./deploy.sh"], ["bash", "./deploy.sh"]],
+      "scripts": ["./deploy.sh"],
+      "whyNoAsk": "runs the script ./deploy.sh by a relative path",
+      "runs": []
+    },
+    {
+      "name": "-n counts on its own command only: the absolute script run after it is bound",
+      "call": "bash -n $FIXTURE/deploy.sh && bash $FIXTURE/deploy.sh",
+      "commands": [["bash", "-n", "$FIXTURE/deploy.sh"], ["bash", "$FIXTURE/deploy.sh"]],
+      "scripts": ["$FIXTURE/deploy.sh"],
+      "whyNoAsk": null,
+      "runs": ["1 044cf6ccded2a6d7420ab6e2f157c3750e1d189084e7aa10422c6da15dc27a85 $FIXTURE/deploy.sh"]
+    },
+    {
+      "name": "-n counts on its own command only: flags before a script after it are refused",
+      "call": "bash -n ./deploy.sh; bash -x ./deploy.sh",
+      "commands": [["bash", "-n", "./deploy.sh"], ["bash", "-x", "./deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "an output redirect's absolute target is no script: bash -c",
+      "call": "bash -c 'ls tasks' > /tmp/x.log",
+      "commands": [["bash", "-c", "ls tasks", ">", "/tmp/x.log"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "an output redirect's absolute target is no script: python3 -m",
+      "call": "python3 -m pytest > /tmp/x",
+      "commands": [["python3", "-m", "pytest", ">", "/tmp/x"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "2>&1 after a flag is no script",
+      "call": "node --version 2>&1",
+      "commands": [["node", "--version", "2>&1"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "an appended output's relative target is no script",
+      "call": "node --version >> versions.txt",
+      "commands": [["node", "--version", ">>", "versions.txt"]],
+      "scripts": [],
+      "whyNoAsk": null,
+      "runs": []
+    },
+    {
+      "name": "an output redirect skipped still leaves the script after the flags",
+      "call": "bash -x 2>/tmp/err ./deploy.sh",
+      "commands": [["bash", "-x", "2>/tmp/err", "./deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "an input redirect feeds the interpreter a script: refused, not bound (the script it names is the < word)",
+      "call": "bash < ./deploy.sh",
+      "commands": [["bash", "<", "./deploy.sh"]],
+      "scripts": ["<"],
+      "whyNoAsk": "by a relative path",
+      "runs": []
+    },
+    {
+      "name": "an input redirect after a flag feeds the interpreter a script",
+      "call": "sh -s < ./deploy.sh",
+      "commands": [["sh", "-s", "<", "./deploy.sh"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "an input redirect's absolute target is not skipped",
+      "call": "python3 -I < $FIXTURE/tool.py",
+      "commands": [["python3", "-I", "<", "$FIXTURE/tool.py"]],
+      "scripts": [],
+      "whyNoAsk": "the call runs a script after interpreter flags",
+      "runs": []
+    },
+    {
+      "name": "a here-string feeds the interpreter a script",
+      "call": "sh <<< 'ls tasks'",
+      "commands": [["sh", "<<<", "ls tasks"]],
+      "scripts": ["<<<"],
+      "whyNoAsk": "by a relative path",
       "runs": []
     },
     {

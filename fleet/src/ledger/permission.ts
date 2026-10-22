@@ -204,7 +204,7 @@ function runningCommands(call: string): string[][] {
  * interpreter (INTERPRETERS: `bash <path>`, `sh`, `node`, `python`, `python3`, `.`, `source`), or a command given
  * as a path (`<path> args`). A command found by name (`just deploy`, `pnpm run deploy`, `wrangler deploy`) names
  * none: what it runs is looked up when it runs. An interpreter's flag first names none either (`python3 -m
- * pytest`, `bash -c '…'`): whyNoAsk refuses one that a path follows. */
+ * pytest`, `bash -c '…'`): whyNoAsk refuses one whose flags a script follows (flaggedScript). */
 export function scriptsOf(call: string): string[] {
   return runningCommands(call).flatMap(([program = "", argument]) => {
     if (INTERPRETERS.includes(program)) return argument === undefined || argument.startsWith("-") ? [] : [argument];
@@ -213,10 +213,59 @@ export function scriptsOf(call: string): string[] {
   });
 }
 
-/** An interpreter run with a flag first whose command names an absolute path after it (`bash -x /abs/x.sh`): the
- * script it runs is one scriptsOf does not bind. */
+/** An interpreter's leading flags after which it runs the text or module the call gives, not a script file: `bash
+ * -c`/`sh -c` (alone or in a bundle such as `-lc`), `node -e`/`-p`/`--eval`/`--print`, `python -c`/`-m` (after
+ * flags such as `-I`). The hook's SCRIPT_INLINE_FLAGS, character for character. */
+const INLINE_FLAGS = new Map([
+  ["bash", /^-[A-NP-Za-np-z]*c[A-NP-Za-np-z]*$/u],
+  ["sh", /^-[A-NP-Za-np-z]*c[A-NP-Za-np-z]*$/u],
+  ["node", /^(?:-e|-p|-pe|--eval|--print)$/u],
+  ["python", /^-[BEIOPRSVbdhiqsuvx]*[cm]/u],
+  ["python3", /^-[BEIOPRSVbdhiqsuvx]*[cm]/u],
+]);
+
+/** An interpreter's leading flags under which it runs nothing, only reads the script for syntax: `bash -n`/`sh -n`
+ * (alone or in a bundle), `--no-execute`, `node --check`. The hook's SCRIPT_NO_RUN_FLAGS, as its NOEXEC_SHELLS. */
+const NO_RUN_FLAGS = new Map([
+  ["bash", /^(?:-[A-NP-Za-np-z]*n[A-NP-Za-np-z]*|--no-execute)$/u],
+  ["sh", /^(?:-[A-NP-Za-np-z]*n[A-NP-Za-np-z]*|--no-execute)$/u],
+  ["node", /^--check$/u],
+]);
+
+/** A command's words without its output redirections and their targets (`> /tmp/x.log`, `>>`, `2>`, `&>`, `2>&1`,
+ * `>&2`): what they name is written, not run. An input redirection (`< ./x.sh`, `<<<`) stays, since it feeds the
+ * interpreter a script. */
+function withoutOutputs(words: readonly string[]): string[] {
+  let target = false;
+
+  return words.filter((word) => {
+    const skip = target || /^(?:[0-9]*|&)>/u.test(word);
+
+    target = !target && /^(?:[0-9]*|&)>[>&|]?$/u.test(word);
+
+    return !skip;
+  });
+}
+
+/** An interpreter run with a flag first whose script scriptsOf does not bind, output redirections aside: a word
+ * after its flags that its inline-code flags do not account for (`bash -x ./x.sh`, `source -- x.sh`), or any
+ * absolute path after the first flag (`bash -x /abs/x.sh`, `python3 -m pytest /abs/x`). A no-run flag (`bash -n`)
+ * clears its own command only. */
 function flaggedScript(call: string): boolean {
-  return runningCommands(call).some(([program = "", argument, ...rest]) => INTERPRETERS.includes(program) && argument?.startsWith("-") === true && rest.some((w) => w.startsWith("/")));
+  return runningCommands(call).some((words) => {
+    const [program = "", ...args] = withoutOutputs(words);
+
+    if (!INTERPRETERS.includes(program) || args[0]?.startsWith("-") !== true) return false;
+
+    const end = args.findIndex((w) => !w.startsWith("-"));
+    const flags = end === -1 ? args : args.slice(0, end);
+
+    if (flags.some((w) => NO_RUN_FLAGS.get(program)?.test(w) === true)) return false;
+
+    if (args.slice(1).some((w) => w.startsWith("/"))) return true;
+
+    return end !== -1 && !flags.some((w) => INLINE_FLAGS.get(program)?.test(w) === true);
+  });
 }
 
 /** Why a Bash call cannot be asked for before it runs, though a rule can hold it: the user allows what they read,
