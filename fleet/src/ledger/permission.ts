@@ -135,8 +135,8 @@ export const SUPPORTED_FORM =
   "`bash <its absolute path>`, or give the commands one by one (--call for the first, --then for each next, each a Bash call of its own). " +
   "An action (--manual) is for a step only the user can take, not for a command the fleet can run";
 
-/** The programs whose first argument is the script they run. */
-const INTERPRETERS: readonly string[] = ["bash", "sh", "node", "python", "python3"];
+/** The programs whose first argument is the script they run (`.` and `source` read it into the shell). */
+const INTERPRETERS: readonly string[] = ["bash", "sh", "node", "python", "python3", ".", "source"];
 
 /** Words that only lead to the command that runs: shell keywords, and the wrappers that take a command. */
 const LEADERS: readonly string[] = ["{", "!", "if", "then", "else", "elif", "do", "while", "until", "time", "nice", "nohup", "command", "builtin", "noglob", "exec", "env", "timeout", "stdbuf"];
@@ -182,12 +182,10 @@ export function simpleCommands(call: string, anyCall = false): string[][] {
   return commands;
 }
 
-/** The script file each simple command of a Bash call runs, where its text names one: the first argument of an
- * interpreter (INTERPRETERS: `bash <path>`, `sh`, `node`, `python`, `python3`), or a command given as a path
- * (`<path> args`). A command found by name (`just deploy`, `pnpm run deploy`, `wrangler deploy`) names none: what
- * it runs is looked up when it runs. Assignments, shell keywords and wrappers before the command are skipped. */
-export function scriptsOf(call: string): string[] {
-  return simpleCommands(call).flatMap((all) => {
+/** Each simple command of a Bash call from the program that runs: assignments, shell keywords and wrappers with
+ * their flags and durations before it skipped. */
+function runningCommands(call: string): string[][] {
+  return simpleCommands(call).map((all) => {
     let words = all;
 
     for (;;) {
@@ -198,22 +196,39 @@ export function scriptsOf(call: string): string[] {
       else break;
     }
 
-    const [program = "", argument] = words;
+    return words;
+  });
+}
 
+/** The script file each simple command of a Bash call runs, where its text names one: the first argument of an
+ * interpreter (INTERPRETERS: `bash <path>`, `sh`, `node`, `python`, `python3`, `.`, `source`), or a command given
+ * as a path (`<path> args`). A command found by name (`just deploy`, `pnpm run deploy`, `wrangler deploy`) names
+ * none: what it runs is looked up when it runs. An interpreter's flag first names none either (`python3 -m
+ * pytest`, `bash -c '…'`): whyNoAsk refuses one that a path follows. */
+export function scriptsOf(call: string): string[] {
+  return runningCommands(call).flatMap(([program = "", argument]) => {
     if (INTERPRETERS.includes(program)) return argument === undefined || argument.startsWith("-") ? [] : [argument];
 
     return program.includes("/") ? [program] : [];
   });
 }
 
+/** An interpreter run with a flag first whose command names an absolute path after it (`bash -x /abs/x.sh`): the
+ * script it runs is one scriptsOf does not bind. */
+function flaggedScript(call: string): boolean {
+  return runningCommands(call).some(([program = "", argument, ...rest]) => INTERPRETERS.includes(program) && argument?.startsWith("-") === true && rest.some((w) => w.startsWith("/")));
+}
+
 /** Why a Bash call cannot be asked for before it runs, though a rule can hold it: the user allows what they read,
- * so the call names what it runs. A command substitution is decided when it runs, and a script named by a
- * relative path is whatever file that path finds from the directory the call happens to run in. */
+ * so the call names what it runs. A command substitution is decided when it runs, a script after an interpreter's
+ * flags is bound to no file, and a script named by a relative path is whatever file that path finds from the
+ * directory the call happens to run in. */
 export function whyNoAsk(call: string): string | undefined {
   if (call.includes("$(") || call.includes("`") || call.includes("<(") || call.includes(">(")) {
     return "the call has a command substitution ($( ), backticks or <( )), so what it runs is decided when it runs, not when the user reads it: give the value itself, or put the lines in a script";
   }
 
+  if (flaggedScript(call)) return "the call runs a script after interpreter flags: give `bash <path>` with no flags (put `set -x`/`-e` in the script)";
   const relative = scriptsOf(call).find((path) => !isAbsolute(path));
 
   if (relative !== undefined) {

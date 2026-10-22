@@ -2162,7 +2162,7 @@ def why_no_rule(tool, call):
 # The programs whose first argument is the script they run, and the words that only lead to the command that runs
 # (shell keywords, and the wrappers that take a command): the CLI's INTERPRETERS and LEADERS
 # (fleet/src/ledger/permission.ts), which fleet-host's grant-writes.ts copies.
-SCRIPT_INTERPRETERS = ("bash", "sh", "node", "python", "python3")
+SCRIPT_INTERPRETERS = ("bash", "sh", "node", "python", "python3", ".", "source")
 SCRIPT_LEADERS = ("{", "!", "if", "then", "else", "elif", "do", "while", "until", "time", "nice", "nohup", "command",
                   "builtin", "noglob", "exec", "env", "timeout", "stdbuf")
 
@@ -2206,10 +2206,9 @@ def _rule_commands(call):
     return commands
 
 
-def scripts_of(call):
-    """The script file each simple command of a Bash call runs, where its text names one: the CLI's scriptsOf. The
-    first argument of an interpreter (SCRIPT_INTERPRETERS), or a command given as a path; a command found by name
-    names none. Assignments, and leaders with their flags and durations, before the command are skipped."""
+def _running_commands(call):
+    """Each simple command of a Bash call from the program that runs: the CLI's runningCommands. Assignments, and
+    leaders with their flags and durations, before it are skipped."""
     found = []
     for words in _rule_commands(call):
         while words:
@@ -2221,6 +2220,23 @@ def scripts_of(call):
                 words = [] if k is None else rest[k:]
             else:
                 break
+        found.append(words)
+    return found
+
+
+def _flagged_script(call):
+    """An interpreter run with a flag first whose command names an absolute path after it (`bash -x /abs/x.sh`): the
+    CLI's flaggedScript, a script scripts_of does not bind."""
+    return any(len(words) > 1 and words[0] in SCRIPT_INTERPRETERS and words[1].startswith("-")
+               and any(w.startswith("/") for w in words[2:]) for words in _running_commands(call))
+
+
+def scripts_of(call):
+    """The script file each simple command of a Bash call runs, where its text names one: the CLI's scriptsOf. The
+    first argument of an interpreter (SCRIPT_INTERPRETERS), or a command given as a path; a command found by name
+    names none, and neither does an interpreter's flag first (why_no_asks refuses one that a path follows)."""
+    found = []
+    for words in _running_commands(call):
         program, argument = (words[0] if words else ""), (words[1] if len(words) > 1 else None)
         if program in SCRIPT_INTERPRETERS:
             found += [] if argument is None or argument.startswith("-") else [argument]
@@ -2257,7 +2273,7 @@ def runs_of(calls):
 def why_no_asks(calls):
     """Why the calls cannot be asked for, though a rule can hold them, or None: the CLI's whyNoAsks, in its words.
     The user allows what they read, so a call names what it runs: a command substitution is decided when it runs, a
-    script named by a relative path is whatever that path finds from where the call runs, and a script that cannot
+    script after an interpreter's flags is bound to no file, a script named by a relative path is whatever that path finds from where the call runs, and a script that cannot
     be read is no file the user could allow."""
     for k, call in enumerate(calls, 1):
         which = "this call" if len(calls) == 1 else f"call {k} of {len(calls)} (`{call}`)"
@@ -2265,6 +2281,9 @@ def why_no_asks(calls):
             return (f"no permission for {which}: the call has a command substitution ($( ), backticks or <( )), so what "
                     "it runs is decided when it runs, not when the user reads it: give the value itself, or put the "
                     "lines in a script")
+        if _flagged_script(call):
+            return (f"no permission for {which}: the call runs a script after interpreter flags: give `bash <path>` "
+                    "with no flags (put `set -x`/`-e` in the script)")
         scripts = scripts_of(call)
         relative = next((p for p in scripts if not p.startswith("/")), None)
         if relative is not None:
