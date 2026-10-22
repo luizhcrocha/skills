@@ -76,6 +76,9 @@ const LEAST_CAP = 2 * 1024 ** 3;
 
 const PEAK_MARGIN = 1.25;
 
+/** {@link PEAK_MARGIN} in words, for the line that says where an estimate came from. */
+export const PEAK_MARGIN_TEXT = `${String(Math.round((PEAK_MARGIN - 1) * 100))}%`;
+
 const RUNS_MEASURED = 3;
 
 const MIB = 1024 ** 2;
@@ -87,11 +90,31 @@ export function memEstimate(peak: number): number {
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
-/** A command as its history knows it: a session's scratchpad (`.../<uuid>/scratchpad`) and any other UUID in it are
- * placeholders, so the same suite run from another session is the same command. */
+/** A last word that names a revision: a jj change id (8 to 32 of jj's letters, k to z), or a commit hash (7 to 40 hex
+ * digits, one a letter at least: a number is no hash). */
+const REVISION = /(?<=\s)(?:[k-z]{8,32}|(?=[0-9]*[a-f])[0-9a-f]{7,40})$/;
+
+/** A command as its history knows it: a session's scratchpad (`.../<uuid>/scratchpad`), any other UUID in it and a last
+ * word that names a revision are placeholders, so the same suite run from another session, or a landing gate given
+ * the change it lands (`tasks/land-gate mznklkup`), is the same command. */
 export function whatKey(what: string): string {
-  return what.replace(/(?:\/[^/\s'"=]+)*\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\/scratchpad(?=[/\s'"]|$)/gi, "<scratchpad>").replace(UUID, "<uuid>");
+  return what.replace(/(?:\/[^/\s'"=]+)*\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\/scratchpad(?=[/\s'"]|$)/gi, "<scratchpad>").replace(UUID, "<uuid>")
+    .replace(REVISION, "<rev>");
 }
+
+/** A command's family, the same in every workspace of its repository: its {@link whatKey}, with the workspace's root,
+ * where it names one, a placeholder (replaced first, so a root under a scratchpad is one too), so `bash <root>/gate-x.sh`
+ * run in two workspaces is one family. */
+export function familyOf(what: string, workspace: string | undefined): string {
+  if (workspace === undefined || workspace === "" || workspace === "/") return whatKey(what);
+
+  const root = workspace.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  return whatKey(what.replace(new RegExp(`(?<![^\\s'"=])${root}(?=[/\\s'"]|$)`, "g"), "<workspace>"));
+}
+
+/** How far back a run of the same family sizes a run with no history of its own: the day {@link Gate.day} counts. */
+const DAY_MS = 24 * 3600 * 1000;
 
 /** How many lines `runs.jsonl` keeps: past twice this, the oldest are dropped. */
 const RUNS_KEPT = 1000;
@@ -466,7 +489,7 @@ export interface RunRecord {
   readonly kind: "fleet" | "session";
   /** The whole command, quoted for a shell. */
   readonly what: string;
-  /** Where its estimate came from (`--mem`'s `24G`, `last runs`, the default `25%`), and its ceiling in bytes: its
+  /** Where its estimate came from (`--mem`'s `24G`, `last runs`, `its family's runs`, the default `25%`), and its ceiling in bytes: its
    * scope's MemoryMax, the budget (the whole budget for a run with no scope). */
   readonly asked: string;
   readonly cap: number;
@@ -526,6 +549,16 @@ function measuredOf(runs: readonly Ran[]): Measured | undefined {
   });
 
   return { peak: top.peak, at: top.at, ran: Math.max(...last.map((r) => r.ran)), cores: cores.length === 0 ? undefined : Math.max(...cores), runs: last.length };
+}
+
+/** The largest peak of a family's runs in the last day in one repository, whatever their workspace: the run's end,
+ * and the repository and workspace it ran in. */
+export interface FamilyPeak {
+  readonly command: string;
+  readonly peak: number;
+  readonly at: string;
+  readonly repo: string;
+  readonly workspace: string;
 }
 
 /** The last day's runs in numbers. */
@@ -968,12 +1001,32 @@ export class Gate {
     return measuredOf(this.measuredRuns().filter((r) => r.run["repo"] === repo && whatKey(asString(r.run["what"]) ?? "") === key));
   }
 
+  /** The largest peak of the runs of `what`'s family (as {@link familyOf} keys it, `what` run in `workspace`) that ended
+   * in the day before `now` in the repository `repo`, in any of its workspaces; undefined when there were none. Never
+   * another repository's: `just test` in a small one says nothing of a large one's. A line that names no workspace
+   * (an older one) is none. */
+  familyPeak(repo: string, what: string, workspace: string, now: Date): FamilyPeak | undefined {
+    const command = familyOf(what, workspace);
+    const from = now.getTime() - DAY_MS;
+
+    return this.measuredRuns().reduce<FamilyPeak | undefined>((top, r) => {
+      const ran = asString(r.run["workspace"]);
+      const at = parseInstant(r.at);
+
+      if (r.run["repo"] !== repo || ran === undefined || at === undefined || at < from || at > now.getTime()) return top;
+
+      if (familyOf(asString(r.run["what"]) ?? "", ran) !== command || (top !== undefined && r.peak <= top.peak)) return top;
+
+      return { command, peak: r.peak, at: r.at, repo, workspace: ran };
+    }, undefined);
+  }
+
   /** The runs that ended in the day before `now`, in numbers; undefined when there were none. */
   day(now: Date): Day | undefined {
     const path = this.path("runs.jsonl");
 
     if (!exists(path)) return undefined;
-    const from = now.getTime() - 24 * 3600 * 1000;
+    const from = now.getTime() - DAY_MS;
 
     const runs = (readText(path) ?? "").split("\n").flatMap((line) => {
       const run = Option.getOrUndefined(parseObject(line));

@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { asArray, asObject, asString, type JsonObject } from "../src/json.ts";
-import { capBytes, cpuBudgetOf, cpusHere, endOf, floorOf, Gate, holdText, memAvailable, whatKey, type Hold, type RunRecord, type Waiting } from "../src/gate.ts";
+import { capBytes, cpuBudgetOf, cpusHere, endOf, floorOf, Gate, holdText, familyOf, memAvailable, whatKey, type Hold, type RunRecord, type Waiting } from "../src/gate.ts";
 import { readJson, tmp } from "./support.ts";
 
 const GB = 1024 ** 3;
@@ -987,6 +987,39 @@ describe("the runs' records", () => {
     expect(whatKey("just test --out=/tmp/x/21adec87-2e88-42c8-b0b5-5f8352b34ddd/scratchpad")).toBe("just test --out=<scratchpad>");
     gate.record(run(1, { repo: "/r/a", what: one, peak: 7 * GB }));
     expect(gate.history("/r/a", two)?.peak).toBe(7 * GB);
+  });
+
+  // The runs.jsonl of 10-22: every land-gate run named its change, so no workspace's run was another's history.
+  test("a last word that names a revision is a placeholder: a landing gate given another change has its history", () => {
+    expect(whatKey("servers/case-analysis/tasks/land-gate mznklkup")).toBe("servers/case-analysis/tasks/land-gate <rev>");
+    expect(whatKey("just land 6c255d3d")).toBe("just land <rev>");
+    expect(whatKey("bun test --seed 1234567")).toBe("bun test --seed 1234567");
+    expect(whatKey("just test-changed")).toBe("just test-changed");
+    expect(whatKey("mznklkup")).toBe("mznklkup");
+    gate.record(run(1, { repo: "/r/a", workspace: "/w/jb1", what: "servers/case-analysis/tasks/land-gate mznklkup", peak: 10.3 * GB }));
+    expect(gate.history("/r/a", "servers/case-analysis/tasks/land-gate rtlrppos")?.peak).toBe(10.3 * GB);
+  });
+
+  test("a command's family is its key with the workspace's root a placeholder: the same script in two workspaces is one family", () => {
+    expect(familyOf("bash /w/gatemem/fleet/gate-x.sh --tier /w/gatemem", "/w/gatemem")).toBe("bash <workspace>/fleet/gate-x.sh --tier <workspace>");
+    expect(familyOf("bash /w/gatemem-2/gate-x.sh", "/w/gatemem")).toBe("bash /w/gatemem-2/gate-x.sh");
+    expect(familyOf("bash /tmp/c/21adec87-2e88-42c8-b0b5-5f8352b34ddd/scratchpad/gate-x.sh", undefined)).toBe("bash <scratchpad>/gate-x.sh");
+    // The root is replaced before the scratchpad and the UUIDs: a workspace under a scratchpad is one too.
+    expect(familyOf("bash /tmp/c/21adec87-2e88-42c8-b0b5-5f8352b34ddd/scratchpad/ws/gate-x.sh", "/tmp/c/21adec87-2e88-42c8-b0b5-5f8352b34ddd/scratchpad/ws")).toBe("bash <workspace>/gate-x.sh");
+  });
+
+  // A first run in a new workspace has no history of its own: the same family's runs in the repository's other workspaces size it.
+  test("a family's peak is the largest of the day's runs of that family in the repository's workspaces; another repository's, older runs, and lines with no workspace, are none", () => {
+    gate.record(run(1, { repo: "/r/b", workspace: "/w/a", what: "bash /w/a/gate-x.sh", peak: 6 * GB }));
+    gate.record(run(2, { repo: "/r/b", workspace: "/w/b", what: "bash /w/b/gate-x.sh", peak: 10.3 * GB }));
+    gate.record(run(3, { repo: "/r/b", workspace: "/w/b", what: "bash /w/b/gate-y.sh", peak: 20 * GB }));
+    gate.record(run(4, { repo: "/r/c", workspace: "/w/c", what: "bash /w/c/gate-x.sh", peak: 25 * GB }));
+    gate.record(run(-25 * 60, { repo: "/r/b", workspace: "/w/b", what: "bash /w/b/gate-x.sh", peak: 30 * GB }));
+    gate.record(run(5, { repo: "/r/b", what: "bash /w/b/gate-x.sh", peak: 40 * GB }));
+    expect(gate.familyPeak("/r/b", "bash /w/new/gate-x.sh", "/w/new", at(10 * 60))).toEqual({ command: "bash <workspace>/gate-x.sh", peak: 10.3 * GB, at: "2026-10-05T12:02:00.000Z", repo: "/r/b", workspace: "/w/b" });
+    expect(gate.familyPeak("/r/b", "bash /w/new/gate-z.sh", "/w/new", at(10 * 60))).toBeUndefined();
+    expect(gate.familyPeak("/r/d", "bash /w/new/gate-x.sh", "/w/new", at(10 * 60))).toBeUndefined();
+    expect(gate.familyPeak("/r/b", "bash /w/new/gate-x.sh", "/w/new", at(25 * 3600))).toBeUndefined();
   });
 
   test("lines from before the repository and the CPU seconds still read: the day counts them, and no command's history is one", () => {

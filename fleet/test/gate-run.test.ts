@@ -932,6 +932,44 @@ describe.skipIf(!SCOPE)("gate run's record, and its estimate from the last runs"
     expect(gate(["run", "--as", "w1", "--", "true"], more, gitRepo()).stderr).toContain("(no earlier run)");
   });
 
+  // The Manager's 10-22 gate: 6 of 10 queued first runs asked 25% each while no run's peak passed 10.3G.
+  test.skipIf(Bun.which("jj") === null)("a new workspace's first run is estimated from the largest peak of its family in the repository's workspaces in the last 24 h, plus 25%; never another repository's; $FLEET_GATE_MEMORY_MAX wins", () => {
+    const GB = 1024 ** 3;
+    const env = { ...more, FLEET_GATE_MEMORY_BUDGET: "32G", FLEET_GATE_MEMORY_FLOOR: "0" };
+    const main = tmp("fleet-gate-jj-");
+    sh(main, ["jj", "git", "init", "--quiet"]);
+
+    const ws = (name: string): string => {
+      const dir = join(tmp("fleet-gate-ws-"), name);
+
+      sh(main, ["jj", "workspace", "add", "--quiet", dir]);
+
+      return sh(dir, ["jj", "root"]);
+    };
+
+    const [root, other, third] = [sh(main, ["jj", "root"]), ws("other"), ws("third")];
+    const stranger = gitRepo();
+    const strangerRoot = sh(stranger, ["git", "rev-parse", "--show-toplevel"]);
+
+    for (const dir of [other, third, strangerRoot]) writeFileSync(join(dir, "gate-x.sh"), "true\n");
+    const store = realpathSync(join(main, ".jj", "repo"));
+    const hour = new Date(Date.now() - 3600_000).toISOString();
+    const line = (at: string, peak: number): string => JSON.stringify({ at, name: "w", kind: "session", what: `bash ${root}/gate-x.sh`, asked: "25%", cap: 16 * GB, waited: 0, ran: 60, code: 0, peak, killed: 0, repo: store, workspace: root });
+    mkdirSync(join(home, "gate"), { recursive: true });
+    writeFileSync(join(home, "gate", "runs.jsonl"), `${line(hour, 3 * GB)}\n${line(new Date(Date.now() - 25 * 3600_000).toISOString(), 9 * GB)}\n`);
+
+    const first = gate(["run", "--as", "w1", "--", "bash", `${other}/gate-x.sh`], env, other);
+    expect(first.code).toBe(0);
+    expect(first.stderr).toContain(`, estimate ${sizeText(memEstimate(3 * GB))} from the 24 h peak of 'bash <workspace>/gate-x.sh' in ${root} (repository ${store}), 3.0G at ${hour}, plus 25% and `);
+    expect(records().at(-1)).toMatchObject({ asked: "its family's runs", estimate: memEstimate(3 * GB) });
+
+    // Another command has no family run; another repository's runs are never this one's; the operator's word wins.
+    writeFileSync(join(other, "gate-y.sh"), "true\n");
+    expect(gate(["run", "--as", "w1", "--", "bash", `${other}/gate-y.sh`], env, other).stderr).toMatch(/, estimate [\d.]+G from the default 25% \(no earlier run\) and /);
+    expect(gate(["run", "--as", "w1", "--", "bash", `${strangerRoot}/gate-x.sh`], env, stranger).stderr).toMatch(/, estimate [\d.]+G from the default 25% \(no earlier run\) and /);
+    expect(gate(["run", "--as", "w1", "--", "bash", `${third}/gate-x.sh`], { ...env, FLEET_GATE_MEMORY_MAX: "5G" }, third).stderr).toContain(", estimate 5.0G from $FLEET_GATE_MEMORY_MAX 5G (no earlier run) and ");
+  });
+
   // A run's peak past its estimate is not killed: only the ceiling, the whole budget, limits it, and the peak raises
   // the next run's estimate, whatever its end.
   test("a run past its estimate goes on under the ceiling, the same for every run, and its peak, a failure's too, raises the next estimate", () => {

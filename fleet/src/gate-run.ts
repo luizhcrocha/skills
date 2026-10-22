@@ -32,7 +32,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { stampOf } from "./clock.ts";
 import { readText } from "./files.ts";
-import { budgetOf, capBytes, cpuBudgetOf, cpusHere, DEFAULT_CAP, floorOf, floorRefusal, gateOf, holdText, LIGHT_CAP, LIGHT_S, memAvailable, memEstimate, memTotal, plain, scopeLives, shortText, sizeText, type GateHolder, type Memory, type RunRecord, type Waiting } from "./gate.ts";
+import { budgetOf, capBytes, cpuBudgetOf, cpusHere, DEFAULT_CAP, floorOf, floorRefusal, gateOf, holdText, LIGHT_CAP, LIGHT_S, memAvailable, memEstimate, memTotal, PEAK_MARGIN_TEXT, plain, scopeLives, shortText, sizeText, type GateHolder, type Memory, type RunRecord, type Waiting } from "./gate.ts";
 import { ancestry } from "./procs.ts";
 import type { Machine } from "./world.ts";
 
@@ -500,9 +500,15 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
   const command = quoted(ask.command);
   const last = where.repo === undefined ? undefined : gate.history(where.repo, command);
   const total = memTotal();
-  // The estimate: --mem, else its last runs, else $FLEET_GATE_MEMORY_MAX or the default.
+  // The estimate: --mem, else its last runs, else $FLEET_GATE_MEMORY_MAX (the operator's word), else its family's peak of
+  // the day in this repository's other workspaces, else the default.
   const given = ask.mem ?? (last !== undefined ? undefined : machine.env("FLEET_GATE_MEMORY_MAX"));
-  const measured = given === undefined && last !== undefined ? memEstimate(last.peak) : undefined;
+
+  const kin = given !== undefined || last !== undefined || where.repo === undefined || where.workspace === undefined ? undefined
+    : gate.familyPeak(where.repo, command, where.workspace, machine.now());
+
+  const peak = last?.peak ?? kin?.peak;
+  const measured = given === undefined && peak !== undefined ? memEstimate(peak) : undefined;
   const spec = given ?? (measured === undefined ? DEFAULT_CAP : sizeText(measured));
   const parsed = measured ?? capBytes(spec, total);
 
@@ -532,6 +538,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
   const runs = last === undefined ? "" : last.runs === 1 ? "its last run" : `its last ${String(last.runs)} runs`;
 
   const memFrom = ask.mem !== undefined ? "--mem" : last !== undefined ? `${runs} (${sizeText(last.peak)} peak at ${last.at})`
+    : kin !== undefined ? `the 24 h peak of '${kin.command}' in ${kin.workspace} (repository ${kin.repo}), ${sizeText(kin.peak)} at ${kin.at}, plus ${PEAK_MARGIN_TEXT}`
     : `${given === undefined ? "the default" : "$FLEET_GATE_MEMORY_MAX"} ${spec} (no earlier run)`;
 
   const cpuFrom = ask.cpus !== undefined ? "--cpus" : fromRuns !== undefined ? `${runs} (${last?.cores?.toFixed(1) ?? "?"} used on average)` : "the default (no earlier run)";
@@ -573,7 +580,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
 
   // The ceiling, the same for every run: the whole budget. The estimate only admits it.
   const cap = budget.bytes;
-  const askedAs = !scoped ? "all (no scope)" : measured === undefined ? spec : "last runs";
+  const askedAs = !scoped ? "all (no scope)" : measured === undefined ? spec : last !== undefined ? "last runs" : "its family's runs";
   // Light: a small estimate, and every one of its last runs short. A first run is never light.
   const light = scoped && last !== undefined && last.ran <= LIGHT_S && estimate <= LIGHT_CAP;
   const marks = { repo: where.repo, workspace: where.workspace, commit: where.commit, estimate: scoped ? estimate : undefined, cpus, landing: ask.landing || undefined };
