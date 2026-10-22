@@ -16,7 +16,7 @@ import { expect, test } from "bun:test";
 
 import type { Frame } from "puppeteer-core";
 
-import { bodyFrame, eachRow, found, freshPage, hubFor, NOW, selectIdea, sleep, usePolicyBrowser } from "./content-policy-kit.ts";
+import { bodyFrame, eachRow, found, freshPage, hubFor, NOW, ROWS, selectIdea, sleep, usePolicyBrowser } from "./content-policy-kit.ts";
 import { D30_BODY, marksView } from "./marks-fixtures.ts";
 
 usePolicyBrowser();
@@ -33,6 +33,34 @@ test.skipIf(!found)("in a fleet's page (frameDoc): no row runs or navigates, and
 
   expect(failed).toEqual([]);
 }, 120_000);
+
+test.skipIf(!found)("in a fleet's page (frameDoc): a frame whose height message comes late is still sized", async () => {
+  const rows = ROWS.filter((r) => r.name === "meta refresh to javascript:");
+  expect(rows).toHaveLength(1);
+
+  const failed = await eachRow(async (page, hub) => {
+    /* Every height message from the frame reaches the page 2.5 s late, as from a frame slow to lay out. */
+    await page.evaluateOnNewDocument(() => {
+      const late = new WeakSet<Event>();
+
+      addEventListener("message", (e: MessageEvent<{ fleetEvidence?: unknown } | null>) => {
+        if (late.has(e) || e.data?.fleetEvidence !== true) return;
+        e.stopImmediatePropagation();
+        const again = new MessageEvent("message", { data: e.data, origin: e.origin, source: e.source });
+        late.add(again);
+        setTimeout(() => dispatchEvent(again), 2500);
+      }, true);
+    });
+    const url = `${hub.origin}/f/perf/#decision/d30`;
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => document.querySelector("#conn")?.textContent === "Live");
+    const frame = await bodyFrame(page);
+
+    return { url, frame, height: () => page.$eval("#dv-frame iframe", (e) => e.getBoundingClientRect().height) };
+  }, rows);
+
+  expect(failed).toEqual([]);
+}, 60_000);
 
 test.skipIf(!found)("by itself on the hub's route: every row is plain text, and none runs or navigates", async () => {
   const failed = await eachRow(async (page, hub) => {

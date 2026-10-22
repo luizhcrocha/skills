@@ -280,11 +280,18 @@ async function forbiddenIn(frame: Frame): Promise<string[]> {
   });
 }
 
+/** Whether the frame shows 300 px tall within `ms`: the page sizes it when the frame's height message arrives. */
+async function sized(height: () => Promise<number>, ms = 5000): Promise<boolean> {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(50)) if ((await height()) >= 300) return true;
+
+  return (await height()) >= 300;
+}
+
 /** The fleet's own scripts on a page showing the body in `frame`: its height, the bar on a selection, the kinds of mark. */
 async function ownScripts(page: Page, frame: Frame, height: () => Promise<number>): Promise<string[]> {
   const out: string[] = [];
 
-  if ((await height()) < 300) out.push("frame not sized");
+  if (!(await sized(height))) out.push("frame not sized");
   await selectIdea(frame);
   const bar = await page.waitForSelector("#seltool:not([hidden]) .seltool-marks", { timeout: 3000 }).catch(() => null);
 
