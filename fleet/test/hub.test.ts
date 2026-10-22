@@ -3307,6 +3307,24 @@ describe("a permission's answer grants the call once", () => {
       expect([existsSync(settings), grants(), readChat(root)]).toEqual([false, [], []]);
       expect((await post(yes(), { Origin: "https://elsewhere.example" })).status).toBe(403);
     });
+
+    test("a refusal's card is held to what an ask is too: its cause is the opener's to write, and a call it binds no file of grants nothing", async () => {
+      await start();
+
+      const cases: (readonly [string, string])[] = [
+        ["bash ./deploy.sh", "the call runs the script ./deploy.sh by a relative path"],
+        ["echo $(cat /etc/hostname)", "the call has a command substitution"],
+        [`bash -x ${script}`, "the call runs a script after interpreter flags"],
+      ];
+
+      for (const [refused, why] of cases) {
+        withRows(permission({ refusal: { tool: "Bash", call: refused, rule: `Bash(${refused})`, cause: "[Deploy]", root: session, agent_id: "agent-7f" } }));
+        const got = await post({ ...allow, rule: `Bash(${refused})`, root: session });
+        expect([got.status, asString(got.body["error"])]).toEqual([409, expect.stringContaining(`no grant: no permission for this call: ${why}`)]);
+      }
+
+      expect([existsSync(settings), grants(), readChat(root)]).toEqual([false, [], []]);
+    });
   });
 
   describe("the hub ends a grant itself, 30 minutes after the answer", () => {

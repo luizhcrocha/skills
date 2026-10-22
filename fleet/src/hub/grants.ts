@@ -53,7 +53,7 @@ import { addAutoModeRule, userSettingsFile } from "./user-settings.ts";
 import { readBeats } from "../heartbeat.ts";
 import { parseLedger, type Decision } from "../ledger/model.ts";
 import { findDecision } from "../ledger/numbers.ts";
-import { ALLOW_ONCE, allows, asksKind, callsOf, GRANT_TTL_MS, offersKind, permissionOptions, grantFileOf, isAsk, PERMISSION_TOOLS, readRun, refusalRev, ruleOf, rulesOf, runsOf, whyNoAsks, whyNoCalls } from "../ledger/permission.ts";
+import { ALLOW_ONCE, allows, asksKind, callsOf, GRANT_TTL_MS, offersKind, permissionOptions, grantFileOf, PERMISSION_TOOLS, readRun, refusalRev, ruleOf, rulesOf, runsOf, whyNoAsks, whyNoCalls } from "../ledger/permission.ts";
 import { parseInstant } from "../clock.ts";
 import { cwdOf } from "../procs.ts";
 import { alive } from "../registry.ts";
@@ -289,7 +289,8 @@ function askedOf(dir: string, d: Decision, registered: () => Registered | undefi
   if (d.status !== "open") return new Ungranted("the permission is no longer open");
 
   if (!PERMISSION_TOOLS.includes(r.tool)) return new Ungranted(`a grant is for ${PERMISSION_TOOLS.join(" or ")} alone, and this permission is for ${r.tool}`);
-  const why = whyNoCalls(r.tool, callsOf(r)) ?? (r.tool === "Bash" && isAsk(r) ? whyNoAsks(callsOf(r)) : undefined);
+  // Every Bash card, a refusal's too: its cause is the opener's to write, so it decides nothing about what the card binds.
+  const why = whyNoCalls(r.tool, callsOf(r)) ?? (r.tool === "Bash" ? whyNoAsks(callsOf(r)) : undefined);
 
   if (why !== undefined) return new Ungranted(`no grant: ${why}`);
   const exact = ruleOf(r.tool, r.call);
