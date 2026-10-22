@@ -2764,6 +2764,21 @@ class GrantRemovalTest(GrantCase):
         self.assertEqual(self.allow(), [self.RULE])
         self.assertEqual([(line["op"], line.get("why")) for line in self.lines()], [("grant", None), ("remove", "used")])
 
+    def test_a_line_on_no_record_from_before_a_grant_makes_no_owner_rule_the_grants(self):
+        """A line on no record whose rule was never in its file, so no sweep took it back, then a grant of its rule on
+        record, used and taken back, and the owner's rule: the line came before the grant on record, so it is no
+        grant after its take-back, and the rule stays the owner's."""
+        self.write_settings({"permissions": {"allow": ["Bash(ls)"]}})
+        self.grant(issued=False, at="2026-01-05T08:00:00+00:00")
+        self.run_tool("ls", now="2026-01-05T08:01:00+00:00")
+        self.write_settings({"permissions": {"allow": [self.RULE]}})
+        self.grant()
+        self.run_tool("git push --force origin HEAD:main")
+        self.assertEqual(self.allow(), [])
+        self.write_settings({"permissions": {"allow": [self.RULE]}})
+        self.run_tool("ls", now="2026-01-05T10:00:00+00:00")
+        self.assertEqual(self.allow(), [self.RULE])
+
     def test_a_grant_line_that_copies_an_ended_grant_shields_no_later_grant(self):
         """The record of grants is any agent's to write: a grant line that copies a grant already taken back (its
         decision, rule and stamp) is over with it, and the later grant of the rule is the one that stands and goes
@@ -3813,6 +3828,37 @@ class GrantAloneTest(GrantCase):
         reason = self.denied(calls[2])
         self.assertIn("a call of that list failed", reason)
         self.assertIn("Ask the user again", reason)
+
+    def used_then_granted_again(self, issued):
+        """An allow-once used and taken back by the hook, then the owner's second allow-once of the same rule: the
+        rule back in its file and a new line, with its own entry on record (`issued`, as the hub writes it) or none
+        (as the host writes it)."""
+        self.grant()
+        self.assertIsNone(self.before(self.CALL))
+        self.run_tool(self.CALL)
+        self.assertNotIn(self.RULE, self.allow())
+        self.write_settings({"permissions": {"allow": [self.RULE]}})
+        self.grant(at="2026-01-05T09:10:00+00:00", issued=issued)
+
+    def test_a_grant_again_after_its_take_back_allows_one_call(self):
+        """The hook's take-back of the first grant made the rule the owner's, and the second grant's line was read as
+        the first grant's: `A; A` passed, and the rule stayed after its call. A line is the grant of its own entry."""
+        self.used_then_granted_again(issued=True)
+        now = "2026-01-05T09:11:00+00:00"
+        self.assertIn("P1", self.denied(f"{self.CALL}; {self.CALL}", now=now))
+        self.assertIsNone(self.before(self.CALL, now=now))
+        self.run_tool(self.CALL, now=now)
+        self.assertNotIn(self.RULE, self.allow())
+        self.assertEqual([e["granted"] for e in json.loads(self.record.read_text())["ended"]],
+                         ["2026-01-05T09:00:00+00:00", "2026-01-05T09:10:00+00:00"])
+
+    def test_a_grant_again_with_no_entry_after_its_take_back_allows_none(self):
+        """The same with a line on no record of issued grants: it grants nothing, and its rule goes at once."""
+        self.used_then_granted_again(issued=False)
+        now = "2026-01-05T09:11:00+00:00"
+        self.assertIn("Ask the user again", self.denied(self.CALL, now=now))
+        self.assertNotIn(self.RULE, self.allow())
+        self.assertIsNone(self.before(f"{self.CALL}; {self.CALL}", now=now))
 
     def script(self, text="echo deploy\n"):
         script = self.tmp / "project" / "tasks" / "deploy.sh"

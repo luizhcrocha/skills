@@ -2366,6 +2366,13 @@ def _recorded_grant(entry, ended, kept, line_why=None):
             "kept": _ended_why(kept, entry) is not None, "ended": why, "issued": entry}
 
 
+def _later(line, entry):
+    """Whether grant line `line`, on no record, came after `entry`, on record: by `at`, and a line whose `at` does not
+    read is later (it then hides the entry's grant: fewer allowed calls)."""
+    at, then = _instant(line.get("at")), _instant(entry.get("at"))
+    return at is None or then is None or at >= then
+
+
 def _latest_grants(hook, raw):
     """The grant of each (file, rule): the newest entry of it on the record of issued grants of the session's root
     and of each root a grants.jsonl line names (an earlier entry of the same rule is superseded, ended or not). The
@@ -2373,12 +2380,14 @@ def _latest_grants(hook, raw):
     can write, so a line found nothing and hides nothing: a grant whose line was deleted still stands, and is held
     to its bounds. A record holds only the grants of its own root (_read_issued), and the session root's is read
     first: no entry of a root a line names replaces one of the session's (review 2: one did, from a folder the agent
-    made, with a later `at` and no `runs`). An entry the import copied from the tree (`imported`, _import_records)
-    hides only the lines of the grants imported with it: the tree is any agent's to write, so a forged entry of a rule
-    hid a later line of it, and its take-back kept the rule. A line names a root to read, and a line of a (file, rule)
-    that has no entry on record is kept as a grant on no record (`issued` None), which grants nothing and is taken
-    back at once: a grant of a hub that wrote no record, or a forged line, whose failure is fewer allowed calls; its
-    take-back is marked `line` (_line_ended).
+    made, with a later `at` and no `runs`). A line is the grant of its own entry (by _ended_key), never of an earlier
+    entry of its rule: a line with no entry is a grant on no record (`issued` None), which grants nothing and is
+    taken back at once: a grant of a hub that wrote no record (the host's), or a forged line, whose failure is fewer
+    allowed calls; its take-back is marked `line` (_line_ended). Such a line replaces the rule's grant on record when
+    that grant is over and the line came after it (_later), or the entry is one the import copied from the tree
+    (`imported`, _import_records), any agent's to write; else it hides nothing, so no forged line moves a standing
+    grant. Hidden behind a grant the hook took back, a second allow-once of its rule was read as that grant, whose
+    take-back made the rule the owner's: `A; A` ran, the rule stayed, and no sweep took it.
     Each grant has `over` (on a record of take-backs of the root, _ended_of), `kept` (its rule, while in its file, the
     owner's: _kept_of), `ended` (the why recorded there), `turn` (its `n`), and `runs` and `ref`, all from the record,
     never from a line."""
@@ -2392,10 +2401,10 @@ def _latest_grants(hook, raw):
     for file in ([own] if own else []) + [f for f, _ in lines]:
         places.setdefault(os.path.dirname(file), file)
     latest = {}
-    imported = set()
+    paired = set()
     for place in places.values():
         entries = _issued_of(hook, place)
-        imported.update(_ended_key(e) for e in entries if e.get("imported") is True)
+        paired.update(_ended_key(e) for e in entries)
         newest = {(entry["file"], entry["rule"]): entry for entry in entries}
         for key, entry in newest.items():
             if key not in latest:
@@ -2406,8 +2415,10 @@ def _latest_grants(hook, raw):
         if entry.get("op") != "grant":
             continue
         named = dict(entry, file=file)
+        if _ended_key(named) in paired:
+            continue
         issued = latest[key]["issued"] if key in latest else None
-        if issued is not None and (issued.get("imported") is not True or _ended_key(named) in imported):
+        if issued is not None and issued.get("imported") is not True and not (latest[key]["over"] and _later(named, issued)):
             continue
         over, kept = (_ended_why(e, named, line=True) is not None or _line_ended(e, named)
                       for e in (_ended_of(hook, file), _kept_of(hook, file)))
