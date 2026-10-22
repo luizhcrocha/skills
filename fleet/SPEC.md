@@ -328,7 +328,16 @@ Checked in this order:
      somehow" and refused `wrangler deploy --env production` where wrangler was not installed). What it
      cannot tell is whether the steps are the right ones: a numbered list of prose passes. It is checked
      when `--manual` is given and when a row becomes an action (`--kind action` on a secret). A secret's manual
-     is not held to it. An option is `KEY: label | consequence` with a key matching the
+     is not held to it. Every step of an action is on its card, never deferred to the body (Luiz #614,
+     #804, 2026-10-21): before that check, an action's new `--manual` is refused, numbered or fenced or
+     not, when it holds one of a short list of phrases, case-insensitive: "see the body", "steps /
+     details / instructions in the body", "as described / explained / shown / listed in the body",
+     "follow the body", "follow the steps in the body", "per the body" (each also with "the card body"
+     or "the card's body"); ``--manual sends the user to the body for its steps: every step of an action
+     is on its card, in its --manual (Luiz #614, #804). ...``. A manual that lists its steps and mentions
+     the body otherwise passes: "The body says why", "see the body for why" (or for background, for
+     context), "the body of the HTTP response" (a body "of" something is another body), and "below" or
+     "above", which in a manual point at its own fence or list ("Paste it as shown below:"). An option is `KEY: label | consequence` with a key matching the
      id pattern; keys are unique. **permission** (TypeScript only: see [Permission
      grants](#permission-grants)) takes the refused call instead of options.
    - The row: `kind, title, question, why, blocking, agent, options[], recommend, reason, secret,

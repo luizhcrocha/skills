@@ -1030,6 +1030,35 @@ const APPROVAL_REFUSAL =
   "`fleet state <dir> decision ID --kind decision --option 'A: yes | what yes does' --option 'B: no | what no does' --recommend A --reason R`; " +
   "an action is for steps Luiz performs outside the page (a command to run, a click in a console, a key to plug in)";
 
+/**
+ * The phrases by which a `--manual` hands its steps to somewhere else on the page. A short list, no classifier: a
+ * manual that mentions the body while it lists its own steps ("The body says why") passes. Luiz, #614 and #804,
+ * 2026-10-21: every step of an action is on its card, never "see the body". No "below" or "above": in a manual
+ * they point at its own fence or list. "The body of" is some other body (an HTTP response's), and "see the body
+ * for why" sends the user there for background, not for a step.
+ */
+const BODY = String.raw`(?:card(?:'?s)? )?body\b(?! of\b)`;
+
+const DEFERS_RE = new RegExp(
+  [
+    String.raw`\bsee (?:the )?${BODY}(?! for (?:why|background|context)\b)`,
+    String.raw`\b(?:steps|details|instructions) (?:are )?in the ${BODY}`,
+    String.raw`\bas (?:described|explained|shown|listed) in the ${BODY}`,
+    String.raw`\bfollow (?:the (?:steps|instructions) in )?the ${BODY}`,
+    String.raw`\bper the ${BODY}`,
+  ].join("|"),
+  "iu",
+);
+
+/** True when a `--manual` sends the user elsewhere for its steps (`DEFERS_RE`). */
+export function defersToBody(manual: string): boolean {
+  return DEFERS_RE.test(manual.replace(/\s+/gu, " "));
+}
+
+const DEFERS_REFUSAL =
+  "--manual sends the user to the body for its steps: every step of an action is on its card, in its --manual (Luiz #614, #804). " +
+  "Write each step there, as a fenced block of commands or numbered steps from 1; the body (--body) keeps the background only";
+
 /** What `d`'s kind shows has to be there; `manualGiven`: the `--manual` is this command's, or the row became this
  * kind in this command, so its format is checked (a row recorded before a rule stays as it is). */
 function checkKind(d: Decision, manualGiven: boolean, hand: string | undefined, home: string | undefined, rule?: string): Step$ {
@@ -1062,6 +1091,7 @@ function checkKind(d: Decision, manualGiven: boolean, hand: string | undefined, 
     return refuse(`${d.kind === "secret" ? "a secret" : "an action"} gives the manual route: give --manual with the steps or commands`);
   }
 
+  if (d.kind === "action" && manualGiven && defersToBody(d.manual ?? "")) return refuse(DEFERS_REFUSAL);
   const numbered = d.kind === "action" && numberedSteps(d.manual ?? "").length > 0;
   const unfenced = (d.kind === "secret" || d.kind === "action") && manualGiven && !numbered ? unfencedLines(d.manual ?? "") : 0;
 

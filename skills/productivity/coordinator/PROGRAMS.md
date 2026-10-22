@@ -184,7 +184,9 @@ A follow-up is a new round, `await grill.ask("g1", { id: "q3", of: "q1", title: 
 and a question nobody needs goes with `await grill.drop("g1", "q3", "why")`.
 
 **An action** is a step only the owner can take: `hand` says why only they can, and `manual` is the steps they run
-(DASHBOARD.md, "An action by hand", has the manual's rules). **A secret** names in `secret` the secret to set, never
+(DASHBOARD.md, "An action by hand", has the manual's rules): every step is in `manual`, never deferred to the body
+(Luiz #614, #804); the `fleet state` CLI refuses a manual that does, and the cloud's `decision.open` is the fleet
+repo's to hold to the same rule. **A secret** names in `secret` the secret to set, never
 its value, and says in `manual` how to set it by hand:
 
 ```ts

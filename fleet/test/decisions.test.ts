@@ -185,7 +185,7 @@ describe("open", () => {
       );
 
       // A sentence that reads like a command line is prose all the same, and so is a command with no fence.
-      for (const manual of ["by hand", "make sure everything works again somehow", "restart the perf session when the push is done", "Click Deploy in the Cloudflare console", "see the body", "wrangler deploy --env production"]) {
+      for (const manual of ["by hand", "make sure everything works again somehow", "restart the perf session when the push is done", "Click Deploy in the Cloudflare console", "wrangler deploy --env production"]) {
         expect(refused("decision", "d58", ...base, "--manual", manual), manual).toContain(tells);
       }
 
@@ -229,6 +229,34 @@ describe("open", () => {
       expect(item("a1")["manual"]).toBe(d58);
       expect(refused("decision", "a1", "--manual", "restart the perf session")).toContain(tells);
       ok("decision", "a1", "--decide", "Done.", "--resolution", "answered on the page (#2)");
+    });
+
+    test("a manual that defers its steps to the body is refused, numbered or not; one that lists its steps and mentions the body passes (Luiz #614, #804)", () => {
+      const defers = "--manual sends the user to the body for its steps: every step of an action is on its card";
+
+      for (const manual of [
+        "Steps: see the body.",
+        "1. Follow the steps in the body.",
+        "Steps: see the card body.",
+        "1. Do as described in the card body.",
+        "```nu\njust deploy\n```\nThen the rest, as described in the body.",
+        "1. Open 1Password.\n2. The rest: details in the body.",
+        "1. Per the card's body, restart it.",
+        "1. Follow the body.",
+      ]) {
+        expect(refused("decision", "a1", ...base, "--manual", manual, ...HAND), manual).toContain(defers);
+      }
+
+      expect(rows("decisions")).toEqual([]);
+
+      for (const [id, manual] of [
+        ["a1", "1. Open 1Password.\n2. Click Approve on the request.\nThe body says why the key is needed."],
+        ["a2", "1. Copy the token.\n2. Paste it as shown below:\n```nu\nsecretspec set K\n```"],
+        ["a3", "1. Run `just deploy`.\n2. If it fails, see the body for why."],
+        ["a4", "```nu\njust deploy\n```\nIf it fails, the error details in the body of the HTTP response name the field."],
+      ] as const) {
+        ok("decision", id, ...base, "--manual", manual, ...HAND);
+      }
     });
 
     test("a secret's manual is not held to it, until the row becomes an action", () => {
