@@ -7277,6 +7277,53 @@ class MovedRefusalTest(MovedFleet, RefusalCase):
         self.assertIn("runs exactly the call shown above, once", card["options"][0]["consequence"])
         self.assertEqual(self.owed(), [], "the card asks the user: no draft is owed to the worker")
 
+    DEPLOY_SHA = "a1b6fafd9142ebdcce0d5c6e70cd43370623b45b01757b83c6263e8bd67dc326"  # sha256 of b"echo deploy\n"
+
+    def script(self, name="deploy.sh"):
+        path = self.tmp / name
+        path.write_text("echo deploy\n")
+        return path
+
+    def test_a_refused_script_call_opens_its_card_bound_to_the_scripts_sha256(self):
+        """The hub's runsOf, as fleet-host reads it again at the grant: a card for `bash <absolute path>` (the form
+        SUPPORTED_FORM asks for) carries `<n> <sha256> <path>` of the file it runs, else the host refuses its yes."""
+        script = self.script()
+        command = f"bash {script}"
+        self.refuse(command=command, reason="[Deploy]", agent_id="ab12cd34")
+        [run] = self.programs()
+        [op] = run["ops"]
+        self.assertEqual(op["record"], {"kind": "decision", "key": self.expected_id("ab12cd34", command)})
+        self.assertEqual(op["set"]["refusal"], {"tool": "Bash", "call": command, "rule": f"Bash({command})",
+                                                "cause": "[Deploy]", "root": str(self.project), "agent_id": "ab12cd34",
+                                                "runs": [f"1 {self.DEPLOY_SHA} {script}"]})
+
+    def test_a_card_binds_each_script_its_call_names_once_past_assignments_and_wrappers(self):
+        """scriptsOf: an interpreter's first argument, a command given as a path, after an assignment, a keyword or a
+        wrapper and its flags; a command found by name, an interpreter's flag and a script named twice add none."""
+        deploy, check = self.script(), self.script("check.sh")
+        command = f"FOO=1 timeout -k 5 30s bash {deploy} && {check} --fast; just ship; python3 -m pytest; sh '{deploy}'"
+        self.refuse(command=command, reason="[Deploy]", agent_id="ab12cd34")
+        [op] = self.programs()[-1]["ops"]
+        self.assertEqual(op["set"]["refusal"]["runs"], [f"1 {self.DEPLOY_SHA} {deploy}", f"1 {self.DEPLOY_SHA} {check}"])
+
+    def test_a_call_with_no_script_opens_a_card_bound_to_no_file(self):
+        self.refuse(command="just deploy", reason="[Deploy]", agent_id="ab12cd34")
+        [op] = self.programs()[-1]["ops"]
+        self.assertNotIn("runs", op["set"]["refusal"])
+
+    def test_a_call_the_hub_could_not_ask_for_is_a_blocked_event_never_a_card(self):
+        """The hub's whyNoAsks, which the old CLI holds the card to when the host words it from a refusal draft: a
+        script named by a relative path, a command substitution, a script that is no file that can be read."""
+        cases = {"bash tasks/deploy.sh": "by a relative path", "./deploy.sh": "by a relative path",
+                 "echo $(date)": "command substitution", "echo `date`": "command substitution",
+                 f"bash {self.tmp / 'gone.sh'}": "no file that can be read"}
+        for i, (command, why) in enumerate(cases.items()):
+            with self.subTest(command=command):
+                self.refuse(command=command, reason="[Deploy]", agent_id=f"ab12ef{i:02d}")
+                text = self.blocked()
+                self.assertIn(why, text)
+                self.assertIn("Nothing was asked of the user", text)
+
     def blocked(self):
         """The one op of the last program, asserted to be an important `blocked` event; its text."""
         [op] = self.programs()[-1]["ops"]

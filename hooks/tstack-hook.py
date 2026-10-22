@@ -2159,8 +2159,127 @@ def why_no_rule(tool, call):
     return None
 
 
+# The programs whose first argument is the script they run, and the words that only lead to the command that runs
+# (shell keywords, and the wrappers that take a command): the CLI's INTERPRETERS and LEADERS
+# (fleet/src/ledger/permission.ts), which fleet-host's grant-writes.ts copies.
+SCRIPT_INTERPRETERS = ("bash", "sh", "node", "python", "python3")
+SCRIPT_LEADERS = ("{", "!", "if", "then", "else", "elif", "do", "while", "until", "time", "nice", "nohup", "command",
+                  "builtin", "noglob", "exec", "env", "timeout", "stdbuf")
+
+
+def _rule_commands(call):
+    """The words of each simple command of a Bash call a rule can hold, as the CLI's simpleCommands splits them: on
+    `;`, `&&`, `||`, `&` and a group's parentheses outside quotes, each word without its quotes. Not _simple_commands,
+    which parses bash whole: the files a card binds are the ones fleet-host finds again at the grant, so the split is
+    the CLI's, character for character."""
+    commands, words, word, quote = [], [], None, ""
+
+    def end_word():
+        nonlocal word
+        if word is not None:
+            words.append(word)
+        word = None
+
+    def end_command():
+        nonlocal words
+        end_word()
+        if words:
+            commands.append(words)
+        words = []
+
+    for at, c in enumerate(call):
+        if quote:
+            if c == quote:
+                quote = ""
+            else:
+                word = (word or "") + c
+        elif c in "'\"":
+            quote = c
+            word = word if word is not None else ""
+        elif c in " \t":
+            end_word()
+        elif c in ";()" or (c == "&" and call[at - 1:at] not in (">", "<") and call[at + 1:at + 2] != ">"):
+            end_command()
+        else:
+            word = (word or "") + c
+    end_command()
+    return commands
+
+
+def scripts_of(call):
+    """The script file each simple command of a Bash call runs, where its text names one: the CLI's scriptsOf. The
+    first argument of an interpreter (SCRIPT_INTERPRETERS), or a command given as a path; a command found by name
+    names none. Assignments, and leaders with their flags and durations, before the command are skipped."""
+    found = []
+    for words in _rule_commands(call):
+        while words:
+            first, rest = words[0], words[1:]
+            if re.match(r"[A-Za-z_][A-Za-z0-9_]*=", first):
+                words = rest
+            elif first in SCRIPT_LEADERS:
+                k = next((k for k, w in enumerate(rest) if not w.startswith("-") and not re.fullmatch(r"[0-9.]+[smhd]?", w)), None)
+                words = [] if k is None else rest[k:]
+            else:
+                break
+        program, argument = (words[0] if words else ""), (words[1] if len(words) > 1 else None)
+        if program in SCRIPT_INTERPRETERS:
+            found += [] if argument is None or argument.startswith("-") else [argument]
+        elif "/" in program:
+            found.append(program)
+    return found
+
+
+def _file_sha256(path):
+    """A file's sha256, or None when it cannot be read: the CLI's fileSha256."""
+    import hashlib
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def runs_of(calls):
+    """The files a permission's calls are bound to, as a card's `runs` holds them: the CLI's runsOf. `<n> <sha256>
+    <path>` for each script call n (from 1) runs by an absolute path that can be read now, each path once."""
+    runs = []
+    for n, call in enumerate(calls, 1):
+        for path in dict.fromkeys(scripts_of(call)):
+            sha = _file_sha256(path) if path.startswith("/") else None
+            if sha is not None:
+                runs.append(f"{n} {sha} {path}")
+    return runs
+
+
+def why_no_asks(calls):
+    """Why the calls cannot be asked for, though a rule can hold them, or None: the CLI's whyNoAsks, in its words.
+    The user allows what they read, so a call names what it runs: a command substitution is decided when it runs, a
+    script named by a relative path is whatever that path finds from where the call runs, and a script that cannot
+    be read is no file the user could allow."""
+    for k, call in enumerate(calls, 1):
+        which = "this call" if len(calls) == 1 else f"call {k} of {len(calls)} (`{call}`)"
+        if any(s in call for s in ("$(", "`", "<(", ">(")):
+            return (f"no permission for {which}: the call has a command substitution ($( ), backticks or <( )), so what "
+                    "it runs is decided when it runs, not when the user reads it: give the value itself, or put the "
+                    "lines in a script")
+        scripts = scripts_of(call)
+        relative = next((p for p in scripts if not p.startswith("/")), None)
+        if relative is not None:
+            return (f"no permission for {which}: the call runs the script {relative} by a relative path: give its "
+                    "absolute path, so the file the user allows is the file that runs")
+        unread = next((p for p in scripts if _file_sha256(p) is None), None)
+        if unread is not None:
+            return (f"no permission for {which}: it runs {unread}, which is no file that can be read, so the user "
+                    "would allow a file that is not there")
+    return None
+
+
 def _why_no_card(r):
-    """Why the hook opens no card for a refused call on a moved fleet, or None when it opens one."""
+    """Why the hook opens no card for a refused call on a moved fleet, or None when it opens one. A Bash call is held
+    to what an ask is (why_no_asks), as the old CLI holds the card the host words from a refusal draft."""
     if _carries_secret(r):
         return "the call may carry a credential"
     if r.spawn:
@@ -2171,7 +2290,7 @@ def _why_no_card(r):
     if r.tool != "Bash":
         return (f"Claude Code matches no allow rule of a {_one_line(r.tool, 60)} call's input, so a card's grant would "
                 "never let it through: the user allows it in the terminal")
-    return why_no_rule("Bash", r.call)
+    return why_no_rule("Bash", r.call) or why_no_asks([r.call])
 
 
 def refusal_card_program(refusal_id, r, worker, host):
@@ -2231,10 +2350,15 @@ def _who(r, worker, host):
 
 
 def _refusal_of(r, call):
-    """A permission card's refused call: the exact call, its rule, the cause, and the root it ran in (round A's
-    RefusedCall keeps call and root in the cloud)."""
-    return {"tool": r.tool, "call": call, "rule": f"{r.tool}({call})", "cause": r.reason, "root": r.root,
-            "agent_id": r.agent_id}
+    """A permission card's refused call: the exact call, its rule, the cause, the root it ran in (round A's
+    RefusedCall keeps call and root in the cloud), and for a Bash call the files it runs (runs_of), read as the card
+    opens: fleet-host reads them again at the grant and refuses a yes to a card whose runs are not the files now."""
+    refusal = {"tool": r.tool, "call": call, "rule": f"{r.tool}({call})", "cause": r.reason, "root": r.root,
+               "agent_id": r.agent_id}
+    runs = runs_of([call]) if r.tool == "Bash" else []
+    if runs:
+        refusal["runs"] = runs
+    return refusal
 
 
 def _allow_options(what):
