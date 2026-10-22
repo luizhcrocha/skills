@@ -129,8 +129,10 @@ After the yes, run the call as a Bash call of its own, unchanged, once.
 
 A program opens a permission only for a call that runs no script by its path. A call that does (`bash
 /abs/deploy.sh`, `/abs/deploy.sh`, `source /abs/env.sh`) is bound to the sha256 of each file it runs, read on this
-machine: a program's card carries none, so the host refuses the yes. Open such a call from the machine: run it
-as a Bash call of its own, and when auto mode refuses it, the hook opens its card with the files it runs.
+machine: a program's card carries none, so the fold refuses the card when it opens. It refuses there too a call
+that does not name what it runs (`$(…)` or backticks, `bash -x /abs/x.sh`, a script by a relative path), which no
+one can be asked for. Open a script call from the machine: run it as a Bash call of its own, and when auto mode
+refuses it, the hook opens its card with the files it runs.
 
 An event, and a note kept for the next session:
 
