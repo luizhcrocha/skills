@@ -75,6 +75,15 @@ class WorkedCallsTest(unittest.TestCase):
         assert_applied(self, outcomes)
         self.assertEqual(outcomes[-1]["returned"][0]["key"], "x7", "the read returns the open cards")
 
+    def test_no_worked_permission_runs_a_script(self):
+        """A program's permission card carries no `runs`, so the office host refuses the yes to a call that runs a
+        script (design review F1): the worked permission names none, as the split every port shares finds them."""
+        calls = re.findall(r'kind: "permission".*?\bcall: ("(?:[^"\\]|\\.)*")', PROGRAMS.read_text(), re.S)
+        self.assertTrue(calls, "PROGRAMS.md has a worked permission")
+        hook = load_hook()
+        for call in map(json.loads, calls):
+            self.assertEqual(hook.scripts_of(call), [], call)
+
 
 class BodiesLimitTest(unittest.TestCase):
     """A program puts at most 16 bodies, as the cloud's PROGRAM_BODIES_LIMIT holds it: the 17th put throws."""

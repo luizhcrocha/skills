@@ -120,12 +120,17 @@ call ran, or after 30 minutes. `root` is your session's root (`$CLAUDE_PROJECT_D
 ```ts
 decision.open({ kind: "permission", title: "May the coordinator deploy the page Worker?",
   question: "Let the coordinator run this exact call once?", tool: "Bash",
-  call: "bash /home/luizrocha/repos/acme/scripts/deploy.sh", root: "/home/luizrocha/repos/acme",
+  call: "pnpm --filter page run deploy", root: "/home/luizrocha/repos/acme",
   why: "It ships the reviewed login form to production.", blocking: true });
 return records.apply(ops);
 ```
 
 After the yes, run the call as a Bash call of its own, unchanged, once.
+
+A program opens a permission only for a call that runs no script by its path. A call that does (`bash
+/abs/deploy.sh`, `/abs/deploy.sh`, `source /abs/env.sh`) is bound to the sha256 of each file it runs, read on this
+machine: a program's card carries none, so the host refuses the yes. Open such a call from the machine: run it
+as a Bash call of its own, and when auto mode refuses it, the hook opens its card with the files it runs.
 
 An event, and a note kept for the next session:
 
