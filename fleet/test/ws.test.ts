@@ -808,8 +808,8 @@ describe("the ws-add hook: the repo prepares each new workspace", () => {
       const pidFile = join(base, "repo-a1", ".child");
       const until = Date.now() + 15_000;
 
-      while (!existsSync(pidFile) && Date.now() < until) await Bun.sleep(50);
-      await Bun.sleep(200);
+      while (!(existsSync(pidFile) && /^\d+\n$/.test(readFileSync(pidFile, "utf8"))) && Date.now() < until) await Bun.sleep(50);
+      expect(existsSync(pidFile) ? readFileSync(pidFile, "utf8") : "no .child file after 15 s").toMatch(/^\d+\n$/);
       const pid = Number(readFileSync(join(base, "repo-a1", ".pid"), "utf8"));
       const sleeper = Number(readFileSync(pidFile, "utf8"));
       child.kill(signal);

@@ -228,7 +228,7 @@ describe("gate run and the slot", () => {
     const took = gate(["take", "--as", "other", "browser tests"]);
     const token = /fleet fleets gate free (\S+)`/.exec(took.stdout)?.[1] ?? "";
     const runner = Bun.spawn([FLEET, "fleets", "gate", "run", "--as", "w1", "--wait", "30", "--", "sh", "-c", "echo ran"], { env, stdout: "pipe", stderr: "pipe" });
-    await Bun.sleep(1500);
+    expect(await until(() => standing().queue.length === 1, 10000)).toBe(true);
     expect(gate(["free", token]).code).toBe(0);
     expect(await runner.exited).toBe(0);
     expect(await new Response(runner.stdout).text()).toBe("ran\n");

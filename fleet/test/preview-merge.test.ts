@@ -80,6 +80,17 @@ async function until(ready: () => boolean, ms = 10_000): Promise<void> {
   }
 }
 
+/** What a test writes as the record's error, for the updater to write over. */
+const MARK = "a test's mark";
+
+/** Two whole looks of the updater, the second begun after this call: each writes over the mark. */
+async function looked(): Promise<void> {
+  for (let i = 0; i < 2; i += 1) {
+    updateRecord(dir, (now) => (now === undefined ? undefined : { ...now, error: MARK }));
+    await until(() => record().error !== MARK);
+  }
+}
+
 const read = (path: string): string => (existsSync(path) ? readFileSync(path, "utf8") : "");
 
 const ws = (name: string): string => join(base, `repo-${name}`);
@@ -277,7 +288,7 @@ describe("the updater", () => {
     expect([record().commit, record().stack]).toEqual([good.commit, good.stack]);
     expect(preview("status").stdout).toContain("updater's last error: the stack (");
     writeFileSync(join(ws("a1"), "a.txt"), "header by a1, again\n");
-    await sleep(800);
+    await looked();
     expect([read(join(ws("preview"), "a.txt")), read(join(ws("preview"), "c.txt"))]).toEqual(["header by a1\n", "base\n"]);
 
     // Resolved, the merge follows again.
@@ -409,7 +420,7 @@ describe("a workspace added out of the preview", () => {
     state("agent", "l1", "--status", "running");
     expect(add("l1", "--repo", repo, "--no-preview").code).toBe(0);
     writeFileSync(join(ws("l1"), "c.txt"), "c by l1\n");
-    await sleep(800);
+    await looked();
     expect([read(join(ws("preview"), "c.txt")), record().merged.map((m) => m.id)]).toEqual(["base\n", ["a1", "a2"]]);
     expect(preview("status").stdout).toContain("[ ] l1 (added out of the preview)\n");
 
@@ -439,7 +450,7 @@ describe("a workspace added out of the preview", () => {
     expect(record().left).toEqual([]);
     expect(preview("status").stdout).toContain("[ ] l1 (added out of the preview)\n");
     writeFileSync(join(ws("l1"), "b.txt"), "footer by l1\n");
-    await sleep(800);
+    await looked();
     expect([read(join(ws("preview"), "a.txt")), read(join(ws("preview"), "b.txt"))]).toEqual(["header by a1\n", "base\n"]);
     expect(jj(repo, "log", "--no-graph", "--ignore-working-copy", "-r", "l1@", "-T", "empty")).toBe("true");
 
