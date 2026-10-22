@@ -6,10 +6,10 @@
  * repos and a stand-in dev server (stub-dev.ts), as preview.test.ts. What one look does when a worker's
  * own jj command lands inside it is in preview-look.test.ts.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 
 import { readChat } from "../src/chat/store.ts";
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
@@ -87,22 +87,43 @@ const ws = (name: string): string => join(base, `repo-${name}`);
 /** The commit `revset` names in the test repo, read without a snapshot. */
 const commitOf = (revset: string): string => jj(repo, "log", "--no-graph", "--ignore-working-copy", "-r", revset, "-T", "commit_id").trim();
 
-beforeEach(() => {
-  base = tmp("fleet-preview-");
+function at(root: string): void {
+  base = root;
   repo = join(base, "repo");
+  dir = join(base, "fleet");
+  env = baseEnv(join(base, "registry"), { TZ: "UTC", TAILSCALE: join(base, "no-tailscale"), FLEET_PREVIEW_S: "0.2", FLEET_PREVIEW_WAIT_S: "10" });
+}
+
+/** The repo, a1's and a2's workspaces and the fleet each test starts from, made once. jj records its workspaces'
+ * paths relative to the repo, so a copy is a repo of its own; the fleet's files name the template's folder, rewritten to the copy's. */
+let template: string;
+
+beforeAll(() => {
+  at(tmp("fleet-preview-template-"));
+  template = base;
   Bun.spawnSync(["jj", "git", "init", repo], { stdout: "ignore", stderr: "ignore" });
 
   for (const f of ["a.txt", "b.txt", "c.txt"]) writeFileSync(join(repo, f), "base\n");
   jj(repo, "describe", "-m", "base");
   jj(repo, "new");
-  dir = join(base, "fleet");
-  env = baseEnv(join(base, "registry"), { TZ: "UTC", TAILSCALE: join(base, "no-tailscale"), FLEET_PREVIEW_S: "0.2", FLEET_PREVIEW_WAIT_S: "10" });
   state("init", "--project", "shop", "--goal", "g");
   state("milestone", "m1", "--title", "M");
   state("agent", "a1", "--task", "header", "--milestone", "m1", "--lane", "a.txt");
   state("agent", "a2", "--task", "footer", "--milestone", "m1", "--lane", "b.txt");
   expect(fleet(["ws", dir, "add", "a1", "--repo", repo], env).code).toBe(0);
   expect(fleet(["ws", dir, "add", "a2", "--repo", repo], env).code).toBe(0);
+});
+
+beforeEach(() => {
+  at(tmp("fleet-preview-"));
+  cpSync(template, base, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true });
+
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const path = join(dir, entry.name);
+    writeFileSync(path, readFileSync(path, "utf8").replaceAll(template, base));
+  }
+
   expect(fleet(["serve", dir, "--pid", String(process.pid)], env).code).toBe(0);
 });
 
