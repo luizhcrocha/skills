@@ -50,11 +50,18 @@ const NICE = 5;
  * the scope's own limit after the runner's, the scope's own grace) is over before the hold lapses. */
 const HOLD_GRACE_S = 15;
 
-/** How long the systemd user manager has to answer the probe for a scope. */
+/** How long the systemd user manager has to answer the probe for a scope; $FLEET_GATE_SCOPE_PROBE_MS (a test's) says otherwise. */
 const SCOPE_PROBE_MS = 5000;
 
-/** Seconds a stopped command has between SIGTERM and SIGKILL. */
+/** Seconds a stopped command has between SIGTERM and SIGKILL; $FLEET_GATE_STOP_GRACE_S (a test's) says otherwise. */
 const STOP_GRACE_S = 5;
+
+/** The whole number, above 0, that $`name` gives, else `fallback`. */
+function wholeOr(env: (name: string) => string | undefined, name: string, fallback: number): number {
+  const given = env(name)?.trim();
+
+  return given !== undefined && /^[0-9]+$/.test(given) && Number(given) > 0 ? Number(given) : fallback;
+}
 
 /** How long a stopped scope's cgroup has to go, once `systemctl stop` has answered, before it is taken as still there. */
 const SCOPE_GONE_MS = 1000;
@@ -142,11 +149,12 @@ export function scopeHere(env: (name: string) => string | undefined): { readonly
   if (env("FLEET_GATE_SCOPE") === "0") return { scoped: false, why: "$FLEET_GATE_SCOPE is 0" };
 
   if (process.platform !== "linux" || Bun.which("systemd-run") === null || Bun.which("systemctl") === null) return { scoped: false, why: "no systemd user manager here" };
-  const done = spawnSync("systemctl", ["--user", "show", "--property=Version"], { encoding: "utf8", timeout: SCOPE_PROBE_MS });
+  const probeMs = wholeOr(env, "FLEET_GATE_SCOPE_PROBE_MS", SCOPE_PROBE_MS);
+  const done = spawnSync("systemctl", ["--user", "show", "--property=Version"], { encoding: "utf8", timeout: probeMs });
 
   if (done.error === undefined && done.status === 0) return { scoped: true, systemd: Number(/^Version=(\d+)/m.exec(done.stdout)?.[1] ?? 0) };
 
-  return { scoped: false, why: done.error === undefined ? `systemctl --user failed (exit ${String(done.status)})` : `systemctl --user did not answer in ${String(SCOPE_PROBE_MS / 1000)}s (${done.error.message})` };
+  return { scoped: false, why: done.error === undefined ? `systemctl --user failed (exit ${String(done.status)})` : `systemctl --user did not answer in ${String(probeMs / 1000)}s (${done.error.message})` };
 }
 
 /** Whether a transient scope can hold a command here. */
@@ -410,8 +418,8 @@ function groupAlive(pgid: number): boolean {
   }
 }
 
-function stopUnit(unit: string): void {
-  spawnSync("systemctl", ["--user", "stop", `${unit}.scope`], { stdio: "ignore", timeout: (STOP_GRACE_S + 10) * 1000 });
+function stopUnit(unit: string, graceS: number): void {
+  spawnSync("systemctl", ["--user", "stop", `${unit}.scope`], { stdio: "ignore", timeout: (graceS + 10) * 1000 });
 }
 
 /** A watchdog outside the runner's group: when the runner (`runner`) is gone, it stops what it ran. */
@@ -638,6 +646,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     freed = true;
   };
 
+  const graceS = wholeOr(machine.env, "FLEET_GATE_STOP_GRACE_S", STOP_GRACE_S);
   const weight = scoped ? cpuWeight(machine.env) : undefined;
   const quota = scoped ? cpuShare(machine.env) : undefined;
   const inScope = ["/bin/sh", "-c", IN_SCOPE, "sh", ...ask.command];
@@ -650,7 +659,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
 
   const [program = "", ...args] = scoped
     ? ["systemd-run", "--user", "--scope", "--collect", "--quiet", ...asGiven, "--unit", unit, "-p", `MemoryMax=${cap}`, "-p", "MemorySwapMax=0", "-p", "OOMPolicy=continue",
-      "-p", `TimeoutStopSec=${STOP_GRACE_S}`, "-p", `RuntimeMaxSec=${limitS + STOP_GRACE_S}`, ...(quota?.cpus === undefined ? [] : ["-p", `CPUQuota=${String(quota.cpus * 100)}%`]),
+      "-p", `TimeoutStopSec=${graceS}`, "-p", `RuntimeMaxSec=${limitS + graceS}`, ...(quota?.cpus === undefined ? [] : ["-p", `CPUQuota=${String(quota.cpus * 100)}%`]),
       ...(weight === undefined ? ["--", "nice", "-n", String(NICE)] : ["-p", `CPUWeight=${weight}`, "--"]), ...inScope]
     : [...ask.command];
 
@@ -711,7 +720,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
   const pid = child.pid;
 
   const dog = pid === undefined ? undefined
-    : watchdog(process.pid, scoped ? `systemctl --user stop ${unit}.scope >/dev/null 2>&1` : `kill -TERM -- -${pid} 2>/dev/null; i=0; while kill -0 -- -${pid} 2>/dev/null && [ $i -lt ${STOP_GRACE_S * 10} ]; do sleep 0.1; i=$((i+1)); done; kill -KILL -- -${pid} 2>/dev/null`);
+    : watchdog(process.pid, scoped ? `systemctl --user stop ${unit}.scope >/dev/null 2>&1` : `kill -TERM -- -${pid} 2>/dev/null; i=0; while kill -0 -- -${pid} 2>/dev/null && [ $i -lt ${graceS * 10} ]; do sleep 0.1; i=$((i+1)); done; kill -KILL -- -${pid} 2>/dev/null`);
 
   let why: "timeout" | NodeJS.Signals | undefined;
   let stopping: Promise<void> | undefined;
@@ -727,13 +736,13 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
       if (scoped) {
         sweep();
         atStop = memoryNow(told(piped, "cgroup"));
-        stopUnit(unit);
+        stopUnit(unit, graceS);
 
         return;
       }
 
       signalGroup(pid, "SIGTERM");
-      const until = Date.now() + STOP_GRACE_S * 1000;
+      const until = Date.now() + graceS * 1000;
 
       while (groupAlive(pid) && Date.now() < until) await sleep(50);
       signalGroup(pid, "SIGKILL");
@@ -755,7 +764,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     if (scoped) {
       sweep();
       clearInterval(sweeper);
-      stopUnit(unit);
+      stopUnit(unit, graceS);
     }
     else if (pid !== undefined) signalGroup(pid, "SIGKILL");
 

@@ -621,7 +621,7 @@ describe("what keeps the memory within the budget", () => {
 
   test.skipIf(!SCOPE)("a scope whose runner and watchdog were both killed is counted while it lives, and ends at its own limit", async () => {
     const dir = tmp("fleet-gate-orphan-");
-    const run = running(["--as", "k", "--timeout", "3", "--", "sh", "-c", `echo $$ > ${dir}/pid; exec sleep 60`], scope);
+    const run = running(["--as", "k", "--timeout", "3", "--", "sh", "-c", `echo $$ > ${dir}/pid; exec sleep 60`], { ...scope, FLEET_GATE_STOP_GRACE_S: "1" });
     expect(await until(() => existsSync(join(dir, "pid")) && /^\d+\n$/.test(readFileSync(join(dir, "pid"), "utf8")), 10000)).toBe(true);
     const children = Bun.spawnSync(["pgrep", "-P", String(run.pid)]).stdout.toString().trim().split("\n").map(Number);
     const dogs = children.filter((pid) => readFileSync(`/proc/${String(pid)}/cmdline`, "utf8").includes("while kill -0"));
@@ -664,10 +664,10 @@ describe("what keeps the memory within the budget", () => {
   test.skipIf(!SCOPE)("a systemd user manager that does not answer in time is said, and the run takes the whole budget", () => {
     const bin = tmp("fleet-gate-bin-");
     writeFileSync(join(bin, "systemctl"), "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
-    const done = gate(["run", "--as", "w1", "--", "sh", "-c", "echo ran"], { PATH: `${bin}:${process.env["PATH"] ?? ""}` });
+    const done = gate(["run", "--as", "w1", "--", "sh", "-c", "echo ran"], { PATH: `${bin}:${process.env["PATH"] ?? ""}`, FLEET_GATE_SCOPE_PROBE_MS: "200" });
     expect(done.code).toBe(0);
     expect(done.stdout).toBe("ran\n");
-    expect(done.stderr).toMatch(/warning: systemctl --user did not answer in 5s.*, so nothing caps the command's memory: this run asks for the whole budget/);
+    expect(done.stderr).toMatch(/warning: systemctl --user did not answer in 0\.2s.*, so nothing caps the command's memory: this run asks for the whole budget/);
     expect(records()[0]).toMatchObject({ asked: "all (no scope)" });
   }, 30_000);
 });
