@@ -60,16 +60,16 @@ function cli(...args: string[]): Ran {
   return fleet(["chat", root, ...args], env);
 }
 
-function send(sender: string, text: string, more: Omit<Draft, "sender" | "text"> = {}): Message {
-  const sent = append(m, root, { sender, text, ...more }, now());
+function send(sender: string, text: string, more: Omit<Draft, "sender" | "text"> = {}, at: string = now()): Message {
+  const sent = append(m, root, { sender, text, ...more }, at);
 
   if (sent instanceof ChatError) throw new Error(sent.reason);
 
   return sent;
 }
 
-function user(text: string, more: Omit<Draft, "sender" | "text" | "allowUser"> = {}): Message {
-  return send("user", text, { ...more, allowUser: true });
+function user(text: string, more: Omit<Draft, "sender" | "text" | "allowUser"> = {}, at: string = now()): Message {
+  return send("user", text, { ...more, allowUser: true }, at);
 }
 
 /** A watch run on a terminal, as a person runs one without --once. */
@@ -1905,17 +1905,18 @@ describe("wait", () => {
   });
 
   test("an answer the fleet holds is not news", async () => {
+    // The hold falls between the two answers, so the verdict is the same whether the wait's first read or its tail sees "Done.".
     writeDecisions([
-      { id: "d-x", ref: "A1", kind: "action", title: "Do it", question: "q", status: "open", opened: "2026-01-01T00:00:00+00:00", held: "fix the code first", held_at: "2999-01-01T00:00:00+00:00" },
+      { id: "d-x", ref: "A1", kind: "action", title: "Do it", question: "q", status: "open", opened: "2026-01-01T00:00:00+00:00", held: "fix the code first", held_at: "2026-01-02T00:00:00+00:00" },
     ]);
-    user("Needs a fix.", { decision: "d-x" });
+    user("Needs a fix.", { decision: "d-x" }, "2026-01-01T12:00:00+00:00");
     const { proc, lines } = start(["chat", root, "wait", "A1"], env);
     procs.push(proc);
-    await sleep(600);
-    expect(proc.exitCode).toBeNull();
-    user("Done.", { decision: "d-x" });
+    user("Done.", { decision: "d-x" }, "2026-01-03T00:00:00+00:00");
     expect(await proc.exited).toBe(0);
-    expect(await lines.rest()).toContain("[A1 d-x]: Done.");
+    const out = await lines.rest();
+    expect(out).toContain("[A1 d-x]: Done.");
+    expect(out).not.toContain("Needs a fix.");
   });
 });
 
