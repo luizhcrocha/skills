@@ -7936,5 +7936,248 @@ class PermissionSplitTest(unittest.TestCase):
             self.assertIn(f"the grant binds the script {script} by the absence entry", module._moved_file(grant) or "")
 
 
+
+class RmGuardTest(HookCase):
+    """rm_guard (PreToolUse, Bash and Monitor): a recursive rm whose operand can expand to what nobody read, or that
+    names the home folder, a dot-folder in it, a folder of ~/.config or `/`, is refused. On 10-22 a reviewer ran
+    `rm -rf ~/.config/jj/repos/$(cat …)`, the `cat` failed, and every repo's jj config went. The tests feed the hook
+    JSON only: no rm runs."""
+
+    SENTENCE = "tstack: refused a recursive delete"
+
+    def call(self, command, tool="Bash", env=None):
+        payload = {**self.base("PreToolUse"), "tool_name": tool, "tool_input": {"command": command}}
+        r = self.hook("PreToolUse", payload, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def decision(self, command, tool="Bash", env=None):
+        out = self.call(command, tool, env)
+        return json.loads(out).get("hookSpecificOutput", {}) if out.strip() else {}
+
+    def assertRefused(self, command, operand, tool="Bash", env=None):
+        decision = self.decision(command, tool, env)
+        self.assertEqual(decision.get("permissionDecision"), "deny", command)
+        reason = decision["permissionDecisionReason"]
+        self.assertIn(self.SENTENCE, reason, command)
+        self.assertIn(f"`{operand}`", reason, command)
+        self.assertIn("trash <path>", reason, command)
+        self.assertIn("ls it", reason, command)
+
+    def assertFed(self, command):
+        reason = self.decision(command).get("permissionDecisionReason", "")
+        self.assertIn(self.SENTENCE, reason, command)
+        self.assertIn("xargs", reason, command)
+        self.assertIn("list the paths first", reason, command)
+        self.assertIn("trash <path>", reason, command)
+
+    def assertAllowed(self, command, env=None):
+        self.assertNotEqual(self.decision(command, env=env).get("permissionDecision"), "deny", command)
+
+    def test_the_incident_command_is_refused(self):
+        self.assertRefused("rm -rf ~/.config/jj/repos/$(cat /tmp/x)", "~/.config/jj/repos/$(cat /tmp/x)")
+
+    def test_an_operand_that_expands_unguarded_is_refused(self):
+        for command, operand in (('rm -rf "$DIR"/', '"$DIR"/'), ("rm -rf ${D}/x", "${D}/x"),
+                                 ("rm -rf `pwd`/x", "`pwd`/x"), ("rm -rf ${D:-/tmp}/x", "${D:-/tmp}/x")):
+            with self.subTest(command):
+                self.assertRefused(command, operand)
+
+    def test_an_operand_that_names_a_protected_folder_is_refused(self):
+        for command, operand in (("rm -fr ~/.config", "~/.config"), ("rm -r ~/.ssh/", "~/.ssh/"), ("rm -rf ~", "~"),
+                                 ("rm -rf $HOME/", "$HOME/"), ("rm -rf /", "/"), ("rm -Rf ~/.config/jj", "~/.config/jj"),
+                                 ("rm -rfv ~/./.local/../.config/", "~/./.local/../.config/"),
+                                 ("rm --recursive ~/.config/*", "~/.config/*"), ("cd ~ && rm -rf .ssh", ".ssh")):
+            with self.subTest(command):
+                self.assertRefused(command, operand)
+
+    def test_rm_through_a_wrapper_or_find_is_refused(self):
+        for command, operand in (("sudo rm -rf ~/.local", "~/.local"), ("find ~/.config -delete", "~/.config"),
+                                 ("sudo -u root nice -n 5 timeout 10 rm -rf ~/.ssh", "~/.ssh"),
+                                 ("env FOO=1 command rm -rf /", "/"), ("echo x | xargs rm -rf ~/.config", "~/.config"),
+                                 ("find ~ -name x -exec rm -rf {} +", "~"), ("bash -c 'rm -rf ~/.ssh'", "~/.ssh"),
+                                 ("ls; (cd /tmp && rm -rf $X)", "$X")):
+            with self.subTest(command):
+                self.assertRefused(command, operand)
+
+    def test_a_whole_folder_glob_over_home_or_inside_a_dot_folder_of_it_is_refused(self):
+        for operand in ("~/.config/jj/repos/*", "~/.ssh/*", "~/.config/jj/repos/abc123/*", "$HOME/.local/share/x/**",
+                        "~/.cache/pip/*.*", "~/.local/x/{*,.*}", "~/*", "~/.*", "/*"):
+            with self.subTest(operand):
+                self.assertRefused(f"rm -rf {operand}", operand)
+
+    def test_a_whole_folder_glob_in_a_plain_folder_under_home_is_allowed(self):
+        """Only home, a folder above it, `/` and the inside of home's dot-folders hold what a whole-folder glob must
+        not empty; a project's build folder is the glob's everyday use."""
+        for command in ("cd ~/proj && rm -rf build/*", "rm -rf ~/proj/*", "rm -rf ~/proj/build/*", "rm -rf ./build/*",
+                        "rm -rf $HOME/proj/build/**", "rm -rf ~/proj/{*,.*}", "cd ~/proj/build && rm -rf ./*"):
+            with self.subTest(command):
+                self.assertAllowed(command)
+
+    def test_xargs_feeding_rm_its_operands_is_refused(self):
+        for command in ("find . -name x | xargs rm -rf", "find . -print0 | xargs -0 rm -rf",
+                        "ls | xargs -I{} rm -r {}", "cat list | xargs sudo rm -Rf --"):
+            with self.subTest(command):
+                self.assertFed(command)
+
+    def test_xargs_feeding_rm_after_written_operands_is_refused(self):
+        for command in ("echo ~/.ssh | xargs rm -rf /tmp/a", "xargs rm -rf /tmp/a < /dev/null"):
+            with self.subTest(command):
+                self.assertFed(command)
+
+    def test_a_monitor_call_is_read_the_same(self):
+        self.assertRefused("rm -rf ~/.config/jj/repos/$(cat /tmp/x)", "~/.config/jj/repos/$(cat /tmp/x)", tool="Monitor")
+
+    def test_a_literal_or_guarded_operand_and_a_plain_rm_are_allowed(self):
+        for command in ("rm -rf ./build", "rm -rf /tmp/claude-1000/x", "rm -rf ~/.config/jj/repos/abc123",
+                        'rm -rf "${DIR:?}/build"', "rm file.txt", "rm -f ~/.config/x.json", "rm -f $X",
+                        "find /tmp/x -name '*.o' -delete", "grep -r 'rm -rf ~' docs", "echo 'rm -rf /'",
+                        "rm -rf '$HOME'x", "rm -rf ~/repos/x/.git", "rm -rf ./build/*", "rm -rf /tmp/x/*",
+                        "rm -rf ~/proj/*.log", "ls | xargs rm -f", "ls | xargs echo rm -rf"):
+            with self.subTest(command):
+                self.assertAllowed(command)
+
+    def test_a_cd_to_a_folder_nobody_read_refuses_a_relative_delete_after_it(self):
+        """Unquoted and empty, the target leaves a bare `cd`, which goes to the home folder."""
+        for command, operand in (("cd $(cat /tmp/x); rm -rf *", "*"), ("cd $D && rm -rf *", "*"),
+                                 ("cd `cat /tmp/x` && rm -rf build", "build"), ('cd "" && rm -rf build', "build"),
+                                 ("cd $D/sub && rm -rf ./x", "./x")):
+            with self.subTest(command):
+                self.assertRefused(command, operand)
+
+    def test_a_cd_the_hook_cannot_read_refuses_a_bare_glob_after_it(self):
+        for command, operand in (('cd "$D" && rm -rf *', "*"), ('cd "$(cat /tmp/x)" && rm -rf .*', ".*"),
+                                 ('cd "${D:?}" && rm -rf ./*', "./*"), ("cd - && rm -rf *", "*")):
+            with self.subTest(command):
+                self.assertRefused(command, operand)
+
+    def test_a_quoted_cd_nobody_read_leaves_a_literal_delete_alone(self):
+        for command in ('cd "$(mktemp -d)" && rm -rf x', 'cd "$D" && rm -rf build', "cd $D && rm -rf /tmp/x",
+                        'cd "$D" && rm -rf build/*.o'):
+            with self.subTest(command):
+                self.assertAllowed(command)
+
+    def test_a_folder_above_home_is_refused(self):
+        for command, operand in (("rm -rf /home", "/home"), ("rm -rf ~/..", "~/.."), ("rm -rf /home/*", "/home/*"),
+                                 ("rm -rf /home/", "/home/"), ("rm -rf /ho*", "/ho*")):
+            with self.subTest(command):
+                self.assertRefused(command, operand, env={"HOME": "/home/u"})
+
+    def test_a_whole_folder_glob_after_the_lines_own_cd_is_refused(self):
+        for command, operand in (("cd ~/.config/jj/repos && rm -rf *", "*"), ("cd ~; rm -rf .*", ".*"),
+                                 ("cd; rm -rf *", "*"), ("cd ~/.local/share/x && rm -rf ./*", "./*"),
+                                 ("cd ~/.ssh && rm -rf build/*", "build/*")):
+            with self.subTest(command):
+                self.assertRefused(command, operand)
+
+    def test_the_config_tree_two_folders_deep_is_refused(self):
+        for command, operand in (("rm -rf ~/.config/jj/repos/", "~/.config/jj/repos/"),
+                                 ("rm -rf $HOME/.config/jj/repos", "$HOME/.config/jj/repos"),
+                                 ("rm -rf ~/.config/gh/hosts/../../jj/repos", "~/.config/gh/hosts/../../jj/repos"),
+                                 ("rm -rf ~/.config/jj/repos/abc*", "~/.config/jj/repos/abc*"),
+                                 ("rm -rf ~/.config/nvim/lazy", "~/.config/nvim/lazy")):
+            with self.subTest(command):
+                self.assertRefused(command, operand)
+
+    def test_a_literal_folder_three_deep_in_the_config_tree_is_allowed(self):
+        for command in ("rm -rf ~/.config/jj/repos/abc123", "rm -rf ~/.config/nvim/lua/plugins",
+                        "cd ~/.config/jj/repos && rm -rf abc123"):
+            with self.subTest(command):
+                self.assertAllowed(command)
+
+    def test_a_find_exec_of_a_wrapper_with_no_command_is_let_through(self):
+        for command in (r"find . -name x.rm -exec nohup \;", r"find . -name x.rm -exec env \;"):
+            with self.subTest(command):
+                self.assertAllowed(command)
+
+    DEEP = "$(" * 1200 + "x" + ")" * 1200  # past Python's recursion limit: rm_guard fails on it
+
+    def test_a_command_with_no_rm_find_or_xargs_word_is_not_read(self):
+        for command in ("terraform", "git log --format=%H", "npm run format", "confirm", "perm", "x.rm"):
+            with self.subTest(command):
+                self.assertNotEqual(self.decision(f"{command} {self.DEEP}").get("permissionDecision"), "deny")
+
+    def test_a_failure_with_no_delete_in_the_command_lets_it_through_and_logs_it(self):
+        self.assertNotEqual(self.decision(f"find . {self.DEEP}").get("permissionDecision"), "deny")
+        self.assertIn("rm_guard failed", self.log())
+
+    def test_a_failure_with_an_rm_in_the_command_denies_it(self):
+        decision = self.decision(f"rm -rf {self.DEEP}")
+        self.assertEqual(decision.get("permissionDecision"), "deny")
+        self.assertIn("rm_guard failed", decision["permissionDecisionReason"])
+
+    def test_find_deletes_through_any_rm_it_runs_or_a_shell_running_one(self):
+        for command, operand in (("find ~/.ssh -type f -exec rm -f {} +", "~/.ssh"),
+                                 ("find ~/.config -exec sh -c 'rm -rf \"$1\"' _ {} \;", "~/.config"),
+                                 ("find ~/.ssh -execdir sudo rm {} \;", "~/.ssh")):
+            with self.subTest(command):
+                self.assertRefused(command, operand)
+
+    def test_a_shell_with_options_before_its_script_is_read(self):
+        for command in ("bash -euo pipefail -c 'rm -rf ~/.ssh'", "bash -c -- 'rm -rf ~/.ssh'",
+                        "bash --norc -O extglob -c 'rm -rf ~/.ssh'"):
+            with self.subTest(command):
+                self.assertRefused(command, "~/.ssh")
+
+    def test_more_wrappers_are_read(self):
+        for command, operand in (("nice -5 rm -rf ~/.ssh", "~/.ssh"), ("nice -n5 rm -rf ~/.ssh", "~/.ssh"),
+                                 ("command -- rm -rf ~/.ssh", "~/.ssh"), ("ionice -c3 rm -rf ~/.ssh", "~/.ssh"),
+                                 ("ionice -c 2 -n 7 rm -rf ~/.ssh", "~/.ssh"), ("setsid -f rm -rf ~/.ssh", "~/.ssh"),
+                                 ("flock /tmp/l rm -rf ~/.ssh", "~/.ssh"),
+                                 ("flock -w 5 /tmp/l -c 'rm -rf ~/.ssh'", "~/.ssh"),
+                                 ("busybox rm -rf ~/.ssh", "~/.ssh"), ("parallel rm -rf ::: ~/.ssh", "~/.ssh"),
+                                 ("parallel -j4 rm -rf {} ::: /tmp/a ~/.ssh", "~/.ssh"),
+                                 ("su -c 'rm -rf ~/.ssh'", "~/.ssh"), ("su - root --command='rm -rf ~/.ssh'", "~/.ssh"),
+                                 ("env -C ~ rm -rf .ssh", ".ssh"), ("env --chdir=$HOME rm -rf .ssh", ".ssh"),
+                                 ("sudo -D ~ rm -rf .ssh", ".ssh")):
+            with self.subTest(command):
+                self.assertRefused(command, operand)
+
+    def test_nested_wrappers_are_peeled_one_at_a_time(self):
+        for command in ("timeout 5 nice -5 rm -rf ~/.ssh", "time command -- rm -rf ~/.ssh",
+                        "nohup timeout 5 ionice -c3 rm -rf ~/.ssh", "FOO=1 time env -C / nice -n5 rm -rf ~/.ssh"):
+            with self.subTest(command):
+                self.assertRefused(command, "~/.ssh")
+
+    def test_a_trap_runs_its_text_as_a_shell_would(self):
+        self.assertRefused("""trap 'rm -rf "$dir"/*' EXIT""", '"$dir"/*')
+        self.assertRefused("trap -- 'rm -rf ~/.ssh' EXIT INT", "~/.ssh")
+        for command in ("""trap 'rm -rf "${dir:?}"/*' EXIT""", "trap - EXIT", "trap -p", "trap 'rm -rf ./build' EXIT"):
+            with self.subTest(command):
+                self.assertAllowed(command)
+
+    def test_parallel_feeding_rm_from_its_input_is_refused(self):
+        for command in ("ls | parallel rm -rf", "parallel rm -rf :::: list"):
+            with self.subTest(command):
+                self.assertFed(command)
+
+    def test_tilde_forms_and_a_climb_after_a_pattern_are_read(self):
+        for command, operand, env in (("rm -rf ~root/.ssh", "~root/.ssh", None),
+                                      ("cd ~ && rm -rf ~+/.ssh", "~+/.ssh", None),
+                                      ("rm -rf ~/proj/{x,../.ssh}", "~/proj/{x,../.ssh}", None),
+                                      ("rm -rf /home/u/proj/*/../../.ssh", "/home/u/proj/*/../../.ssh",
+                                       {"HOME": "/home/u"})):
+            with self.subTest(command):
+                self.assertRefused(command, operand, env=env)
+
+    def test_everyday_cleanups_are_allowed(self):
+        for command in ("rm -rf node_modules", 'rm -rf "${dir:?}/build"', "rm -rf /tmp/claude-1000/sess/scratchpad/x",
+                        "rm -rf ../skills-ws-a", "jj workspace forget ws-a && rm -rf ../ws-a",
+                        "git worktree remove ../wt && rm -rf ../wt", "rm -rf ~/repos/skills-wt", "rm -rf ~/.cache/pip",
+                        "find . -name node_modules -prune -exec rm -rf {} +", "find . -name '*.pyc' -delete",
+                        "find . -name '*.pyc' -exec rm -f {} +", 'cd "$(mktemp -d)" && rm -rf x',
+                        "cd build && rm -rf ./x", "cd /tmp/x && rm -rf *", "bash -euo pipefail -c 'rm -rf ./build'",
+                        "nice -5 rm -rf ./build", "env -C /tmp rm -rf x"):
+            with self.subTest(command):
+                self.assertAllowed(command)
+
+    def test_a_tmpdir_the_session_set_is_read_as_its_folder(self):
+        env = {"TMPDIR": "/tmp/claude-1000"}
+        for command in ('rm -rf "$TMPDIR/x"', 'rm -rf "${TMPDIR}/x"', "rm -rf $TMPDIR/x/*"):
+            with self.subTest(command):
+                self.assertAllowed(command, env=env)
+        self.assertRefused('rm -rf "$TMPDIR/x"', '"$TMPDIR/x"')
+
+
 if __name__ == "__main__":
     unittest.main()

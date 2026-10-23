@@ -4567,9 +4567,10 @@ def _path(cwd, given):
     return os.path.normpath(os.path.join(cwd, os.path.expanduser(given)))
 
 
-def _unwrap(words):
+def _unwrap(words, once=False):
     """The command a wrapper runs: past assignments, env [-i] [K=V], timeout N, nice, command, exec, nohup,
-    time, devenv-run and `nix shell|develop ... --command`. (words, whether it reads its arguments from stdin)."""
+    time, devenv-run and `nix shell|develop ... --command`; past one of them when `once`. (words, whether it reads its
+    arguments from stdin)."""
     stdin = False
     while words:
         head = os.path.basename(words[0])
@@ -4600,6 +4601,8 @@ def _unwrap(words):
                 i += 2 if words[i] in ("-n", "-I", "-L", "-P", "-d", "-a", "-E", "-s") else 1
             words, stdin = words[i:], True
         else:
+            break
+        if once:
             break
     return words, stdin
 
@@ -5832,6 +5835,536 @@ def onepw_watch(hook):
     return _onepw()["_onepw_watch"](hook)
 
 
+# The rm guard. On 10-22 a fleet reviewer ran `rm -rf ~/.config/jj/repos/$(cat …)`: the `cat` failed, the operand came
+# to ~/.config/jj/repos/, and every repo's jj config (about 720) was deleted; auto mode let it through. A recursive rm,
+# find's -delete, or any rm find runs (find recurses even when its rm does not), is refused when an operand can expand
+# to what nobody read (`$(`, a backtick, a variable with no `:?` guard; `~`, $HOME and $TMPDIR are read as the
+# session's) or names `/`, a folder above HOME, HOME, a dot-folder of it or a folder at most two deep in ~/.config; a
+# pattern over one of those, a pattern that climbs out of its folder with `..`, and a whole folder's pattern (`*`, `.*`,
+# `{*,.*}`) of a folder anywhere inside a dot-folder of HOME, written absolute or read after the line's own `cd`, count
+# too (`~/proj/build/*` passes). A trap's text is read as `sh -c`'s. A `cd` (or env -C, sudo -D) to a
+# target that can expand to nothing leaves every relative operand after it unread; one the hook cannot read otherwise
+# leaves a bare pattern unread. An rm that xargs or parallel feeds is refused: its operands are input nobody read.
+# The split is _simple_commands' (see rm_guard for what it does not see).
+RM_SENTENCE = "tstack: refused a recursive delete"
+RM_FIX = ("To delete it, move it to the trash with `trash <path>` (or `gio trash <path>`), which can be undone; or resolve "
+          "the path into a variable, check it is non-empty and the one you mean (ls it), then delete with the literal path.")
+RM_GLOB = frozenset("*?[{")
+RM_SUDO_VALUED = frozenset(("-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-h", "--host", "-p",
+                            "--prompt", "-R", "--chroot", "-T", "--command-timeout", "-U", "--other-user", "-r", "--role",
+                            "-t", "--type"))
+RM_EXECS = ("-exec", "-execdir", "-ok", "-okdir")
+RM_WHOLE = re.compile(r"[*?.{},]*[*?][*?.{},]*")  # a last component that is only a pattern: every entry of its folder
+RM_CLIMB = re.compile(r"(?:^|[/{,])\.\.(?:$|[/},])")  # a `..` component, in a path or a brace list
+RM_FED = ("takes its operands from input nobody read before it runs (xargs' or parallel's): list the paths first and "
+          "delete them by literal path, or move them to the trash with `trash <path>`")
+RM_DEPTH = 3  # `bash -c '...'` inside `sh -c '...'`: a deeper one is not read
+RM_WORD = re.compile(r"(?<![\w.-])(?:rm|find|xargs)(?![\w.-])")  # a command rm_guard reads has one of these words
+RM_DELETES = re.compile(r"(?<![\w.-])(?:rm|-delete)(?![\w.-])")
+RM_KNOWN = ("HOME", "TMPDIR")  # read as the session's value when it is an absolute path
+RM_PARALLEL_VALUED = frozenset(("-j", "--jobs", "-P", "-S", "--sshlogin", "-N", "-n", "--max-args", "-L", "--max-lines",
+                                "-d", "--delimiter", "-a", "--arg-file", "-I", "--joblog", "--tmpdir", "-E", "-C",
+                                "--colsep"))
+# Where a simple command runs: its folder (None when not known); why not known after a `cd` ("unread": its target can
+# expand to nothing, which goes to HOME; "unknown": the hook cannot read it); whether a `cd` on the line moved it.
+RmPlace = namedtuple("RmPlace", "cwd blind moved")
+
+
+def rm_guard(hook):
+    """PreToolUse (Bash, Monitor): a recursive delete whose operand can expand to what nobody read, or names `/`, a
+    folder above HOME, HOME, a dot-folder of it or a folder two deep in ~/.config, is denied (the comment above). Any
+    other call it says nothing on, and it never allows. When it fails, the call is denied (dispatch) only if the
+    command holds an rm or -delete word; with none, nothing in it deletes, so the failure is logged and the call goes
+    through.
+    Not seen: an rm run by a script file, an alias or a function; a shell fed its script on stdin
+    (`echo … | bash`, `bash <<< …`, a here-document as in `bash -s <<'EOF'`); `~-`, `$'…'` escapes, a bracket class as a whole folder's pattern (`[a-z]*`), a
+    quoted command word (`r''m`), a backslash-newline before an operand at column 0; other deleters (python's
+    shutil.rmtree, perl's rmtree, rsync --delete, mv, git clean). `~user` is read as that user's home folder. A `cd`
+    inside a subshell moves the folder for the commands after the subshell too."""
+    command = _shell_command(hook)
+    if command is None or not RM_WORD.search(command):
+        return None
+    known = {}
+    for name in RM_KNOWN:
+        value = hook.env.get(name)
+        if isinstance(value, str) and os.path.isabs(value):
+            known[name] = os.path.normpath(value)
+    try:
+        problem = _rm_problem(command, RmPlace(hook.cwd, None, False), known)
+    except Exception:
+        if RM_DELETES.search(command):
+            raise
+        log(hook.data_dir, f"PreToolUse rm_guard failed, let through (no rm in the command)\n{traceback.format_exc()}")
+        return None
+    return Deny(f"{RM_SENTENCE}: {problem} {RM_FIX}") if problem else None
+
+
+def _rm_problem(command, place, known, depth=0):
+    """Why a simple command of `command` deletes what it should not, or None. `place` is where it starts (RmPlace)."""
+    try:
+        pieces = _simple_commands(command)
+    except (ValueError, IndexError):  # bash runs no text that does not parse
+        return None
+    for piece in pieces:
+        words, fed, chdirs = _rm_unwrapped(_rm_words(_without_redirections(piece)))
+        if not words:
+            continue
+        head = os.path.basename(_rm_bare(words[0]))
+        if head in ("cd", "pushd", "popd"):
+            place = _rm_cd(head, words[1:], place, known)
+            continue
+        here = place
+        for target in chdirs:
+            here = _rm_moved(target, here, known)
+        if head in SHELLS or head in ("eval", "trap"):
+            script = _rm_script(words)
+            problem = _rm_problem(script, here, known, depth + 1) if script and depth < RM_DEPTH else None
+            if problem:
+                return problem
+            continue
+        operands = _rm_operands(words)
+        if operands is None:
+            continue
+        for operand in operands:
+            why = _rm_why(operand, here, known)
+            if why:
+                return f"`{_one_line(piece, 120)}`: its operand `{operand}` {why}."
+        if fed:
+            return f"`{_one_line(piece, 120)}` {RM_FED}."
+    return None
+
+
+def _rm_cd(head, args, place, known):
+    """Where a cd, pushd or popd with these words leaves the folder."""
+    while args and _rm_bare(args[0]) in ("-L", "-P", "-e", "-@", "-n"):
+        args = args[1:]
+    if args and _rm_bare(args[0]) == "--":
+        args = args[1:]
+    if head == "popd" or (head == "pushd" and not args) or (args and re.fullmatch(r"[+-]\d*", _rm_bare(args[0]))):
+        return RmPlace(None, "unknown", True)
+    return _rm_moved(args[0] if args else "~", place, known)
+
+
+def _rm_moved(target, place, known):
+    """The place after a move to `target`, as written (a cd's word, env -C's or sudo -D's)."""
+    text, _, why, bare = _rm_read(target, known, place.cwd)
+    if why:
+        return RmPlace(None, "unread" if bare else "unknown", True)
+    if text == "":
+        return RmPlace(None, "unread", True)
+    path = _rm_path(text, place.cwd) if text is not None else None
+    return RmPlace(path, None if path else place.blind or "unknown", True)
+
+
+def _rm_script(words):
+    """The text a shell's `-c`, `eval` or a `trap` runs, None when there is none: past a shell's options (`-o`/`-O`
+    take a value) and a `--`; a trap's first operand when signals follow it (`trap - EXIT` and `trap EXIT` reset)."""
+    head = os.path.basename(_rm_bare(words[0]))
+    if head == "eval":
+        return " ".join(_rm_bare(w) for w in words[1:])
+    if head == "trap":
+        args = _rm_past_options(words)
+        return _rm_bare(args[0]) if len(args) > 1 and _rm_bare(args[0]) != "-" else None
+    command, i = False, 1
+    while i < len(words):
+        bare = _rm_bare(words[i])
+        if bare == "--":
+            i += 1
+            break
+        if re.fullmatch(r"[-+][A-Za-z]+", bare):
+            command = command or "c" in bare[1:]
+            i += 2 if "o" in bare[1:] or "O" in bare[1:] else 1
+        elif bare in ("--rcfile", "--init-file"):
+            i += 2
+        elif bare.startswith("--"):
+            i += 1
+        else:
+            break
+    return _rm_bare(words[i]) if command and i < len(words) else None
+
+
+def _rm_words(text):
+    """A simple command's words as written, quotes and expansions kept: split at blanks outside quotes, `$( )`, `${ }`
+    and backticks."""
+    words, start, stack, i, n = [], None, [], 0, len(text)
+    while i < n:
+        c = text[i]
+        top = stack[-1] if stack else None
+        if top == "'":
+            if c == "'":
+                stack.pop()
+            i += 1
+            continue
+        if c == "\\":
+            start = i if start is None else start
+            i += 2
+            continue
+        if not stack and c in " \t\n":
+            if start is not None:
+                words.append(text[start:i])
+                start = None
+            i += 1
+            continue
+        start = i if start is None else start
+        if top == c and c in "\")}`":
+            stack.pop()
+        elif c == "'" and top != '"':
+            stack.append("'")
+        elif c in "\"`":
+            stack.append(c)
+        elif text.startswith("$(", i) or text.startswith("${", i):
+            stack.append(")" if text[i + 1] == "(" else "}")
+            i += 1
+        elif c == "(" and top == ")":
+            stack.append(")")
+        i += 1
+    if start is not None:
+        words.append(text[start:])
+    return words
+
+
+def _rm_bare(word):
+    """A word without its quotes and backslashes; as written when it does not read as one word."""
+    import shlex
+    try:
+        parts = shlex.split(word)
+    except ValueError:
+        return word
+    return parts[0] if len(parts) == 1 else word
+
+
+def _rm_past_options(words, valued=()):
+    """The words after a command's options and a `--`; an option in `valued` takes the word after it."""
+    i = 1
+    while i < len(words):
+        bare = _rm_bare(words[i])
+        if bare == "--":
+            return words[i + 1:]
+        if bare in valued:
+            i += 2
+        elif bare.startswith("-") and len(bare) > 1:
+            i += 1
+        else:
+            break
+    return words[i:]
+
+
+def _rm_option(words, names):
+    """The value of the first of these options among `words` (`-c X`, `--command X`, `--command=X`), or None."""
+    for k, word in enumerate(words[1:], 1):
+        bare = _rm_bare(word)
+        if bare in names and k + 1 < len(words):
+            return words[k + 1]
+        for name in names:
+            if name.startswith("--") and bare.startswith(name + "="):
+                return bare[len(name) + 1:]
+    return None
+
+
+def _rm_unwrapped(words):
+    """The command past the shell words that lead to it (`{`, `if`, `then`...) and its wrappers: sudo, doas, stdbuf,
+    env, nice, ionice, setsid, command, exec, builtin, busybox, flock, su, parallel, and _unwrap's (timeout, nohup,
+    time, xargs, ...); `flock -c` and `su -c` run their text as `sh -c`. (words, whether xargs or parallel feeds it its
+    input, the folders env -C and sudo -D move it to, as written.)"""
+    fed, chdirs = False, []
+    while words:
+        head = os.path.basename(_rm_bare(words[0]))
+        if words[0] in SHELL_LEADERS:
+            words = words[1:]
+        elif head in ("sudo", "doas", "stdbuf"):
+            i = 1
+            while i < len(words) and words[i].startswith("-"):
+                if words[i] == "--":
+                    i += 1
+                    break
+                if head == "sudo" and words[i] in ("-D", "--chdir") and i + 1 < len(words):
+                    chdirs.append(words[i + 1])
+                elif head == "sudo" and words[i].startswith("--chdir="):
+                    chdirs.append(words[i][len("--chdir="):])
+                i += 2 if head != "stdbuf" and words[i] in RM_SUDO_VALUED else 1
+            words = words[i:]
+        elif head == "env":
+            words = _rm_env(words, chdirs)
+        elif head == "nice":
+            words = _rm_past_options(words, ("-n", "--adjustment"))
+        elif head == "ionice":
+            if any(_rm_bare(w) in ("-p", "-P", "-u", "--pid", "--pgid", "--uid") for w in words[1:]):
+                return [], fed, chdirs
+            words = _rm_past_options(words, ("-c", "-n", "--class", "--classdata"))
+        elif head in ("setsid", "command", "exec", "builtin"):
+            words = _rm_past_options(words, ("-a",))
+        elif head == "busybox":
+            words = words[1:]
+        elif head in ("flock", "su"):
+            script = _rm_option(words, ("-c", "--command"))
+            if script is not None:
+                words = ["sh", "-c", script]
+            elif head == "flock":
+                words = _rm_past_options(words, ("-w", "--wait", "--timeout", "-E", "--conflict-exit-code"))[1:]
+            else:
+                return [], fed, chdirs
+        elif head == "parallel":
+            body = _rm_past_options(words, RM_PARALLEL_VALUED)
+            options = [_rm_bare(w) for w in words[1:len(words) - len(body)]]
+            seps = [k for k, w in enumerate(body) if _rm_bare(w) in (":::", ":::+", "::::", "::::+")]
+            fed = fed or not seps or any(_rm_bare(body[k]).startswith("::::") for k in seps) or any(
+                w in ("-a", "--arg-file") or w.startswith("--arg-file=") for w in options)
+            command = body[:seps[0]] if seps else body
+            args = [w for w in body[seps[0]:] if _rm_bare(w) not in (":::", ":::+", "::::", "::::+")] if seps else []
+            words = [w for w in command if not re.fullmatch(r"\{[^}\s]*\}", _rm_bare(w))] + args
+        else:
+            if head == "xargs":
+                fed = True
+            inner, _ = _unwrap(words, once=True)
+            if inner == words:
+                return words, fed, chdirs
+            words = inner
+    return words, fed, chdirs
+
+
+def _rm_env(words, chdirs):
+    """The command env runs, past its options and assignments; its -C folder goes to `chdirs`, and -S's text is split
+    into the words it stands for."""
+    i = 1
+    while i < len(words):
+        bare = _rm_bare(words[i])
+        if bare == "--":
+            return words[i + 1:]
+        if bare in ("-C", "--chdir") and i + 1 < len(words):
+            chdirs.append(words[i + 1])
+            i += 2
+        elif bare.startswith("--chdir=") or (bare.startswith("-C") and len(bare) > 2):
+            given = words[i] if words[i].startswith(("--chdir=", "-C")) else bare
+            chdirs.append(given.split("=", 1)[1] if given.startswith("--") else given[2:])
+            i += 1
+        elif bare in ("-S", "--split-string") and i + 1 < len(words):
+            return _rm_words(_rm_bare(words[i + 1])) + words[i + 2:]
+        elif bare in ("-u", "--unset"):
+            i += 2
+        elif (bare.startswith("-") and len(bare) > 1) or re.match(r"[A-Za-z_]\w*=", bare):
+            i += 1
+        else:
+            break
+    return words[i:]
+
+
+def _rm_operands(words):
+    """What a recursive delete names: an rm's operands, find's starting points when it runs -delete, any rm, or a shell
+    whose text holds one (with a recursive rm's own operands but `{}`); None for any other command, and for an rm that
+    is not recursive."""
+    if not words:
+        return None
+    head = os.path.basename(_rm_bare(words[0]))
+    if head == "rm":
+        recursive, operands, options = False, [], True
+        for word in words[1:]:
+            bare = _rm_bare(word)
+            if options and bare == "--":
+                options = False
+            elif options and bare.startswith("--"):
+                name = bare.split("=", 1)[0]
+                recursive = recursive or (len(name) > 2 and "--recursive".startswith(name))
+            elif options and bare.startswith("-") and len(bare) > 1:
+                recursive = recursive or "r" in bare or "R" in bare
+            else:
+                operands.append(word)
+        return operands if recursive else None
+    if head != "find":
+        return None
+    i = 1
+    while i < len(words) and _rm_bare(words[i]) in ("-H", "-L", "-P", "-D") or (
+            i < len(words) and _rm_bare(words[i]).startswith("-O")):
+        i += 2 if _rm_bare(words[i]) == "-D" else 1
+    paths = []
+    while i < len(words) and not _rm_bare(words[i]).startswith(("-", "(", "!", ")")):
+        paths.append(words[i])
+        i += 1
+    expression = [_rm_bare(w) for w in words[i:]]
+    deletes, more = "-delete" in expression, []
+    for k, word in enumerate(expression):
+        if word not in RM_EXECS:
+            continue
+        end = next((j for j in range(k + 1, len(expression)) if expression[j] in (";", "+")), len(expression))
+        inner = _rm_unwrapped(words[i + k + 1:i + end])[0]
+        if not inner:
+            continue
+        head = os.path.basename(_rm_bare(inner[0]))
+        if head == "rm":
+            deletes = True
+            more += [w for w in _rm_operands(inner) or () if _rm_bare(w) != "{}"]
+        elif head in SHELLS and RM_DELETES.search(_rm_script(inner) or ""):
+            deletes = True
+    return (paths or ["."]) + more if deletes else None
+
+
+def _rm_why(operand, place, known):
+    """Why a recursive delete run at `place` may not take this operand, or None."""
+    home = known.get("HOME")
+    user = re.match(r"~([A-Za-z_][\w.-]*)(?=/|$)", operand)
+    theirs = _rm_user_home(user.group(1)) if user else None
+    if theirs and theirs != home:
+        why = _rm_why("~" + operand[user.end():], place, {**known, "HOME": theirs})
+        if why:
+            return why
+    text, glob, why, _ = _rm_read(operand, known, place.cwd)
+    if why or text is None:
+        return why
+    relative = not text.startswith("/")
+    if relative and place.blind == "unread":
+        return ("is read in the folder of a `cd` whose target can expand to nothing: unquoted and empty, it leaves a "
+                "bare `cd`, which goes to the home folder")
+    if glob is not None:
+        if RM_CLIMB.search(text[glob:]):
+            return "climbs out of its folder with `..` after a pattern, to a folder nobody read"
+        cut = text.rfind("/", 0, glob)
+        before = text[:cut] if cut >= 0 else ""
+        whole = RM_WHOLE.fullmatch(text[cut + 1:])
+        folder = _rm_path(before or ("/" if cut == 0 else "."), place.cwd)
+        if folder is None:
+            if place.blind and whole and relative and all(s in ("", ".", "..") for s in before.split("/")):
+                return "is a pattern for every entry of the folder a `cd` went to, which the hook cannot read"
+            return None
+        named = _rm_protected(folder, home)
+        if named:
+            return f"is a pattern over {_rm_shown(folder, home)}, which matches what lies in it"
+        dotted = home and folder.startswith(home + "/.") and (not relative or place.moved)
+        if dotted and whole:
+            return f"is a pattern for every entry of {_rm_shown(folder, home)}, which empties the folder"
+        return None
+    path = _rm_path(text, place.cwd)
+    named = _rm_protected(path, home) if path else None
+    return f"names {_rm_shown(path, home)}, {named}" if named else None
+
+
+def _rm_user_home(name):
+    try:
+        import pwd
+        return os.path.normpath(pwd.getpwnam(name).pw_dir)
+    except (ImportError, KeyError):
+        return None
+
+
+def _rm_read(word, known, cwd=None):
+    """What an operand stands for: (its text with `~`, `~+`, `~user` and the known variables put in, where its first
+    unquoted pattern character stands or None, why it can expand to what nobody read or None, whether that expansion
+    lies outside double quotes, where an empty one leaves no word at all). The text is None when a guarded variable
+    (`${VAR:?}`) or a `~+` with no known folder stands in it: what it holds is not known, and an empty guarded one
+    stops the command."""
+    out, glob, quote, i, n = [], None, None, 0, len(word)
+    readable = True
+    tilde = re.match(r"~([^/]*)", word)
+    if tilde:
+        name = tilde.group(1)
+        base = known.get("HOME") if name == "" else cwd if name == "+" else (
+            _rm_user_home(name) if re.fullmatch(r"[A-Za-z_][\w.-]*", name) else None)
+        if base:
+            out.extend(base)
+            i = tilde.end()
+        elif name == "+":
+            return None, None, None, False
+    while i < n:
+        c = word[i]
+        if quote == "'":
+            if c == "'":
+                quote = None
+            else:
+                out.append(c)
+            i += 1
+        elif c == "\\":
+            if quote == '"' and word[i + 1:i + 2] not in ("$", "`", '"', "\\"):
+                out.append(c)
+            out.extend(word[i + 1:i + 2])
+            i += 2
+        elif c == "'" and quote is None:
+            quote, i = "'", i + 1
+        elif c == '"':
+            quote, i = (None if quote else '"'), i + 1
+        elif c == "`":
+            return None, None, ("holds a command substitution in backticks, which can print nothing and leave only the "
+                                "path around it"), quote is None
+        elif c == "$":
+            rest = word[i + 1:]
+            name = re.match(r"[A-Za-z_]\w*", rest)
+            if rest.startswith("("):
+                return None, None, ("holds a command substitution (`$(`), which can print nothing and leave only the "
+                                    "path around it: on 10-22 `rm -rf ~/.config/jj/repos/$(cat …)` deleted every repo's "
+                                    "jj config that way"), quote is None
+            if rest.startswith("{"):
+                end = word.find("}", i)
+                inner = word[i + 2:end] if end >= 0 else rest[1:]
+                var = re.match(r"[A-Za-z_]\w*", inner)
+                modifier = inner[var.end():] if var else ""
+                if var and var.group() in known and (not modifier or modifier[:2] in (":?", ":-", ":=")):
+                    out.extend(known[var.group()])
+                elif var and modifier[:2] == ":?" and end >= 0:
+                    readable = False
+                else:
+                    return None, None, _rm_unguarded(var.group() if var else inner), quote is None
+                i = end + 1 if end >= 0 else n
+            elif name:
+                if name.group() not in known:
+                    return None, None, _rm_unguarded(name.group()), quote is None
+                out.extend(known[name.group()])
+                i += 1 + name.end()
+            elif rest[:1] and (rest[0].isdigit() or rest[0] in "@*#?$!-"):
+                return None, None, _rm_unguarded(rest[0]), quote is None
+            elif rest[:1] in ("'", '"') and quote is None:  # $'...' and $"..." are quotes
+                i += 1
+            else:
+                out.append(c)
+                i += 1
+        else:
+            if quote is None and c in RM_GLOB and glob is None:
+                glob = len(out)
+            out.append(c)
+            i += 1
+    return ("".join(out) if readable else None), glob, None, False
+
+
+def _rm_unguarded(name):
+    return (f"holds `${name}`, a variable with no `:?` guard: empty or unset, it leaves only the path around it "
+            f"(`${{{name}:?}}` stops the command instead)")
+
+
+def _rm_path(text, cwd):
+    """A path's normal form, relative to `cwd`; None when it is relative and the folder is not known."""
+    if not text:
+        return None
+    if not text.startswith("/"):
+        if not cwd:
+            return None
+        text = os.path.join(cwd, text)
+    path = os.path.normpath(text)
+    return "/" + path.lstrip("/") if path.startswith("//") else path
+
+
+def _rm_protected(path, home):
+    """What a protected folder is, or None: `/`, a folder above the home folder, the home folder, a dot-folder of it,
+    a folder at most two deep in ~/.config."""
+    if path == "/":
+        return "the whole filesystem"
+    if not home:
+        return None
+    if path == home:
+        return "the home folder"
+    if home.startswith(path.rstrip("/") + "/"):
+        return "a folder above the home folder, which holds it"
+    parent, name = os.path.split(path)
+    if parent == home and name.startswith("."):
+        return "a dot-folder of the home folder"
+    config = os.path.join(home, ".config")
+    if parent == config:
+        return "a folder of ~/.config, one tool's whole configuration"
+    if os.path.dirname(parent) == config:
+        return ("a folder two deep in ~/.config, a whole part of one tool's configuration (on 10-22 "
+                "~/.config/jj/repos was emptied)")
+    return None
+
+
+def _rm_shown(path, home):
+    return "~" + path[len(home):] if home and (path == home or path.startswith(home + "/")) else path
+
+
 def _tracked(root, paths):
     """Which of `paths` (relative to `root`) the root's jj working-copy commit, as last snapshotted, or else its git
     index, tracks; none when neither answers."""
@@ -5881,8 +6414,8 @@ HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, memo_dream_pending, fleet_heartbeat, grant_records_tracked, tape_build],
     "Stop": [memo_nudge, fleet_listen_guard, fleet_idle_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
-    "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, fleet_moved_writes, land_turn_gate, suite_gate, onepw_hold, fleet_monitor_watch,
-                   fleet_grant_alone],
+    "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, fleet_moved_writes, land_turn_gate, suite_gate, onepw_hold, rm_guard,
+                   fleet_monitor_watch, fleet_grant_alone],
     "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_refusal_note, fleet_chat_nudge, onepw_watch],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep, onepw_watch],
     "PermissionDenied": [fleet_permission_denied],
@@ -5893,7 +6426,7 @@ HANDLERS = {
 # The PreToolUse handlers that can deny, each of which denies the call when it fails (dispatch); fleet_agent_grant
 # only allows, and its failure allows nothing.
 GUARDS = frozenset({fleet_spawn_effort, fleet_moved_writes, land_turn_gate, suite_gate, onepw_hold, fleet_monitor_watch,
-                    fleet_grant_alone})
+                    rm_guard, fleet_grant_alone})
 
 
 def _context(event, text):
