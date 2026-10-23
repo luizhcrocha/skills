@@ -3,7 +3,7 @@
  * the inactive ones folded under All and listed under Inactive, the kind and fleet filters, and each row's
  * badge, plain title, round, "for", status and port. Run in happy-dom, through `takeState`.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, setSystemTime, test } from "bun:test";
 import { flush } from "solid-js";
 import { render } from "@solidjs/web";
 
@@ -14,7 +14,12 @@ import type { Model } from "../src/model.ts";
 import type { Ui } from "../src/ui.ts";
 import { linksView } from "./fixtures.ts";
 
-const NOW = Date.now();
+// Midday, so a link checked two minutes before NOW is still today and shows as a clock time.
+const NOW = Date.parse("2026-10-22T12:00:00");
+
+beforeAll(() => setSystemTime(new Date(NOW)));
+
+afterAll(() => setSystemTime());
 
 let page: { m: Model; ui: Ui };
 
